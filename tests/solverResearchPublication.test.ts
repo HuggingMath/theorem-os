@@ -227,11 +227,16 @@ it('wakes Lead after restore for an unanswered refutation until a plan answers i
   expect(wakePending()).toBe(true);
   state.cooperation!.lastLeadInputDigest = (cooperative as any).planningInputDigest();
   await restart();
-  // The saved wake-up survives, but the decision already answering this exact input absorbs it without a turn.
+  // The saved wake-up survives, but an answered input waits for new work without a turn or a busy retry.
   expect(wakePending()).toBe(true);
-  await expect((cooperative as any).nextLead(workers[0], { maxTurns: Infinity, remainingMs: Infinity }, true))
-    .resolves.toBe(RETRY_DISPATCH);
+  let settled = false;
+  const dispatch = (cooperative as any).nextLead(workers[0], { maxTurns: Infinity, remainingMs: Infinity }, true)
+    .then((result: unknown) => { settled = true; return result; });
+  await new Promise<void>(resolve => setImmediate(resolve));
   expect(wakePending()).toBe(false);
+  expect(settled).toBe(false);
+  (cooperative as any).wake();
+  await expect(dispatch).resolves.toBe(RETRY_DISPATCH);
 });
 
 it('keeps a progress decision request across restart while other work is still running', async () => {

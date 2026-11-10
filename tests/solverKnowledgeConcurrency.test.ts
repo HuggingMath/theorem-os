@@ -172,9 +172,11 @@ describe('proof delivery with concurrent knowledge application checks', () => {
 
     gate.release(); await delivery;
 
-    expect(records().filter(record => record.kind === 'proof')).toMatchObject([{ taskId: action.task.id, status: 'verified', commit,
+    expect(records().filter(record => record.kind === 'proof')).toMatchObject([{ taskId: action.task.id, status: 'verified',
+      commit: node().integratedCheck!.commit,
       knowledgeUses: [{ consumer: { taskId: action.task.id, taskDigest: taskVersion(action.task) },
-        application: { check: { status: 'elaborated', proofAcceptance: 'not-assessed' } } }] }]);
+        application: { check: { status: 'elaborated', proofAcceptance: 'not-assessed', commit } } }] }]);
+    expect(node().proof!.commit).toBe(commit);
     expect(host.check).toHaveBeenCalledTimes(1);
   });
 
@@ -199,7 +201,8 @@ describe('proof delivery with concurrent knowledge application checks', () => {
     void first.then(() => { firstSettled = true; }, () => { firstSettled = true; });
     await gate.entered;
     const core = records().find(record => record.kind === 'proof' && record.taskId === action.task.id)!;
-    expect(core).toMatchObject({ status: 'verified', commit });
+    expect(core).toMatchObject({ status: 'verified', commit: node().integratedCheck!.commit });
+    expect(node().proof!.commit).toBe(commit);
 
     const independent = track(cooperative.deliver(workers[2], second.action, second.commit));
     await vi.waitFor(() => expect(second.node.status).toBe('integrated'), { timeout: 5000 });
@@ -215,7 +218,7 @@ describe('proof delivery with concurrent knowledge application checks', () => {
     gate.release(); await first;
 
     expect(records().find(record => record.id === core.id)).toBe(core);
-    expect(core.knowledgeUses).toMatchObject([{ application: { check: { status: 'elaborated' } } }]);
+    expect(core.knowledgeUses).toMatchObject([{ application: { check: { status: 'elaborated', commit } } }]);
     expect(events.filter(item => item.event === 'delivery_published' && item.details?.deliveryId === core.id)).toHaveLength(1);
   });
 
@@ -245,13 +248,15 @@ describe('proof delivery with concurrent knowledge application checks', () => {
     gate.release(); await child;
 
     expect(records().find(record => record.kind === 'proof' && record.taskId === action.task.id)?.knowledgeUses)
-      .toMatchObject([{ application: { check: { status: 'elaborated' } } }]);
+      .toMatchObject([{ application: { check: { status: 'elaborated', commit } } }]);
   });
 
   it('does not publish an old application result after its task contract changes', async () => {
     const commit = commitProof({ rejectedUse: true }), gate = gateKnowledge();
     const delivery = track(cooperative.deliver(workers[1], action, commit));
     await gate.entered;
+    const accepted = node().integratedCheck!;
+    expect(node().proof!.commit).toBe(commit);
 
     let applied = false;
     const pulse = edit('revise-during-knowledge', task => task.id === action.task.id
@@ -265,7 +270,7 @@ describe('proof delivery with concurrent knowledge application checks', () => {
     const current = node(), snapshot = JSON.parse(JSON.stringify(current));
     const historical = records().filter(record => record.kind === 'proof' && record.taskDigest === action.assignment.taskDigest);
     expect(historical).toHaveLength(1);
-    expect(historical[0]).toMatchObject({ status: 'superseded', commit });
+    expect(historical[0]).toMatchObject({ status: 'superseded', commit: accepted.commit });
     const recordedKnowledge = structuredClone(historical[0].knowledgeUses);
     const beforeCompletion = events.length;
 
@@ -286,7 +291,8 @@ describe('proof delivery with concurrent knowledge application checks', () => {
     await gate.entered;
     const delivered = node();
     const core = records().find(record => record.kind === 'proof' && record.taskId === action.task.id)!;
-    expect(core).toMatchObject({ status: 'verified', commit });
+    expect(core).toMatchObject({ status: 'verified', commit: delivered.integratedCheck!.commit });
+    expect(delivered.proof!.commit).toBe(commit);
     const coreBeforeCompletion = structuredClone(core);
 
     switch (change) {
@@ -331,8 +337,9 @@ describe('proof delivery with concurrent knowledge application checks', () => {
 
     expect(host.check).toHaveBeenCalledTimes(1);
     expect(records().filter(record => record.kind === 'proof')).toHaveLength(1);
-    expect(records()[0]).toMatchObject({ taskId: action.task.id, status: 'verified', commit,
-      knowledgeUses: [{ application: { check: { status: 'elaborated' } } }] });
+    expect(records()[0]).toMatchObject({ taskId: action.task.id, status: 'verified', commit: node().integratedCheck!.commit,
+      knowledgeUses: [{ application: { check: { status: 'elaborated', commit } } }] });
+    expect(node().proof!.commit).toBe(commit);
     expect(events.filter(item => item.event === 'knowledge_use_observed')).toHaveLength(1);
   });
 
@@ -358,12 +365,14 @@ describe('proof delivery with concurrent knowledge application checks', () => {
     await expect(poll()).rejects.toBe(failure);
 
     const core = records().find(record => record.kind === 'proof' && record.taskId === action.task.id)!;
-    expect(core).toMatchObject({ status: 'verified', commit, submissionId: submission.id });
+    expect(core).toMatchObject({ status: 'verified', commit: node().integratedCheck!.commit, submissionId: submission.id });
+    expect(node().proof!.commit).toBe(commit);
     expect(core.knowledgeUses).toHaveLength(1);
     expect(core.knowledgeUses![0].application?.check).toBeUndefined();
     expect(cursors[key]).toBe(prefixEnd);
     expect(snapshots.at(-1)?.[key]).toBe(prefixEnd);
-    expect(records().map(record => record.summary)).toEqual(['Accepted prefix.', submission.summary]);
+    expect(records().map(record => record.summary)).toEqual(['Accepted prefix.',
+      'Checked proof integrated with freshly validated dependencies.']);
     expect(events.filter(item => item.event === 'delivery_published' && item.details?.deliveryId === core.id)).toHaveLength(1);
     expect(events.filter(item => item.event === 'knowledge_use_observed')).toEqual([]);
     expect(host.check).toHaveBeenCalledTimes(1);
@@ -376,7 +385,7 @@ describe('proof delivery with concurrent knowledge application checks', () => {
 
     expect(records().filter(record => record.kind === 'proof')).toEqual([core]);
     expect(records().find(record => record.id === core.id)).toBe(core);
-    expect(core).toMatchObject({ status: 'verified', commit, submissionId: submission.id,
+    expect(core).toMatchObject({ status: 'verified', commit: integratedCheck!.commit, submissionId: submission.id,
       knowledgeUses: [{ application: { check: { status: 'elaborated', commit } } }] });
     expect(node().proof).toBe(proof);
     expect(node().integratedCheck).toBe(integratedCheck);
@@ -385,7 +394,8 @@ describe('proof delivery with concurrent knowledge application checks', () => {
     expect(host.check).toHaveBeenCalledTimes(2);
     expect(cursors[key]).toBe(fs.statSync(file).size);
     expect(snapshots.at(-1)?.[key]).toBe(fs.statSync(file).size);
-    expect(records().map(record => record.summary)).toEqual(['Accepted prefix.', submission.summary, 'Accepted suffix.']);
+    expect(records().map(record => record.summary)).toEqual(['Accepted prefix.',
+      'Checked proof integrated with freshly validated dependencies.', 'Accepted suffix.']);
     expect(events.filter(item => item.event === 'delivery_published' && item.details?.deliveryId === core.id)).toHaveLength(1);
     expect(events.filter(item => item.event === 'knowledge_use_observed' && item.details?.commit === commit)).toHaveLength(1);
   });
@@ -395,7 +405,9 @@ describe('proof delivery with concurrent knowledge application checks', () => {
     const delivery = track(cooperative.deliver(workers[1], action, commit));
     await gate.entered;
     const core = records().find(record => record.kind === 'proof' && record.taskId === action.task.id)!;
-    expect(core).toMatchObject({ status: 'verified', commit });
+    const accepted = node().integratedCheck!;
+    expect(core).toMatchObject({ status: 'verified', commit: accepted.commit });
+    expect(node().proof!.commit).toBe(commit);
     const recordedKnowledge = structuredClone(core.knowledgeUses);
     const beforeCancellation = events.length;
 
@@ -415,7 +427,7 @@ describe('proof delivery with concurrent knowledge application checks', () => {
     expect(gate.cleaned()).toBe(true);
     expect(stopSettled).toBe(true);
     expect(records().filter(record => record.kind === 'proof')).toEqual([core]);
-    expect(core).toMatchObject({ status: 'verified', commit });
+    expect(core).toMatchObject({ status: 'verified', commit: accepted.commit });
     expect(core.knowledgeUses).toEqual(recordedKnowledge);
     expect(events.slice(beforeCancellation).filter(item => ['knowledge_use_observed', 'knowledge_use_rejected'].includes(item.event) &&
       item.details?.commit === commit)).toEqual([]);

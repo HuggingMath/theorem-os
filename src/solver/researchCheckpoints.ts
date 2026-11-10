@@ -1,11 +1,11 @@
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import { ownedSourceDigest } from './cooperativeProof';
 import { deliveryInputFields } from './cooperationShared';
-import type { DeliveryRecord } from './deliveries';
+import { MAX_RESEARCH_NOTES_BYTES, type DeliveryRecord } from './deliveries';
 import { mathematicalGapVisible } from './mathematicalGaps';
 import { taskDependencyRecords } from './modules/search';
 import { captureObligationSnapshot } from './obligationProgress';
-import { git, type SolverProblem } from './problem';
+import { committedSource, git, type SolverProblem } from './problem';
 import type { CheckpointCandidate } from './researchEvidence';
 import { routeBlockerBasis } from './routeControl';
 import { taskGroup, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
@@ -65,3 +65,17 @@ export function researchCheckpointInputDigest(input: CheckpointInput & {
 export const researchCheckpointOutputDigest = (problem: SolverProblem, worktree: string, commit: string) =>
   mathDigest(canonicalMathJson({ sourceDigest: ownedSourceDigest(problem, worktree, commit),
     notesBlob: git(worktree, ['ls-tree', '--format=%(objectname)', commit, '--', 'RESEARCH.md']) }));
+
+/** A saved snapshot may contain inherited notes; its existence alone does not attribute them to a task. */
+export function committedResearchNotesDigest(worktree: string, commit: string): string | undefined {
+  if (!git(worktree, ['ls-tree', '--format=%(objectname)', commit, '--', 'RESEARCH.md'])) return;
+  const notes = committedSource(worktree, commit, 'RESEARCH.md');
+  return notes.trim() && Buffer.byteLength(notes, 'utf8') <= MAX_RESEARCH_NOTES_BYTES ? mathDigest(notes) : undefined;
+}
+
+/** Only a task's own write, a previously attributed snapshot or a current acknowledgment is a handoff. */
+export function researchHandoffNotesDigest(notesDigest: string | undefined, seedNotesDigest: string | undefined,
+  retainedNotesDigest?: string, acknowledgedNotesDigest?: string): string | undefined {
+  return notesDigest && (notesDigest !== seedNotesDigest || notesDigest === retainedNotesDigest ||
+    notesDigest === acknowledgedNotesDigest) ? notesDigest : undefined;
+}

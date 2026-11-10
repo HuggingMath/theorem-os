@@ -6,6 +6,7 @@ import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 import { LEAN_MEMORY_LIMIT_ERROR, LEAN_STACK_LIMIT_ERROR, type MathematicsVerifierBatchRequest, type MathematicsVerifierBatchResult } from '../src/math/verifier';
 import type { SolverRunState } from '../src/solver/archive';
 import type { CooperativeResearch } from '../src/solver/cooperation';
+import { checkTaskProofs, type TaskProof } from '../src/solver/cooperativeProof';
 import { captureDeliveryArtifacts } from '../src/solver/deliveryArtifacts';
 import type { KnowledgeContextSnapshot } from '../src/solver/knowledgeContext';
 import { directSolverModules } from '../src/solver/modules';
@@ -16,11 +17,11 @@ import { deferred } from './helpers/async';
 import { cooperativeResearch, workerAccess } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 
-const host = vi.hoisted(() => ({ verify: vi.fn(), check: vi.fn(), identity: vi.fn(), createSession: vi.fn() }));
+const host = vi.hoisted(() => ({ verify: vi.fn(), check: vi.fn(), identity: vi.fn(), tools: vi.fn(), createSession: vi.fn() }));
 vi.mock('../src/math/verifier', async importOriginal => ({
   ...await importOriginal<typeof import('../src/math/verifier')>(),
   checkManyFormalVerifications: host.verify,
-  formalVerificationToolIdentity: () => undefined,
+  formalVerificationToolIdentity: host.tools,
   resolveMathematicsLakePackagesCache: () => undefined,
 }));
 vi.mock('../src/math/leanTypeDiagnostics', async importOriginal => ({
@@ -82,6 +83,23 @@ describe('same-layer checked task integration batches', () => {
     const proofs = await Promise.all([prepare('first'), prepare('second')]);
     host.verify.mockClear(); receipts = []; return proofs;
   };
+  const enableProofCache = () => {
+    host.tools.mockReturnValue('fixture-cache-tools');
+    for (const value of access.values()) value.environment = {
+      DEEPSCIENTIST_MATH_ENV_FILE: path.join(directory, 'math.env'), PATH: '/usr/bin:/bin',
+    };
+  };
+  const prepareDependentDelivery = async () => {
+    enableProofCache();
+    await prepare('second'); await integrate('second');
+    const canonical = state.cooperation!.canonicalCommit!, record = node();
+    changeTask('first', { dependsOn: ['second'] });
+    record.assignment = { ...record.assignment!, seedCommit: canonical,
+      dependencies: [{ taskId: 'second', taskDigest: taskVersion(node('second').task) }] };
+    const worker = workers.find(item => item.id === record.assignment!.workerId)!;
+    git(worker.worktree, ['reset', '--hard', canonical]);
+    return await prepare('first', 'lemma batch_first : True := by exact batch_second');
+  };
   const integrate = (id = 'first') => track((cooperative as any).integrateNow(node(id)) as Promise<void>);
   const drain = () => track((cooperative as any).integrateReady() as Promise<void>);
   const gateBatch = (resultFor: (request: MathematicsVerifierBatchRequest) => MathematicsVerifierBatchResult = verified) => {
@@ -116,6 +134,7 @@ describe('same-layer checked task integration batches', () => {
   beforeEach(() => {
     receipts = []; sequence = 0; releases = []; pending = []; events = [];
     host.verify.mockReset().mockImplementation(async request => verified(request));
+    host.tools.mockReset().mockReturnValue(undefined);
     host.check.mockReset().mockImplementation(() => { throw new Error('fixture_unexpected_knowledge_check'); });
     host.identity.mockReset().mockReturnValue({ environmentDigest: mathDigest('diagnostic-environment'), toolIdentity: mathDigest('fixture-tools') });
     host.createSession.mockReset().mockImplementation(() => { throw new Error('fixture_real_models_forbidden'); });
@@ -155,6 +174,86 @@ describe('same-layer checked task integration batches', () => {
     controller.abort(); await Promise.allSettled(pending); await cooperative.stop();
     expect(host.createSession).not.toHaveBeenCalled();
     vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  it.each(['integration', 'restored recheck'] as const)
+  ('reuses an unchanged dependent delivery during %s', async phase => {
+    const delivery = await prepareDependentDelivery();
+    host.verify.mockClear();
+    let receipt: TaskProof | undefined;
+    if (phase === 'integration') {
+      await integrate();
+      expect(node().status).toBe('integrated');
+      receipt = node().integratedCheck;
+    } else {
+      const tasks = state.cooperation!.tasks.map(record => record === node()
+        ? { ...record, status: 'integrated' as const, integratedCheck: structuredClone(delivery) } : { ...record });
+      await expect(track((cooperative as any).recheckIntegrated(delivery.commit, false, {
+        tasks, ids: new Set(['first']), environment: access.get(workers[0]!.id)!.environment,
+        environmentDigest: state.environmentDigest, current: () => true,
+      }))).resolves.toBe(true);
+      expect(tasks.find(record => record.task.id === 'first')!.status).toBe('integrated');
+      receipt = tasks.find(record => record.task.id === 'first')!.integratedCheck;
+    }
+    expect(calls()).toHaveLength(0);
+    expect(receipt!.verification.sessionId).toBe(delivery.verification.sessionId);
+    expectNoFailure();
+  });
+
+  it('checks a dependent delivery again after an input version changes with identical Lean source', async () => {
+    const delivery = await prepareDependentDelivery(), dependency = node('second');
+    changeTask('second', { revision: dependency.task.revision + 1 });
+    const canonical = state.cooperation!.canonicalCommit!;
+    dependency.integratedCheck = await (cooperative as any).check(dependency.task, {
+      taskId: dependency.task.id, taskDigest: taskVersion(dependency.task), workerId: workers[0]!.id,
+      seedCommit: canonical, dependencies: [],
+    }, workspace, canonical, []);
+    host.verify.mockClear();
+
+    await integrate();
+
+    expect(node().status).toBe('integrated');
+    expect(calls()).toHaveLength(1);
+    expect(node().integratedCheck!.verification.sessionId).not.toBe(delivery.verification.sessionId);
+    expectNoFailure();
+  });
+
+  it('reuses a checked shared projection with the same current dependency versions during batch integration', async () => {
+    enableProofCache();
+    const task: CooperativeTask = { id: 'input', kind: 'lemma', objective: 'Prove the shared input.',
+      theoremName: 'Tutorial.batch_input', proofPath: 'Submission.lean', type: 'True', dependsOn: [], revision: 0 };
+    state.cooperation!.tasks.push({ task, status: 'running', attempts: 1, assignment: {
+      taskId: task.id, taskDigest: taskVersion(task), workerId: workers[3]!.id,
+      seedCommit: problem.baseCommit, dependencies: [],
+    } });
+    await prepare('input'); await integrate('input');
+    const canonical = state.cooperation!.canonicalCommit!;
+    const dependencies = [{ taskId: task.id, taskDigest: taskVersion(task) }];
+    for (const id of ['first', 'second']) {
+      changeTask(id, { dependsOn: [task.id] });
+      node(id).assignment = { ...node(id).assignment!, seedCommit: canonical, dependencies };
+      git(workers.find(worker => worker.id === node(id).assignment!.workerId)!.worktree, ['reset', '--hard', canonical]);
+      await prepare(id, `lemma batch_${id} : True := by exact batch_input`);
+    }
+    git(workers[3]!.worktree, ['reset', '--hard', canonical]);
+    const candidate = writeLemma(workers[3]!, ['first', 'second'].map(id =>
+      `lemma batch_${id} : True := by exact batch_input`).join('\n'));
+    const checked = await checkTaskProofs(problem, workers[3]!.worktree, candidate, ['first', 'second'].map(id => ({
+      task: node(id).task, retainedGoals: [], assignment: { taskId: id, taskDigest: taskVersion(node(id).task),
+        workerId: workers[3]!.id, seedCommit: candidate, dependencies },
+    })), access.get(workers[0]!.id)!.environment, controller.signal, undefined, state.environmentDigest,
+    (cooperative as any).taskProofCache);
+    host.verify.mockClear();
+
+    await integrate();
+
+    expect(calls()).toHaveLength(0);
+    for (const [index, id] of ['first', 'second'].entries()) {
+      expect(node(id).status).toBe('integrated');
+      expect(node(id).integratedCheck!.verification.sessionId).toBe(checked[index]!.verification.sessionId);
+    }
+    expect(events.some(item => item.event === 'task_integration_batch_started')).toBe(true);
+    expectNoFailure();
   });
 
   it('checks a ready pair once and preserves each target\'s original receipt while publishing the union', async () => {

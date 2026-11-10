@@ -141,7 +141,7 @@ const researchContext = z.object({ environmentDigest: hash, problemReceiptDigest
 const savedTaskDraft = z.object({ taskId: id, taskDigest: hash, workerId: id,
   assignmentId: z.string().optional(), seedCommit: oid, canonicalCommit: oid.optional(), commit: oid,
   outputDigest: hash, task: handoffTask.optional(), suspended: z.boolean().optional(), archived: z.literal(true).optional(),
-  sources: z.record(z.string()), notes: z.string().nullable(),
+  sources: z.record(z.string()), notes: z.string().nullable(), handoffNotesDigest: hash.optional(),
   source: z.object({ runId: z.string(), stateFile: z.string(), environmentDigest: hash,
     problemReceiptDigest: hash, sourcePolicyDigest: hash }).strict(),
 }).strict();
@@ -482,6 +482,7 @@ function capturedTaskDrafts(state: SolverRunState, stateFile: string, previous: 
     const draft = savedTaskDraft.parse({ taskId, taskDigest: snapshot.taskDigest, workerId: snapshot.workerId,
       assignmentId: prior?.assignmentId ?? snapshot.assignmentId, seedCommit: snapshot.seedCommit,
       canonicalCommit: snapshot.canonicalCommit, commit: snapshot.commit, outputDigest: snapshot.outputDigest,
+      handoffNotesDigest: snapshot.handoffNotesDigest,
       task, suspended: snapshot.suspended, ...(current ? {} : { archived: true }),
       sources: Object.fromEntries(state.problem.ownedFiles.map(file => [file,
         committedSource(state.worktree, snapshot.commit, `${state.problem.projectRelative}/${file}`)])),
@@ -1373,7 +1374,8 @@ export async function seedSolverContinuation(options: {
         node.assignment = assignment;
         (state.cooperation.researchDrafts ??= {})[draft.taskId] = { taskDigest: draft.taskDigest, workerId: draft.workerId,
           assignmentId: assignment.assignmentId, seedCommit: draft.seedCommit, canonicalCommit: draft.canonicalCommit,
-          commit: draft.commit, outputDigest: draft.outputDigest, artifacts, suspended: true };
+          commit: draft.commit, outputDigest: draft.outputDigest, artifacts, suspended: true,
+          handoffNotesDigest: draft.handoffNotesDigest };
         emit('continuation_seed_task_draft_pending', { taskId: draft.taskId, workerId: draft.workerId,
           sourceRunId: draft.source.runId, snapshotCommit: draft.commit, acceptance: 'not-assessed' });
       }

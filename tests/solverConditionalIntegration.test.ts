@@ -127,7 +127,7 @@ describe('conditional proof declaration ownership', () => {
     const parentChecks = projections.filter(item => item.theoremName === 'Tutorial.add_zero')
       .map(item => item.files['Submission.lean']);
     expect(parentChecks).toHaveLength(2);
-    expect(parentChecks[0]).toContain('theorem add_zero (child : True)');
+    expect(parentChecks[0]).toContain('theorem add_zero : theorem_os_conditional_type%');
     expect(parentChecks[1]).toContain('theorem add_zero (n : Nat)');
     expect(parentChecks[1]).toContain('lemma child : True := by trivial');
   });
@@ -252,7 +252,7 @@ describe('conditional proof declaration ownership', () => {
     host.verify.mockImplementation(async (request: MathematicsVerifierBatchRequest) => {
       const result = await verify(request);
       const source = fs.readFileSync(path.join(request.projectRoot, 'Submission.lean'), 'utf8');
-      return request.items[0].theoremName === 'Tutorial.add_zero' && !source.includes('(child : True)')
+      return request.items[0].theoremName === 'Tutorial.add_zero' && !source.includes('theorem_os_conditional_type%')
         ? failedBatch(result, { stdoutPreview: () => 'Submission.lean:1:0: error: fixture combined proof does not close the target' }) : result;
     });
 

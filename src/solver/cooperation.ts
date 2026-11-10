@@ -548,9 +548,32 @@ export class CooperativeResearch extends CooperationInputs {
   }
   private taskDispatchBlock(node: TaskRecord): 'preparing-type' | 'synchronizing' | 'capacity-expired' | undefined {
     if (this.preparingTaskTypes.has(node)) return 'preparing-type';
-    if (this.synchronizationBlocked(node.task)) return 'synchronizing';
+    if (this.transferringResearch.has(node) || this.synchronizationBlocked(node.task)) return 'synchronizing';
     if (node.capacityExploration && !currentCapacityExploration(node, this.archive.tasks, this.explorationIdentity))
       return 'capacity-expired';
+  }
+  private transferringResearch = new Set<TaskRecord>();
+  private transferableResearch(node: TaskRecord, worker: ResearchWorker): boolean {
+    const assignment = node.assignment;
+    if (this.stopping || this.failure || this.input.signal.aborted || this.planApprovalPending() ||
+        this.input.modelDispatchAllowed?.() === false || !this.liveWorkers.has(this.lead.id) ||
+        !this.allocationPeers.some(peer => peer.id === worker.id) || this.active.has(worker.id) ||
+        this.archive.tasks.some(peer => peer.status === 'running' && peer.assignment?.workerId === worker.id) ||
+        [...this.proofPublications.values()].some(publication => publication.workerId === worker.id) ||
+        !this.archive.tasks.includes(node) || node.status !== 'pending' || !advisory(node.task) ||
+        node.task.ownerId || isFeasibilityReview(node.task) || node.capacityExploration || node.nextCheckId ||
+        node.alternativeRoutes?.length || !assignment || assignment.workerId === worker.id ||
+        !this.liveWorkers.has(assignment.workerId) || assignment.taskId !== node.task.id || assignment.taskDigest !== digest(node.task) ||
+        this.preparingTaskTypes.has(node) || this.synchronizationBlocked(node.task) ||
+        !taskCanStart(node.task, this.archive.tasks, this.archive.groups) ||
+        !routeAllowsTask(node.task, this.archive.tasks, this.archive.groups) ||
+        assessTaskResponsibility({ ...node, assignment: undefined }, worker, this.responsibility).kind !== 'matches') return false;
+    // A pending status alone does not establish that the old writer stopped:
+    // delivery settlement can still own an active action or publication.
+    if ([...this.active.values()].some(active => active.action.kind === 'task' && active.action.assignment === assignment) ||
+        [...this.proofPublications.values()].some(publication => publication.action.assignment === assignment)) return false;
+    return this.archive.tasks.some(peer => peer !== node && peer.status === 'running' &&
+      peer.assignment?.workerId === assignment.workerId && peer.assignment.taskDigest === digest(peer.task));
   }
   private recordTaskWait(worker: ResearchWorker, ranked: readonly TaskRecord[], ready: readonly TaskRecord[]) {
     const owned = this.archive.tasks.filter(node => !['integrated', 'completed'].includes(node.status) &&
@@ -631,6 +654,17 @@ export class CooperativeResearch extends CooperationInputs {
     const node = this.input.modules.M5.assign(ready, worker,
       this.allocationPeers, this.archive.groups, this.archive.tasks, this.stoppedWorkers);
     if (!node) {
+      const movable = ready.find(candidate => this.transferableResearch(candidate, worker));
+      // Respect custom M5 decisions as well: only offer a transfer the configured
+      // allocator would select after this one saved-worker pin is replaced.
+      const proposal = movable && { ...movable, assignment: undefined };
+      if (movable && proposal && this.input.modules.M5.assign([proposal], worker, this.allocationPeers,
+          this.archive.groups, this.archive.tasks.map(candidate => candidate === movable ? proposal : candidate), this.stoppedWorkers) === proposal) {
+        this.transferringResearch.add(movable);
+        try {
+          if (await this.transferResearchDraft(worker, movable, () => this.transferableResearch(movable, worker))) return RETRY_DISPATCH;
+        } finally { this.transferringResearch.delete(movable); this.wake(); }
+      }
       this.recordTaskWait(worker, ranked, ready);
       if (await this.requestCapacityExploration(worker, budget, ready)) return RETRY_DISPATCH;
       return this.liveWorkers.has(worker.id) ? this.waitForDispatch() : undefined;

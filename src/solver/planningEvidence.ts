@@ -1,10 +1,11 @@
 import { buildProofContinuation, createRecordedTaskSettlement, recordedTaskProofStatus } from './progress';
 import { taskConsumerInterfaces } from './taskConsumers';
-import { isAdvisoryTask, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
+import { allRoutesParked, groupOpen, isAdvisoryTask, isFinalCandidateReview, taskGroup, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
 import type { CooperationState } from './cooperationShared';
 import type { ProofRoute } from './proofRoutes';
 import { reviewGoalPaths } from './goalPathReview';
 import type { GoalPathReview } from './goalPathReview';
+import { originalGoalTaskFocus } from './modules/search';
 
 const summaryLimit = 8, referenceLimit = 4;
 const reference = (task: CooperativeTask) => ({ taskId: task.id, taskDigest: taskVersion(task) });
@@ -47,6 +48,25 @@ export function leadPlanningEvidence(state: Pick<CooperationState, 'tasks' | 'gr
   const recorded = createRecordedTaskSettlement(state.tasks, { proofRoutes: state.proofRoutes, environmentDigest });
   const application = createTaskApplicationEvidence(state.tasks, { proofRoutes: state.proofRoutes, environmentDigest });
   const ref = (id: string) => byId.has(id) ? reference(byId.get(id)!.task) : { taskId: id, taskDigest: null };
+  const focus = originalGoalTaskFocus(state.proofRoutes ? state.tasks.map(node => ({ ...node,
+    alternativeRoutes: state.proofRoutes!.filter(route => route.targetTaskId === node.task.id) })) : state.tasks,
+  state.groups, environmentDigest);
+  // Show missing planning links before the helper is proved. Independent work remains valid;
+  // this asks the Lead to identify its use, not to invent a proof dependency or reject the plan.
+  const unexplained = state.tasks.filter(node => !node.capacityExploration && !node.nextCheckId && !isFinalCandidateReview(node.task) &&
+    (node.task.status ?? 'active') === 'active' && !node.routeParking?.length && !allRoutesParked(node) &&
+    (!state.groups || groupOpen(state.groups.find(group => group.group.id === taskGroup(node.task)))) &&
+    !recorded.settled(node) && !['completed', 'integrated'].includes(node.status) && !focus.support.has(node.task.id));
+  const unconnectedProof = unexplained.filter(node => node.task.kind === 'lemma');
+  const unattributedResearch = unexplained.filter(node => isAdvisoryTask(node.task));
+  const connectionSummary = (node: TaskRecord) => ({ ...reference(node.task), status: node.status,
+    interfaceSource: { path: 'COOPERATION.json', field: 'tasks[].task', match: 'taskId-and-taskDigest' } });
+  const connectionGaps = {
+    unconnectedProofTasks: unconnectedProof.slice(0, summaryLimit).map(connectionSummary),
+    omittedUnconnectedProofTasks: Math.max(0, unconnectedProof.length - summaryLimit),
+    unattributedResearchTasks: unattributedResearch.slice(0, summaryLimit).map(connectionSummary),
+    omittedUnattributedResearchTasks: Math.max(0, unattributedResearch.length - summaryLimit),
+  };
   const disconnected = new Set(continuation.unconnectedTasks);
   const packages = state.tasks.filter(node => disconnected.has(node.task.id) && !isAdvisoryTask(node.task) &&
     !node.capacityExploration && (recorded.settled(node) ||
@@ -99,7 +119,7 @@ export function leadPlanningEvidence(state: Pick<CooperationState, 'tasks' | 'gr
     ...(stall?.ignoredAt ? { ignored: true } : {}) };
   return { evidence: 'recorded-not-replayed' as const, acceptance: 'not-assessed' as const,
     // Whether each goal's frontier can run now, and host-proposed decisions for a goal that cannot.
-    goalPath,
+    goalPath, connectionGaps,
     ...(state.goalProgress?.pending ? { progressReview: { ...state.goalProgress.pending,
       evidence: 'started-worker-execution-without-new-checked-inputs-or-frontier-closure' as const,
       goals: state.goalProgress.goals.filter(goal => state.goalProgress!.pending!.goalKeys.includes(goal.key))
@@ -126,6 +146,13 @@ export function leadPlanningEvidence(state: Pick<CooperationState, 'tasks' | 'gr
 export function leadPlanningEvidenceText(evidence: ReturnType<typeof leadPlanningEvidence>) {
   const goalPath = evidence.goalPath;
   return 'Current route applications and remaining obligations (recorded, not proof acceptance):\n' + JSON.stringify(evidence) +
+    (evidence.connectionGaps.unconnectedProofTasks.length || evidence.connectionGaps.unattributedResearchTasks.length
+      ? '\nPlanning connection gaps name active work with no recorded connection to an unfinished original goal. ' +
+        'For an intended proof input, record the actual consumer dependency or proof route; for advisory effort, ' +
+        'set consumerGoalIds to its original goals and use dependsOn only for the questions or inputs it investigates. ' +
+        'A use described only in objective prose is not an executable connection. Independent exploration may remain ' +
+        'unconnected when intentional; explain that choice instead of adding a speculative dependency. These are planning ' +
+        'facts, not proof failure, and do not require pausing active work.' : '') +
     (evidence.progressReview ? '\nTeam progress review ' + evidence.progressReview.id + ': these original goals have accumulated worker execution ' +
       'without new recorded checked inputs or unconditional closure of a previously observed frontier obligation. ' +
       'coreActiveMs tracks effort without that closure; conditional connections can be useful while this clock continues. ' +
