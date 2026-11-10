@@ -21,7 +21,7 @@
 
 > **研究内测**：[云端工作台](https://app.theoremos.top/)采用邮箱白名单免费内测（需自备支持 Responses API 的模型密钥）。可通过 [GitHub Issue](https://github.com/LikC1606/TheoremOS/issues/new?template=early-access.yml) 申请开通，CLI 实验与合作方式详见[访问说明](docs/ACCESS.md)。
 
-> 🏆 **研究成果与评测表现**：本仓库公开了系统完成的 **26 条高难度前沿数学证明记录**，涵盖代数数论、黎曼几何、泛函分析与统计物理等领域，其中包括 **[10 份通过 Lean-Eval 官方评测的证明](#lean-eval10-份官方通过的证明)**，以及 **[16 条经本地 Lean 与原题检查程序复核的 OpenAI Math 证明记录](#openai-math16-条证明记录)**。
+> 🏆 **研究成果与评测表现**：本仓库公开了系统完成的 **28 条高难度前沿数学证明记录**，涵盖代数数论、黎曼几何、泛函分析与统计物理等领域，其中包括 **[10 份通过 Lean-Eval 官方评测的证明](#lean-eval10-份官方通过的证明)**，以及 **[18 条经本地 Lean 与原题检查程序复核的 OpenAI Math 证明记录](#openai-math18-条证明记录)**。
 
 **从这里开始：**[首次使用图文教程](docs/GETTING-STARTED.zh-CN.md) · [真实研究案例](docs/CASE-STUDY.zh-CN.md) · [能力与开放范围](docs/CAPABILITIES.zh-CN.md) · [评测数据与口径](docs/EVALUATION.zh-CN.md) · [下载真实证明复核包](proof-kits/dimitrov/README.zh-CN.md)
 
@@ -105,7 +105,7 @@
 | **树上三状态模型的超临界重构** | 在题目给定的超临界条件下，证明正则树与泊松树的重构优势趋于正极限。 | [题面](data/proofs/openai_three_state_supercritical/Challenge.lean) · [证明](data/proofs/openai_three_state_supercritical/Submission.lean) · [检查结果](data/proofs/openai_three_state_supercritical/verification.json) · [研究过程](data/proofs/openai_three_state_supercritical/process.json) |
 | **Snaky 获胜策略** | 面对合法应手，严格证明在 35 次 Maker 落子内完成 Snaky，并保持局面合法。 | [题面](data/proofs/openai_snaky_conditional/Challenge.lean) · [证明](data/proofs/openai_snaky_conditional/Submission.lean) · [检查结果](data/proofs/openai_snaky_conditional/verification.json) · [研究过程](data/proofs/openai_snaky_conditional/process.json) |
 
-👉 **[点击查看全部 26 条证明与检查记录](#证明与检查结果)**。
+👉 **[点击查看全部 28 条证明与检查记录](#证明与检查结果)**。
 
 ---
 
@@ -143,7 +143,7 @@ TheoremOS 目前通过邮箱白名单机制开放研究内测。**内测期间�
 - **能力与开放范围**：[网页功能、CLI 研究访问与规划中的能力](docs/CAPABILITIES.zh-CN.md)。
 - **评测数据与口径**：[档案构成、逐次运行观测与 JSON/CSV 下载](docs/EVALUATION.zh-CN.md)。
 - **完整证明复核包**：[Dimitrov：固定题面、证明、环境、检查脚本与报告](proof-kits/dimitrov/README.zh-CN.md)。
-- **证明复核指引**：[`docs/VERIFY.zh-CN.md`](docs/VERIFY.zh-CN.md) — 提供无需 Mathlib 的 Lean 入门检查示例与 Dimitrov 官方冻结工作区复核步骤，并说明全部 26 条公开证明记录的构成（含 10 份具有 Lean-Eval 官方通过记录的证明，以及 16 条经本项目运行 Lean 与原题比较器核验、OpenAI 官方结果尚未确认的记录）。
+- **证明复核指引**：[`docs/VERIFY.zh-CN.md`](docs/VERIFY.zh-CN.md) — 提供无需 Mathlib 的 Lean 入门检查示例与 Dimitrov 官方冻结工作区复核步骤，并说明全部 28 条公开证明记录的构成（含 10 份具有 Lean-Eval 官方通过记录的证明，以及 18 条经本项目运行 Lean 与原题比较器核验、OpenAI 官方结果尚未确认的记录）。
 - **许可与引用**：[`LICENSE`](LICENSE)、[`docs/PUBLIC-MATERIALS.md`](docs/PUBLIC-MATERIALS.md)（公开材料许可说明）与 [`CITATION.cff`](CITATION.cff)。
 - **版本记录**：[`CHANGELOG.md`](CHANGELOG.md)。
 - **问题反馈与建议**：欢迎通过 [GitHub Issues](https://github.com/LikC1606/TheoremOS/issues/new/choose) 提交内测申请、Bug 报告、功能建议或问题咨询。
@@ -174,12 +174,12 @@ TheoremOS 目前通过邮箱白名单机制开放研究内测。**内测期间�
 
 </details>
 
-### OpenAI Math：16 条证明记录
+### OpenAI Math：18 条证明记录
 
-以下 16 条证明记录已由我们运行独立的 Lean 检查程序和原题比较器严格复核（均公开完整研究过程），OpenAI 官方评测结果尚未确认。
+以下 18 条证明记录已由我们运行独立的 Lean 检查程序和原题比较器严格复核（均公开完整研究过程），OpenAI 官方评测结果尚未确认。其中“全部接缝”条目对应所列曲面表示下的辅助结论。
 
 <details>
-<summary><b>📂 点击展开：查看全部 16 条记录的题目、证明源码、检查结果与完整研究过程</b></summary>
+<summary><b>📂 点击展开：查看全部 18 条记录的题目、证明源码、检查结果与完整研究过程</b></summary>
 
 | 题目 | 领域 | 题面与证明 | 检查结果与研究过程 |
 | --- | --- | --- | --- |
@@ -199,6 +199,8 @@ TheoremOS 目前通过邮箱白名单机制开放研究内测。**内测期间�
 | 六阶 Hadamard 行比值的立方纤维消去 | 线性代数 | [题面](data/proofs/openai_hadamard_cube_fiber/Challenge.lean) · [证明](data/proofs/openai_hadamard_cube_fiber/Submission.lean) | [检查结果](data/proofs/openai_hadamard_cube_fiber/verification.json) · [研究过程](data/proofs/openai_hadamard_cube_fiber/process.json) |
 | 三维完备诺特正规局部复代数 | 交换代数 | [题面](data/proofs/openai_surface_cone_candidate_support/Challenge.lean) · [证明](data/proofs/openai_surface_cone_candidate_support/Submission.lean) | [检查结果](data/proofs/openai_surface_cone_candidate_support/verification.json) · [研究过程](data/proofs/openai_surface_cone_candidate_support/process.json) |
 | Truffet 优化程序的有限反例 | 热带优化 | [题面](data/proofs/openai_truffet_counterexample/Challenge.lean) · [证明](data/proofs/openai_truffet_counterexample/Submission.lean) | [检查结果](data/proofs/openai_truffet_counterexample/verification.json) · [研究过程](data/proofs/openai_truffet_counterexample/process.json) |
+| 三状态树信道的超临界重构 | 概率论 | [题面](data/proofs/openai_three_state_tree_clauses/Challenge.lean) · [证明](data/proofs/openai_three_state_tree_clauses/Submission.lean) | [检查结果](data/proofs/openai_three_state_tree_clauses/verification.json) · [研究过程](data/proofs/openai_three_state_tree_clauses/process.json) |
+| 曲面全部接缝标记迹值的辅助结论 | 代数几何 | [题面](data/proofs/openai_character_varieties_all_seams_support/Challenge.lean) · [证明](data/proofs/openai_character_varieties_all_seams_support/Submission.lean) | [检查结果](data/proofs/openai_character_varieties_all_seams_support/verification.json) · [研究过程](data/proofs/openai_character_varieties_all_seams_support/process.json) |
 
 </details>
 
@@ -217,7 +219,7 @@ TheoremOS 目前通过邮箱白名单机制开放研究内测。**内测期间�
 | --- | --- |
 | [accepted/](accepted/) | 六份通过 Lean-Eval 官方评测的证明及来源记录 |
 | [submitted/](submitted/) | 提交 #2144 中另外四份通过官方评测的证明 |
-| [data/proofs/](data/proofs/) | 16 条 OpenAI Math 证明记录，含题目、源码、检查报告和研究过程 |
+| [data/proofs/](data/proofs/) | 18 条 OpenAI Math 证明记录，含题目、源码、检查报告和研究过程 |
 | [in-progress/](in-progress/) | 早期的 Lean 证明草稿，部分尚未完成，含有 `sorry` |
 | [data/catalog.json](data/catalog.json) | 证明档案目录，含进展与检查结果链接 |
 | `index.html`, `archive.html`, `feedback.html`, `en/`, `assets/` | 官网、英文页面和工作台截图 |
