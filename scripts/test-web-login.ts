@@ -29,7 +29,7 @@ const mark = (check: string) => console.log(`PASS ${check}`);
 let browser: Awaited<ReturnType<typeof startBrowser>> | undefined;
 try {
   browser = await startBrowser(service.server, port);
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, locale: 'zh-CN' });
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error' && !/status of (?:40[013]|428)/u.test(message.text())) errors.push(message.text()); });
@@ -311,6 +311,11 @@ try {
   mark('the login page fits 375 and 320 pixel screens');
   assert.deepEqual(errors, []);
   console.log('Login checks passed: email and password login, account password setup, run links, account menu, logout and narrow layouts.');
+} catch (error) {
+  const page = browser?.contexts()[0]?.pages()[0];
+  console.error('Login check failed at', page?.url());
+  await page?.screenshot({ path: path.join(output, 'login-failure.png'), fullPage: true }).catch(() => {});
+  throw error;
 } finally {
   await browser?.close();
   await service.close();

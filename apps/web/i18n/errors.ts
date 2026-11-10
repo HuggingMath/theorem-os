@@ -1,5 +1,6 @@
 /** Error messages from the server: request checks, session and login, runs, the run environment, explanations, plans and knowledge. */
 export const errors: Record<string, string> = {
+  "当前账号的形式化队列已满，请等待已有任务结束。": "Your formalization queue is full. Wait for an existing task to finish.",
   '保存的完整证明身份与最终验收结果不一致，请重新从结果页保存。': 'The saved proof identity does not match the final acceptance result. Save it again from the result page.',
   '任务成果需要固定任务版本与源码提交。': 'Pin both the task version and source commit for this result.',
   '此运行尚未通过完整原题验收，不能保存为完整证明。': 'This run has not passed acceptance for the complete original problem and cannot be saved as a complete proof.',
@@ -45,7 +46,6 @@ export const errors: Record<string, string> = {
   "请检查原题、证明环境与 API Key。": "Check the original problem, proof environment and API key.",
   "请先取消进行中的形式化任务。": "Cancel the active formalization first.",
   "形式化记录已满，请先删除不需要的记录。": "The formalization history is full. Delete records you no longer need first.",
-  "已有形式化任务正在进行，请等待结束。": "A formalization is already running. Wait for it to finish.",
   "形式化队列已满，请稍后重试。": "The formalization queue is full. Try again shortly.",
   "请先确认原题与 Lean 声明的对应关系。": "Confirm the correspondence between the original problem and the Lean statement first.",
   "确认内容已改变，请刷新并重新核对。": "The content to confirm has changed. Refresh and check it again.",

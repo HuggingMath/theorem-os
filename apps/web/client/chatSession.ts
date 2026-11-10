@@ -819,7 +819,8 @@ export class ChatSession {
     const newProblem = !this.conversation && !this.run;
     const editedSubmission = newProblem && !!this.seed && this.draft !== this.seed.original;
     const pendingSubmission = newProblem && this.submissionIdentity.unresolved;
-    const busyFormalization = newProblem && !this.seed && !pendingSubmission && this.formalizations.some(item => running(item));
+    const busyFormalization = newProblem && !this.seed && !pendingSubmission && !!this.capabilities
+      && this.formalizations.filter(item => running(item)).length >= this.capabilities.limits.perOwner;
     const unavailable = newProblem && !pendingSubmission && this.capabilities?.available === false;
     document.body.dataset.chatEmpty = String(!this.conversation && !this.run && !this.loading && !this.seed);
     const solve = this.solve();
@@ -934,7 +935,7 @@ export class ChatSession {
             : !this.run?.observation ? t('正在等待当前运行的观察记录，收到后即可发送。') : t('指导会交给研究组参考，送达状态会显示在对话中。')
         : this.pendingMessage ? t('上一条问题的发送结果尚未确认，重试会先核对原问题；新输入会保留。')
         : this.options.session()?.maintenance ? t('工作台正在维护，暂不开始新任务或回答；已有记录仍可查看和下载。')
-        : busyFormalization ? t("上一道题正在形式化，你可以先写下一条消息。")
+        : busyFormalization ? t("当前账号的形式化队列已满，输入内容会保留。")
         : unavailable ? this.capabilities?.reason === 'provider'
           ? t('当前服务未配置自然语言解题的模型，请联系管理员；也可切换到 Lean 输入。')
           : this.options.session()?.runtime.ready

@@ -10,7 +10,7 @@ import type { NextStep } from '../../report';
 import { locale, localizeText, t } from '../../i18n';
 import type { SolveProcess } from '../solveProcess';
 import type { ThinkingStep } from '../thinkingProcess';
-import { formalizationReasonText } from '../formalizationReasons';
+import { formalizationReasonText, formalizationNextStep } from '../formalizationReasons';
 import { Icon } from './Icon';
 import { ChatMessageContent } from './ChatMessageContent';
 import { Rich } from '../richText';
@@ -121,8 +121,8 @@ function FormalizationFailure({ item }: { item: WebFormalization }) {
       <dt>{t('停止阶段')}</dt><dd>{stage}</dd>
       <dt>{t('原因')}</dt><dd>{formalizationReasonText(code)}</dd>
       <dt>{t('保留成果')}</dt><dd>{kept}</dd>
-      <dt>{t('下一步')}</dt><dd>{item.researchError ? t('保留这份陈述，点击「继续证明」重新进入证明队列。') : t('修改题目后重新发送；不会自动重试。')}</dd>
-      <dt>{t('诊断编号')}</dt><dd><code>{code}</code></dd>
+      <dt>{t('下一步')}</dt><dd>{formalizationNextStep(code)}</dd>
+      <dt>{t('错误代码')}</dt><dd><code>{code}</code></dd>
     </dl>
   </details>;
 }
@@ -153,7 +153,7 @@ function TaskMessage(props: ChatThreadProps) {
           : item?.status === 'confirmed' ? direct ? t('Lean 代码已就绪') : t("陈述已确认") : props.missingTask ? t('关联任务记录已删除') : t("正在读取任务");
   const description = props.missingTask ? t('原题和对话仍保留，可以修改题目后重新发送。') : run ? accepted && natural ? acceptedDescription(run) : resultDescription(run) : failed
     ? item?.researchError ? t("Lean 陈述已生成，但证明研究未能启动。")
-      : t("本次未能完成原题形式化，可查看详情后修改题目重试。")
+      : t("本次未能完成原题形式化，请查看详情中的原因和下一步。")
     : item?.status === 'cancelled' ? t("任务已停止，已保存的消息仍可查看。")
       : formalProgress?.description ?? t("陈述检查不代表证明通过，最终结果以 Lean 独立验收为准。");
   const proof = run?.result?.proof || run?.artifact?.source;
@@ -171,6 +171,7 @@ function TaskMessage(props: ChatThreadProps) {
         {active && props.onCancelTask && <button type="button" class="text-button" data-research-stop onClick={props.onCancelTask}>{t("停止解题")}</button>}
       </p>}
       {(!statementDecision || failed) && <p class="research-conversation-description">{description}</p>}
+      {!run && item?.status === 'queued' && item.queue && <p class="research-conversation-latest" data-formalization-queue>{t('排队第 {0} 位 · 前方 {1} 项等待 · {2} 项执行中', item.queue.position, item.queue.ahead, item.queue.running)}</p>}
       {item && <FormalizationProgress item={item} process={solve?.process} wide={solve?.wide}
         onCode={() => props.onArtifact('live')} />}
       {!statementDecision && natural && (item?.report || run?.formalization) && <p class="chat-statement-verdict" data-statement-verdict>

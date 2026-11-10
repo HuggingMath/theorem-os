@@ -155,6 +155,25 @@ async function waitForAnswerStatus(page: Page, status: 'complete' | 'interrupted
 }
 try {
   browser = await startBrowser(service.server, port);
+  {
+    const context = await browser.newContext({ locale: 'zh-CN' });
+    const page = await context.newPage();
+    try {
+      await page.goto(origin); await page.locator('#formalize-original').waitFor();
+      await page.evaluate(() => {
+        sessionStorage.setItem('theorem-os.chat-draft.anonymous.home', 'Private draft from an earlier anonymous session');
+        sessionStorage.setItem('theorem-os.chat-submission.v1.anonymous', JSON.stringify({
+          requestId: '11111111-1111-4111-8111-111111111111', digest: 'a'.repeat(64) }));
+      });
+      await page.reload(); await page.locator('#formalize-original').waitFor();
+      assert.equal(await page.locator('#formalize-original').inputValue(), '');
+      assert.equal(await page.evaluate(async () => {
+        const session = await (await fetch('/api/session')).json();
+        return sessionStorage.getItem(`theorem-os.chat-submission.v1.${session.draftOwner}`);
+      }), null, 'Unbound anonymous identities must never be assigned to the current owner');
+      mark('old anonymous drafts and submission identities do not migrate into a current owner');
+    } finally { await context.close(); }
+  }
   for (const width of [1440, 390]) {
     const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
     await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
@@ -498,8 +517,8 @@ try {
       const rows = await details.locator('dt').evaluateAll(nodes => nodes.map(node => [node.textContent,
         node.nextElementSibling?.textContent]));
       assert.deepEqual(rows, [['停止阶段', '生成 Lean 陈述'], ['原因', '已用完本次 Token 预算，尚未完成形式化。'],
-        ['保留成果', '没有保存可用的 Lean 陈述。'], ['下一步', '修改题目后重新发送；不会自动重试。'],
-        ['诊断编号', 'formalization_token_limit']]);
+        ['保留成果', '没有保存可用的 Lean 陈述。'], ['下一步', '先核对本次用量和预算；如需再试，可重新发送原题。不会自动重试，也不会自动增加预算。'],
+        ['错误代码', 'formalization_token_limit']]);
       assert.equal(runs.length, proofs, 'A failed formalization starts no proof');
       // With no proof run, the page is named after the conversation, as a run would name it.
       const named = [...(await conversation(page)).title];
@@ -703,6 +722,32 @@ try {
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
       mark(`${width}px: an expanded record list shows the new statement; removal has a terminal state and restores the original for editing`);
     } finally { await context.close(); }
+  }
+  {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: 'zh-CN', reducedMotion: 'reduce' });
+    const page = await context.newPage(), ids: string[] = [];
+    try {
+      await page.goto(origin); await page.locator('#formalize-original').fill('First queued browser problem'); await credentials(page);
+      let response = page.waitForResponse(reply => reply.request().method() === 'POST' && new URL(reply.url()).pathname === '/api/formalizations');
+      await page.locator('#formalize-start').click(); ids.push((await (await response).json()).formalization.id);
+      await page.waitForURL(url => url.searchParams.has('chat'));
+      await page.locator('#topbar-draft').click();
+      await page.locator('#formalize-original').fill('Second queued browser problem'); await credentials(page);
+      assert.equal(await page.locator('#formalize-start').isEnabled(), true, 'One active task leaves a second owner slot');
+      response = page.waitForResponse(reply => reply.request().method() === 'POST' && new URL(reply.url()).pathname === '/api/formalizations');
+      await page.locator('#formalize-start').click(); const second = (await (await response).json()).formalization; ids.push(second.id);
+      assert.equal(second.status, 'queued'); assert.equal(second.queue.position, 1);
+      await page.locator('[data-formalization-queue]').filter({ hasText: '排队第 1 位' }).waitFor();
+      await page.locator('#topbar-draft').click(); await page.locator('#formalize-original').fill('Third problem waits');
+      assert.equal(await page.locator('#formalize-start').isDisabled(), true, 'Two active tasks fill this owner queue');
+      mark('same-owner chat accepts a second task, displays FIFO and disables a third');
+    } finally {
+      await page.evaluate(async ids => {
+        const session = await (await fetch('/api/session')).json();
+        for (const id of ids) await fetch(`/api/formalizations/${id}/cancel`, { method: 'POST', headers: { 'X-CSRF-Token': session.csrfToken } });
+      }, ids).catch(() => {});
+      await context.close();
+    }
   }
   assert.deepEqual(errors, []);
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', paidModelCalls: false, checks }, null, 2) + '\n');

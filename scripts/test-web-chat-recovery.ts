@@ -105,6 +105,16 @@ try {
   await page.locator('#formalize-start').click(); await page.locator('.chat-error').waitFor();
   assert.equal(receiptStatus, 201); assert.equal(formalizations.length, 1);
   const firstId = formalizations[0];
+  // Simulate the former client's email scope. Only this account's already-bound state may migrate.
+  await page.evaluate(async () => {
+    const session = await (await fetch('/api/session')).json(), owner = session.draftOwner, email = session.account.email;
+    for (const key of Object.keys(sessionStorage)) {
+      const target = key.startsWith(`theorem-os.chat-draft.${owner}.`)
+        ? `theorem-os.chat-draft.${email}.${key.slice(`theorem-os.chat-draft.${owner}.`.length)}`
+        : key === `theorem-os.chat-submission.v1.${owner}` ? `theorem-os.chat-submission.v1.${email}` : undefined;
+      if (target) { sessionStorage.setItem(target, sessionStorage.getItem(key)!); sessionStorage.removeItem(key); }
+    }
+  });
   // Reopen the server from disk as well as the page: the idempotency record must outlive either process.
   await service.close();
   service = createWebService(config, runner, { mailer: async item => { mail.push(item); }, captchaAnswer: () => '24680' });

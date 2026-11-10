@@ -158,7 +158,7 @@ async function loadNaturalResearch() {
     runs: () => state.runs,
     onOpenRun: id => selectRun(id),
     connected: () => state.connected,
-    draftScope: state.session?.account?.email ?? 'anonymous',
+    draftScope: state.session ? ownerOfSession(state.session) : '',
     keyRequired: providerId => !state.session?.account?.serverKeys?.includes(providerId) && !state.session?.account?.savedKeys?.some(key => key.providerId === providerId),
     onNavigate: (id, mode, attached) => {
       chatArtifacts.clear();
@@ -342,7 +342,7 @@ function clearOwnedDrafts() {
   forgetRememberedKey();
   try {
     for (const key of Object.keys(sessionStorage)) {
-      if (key.startsWith('theorem-os.natural-research-draft.v1:') || key.startsWith('theorem-os.chat-draft.')
+      if (key.startsWith('theorem-os.natural-research-draft.v1:') || key.startsWith('theorem-os.chat-draft.') || key.startsWith('theorem-os.chat-submission.')
         || key.startsWith('theorem-os.chat-reading.') || key === entryStorageKey) sessionStorage.removeItem(key);
     }
   } catch { /* In-memory drafts are also cleared when browser storage is unavailable. */ }
@@ -2133,6 +2133,19 @@ function initialize(): Promise<void> {
       if (!state.session) {
         try { storedOwnerChanged = sessionStorage.getItem(draftOwnerStorageKey) !== ownerOfSession(session); }
         catch { /* Unavailable storage cannot restore a previous owner's draft. */ }
+        // Only the signed-in account's former email scope identifies an owner; old anonymous keys are unbound.
+        if (session.account && !storedOwnerChanged) try {
+          const previous = session.account.email, owner = ownerOfSession(session);
+          for (const key of Object.keys(sessionStorage)) {
+            const prefix = ['theorem-os.chat-draft.', 'theorem-os.chat-reading.'].find(value => key.startsWith(`${value}${previous}.`));
+            const target = prefix ? `${prefix}${owner}.${key.slice(`${prefix}${previous}.`.length)}`
+              : key === `theorem-os.chat-submission.v1.${previous}` ? `theorem-os.chat-submission.v1.${owner}` : undefined;
+            if (target && target !== key) {
+              if (sessionStorage.getItem(target) === null) sessionStorage.setItem(target, sessionStorage.getItem(key)!);
+              sessionStorage.removeItem(key);
+            }
+          }
+        } catch { /* The current owner can still start without browser storage. */ }
       }
       if (ownerChanged || storedOwnerChanged) { clearOwnedDrafts(); state.submitting = false; }
       ownedDrafts.bind(ownerOfSession(session));
@@ -2144,7 +2157,7 @@ function initialize(): Promise<void> {
         if (!ownerChanged) toast(t('会话已更新，未提交内容已保留'));
       }
       state.session = session;
-      chatWorkspace?.bindOwner(session.account?.email ?? 'anonymous');
+      chatWorkspace?.bindOwner(ownerOfSession(session));
       const previousProvider = field('provider').value;
       const providers = session.providers.map(provider => [provider.id, provider.name] as const);
       const keepProvider = session.providers.some(provider => provider.id === previousProvider);
