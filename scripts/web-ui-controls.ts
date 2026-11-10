@@ -90,6 +90,8 @@ export async function showArtifacts(page: Page) {
   if (await page.locator('body[data-view="run"]').count() && !await page.locator('#runs-panel').isVisible()) {
     // The chat's 路线图 link opens the run panel on its trajectory; the tab the run had selected is selected again.
     const tab = await page.evaluate(() => document.querySelector<HTMLElement>('[data-detail-tab][aria-selected="true"]')?.dataset.detailTab);
+    const more = page.locator('[data-chat-result-more]:not([open]) > summary');
+    if (await more.count()) await more.click();
     await page.locator('[data-research-artifact="roadmap"]').click();
     await page.locator('#runs-panel').waitFor();
     if (tab && tab !== 'trajectory') {

@@ -208,8 +208,8 @@ try {
   await form(otherTab, 'alice_other_tab_private');
   await page.locator('#open-account').click();
   await page.locator('#logout').click();
-  await page.waitForURL('**/login.html');
-  await otherTab.waitForURL('**/login.html');
+  await page.waitForURL(url => url.origin === serial.origin && url.pathname === '/login.html');
+  await otherTab.waitForURL(url => url.origin === serial.origin && url.pathname === '/login.html');
   assert.ok(!(await otherTab.evaluate(() => JSON.stringify(sessionStorage))).includes('alice_other_tab_private'));
   const switched = await serial.login('bob@example.org', client.context);
   await page.goto(serial.origin); await ready(page);
@@ -306,7 +306,7 @@ try {
   await expiredAlice.context.clearCookies();
   await expiredPage.evaluate(() => window.dispatchEvent(new Event('offline')));
   await expiredPage.evaluate(() => window.dispatchEvent(new Event('online')));
-  await expiredPage.waitForURL('**/login.html');
+  await expiredPage.waitForURL(url => url.origin === expired.origin && url.pathname === '/login.html');
   await expired.login('bob@example.org', expiredAlice.context);
   await expiredPage.goto(expired.origin); await ready(expiredPage);
   assert.notEqual(await expiredPage.locator('#task').inputValue(), 'alice_expired_private');
@@ -319,7 +319,7 @@ try {
   await deletedPage.locator('#open-account').click();
   await deletedPage.locator('#account-confirm').fill('alice@example.org');
   await deletedPage.locator('#delete-account').click();
-  await deletedPage.waitForURL('**/login.html');
+  await deletedPage.waitForURL(url => url.origin === deleted.origin && url.pathname === '/login.html');
   await deleted.login('bob@example.org', deletedAlice.context);
   await deletedPage.goto(deleted.origin); await ready(deletedPage);
   assert.notEqual(await deletedPage.locator('#task').inputValue(), 'alice_deleted_private');

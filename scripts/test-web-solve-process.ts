@@ -74,6 +74,8 @@ async function eventually(check: () => boolean, _description: string) {
   while (!check()) await sleep(40);
 }
 async function credentials(page: Page) {
+  if (!await page.locator('input[name="chat-participation"][value="automatic"]').isVisible())
+    await page.locator('[data-chat-participation-control] > summary').click();
   await page.locator('input[name="chat-participation"][value="automatic"]').check();
   if (!await page.locator('#formalize-key').isVisible()) await page.locator('#open-settings').click();
   await page.locator('#formalize-key').fill('sk-disposable-browser-fixture');
@@ -107,7 +109,9 @@ try {
     formalization.send({ type: 'activity', activity: { type: 'step', step: { round: 1, step: 'revision', stage: 'round', text: 'Lean 报错：第 2 行 unknown tactic。' } } });
     await process(page).waitFor();
     await page.locator('.solve-process-title').filter({ hasText: '解题过程' }).waitFor();
-    assert.equal(await process(page).getAttribute('open'), null, 'The readable thinking process leaves diagnostic records folded');
+    assert.equal(await process(page).getAttribute('open'), '', 'The recorded diagnostic process starts open');
+    await process(page).locator(':scope > summary').click();
+    assert.equal(await process(page).getAttribute('open'), null, 'The reader can fold diagnostic records');
     await process(page).locator(':scope > summary').click();
     await page.waitForFunction(() => document.querySelectorAll('.solve-stage[data-stage]').length >= 3);
     assert.equal(await process(page).getAttribute('open'), '', 'The reader can open the detailed execution records');
@@ -158,8 +162,16 @@ try {
       mark('1440px: a check row in the checklist opens the workspace beside the chat');
     } else {
       assert.equal(await live(page).isVisible(), false, 'A phone shows the checklist only');
-      assert.equal(await page.locator('[data-research-artifact="live"]').isVisible(), false);
-      assert.equal(await page.locator('[data-solve-check]').count(), 0, 'A phone\'s check rows open their records in place');
+      assert.equal(await page.locator('[data-research-artifact="live"]').isVisible(), true, 'A phone can explicitly open the current source');
+      const row = page.locator('.solve-row').filter({ has: page.locator('[data-solve-check]') }).first();
+      const toggle = row.locator('.solve-row-toggle');
+      if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+      assert.match(await row.innerText(), /unknown tactic/u, 'A phone can expand the saved check feedback in place');
+      await row.locator('[data-solve-check]').click();
+      await live(page).waitFor();
+      await page.locator('#close-research-output').click();
+      await page.waitForFunction(() => document.body.dataset.chatArtifact !== 'live');
+      mark('390px: check feedback expands in place and its source opens on request');
     }
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
     assert.deepEqual(await audit(page), []);

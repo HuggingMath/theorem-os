@@ -25,6 +25,7 @@ const service = createWebService(config, runner,
 { mailer: async message => { mail.push(message); }, captchaAnswer: () => '24680' });
 // The workbench at the root address; it may already name the run it reopened (?run= or ?chat=) when the load event fires.
 const workbench = (url: URL) => url.origin === origin && url.pathname === '/';
+const loginPage = (url: URL) => url.origin === origin && url.pathname === '/login.html';
 const mark = (check: string) => console.log(`PASS ${check}`);
 let browser: Awaited<ReturnType<typeof startBrowser>> | undefined;
 try {
@@ -38,7 +39,7 @@ try {
   const recordFirstVisit = (request: { url(): string }) => firstVisit.push(new URL(request.url()).pathname);
   page.on('request', recordFirstVisit);
   await page.goto(origin);
-  await page.waitForURL(/\/login\.html$/u);
+  await page.waitForURL(loginPage);
   await page.locator('#send-code:enabled').waitFor();
   page.off('request', recordFirstVisit);
   // The server sends a signed-out visitor to the login page; the workbench bundle is never fetched on the way.
@@ -187,7 +188,7 @@ try {
     await page.setViewportSize({ width, height: 760 });
     await settled(page);
     const bar = await page.locator('#topbar').evaluate(topbar => ({ scroll: topbar.scrollWidth, client: topbar.clientWidth,
-      controls: [...topbar.querySelectorAll<HTMLElement>('button, a')].filter(control => control.getClientRects().length).map(control => {
+      controls: [...topbar.querySelectorAll<HTMLElement>('button, a, summary')].filter(control => control.checkVisibility()).map(control => {
         const box = control.getBoundingClientRect();
         return { name: control.id || control.className.split(' ')[0], left: box.left, right: box.right, width: box.width, height: box.height };
       }).sort((a, b) => a.left - b.left) }));
@@ -197,6 +198,7 @@ try {
     for (const control of bar.controls) assert.ok(control.width >= 24 && control.height >= 24, `${control.name} is under 24px at ${width}px: ${JSON.stringify(control)}`);
     for (const [index, control] of bar.controls.slice(1).entries())
       assert.ok(control.left >= bar.controls[index].right - 0.5, `${bar.controls[index].name} and ${control.name} overlap at ${width}px`);
+    if (width === 850 || width === 320) await page.screenshot({ path: path.join(output, `signed-in-topbar-${width}.png`) });
   }
   await page.setViewportSize({ width: 1440, height: 900 });
   mark('the signed-in top bar keeps the search button, settings, language and account at 24px or more, without overlap, from 1440 to 320 pixels');
@@ -236,7 +238,7 @@ try {
   const chatAddress = new URL(page.url()).search, signedIn = await page.context().cookies();
   await page.context().clearCookies();
   await page.evaluate(() => { window.dispatchEvent(new Event('offline')); window.dispatchEvent(new Event('online')); });
-  await page.waitForURL(url => url.pathname === '/login.html' && url.search === chatAddress);
+  await page.waitForURL(url => loginPage(url) && url.searchParams.get('returnTo') === `/${chatAddress}`);
   await page.locator('#send-code:enabled').waitFor();
   await page.context().addCookies(signedIn);
   await page.reload();
@@ -274,7 +276,7 @@ try {
   await page.locator('#toast').filter({ hasText: '密码已更新' }).waitFor();
   assert.equal((await (await page.request.get(origin + '/api/session')).json()).account.passwordSet, true);
   await page.click('#logout');
-  await page.waitForURL(/\/login\.html$/u);
+  await page.waitForURL(loginPage);
   // Until the page has its session, the password form cannot be sent: it would carry no session cookie or CSRF token.
   let releaseSession!: () => void;
   const sessionHeld = new Promise<void>(resolve => { releaseSession = resolve; });
@@ -296,9 +298,9 @@ try {
   await page.locator('#account-dialog[open]').waitFor();
   assert.equal(await page.locator('#account-current-wrap').isVisible(), true);
   await page.click('#logout');
-  await page.waitForURL(/\/login\.html$/u);
+  await page.waitForURL(loginPage);
   await page.goto(origin);
-  await page.waitForURL(/\/login\.html$/u);
+  await page.waitForURL(loginPage);
   mark('the account dialog sets a password; the password form waits for the session, a wrong password fails and the right one opens the same account');
 
   for (const width of [375, 320]) {
