@@ -15,8 +15,10 @@ import { nextSteps, summarizeGoals } from '../report';
 import type { ChatArtifactKind } from './chatArtifactNavigation';
 import { clockTime } from './collaborationUi';
 import type { PlanApprovalProps } from './ui/RunHeader';
-import { decodeChatDraft, encodeChatDraft, readEditedProblemId, type ChatDraft, type ChatDraftSettings, type ChatPendingMessage } from './chatDraft';
+import { decodeChatDraft, encodeChatDraft, readEditedProblemId, type ChatDraft, type ChatDraftSettings, type ChatPendingMessage, type ChatOriginalBackup } from './chatDraft';
 import { libraryReferenceId, withLibraryReferences, type ChatLibraryReference } from './chatReference';
+import type { ProblemDraftValue } from '../problemDraftTypes';
+import type { ProblemDraftPanelProps } from './problemDrafts';
 import { SubmissionIdentity } from './submissionIdentity';
 import { retainLatestRun } from './runSnapshot';
 import { statementTemplate } from './productFlow';
@@ -59,6 +61,8 @@ type Options = {
   onPlan(run: WebRun, edit: boolean): void;
   onCancelRun(run: WebRun): void;
   isSample(run: WebRun): boolean;
+  problemDraftTarget?(): ProblemDraftPanelProps['target'];
+  onRestoreProblemDraft?: ProblemDraftPanelProps['onRestore'];
 };
 
 /** Owns the conversation and its draft. Proof tasks remain independent server jobs. */
@@ -76,6 +80,7 @@ export class ChatSession {
   private draft = '';
   private references: ChatLibraryReference[] = [];
   private editedProblem = readEditedProblemId(new URLSearchParams(location.search));
+  private originalBackup?: ChatOriginalBackup;
   private environment: 'standard' | 'mathlib' = 'mathlib';
   private effort: 'low' | 'high' | 'max' = 'max';
   private participation: 'guided' | 'automatic' = 'guided';
@@ -231,7 +236,7 @@ export class ChatSession {
     const position = this.draftPositions.get(id);
     const settings: ChatDraftSettings = { providerId: this.providerId, model: this.model, environment: this.environment,
       effort: this.effort, participation: this.participation, ...structuredClone(this.budgets) };
-    const draft: ChatDraft = { text: this.draft, settings,
+    const draft: ChatDraft = { text: this.draft, settings, ...(!this.currentId && this.originalBackup ? { originalBackup: this.originalBackup } : {}),
       ...(this.guidanceMode && this.guidanceRunId ? { guidance: { runId: this.guidanceRunId,
         ...(this.guidanceTarget && this.guidanceVersion ? { taskRef: { id: this.guidanceTarget, version: this.guidanceVersion } } : {}) } } : {}),
       ...(this.pendingMessage ? { pendingMessage: { ...this.pendingMessage } } : {}),
@@ -266,6 +271,7 @@ export class ChatSession {
       Object.assign(this, { providerId, model, environment, effort, participation });
       this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...webFormalizationDefaults.research, ...research } }; this.hasDraftSettings = true;
     }
+    this.originalBackup = id === 'home' ? draft?.originalBackup : undefined;
     this.guidanceMode = Boolean(draft?.guidance);
     this.guidanceRunId = draft?.guidance?.runId ?? '';
     this.guidanceTarget = draft?.guidance?.taskRef?.id ?? '';
@@ -388,7 +394,7 @@ export class ChatSession {
     this.attachRunId = ''; this.loading = false; this.submitting = false; this.error = ''; this.readError = ''; this.apiKey = ''; this.keyNotice = ''; this.startingResearch = false; this.clearConnection();
     if (reset) this.references = [];
     this.draft = reset ? '' : this.restoredDraft('home');
-    if (reset) { this.pendingMessage = undefined; this.messageErrorId = ''; }
+    if (reset) { this.pendingMessage = undefined; this.messageErrorId = ''; this.originalBackup = undefined; }
     if (reset) { this.submissionIdentity.clear(); this.rememberDraft(); }
     document.body.dataset.chatArtifact = '';
     document.body.dataset.outputOpen = 'false';
@@ -405,9 +411,33 @@ export class ChatSession {
     if (!saved && original !== undefined) { this.draft = original; this.references = []; if (environment) this.environment = environment; }
     this.rememberDraft(); this.options.onNavigate('', mode, false, id); this.options.onSelection(); this.draw(); this.focus();
   }
-  fillOriginal(original: string) { this.quotedDrafts.delete(this.draftId); this.draft = original; this.rememberDraft(); this.draw(); this.focus(); }
+  problemDraft(): Extract<ProblemDraftValue, { mode: 'natural' }> {
+    return { mode: 'natural', text: this.draft, settings: { providerId: this.providerId, model: this.model, environment: this.environment,
+      effort: this.effort, participation: this.participation, ...structuredClone(this.budgets) } };
+  }
+  restoreProblemDraft(value: Extract<ProblemDraftValue, { mode: 'natural' }>) {
+    this.home(false); this.keepOriginal();
+    const { maxRunSeconds, maxTotalTokens, research, ...settings } = value.settings;
+    Object.assign(this, settings); this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...research } }; this.hasDraftSettings = true;
+    this.draft = value.text; this.apiKey = ''; this.clearConnection(); this.rememberDraft(); this.draw(); this.focus();
+  }
+  private keepOriginal() {
+    if (!this.currentId && this.draft.trim() && !this.originalBackup) {
+      const value = this.problemDraft(); this.originalBackup = { text: value.text, settings: value.settings };
+    }
+  }
+  private recoverOriginal() {
+    const backup = this.originalBackup; if (!backup) return;
+    this.originalBackup = undefined;
+    if (backup.settings) {
+      const { maxRunSeconds, maxTotalTokens, research, ...settings } = backup.settings;
+      Object.assign(this, settings); this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...research } };
+    }
+    this.draft = backup.text; this.apiKey = ''; this.clearConnection(); this.rememberDraft(); this.draw(); this.focus();
+  }
+  fillOriginal(original: string) { if (original !== this.draft) this.keepOriginal(); this.quotedDrafts.delete(this.draftId); this.draft = original; this.rememberDraft(); this.draw(); this.focus(); }
   prepareOriginal(original: string, environment: 'standard' | 'mathlib') {
-    this.home(false); this.environment = environment; this.fillOriginal(original);
+    this.home(false); this.keepOriginal(); this.environment = environment; this.fillOriginal(original);
     requestAnimationFrame(() => this.composer.querySelector<HTMLTextAreaElement>('textarea')?.scrollIntoView({ block: 'center', behavior: 'instant' }));
   }
   revealMessage(id: string) {
@@ -813,7 +843,7 @@ export class ChatSession {
   }
   private useExample(id: string) {
     const example = researchExamples.find(item => item.id === id);
-    if (example) { this.environment = example.environment; this.fillOriginal(locale === 'en' ? example.originalEn : example.original); }
+    if (example) { this.keepOriginal(); this.environment = example.environment; this.fillOriginal(locale === 'en' ? example.originalEn : example.original); }
   }
   private refreshGuidanceFeedback(force = false) {
     const runId = this.run?.id;
@@ -967,6 +997,12 @@ export class ChatSession {
     const quotedBlocks = this.draftQuoteBlocks();
     renderChatComposer(this.composer, {
       ...(newProblem && !this.loading && !this.seed ? { home } : {}),
+      ...(newProblem && this.originalBackup ? { originalRecovery: () => this.recoverOriginal() } : {}),
+      ...(newProblem && this.options.onRestoreProblemDraft && this.options.session() ? { problemDrafts: {
+        owner: this.options.session()!.draftOwner ?? this.options.draftScope, account: Boolean(this.options.session()!.account), value: this.problemDraft(),
+        locked: this.submitting || Boolean(this.seed || this.submissionIdentity.unresolved), request: this.options.request,
+        target: this.options.problemDraftTarget?.(), onRestore: this.options.onRestoreProblemDraft,
+      } } : {}),
       input: this.draft, onInput: value => { this.draft = value; this.rememberDraft(); this.draw(); },
       ...(!this.guidanceMode && quotedBlocks.length ? { quote: { count: quotedBlocks.length, onUndo: () => this.undoStepQuote() } } : {}),
       references: this.references, onRemoveReference: id => {

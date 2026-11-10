@@ -120,7 +120,7 @@ describe('persisted collaboration workflows', () => {
     expect(projects.respondInvitation(carol, project.id, invitation.id, respond).status).toBe('accepted');
     const accepted = projects.detail(carol, project.id);
     expect(accepted.visibility).toBe('members'); expect(accepted.permissions.edit).toBe(false);
-    expect(accepted.members.filter(member => member.researcherId === projects.identity(carol))).toEqual([{ researcherId: projects.identity(carol), role: 'reader' }]);
+    expect(accepted.members.filter(member => member.researcherId === projects.identity(carol))).toEqual([{ researcherId: projects.identity(carol), role: 'reader', displayName: 'Carol', profileVisible: true }]);
     errorStatus(() => projects.respondInvitation(carol, project.id, invitation.id, { ...respond, requestId: 'accept-again' }), 409);
   });
   it('allows requests but reserves acceptance, refusal and invitations for the authorized actors', () => {

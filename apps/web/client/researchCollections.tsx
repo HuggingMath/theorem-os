@@ -2,17 +2,29 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ResearchBookmark, ResearchBookmarkTarget, ResearchCollection, ResearchCollectionPreparation } from '../researchCollectionTypes';
 import { Rich, RichProse } from './richText';
 import { OwnedDrafts, researchEnvironmentStorageKey, researchSelectionStorageKey, webDraftOwner } from './ownedDrafts';
+import { locale } from '../i18n';
 import { base, enc, Empty, ErrorBox, Field, MutationState, Panel, tx, useMutation, useResource, type Item, type Items, type ResearchContext } from './researchShared';
 
 export function BookmarkControl(props: { target: ResearchBookmarkTarget; context: ResearchContext }) {
+  const target = props.target, login = target.kind === 'release'
+    ? `login.html?${new URLSearchParams({ returnTo: 'library', entry: target.assetId, version: target.version, action: 'bookmark', lang: locale })}` : 'login.html';
   return props.context.session.authenticated ? <BookmarkForm key={JSON.stringify(props.target)} {...props} />
-    : <a class="text-button" href="login.html">{tx('登录后收藏', 'Sign in to save')}</a>;
+    : <a class="text-button" href={login}>{tx('登录后收藏', 'Sign in to save')}</a>;
 }
 function BookmarkForm({ target }: { target: ResearchBookmarkTarget; context: ResearchContext }) {
-  const [open, setOpen] = useState(false), [collectionId, setCollectionId] = useState(''), [title, setTitle] = useState(''), [note, setNote] = useState('');
+  const parameters = new URLSearchParams(location.search), requested = target.kind === 'release' && parameters.get('action') === 'bookmark'
+    && parameters.get('entry') === target.assetId && parameters.get('version') === target.version;
+  const [open, setOpen] = useState(requested), [collectionId, setCollectionId] = useState(''), [title, setTitle] = useState(''), [note, setNote] = useState('');
   const [created, setCreated] = useState<ResearchCollection>(), [saved, setSaved] = useState(false), [noteEdited, setNoteEdited] = useState(false);
+  const control = useRef<HTMLDetailsElement>(null), returnFocused = useRef(false);
   const collections = useResource<Items<ResearchCollection>>(open ? `${base}/collections` : undefined);
   const create = useMutation(), save = useMutation(), items = [...(collections.data?.items ?? []), ...(created && !collections.data?.items.some(item => item.id === created.id) ? [created] : [])];
+  useEffect(() => {
+    if (!requested || !open || !collections.data || returnFocused.current || !control.current) return;
+    returnFocused.current = true;
+    control.current.scrollIntoView({ block: 'center' });
+    control.current.querySelector<HTMLElement>('select, input, textarea')?.focus({ preventScroll: true });
+  }, [requested, open, collections.data]);
   const submit = async () => {
     let collection = items.find(item => item.id === (collectionId || items[0]?.id));
     if (collectionId === 'new' || !items.length) {
@@ -23,9 +35,10 @@ function BookmarkForm({ target }: { target: ResearchBookmarkTarget; context: Res
     if (!collection) return;
     await save.run<Item<ResearchCollection>>('POST', `${base}/collections/${enc(collection.id)}/items`, { expectedRevision: collection.revision, target, ...(noteEdited ? { note } : {}) }, () => {
       setSaved(true); collections.refresh();
+      if (requested) { const address = new URL(location.href); address.searchParams.delete('action'); history.replaceState(null, '', address); }
     });
   };
-  return <details class="research-bookmark-control" onToggle={event => setOpen(event.currentTarget.open)} data-bookmark-control>
+  return <details ref={control} class="research-bookmark-control" open={open} onToggle={event => setOpen(event.currentTarget.open)} data-bookmark-control>
     <summary>{saved ? tx('已收藏', 'Saved') : tx('收藏到资料夹', 'Save to a collection')}</summary>
     {open && <form class="research-form" onSubmit={event => { event.preventDefault(); void submit(); }}>
       <ErrorBox message={collections.error} />{collections.error && <button class="text-button" type="button" onClick={collections.refresh}>{tx('重新读取', 'Try again')}</button>}

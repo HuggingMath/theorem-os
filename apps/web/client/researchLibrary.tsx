@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { FrozenResearchConfiguration, ResearchAsset, ResearchAssetPrefill, ResearchAssetPreview, ResearchAssetRelease, ResearchAssetKind, ResearchConfigurationSelection, ResearchLibraryUse, ResearchPublication, ResearchReleaseRef } from '../researchAssetTypes';
 import type { ResearcherProfile } from '../researchProjectTypes';
 import type { ResearchLibraryDiscovery } from '../researchLibraryDiscoveryTypes';
+import type { ResearchLibraryProvenance } from '../researchAssetTypes';
 import { AssetEditor, FixedMathSource } from './researchAssetEditor';
 import { BookmarkControl } from './researchCollections';
 import { AssetFollowControl, ReleaseComparison } from './researchReleaseComparison';
@@ -10,9 +11,11 @@ import { MathUsageDescription } from './researchMathUsage';
 import { InstalledLibraryDirectory, InstalledLibraryModule } from './researchInstalledLibrary';
 import { LibraryDiscoveryContext } from './researchLibraryDiscovery';
 import { discoverySuggestedTerms, matchLibraryDiscovery } from './researchLibraryDiscoveryModel';
+import { rememberLibraryEntry } from './libraryEntry';
 import { RichProse } from './richText';
 import { OwnedDrafts, researchEnvironmentStorageKey, researchSelectionStorageKey, webDraftOwner } from './ownedDrafts';
 import { loginHref, type WebEnvironment } from '../shared';
+import { locale } from '../i18n';
 import { api, base, enc, Empty, ErrorBox, errorText, Field, MutationState, nameOf, Panel, personHref, Search, stamp, State, Tags, theoremHref, tx,
   useMutation, useResource, type Item, type Items, type ResearchContext } from './researchShared';
 
@@ -239,7 +242,7 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
       {showingAssets && <p class="research-field-note">{tx('加入配置选择后可检查依赖与环境，再带入工作台。新研究启动前会固定完整版本和依赖。', 'Add fixed versions to your selection, check their dependencies and environment, then open the workbench. Versions and dependencies are frozen before research starts.')}</p>}
     </div>}
 
-    <ErrorBox message={storageError} />{selection.length > 0 && <Selection selection={selection} remove={choose} clear={clear} assets={directory.data?.items ?? []} />}</div>
+    <ErrorBox message={storageError} />{selection.length > 0 && <Selection selection={selection} remove={choose} clear={clear} assets={directory.data?.items ?? []} authenticated={context.session.authenticated} />}</div>
   </div>;
 }
 
@@ -314,7 +317,12 @@ function Asset({ asset, context, refresh, selection, choose }: { asset: Research
   const useVersion = (selectedVersion = release?.version) => {
     if (!selectedVersion) return;
     const ref = { assetId: asset.id, version: selectedVersion }, next = [...selection.filter(item => item.assetId !== asset.id), ref];
-    saveSelection(next); location.assign(`./?researchAsset=${enc(ref.assetId)}&researchVersion=${enc(ref.version)}`);
+    const parameters = new URLSearchParams({ researchAsset: ref.assetId, researchVersion: ref.version, lang: locale });
+    try {
+      if (!context.session.authenticated) parameters.set('libraryReturn', rememberLibraryEntry(next));
+      else if (!saveSelection(next)) throw new Error('selection_storage_unavailable');
+      location.assign(`./?${parameters}`);
+    } catch { setDraftError(tx('未能保存成果选择，请登录后在这个版本页重试。', 'Could not save the selection. Sign in and try again from this release.')); }
   };
   const shown = release ?? asset.release ?? asset, shownTime = release?.createdAt ?? asset.release?.createdAt ?? asset.updatedAt;
   const withdrawn = Boolean(asset.releases.find(item => item.version === version)?.withdrawn);
@@ -329,7 +337,7 @@ function Asset({ asset, context, refresh, selection, choose }: { asset: Research
       }}>{asset.releases.filter(item => !item.withdrawn || asset.editable).map(item => <option key={item.version} value={item.version}>{item.version} · {item.license} · {stamp(item.createdAt)}{item.withdrawn ? ` · ${tx('已撤回', 'Withdrawn')}` : ''}</option>)}</select></label>
       : <Empty>{tx('尚无已发布版本。', 'No published versions yet.')}</Empty>}
       <ErrorBox message={releaseResult.error} />{releaseResult.error && <button class="text-button" type="button" onClick={releaseResult.refresh}>{tx('重新读取版本', 'Reload release')}</button>}
-      {release && <><div class="research-item-meta"><span>{release.license}</span><State value={release.visibility} /><time dateTime={release.createdAt}>{stamp(release.createdAt)}</time></div>
+      <ErrorBox message={draftError} />{release && <><div class="research-item-meta"><span>{release.license}</span><State value={release.visibility} /><time dateTime={release.createdAt}>{stamp(release.createdAt)}</time></div>
         {withdrawn && <p class="research-status">{tx('此版本已撤回，不能加入新的研究配置。', 'This version is withdrawn and cannot be added to a new research configuration.')}</p>}
         <div class="research-actions"><button class="button button-primary" type="button" disabled={withdrawn} onClick={() => useVersion()}>{tx('用于新研究', 'Use in new research')}</button>
           <button class="button" type="button" disabled={withdrawn} aria-pressed={selection.some(ref => ref.assetId === asset.id && ref.version === release.version)} onClick={() => choose({ assetId: asset.id, version: release.version })}>
@@ -363,9 +371,12 @@ function Asset({ asset, context, refresh, selection, choose }: { asset: Research
 }
 
 function ReleaseContent({ release }: { release: ResearchAssetRelease }) {
+  const provenance = useResource<Item<ResearchLibraryProvenance>>(release.mathematics?.source.kind === 'run'
+    ? `${base}/library/${enc(release.assetId)}/releases/${enc(release.version)}/source` : undefined);
   if (release.type === 'mathematics' && release.mathematics) {
     const math = release.mathematics;
-    return <><MathUsageDescription usage={math.usage} />{math.source.kind === 'run' && math.source.scope && <FixedMathSource source={math.source} />}
+    return <><MathUsageDescription usage={math.usage} />{math.source.kind === 'run' && <FixedMathSource source={math.source} provenance={provenance.data?.item} />}
+      <ErrorBox message={provenance.error} />{provenance.error && <button class="text-button" type="button" onClick={provenance.refresh}>{tx('重新核对来源访问权限', 'Recheck source access')}</button>}
       <h3>{tx('数学声明', 'Mathematical declarations')}</h3>{math.declarations.map(declaration => <article class="research-event" key={`${declaration.file}:${declaration.name}`}>
       <span class="research-item-title">{declaration.name}</span><pre class="research-block-code">{declaration.type}</pre><span class="research-item-meta">{declaration.file}</span></article>)}
       <dl class="research-facts"><div><dt>{tx('环境', 'Environment')}</dt><dd>{math.environment}</dd></div><div><dt>{tx('环境摘要', 'Environment digest')}</dt><dd>{math.environmentDigest}</dd></div><div><dt>{tx('库摘要', 'Pack digest')}</dt><dd>{math.packDigest}</dd></div></dl>
@@ -490,7 +501,7 @@ function Withdraw({ asset, version, refresh }: { asset: ResearchAsset; version: 
       onClick={() => void action.run('POST', `${base}/library/${enc(asset.id)}/releases/${enc(version)}/withdraw`, { expectedRevision: asset.revision }, refresh)}>{tx('撤回版本', 'Withdraw release')}</button></details>;
 }
 
-function Selection({ selection, remove, clear, assets }: { selection: ResearchReleaseRef[]; remove: (ref: ResearchReleaseRef) => void; clear: () => void; assets: ResearchAsset[] }) {
+function Selection({ selection, remove, clear, assets, authenticated }: { selection: ResearchReleaseRef[]; remove: (ref: ResearchReleaseRef) => void; clear: () => void; assets: ResearchAsset[]; authenticated: boolean }) {
   const [environment, setEnvironment] = useState<WebEnvironment>('mathlib'), [busy, setBusy] = useState(false), [error, setError] = useState(''), [validated, setValidated] = useState<FrozenResearchConfiguration>();
   const signature = JSON.stringify([selection, environment]), currentSignature = useRef(signature);
   currentSignature.current = signature;
@@ -511,8 +522,12 @@ function Selection({ selection, remove, clear, assets }: { selection: ResearchRe
     finally { setBusy(false); }
   };
   const open = () => {
-    if (!saveSelection(selection, validated?.environment ?? environment)) { setError(tx('浏览器未能保存组合，请从每个版本的「用于新研究」入口带入。', 'The browser could not save the selection. Use each release’s “Use in new research” action.')); return; }
-    const first = selection[0]!; location.assign(`./?researchAsset=${enc(first.assetId)}&researchVersion=${enc(first.version)}`);
+    const first = selection[0]!, parameters = new URLSearchParams({ researchAsset: first.assetId, researchVersion: first.version, lang: locale });
+    try {
+      if (!authenticated) parameters.set('libraryReturn', rememberLibraryEntry(selection, validated?.environment ?? environment));
+      else if (!saveSelection(selection, validated?.environment ?? environment)) throw new Error('selection_storage_unavailable');
+      location.assign(`./?${parameters}`);
+    } catch { setError(tx('浏览器未能保存组合，请从每个版本的「用于新研究」入口带入。', 'The browser could not save the selection. Use each release’s “Use in new research” action.')); }
   };
   return <section id="research-library-selection" class="research-panel research-selection-panel" aria-label={tx('研究配置选择', 'Research configuration selection')}><h2>{tx('研究配置选择', 'Research configuration selection')} ({selection.length})</h2>
     <ul class="research-list">{selection.map(ref => <li class="research-list-item" key={`${ref.assetId}@${ref.version}`}><div class="research-actions"><a href={filteredLibraryHref(ref.assetId, ref.version)}>{assets.find(asset => asset.id === ref.assetId)?.name ?? ref.assetId} · {ref.version}</a>

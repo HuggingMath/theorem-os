@@ -48,6 +48,8 @@ export type ResearchFeedbackTarget = {
   runId: string; statementVersionId: string;
   observationRef: { sequence: number; stateDigest: string }; taskRef?: { id: string; version: string };
 };
+/** A discussion cites a saved step; it never targets a live execution command. */
+export type ResearchDiscussionContext = ResearchFeedbackTarget & { taskRef: { id: string; version: string }; commit?: string; taskTitle?: string };
 export type ResearchIssueSource = { issueId: string; issueRevision: number; resolutionAt: string; proposalId?: string; reviewedTaskRef?: { id: string; version: string } };
 export type ResearchAnnotationAnchor =
   | { kind: 'source'; sourceDigest: string; file: string; startLine: number; endLine: number; quote: string }
@@ -71,7 +73,7 @@ export type ResearchReviewComment = { id: string; author: ResearchAuthor; text: 
 export type ResearchCandidateRevisionInput = { feedbackId: string; expectedRevision: number; responses: { commentId: string; text: string }[] };
 type FeedbackBase = ResearchMutation & { text: string; visibility?: 'members' | 'public'; sourceFeedbackId?: string; issueSource?: ResearchIssueSource };
 export type ResearchFeedbackInput = FeedbackBase & (
-  | { kind: 'discussion'; statementVersionId?: string }
+  | { kind: 'discussion'; statementVersionId?: string; context?: ResearchDiscussionContext }
   | { kind: 'guidance'; target: ResearchFeedbackTarget; recipient: WebGuidanceInput['recipient'] }
   | { kind: 'plan-edit' | 'route-control'; target: ResearchFeedbackTarget; proposal: Omit<WebPlanProposal, 'id'> }
   | { kind: 'plan-approval'; target: ResearchFeedbackTarget; planVersion: string }
@@ -104,7 +106,7 @@ export type ResearchFeedback = {
   reviewContinuation?: ResearchWorkContinuation;
   /** Non-members can revisit their own private discussion while the project remains readable. */
   authorReadable?: boolean;
-  statementVersionId?: string; target?: ResearchFeedbackTarget;
+  statementVersionId?: string; target?: ResearchFeedbackTarget; discussionContext?: ResearchDiscussionContext;
   /** Typed payload retained for review and stable command retries. It contains no owner or connection. */
   payload?: Omit<Extract<ResearchFeedbackInput, { kind: 'guidance' }>, keyof FeedbackBase | 'kind' | 'target'>
     | { proposal: Omit<WebPlanProposal, 'id'> } | { planVersion: string }
@@ -132,7 +134,7 @@ export type ResearchActivity = {
 };
 export type ResearchProjectSummary = {
   id: string; title: string; description: string; fields: string[]; visibility: ResearchVisibility;
-  owner: ResearchAuthor; members: { researcherId: string; role: ResearchMemberRole }[];
+  owner: ResearchAuthor; members: { researcherId: string; role: ResearchMemberRole; displayName?: string; profileVisible?: boolean }[];
   currentStatementVersionId?: string; revision: number; createdAt: string; updatedAt: string;
   permissions: { manage: boolean; edit: boolean; discuss: boolean; member: boolean };
   following?: boolean;

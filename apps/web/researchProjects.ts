@@ -13,7 +13,7 @@ import type {
   ResearchProfileInput, ResearchProjectDetail, ResearchProjectInput, ResearchProjectSummary, ResearchProjectUpdate,
   ResearchQuery, ResearcherDirectory, ResearcherProfile, ResearchRunBinding, ResearchRunBindingInput, ResearchRunGrants, ResearchRunPermission,
   ResearchStatementInput, ResearchStatementVersion, ResearchProofResult, ResearchWorkImpact, ResearchWorkImpactItem, ResearchWorkContinuation,
-  ResearchAnnotation, ResearchAnnotationAnchor, ResearchAnnotationContext, ResearchAnnotationPage,
+  ResearchAnnotation, ResearchAnnotationAnchor, ResearchAnnotationContext, ResearchAnnotationPage, ResearchDiscussionContext,
 } from './researchProjectTypes';
 import type { ResearchLibraryCandidateAttachment } from './researchLibraryTrialTypes';
 import type { ResearchStageReference } from './researchProblemTypes';
@@ -47,6 +47,7 @@ const taskRefSchema = z.object({ id, version: nonempty(128) }).strict();
 const observationRefSchema = z.object({ sequence: z.number().int().positive(), stateDigest: hash }).strict();
 const targetSchema = z.object({ runId: id, statementVersionId: id, observationRef: observationRefSchema,
   taskRef: taskRefSchema.optional() }).strict();
+const discussionContextSchema = targetSchema.extend({ taskRef: taskRefSchema, commit: nonempty(128).optional(), taskTitle: nonempty(1000).optional() });
 const issueSourceSchema = z.object({ issueId: id, issueRevision: revision, resolutionAt: nonempty(64), proposalId: id.optional(), reviewedTaskRef: taskRefSchema.optional() }).strict();
 const feedbackFields = { ...mutation, text: nonempty(4000), visibility: z.enum(['members', 'public']).optional(), sourceFeedbackId: id.optional(), issueSource: issueSourceSchema.optional() };
 const recipientSchema = z.discriminatedUnion('kind', [z.object({ kind: z.literal('lead'), id: id.optional() }).strict(),
@@ -63,7 +64,7 @@ const annotationFields = (task: WebInspectedTask): ResearchAnnotationContext['fi
   ['derivation', task.informalProof], ['finding', task.finding], ['feedback', task.feedback],
 ] as const).flatMap(([field, value]) => value ? [{ field, text: value, digest: mathDigest(value) }] : []);
 const feedbackSchema = z.discriminatedUnion('kind', [
-  z.object({ ...feedbackFields, kind: z.literal('discussion'), statementVersionId: id.optional() }).strict(),
+  z.object({ ...feedbackFields, kind: z.literal('discussion'), statementVersionId: id.optional(), context: discussionContextSchema.optional() }).strict(),
   z.object({ ...feedbackFields, kind: z.literal('guidance'), target: targetSchema, recipient: recipientSchema }).strict(),
   z.object({ ...feedbackFields, kind: z.literal('plan-edit'), target: targetSchema, proposal: z.unknown() }).strict(),
   z.object({ ...feedbackFields, kind: z.literal('route-control'), target: targetSchema, proposal: z.unknown() }).strict(),
@@ -193,12 +194,17 @@ export class WebResearchProjects {
   private summary(viewer: string, stored: StoredProject): ResearchProjectSummary {
     const { visible: _visible, ...permissions } = this.access(viewer, stored);
     return { ...clone(stored.project), permissions,
+      members: stored.project.members.map(({ researcherId, role }) => {
+        const profile = this.person(researcherId)?.profile, profileVisible = profile?.visibility === 'public' || researcherId === this.identity(viewer);
+        return { researcherId, role, ...(profile && (permissions.member || profileVisible) ? { displayName: profile.displayName, profileVisible } : {}) };
+      }),
       following: viewer !== 'public' && this.ownerState(viewer).follows.some(follow => follow.kind === 'theorem' && follow.id === stored.project.id) };
   }
   private visibleFeedback(viewer: string, stored: StoredProject): ResearchFeedback[] {
     const member = this.access(viewer, stored).member;
-    return stored.feedback.filter(feedback => member || feedback.visibility === 'public' ||
-      viewer !== 'public' && feedback.kind === 'discussion' && feedback.authorReadable && feedback.author.id === this.identity(viewer));
+    return stored.feedback.filter(feedback => (member || feedback.visibility === 'public' ||
+      viewer !== 'public' && feedback.kind === 'discussion' && feedback.authorReadable && feedback.author.id === this.identity(viewer)) &&
+      (!feedback.discussionContext || this.bindingView(viewer, stored, stored.bindings.find(binding => binding.runId === feedback.discussionContext!.runId))));
   }
   private activities(viewer: string, stored: StoredProject): ResearchActivity[] {
     const visibleIds = new Set(this.visibleFeedback(viewer, stored).map(feedback => feedback.id));
@@ -401,6 +407,17 @@ export class WebResearchProjects {
   private feedbackPermission(kind: ResearchFeedback['kind']): ResearchRunPermission {
     return kind === 'guidance' ? 'guidance' : kind === 'plan-approval' ? 'approve' : kind === 'proof-submission' ? 'proof' : 'edit';
   }
+  discussionContext(viewer: string, projectId: string, value: ResearchDiscussionContext): ResearchDiscussionContext {
+    const context = parse(discussionContextSchema, value) as ResearchDiscussionContext;
+    const resolved = this.resolveBinding(viewer, projectId, context.runId, 'read');
+    if (context.statementVersionId !== resolved.binding.statementVersionId) throw new WebStorageError(409, '陈述版本与运行不一致。');
+    const observation = this.storage.getObservation(resolved.runOwner, context.runId, context.observationRef.sequence)
+      ?? (resolved.run.observation?.sequence === context.observationRef.sequence ? resolved.run.observation : undefined);
+    if (!observation || observation.snapshot.stateDigest !== context.observationRef.stateDigest) throw new WebStorageError(409, '原观测已不存在或不匹配，请重新核对。');
+    const task = observation.inspection.tasks.find(item => item.id === context.taskRef.id && item.version === context.taskRef.version);
+    if (!task || context.commit && task.proof.commit !== context.commit) throw new WebStorageError(409, '讨论引用的任务或源码版本与保存时点不一致。');
+    return { ...clone(context), taskTitle: (task.objective || task.theorem || task.id).slice(0, 1000) };
+  }
   submitFeedback(viewer: string, projectId: string, value: unknown, trusted?: { libraryTrial?: ResearchLibraryCandidateAttachment }): ResearchFeedback {
     this.authenticated(viewer);
     const stored = this.readable(viewer, projectId), input = parse(feedbackSchema, value) as ResearchFeedbackInput;
@@ -433,10 +450,18 @@ export class WebResearchProjects {
       sourceMembersOnly = true;
     }
     const feedbackId = `feedback-${mathDigest(`${this.identity(viewer)}:${input.requestId}`).slice(0, 32)}`;
-    let payload: ResearchFeedback['payload'], parent: ResearchFeedback | undefined, candidateRevision: ResearchFeedback['candidateRevision'];
+    let payload: ResearchFeedback['payload'], parent: ResearchFeedback | undefined, candidateRevision: ResearchFeedback['candidateRevision'], discussionContext: ResearchDiscussionContext | undefined;
     if (input.kind === 'discussion') {
       if (input.statementVersionId && !stored.versions.some(version => version.id === input.statementVersionId))
         throw new WebStorageError(404, '陈述版本不存在。');
+      if (input.context) {
+        discussionContext = this.discussionContext(viewer, projectId, input.context);
+        if (input.statementVersionId && input.statementVersionId !== input.context.statementVersionId) throw new WebStorageError(409, '讨论与引用步骤的陈述版本不一致。');
+        if (stored.bindings.find(binding => binding.runId === input.context!.runId)?.exposure !== 'public') {
+          if (input.visibility === 'public') throw new WebStorageError(403, '这份运行记录仅向成员开放，不能公开对应步骤讨论。');
+          sourceMembersOnly = true;
+        }
+      }
     } else {
       const revisionParent = input.kind === 'proof-submission' && input.revisionOf ? stored.feedback.find(item => item.id === input.revisionOf!.feedbackId) : undefined;
       const inheritedTrial = revisionParent?.payload && 'libraryTrial' in revisionParent.payload ? revisionParent.payload.libraryTrial : undefined;
@@ -509,7 +534,8 @@ export class WebResearchProjects {
       ...(issueSource ? { issueSource } : {}),
       ...(input.kind === 'proof-submission' ? { candidateDelivery: { policy: payload && 'libraryTrial' in payload && payload.libraryTrial ? 'reviewed' : stored.project.candidateDeliveryPolicy ?? 'direct', status: 'checking' },
         ...(candidateRevision ? { candidateRevision } : {}), ...(parent?.review ? { review: clone(parent.review) } : {}) } : {}),
-      ...(input.kind === 'discussion' ? { statementVersionId: input.statementVersionId } : { target: input.target, payload }),
+      ...(input.kind === 'discussion' ? { statementVersionId: input.context?.statementVersionId ?? input.statementVersionId,
+        ...(discussionContext ? { discussionContext } : {}) } : { target: input.target, payload }),
       delivery: { status: 'not-sent', ...(input.kind === 'discussion' ? {} : { commandId: feedbackId }) },
       decision: { status: 'pending', evidenceRefs: [] },
       execution: { status: 'not-started', taskRefs: [], resultRefs: [] }, revision: 1, createdAt: at, updatedAt: at };
@@ -528,7 +554,8 @@ export class WebResearchProjects {
       if (claim) { claim.status = 'submitted'; claim.feedbackId = record.id; claim.updatedAt = at; }
     }
     this.event(stored, viewer, 'feedback-created', input.kind === 'discussion' ? '提出讨论建议' : '提交研究反馈',
-      { feedbackId, ...(input.kind === 'discussion' && input.statementVersionId ? { statementVersionId: input.statementVersionId } : {}) });
+      { feedbackId, ...(input.kind === 'discussion' ? { statementVersionId: input.context?.statementVersionId ?? input.statementVersionId,
+        ...(input.context ? { runId: input.context.runId } : {}) } : {}) });
     this.contribute(stored, viewer, input.kind, '提出研究建议或候选成果', { feedbackId });
     this.remember(stored, viewer, 'feedback', input, feedbackId); this.save(stored); return clone(record);
   }

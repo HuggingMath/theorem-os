@@ -2,6 +2,7 @@ import type { FrozenResearchConfiguration, ResearchAssetRelease, ResearchConfigu
 import type { WebEnvironment } from '../shared';
 import { researchEnvironmentStorageKey, researchSelectionStorageKey, type OwnedDrafts } from './ownedDrafts';
 import { localizeMessage, t } from '../i18n';
+import { takeLibraryEntry } from './libraryEntry';
 
 type Api = <T>(url: string, init?: RequestInit) => Promise<T>;
 type PreparedSelection = { refs: ResearchReleaseRef[]; releases: ResearchAssetRelease[]; configuration: FrozenResearchConfiguration; imports: string[] };
@@ -15,6 +16,8 @@ export class ResearchSelection {
   private releases: ResearchAssetRelease[] = [];
   private panel = document.createElement('aside');
   private loaded = false;
+  // The workbench normalizes its address while loading runs, before it prepares Library choices.
+  private entrySearch = location.search;
   constructor(private api: Api, private changed: () => void, private drafts: OwnedDrafts) {
     this.panel.className = 'composer-research-selection'; this.panel.hidden = true;
     this.panel.setAttribute('aria-label', t('Library 研究配置'));
@@ -48,6 +51,7 @@ export class ResearchSelection {
   async load(apply: (configuration: FrozenResearchConfiguration, imports: string[]) => void, environment: WebEnvironment, onSelected?: () => void) {
     if (this.loaded) return;
     this.loaded = true;
+    const entrySearch = this.entrySearch; this.entrySearch = '';
     let savedEnvironment: WebEnvironment | undefined;
     try {
       const stored: unknown = JSON.parse(this.drafts.getItem(researchSelectionStorageKey) ?? '[]');
@@ -55,7 +59,17 @@ export class ResearchSelection {
       const saved = this.drafts.getItem(researchEnvironmentStorageKey);
       if (saved === 'standard' || saved === 'mathlib') savedEnvironment = saved;
     } catch { /* No saved selection. */ }
-    const search = new URLSearchParams(location.search), assetId = search.get('researchAsset'), version = search.get('researchVersion');
+    try {
+      const pending = takeLibraryEntry(entrySearch);
+      if (pending) {
+        this.refs = pending.refs; savedEnvironment = pending.environment;
+        this.drafts.setItem(researchSelectionStorageKey, JSON.stringify(this.refs));
+        if (savedEnvironment) this.drafts.setItem(researchEnvironmentStorageKey, savedEnvironment);
+        else this.drafts.removeItem(researchEnvironmentStorageKey);
+        const address = new URL(location.href); address.searchParams.delete('libraryReturn'); history.replaceState(null, '', address);
+      }
+    } catch { /* The explicit single-version URL remains available when tab storage is blocked. */ }
+    const search = new URLSearchParams(entrySearch), assetId = search.get('researchAsset'), version = search.get('researchVersion');
     const linked = { assetId, version };
     if (validRef(linked) && !this.refs.some(ref => ref.assetId === linked.assetId && ref.version === linked.version)) this.refs.push(linked);
     if (!this.refs.length) return;

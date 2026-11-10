@@ -9,7 +9,7 @@ import { api, base, enc, ErrorBox, errorText, Field, MutationState, ResearchHttp
 import { FeedbackWorkspace, type FeedbackFocus } from './researchFeedback';
 import { ProofSubmission } from './researchTheorems';
 import { ProjectPlanApproval } from './researchPlanApproval';
-import { DecisionSummary } from './decisionSummary';
+import { InlinePersonalApproval } from './researchPersonalApproval';
 import { ResearchAnnotations } from './researchAnnotations';
 import { ResearchDraftPicker } from './researchDrafts';
 import { useResearchInputDraft } from './researchInputDraft';
@@ -52,7 +52,7 @@ export function ResearchInlineActions({ problem, task, context, refresh, onTask,
       {project && binding ? <>
         <InlineProjectClaim project={project} binding={binding} observation={observation} task={current ? task : undefined} selfId={selfId} refresh={changed} />
         <ProjectPlanApproval project={project} binding={{ ...binding, status: run.status }} observation={observation} selfId={selfId} refresh={changed} />
-      </> : !project && <InlinePersonalApproval run={run} observation={observation} root={root} refresh={changed} />}
+      </> : !project && <InlinePersonalApproval key={`${selfId}:${run.id}`} owner={selfId} run={run} observation={observation} root={root} refresh={changed} />}
       {(!task || current) && (binding?.permissions.guidance ?? !project) && run.status === 'running' && <InlineGuidance selfId={selfId} project={project} binding={binding} observation={observation} task={task} root={root} refresh={changed}
         onSaved={id => { setFocus(previous => ({ id, request: (previous?.request ?? 0) + 1 })); setShowFeedback(true); }} />}
       {project && binding && task && current && binding.permissions.proof && run.status === 'running' && <>
@@ -108,19 +108,6 @@ function usePersonalCommand(root: string, refresh: () => void, onSaved?: (receip
     } finally { lock.current = false; setBusy(false); }
   };
   return { busy, error, receipt, submitted, unconfirmed, send, retry: () => pending.current && send(pending.current.path, pending.current.body, true) };
-}
-
-function InlinePersonalApproval({ run, observation, root, refresh }: { run: WebRun; observation: WebObservation; root: string; refresh(): void }) {
-  const approval = observation.inspection.planApproval, command = usePersonalCommand(root, refresh), [confirmed, setConfirmed] = useState('');
-  if (approval?.status !== 'pending') return null;
-  const canApprove = run.status === 'running' && !approval.leadRevising && observation.plan?.baseVersion === approval.planVersion;
-  const recorded = command.submitted?.planVersion === approval.planVersion && command.receipt && !['unknown', 'failed', 'rejected'].includes(command.receipt.status);
-  return <section data-inline-personal-approval><h4>{tx('研究计划等待你决定', 'The research plan awaits your decision')}</h4><DecisionSummary plan={observation.plan} expectedVersion={approval.planVersion} />
-    {approval.leadRevising && <p role="status">{tx('正在按意见修改计划，请等新版本准备好后再核对。', 'The plan is being revised. Review the new version when it is ready.')}</p>}
-    <label class="research-check"><input type="checkbox" data-inline-confirm-plan checked={confirmed === approval.planVersion} onChange={event => setConfirmed(event.currentTarget.checked ? approval.planVersion ?? '' : '')} />{tx('已核对这些任务、前提和依赖', 'I reviewed these tasks, premises and dependencies')}</label>
-    <button type="button" class="button" data-inline-approve-plan disabled={command.busy || command.unconfirmed || recorded || !canApprove || confirmed !== approval.planVersion} onClick={() => void command.send('plan-approval', { planVersion: approval.planVersion })}>{recorded ? tx('批准已记录，等待运行确认', 'Approval recorded; awaiting run confirmation') : tx('批准此计划并继续', 'Approve this plan and continue')}</button>
-    <PersonalCommandStatus command={command} />
-  </section>;
 }
 
 function InlineGuidance({ selfId, project, binding, observation, task, root, refresh, onSaved }: { selfId: string; project?: ResearchProjectDetail; binding?: ResearchRunBinding; observation: WebObservation; task?: ResearchBriefTask; root: string; refresh(): void; onSaved(id: string): void }) {

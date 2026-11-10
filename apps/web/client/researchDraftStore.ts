@@ -8,6 +8,7 @@ export const researchDraftKey = (scope: ResearchDraftScope) => prefix + encodeUR
   scope.taskVersion ?? '', scope.commit ?? '', scope.issueId ?? '', scope.issueRevision ?? '', scope.sourceFeedbackId ?? '',
   ...(scope.threadId || scope.purpose ? [scope.threadId ?? '', scope.purpose ?? ''] : []),
   ...(scope.localRevision ? [scope.localRevision] : []),
+  ...(scope.draftKey ? [scope.draftKey] : []),
 ]));
 
 /** Exact owner and frozen source identities are part of the storage key, never inferred at restore time. */
@@ -27,7 +28,7 @@ export class ResearchDraftStore {
     return result.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
   save<T>(scope: ResearchDraftScope, value: T, summary: string, accountRevision?: number): ResearchDraft<T> {
-    if (!scope.owner || !scope.projectId && !scope.runId) throw new Error('Draft owner and project or run are required.');
+    if (!scope.owner || !scope.projectId && !scope.runId && !(scope.kind === 'problem' && scope.draftKey)) throw new Error('Draft owner and project, run or new problem identity are required.');
     const item: ResearchDraft<T> = { schema: 'theorem-os.human-draft.v1', scope: { ...scope }, value, summary, updatedAt: new Date().toISOString(), ...(accountRevision !== undefined ? { accountRevision } : {}) };
     this.storage.setItem(researchDraftKey(scope), JSON.stringify(item)); return item;
   }

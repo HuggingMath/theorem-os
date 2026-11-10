@@ -276,6 +276,10 @@ try {
       });
       assert.equal(writes.length, 0, 'IME confirmation must not submit the problem');
       await page.locator('#formalize-original').press('Enter');
+      assert.equal(writes.length, 0, 'Enter edits a multiline new problem without submitting');
+      assert.equal(await page.locator('#formalize-original').inputValue(), `${original}\n`);
+      await page.locator('#formalize-original').fill(original);
+      await page.locator('#formalize-original').press('Control+Enter');
     } else await page.locator('#formalize-start').click();
     await page.waitForURL(url => url.searchParams.has('chat'));
     await eventually(() => formalizations.length === (width === 1440 ? 1 : 2), 'One natural formalization starts');

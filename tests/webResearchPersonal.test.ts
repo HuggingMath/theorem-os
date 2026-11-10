@@ -62,11 +62,41 @@ describe('account draft login return', () => {
     const destination = workbenchDestination(new URLSearchParams({ returnTo: 'theorems', id: '../../private', version: 'https://evil.invalid',
       revise: '../feedback', accountDraft: '../draft', draftVersion: 'https://evil.invalid', next: 'https://evil.invalid' }).toString());
     expect(destination).toBe('theorems.html');
-    expect(workbenchDestination('?returnTo=https://evil.invalid&accountDraft=draft-one')).toBe('./');
+    expect(workbenchDestination('?returnTo=https://evil.invalid&accountDraft=draft-one')).toBe('./?accountDraft=draft-one');
   });
 });
 
 describe('private cross-device account drafts', () => {
+  it('restores historical step discussion drafts only with matching scope and the server-recorded title', () => {
+    const f = fixture(), statementVersionId = f.project.versions[0].id, sourceDigest = f.project.versions[0].sourceDigest;
+    const task = f.run.observation!.inspection.tasks.find(item => item.id === f.source.taskId && item.version === f.source.taskVersion)!;
+    const context = { runId: f.run.id, statementVersionId, taskRef: { id: task.id, version: task.version },
+      observationRef: { sequence: f.run.observation!.sequence, stateDigest: f.run.observation!.snapshot.stateDigest }, ...(task.proof.commit ? { commit: task.proof.commit } : {}) };
+    const scope: ResearchAccountDraftScope = { projectId: f.project.id, kind: 'discussion', statementVersionId, runId: f.run.id,
+      taskId: task.id, taskVersion: task.version, ...(context.commit ? { commit: context.commit } : {}) };
+    const value = { text: 'Explain this exact historical transition', visibility: 'members', baseline: { statementVersionId, sourceDigest, context: { ...context, taskTitle: 'Invented client title' } } };
+    const saved = f.personal.saveDraft(bob, draftInput(scope, value, 'step-discussion'));
+    const expectedContext = { ...context, taskTitle: (task.objective || task.theorem || task.id).slice(0, 1000) };
+    expect(saved.version.value).toMatchObject({ baseline: { context: expectedContext } });
+    const next = structuredClone(f.run); next.observation!.sequence++; next.observation!.snapshot.stateDigest = 'e'.repeat(64);
+    next.observation!.inspection.tasks.find(item => item.id === task.id)!.version = 'changed-task-version'; f.save(alice, next);
+    expect(f.personal.draft(bob, saved.draft.id).version.value).toMatchObject({ baseline: { context: expectedContext } });
+    for (const invalidScope of [{ ...scope, taskVersion: 'changed-task-version' }, { ...scope, commit: 'f'.repeat(40) }]) {
+      expect(() => f.personal.saveDraft(bob, draftInput(invalidScope, value, crypto.randomUUID()))).toThrow('身份不一致');
+    }
+    expect(() => f.personal.saveDraft(bob, draftInput(scope, { ...value, baseline: { ...value.baseline,
+      context: { ...context, observationRef: { ...context.observationRef, stateDigest: 'f'.repeat(64) } } } }, 'false-observation'))).toThrow('不匹配');
+    const actual = f.projects.submitFeedback(bob, f.project.id, { requestId: 'saved-step-discussion', kind: 'discussion', text: value.text, context });
+    const complete = { requestId: 'archive-step-discussion', versionId: saved.version.id, action: 'submitted', submission: { kind: 'feedback', id: actual.id } };
+    f.personal.updateDraft(bob, saved.draft.id, complete);
+    const archived = f.personal.draft(bob, saved.draft.id).version;
+    expect(archived.status).toBe('submitted');
+    const returnUrl = new URL(archived.submission!.href, 'http://local/');
+    expect(returnUrl.searchParams.get('at')).toBe(String(context.observationRef.sequence)); expect(returnUrl.searchParams.get('atState')).toBe(context.observationRef.stateDigest);
+    expect(returnUrl.searchParams.get('taskVersion')).toBe(task.version); expect(returnUrl.searchParams.get('feedback')).toBe(actual.id);
+    f.projects.setMember(alice, f.project.id, f.projects.identity(bob), { requestId: 'revoke-discussion-author', expectedRevision: f.projects.detail(alice, f.project.id).revision, role: null });
+    expect(() => f.personal.draft(bob, saved.draft.id)).toThrow(); expect(f.personal.drafts(bob).items).toEqual([]);
+  });
   it('archives the submitted branch with its actual record and preserves concurrent and later versions', () => {
     const f = fixture(), statementVersionId = f.project.versions[0].id, sourceDigest = f.project.versions[0].sourceDigest;
     const scope: ResearchAccountDraftScope = { projectId: f.project.id, kind: 'discussion', statementVersionId };

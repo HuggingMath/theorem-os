@@ -15,6 +15,16 @@ it('retains exact draft text and selected budgets while projecting out credentia
   for (const text of ['plain original', '{"a":"valid JSON original"}', '  \ntext\n']) expect(decodeChatDraft(text)).toEqual({ text });
 });
 
+it('retains one recoverable original with its settings while excluding nested backups and credentials', () => {
+  const backup = { text: '  原题 $n+0=n$\n第二行\n', settings: { ...settings, apiKey: 'backup-secret' },
+    originalBackup: { text: 'must-not-chain' }, apiKey: 'other-secret' };
+  const encoded = encodeChatDraft({ text: 'A selected example', settings, originalBackup: backup });
+  expect(encoded).not.toContain('secret'); expect(encoded).not.toContain('must-not-chain');
+  expect(decodeChatDraft(encoded)).toEqual({ text: 'A selected example', settings, originalBackup: { text: backup.text, settings } });
+  expect(decodeChatDraft(JSON.stringify({ schema: 'theorem-os.chat-draft.v1', text: 'Still editable', originalBackup: { text: 42 } })))
+    .toEqual({ text: 'Still editable' });
+});
+
 it('restores guidance to the exact run and task version together with an independently pending question', () => {
   const draft = { text: '新的指导草稿', settings, guidance: { runId: 'run-a', taskRef: { id: 'goal', version: 'goal-v1' }, apiKey: 'secret-guidance-key' },
     pendingMessage: { requestId: 'send-1', text: '原来尚未确认的问题', apiKey: 'secret-message-key' } };

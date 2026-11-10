@@ -50,6 +50,8 @@ import { renderTopbar } from './ui/Topbar';
 import { renderRunMonitor as drawRunMonitor, type MonitorItem } from './ui/RunMonitor';
 import { renderRunHeader as drawRunHeader, unmountRunHeader, type RunHeaderProps } from './ui/RunHeader';
 import { ChatSession } from './chatSession';
+import { leanProblemDraft, renderProblemDraftPanel } from './problemDrafts';
+import type { ProblemDraftValue } from '../problemDraftTypes';
 import { ChatArtifactNavigation, chatArtifactLine, chatArtifactTask, type ChatArtifactKind, type ChatArtifactTarget } from './chatArtifactNavigation';
 import { createCommandPalette, type PaletteCommand } from './ui/CommandPalette';
 import { renderFacts, renderGlyph, renderGlyphLabel, renderHistoryEmpty, renderHistoryGroup, renderHistoryRow } from './ui/Controls';
@@ -64,6 +66,7 @@ import { AgentActivity } from './agentActivity';
 import { FormalizationActivityStore } from './formalizationActivityStore';
 import { clockTime, commandId, workerNames } from './collaborationUi';
 import { documentTitle, finishedSince, newlyFinished, newlyWaiting, notifyStorageKey, readResume, saveResume, waitsForOwner } from './runAwareness';
+import { browserNotificationState, notifyRunEvent } from './browserRunNotifications';
 import { forgetKey, hasRememberedKey, rememberKey, rememberedKey } from './keyMemory';
 import { applyTheme, followThemeChanges, readThemePreference, resolveTheme, saveThemePreference, type ThemePreference } from './themePreference';
 import { installTermHints, renderGlossary } from './termHints';
@@ -139,6 +142,9 @@ const state = {
 const entryStorageKey = 'theorem-os.research-entry.v1';
 const productEntrySearch = location.search, productEntry = readResearchEntry(productEntrySearch);
 const productTarget = new URLSearchParams(productEntrySearch);
+const problemDraftId = productTarget.get('accountDraft'), problemDraftVersion = productTarget.get('draftVersion');
+let problemDraftTarget = problemDraftId && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(problemDraftId)
+  ? { id: problemDraftId, ...(problemDraftVersion && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(problemDraftVersion) ? { version: problemDraftVersion } : {}) } : undefined;
 let productEntryHandled = false;
 let libraryProposalHandled = false;
 let libraryTrialHandled = false;
@@ -147,9 +153,10 @@ let sharedDraftHandled = false;
 let recoveryEntryHandled = false;
 function withAddressLanguage(search: string) {
   const language = new URLSearchParams(location.search).get('lang');
-  if (language !== 'zh' && language !== 'en') return search;
-  const parameters = new URLSearchParams(search); parameters.set('lang', language);
-  return `?${parameters}`;
+  const parameters = new URLSearchParams(search);
+  if (language === 'zh' || language === 'en') parameters.set('lang', language);
+  if (!search && problemDraftTarget) { parameters.set('accountDraft', problemDraftTarget.id); if (problemDraftTarget.version) parameters.set('draftVersion', problemDraftTarget.version); }
+  return parameters.size ? `?${parameters}` : '';
 }
 let researchEntry: 'natural' | 'lean' = 'natural';
 // Opening the workbench starts with the user's problem, even when an older tab used a Lean template.
@@ -187,6 +194,8 @@ async function loadNaturalResearch() {
     onOpenRun: id => selectRun(id),
     connected: () => state.connected,
     draftScope: state.session ? ownerOfSession(state.session) : '',
+    problemDraftTarget: () => problemDraftTarget,
+    onRestoreProblemDraft: restoreProblemDraft,
     keyRequired: providerId => !state.session?.account?.serverKeys?.includes(providerId) && !state.session?.account?.savedKeys?.some(key => key.providerId === providerId),
     onNavigate: (id, mode, attached, editedProblem) => {
       chatArtifacts.clear();
@@ -362,26 +371,24 @@ const loginAddress = () => loginHref(location.pathname + location.search + locat
 state.composing = !!linkedProblemDraft || !linkedRun && !sampleLink;
 if (linkedRun !== null && runIdPattern.test(linkedRun))
   saveResume(() => localStorage, { selectedId: linkedRun, seenAt: readResume(() => localStorage)?.seenAt ?? new Date().toISOString() });
-const notificationsSupported = () => typeof Notification === 'function';
-const notifyWanted = () => { try { return localStorage.getItem(notifyStorageKey) === 'on'; } catch { return false; } };
-function notifyState(): 'on' | 'off' | 'blocked' | 'unsupported' {
-  if (!notificationsSupported()) return 'unsupported';
-  if (Notification.permission === 'denied') return 'blocked';
-  return notifyWanted() && Notification.permission === 'granted' ? 'on' : 'off';
+const notifyState = browserNotificationState;
+function announceRun(run: WebRun, kind: 'finished' | 'waiting', label: string) {
+  if (!state.session) return;
+  const owner = ownerOfSession(state.session);
+  void notifyRunEvent({ owner, run, kind, title: `TheoremOS · ${label}`, body: `${run.title}\n${resultDescription(run)}`,
+    current: () => Boolean(state.session && ownerOfSession(state.session) === owner),
+    activate: () => { selectRun(run.id); setMobileView('runs'); },
+  });
 }
 function announceFinished(run: WebRun) {
   if (!document.hidden) return;
   state.unseenRuns.add(run.id);
-  if (notifyState() !== 'on') return;
-  const notice = new Notification(`TheoremOS · ${status(run).label}`, { body: `${run.title}\n${resultDescription(run)}`, tag: run.id });
-  notice.onclick = () => { window.focus(); selectRun(run.id); setMobileView('runs'); notice.close(); };
+  announceRun(run, 'finished', status(run).label);
 }
 /** Nothing in a run with 先审计划 starts until its owner approves the plan, so its owner hears about it at once. */
 function announceWaiting(run: WebRun) {
   if (!document.hidden) { if (run.id !== state.selectedId) toast(t('「{0}」的研究计划等你批准', run.title)); return; }
-  if (notifyState() !== 'on') return;
-  const notice = new Notification(`TheoremOS · ${t('研究计划等你批准')}`, { body: `${run.title}\n${resultDescription(run)}`, tag: run.id });
-  notice.onclick = () => { window.focus(); selectRun(run.id); setMobileView('runs'); notice.close(); };
+  announceRun(run, 'waiting', t('研究计划等你批准'));
 }
 async function toggleNotifications() {
   const current = notifyState();
@@ -421,6 +428,9 @@ let replacingDraft = false;
 const ownedDrafts = new OwnedDrafts(() => sessionStorage);
 const submissionIdentity = new SubmissionIdentity(ownedDrafts);
 const draftRecovery = new DraftRecovery(() => ownedDrafts);
+const problemDraftHost = document.createElement('div');
+problemDraftHost.id = 'lean-problem-drafts'; problemDraftHost.hidden = true;
+element('#run-form').after(problemDraftHost);
 const ownerOfSession = webDraftOwner;
 function clearOwnedDrafts() {
   document.querySelector('[data-library-proposal-start]')?.remove(); libraryProposalHandled = false;
@@ -431,6 +441,7 @@ function clearOwnedDrafts() {
   recoveryEntryHandled = false;
   budgetDraftOrigin = undefined;
   chatWorkspace?.bindOwner('');
+  renderProblemDraftPanel(problemDraftHost); problemDraftHost.hidden = true;
   researchSelection.reset();
   collaborationView.clearPlanDrafts();
   submissionSequence++;
@@ -441,7 +452,7 @@ function clearOwnedDrafts() {
   try {
     for (const key of Object.keys(sessionStorage)) {
       if (key.startsWith('theorem-os.natural-research-draft.v1:') || key.startsWith('theorem-os.chat-draft.') || key.startsWith('theorem-os.chat-submission.')
-        || key.startsWith('theorem-os.chat-reading.') || key === entryStorageKey) sessionStorage.removeItem(key);
+        || key.startsWith('theorem-os.chat-reading.') || key.startsWith('theorem-os.problem-draft.') || key === entryStorageKey) sessionStorage.removeItem(key);
     }
   } catch { /* In-memory drafts are also cleared when browser storage is unavailable. */ }
 }
@@ -510,7 +521,7 @@ const sourceCheck = new SourceCheck({
   message: error => message(error),
   render: () => { renderSourceCheckView(); renderPreparation(); },
 });
-const researchSelection = new ResearchSelection(api, () => { sourceCheck.schedule(); saveDraft(); }, ownedDrafts);
+const researchSelection = new ResearchSelection(api, () => { sourceCheck.schedule(); saveDraft(); renderAccountProblemDraft(); }, ownedDrafts);
 function renderSourceCheckView() {
   renderSourceCheck(element('#source-check'), element('#source-check-status'), {
     check: sourceCheck, onJump: jumpToSourceDiagnostic, onRecheck: () => { void sourceCheck.run(); },
@@ -1041,6 +1052,41 @@ function captureDraft(): TaskDraft {
       ? { problemBudget: { runId: budgetDraftOrigin.runId, ...(budgetDraftOrigin.projectId ? { projectId: budgetDraftOrigin.projectId } : {}) } } : {}),
     ...(draftFormalization ? { formalization: { id: draftFormalization.id, evidenceSha256: draftFormalization.evidenceSha256 } } : {}) };
 }
+function selectedProblemLibraries() {
+  const selection = researchSelection.value();
+  return [...(selection?.agent ? [selection.agent] : []), ...(selection?.skills ?? []), ...(selection?.libraries ?? [])];
+}
+function renderAccountProblemDraft() {
+  const session = state.session;
+  const show = Boolean(session && draftReady && researchEntry === 'lean' && state.composing && !currentRun());
+  problemDraftHost.hidden = !show;
+  renderProblemDraftPanel(problemDraftHost, show && session ? {
+    owner: ownerOfSession(session), account: Boolean(session.account), value: leanProblemDraft(captureDraft(), selectedProblemLibraries()),
+    locked: state.submitting || submissionIdentity.unresolved, request: api, target: problemDraftTarget, onRestore: restoreProblemDraft,
+  } : undefined);
+}
+async function restoreProblemDraft(value: ProblemDraftValue, beforeApply: () => void) {
+  if (!state.session || state.submitting) throw new Error(t('编辑器尚未就绪，请重新选择恢复。'));
+  const owner = ownerOfSession(state.session), revision = draftRevision, entry = researchEntry;
+  const original = JSON.stringify(chatWorkspace?.problemDraft());
+  const selected = value.mode === 'lean' && value.libraries?.length ? await researchSelection.prepare(value.libraries, value.draft.environment) : undefined;
+  if (value.mode === 'natural') { if (!naturalPage) naturalPage = Promise.resolve().then(loadNaturalResearch); await naturalPage; }
+  if (!state.session || ownerOfSession(state.session) !== owner || state.submitting || currentRun() || draftRevision !== revision || researchEntry !== entry
+    || original !== undefined && original !== JSON.stringify(chatWorkspace?.problemDraft())) throw new Error(t('读取期间原题已修改，请重新选择恢复。'));
+  beforeApply();
+  problemDraftTarget = undefined; productTarget.delete('accountDraft'); productTarget.delete('draftVersion');
+  const address = new URL(location.href); address.searchParams.delete('accountDraft'); address.searchParams.delete('draftVersion'); history.replaceState(null, '', address);
+  formalizationLink = null;
+  if (value.mode === 'natural') {
+    chooseEntry('natural'); startDraft(false, 'replace'); chatWorkspace!.restoreProblemDraft(value);
+  } else {
+    replaceDraft('import', () => applyTaskDraft(value.draft));
+    if (selected) researchSelection.adopt(selected); else researchSelection.clear();
+    chooseEntry('lean'); startDraft(false, 'replace'); draftChanged(); saveDraft(); renderDraftRecovery();
+    field('source').focus({ preventScroll: true });
+  }
+  renderAccountProblemDraft();
+}
 function setDraftStatus(text: string, warning = false) {
   element('#draft-status').textContent = text;
   element('#draft-status').classList.toggle('warning', warning);
@@ -1102,6 +1148,7 @@ function draftChanged(persist = true) {
   renderSourceCheckView();
   renderComposerSummary();
   renderDraftPreview();
+  renderAccountProblemDraft();
   if (!draftReady || !persist) return;
   draftDirty = true;
   setDraftStatus(t('草稿待保存'));
@@ -2530,6 +2577,7 @@ function initialize(): Promise<void> {
 }
 const mac = /Mac|iPhone|iPad/.test(navigator.userAgent);
 function renderShell() {
+  renderAccountProblemDraft();
   const session = state.session, ready = Boolean(state.connected && session?.runtime.ready && session.providers.length);
   const run = currentRun(), running = state.runs.filter(activeRun);
   const named = run?.title ?? (researchEntry === 'natural' ? chatWorkspace?.selected?.title : undefined);

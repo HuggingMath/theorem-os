@@ -457,6 +457,7 @@ export function workbenchReturn(search: string): string {
       retain('at', /^[1-9]\d{0,12}$/u); retain('atState', /^[a-f0-9]{64}$/u);
     } else if (destination === 'library') {
       retain('entry', recordId); retain('version', identity); retain('trial', recordId);
+      retain('action', /^bookmark$/u);
       retain('type', /^(?:mathematics|agent|skill)$/u); retain('author', recordId);
       retain('environment', /^(?:all|target|standard|mathlib)$/u); retain('mine', /^1$/u);
       for (const [key, limit] of [['q', 128], ['area', 200]] as const) {
@@ -487,6 +488,18 @@ export function workbenchReturn(search: string): string {
   } else if (chat && /^[a-f0-9-]{36}$/u.test(chat)) {
     kept.set('chat', chat);
     const message = params.get('message'); if (message && /^[a-f0-9-]{36}$/u.test(message)) kept.set('message', message);
+  } else if (params.has('researchAsset') && params.has('researchVersion')) {
+    const asset = params.get('researchAsset')!, version = params.get('researchVersion')!;
+    if (/^[A-Za-z0-9_-]{1,128}$/u.test(asset) && /^[A-Za-z0-9._-]{1,64}$/u.test(version)) {
+      kept.set('researchAsset', asset); kept.set('researchVersion', version);
+      const pending = params.get('libraryReturn'); if (pending && /^[a-f0-9-]{36}$/u.test(pending)) kept.set('libraryReturn', pending);
+    }
+  } else if (params.has('accountDraft')) {
+    const draft = params.get('accountDraft')!, version = params.get('draftVersion');
+    if (/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(draft)) {
+      kept.set('accountDraft', draft);
+      if (version && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(version)) kept.set('draftVersion', version);
+    }
   } else if (params.has('sharedDraft')) {
     const id = params.get('sharedDraft')!; if (/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(id)) kept.set('sharedDraft', id);
   } else if (params.has('budgetRun')) {

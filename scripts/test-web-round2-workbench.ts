@@ -20,7 +20,6 @@ const port = await freePort(), origin = `http://127.0.0.1:${port}`;
 const credential = 'sk-disposable-round2-workbench';
 const original = '对任意自然数 n，证明 n + 1 = 1 + n。';
 const edited = '  对任意自然数 n，证明 n + 0 = n。\n\n保留我的修改。  ';
-const identityKey = 'theorem-os.chat-submission.v1.anonymous';
 const formalizationCalls: string[] = [];
 let fakeRunCalls = 0;
 const runner: WebRunner = {
@@ -71,7 +70,11 @@ async function credentials(page: Page) {
   await page.locator('#formalize-model').fill('fixture-model'); await page.locator('#formalize-key').fill(credential);
   await page.locator('input[name="chat-participation"][value="guided"]').check();
 }
-const identity = (page: Page) => page.evaluate(key => sessionStorage.getItem(key), identityKey);
+const identity = (page: Page) => page.evaluate(() => {
+  const owner = sessionStorage.getItem('theorem-os.web-draft-owner.v1');
+  if (!owner) throw new Error('The current draft owner is unavailable.');
+  return sessionStorage.getItem(`theorem-os.chat-submission.v1.${owner}`);
+});
 async function screenshot(page: Page, name: string) { await page.screenshot({ path: path.join(output, name) }); screenshots.push(name); }
 async function drop(page: Page, name: string, contents: string) {
   await page.evaluate(({ name, contents }) => {
@@ -152,6 +155,7 @@ try {
     await page.locator('[data-chat-submission-recovery]').waitFor();
     await page.locator('#formalize-original').press('Enter'); await settled(page);
     assert.equal(counts.attachPosts, 1, 'Enter must not silently recover the old task when the original changed');
+    await page.locator('#formalize-original').fill(edited);
     await page.locator('[data-chat-prepare-edited]').click();
     await page.locator('#formalize-error').filter({ hasText: 'Local attach failure' }).waitFor();
     assert.equal(await identity(page), pending, 'A failed recovery keeps the exact original identity');

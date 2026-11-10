@@ -9,6 +9,7 @@ import { CandidateReview } from './researchCandidateReview';
 import { ResearchReview } from './researchReview';
 import { CandidateHistory } from './researchCandidateHistory';
 import { LibraryCandidateEvidence } from './researchLibraryCandidate';
+import { DiscussionContext } from './researchDiscussionContext';
 import './researchCandidateContinuity.css';
 import { feedbackNeedsAttention, matchesFeedbackQuery, matchesFeedbackScope, matchesFeedbackStatus,
   type FeedbackScope, type FeedbackStatus, type FeedbackTask } from './researchFeedbackModel';
@@ -119,6 +120,7 @@ function Feedback({ feedback, project, selfId, runId, refresh, hidden, onOpenTas
     <div class="research-item-meta">{source && <span>{tx('投递人', 'Forwarded by')}</span>}<a href={personHref(feedback.author.id)}>{feedback.author.displayName}</a><span>{nameOf(feedback.kind)}</span><time dateTime={feedback.createdAt}>{stamp(feedback.createdAt)}</time>
       {feedback.visibility === 'members' && feedback.authorReadable ? <span class="research-state">{tx('成员和作者可见', 'Members and author')}</span> : <State value={feedback.visibility} />}</div>
     <div class="research-description"><RichProse text={feedback.text} /></div>
+    {feedback.discussionContext && <DiscussionContext projectId={project.id} value={feedback.discussionContext} />}
     {feedback.kind === 'discussion' && <div class="research-item-meta" data-discussion-statement>{feedback.statementVersionId
       ? <a class="research-inline-link" href={`${theoremHref(project.id, undefined, { statementVersionId: feedback.statementVersionId })}#statement-versions`}
         onClick={event => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); onOpenStatement(feedback.statementVersionId!); }}>

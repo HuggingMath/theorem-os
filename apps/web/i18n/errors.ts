@@ -1,6 +1,12 @@
 /** Error messages from the server: request checks, session and login, runs, the run environment, explanations, plans and knowledge. */
 export const errors: Record<string, string> = {
   "当前账号的形式化队列已满，请等待已有任务结束。": "Your formalization queue is full. Wait for an existing task to finish.",
+  '编辑器尚未就绪，请重新选择恢复。': 'The editor is not ready yet. Choose Restore again.',
+  '读取期间原题已修改，请重新选择恢复。': 'The problem changed while loading. Choose Restore again.',
+  '新题草稿范围无效。': 'The scope of this new-problem draft is invalid.',
+  '讨论引用的任务或源码版本与保存时点不一致。': 'The task or source version referenced by the discussion does not match the saved moment.',
+  '讨论与引用步骤的陈述版本不一致。': 'The discussion and its referenced step use different statement versions.',
+  '这份运行记录仅向成员开放，不能公开对应步骤讨论。': 'This run is available to project members only. Discussions about its steps cannot be made public.',
   '续跑来源的固定版本与保存记录不一致，请重新选择。': 'The frozen continuation version does not match the saved record. Select it again.',
   '议题草稿的冻结观测与任务身份不一致。': 'The issue draft’s frozen observation does not match its task identity.',
   '研究记录不存在或不属于当前会话。': 'The research record does not exist or does not belong to this session.',

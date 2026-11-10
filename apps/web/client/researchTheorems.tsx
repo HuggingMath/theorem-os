@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { ResearchFeedback, ResearchFeedbackTarget, ResearchProjectDetail, ResearchProjectSummary, ResearchRunBinding, ResearchStatementVersion, ResearcherProfile } from '../researchProjectTypes';
+import type { ResearchFeedback, ResearchFeedbackTarget, ResearchProjectDetail, ResearchProjectSummary, ResearchRunBinding, ResearchStatementVersion, ResearcherProfile, ResearchDiscussionContext } from '../researchProjectTypes';
 import { loginHref, researchContextHref, type WebRun } from '../shared';
 import type { WebShareSnapshot } from '../shareTypes';
 import type { WebObservation } from '../collaboration';
@@ -19,7 +19,8 @@ import { ResearchDraftStore } from './researchDraftStore';
 import { readPeopleReturn, withPeopleReturn } from './researchPeopleReturn';
 import { RichProse } from './richText';
 import { ResearchDraftPicker, useResearchDrafts } from './researchDrafts';
-import { discussionDraftMatches, type DiscussionDraft } from './researchDiscussionDraft';
+import { discussionContextKey, discussionDraftMatches, type DiscussionDraft } from './researchDiscussionDraft';
+import { DiscussionContext } from './researchDiscussionContext';
 import { ResearchWorkImpactView } from './researchWorkImpact';
 import { AnnotationAnchorSummary } from './researchAnnotations';
 import { api, base, Check, enc, Empty, ErrorBox, Field, FollowButton, lines, MutationState, nameOf, Panel, personHref, Search,
@@ -529,45 +530,50 @@ export function ProofSubmission({ project, projectId, selfId, binding, observati
   </form></details>;
 }
 
-export function Discussion({ project, selfId, version, refresh }: { project: ResearchProjectDetail; selfId: string; version?: ResearchStatementVersion; refresh: () => void }) {
+export function Discussion({ project, selfId, version, context, refresh }: { project: ResearchProjectDetail; selfId: string; version?: ResearchStatementVersion; context?: ResearchDiscussionContext; refresh: () => void }) {
   const [initialDraft] = useState(() => {
     try { return new ResearchDraftStore(localStorage).list<DiscussionDraft>(selfId, project.id, 'discussion').find(item =>
-      !item.scope.localRevision && item.scope.statementVersionId === version?.id); } catch { return; }
+      !item.scope.localRevision && item.scope.statementVersionId === version?.id && discussionContextKey(item.value.baseline.context) === discussionContextKey(context)); } catch { return; }
   });
   const [text, setText] = useState(initialDraft?.value.text ?? ''), [visibility, setVisibility] = useState<DiscussionDraft['visibility']>(initialDraft?.value.visibility ?? 'members'), action = useMutation();
-  const currentBaseline = { statementVersionId: version?.id, sourceDigest: version?.sourceDigest };
+  const currentBaseline = { statementVersionId: version?.id, sourceDigest: version?.sourceDigest, ...(context ? { context } : {}) };
   const [baseline, setBaseline] = useState<DiscussionDraft['baseline']>(initialDraft?.value.baseline ?? currentBaseline), drafts = useResearchDrafts<DiscussionDraft>(selfId, project.id, 'discussion');
   useEffect(() => { if (initialDraft) drafts.restore(initialDraft); }, []);
   const generation = useRef(0), stale = !discussionDraftMatches({ text, visibility, baseline }, currentBaseline);
-  useEffect(() => { if (!text) setBaseline(currentBaseline); }, [version?.id, version?.sourceDigest]);
+  useEffect(() => { if (!text) setBaseline(currentBaseline); }, [version?.id, version?.sourceDigest, discussionContextKey(context)]);
+  const canPublishContext = !baseline.context || project.runs.find(run => run.runId === baseline.context!.runId)?.exposure === 'public';
   const saveDraft = (next: Partial<DiscussionDraft>) => {
     generation.current++;
     const value: DiscussionDraft = { text, visibility, baseline, ...next };
-    if (value.text.trim() || drafts.current()) drafts.save({ statementVersionId: value.baseline.statementVersionId }, value, value.text.slice(0, 80) || tx('讨论内容', 'Discussion'));
+    const cited = value.baseline.context;
+    if (value.text.trim() || drafts.current()) drafts.save({ statementVersionId: value.baseline.statementVersionId, ...(cited ? { runId: cited.runId,
+      taskId: cited.taskRef.id, taskVersion: cited.taskRef.version, ...(cited.commit ? { commit: cited.commit } : {}) } : {}) }, value, value.text.slice(0, 80) || tx('讨论内容', 'Discussion'));
   };
   const versionLabel = (id?: string) => {
     const index = project.versions.findIndex(item => item.id === id);
     return id ? index < 0 ? id : `v${index + 1}` : tx('整个定理', 'Entire theorem');
   };
   return <form class="research-form" data-discussion-composer onSubmit={event => { event.preventDefault();
-    if (stale) return;
+    if (stale || visibility === 'public' && !canPublishContext) return;
     if (text.length > 4000) { action.setError(t('讨论最多 4000 字符，请缩短后保存。')); return; }
     const submittedDraft = drafts.current(), submittedGeneration = generation.current;
     void action.run<Item<ResearchFeedback>>('POST', `${base}/theorems/${enc(project.id)}/feedback`,
-    { kind: 'discussion', text, visibility, ...(baseline.statementVersionId ? { statementVersionId: baseline.statementVersionId } : {}) }, result => {
+    { kind: 'discussion', text, visibility, ...(baseline.statementVersionId ? { statementVersionId: baseline.statementVersionId } : {}), ...(baseline.context ? { context: baseline.context } : {}) }, result => {
       if (submittedDraft) void drafts.complete(submittedDraft, { kind: 'feedback', id: result.item.id });
       if (generation.current === submittedGeneration) { setText(''); generation.current++; }
       refresh();
     }); }}>
     <ResearchDraftPicker drafts={drafts} onRestore={item => { setText(item.value.text); setVisibility(item.value.visibility); setBaseline(item.value.baseline); generation.current++; action.reset(); }} />
     <p class="research-field-note" data-project-draft-note>{initialDraft ? tx('已恢复未发送的讨论。', 'Restored your unsent discussion.') : tx('讨论草稿会在此标签页自动保存。', 'Discussion drafts are saved automatically in this tab.')}</p>
+    {baseline.context && <DiscussionContext projectId={project.id} value={baseline.context} />}
     {stale && <div role="status" data-discussion-draft-baseline><p>{tx('草稿基于其他陈述或源码版本，请先核对。', 'This draft uses another statement or source version. Review it before continuing.')}</p>
       <p>{tx('草稿：', 'Draft: ')}{versionLabel(baseline.statementVersionId)} · {tx('当前：', 'Current: ')}{versionLabel(currentBaseline.statementVersionId)}</p>
-      <button class="button" type="button" data-confirm-discussion-baseline disabled={action.busy} onClick={() => { setBaseline(currentBaseline); saveDraft({ baseline: currentBaseline }); action.reset(); }}>{tx('已核对，使用当前陈述', 'Reviewed; use the current statement')}</button></div>}
+      <button class="button" type="button" data-confirm-discussion-baseline disabled={action.busy} onClick={() => { setBaseline(currentBaseline); saveDraft({ baseline: currentBaseline }); action.reset(); }}>{context || baseline.context ? tx('已核对，改为当前讨论范围', 'Reviewed; use the current discussion scope') : tx('已核对，使用当前陈述', 'Reviewed; use the current statement')}</button></div>}
     <Field label={tx('讨论内容', 'Discussion')} value={text} onInput={value => { setText(value); saveDraft({ text: value }); }} multiline required rows={3} maxLength={4000}
       note={`${t('最多 4000 字符。')} ${text.length} / 4000`} />
     <div class="research-actions"><label>{tx('可见范围', 'Visibility')}<select value={visibility} onChange={event => { const value = event.currentTarget.value as DiscussionDraft['visibility']; setVisibility(value); saveDraft({ visibility: value }); }}><option value="members">{project.permissions.member ? tx('项目成员', 'Members') : tx('项目成员和我', 'Project members and me')}</option>
-      {(project.visibility === 'public' || visibility === 'public') && <option value="public">{tx('公开', 'Public')}</option>}</select></label><button class="button" type="submit" disabled={action.busy || stale}>{tx('保存讨论', 'Save discussion')}</button></div><MutationState action={action} />
+      {(project.visibility === 'public' || visibility === 'public') && <option value="public" disabled={!canPublishContext}>{tx('公开', 'Public')}</option>}</select></label><button class="button" type="submit" disabled={action.busy || stale || visibility === 'public' && !canPublishContext}>{tx('保存讨论', 'Save discussion')}</button></div><MutationState action={action} />
+    {!canPublishContext && <p>{tx('引用的运行仅向项目成员开放，这条步骤讨论也保留在项目内。', 'The referenced run is available to project members, so this step discussion stays within the project.')}</p>}
     {!project.permissions.member && <p class="research-field-note">{tx('选择“项目成员和我”时，你可以回看自己的讨论和处理结果，其他访客不可见。', 'With “Project members and me”, you can revisit your discussion and its handling. Other visitors cannot see it.')}</p>}
   </form>;
 }
@@ -583,8 +589,6 @@ function Members({ project, selfId, refresh }: { project: ResearchProjectDetail;
     const frame = requestAnimationFrame(() => { memberInput.current?.focus({ preventScroll: true }); memberInput.current?.scrollIntoView({ block: 'center' }); });
     return () => cancelAnimationFrame(frame);
   }, []);
-  const displayName = (id: string) => (project.memberProfiles === undefined
-    ? directory.data?.items.find(item => item.id === id) : project.memberProfiles.find(item => item.id === id))?.displayName ?? id;
   const write = (id: string, memberRole: string | null) => void action.run('PUT', `${base}/theorems/${enc(project.id)}/members/${enc(id)}`,
     { role: memberRole, expectedRevision: project.revision }, () => {
       if (memberRole !== null && id === person) {
@@ -593,8 +597,8 @@ function Members({ project, selfId, refresh }: { project: ResearchProjectDetail;
       refresh();
     });
   return <><ul class="research-list"><li class="research-list-item"><span class="research-item-title"><a href={personHref(project.owner.id)}>{project.owner.displayName}</a></span><span class="research-item-meta">{tx('发起者', 'Owner')}</span></li>
-    {project.members.map(member => <li class="research-list-item" key={member.researcherId}><span class="research-item-title"><a href={personHref(member.researcherId)}>{displayName(member.researcherId)}</a>{member.researcherId === selfId ? ` · ${tx('我', 'Me')}` : ''}</span>
-      <div class="research-item-meta"><span>{member.role === 'reader' ? tx('只读成员', 'Reader') : tx('协作者', 'Collaborator')}</span>{project.permissions.manage && <button class="text-button" type="button" disabled={action.busy} onClick={() => write(member.researcherId, null)}>{tx('移除成员', 'Remove member')}</button>}</div></li>)}</ul>
+    {project.members.map(member => <li class="research-list-item" key={member.researcherId} data-project-member={member.researcherId}><span class="research-item-title">{member.profileVisible ? <a href={personHref(member.researcherId)}>{member.displayName ?? member.researcherId}</a> : <span>{member.displayName ?? member.researcherId}</span>}{member.researcherId === selfId ? ` · ${tx('我', 'Me')}` : ''}</span>
+      <div class="research-item-meta">{project.permissions.manage ? <label>{tx('角色', 'Role')}<select data-member-role={member.researcherId} value={member.role} disabled={action.busy} onChange={event => write(member.researcherId, event.currentTarget.value)}><option value="collaborator">{tx('协作者', 'Collaborator')}</option><option value="reader">{tx('只读成员', 'Reader')}</option></select></label> : <span>{member.role === 'reader' ? tx('只读成员', 'Reader') : tx('协作者', 'Collaborator')}</span>}{project.permissions.manage && <button class="text-button" type="button" disabled={action.busy} onClick={() => write(member.researcherId, null)}>{tx('移除成员', 'Remove member')}</button>}</div></li>)}</ul>
     {requested && !project.permissions.manage && <p class="research-status" role="status">{tx('当前账号不能添加成员，请联系项目发起者。', 'This account cannot add members. Contact the project owner.')}</p>}
     {project.permissions.manage && <form class="research-form" data-project-member-form onSubmit={event => { event.preventDefault(); if (person) write(person, role); }}><h3>{tx('添加或调整成员', 'Add or update a member')}</h3>
       <label>{tx('数学家', 'Mathematician')}<input ref={memberInput} data-project-member-person value={person} list="research-people" onInput={event => setPerson(event.currentTarget.value)} required placeholder={tx('选择或填写数学家 ID', 'Choose or enter researcher ID')} /></label>

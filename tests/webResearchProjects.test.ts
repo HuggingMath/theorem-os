@@ -70,6 +70,60 @@ function fixture(disk = false) {
 }
 
 describe('research projects and collaboration permissions', () => {
+  it('retains exact historical step discussions after the task changes and the run ends', () => {
+    const { projects, storage, project, target } = fixture(true);
+    const originalObservation = observation(); originalObservation.sequence = 2; originalObservation.inspection.tasks[0].proof.commit = commit;
+    storage.saveRun(alice, run('run-a', originalObservation));
+    const latest = structuredClone(originalObservation); latest.sequence = 3; latest.snapshot.stateDigest = 'b'.repeat(64);
+    latest.inspection.tasks[0].version = 'task-v2'; latest.inspection.tasks[0].proof.commit = '2'.repeat(40);
+    storage.saveRun(alice, { ...run('run-a', latest), status: 'completed' });
+    const context = { ...target, observationRef: { ...target.observationRef, sequence: 2 }, taskRef: target.taskRef!, commit };
+    const discussion = projects.submitFeedback(bob, project.id, { requestId: 'historical-discussion', kind: 'discussion', text: 'Explain this original derivation', context });
+    expect(discussion.discussionContext).toEqual({ ...context, taskTitle: 'Prove True' }); expect(discussion.target).toBeUndefined();
+    expect(discussion.statementVersionId).toBe(target.statementVersionId); expect(discussion.visibility).toBe('members');
+    expect(projects.detail(bob, project.id).feedback.find(item => item.id === discussion.id)?.discussionContext).toEqual({ ...context, taskTitle: 'Prove True' });
+    expect(projects.discussionContext(bob, project.id, { ...context, taskTitle: 'Untrusted invented title' }).taskTitle).toBe('Prove True');
+    for (const invalid of [
+      { ...context, observationRef: { ...context.observationRef, stateDigest: 'c'.repeat(64) } },
+      { ...context, taskRef: { ...context.taskRef, version: 'task-v2' } },
+      { ...context, commit: '2'.repeat(40) },
+      { ...context, statementVersionId: 'wrong-statement' },
+    ]) errorStatus(() => projects.submitFeedback(bob, project.id, { requestId: crypto.randomUUID(), kind: 'discussion', text: 'Mismatched citation', context: invalid }), 409);
+    const current = projects.detail(alice, project.id);
+    const next = projects.addVersion(alice, project.id, { requestId: 'discussion-new-statement', expectedRevision: current.revision,
+      source: original, statement: 'A different statement version', environment: 'standard' });
+    errorStatus(() => projects.submitFeedback(bob, project.id, { requestId: 'discussion-statement-conflict', kind: 'discussion',
+      text: 'Conflicting statement and step', statementVersionId: next.currentStatementVersionId, context }), 409);
+  });
+
+  it('keeps saved private-run discussion references within their current read permission', () => {
+    const { projects, project, target } = fixture();
+    let current = projects.update(alice, project.id, { requestId: 'discussion-public-project', expectedRevision: project.revision, visibility: 'public' });
+    const context = { ...target, taskRef: target.taskRef! };
+    errorStatus(() => projects.submitFeedback(bob, project.id, { requestId: 'leaked-discussion', kind: 'discussion', text: 'Private run step', context, visibility: 'public' }), 403);
+    const comment = projects.submitFeedback(bob, project.id, { requestId: 'private-run-discussion', kind: 'discussion', text: 'Private run step', context });
+    expect(comment.visibility).toBe('members'); expect(projects.detail('public', project.id).feedback).toEqual([]);
+    current = projects.detail(alice, project.id);
+    projects.setMember(alice, project.id, projects.identity(bob), { requestId: 'discussion-revoke-bob', expectedRevision: current.revision, role: null });
+    errorStatus(() => projects.feedback(bob, project.id, comment.id), 404);
+    errorStatus(() => projects.discussionContext(bob, project.id, context), 404);
+  });
+
+  it('projects private teammate names for members without exposing their profiles to members or visitors', () => {
+    const { projects, project } = fixture();
+    projects.saveProfile(bob, { requestId: 'private-bob-profile', expectedRevision: 1, displayName: 'Private Bob', visibility: 'private',
+      bio: 'PRIVATE_BIO_NOT_PROJECT_DATA', fields: ['PRIVATE_FIELD_NOT_PROJECT_DATA'] });
+    let current = projects.detail(alice, project.id), id = projects.identity(bob);
+    expect(current.members.find(member => member.researcherId === id)).toEqual({ researcherId: id, displayName: 'Private Bob', profileVisible: false, role: 'collaborator' });
+    expect(JSON.stringify(current)).not.toContain('PRIVATE_BIO_NOT_PROJECT_DATA'); expect(JSON.stringify(current)).not.toContain('PRIVATE_FIELD_NOT_PROJECT_DATA');
+    errorStatus(() => projects.profile(alice, id), 404);
+    current = projects.setMember(alice, project.id, id, { requestId: 'private-bob-reader', expectedRevision: current.revision, role: 'reader' });
+    expect(current.members[0]).toMatchObject({ displayName: 'Private Bob', role: 'reader' });
+    expect(projects.resolveBinding(bob, project.id, 'run-a').binding.permissions.edit).toBe(false);
+    projects.update(alice, project.id, { requestId: 'private-member-public-project', expectedRevision: current.revision, visibility: 'public' });
+    expect(projects.detail('public', project.id).members.find(member => member.researcherId === id)).toEqual({ researcherId: id, role: 'reader' });
+  });
+
   it('keeps private profiles out of directory and never exposes account ownership in project projections', () => {
     const { projects, project } = fixture();
     projects.saveProfile(carol, { requestId: 'private-profile', expectedRevision: 1, displayName: 'Private Carol', visibility: 'private' });
@@ -80,7 +134,7 @@ describe('research projects and collaboration permissions', () => {
     expect(serialized).not.toContain('apiKey'); expect(serialized).not.toContain('email');
   });
 
-  it('projects current visible member names for collaborators, readers and public visitors without exposing private profiles', () => {
+  it('projects teammate names to project members while keeping private names and profiles out of public views', () => {
     const { projects, project } = fixture();
     let current = projects.update(alice, project.id, { requestId: 'member-name-public', expectedRevision: project.revision, visibility: 'public' });
     projects.saveProfile(carol, { requestId: 'member-name-private', expectedRevision: 1, displayName: 'Private Carol',
@@ -92,7 +146,14 @@ describe('research projects and collaboration permissions', () => {
       const detail = projects.detail(viewer, project.id);
       expect(detail.memberProfiles).toEqual([bobName]);
       expect(detail.members).toHaveLength(2);
-      expect(JSON.stringify(detail)).not.toContain('Private Carol');
+      const teammate = detail.members.find(member => member.researcherId === projects.identity(carol));
+      if (viewer === 'public') {
+        expect(teammate).toEqual({ researcherId: projects.identity(carol), role: 'reader' });
+        expect(JSON.stringify(detail)).not.toContain('Private Carol');
+      } else {
+        expect(teammate).toEqual({ researcherId: projects.identity(carol), role: 'reader', displayName: 'Private Carol', profileVisible: false });
+        errorStatus(() => projects.profile(viewer, projects.identity(carol)), 404);
+      }
       expect(JSON.stringify(detail)).not.toContain('PRIVATE_MEMBER');
     }
     expect(projects.detail(carol, project.id).memberProfiles).toEqual([

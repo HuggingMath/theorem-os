@@ -9,7 +9,8 @@ export type ChatDraftSettings = Required<Pick<WebFormalizationRequest,
   };
 export type ChatGuidanceDraft = { runId: string; taskRef?: { id: string; version: string } };
 export type ChatPendingMessage = { requestId: string; text: string };
-export type ChatDraft = { text: string; settings?: ChatDraftSettings; guidance?: ChatGuidanceDraft; pendingMessage?: ChatPendingMessage; references?: ChatLibraryReference[] };
+export type ChatOriginalBackup = { text: string; settings?: ChatDraftSettings };
+export type ChatDraft = { text: string; settings?: ChatDraftSettings; guidance?: ChatGuidanceDraft; pendingMessage?: ChatPendingMessage; references?: ChatLibraryReference[]; originalBackup?: ChatOriginalBackup };
 export function readEditedProblemId(parameters: URLSearchParams): string {
   const id = parameters.get('editProblem') ?? '';
   return /^[A-Za-z0-9_-]{1,128}$/u.test(id) ? id : '';
@@ -47,7 +48,9 @@ export function encodeChatDraft(draft: ChatDraft): string {
   return JSON.stringify({ schema, text: draft.text, ...(draft.settings ? { settings: settings(draft.settings) } : {}),
     ...(draft.guidance ? { guidance: guidance(draft.guidance) } : {}),
     ...(draft.pendingMessage ? { pendingMessage: pendingMessage(draft.pendingMessage) } : {}),
-    ...(references.length ? { references } : {}) });
+    ...(references.length ? { references } : {}),
+    ...(draft.originalBackup ? { originalBackup: { text: draft.originalBackup.text,
+      ...(draft.originalBackup.settings ? { settings: settings(draft.originalBackup.settings) } : {}) } } : {}) });
 }
 
 export function decodeChatDraft(raw: string): ChatDraft {
@@ -58,7 +61,10 @@ export function decodeChatDraft(raw: string): ChatDraft {
       const references = decodeLibraryReferences(value.references);
       const restoredGuidance = guidance(value.guidance), pending = pendingMessage(value.pendingMessage);
       return { text: value.text, ...(restored ? { settings: restored } : {}),
-        ...(restoredGuidance ? { guidance: restoredGuidance } : {}), ...(pending ? { pendingMessage: pending } : {}), ...(references.length ? { references } : {}) };
+        ...(restoredGuidance ? { guidance: restoredGuidance } : {}), ...(pending ? { pendingMessage: pending } : {}),
+        ...(references.length ? { references } : {}),
+        ...(record(value.originalBackup) && typeof value.originalBackup.text === 'string' ? { originalBackup: { text: value.originalBackup.text,
+          ...(settings(value.originalBackup.settings) ? { settings: settings(value.originalBackup.settings) } : {}) } } : {}) };
     }
   } catch { /* Before this schema a draft was the exact original text. */ }
   return { text: raw };

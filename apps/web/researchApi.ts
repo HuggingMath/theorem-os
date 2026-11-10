@@ -21,6 +21,7 @@ import { researchAssetFromRun } from './researchAssetPrefill';
 import { selectWebLibraryPack } from './frozenLibrary';
 import { installedLibraryDetail, installedLibraryDirectory, installedLibrarySource } from './installedLibrary';
 import { acceptedResearchLibraryUses } from './researchLibraryUsage';
+import { researchLibraryProvenance } from './researchLibraryProvenance';
 import { WebStorage, WebStorageError } from './storage';
 import type { WebJobs } from './jobs';
 import type { WebKnowledgeService } from './knowledgeService';
@@ -365,6 +366,7 @@ export class WebResearchApi {
       }
       if (action === 'releases' && ref && method === 'GET') {
         const release = this.assets.release(viewer, id, ref);
+        if (subaction === 'source') return item(researchLibraryProvenance({ storage: this.storage, jobs: this.jobs, projects: this.projects }, viewer, release));
         if (subaction === 'uses') return { status: 200, body: { items: this.uses(viewer, release) } };
         if (subaction === 'checks') {
           if (!release.mathematics?.receiptRefs.includes(parts[5])) fail(404, '检查回执不属于此版本。');

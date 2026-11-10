@@ -10,6 +10,7 @@ import { bindResearchSession, clearResearchSession, errorText, ErrorBox, readRes
   ResearchSessionChangedError, tx, type ResearchContext } from './researchShared';
 import { webDraftOwner } from './ownedDrafts';
 import { loginHref, researchContextHref, researchNavigation } from '../shared';
+import { ResearchRunNotifications } from './researchRunNotifications';
 
 const page = document.body.dataset.researchPage ?? 'people';
 const pageNames = { workspace: ['我的研究', 'My research'], theorems: ['定理', 'Theorems'], people: ['数学家', 'Mathematicians'], library: ['Library', 'Library'] } as const;
@@ -100,8 +101,11 @@ export function ResearchApp() {
   }, [attempt, changed]);
   const draftNeedsLogin = page === 'theorems' && loginParameters.has('accountDraft') && Boolean(context && !context.session.authenticated);
   const unavailable = Boolean(error) || !context || verifyingOwner || draftNeedsLogin;
+  const label = pageNames[page as keyof typeof pageNames] ?? pageNames.people;
+  const title = `${page === 'problem' ? t('题目工作区') : page === 'invite' ? tx('研究邀请', 'Research invitation') : tx(label[0], label[1])} · TheoremOS`;
   return <><Header /><main id="main" class={context ? 'research-shell' : 'research-loading'} tabIndex={-1} aria-busy={checking}>
     {context && !draftNeedsLogin && <div class={unavailable ? 'research-session-pending' : undefined} aria-hidden={unavailable} inert={unavailable} key={webDraftOwner(context.web)}>
+      {!unavailable && <ResearchRunNotifications context={context} title={title} />}
       {page === 'invite' ? <ResearchInvitePage context={context} /> : page === 'problem' ? <ProblemPage context={context} /> : page === 'workspace' ? <WorkspacePage context={context} /> : page === 'theorems' ? <TheoremsPage context={context} /> : page === 'library' ? <LibraryPage context={context} /> : <PeoplePage context={context} />}
     </div>}
     {unavailable && <div class="research-session-notice">{error ? <><ErrorBox message={error} /><div class="research-actions">

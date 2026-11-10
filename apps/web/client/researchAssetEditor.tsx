@@ -3,6 +3,7 @@ import type { ResearchAgentDraft, ResearchAsset, ResearchAssetContent, ResearchA
 import { MathUsageEditor } from './researchMathUsageEditor';
 import type { ResearchModulePlan, ResearchModuleSlot } from '../../../src/solver/modules/policy';
 import type { WebRun } from '../shared';
+import type { ResearchLibraryProvenance } from '../researchAssetTypes';
 import { base, Check, enc, Empty, ErrorBox, Field, lines, MutationState, nameOf, Search, tx, useMutation, useResource, type Item, type ResearchContext } from './researchShared';
 
 const blankAgent = (): ResearchAgentDraft => ({ environment: 'mathlib', modulePlan: { scheduler: 'plan', context: 'full', custom: [] }, skills: [], libraries: [] });
@@ -112,17 +113,23 @@ export function AssetEditor({ asset, prefill, context, onSaved, disabled = false
   </fieldset></form>;
 }
 
-export function FixedMathSource({ source, prefill }: { source: Extract<ResearchMathSource, { kind: 'run' }>; prefill?: ResearchAssetPrefill }) {
+export function FixedMathSource({ source, prefill, provenance }: { source: Extract<ResearchMathSource, { kind: 'run' }>; prefill?: ResearchAssetPrefill; provenance?: ResearchLibraryProvenance }) {
+  const parameters = new URLSearchParams({ run: source.runId, view: source.taskId ? 'route' : 'source' });
+  if (source.taskId && source.taskVersion && source.commit) { parameters.set('task', source.taskId); parameters.set('taskVersion', source.taskVersion); parameters.set('commit', source.commit); }
+  const href = provenance?.href ?? (prefill ? `./?${parameters}` : undefined);
   return <section data-library-prefill={source.scope} class="research-source-evidence">
-    <p class="research-status">{source.scope === 'original-proof' ? tx('保存完整原题的最终验收证明。', 'Save the final accepted proof of the original problem.')
-      : tx('保存这个任务版本的已检查成果。完整原题的验收状态另行记录。', 'Save the checked result of this task version. Original-problem acceptance is recorded separately.')}</p>
-    <dl class="research-facts"><div><dt>{tx('来源运行', 'Source run')}</dt><dd><a href={`./?run=${enc(source.runId)}`}>{source.runId}</a></dd></div>
+    <p class="research-status">{source.scope === 'original-proof' ? tx('完整原题的最终验收证明。', 'The final accepted proof of the original problem.')
+      : source.scope === 'checked-task' ? tx('这个任务版本的已检查成果。完整原题的验收状态另行记录。', 'The checked result of this task version. Original-problem acceptance is recorded separately.')
+      : tx('发布时固定的运行源码。检查记录见下方。', 'The source fixed at publication. Check records appear below.')}</p>
+    <dl class="research-facts"><div><dt>{tx('来源运行', 'Source run')}</dt><dd>{href ? <a data-library-source-link href={href}>{provenance?.kind === 'public-result' ? tx('查看公开的原题证明', 'View the public proof')
+      : provenance?.kind === 'project' ? tx('在项目中核对来源', 'Review the source in its project') : tx('核对自己的来源研究', 'Review my source research')}</a> : <code>{source.runId}</code>}</dd></div>
       {source.taskId && <div><dt>{tx('任务', 'Task')}</dt><dd>{source.taskId}</dd></div>}
       {source.taskVersion && <div><dt>{tx('任务版本', 'Task version')}</dt><dd>{source.taskVersion}</dd></div>}
-      <div><dt>{tx('源码提交', 'Source commit')}</dt><dd>{source.commit}</dd></div>
+      {source.commit && <div><dt>{tx('源码提交', 'Source commit')}</dt><dd>{source.commit}</dd></div>}
       {prefill && <><div><dt>{tx('证明环境', 'Proof environment')}</dt><dd>{prefill.environment}</dd></div>
         <div><dt>{tx('源码文件', 'Source file')}</dt><dd>{prefill.evidence.file}</dd></div></>}
-    </dl>{prefill && <details><summary>{tx('查看声明与来源回执', 'View declarations and source receipts')}</summary>
+    </dl>{provenance?.kind === 'published' && <p data-library-source-private>{tx('原运行未向你开放。你仍可核对下方已发布的固定源码、声明与检查记录。', 'The original run is not available to you. Its published source, declarations and check records remain available below.')}</p>}
+    {prefill && <details><summary>{tx('查看声明与来源回执', 'View declarations and source receipts')}</summary>
       {prefill.evidence.declarations.map(item => <div key={`${item.file}:${item.name}`}><h4>{item.name}</h4><pre class="research-block-code">{item.type}</pre></div>)}
       <dl class="research-facts"><div><dt>{tx('源码摘要', 'Source digest')}</dt><dd>{prefill.evidence.sourceDigest}</dd></div>
         {prefill.evidence.environmentDigest && <div><dt>{tx('来源运行环境摘要', 'Source runtime environment digest')}</dt><dd>{prefill.evidence.environmentDigest}</dd></div>}

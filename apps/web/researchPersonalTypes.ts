@@ -1,18 +1,20 @@
 import type { WebTaskSource } from './collaboration';
-import type { ResearchAnnotationAnchor, ResearchFeedbackTarget } from './researchProjectTypes';
+import type { ResearchAnnotationAnchor, ResearchFeedbackTarget, ResearchDiscussionContext } from './researchProjectTypes';
+import type { ProblemDraftValue } from './problemDraftTypes';
 
-export type ResearchDraftKind = 'candidate' | 'discussion' | 'issue' | 'issue-reply' | 'guidance' | 'annotation' | 'annotation-reply' | 'review';
+export type ResearchDraftKind = 'candidate' | 'discussion' | 'issue' | 'issue-reply' | 'guidance' | 'annotation' | 'annotation-reply' | 'review' | 'problem';
 export type ResearchDraftScope = {
   owner: string; projectId?: string; kind: ResearchDraftKind; statementVersionId?: string;
   runId?: string; taskId?: string; taskVersion?: string; commit?: string; issueId?: string; issueRevision?: number; sourceFeedbackId?: string;
-  threadId?: string; purpose?: 'comment' | 'resubmit';
+  threadId?: string; purpose?: 'comment' | 'resubmit'; draftKey?: string;
 };
 export type ResearchAccountDraftScope = Omit<ResearchDraftScope, 'owner'>;
 export type ResearchDraftValues = {
+  problem: ProblemDraftValue;
   candidate: { source: string; text: string; edited: boolean; needsReview: boolean; baseSource: WebTaskSource;
     baseObservation: { sequence: number; stateDigest: string };
     revisionOf?: { feedbackId: string; expectedRevision: number; responses: { commentId: string; text: string }[] } };
-  discussion: { text: string; visibility: 'members' | 'public'; baseline: { statementVersionId?: string; sourceDigest?: string } };
+  discussion: { text: string; visibility: 'members' | 'public'; baseline: { statementVersionId?: string; sourceDigest?: string; context?: ResearchDiscussionContext } };
   issue: { title: string; text: string; target?: ResearchFeedbackTarget; sourceFeedbackId?: string; statementVersionId?: string };
   'issue-reply': { text: string; kind: string; replyTo: string; proposalId: string; feedbackId: string; revision: number };
   guidance: { text: string; planVersion?: string; observationRef: { sequence: number; stateDigest: string } };

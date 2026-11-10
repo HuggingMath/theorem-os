@@ -38,6 +38,16 @@ describe('research feedback scope and route annotations', () => {
     expect(taskFeedbackAnnotations([discussion], 'run-a')).toEqual([]);
   });
 
+  it('filters saved step discussions by their cited run and version without creating an execution target', () => {
+    const discussion = feedback({ kind: 'discussion', target: undefined, discussionContext: { runId: 'run-a', statementVersionId: 'statement-a',
+      observationRef: { sequence: 1, stateDigest: 'saved' }, taskRef: { id: 'lemma', version: 'old-version' }, commit: 'old-commit' } });
+    expect(matchesFeedbackScope(discussion, 'run', 'run-a')).toBe(true);
+    expect(matchesFeedbackScope(discussion, 'task', 'run-a', { runId: 'run-a', taskId: 'lemma', taskVersion: 'old-version' })).toBe(true);
+    expect(matchesFeedbackScope(discussion, 'task', 'run-a', { runId: 'run-a', taskId: 'lemma', taskVersion: 'v1' })).toBe(false);
+    expect(matchesFeedbackScope(discussion, 'run', 'run-b')).toBe(false);
+    expect(taskFeedbackAnnotations([discussion], 'run-a')).toEqual([{ taskId: 'lemma', taskVersion: 'old-version', total: 1, attention: 1 }]);
+  });
+
   it('separates delivery, decision and execution when classifying attention and results', () => {
     const accepted = feedback({ decision: { status: 'accepted', evidenceRefs: [] } });
     expect(matchesFeedbackStatus(accepted, 'accepted')).toBe(true);

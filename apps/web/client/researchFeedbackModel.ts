@@ -6,7 +6,8 @@ export type FeedbackTask = { runId: string; taskId: string; taskVersion: string 
 
 /** These are recorded associations, rather than task ids inferred from the feedback text. */
 export function feedbackTaskRefs(feedback: ResearchFeedback) {
-  const refs = [...(feedback.target?.taskRef ? [feedback.target.taskRef] : []), ...feedback.execution.taskRefs];
+  const target = feedback.discussionContext ?? feedback.target;
+  const refs = [...(target?.taskRef ? [target.taskRef] : []), ...feedback.execution.taskRefs];
   return refs.filter((ref, index) => refs.findIndex(item => item.id === ref.id && item.version === ref.version) === index);
 }
 
@@ -19,7 +20,7 @@ export function feedbackNeedsAttention(feedback: ResearchFeedback) {
 
 export function matchesFeedbackScope(feedback: ResearchFeedback, scope: FeedbackScope, runId?: string, task?: FeedbackTask) {
   if (scope === 'all') return true;
-  if (!runId || feedback.target?.runId !== runId) return false;
+  if (!runId || (feedback.discussionContext ?? feedback.target)?.runId !== runId) return false;
   if (scope === 'run') return true;
   return task?.runId === runId && feedbackTaskRefs(feedback).some(ref => ref.id === task.taskId && ref.version === task.taskVersion);
 }
@@ -46,7 +47,7 @@ export function matchesFeedbackQuery(feedback: ResearchFeedback, query: string) 
 export function taskFeedbackAnnotations(feedback: readonly ResearchFeedback[], runId: string) {
   const counts = new Map<string, { taskId: string; taskVersion: string; total: number; attention: number }>();
   for (const item of feedback) {
-    if (item.target?.runId !== runId) continue;
+    if ((item.discussionContext ?? item.target)?.runId !== runId) continue;
     for (const task of feedbackTaskRefs(item)) {
       const key = JSON.stringify([task.id, task.version]);
       const value = counts.get(key) ?? { taskId: task.id, taskVersion: task.version, total: 0, attention: 0 };

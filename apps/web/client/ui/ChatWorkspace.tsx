@@ -33,6 +33,7 @@ import type { ChatMathematics } from '../chatMathematics';
 import { ChatMathematicalAnswer, ChatMathematicalProgress } from './ChatMathematicalWork';
 import type { ResearchStartCostProps } from '../researchStartCost';
 import { libraryReferenceId, type ChatLibraryReference } from '../chatReference';
+import { ProblemDraftPanel, type ProblemDraftPanelProps } from '../problemDrafts';
 
 
 export type ChatThreadProps = {
@@ -308,6 +309,8 @@ export type ChatBudgets = { maxRunSeconds: number; maxTotalTokens: number; resea
 export type ChatProvider = WebProvider & { defaultModel: string; key: 'required' | 'saved' | 'server'; keyUrl?: string };
 export type ChatComposerProps = {
   home?: Pick<ChatThreadProps, 'overview' | 'startGuide' | 'onConfigure' | 'onFirstExample' | 'onSample'>;
+  originalRecovery?(): void;
+  problemDrafts?: ProblemDraftPanelProps;
   input: string; onInput(value: string): void; onSubmit(): void; onStop(): void;
   references?: ChatLibraryReference[]; onRemoveReference?(id: string): void;
   editedProblem?: { research?: boolean; onReturnHome(): void };
@@ -413,9 +416,13 @@ function ChatComposer(props: ChatComposerProps) {
         onInput={event => props.onInput(event.currentTarget.value)}
         onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
         onKeyDown={event => {
-          if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.isComposing || composing.current || event.keyCode === 229 || matchMedia('(pointer: coarse)').matches) return;
+          if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.isComposing || composing.current || event.keyCode === 229 || matchMedia('(pointer: coarse)').matches) return;
+          if (props.newProblem ? !event.ctrlKey && !event.metaKey : event.ctrlKey || event.metaKey) return;
           event.preventDefault(); if (canSend) props.onSubmit(); else if (missingKey && props.input.trim() && !props.disabled && !props.submitting) configureKey();
         }} />
+      {props.newProblem && <p class="chat-send-status" data-new-problem-shortcut>{tx('Enter 换行；Ctrl / ⌘ + Enter 提交题目。', 'Enter adds a line; Ctrl / ⌘ + Enter submits the problem.')}</p>}
+      {props.originalRecovery && <div class="chat-send-status" data-original-recovery role="status"><span>{tx('上一份原题与配置已保留。', 'Your previous problem and settings are kept.')} </span>
+        <button type="button" class="text-button" data-recover-original disabled={props.submitting} onClick={props.originalRecovery}>{tx('恢复上一份原题', 'Restore previous problem')}</button></div>}
       {props.newProblem && preview && <section class="chat-input-preview" data-input-preview tabIndex={0} aria-label={tx('原题公式预览', 'Problem formula preview')}>
         {props.input.trim() ? <RichProse text={props.input} /> : <p>{tx('先在编辑中写下原题，这里会预览文字和公式。', 'Write a problem in Edit to preview its text and formulas here.')}</p>}
       </section>}
@@ -545,6 +552,7 @@ function ChatComposer(props: ChatComposerProps) {
     </div>}
     {props.home && <HomeResearchDetails {...props.home} />}
     {props.newProblem && <details class="chat-examples"><summary>{t("试试例题")}</summary><label class="sr-only" for="formalize-example">{t("选择自然语言例题")}</label><select id="formalize-example" value="" onChange={event => { props.onExample(event.currentTarget.value); event.currentTarget.value = ''; textarea.current?.focus(); }}><option value="">{t("选择一个题目")}</option>{researchExamples.map(example => <option key={example.id} value={example.id}>{locale === 'en' ? example.nameEn : example.name}</option>)}</select></details>}
+    {props.problemDrafts && <ProblemDraftPanel key={props.problemDrafts.owner} {...props.problemDrafts} />}
   </div>;
 }
 

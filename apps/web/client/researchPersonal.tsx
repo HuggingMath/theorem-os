@@ -64,6 +64,7 @@ export function ProblemOrganization({ problem, context }: { problem: Pick<Resear
 export function accountDraftHref(draft: ResearchAccountDraft, versionId?: string) {
   const scope = draft.scope, parameters = new URLSearchParams({ ...(scope.projectId ? { id: scope.projectId } : {}), accountDraft: draft.id });
   if (versionId) parameters.set('draftVersion', versionId);
+  if (scope.kind === 'problem') return `./?${parameters}`;
   if (scope.statementVersionId) parameters.set('version', scope.statementVersionId);
   if (scope.runId) parameters.set('run', scope.runId);
   if (scope.taskId) parameters.set('task', scope.taskId);

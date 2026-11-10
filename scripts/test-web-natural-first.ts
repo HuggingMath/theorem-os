@@ -24,7 +24,7 @@ const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port
 const original = '  对任意自然数 n，证明 $n + 0 = n$。\n\n保留完整原题及空格。  ';
 const checks: string[] = [], errors: string[] = [];
 let browser: Browser | undefined, activePage: Page | undefined;
-const noOverflow = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1);
+const noOverflow = (page: Page) => page.evaluate(() => Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) <= innerWidth + 1);
 const mark = (value: string) => { checks.push(value); console.log(`PASS ${value}`); };
 async function lean(page: Page) {
   if (await page.locator('#entry-lean').isVisible()) await page.locator('#entry-lean').click();
@@ -83,7 +83,8 @@ try {
     await page.locator('#topbar-draft').click();
     await page.locator('[data-chat-sample]').click();
     await page.locator('[data-chat-sample-note]').waitFor();
-    assert.equal(new URL(page.url()).search, '?sample');
+    assert.equal(new URL(page.url()).searchParams.has('sample'), true);
+    assert.equal(new URL(page.url()).searchParams.size, 1);
     assert.equal(await page.locator('[data-chat-share]').count(), 0);
     assert.equal(await page.locator('#formalize-start').isDisabled(), true);
     assert.equal(await page.locator('[data-first-research-start], [data-chat-participation]').count(), 0,

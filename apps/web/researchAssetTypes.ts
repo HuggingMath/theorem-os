@@ -12,6 +12,7 @@ export type ResearchLibraryPack = {
 export type ResearchAssetKind = 'mathematics' | 'agent' | 'skill';
 export type ResearchAssetVisibility = 'private' | 'public';
 export type ResearchReleaseRef = { assetId: string; version: string; digest?: string };
+export type ResearchLibraryProvenance = { kind: 'owner' | 'project' | 'public-result' | 'published'; href?: string };
 export type ResearchMathSource =
   | { kind: 'knowledge'; catalogDigest: string; entryIds: string[] }
   | { kind: 'run'; runId: string; taskId?: string; taskVersion?: string; commit?: string;

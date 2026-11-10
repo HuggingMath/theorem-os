@@ -8,14 +8,16 @@ import type { ResearchPersonalTarget, ResearchPersonalProblem, ResearchAccountDr
   ResearchAccountDraftVersion, ResearchAccountDraftResult, ResearchDraftKind, ResearchDraftSubmission } from './researchPersonalTypes';
 import type { ResearchProjectDetail } from './researchProjectTypes';
 import { researchStatementIdentity } from './client/researchOverviewModel';
+import { researchModulePlanDraftSchema } from '../../src/solver/modules/policy';
+import type { ResearchDiscussionContext } from './researchProjectTypes';
 
 const key = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u), hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const text = (max: number) => z.string().max(max).refine(value => !value.includes('\0'));
 const identifier = text(200).refine(value => value.length > 0), commit = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u);
-const draftKinds = z.enum(['candidate', 'discussion', 'issue', 'issue-reply', 'guidance', 'annotation', 'annotation-reply', 'review']);
+const draftKinds = z.enum(['candidate', 'discussion', 'issue', 'issue-reply', 'guidance', 'annotation', 'annotation-reply', 'review', 'problem']);
 const scopeSchema = z.object({ projectId: key.optional(), kind: draftKinds, statementVersionId: key.optional(),
   runId: key.optional(), taskId: identifier.optional(), taskVersion: identifier.optional(), commit: commit.optional(), issueId: key.optional(),
-  issueRevision: z.number().int().nonnegative().optional(), sourceFeedbackId: key.optional(), threadId: key.optional(), purpose: z.enum(['comment', 'resubmit']).optional() }).strict();
+  issueRevision: z.number().int().nonnegative().optional(), sourceFeedbackId: key.optional(), threadId: key.optional(), purpose: z.enum(['comment', 'resubmit']).optional(), draftKey: key.optional() }).strict();
 const observationSchema = z.object({ sequence: z.number().int().nonnegative(), stateDigest: hash }).strict();
 const anchorSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('source'), sourceDigest: hash, file: text(512), startLine: z.number().int().positive(), endLine: z.number().int().positive(), quote: text(64_000) }).strict(),
@@ -27,10 +29,23 @@ const targetSchema = z.object({ runId: key, statementVersionId: key, observation
 const sourceSchema = z.object({ taskId: identifier, taskVersion: identifier, commit, sourceDigest: hash, environmentDigest: hash,
   file: text(512), source: text(128_000), scope: z.literal('owned-file'), dependencySources: z.array(z.object({ file: text(512), source: text(128_000) }).strict()).max(64).optional() }).strict();
 const values = {
+  problem: z.discriminatedUnion('mode', [
+    z.object({ mode: z.literal('natural'), text: text(32768), settings: z.object({ providerId: text(64), model: text(128),
+      environment: z.enum(['standard', 'mathlib']), effort: z.enum(['low', 'high', 'max']), participation: z.enum(['guided', 'automatic']),
+      maxRunSeconds: z.number().finite().nonnegative(), maxTotalTokens: z.number().finite().nonnegative(),
+      research: z.object({ maxRunSeconds: z.number().finite().nonnegative(), maxTotalTokens: z.number().finite().nonnegative(), maxTurns: z.number().finite().nonnegative() }).strict() }).strict() }).strict(),
+    z.object({ mode: z.literal('lean'), draft: z.object({ providerId: text(64), model: text(128), source: text(32768), task: text(8000),
+      maxTurns: text(40), maxRunSeconds: text(40), workers: text(40), maxTotalTokens: text(40).optional(),
+      effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']), environment: z.enum(['standard', 'mathlib']),
+      coordination: z.enum(['cooperative', 'independent']), planApproval: z.literal(true).optional(), templateId: text(64),
+      modulePlan: researchModulePlanDraftSchema.optional(), knowledgeDigest: text(256).nullable().optional() }).strict(),
+      libraries: z.array(z.object({ assetId: key, version: text(64), digest: hash.optional() }).strict()).max(64).optional() }).strict(),
+  ]),
   candidate: z.object({ source: text(128_000), text: text(8000), edited: z.boolean(), needsReview: z.boolean(), baseSource: sourceSchema,
     baseObservation: z.object({ sequence: z.number().int().nonnegative(), stateDigest: hash }).strict(),
     revisionOf: z.object({ feedbackId: key, expectedRevision: z.number().int().nonnegative(), responses: z.array(z.object({ commentId: key, text: text(4000) }).strict()).max(100) }).strict().optional() }).strict(),
-  discussion: z.object({ text: text(4000), visibility: z.enum(['members', 'public']), baseline: z.object({ statementVersionId: key.optional(), sourceDigest: hash.optional() }).strict() }).strict(),
+  discussion: z.object({ text: text(4000), visibility: z.enum(['members', 'public']), baseline: z.object({ statementVersionId: key.optional(), sourceDigest: hash.optional(),
+    context: targetSchema.extend({ taskRef: z.object({ id: identifier, version: identifier }).strict(), commit: commit.optional(), taskTitle: text(1000).optional() }).strict().optional() }).strict() }).strict(),
   issue: z.object({ title: text(200), text: text(4000), target: targetSchema.optional(), sourceFeedbackId: key.optional(), statementVersionId: key.optional() }).strict(),
   'issue-reply': z.object({ text: text(4000), kind: z.enum(['comment', 'proposal']), replyTo: text(128), proposalId: text(128), feedbackId: text(128), revision: z.number().int().nonnegative() }).strict(),
   guidance: z.object({ text: text(4000), planVersion: identifier.optional(), observationRef: observationSchema }).strict(),
@@ -74,6 +89,11 @@ export class WebResearchPersonal {
     return project;
   }
   private authorize(viewer: string, scope: ResearchAccountDraftScope, value: unknown) {
+    if (scope.kind === 'problem') {
+      if (!scope.draftKey || Object.keys(scope).some(name => !['kind', 'draftKey'].includes(name))) fail(400, '新题草稿范围无效。');
+      return;
+    }
+    if (scope.draftKey) fail(400, '新题草稿范围无效。');
     if (scope.kind === 'review') {
       if (!scope.projectId || !scope.sourceFeedbackId || !scope.purpose) fail(400, '评审草稿需要保留原反馈与补充类型。');
       const project = this.deps.projects.detail(viewer, scope.projectId!), feedback = this.deps.projects.feedback(viewer, scope.projectId!, scope.sourceFeedbackId!);
@@ -145,6 +165,10 @@ export class WebResearchPersonal {
       const version = project.versions.find(item => item.id === scope.statementVersionId);
       if (record.baseline.statementVersionId !== scope.statementVersionId || record.baseline.sourceDigest !== version?.sourceDigest)
         fail(409, '讨论草稿的陈述与源码身份不一致。');
+      const context = record.baseline.context as ResearchDiscussionContext | undefined;
+      if (context && (context.runId !== scope.runId || context.taskRef?.id !== scope.taskId || context.taskRef?.version !== scope.taskVersion || context.commit !== scope.commit))
+        fail(409, '讨论草稿的陈述与源码身份不一致。');
+      if (context) record.baseline.context = this.deps.projects.discussionContext(viewer, project.id, context);
     }
     if (scope.kind === 'issue') {
       if (record.statementVersionId !== scope.statementVersionId || record.sourceFeedbackId !== scope.sourceFeedbackId
@@ -213,7 +237,7 @@ export class WebResearchPersonal {
     if (previous) { if (previous !== intent) fail(409, '这个请求已用于另一项草稿操作。'); return this.draft(viewer, id, version.id); }
     if (input.action === 'submitted') {
       if (!input.submission) fail(400, '请关联实际提交记录后归档。');
-      const submission = this.submission(viewer, stored.scope, input.submission as Omit<ResearchDraftSubmission, 'href'>);
+      const submission = this.submission(viewer, stored.scope, input.submission as Omit<ResearchDraftSubmission, 'href'>, version.value);
       let branch: ResearchAccountDraftVersion | undefined = version;
       while (branch) {
         if (!branch.status || branch.status === 'open') { branch.status = 'submitted'; branch.submission = submission; branch.completedAt = new Date().toISOString(); }
@@ -227,16 +251,27 @@ export class WebResearchPersonal {
     (stored.lifecycleRequests ??= {})[input.requestId] = intent;
     this.deps.storage.saveRecord(path, stored); return this.draft(viewer, id, version.id);
   }
-  private submission(viewer: string, scope: ResearchAccountDraftScope, input: Omit<ResearchDraftSubmission, 'href'>): ResearchDraftSubmission {
+  private submission(viewer: string, scope: ResearchAccountDraftScope, input: Omit<ResearchDraftSubmission, 'href'>, value: unknown): ResearchDraftSubmission {
     const self = this.deps.projects.identity(viewer), target = new URLSearchParams({ ...(scope.projectId ? { project: scope.projectId } : {}),
       ...(scope.runId ? { run: scope.runId } : {}), tab: 'route', ...(scope.taskId ? { task: scope.taskId, taskVersion: scope.taskVersion! } : {}) });
     let href = `problem.html?${target}`;
     if (input.kind === 'feedback' && scope.projectId && ['candidate', 'discussion', 'guidance'].includes(scope.kind)) {
       const feedback = this.deps.projects.feedback(viewer, scope.projectId, input.id);
       const kind = scope.kind === 'candidate' ? 'proof-submission' : scope.kind;
-      if (feedback.author.id !== self || feedback.kind !== kind || scope.runId && feedback.target?.runId !== scope.runId
-        || scope.taskId && (feedback.target?.taskRef?.id !== scope.taskId || feedback.target?.taskRef?.version !== scope.taskVersion)) fail(409, '提交记录与草稿范围不一致。');
+      const reference = feedback.discussionContext ?? feedback.target;
+      if (feedback.author.id !== self || feedback.kind !== kind || scope.runId && reference?.runId !== scope.runId
+        || scope.taskId && (reference?.taskRef?.id !== scope.taskId || reference?.taskRef?.version !== scope.taskVersion)) fail(409, '提交记录与草稿范围不一致。');
       href = `theorems.html?${new URLSearchParams({ id: scope.projectId, ...(scope.runId ? { run: scope.runId } : {}) })}#feedback-${input.id}`;
+      if (scope.kind === 'discussion') {
+        const expected = (value as { baseline: { context?: ResearchDiscussionContext } }).baseline.context, context = feedback.discussionContext;
+        if (Boolean(expected) !== Boolean(context) || expected && context && (expected.statementVersionId !== context.statementVersionId
+          || expected.observationRef.sequence !== context.observationRef.sequence || expected.observationRef.stateDigest !== context.observationRef.stateDigest
+          || expected.commit !== context.commit)) fail(409, '提交记录与草稿范围不一致。');
+        if (context) {
+          target.set('tab', 'discussion'); target.set('at', String(context.observationRef.sequence)); target.set('atState', context.observationRef.stateDigest);
+          if (context.commit) target.set('commit', context.commit); target.set('feedback', input.id); href = `problem.html?${target}#feedback-${input.id}`;
+        }
+      }
     } else if ((input.kind === 'issue' && scope.kind === 'issue' || input.kind === 'issue-reply' && scope.kind === 'issue-reply') && scope.projectId) {
       const issue = this.deps.projects.collaboration(viewer, scope.projectId).issues.find(item => item.id === input.id) ?? fail(404, '提交的议题记录不存在。');
       if (scope.kind === 'issue' ? issue.author.id !== self : issue.id !== scope.issueId || !issue.replies.some(reply => reply.author.id === self)

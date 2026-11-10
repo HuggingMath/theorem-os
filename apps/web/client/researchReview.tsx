@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { ResearchFeedback, ResearchProjectDetail, ResearcherProfile } from '../researchProjectTypes';
+import type { ResearchFeedback, ResearchProjectDetail } from '../researchProjectTypes';
 import { RichProse } from './richText';
 import { ResearchAnnotations } from './researchAnnotations';
 import { ResearchDraftPicker } from './researchDrafts';
 import { useResearchInputDraft } from './researchInputDraft';
-import { base, enc, ErrorBox, Field, MutationState, stamp, tx, useMutation, useResource, type Items } from './researchShared';
+import { base, enc, Field, MutationState, stamp, tx, useMutation } from './researchShared';
+import { projectPeople, projectPersonLabel } from './researchMembers';
 
 export function ResearchReview({ feedback, project, selfId, canReview, refresh, focusAnnotationId }: {
   feedback: ResearchFeedback; project: ResearchProjectDetail; selfId: string; canReview: boolean; refresh(): void; focusAnnotationId?: string;
@@ -26,11 +27,7 @@ export function ResearchReview({ feedback, project, selfId, canReview, refresh, 
     && !['declined', 'needs-info'].includes(feedback.decision.status) && feedback.candidateDelivery?.status !== 'withdrawn'
     && (feedback.candidateDelivery?.approvedAt && feedback.candidateDelivery.approvedBy && ['approved', 'dispatched'].includes(feedback.candidateDelivery.status)
       || feedback.decision.status === 'accepted' && feedback.decision.actor?.kind === 'human');
-  const directory = useResource<Items<ResearcherProfile>>(canAssign ? `${base}/people?limit=100` : undefined);
-  const people = [project.owner, ...project.members.filter(member => member.role === 'collaborator').map(member => ({
-    id: member.researcherId, displayName: directory.data?.items.find(item => item.id === member.researcherId)?.displayName ?? project.feedback.find(item => item.author.id === member.researcherId)?.author.displayName
-      ?? project.assignments.find(item => item.author.id === member.researcherId)?.author.displayName ?? member.researcherId,
-  }))].filter(person => person.id !== feedback.author.id && person.id !== assigned?.id);
+  const people = projectPeople(project).filter(person => person.role !== 'reader' && person.id !== feedback.author.id && person.id !== assigned?.id);
   return <section class="collaboration-review" data-feedback-review>
     {feedback.candidateDelivery && <div class="candidate-delivery-status" data-candidate-delivery-status={feedback.candidateDelivery.status}>
       <p>{feedback.candidateDelivery.status === 'awaiting-review' ? tx('候选检查已通过，等待人工批准。', 'The candidate passed its check and is waiting for human approval.')
@@ -47,7 +44,7 @@ export function ResearchReview({ feedback, project, selfId, canReview, refresh, 
     <p>{assigned ? <>{tx('负责评审：', 'Responsible reviewer: ')}<strong>{assigned.displayName}</strong></> : tx('尚未指定评审人', 'No reviewer assigned')}
       {!assigned && canReview && feedback.author.id !== selfId && <button type="button" class="button" data-claim-review disabled={action.busy} onClick={() => void action.run('POST', path, { action: 'claim', expectedRevision: feedback.revision }, refresh)}>{tx('由我评审', 'Review this myself')}</button>}</p>
     {canAssign && <form class="research-form" onSubmit={event => { event.preventDefault(); void action.run('POST', path, { action: 'assign', reviewerId: reviewer, expectedRevision: feedback.revision }, refresh); }}>
-      <label>{assigned ? tx('移交评审', 'Transfer review') : tx('指定评审人', 'Assign a reviewer')}<select data-reviewer-select value={reviewer} required onChange={event => setReviewer(event.currentTarget.value)}><option value="">{tx('选择有权限的协作者', 'Choose an authorized collaborator')}</option>{people.map(person => <option key={person.id} value={person.id}>{person.displayName}</option>)}</select></label>
+      <label>{assigned ? tx('移交评审', 'Transfer review') : tx('指定评审人', 'Assign a reviewer')}<select data-reviewer-select value={reviewer} required onChange={event => setReviewer(event.currentTarget.value)}><option value="">{tx('选择有权限的协作者', 'Choose an authorized collaborator')}</option>{people.map(person => <option key={person.id} value={person.id}>{projectPersonLabel(person)}</option>)}</select></label>
       <button class="button" type="submit" disabled={action.busy || !reviewer}>{assigned ? tx('确认移交', 'Confirm transfer') : tx('确认分配', 'Confirm assignment')}</button></form>}
     {feedback.author.id === selfId && feedback.decision.status === 'needs-info' && <form class="research-form" data-resubmit-review onSubmit={event => { event.preventDefault(); const submitted = supplement.drafts.current(), value = supplement.value;
       void action.run('POST', path, { action: 'resubmit', text, expectedRevision: feedback.revision }, () => { void supplement.complete(submitted, { kind: 'review', id: feedback.id }, value); refresh(); }); }}>
@@ -64,6 +61,6 @@ export function ResearchReview({ feedback, project, selfId, canReview, refresh, 
     {Boolean(feedback.reviewHistory?.length || feedback.decisionHistory?.length) && <details data-review-history><summary>{tx('评审流转与补充记录', 'Review history and additional information')}</summary>
       {feedback.reviewHistory?.map((item, i) => <div class="collaboration-resolution" key={i}><p>{item.actor.displayName} · {item.action === 'resubmit' ? tx('补充后重新送审', 'Resubmitted with more information') : item.action === 'claim' ? tx('接下评审', 'Claimed review') : tx('分配评审', 'Assigned review')}{item.reviewer && <> → {item.reviewer.displayName}</>} · {stamp(item.createdAt)}</p>{item.text && <RichProse text={item.text} />}</div>)}
       {feedback.decisionHistory?.map((item, i) => <div class="collaboration-resolution" key={`decision-${i}`}><p>{item.actor?.displayName} · {stamp(item.decidedAt ?? '')}</p>{item.reason && <RichProse text={item.reason} />}</div>)}</details>}
-    <ErrorBox message={directory.error} /><MutationState action={action} />
+    <MutationState action={action} />
   </section>;
 }
