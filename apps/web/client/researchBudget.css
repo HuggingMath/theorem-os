@@ -3,3 +3,4 @@
 .research-budget-draft h4 { margin: 0 0 12px; font-size: 14px; }
 .research-budget-draft p { font-size: 12px; line-height: 1.7; }
 .research-budget-draft > a { font-size: 12px; }
+.problem-budget-spent { display: flex; flex-wrap: wrap; gap: .25rem 1rem; }

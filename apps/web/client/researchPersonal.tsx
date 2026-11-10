@@ -17,15 +17,26 @@ export function PersonalProblemControl({ target, item, onSaved, compact = false,
   const [pinned, setPinned] = useState(item?.pinned ?? false), [status, setStatus] = useState(item?.status ?? 'active'), [tags, setTags] = useState(item?.tags.join(', ') ?? ''), [note, setNote] = useState(item?.nextNote ?? '');
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState(false), [ready, setReady] = useState(Boolean(item));
   const lock = useRef(false), pending = useRef<{ signature: string; input: object }>();
+  const edited = useRef(new Set<'pinned' | 'status' | 'tags' | 'note'>());
   const url = personalProblemUrl(target);
   const load = async (keepEdits = false) => {
     try {
       const { item: latest } = await request<Item<ResearchPersonalProblem>>(url); setRecord(latest); setReady(true); setError('');
-      if (!keepEdits) { setPinned(latest.pinned); setStatus(latest.status); setTags(latest.tags.join(', ')); setNote(latest.nextNote); }
+      if (!keepEdits || !edited.current.has('pinned')) setPinned(latest.pinned);
+      if (!keepEdits || !edited.current.has('status')) setStatus(latest.status);
+      if (!keepEdits || !edited.current.has('tags')) setTags(latest.tags.join(', '));
+      if (!keepEdits || !edited.current.has('note')) setNote(latest.nextNote);
     } catch (cause) { setError(errorText(cause)); }
   };
-  useEffect(() => { let live = true; setReady(Boolean(item)); if (item) setRecord(item);
-    else request<Item<ResearchPersonalProblem>>(url).then(({ item: next }) => { if (live) { setRecord(next); setReady(true); setPinned(next.pinned); setStatus(next.status); setTags(next.tags.join(', ')); setNote(next.nextNote); } }).catch(cause => { if (live) setError(errorText(cause)); });
+  useEffect(() => { let live = true; edited.current.clear(); setReady(Boolean(item)); if (item) setRecord(item);
+    else request<Item<ResearchPersonalProblem>>(url).then(({ item: next }) => { if (live) {
+      setRecord(next); setReady(true);
+      if (!edited.current.has('pinned')) setPinned(next.pinned);
+      if (!edited.current.has('status')) setStatus(next.status);
+      if (!edited.current.has('tags')) setTags(next.tags.join(', '));
+      if (!edited.current.has('note')) setNote(next.nextNote);
+      if (edited.current.size) setNotice(tx('已读取此前的整理，保留你刚输入的内容。', 'Your saved organization is loaded. Your new edits are preserved.'));
+    } }).catch(cause => { if (live) setError(errorText(cause)); });
     return () => { live = false; };
   }, [url, request]);
   const save = async () => {
@@ -43,12 +54,13 @@ export function PersonalProblemControl({ target, item, onSaved, compact = false,
   return <details class={`research-personal-problem${compact ? ' research-personal-problem-compact' : ''}`} data-personal-problem={record.key}>
     <summary>{tx('个人整理', 'Organize for myself')}<span>{record.pinned ? `${tx('已置顶', 'Pinned')} · ` : ''}{stateLabel(record.status)}{record.tags.length ? ` · ${record.tags.join(' / ')}` : ''}</span></summary>
     <p class="research-field-note">{tx('只保存在你的研究空间，独立于运行状态与证明验收。', 'Private to your research space, separate from run status and proof acceptance.')}</p>
+    {!ready && !error && <p role="status" data-personal-loading>{tx('正在读取个人整理…', 'Loading your organization…')}</p>}
     <form class="research-form" onSubmit={event => { event.preventDefault(); void save(); }}>
-      <label class="research-check"><input type="checkbox" data-personal-pinned checked={pinned} onChange={event => setPinned(event.currentTarget.checked)} />{tx('置顶这道题', 'Pin this problem')}</label>
-      <label>{tx('整理状态', 'Organization status')}<select value={status} data-personal-status onChange={event => setStatus(event.currentTarget.value as ResearchPersonalProblem['status'])}>
+      <label class="research-check"><input type="checkbox" data-personal-pinned checked={pinned} onChange={event => { edited.current.add('pinned'); setPinned(event.currentTarget.checked); }} />{tx('置顶这道题', 'Pin this problem')}</label>
+      <label>{tx('整理状态', 'Organization status')}<select value={status} data-personal-status onChange={event => { edited.current.add('status'); setStatus(event.currentTarget.value as ResearchPersonalProblem['status']); }}>
         <option value="active">{stateLabel('active')}</option><option value="parked">{stateLabel('parked')}</option><option value="archived">{stateLabel('archived')}</option></select></label>
-      <Field label={tx('标签', 'Tags')} value={tags} onInput={setTags} maxLength={500} placeholder={tx('例如：数论、待补引理；用逗号分隔', 'For example: number theory, missing lemma; separate with commas')} />
-      <Field label={tx('下次从这里继续', 'Next time, start here')} value={note} onInput={setNote} multiline rows={3} maxLength={4000} />
+      <Field label={tx('标签', 'Tags')} value={tags} onInput={value => { edited.current.add('tags'); setTags(value); }} maxLength={500} placeholder={tx('例如：数论、待补引理；用逗号分隔', 'For example: number theory, missing lemma; separate with commas')} />
+      <Field label={tx('下次从这里继续', 'Next time, start here')} value={note} onInput={value => { edited.current.add('note'); setNote(value); }} multiline rows={3} maxLength={4000} />
       <button class="button" type="submit" data-save-personal-problem disabled={busy || !ready}>{busy ? tx('正在保存…', 'Saving…') : tx('保存个人整理', 'Save organization')}</button>
     </form>
     <ErrorBox message={error} />{error && <button type="button" class="text-button" onClick={() => void load(true)}>{tx('读取最新整理，保留当前输入', 'Load the latest organization and keep my edits')}</button>}

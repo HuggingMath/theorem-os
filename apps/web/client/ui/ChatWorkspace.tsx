@@ -319,6 +319,7 @@ export type ChatComposerProps = {
   home?: Pick<ChatThreadProps, 'overview' | 'startGuide' | 'onConfigure' | 'onFirstExample' | 'onSample'>;
   originalRecovery?(): void;
   problemDrafts?: ProblemDraftPanelProps;
+  draftPersistence?: { retry(): void; download(): void };
   input: string; onInput(value: string): void; onSubmit(): void; onStop(): void;
   references?: ChatLibraryReference[]; onRemoveReference?(id: string): void;
   editedProblem?: { research?: boolean; onReturnHome(): void };
@@ -429,6 +430,11 @@ function ChatComposer(props: ChatComposerProps) {
           event.preventDefault(); if (canSend) props.onSubmit(); else if (missingKey && props.input.trim() && !props.disabled && !props.submitting) configureKey();
         }} />
       {props.newProblem && <p class="chat-send-status" data-new-problem-shortcut>{tx('Enter 换行；Ctrl / ⌘ + Enter 提交题目。', 'Enter adds a line; Ctrl / ⌘ + Enter submits the problem.')}</p>}
+      {props.draftPersistence && <div class="chat-error" role="alert" data-chat-draft-save-error>
+        <p>{tx('草稿尚未保存，刷新或关闭页面会丢失当前输入。请先下载原题，或重试保存。', 'Your draft has not been saved. Reloading or closing this page will lose your input. Download the problem or retry saving first.')}</p>
+        <button type="button" class="text-button" data-retry-chat-draft onClick={props.draftPersistence.retry}>{tx('重试保存', 'Retry saving')}</button>{' '}
+        <button type="button" class="text-button" data-download-chat-draft onClick={props.draftPersistence.download}>{tx('下载原题', 'Download problem')}</button>
+      </div>}
       {props.originalRecovery && <div class="chat-send-status" data-original-recovery role="status"><span>{tx('上一份原题与配置已保留。', 'Your previous problem and settings are kept.')} </span>
         <button type="button" class="text-button" data-recover-original disabled={props.submitting} onClick={props.originalRecovery}>{tx('恢复上一份原题', 'Restore previous problem')}</button></div>}
       {props.newProblem && preview && <section class="chat-input-preview" data-input-preview tabIndex={0} aria-label={tx('原题公式预览', 'Problem formula preview')}>

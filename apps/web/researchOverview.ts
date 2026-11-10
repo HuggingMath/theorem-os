@@ -18,5 +18,8 @@ export function researchOverview(projects: WebResearchProjects, viewer: string):
     }
     if (page.nextOffset === undefined) break;
   }
-  return { projects: items, notifications: projects.notifications(viewer, { limit: 100 }).items };
+  const feedbackActions = projects.collaborationInbox(viewer).items.flatMap(item =>
+    item.feedbackId && ['review', 'needs-info'].includes(item.kind) && !item.resolved && !item.processed
+      ? [{ feedbackId: item.feedbackId, projectId: item.projectId, title: item.title, href: item.href, updatedAt: item.createdAt }] : []);
+  return { projects: items, notifications: projects.notifications(viewer, { limit: 100 }).items, feedbackActions };
 }

@@ -183,6 +183,96 @@ describe('host credential relay for isolated formalization roles', () => {
     }
   }
 
+  it.each(['completed', 'incomplete', 'failed', 'cancelled'] as const)(
+    'settles a response.%s event and closes its stream without waiting for upstream EOF', async status => {
+      let reached!: (boundary: string) => void;
+      const boundary = new Promise<string>(resolve => { reached = resolve; });
+      const settle = vi.fn(() => { reached('settled'); }), incomplete = vi.fn(), cancel = vi.fn();
+      const gate: ModelRequestGate = () => ({ allowed: true, settle });
+      const terminal = 'data: ' + JSON.stringify({ type: 'response.' + status, response: {
+        id: 'terminal-fixture', status, usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+        output: [{ text: 'private ' + secret }],
+      } }) + '\n\n';
+      const fetch = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          // Split the final SSE delimiter as well as the credential redactor's buffered tail.
+          controller.enqueue(Buffer.from(terminal.slice(0, -1)));
+          controller.enqueue(Buffer.from(terminal.slice(-1)));
+        },
+        pull() { reached('read-past-terminal'); },
+        cancel,
+      }, { highWaterMark: 0 }), { headers: { 'Content-Type': 'text/event-stream' } }));
+      vi.stubGlobal('fetch', fetch);
+      const relay = await start({ requestGate: gate, onUsageIncomplete: incomplete });
+      const pending = send(relay); void pending.catch(() => {});
+      try {
+        // The stream signals a read past its terminal frame, so this fails deterministically
+        // on the old EOF-only path without a test deadline or an open request left behind.
+        expect(await boundary).toBe('settled');
+        expect(await pending).toMatchObject({ status: 200, text: terminal.replace(secret, '[redacted]') });
+        expect(settle).toHaveBeenCalledExactlyOnceWith({ complete: true,
+          outcome: status === 'cancelled' ? 'cancelled' : status === 'failed' ? 'failed' : 'completed',
+          providerRequestId: 'terminal-fixture', usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } });
+        expect(incomplete).not.toHaveBeenCalled(); expect(fetch).toHaveBeenCalledOnce();
+      } finally { await relay.close(); await pending.catch(() => {}); }
+      expect(cancel).toHaveBeenCalledOnce(); expect(settle).toHaveBeenCalledOnce();
+    });
+
+  it.each(['missing', 'invalid'] as const)(
+    'preserves %s usage at a terminal event without waiting for upstream EOF', async usage => {
+      let reached!: (boundary: string) => void;
+      const boundary = new Promise<string>(resolve => { reached = resolve; });
+      const settle = vi.fn(() => { reached('settled'); }), incomplete = vi.fn(), cancel = vi.fn();
+      const gate: ModelRequestGate = () => ({ allowed: true, settle });
+      const terminal = 'data: ' + JSON.stringify({ type: 'response.completed', response: {
+        id: 'terminal-fixture', status: 'completed',
+        ...(usage === 'invalid' ? { usage: { input_tokens: 10, output_tokens: 5, total_tokens: 999 } } : {}),
+      } }) + '\n\n';
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(Buffer.from(terminal)); },
+        pull() { reached('read-past-terminal'); }, cancel,
+      }, { highWaterMark: 0 }), { headers: { 'Content-Type': 'text/event-stream' } })));
+      const relay = await start({ requestGate: gate, onUsageIncomplete: incomplete });
+      const pending = send(relay); void pending.catch(() => {});
+      try {
+        expect(await boundary).toBe('settled');
+        expect(await pending).toMatchObject({ status: 200, text: terminal });
+        expect(settle).toHaveBeenCalledExactlyOnceWith({ complete: false, outcome: 'completed',
+          providerRequestId: 'terminal-fixture', usage: undefined,
+          missingReason: usage === 'missing' ? 'provider-usage-missing' : 'provider-usage-invalid' });
+        expect(incomplete).toHaveBeenCalledOnce();
+      } finally { await relay.close(); await pending.catch(() => {}); }
+      expect(cancel).toHaveBeenCalledOnce(); expect(settle).toHaveBeenCalledOnce();
+    });
+
+  it('keeps a nonterminal response streaming until its actual terminal event arrives', async () => {
+    let reached!: (boundary: string) => void, upstream!: ReadableStreamDefaultController<Uint8Array>;
+    const boundary = new Promise<string>(resolve => { reached = resolve; });
+    const settle = vi.fn(() => { reached('settled'); }), cancel = vi.fn(), incomplete = vi.fn();
+    const gate: ModelRequestGate = () => ({ allowed: true, settle });
+    const delta = 'data: ' + JSON.stringify({ type: 'response.output_text.delta',
+      delta: 'Still generating.', response: { status: 'in_progress', usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } } }) + '\n\n';
+    const terminal = 'data: ' + JSON.stringify({ type: 'response.completed', response: {
+      id: 'terminal-fixture', status: 'completed', usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+    } }) + '\n\n';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { upstream = controller; controller.enqueue(Buffer.from(delta)); },
+      pull() { reached('still-streaming'); }, cancel,
+    }, { highWaterMark: 0 }), { headers: { 'Content-Type': 'text/event-stream' } })));
+    const relay = await start({ requestGate: gate, onUsageIncomplete: incomplete });
+    const pending = send(relay); void pending.catch(() => {});
+    try {
+      expect(await boundary).toBe('still-streaming');
+      expect(settle).not.toHaveBeenCalled(); expect(cancel).not.toHaveBeenCalled();
+      upstream.enqueue(Buffer.from(terminal));
+      expect(await pending).toMatchObject({ status: 200, text: delta + terminal });
+      expect(settle).toHaveBeenCalledExactlyOnceWith({ complete: true, outcome: 'completed',
+        providerRequestId: 'terminal-fixture', usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } });
+      expect(incomplete).not.toHaveBeenCalled();
+    } finally { await relay.close(); await pending.catch(() => {}); }
+    expect(cancel).toHaveBeenCalledOnce(); expect(settle).toHaveBeenCalledOnce();
+  });
+
   it('rejects a generic-provider request at its token gate without an upstream call or a false usage settlement', async () => {
     writeWebProfile(); const fetch = vi.fn(), incomplete = vi.fn(); vi.stubGlobal('fetch', fetch);
     const gate: ModelRequestGate = vi.fn(() => ({ allowed: false as const, reason: 'math_total_token_limit' as const }));

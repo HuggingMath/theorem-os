@@ -86,13 +86,15 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 });
 `;
 
-type Stream = { finish(options?: { missingUsage?: boolean }): void; ended: boolean };
+type Stream = { finish(options?: { missingUsage?: boolean; keepOpen?: boolean }): void; ended: boolean };
 let directory: string, session: MathAgentSession | undefined;
 let streams: Stream[], receipts: ModelRequestReceipt[], cancelled: number[], sources: string[];
 let validatedOutputs: number, incompleteUsage: number;
 const trace = () => fs.existsSync(path.join(directory, 'trace.jsonl'))
   ? fs.readFileSync(path.join(directory, 'trace.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
 const control = (command: string) => fs.writeFileSync(path.join(directory, 'control'), command);
+// Vitest poll timeout=0 expires immediately; these workflow waits have no deadline.
+const until = async (check: () => boolean) => { while (!check()) await delay(5); };
 
 async function fixture(provider: 'sub2api' | 'westlake' = 'sub2api', extra: {
   holdAck?: boolean; turnTimeoutMs?: number; completedOutput?: boolean; validationFeedback?: boolean;
@@ -120,7 +122,8 @@ async function fixture(provider: 'sub2api' | 'westlake' = 'sub2api', extra: {
         : [{ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] },
           { choices: [], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } }]
           .map(value => 'data: ' + JSON.stringify(value) + '\n\n').join('') + 'data: [DONE]\n\n';
-      source.enqueue(Buffer.from(terminal)); source.close();
+      source.enqueue(Buffer.from(terminal));
+      if (!options?.keepOpen) source.close();
     } };
     const body = new ReadableStream<Uint8Array>({ start(controller) {
       source = controller;
@@ -156,7 +159,7 @@ async function fixture(provider: 'sub2api' | 'westlake' = 'sub2api', extra: {
   });
   const running = session.run('work', 'first-turn', directory, () => {});
   void running.catch(() => {});
-  await expect.poll(() => streams.length).toBe(1);
+  await until(() => streams.length === 1);
   return { running, feedback, feedbackAtAdmission };
 }
 
@@ -383,6 +386,46 @@ describe('soft notifications at real provider request boundaries', () => {
     expect(receipts).toMatchObject([{ complete: false, missingReason: 'provider-usage-missing' }]);
     expect(incompleteUsage).toBe(1);
   });
+
+  it.each([false, true])('finishes a submitted role after terminal SSE without waiting for connection EOF (missing usage=%s)', async missingUsage => {
+    const { running } = await fixture('sub2api', { completedOutput: true, turnTimeoutMs: 0 });
+    fs.writeFileSync(path.join(directory, 'OUTPUT.json'), JSON.stringify({ approved: true }));
+    await until(() => validatedOutputs === 1);
+    expect(receipts).toEqual([]);
+    expect(trace().filter(item => item.event === 'interrupt')).toEqual([]);
+    streams[0].finish({ missingUsage, keepOpen: true });
+    expect(await running).toBe('submitted');
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]).toMatchObject(missingUsage
+      ? { complete: false, outcome: 'completed', missingReason: 'provider-usage-missing' }
+      : { complete: true, outcome: 'completed', usage: { totalTokens: 12 } });
+    expect(trace().filter(item => item.event === 'interrupt')).toHaveLength(1);
+    expect(cancelled).toEqual([]);
+    expect(incompleteUsage).toBe(missingUsage ? 1 : 0);
+    expect(await session!.stopForFreeze!()).toMatchObject({ status: 'stopped' });
+  });
+
+  it.each(['sub2api', 'westlake'] as const)(
+    'checks valid %s output before the next paid admission even when the file poll has not run', async provider => {
+      let submitAtAdmission = false;
+      const { running } = await fixture(provider, { completedOutput: true, beforeRequest: () => {
+        if (submitAtAdmission) fs.writeFileSync(path.join(directory, 'OUTPUT.json'), JSON.stringify({ approved: true }));
+      } });
+      streams[0].finish();
+      await until(() => receipts.length === 1);
+      // Write between the asynchronous request hook and synchronous admission, with no timer tick in between.
+      submitAtAdmission = true;
+      control('request');
+      await until(() => streams.length > 1 || trace().some(item => item.event === 'interrupt'));
+      expect(streams).toHaveLength(1);
+      expect(sources).toHaveLength(1);
+      expect(await running).toBe('submitted');
+      expect(validatedOutputs).toBe(1);
+      expect(trace().filter(item => item.event === 'interrupt')).toHaveLength(1);
+      expect(receipts).toMatchObject([{ complete: true, outcome: 'completed', usage: { totalTokens: 12 } }]);
+      expect(cancelled).toEqual([]);
+      expect(incompleteUsage).toBe(0);
+    });
 
   it('keeps the turn deadline active while submitted output waits for paid usage', async () => {
     const { running } = await fixture('sub2api', { completedOutput: true, turnTimeoutMs: 500 });

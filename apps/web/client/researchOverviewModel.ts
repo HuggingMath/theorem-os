@@ -45,13 +45,11 @@ export function buildResearchOverview(input: { runs: readonly WebRun[]; conversa
     const card = make(`project:${project.id}`, project.title, project.updatedAt, project);
     for (const binding of project.runs) if (!byRun.has(binding.runId)) byRun.set(binding.runId, card);
     for (const version of project.versions) if (version.formalizationId && !byFormalization.has(version.formalizationId)) byFormalization.set(version.formalizationId, card);
-    if (project.permissions.manage) for (const feedback of project.feedback) {
-      if (feedback.decision.status !== 'pending' || feedback.kind === 'plan-approval' ||
-        feedback.execution.status === 'superseded' || feedback.delivery.status === 'failed') continue;
-      act(card, { id: `feedback:${feedback.id}`, kind: 'feedback', title: feedback.text, updatedAt: feedback.updatedAt,
-        href: theoremHref(project.id, feedback.target?.runId, feedback.target?.statementVersionId ?? feedback.statementVersionId, feedback.id, feedback.target?.taskRef) });
-    }
   }
+  // The collaboration inbox owns current responsibility, permissions and candidate lifecycle.
+  for (const feedback of input.research?.feedbackActions ?? [])
+    act(cards.find(card => card.project?.id === feedback.projectId), { id: `feedback:${feedback.feedbackId}`, kind: 'feedback',
+      title: feedback.title, updatedAt: feedback.updatedAt, href: feedback.href });
   // Oldest first makes each unbound group's key stable as newer attempts arrive.
   for (const run of [...input.runs].sort((a, b) => a.createdAt.localeCompare(b.createdAt))) {
     const identity = researchStatementIdentity(run);

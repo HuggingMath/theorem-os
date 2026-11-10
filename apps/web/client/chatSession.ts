@@ -119,6 +119,7 @@ export class ChatSession {
   private seed?: WebFormalization;
   private currentId = new URLSearchParams(location.search).get('chat') ?? '';
   private readonly drafts = new Map<string, ChatDraft>();
+  private readonly unsavedDrafts = new Set<string>();
   private readonly submissionIdentity: SubmissionIdentity;
   private readonly quotedDrafts = new Map<string, string[]>();
   private readonly draftPositions = new Map<string, DraftPosition>();
@@ -160,6 +161,10 @@ export class ChatSession {
     document.addEventListener('visibilitychange', () => { if (!document.hidden) void this.refresh(); });
     window.addEventListener('online', () => void this.refresh());
     window.addEventListener('pagehide', () => { this.rememberDraft(); this.apiKey = ''; clearTimeout(this.timer); });
+    window.addEventListener('beforeunload', event => {
+      if (![...this.unsavedDrafts].some(id => { const draft = this.drafts.get(id); return draft?.text.trim() || draft?.originalBackup?.text.trim(); })) return;
+      event.preventDefault(); event.returnValue = '';
+    });
     window.addEventListener('pageshow', event => { if (event.persisted) void this.refresh(); });
   }
   get id() { return this.currentId; }
@@ -176,7 +181,7 @@ export class ChatSession {
     this.answers.clear(); this.lastAnswerRefresh = 0;
     clearTimeout(this.timer); this.refreshing = false;
     this.home(true, false);
-    this.drafts.clear(); this.quotedDrafts.clear(); this.draftPositions.clear(); this.renderedDraftId = undefined; this.options.draftScope = scope; this.reading.bind(scope);
+    this.drafts.clear(); this.unsavedDrafts.clear(); this.quotedDrafts.clear(); this.draftPositions.clear(); this.renderedDraftId = undefined; this.options.draftScope = scope; this.reading.bind(scope);
     try {
       for (const key of Object.keys(sessionStorage)) {
         if (key.startsWith(`theorem-os.chat-draft.${previous}.`) || key.startsWith(`theorem-os.chat-reading.${previous}.`)) sessionStorage.removeItem(key);
@@ -243,14 +248,29 @@ export class ChatSession {
       ...(this.pendingMessage ? { pendingMessage: { ...this.pendingMessage } } : {}),
       ...(this.references.length ? { references: this.references } : {}) };
     this.drafts.set(id, draft); this.hasDraftSettings = true;
+    const key = `theorem-os.chat-draft.${this.options.draftScope}.${id}`;
     try {
-      const key = `theorem-os.chat-draft.${this.options.draftScope}.${id}`;
       sessionStorage.setItem(key, encodeChatDraft(draft));
       if (quotes.length) sessionStorage.setItem(`${key}.quotes`, JSON.stringify(quotes));
       else sessionStorage.removeItem(`${key}.quotes`);
       if (position) sessionStorage.setItem(`${key}.position`, JSON.stringify(position));
       else sessionStorage.removeItem(`${key}.position`);
-    } catch { /* In-memory draft remains. */ }
+      this.unsavedDrafts.delete(id);
+    } catch {
+      this.unsavedDrafts.add(id);
+      // An older persisted value must not look like the latest edits after a reload.
+      try {
+        sessionStorage.removeItem(key);
+        sessionStorage.removeItem(`${key}.quotes`);
+        sessionStorage.removeItem(`${key}.position`);
+      } catch { /* The current draft remains in memory. */ }
+    }
+  }
+  private downloadDraft() {
+    const text = this.draft || this.originalBackup?.text || '';
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+    const link = document.createElement('a'); link.href = url; link.download = 'theorem-os-problem.txt'; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   private restoredDraft(id: string) {
     if (!this.quotedDrafts.has(id)) {
@@ -842,6 +862,7 @@ export class ChatSession {
       this.drafts.delete(id);
       this.quotedDrafts.delete(id);
       this.draftPositions.delete(id);
+      this.unsavedDrafts.delete(id);
       try {
         sessionStorage.removeItem(`theorem-os.chat-draft.${this.options.draftScope}.${id}`);
         sessionStorage.removeItem(`theorem-os.chat-draft.${this.options.draftScope}.${id}.quotes`);
@@ -1030,6 +1051,9 @@ export class ChatSession {
     const quotedBlocks = this.draftQuoteBlocks();
     renderChatComposer(this.composer, {
       ...(newProblem && !this.loading && !this.seed ? { home } : {}),
+      ...(this.unsavedDrafts.has(this.draftId) ? { draftPersistence: {
+        retry: () => { this.rememberDraft(); this.draw(); }, download: () => this.downloadDraft(),
+      } } : {}),
       ...(newProblem && this.originalBackup ? { originalRecovery: () => this.recoverOriginal() } : {}),
       ...(newProblem && this.options.onRestoreProblemDraft && this.options.session() ? { problemDrafts: {
         owner: this.options.session()!.draftOwner ?? this.options.draftScope, account: Boolean(this.options.session()!.account), value: this.problemDraft(),

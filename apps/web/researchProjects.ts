@@ -1457,12 +1457,12 @@ export class WebResearchProjects {
           && (feedback.kind !== 'proof-submission' || feedback.proofCheck?.status === 'checked')
           && (!feedback.target || Boolean(this.bindingView(viewer, stored, stored.bindings.find(item => item.runId === feedback.target!.runId)!)?.permissions[this.feedbackPermission(feedback.kind)]));
         if (needsInfo || review) add(stored, { id: `${needsInfo ? 'needs-info' : 'review'}:${feedback.id}:${feedback.reviewHistory?.length ?? 0}${needsInfo ? `:${feedback.decision.decidedAt ?? ''}` : ''}`, kind: needsInfo ? 'needs-info' : 'review',
-          title: feedback.text, text: feedback.decision.reason, createdAt: feedback.updatedAt, resolved: false, href: href(stored, feedback.target, `#feedback-${feedback.id}`, feedback.statementVersionId) });
+          feedbackId: feedback.id, title: feedback.text, text: feedback.decision.reason, createdAt: feedback.updatedAt, resolved: false, href: href(stored, feedback.target, `#feedback-${feedback.id}`, feedback.statementVersionId) });
         if (access.manage && feedback.review && !this.hasActiveReviewer(stored, feedback) && !feedback.supersededBy
           && !feedback.continuation && !feedback.reviewContinuation && feedback.candidateDelivery?.status !== 'withdrawn'
           && ['pending', 'not-recorded', 'needs-info'].includes(feedback.decision.status))
           add(stored, { id: `review-reassign:${feedback.id}:${feedback.review.assignedAt}`, kind: 'review',
-            title: feedback.text, reviewReassignment: true, createdAt: stored.project.updatedAt,
+            feedbackId: feedback.id, title: feedback.text, reviewReassignment: true, createdAt: stored.project.updatedAt,
             resolved: false, href: href(stored, feedback.target, `#feedback-${feedback.id}`, feedback.statementVersionId) });
         if (feedback.author.id === self) for (const comment of feedback.reviewComments ?? []) {
           if (comment.anchor || comment.author.id === self) continue;
