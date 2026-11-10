@@ -1,7 +1,7 @@
 import type { WebFormalizationActivity } from '../formalizationTypes';
 import type { WebRun } from '../shared';
 
-export type ChatMathematicalTask = { id: string; name: string; statement: string };
+export type ChatMathematicalTask = { id: string; name: string; statement: string; status?: 'running' | 'delivered' | 'conditional' };
 export type ChatMathematics = {
   checked: ChatMathematicalTask[];
   working: ChatMathematicalTask[];
@@ -17,7 +17,7 @@ export function chatMathematics(run?: WebRun, activity: readonly WebFormalizatio
   const checked = tasks.filter(task => task.control === 'active' && task.proof.status === 'checked'
     && !task.proof.conditions?.length && ['lemma', 'goal'].includes(task.kind)).map(describe);
   const working = tasks.filter(task => task.control === 'active' && ['running', 'delivered', 'conditional'].includes(task.status)
-    && !checked.some(done => done.id === task.id)).map(describe);
+    && !checked.some(done => done.id === task.id)).map(task => ({ ...describe(task), status: task.status as NonNullable<ChatMathematicalTask['status']> }));
   const blockers = tasks.filter(task => task.control === 'active' && ['blocked', 'failed'].includes(task.status))
     .map(task => ({ id: task.id, text: task.finding || task.feedback || task.informalStatement || task.objective }));
   let latest: ChatMathematics['latest'];

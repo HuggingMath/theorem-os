@@ -2,10 +2,11 @@ import type { ArchiveIndex, ArchiveIndexRecord } from '../../../docs/web/types';
 import type { Locale } from '../../../docs/web/site';
 import type { ResearchProjectDetail, ResearchStatementVersion } from '../researchProjectTypes';
 import type { WebEnvironment } from '../shared';
+import { archiveReadingReturn } from '../../../docs/web/proofReadingLocation';
 
-export const researchProblemDraftKeys = ['archiveProblem', 'archiveSource', 'researchProject', 'statementVersion', 'statementSource'] as const;
+export const researchProblemDraftKeys = ['archiveProblem', 'archiveSource', 'archiveReading', 'researchProject', 'statementVersion', 'statementSource'] as const;
 export type ResearchProblemDraftReference =
-  | { kind: 'archive'; id: string; sourceDigest: string }
+  | { kind: 'archive'; id: string; sourceDigest: string; readingUrl?: string }
   | { kind: 'project'; id: string; version: string; sourceDigest: string };
 export type ResearchProblemDraft = {
   title: string; text: string; statement: string; source: string; sourceDigest: string; environment: WebEnvironment;
@@ -21,7 +22,8 @@ const identifier = /^[A-Za-z0-9_-]{1,128}$/u, digest = /^[a-f0-9]{64}$/u;
 export function readResearchProblemDraft(parameters: URLSearchParams): ResearchProblemDraftReference | undefined {
   if (!researchProblemDraftKeys.some(key => parameters.has(key))) return undefined;
   if (parameters.has('archiveProblem') || parameters.has('archiveSource'))
-    return { kind: 'archive', id: parameters.get('archiveProblem') ?? '', sourceDigest: parameters.get('archiveSource') ?? '' };
+    return { kind: 'archive', id: parameters.get('archiveProblem') ?? '', sourceDigest: parameters.get('archiveSource') ?? '',
+      ...(parameters.get('archiveReading') ? { readingUrl: parameters.get('archiveReading')! } : {}) };
   return { kind: 'project', id: parameters.get('researchProject') ?? '', version: parameters.get('statementVersion') ?? '', sourceDigest: parameters.get('statementSource') ?? '' };
 }
 
@@ -33,6 +35,7 @@ export function researchProblemDraftHref(reference: ResearchProblemDraftReferenc
   const parameters = reference.kind === 'archive'
     ? new URLSearchParams({ archiveProblem: reference.id, archiveSource: reference.sourceDigest })
     : new URLSearchParams({ researchProject: reference.id, statementVersion: reference.version, statementSource: reference.sourceDigest });
+  if (reference.kind === 'archive' && reference.readingUrl) parameters.set('archiveReading', reference.readingUrl);
   return `${workbench}?${parameters}`;
 }
 
@@ -67,7 +70,8 @@ export async function loadResearchProblemDraft(reference: ResearchProblemDraftRe
     title = reader.locale === 'en' ? record.en?.subtitle || record.title : record.subtitle || record.title;
     statement = reader.locale === 'en' ? record.en?.summary ?? record.summary : record.summary;
     environment = 'mathlib'; targets = record.campaign!.targets;
-    sourceUrl = new URL(`/classics/${reader.locale === 'en' ? 'en/' : ''}archive.html#${new URLSearchParams({ proof: record.id, tab: 'reading', status: 'verified' })}`, reader.currentHref).href;
+    sourceUrl = archiveReadingReturn(reference.readingUrl, record.id, reader.currentHref, record.campaign!.proofSha256)
+      ?? new URL(`/classics/${reader.locale === 'en' ? 'en/' : ''}archive.html#${new URLSearchParams({ proof: record.id, tab: 'reading', status: 'verified' })}`, reader.currentHref).href;
     sourceFileUrl = new URL(`/classics/data/proofs/${encodeURIComponent(record.id)}/Challenge.lean`, reader.currentHref).href;
   } else {
     const { item: project } = await reader.json<{ item: ResearchProjectDetail }>(`/api/research/theorems/${encodeURIComponent(reference.id)}`);

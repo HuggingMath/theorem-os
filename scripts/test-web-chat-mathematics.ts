@@ -52,6 +52,7 @@ function observation(webRunId: string): WebObservation {
     task('checked_assoc', { informalStatement: '已检查：自然数加法满足结合律。' }),
     task('checked_fourth', { informalStatement: '已检查：第四个辅助引理保留在展开项中。' }),
     task('working_target', { kind: 'goal', status: 'running', informalStatement: '正在把辅助引理组合成主目标。', proof: { status: 'unchecked' } }),
+    task('delivered_helper', { status: 'delivered', informalStatement: '候选已提交，等待检查结果。', proof: { status: 'unchecked' } }),
     task('conditional_helper', { status: 'conditional', informalStatement: '这个候选引理仍然依赖未证明的输入。',
       proof: { status: 'checked', receiptIds: ['conditional-receipt'], conditions: [{ taskId: 'input', taskDigest: 'input-v1' }] } }),
     task('paused_helper', { control: 'paused', informalStatement: '已暂停的引理不属于当前已检查成果。' }),
@@ -107,11 +108,12 @@ function explanation(value: WebRun, target: string): WebExplanation {
   return { id: `${value.id}-${target}`, runId: value.id, target, language: 'zh', status: 'approved', createdAt: at, updatedAt: at,
     model: 'recorded-fixture', effort: 'high', maxRunSeconds: 0, maxTotalTokens: 0, document: explanationDocument(target) };
 }
-function overview(value: WebRun, available: boolean): WebExplanationOverview {
+function overview(value: WebRun, available: boolean, entries?: WebExplanation[], canGenerate = false): WebExplanationOverview {
   return { run: { id: value.id, title: value.title, environment: value.environment, providerId: value.providerId, model: value.model,
     effort: value.effort, proof: value.result!.proof }, targets: [{ name: 'swap_sum', declarations: 2 }, { name: 'identity_sum', declarations: 2 }],
-    explanations: available ? ['swap_sum', 'identity_sum'].map(target => { const { document: _, ...item } = explanation(value, target); return item; }) : [],
-    generation: { available: false, reason: 'runtime' } };
+    explanations: entries ?? (available ? ['swap_sum', 'identity_sum'].map(target => { const { document: _, ...item } = explanation(value, target); return item; }) : []),
+    generation: canGenerate ? { available: true, model: 'recorded-fixture', effort: 'high', key: 'required', maxRunSeconds: 0,
+      maxTotalTokens: 0, reference: { declarations: 2, seconds: 0, tokens: 0 } } : { available: false, reason: 'runtime' } };
 }
 async function fit(page: Page) {
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
@@ -133,8 +135,10 @@ try {
     const context = await browser.newContext({ locale: 'zh-CN', viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
     context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
     await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
-    const accepted = run('completed'), missing = run('completed'), working = run('running');
-    const runs = [accepted, missing, working], conversations = runs.map(conversation);
+    const accepted = run('completed'), missing = run('completed'), working = run('running'), unavailable = run('completed'),
+      queued = run('completed'), generating = run('completed'), failed = run('completed'), cancelled = run('completed'), exhausted = run('completed');
+    const runs = [accepted, missing, working, unavailable, queued, generating, failed, cancelled, exhausted], conversations = runs.map(conversation);
+    let generated = false;
     await context.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url());
       if (url.origin !== origin) { external.push(request.url()); await route.abort(); return; }
@@ -149,9 +153,19 @@ try {
       if (selectedRun) {
         const endpoint = url.pathname.slice(`/api/runs/${selectedRun.id}`.length);
         if (!endpoint) { await route.fulfill({ json: { run: selectedRun } }); return; }
-        if (endpoint === '/explanations') { reads.push(url.pathname); await route.fulfill({ json: overview(selectedRun, selectedRun.id === accepted.id) }); return; }
+        if (endpoint === '/explanations') {
+          reads.push(url.pathname);
+          const fixtureStatus = selectedRun === queued ? 'queued' : selectedRun === generating && !generated ? 'running'
+            : selectedRun === failed ? 'error' : selectedRun === cancelled ? 'cancelled' : selectedRun === exhausted ? 'exhausted' : undefined;
+          const entries = fixtureStatus ? [{ ...explanation(selectedRun, 'swap_sum'), document: undefined, status: fixtureStatus,
+            ...(fixtureStatus === 'queued' ? { queue: { position: 3, ahead: 2 } } : fixtureStatus === 'running'
+              ? { progress: { phase: 'auditing', batches: 3, approvedBatches: 1, updatedAt: at } }
+              : { reason: 'explanation_gateway_unavailable' }) } as WebExplanation] : undefined;
+          await route.fulfill({ json: overview(selectedRun, selectedRun === accepted || selectedRun === generating && generated, entries,
+            selectedRun !== unavailable && selectedRun !== accepted && selectedRun !== working) }); return;
+        }
         if (endpoint === '/explanations/item') {
-          reads.push(url.pathname + url.search); assert.equal(selectedRun.id, accepted.id);
+          reads.push(url.pathname + url.search); assert.ok(selectedRun === accepted || selectedRun === generating && generated);
           assert.equal(url.searchParams.get('language'), 'zh');
           const target = url.searchParams.get('target'); assert.ok(['swap_sum', 'identity_sum'].includes(target!));
           await route.fulfill({ json: { explanation: explanation(selectedRun, target!) } }); return;
@@ -177,6 +191,19 @@ try {
     for (const selector of budgetInputs) { assert.equal(await page.locator(selector).inputValue(), ''); assert.equal(await page.locator(selector).getAttribute('placeholder'), '不限'); }
     await fit(page); await screenshot(page, `${width}-unlimited-settings.png`);
     mark(`${width}: visible task input, collapsed guided participation and empty unlimited budgets`);
+    await page.locator('#formalize-settings > summary').click();
+    const draft = '保留这份题目草稿，在配置 Key 后再发送。';
+    await input.fill(draft);
+    await page.locator('[data-chat-configure-key]').click();
+    assert.equal(await page.locator('#formalize-settings').evaluate((node: HTMLDetailsElement) => node.open), true);
+    assert.equal(await page.locator('#formalize-key').evaluate(node => document.activeElement === node), true);
+    assert.equal(await input.inputValue(), draft); assert.deepEqual(writes, []);
+    await page.locator('#formalize-key').fill('disposable-fixture-key');
+    assert.equal(await page.locator('[data-chat-key-required]').count(), 0);
+    assert.equal(await page.locator('#formalize-start').isEnabled(), true);
+    await page.locator('#formalize-settings > summary').click();
+    await fit(page); await screenshot(page, `${width}-key-next-step.png`);
+    mark(`${width}: missing-key action opens and focuses settings while retaining the unsent draft`);
 
     await page.goto(`${origin}/?chat=${conversations[0].id}`, { timeout: 0 });
     const answer = page.locator('[data-chat-answer]');
@@ -197,6 +224,15 @@ try {
     await answer.locator('h3').scrollIntoViewIfNeeded();
     await fit(page); await screenshot(page, `${width}-second-target.png`);
     mark(`${width}: saved explanation overview, statement, steps and citation are readable directly; target switching reads the selected document`);
+    const more = page.locator('[data-chat-result-more]');
+    assert.equal(await more.evaluate((node: HTMLDetailsElement) => node.open), false);
+    assert.equal(await page.locator('[data-research-artifact="source"]').isVisible(), true);
+    assert.equal(await page.locator('[data-chat-download-kit]').isVisible(), false);
+    await more.locator('summary').click();
+    for (const selector of ['[data-research-artifact="roadmap"]', '[data-research-artifact="result"]', '[data-chat-download-kit]', '[data-chat-share]'])
+      assert.equal(await more.locator(selector).isVisible(), true);
+    await fit(page); await screenshot(page, `${width}-more-result-actions.png`);
+    mark(`${width}: accepted proof stays directly accessible and secondary result actions remain in the collapsed menu`);
 
     await page.goto(`${origin}/?chat=${conversations[1].id}`, { timeout: 0 });
     await page.waitForFunction(() => document.querySelector('[data-chat-answer]')?.textContent?.includes('这份验收证明还没有可阅读的讲解。'), undefined, { timeout: 0 });
@@ -210,6 +246,25 @@ try {
     assert.deepEqual(writes, []); await fit(page); await screenshot(page, `${width}-missing-explanation.png`);
     mark(`${width}: missing saved explanation has an explicit generation link and performs no generation request`);
 
+    for (const [value, status, text] of [
+      [unavailable, 'unavailable', '当前服务不提供证明讲解。'], [queued, 'queued', '前面 2 份'],
+      [generating, 'running', '正在核对讲解与证明'], [failed, 'error', '无法连接模型服务，请稍后重试。'],
+      [cancelled, 'cancelled', '已停止生成'], [exhausted, 'exhausted', '讲解没有完成'],
+    ] as const) {
+      await page.goto(`${origin}/?chat=${conversations[runs.indexOf(value)]!.id}`, { timeout: 0 });
+      const state = page.locator(`[data-chat-answer-status="${status}"]`); await state.waitFor({ timeout: 0 });
+      assert.ok((await state.innerText()).includes(text));
+      if (status === 'unavailable') assert.equal(await state.locator('[data-chat-explain]').count(), 0);
+      else assert.equal(await state.locator('[data-chat-explain]').innerText(), ['queued', 'running'].includes(status) ? '查看讲解进度' : '重新生成详细解答');
+      if (status === 'running') {
+        assert.match(await state.innerText(), /已通过批次\s+1\s*\/\s*3/u);
+        generated = true;
+        await page.locator('[data-chat-answer-document="swap_sum"]').waitFor({ timeout: 0 });
+      }
+      await fit(page); await screenshot(page, `${width}-explanation-${status}.png`);
+    }
+    mark(`${width}: unavailable, queued, running, failed, cancelled and incomplete explanations show accurate states; the finished document appears automatically without generation`);
+
     await page.goto(`${origin}/?chat=${conversations[2].id}`, { timeout: 0 });
     const mathematics = page.locator('[data-chat-mathematics]');
     await mathematics.locator('[data-chat-math-checked]').waitFor({ timeout: 0 });
@@ -219,6 +274,13 @@ try {
     assert.equal(await mathematics.locator('[data-chat-math-task="paused_helper"]').count(), 0);
     assert.equal(await mathematics.locator('[data-chat-math-working] [data-chat-math-task="working_target"]').count(), 1);
     assert.equal(await mathematics.locator('[data-chat-math-working] [data-chat-math-task="conditional_helper"]').count(), 1);
+    for (const [id, status, label] of [['working_target', 'running', '正在证明'], ['delivered_helper', 'delivered', '候选已提交，等待检查'],
+      ['conditional_helper', 'conditional', '候选仍有前提待证明']]) {
+      const row = mathematics.locator(`[data-chat-math-task="${id}"]`).locator('..');
+      assert.equal(await row.locator(`[data-chat-math-status="${status}"]`).innerText(), label);
+    }
+    assert.equal(await mathematics.locator('[data-chat-math-blockers]').evaluate(element => !!(element.compareDocumentPosition(document.querySelector('[data-chat-math-working]')!) & Node.DOCUMENT_POSITION_FOLLOWING)), true);
+    assert.equal(await mathematics.locator('[data-chat-math-working]').evaluate(element => !!(element.compareDocumentPosition(document.querySelector('[data-chat-math-checked]')!) & Node.DOCUMENT_POSITION_FOLLOWING)), true);
     assert.match(await mathematics.locator('[data-chat-math-blockers]').innerText(), /主目标的归纳步骤仍缺少一个等式变换/u);
     assert.match(await mathematics.locator('[data-chat-math-finding]').innerText(), /先使用结合律，再应用交换律/u);
     assert.equal(await mathematics.locator('[data-chat-math-finding] time').count(), 0, 'findings do not acquire heartbeat timestamps');

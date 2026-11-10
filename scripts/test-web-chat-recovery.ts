@@ -193,12 +193,14 @@ try {
     await samplePage.locator('[data-chat-sample-note]').waitFor();
     assert.ok(await samplePage.locator('#research-chat-thread').evaluate(node => node.clientHeight) >= Math.min(100, height * .25));
     await samplePage.screenshot({ path: path.join(output, `conversation-${width}x${height}.png`), fullPage: true });
+    await samplePage.locator('[data-chat-result-more] > summary').click();
     await samplePage.locator('[data-research-artifact="roadmap"]').click();
     await samplePage.locator('.solution-route-view-controls [data-solution-view="read"]').click();
     await samplePage.locator('[data-solution-reader-select]').waitFor();
     await samplePage.screenshot({ path: path.join(output, `roadmap-${width}x${height}.png`), fullPage: true });
     for (const artifact of ['result', 'source']) {
       await samplePage.goto(origin + '/?sample');
+      if (artifact === 'result') await samplePage.locator('[data-chat-result-more] > summary').click();
       await samplePage.locator(`[data-research-artifact="${artifact}"]`).click();
       await samplePage.locator(`#detail-tab-${artifact}[aria-selected="true"]`).waitFor();
     }

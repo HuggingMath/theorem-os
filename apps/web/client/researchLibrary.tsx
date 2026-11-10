@@ -52,7 +52,7 @@ function rememberLibraryView(view: LibraryView, owner: string) {
     libraryFilterDrafts.setItem(`theoremos.research.library.filters.type:${view.type}`, value);
   } catch { /* Current filters and URL navigation still work when storage is unavailable. */ }
 }
-const libraryFilterKeys = ['q', 'type', 'collection', 'area', 'author', 'environment', 'mine', 'offset', 'workbenchChat'] as const;
+const libraryFilterKeys = ['q', 'type', 'collection', 'area', 'author', 'environment', 'mine', 'offset', 'workbenchChat', 'workbenchRun'] as const;
 function filteredLibraryHref(id?: string, version?: string, filters = new URLSearchParams(location.search)) {
   const parameters = new URLSearchParams();
   for (const key of libraryFilterKeys) {
@@ -96,6 +96,7 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
   useEffect(() => { if (!hasDirectoryType.current && detail.data) setType(detail.data.item.type); }, [detail.data?.item.id]);
   const filters = new URLSearchParams({ type });
   if (parameters.get('workbenchChat')) filters.set('workbenchChat', parameters.get('workbenchChat')!);
+  if (parameters.get('workbenchRun')) filters.set('workbenchRun', parameters.get('workbenchRun')!);
   if (type === 'mathematics') filters.set('collection', collection);
   if (query) filters.set('q', query);
   if (area) filters.set('area', area);
@@ -138,6 +139,7 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
     if (view.query) next.set('q', view.query);
     if (view.offset) next.set('offset', String(view.offset));
     if (filters.get('workbenchChat')) next.set('workbenchChat', filters.get('workbenchChat')!);
+    if (filters.get('workbenchRun')) next.set('workbenchRun', filters.get('workbenchRun')!);
     return filteredLibraryHref(undefined, undefined, next);
   };
   const scopeHref = (value: 'lean' | 'shared' | 'mine') => {
@@ -150,7 +152,7 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
   const clear = () => { setSelection([]); saveSelection([]); };
   const createAddress = new URL(location.href); createAddress.searchParams.set('create', '1'); createAddress.hash = 'new-asset';
   if (legacyOpenAI) return <p class="research-status" role="status">{tx('正在打开定理页的已解决题目…', 'Opening solved problems on the theorems page…')}</p>;
-  return <div class="research-library-page"><div class="research-heading research-library-heading"><div><h1>{tx('数学库', 'Library')}</h1>
+  return <div class={`research-library-page${installedFile ? ' research-library-module-page' : ''}`}><div class="research-heading research-library-heading"><div><h1>{tx('数学库', 'Library')}</h1>
     <p>{tx('查找可复用的模块、接口和研究工具。', 'Find reusable modules, interfaces and research tools.')}</p></div>
     <div class="research-heading-actions">{context.session.authenticated ? <button class="button button-primary" type="button" onClick={() => { setCreatorMounted(true); setCreating(value => !value); }} aria-expanded={creating}>{creating ? tx('收起创建表单', 'Close creator') : tx('创建成果 / 工具', 'Create an asset')}</button>
       : <a class="button" href={loginHref(createAddress.pathname + createAddress.search + createAddress.hash)}>{tx('登录后创建成果', 'Sign in to create an asset')}</a>}</div></div>

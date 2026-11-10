@@ -19,7 +19,7 @@ function Topbar(props: TopbarProps) {
   const parameters = new URLSearchParams(location.search);
   const linkedChat = new URL(props.libraryHref ?? 'library.html', location.href).searchParams.get('workbenchChat');
   if (linkedChat) parameters.set('workbenchChat', linkedChat);
-  const navigation = researchNavigation(parameters.toString());
+  const navigation = researchNavigation(parameters.toString(), 'workbench');
   const links = [
     { href: navigation.workbench, label: t('工作台'), current: true },
     { href: navigation.theorems, label: t('定理') },

@@ -445,12 +445,28 @@ export function loginHref(returnTo: string): string {
 export function loginReturn(search: string): string {
   return safeAppReturn(new URLSearchParams(search).get('returnTo')) ?? `./${workbenchReturn(search)}`;
 }
-/** Carry the open conversation or run through every research-space page, then back to the same workbench. */
-export function researchNavigation(search: string): { workbench: string; theorems: string; people: string; library: string } {
+function researchContext(search: string, origin: 'research' | 'workbench' = 'research'): URLSearchParams {
   const params = new URLSearchParams(search), context = new URLSearchParams();
-  const chat = params.get('workbenchChat') ?? params.get('chat'), run = params.get('workbenchRun') ?? params.get('run');
+  const chat = params.get('workbenchChat') ?? (origin === 'workbench' ? params.get('chat') : null);
+  const run = params.get('workbenchRun') ?? (origin === 'workbench' ? params.get('run') : null);
   if (chat && /^[a-f0-9-]{36}$/u.test(chat)) context.set('workbenchChat', chat);
   if (run && /^[a-f0-9-]{1,36}$/u.test(run)) context.set('workbenchRun', run);
+  return context;
+}
+/** Add only the explicit workbench source to an app link, keeping its own target, filters and fragment. */
+export function researchContextHref(href: string, search: string): string {
+  if (href.startsWith('#') || !safeAppReturn(href)) return href;
+  const context = researchContext(search);
+  if (!context.size) return href;
+  const hashAt = href.indexOf('#'), fragment = hashAt < 0 ? '' : href.slice(hashAt), address = hashAt < 0 ? href : href.slice(0, hashAt);
+  const queryAt = address.indexOf('?'), pathname = queryAt < 0 ? address : address.slice(0, queryAt);
+  const parameters = new URLSearchParams(queryAt < 0 ? '' : address.slice(queryAt + 1));
+  for (const [key, value] of context) parameters.set(key, value);
+  return `${pathname}?${parameters}${fragment}`;
+}
+/** Research pages have target run ids of their own; only a workbench converts its chat/run into a return source. */
+export function researchNavigation(search: string, origin: 'research' | 'workbench' = 'research'): { workbench: string; theorems: string; people: string; library: string } {
+  const context = researchContext(search, origin);
   const suffix = context.size ? `?${context}` : '';
   const back = context.has('workbenchChat') ? `?${new URLSearchParams({ chat: context.get('workbenchChat')! })}`
     : context.has('workbenchRun') ? `?${new URLSearchParams({ run: context.get('workbenchRun')! })}` : '';

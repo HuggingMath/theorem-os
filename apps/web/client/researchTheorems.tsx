@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ResearchFeedbackTarget, ResearchProjectDetail, ResearchProjectSummary, ResearchRunBinding, ResearchStatementVersion, ResearcherProfile } from '../researchProjectTypes';
-import { loginHref, type WebRun } from '../shared';
+import { loginHref, researchContextHref, type WebRun } from '../shared';
 import type { WebShareSnapshot } from '../share';
 import type { WebObservation } from '../collaboration';
 import { t } from '../i18n';
@@ -35,7 +35,7 @@ export function TheoremsPage({ context }: { context: ResearchContext }) {
   const browse = new URLSearchParams({ collection });
   if (collection === 'solved' && sort !== 'newest') browse.set('sort', sort);
   if (query) browse.set('q', query); if (field) browse.set('field', field); if (offset) browse.set('offset', String(offset));
-  const browseHref = `theorems.html${browse.size ? `?${browse}` : ''}`;
+  const browseHref = researchContextHref(`theorems.html${browse.size ? `?${browse}` : ''}`, location.search);
   const createHref = `${browseHref}${browse.size ? '&' : '?'}create=1`;
   useEffect(() => {
     const next = new URL(location.href);
@@ -82,11 +82,12 @@ export function TheoremsPage({ context }: { context: ResearchContext }) {
       <ErrorBox message={directory.error} />{directory.loading && <p class="research-status" role="status">{tx('正在读取…', 'Loading…')}</p>}
       <ul class="research-directory-grid">{directory.data?.items.map(project => {
         const item = new URLSearchParams(browse); item.set('id', project.id);
-        return <li class="research-directory-card" key={project.id}><h3 class="research-card-heading"><a href={`theorems.html?${item}`}>{project.title}</a></h3>
+        const href = researchContextHref(`theorems.html?${item}`, location.search);
+        return <li class="research-directory-card" key={project.id}><h3 class="research-card-heading"><a href={href}>{project.title}</a></h3>
           {project.description && <div class="research-card-description"><RichProse text={project.description} /></div>}<Tags values={project.fields} />
           <div class="research-item-meta"><a href={personHref(project.owner.id)}>{project.owner.displayName}</a><State value={project.visibility} />
             <span>{project.currentStatementVersionId ? tx('已有题目陈述', 'Statement available') : tx('待补充题目陈述', 'Statement needed')}</span></div>
-          <div class="research-card-footer"><time dateTime={project.updatedAt}>{stamp(project.updatedAt)}</time><a href={`theorems.html?${item}`}>{tx('查看定理', 'View theorem')} →</a></div>
+          <div class="research-card-footer"><time dateTime={project.updatedAt}>{stamp(project.updatedAt)}</time><a href={href}>{tx('查看定理', 'View theorem')} →</a></div>
         </li>;
       })}</ul>
       {directory.data && !directory.data.items.length && <Empty>{query || field ? tx('暂无匹配的定理。试试其他关键词或领域。', 'No matching theorems. Try another keyword or field.')
@@ -99,7 +100,7 @@ export function TheoremsPage({ context }: { context: ResearchContext }) {
 function CreateProject() {
   const [title, setTitle] = useState(''), [description, setDescription] = useState(''), [fields, setFields] = useState(''), [visibility, setVisibility] = useState('private'), action = useMutation();
   return <form class="research-form" onSubmit={event => { event.preventDefault(); void action.run<Item<ResearchProjectSummary>>('POST', `${base}/theorems`,
-    { title: title.trim(), description, fields: words(fields), visibility }, result => location.assign(theoremHref(result.item.id))); }}>
+    { title: title.trim(), description, fields: words(fields), visibility }, result => location.assign(`${theoremHref(result.item.id)}#statement-versions`)); }}>
     <Field label={tx('定理名称', 'Theorem title')} value={title} onInput={setTitle} required maxLength={200} />
     <Field label={tx('研究描述', 'Research description')} value={description} onInput={setDescription} multiline rows={3} />
     <Field label={tx('领域，用逗号分隔', 'Fields, separated by commas')} value={fields} onInput={setFields} />
@@ -122,6 +123,14 @@ function Project({ project, context, refresh }: { project: ResearchProjectDetail
   const version = versionChoice ? project.versions.find(item => item.id === versionChoice) : project.versions.at(-1);
   const runs = project.runs.filter(run => run.statementVersionId === version?.id);
   const run = runChoice ? runs.find(item => item.runId === runChoice) : runs[0];
+  useEffect(() => {
+    if (project.versions.length || !project.permissions.edit || location.hash !== '#statement-versions') return;
+    const frame = requestAnimationFrame(() => {
+      const statement = document.querySelector<HTMLTextAreaElement>('[data-project-statement-editor] textarea');
+      statement?.focus({ preventScroll: true }); statement?.scrollIntoView({ block: 'center' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [project.id]);
   const remember = (versionId: string, runId?: string) => {
     const next = new URL(location.href); next.searchParams.set('version', versionId); runId ? next.searchParams.set('run', runId) : next.searchParams.delete('run');
     next.searchParams.delete('task'); next.searchParams.delete('taskVersion'); next.hash = ''; history.replaceState(null, '', next);
@@ -169,7 +178,9 @@ function Project({ project, context, refresh }: { project: ResearchProjectDetail
         <div><dt>{tx('源码摘要', 'Source digest')}</dt><dd>{version.sourceDigest}</dd></div>{version.environmentDigest && <div><dt>{tx('环境摘要', 'Environment digest')}</dt><dd>{version.environmentDigest}</dd></div>}</dl></details></>
       : <Empty>{project.versions.length ? tx('所选陈述版本不可用。请从版本列表重新选择。', 'The selected statement version is unavailable. Choose a version from the list.')
         : tx('尚无陈述版本。请先保存自然语言原题和对应 Lean 源码。', 'No statement version yet. Save the original statement and its Lean source first.')}</Empty>}
-    {project.permissions.edit && <details><summary>{tx('添加陈述版本', 'Add a statement version')}</summary><StatementEditor project={project} onSaved={item => { setVersionChoice(item.id); setRunChoice(''); remember(item.id); refresh(); }} /></details>}
+    {project.permissions.edit && <details data-project-statement-editor open={!project.versions.length || undefined}><summary>{project.versions.length ? tx('添加陈述版本', 'Add a statement version') : tx('添加第一个陈述', 'Add the first statement')}</summary>
+      {!project.versions.length && <p class="research-field-note">{tx('题目已创建。下一步填写自然语言原题和 Lean 陈述，保存后即可开始研究。', 'The project is ready. Add the original problem and Lean statement, then save to begin research.')}</p>}
+      <StatementEditor project={project} onSaved={item => { setVersionChoice(item.id); setRunChoice(''); remember(item.id); refresh(); }} /></details>}
   </Panel><Panel id="research-progress" title={tx('研究进展与路线', 'Research progress and routes')} note={tx('查看当前版本的研究运行、任务与检查结果。', 'Explore runs, tasks and check results for this statement version.')}>
     {runs.length > 0 ? <><div class="research-run-tools"><label>{tx('选择研究运行', 'Select research run')}<select value={run?.runId} onChange={event => {
       setRunChoice(event.currentTarget.value); if (version) remember(version.id, event.currentTarget.value);

@@ -2,21 +2,10 @@ import type { ArchiveIndexRecord, ArchiveProcess } from './types';
 import type { Locale } from './site';
 import { renderProofWalkthrough, selectedProofWalkthrough } from './proofWalkthrough';
 import { archiveProblemDraftHref } from '../../apps/web/client/researchProblemDraft';
+export { theoremDirectoryReturn } from './proofReadingLocation';
 
 const html = (value: string) => value.replace(/[&<>"']/gu, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]!));
 const text = (locale: Locale, zh: string, en: string) => locale === 'en' ? en : zh;
-
-/** Only the originating workbench directory may be a proof's return destination. */
-export function theoremDirectoryReturn(value: string | null, currentHref: string): string | undefined {
-  if (!value) return undefined;
-  try {
-    const current = new URL(currentHref), destination = new URL(value, current);
-    const directory = new URL(current.pathname.endsWith('/en/archive.html') ? '../../theorems.html' : '../theorems.html', current);
-    if (destination.origin !== current.origin || destination.pathname !== directory.pathname
-      || destination.username || destination.password || destination.searchParams.get('collection') !== 'solved') return undefined;
-    return `${destination.pathname}${destination.search}${destination.hash}`;
-  } catch { return undefined; }
-}
 
 type ProofRecord = Pick<ArchiveIndexRecord, 'id' | 'campaign' | 'sources'>;
 function acceptedReadingProof(record: ProofRecord, process: ArchiveProcess) {
@@ -52,21 +41,21 @@ export function renderProofSolution(record: ArchiveIndexRecord, process: Archive
   const walkthrough = selectedProofWalkthrough(record, process, run);
   const summary = locale === 'en' ? record.en?.summary ?? record.summary : record.summary;
   let body: string;
-  if (walkthrough) body = renderProofWalkthrough(walkthrough, process, run, locale, { linear: true });
+  if (walkthrough) body = renderProofWalkthrough(walkthrough, process, run, locale, { linear: true, researchHref });
   else {
     const file = process.sourceRoute?.files.find(file => file.sha256 === campaign.proofSha256);
     const targets = file?.declarations.filter(declaration => campaign.targets.includes(declaration.name)) ?? [];
     const lines = source.code.split('\n');
-    const declaration = (item: NonNullable<typeof file>['declarations'][number]) => `<p class="process-code-meta">Submission.lean:${item.line}–${item.endLine}</p><pre class="process-code" tabindex="0"><code data-proof-source-code>${html(lines.slice(item.line - 1, item.endLine).join('\n'))}</code></pre><div class="process-targets"><code>${html(item.name)}</code></div>`;
+    const declaration = (item: NonNullable<typeof file>['declarations'][number], anchor: string) => `<p class="process-code-meta">Submission.lean:${item.line}–${item.endLine}</p><pre class="process-code" tabindex="0"><code data-proof-source-code>${html(lines.slice(item.line - 1, item.endLine).join('\n'))}</code></pre><div class="process-targets"><code>${html(item.name)}</code></div><div class="proof-walkthrough-links"><button type="button" data-action="copy-link" data-proof-copy-reading="${anchor}">${text(locale, '复制此处链接', 'Copy link here')}</button>${researchHref ? `<a class="proof-reading-research" data-proof-position-research="${anchor}" href="${html(researchHref)}">${text(locale, '以此题开始研究', 'Research this problem')} ↗</a>` : ''}</div>`;
     const helpers = file?.declarations.filter(item => !campaign.targets.includes(item.name)) ?? [];
     const targetId = (index: number) => `proof-source-target-${index + 1}`, helperId = (index: number) => `proof-source-helper-${index + 1}`;
     const shortName = (name: string) => html(name.split('.').at(-1)!);
     const indexLinks = (items: typeof targets, id: (index: number) => string) => `<ul>${items.map((item, index) => `<li><button type="button" data-global-scroll="${id(index)}"><code>${shortName(item.name)}</code><span>${item.line}–${item.endLine}</span></button></li>`).join('')}</ul>`;
     body = `<section class="proof-reading-content" data-proof-source-reading><p class="workflow-prose">${text(locale, '以下直接阅读已验收 Lean 源码中的目标声明及证明，按源码顺序排列；此题尚无逐步数学讲解。', 'Read the target declarations and proofs from the accepted Lean source, in source order. A step-by-step mathematical explanation is not yet available.')}</p>
       ${targets.length || helpers.length ? `<details class="proof-source-index"><summary>${text(locale, '目标与辅助定义索引', 'Target and definition index')} <span>${targets.length} / ${helpers.length}</span></summary><nav aria-label="${text(locale, '已验收源码声明', 'Accepted source declarations')}"><h5>${text(locale, '证明目标', 'Proof targets')}</h5>${indexLinks(targets, targetId)}${helpers.length ? `<h5>${text(locale, '辅助声明与定义', 'Supporting declarations and definitions')}</h5>${indexLinks(helpers, helperId)}` : ''}</nav></details>` : ''}
-      ${targets.length ? `<ol class="proof-walkthrough-steps">${targets.map((item, index) => `<li class="proof-walkthrough-step" id="${targetId(index)}" data-proof-source-declaration="${html(item.name)}" data-proof-source-lines="${item.line}:${item.endLine}"><header><span>${String(index + 1).padStart(2, '0')}</span><h5 tabindex="-1">${shortName(item.name)}</h5></header>${declaration(item)}</li>`).join('')}</ol>`
+      ${targets.length ? `<ol class="proof-walkthrough-steps">${targets.map((item, index) => `<li class="proof-walkthrough-step" id="${targetId(index)}" data-proof-source-declaration="${html(item.name)}" data-proof-source-lines="${item.line}:${item.endLine}"><header><span>${String(index + 1).padStart(2, '0')}</span><h5 tabindex="-1">${shortName(item.name)}</h5></header>${declaration(item, targetId(index))}</li>`).join('')}</ol>`
         : `<pre class="process-code" tabindex="0"><code data-proof-source-code>${html(source.code)}</code></pre>`}
-      ${helpers.length ? `<details class="workflow-full-text"><summary>${text(locale, `辅助声明与定义（${helpers.length}）`, `Supporting declarations and definitions (${helpers.length})`)}</summary>${helpers.map((item, index) => `<details class="proof-walkthrough-source" id="${helperId(index)}"><summary><code>${shortName(item.name)}</code><span>Submission.lean:${item.line}–${item.endLine}</span></summary>${declaration(item)}</details>`).join('')}</details>` : ''}
+      ${helpers.length ? `<details class="workflow-full-text"><summary>${text(locale, `辅助声明与定义（${helpers.length}）`, `Supporting declarations and definitions (${helpers.length})`)}</summary>${helpers.map((item, index) => `<details class="proof-walkthrough-source" id="${helperId(index)}"><summary><code>${shortName(item.name)}</code><span>Submission.lean:${item.line}–${item.endLine}</span></summary>${declaration(item, helperId(index))}</details>`).join('')}</details>` : ''}
     </section>`;
   }
   return `<article class="archive-process" data-proof-solution="${html(record.id)}" data-proof-solution-run="${html(run.runId)}" data-proof-solution-sha="${html(source.sha256)}" data-proof-solution-mode="${walkthrough ? 'derivation' : 'source'}">

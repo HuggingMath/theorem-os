@@ -13,7 +13,8 @@ import { keepHashOnLanguageSwitch, localeOf, localizeRecord, rootOf } from './si
 import { initializeReplay } from './replay';
 import { emptyProcessSelection, renderArchiveProcess, selectedProcessRun } from './process';
 import { buildArchiveRoadmap, mountArchiveRoadmap } from './processRoadmap';
-import { mountProofReading } from './proofReading';
+import { mountProofReading, proofReadingLink, revealProofReadingLocation } from './proofReading';
+import { readProofReadingPosition } from './proofReadingLocation';
 import { proofSolutionTitle, renderProofSolution, theoremDirectoryReturn } from './proofSolution';
 import { mountProofFigures } from './proofFigures';
 import { mountArchiveSolutionRoutes, typesetArchiveProse } from './solutionRouteClient';
@@ -143,9 +144,9 @@ function loadProcess(record: ArchiveRecord): Promise<ArchiveProcess | undefined>
   return request;
 }
 const icons = () => {
-  createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } }); mountArchiveRoadmap(); mountProofReading();
+  createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } }); mountArchiveRoadmap();
   const inspector = document.querySelector<HTMLElement>('#inspector');
-  if (inspector) void typesetArchiveProse(inspector, locale);
+  mountProofReading(inspector ? typesetArchiveProse(inspector, locale) : Promise.resolve());
   const record = selectedRecord(), process = record && window.theoremosProcesses?.[record.id];
   if (record && process) void mountArchiveSolutionRoutes(record, process, locale).then(() => {
     const toolbar = document.querySelector<HTMLElement>('.process-view-toolbar');
@@ -218,6 +219,10 @@ function writeLocation(push = false) {
     if (state.filter !== 'all') params.set('status', state.filter);
     if (state.query) params.set('q', state.query);
     if (state.sort !== 'verified') params.set('sort', state.sort);
+    const previous = new URLSearchParams(location.hash.slice(1)), reading = readProofReadingPosition(previous);
+    if (previous.get('proof') === state.selected && reading) {
+      params.set('reading', reading.anchor); params.set('readingSha', reading.proofSha);
+    }
     if (state.tab === 'process') {
       params.set('mode', processSelection.view);
       if (processSelection.run) params.set('run', processSelection.run);
@@ -580,7 +585,7 @@ function restoreLocation() {
     // processView renders the loaded process or its failure message before revealing it.
     const ready = (state.tab === 'process' || state.tab === 'reading') && record ? loadProcess(record).catch(() => undefined) : Promise.resolve();
     void ready.then(() => document.fonts.ready).then(() => {
-      if (state.selected === requested) revealRecord();
+      if (state.selected === requested && !revealProofReadingLocation()) revealRecord();
     });
   }
 }
@@ -766,7 +771,7 @@ document.addEventListener('click', event => {
     }
     case 'quickstart': state.view = 'quickstart'; writeLocation(true); render(); break;
     case 'reset': state.query = ''; state.filter = 'all'; render(); element('#search').focus(); break;
-    case 'copy-link': void copy(location.href); break;
+    case 'copy-link': void copy(proofReadingLink(target.dataset.proofCopyReading)); break;
     case 'copy-hash': void copy(target.dataset.value ?? ''); break;
     case 'jump-declaration': if (record) jumpToDeclaration(record); break;
     case 'copy-source': if (record) void copy(currentSource(record).code); break;

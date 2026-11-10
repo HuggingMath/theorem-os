@@ -120,7 +120,7 @@ export class ChatSession {
   private lastAnswerRefresh = 0;
 
   constructor(private readonly options: Options) {
-    this.answers = new ChatAnswers(options.request, locale, () => this.redraw());
+    this.answers = new ChatAnswers(options.request, locale, () => { this.redraw(); this.schedule(); });
     this.submissionIdentity = new SubmissionIdentity({
       getItem: key => options.draftScope ? sessionStorage.getItem(`${key}.${options.draftScope}`) : null,
       setItem: (key, value) => { if (options.draftScope) sessionStorage.setItem(`${key}.${options.draftScope}`, value); },
@@ -419,7 +419,8 @@ export class ChatSession {
     const unlinkedRun = Boolean(this.formalization?.runId && this.conversation && !this.conversation.runId);
     // Nothing in progress: a slow check, since returning to the tab refreshes at once. A fast idle poll on every open tab
     // reached the site's per-address request limit.
-    this.timer = setTimeout(() => void this.refresh(), pending ? 500 : running(this.run) || running(this.formalization) || unlinkedRun ? 1500 : 30_000);
+    this.timer = setTimeout(() => void this.refresh(), pending ? 500 : running(this.run) || running(this.formalization) || unlinkedRun ? 1500
+      : this.answers.generating(this.run?.id) ? 5000 : 30_000);
   }
   async refresh() {
     if (!this.options.draftScope) return;
@@ -434,7 +435,7 @@ export class ChatSession {
         if (runChanged || Date.now() - this.lastTaskRefresh >= 1500) await this.loadTask(generation);
       }
       if (generation !== this.generation) return;
-      if (Date.now() - this.lastAnswerRefresh >= 30_000) {
+      if (Date.now() - this.lastAnswerRefresh >= (this.answers.generating(this.run?.id) ? 5000 : 30_000)) {
         this.lastAnswerRefresh = Date.now(); this.answers.refresh(this.run);
       }
       if (Date.now() - this.lastListRefresh >= 6000) {

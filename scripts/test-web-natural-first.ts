@@ -38,7 +38,7 @@ try {
       localStorage.setItem(key, value);
       sessionStorage.setItem('theorem-os.research-entry.v1', 'lean');
     }, [localeStorageKey, locale]);
-    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
     page.on('pageerror', error => errors.push(error.message));
     const writes: string[] = [];
     const connectionChecks: { url: string; body: Record<string, unknown> }[] = [];
@@ -85,6 +85,7 @@ try {
     assert.equal(new URL(page.url()).search, '?sample');
     assert.equal(await page.locator('[data-chat-share]').count(), 0);
     assert.equal(await page.locator('#formalize-start').isDisabled(), true);
+    await page.locator('[data-chat-result-more] > summary').click();
     await page.locator('[data-research-artifact="result"]').click();
     await page.locator('.result-verdict').waitFor();
     assert.equal(writes.length, 0, 'Opening the sample and its acceptance report creates no paid task');
@@ -104,10 +105,9 @@ try {
     if (width === 1440) {
       assert.equal(await page.locator('#formalize-provider').inputValue(), 'sub2api');
       assert.equal(await page.locator('#formalize-model').inputValue(), 'deepseek-flash');
-      assert.equal(await page.locator('#formalize-tokens').inputValue(), '400000');
-      assert.equal(await page.locator('#research-tokens').inputValue(), '200000');
-      assert.equal(await page.locator('#research-turns').inputValue(), '5');
-      assert.match(await page.locator('[data-chat-budget]').innerText(), /10 分钟.*5 分钟/u);
+      for (const selector of ['#formalize-minutes', '#formalize-tokens', '#research-minutes', '#research-tokens', '#research-turns'])
+        assert.equal(await page.locator(selector).inputValue(), '');
+      assert.match(await page.locator('[data-chat-budget]').innerText(), /时间不限.*Token 不限.*轮次不限/u);
       await page.locator('#formalize-key').fill('gateway-key-to-clear');
       await page.locator('#formalize-provider').selectOption('openai');
       assert.equal(await page.locator('#formalize-key').inputValue(), '', 'A gateway key cannot accidentally be sent to OpenAI');
@@ -128,7 +128,7 @@ try {
       assert.equal(await page.locator('#chat-connection-result').count(), 0, 'Changing the key invalidates the prior result');
       await page.locator('#formalize-original').fill(original);
       await page.locator('#formalize-tokens').fill('0');
-      assert.equal(await page.locator('#formalize-start').isDisabled(), true, 'The first task cannot start with an unbounded token budget');
+      assert.equal(await page.locator('#formalize-start').isEnabled(), true, 'Zero keeps the first task unlimited and ready to send');
       await page.locator('#formalize-tokens').fill('120000');
       await page.locator('#research-tokens').fill('80000');
       await page.locator('#formalize-minutes').fill('4');
@@ -138,7 +138,7 @@ try {
       assert.equal(writes.length, 0, 'Connection checks and budget edits create no paid task');
       await page.locator('#formalize-provider').selectOption('sub2api');
       await page.locator('#formalize-original').fill('');
-      mark('provider-specific key guidance, key clearing, bounded budgets and non-generating connection checks');
+      mark('provider-specific key guidance, key clearing, unlimited defaults, optional budgets and non-generating connection checks');
     }
     await page.locator('#formalize-settings > summary').click();
     await page.locator('.chat-settings-fields').waitFor({ state: 'hidden' });

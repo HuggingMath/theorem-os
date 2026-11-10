@@ -39,7 +39,15 @@ export type InstalledLibraryDirectory = {
   limit: number;
   nextOffset?: number;
 };
-export type InstalledLibraryDetail = { library: InstalledLibraryInfo; module: InstalledLibraryModule };
+export type InstalledLibraryDefinition = {
+  source: string;
+  body: string;
+  documentation: string;
+  context: string[];
+  line: number;
+};
+export type InstalledLibraryDetail = { library: InstalledLibraryInfo; module: InstalledLibraryModule;
+  definitions: Record<string, InstalledLibraryDefinition> };
 export type InstalledLibrarySource = {
   library: InstalledLibraryInfo;
   file: string;

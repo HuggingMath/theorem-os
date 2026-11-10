@@ -21,10 +21,13 @@
 .proof-solution-summary-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px 20px; flex-wrap: wrap; margin-bottom: 8px; }
 .proof-solution-summary-heading h4 { margin: 0; }
 .proof-research-start { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 7px 11px; font-size: 12px; white-space: nowrap; text-decoration: none; }
+.proof-reading-research { display: inline-block; padding: 3px 0; color: var(--green); font-size: 11px; text-decoration: none; }
+.proof-reading-research:hover { text-decoration: underline; }
 .proof-reading-intro { margin: 0 0 16px; }
 .proof-reading-intro > summary { display: flex; align-items: baseline; gap: 16px; padding: 9px 0; color: var(--green); cursor: pointer; font-size: 12px; }
 .proof-reading-intro > summary > span { margin-left: auto; color: var(--muted); font: 10px var(--mono); white-space: nowrap; }
 .proof-reading-intro[open] > .proof-walkthrough-intro { padding: 10px 0 16px; }
+.proof-reading-intro section.proof-walkthrough-problem { flex-basis: 100%; }
 .proof-walkthrough[data-proof-reading="linear"] .proof-walkthrough-route { padding-right: 0; border-right: 0; }
 .proof-source-index { margin: 12px 0 22px; }
 .proof-source-index > summary { cursor: pointer; color: var(--green); font-size: 12px; padding: 8px 0; }

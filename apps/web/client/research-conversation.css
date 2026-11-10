@@ -153,6 +153,8 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 .chat-mathematics h4,.chat-mathematical-answer h4{font-size:14px;line-height:1.8;margin:18px 0 10px}
 .chat-math-tasks{display:grid;gap:12px;margin:0;padding:0;list-style:none}
 .chat-math-tasks>li{padding-left:14px;border-left:2px solid var(--line)}
+.chat-math-task-status{display:block;margin-bottom:5px;color:var(--muted);font-size:12px}
+[data-chat-math-blockers]{padding:0 14px 12px;border-left:2px solid var(--orange-600,var(--muted))}
 [data-chat-math-checked] .chat-math-tasks>li{border-left-color:var(--green-600)}
 .chat-math-tasks .text-button{display:inline-flex;align-items:center;gap:6px;margin-top:5px;font-size:12px;max-width:100%;text-align:left}
 .chat-math-tasks .text-button span{overflow-wrap:anywhere}
@@ -170,6 +172,16 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 .chat-answer-uses{display:flex;align-items:baseline;flex-wrap:wrap;gap:5px 10px;margin:8px 0 0!important;font-size:12px;color:var(--muted)}
 .chat-answer-uses code{font-size:11px;overflow-wrap:anywhere;color:var(--gray-700)}
 .chat-answer-support{margin-top:14px;border-top:1px solid var(--line)}
+.chat-answer-generation,.chat-answer-stopped{font-size:13px;line-height:1.8;color:var(--muted)}
+.chat-answer-generation p,.chat-answer-stopped p{margin:8px 0}
+.chat-answer-stopped strong{color:var(--ink)}
+.research-conversation-artifacts .chat-result-primary{border-color:var(--ink);font-weight:600}
+.chat-result-more{min-width:0;width:100%;font-size:13px}
+.chat-result-more>summary{width:fit-content;min-height:44px;cursor:pointer;color:var(--muted);padding:10px 0}
+.chat-result-more-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:10px 0}
+.chat-result-more-actions :is(.button,.text-button){max-width:100%;min-height:40px;white-space:normal;text-align:left}
+.chat-key-next-step{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-top:12px;font-size:13px;line-height:1.8}
+.chat-key-next-step p{margin:0;color:var(--muted)}
 #research-problem-draft:empty{display:none}
 #research-problem-draft{flex:none;max-height:52dvh;overflow:auto;scrollbar-width:thin;width:100%;max-width:808px;margin:0 auto;padding:8px 24px}
 .chat-problem-draft{padding:18px 20px;border:1px solid var(--line);border-radius:14px;background:var(--card);font-size:14px;line-height:1.8;overflow-wrap:anywhere}

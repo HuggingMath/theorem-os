@@ -8,7 +8,7 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebResult, WebRun, WebRunInput } from '../apps/web/shared';
-import { closeDialog, openRunMenu, refresh, refreshHistory, runMenu, selectHistoryRun, showArtifacts } from './web-ui-controls';
+import { closeDialog, historyDocked, openHistory, openRunMenu, refresh, refreshHistory, runMenu, showArtifacts as showRunArtifacts } from './web-ui-controls';
 import { deferred, freePort, postRun, ready, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -79,7 +79,7 @@ const deleteCount = (h: Harness, id?: string) => h.requests.filter(request => re
 const scenario = (name: string, run: (h: Harness) => Promise<void>) => webScenario<Harness>(browser!, suite, name, run, {
   context: { viewport: { width: 1440, height: 900 }, permissions: ['clipboard-read', 'clipboard-write'] },
   harness: (page, context) => ({ page, context, requests: [], runIds: [], releases: [] }),
-  routes: 'api', open: async ({ page }) => { await page.goto(origin); await ready(page); }, timeout: { label: 'Results', seconds: 35 },
+  routes: 'api', open: async ({ page }) => { await page.goto(origin); await ready(page); }, timeout: { label: 'Results', seconds: 0 },
   failure: { prefix: 'results-', fullPage: true },
   cleanup: h => {
     for (const release of h.releases) release();
@@ -96,8 +96,22 @@ async function createRun(h: Harness, title: string, completed: WebResult | null 
   return h.page.evaluate(async id => (await (await fetch(`/api/runs/${id}`)).json()).run as WebRun, run.id);
 }
 async function select(h: Harness, id: string) {
-  await selectHistoryRun(h.page, id);
+  await openHistory(h.page);
+  const entry = h.page.locator(`[data-run-id="${id}"]`);
+  if (historyDocked(h.page)) await entry.click();
+  else await closeDialog(h.page, '#history-dialog', () => entry.click());
+  await h.page.locator(`[data-run-id="${id}"][aria-pressed="true"]`).waitFor({ state: 'attached' });
+  await showArtifacts(h.page);
   await h.page.locator('#detail-tab-result').click();
+}
+async function openResultActions(page: Page) {
+  const more = page.locator('[data-chat-result-more]');
+  if (await more.count() && !await more.evaluate(element => (element as HTMLDetailsElement).open)) await more.locator(':scope > summary').click();
+}
+async function showArtifacts(page: Page) {
+  // Accepted runs keep their trajectory/report actions inside the native More disclosure.
+  await openResultActions(page);
+  await showRunArtifacts(page);
 }
 async function showDelete(h: Harness, id: string) {
   await select(h, id);
@@ -194,7 +208,7 @@ try {
     assert.equal(h.requests.filter(request => request.method === 'POST' && request.pathname === '/api/runs').length, 2);
   });
 
-  await scenario('The conversation opens accepted results, explanation, verification download and sharing directly', async h => {
+  await scenario('Accepted-result More actions open reports, verification downloads and sharing while unsupported explanation stays unavailable', async h => {
     const run = await createRun(h, 'Accepted conversation actions', result({
       candidateCheck: { passed: true, results: [{ theoremName: 'result_fixture', status: 'kernel_verified' }] },
       evaluator: { status: 'passed', method: 'host-lean-kernel-all-targets' },
@@ -202,12 +216,18 @@ try {
     await refresh(h); await select(h, run.id);
     await h.page.locator('#close-research-output').click();
     const report = h.page.locator('[data-research-artifact="result"]');
-    await report.waitFor();
+    const more = h.page.locator('[data-chat-result-more]');
     const writes = h.requests.filter(runtimeWrite).length;
     for (const width of widths) {
       await h.page.setViewportSize({ width, height: width > 850 ? 900 : 812 });
+      if (await more.evaluate(element => (element as HTMLDetailsElement).open)) await more.locator(':scope > summary').click();
+      assert.equal(await report.isVisible(), false, 'accepted-result reports start behind More');
+      await more.locator(':scope > summary').click();
+      await report.waitFor({ state: 'visible' });
       assert.equal((await report.innerText()).trim(), '查看验收报告');
-      await assertHorizontalFit(h.page, '.chat-task-actions', width);
+      await assertHorizontalFit(h.page, '.chat-task-actions:has([data-chat-result-more])', width);
+      await report.scrollIntoViewIfNeeded();
+      await screenshot(h.page, `results-${width}-accepted-more.png`);
       await report.click();
       await h.page.locator('#detail-panel[data-tab="result"] .result-verdict.passed').waitFor();
       assert.equal(await h.page.locator('#detail-tab-result').getAttribute('aria-selected'), 'true');
@@ -215,13 +235,9 @@ try {
       await report.waitFor();
     }
     await h.page.setViewportSize({ width: 1440, height: 900 });
-    const popup = h.page.waitForEvent('popup');
-    await h.page.locator('[data-chat-explain]').click();
-    const explanation = await popup;
-    await explanation.locator('#explain-lean-code .lean-row').first().waitFor();
-    assert.equal(new URL(explanation.url()).searchParams.get('run'), run.id);
-    assert.match(await explanation.locator('#explain-lean-code').innerText(), /theorem result_fixture/u);
-    await explanation.close();
+    await h.page.locator('[data-chat-answer][data-chat-answer-status="unavailable"]').waitFor();
+    assert.equal(await h.page.locator('[data-chat-answer-unavailable]').innerText(), '证明讲解目前只支持 Sub2API 模型服务。');
+    assert.equal(await h.page.locator('[data-chat-explain]').count(), 0, 'the OpenAI fixture must not offer unsupported explanation generation');
     const download = h.page.waitForEvent('download');
     await h.page.locator('[data-chat-download-kit]').click();
     const kit = await download;
@@ -233,6 +249,7 @@ try {
     await h.page.locator('#share-dialog[open]').waitFor();
     await h.page.locator('#create-share:enabled').waitFor();
     assert.equal(await h.page.locator('#share-run-title').textContent(), run.title);
+    await screenshot(h.page, 'results-accepted-share-dialog.png');
     await closeDialog(h.page, '#share-dialog', () => h.page.locator('#close-share').click());
     assert.equal(h.requests.filter(runtimeWrite).length, writes, 'opening result actions must not start research or create a share');
   });
@@ -405,7 +422,7 @@ try {
       else await h.page.locator(action === 'cancel' ? '#cancel-delete' : '#close-delete').click();
       await h.page.locator('#delete-run-dialog[open]').waitFor({ state: 'hidden' });
       // The kept run's menu, where the dialog was opened, gets the keyboard back.
-      await h.page.waitForFunction(() => document.activeElement?.matches('[data-run-menu]>summary'), undefined, { timeout: 3_000 })
+      await h.page.waitForFunction(() => document.activeElement?.matches('[data-run-menu]>summary'), undefined, { timeout: 0 })
         .catch(() => assert.fail(`focus returns to the run menu after ${action}`));
     }
     assert.equal(deleteCount(h), 0);
@@ -424,7 +441,7 @@ try {
     // The keyboard lands on the run now shown, so it can be read or deleted next, and the address names it. The dialog's
     // close event, which moves it, comes a task after the dialog hides.
     await h.page.waitForFunction(id => (document.activeElement as HTMLElement | null)?.closest('#run-list')
-      && (document.activeElement as HTMLElement).dataset.runId === id, selected, { timeout: 3_000 })
+      && (document.activeElement as HTMLElement).dataset.runId === id, selected, { timeout: 0 })
       .catch(() => assert.fail('focus moves to the newly selected run'));
     // The run's own address, or that of its conversation once it opens beside the run.
     await h.page.waitForFunction(id => location.search === `?run=${id}` || location.search.startsWith('?chat='), selected);
