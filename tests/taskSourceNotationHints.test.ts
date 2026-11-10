@@ -79,7 +79,8 @@ describe('original input discovery through notation', () => {
     ].join('\n'));
     f.accepted(f.source);
     expect(f.project.dependencyHints(f.task, [])).toEqual([]);
-    expect(projectedGoalInputs(f.project, f.task, f.records)).toEqual([]);
+    expect(projectedGoalInputs(f.project, f.task, f.records).map(node => node.task.theoremName))
+      .toEqual(['NotationHint.first', 'NotationHint.second']);
     expect(f.native(f.project(f.task, []).get('Submission.lean')!).status).not.toBe(0);
     f.accepted(f.project(f.task, ['NotationHint.first', 'NotationHint.second']).get('Submission.lean')!);
   });
@@ -97,7 +98,7 @@ describe('original input discovery through notation', () => {
     f.accepted(f.project(f.task, []).get('Submission.lean')!);
   });
 
-  it('does not report a plus notation as an input of an append expression', () => {
+  it('keeps the plus quotation context out of unambiguous append dependency hints', () => {
     const f = fixture([
       'namespace NotationHint', 'theorem first : True := by trivial',
       'def stageOperation (left right : Nat) : Nat := by have := first; exact left',
@@ -106,7 +107,8 @@ describe('original input discovery through notation', () => {
     ].join('\n'));
     f.accepted(f.source);
     expect(f.project.dependencyHints(f.task, [])).toEqual([]);
-    expect(projectedGoalInputs(f.project, f.task, f.records)).toEqual([]);
+    expect(projectedGoalInputs(f.project, f.task, f.records).map(node => node.task.theoremName))
+      .toEqual(['NotationHint.first']);
   });
 
   it('ignores notation names mentioned only in strings and comments', () => {

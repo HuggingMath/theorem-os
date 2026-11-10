@@ -21,18 +21,21 @@ import { inspectProjectionNotations, type ProjectionNotation } from './projectio
 
 export { TaskProofCache } from './taskProofCache';
 
-/** Source hints only order/recover checks; callers must separately establish fresh acceptance.
- * A hint stops at the first excluded original, whose own inputs must also be retained and checked. */
+/** Source observations only order/recover checks; callers must separately establish fresh acceptance.
+ * Possible notation context is not a plan edge or an unambiguous dependency hint. */
 export function projectedGoalInputs(project: ReturnType<typeof createTaskSourceProjector>, task: CooperativeTask,
   tasks: readonly TaskRecord[], conditions: readonly CooperativeTask[] = []): TaskRecord[] {
   const found = new Set<TaskRecord>(), visited = new Set<string>(), pending = [task];
   for (const current of pending) {
     if (visited.has(current.id)) continue;
     visited.add(current.id);
-    for (const hint of project.dependencyHints(current, [], current === task ? conditions : [])) {
-      if (hint.root.removedBecause !== 'excluded-original-target') continue;
+    const inputs = current === task ? conditions : [];
+    const roots = [...project.dependencyHints(current, [], inputs)
+      .filter(hint => hint.root.removedBecause === 'excluded-original-target').map(hint => hint.root),
+      ...project.possibleContextGoals(current, [], inputs)];
+    for (const root of roots) {
       const matches = tasks.filter(node => node.task.kind === 'goal' && node.task.id !== task.id &&
-        node.task.proofPath === hint.root.file && node.task.theoremName?.replace(/^_root_\./u, '') === hint.root.name);
+        node.task.proofPath === root.file && node.task.theoremName?.replace(/^_root_\./u, '') === root.name);
       if (matches.length !== 1 || found.has(matches[0])) continue;
       found.add(matches[0]); pending.push(matches[0].task);
     }
@@ -316,9 +319,10 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
   }));
   const frozenModules = new Map(declarations.filter(item => item.name && Object.hasOwn(problem.frozenFiles ?? {}, item.file))
     .map(item => [item.qualifiedName, item.file.slice(0, -'.lean'.length).replaceAll('/', '.')]));
+  const notationGroupsCache = new Map<typeof declarations[number], string[][]>();
   const originals = new Map<string, string>();
   const project = (task: CooperativeTask, retainedGoals: readonly string[], conditions: readonly CooperativeTask[] = [],
-    observe?: (hints: readonly ProjectionDependencyHint[]) => void): Map<string, string> => {
+    observe?: (hints: readonly ProjectionDependencyHint[], context: readonly ProjectionDeclaration[]) => void): Map<string, string> => {
     assertTaskTypeContract(task);
     conditions.forEach(assertTaskTypeContract);
     const binders = conditions.map(dependency => `(${local(dependency.theoremName!)} : ${dependency.type})`).join(' ');
@@ -446,8 +450,8 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     };
     // Notation literals are parser tokens, not namespace-qualified constants. Resolve them
     // separately so global aliases and symbolic notation carry the same source dependencies.
-    const notationGroupsCache = new Map<typeof declarations[number], string[][]>();
     const notationGroups = (declaration: typeof declarations[number]) => {
+      if (!notationDeclarations.length) return [];
       let groups = notationGroupsCache.get(declaration);
       if (groups) return groups;
       const text = maskLeanCommentsAndStrings(sourceSnapshot.get(declaration.file)!
@@ -549,20 +553,29 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     // it could turn an identifier in the target's type into a new autoImplicit parameter.
     const requiredNotations = new Set<string>(), syntaxConsumers = declarations.filter(item => keep.has(item.id));
     const visitedSyntax = new Set(syntaxConsumers.map(item => item.id));
+    const syntaxDependencies = observe ? new Map<string, Set<string>>() : undefined;
     for (const consumer of syntaxConsumers) {
-      for (const reference of consumer.references) for (const group of referenceGroups(consumer, reference))
-        for (const id of group) if (!visitedSyntax.has(id)) {
-          const dependency = byId.get(id);
-          if (dependency) { visitedSyntax.add(id); syntaxConsumers.push(dependency); }
+      const conditionTypes = consumer.id === target ? conditions.map(input => input.type ?? '').join('\n') : '';
+      const references = conditionTypes ? [...consumer.references, ...sourceReferences(conditionTypes, consumer.bodyOffset)] : consumer.references;
+      const dependencies = new Set<string>();
+      for (const reference of references) for (const group of referenceGroups(consumer, reference))
+        for (const id of group) {
+          dependencies.add(id);
+          if (!visitedSyntax.has(id)) {
+            const dependency = byId.get(id);
+            if (dependency) { visitedSyntax.add(id); syntaxConsumers.push(dependency); }
+          }
         }
       const text = maskLeanCommentsAndStrings(sourceSnapshot.get(consumer.file)!
-        .slice(consumer.notation ? consumer.bodyOffset : consumer.startOffset, consumer.endOffset));
-      for (const candidate of notationDeclarations) if (!requiredNotations.has(candidate.id) &&
+        .slice(consumer.notation ? consumer.bodyOffset : consumer.startOffset, consumer.endOffset) + '\n' + conditionTypes);
+      for (const candidate of notationDeclarations) if (
           visibleBindings(consumer, [candidate]).length && candidate.notation.tokens.some(token =>
-            isSimpleLeanName(token) ? consumer.references.some(reference => reference.name === token) : text.includes(token))) {
+            isSimpleLeanName(token) ? references.some(reference => reference.name === token) : text.includes(token))) {
+        dependencies.add(candidate.id);
         requiredNotations.add(candidate.id);
         if (!visitedSyntax.has(candidate.id)) { visitedSyntax.add(candidate.id); syntaxConsumers.push(candidate); }
       }
+      syntaxDependencies?.set(consumer.id, dependencies);
     }
     // Source lookup cannot rule out imported providers or tactic-local synthesis.
     // Only prune implicit wrappers outside the retained target's possible class context.
@@ -572,9 +585,10 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     for (;;) {
       const changedInstance = instances.some(provider => changed.has(provider.item.id));
       const affected = declarations.filter(item => !keep.has(item.id) && !removed.has(item.id) &&
-        ([...item.references.flatMap(reference => referenceGroups(item, reference)), ...notationGroups(item)]
-          .some(candidates => item.notation ? candidates.every(reference => changed.has(reference))
-            : candidates.some(reference => changed.has(reference))) ||
+        (item.references.some(reference => referenceGroups(item, reference).some(candidates => item.notation
+          ? candidates.every(reference => changed.has(reference)) : candidates.some(reference => changed.has(reference)))) ||
+          notationGroups(item).some(candidates => item.notation
+            ? candidates.every(reference => changed.has(reference)) : candidates.some(reference => changed.has(reference))) ||
           changedInstance && !visitedSyntax.has(item.id) &&
             !instances.some(provider => provider.item === item && provider.contextNames.some(name => requiredInstanceHeads.has(name))) &&
             implicitGroups(item).some(candidates => candidates.every(reference => changed.has(reference)))));
@@ -643,7 +657,22 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
           }
         }
       }
-      observe(hints);
+      // Required syntax can have several viable parser branches. Its quotation context
+      // must still compile; keep these possible roots separate from dependency evidence.
+      const context: ProjectionDeclaration[] = [], pendingContext = [...requiredNotations], visitedContext = new Set<string>();
+      for (const id of pendingContext) {
+        if (visitedContext.has(id)) continue;
+        visitedContext.add(id);
+        const item = unique.get(id);
+        if (!item) continue;
+        const reason = removalRoots!.get(id);
+        if (reason) {
+          if (reason === 'excluded-original-target' && item.name) context.push(describe(item));
+          continue;
+        }
+        pendingContext.push(...syntaxDependencies!.get(id) ?? []);
+      }
+      observe(hints, context);
       // Hint callers consume only observations. Building and compacting acceptance sources here
       // repeats every owned-file edit for each transitive original input, then discards the result.
       return sources;
@@ -716,20 +745,26 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     }
     return options.compact ? compactTaskSources(problem, sources, task, retainedGoals, options.preserved) : sources;
   };
-  const dependencyHints = new Map<string, readonly ProjectionDependencyHint[]>();
+  const observations = new Map<string, { hints: readonly ProjectionDependencyHint[]; context: readonly ProjectionDeclaration[] }>();
+  const observe = (task: CooperativeTask, retainedGoals: readonly string[], conditions: readonly CooperativeTask[]) => {
+    const key = canonicalMathJson({ task, retainedGoals, conditions });
+    let value = observations.get(key);
+    if (!value) {
+      project(task, retainedGoals, conditions, (hints, context) => { value = { hints, context }; });
+      observations.set(key, value!);
+    }
+    return value!;
+  };
   return Object.assign((task: CooperativeTask, retainedGoals: readonly string[], conditions: readonly CooperativeTask[] = []) =>
     project(task, retainedGoals, conditions), {
     /** Cache source observations for this immutable snapshot, never proof acceptance. */
     dependencyHints(task: CooperativeTask, retainedGoals: readonly string[], conditions: readonly CooperativeTask[] = []): readonly ProjectionDependencyHint[] {
-      const key = canonicalMathJson({ task, retainedGoals, conditions });
-      let hints = dependencyHints.get(key);
-      if (hints === undefined) {
-        hints = [];
-        project(task, retainedGoals, conditions, value => { hints = value; });
-        dependencyHints.set(key, hints);
-      }
       // Failed-proof metadata and other consumers may edit their copy of a hint.
-      return structuredClone(hints);
+      return structuredClone(observe(task, retainedGoals, conditions).hints);
+    },
+    /** Possible source context only. The host must freshly accept each input before retaining it. */
+    possibleContextGoals(task: CooperativeTask, retainedGoals: readonly string[], conditions: readonly CooperativeTask[] = []): readonly ProjectionDeclaration[] {
+      return structuredClone(observe(task, retainedGoals, conditions).context);
     },
   });
 }

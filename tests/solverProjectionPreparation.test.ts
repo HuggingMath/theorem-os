@@ -92,7 +92,7 @@ describe('integrated task projection preparation', () => {
         targets.push(task.id);
         return project(task, retainedGoals, conditions);
       };
-      const complete = Object.assign(wrapped, { dependencyHints: project.dependencyHints });
+      const complete = Object.assign(wrapped, { dependencyHints: project.dependencyHints, possibleContextGoals: project.possibleContextGoals });
       preparations.push({ commit, worktree, targets, project: complete });
       return complete;
     });
