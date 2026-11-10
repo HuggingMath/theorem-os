@@ -7,13 +7,14 @@ import { ResearchBudgetContinuity } from './researchBudgetContinuity';
 
 export function ResearchBudgetFacts({ value }: { value: ResearchBudgetView }) {
   const { plan, forecast } = value;
+  const unresolved = value.continuity?.status === 'conflict';
   const otherCurrencies = (['CNY', 'USD'] as const).filter(currency => currency !== plan.currency && value.spent[currency] > 0);
   const spentCurrencies = [plan.currency, ...otherCurrencies];
   return <div data-problem-budget-facts>
     <dl class="problem-budget-facts"><div><dt>{tx('整道题已记录用量', 'Recorded usage across this problem')}</dt><dd>{formatTokens(value.knownTokens)} Token</dd></div>
       <div><dt>{tx('按单价估算已投入', 'Estimated spend at your rates')}</dt><dd class="problem-budget-spent">{spentCurrencies.map(currency => <span key={currency} data-budget-spent={currency}>{currency} {value.spent[currency].toFixed(4)}</span>)}</dd></div>
-      <div><dt>{tx('按已记录用量剩余', 'Remaining against recorded usage')}</dt><dd>{value.remainingTokens === null ? tx('未设 Token 预算', 'No token budget') : `${formatTokens(value.remainingTokens)} Token`}</dd></div>
-      <div><dt>{tx('按已计价记录剩余', 'Remaining against priced records')}</dt><dd>{value.remainingAmount === null ? tx('未设金额预算', 'No cost budget') : `${plan.currency} ${value.remainingAmount.toFixed(4)}`}</dd></div></dl>
+      <div><dt>{tx('按已记录用量剩余', 'Remaining against recorded usage')}</dt><dd>{unresolved ? tx('待选择项目预算', 'Choose a project budget first') : value.remainingTokens === null ? tx('未设 Token 预算', 'No token budget') : `${formatTokens(value.remainingTokens)} Token`}</dd></div>
+      <div><dt>{tx('按已计价记录剩余', 'Remaining against priced records')}</dt><dd>{unresolved ? tx('待选择项目预算', 'Choose a project budget first') : value.remainingAmount === null ? tx('未设金额预算', 'No cost budget') : `${plan.currency} ${value.remainingAmount.toFixed(4)}`}</dd></div></dl>
     {otherCurrencies.length > 0 && value.remainingAmount !== null && <p class="research-status" data-budget-currency-scope>{tx(`预算余额只扣除 ${plan.currency} 支出，其他币种单独列示。`, `The budget balance deducts ${plan.currency} spending only. Other currencies are listed separately.`)}</p>}
     {(value.missingUsage > 0 || value.unpricedEntries > 0) && <p class="research-status">{tx(`有 ${value.missingUsage} 条记录缺少用量，${value.unpricedEntries} 条未计价；余额仅依据已记录部分。`,
       `${value.missingUsage} records lack usage and ${value.unpricedEntries} are unpriced. Remaining amounts use the recorded portion only.`)}</p>}

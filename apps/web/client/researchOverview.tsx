@@ -12,7 +12,7 @@ import { Rich, RichProse } from './richText';
 import { buildResearchOverview, overviewProjectHref, type ResearchOverviewAction } from './researchOverviewModel';
 import { problemEntryHref } from './researchProblemNavigation';
 import type { ResearchPersonalProblem } from '../researchPersonalTypes';
-import { PersonalNextNote, PersonalProblemControl } from './researchPersonal';
+import { PersonalNextNote, PersonalProblemControl, personalProblemUrl } from './researchPersonal';
 import { CollaborationMessageSummary } from './collaborationFlow';
 
 export type ResearchOverviewProps = {
@@ -134,7 +134,7 @@ export function ResearchOverview(props: ResearchOverviewProps) {
           {card.runs.filter(run => !card.project?.runs.some(binding => binding.runId === run.id)).map(run => <li key={run.id}><a href={problemEntryHref({ runId: run.id })}><Rich text={run.title} /></a><a href={`?run=${encodeURIComponent(run.id)}`} onClick={event => open(event, { runId: run.id })}>{tx('研究操作', 'Controls')}</a><span>{runLabel(run)}</span></li>)}
           {card.conversations.map(item => <li key={item.id}><a href={`?chat=${encodeURIComponent(item.id)}`} onClick={event => open(event, { conversationId: item.id })}><Rich text={item.title} /></a><span>{tx('对话', 'Conversation')}</span></li>)}</ul></details>}
         {statement && <details class="research-overview-statement"><summary>{tx('查看原题', 'Read the original statement')}</summary>{naturalStatement ? <RichProse text={statement} /> : <pre>{statement}</pre>}</details>}
-        {organizeTarget && <PersonalProblemControl key={`${card.id}:${saved?.revision ?? 0}`} target={organizeTarget} item={saved} onSaved={savedOrganization} compact request={props.request} />}
+        {organizeTarget && <PersonalProblemControl key={`${card.id}:${personalProblemUrl(organizeTarget)}`} owner={props.owner} target={organizeTarget} item={saved} onSaved={savedOrganization} compact request={props.request} />}
       </article>;
     })}</div>
     {!cards.length && !loading && <p class="research-overview-note">{normalized || filter !== 'all' || organization !== 'current' || tag || model.cards.length > 0 ? tx('没有匹配的研究。', 'No matching research.') : tx('第一道题的对话、研究和后续版本会保存在这里。', 'Your first problem, research runs and later versions will appear here.')}</p>}

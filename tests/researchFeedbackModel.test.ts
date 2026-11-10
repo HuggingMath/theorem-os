@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { ResearchFeedback } from '../apps/web/researchProjectTypes';
-import { feedbackNeedsAttention, matchesFeedbackQuery, matchesFeedbackScope, matchesFeedbackStatus,
+import type { ResearchFeedback, ResearchProjectDetail } from '../apps/web/researchProjectTypes';
+import { canRecordFeedbackDecision, feedbackDecisionStatuses, feedbackNeedsAttention, matchesFeedbackQuery, matchesFeedbackScope, matchesFeedbackStatus,
   taskFeedbackAnnotations } from '../apps/web/client/researchFeedbackModel';
 
 function feedback(overrides: Partial<ResearchFeedback> = {}): ResearchFeedback {
@@ -12,6 +12,20 @@ function feedback(overrides: Partial<ResearchFeedback> = {}): ResearchFeedback {
 }
 
 describe('research feedback scope and route annotations', () => {
+  it('offers decisions only to authorized reviewers and keeps reviewed candidate authors out of self approval', () => {
+    const project = { permissions: { edit: true, manage: true }, runs: [{ runId: 'run-a', permissions: { proof: true, guidance: true } }] } as Pick<ResearchProjectDetail, 'permissions' | 'runs'>;
+    const candidate = feedback({ kind: 'proof-submission', candidateDelivery: { policy: 'reviewed', status: 'awaiting-review' } });
+    expect(canRecordFeedbackDecision(candidate, project, candidate.author.id)).toBe(true);
+    expect(feedbackDecisionStatuses(candidate, candidate.author.id)).toEqual(['declined', 'needs-info']);
+    expect(feedbackDecisionStatuses(candidate, 'independent-reviewer')).toEqual(['accepted', 'declined', 'needs-info']);
+    expect(canRecordFeedbackDecision(candidate, project, 'independent-reviewer')).toBe(true);
+    const assigned = { ...candidate, review: { reviewer: { id: 'assigned-reviewer', displayName: 'Reviewer' }, assignedBy: { id: 'owner', displayName: 'Owner' }, assignedAt: '2026-11-10' } };
+    const collaborator = { ...project, permissions: { ...project.permissions, manage: false } };
+    expect(canRecordFeedbackDecision(assigned, collaborator, 'unassigned-member')).toBe(false);
+    expect(canRecordFeedbackDecision(assigned, collaborator, 'assigned-reviewer')).toBe(true);
+    expect(canRecordFeedbackDecision(candidate, { ...project, runs: [{ ...project.runs[0], permissions: { ...project.runs[0].permissions, proof: false } }] }, 'independent-reviewer')).toBe(false);
+    expect(canRecordFeedbackDecision(feedback({ kind: 'discussion', target: undefined }), collaborator, 'independent-reviewer')).toBe(true);
+  });
   it('keeps identically named tasks in different runs and versions separate', () => {
     const advice = feedback();
     expect(matchesFeedbackScope(advice, 'task', 'run-a', { runId: 'run-a', taskId: 'lemma', taskVersion: 'v1' })).toBe(true);

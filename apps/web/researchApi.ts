@@ -343,6 +343,7 @@ export class WebResearchApi {
       if (!id && method === 'GET') return { status: 200, body: { items: this.assets.list(viewer, {
         type: parse(z.enum(['mathematics', 'agent', 'skill']).optional(), url.searchParams.get('type') ?? undefined),
         query: url.searchParams.get('q') ?? url.searchParams.get('query') ?? undefined,
+        environment: parse(z.enum(['standard', 'mathlib']).optional(), url.searchParams.get('environment') ?? undefined),
         authorId: url.searchParams.get('author') ?? undefined, area: url.searchParams.get('area') ?? undefined })
         .filter(asset => !url.searchParams.has('mine') || asset.editable) } };
       if (!id && method === 'POST') return item(this.assets.create(viewer, await body()), 201);
@@ -453,7 +454,7 @@ export class WebResearchApi {
           this.projects.syncRunObservation(viewer, id, ref);
           // Cross-account research reads expose this run's work only, without account-level resource handles.
           const { researchConfiguration: _configuration, continueFrom: _continuation, knowledgeDigest: _knowledge, archives: _archives,
-            knowledgeCatalogDigest: _catalog, formalizationId: _formalization, ...run } = resolved.run;
+            knowledgeCatalogDigest: _catalog, formalizationId: _formalization, budgetOrigin: _budgetOrigin, ...run } = resolved.run;
           if (run.observation) run.observation = this.observationView(viewer, id, run.observation);
           if (subaction === 'observation') return { status: 200, body: { run, observation: run.observation ?? null } };
           if (!subaction) return { status: 200, body: { run } };

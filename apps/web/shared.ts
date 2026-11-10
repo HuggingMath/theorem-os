@@ -42,6 +42,8 @@ export type WebSavedKey = { providerId: string; ending: string };
 /** Omitted budgets normalize to 0 (unlimited); `saveKey` stays with this account and never reaches the run. */
 export type WebRunRequest = Omit<WebRunInput, 'maxTurns' | 'maxRunSeconds'> & {
   maxTurns?: number; maxRunSeconds?: number; saveKey?: boolean; requestId?: string };
+/** A private attempt prepared against a project's budget. This reference grants no project access or sharing. */
+export type WebProjectBudgetOrigin = { runId: string; projectId: string };
 export type WebRunInput = {
   providerId: string;
   apiKey: string;
@@ -66,6 +68,7 @@ export type WebRunInput = {
   formalizationId?: string;
   /** References only. The server resolves and freezes all contents before starting work. */
   researchSelection?: import('./researchAssetTypes').ResearchConfigurationSelection;
+  budgetOrigin?: WebProjectBudgetOrigin;
 };
 /**
  * A version recorded in one of the account's runs that a new run starts from: its code reaches every Agent as an
@@ -147,6 +150,7 @@ export type WebRun = {
   knowledgeCatalogDigest?: string;
   moduleConfiguration?: WebFrozenModuleConfiguration;
   researchConfiguration?: import('./researchAssetTypes').FrozenResearchConfiguration;
+  budgetOrigin?: WebProjectBudgetOrigin;
   events: WebEvent[];
   /** How many Agent actions are stored (read them from /actions) and how many arrived past the per-run limit. */
   actions?: { count: number; dropped?: number };

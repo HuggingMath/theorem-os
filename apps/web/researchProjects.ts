@@ -1474,10 +1474,23 @@ export class WebResearchProjects {
       }
       if (!access.member) continue;
       for (const issue of state.issues) {
+        const resolutions = [...(issue.resolutionHistory ?? []), ...(issue.resolution ? [issue.resolution] : [])];
+        const participated = issue.author.id === self || issue.replies.some(reply => reply.author.id === self)
+          || resolutions.some(resolution => resolution.author.id === self);
         const last = issue.replies.at(-1);
-        if (last && last.author.id !== self && (issue.author.id === self || issue.replies.some(reply => reply.author.id === self)))
+        if (last && last.author.id !== self && participated)
           add(stored, { id: `reply:${last.id}`, kind: 'reply', title: issue.title, text: last.text, createdAt: last.createdAt,
             resolved: issue.status === 'resolved', href: href(stored, issue.target, `#issue-${issue.id}`) });
+        if (participated) {
+          resolutions.forEach((resolution, index) => {
+            if (resolution.author.id === self) return;
+            const action = resolution.action ?? 'resolve';
+            add(stored, { id: `issue-resolution:${issue.id}:${index}`, kind: 'reply', issueAction: action,
+              category: action === 'resolve' ? 'progress' : 'reply', title: issue.title, text: resolution.text, createdAt: resolution.createdAt,
+              resolved: action === 'resolve' || issue.status === 'resolved' || index < resolutions.length - 1,
+              href: href(stored, issue.target, `#issue-${issue.id}`, issue.statementVersionId) });
+          });
+        }
       }
       const visibleFeedback = this.visibleFeedback(viewer, stored);
       for (const annotation of stored.annotations ?? []) {

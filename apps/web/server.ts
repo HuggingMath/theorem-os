@@ -64,6 +64,7 @@ const inputSchema = z.object({
   planApproval: z.boolean().optional(),
   modulePlan: researchModulePlanSchema.optional(),
   researchSelection: researchSelectionSchema.optional(),
+  budgetOrigin: z.object({ runId: z.string().uuid(), projectId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u) }).strict().optional(),
   knowledgeDigest: z.string().regex(/^[a-f0-9]{64}$/u).nullable().optional(),
   formalizationId: z.string().uuid().optional(),
   // Names a version of one of the account's runs; its saved file is looked up here, never taken from the request.
@@ -916,6 +917,11 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
               ? { keySaveFailed: true } : {}) } : {};
           const previous = jobs.replay(owner, input as WebRunInput, provider, requestId);
           if (previous) { json(response, 200, { run: previous, ...submissionKeys() }); return; }
+          if (input.budgetOrigin) {
+            const origin = research.projects.resolveBinding(owner, input.budgetOrigin.projectId, input.budgetOrigin.runId);
+            if (origin.run.source !== input.source || origin.run.environment !== input.environment)
+              throw new HttpError(409, '运行的原题或环境与陈述版本不一致。');
+          }
           const frozenResearch = input.researchSelection
             ? research.assets.freeze(owner, input.researchSelection as ResearchConfigurationSelection, input.environment,
               input.researchSelection.agent ? undefined : input.modulePlan as ResearchModulePlan | undefined) : undefined;

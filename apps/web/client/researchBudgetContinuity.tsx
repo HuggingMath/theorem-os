@@ -1,8 +1,8 @@
 import type { ResearchBudgetView } from '../researchBudgetTypes';
-import { MutationState, tx, useMutation } from './researchShared';
+import { api, MutationState, tx, useMutation } from './researchShared';
 
-export function ResearchBudgetContinuity({ value, endpoint, onResolved }: { value: ResearchBudgetView; endpoint: string; onResolved(): void }) {
-  const action = useMutation(), continuity = value.continuity;
+export function ResearchBudgetContinuity({ value, endpoint, onResolved, request }: { value: ResearchBudgetView; endpoint: string; onResolved(): void; request?: typeof api }) {
+  const action = useMutation(request), continuity = value.continuity;
   if (!continuity) return null;
   if (continuity.status === 'inherited') return <p class="research-status" data-budget-inherited>{tx('已接续你在个人研究中设置的预算。', 'Your budget from personal research continues here.')}</p>;
   const inherit = (sourceKey: string | null, sourceRevision: number | null) => {

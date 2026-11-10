@@ -1,6 +1,7 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { ResearchFeedback, ResearchFeedbackTarget, ResearchProjectDetail } from '../researchProjectTypes';
+import type { ResearchDecisionDraft } from '../researchPersonalTypes';
 import { localizeMessage } from '../i18n';
 import { RichProse } from './richText';
 import { DiscussionGuidance } from './researchDiscussionGuidance';
@@ -10,8 +11,11 @@ import { ResearchReview } from './researchReview';
 import { CandidateHistory } from './researchCandidateHistory';
 import { LibraryCandidateEvidence } from './researchLibraryCandidate';
 import { DiscussionContext } from './researchDiscussionContext';
+import { ResearchDraftPicker, useResearchDrafts } from './researchDrafts';
+import { reviewerMembersHref } from './researchReviewerNavigation';
+import { projectPeople } from './researchMembers';
 import './researchCandidateContinuity.css';
-import { feedbackNeedsAttention, matchesFeedbackQuery, matchesFeedbackScope, matchesFeedbackStatus,
+import { canRecordFeedbackDecision, feedbackDecisionStatuses, feedbackNeedsAttention, matchesFeedbackQuery, matchesFeedbackScope, matchesFeedbackStatus,
   type FeedbackScope, type FeedbackStatus, type FeedbackTask } from './researchFeedbackModel';
 import { base, enc, Empty, Field, MutationState, nameOf, personHref, stamp, State, Tags, theoremHref, tx, useMutation, lines, type Item } from './researchShared';
 
@@ -112,7 +116,10 @@ function Feedback({ feedback, project, selfId, runId, refresh, hidden, onOpenTas
 }) {
   const permission = feedback.kind === 'guidance' ? 'guidance' : feedback.kind === 'plan-approval' ? 'approve' : feedback.kind === 'proof-submission' ? 'proof' : 'edit';
   const canReview = project.permissions.edit && (!feedback.target || Boolean(project.runs.find(item => item.runId === feedback.target!.runId)?.permissions[permission]));
-  const canDecide = canReview && (!feedback.review || feedback.review.reviewer.id === selfId || project.permissions.manage);
+  const canDecide = canRecordFeedbackDecision(feedback, project, selfId);
+  const ownReviewedCandidate = canReview && feedback.kind === 'proof-submission' && feedback.candidateDelivery?.policy === 'reviewed' && feedback.author.id === selfId
+    && !feedback.supersededBy && feedback.continuation?.action !== 'end' && ['checking', 'awaiting-review'].includes(feedback.candidateDelivery.status);
+  const availableReviewer = projectPeople(project).some(person => person.id !== selfId && person.role !== 'reader');
   const source = feedback.sourceFeedbackId && project.feedback.find(item => item.id === feedback.sourceFeedbackId);
   const forwarded = project.feedback.filter(item => item.sourceFeedbackId === feedback.id);
   const needsNewAttempt = feedback.payload && 'libraryTrial' in feedback.payload && feedback.payload.libraryTrial?.requiresNewAttempt;
@@ -161,23 +168,50 @@ function Feedback({ feedback, project, selfId, runId, refresh, hidden, onOpenTas
       && project.runs.some(run => run.runId === feedback.target?.runId && (run.status === 'running' || needsNewAttempt && ['completed', 'cancelled', 'error'].includes(run.status)) && run.permissions.proof) && <a class="button" data-revise-candidate href={`${reviseUrl.pathname.split('/').at(-1)}${reviseUrl.search}${reviseUrl.hash}`}>{tx('基于此候选继续修改', 'Continue revising this candidate')}</a>}
     {feedback.kind !== 'guidance' && (feedback.decision.evidenceRefs.length > 0 || feedback.execution.resultRefs.length > 0) && <details><summary>{tx('结果与证据引用', 'Result and evidence references')}</summary><Tags values={[...new Set([...feedback.decision.evidenceRefs, ...feedback.execution.resultRefs])]} /></details>}
     {selfId && <ResearchReview feedback={feedback} project={project} selfId={selfId} canReview={canReview} refresh={refresh} focusAnnotationId={focusAnnotationId} />}
-    {canDecide && <details><summary>{tx('记录采纳决定', 'Record an adoption decision')}</summary><Decision projectId={project.id} feedback={feedback} refresh={refresh} /></details>}
+    {ownReviewedCandidate && <div class="research-status" data-decision-peer-required><p>{tx('这份候选由你提交，需要另一位成员评审。', 'You submitted this candidate. Another member needs to review it.')}</p>
+      <a class="text-button" data-decision-peer-review href={availableReviewer ? `#review-${feedback.id}` : reviewerMembersHref(project.id, feedback)} onClick={event => {
+        if (!availableReviewer || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        const review = document.getElementById(`review-${feedback.id}`); if (!review) return;
+        event.preventDefault(); review.scrollIntoView({ block: 'center' });
+        (review.querySelector<HTMLElement>('[data-reviewer-select]') ?? review).focus({ preventScroll: true });
+      }}>{availableReviewer ? tx('查看或指定另一位评审人', 'View or assign another reviewer') : tx('邀请另一位成员评审', 'Invite another member to review')}</a></div>}
+    {canDecide && <details data-feedback-decision><summary>{feedbackDecisionStatuses(feedback, selfId).includes('accepted') ? tx('记录采纳决定', 'Record an adoption decision')
+      : tx('记录未采纳或补充需求', 'Record a decline or request for information')}</summary><Decision key={`${selfId}:${project.id}:${feedback.id}`} projectId={project.id} selfId={selfId} feedback={feedback} refresh={refresh} /></details>}
     {project.permissions.edit && onOpenIssue && <button class="text-button" type="button" onClick={() => onOpenIssue(feedback)}>{tx('就此反馈发起议题', 'Open an issue from this feedback')}</button>}
     {(canForward || opened) && <details data-forward-discussion onToggle={event => { if (event.currentTarget.open) setOpened(true); }}><summary>{tx('转为运行指导', 'Forward to a run')}</summary>
       {opened && <DiscussionGuidance project={project} source={feedback} selfId={selfId} initialRunId={runId} refresh={refresh} onRevealFeedback={onRevealFeedback} />}</details>}
   </article>;
 }
 
-function Decision({ projectId, feedback, refresh }: { projectId: string; feedback: ResearchFeedback; refresh: () => void }) {
-  const [status, setStatus] = useState('accepted'), [reason, setReason] = useState(''), [evidence, setEvidence] = useState(''), [planVersion, setPlanVersion] = useState(''), action = useMutation();
-  const [revision, setRevision] = useState(feedback.revision);
-  useEffect(() => { if (!reason && !evidence && !planVersion) setRevision(feedback.revision); }, [feedback.revision]);
-  return <form class="research-form" onSubmit={event => { event.preventDefault(); if (revision !== feedback.revision) return; void action.run<Item<ResearchFeedback>>('POST', `${base}/theorems/${enc(projectId)}/feedback/${enc(feedback.id)}/decision`,
-    { status, reason, evidenceRefs: lines(evidence), ...(planVersion ? { planVersion } : {}), expectedRevision: revision }, result => { setRevision(result.item.revision); refresh(); }); }}>
-    <label>{tx('决定', 'Decision')}<select value={status} onChange={event => setStatus(event.currentTarget.value)}><option value="accepted">{tx('采纳', 'Accept')}</option><option value="declined">{tx('未采纳', 'Decline')}</option><option value="needs-info">{tx('需要补充', 'Needs information')}</option></select></label>
-    <Field label={tx('理由', 'Reason')} value={reason} onInput={setReason} multiline required rows={2} /><Field label={tx('关联计划版本（可选）', 'Related plan version (optional)')} value={planVersion} onInput={setPlanVersion} />
-    <Field label={tx('证据引用，每行一项', 'Evidence references, one per line')} value={evidence} onInput={setEvidence} multiline rows={2} />
-    {revision !== feedback.revision && <p class="research-status">{tx('反馈状态已有更新，你的草稿已保留。', 'Feedback has changed. Your draft is preserved.')} <button type="button" class="text-button" onClick={() => setRevision(feedback.revision)}>{tx('基于最新反馈提交', 'Use latest feedback revision')}</button></p>}
-    <MutationState action={action} /><button type="submit" class="button" disabled={action.busy || revision !== feedback.revision}>{tx('保存决定', 'Save decision')}</button>
+function Decision({ projectId, selfId, feedback, refresh }: { projectId: string; selfId: string; feedback: ResearchFeedback; refresh: () => void }) {
+  const scope = { sourceFeedbackId: feedback.id, purpose: 'decision' as const,
+    ...(feedback.target ? { runId: feedback.target.runId, statementVersionId: feedback.target.statementVersionId,
+      ...(feedback.target.taskRef ? { taskId: feedback.target.taskRef.id, taskVersion: feedback.target.taskRef.version } : {}) }
+      : feedback.statementVersionId ? { statementVersionId: feedback.statementVersionId } : {}) };
+  const drafts = useResearchDrafts<ResearchDecisionDraft>(selfId, projectId, 'review'), action = useMutation();
+  const statuses = feedbackDecisionStatuses(feedback, selfId), initialStatus = statuses.includes('accepted') ? 'accepted' : '';
+  const empty = (revision: number): ResearchDecisionDraft => ({ status: initialStatus, text: '', evidence: '', planVersion: '', revision });
+  const [value, setValue] = useState(() => drafts.read(scope)?.value ?? empty(feedback.revision)), current = useRef(value);
+  current.current = value;
+  useEffect(() => { const saved = drafts.read(scope); if (saved) drafts.restore(saved); }, []);
+  useEffect(() => { if (current.current.status === initialStatus && !current.current.text && !current.current.evidence && !current.current.planVersion)
+    setValue(previous => ({ ...previous, revision: feedback.revision })); }, [feedback.revision]);
+  const update = (next: Partial<ResearchDecisionDraft>) => { const changed = { ...current.current, ...next }; current.current = changed; setValue(changed); drafts.save(scope, changed, changed.text.slice(0, 80) || tx('待完成的采纳决定', 'Unfinished adoption decision')); };
+  const stale = value.revision !== feedback.revision;
+  return <form class="research-form" onSubmit={event => { event.preventDefault(); const snapshot = current.current; if (stale || !snapshot.status || !statuses.includes(snapshot.status)) return; const submitted = drafts.current();
+    void action.run<Item<ResearchFeedback>>('POST', `${base}/theorems/${enc(projectId)}/feedback/${enc(feedback.id)}/decision`,
+      { status: snapshot.status, reason: snapshot.text, evidenceRefs: lines(snapshot.evidence), ...(snapshot.planVersion ? { planVersion: snapshot.planVersion } : {}), expectedRevision: snapshot.revision }, result => {
+        if (submitted) { drafts.remove(submitted, true); void drafts.complete(submitted, { kind: 'review', id: feedback.id }); }
+        if (JSON.stringify(current.current) === JSON.stringify(snapshot)) { const cleared = empty(result.item.revision); current.current = cleared; setValue(cleared); }
+        refresh();
+      }); }}>
+    <ResearchDraftPicker drafts={drafts} filter={item => item.scope.sourceFeedbackId === feedback.id && item.scope.purpose === 'decision'} onRestore={item => { current.current = item.value; setValue(item.value); action.reset(); }} />
+    <label>{tx('决定', 'Decision')}<select data-decision-status value={value.status} required onChange={event => update({ status: event.currentTarget.value as ResearchDecisionDraft['status'] })}>
+      {!initialStatus && <option value="">{tx('选择处理决定', 'Choose a decision')}</option>}
+      {statuses.includes('accepted') && <option value="accepted">{tx('采纳', 'Accept')}</option>}<option value="declined">{tx('未采纳', 'Decline')}</option><option value="needs-info">{tx('需要补充', 'Needs information')}</option></select></label>
+    <Field label={tx('理由', 'Reason')} value={value.text} onInput={text => update({ text })} multiline required rows={2} maxLength={4000} /><Field label={tx('关联计划版本（可选）', 'Related plan version (optional)')} value={value.planVersion} onInput={planVersion => update({ planVersion })} maxLength={128} />
+    <Field label={tx('证据引用，每行一项', 'Evidence references, one per line')} value={value.evidence} onInput={evidence => update({ evidence })} multiline rows={2} maxLength={64000} />
+    {stale && <p class="research-status" data-decision-stale>{tx('反馈状态已有更新，你的草稿已保留。', 'Feedback has changed. Your draft is preserved.')} <button type="button" class="text-button" onClick={() => update({ revision: feedback.revision })}>{tx('基于最新反馈提交', 'Use latest feedback revision')}</button></p>}
+    <MutationState action={action} /><button type="submit" class="button" data-save-decision disabled={action.busy || stale || !value.status || !statuses.includes(value.status)}>{tx('保存决定', 'Save decision')}</button>
   </form>;
 }

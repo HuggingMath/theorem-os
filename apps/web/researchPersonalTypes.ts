@@ -6,8 +6,9 @@ export type ResearchDraftKind = 'candidate' | 'discussion' | 'issue' | 'issue-re
 export type ResearchDraftScope = {
   owner: string; projectId?: string; kind: ResearchDraftKind; statementVersionId?: string;
   runId?: string; taskId?: string; taskVersion?: string; commit?: string; issueId?: string; issueRevision?: number; sourceFeedbackId?: string;
-  threadId?: string; purpose?: 'comment' | 'resubmit'; draftKey?: string;
+  threadId?: string; purpose?: 'comment' | 'resubmit' | 'decision'; draftKey?: string;
 };
+export type ResearchDecisionDraft = { text: string; status: '' | 'accepted' | 'declined' | 'needs-info'; evidence: string; planVersion: string; revision: number };
 export type ResearchAccountDraftScope = Omit<ResearchDraftScope, 'owner'>;
 export type ResearchDraftValues = {
   problem: ProblemDraftValue;
@@ -20,7 +21,7 @@ export type ResearchDraftValues = {
   guidance: { text: string; planVersion?: string; observationRef: { sequence: number; stateDigest: string } };
   annotation: { text: string; anchor?: ResearchAnnotationAnchor; observationRef: { sequence: number; stateDigest: string } };
   'annotation-reply': { text: string };
-  review: { text: string };
+  review: { text: string } | ResearchDecisionDraft;
 };
 export type ResearchDraftSubmission = { kind: 'feedback' | 'issue' | 'issue-reply' | 'guidance' | 'annotation' | 'annotation-reply' | 'review' | 'formalization' | 'run'; id: string; href?: string };
 export type ResearchAccountDraftVersionInfo = {

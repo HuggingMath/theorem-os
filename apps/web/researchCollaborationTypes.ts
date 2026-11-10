@@ -44,6 +44,7 @@ export type ResearchInboxItem = {
   invitation?: ResearchInvitation; handoff?: ResearchHandoff;
   feedbackId?: string; reviewReassignment?: boolean;
   annotationAction?: 'create' | 'reply' | 'resolve' | 'reopen';
+  issueAction?: 'resolve' | 'reopen';
 };
 export type ResearchCollaborationInbox = { items: ResearchInboxItem[]; unread: number; pending: number;
   counts: Record<ResearchInboxItem['category'], number> };

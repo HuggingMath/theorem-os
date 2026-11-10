@@ -15,7 +15,7 @@ import { mathDigest } from '../src/math/mathRuntimeIo';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import { freePort, preferFullCollaboration, startBrowser } from '../scripts/web-scenario';
 
-const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/product-continuity/post-continuity-20261111/library');
+const root = path.resolve(import.meta.dirname, '..'), output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/product-continuity/post-continuity-20261111/library');
 await fs.mkdir(output, { recursive: true });
 const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-library-product-audit-'));
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;

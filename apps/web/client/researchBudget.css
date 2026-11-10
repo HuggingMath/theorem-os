@@ -4,3 +4,10 @@
 .research-budget-draft p { font-size: 12px; line-height: 1.7; }
 .research-budget-draft > a { font-size: 12px; }
 .problem-budget-spent { display: flex; flex-wrap: wrap; gap: .25rem 1rem; }
+.research-budget-attempt { margin-block: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }
+.research-budget-attempt h3 { margin: 0 0 12px; font-size: 15px; }
+.research-budget-attempt p, .research-budget-attempt label, .research-budget-attempt .research-actions { font-size: 13px; line-height: 1.7; }
+.research-budget-attempt .research-check { display: flex; align-items: flex-start; gap: 8px; margin-block: 12px; }
+.research-budget-attempt .research-check input { flex: 0 0 16px; width: 16px; min-width: 16px; height: 16px; min-height: 0; margin: 3px 0 0; padding: 0; accent-color: var(--accent); }
+.research-budget-attempt .research-check span { flex: 1; min-width: 0; }
+.research-budget-attempt .research-actions { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 12px; }

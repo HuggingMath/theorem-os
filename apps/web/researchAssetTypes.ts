@@ -104,6 +104,7 @@ export type ResearchAsset = {
   revision: number;
   editable: boolean;
   draft?: ResearchAssetContent;
+  /** Latest accessible release; an environment-filtered directory selects its latest compatible release. */
   release?: ResearchAssetRelease;
   releases: ResearchAssetReleaseInfo[];
   derivedFrom?: ResearchReleaseRef;

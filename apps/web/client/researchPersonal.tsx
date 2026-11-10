@@ -4,49 +4,75 @@ import type { ResearchProblem } from '../researchProblemTypes';
 import type { WebApi } from './collaborationUi';
 import { api, base, ErrorBox, errorText, Field, stamp, tx, type Item, type ResearchContext } from './researchShared';
 import { RichProse } from './richText';
+import { webDraftOwner } from './ownedDrafts';
+import { mergeOrganizationEdits, organizationDraftKey, organizationValues, readOrganizationDraft, writeOrganizationDraft, type OrganizationField, type OrganizationValues } from './researchOrganizationDraft';
 
 export const personalProblemUrl = (target: ResearchPersonalTarget) => `${base}/personal/problems?${new URLSearchParams({
   ...(target.runId ? { runId: target.runId } : {}), ...(target.projectId ? { projectId: target.projectId } : {}),
 })}`;
 const stateLabel = (value: ResearchPersonalProblem['status']) => value === 'active' ? tx('持续研究', 'Active research') : value === 'parked' ? tx('暂放', 'Parked') : tx('已归档', 'Archived');
 
-export function PersonalProblemControl({ target, item, onSaved, compact = false, request = api }: {
-  target: ResearchPersonalTarget; item?: ResearchPersonalProblem; onSaved?(value: ResearchPersonalProblem): void; compact?: boolean; request?: WebApi;
+export function PersonalProblemControl({ owner, target, item, onSaved, compact = false, request = api }: {
+  owner: string; target: ResearchPersonalTarget; item?: ResearchPersonalProblem; onSaved?(value: ResearchPersonalProblem): void; compact?: boolean; request?: WebApi;
 }) {
   const [record, setRecord] = useState<ResearchPersonalProblem>(item ?? { key: '', target, revision: 0, pinned: false, status: 'active', tags: [], nextNote: '' });
-  const [pinned, setPinned] = useState(item?.pinned ?? false), [status, setStatus] = useState(item?.status ?? 'active'), [tags, setTags] = useState(item?.tags.join(', ') ?? ''), [note, setNote] = useState(item?.nextNote ?? '');
+  const [values, setValues] = useState(() => organizationValues(item)), current = useRef(values);
+  const [dirty, setDirty] = useState(false), [draftError, setDraftError] = useState('');
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState(false), [ready, setReady] = useState(Boolean(item));
   const lock = useRef(false), pending = useRef<{ signature: string; input: object }>();
-  const edited = useRef(new Set<'pinned' | 'status' | 'tags' | 'note'>());
-  const url = personalProblemUrl(target);
+  const edited = useRef(new Set<OrganizationField>()), revision = useRef(record.revision), backupFailed = useRef(false);
+  const url = personalProblemUrl(target), draftKey = organizationDraftKey(owner, target);
+  const persist = () => {
+    try { writeOrganizationDraft(localStorage, draftKey, { baseRevision: revision.current, values: current.current, edited: [...edited.current] }); backupFailed.current = false; setDraftError(''); }
+    catch { backupFailed.current = true; setDraftError(tx('本机备份未保存，请保留当前页面或复制内容。', 'The local backup could not be saved. Keep this page open or copy your work.')); }
+  };
+  const change = <K extends OrganizationField>(field: K, value: OrganizationValues[K]) => {
+    edited.current.add(field); current.current = { ...current.current, [field]: value }; setValues(current.current); setDirty(true); setNotice(''); persist();
+  };
+  const applySaved = (latest: ResearchPersonalProblem) => {
+    revision.current = latest.revision; setRecord(latest); setReady(true); setError('');
+    current.current = mergeOrganizationEdits(organizationValues(latest), current.current, edited.current); setValues(current.current);
+  };
   const load = async (keepEdits = false) => {
     try {
-      const { item: latest } = await request<Item<ResearchPersonalProblem>>(url); setRecord(latest); setReady(true); setError('');
-      if (!keepEdits || !edited.current.has('pinned')) setPinned(latest.pinned);
-      if (!keepEdits || !edited.current.has('status')) setStatus(latest.status);
-      if (!keepEdits || !edited.current.has('tags')) setTags(latest.tags.join(', '));
-      if (!keepEdits || !edited.current.has('note')) setNote(latest.nextNote);
+      const { item: latest } = await request<Item<ResearchPersonalProblem>>(url);
+      if (!keepEdits) edited.current.clear(); applySaved(latest);
     } catch (cause) { setError(errorText(cause)); }
   };
-  useEffect(() => { let live = true; edited.current.clear(); setReady(Boolean(item)); if (item) setRecord(item);
+  useEffect(() => { let live = true;
+    try { const saved = readOrganizationDraft(localStorage, draftKey); if (saved) {
+      edited.current = new Set(saved.edited); current.current = mergeOrganizationEdits(current.current, saved.values, edited.current); setValues(current.current); setDirty(true);
+      setNotice(tx('已恢复本机尚未保存的整理，请核对后保存。', 'Your unsaved organization is restored from this browser. Review it before saving.'));
+    } } catch { setDraftError(tx('本机备份无法读取，已保存的整理仍可读取。', 'The local backup could not be read. Your saved organization is still available.')); }
+    setReady(Boolean(item)); if (item) applySaved(item);
     else request<Item<ResearchPersonalProblem>>(url).then(({ item: next }) => { if (live) {
-      setRecord(next); setReady(true);
-      if (!edited.current.has('pinned')) setPinned(next.pinned);
-      if (!edited.current.has('status')) setStatus(next.status);
-      if (!edited.current.has('tags')) setTags(next.tags.join(', '));
-      if (!edited.current.has('note')) setNote(next.nextNote);
-      if (edited.current.size) setNotice(tx('已读取此前的整理，保留你刚输入的内容。', 'Your saved organization is loaded. Your new edits are preserved.'));
+      applySaved(next);
+      if (edited.current.size) setNotice(tx('此前的整理已读入，新修改还没保存。', 'Your saved organization is loaded. Your new edits are not saved yet.'));
     } }).catch(cause => { if (live) setError(errorText(cause)); });
     return () => { live = false; };
-  }, [url, request]);
+  }, [url, request, owner]);
+  useEffect(() => { if (item && item.revision !== revision.current) applySaved(item); }, [item?.revision]);
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => { if (edited.current.size && backupFailed.current) { event.preventDefault(); event.returnValue = ''; } };
+    window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn);
+  }, []);
   const save = async () => {
     if (lock.current || !ready) return; lock.current = true; setBusy(true); setError(''); setNotice('');
-    const value = { pinned, status, tags: tags.split(/[,，\n]/u).map(tag => tag.trim()).filter(Boolean), nextNote: note };
+    const submitted = current.current;
+    const value = { ...submitted, tags: submitted.tags.split(/[,，\n]/u).map(tag => tag.trim()).filter(Boolean) };
     const signature = JSON.stringify([url, record.revision, value]);
     if (pending.current?.signature !== signature) pending.current = { signature, input: { requestId: crypto.randomUUID(), expectedRevision: record.revision, ...value } };
     try {
       const { item: saved } = await request<Item<ResearchPersonalProblem>>(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pending.current.input) });
-      pending.current = undefined; setRecord(saved); setNotice(tx('个人整理已保存。', 'Your organization is saved.')); onSaved?.(saved);
+      pending.current = undefined; revision.current = saved.revision; setRecord(saved);
+      if (JSON.stringify(current.current) === JSON.stringify(submitted)) {
+        edited.current.clear(); current.current = organizationValues(saved); setValues(current.current); setDirty(false);
+        try { localStorage.removeItem(draftKey); setDraftError(''); } catch { setDraftError(tx('整理已保存，本机备份尚未清理。', 'Your organization is saved. The local backup could not be cleared.')); }
+        setNotice(tx('个人整理已保存。', 'Your organization is saved.'));
+      } else {
+        persist(); setNotice(tx('上一版已保存，还有新修改未保存。', 'The previous version is saved. Your new edits are not saved yet.'));
+      }
+      onSaved?.(saved);
       window.dispatchEvent(new CustomEvent('theoremos-personal-problem-updated', { detail: saved }));
     } catch (cause) { setError(errorText(cause)); }
     finally { lock.current = false; setBusy(false); }
@@ -56,21 +82,25 @@ export function PersonalProblemControl({ target, item, onSaved, compact = false,
     <p class="research-field-note">{tx('只保存在你的研究空间，独立于运行状态与证明验收。', 'Private to your research space, separate from run status and proof acceptance.')}</p>
     {!ready && !error && <p role="status" data-personal-loading>{tx('正在读取个人整理…', 'Loading your organization…')}</p>}
     <form class="research-form" onSubmit={event => { event.preventDefault(); void save(); }}>
-      <label class="research-check"><input type="checkbox" data-personal-pinned checked={pinned} onChange={event => { edited.current.add('pinned'); setPinned(event.currentTarget.checked); }} />{tx('置顶这道题', 'Pin this problem')}</label>
-      <label>{tx('整理状态', 'Organization status')}<select value={status} data-personal-status onChange={event => { edited.current.add('status'); setStatus(event.currentTarget.value as ResearchPersonalProblem['status']); }}>
+      <label class="research-check"><input type="checkbox" data-personal-pinned checked={values.pinned} onChange={event => change('pinned', event.currentTarget.checked)} />{tx('置顶这道题', 'Pin this problem')}</label>
+      <label>{tx('整理状态', 'Organization status')}<select value={values.status} data-personal-status onChange={event => change('status', event.currentTarget.value as ResearchPersonalProblem['status'])}>
         <option value="active">{stateLabel('active')}</option><option value="parked">{stateLabel('parked')}</option><option value="archived">{stateLabel('archived')}</option></select></label>
-      <Field label={tx('标签', 'Tags')} value={tags} onInput={value => { edited.current.add('tags'); setTags(value); }} maxLength={500} placeholder={tx('例如：数论、待补引理；用逗号分隔', 'For example: number theory, missing lemma; separate with commas')} />
-      <Field label={tx('下次从这里继续', 'Next time, start here')} value={note} onInput={value => { edited.current.add('note'); setNote(value); }} multiline rows={3} maxLength={4000} />
+      <Field label={tx('标签', 'Tags')} value={values.tags} onInput={value => change('tags', value)} maxLength={500} placeholder={tx('例如：数论、待补引理；用逗号分隔', 'For example: number theory, missing lemma; separate with commas')} />
+      <Field label={tx('下次从这里继续', 'Next time, start here')} value={values.nextNote} onInput={value => change('nextNote', value)} multiline rows={3} maxLength={4000} />
       <button class="button" type="submit" data-save-personal-problem disabled={busy || !ready}>{busy ? tx('正在保存…', 'Saving…') : tx('保存个人整理', 'Save organization')}</button>
     </form>
     <ErrorBox message={error} />{error && <button type="button" class="text-button" onClick={() => void load(true)}>{tx('读取最新整理，保留当前输入', 'Load the latest organization and keep my edits')}</button>}
-    {notice && <p role="status" data-personal-notice>{notice}</p>}
+    <ErrorBox message={draftError} />
+    {(dirty || notice) && <p role="status" data-personal-unsaved={dirty ? true : undefined} data-personal-notice={notice ? true : undefined}>
+      {notice || tx('还有修改未保存到账号。', 'You have changes that are not saved to your account.')}</p>}
   </details>;
 }
 
 export function ProblemOrganization({ problem, context }: { problem: Pick<ResearchProblem, 'key' | 'brief' | 'project'>; context?: ResearchContext }) {
   if (context && !context.session.authenticated) return null;
-  return <PersonalProblemControl key={problem.key} target={{ runId: problem.brief.selectedRunId, ...(problem.project ? { projectId: problem.project.id } : {}) }} />;
+  if (!context) return null;
+  const owner = webDraftOwner(context.web), target = { runId: problem.brief.selectedRunId, ...(problem.project ? { projectId: problem.project.id } : {}) };
+  return <PersonalProblemControl key={`${owner}:${personalProblemUrl(target)}`} owner={owner} target={target} />;
 }
 
 export function accountDraftHref(draft: ResearchAccountDraft, versionId?: string) {

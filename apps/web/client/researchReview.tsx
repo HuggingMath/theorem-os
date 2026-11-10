@@ -32,7 +32,7 @@ export function ResearchReview({ feedback, project, selfId, canReview, refresh, 
     && (feedback.candidateDelivery?.approvedAt && feedback.candidateDelivery.approvedBy && ['approved', 'dispatched'].includes(feedback.candidateDelivery.status)
       || feedback.decision.status === 'accepted' && feedback.decision.actor?.kind === 'human');
   const people = projectPeople(project).filter(person => person.role !== 'reader' && person.id !== feedback.author.id && person.id !== assigned?.id);
-  return <section class="collaboration-review" data-feedback-review>
+  return <section class="collaboration-review" id={`review-${feedback.id}`} tabIndex={-1} data-feedback-review>
     {feedback.candidateDelivery && <div class="candidate-delivery-status" data-candidate-delivery-status={feedback.candidateDelivery.status}>
       <p>{needsNewCandidate && feedback.decision.status === 'needs-info' ? tx('评审要求新版候选，请按当前任务版本修订源码并重新检查。', 'The reviewer requested a new candidate. Revise the source for the current task and check it again.')
         : feedback.candidateDelivery.status === 'awaiting-review' ? tx('候选检查已通过，等待人工批准。', 'The candidate passed its check and is waiting for human approval.')

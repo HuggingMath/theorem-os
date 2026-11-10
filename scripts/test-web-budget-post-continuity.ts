@@ -15,7 +15,7 @@ import { closeSettings, enterLean } from './web-ui-controls';
 import { localeStorageKey } from '../apps/web/i18n';
 
 const root = path.resolve(import.meta.dirname, '..');
-const output = path.join(root, 'out/product-continuity/post-continuity-20261111/budget');
+const output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/product-continuity/post-continuity-20261111/budget');
 await fs.mkdir(output, { recursive: true });
 const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-budget-post-continuity-'));
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;

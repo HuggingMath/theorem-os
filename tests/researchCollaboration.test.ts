@@ -22,6 +22,50 @@ const errorStatus = (fn: () => unknown, status: number) => {
 };
 
 describe('one collaboration message center', () => {
+  it('includes a previous resolver when someone reopens an issue without intervening replies', () => {
+    const { projects, project } = fixture();
+    let issue = projects.createIssue(alice, project.id, { requestId: 'resolver-participation', expectedRevision: project.revision,
+      title: 'Resolve the boundary condition', text: 'Please review the alternative.', statementVersionId: project.currentStatementVersionId });
+    issue = projects.resolveIssue(bob, project.id, issue.id, { requestId: 'resolver-first-decision', expectedRevision: issue.revision,
+      action: 'resolve', text: 'The direct argument is sufficient.' });
+    expect(projects.collaborationInbox(alice).items.find(item => item.issueAction === 'resolve')).toMatchObject({ read: false, text: 'The direct argument is sufficient.' });
+    expect(projects.collaborationInbox(bob).items.some(item => item.issueAction)).toBe(false);
+    projects.resolveIssue(alice, project.id, issue.id, { requestId: 'author-reopens-decision', expectedRevision: issue.revision,
+      action: 'reopen', text: 'Please check one remaining hypothesis.' });
+    expect(projects.collaborationInbox(bob).items.find(item => item.issueAction === 'reopen')).toMatchObject({ read: false, resolved: false, text: 'Please check one remaining hypothesis.' });
+  });
+  it('notifies issue participants of each resolution and reopening with independent read state', () => {
+    const { projects, project, target, directory } = fixture(true);
+    projects.setMember(alice, project.id, projects.identity(carol), { requestId: 'unrelated-member', expectedRevision: project.revision, role: 'reader' });
+    let issue = projects.createIssue(alice, project.id, { requestId: 'issue-result', expectedRevision: projects.detail(alice, project.id).revision, title: 'Choose a route', text: 'Compare the two arguments.', target });
+    issue = projects.replyIssue(bob, project.id, issue.id, { requestId: 'issue-proposal', expectedRevision: issue.revision, kind: 'proposal', text: 'Use the direct constructor.' });
+    const reply = projects.collaborationInbox(alice).items.find(item => item.id === `reply:${issue.replies[0].id}`)!;
+    expect(reply).toMatchObject({ read: false, category: 'reply' });
+    projects.markCollaborationItem(alice, reply.id, { requestId: 'dismiss-original-reply', action: 'done' });
+    issue = projects.resolveIssue(alice, project.id, issue.id, { requestId: 'resolve-route', expectedRevision: issue.revision, action: 'resolve', text: 'Adopt the constructor.', proposalId: issue.replies[0].id });
+    const resolution = projects.collaborationInbox(bob).items.find(item => item.issueAction === 'resolve')!;
+    expect(resolution).toMatchObject({ text: 'Adopt the constructor.', read: false, processed: false, category: 'progress', resolved: true });
+    const destination = new URL(resolution.href, 'http://localhost');
+    expect(destination.searchParams.get('taskVersion')).toBe(target.taskRef!.version);
+    expect(destination.searchParams.get('version')).toBe(target.statementVersionId); expect(destination.hash).toBe(`#issue-${issue.id}`);
+    expect(projects.collaborationInbox(alice).items.some(item => item.issueAction)).toBe(false);
+    expect(projects.collaborationInbox(carol).items.some(item => item.href.includes(issue.id))).toBe(false);
+    projects.markCollaborationItem(bob, resolution.id, { requestId: 'read-resolution', action: 'read' });
+    issue = projects.resolveIssue(alice, project.id, issue.id, { requestId: 'reopen-route', expectedRevision: issue.revision, action: 'reopen', text: 'Recheck the boundary case.' });
+    const reopened = projects.collaborationInbox(bob).items.find(item => item.issueAction === 'reopen')!;
+    expect(reopened.id).not.toBe(resolution.id);
+    expect(reopened).toMatchObject({ text: 'Recheck the boundary case.', read: false, processed: false, category: 'reply', resolved: false });
+    expect(projects.collaborationInbox(bob).items.find(item => item.id === resolution.id)?.read).toBe(true);
+    projects.markCollaborationItem(bob, reopened.id, { requestId: 'dismiss-reopening', action: 'done' });
+    issue = projects.resolveIssue(alice, project.id, issue.id, { requestId: 'resolve-again', expectedRevision: issue.revision, action: 'resolve', text: 'The boundary case is covered.' });
+    const reloaded = new WebResearchProjects(new WebStorage(directory)), messages = reloaded.collaborationInbox(bob).items;
+    expect(messages.filter(item => item.issueAction)).toHaveLength(3);
+    expect(messages.find(item => item.id === reopened.id)).toMatchObject({ processed: true, resolved: true });
+    expect(messages.find(item => item.issueAction === 'resolve' && item.id !== resolution.id)).toMatchObject({ read: false, processed: false, text: 'The boundary case is covered.' });
+    const ownerRevision = reloaded.detail(alice, project.id).revision;
+    reloaded.setMember(alice, project.id, reloaded.identity(bob), { requestId: 'remove-participant', expectedRevision: ownerRevision, role: null });
+    expect(reloaded.collaborationInbox(bob).items.some(item => item.href.includes(issue.id))).toBe(false);
+  });
   it('keeps sent requests in progress and makes the recipient response unread for the sender', () => {
     const { projects, project } = fixture();
     const invitation = projects.invite(alice, project.id, { requestId: 'message-center-invite', recipientId: projects.identity(carol), role: 'reader', note: 'Review the saved route.', expectedRevision: project.revision });

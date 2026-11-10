@@ -6,8 +6,10 @@ import type { WebResearchProjects } from './researchProjects';
 import type { WebResearchProblems } from './researchProblems';
 import type { ResearchPersonalTarget, ResearchPersonalProblem, ResearchAccountDraftScope, ResearchAccountDraft,
   ResearchAccountDraftVersion, ResearchAccountDraftResult, ResearchDraftKind, ResearchDraftSubmission } from './researchPersonalTypes';
+import type { ResearchDecisionDraft } from './researchPersonalTypes';
 import type { ResearchProjectDetail } from './researchProjectTypes';
 import { researchStatementIdentity } from './client/researchOverviewModel';
+import { canRecordFeedbackDecision, feedbackDecisionStatuses } from './client/researchFeedbackModel';
 import { researchModulePlanDraftSchema } from '../../src/solver/modules/policy';
 import type { ResearchDiscussionContext } from './researchProjectTypes';
 import type { WebFormalization } from './formalizationTypes';
@@ -20,7 +22,7 @@ const identifier = text(200).refine(value => value.length > 0), commit = z.strin
 const draftKinds = z.enum(['candidate', 'discussion', 'issue', 'issue-reply', 'guidance', 'annotation', 'annotation-reply', 'review', 'problem']);
 const scopeSchema = z.object({ projectId: key.optional(), kind: draftKinds, statementVersionId: key.optional(),
   runId: key.optional(), taskId: identifier.optional(), taskVersion: identifier.optional(), commit: commit.optional(), issueId: key.optional(),
-  issueRevision: z.number().int().nonnegative().optional(), sourceFeedbackId: key.optional(), threadId: key.optional(), purpose: z.enum(['comment', 'resubmit']).optional(), draftKey: key.optional() }).strict();
+  issueRevision: z.number().int().nonnegative().optional(), sourceFeedbackId: key.optional(), threadId: key.optional(), purpose: z.enum(['comment', 'resubmit', 'decision']).optional(), draftKey: key.optional() }).strict();
 const observationSchema = z.object({ sequence: z.number().int().nonnegative(), stateDigest: hash }).strict();
 const anchorSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('source'), sourceDigest: hash, file: text(512), startLine: z.number().int().positive(), endLine: z.number().int().positive(), quote: text(64_000) }).strict(),
@@ -57,6 +59,8 @@ const values = {
   'annotation-reply': z.object({ text: text(4000) }).strict(),
   review: z.object({ text: text(4000) }).strict(),
 };
+const decisionDraftSchema = z.object({ text: text(4000), status: z.enum(['', 'accepted', 'declined', 'needs-info']), evidence: text(64_000),
+  planVersion: text(128), revision: z.number().int().nonnegative() }).strict();
 const mutation = { requestId: key, expectedRevision: z.number().int().nonnegative() };
 const saveDraftSchema = z.object({ ...mutation, scope: scopeSchema, value: z.unknown(), summary: text(200), deviceId: key,
   deviceName: z.string().trim().min(1).max(80), clientUpdatedAt: z.string().datetime() }).strict();
@@ -102,6 +106,13 @@ export class WebResearchPersonal {
       if (!scope.projectId || !scope.sourceFeedbackId || !scope.purpose) fail(400, '评审草稿需要保留原反馈与补充类型。');
       const project = this.deps.projects.detail(viewer, scope.projectId!), feedback = this.deps.projects.feedback(viewer, scope.projectId!, scope.sourceFeedbackId!);
       if (scope.purpose === 'resubmit' ? feedback.author.id !== this.deps.projects.identity(viewer) : !project.permissions.member) fail(403, '你已没有这份评审草稿的编辑权限。');
+      if (scope.purpose === 'decision') {
+        if (!canRecordFeedbackDecision(feedback, project, this.deps.projects.identity(viewer))) fail(403, '你已没有这份评审草稿的编辑权限。');
+        const draft = value as ResearchDecisionDraft;
+        if (draft.status && !feedbackDecisionStatuses(feedback, this.deps.projects.identity(viewer)).includes(draft.status)) fail(403, '请交由另一位成员评审自己的提交。');
+        if (draft.revision > feedback.revision || scope.statementVersionId !== (feedback.target?.statementVersionId ?? feedback.statementVersionId))
+          fail(409, '评审草稿与反馈任务范围不一致。');
+      }
       if (feedback.target?.runId !== scope.runId || feedback.target?.taskRef?.id !== scope.taskId || feedback.target?.taskRef?.version !== scope.taskVersion)
         fail(409, '评审草稿与反馈任务范围不一致。');
       return;
@@ -217,7 +228,7 @@ export class WebResearchPersonal {
   }
   saveDraft(viewer: string, raw: unknown): ResearchAccountDraftResult {
     this.owner(viewer, true); const input = parse(saveDraftSchema, raw), scope = input.scope as ResearchAccountDraftScope;
-    const value = parse(values[scope.kind], input.value);
+    const value = parse(scope.kind === 'review' && scope.purpose === 'decision' ? decisionDraftSchema : values[scope.kind], input.value);
     if (Buffer.byteLength(canonicalMathJson(value)) > 1_000_000) fail(400, '账号草稿过大，请减少附带源码。');
     this.authorize(viewer, scope, value);
     const id = `draft_${digest(scope).slice(0, 32)}`, path = this.draftPath(viewer, id);
@@ -302,6 +313,16 @@ export class WebResearchPersonal {
       target.set('annotation', annotation!.id); if (scope.sourceFeedbackId) target.set('feedback', scope.sourceFeedbackId); href = `problem.html?${target}`;
     } else if (input.kind === 'review' && scope.kind === 'review' && scope.projectId && scope.sourceFeedbackId === input.id) {
       const feedback = this.deps.projects.feedback(viewer, scope.projectId, input.id);
+      if (scope.purpose === 'decision') {
+        const draft = value as ResearchDecisionDraft;
+        const evidence = [...new Set([...draft.evidence.split(/\r?\n/u).map(item => item.trim()).filter(Boolean), ...(draft.planVersion ? [`plan:${draft.planVersion}`] : [])])].sort();
+        if (![feedback.decision, ...(feedback.decisionHistory ?? [])].some(decision => decision.actor?.id === self && decision.actor.kind === 'human'
+          && decision.status === draft.status && decision.reason === draft.text && canonicalMathJson([...decision.evidenceRefs].sort()) === canonicalMathJson(evidence)))
+          fail(409, '评审决定尚未保存。');
+        const query = new URLSearchParams({ id: scope.projectId, ...(scope.runId ? { run: scope.runId } : {}),
+          ...(scope.statementVersionId ? { version: scope.statementVersionId } : {}), ...(scope.taskId ? { task: scope.taskId, taskVersion: scope.taskVersion! } : {}) });
+        return { ...input, href: `theorems.html?${query}#feedback-${input.id}` };
+      }
       const revision = feedback.supersededBy ? this.deps.projects.feedback(viewer, scope.projectId, feedback.supersededBy) : undefined;
       const continued = revision?.author.id === self && revision.candidateRevision?.parentFeedbackId === feedback.id && revision.text === (value as { text: string }).text;
       if (scope.purpose === 'resubmit' ? !continued && !feedback.reviewHistory?.some(item => item.action === 'resubmit' && item.actor.id === self)

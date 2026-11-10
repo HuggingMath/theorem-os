@@ -9,7 +9,7 @@ import { WebResearchWorkspace } from '../apps/web/researchWorkspace';
 import { WebResearchProblems } from '../apps/web/researchProblems';
 import { WebKnowledgeService } from '../apps/web/knowledgeService';
 import { WebResearchPersonal, createResearchPersonalHandler } from '../apps/web/researchPersonal';
-import type { ResearchAccountDraftScope, ResearchDraftValues, ResearchPersonalTarget } from '../apps/web/researchPersonalTypes';
+import type { ResearchAccountDraftScope, ResearchDecisionDraft, ResearchDraftValues, ResearchPersonalTarget } from '../apps/web/researchPersonalTypes';
 import type { WebJobs } from '../apps/web/jobs';
 import type { WebRun } from '../apps/web/shared';
 import { loadWebSample } from '../apps/web/sample';
@@ -67,6 +67,50 @@ describe('account draft login return', () => {
 });
 
 describe('private cross-device account drafts', () => {
+  it('preserves legal author decisions for reviewed candidates without restoring self approval', () => {
+    const f = fixture();
+    f.projects.update(alice, f.project.id, { requestId: 'require-independent-review', expectedRevision: f.project.revision, candidateDeliveryPolicy: 'reviewed' });
+    const target = { runId: f.run.id, statementVersionId: f.project.versions[0].id, observationRef: f.candidate.baseObservation,
+      taskRef: { id: f.source.taskId, version: f.source.taskVersion } };
+    const feedback = f.projects.submitFeedback(alice, f.project.id, { requestId: 'author-decision-candidate', kind: 'proof-submission', text: 'Review this candidate',
+      target, source: f.candidate.source, base: { commit: f.source.commit, sourceDigest: f.source.sourceDigest, environmentDigest: f.source.environmentDigest, file: f.source.file } });
+    const scope: ResearchAccountDraftScope = { projectId: f.project.id, kind: 'review', purpose: 'decision', sourceFeedbackId: feedback.id,
+      runId: f.run.id, statementVersionId: target.statementVersionId, taskId: f.source.taskId, taskVersion: f.source.taskVersion };
+    const blank: ResearchDecisionDraft = { text: '', status: '', evidence: '', planVersion: '', revision: feedback.revision };
+    expect(f.personal.saveDraft(alice, draftInput(scope, blank, 'blank-author-choice')).version.value).toEqual(blank);
+    for (const status of ['needs-info', 'declined'] as const) expect(f.personal.saveDraft(alice,
+      draftInput(scope, { ...blank, status, text: 'This approach needs further work.' }, `author-${status}`)).version.value).toMatchObject({ status });
+    expect(() => f.personal.saveDraft(alice, draftInput(scope, { ...blank, status: 'accepted', text: 'Approve my own candidate.' }, 'author-self-approval'))).toThrow('另一位成员');
+  });
+  it('restores complete decision drafts and archives only matching saved decisions while preserving later edits', () => {
+    const f = fixture(), target = { runId: f.run.id, statementVersionId: f.project.versions[0].id,
+      observationRef: f.candidate.baseObservation, taskRef: { id: f.source.taskId, version: f.source.taskVersion } };
+    const feedback = f.projects.submitFeedback(alice, f.project.id, { requestId: 'decision-candidate', kind: 'proof-submission', text: 'A candidate to review',
+      target, source: f.candidate.source, base: { commit: f.source.commit, sourceDigest: f.source.sourceDigest, environmentDigest: f.source.environmentDigest, file: f.source.file } });
+    const scope: ResearchAccountDraftScope = { projectId: f.project.id, kind: 'review', purpose: 'decision', sourceFeedbackId: feedback.id,
+      runId: f.run.id, statementVersionId: target.statementVersionId, taskId: f.source.taskId, taskVersion: f.source.taskVersion };
+    const value: ResearchDecisionDraft = { text: ' Explain the final implication. ', status: 'needs-info', evidence: `task:${f.source.taskId}@${f.source.taskVersion}\ncheck:fixture`,
+      planVersion: f.run.observation!.inspection.planVersion!, revision: feedback.revision };
+    const saved = f.personal.saveDraft(bob, draftInput(scope, value, 'decision-draft'));
+    expect(f.personal.draft(bob, saved.draft.id).version.value).toEqual(value);
+    const complete = { requestId: 'archive-decision', versionId: saved.version.id, action: 'submitted', submission: { kind: 'review', id: feedback.id } };
+    expect(() => f.personal.updateDraft(bob, saved.draft.id, complete)).toThrow('决定尚未保存');
+    f.personal.saveDraft(bob, draftInput({ ...scope, purpose: 'comment' }, { text: 'A distinct review comment' }, 'parallel-comment'));
+    const decision = f.projects.decideFeedback(bob, f.project.id, feedback.id, { requestId: 'actual-decision', expectedRevision: feedback.revision,
+      status: value.status, reason: value.text, evidenceRefs: value.evidence.split('\n'), planVersion: value.planVersion });
+    const newer = f.personal.saveDraft(bob, draftInput(scope, { ...value, text: 'New reasoning typed while saving settles', revision: decision.revision }, 'later-decision', saved.version.revision));
+    const archived = f.personal.updateDraft(bob, saved.draft.id, complete);
+    expect(archived.version.status).toBe('submitted');
+    expect(archived.version.submission?.href).toContain(`#feedback-${feedback.id}`);
+    expect(archived.version.submission?.href).toContain(`taskVersion=${encodeURIComponent(f.source.taskVersion)}`);
+    const open = f.personal.drafts(bob).items;
+    expect(open.find(item => item.id === saved.draft.id)?.versions.map(item => item.id)).toEqual([newer.version.id]);
+    expect(open.some(item => item.scope.purpose === 'comment')).toBe(true);
+    expect(() => f.personal.updateDraft(bob, newer.draft.id, { ...complete, requestId: 'wrong-snapshot', versionId: newer.version.id })).toThrow('决定尚未保存');
+    expect(() => f.personal.saveDraft(bob, draftInput({ ...scope, taskVersion: 'foreign-task' }, value, 'wrong-task'))).toThrow('范围不一致');
+    expect(() => f.personal.draft(alice, saved.draft.id)).toThrow('不存在');
+    expect(() => f.personal.saveDraft(bob, draftInput(scope, { ...value, revision: decision.revision + 1 }, 'future-revision'))).toThrow('范围不一致');
+  });
   it('restores historical step discussion drafts only with matching scope and the server-recorded title', () => {
     const f = fixture(), statementVersionId = f.project.versions[0].id, sourceDigest = f.project.versions[0].sourceDigest;
     const task = f.run.observation!.inspection.tasks.find(item => item.id === f.source.taskId && item.version === f.source.taskVersion)!;

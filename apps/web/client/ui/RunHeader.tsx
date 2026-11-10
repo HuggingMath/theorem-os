@@ -4,6 +4,7 @@ import { rollDigits, rollStatus } from '../motion';
 import { Icon, Spinner } from './Icon';
 import { fill } from './Section';
 import { t } from '../../i18n';
+import { ResearchBudgetAttempt, type ResearchBudgetAttemptProps } from '../researchBudgetAttempt';
 
 export type HeaderStage = { label: string; state: 'done' | 'active' | 'stopped' | 'error' | 'pending' | 'skipped'; clock: string;
   /** The solve budget, on the stage it counts in; that stage's clock reads against it while it runs. */ budget?: string };
@@ -20,6 +21,7 @@ export type RunHeaderProps = {
   formalizationId?: string;
   /** Set while the run's first plan waits for its owner (先审计划); no Agent works on it until they approve it. */
   approval?: PlanApprovalProps;
+  budgetAttempt?: ResearchBudgetAttemptProps;
 };
 export type PlanApprovalProps = {
   /** The visible plan is the exact version awaiting this decision. */ reviewable?: boolean;
@@ -180,6 +182,7 @@ function RunHeader(props: RunHeaderProps) {
       </div>
       <Actions {...props} />
     </header>
+    {props.budgetAttempt && <ResearchBudgetAttempt key={props.id} {...props.budgetAttempt} />}
     {props.sample && <p class="sample-note" data-sample-note>{t('这是一次录制好的运行：Agent 由离线脚本代替模型，环境、任务协作、Lean 检查和独立验收都是真实执行的。可以浏览每个标签页；点「用这道题开始研究」会把题目和配置填进新草稿，填入自己的 API Key 即可提交。')}</p>}
     {props.formalizationId && <p class="run-continuation" data-run-formalization><Icon name="languages" /><a class="text-button" href={`formalize.html?id=${encodeURIComponent(props.formalizationId)}`}>{t('查看最新审核')}</a></p>}
     {props.continuation && <p class="run-continuation" data-run-continuation><Icon name="git-branch" />

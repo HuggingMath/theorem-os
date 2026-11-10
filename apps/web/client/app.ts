@@ -42,7 +42,7 @@ import { ServerModulePlans } from './serverModulePlans';
 import { ModulePlanLibrary, modulePlanLibraryStorageKey } from './modulePlanLibrary';
 import { ModulePlanLibraryView } from './modulePlanLibraryView';
 import type { ResearchModuleSlot } from '../../../src/solver/modules/policy';
-import { draftOwnerStorageKey, OwnedDrafts, webDraftOwner } from './ownedDrafts';
+import { draftOwnerStorageKey, OwnedDrafts, researchEntryStorageKey, webDraftOwner } from './ownedDrafts';
 import { SubmissionIdentity } from './submissionIdentity';
 import { DraftRecovery, type ReplacementReason } from './draftRecovery';
 import { animateEntrance, arriveRow, finishHiddenMotion, finishMotion, glideSelection, revealTheme, selectionBox } from './motion';
@@ -140,7 +140,7 @@ const state = {
   /** The read-only sample run, fetched when first opened; it is never part of runs. */
   sample: undefined as WebRun | undefined,
 };
-const entryStorageKey = 'theorem-os.research-entry.v1';
+const entryStorageKey = researchEntryStorageKey;
 const productEntrySearch = location.search, productEntry = readResearchEntry(productEntrySearch);
 const productTarget = new URLSearchParams(productEntrySearch);
 const problemDraftId = productTarget.get('accountDraft'), problemDraftVersion = productTarget.get('draftVersion');
@@ -160,7 +160,7 @@ function withAddressLanguage(search: string) {
   return parameters.size ? `?${parameters}` : '';
 }
 let researchEntry: 'natural' | 'lean' = 'natural';
-// Opening the workbench starts with the user's problem, even when an older tab used a Lean template.
+// Fresh visits begin with a problem; same-owner drafts can resume their selected editor after loading.
 document.body.dataset.entry = researchEntry;
 let naturalPage: Promise<void> | undefined;
 let chatWorkspace: ChatSession | undefined;
@@ -183,7 +183,7 @@ function chooseEntry(mode: 'natural' | 'lean') {
   element('#open-natural-language').setAttribute('aria-pressed', String(mode === 'natural'));
   element('#entry-lean').setAttribute('aria-pressed', String(mode === 'lean'));
   placeInputMode();
-  try { sessionStorage.setItem(entryStorageKey, mode); } catch { /* Keep the choice for this page. */ }
+  try { ownedDrafts.setItem(entryStorageKey, mode); } catch { /* Keep the choice for this page. */ }
   syncNaturalResearch();
   renderRuntime(); renderPreparation(); renderShell();
 }
@@ -2009,6 +2009,7 @@ function renderRunHeader(run: WebRun) {
     download: run.result || !activeRun(run) ? downloadUrl(run.id) : undefined, shareable: !isSample(run) && isAcceptedRun(run) && isStatementReviewed(run) && Boolean(run.result?.proof),
     sample: isSample(run), ...(stalledMinutes(run) !== undefined ? { stalled: stalledMinutes(run)! } : {}),
     ...(run.formalizationId ? { formalizationId: run.formalizationId } : {}),
+    ...(run.budgetOrigin && !isSample(run) ? { budgetAttempt: { run, request: api } } : {}),
     // The sample's Agents were offline scripts; its recorded token counts would read as a real cost.
     ...(!isSample(run) && runTokens(run) ? { tokens: { used: formatTokens(runTokens(run)!), ...(run.maxTotalTokens ? { cap: formatTokens(run.maxTotalTokens) } : {}) } } : {}),
     ...(approvalProps(run) ? { approval: approvalProps(run)! } : {}),
@@ -2351,8 +2352,8 @@ async function openBudgetAttemptDraft() {
       budgetDraftOrigin = { runId, projectId, source: run.source, environment: run.environment };
       field('max-tokens').value = String(tokens / 10_000);
       draftChanged(); saveDraft(); renderDraftRecovery();
-      notice.textContent = own ? t('已准备原题、执行配置与本次预算。核对后即可发送研究任务。')
-        : t('已将项目原题准备为个人尝试。核对模型、Library 和预算后可开始，随后可将新运行关联到项目。');
+      notice.textContent = projectId ? t('已将项目原题准备为个人尝试。核对模型、Library 和预算后可开始，随后可将新运行关联到项目。')
+        : t('已准备原题、执行配置与本次预算。核对后即可发送研究任务。');
       panel.dataset.budgetAttemptReady = 'true';
     } catch (error) { notice.textContent = message(error); retry.hidden = false; }
     finally { retry.disabled = false; }
@@ -2544,8 +2545,11 @@ function initialize(): Promise<void> {
       element<HTMLInputElement>('#max-turns').max = String(session.limits.maxTurns);
       element<HTMLInputElement>('#max-seconds').max = String(session.limits.maxRunSeconds);
       element<HTMLInputElement>('#workers').max = String(session.limits.maxWorkers);
-      let restoredTaskDraft = false;
+      let restoredTaskDraft = false, resumeLeanDraft = false;
       if (firstLoad) { resetForm(); restoredTaskDraft = restoreDraft(); draftReady = true; draftRecovery.load(); renderDraftRecovery(); }
+      if (restoredTaskDraft) {
+        try { resumeLeanDraft = ownedDrafts.getItem(entryStorageKey) === 'lean'; } catch { /* Unavailable storage keeps the normal entry. */ }
+      }
       providerAddress(); updateEnvironment(); updateCounts(); renderRuntime();
       await refreshRuns(epoch, false, listed);
       if (!currentConnection(epoch)) return;
@@ -2605,7 +2609,9 @@ function initialize(): Promise<void> {
           }
         }
       }
-      if (firstLoad && (budgetDraftOrigin || draftSharedProofOrigin) && state.composing && !productEntry && !productTarget.has('fromClassic') && !productTarget.has('chat') && !linkedRun) {
+      if (firstLoad && (budgetDraftOrigin || draftSharedProofOrigin || resumeLeanDraft) && state.composing && !productEntry && !problemDraftTarget
+        && !readResearchProblemDraft(productTarget) && !readLibraryReference(productTarget) && !readEditedProblemId(productTarget)
+        && !productTarget.has('fromClassic') && !productTarget.has('chat') && !linkedRun) {
         await naturalPage;
         if (!currentConnection(epoch)) return;
         chooseEntry('lean');
@@ -2954,6 +2960,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
       ...(capturedDraft.modulePlan ? { modulePlan: capturedDraft.modulePlan } : {}),
       ...(capturedDraft.knowledgeDigest !== undefined ? { knowledgeDigest: capturedDraft.knowledgeDigest } : {}),
       ...(draftContinuation ? { continueFrom: draftContinuation } : {}),
+      ...(capturedDraft.problemBudget?.projectId ? { budgetOrigin: { runId: capturedDraft.problemBudget.runId, projectId: capturedDraft.problemBudget.projectId } } : {}),
       ...(draftFormalization ? { formalizationId: draftFormalization.id } : {}),
       ...(researchSelection.value() ? { researchSelection: researchSelection.value() } : {}),
     };

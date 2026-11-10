@@ -12,6 +12,7 @@ import { InstalledLibraryDirectory, InstalledLibraryModule } from './researchIns
 import { LibraryDiscoveryContext } from './researchLibraryDiscovery';
 import { discoverySuggestedTerms, matchLibraryDiscovery } from './researchLibraryDiscoveryModel';
 import { rememberLibraryEntry } from './libraryEntry';
+import { researchLibraryHref } from './researchLibraryNavigation';
 import { RichProse } from './richText';
 import { OwnedDrafts, researchEnvironmentStorageKey, researchSelectionStorageKey, webDraftOwner } from './ownedDrafts';
 import { loginHref, type WebEnvironment } from '../shared';
@@ -64,12 +65,12 @@ function rememberLibraryView(view: LibraryView, owner: string) {
 }
 const libraryFilterKeys = ['q', 'type', 'collection', 'area', 'author', 'environment', 'mine', 'offset', 'workbenchChat', 'workbenchRun', 'workbenchEdit', 'lang', 'run', 'project', 'task', 'taskVersion', 'commit'] as const;
 function filteredLibraryHref(id?: string, version?: string, filters = new URLSearchParams(location.search)) {
+  if (id) return researchLibraryHref({ assetId: id, ...(version ? { version } : {}) }, filters, true);
   const parameters = new URLSearchParams();
   for (const key of libraryFilterKeys) {
     const value = filters.get(key);
     if (value) parameters.set(key, value);
   }
-  if (id) { parameters.set('entry', id); parameters.set('collection', 'shared'); }
   if (version) parameters.set('version', version);
   return `library.html${parameters.size ? `?${parameters}` : ''}`;
 }
@@ -106,7 +107,8 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
   const [creatorMounted, setCreatorMounted] = useState(creating), [searchReset, setSearchReset] = useState(0), [offset, setOffset] = useState(Number.isSafeInteger(initialOffset) && initialOffset > 0 ? initialOffset : 0),
     [collection, setCollection] = useState<MathematicsCollection>(installedFile ? 'lean' : selected || initialCollection === 'shared' || hasTarget && !initialCollection ? 'shared' : 'lean');
   const showingAssets = Boolean(selected) || type !== 'mathematics' || collection === 'shared', ownView = mine && showingAssets;
-  const directory = useResource<Items<ResearchAsset>>(!legacyOpenAI && showingAssets ? `${base}/library?q=${enc(hasTarget && type === 'mathematics' ? '' : query)}&type=${enc(type)}&area=${enc(area)}&author=${enc(author)}${mine ? '&mine=1' : ''}` : undefined);
+  const actualEnvironment = environment === 'target' ? target?.environment ?? '' : environment;
+  const directory = useResource<Items<ResearchAsset>>(!legacyOpenAI && showingAssets ? `${base}/library?q=${enc(hasTarget && type === 'mathematics' ? '' : query)}&type=${enc(type)}&area=${enc(area)}&author=${enc(author)}${type === 'mathematics' && actualEnvironment ? `&environment=${enc(actualEnvironment)}` : ''}${mine ? '&mine=1' : ''}` : undefined);
   const detail = useResource<Item<ResearchAsset>>(selected ? `${base}/library/${enc(selected)}` : undefined);
   useEffect(() => { if (!hasDirectoryType.current && detail.data) setType(detail.data.item.type); }, [detail.data?.item.id]);
   const filters = new URLSearchParams({ type });
@@ -131,7 +133,6 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
     history.replaceState(null, '', next);
     rememberLibraryView(currentView, filterOwner);
   }, [filterQuery, legacyOpenAI]);
-  const actualEnvironment = environment === 'target' ? target?.environment ?? '' : environment;
   const candidates = directory.data?.items.filter(item => type !== 'mathematics' || !actualEnvironment || item.release?.mathematics?.environment === actualEnvironment) ?? [];
   const terms = query.trim() ? query.trim().split(/\s+/u).slice(0, 10) : target ? discoverySuggestedTerms(target) : [];
   const matches = target && type === 'mathematics' ? candidates.map(asset => matchLibraryDiscovery(asset, target, terms))
@@ -234,7 +235,7 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
         : <><ErrorBox message={directory.error} />{directory.error && <button class="button" type="button" onClick={directory.refresh}>{tx('重新读取共享成果', 'Reload shared resources')}</button>}
           {directory.loading && <p class="research-status" role="status">{tx('正在读取目录…', 'Loading directory…')}</p>}
           {directory.data && <p class="research-status" role="status">{items.length} {tx('项资源', 'resources')}{mine ? ` · ${tx('包含自己的草稿与发布版本', 'Includes your drafts and releases')}` : ''}</p>}
-          <div class="research-directory-grid">{items.map(asset => <DirectoryAsset key={asset.id} asset={asset} mine={mine} href={filteredLibraryHref(asset.id, asset.release?.version, filters)} match={matches?.find(item => item.asset.id === asset.id)} />)}</div>
+          <div class="research-directory-grid">{items.map(asset => <DirectoryAsset key={asset.id} asset={asset} mine={mine} recommended={asset.type === 'mathematics' && Boolean(actualEnvironment)} href={filteredLibraryHref(asset.id, asset.release?.version, filters)} match={matches?.find(item => item.asset.id === asset.id)} />)}</div>
           {directory.data && !items.length && <Empty>{mine ? tx('还没有匹配的个人资源。可以创建草稿，或调整筛选。', 'No matching resources of your own. Create a draft or change the filters.')
             : tx('暂无匹配的共享成果，请调整关键词或领域。', 'No matching shared resources. Try another keyword or field.')}</Empty>}
           {target && query.trim() && <button class="text-button" type="button" onClick={() => search('')}>{tx('清空检索词，查看环境内全部成果', 'Clear keywords and show all results in this environment')}</button>}
@@ -246,7 +247,7 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
   </div>;
 }
 
-function DirectoryAsset({ asset, mine, href, match }: { asset: ResearchAsset; mine: boolean; href: string; match?: ReturnType<typeof matchLibraryDiscovery> }) {
+function DirectoryAsset({ asset, mine, href, recommended, match }: { asset: ResearchAsset; mine: boolean; href: string; recommended: boolean; match?: ReturnType<typeof matchLibraryDiscovery> }) {
   const personalDraft = mine && asset.editable, shown = personalDraft ? asset : asset.release ?? asset, release = asset.release,
     content = personalDraft ? asset.draft ?? release?.content : release?.content ?? asset.draft;
   const details = !personalDraft && release?.mathematics ? [release.mathematics.environment, `${release.mathematics.declarations.length} ${tx('条数学声明', 'declarations')}`]
@@ -255,7 +256,7 @@ function DirectoryAsset({ asset, mine, href, match }: { asset: ResearchAsset; mi
     : content && 'source' in content ? [content.source.kind === 'run' ? tx('研究运行来源', 'Research-run source') : tx('知识目录来源', 'Knowledge-catalog source')] : [];
   return <article class="research-directory-card">{personalDraft && <span class="research-eyebrow">{tx('个人草稿', 'Personal draft')}</span>}<a class="research-card-heading" href={href}>{shown.name}</a>
     <div class="research-card-description"><RichProse text={shown.description || tx('作者尚未补充用途说明。', 'The author has not added a description.')} /></div>
-    <div class="research-item-meta"><span>{shown.area || tx('未标注领域', 'No field specified')}</span>{!personalDraft && <span>{release?.version ?? tx('尚无可选版本', 'No selectable release')}</span>}<State value={shown.visibility} /></div>
+    <div class="research-item-meta"><span>{shown.area || tx('未标注领域', 'No field specified')}</span>{!personalDraft && <span data-library-recommended-release={recommended ? release?.version : undefined}>{release ? `${recommended ? tx('推荐 ', 'Recommended ') : ''}${release.version}` : tx('尚无可选版本', 'No selectable release')}</span>}<State value={shown.visibility} /></div>
     {details.length > 0 && <Tags values={details} />}
     {match && <div class="research-library-match" data-library-match={asset.id}>
       <span>{match.sameEnvironment ? tx('证明环境相同', 'Same proof environment') : tx('证明环境不同', 'Different proof environment')}</span>

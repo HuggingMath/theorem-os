@@ -136,7 +136,7 @@ export function useResource<T>(url: string | undefined, interval = 0) {
 }
 
 /** Reuse the request identity if a failed or uncertain request is retried unchanged. */
-export function useMutation() {
+export function useMutation(request: typeof api = api) {
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
   const pending = useRef<{ signature: string; method: string; url: string; body: Record<string, unknown> }>();
   const lock = useRef(false);
@@ -147,7 +147,7 @@ export function useMutation() {
     if (pending.current?.signature !== signature) pending.current = { signature, method, url, body: { ...input, requestId: crypto.randomUUID() } };
     lock.current = true; setBusy(true); setError(''); setMessage('');
     try {
-      const result = await api<T>(url, { method, body: JSON.stringify(pending.current.body) });
+      const result = await request<T>(url, { method, body: JSON.stringify(pending.current.body) });
       pending.current = undefined;
       setMessage(tx('已保存。', 'Saved.')); completed?.(result);
       return result;

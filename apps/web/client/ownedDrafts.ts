@@ -6,7 +6,8 @@ export const draftOwnerStorageKey = 'theorem-os.web-draft-owner.v1';
 export const submissionStorageKey = 'theorem-os.web-submission.v1';
 export const researchSelectionStorageKey = 'theoremos.research.selection';
 export const researchEnvironmentStorageKey = 'theoremos.research.selection.environment';
-const keys = [taskDraftStorageKey, draftRecoveryStorageKey, submissionStorageKey, researchSelectionStorageKey, researchEnvironmentStorageKey];
+export const researchEntryStorageKey = 'theorem-os.research-entry.v1';
+const keys = [taskDraftStorageKey, draftRecoveryStorageKey, submissionStorageKey, researchSelectionStorageKey, researchEnvironmentStorageKey, researchEntryStorageKey];
 export const webDraftOwner = (session: WebSession) => session.draftOwner ?? (session.account ? `account:${session.account.email}` : session.csrfToken);
 type StorageAccess = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 

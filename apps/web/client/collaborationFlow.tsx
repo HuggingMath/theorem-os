@@ -104,6 +104,7 @@ export function CollaborationInbox({ context, request = api }: { context: Resear
       return <article class="collaboration-inbox-item" key={item.id} data-inbox-item={item.id}>
         <div class="collaboration-meta"><span>{inboxLabel(item.kind)}</span><span>{item.projectTitle}</span><time dateTime={item.createdAt}>{stamp(item.createdAt)}</time>
           {item.annotationAction && <span>{item.annotationAction === 'resolve' ? tx('已解决批注', 'Comment resolved') : item.annotationAction === 'reopen' ? tx('重新打开批注', 'Comment reopened') : item.annotationAction === 'reply' ? tx('有新回应', 'New reply') : tx('有新批注', 'New comment')}</span>}
+          {item.issueAction && <span>{item.issueAction === 'resolve' ? tx('议题已有决议', 'Issue resolved') : tx('议题重新讨论', 'Issue reopened')}</span>}
           {!item.read && <strong>{tx('未读', 'Unread')}</strong>}{(item.processed || item.resolved) && <span>{tx('已处理', 'Processed')}</span>}</div>
         <div class="collaboration-inbox-copy"><RichProse text={item.title} />{item.reviewReassignment && <p>{tx('原评审人已无权限，请重新指定评审人。', 'The previous reviewer no longer has permission. Assign a new reviewer.')}</p>}{item.text && <RichProse text={item.kind === 'claim' ? claimStatus(item.text) : item.text} />}</div>
         {record && <p>{record.author.displayName} → {record.recipient.displayName} · {invitationStatus(record)}{'role' in record && <> · {roleName(record.role)}</>}</p>}

@@ -1,8 +1,19 @@
-import type { ResearchFeedback } from '../researchProjectTypes';
+import type { ResearchFeedback, ResearchProjectDetail } from '../researchProjectTypes';
 
 export type FeedbackScope = 'all' | 'run' | 'task';
 export type FeedbackStatus = 'all' | 'attention' | 'pending' | 'accepted' | 'executing' | 'completed';
 export type FeedbackTask = { runId: string; taskId: string; taskVersion: string };
+
+export function canRecordFeedbackDecision(feedback: ResearchFeedback, project: Pick<ResearchProjectDetail, 'permissions' | 'runs'>, selfId: string) {
+  const permission = feedback.kind === 'guidance' ? 'guidance' : feedback.kind === 'plan-approval' ? 'approve' : feedback.kind === 'proof-submission' ? 'proof' : 'edit';
+  return project.permissions.edit && (!feedback.target || Boolean(project.runs.find(item => item.runId === feedback.target!.runId)?.permissions[permission]))
+    && (!feedback.review || feedback.review.reviewer.id === selfId || project.permissions.manage);
+}
+
+export function feedbackDecisionStatuses(feedback: ResearchFeedback, selfId: string): ('accepted' | 'declined' | 'needs-info')[] {
+  return feedback.kind === 'proof-submission' && feedback.candidateDelivery?.policy === 'reviewed' && feedback.author.id === selfId
+    ? ['declined', 'needs-info'] : ['accepted', 'declined', 'needs-info'];
+}
 
 /** These are recorded associations, rather than task ids inferred from the feedback text. */
 export function feedbackTaskRefs(feedback: ResearchFeedback) {

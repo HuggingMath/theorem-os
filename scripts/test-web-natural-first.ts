@@ -37,7 +37,7 @@ try {
     const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
     await context.addInitScript(([key, value]) => {
       localStorage.setItem(key, value);
-      sessionStorage.setItem('theorem-os.research-entry.v1', 'lean');
+      if (!sessionStorage.getItem('theorem-os.web-draft-owner.v1')) sessionStorage.setItem('theorem-os.research-entry.v1', 'lean');
     }, [localeStorageKey, locale]);
     const page = await context.newPage(); activePage = page; page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
     page.on('pageerror', error => errors.push(error.message));
@@ -173,7 +173,7 @@ try {
     assert.equal(await page.locator('#run-settings #source, #run-settings #environment, #run-settings #template').count(), 0);
     const typedLean = 'theorem typed_directly (n : Nat) : n = n := by\n  sorry\n';
     await page.locator('#source').fill(typedLean);
-    await page.reload(); await page.locator('#formalize-original').waitFor(); await lean(page);
+    await page.reload(); await page.locator('#source').waitFor({ state: 'visible' });
     assert.equal(await page.locator('#source').inputValue(), typedLean, 'Lean draft survives reload separately from natural language');
     assert.equal(await noOverflow(page), true); assert.deepEqual(await audit(page), []);
     await page.screenshot({ path: path.join(output, `inline-lean-${locale}-${width}.png`), fullPage: true });

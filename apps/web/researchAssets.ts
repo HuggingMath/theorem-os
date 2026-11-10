@@ -159,13 +159,20 @@ export class WebResearchAssets {
   private revision(asset: StoredAsset, expected: number) {
     if (asset.revision !== expected) fail(409, `资产已更新，请刷新后重试。当前版本：${asset.revision}`);
   }
-  list(viewer: string, options: { type?: ResearchAssetKind; query?: string; area?: string; authorId?: string } = {}): ResearchAsset[] {
+  list(viewer: string, options: { type?: ResearchAssetKind; query?: string; area?: string; authorId?: string; environment?: 'standard' | 'mathlib' } = {}): ResearchAsset[] {
     const query = (options.query ?? '').trim().toLocaleLowerCase();
     return this.storage.listRecords(['research', 'assets']).flatMap(id => {
       const asset = this.stored(id);
       if (options.type && asset.type !== options.type || options.authorId && asset.authorId !== options.authorId) return [];
       let item: ResearchAsset;
       try { item = this.view(asset, viewer); } catch (error) { if (error instanceof WebStorageError && error.status === 404) return []; throw error; }
+      if (options.environment && asset.type === 'mathematics') {
+        const release = item.releases.slice().reverse().filter(info => !info.withdrawn)
+          .map(info => this.storedRelease(asset.id, info.version)).find(release => release.mathematics?.environment === options.environment);
+        if (!release) return [];
+        item = { ...item, release, name: release.name, description: release.description, area: release.area,
+          visibility: release.visibility, updatedAt: release.createdAt };
+      }
       if (options.area && item.area !== options.area) return [];
       const declarations = item.release?.mathematics?.declarations.map(entry => `${entry.name} ${entry.type}`).join(' ') ?? '';
       return query && !`${item.name} ${item.description} ${item.area} ${declarations}`.toLocaleLowerCase().includes(query) ? [] : [item];
