@@ -64,6 +64,7 @@ const frames = (page: Page) => page.evaluate(() => new Promise<void>(resolve => 
 async function lateBootstrap(nextPerson: 'Alice' | 'Bob', width: number) {
   const value = await context(width); await login(value, 'Alice');
   const page = current = await value.newPage(); await page.goto(origin + '/people.html');
+  await page.getByRole('link', { name: '我的主页', exact: true }).click();
   await page.getByText('编辑我的资料', { exact: true }).click();
   const draft = page.getByRole('textbox', { name: '简介', exact: true }), text = 'UNSENT_ALICE_DRAFT_' + nextPerson;
   await draft.fill(text); await draft.evaluate(input => input.setAttribute('data-session-draft-marker', 'original'));
@@ -101,7 +102,6 @@ async function lateBootstrap(nextPerson: 'Alice' | 'Bob', width: number) {
     const identityAfter = (await value.cookies(origin)).find(item => item.name === 'theoremos_session')?.value;
     const live = await session(value);
     assert.equal(identityAfter, identityBefore); assert.equal(live.account?.email, newer.account?.email);
-    await page.getByRole('heading', { name: nextPerson, exact: true }).waitFor();
     await page.locator('main[aria-busy="false"]').waitFor(); await frames(page);
     const staleCsrf = await value.request.patch(origin + '/api/auth/account', {
       headers: { 'X-CSRF-Token': captured.session.csrfToken }, data: { completionEmail: false } });
@@ -111,10 +111,15 @@ async function lateBootstrap(nextPerson: 'Alice' | 'Bob', width: number) {
     const result = { name: phase, nextPerson, width, bootstrapUsesSeparateCookie: true, signedInCookieUnchanged: true,
       activeAccount: live.account?.email, staleAnonymousCsrf: 403, draftRetained, originalEditorRetained,
       oldEditorMountedDuringVerification: true, oldEditorHiddenAndInertDuringVerification: true };
+    if (nextPerson === 'Alice') assert.ok(draftRetained && originalEditorRetained, 'Same-account reauthentication must retain the previous unsent editor draft');
+    else {
+      assert.equal(draftRetained, false, 'An Alice draft must not be mounted for Bob');
+      // The explicit Alice profile URL stays selected; verify isolation before opening Bob's own profile.
+      await page.getByRole('link', { name: '我的主页', exact: true }).click();
+    }
+    await page.getByRole('heading', { name: nextPerson, exact: true }).waitFor();
     checks.push(result);
     await page.screenshot({ path: path.join(output, nextPerson === 'Alice' ? 'same-account-draft-after-late-bootstrap.png' : 'new-account-after-late-bootstrap.png'), fullPage: true });
-    if (nextPerson === 'Alice') assert.ok(draftRetained && originalEditorRetained, 'Same-account reauthentication must retain the previous unsent editor draft');
-    else assert.equal(draftRetained, false, 'An Alice draft must not be mounted for Bob');
     let webReads = 0, researchReads = 0;
     const count = (request: import('playwright').Request) => {
       const pathname = new URL(request.url()).pathname;

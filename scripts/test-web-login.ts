@@ -25,6 +25,7 @@ const service = createWebService(config, runner,
 { mailer: async message => { mail.push(message); }, captchaAnswer: () => '24680' });
 // The workbench at the root address; it may already name the run it reopened (?run= or ?chat=) when the load event fires.
 const workbench = (url: URL) => url.origin === origin && url.pathname === '/';
+const loginPage = (url: URL) => url.origin === origin && url.pathname === '/login.html';
 const mark = (check: string) => console.log(`PASS ${check}`);
 let browser: Awaited<ReturnType<typeof startBrowser>> | undefined;
 try {
@@ -38,7 +39,7 @@ try {
   const recordFirstVisit = (request: { url(): string }) => firstVisit.push(new URL(request.url()).pathname);
   page.on('request', recordFirstVisit);
   await page.goto(origin);
-  await page.waitForURL(/\/login\.html$/u);
+  await page.waitForURL(loginPage);
   await page.locator('#send-code:enabled').waitFor();
   page.off('request', recordFirstVisit);
   // The server sends a signed-out visitor to the login page; the workbench bundle is never fetched on the way.
@@ -201,6 +202,7 @@ try {
     if ([850, 320].includes(width)) {
       await fs.writeFile(path.join(output, `topbar-${width}.json`), JSON.stringify(bar, null, 2) + '\n');
       await page.screenshot({ path: path.join(output, `topbar-${width}.png`) });
+      await fs.copyFile(path.join(output, `topbar-${width}.png`), path.join(output, `signed-in-topbar-${width}.png`));
     }
   }
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -241,7 +243,7 @@ try {
   const chatAddress = new URL(page.url()).search, signedIn = await page.context().cookies();
   await page.context().clearCookies();
   await page.evaluate(() => { window.dispatchEvent(new Event('offline')); window.dispatchEvent(new Event('online')); });
-  await page.waitForURL(url => url.pathname === '/login.html' && url.searchParams.has('returnTo'));
+  await page.waitForURL(url => loginPage(url) && url.searchParams.get('returnTo') === `/${chatAddress}`);
   const expiredReturn = new URL(new URL(page.url()).searchParams.get('returnTo')!, origin);
   assert.equal(expiredReturn.origin, origin);
   assert.equal(expiredReturn.pathname, '/');
@@ -283,7 +285,7 @@ try {
   await page.locator('#toast').filter({ hasText: '密码已更新' }).waitFor();
   assert.equal((await (await page.request.get(origin + '/api/session')).json()).account.passwordSet, true);
   await page.click('#logout');
-  await page.waitForURL(/\/login\.html$/u);
+  await page.waitForURL(loginPage);
   // Until the page has its session, the password form cannot be sent: it would carry no session cookie or CSRF token.
   let releaseSession!: () => void;
   const sessionHeld = new Promise<void>(resolve => { releaseSession = resolve; });
@@ -305,9 +307,9 @@ try {
   await page.locator('#account-dialog[open]').waitFor();
   assert.equal(await page.locator('#account-current-wrap').isVisible(), true);
   await page.click('#logout');
-  await page.waitForURL(/\/login\.html$/u);
+  await page.waitForURL(loginPage);
   await page.goto(origin);
-  await page.waitForURL(/\/login\.html$/u);
+  await page.waitForURL(loginPage);
   mark('the account dialog sets a password; the password form waits for the session, a wrong password fails and the right one opens the same account');
 
   for (const width of [375, 320]) {

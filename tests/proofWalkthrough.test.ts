@@ -18,50 +18,50 @@ const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const explainedRecords = () => campaignRecords(root).records.filter(record => record.process?.walkthrough);
 
 describe('mathematical walkthroughs of accepted classic proofs', () => {
-  it('binds every step to the accepted proof and existing record identities without altering native archives', () => {
-    const records = campaignRecords(root).records;
+  const records = campaignRecords(root).records;
+
+  it('covers every walkthrough with unique existing record identities and at least sixty steps', () => {
     expect(proofWalkthroughs).toHaveLength(16);
     expect(new Set(proofWalkthroughs.map(item => item.recordId)).size).toBe(16);
     expect(records.filter(record => record.process?.walkthrough).map(record => record.id).sort()).toEqual(proofWalkthroughs.map(item => item.recordId).sort());
-    let steps = 0;
-    for (const record of records) {
-      const native = JSON.parse(fs.readFileSync(path.join(root, 'research/openai-math', record.campaign!.target, 'process.json'), 'utf8'));
-      expect(native).not.toHaveProperty('walkthrough');
-      expect(record.process!.runs).toEqual(native.runs);
-      expect(record.process!.sources).toEqual(native.sources);
-      const walkthrough = record.process!.walkthrough;
-      if (!walkthrough) continue;
-      expect(walkthrough.recordId).toBe(record.id);
-      expect(walkthrough.proofSha256).toBe(record.campaign!.proofSha256);
-      const final = record.process!.runs.find(run => run.runId === walkthrough.runId)!;
-      const source = record.sources.find(source => source.name === 'Submission.lean')!;
-      expect(hash(source.code)).toBe(walkthrough.proofSha256);
-      expect(final.checks!.some(check => check.scope === 'original' && check.sourceDigest === source.sha256 && check.status === 'kernel_verified')).toBe(true);
-      expect(walkthrough.stages.flatMap(stage => stage.stepIds)).toEqual(walkthrough.steps.map(step => step.id));
-      for (const locale of ['zh', 'en'] as const) {
-        expect(walkthrough.strategy[locale].trim()).not.toBe('');
-        for (const stage of walkthrough.stages) {
-          expect(stage.title[locale].trim()).not.toBe('');
-          expect(stage.summary[locale].trim()).not.toBe('');
-          expect(stage.stepIds.length).toBeGreaterThan(0);
-        }
-      }
-      for (const step of walkthrough.steps) {
-        expect(step.evidence.source.name).toBe('Submission.lean');
-        expect(step.evidence.source.endLine).toBeGreaterThanOrEqual(step.evidence.source.line);
-        expect(source.code.split('\n').slice(step.evidence.source.line - 1, step.evidence.source.endLine).join('\n').trim()).not.toBe('');
-        for (const locale of ['zh', 'en'] as const) for (const field of ['title', 'given', 'claim', 'because', 'next'] as const) {
-          expect(step[field][locale].trim(), record.id + '/' + step.id + '/' + field).not.toBe('');
-        }
-        expect(step.derivation.length).toBeGreaterThanOrEqual(2);
-        for (const line of step.derivation) for (const locale of ['zh', 'en'] as const) {
-          expect(line.statement[locale].trim(), record.id + '/' + step.id + '/statement').not.toBe('');
-          expect(line.reason[locale].trim(), record.id + '/' + step.id + '/reason').not.toBe('');
-        }
-        steps++;
+    expect(records.reduce((steps, record) => steps + (record.process?.walkthrough?.steps.length ?? 0), 0)).toBeGreaterThanOrEqual(60);
+  });
+
+  it.each(records)('binds every step to the accepted proof and existing record identities without altering native archives: $id', record => {
+    const native = JSON.parse(fs.readFileSync(path.join(root, 'research/openai-math', record.campaign!.target, 'process.json'), 'utf8'));
+    expect(native).not.toHaveProperty('walkthrough');
+    expect(record.process!.runs).toEqual(native.runs);
+    expect(record.process!.sources).toEqual(native.sources);
+    const walkthrough = record.process!.walkthrough;
+    if (!walkthrough) return;
+    expect(walkthrough.recordId).toBe(record.id);
+    expect(walkthrough.proofSha256).toBe(record.campaign!.proofSha256);
+    const final = record.process!.runs.find(run => run.runId === walkthrough.runId)!;
+    const source = record.sources.find(source => source.name === 'Submission.lean')!;
+    expect(hash(source.code)).toBe(walkthrough.proofSha256);
+    expect(final.checks!.some(check => check.scope === 'original' && check.sourceDigest === source.sha256 && check.status === 'kernel_verified')).toBe(true);
+    expect(walkthrough.stages.flatMap(stage => stage.stepIds)).toEqual(walkthrough.steps.map(step => step.id));
+    for (const locale of ['zh', 'en'] as const) {
+      expect(walkthrough.strategy[locale].trim()).not.toBe('');
+      for (const stage of walkthrough.stages) {
+        expect(stage.title[locale].trim()).not.toBe('');
+        expect(stage.summary[locale].trim()).not.toBe('');
+        expect(stage.stepIds.length).toBeGreaterThan(0);
       }
     }
-    expect(steps).toBeGreaterThanOrEqual(60);
+    for (const step of walkthrough.steps) {
+      expect(step.evidence.source.name).toBe('Submission.lean');
+      expect(step.evidence.source.endLine).toBeGreaterThanOrEqual(step.evidence.source.line);
+      expect(source.code.split('\n').slice(step.evidence.source.line - 1, step.evidence.source.endLine).join('\n').trim()).not.toBe('');
+      for (const locale of ['zh', 'en'] as const) for (const field of ['title', 'given', 'claim', 'because', 'next'] as const) {
+        expect(step[field][locale].trim(), record.id + '/' + step.id + '/' + field).not.toBe('');
+      }
+      expect(step.derivation.length).toBeGreaterThanOrEqual(2);
+      for (const line of step.derivation) for (const locale of ['zh', 'en'] as const) {
+        expect(line.statement[locale].trim(), record.id + '/' + step.id + '/statement').not.toBe('');
+        expect(line.reason[locale].trim(), record.id + '/' + step.id + '/reason').not.toBe('');
+      }
+    }
   });
 
   it('renders the complete derivation before the task map, including exact source excerpts and links', () => {
