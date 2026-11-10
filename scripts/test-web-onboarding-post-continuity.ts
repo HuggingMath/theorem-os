@@ -56,7 +56,13 @@ try{
   await page.reload();await page.locator('#formalize-original').waitFor();assert.equal(await page.locator('#formalize-original').inputValue(),original);
   checks.push({id:'N1-persistence-failure-visible-download-and-retry',language,width,downloaded:true,retryPreservedOriginal:true});
   // Main also keeps historical problem edits independent from the unfinished home question.
-  const editedRun=readingRun(crypto.randomUUID());service.storage.saveRun(`account:${account.id}`,editedRun);
+  phase=`historical-edit-storage-failure-${language}`;
+  await page.evaluate(()=>{(window as unknown as {allowChatDraftWrite?:boolean}).allowChatDraftWrite=true;});
+  if(await warning.isVisible())await warning.locator('[data-retry-chat-draft]').click();
+  assert.equal(await page.evaluate(text=>Object.values(sessionStorage).some(value=>value.includes(text)),original),true);
+  const recorded=readingRun(),provider=config.providers[0]!;
+  const editedRun=service.jobs.create(`account:${account.id}`,{providerId:provider.id,apiKey:'sk-disposable-unused',model:'fixture',effort:'high',
+   environment:'standard',source:recorded.source,task:recorded.task,maxTurns:1,maxRunSeconds:0,workers:1,coordination:'independent'},provider);
   const editedConversation=service.conversations.create(`account:${account.id}`,{runId:editedRun.id});
   await page.goto(`${origin}/?editProblem=${editedConversation.id}`);await page.locator('#formalize-original').waitFor();
   const edited=`UNSAVED_EDIT_${language}: preserve this independent historical problem edit.`;
