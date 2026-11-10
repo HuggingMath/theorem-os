@@ -544,7 +544,7 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 
 ### 部署来源
 
-构建时传入源码提交：`THEOREMOS_SOURCE_COMMIT=$(git rev-parse HEAD) docker compose -f apps/web/compose.yml build web`，worker 用同一参数（`--build-arg THEOREMOS_SOURCE_COMMIT=…`）。两个镜像都带 `org.opencontainers.image.revision` 标签，Web 的 `/healthz` 返回 `{"ok":true,"commit":"…"}`；未传入时只返回 `ok`。部署后在同一检出目录运行 `scripts/web-deploy-record.sh <THEOREMOS_WEB_PUBLIC_URL> >> deploys.jsonl`（服务只接受该地址的 Host），一行记录提交、工作区是否干净、Web/worker 镜像 ID 与标签、容器实际镜像，以及线上与镜像内 `app.js` 的 SHA-256。`clean` 为 false 时该提交不能代表部署内容，应先提交再部署。回滚使用部署前打的镜像标签，回滚后同样记录一行。
+构建时传入源码提交：`THEOREMOS_SOURCE_COMMIT=$(git rev-parse HEAD) docker compose -f apps/web/compose.yml build web`，worker 用同一参数（`--build-arg THEOREMOS_SOURCE_COMMIT=…`）。两个镜像都带 `org.opencontainers.image.revision` 标签，Web 的 `/healthz` 返回 `{"ok":true,"commit":"…"}`；未传入时只返回 `ok`。部署后在同一检出目录运行 `scripts/web-deploy-record.sh <THEOREMOS_WEB_PUBLIC_URL> >> deploys.jsonl`（服务只接受该地址的 Host），一行记录提交、工作区是否干净、Web/worker 镜像 ID 与标签、容器实际镜像，以及线上与镜像内 `app.js` 的 SHA-256。`clean` 检查受控变更和未跟踪文件（不含 Git 忽略文件）；false 时该提交不能代表部署内容。构建应使用干净检出，并核对忽略文件是否进入 Docker 上下文。记录只采样 `app.js`，不覆盖全部静态资源，也不验证实际运行的 worker 容器。回滚使用部署前打的镜像标签，回滚后同样记录一行。
 
 ### 发布清单
 
@@ -572,9 +572,9 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 
 | 队列 | 同时执行 | 等待+执行上限 | 每账号 |
 | --- | --- | --- | --- |
-| 原题形式化 | 1 | 8 | 1 个进行中、保留 20 条 |
+| 原题形式化 | 1 | 8 | 最多 2 个等待或执行中的任务、保留 20 条 |
 | 证明研究 | `THEOREMOS_WEB_CONCURRENCY`（默认 1，最多 8） | `THEOREMOS_WEB_QUEUE_LIMIT`（默认 8） | 保留上限见运行记录 |
-| 提交前 Lean 检查 | 2 | 8（另排队 6） | 每会话 1 个、每分钟 20 次 |
+| 提交前 Lean 检查 | 2 | 8（另排队 6） | 每页面 1 个、每账号每分钟 20 次 |
 | 证明讲解 | 1 | 4 | 2 |
 
 形式化通过后自动入证明队列；证明队列已满时形式化记录标为 `formalization_research_queue_failed`，用户可显式继续已冻结陈述。重试校验冻结证据、原服务商地址和记录归属，并幂等返回同一 runId。形式化与证明各占自己的执行位，因此 A 的证明运行时 B 的形式化可以同时执行，B 的证明随后在证明队列排队。关联 ID：形式化记录 `id` 等于证明运行的 `formalizationId`，形式化记录的 `runId` 指回该运行，两者都只能由所属账号读取。模型网关自身的并发（例如每个 Key 的上限）不在这些数字内；提高 `THEOREMOS_WEB_CONCURRENCY` 前须确认网关和宿主机 CPU/内存能承担。对应回归见 `tests/webFormalizations.test.ts` 的双账号排队用例。
@@ -652,7 +652,9 @@ Web 容器是 Docker supervisor，挂载 Docker socket，有权限创建和删�
 
 API 包含 `POST /api/providers/:id/check`（只读取模型列表，不调用模型）、`POST /api/formalizations/:id/research`（接续证明）以及 `GET/POST /api/formalizations`、`GET/DELETE /api/formalizations/:id`、`POST /api/formalizations/:id/cancel` 和 `POST /api/formalizations/:id/confirm`（含 `evidenceSha256`）。写操作沿用会话、归属与 CSRF 检查。凭据只驻留执行输入，服务端记录不包含 Key；账户已保存 Key 和管理员配置 Key 可直接使用。任务与证据保存于所有者目录，服务重启会把未完成任务标为中断，不自动重跑。
 
-生成支持配置中的 Sub2API `deepseek-flash` 和 HTTPS Responses 服务（包括 OpenAI），原服务商、模型和预算随记录保存。形式化与后续证明的时间、Token 和证明轮次默认留空；留空或填 0 表示无限制，只有用户填写正数时才启用相应预算。单轮执行与宿主检查也不会为默认无限制的请求补入隐藏时间上限。显式填写的形式化时间最多 30 分钟、Token 最多 2,000,000；这些是有限预算输入的校验上界。默认只调用生成角色；每个账号一次一个任务，全局单并发、最多 8 个等待或执行任务，每个账号最多保留 20 条记录。部署须同时重新构建 Web 静态产物和 worker 镜像，镜像 entrypoint 新增 `formalize` 分支；没有对应 runner 或服务商时页面说明不可用。原 CLI 与离线形式化报告保持独立。
+聊天与独立形式化页面在发送前保存按 owner 隔离的提交身份、原题和非密钥设置；响应丢失后，刷新并手动重试仍使用同一 `requestId`，不要求再次提供 Key，也不重复入队。相同身份和配置返回原记录，配置冲突返回 409，记录已删除返回 410。服务重启后返回中断状态，不自动恢复付费执行。独立页打开明确的记录或例题链接时优先展示链接目标，旧的待恢复草稿不会覆盖它。账号最多接收两项形式化任务，页面展示全局 FIFO 排队位置；运行、取消和后续证明仍按各自任务身份关联。
+
+生成支持配置中的 Sub2API `deepseek-flash` 和 HTTPS Responses 服务（包括 OpenAI），原服务商、模型和预算随记录保存。形式化与后续证明的时间、Token 和证明轮次默认留空；留空或填 0 表示无限制，只有用户填写正数时才启用相应预算。单轮执行与宿主检查也不会为默认无限制的请求补入隐藏时间上限。显式填写的形式化时间最多 30 分钟、Token 最多 2,000,000；这些是有限预算输入的校验上界。默认只调用生成角色；每个账号最多两个等待或执行中的任务，全局单并发、最多 8 个等待或执行任务，每个账号最多保留 20 条记录。部署须同时重新构建 Web 静态产物和 worker 镜像，镜像 entrypoint 新增 `formalize` 分支；没有对应 runner 或服务商时页面说明不可用。原 CLI 与离线形式化报告保持独立。
 
 Token 上限依据服务商返回的用量执行，进行中的请求可能超出；它与时间限制、每日次数额度都不是金额保证。费用由模型服务商收取。旧的零上限或 200,000 Token 证据仍可读取，新记录必须与实际提交的预算一致。页面区分形式化的编译结果与最终独立 Lean 证明验收；默认形式化没有独立语义审核，Lean 验收只保证冻结 Lean 陈述下的证明。
 

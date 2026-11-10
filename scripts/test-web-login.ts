@@ -29,7 +29,7 @@ const mark = (check: string) => console.log(`PASS ${check}`);
 let browser: Awaited<ReturnType<typeof startBrowser>> | undefined;
 try {
   browser = await startBrowser(service.server, port);
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, locale: 'zh-CN' });
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error' && !/status of (?:40[013]|428)/u.test(message.text())) errors.push(message.text()); });
@@ -187,7 +187,8 @@ try {
     await page.setViewportSize({ width, height: 760 });
     await settled(page);
     const bar = await page.locator('#topbar').evaluate(topbar => ({ scroll: topbar.scrollWidth, client: topbar.clientWidth,
-      controls: [...topbar.querySelectorAll<HTMLElement>('button, a')].filter(control => control.getClientRects().length).map(control => {
+      // Closed details can retain descendant rectangles; only rendered controls share this row.
+      controls: [...topbar.querySelectorAll<HTMLElement>('button, a, summary')].filter(control => control.checkVisibility()).map(control => {
         const box = control.getBoundingClientRect();
         return { name: control.id || control.className.split(' ')[0], left: box.left, right: box.right, width: box.width, height: box.height };
       }).sort((a, b) => a.left - b.left) }));
@@ -196,7 +197,11 @@ try {
       assert.ok(bar.controls.some(control => control.name === name && control.right <= width), `${name} is missing at ${width}px: ${JSON.stringify(bar.controls)}`);
     for (const control of bar.controls) assert.ok(control.width >= 24 && control.height >= 24, `${control.name} is under 24px at ${width}px: ${JSON.stringify(control)}`);
     for (const [index, control] of bar.controls.slice(1).entries())
-      assert.ok(control.left >= bar.controls[index].right - 0.5, `${bar.controls[index].name} and ${control.name} overlap at ${width}px`);
+      assert.ok(control.left >= bar.controls[index].right - 0.5, `${bar.controls[index].name} and ${control.name} overlap at ${width}px: ${JSON.stringify(bar.controls)}`);
+    if ([850, 320].includes(width)) {
+      await fs.writeFile(path.join(output, `topbar-${width}.json`), JSON.stringify(bar, null, 2) + '\n');
+      await page.screenshot({ path: path.join(output, `topbar-${width}.png`) });
+    }
   }
   await page.setViewportSize({ width: 1440, height: 900 });
   mark('the signed-in top bar keeps the search button, settings, language and account at 24px or more, without overlap, from 1440 to 320 pixels');
@@ -236,7 +241,11 @@ try {
   const chatAddress = new URL(page.url()).search, signedIn = await page.context().cookies();
   await page.context().clearCookies();
   await page.evaluate(() => { window.dispatchEvent(new Event('offline')); window.dispatchEvent(new Event('online')); });
-  await page.waitForURL(url => url.pathname === '/login.html' && url.search === chatAddress);
+  await page.waitForURL(url => url.pathname === '/login.html' && url.searchParams.has('returnTo'));
+  const expiredReturn = new URL(new URL(page.url()).searchParams.get('returnTo')!, origin);
+  assert.equal(expiredReturn.origin, origin);
+  assert.equal(expiredReturn.pathname, '/');
+  assert.equal(expiredReturn.searchParams.get('chat'), new URLSearchParams(chatAddress).get('chat'));
   await page.locator('#send-code:enabled').waitFor();
   await page.context().addCookies(signedIn);
   await page.reload();
@@ -311,6 +320,11 @@ try {
   mark('the login page fits 375 and 320 pixel screens');
   assert.deepEqual(errors, []);
   console.log('Login checks passed: email and password login, account password setup, run links, account menu, logout and narrow layouts.');
+} catch (error) {
+  const page = browser?.contexts()[0]?.pages()[0];
+  console.error('Login check failed at', page?.url());
+  await page?.screenshot({ path: path.join(output, 'login-failure.png'), fullPage: true }).catch(() => {});
+  throw error;
 } finally {
   await browser?.close();
   await service.close();
