@@ -1,6 +1,6 @@
 /* The conversation is the default page. Detailed artifacts open alongside it on wide screens. */
 #research-conversation-panel{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;overflow:hidden}
-#research-chat-thread{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin}
+#research-chat-thread{position:relative;flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin}
 body[data-view=run] .runs-workspace{display:none;min-width:0;flex-direction:column}
 body[data-view=run][data-output-open=true] .runs-workspace{display:flex;flex:1}
 body[data-view=run] .mobile-switch{display:none}

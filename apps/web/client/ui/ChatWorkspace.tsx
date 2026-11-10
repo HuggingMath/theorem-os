@@ -180,7 +180,7 @@ function TaskMessage(props: ChatThreadProps) {
           <Icon name="file-code-2" />{hasSource ? t('查看当前代码') : t('实时工作区')}</button>}
         {active && props.onCancelTask && <button type="button" class="text-button" data-research-stop onClick={props.onCancelTask}>{t("停止解题")}</button>}
       </p>}
-      {((!solve && !statementDecision) || failed) && <p class="research-conversation-description">{description}</p>}
+      {(!statementDecision || failed) && <p class="research-conversation-description">{description}</p>}
       {solve && <div class="chat-outcome-summary" data-chat-outcomes>
         <p><span>{t('已有成果')}</span><strong>{solve.process.current?.kind === 'proof' ? t('已验收证明') : solve.process.current?.kind === 'candidate' ? t('证明候选，可查看和下载') : hasSource ? t('Lean 陈述，可查看和下载') : t('正在准备，尚无代码')}</strong></p>
         <p><span>{t('当前进展')}</span><strong>{title}</strong></p>

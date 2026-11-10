@@ -176,7 +176,7 @@ try {
   let claimState = (await http<ResearchCollaborationInbox>(peer, 'GET', '/api/research/collaboration/inbox')).items.find(item => item.id === claimKey)!;
   assert.equal(claimState.read, true); assert.equal(claimState.processed, false);
   await save(peer, 'POST', '/api/research/collaboration/inbox/' + encodeURIComponent(claimKey), () => claim.getByRole('button', { name: '从我的待办收起', exact: true }).click());
-  await open(peer, 'people.html'); await inbox.getByRole('button', { name: '已处理', exact: true }).click(); await inbox.locator('[data-inbox-item="' + claimKey + '"]').waitFor();
+  await open(peer, 'workspace.html?tab=inbox'); await inbox.getByRole('button', { name: '已处理', exact: true }).click(); await inbox.locator('[data-inbox-item="' + claimKey + '"]').waitFor();
   claimState = (await http<ResearchCollaborationInbox>(peer, 'GET', '/api/research/collaboration/inbox')).items.find(item => item.id === claimKey)!; assert.equal(claimState.processed, true);
   assert.equal(new URL(claimState.href, origin).searchParams.get('taskVersion'), 'goal-v1');
   checks.push({ name: phase, independentReadState: true, processedPersistedAfterReload: true, preciseTaskLink: true });

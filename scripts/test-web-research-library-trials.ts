@@ -110,6 +110,7 @@ try {
     const before = JSON.stringify(run), beforeCommands = commandCalls;
     const entry = new URLSearchParams({ run: run.id, project: project.id, task: 'target', taskVersion: 'task-v1', commit });
     await page.goto(`${origin}/library.html?${entry}`);
+    await page.locator('[data-library-collection="shared"]').click();
     await page.getByRole('link', { name: new RegExp(`Addition math-${width}`) }).first().click();
     assert.equal(new URL(page.url()).searchParams.get('run'), run.id, 'Directory navigation keeps the exact task context');
     assert.equal(new URL(page.url()).searchParams.get('project'), project.id);
@@ -220,6 +221,7 @@ try {
     await peerContext.route(/^https?:\/\//u, async route => { if (new URL(route.request().url()).origin !== origin) { external.push(route.request().url()); await route.abort(); } else await route.continue(); });
     const peer = await peerContext.newPage(); peer.setDefaultTimeout(12_000); peer.on('pageerror', error => errors.push(error.message));
     await peer.goto(`${origin}/theorems.html`);
+    await peer.locator('main[aria-busy="false"]').waitFor();
     const reviewer = (await peerContext.cookies(origin)).find(item => item.name === 'theoremos_session')!.value;
     project = service.research.projects.setMember(owner, project.id, service.research.projects.identity(reviewer), {
       requestId: 'reviewer', expectedRevision: service.research.projects.detail(owner, project.id).revision, role: 'collaborator' });

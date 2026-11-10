@@ -228,6 +228,9 @@ try {
             since: Number(url.searchParams.get('since') ?? 0), instance: url.searchParams.get('instance') ?? undefined }) });
         }
         if (url.pathname === `/api/runs/${item.id}/outline`) return json({ outline: proofOutline(item) });
+        if (url.pathname === `/api/runs/${item.id}/explanations`) return json({ run: { id: item.id, title: item.title,
+          environment: item.environment, model: item.model, effort: item.effort, proof: item.result?.proof },
+          targets: [], explanations: [], generation: { available: false, reason: 'runtime' } });
       }
       unexpectedApi.push(url.pathname); await route.fulfill({ status: 500, json: { error: `Unexpected proof fixture API: ${url.pathname}` } });
     });
@@ -533,7 +536,10 @@ try {
     assert.equal(await options.getAttribute('open'), null, 'Escape closes record options');
     await optionsToggle.click(); await settled(page); await allFilter.click(); await settled(page);
     assert.equal(await options.getAttribute('open'), null, 'Clicking outside closes record options');
-    assert.equal(await page.locator('[data-solve-process]').getAttribute('open'), null);
+    const diagnostics = page.locator('[data-solve-process]');
+    assert.equal(await diagnostics.getAttribute('open'), '');
+    await diagnostics.locator(':scope > summary').click();
+    assert.equal(await diagnostics.getAttribute('open'), null);
     assert.equal(await page.locator('.research-conversation-status').getAttribute('data-accepted'), 'false');
     await capture('proof-started');
 
