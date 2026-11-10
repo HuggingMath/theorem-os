@@ -72,7 +72,8 @@ try {
         const response = await context.request.get(`${origin}/api/runs/${seed.id}/${operation}`);
         assert.equal(response.status(), 200);
         const archive = await response.json();
-        assert.equal(archive.run.maxTotalTokens, cap);
+        // The server persists omitted budgets as zero, the explicit unlimited value.
+        assert.equal(archive.run.maxTotalTokens, cap ?? 0);
         assert.equal(archive.schema, operation === 'download' ? 'theorem-os.web-archive.v1' : 'theorem-os.web-export.v1');
         await fs.writeFile(path.join(output, `${locale}-source-${cap ?? 'unlimited'}.json`), JSON.stringify(archive, null, 2) + '\n');
 
@@ -80,7 +81,7 @@ try {
         const facts = await page.locator('#import-facts').innerText();
         if (cap === 10_003) await page.screenshot({ path: path.join(output, `${locale}-fractional-import-${width}.png`) });
         await confirmImport(page);
-        const units = cap === undefined ? '' : String(cap / 10_000);
+        const units = String((cap ?? 0) / 10_000);
         assert.equal(await page.locator('#max-tokens').inputValue(), units);
         assert.equal(await page.locator('#max-tokens').evaluate(input => (input as HTMLInputElement).validity.stepMismatch), false);
         assert.equal(await page.locator('#source').inputValue(), archive.run.source);
@@ -91,7 +92,7 @@ try {
         await page.locator('#export-draft').click();
         const ordinary = JSON.parse(await fs.readFile((await (await downloading).path())!, 'utf8'));
         assert.equal(ordinary.schema, 'theorem-os.web-draft.v1');
-        assert.equal(ordinary.draft.maxTotalTokens, cap === undefined ? undefined : units);
+        assert.equal(ordinary.draft.maxTotalTokens, units);
         await importJson(page, ordinary, 'ordinary-draft-roundtrip.json'); await confirmImport(page);
         assert.equal(await page.locator('#max-tokens').inputValue(), units);
         await page.locator('#api-key').fill(credential);
@@ -102,11 +103,11 @@ try {
         assert.equal(posted.maxTotalTokens, cap);
         const { run } = await created.json();
         await waitForRun({ page }, run.id, finished);
-        assert.equal(starts.find(item => item.id === run.id)?.maxTotalTokens, cap);
+        assert.equal(starts.find(item => item.id === run.id)?.maxTotalTokens, cap ?? 0);
         await page.locator('body[data-view="run"]').waitFor({ state: 'attached' });
         const storage = await page.evaluate(() => JSON.stringify(sessionStorage) + JSON.stringify(localStorage));
         assert.equal(storage.includes(credential), false);
-        mark({ locale, width, source: { method: 'GET', path: `/api/runs/${seed.id}/${operation}`, schema: archive.schema, maxTotalTokens: cap ?? null },
+        mark({ locale, width, source: { method: 'GET', path: `/api/runs/${seed.id}/${operation}`, schema: archive.schema, maxTotalTokens: archive.run.maxTotalTokens },
           importedUnits: units, ordinaryDraftUnits: ordinary.draft.maxTotalTokens ?? null, postedTokens: posted.maxTotalTokens ?? null,
           runnerTokens: starts.find(item => item.id === run.id)?.maxTotalTokens ?? null, facts });
       }

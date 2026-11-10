@@ -55,7 +55,7 @@ setInterval(() => {
   }
   if (command === 'complete') finish('completed');
   if (command === 'cancel-request') { controller?.abort(); record('client-aborted'); }
-  if (command === 'request') void request();
+  if (command === 'request' || command.startsWith('request:')) void request();
   if (command === 'ack') { const reply = steerReply; steerReply = undefined; reply?.(); }
 }, 5);
 readline.createInterface({ input: process.stdin }).on('line', line => {
@@ -73,7 +73,10 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   }
   if (call.method === 'turn/interrupt') { record('interrupt'); controller?.abort(); finish('interrupted'); return reply({}); }
   if (call.method === 'turn/steer') {
-    record('steer', params); controller?.abort();
+    record('steer', params);
+    // Stdio acknowledgement and HTTP cancellation travel independently. A test can
+    // hold the latter so the host must reject the obsolete request on its own.
+    if (process.env.FIXTURE_HOLD_STEER_ABORT !== '1') controller?.abort();
     if (process.env.FIXTURE_HOLD_ACK === '1') {
       // The next HTTP request races with the still-unacknowledged steer. It must wait before provider admission.
       void request(); steerReply = () => reply({ turnId: turn }); return;
@@ -93,7 +96,7 @@ const control = (command: string) => fs.writeFileSync(path.join(directory, 'cont
 
 async function fixture(provider: 'sub2api' | 'westlake' = 'sub2api', extra: {
   holdAck?: boolean; turnTimeoutMs?: number; completedOutput?: boolean; validationFeedback?: boolean;
-  submitTool?: boolean;
+  submitTool?: boolean; holdSteerAbort?: boolean;
   beforeRequest?: (requestNumber: number) => void;
 } = {}) {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-notice-'));
@@ -147,6 +150,7 @@ async function fixture(provider: 'sub2api' | 'westlake' = 'sub2api', extra: {
     environment: { PATH: process.env.PATH, [selected.apiKeyEnvironment]: 'offline-fixture-key',
       FIXTURE_TRACE: path.join(directory, 'trace.jsonl'), FIXTURE_CONTROL: path.join(directory, 'control'),
       ...(extra.submitTool ? { FIXTURE_SUBMIT_TOOL: '1', FIXTURE_OUTPUT: path.join(directory, 'OUTPUT.json') } : {}),
+      ...(extra.holdSteerAbort ? { FIXTURE_HOLD_STEER_ABORT: '1' } : {}),
       ...(extra.holdAck ? { FIXTURE_HOLD_ACK: '1' } : {}) },
     requestGate,
   });
@@ -195,6 +199,37 @@ describe('soft notifications at real provider request boundaries', () => {
     expect(cancelled).toEqual([]);
     await session!.interrupt(); expect(await running).toBe('interrupted');
   });
+
+  it.each(['sub2api', 'westlake'] as const)(
+    'rejects the obsolete %s request when steer acknowledgement arrives before HTTP cancellation', async provider => {
+      const { running } = await fixture(provider, { holdSteerAbort: true });
+      const delivered = session!.notify!('Finish your independent review', { waitForRequest: true });
+      void delivered.catch(() => {});
+      streams[0].finish();
+      await expect.poll(() => trace().filter(item => item.event === 'request-returned').length).toBe(1);
+      control('request');
+      await delivered;
+      // Resolving notify precedes the fence's finally handler. Drain those microtasks
+      // before observing whether the obsolete request reached the paid gate.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(streams).toHaveLength(1); expect(sources).toHaveLength(1);
+      await expect.poll(() => trace().filter(item => item.event === 'request-returned').length).toBe(2);
+      expect(trace().filter(item => item.event === 'request-returned').at(-1).status).toBeGreaterThanOrEqual(400);
+      expect(trace().filter(item => item.event === 'steer')).toHaveLength(1);
+      expect(receipts).toMatchObject([{ complete: true, usage: { totalTokens: 12 } }]);
+      expect(cancelled).toEqual([]); expect(incompleteUsage).toBe(0);
+
+      control('request:after-notice');
+      await expect.poll(() => streams.length).toBe(2);
+      streams[1].finish();
+      await expect.poll(() => receipts.length).toBe(2);
+      expect(sources).toEqual(Array(2).fill(provider === 'sub2api' ? 'responses-relay' : 'chat-completions-bridge'));
+      expect(receipts).toMatchObject([
+        { complete: true, usage: { totalTokens: 12 } }, { complete: true, usage: { totalTokens: 12 } },
+      ]);
+      expect(cancelled).toEqual([]); expect(incompleteUsage).toBe(0);
+      await session!.interrupt(); expect(await running).toBe('interrupted');
+    });
 
   it.each(['sub2api', 'westlake'] as const)(
     'defers invalid-output feedback until the %s request settles and fences the next admission', async provider => {

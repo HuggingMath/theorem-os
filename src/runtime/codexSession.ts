@@ -269,7 +269,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   const useResponsesRelay = providerId === SUB2API_PROVIDER.id && !options.readIsolation && Boolean(options.requestGate);
   const activeRequests = new Set<object>();
   let requestTurn = 0, turnSettled = true, turnStopping = false;
-  let notificationFence: { promise: Promise<void>; release(): void } | undefined;
+  type NotificationFence = { promise: Promise<void>; release(): void; steered: boolean };
+  let notificationFence: NotificationFence | undefined;
   let requestStateChanged = () => {};
   let cancelNotifications = () => {};
   let drainSubmittedRequests: (() => void) | undefined;
@@ -289,12 +290,13 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   };
   requestGate.beforeRequest = async signal => {
     const turn = requestTurn;
+    let deferredFence: NotificationFence | undefined;
     await options.requestGate?.beforeRequest?.(signal);
     if ([...notices].some(notice => notice.waitForRequest)) {
       // A settled response may still be executing its submission tool. The next
       // request proves those tools have finished; prefer their valid output to steer.
       if (!turnSettled && !turnStopping) checkCompletedOutput?.();
-      if (!turnSettled && !turnStopping) flushNotifications(true);
+      if (!turnSettled && !turnStopping) deferredFence = flushNotifications(true);
     }
     // A subsequent HTTP request may already be queued when steer is sent. Keep it outside
     // provider admission until Codex acknowledges the notice, so steer cannot cancel paid work.
@@ -309,6 +311,9 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     }
     signal.throwIfAborted();
     if (turn !== requestTurn || turnSettled || turnStopping) throw new Error('math_codex_notification_turn_settled');
+    // This request predates the delivered instructions. Stdio acknowledgement can
+    // beat its HTTP cancellation; only a new request can carry the updated context.
+    if (deferredFence?.steered) throw new Error('math_codex_notification_request_superseded');
   };
   const envKey = provider && typeof provider === 'object' && typeof provider.env_key === 'string'
     ? provider.env_key : undefined;
@@ -431,12 +436,12 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     for (const notice of notices) notice.reject(new Error('math_codex_notification_turn_settled'));
     notices.clear(); releaseFence();
   };
-  const flushNotifications = (atRequest = false) => {
+  const flushNotifications = (atRequest = false): NotificationFence | undefined => {
     if (!notices.size || activeRequests.size || notificationFence || !activeTurn || turnSettled || turnStopping || closing) return;
     if (![...notices].some(notice => !notice.waitForRequest || atRequest)) return;
     const turnId = activeTurn, turn = requestTurn;
     let release!: () => void;
-    const fence = { promise: new Promise<void>(resolve => { release = resolve; }), release: () => release() };
+    const fence: NotificationFence = { promise: new Promise<void>(resolve => { release = resolve; }), release: () => release(), steered: false };
     notificationFence = fence;
     // The bridge may settle accounting while writing its terminal event. Finish that write
     // before sending input, while the fence already protects the next provider request.
@@ -449,6 +454,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       if (activeRequests.size) { releaseFence(fence); return; }
       const batch = [...notices].filter(notice => notice.turn === turn && notice.turnId === turnId &&
         (!notice.waitForRequest || atRequest));
+      fence.steered = true;
       void rpc.request('turn/steer', { threadId, expectedTurnId: turnId,
         input: batch.map(notice => ({ type: 'text', text: notice.message, text_elements: [] })) })
         .then(() => {
@@ -459,6 +465,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           releaseFence(fence); flushNotifications();
         });
     });
+    return fence;
   };
   const notify: NonNullable<MathAgentSession['notify']> = async (message, notifyOptions) => {
     if (!activeTurn || turnSettled || turnStopping || closing) {
