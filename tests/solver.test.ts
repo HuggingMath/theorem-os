@@ -2517,7 +2517,9 @@ describe('isolated solver and host acceptance', () => {
     expect(context.instructions).toContain('leave Lean sources unchanged during planning');
     expect(context.instructions).toContain('Return the plan without running Lean diagnostics');
     expect(context.instructions).not.toContain('FULL_CLOSED_LEAN_TYPE');
-    const example = JSON.parse(context.instructions.match(/Write one JSON object in RESEARCH\.md: (\{.*?\})\. Include/u)![1]);
+    const exampleText = context.instructions.match(/Use this plan schema for the delivery-log event, or for a math-plan JSON fence in RESEARCH\.md when returning without publication: (\{.*?\})\. Include/u);
+    expect(exampleText).not.toBeNull();
+    const example = JSON.parse(exampleText![1]);
     example.tasks[0].theoremName = 'Submission.helper';
     example.tasks[0].type = 'True';
     example.tasks[1].theoremName = 'Submission.first';
@@ -2775,15 +2777,20 @@ describe('isolated solver and host acceptance', () => {
       else finishAssignment(action, options);
       return 'completed';
     });
+    let invalidOffered = false;
     const assign = (...inputs: Parameters<typeof directSolverModules.M5.assign>) => {
-      if (inputs[1].id === 'prover-1') return inputs[0].find(node => node.task.kind === kind);
-      // Let the invalid worker reach host validation first, then finish through eligible peers.
-      const rejected = readSolverRunState(`${output}.runtime/state.json`).workers!
-        .find(worker => worker.id === 'prover-1')?.error;
-      return rejected ? directSolverModules.M5.assign(...inputs) : undefined;
+      if (inputs[1].id === 'prover-1') {
+        const invalid = inputs[0].find(node => node.task.kind === kind);
+        if (invalid) invalidOffered = true;
+        return invalid;
+      }
+      // The host validates this return synchronously. Keep ordinary work available after
+      // the bad selection instead of making readiness depend on a later state-file save.
+      return invalidOffered ? directSolverModules.M5.assign(...inputs) : undefined;
     };
-    expect(await runSolver([...args, '--workers', '8', '--max-turns', '10'], directory,
-      { ...directSolverModules, M5: { ...directSolverModules.M5, assign } })).toBe(0);
+    const code = await runSolver([...args, '--workers', '8', '--max-turns', '10'], directory,
+      { ...directSolverModules, M5: { ...directSolverModules.M5, assign } });
+    expect(code, fs.readFileSync(output, 'utf8')).toBe(0);
     expect(readSolverRunState(`${output}.runtime/state.json`).workers!.find(worker => worker.id === 'prover-1'))
       .toMatchObject({ error: 'math_task_assignment_invalid', turns: 0 });
     expect(host.createSession.mock.calls.some(([options]) => options.environment!.DEEPSCIENTIST_MATH_WORKER_ID === 'prover-1'))
@@ -4582,8 +4589,11 @@ describe('isolated solver and host acceptance', () => {
       if (action.kind === 'lead') writePlan(options.workspace, tasks);
       else if (action.kind === 'task' && action.task.id === task.id) {
         assignments.push(action.assignment.assignmentId ?? 'legacy');
-        fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), JSON.stringify({
-          summary: `Discriminating evidence checkpoint ${assignments.length}.`, conclusion: 'inconclusive' }));
+        const summary = `Discriminating evidence checkpoint ${assignments.length}.`;
+        // This fixture exercises assignment/thread recovery. A structured partial finding
+        // has a separate publication protocol that correctly requests a new Lead decision.
+        fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), assignments.length < 3
+          ? summary + '\n' : JSON.stringify({ summary, conclusion: 'inconclusive' }));
         return assignments.length < 3 ? 'checkpoint' : 'completed';
       } else throw new Error('unexpected_review_identity_fixture_assignment');
       return 'completed';
