@@ -147,6 +147,8 @@ jobs:
         run: bunx vitest run --maxWorkers=4 tests/taskTypeContract.test.ts tests/projectionNotation.test.ts tests/taskSourceImplicitInstances.test.ts tests/taskSourceMacroProjection.test.ts tests/taskSourceNotationHints.test.ts tests/taskSourceNotationContext.test.ts tests/solverRetainedSourceGoals.test.ts tests/solverConditionalLibraryImports.test.ts tests/solverCanonicalGoalProof.test.ts
       - name: Verify search tools, failure reuse and completed research delivery
         run: bunx vitest run --maxWorkers=4 tests/declarationSearch.test.ts tests/continuationSearch.test.ts tests/tacticBatteryFailureCache.test.ts tests/solverAssemblyLeadYield.test.ts tests/solverCompletedGuidance.test.ts tests/codexCompletedResponse.test.ts
+      - name: Verify definition contracts, conditional publication and research continuation
+        run: bunx vitest run --maxWorkers=4 tests/conditionalProjectionElaborator.test.ts tests/customSolverModules.test.ts tests/definitionContractChecks.test.ts tests/nextCheckNegativeDecisions.test.ts tests/planResearchConnections.test.ts tests/planningEvidence.test.ts tests/researchDurableCheckpoint.test.ts tests/solver.test.ts tests/solverDefinitionContractChecks.test.ts tests/solverKnowledgeConcurrency.test.ts tests/solverNextCheckPlanLifecycle.test.ts tests/solverResearchPublication.test.ts tests/solverResearchTransfer.test.ts tests/taskConditionalUniverses.test.ts tests/taskSourceConditionalContext.test.ts tests/verifiedProofPublication.test.ts tests/webModuleIdentity.test.ts
 
   publish:
     needs: [verify, verify-solver, verify-research-workflows]
