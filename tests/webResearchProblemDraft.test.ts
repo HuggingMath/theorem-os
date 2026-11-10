@@ -16,6 +16,9 @@ const hash = (text: string) => createHash('sha256').update(text).digest('hex');
 const currentHref = 'https://workbench.example/?archiveProblem=example';
 
 describe('explicit problem-to-draft handoff', () => {
+  const records = campaignRecords(root).records;
+  const index = archiveIndex({ schema: 'theoremos.public-archive.v1', repository: '', archiveRevision: '', snapshotAt: '', records });
+
   it('pins archive and project links to source identities and clears only handoff parameters', () => {
     const archive = { kind: 'archive' as const, id: 'openai_triangle_face', sourceDigest: 'a'.repeat(64) };
     expect(readResearchProblemDraft(new URL(researchProblemDraftHref(archive), currentHref).searchParams)).toEqual(archive);
@@ -30,8 +33,7 @@ describe('explicit problem-to-draft handoff', () => {
   });
 
   it('returns to the original accepted reading step and directory without allowing the handoff to choose a different source', async () => {
-    const records = campaignRecords(root).records, record = records.find(record => record.id === 'openai_triangle_face')!;
-    const index = archiveIndex({ schema: 'theoremos.public-archive.v1', repository: '', archiveRevision: '', snapshotAt: '', records });
+    const record = records.find(record => record.id === 'openai_triangle_face')!;
     const original = record.sources.find(source => source.name === 'Challenge.lean')!;
     const directory = `/theorems.html?collection=solved&q=triangle&field=Combinatorial+optimization&sort=title&offset=14#problem-${record.id}`;
     const reading = new URL('/classics/en/archive.html', currentHref);
@@ -72,8 +74,6 @@ describe('explicit problem-to-draft handoff', () => {
   });
 
   it('reads all 18 original statements from fixed archive files and never reuses the accepted proof as a new input', async () => {
-    const records = campaignRecords(root).records;
-    const index = archiveIndex({ schema: 'theoremos.public-archive.v1', repository: '', archiveRevision: '', snapshotAt: '', records });
     const requests: string[] = [];
     const json = async <T,>(url: string) => { requests.push(url); expect(url).toBe('/classics/data/index.json'); return index as T; };
     const text = async (url: string) => {
