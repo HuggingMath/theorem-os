@@ -109,6 +109,7 @@ export function advisoryCheckpointNoticeOnly(assignment: CooperativeAction | und
 
 export type WorkerAccess = { environment: NodeJS.ProcessEnv; corpusFile?: string; retrievalRoot: string;
   continuation?: ContinuationSnapshot; mathTools?: MathTools;
+  assertKnowledgeCurrent?: () => void;
   installedLibrary?: KnowledgeContextSnapshot;
   libraryCatalog?: LibraryAccess;
   knowledgeFile?: string; knowledgeDigest?: string; knowledgeSnapshot?: KnowledgeContextSnapshot };
@@ -220,6 +221,7 @@ export async function runResearchWorkers(input: {
         dispatchDigest: string }>();
       const context = (feedback?: string, previousCheck?: ProofCheck, previousFailures = research.failures,
         assignment?: CooperativeAction) => {
+        access.assertKnowledgeCurrent?.();
         if (access.libraryCatalog) writeLibraryAccess(state.problem, worker.worktree, access.libraryCatalog);
         const scoped = cooperation?.contextState(assignment, worker);
         const currentContext = { ...modules.M4.build(state.problem,
@@ -974,6 +976,7 @@ export async function runResearchWorkers(input: {
         close, save, emit, checked: () => { retries = 0; } });
       try {
         await waitForRecovery(true);
+        access.assertKnowledgeCurrent?.();
         if (!cooperation && !research.turns && access.installedLibrary && modules.M2.applyLibrary && budget().remainingMs > 0) {
           const closed = await applyOriginalLibraryTasks({ problem: state.problem, library: access.installedLibrary,
             taskText: input.taskText, environmentDigest: state.environmentDigest, worktree: worker.worktree, workerId: worker.id,

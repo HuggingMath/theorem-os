@@ -4,10 +4,11 @@ import { prepareLibraryKnowledge } from '../../src/solver/theoremKnowledgeLibrar
 
 export function main(argv: string[]) {
   const { values } = parseArgs({ args: argv, options: { workspace: { type: 'string' }, output: { type: 'string' },
-    state: { type: 'string', multiple: true }, 'auto-library-build': { type: 'string', multiple: true } } });
+    state: { type: 'string', multiple: true }, 'auto-library-build': { type: 'string', multiple: true }, 'receipt-file': { type: 'string' } } });
   if (!values.workspace?.trim() || !values.output?.trim()) throw new Error('--workspace and --output are required');
   return prepareLibraryKnowledge(values.workspace, values.output, {
     stateFiles: values.state, autoLibraryBuilds: values['auto-library-build'],
+    receiptFile: values['receipt-file'],
   });
 }
 

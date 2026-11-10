@@ -22,6 +22,9 @@ const readline = require('node:readline');
 fs.writeFileSync(process.env.CODEX_HOME + '/provider-environment.json', JSON.stringify({
   deepseekKeyPresent: Boolean(process.env.DEEPSEEK_API_KEY), unrelatedSecretPresent: Boolean(process.env.UNRELATED_FIXTURE_SECRET),
 }));
+fs.writeFileSync(process.env.CODEX_HOME + '/library-host-environment.json', JSON.stringify({
+  hostConfigPresent: process.env.THEOREMOS_LIBRARY_HOST_CONFIG !== undefined,
+}));
 if (process.env.WESTLAKEHPC_API_KEY) fs.writeFileSync(process.env.CODEX_HOME + '/westlake-environment.json', JSON.stringify({
   receivedLocalCredential: process.env.WESTLAKEHPC_API_KEY !== 'upstream-westlake-fixture-secret',
   receivedSecondaryCredential: Boolean(process.env.WESTLAKEHPC_API_KEY_2),
@@ -201,6 +204,13 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     session = undefined;
   });
   afterEach(async () => { await session?.close(); vi.unstubAllEnvs(); fs.rmSync(root, { recursive: true, force: true }); });
+
+  it('does not expose the host library configuration path to the agent process', async () => {
+    vi.stubEnv('THEOREMOS_LIBRARY_HOST_CONFIG', '/host/private/library-config.json');
+    session = await createCodexMathSession(options);
+    expect(JSON.parse(fs.readFileSync(path.join(root, 'library-host-environment.json'), 'utf8')))
+      .toEqual({ hostConfigPresent: false });
+  });
 
   it('passes only the selected provider credential after environment projection and excludes it from tools', async () => {
     const profile = path.join(root, 'deepseek');

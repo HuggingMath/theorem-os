@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { bootstrapLeanTask } from '../src/math/leanTask';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { bootstrapLeanTask, leanTaskId } from '../src/math/leanTask';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import { LIBRARY_PACK_SCHEMA, MAX_LIBRARY_PACK_BYTES, MAX_LIBRARY_PACK_MODULES, type LibraryPack } from '../src/math/libraryPacks';
 import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
@@ -10,9 +10,10 @@ import { agentLibrary, LIBRARY_ACCESS_FILE, LIBRARY_REQUEST_FILE, LibraryInstall
 import { readLibraryCatalog, writeLibraryCatalog } from '../src/solver/libraryCatalog';
 import { git, readSolverProblem } from '../src/solver/problem';
 import { temporaryDirectory } from './helpers/files';
+import { writeLibraryHostFixture } from './helpers/libraryHostFixture';
 
 const roots: string[] = [];
-afterEach(() => roots.splice(0).forEach(root => fs.rmSync(root, { recursive: true, force: true })));
+afterEach(() => { vi.unstubAllEnvs(); roots.splice(0).forEach(root => fs.rmSync(root, { recursive: true, force: true })); });
 const foundation = 'Submission/Library/Access/Foundation.lean';
 const installed = 'Submission/Library/Access/Installed.lean';
 const support = 'Submission/Library/Access/Support.lean';
@@ -180,6 +181,26 @@ describe('agent access to the complete pinned library', () => {
 });
 
 describe('host validation of requested frozen continuations', () => {
+  it('rejects full-release access and continuation materialization for a host-bound task', () => {
+    const f = fixture();
+    f.library.request(['Access.all_hold'], 'Request an uninstalled declaration.');
+    const source = 'import Mathlib\ntheorem hosted_goal : True := by sorry\n';
+    const host = writeLibraryHostFixture(path.join(f.root, 'host'), [
+      { taskId: leanTaskId(source), selection: { mode: 'mapped', exclusionKeys: ['FixtureTask'] } }]);
+    vi.stubEnv('THEOREMOS_LIBRARY_HOST_CONFIG', host.configPath);
+    const receipt = bootstrapLeanTask(path.join(f.root, 'hosted-task'), { source, task: 'prove', environment: 'openai-math' });
+    const problem = readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath);
+    const before = fs.readFileSync(receipt.activeProblemPath, 'utf8');
+    const request = { ...requestValue(f), problemReceiptDigest: problem.receiptDigest,
+      seedCommit: git(receipt.workspaceRoot, ['rev-parse', 'HEAD']) };
+    expect(() => writeLibraryAccess(problem, receipt.workspaceRoot, f.access)).toThrow('library_knowledge_catalog_unauthorized');
+    expect(() => requestedLibraryPack(problem, request, f.access, receipt.workspaceRoot))
+      .toThrow('library_knowledge_catalog_unauthorized');
+    expect(fs.existsSync(path.join(receipt.workspaceRoot, LIBRARY_ACCESS_FILE))).toBe(false);
+    expect(fs.existsSync(path.join(receipt.projectRoot, requested))).toBe(false);
+    expect(fs.readFileSync(receipt.activeProblemPath, 'utf8')).toBe(before);
+  });
+
   it('retains shared modules from the exact seed while extending a catalog pack with their original imports intact', () => {
     const sharedBase = 'Submission/Library/Shared/Base.lean', shared = 'Submission/Library/Shared/Result.lean';
     const sharedSources = {

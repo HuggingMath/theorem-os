@@ -3,7 +3,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { canonicalMathJson, mathDigest, parseMathJson, readMathFile, readMathText, syncMathDirectory, writeMathFrozen } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath } from '../math/paths';
-import { theoremKnowledgeEntrySchema, theoremKnowledgeStats, validateKnowledgeMetadata, validateTheoremKnowledge,
+import { libraryKnowledgeAuthorizationSchema, theoremKnowledgeEntrySchema, theoremKnowledgeStats, validateKnowledgeMetadata, validateTheoremKnowledge,
   type TheoremKnowledgeBase } from './theoremKnowledge';
 import { knowledgeRouteFindingSchema } from './theoremKnowledgeFindings';
 
@@ -18,6 +18,7 @@ const packedSchema = z.object({
   routeFindings: z.array(knowledgeRouteFindingSchema).optional(),
   contexts: z.record(hash, z.record(z.string(), hash)), sources: z.record(hash, sourceIdentity),
   objectsDirectory: directoryName, originSha256: hash.optional(),
+  libraryAuthorization: libraryKnowledgeAuthorizationSchema.optional(),
 }).strict();
 type PackedManifest = Omit<z.infer<typeof packedSchema>, 'sources'> & { sources: Record<string, { bytes: number }> };
 
@@ -69,6 +70,7 @@ function packedView(resolved: string, text: string, digest: string, manifest: Pa
   const base: TheoremKnowledgeBase = { schema: 'theorem-os.theorem-knowledge.v1',
     evidence: manifest.evidence, requiresFreshCheck: manifest.requiresFreshCheck,
     entries: manifest.entries, contexts: manifest.contexts, sources,
+    ...(manifest.libraryAuthorization ? { libraryAuthorization: manifest.libraryAuthorization } : {}),
     ...(manifest.routeFindings ? { routeFindings: manifest.routeFindings } : {}) };
   validateKnowledgeMetadata(base, manifest.sources);
   objectsRoot(resolved, manifest);
@@ -91,6 +93,7 @@ export function writePackedKnowledge(file: string, base: TheoremKnowledgeBase, o
   const checked = validateTheoremKnowledge(base);
   const manifest: PackedManifest = { schema: 'theorem-os.theorem-knowledge.v2', evidence: checked.evidence,
     requiresFreshCheck: checked.requiresFreshCheck, entries: checked.entries, contexts: checked.contexts,
+    ...(checked.libraryAuthorization ? { libraryAuthorization: checked.libraryAuthorization } : {}),
     ...(checked.routeFindings ? { routeFindings: checked.routeFindings } : {}),
     sources: Object.fromEntries(Object.entries(checked.sources).map(([digest, text]) => [digest, { bytes: Buffer.byteLength(text) }])),
     objectsDirectory, ...(originSha256 === undefined ? {} : { originSha256 }) };

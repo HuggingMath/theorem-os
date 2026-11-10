@@ -39,6 +39,9 @@ import { readKnowledgeCatalog, writePackedKnowledge } from '../src/solver/theore
 import { buildRunInspection } from '../src/solver/inspection';
 import { createTaskConnectionCheck } from '../src/solver/taskConnections';
 import { deferred } from './helpers/async';
+import { bootstrapLeanTask, leanTaskId } from '../src/math/leanTask';
+import { writeLibraryHostFixture } from './helpers/libraryHostFixture';
+import { prepareLibraryKnowledge } from '../src/solver/theoremKnowledgeLibrary';
 import { planApprovalLog } from '../src/solver/planApproval';
 
 const host = vi.hoisted(() => ({ verify: vi.fn(), createSession: vi.fn(), officialGate: vi.fn(), build: vi.fn(), delay: vi.fn(),
@@ -136,6 +139,8 @@ describe('isolated solver and host acceptance', () => {
     directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'math-solver-test-')));
     // Offline verifier fixtures must not inherit the developer's math.env or toolchain.
     vi.stubEnv('DEEPSCIENTIST_MATH_ENV_FILE', path.join(directory, 'math.env'));
+    vi.stubEnv('DEEPSCIENTIST_MATH_PANTOGRAPH_MANIFEST', undefined);
+    vi.stubEnv('DEEPSCIENTIST_MATH_PANTOGRAPH_SHA256', undefined);
     workspace = path.join(directory, 'public'); project = path.join(workspace, 'generated', 'p');
     fs.mkdirSync(project, { recursive: true });
     fs.mkdirSync(`${workspace}.source`);
@@ -388,6 +393,97 @@ describe('isolated solver and host acceptance', () => {
         sourceDigest: 'a'.repeat(64), receiptIds: ['historical-receipt'] },
     }]));
   }
+
+  function hostedKnowledgeFixture() {
+    const source = 'import Mathlib\ntheorem hosted_goal : True := by sorry\n';
+    const hostFixture = writeLibraryHostFixture(path.join(directory, 'host'), [
+      { taskId: leanTaskId(source), selection: { mode: 'mapped', exclusionKeys: ['FixtureTask'] } }]);
+    vi.stubEnv('THEOREMOS_LIBRARY_HOST_CONFIG', hostFixture.configPath);
+    const hostedWorkspace = path.join(directory, 'hosted-task');
+    const receipt = bootstrapLeanTask(hostedWorkspace, { source, task: 'prove', environment: 'openai-math' });
+    host.packages = path.join(directory, 'hosted-packages'); fs.mkdirSync(host.packages);
+    const catalog = prepareLibraryKnowledge(hostedWorkspace, path.join(directory, 'authorized.json'));
+    if (!catalog.enabled) throw new Error('expected catalog');
+    return { ...hostFixture, receipt, catalog, hostedArgs: args.map(value => value === workspace ? hostedWorkspace : value) };
+  }
+
+  it('copies only authorized knowledge on hosted startup and rejects policy drift before resume', async () => {
+    const f = hostedKnowledgeFixture();
+    const hostedArgs = [...f.hostedArgs, '--workers', '4', '--startup-only', '--knowledge-base', f.catalog.file];
+    expect(await runSolver(hostedArgs, directory), vi.mocked(console.log).mock.calls.flat().join('\n')).toBe(0);
+    expect(host.createSession).not.toHaveBeenCalled();
+    const state = readSolverRunState(output + '.runtime/state.json');
+    for (const worker of state.workers!) {
+      const copy = path.join(worker.worktree, state.problem.projectRelative, '.lake/theorem-knowledge.json');
+      const loaded = readKnowledgeCatalog(copy, f.catalog.sha256);
+      expect(loaded.base.libraryAuthorization!.binding).toEqual(f.receipt.libraryBinding);
+      expect(loaded.base.entries).toHaveLength(2);
+    }
+    fs.appendFileSync(f.configPath, ' ');
+    expect(await runSolver([...hostedArgs, '--resume'], directory)).toBe(1);
+    expect(host.createSession).not.toHaveBeenCalled();
+  });
+  it('rejects raw historical catalogs and continuation attachments before starting a hosted worker', async () => {
+    const f = hostedKnowledgeFixture(), raw = knowledgeFixture();
+    expect(await runSolver([...f.hostedArgs, '--startup-only', '--knowledge-base', raw.file], directory)).toBe(1);
+    expect(await runSolver([...f.hostedArgs, '--continuation-manifest', '/missing'], directory)).toBe(1);
+    expect(await runSolver([...f.hostedArgs, '--workers', '2', '--continuation-source-run', '/missing'], directory)).toBe(1);
+    expect(host.createSession).not.toHaveBeenCalled();
+  });
+  it('rejects a full release catalog before reading it or admitting a hosted provider', async () => {
+    const f = hostedKnowledgeFixture();
+    expect(await runSolver([...f.hostedArgs, '--library-catalog', '/missing',
+      '--library-catalog-sha256', 'a'.repeat(64)], directory)).toBe(1);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('library_knowledge_catalog_unauthorized'));
+    expect(host.connectivity).not.toHaveBeenCalled();
+    expect(host.createSession).not.toHaveBeenCalled();
+  });
+  it('rechecks host policy after preparation without a historical knowledge catalog', async () => {
+    const f = hostedKnowledgeFixture();
+    const applyLibrary = vi.spyOn(directSolverModules.M2, 'applyLibrary');
+    host.connectivity.mockImplementation(async () => {
+      fs.appendFileSync(f.configPath, ' '); return { status: 'reachable', httpStatus: 401 };
+    });
+    expect(await runSolver(f.hostedArgs, directory)).toBe(1);
+    expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ status: 'runtime_error', reason: 'library_host_binding_changed' });
+    expect(applyLibrary).not.toHaveBeenCalled();
+    expect(host.createSession).not.toHaveBeenCalled();
+  });
+  it('rechecks installed-only host policy between model turns', async () => {
+    const f = hostedKnowledgeFixture();
+    vi.spyOn(directSolverModules.M2, 'applyLibrary').mockResolvedValue({ status: 'skipped', reason: 'fixture-policy-check', candidates: [] });
+    host.verify.mockImplementation(async request => failed(verified(request)));
+    const turn = vi.fn(async () => {
+      fs.appendFileSync(f.configPath, ' ');
+      return 'completed';
+    });
+    host.createSession.mockImplementation(session('hosted-policy-drift', turn));
+    expect(await runSolver([...f.hostedArgs, '--max-turns', '2'], directory)).toBe(1);
+    expect(turn).toHaveBeenCalledOnce();
+    expect(host.createSession).toHaveBeenCalledOnce();
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('library_host_binding_changed'));
+    expect(readSolverRunState(output + '.runtime/state.json').knowledgeDigest).toBeUndefined();
+    expect(host.officialGate).not.toHaveBeenCalled();
+  });
+  it('rejects host policy changes during preparation before copying knowledge to a worker', async () => {
+    const f = hostedKnowledgeFixture();
+    host.connectivity.mockImplementation(async () => {
+      fs.appendFileSync(f.configPath, ' '); return { status: 'reachable', httpStatus: 401 };
+    });
+    expect(await runSolver([...f.hostedArgs, '--startup-only', '--knowledge-base', f.catalog.file], directory)).toBe(1);
+    expect(host.createSession).not.toHaveBeenCalled();
+    const state = readSolverRunState(output + '.runtime/state.json');
+    expect(fs.existsSync(path.join(state.worktree, state.problem.projectRelative, '.lake/theorem-knowledge.json'))).toBe(false);
+  });
+  it('rejects a saved hosted continuation on resume even when no attachment flag is supplied', async () => {
+    const f = hostedKnowledgeFixture(), hostedArgs = [...f.hostedArgs, '--startup-only', '--knowledge-base', f.catalog.file];
+    expect(await runSolver(hostedArgs, directory)).toBe(0);
+    const stateFile = output + '.runtime/state.json', state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    state.continuationDigest = 'a'.repeat(64); fs.writeFileSync(stateFile, JSON.stringify(state));
+    expect(await runSolver([...hostedArgs, '--resume'], directory)).toBe(1);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('library_knowledge_history_unauthorized'));
+    expect(host.createSession).not.toHaveBeenCalled();
+  });
 
   it.each(['v1', 'v2'] as const)('prepares identical read-only %s knowledge snapshots for all four workers without opening a model', async format => {
     const catalog = knowledgeFixture('knowledge.json', 'True', format);

@@ -6,10 +6,13 @@ import { fileURLToPath } from 'node:url';
 import { parseFlags, required } from './arguments';
 import { autoLibraryLiveUsage, autoLibraryPackFor, autoLibraryRunUsage, readAutoLibraryPool } from '../../src/math/autoLibrary';
 import { getLeanTaskEnvironment, type LeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
-import { LEAN_TASK_SOURCE_MAX_BYTES } from '../../src/math/leanTask';
+import { autoLibraryHostTarget, resolveAutoLibraryBase } from '../../src/math/autoLibraryHost';
+import { authorizeHostAutoTask, hostAutoEvidence, libraryHostConfigPath, resolveHostLibrary } from '../../src/math/libraryHostConfig';
+import { canonicalLibraryJson } from '../../src/math/libraryRelease';
+import { LEAN_TASK_SOURCE_MAX_BYTES, leanTaskId } from '../../src/math/leanTask';
 import { readLibraryPack, summarizeLibraryPack } from '../../src/math/libraryPacks';
 import { readMathBuildManifest } from '../../src/math/mathBuildManifest';
-import { readMathText, writeMathJsonDurable } from '../../src/math/mathRuntimeIo';
+import { mathDigest, readMathText, writeMathJsonDurable } from '../../src/math/mathRuntimeIo';
 import { assertMathCanonicalPath, isMathPathWithin } from '../../src/math/paths';
 import { inspectAutoLibraryBuild, prepareAutoLibraryBuild, readAutoLibraryRequest, runAutoLibraryBuild } from '../../src/solver/autoLibrary';
 import { captureAutoLibraryDemand, readAutoLibraryDemand } from '../../src/solver/autoLibraryDemand';
@@ -70,19 +73,35 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
 /** The destination pack of one challenge: the hand pack plus every installable pool module. */
 function pack(flags: ReadonlyMap<string, string>) {
   const environment = getLeanTaskEnvironment((flags.get('environment') ?? 'mathlib') as LeanTaskEnvironment);
-  const base = flags.has('base-pack') ? readLibraryPack(required(flags, 'base-pack')) : undefined;
-  const result = autoLibraryPackFor({ base, records: readAutoLibraryPool(externalPath(required(flags, 'pool'))),
-    environmentDigest: environment.dependencyDigest, challengeSource: readFile(required(flags, 'challenge-file'), LEAN_TASK_SOURCE_MAX_BYTES) });
   const output = path.resolve(required(flags, 'output')); assertMathCanonicalPath(output);
   if (fs.existsSync(output)) throw new Error('--output exists; choose a new file');
-  if (result.pack) writeMathJsonDurable(output, result.pack, 0o400);
-  return { schema: 'theorem-os.auto-library-cli.v1', phase: 'pack', modelInvoked: false, output: result.pack ? output : null,
+  const workspace = flags.has('workspace') ? externalPath(required(flags, 'workspace')) : path.dirname(output);
+  if (libraryHostConfigPath() && flags.has('base-pack')) throw new Error('library_host_sources_conflict');
+  if (libraryHostConfigPath() && !flags.has('workspace')) throw new Error('--workspace is required for host-authorized Auto packs');
+  if (libraryHostConfigPath() && fs.existsSync(workspace)) throw new Error('--workspace exists; choose a new workspace');
+  const effective = libraryHostConfigPath() ? resolveAutoLibraryBase(required(flags, 'challenge-id'), environment.id, workspace) : undefined;
+  const base = flags.has('base-pack') ? readLibraryPack(required(flags, 'base-pack')) : undefined;
+  const source = readFile(required(flags, 'challenge-file'), LEAN_TASK_SOURCE_MAX_BYTES);
+  const records = readAutoLibraryPool(externalPath(required(flags, 'pool')));
+  const result = autoLibraryPackFor({ ...(effective ? { effective,
+    authenticated: (record) => hostAutoEvidence('records', mathDigest(canonicalLibraryJson(record)), record, workspace) } : { base }),
+    records, environmentDigest: environment.dependencyDigest, challengeSource: source });
+  let libraryBinding;
+  if (effective) {
+    authorizeHostAutoTask({ parent: { taskId: required(flags, 'challenge-id') }, binding: effective.binding,
+      target: autoLibraryHostTarget(environment.id), workspace, taskId: leanTaskId(source), pack: result.pack,
+      provenance: records.filter(record => result.included.includes(record.name)).map(record => mathDigest(canonicalLibraryJson(record))) });
+    libraryBinding = resolveHostLibrary({ taskId: leanTaskId(source) }, autoLibraryHostTarget(environment.id), workspace)!.binding;
+    writeMathJsonDurable(output, { schema: 'theorem-os.auto-library-selection.v1', libraryBinding, pack: result.pack ?? null }, 0o400);
+  } else if (result.pack) writeMathJsonDurable(output, result.pack, 0o400);
+  return { schema: 'theorem-os.auto-library-cli.v1', phase: 'pack', modelInvoked: false, output: result.pack || effective ? output : null,
+    ...(libraryBinding ? { libraryBinding, workspace } : {}),
     included: result.included, skipped: result.skipped, ...(result.pack ? { pack: summarizeLibraryPack(result.pack) } : {}) };
 }
 
 export async function autoLibrary(argv: string[]): Promise<number> {
   const flags = parseFlags(argv, ['phase', 'directory', 'pool', 'challenge-file', 'base-pack', 'environment', 'output', 'run',
-    'delivery', 'live', ...prepareFlags]);
+    'delivery', 'live', 'workspace', ...prepareFlags]);
   if (flags.has('help')) {
     console.log('Usage: theorem-os auto-library --phase prepare|demand|run|inspect|pack|usage|replay [options]\n'
       + 'prepare (offline): --directory DIR --challenge-id ID --challenge-file Challenge.lean --pool DIR --build-manifest FILE\n'
@@ -103,13 +122,14 @@ export async function autoLibrary(argv: string[]): Promise<number> {
       + 'usage (offline): --pool DIR --run RESULT.json|state.json [--live true]\n'
       + '  report pool modules the run\'s solution imports; --live true also inspects current worker sources.\n'
       + 'replay --directory NEW_DIR (offline): preset planner and solver outputs checked with real Lean v4.33.0; no model calls.\n'
-      + 'Pool modules are not excluded per challenge; each record names the problem that triggered it and what it cost.');
+      + 'Host-configured Auto requires autoLibraryDirectory; pack also requires --challenge-id ID --workspace NEW_DIR.\n'
+      + 'Pool modules must match the base binding and every visible source digest; legacy records cannot enter a configured build.');
     return 0;
   }
   const phase = required(flags, 'phase');
   const allowed: Record<string, readonly string[]> = { prepare: ['directory', ...prepareFlags], run: ['directory'], inspect: ['directory'],
     demand: ['run', 'delivery', 'output'],
-    pack: ['pool', 'challenge-file', 'base-pack', 'environment', 'output'], usage: ['pool', 'run', 'live'], replay: ['directory'] };
+    pack: ['pool', 'challenge-file', 'base-pack', 'environment', 'output', 'challenge-id', 'workspace'], usage: ['pool', 'run', 'live'], replay: ['directory'] };
   if (!Object.hasOwn(allowed, phase)) throw new Error('Unknown auto-library phase.');
   for (const name of flags.keys()) if (name !== 'phase' && !allowed[phase]!.includes(name)) throw new Error(`--${name} is not valid for --phase ${phase}`);
   let report: unknown, code = 0;

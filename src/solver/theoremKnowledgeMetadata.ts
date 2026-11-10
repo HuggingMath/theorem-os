@@ -4,7 +4,7 @@ import { knowledgeSearchGroup, knowledgeVersionSummary } from './theoremKnowledg
 import { largestFittingPage, splitsSurrogate } from './textPage';
 
 const fieldNames = ['name', 'file', 'type', 'premises', 'environmentDigest', 'description', 'dependencies',
-  'provenance', 'relatedVersions', 'files', 'elaboration', 'applicationHints'] as const;
+  'provenance', 'relatedVersions', 'files', 'elaboration', 'applicationHints', 'libraryMetadata'] as const;
 export type KnowledgeMetadataField = typeof fieldNames[number];
 export type KnowledgeMetadataOptions = { field?: KnowledgeMetadataField; startOffset?: number; maxBytes?: number };
 type FieldDescriptor = {
@@ -32,7 +32,8 @@ export function getKnowledgeMetadata(base: TheoremKnowledgeBase, id: string, opt
         .map(other => knowledgeVersionSummary(other)).sort((left, right) => left.id.localeCompare(right.id));
     } else if (name === 'files') value = Object.keys(files).sort().map(file => ({ file, sha256: files[file]! }));
     else value = name === 'environmentDigest' ? entry.environmentDigest ?? null :
-      name === 'elaboration' ? entry.elaboration ?? null : name === 'applicationHints' ? entry.applicationHints ?? [] : entry[name];
+      name === 'elaboration' ? entry.elaboration ?? null : name === 'applicationHints' ? entry.applicationHints ?? [] :
+      name === 'libraryMetadata' ? entry.libraryMetadata ?? null : entry[name];
     const format = typeof value === 'string' ? 'text' as const : 'json' as const;
     const text = format === 'text' ? value as string : canonicalMathJson(value);
     return { value, format, text, sha256: mathDigest(text), bytes: Buffer.byteLength(text),
@@ -57,7 +58,8 @@ export function getKnowledgeMetadata(base: TheoremKnowledgeBase, id: string, opt
     return largestFittingPage(current.text, begin, current.text.length, maxBytes, packet, 'math_knowledge_metadata_budget_too_small');
   }
 
-  const prepared = fieldNames.map(name => ({ name, ...prepare(name) }));
+  const visibleFields = fieldNames.filter(name => name !== 'libraryMetadata' || entry.libraryMetadata);
+  const prepared = visibleFields.map(name => ({ name, ...prepare(name) }));
   const fields = Object.fromEntries(prepared.map(({ name, format, sha256, bytes, count }) => {
     return [name, { format, sha256, bytes, ...(count === undefined ? {} : { count }), complete: false,
       read: { field: name, startOffset: 0 } } satisfies FieldDescriptor];
@@ -70,6 +72,6 @@ export function getKnowledgeMetadata(base: TheoremKnowledgeBase, id: string, opt
     fields[name] = { ...details, complete: true, value };
     if (!fits(packet)) fields[name] = deferred;
   }
-  packet.allFieldsComplete = fieldNames.every(name => fields[name].complete);
+  packet.allFieldsComplete = visibleFields.every(name => fields[name].complete);
   return packet;
 }

@@ -409,6 +409,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     ...(typeof profileConfig.model_catalog_json === 'string' ? { model_catalog_json: profileConfig.model_catalog_json } : {}),
   } : {};
   let rpc: CodexRpc;
+  environment = { ...(environment ?? process.env) };
+  delete environment.THEOREMOS_LIBRARY_HOST_CONFIG;
   try { options.signal?.throwIfAborted(); rpc = new CodexRpc(options.executable, nativeProfile, environment, isolated); }
   catch (error) { await responsesRelay?.close(); await bridge?.close(); await isolated?.close(); throw error; }
   let closing: Promise<void> | undefined;

@@ -8,7 +8,10 @@ import { spawnSync } from 'node:child_process';
 // Build-time only: use the worker's installed Lean, never a prebuilt Pantograph binary.
 const sourceCommit = '0ee70917fb93a5421157119362ecde806a4d881b';
 const sourceArchiveSha256 = '86c5f61ac931346378eaf53b76b98c83c7f4d39d477a6be61e8304d209b8eb56';
-const toolchain = 'leanprover/lean4:v4.33.0';
+const toolchain = process.env.THEOREMOS_PANTOGRAPH_TOOLCHAIN ?? 'leanprover/lean4:v4.33.0';
+if (!['leanprover/lean4:v4.33.0', 'leanprover/lean4:v4.34.1'].includes(toolchain))
+  throw new Error('Unsupported Pantograph build toolchain.');
+const versionNumber = toolchain.split(':v')[1];
 const sourceUrl = `https://codeload.github.com/stanford-centaur/Pantograph/tar.gz/${sourceCommit}`;
 const output = path.resolve(process.argv[2] || '/opt/theoremos-pantograph');
 if (fs.existsSync(output)) throw new Error('Use a new Pantograph installation directory.');
@@ -38,15 +41,18 @@ const collect = (directory: string) => {
 let createdOutput = false;
 try {
   const archive = path.join(temporary, 'source.tar.gz');
-  run('curl', ['--fail', '--location', '--retry', '3', '--max-time', '180', '--output', archive, sourceUrl]);
+  const cachedArchive = process.env.THEOREMOS_PANTOGRAPH_ARCHIVE;
+  if (cachedArchive) fs.copyFileSync(path.resolve(cachedArchive), archive);
+  else run('curl', ['--fail', '--location', '--retry', '3', '--max-time', '180', '--output', archive, sourceUrl]);
   if (sha256(archive) !== sourceArchiveSha256) throw new Error('Pantograph source archive digest changed.');
   run('tar', ['-xzf', archive, '--strip-components=1', '-C', source]);
   const upstreamToolchain = fs.readFileSync(path.join(source, 'lean-toolchain'), 'utf8').trim();
-  // The upstream commit specifies 4.33.1. Only this build checkout selects 4.33.0;
+  // The upstream commit specifies 4.33.1. Only this isolated build checkout selects the target;
   // problem toolchains and the worker's frozen Mathlib dependency manifest stay intact.
   fs.writeFileSync(path.join(source, 'lean-toolchain'), toolchain + '\n');
   const leanVersion = run('lean', ['--version'], { capture: true });
-  if (!/^Lean \(version 4\.33\.0,/u.test(leanVersion)) throw new Error('Pantograph requires the installed Lean 4.33.0 toolchain.');
+  if (!leanVersion.startsWith(`Lean (version ${versionNumber},`))
+    throw new Error(`Pantograph requires the installed Lean ${versionNumber} toolchain.`);
   const sysroot = run('lean', ['--print-prefix'], { capture: true });
   const bin = path.join(sysroot, 'bin');
   const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
@@ -59,7 +65,11 @@ try {
     fs.mkdirSync(directory, { recursive: true });
     run('git', ['init', '--quiet', directory]);
     run('git', ['remote', 'add', 'origin', item.url], { cwd: directory });
-    run('git', ['-c', 'protocol.file.allow=never', 'fetch', '--depth=1', 'origin', item.rev], { cwd: directory });
+    const bundleRoot = process.env.THEOREMOS_PANTOGRAPH_DEPENDENCY_BUNDLES;
+    if (bundleRoot) {
+      if (!/^[A-Za-z0-9_-]+$/u.test(item.name)) throw new Error('Invalid dependency name.');
+      run('git', ['fetch', path.resolve(bundleRoot, `${item.name}.bundle`), 'HEAD'], { cwd: directory });
+    } else run('git', ['-c', 'protocol.file.allow=never', 'fetch', '--depth=1', 'origin', item.rev], { cwd: directory });
     run('git', ['checkout', '--detach', '--quiet', 'FETCH_HEAD'], { cwd: directory });
     if (run('git', ['rev-parse', 'HEAD'], { cwd: directory, capture: true }) !== item.rev)
       throw new Error('Pantograph build dependency revision changed.');

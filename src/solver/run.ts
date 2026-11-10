@@ -33,11 +33,12 @@ import { buildTokenBudget } from './usageBudget';
 import { selectedDeepSeekProfile } from '../runtime/deepseek';
 import { selectedWestlakeProfile } from '../runtime/westlake';
 import { selectedSub2apiProfile } from '../runtime/sub2api';
+import { copyKnowledgeSnapshot } from './theoremKnowledgeStore';
+import { readAuthorizedKnowledgeCatalog } from './theoremKnowledgeAuthorization';
 import { ExecutionDeadline } from '../runtime/executionDeadline';
-import { copyKnowledgeSnapshot, readKnowledgeCatalog } from './theoremKnowledgeStore';
 import { readInstalledLibrarySnapshot } from './installedLibraryContext';
 import { indexKnowledgeContextSnapshot } from './knowledgeContext';
-import { LibraryInstallationRequested } from './libraryAccess';
+import { assertLibraryCatalogAccess, LibraryInstallationRequested } from './libraryAccess';
 import { readLibraryCatalog } from './libraryCatalog';
 import { readLeanTaskReceipt } from '../math/leanTask';
 import { copyContinuationSnapshot, freezeContinuationInput, readContinuationInput, readContinuationSnapshot,
@@ -157,7 +158,15 @@ export async function runSolver(args: string[], root: string, customModules?: So
       const bundleRoot = path.join(root, 'out', 'main');
       readMathBuildManifest(buildFile, root, bundleRoot);
       const task = fs.readFileSync(required('task-file'), 'utf8');
-      const problem = readSolverProblem(workspace, values['receipt-file'] || path.join(workspace, 'active-problem.json'));
+      const receiptFile = values['receipt-file'] || path.join(workspace, 'active-problem.json');
+      const problem = readSolverProblem(workspace, receiptFile);
+      const assertHostProblemCurrent = () => {
+        if (problem.libraryBinding?.hostConfiguration && readSolverProblem(workspace, receiptFile).receiptDigest !== problem.receiptDigest)
+          throw new Error('library_host_binding_changed');
+      };
+      if (problem.libraryBinding?.hostConfiguration && (values['continuation-manifest'] || values['continuation-source-run']))
+        throw new Error('library_knowledge_history_unauthorized');
+      if (values['library-catalog'] || values['library-catalog-sha256']) assertLibraryCatalogAccess(problem);
       if (Boolean(values['library-catalog']) !== Boolean(values['library-catalog-sha256'])) throw new Error('math_library_catalog_pin_missing');
       const libraryCatalog = values['library-catalog'] && readLibraryCatalog(values['library-catalog'], values['library-catalog-sha256']);
       if (libraryCatalog && (problem.kind !== 'lean-task' ||
@@ -197,7 +206,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
       const westlakeProfile = modules.M1.open === directSolverModules.M1.open && !sub2apiProfile ? selectedWestlakeProfile(profile) : undefined;
       const providerProfile = modules.M1.open === directSolverModules.M1.open
         ? selectedDeepSeekProfile(profile) ?? sub2apiProfile ?? westlakeProfile : undefined;
-      const knowledge = values['knowledge-base'] ? readKnowledgeCatalog(values['knowledge-base']) : undefined;
+      const knowledge = values['knowledge-base'] ? readAuthorizedKnowledgeCatalog(values['knowledge-base'], workspace,
+        values['receipt-file'] || path.join(workspace, 'active-problem.json')) : undefined;
       const identity = { taskDigest: mathDigest(task), buildDigest: mathDigest(fs.readFileSync(buildFile)),
         providerProfile: providerProfile?.profile, providerProfileDigest: providerProfile?.digest,
         environmentDigest: mathDigest(canonicalMathJson(projectMathematicsRuntimeEnvironment(env))),
@@ -209,6 +219,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
       let sourceFeedback: string | undefined;
       if (values.resume) {
         state = readSolverRunState(stateFile);
+        if (problem.libraryBinding?.hostConfiguration && state.continuationDigest)
+          throw new Error('library_knowledge_history_unauthorized');
         if ([state, ...(state.workers ?? [])].some(record => record.writerStopUnconfirmed))
           throw new Error('math_writer_stop_unconfirmed: recover into a new isolated workspace before resuming.');
         if (!tokenLimitSpecified) maxTotalTokens = state.tokenBudget?.maxTotalTokens ?? 0;
@@ -381,14 +393,18 @@ export async function runSolver(args: string[], root: string, customModules?: So
         if (!corpusCreated) assertMathRetrievalCorpus(retrievalRoot, corpus);
         emit('library_index', { phase: 'ready', sourceFiles: corpus!.sources.length });
       }
+      assertHostProblemCurrent();
       const installedLibrary = readInstalledLibrarySnapshot(problem, state.environmentDigest);
       const knowledgeSnapshot = knowledge && indexKnowledgeContextSnapshot({ digest: knowledge.digest, base: { entries: knowledge.base.entries,
         evidence: knowledge.base.evidence, contexts: knowledge.base.contexts, routeFindings: knowledge.base.routeFindings } });
       const workerAccess = new Map<string, WorkerAccess>();
       const prepareAccess = (workerId: string, workerRoot: string, workerProject: string, workerCorpus?: string) => {
         const workerContinuation = continuation && copyContinuationSnapshot(continuation, workerProject);
+        assertHostProblemCurrent();
         let knowledgeFile: string | undefined;
         if (knowledge) {
+          if (knowledge.base.libraryAuthorization) readAuthorizedKnowledgeCatalog(values['knowledge-base']!, workspace,
+            values['receipt-file'] || path.join(workspace, 'active-problem.json'), knowledge.digest);
           knowledgeFile = path.join(workerProject, '.lake', 'theorem-knowledge.json');
           copyKnowledgeSnapshot(knowledge, values['knowledge-base']!, knowledgeFile);
         }
@@ -402,6 +418,10 @@ export async function runSolver(args: string[], root: string, customModules?: So
           ...(installedLibrary ? { installedLibrary } : {}),
           ...(libraryCatalog ? { libraryCatalog: { file: path.resolve(values['library-catalog']!), digest: libraryCatalog.identity.catalogDigest } } : {}),
           ...(workerContinuation ? { continuation: workerContinuation } : {}),
+          ...(problem.libraryBinding?.hostConfiguration ? { assertKnowledgeCurrent: () => {
+            if (knowledge) readAuthorizedKnowledgeCatalog(knowledgeFile!, workspace, receiptFile, knowledge.digest);
+            else assertHostProblemCurrent();
+          } } : {}),
           ...(knowledge ? { knowledgeFile, knowledgeDigest: knowledge.digest,
             knowledgeSnapshot } : {}) });
       };

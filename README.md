@@ -254,6 +254,7 @@ TheoremOS 使用 `gpt-5.6-sol`、`xhigh`、每题 4 个 worker，通过 **6/6 �
 | 文档 | 内容 |
 | --- | --- |
 | [运行指南](docs/usage.md) | 依赖、CLI 参数、恢复、批量运行与故障诊断 |
+| [固定历史 Lean-Eval](docs/lean-eval-historical.md) | 显式 Lean 4.34.1 benchmark 配置、依赖投影与收据恢复 |
 | [网页工作台](docs/web-workbench.md) | Docker、API 服务商、资源限制与服务器部署 |
 | [小题示例](examples/getting-started/README.md) · [IMO2026](examples/imo2026/README.md) | 从第一次回放到真实题目 |
 | [组件示例](examples/components/README.md) · [对照实验](examples/imo2026/COMPARISON.md) | 接入研究策略与比较实验 |

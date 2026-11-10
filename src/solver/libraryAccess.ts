@@ -21,8 +21,14 @@ const contextSchema = z.object({ schema: z.literal('theorem-os.library-access.v1
   catalog: z.object({ file: z.string(), digest: hash }).strict(), problemReceiptDigest: hash,
   seedCommit: z.string(), frozenFiles: z.record(hash) }).strict();
 
+/** Full release search and installation have no task-policy projection yet. */
+export function assertLibraryCatalogAccess(problem: SolverProblem): void {
+  if (problem.libraryBinding?.hostConfiguration) throw new Error('library_knowledge_catalog_unauthorized');
+}
+
 /** Published by the host before a turn; shell requests are advisory until the host validates them. */
 export function writeLibraryAccess(problem: SolverProblem, worktree: string, catalog: LibraryAccess) {
+  assertLibraryCatalogAccess(problem);
   writeMathJsonDurable(path.join(worktree, LIBRARY_ACCESS_FILE), { schema: 'theorem-os.library-access.v1', catalog,
     problemReceiptDigest: problem.receiptDigest, seedCommit: git(worktree, ['rev-parse', 'HEAD']),
     frozenFiles: problem.frozenFiles ?? {} }, 0o400);
@@ -78,6 +84,7 @@ export class LibraryInstallationRequested extends Error {
 
 /** Resolve only explicit requests and retain the previous pack. Every new bootstrap still rechecks it in Lean. */
 export function requestedLibraryPack(problem: SolverProblem, requestInput: unknown, access: LibraryAccess, worktree: string) {
+  assertLibraryCatalogAccess(problem);
   const request = libraryRequestSchema.parse(requestInput), catalog = readLibraryCatalog(access.file, access.digest);
   if (request.catalogDigest !== access.digest || request.problemReceiptDigest !== problem.receiptDigest)
     throw new Error('math_library_request_identity_changed');

@@ -17,6 +17,8 @@ import { readLeanTaskReceipt } from '../math/leanTask';
 import { DECLARATION_INDEX_FILE } from './declarationIndex';
 import { libraryDeclarationConflict } from '../math/libraryPacks';
 import { maskLeanComments } from '../math/leanSyntax';
+import type { EffectiveLibraryBinding } from '../math/libraryEffectivePack';
+import type { LibraryHostTaskIdentity } from '../math/libraryHostConfig';
 import { originalDeclarationRegions, solverSourceContext as sourceContext } from './sourceContext';
 export { originalDeclarationRegions, solverMathlibImports } from './sourceContext';
 
@@ -68,6 +70,8 @@ export type SolverProblem = Readonly<{
   sourceImports?: Readonly<Record<string, readonly string[]>>;
   /** Owned library-pack modules whose bytes are frozen (file → digest); proofs import them and never edit them. */
   frozenFiles?: Readonly<Record<string, string>>;
+  libraryBinding?: EffectiveLibraryBinding;
+  libraryHostTask?: LibraryHostTaskIdentity;
 }>;
 
 export function git(root: string, args: string[]): string {
@@ -204,6 +208,9 @@ export function readSolverProblem(workspacePath: string, receiptFile: string): S
     contract: receipt.contract, targets, trustedFiles, ownedFiles: receipt.solverOwnedFiles,
     declarations, sourceStructure: structures, sourceContexts: contexts, sourceImports, activeProblemPath: receipt.activeProblemPath,
     ...(frozenFiles ? { frozenFiles } : {}),
+    ...('libraryBinding' in receipt && receipt.libraryBinding ? { libraryBinding: receipt.libraryBinding,
+      libraryHostTask: { taskId: receipt.libraryBinding.taskId,
+        ...('benchmarkCommit' in receipt ? { benchmarkCommit: receipt.benchmarkCommit } : {}) } } : {}),
     ...('sourceProjectRoot' in receipt ? { sourceRepository: receipt.sourceProjectRoot } : {}) };
   if (receipt.schema === 'theorem-os.lean-task.v1') assertSolverProjectSources(problem, receipt.projectRoot);
   return problem;

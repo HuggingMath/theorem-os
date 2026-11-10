@@ -14,6 +14,8 @@ import { getKnowledgeSource } from '../../src/solver/theoremKnowledgeSource';
 import { getKnowledgeMetadata, type KnowledgeMetadataField } from '../../src/solver/theoremKnowledgeMetadata';
 import { searchKnowledgeRouteFindings, getKnowledgeRouteFindingPage } from '../../src/solver/theoremKnowledgeFindings';
 import { assertMathCanonicalPath } from '../../src/math/paths';
+import { libraryHostConfigPath } from '../../src/math/libraryHostConfig';
+import { readAuthorizedKnowledgeCatalog } from '../../src/solver/theoremKnowledgeAuthorization';
 
 const help = `Usage: theorem-os knowledge <build|enrich|pack|search|get|finding|source|dependencies|consumers|stats> [arguments]
   build  [--state STATE_JSON ...] [--accepted-manifest accepted.json] [--submitted-manifest submitted.json]
@@ -56,7 +58,11 @@ excluded. A recorded refutation never refutes an original theorem or parks a tas
 finding returns exact JSON text pages; concatenate them using nextOffset before
 parsing. Recorded assumptions, local-check claims and reopening conditions require
 review in the current problem; old evidence never grants new acceptance.
-Use --merge with a new output path to add proofs without overwriting old catalogs.`;
+Use --merge with a new output path to add proofs without overwriting old catalogs.
+With THEOREMOS_LIBRARY_HOST_CONFIG enabled, reads require --workspace TASK_DIR
+(optionally --receipt-file FILE) and validate the exact installed authorized catalogue.
+Archive build/enrich/pack and unauthenticated history are disabled in host mode;
+generate a new snapshot with scripts/mathematics/prepareLibraryKnowledge.ts.`;
 
 try {
   const [command, ...args] = process.argv.slice(2);
@@ -70,6 +76,7 @@ try {
       output: { type: 'string' }, merge: { type: 'string' }, report: { type: 'string' },
       format: { type: 'string', default: 'v2' },
       catalog: { type: 'string' }, sha256: { type: 'string' }, query: { type: 'string', multiple: true },
+      workspace: { type: 'string' }, 'receipt-file': { type: 'string' },
       goal: { type: 'string' }, limit: { type: 'string', default: '10' }, problem: { type: 'string' },
       environment: { type: 'string' }, 'problem-receipt': { type: 'string' },
       id: { type: 'string' }, source: { type: 'string' }, depth: { type: 'string', default: '2' },
@@ -85,6 +92,8 @@ try {
     };
     if (values['retry-enrichment'] !== undefined && command !== 'enrich')
       throw new Error('--retry-enrichment requires enrich');
+    const hosted = Boolean(libraryHostConfigPath());
+    if (hosted && ['build', 'enrich', 'pack'].includes(command)) throw new Error('library_knowledge_history_unauthorized');
     if (command === 'build') {
       if (values['accepted-enrichment'] && !values['accepted-manifest'] || values['submitted-enrichment'] && !values['submitted-manifest'])
         throw new Error('enrichment requires its corresponding explicit manifest');
@@ -135,7 +144,9 @@ try {
         console.log(JSON.stringify(writeKnowledgeEnrichment(output, result)));
       } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
     } else if (['pack', 'search', 'get', 'finding', 'source', 'dependencies', 'consumers', 'stats'].includes(command)) {
-      const { base, digest, format } = readKnowledgeCatalog(required('catalog'), values.sha256);
+      const { base, digest, format } = hosted
+        ? readAuthorizedKnowledgeCatalog(required('catalog'), required('workspace'), values['receipt-file'], values.sha256)
+        : readKnowledgeCatalog(required('catalog'), values.sha256);
       if (command === 'pack') console.log(JSON.stringify(writePackedKnowledge(required('output'), base, digest)));
       else if (command === 'stats') console.log(JSON.stringify({ sha256: digest, format, ...theoremKnowledgeStats(base) }));
       else if (command === 'finding') console.log(JSON.stringify(getKnowledgeRouteFindingPage(base, required('id'), {

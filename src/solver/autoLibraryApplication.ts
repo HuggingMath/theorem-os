@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import { bootstrapLeanTask, readLeanTaskReceipt } from '../math/leanTask';
+import { readLeanTaskReceipt } from '../math/leanTask';
+import { bootstrapAutoLibraryTask, type AutoLibraryHostContext } from '../math/autoLibraryHost';
 import type { LeanTaskEnvironment } from '../math/leanTaskEnvironment';
 import { autoLibraryModule } from '../math/autoLibrary';
 import { checkLeanType } from '../math/leanTypeDiagnostics';
@@ -16,7 +17,7 @@ export const autoLibraryApplicationCheckSchema = z.object({
 /** Test a library theorem at the original consumer without changing the active problem or its frozen pack. */
 export async function checkAutoLibraryApplication(input: {
   workspace: string; source: string; environment: LeanTaskEnvironment; pack: LibraryPack; moduleName: string;
-  definitionTargets?: string[];
+  definitionTargets?: string[]; host?: AutoLibraryHostContext;
   selected: { declaration: string; application: z.infer<typeof knowledgeApplicationReportSchema> };
   env: NodeJS.ProcessEnv; signal?: AbortSignal; prepare: () => Promise<void>;
 }): Promise<z.infer<typeof autoLibraryApplicationCheckSchema>> {
@@ -28,9 +29,9 @@ export async function checkAutoLibraryApplication(input: {
     const file = path.join(input.workspace, 'workspace', 'active-problem.json');
     const source = `import ${autoLibraryModule(input.moduleName)}\n${input.source}`;
     const receipt = fs.existsSync(file) ? readLeanTaskReceipt(file) :
-      bootstrapLeanTask(path.join(input.workspace, 'workspace'), { source, task: 'Check the selected library application at its original consumer.',
+      bootstrapAutoLibraryTask(path.join(input.workspace, 'workspace'), { source, task: 'Check the selected library application at its original consumer.',
         environment: input.environment, libraryPack: input.pack,
-        ...(input.definitionTargets ? { definitionTargets: input.definitionTargets } : {}) });
+        ...(input.definitionTargets ? { definitionTargets: input.definitionTargets } : {}) }, input.host);
     if (receipt.contract.formalStatement !== source)
       throw new Error('auto_library_application_source_changed');
     base.commit = receipt.baseCommit; base.environmentDigest = receipt.environmentDigest ?? '';

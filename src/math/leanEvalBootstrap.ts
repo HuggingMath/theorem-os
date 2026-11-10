@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { canonicalMathProblemNegationPayload, canonicalMathProblemStatementPayloads, isMathFoundationalLeanAxiom, normalizeMathProblemContract, type MathProblemContract } from "./contracts";
-import { fetchLeanEvalLeaderboardCredits, parseLeanEvalLeaderboardCredits, findLeanEvalCatalogProblem, readLeanEvalCatalog, LEAN_EVAL_BENCHMARK_COMMIT, LEAN_EVAL_LEADERBOARD_URL, LEAN_EVAL_REPOSITORY_URL, type LeanEvalCatalog, type LeanEvalCatalogProblem } from "./leanEvalCatalogAdapter";
+import { fetchLeanEvalLeaderboardCredits, parseLeanEvalLeaderboardCredits, findLeanEvalCatalogProblem, readLeanEvalCatalog, LEAN_EVAL_LEADERBOARD_URL, LEAN_EVAL_REPOSITORY_URL, type LeanEvalCatalog, type LeanEvalCatalogProblem } from "./leanEvalCatalogAdapter";
 import { collectLeanEvalSubmissionFiles, materializeLeanEvalProblemBinding, prepareLeanEvalProblemBinding, type LeanEvalProblemBinding } from "./leanEvalAdapter";
 import { checkManyFormalVerifications, resolveMathematicsLakePackagesCache, runOfficialComparator, type MathematicsVerifierBatchResult, type MathematicsVerifierResult, type MathematicsOfficialComparatorResult, type MathematicsVerifierExecutionOptions } from "./verifier";
 import { inspectLeanDeclarations } from "./leanSource";
@@ -17,19 +17,25 @@ import { resolveMathematicsRuntimeEnvironment } from "./mathRuntimeEnvironment";
 import { readMathematicsReceiptSecret, signMathOfficialGateReceipt } from "./receiptAttestation";
 import type { MathOfficialGateReceipt } from "./contracts";
 import { assertMathCanonicalPath, repositoryRelativePath } from "./paths";
-import { mathDigest as sha256, readMathJson, writeMathJsonDurable } from "./mathRuntimeIo";
+import { mathDigest as sha256, readMathFile, readMathJson, writeMathJsonDurable } from "./mathRuntimeIo";
 import { mathGitBytes, mathGitText } from './mathGit';
 import { resolveLeanEvalSubmissionName } from "./leanEvalSubmission";
 import { certificateSlotFiles, certificateSlotSource, MAX_CERTIFICATE_SLOTS } from './certificateSlots';
 import { MAX_THEORY_MODULES, theoryModuleFiles, theoryModuleSource } from './theoryModules';
-import { installLibraryPack, isLibraryPackFile, libraryPackDigest, parseLibraryPack, type LibraryPack } from './libraryPacks';
+import { installLibraryPack, isLibraryPackFile, libraryPackDigest, MAX_LIBRARY_MODULE_BYTES, parseLibraryPack, type LibraryPack } from './libraryPacks';
 import { z } from 'zod';
+import { canonicalLibraryJson, libraryUnicodeCompare } from './libraryRelease';
+import { effectiveLibraryBindingSchema, type EffectiveLibraryBinding } from './libraryEffectivePack';
+import { assertHostLibraryCurrent, libraryDependencyLockDigest, libraryHostConfigPath, resolveHostLibrary } from './libraryHostConfig';
+
+import { leanEvalBenchmarkCommit, readHistoricalLeanEvalInputs, LEAN_EVAL_HISTORICAL_CREDITS, LEAN_EVAL_4341_PROFILE } from './leanEvalBenchmark';
 
 export type LeanEvalBootstrapReceipt = Readonly<{
   schema: 'deepscientist.mathematics.lean-eval-bootstrap-receipt.v1';
   receiptId: string;
   problemId: string;
   benchmarkCommit: string;
+  benchmarkProfile?: typeof LEAN_EVAL_4341_PROFILE;
   catalogHash: string;
   evaluationMode?: 'official' | 'benchmark';
   leaderboardSource: string;
@@ -54,6 +60,7 @@ export type LeanEvalBootstrapReceipt = Readonly<{
   theoryModules?: number;
   /** Frozen Submission/Library modules installed from a library pack: pack digest and installed file digests. */
   libraryPack?: Readonly<{ digest: string; files: Readonly<Record<string, string>> }>;
+  libraryBinding?: EffectiveLibraryBinding;
   activeProblemPath: string;
   createdAt: number;
 }>;
@@ -194,7 +201,7 @@ export async function runPersistedLeanEvalOfficialGate(options: {
   fetchLeaderboard?: LeanEvalOfficialGateOptions['fetchLeaderboard'];
 }): Promise<LeanEvalOfficialGateResult> {
   const receipt = readLeanEvalBootstrapReceipt(options.activeProblemPath);
-  if (receipt.leaderboardSource !== LEAN_EVAL_LEADERBOARD_URL) {
+  if (!receipt.benchmarkProfile && receipt.leaderboardSource !== LEAN_EVAL_LEADERBOARD_URL) {
     throw new Error('Persisted Lean-Eval official gate requires an official leaderboard-backed bootstrap receipt');
   }
   const repositoryRoot = fs.realpathSync(path.resolve(options.repositoryRoot));
@@ -203,14 +210,16 @@ export async function runPersistedLeanEvalOfficialGate(options: {
   if (!fs.existsSync(sourceRoot)) {
     sourceRoot = `${path.resolve(receipt.workspaceRoot)}.source-reloaded`;
     if (fs.existsSync(sourceRoot)) throw new Error('LeanEval source reload path already exists and is unsafe');
-    git(repositoryRoot, ['worktree', 'add', '--detach', sourceRoot, LEAN_EVAL_BENCHMARK_COMMIT]);
+    git(repositoryRoot, ['worktree', 'add', '--detach', sourceRoot, receipt.benchmarkCommit]);
     reloadedSource = true;
   } else {
     assertRegisteredWorktree(repositoryRoot, sourceRoot, 'source');
   }
   try {
     const snapshotFile = leaderboardSnapshotPath(receipt.activeProblemPath);
-    const persistedLeaderboard = fs.existsSync(snapshotFile)
+    const persistedLeaderboard = receipt.benchmarkProfile
+      ? { credits: [], generatedAt: receipt.createdAt }
+      : fs.existsSync(snapshotFile)
       ? parseLeanEvalLeaderboardCredits(readMathJson(snapshotFile))
       : await freshLeaderboardCredits(options);
     if (receipt.leaderboardHash && sha256(JSON.stringify(persistedLeaderboard.credits)) !== receipt.leaderboardHash) {
@@ -224,7 +233,7 @@ export async function runPersistedLeanEvalOfficialGate(options: {
     }
     const catalog = readLeanEvalCatalog({
       repositoryRoot: sourceRoot,
-      benchmarkCommit: LEAN_EVAL_BENCHMARK_COMMIT,
+      benchmarkCommit: receipt.benchmarkCommit,
       credits: persistedLeaderboard.credits,
       generatedAt: persistedLeaderboard.generatedAt,
       verifyGitCommit: true,
@@ -246,7 +255,7 @@ export async function runPersistedLeanEvalOfficialGate(options: {
       title: problem.title,
       informalStatement: problem.notes ?? problem.title,
       statementRevision: problem.statementRevision,
-      baselineCommit: LEAN_EVAL_BENCHMARK_COMMIT,
+      baselineCommit: receipt.benchmarkCommit,
       repositoryUrl: LEAN_EVAL_REPOSITORY_URL,
     });
     if (
@@ -261,7 +270,7 @@ export async function runPersistedLeanEvalOfficialGate(options: {
     ) {
       throw new Error('Persisted Lean-Eval bootstrap official binding identity no longer matches the receipt');
     }
-    const slottedExpectation = slottedOwnership(pinnedOwnership(sourceRoot, problem, LEAN_EVAL_BENCHMARK_COMMIT),
+    const slottedExpectation = slottedOwnership(pinnedOwnership(sourceRoot, problem, receipt.benchmarkCommit),
       receipt.certificateSlots ?? 0, receipt.theoryModules ?? 0);
     // Library-pack modules are extra solver-owned files; the reader already checked their paths.
     const expectedOwnership = { trustedFiles: slottedExpectation.trustedFiles, solverOwnedFiles:
@@ -287,6 +296,8 @@ export async function runPersistedLeanEvalOfficialGate(options: {
 }
 
 export type LeanEvalBootstrapOptions = Readonly<{
+  /** Explicit historical profile; requires benchmark mode and never fetches live credits. */
+  benchmarkProfile?: string;
   repositoryRoot: string;
   problemId: string;
   evaluationMode?: 'official' | 'benchmark';
@@ -438,7 +449,8 @@ const materializeSolverWorkspace = (
   workspaceRoot: string,
   certificateSlots = 0,
   theoryModules = 0,
-  libraryPack?: LibraryPack
+  libraryPack?: LibraryPack,
+  benchmarkProfile?: string
 ): Readonly<{ projectRoot: string; trustedFiles: readonly string[]; solverOwnedFiles: readonly string[];
   libraryFiles?: Readonly<Record<string, string>> }> => {
   const projectRoot = path.join(workspaceRoot, problem.generatedPath);
@@ -462,7 +474,9 @@ const materializeSolverWorkspace = (
     solverOwnedFiles: Object.freeze([...slotted.solverOwnedFiles, ...Object.keys(libraryFiles)].toSorted()) }) : slotted;
   const manifestPath = path.join(projectRoot, 'lake-manifest.json');
   if (fs.existsSync(manifestPath)) {
-    const manifest = readMathJson(manifestPath) as LeanEvalLakeManifestRecord;
+    const manifest = (benchmarkProfile
+      ? JSON.parse(readHistoricalLeanEvalInputs(repositoryRoot, baselineCommit, problem.generatedPath).manifest)
+      : readMathJson(manifestPath)) as LeanEvalLakeManifestRecord;
     if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest))
       throw new Error(`LeanEval Lake manifest must be a JSON object: ${manifestPath}`);
     // Keep pinned dependency revisions while making this an independent package.
@@ -541,11 +555,14 @@ const slottedOwnership = (
 };
 
 export async function bootstrapLeanEvalProblem(options: LeanEvalBootstrapOptions): Promise<LeanEvalBootstrapResult> {
+  if (libraryHostConfigPath() && options.libraryPack !== undefined) throw new Error('library_host_sources_conflict');
   const repositoryRoot = fs.realpathSync(path.resolve(options.repositoryRoot));
-  const baselineCommit = LEAN_EVAL_BENCHMARK_COMMIT;
+  const baselineCommit = leanEvalBenchmarkCommit(options.benchmarkProfile, options.evaluationMode);
+  if (options.benchmarkProfile && (options.useOfficialCredits === true || (options.credits?.length ?? 0) > 0))
+    throw new Error('lean_eval_historical_credits_override');
   const certificateSlots = options.certificateSlots ?? 0, theoryModules = options.theoryModules ?? 0;
   slotSources(certificateSlots, theoryModules);
-  const libraryPack = options.libraryPack && parseLibraryPack(options.libraryPack);
+  let libraryPack = options.libraryPack && parseLibraryPack(options.libraryPack);
   // The caller checkout may be dirty or on another branch.  Require only that
   // it contains the official object, then read every public input from a
   // detached worktree at that exact commit.
@@ -564,7 +581,7 @@ export async function bootstrapLeanEvalProblem(options: LeanEvalBootstrapOptions
   const sourceWorktree = `${workspaceRoot}.source`;
   // Explicit credits are reserved for deterministic tests.  In production,
   // callers leave credits undefined and the official leaderboard is fetched.
-  const useOfficialCredits = options.useOfficialCredits ?? options.credits === undefined;
+  const useOfficialCredits = options.benchmarkProfile ? false : options.useOfficialCredits ?? options.credits === undefined;
   const official = useOfficialCredits ? await fetchLeanEvalLeaderboardCredits() : undefined;
   let sourceWorktreeCreated = false;
   try {
@@ -588,7 +605,7 @@ export async function bootstrapLeanEvalProblem(options: LeanEvalBootstrapOptions
       repositoryRoot: sourceWorktree,
       benchmarkCommit: baselineCommit,
       setId: options.setId,
-      credits: official?.credits ?? options.credits,
+      credits: options.benchmarkProfile ? [] : official?.credits ?? options.credits,
       generatedAt: official?.generatedAt ?? Date.now(),
       verifyGitCommit: true,
     });
@@ -603,6 +620,10 @@ export async function bootstrapLeanEvalProblem(options: LeanEvalBootstrapOptions
   const verifierProjectRoot = `${workspaceRoot}.git`;
   let verifierWorktreeCreated = false;
   try {
+    if (options.benchmarkProfile) readHistoricalLeanEvalInputs(sourceWorktree, baselineCommit, selectedProblem.generatedPath);
+    const effective = libraryHostConfigPath() ? resolveHostLibrary({ taskId: selectedProblem.id, benchmarkCommit: baselineCommit },
+      heldOutLibraryTarget(sourceWorktree, baselineCommit, selectedProblem.generatedPath, true, options.benchmarkProfile), workspaceRoot) : undefined;
+    if (effective) libraryPack = effective.pack ?? undefined;
     const workspaceRelation = path.relative(repositoryRoot, workspaceRoot);
     if (!workspaceRelation || (!workspaceRelation.startsWith(`..${path.sep}`) && workspaceRelation !== '..')) {
       throw new Error('LeanEval solver workspace must be outside the benchmark checkout.');
@@ -624,7 +645,7 @@ export async function bootstrapLeanEvalProblem(options: LeanEvalBootstrapOptions
     // latter retains protected evaluator files for official comparison while
     // the former never materializes Solution.lean into a solver workspace.
     const materialized = materializeSolverWorkspace(sourceWorktree, selectedProblem, baselineCommit, workspaceRoot,
-      certificateSlots, theoryModules, libraryPack);
+      certificateSlots, theoryModules, libraryPack, options.benchmarkProfile);
     const binding = prepareLeanEvalProblemBinding({
       projectRoot: path.join(verifierProjectRoot, selectedProblem.generatedPath),
       problemId: selectedProblem.id,
@@ -644,8 +665,9 @@ export async function bootstrapLeanEvalProblem(options: LeanEvalBootstrapOptions
       receiptId: `lean-eval-bootstrap:${selectedProblem.id}:${sha256(`${catalog.catalogHash}\0${binding.problemContract.leanStatementHash}`).slice(0, 24)}`,
       problemId: selectedProblem.id,
       benchmarkCommit: baselineCommit,
+      ...(options.benchmarkProfile ? { benchmarkProfile: LEAN_EVAL_4341_PROFILE } : {}),
       catalogHash: catalog.catalogHash,
-      leaderboardSource: official
+      leaderboardSource: options.benchmarkProfile ? LEAN_EVAL_HISTORICAL_CREDITS : official
         ? LEAN_EVAL_LEADERBOARD_URL
         : options.credits
           ? 'caller-supplied:test-only'
@@ -670,6 +692,7 @@ export async function bootstrapLeanEvalProblem(options: LeanEvalBootstrapOptions
       ...(theoryModules ? { theoryModules } : {}),
       ...(libraryPack && materialized.libraryFiles
         ? { libraryPack: Object.freeze({ digest: libraryPackDigest(libraryPack), files: materialized.libraryFiles }) } : {}),
+      ...(effective ? { libraryBinding: effective.binding } : {}),
       activeProblemPath: path.join(workspaceRoot, 'active-problem.json'),
       createdAt: Date.now(),
     });
@@ -687,7 +710,8 @@ export async function bootstrapLeanEvalProblem(options: LeanEvalBootstrapOptions
     git(workspaceRoot, ['add', '-f', '--', ...[...receipt.trustedFiles, ...receipt.solverOwnedFiles]
       .map(file => path.join(selectedProblem.generatedPath, file))]);
     git(workspaceRoot, ['-c', 'user.name=DeepScientist Math', '-c', 'user.email=math@localhost',
-      'commit', '--no-gpg-sign', '--quiet', '-m', 'Public Lean-Eval solver baseline']);
+      '-c', 'core.hooksPath=/dev/null', 'commit', '--no-gpg-sign', '--quiet', '-m',
+      leanEvalLibrarySeedPrefix + canonicalLibraryJson(leanEvalLibrarySeed(receipt))]);
     fs.appendFileSync(path.join(workspaceRoot, '.git', 'info', 'exclude'),
       '\n/active-problem.json\n/bootstrap-result.json\n/.deepscientist/\n**/.lake/\n');
     return Object.freeze({ catalog, problem: selectedProblem, binding, receipt });
@@ -701,17 +725,99 @@ export async function bootstrapLeanEvalProblem(options: LeanEvalBootstrapOptions
 }
 
 const receiptHash = z.string().regex(/^[0-9a-f]{64}$/iu), positiveTime = z.number().finite().positive();
+const leanEvalLibrarySeedPrefix = 'Public Lean-Eval solver baseline\n\n';
+const leanEvalLibrarySeed = (receipt: LeanEvalBootstrapReceipt) => ({ problemId: receipt.problemId,
+  benchmarkCommit: receipt.benchmarkCommit, ...(receipt.benchmarkProfile ? { benchmarkProfile: receipt.benchmarkProfile } : {}), libraryPack: receipt.libraryPack ?? null, libraryBinding: receipt.libraryBinding ?? null });
+
+function heldOutLibraryTarget(root: string, commit: string, project: string, rootManifestFallback = false, benchmarkProfile?: string) {
+  const blob = (file: string) => mathGitBytes(root, ['--no-replace-objects', 'show', `${commit}:${file}`],
+    { maxBuffer: 2 * 1024 * 1024, timeout: 30_000 }).toString('utf8');
+  let lakeManifest: string;
+  // Match materializeSolverWorkspace's pinned root-lock fallback, without reading mutable destination files.
+  if (benchmarkProfile) lakeManifest = readHistoricalLeanEvalInputs(root, commit, project).manifest;
+  else if (rootManifestFallback && !fs.existsSync(path.join(root, project, 'lake-manifest.json'))) lakeManifest = blob('lake-manifest.json');
+  else lakeManifest = blob(`${project}/lake-manifest.json`);
+  const toolchain = blob(`${project}/lean-toolchain`).trim();
+  // Solver materialization renames the root package. The package identity digest is invariant under that rename.
+  const runtimeEnvironmentDigest = sha256(canonicalLibraryJson({ toolchain,
+    dependencyLockSha256: libraryDependencyLockDigest(Buffer.from(lakeManifest)) }));
+  return { toolchain, lakeManifest, runtimeEnvironmentDigest };
+}
+
+function assertLeanEvalLibraryBinding(receipt: LeanEvalBootstrapReceipt): void {
+  if (receipt.benchmarkCommit !== leanEvalBenchmarkCommit(receipt.benchmarkProfile, receipt.evaluationMode))
+    throw new Error('lean_eval_benchmark_identity_changed');
+  if (receipt.benchmarkProfile) {
+    if (receipt.leaderboardSource !== LEAN_EVAL_HISTORICAL_CREDITS || !receipt.verifierProjectRoot)
+      throw new Error('lean_eval_historical_receipt_invalid');
+    const project = path.relative(receipt.workspaceRoot, receipt.projectRoot).split(path.sep).join('/');
+    const expected = readHistoricalLeanEvalInputs(receipt.verifierProjectRoot, receipt.benchmarkCommit, project);
+    for (const [file, bytes] of Object.entries({ 'lakefile.toml': expected.lakefile, 'lean-toolchain': expected.toolchain,
+      'lake-manifest.json': expected.manifest })) {
+      const installed = path.join(receipt.projectRoot, file); assertMathCanonicalPath(installed);
+      if (readMathFile(installed, 2 * 1024 * 1024).bytes.toString('utf8') !== bytes)
+        throw new Error('lean_eval_historical_configuration_changed');
+    }
+  }
+  const root = receipt.workspaceRoot;
+  const base = git(root, ['--no-replace-objects', 'rev-list', '--max-parents=0', 'HEAD']);
+  if (!/^[a-f0-9]{40}$/u.test(base)) throw new Error('lean_eval_library_seed_invalid');
+  const message = git(root, ['--no-replace-objects', 'show', '-s', '--format=%B', base]);
+  if (message.startsWith(leanEvalLibrarySeedPrefix)) {
+    if (message.slice(leanEvalLibrarySeedPrefix.length) !== canonicalLibraryJson(leanEvalLibrarySeed(receipt)))
+      throw new Error('lean_eval_library_binding_changed');
+  } else if (receipt.libraryBinding || libraryHostConfigPath()) throw new Error('lean_eval_library_seed_missing');
+  if (!receipt.libraryBinding && !libraryHostConfigPath()) return;
+  const project = path.relative(root, receipt.projectRoot).split(path.sep).join('/');
+  const target = heldOutLibraryTarget(root, base, project);
+  const installedInput = (file: string) => {
+    const absolute = path.join(receipt.projectRoot, file); assertMathCanonicalPath(absolute);
+    return readMathFile(absolute, 2 * 1024 * 1024).bytes;
+  };
+  if (installedInput('lean-toolchain').toString('utf8').trim() !== target.toolchain ||
+      libraryDependencyLockDigest(installedInput('lake-manifest.json')) !==
+      libraryDependencyLockDigest(Buffer.from(target.lakeManifest))) throw new Error('library_host_dependency_mismatch');
+  // Configuration is exported as knowledge context: authenticate its complete bytes,
+  // including comments and lockfile fields outside the dependency identity.
+  for (const file of ['lean-toolchain', 'lake-manifest.json', 'lakefile.toml', 'lakefile.lean']) {
+    if (!receipt.trustedFiles.includes(file)) continue;
+    const frozen = mathGitBytes(root, ['--no-replace-objects', 'show', `${base}:${project}/${file}`],
+      { maxBuffer: 2 * 1024 * 1024 + 1, timeout: 30_000 });
+    if (!installedInput(file).equals(frozen)) throw new Error('library_knowledge_configuration_changed');
+  }
+  assertHostLibraryCurrent(receipt.libraryBinding, { taskId: receipt.problemId, benchmarkCommit: receipt.benchmarkCommit },
+    target, root);
+  if (receipt.libraryBinding!.effectivePackDigest !== (receipt.libraryPack?.digest ?? sha256('null')))
+    throw new Error('lean_eval_library_binding_changed');
+  const modules = Object.keys(receipt.libraryPack?.files ?? {}).sort(libraryUnicodeCompare).map(file => ({
+    file, module: file.slice(0, -5).replaceAll('/', '.'), sha256: receipt.libraryPack!.files[file] }));
+  if (sha256(canonicalLibraryJson(modules)) !== receipt.libraryBinding!.moduleSetSha256)
+    throw new Error('lean_eval_library_module_set_changed');
+  if (canonicalLibraryJson(receipt.solverOwnedFiles.filter(isLibraryPackFile).toSorted()) !==
+      canonicalLibraryJson(Object.keys(receipt.libraryPack?.files ?? {}).sort()))
+    throw new Error('lean_eval_library_binding_changed');
+  for (const [file, digest] of Object.entries(receipt.libraryPack?.files ?? {})) {
+    const installed = path.join(receipt.projectRoot, file);
+    assertMathCanonicalPath(installed);
+    const bytes = mathGitBytes(root, ['--no-replace-objects', 'show', `${base}:${project}/${file}`],
+      { maxBuffer: MAX_LIBRARY_MODULE_BYTES + 1, timeout: 30_000 });
+    if (sha256(bytes) !== digest || sha256(readMathFile(installed, MAX_LIBRARY_MODULE_BYTES).bytes) !== digest)
+      throw new Error('lean_eval_library_binding_changed');
+  }
+}
 const nonBlank = (value: string) => !!value.trim();
 // benchmarkCommit is compared at read time: the pinned commit is not a load-time constant under test hosts.
 const bootstrapReceiptSchema = z.object({
   schema: z.literal('deepscientist.mathematics.lean-eval-bootstrap-receipt.v1'), receiptId: z.string().refine(nonBlank),
   problemId: z.string().regex(/^[A-Za-z0-9_.-]+$/u), evaluationMode: z.enum(['official', 'benchmark']).optional(),
+  benchmarkProfile: z.literal(LEAN_EVAL_4341_PROFILE).optional(),
   catalogHash: receiptHash, leaderboardSource: z.string().refine(nonBlank), leaderboardHash: receiptHash.optional(),
   leaderboardGeneratedAt: positiveTime.optional(), workspaceRoot: z.string(), projectRoot: z.string(),
   verifierProjectRoot: z.string().optional(), sourceProjectRoot: z.string().optional(), activeProblemPath: z.string(),
   contract: z.object({}).passthrough(), solverOwnedFiles: z.array(z.unknown()), trustedFiles: z.array(z.unknown()),
   certificateSlots: z.number().int().min(1).max(MAX_CERTIFICATE_SLOTS).optional(),
   theoryModules: z.number().int().min(1).max(MAX_THEORY_MODULES).optional(),
+  libraryBinding: effectiveLibraryBindingSchema.optional(),
   libraryPack: z.object({ digest: receiptHash, files: z.record(z.string(), receiptHash) }).strict().optional(), createdAt: positiveTime,
 }).passthrough().refine(receipt => receipt.leaderboardSource !== LEAN_EVAL_LEADERBOARD_URL
   || (receipt.leaderboardHash !== undefined && receipt.leaderboardGeneratedAt !== undefined));
@@ -723,7 +829,7 @@ const publicObligationsSchema = z.array(z.object({ name: z.string().refine(nonBl
 export function readLeanEvalBootstrapReceipt(activeProblemPath: string): LeanEvalBootstrapReceipt {
   const absolute = path.resolve(activeProblemPath);
   const parsed = readMathJson(absolute) as LeanEvalBootstrapReceipt;
-  if (!bootstrapReceiptSchema.safeParse(parsed).success || parsed.benchmarkCommit !== LEAN_EVAL_BENCHMARK_COMMIT) {
+  if (!bootstrapReceiptSchema.safeParse(parsed).success || parsed.benchmarkCommit !== leanEvalBenchmarkCommit(parsed.benchmarkProfile, parsed.evaluationMode)) {
     throw new Error('LeanEval bootstrap receipt is invalid or not pinned');
   }
   let contract: MathProblemContract;
@@ -802,6 +908,7 @@ export function readLeanEvalBootstrapReceipt(activeProblemPath: string): LeanEva
     }
     if (candidate !== undefined) assertMathCanonicalPath(path.resolve(candidate));
   }
+  assertLeanEvalLibraryBinding(parsed);
   return Object.freeze({
     ...parsed,
     workspaceRoot,
@@ -858,6 +965,7 @@ export function commitLeanEvalSubmission(
     if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`LeanEval ${label} worktree is unsafe`);
   }
   const verifierProject = path.join(verifierRoot, bootstrapped.problem.generatedPath);
+  assertLeanEvalLibraryBinding(bootstrapped.receipt);
   if (!fs.existsSync(verifierRoot) || !fs.existsSync(verifierProject)) {
     throw new Error('LeanEval verifier worktree is missing');
   }
@@ -956,6 +1064,13 @@ const assertSubmissionCommitDelta = (bootstrapped: LeanEvalBootstrapResult, targ
     if (paths.some((file) => file.startsWith(generatedPrefix))) solverChange = true;
   }
   if (!solverChange) throw new Error('LeanEval submission commit does not contain a solver-owned proof change');
+  if (bootstrapped.receipt.libraryBinding) for (const [file, digest] of Object.entries(bootstrapped.receipt.libraryPack?.files ?? {})) {
+    const relative = `${generatedPrefix}${file}`;
+    const entry = git(verifierRoot, ['--no-replace-objects', 'ls-tree', targetCommit, '--', relative]);
+    const bytes = mathGitBytes(verifierRoot, ['--no-replace-objects', 'show', `${targetCommit}:${relative}`],
+      { maxBuffer: MAX_LIBRARY_MODULE_BYTES + 1, timeout: 30_000 });
+    if (!entry.startsWith('100644 blob ') || sha256(bytes) !== digest) throw new Error('lean_eval_library_submission_changed');
+  }
 };
 
 /** Commit the solver output and run the pinned official comparator as one gate. */
@@ -963,6 +1078,7 @@ export async function runLeanEvalOfficialGate(
   bootstrapped: LeanEvalBootstrapResult,
   options: LeanEvalOfficialGateOptions = {}
 ): Promise<LeanEvalOfficialGateResult> {
+  assertLeanEvalLibraryBinding(bootstrapped.receipt);
   // Eligibility is an authority decision, so a cached intake snapshot is not
   // sufficient. Refresh immediately before any submission commit/gate and
   // fail closed if the leaderboard cannot be reached.
@@ -1006,7 +1122,12 @@ export async function runLeanEvalOfficialGate(
   const solverProjectRoot = path.resolve(bootstrapped.receipt.projectRoot);
   const verifierProject = path.join(verifierRoot, bootstrapped.problem.generatedPath);
   const verifierManifest = path.join(verifierProject, 'lake-manifest.json');
-  if (!fs.existsSync(verifierManifest) && fs.existsSync(path.join(verifierRoot, 'lake-manifest.json'))) {
+  if (bootstrapped.receipt.benchmarkProfile) {
+    const expected = readHistoricalLeanEvalInputs(verifierRoot, bootstrapped.receipt.benchmarkCommit, bootstrapped.problem.generatedPath).manifest;
+    if (fs.existsSync(verifierManifest) && fs.readFileSync(verifierManifest, 'utf8') !== expected)
+      throw new Error('lean_eval_historical_verifier_lock_changed');
+    fs.writeFileSync(verifierManifest, expected);
+  } else if (!fs.existsSync(verifierManifest) && fs.existsSync(path.join(verifierRoot, 'lake-manifest.json'))) {
     const pinned = JSON.parse(git(verifierRoot, ['show', `${bootstrapped.receipt.benchmarkCommit}:lake-manifest.json`]));
     writeMathJsonDurable(verifierManifest, { ...pinned, version: pinned.version ?? pinned.schemaVersion ?? '1.2.0',
       name: bootstrapped.problem.id, lakeDir: '.lake', packagesDir: '.lake/packages' });
