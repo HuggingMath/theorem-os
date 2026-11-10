@@ -1098,9 +1098,12 @@ export async function runFormalization(directory: string, root: string, options:
             state.error = errorText(cause).slice(0, 16_000);
             writeMathJsonDurable(path.join(roundDirectory, 'failure.json'), { error: state.error, round: state.rounds });
             save();
+            // Coverage diagnostics quote candidate/source data, which may itself
+            // contain reserved error strings. Only its actual code controls retry.
+            const retryClassification = state.error.startsWith('formalization_coverage_invalid:') ? 'formalization_coverage_invalid' : state.error;
             if (lease.signal.aborted || !modelDispatchAllowed(buildTokenBudget(request.maxTotalTokens, state.sessions)) ||
-                cause instanceof FormalizationRoleFailure || state.error.includes('formalization_plan_task_kind_unsupported') || infrastructureFailure(state.error) ||
-                /formalization_role_incomplete:failed:(?:unauthorized|badRequest|misalignmentPolicyViolation|cyberPolicy)/u.test(state.error)) throw cause;
+                cause instanceof FormalizationRoleFailure || retryClassification.includes('formalization_plan_task_kind_unsupported') || infrastructureFailure(retryClassification) ||
+                /formalization_role_incomplete:failed:(?:unauthorized|badRequest|misalignmentPolicyViolation|cyberPolicy)/u.test(retryClassification)) throw cause;
             state.feedback = state.error;
             if (direct && state.error.startsWith('formalization_unsupported_declaration'))
               state.feedback += '\nUse only imports, namespaces, sections, variable/universe declarations and ordinary named def/abbrev/instance/theorem/lemma declarations. Replace structure or inductive declarations with ordinary predicates or existential quantifiers; do not use custom notation or metaprogramming.';
