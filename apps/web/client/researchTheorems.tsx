@@ -363,7 +363,7 @@ function RunResearch({ project, selfId, binding, refreshProject, task, requested
     const taskId = requested?.taskId ?? (matchesUrl ? parameters.get('task') : null), taskVersion = requested?.taskVersion ?? (matchesUrl ? parameters.get('taskVersion') ?? undefined : undefined);
     const commit = requested ? undefined : matchesUrl ? parameters.get('commit') ?? undefined : undefined;
     const key = JSON.stringify([taskId, taskVersion, commit, requested?.request]);
-    if (taskId && latest && taskShown.current !== key && view.current.showTask(binding.runId, taskId, taskVersion, commit)) taskShown.current = key;
+    if (taskId && latest && taskShown.current !== key && view.current.showTask(binding.runId, taskId, taskVersion, commit, !parameters.has('reviewComment'))) taskShown.current = key;
   }, [observation.data, observation.error, latest, binding.permissions, project.feedback, requestedTask]);
   return <><ErrorBox message={observation.error} />{observation.error && observation.data?.run && latest && <p class="research-status">{tx('当前展示上一次成功读取的观测；恢复连接后会继续更新。', 'Showing the last successful observation. Updates resume after reconnection.')}</p>}
     {pinnedCommit && <p class="research-status">{tx('正在查看收藏的固定源码快照。', 'Viewing a saved source snapshot.')} <code>{pinnedCommit}</code> <a class="research-inline-link" href={theoremHref(project.id, binding.runId, { statementVersionId: binding.statementVersionId, ...(task ? { taskRef: { id: task.taskId, version: task.taskVersion } } : {}) })}>{tx('返回当前运行参与研究', 'Return to the current run to participate')}</a></p>}
@@ -375,7 +375,7 @@ function RunResearch({ project, selfId, binding, refreshProject, task, requested
     {observation.data?.run && latest && <>{!pinnedCommit && binding.permissions.approve && <ProjectPlanApproval project={project} selfId={selfId} binding={binding} observation={latest} refresh={refreshProject} />}
       <CollaborationTaskWorkspace project={project} selfId={selfId} binding={binding} observation={latest} selectedTask={task} pinnedCommit={pinnedCommit} context={context} refresh={refreshProject} onSubmitCandidate={target => setCandidateRequest(previous => ({ target, serial: (previous?.serial ?? 0) + 1 }))} onSelectTask={(taskId, version) => { view.current?.showTask(binding.runId, taskId, version, pinnedCommit, false); }} onOpenIssue={onOpenIssue} onRevealFeedback={onRevealFeedback} />
       {!pinnedCommit && <HumanParticipation project={project} selfId={selfId} binding={binding} observation={latest} refresh={refreshProject} />}
-      {!pinnedCommit && <ResearchWorkImpactView project={project} binding={binding} refresh={refreshProject} onRevealFeedback={onRevealFeedback} />}
+      {!pinnedCommit && <ResearchWorkImpactView project={project} selfId={selfId} binding={binding} refresh={refreshProject} onRevealFeedback={onRevealFeedback} />}
       {(!pinnedCommit || restoringAccountDraft) && binding.permissions.proof && <ProofSubmission project={project} projectId={projectId} selfId={selfId} binding={binding} observation={latest} refresh={refreshProject} requested={candidateRequest} onSaved={onRevealFeedback} />}</>}
     {binding.permissions.manage && project.permissions.edit && <RunSharing project={project} binding={binding} refresh={refreshProject} />}
   </>;

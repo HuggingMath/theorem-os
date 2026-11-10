@@ -166,15 +166,18 @@ function prefill(params: URLSearchParams) {
   if (env && !environment.value) environment.value = env.replace(/\s+/gu, ' ').trim().slice(0, environment.maxLength);
 }
 prefill(new URLSearchParams(location.search));
+let restoredDraft = false;
 try {
   const saved = parseFeedbackDraft(sessionStorage.getItem(feedbackDraftKey));
   if (saved) {
     kindInputs.forEach(input => { input.checked = input.value === saved.kind; });
     area.value = saved.area; subject.value = saved.subject; description.value = saved.description; environment.value = saved.environment;
-    draftStatus.textContent = text.draftRestored;
+    restoredDraft = true; draftStatus.textContent = text.draftRestored;
   }
 } catch { draftStatus.textContent = text.draftUnavailable; }
 
+// Validated entry context is already useful work, even before the first keystroke.
+if (!restoredDraft && (area.value || environment.value || selectedKind() !== 'bug')) saveDraft();
 updateFields();
 form.hidden = false;
 element('feedback-fallback').hidden = true;

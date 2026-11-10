@@ -190,6 +190,7 @@ export function createResearchCollectionsHandler(dependencies: Dependencies) {
     if (parts[0] !== 'api' || parts[1] !== 'research') return;
     const [, , section, id, action, itemId] = parts, item = (body: unknown, status = 200) => ({ status, body: { item: body } });
     if (section === 'shared-proofs') {
+      if (!id && method === 'GET') return item(sharedProofs.registered(viewer, url.searchParams.get('tokenDigest') ?? ''));
       if (!id && method === 'POST') return item(sharedProofs.register(viewer, await readBody()), 201);
       if (id === 'preparations' && action && !itemId && method === 'GET') return item(sharedProofs.prepared(viewer, action));
       if (id && !action && method === 'GET') return item(sharedProofs.read(viewer, id));

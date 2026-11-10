@@ -298,6 +298,7 @@ export const errors: Record<string, string> = {
   '此反馈由指定评审负责，请先办理评审移交。': 'This feedback has an assigned reviewer. Transfer the review first.',
   '只有提交人能补充后重新送审。': 'Only the author can add information and resubmit for review.',
   '请在待补充状态填写补充内容后送审。': 'Add the requested information before resubmitting a review that needs information.',
+  '旧版本评审已经接续或结束，请修订当前任务的候选并重新检查后送审。': 'The old review has been continued or closed. Revise and check a candidate for the current task before resubmitting.',
   '没有评审分配权限。': 'You do not have permission to assign a reviewer.',
   '只有项目发起者或当前评审可以移交评审。': 'Only the project owner or current reviewer can transfer the review.',
   '请选择评审人。': 'Choose a reviewer.',

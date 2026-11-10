@@ -32,6 +32,16 @@ describe('task draft codecs without credentials or run-result state', () => {
     const original = draft({ knowledgeDigest: null });
     expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(original)))).toEqual(original);
   });
+  it('retains recipient-owned shared-proof provenance across reload without a share capability', () => {
+    const sharedProofOrigin = { readingId: 'reading-one', title: 'A shared original theorem', digest: 'a'.repeat(64) };
+    const original = draft({ sharedProofOrigin });
+    expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(original)))).toEqual(original);
+    const extended = { ...sharedProofOrigin, token: 'private-capability', href: 'https://outside.invalid/' };
+    expect(encodeTaskDraft(draft({ sharedProofOrigin: extended }))).not.toMatch(/private-capability|outside\.invalid/);
+    expect(decodeTaskDraft({ ...archive(), run: { ...archive().run, sharedProofOrigin } })).not.toHaveProperty('sharedProofOrigin');
+    expect(() => decodeTaskDraft(envelope(draft({ sharedProofOrigin: { ...sharedProofOrigin, readingId: '../../elsewhere' } })))).toThrow('任务草稿格式无效');
+    expect(() => decodeTaskDraft(envelope(draft({ sharedProofOrigin: { ...sharedProofOrigin, digest: 'bad' } })))).toThrow('任务草稿格式无效');
+  });
   it('keeps the problem budget reference through reload without importing an archived account reference', () => {
     const problemBudget = { runId: 'a'.repeat(36), projectId: 'project-one' };
     const original = draft({ problemBudget, maxTotalTokens: '15' });

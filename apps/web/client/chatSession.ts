@@ -15,7 +15,7 @@ import { nextSteps, summarizeGoals } from '../report';
 import type { ChatArtifactKind } from './chatArtifactNavigation';
 import { clockTime } from './collaborationUi';
 import type { PlanApprovalProps } from './ui/RunHeader';
-import { decodeChatDraft, encodeChatDraft, readEditedProblemId, type ChatDraft, type ChatDraftSettings, type ChatPendingMessage, type ChatOriginalBackup } from './chatDraft';
+import { decodeChatDraft, encodeChatDraft, historicalChatSettings, readEditedProblemId, type ChatDraft, type ChatDraftSettings, type ChatPendingMessage, type ChatOriginalBackup } from './chatDraft';
 import { libraryReferenceId, withLibraryReferences, type ChatLibraryReference } from './chatReference';
 import type { ProblemDraftValue } from '../problemDraftTypes';
 import type { ProblemDraftPanelProps } from './problemDrafts';
@@ -406,12 +406,17 @@ export class ChatSession {
   /** Edits have their own saved input; returning home restores its independent unfinished question. */
   openEditedProblem(id: string, original?: string, mode: 'push' | 'replace' = 'push', environment?: 'standard' | 'mathlib') {
     if (!readEditedProblemId(new URLSearchParams({ editProblem: id }))) return;
+    const settings = historicalChatSettings(this.formalization, this.run, this.problemDraft().settings);
     this.home(false); this.editedProblem = id;
     this.draft = this.restoredDraft(this.draftId);
     const saved = this.drafts.has(this.draftId) || (() => {
       try { return sessionStorage.getItem(`theorem-os.chat-draft.${this.options.draftScope}.${this.draftId}`) !== null; } catch { return false; }
     })();
-    if (!saved && original !== undefined) { this.draft = original; this.references = []; if (environment) this.environment = environment; }
+    if (!saved && original !== undefined) {
+      const { maxRunSeconds, maxTotalTokens, research, ...historical } = settings;
+      Object.assign(this, historical); this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...research } }; this.hasDraftSettings = true;
+      this.draft = original; this.references = []; if (environment) this.environment = environment;
+    }
     this.rememberDraft(); this.options.onNavigate('', mode, false, id); this.options.onSelection(); this.draw(); this.focus();
   }
   problemDraft(): Extract<ProblemDraftValue, { mode: 'natural' }> {

@@ -1,4 +1,5 @@
-import type { WebFormalizationRequest, WebResearchBudget } from '../formalizationTypes';
+import type { WebFormalization, WebFormalizationRequest, WebResearchBudget } from '../formalizationTypes';
+import type { WebRun } from '../shared';
 import { webConversationLimits } from '../conversationTypes';
 import { decodeLibraryReferences, type ChatLibraryReference } from './chatReference';
 
@@ -18,6 +19,19 @@ export function readEditedProblemId(parameters: URLSearchParams): string {
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const budget = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 const reference = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 512;
+
+/** Old records may omit budgets; use the editable settings only for fields never recorded. */
+export function historicalChatSettings(formalization: WebFormalization | undefined, run: WebRun | undefined, fallback: ChatDraftSettings): ChatDraftSettings {
+  const research = formalization?.research ?? (run ? { maxRunSeconds: run.maxRunSeconds,
+    maxTotalTokens: run.maxTotalTokens ?? 0, maxTurns: run.maxTurns } : fallback.research);
+  return { providerId: formalization?.providerId ?? run?.providerId ?? fallback.providerId,
+    model: formalization?.model ?? run?.model ?? fallback.model,
+    environment: formalization?.environment ?? run?.environment ?? fallback.environment,
+    effort: formalization?.effort ?? (run && ['low', 'high', 'max'].includes(run.effort) ? run.effort as ChatDraftSettings['effort'] : fallback.effort),
+    participation: formalization ? formalization.humanReview ? 'guided' : 'automatic' : run ? run.planApproval ? 'guided' : 'automatic' : fallback.participation,
+    maxRunSeconds: formalization?.maxRunSeconds ?? fallback.maxRunSeconds,
+    maxTotalTokens: formalization?.maxTotalTokens ?? fallback.maxTotalTokens, research: { ...research } };
+}
 
 function guidance(value: unknown): ChatGuidanceDraft | undefined {
   if (!record(value) || !reference(value.runId)) return;

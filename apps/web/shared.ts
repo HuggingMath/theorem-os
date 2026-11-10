@@ -467,6 +467,7 @@ export function workbenchReturn(search: string): string {
       }
     } else if (destination === 'theorems') {
       retain('id', recordId); retain('version', recordId); retain('revise', recordId);
+      retain('reviewComment', recordId);
     } else {
       retain('tab', /^(?:inbox|search|usage|brief|collections|drafts|trials|help)$/u);
       retain('trial', recordId); retain('asset', recordId); retain('status', /^(?:prepared|checking|passed|failed)$/u);
@@ -474,6 +475,8 @@ export function workbenchReturn(search: string): string {
       retain('history', /^[a-f0-9]{64}$/u);
       retain('kind', /^(?:problem|conversation|lemma|route|library|history|decision|stage)$/u);
       const searchQuery = params.get('q'); if (searchQuery && searchQuery.length <= 128) kept.set('q', searchQuery);
+      const searchOffset = params.get('offset');
+      if (searchOffset && /^\d{1,6}$/u.test(searchOffset) && Number(searchOffset) <= 100_000) kept.set('offset', String(Number(searchOffset)));
     }
     const language = params.get('lang'); if (language === 'zh' || language === 'en') kept.set('lang', language);
     return `?${kept}`;

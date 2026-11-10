@@ -58,11 +58,15 @@ export function FeedbackWorkspace({ project, selfId, runId, task, refresh, onOpe
   }, [browseTask]);
   useEffect(() => {
     const id = focus?.id ?? project.feedback.find(item => location.hash === `#feedback-${enc(item.id)}`)?.id;
-    const key = JSON.stringify([id, focus?.request]);
+    const commentId = new URLSearchParams(location.search).get('reviewComment');
+    const key = JSON.stringify([id, focus?.request, commentId]);
     if (!id || focused.current === key || !project.feedback.some(item => item.id === id)) return;
-    focused.current = key; setScope('all'); setStatus('all'); setQuery('');
+    setScope('all'); setStatus('all'); setQuery('');
     const frame = requestAnimationFrame(() => {
-      const row = document.getElementById(`feedback-${id}`);
+      const comment = commentId && project.feedback.find(item => item.id === id)?.reviewComments?.some(item => item.id === commentId && !item.anchor)
+        ? document.getElementById(`review-comment-${commentId}`) : undefined;
+      const row = comment || document.getElementById(`feedback-${id}`);
+      if (row) focused.current = key;
       row?.scrollIntoView({ block: 'start' }); row?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
@@ -153,7 +157,7 @@ function Feedback({ feedback, project, selfId, runId, refresh, hidden, onOpenTas
     {feedback.payload && 'libraryTrial' in feedback.payload && feedback.payload.libraryTrial && <LibraryCandidateEvidence attachment={feedback.payload.libraryTrial} />}
     {feedback.candidateRevision && <CandidateHistory feedback={feedback} onReveal={onRevealFeedback} />}
     {feedback.supersededBy && <p>{tx('已有后续候选修订。', 'A newer candidate revision is available.')} <button class="text-button" type="button" onClick={() => onRevealFeedback(feedback.supersededBy!)}>{tx('打开最新修订', 'Open the newer revision')}</button></p>}
-    {feedback.kind === 'proof-submission' && reviseUrl && feedback.author.id === selfId && !feedback.supersededBy && feedback.continuation?.action !== 'end'
+    {feedback.kind === 'proof-submission' && reviseUrl && feedback.author.id === selfId && !feedback.supersededBy && !feedback.reviewContinuation && feedback.continuation?.action !== 'end'
       && project.runs.some(run => run.runId === feedback.target?.runId && (run.status === 'running' || needsNewAttempt && ['completed', 'cancelled', 'error'].includes(run.status)) && run.permissions.proof) && <a class="button" data-revise-candidate href={`${reviseUrl.pathname.split('/').at(-1)}${reviseUrl.search}${reviseUrl.hash}`}>{tx('基于此候选继续修改', 'Continue revising this candidate')}</a>}
     {feedback.kind !== 'guidance' && (feedback.decision.evidenceRefs.length > 0 || feedback.execution.resultRefs.length > 0) && <details><summary>{tx('结果与证据引用', 'Result and evidence references')}</summary><Tags values={[...new Set([...feedback.decision.evidenceRefs, ...feedback.execution.resultRefs])]} /></details>}
     {selfId && <ResearchReview feedback={feedback} project={project} selfId={selfId} canReview={canReview} refresh={refresh} focusAnnotationId={focusAnnotationId} />}

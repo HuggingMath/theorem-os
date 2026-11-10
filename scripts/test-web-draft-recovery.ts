@@ -13,7 +13,7 @@ import { closeDialog, closeSettings, discardSourceEditor, fillConfig, fitViewpor
 import { freePort, postRun, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport, ready, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const output = path.join(root, 'out/web-draft-recovery');
+const output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/web-draft-recovery');
 const reportFile = path.join(output, 'report.json');
 const draftKey = 'theorem-os.web-draft.v1', recoveryKey = 'theorem-os.web-draft-recovery.v1';
 const credential = `sk-theoremos-recovery-fixture-${crypto.randomUUID()}`;
@@ -79,6 +79,8 @@ async function fill(page: Page, value: TaskDraft) {
   await withSettings(page, async () => {
     await page.locator('#provider').selectOption(value.providerId); await page.locator('#effort').selectOption(value.effort);
     for (const key of ['model', 'maxTurns', 'maxRunSeconds', 'workers'] as const) await page.locator(`#${ids[key]}`).fill(value[key]);
+    // Commit blank-field validation before clicking the visually hidden radio input.
+    await page.locator('#workers').blur();
     await page.locator(`input[name="coordination"][value="${value.coordination}"]`).check();
   });
   // Environment, template and source sit in the composer, behind the settings dialog.

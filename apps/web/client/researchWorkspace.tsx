@@ -87,20 +87,38 @@ function WorkspaceSearch({ context }: { context: ResearchContext }) {
   const parameters = new URLSearchParams(location.search);
   const [draft, setDraft] = useState(parameters.get('q') ?? ''), [query, setQuery] = useState(draft);
   const initialKind = parameters.get('kind') ?? '';
-  const [kind, setKind] = useState<ResearchSearchKind | ''>(initialKind in kinds ? initialKind as ResearchSearchKind : ''), [offset, setOffset] = useState(0);
+  const initialOffset = Number(parameters.get('offset') ?? 0);
+  const [kind, setKind] = useState<ResearchSearchKind | ''>(initialKind in kinds ? initialKind as ResearchSearchKind : ''),
+    [offset, setOffset] = useState(Number.isSafeInteger(initialOffset) && initialOffset >= 0 && initialOffset <= 100_000 ? initialOffset : 0);
   const data = useResource<ResearchSearchResult>(query ? `${base}/workspace/search?${new URLSearchParams({ q: query, kind, offset: String(offset) })}` : undefined);
+  useEffect(() => {
+    const hit = history.state?.workspaceSearchHit;
+    if (!data.data || typeof hit !== 'string') return;
+    const frame = requestAnimationFrame(() => {
+      const link = document.getElementById(`workspace-search-${hit}`);
+      link?.focus({ preventScroll: true }); link?.scrollIntoView({ block: 'center' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [data.data]);
   const record = parameters.get('record');
   const historyId = parameters.get('history');
   const saved = useResource<Item<{ name: string; type: string; description: string; declaration: string; premises: string[] }>>(record ? `${base}/workspace/knowledge/${enc(record)}` : undefined);
   const submit = () => {
     const value = draft.trim(); setOffset(0); setQuery(value);
     const url = new URL(location.href); if (value) url.searchParams.set('q', value); else url.searchParams.delete('q');
-    url.searchParams.delete('record'); url.searchParams.delete('history'); history.replaceState(null, '', url); data.refresh();
+    url.searchParams.delete('record'); url.searchParams.delete('history'); url.searchParams.delete('offset');
+    history.replaceState(null, '', url); data.refresh();
   };
   const chooseKind = (next: ResearchSearchKind | '') => {
     setKind(next); setOffset(0); const url = new URL(location.href);
     if (next) url.searchParams.set('kind', next); else url.searchParams.delete('kind');
+    url.searchParams.delete('offset');
     history.replaceState(null, '', url);
+  };
+  const turnPage = (next: number) => {
+    const url = new URL(location.href);
+    if (next) url.searchParams.set('offset', String(next)); else url.searchParams.delete('offset');
+    history.replaceState(null, '', url); setOffset(next);
   };
   return <>{historyId && <ResearchHistoryReader id={historyId} context={context} />}<Panel title={tx('搜索研究记录', 'Search your research')} note={tx('查找题目、对话、历史推导、评审意见、阶段结论和 Library。', 'Find problems, conversations, historical reasoning, reviews, stage conclusions and Library releases.')}>
     <form class="workspace-search" role="search" onSubmit={event => { event.preventDefault(); submit(); }}>
@@ -118,12 +136,15 @@ function WorkspaceSearch({ context }: { context: ResearchContext }) {
     {data.data && <><p class="workspace-result-count" role="status">{tx(`找到 ${data.data.total} 条记录`, `${data.data.total} results`)}{offset ? ` · ${offset + 1}–${offset + data.data.items.length}` : ''}</p>
       <div class="workspace-results">{data.data.items.map(item => <article key={item.id} class="workspace-result">
         <div class="workspace-result-meta"><span>{kinds[item.kind]}</span><span><Rich text={item.context} /></span>{item.updatedAt && <time dateTime={item.updatedAt}>{stamp(item.updatedAt)}</time>}</div>
-        <h3><a href={item.href}><Rich text={item.title} /></a></h3><RichProse text={item.excerpt} />
+        <h3><a id={`workspace-search-${item.id}`} href={item.href} onClick={event => {
+          if (!event.button && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey)
+            history.replaceState({ ...history.state, workspaceSearchHit: item.id }, '', location.href);
+        }}><Rich text={item.title} /></a></h3><RichProse text={item.excerpt} />
         {item.version && <details><summary>{tx('版本', 'Version')}</summary><code>{item.version}</code></details>}
       </article>)}</div>
       {!data.data.items.length && <Empty>{tx('没有找到匹配记录，试试更短的关键词或其他结果类型。', 'No matches. Try a shorter phrase or another result type.')}</Empty>}
-      <div class="research-actions">{offset > 0 && <button class="button" type="button" onClick={() => setOffset(Math.max(0, offset - 40))}>{tx('上一页', 'Previous')}</button>}
-        {data.data.nextOffset !== undefined && <button class="button" type="button" onClick={() => setOffset(data.data!.nextOffset!)}>{tx('下一页', 'Next')}</button>}</div>
+      <div class="research-actions">{offset > 0 && <button class="button" type="button" onClick={() => turnPage(Math.max(0, offset - 40))}>{tx('上一页', 'Previous')}</button>}
+        {data.data.nextOffset !== undefined && <button class="button" type="button" onClick={() => turnPage(data.data!.nextOffset!)}>{tx('下一页', 'Next')}</button>}</div>
     </>}
     {!query && <Empty>{tx('输入关键词，从你有权查看的记录中查找。', 'Enter a query to search the records you can access.')}</Empty>}
     <ErrorBox message={saved.error} />{saved.data && <section class="workspace-saved-lemma"><h3>{saved.data.item.name}</h3><RichProse text={saved.data.item.description} />
@@ -142,19 +163,29 @@ function EvidenceState({ value }: { value: string }) { return <span class="resea
 function WorkspaceUsage({ context }: { context: ResearchContext }) {
   const data = useResource<ResearchUsageLedger>(`${base}/workspace/usage`, 15_000);
   const [filter, setFilter] = useState(new URLSearchParams(location.search).get('run') ?? '');
-  return <><Panel title={tx('整道题的用量', 'Usage across the whole problem')}
+  const groups = data.data?.groups.filter(group => !filter || group.id === filter || group.entries.some(entry => entry.id === `proof:${filter}`)) ?? [];
+  const entries = groups.flatMap(group => group.entries);
+  const knownTokens = entries.reduce((total, entry) => total + (entry.tokens ?? 0), 0);
+  const missingEntries = entries.filter(entry => entry.tokens === null).length;
+  const unpricedEntries = entries.filter(entry => !entry.estimate).length;
+  const estimates = (['CNY', 'USD'] as const).flatMap(currency => {
+    const priced = entries.flatMap(entry => entry.estimate?.currency === currency ? [entry.estimate] : []);
+    return priced.length ? [`${currency} ${priced.reduce((total, item) => total + item.amount, 0).toFixed(4)}`] : [];
+  });
+  return <><Panel title={tx('研究用量', 'Research usage')}
     note={tx('形式化、历次证明和讲解分别记账。同一道题的共享运行只计一次。', 'Formalization, proof attempts and explanations are counted separately. Shared runs are counted once.')}>
     <ErrorBox message={data.error} />{data.error && <button type="button" class="button" onClick={data.refresh}>{tx('重新读取', 'Try again')}</button>}
     {data.loading && <p role="status">{tx('正在汇总…', 'Loading usage…')}</p>}
-    {data.data && <><div class="workspace-metrics"><div><strong>{formatTokens(data.data.knownTokens)}</strong><span>{tx('已记录 Token', 'Recorded tokens')}</span></div>
-      <div><strong>{data.data.entryCount}</strong><span>{tx('阶段记录', 'Stage records')}</span></div><div><strong>{data.data.missingEntries}</strong><span>{tx('尚无用量记录', 'Usage unavailable')}</span></div></div>
-      {data.data.estimates.length > 0 && <p class="workspace-estimate">{tx('按你填写的单价估算', 'Estimate using your rates')}: {data.data.estimates.map(item => `${item.currency} ${item.amount.toFixed(4)}`).join(' · ')}
-        {` · ${data.data.unpricedEntries} ${tx('条记录未计价', 'unpriced records')}`}</p>}
+    {data.data && <><label class="workspace-select">{tx('题目', 'Problem')}<select value={filter} onChange={event => setFilter(event.currentTarget.value)}><option value="">{tx('全部题目', 'All problems')}</option>
+        {data.data.groups.map(group => <option key={group.id} value={group.id}>{group.title}</option>)}</select></label>
+      <p data-usage-scope>{filter ? tx('所选题目合计', 'Selected problem total') : tx('全部题目合计', 'All problems combined')}</p>
+      <div class="workspace-metrics"><div><strong>{formatTokens(knownTokens)}</strong><span>{tx('已记录 Token', 'Recorded tokens')}</span></div>
+      <div><strong>{entries.length}</strong><span>{tx('阶段记录', 'Stage records')}</span></div><div><strong>{missingEntries}</strong><span>{tx('尚无用量记录', 'Usage unavailable')}</span></div></div>
+      {estimates.length > 0 && <p class="workspace-estimate">{tx('按你填写的单价估算', 'Estimate using your rates')}: {estimates.join(' · ')}
+        {` · ${unpricedEntries} ${tx('条记录未计价', 'unpriced records')}`}</p>}
       <p class="research-field-note">{tx('缺失用量不计为 0。金额使用你填写的综合单价估算，供应商账单以实际计费为准。共享运行只展示证明阶段用量。',
         'Missing usage is not zero. Cost uses the blended rate you enter; your provider’s bill is authoritative. Shared runs include proof-stage usage only.')}</p>
-      <label class="workspace-select">{tx('题目', 'Problem')}<select value={filter} onChange={event => setFilter(event.currentTarget.value)}><option value="">{tx('全部题目', 'All problems')}</option>
-        {data.data.groups.map(group => <option key={group.id} value={group.id}>{group.title}</option>)}</select></label>
-      {data.data.groups.filter(group => !filter || group.id === filter || group.entries.some(entry => entry.id === `proof:${filter}`)).map(group => <section class="workspace-usage-group" key={group.id}>
+      {groups.map(group => <section class="workspace-usage-group" key={group.id}>
         <header><h3><a href={group.href}><Rich text={group.title} /></a></h3><p>{formatTokens(group.knownTokens)} Token · {group.attempts} {tx('次证明研究', 'proof attempts')} · {group.acceptedAttempts} {tx('次验收通过', 'accepted')}</p></header>
         <div class="workspace-table-scroll" tabIndex={0} aria-label={tx('分阶段用量', 'Usage by stage')}><table class="workspace-table"><thead><tr>
           {[tx('阶段', 'Stage'), tx('模型', 'Model'), 'Token', tx('记录时长', 'Elapsed time'), tx('状态', 'Status'), tx('金额估算', 'Estimated cost')].map(label => <th key={label} scope="col">{label}</th>)}</tr></thead>
@@ -163,7 +194,8 @@ function WorkspaceUsage({ context }: { context: ResearchContext }) {
               {entry.tokenLimit && <small>{tx('上限', 'Limit')} {formatTokens(entry.tokenLimit)}</small>}</td><td>{entry.durationMs === null ? '—' : readableDuration(entry.durationMs)}</td>
             <td><EvidenceState value={entry.status} /></td><td>{entry.estimate ? `≈ ${entry.estimate.currency} ${entry.estimate.amount.toFixed(4)}` : '—'}</td></tr>)}</tbody></table></div>
       </section>)}
-      {!data.data.groups.length && <Empty>{tx('开始一次研究后，用量会随记录更新。', 'Usage will appear after you start a research task.')}</Empty>}
+      {!groups.length && <Empty>{filter ? tx('没有找到这道题的用量记录。', 'No usage records were found for this problem.')
+        : tx('开始一次研究后，用量会随记录更新。', 'Usage will appear after you start a research task.')}</Empty>}
     </>}
   </Panel>{data.data && <UsageRates ledger={data.data} context={context} onSave={data.refresh} />}</>;
 }

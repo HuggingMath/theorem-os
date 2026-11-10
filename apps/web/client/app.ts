@@ -440,6 +440,7 @@ function clearOwnedDrafts() {
   document.querySelector('[data-library-trial-start]')?.remove(); libraryTrialHandled = false;
   document.querySelector('[data-budget-attempt-start]')?.remove(); budgetDraftHandled = false;
   document.querySelector('[data-shared-proof-start]')?.remove(); sharedDraftHandled = false;
+  document.querySelector('[data-shared-proof-origin]')?.remove(); draftSharedProofOrigin = undefined;
   recoveryEntryHandled = false;
   budgetDraftOrigin = undefined;
   chatWorkspace?.bindOwner('');
@@ -476,6 +477,7 @@ let draftSourceExpanded = false;
 let draftContinuation: WebContinuation | undefined;
 let continuationPreview: ContinuationPreview | undefined;
 let budgetDraftOrigin: { runId: string; projectId?: string; source: string; environment: WebEnvironment } | undefined;
+let draftSharedProofOrigin: TaskDraft['sharedProofOrigin'];
 let draftFormalization: (NonNullable<TaskDraft['formalization']> & { source: string; environment: WebEnvironment; original?: string }) | undefined;
 let moduleSettingsPolicy: string | undefined;
 let settingsWorkspaceReturn: { focus?: HTMLElement; preview?: boolean } | undefined;
@@ -1052,7 +1054,8 @@ function captureDraft(): TaskDraft {
     ...(draftContinuation ? { continueFrom: draftContinuation } : {}),
     ...(budgetDraftOrigin && budgetDraftOrigin.source === field('source').value && budgetDraftOrigin.environment === field('environment').value
       ? { problemBudget: { runId: budgetDraftOrigin.runId, ...(budgetDraftOrigin.projectId ? { projectId: budgetDraftOrigin.projectId } : {}) } } : {}),
-    ...(draftFormalization ? { formalization: { id: draftFormalization.id, evidenceSha256: draftFormalization.evidenceSha256 } } : {}) };
+    ...(draftFormalization ? { formalization: { id: draftFormalization.id, evidenceSha256: draftFormalization.evidenceSha256 } } : {}),
+    ...(draftSharedProofOrigin ? { sharedProofOrigin: { ...draftSharedProofOrigin } } : {}) };
 }
 function selectedProblemLibraries() {
   const selection = researchSelection.value();
@@ -1117,6 +1120,7 @@ function replaceDraft(reason: ReplacementReason, change: () => void) {
   if (reason !== 'edit' && reason !== 'reuse') continuationPreview = undefined;
   if (reason !== 'edit' && reason !== 'reuse') budgetDraftOrigin = undefined;
   if (reason !== 'edit') draftFormalization = undefined;
+  if (reason !== 'edit') { draftSharedProofOrigin = undefined; renderSharedProofOrigin(); }
   try { change(); } finally { replacingDraft = nested; }
   if (track) {
     draftRecovery.remember(before, captureDraft(), reason);
@@ -1172,6 +1176,8 @@ function saveDraft() {
 }
 function applyTaskDraft(draft: TaskDraft) {
   continuationPreview = undefined;
+  draftSharedProofOrigin = draft.sharedProofOrigin ? { ...draft.sharedProofOrigin } : undefined;
+  renderSharedProofOrigin();
   budgetDraftOrigin = draft.problemBudget ? { ...draft.problemBudget, source: draft.source, environment: draft.environment } : undefined;
   modulePlanLibrary.resetSelection();
   clearValidation();
@@ -1198,17 +1204,19 @@ function applyTaskDraft(draft: TaskDraft) {
   element('#form-error').hidden = true;
   element('#draft-error').hidden = true;
 }
-function restoreDraft() {
+function restoreDraft(): boolean {
   let stored: string | null;
   try { stored = ownedDrafts.getItem(taskDraftStorageKey); }
-  catch { setDraftStatus(t('草稿保存不可用'), true); return; }
-  if (!stored) return;
+  catch { setDraftStatus(t('草稿保存不可用'), true); return false; }
+  if (!stored) return false;
   try {
     applyTaskDraft(decodeTaskDraft(JSON.parse(stored)));
     setDraftStatus(t('已恢复草稿'));
+    return true;
   } catch {
     try { ownedDrafts.removeItem(taskDraftStorageKey); } catch { /* Storage can be unavailable. */ }
     setDraftStatus(t('草稿未恢复'), true);
+    return false;
   }
 }
 function renderImportState() {
@@ -2183,6 +2191,18 @@ async function openLibraryProposalDraft() {
   retry.addEventListener('click', () => void prepare());
   await prepare();
 }
+function renderSharedProofOrigin() {
+  let panel = document.querySelector<HTMLElement>('[data-shared-proof-origin]');
+  if (!draftSharedProofOrigin) { panel?.remove(); return; }
+  if (!panel) {
+    panel = document.createElement('aside'); panel.className = 'composer-research-selection';
+    panel.dataset.sharedProofOrigin = ''; element('#run-form').prepend(panel);
+  }
+  const notice = document.createElement('p');
+  notice.textContent = t('已载入「{0}」的原题。核对模型与预算后开始自己的研究，结果会重新检查。', draftSharedProofOrigin.title);
+  const source = document.createElement('a'); source.href = `share.html?${new URLSearchParams({ reading: draftSharedProofOrigin.readingId, lang: locale })}`;
+  source.textContent = t('查看来源证明'); panel.replaceChildren(notice, source); panel.dataset.sharedProofReady = 'true';
+}
 async function openSharedProofDraft() {
   const id = productTarget.get('sharedDraft');
   if (sharedDraftHandled || !id || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(id)) return;
@@ -2201,15 +2221,13 @@ async function openSharedProofDraft() {
       if (!state.session || ownerOfSession(state.session) !== owner || draftRevision !== revision || state.submitting)
         throw new Error(t('草稿已变化，未载入分享原题。请核对后重新读取。'));
       const draft: TaskDraft = { ...captureDraft(), source: item.source, task: item.task, environment: item.environment,
-        templateId: '', modulePlan: undefined, knowledgeDigest: undefined, formalization: undefined, continueFrom: undefined, problemBudget: undefined };
+        templateId: '', modulePlan: undefined, knowledgeDigest: undefined, formalization: undefined, continueFrom: undefined, problemBudget: undefined,
+        sharedProofOrigin: { readingId: item.origin.readingId, title: item.origin.title, digest: item.origin.digest } };
       const contentIssue = submissionIssues(draft, field('api-key').value, state.session).find(issue => issue.field === 'source' || issue.field === 'task');
       if (contentIssue) throw new Error(contentIssue.message);
       replaceDraft('reuse', () => applyTaskDraft(draft)); researchSelection.clear(); formalizationLink = null;
       chooseEntry('lean'); startDraft(false, 'replace'); draftChanged(); saveDraft(); renderDraftRecovery();
-      notice.textContent = t('已载入「{0}」的原题。核对模型与预算后开始自己的研究，结果会重新检查。', item.origin.title);
-      panel.querySelector('a')?.remove();
-      const source = document.createElement('a'); source.href = `share.html?reading=${encodeURIComponent(item.origin.readingId)}`;
-      source.textContent = t('查看来源证明'); panel.append(source); panel.dataset.sharedProofReady = 'true';
+      panel.remove();
       // A refresh restores the edited draft; it must not import the original a second time.
       const cleaned = new URL(location.href); cleaned.searchParams.delete('sharedDraft'); history.replaceState(null, '', cleaned);
     } catch (error) { notice.textContent = message(error); retry.hidden = false; }
@@ -2300,7 +2318,7 @@ async function openBudgetAttemptDraft() {
         throw new Error(t('草稿已变化，未载入预算规划。请核对后重新准备。'));
       const issue = submissionIssues({ ...captureDraft(), source: run.source, task: run.task }, '', state.session).find(issue => issue.field === 'source' || issue.field === 'task');
       if (issue) throw new Error(issue.message);
-      reuseRun(run);
+      applyReusedRun(run);
       if (selected) researchSelection.adopt(selected); else researchSelection.clear();
       budgetDraftOrigin = { runId, projectId, source: run.source, environment: run.environment };
       field('max-tokens').value = String(tokens / 10_000);
@@ -2498,7 +2516,8 @@ function initialize(): Promise<void> {
       element<HTMLInputElement>('#max-turns').max = String(session.limits.maxTurns);
       element<HTMLInputElement>('#max-seconds').max = String(session.limits.maxRunSeconds);
       element<HTMLInputElement>('#workers').max = String(session.limits.maxWorkers);
-      if (firstLoad) { resetForm(); restoreDraft(); draftReady = true; draftRecovery.load(); renderDraftRecovery(); }
+      let restoredTaskDraft = false;
+      if (firstLoad) { resetForm(); restoredTaskDraft = restoreDraft(); draftReady = true; draftRecovery.load(); renderDraftRecovery(); }
       providerAddress(); updateEnvironment(); updateCounts(); renderRuntime();
       await refreshRuns(epoch, false, listed);
       if (!currentConnection(epoch)) return;
@@ -2507,12 +2526,16 @@ function initialize(): Promise<void> {
       await researchSelection.load((configuration, imports) => {
         field('environment').value = configuration.environment;
         const preferences = configuration.preferences;
-        if (preferences.providerId && session.providers.some(provider => provider.id === preferences.providerId)) field('provider').value = preferences.providerId;
-        if (preferences.model) field('model').value = preferences.model;
-        if (preferences.effort) field('effort').value = preferences.effort;
-        if (preferences.workers) field('workers').value = String(preferences.workers);
-        if (preferences.coordination) element<HTMLInputElement>(`input[name="coordination"][value="${preferences.coordination}"]`).checked = true;
-        if (configuration.agent) modulePlanEditor.setValue(undefined);
+        // A restored attempt already contains the user's execution choices, including Agent preference overrides.
+        const keepSettings = restoredTaskDraft && !productTarget.has('researchAsset') && !productTarget.has('libraryReturn');
+        if (!keepSettings) {
+          if (preferences.providerId && session.providers.some(provider => provider.id === preferences.providerId)) field('provider').value = preferences.providerId;
+          if (preferences.model) field('model').value = preferences.model;
+          if (preferences.effort) field('effort').value = preferences.effort;
+          if (preferences.workers) field('workers').value = String(preferences.workers);
+          if (preferences.coordination) element<HTMLInputElement>(`input[name="coordination"][value="${preferences.coordination}"]`).checked = true;
+          if (configuration.agent) modulePlanEditor.setValue(undefined);
+        }
         if (!draftFormalization && imports.length) {
           const source = field('source').value;
           const additions = [...new Set(imports)].filter(name => !source.split('\n').some(line => line.trim() === `import ${name}`));
@@ -2554,7 +2577,7 @@ function initialize(): Promise<void> {
           }
         }
       }
-      if (firstLoad && budgetDraftOrigin && state.composing && !productEntry && !productTarget.has('chat') && !linkedRun) {
+      if (firstLoad && (budgetDraftOrigin || draftSharedProofOrigin) && state.composing && !productEntry && !productTarget.has('fromClassic') && !productTarget.has('chat') && !linkedRun) {
         await naturalPage;
         if (!currentConnection(epoch)) return;
         chooseEntry('lean');
@@ -3201,12 +3224,28 @@ async function continueChecked(run: WebRun, taskIds: readonly string[], button: 
     const from = await trajectoryView.checkedContinuation(run, taskIds);
     if (state.selectedId !== run.id) return;
     if (!from) { toast(t('已检查版本的源码没有保存，无法带入成果。请在路线图中查看已有记录。')); return; }
-    reuseRun(run, 'retry', from);
+    await reuseRun(run, 'retry', from);
   } catch (error) {
     toast(t('读取已检查的代码失败：{0}', message(error)));
   } finally { button.disabled = false; }
 }
-function reuseRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 'report'> = 'retry', from?: WebContinuation) {
+async function reuseRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 'report'> = 'retry', from?: WebContinuation) {
+  const session = state.session;
+  if (!session || state.submitting) return;
+  const owner = ownerOfSession(session), revision = draftRevision, selectedId = state.selectedId;
+  try {
+    const configuration = run.researchConfiguration;
+    const refs = configuration ? [configuration.agent?.ref, ...configuration.skills.map(item => item.ref), ...configuration.libraries.map(item => item.ref)]
+      .filter(item => item !== undefined) : [];
+    // Check the exact versions before replacing another draft. Missing dependencies keep the original run open.
+    const selected = refs.length ? await researchSelection.prepare(refs, run.environment) : undefined;
+    if (!state.session || ownerOfSession(state.session) !== owner || state.submitting || revision !== draftRevision || selectedId !== state.selectedId) return;
+    applyReusedRun(run, recovery, from);
+    if (selected) researchSelection.adopt(selected); else researchSelection.clear();
+    draftChanged(); saveDraft();
+  } catch (error) { toast(message(error)); }
+}
+function applyReusedRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 'report'> = 'retry', from?: WebContinuation) {
   const session = state.session;
   if (!session || state.submitting) return;
   chooseEntry('lean');

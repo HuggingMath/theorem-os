@@ -143,6 +143,11 @@ export class WebResearchProjects {
     return { visible: owner || stored.project.visibility === 'public' || stored.project.visibility === 'members' && member,
       manage: owner, edit: owner || role === 'collaborator', discuss: viewer !== 'public', member };
   }
+  private hasActiveReviewer(stored: StoredProject, feedback: ResearchFeedback) {
+    const reviewer = feedback.review?.reviewer.id;
+    return Boolean(reviewer && reviewer !== feedback.author.id && (reviewer === stored.project.owner.id
+      || stored.project.members.some(member => member.researcherId === reviewer && member.role === 'collaborator')));
+  }
   private readable(viewer: string, projectId: string): StoredProject {
     const stored = this.raw(projectId);
     if (!this.access(viewer, stored).visible) throw new WebStorageError(404, '研究不存在。');
@@ -805,6 +810,7 @@ export class WebResearchProjects {
     if (input.action === 'resubmit') {
       if (record.author.id !== self) throw new WebStorageError(403, '只有提交人能补充后重新送审。');
       if (record.decision.status !== 'needs-info' || !input.text) throw new WebStorageError(409, '请在待补充状态填写补充内容后送审。');
+      if (record.reviewContinuation) throw new WebStorageError(409, '旧版本评审已经接续或结束，请修订当前任务的候选并重新检查后送审。');
       (record.decisionHistory ??= []).push(clone(record.decision));
       if (!record.review && record.decision.actor?.kind === 'human') {
         const actor = record.decision.actor;
@@ -814,7 +820,7 @@ export class WebResearchProjects {
     } else {
       if (!access.edit) throw new WebStorageError(403, '没有评审分配权限。');
       if (record.target) this.resolveBinding(viewer, projectId, record.target.runId, this.feedbackPermission(record.kind));
-      if (input.action === 'claim' && record.review && record.review.reviewer.id !== self
+      if (input.action === 'claim' && this.hasActiveReviewer(stored, record) && record.review!.reviewer.id !== self
         || input.action === 'assign' && !access.manage && record.review?.reviewer.id !== self)
         throw new WebStorageError(403, '只有项目发起者或当前评审可以移交评审。');
       const reviewerId = input.action === 'claim' ? self : input.reviewerId;
@@ -1448,9 +1454,23 @@ export class WebResearchProjects {
         const needsInfo = !feedback.supersededBy && feedback.continuation?.action !== 'end' && feedback.candidateDelivery?.status !== 'withdrawn'
           && feedback.author.id === self && feedback.decision.status === 'needs-info';
         const review = access.edit && !feedback.supersededBy && !feedback.continuation && !feedback.reviewContinuation && feedback.candidateDelivery?.status !== 'withdrawn' && feedback.author.id !== self && (feedback.review ? feedback.review.reviewer.id === self : access.manage) && ['pending', 'not-recorded'].includes(feedback.decision.status)
+          && (feedback.kind !== 'proof-submission' || feedback.proofCheck?.status === 'checked')
           && (!feedback.target || Boolean(this.bindingView(viewer, stored, stored.bindings.find(item => item.runId === feedback.target!.runId)!)?.permissions[this.feedbackPermission(feedback.kind)]));
         if (needsInfo || review) add(stored, { id: `${needsInfo ? 'needs-info' : 'review'}:${feedback.id}:${feedback.reviewHistory?.length ?? 0}${needsInfo ? `:${feedback.decision.decidedAt ?? ''}` : ''}`, kind: needsInfo ? 'needs-info' : 'review',
           title: feedback.text, text: feedback.decision.reason, createdAt: feedback.updatedAt, resolved: false, href: href(stored, feedback.target, `#feedback-${feedback.id}`, feedback.statementVersionId) });
+        if (access.manage && feedback.review && !this.hasActiveReviewer(stored, feedback) && !feedback.supersededBy
+          && !feedback.continuation && !feedback.reviewContinuation && feedback.candidateDelivery?.status !== 'withdrawn'
+          && ['pending', 'not-recorded', 'needs-info'].includes(feedback.decision.status))
+          add(stored, { id: `review-reassign:${feedback.id}:${feedback.review.assignedAt}`, kind: 'review',
+            title: feedback.text, reviewReassignment: true, createdAt: stored.project.updatedAt,
+            resolved: false, href: href(stored, feedback.target, `#feedback-${feedback.id}`, feedback.statementVersionId) });
+        if (feedback.author.id === self) for (const comment of feedback.reviewComments ?? []) {
+          if (comment.anchor || comment.author.id === self) continue;
+          const destination = new URL(href(stored, feedback.target, `#feedback-${feedback.id}`, feedback.statementVersionId), 'http://localhost');
+          destination.searchParams.set('reviewComment', comment.id);
+          add(stored, { id: `review-comment:${comment.id}`, kind: 'update', title: `${comment.author.displayName} · ${feedback.text}`, text: comment.text,
+            createdAt: comment.createdAt, resolved: false, href: `theorems.html${destination.search}${destination.hash}` });
+        }
       }
       if (!access.member) continue;
       for (const issue of state.issues) {

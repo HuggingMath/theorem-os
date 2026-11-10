@@ -154,6 +154,30 @@ describe('private cross-device account drafts', () => {
     expect(f.personal.drafts(alice).items).toEqual([]);
     expect(f.personal.drafts(bob).items).toHaveLength(1);
   });
+  it('archives a saved supplement only after its matching candidate revision exists and links the revised task', () => {
+    const f = fixture(), target = { runId: f.run.id, statementVersionId: f.project.versions[0].id,
+      observationRef: f.candidate.baseObservation, taskRef: { id: f.source.taskId, version: f.source.taskVersion } };
+    const base = { commit: f.source.commit, sourceDigest: f.source.sourceDigest, environmentDigest: f.source.environmentDigest, file: f.source.file };
+    const parent = f.projects.submitFeedback(alice, f.project.id, { requestId: 'candidate-before-task-change', kind: 'proof-submission', text: 'Original candidate', target, source: f.candidate.source, base });
+    const explanation = 'The revised task uses the same closing lemma.';
+    const scope: ResearchAccountDraftScope = { projectId: f.project.id, kind: 'review', sourceFeedbackId: parent.id, purpose: 'resubmit', runId: f.run.id,
+      statementVersionId: target.statementVersionId, taskId: f.source.taskId, taskVersion: f.source.taskVersion };
+    const draft = f.personal.saveDraft(alice, draftInput(scope, { text: explanation }, 'saved-review-supplement'));
+    const complete = { requestId: 'complete-candidate-supplement', versionId: draft.version.id, action: 'submitted', submission: { kind: 'review', id: parent.id } };
+    expect(() => f.personal.updateDraft(alice, draft.draft.id, complete)).toThrow('尚未保存');
+    const observation = structuredClone(f.run.observation!); observation.sequence++;
+    observation.snapshot.stateDigest = mathDigest('revised-personal-task');
+    observation.inspection.tasks.find(task => task.id === f.source.taskId)!.version = 'next-task-version';
+    observation.sources.find(source => source.taskId === f.source.taskId)!.taskVersion = 'next-task-version';
+    f.save(alice, { ...f.run, observation });
+    const nextTarget = { ...target, observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest }, taskRef: { id: f.source.taskId, version: 'next-task-version' } };
+    const child = f.projects.submitFeedback(alice, f.project.id, { requestId: 'revised-personal-candidate', kind: 'proof-submission', text: explanation, source: f.candidate.source, base, target: nextTarget,
+      revisionOf: { feedbackId: parent.id, expectedRevision: parent.revision, responses: [] } });
+    const archived = f.personal.updateDraft(alice, draft.draft.id, complete);
+    expect(archived.version.status).toBe('submitted');
+    const destination = new URL(archived.version.submission!.href!, 'http://localhost');
+    expect(destination.searchParams.get('feedback')).toBe(child.id); expect(destination.searchParams.get('taskVersion')).toBe('next-task-version');
+  });
   it('saves exact candidate scope and independently restores versioned content only for the same account', () => {
     const f = fixture(), before = canonicalMathJson(f.run), saved = f.personal.saveDraft(alice, draftInput(f.candidateScope, f.candidate));
     expect(saved.draft.scope).toEqual({ ...f.candidateScope, owner: f.projects.identity(alice) }); expect(saved.draft.revision).toBe(1);

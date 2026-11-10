@@ -27,6 +27,8 @@ export type TaskDraft = {
   continueFrom?: WebContinuation;
   formalization?: { id: string; evidenceSha256: string };
   problemBudget?: { runId: string; projectId?: string };
+  /** Recipient-owned reading reference, never the author's private run or the share capability. */
+  sharedProofOrigin?: { readingId: string; title: string; digest: string };
 };
 
 const archiveSchemas = ['theorem-os.web-export.v1', 'theorem-os.web-archive.v1'];
@@ -99,6 +101,12 @@ function validatedDraft(value: unknown): TaskDraft {
   const draft = object(value);
   let formalization: TaskDraft['formalization'];
   let problemBudget: TaskDraft['problemBudget'];
+  let sharedProofOrigin: TaskDraft['sharedProofOrigin'];
+  if (Object.hasOwn(draft, 'sharedProofOrigin')) {
+    const origin = object(draft.sharedProofOrigin), readingId = text(origin, 'readingId', 128), title = text(origin, 'title', 500), digest = text(origin, 'digest', 64);
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(readingId) || !title.trim() || /\p{Cc}/u.test(title) || !/^[a-f0-9]{64}$/u.test(digest)) invalid();
+    sharedProofOrigin = { readingId, title, digest };
+  }
   if (Object.hasOwn(draft, 'problemBudget')) {
     const ref = object(draft.problemBudget), runId = text(ref, 'runId', 36);
     const projectId = Object.hasOwn(ref, 'projectId') ? text(ref, 'projectId', 128) : undefined;
@@ -126,6 +134,7 @@ function validatedDraft(value: unknown): TaskDraft {
     ...(Object.hasOwn(draft, 'continueFrom') ? { continueFrom: continuation(draft.continueFrom) } : {}),
     ...(formalization ? { formalization } : {}),
     ...(problemBudget ? { problemBudget } : {}),
+    ...(sharedProofOrigin ? { sharedProofOrigin } : {}),
   };
 }
 

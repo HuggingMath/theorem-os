@@ -14,6 +14,7 @@ export function ShareReceiverActions({ share, token, readingId }: { share: WebSh
   const [mode, setMode] = useState<Mode>(), [session, setSession] = useState<WebSession>(), [login, setLogin] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [collections, setCollections] = useState<ResearchCollection[]>([]);
   const [selected, setSelected] = useState(''), [title, setTitle] = useState(''), [note, setNote] = useState(''), [confirmed, setConfirmed] = useState(false);
+  const [sharedId, setSharedId] = useState(readingId), [noteEdited, setNoteEdited] = useState(false);
   const [saved, setSaved] = useState<string>();
   const registerId = useRef(crypto.randomUUID()), preparationId = useRef(crypto.randomUUID());
   const registered = useRef<Pick<SharedProofReading, 'id' | 'digest'>>();
@@ -38,7 +39,17 @@ export function ShareReceiverActions({ share, token, readingId }: { share: WebSh
       }
       if (next === 'bookmark') {
         const result = await request<{ items: ResearchCollection[] }>('/api/research/collections', web);
-        setCollections(result.items); setSelected(current => result.items.some(item => item.id === current) ? current : result.items[0]?.id ?? 'new');
+        let id = readingId ?? registered.current?.id;
+        if (!id && token && result.items.some(collection => collection.items.some(item => item.target.kind === 'share'))) {
+          const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+          const tokenDigest = [...new Uint8Array(bytes)].map(value => value.toString(16).padStart(2, '0')).join('');
+          const existing = await request<{ item?: Pick<SharedProofReading, 'id' | 'digest'> }>(`/api/research/shared-proofs?${new URLSearchParams({ tokenDigest })}`, web);
+          if (existing.item) { registered.current = existing.item; id = existing.item.id; }
+        }
+        const collection = result.items.find(item => item.id === selected)
+          ?? result.items.find(collection => collection.items.some(item => item.target.kind === 'share' && item.target.shareId === id)) ?? result.items[0];
+        setSharedId(id); setCollections(result.items); setSelected(collection?.id ?? 'new');
+        setNote(collection?.items.find(item => item.target.kind === 'share' && item.target.shareId === id)?.note ?? ''); setNoteEdited(false);
       }
     } catch (cause) { failure(cause); }
     finally { lock.current = false; setBusy(false); }
@@ -47,6 +58,11 @@ export function ShareReceiverActions({ share, token, readingId }: { share: WebSh
     const action = new URLSearchParams(location.search).get('action');
     if (action === 'bookmark' || action === 'prepare') void begin(action);
   }, []);
+  const existingBookmark = collections.find(item => item.id === selected)?.items.find(item => item.target.kind === 'share' && item.target.shareId === sharedId);
+  const chooseCollection = (id: string) => {
+    setSelected(id); setSaved(undefined); setNoteEdited(false);
+    setNote(collections.find(item => item.id === id)?.items.find(item => item.target.kind === 'share' && item.target.shareId === sharedId)?.note ?? '');
+  };
   const pending = (ref: { current?: Pending }, value: Record<string, unknown>) => {
     const signature = JSON.stringify(value);
     if (ref.current?.signature !== signature) ref.current = { signature, body: { ...value, requestId: crypto.randomUUID() } };
@@ -73,8 +89,9 @@ export function ShareReceiverActions({ share, token, readingId }: { share: WebSh
       }
       if (!collection) throw new Error(tx('请重新读取资料夹后选择。', 'Reload and choose a collection.'));
       const result = await request<{ item: ResearchCollection }>(`/api/research/collections/${encodeURIComponent(collection.id)}/items`, session,
-        pending(savePending, { expectedRevision: collection.revision, target: { kind: 'share', shareId: reading.id }, note }));
-      setCollections(previous => previous.map(item => item.id === result.item.id ? result.item : item)); setSaved(result.item.id);
+        pending(savePending, { expectedRevision: collection.revision, target: { kind: 'share', shareId: reading.id }, ...(noteEdited ? { note } : {}) }));
+      setSharedId(reading.id); setCollections(previous => previous.map(item => item.id === result.item.id ? result.item : item)); setSaved(result.item.id);
+      setNote(result.item.items.find(item => item.target.kind === 'share' && item.target.shareId === reading.id)?.note ?? ''); setNoteEdited(false);
     } catch (cause) { failure(cause); }
     finally { lock.current = false; setBusy(false); }
   }
@@ -98,10 +115,11 @@ export function ShareReceiverActions({ share, token, readingId }: { share: WebSh
     {mode && session && !login && !(session.auth === 'email' && (!session.account || session.termsRequired)) && <>
       {mode === 'bookmark' ? <form class="share-receiver-form" onSubmit={event => { event.preventDefault(); void saveBookmark(); }}>
         <p>{tx('收藏保存的是原分享的链接。分享者停止分享后，资料夹会标记为不可访问，你的私人备注仍保留。', 'A bookmark keeps a link to the original share. If sharing stops, it becomes unavailable; your private note remains.')}</p>
-        {!!collections.length && <label>{tx('资料夹', 'Collection')}<select data-share-collection value={selected} onChange={event => { setSelected(event.currentTarget.value); setSaved(undefined); }}>
+        {!!collections.length && <label>{tx('资料夹', 'Collection')}<select data-share-collection disabled={busy} value={selected} onChange={event => chooseCollection(event.currentTarget.value)}>
           {collections.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}<option value="new">{tx('新建资料夹', 'New collection')}</option></select></label>}
         {(selected === 'new' || !collections.length) && <label>{tx('资料夹名称', 'Collection name')}<input data-share-collection-title value={title} required maxLength={120} onInput={event => setTitle(event.currentTarget.value)} /></label>}
-        <label>{tx('私人备注（可选）', 'Private note (optional)')}<textarea data-share-bookmark-note rows={2} maxLength={4000} value={note} onInput={event => { setNote(event.currentTarget.value); setSaved(undefined); }} /></label>
+        {existingBookmark && <p data-share-existing-bookmark role="status">{tx('已收藏在这个资料夹中。', 'Already saved in this collection.')}</p>}
+        <label>{tx('私人备注（可选）', 'Private note (optional)')}<textarea data-share-bookmark-note disabled={busy} rows={2} maxLength={4000} value={note} onInput={event => { setNote(event.currentTarget.value); setNoteEdited(true); setSaved(undefined); }} /></label>
         <div class="share-receiver-buttons"><button type="submit" class="button button-primary" data-share-save-bookmark disabled={busy || Boolean(saved)}>{saved ? tx('已收藏', 'Saved') : tx('保存收藏', 'Save bookmark')}</button>
           <button type="button" class="text-button" disabled={busy} onClick={() => void begin('bookmark')}>{tx('刷新资料夹', 'Refresh collections')}</button>
           {saved && <a class="text-button" data-share-saved-collection href={`workspace.html?${new URLSearchParams({ tab: 'collections', collection: saved })}`}>{tx('打开我的资料夹', 'Open my collection')}</a>}</div>

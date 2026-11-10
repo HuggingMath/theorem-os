@@ -19,6 +19,17 @@ export class WebSharedProofs {
     if (!viewer || viewer === 'public') fail(401, '请先登录。');
     return ['owners', mathDigest(viewer), 'shared-proofs'];
   }
+  registered(viewer: string, tokenDigest: string): Pick<SharedProofReading, 'id' | 'digest'> | undefined {
+    parse(hash, tokenDigest);
+    const root = this.root(viewer);
+    for (const file of this.storage.listRecords([...root, 'references'])) {
+      const reference = this.storage.getRecord<Reference>([...root, 'references', file]);
+      if (reference && mathDigest(reference.token) === tokenDigest) {
+        const reading = this.read(viewer, reference.id);
+        return { id: reading.id, digest: reading.digest };
+      }
+    }
+  }
   register(viewer: string, raw: unknown): SharedProofReading {
     const root = this.root(viewer), input = parse(z.object({ requestId: key, token: z.string().regex(webShareToken) }).strict(), raw);
     const saved = this.storage.getShare(input.token) ?? fail(404, '分享链接不存在或已停止分享。');

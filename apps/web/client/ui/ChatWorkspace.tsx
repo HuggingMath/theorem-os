@@ -371,7 +371,7 @@ function ChatComposer(props: ChatComposerProps) {
     && props.budgets.research.maxRunSeconds % 60 === 0
     && (props.budgets.research.maxTotalTokens === 0 || props.budgets.research.maxTotalTokens >= 10_000)
     && Object.entries(props.budgets.research).every(([key, value]) => validLimit(value, props.budgetLimits.research[key as keyof ChatBudgets['research']]));
-  const canSend = !!props.input.trim() && !!props.model.trim() && (props.hasConversation || validBudget)
+  const canSend = !!props.input.trim() && !!props.model.trim() && (props.hasConversation || !!provider && validBudget)
     && !props.pending && !props.submitting && !props.disabled && (!props.keyRequired || !!props.apiKey.trim());
   useLayoutEffect(() => {
     const node = textarea.current;
@@ -473,6 +473,7 @@ function ChatComposer(props: ChatComposerProps) {
             <section class="first-research-setup-part" data-setup-part="1" data-current={setupStep === 1}>
             <label for="formalize-provider">{t('模型服务商')}<select id="formalize-provider" value={props.providerId}
               onChange={event => { props.onProvider(event.currentTarget.value); setSetupStep(2); }} disabled={props.hasConversation || props.submitting}>
+              {!provider && <option value={props.providerId} disabled>{props.providerId ? `${props.providerId} · ` : ''}{t('请选择可用的服务商')}</option>}
               {props.providers.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select></label>
             {props.newProblem && <button type="button" class="text-button" data-setup-next="credentials" onClick={() => configure(2, props.keyRequired ? '#formalize-key' : '#formalize-model')}>{tx('使用这个服务商，继续', 'Use this provider and continue')} →</button>}

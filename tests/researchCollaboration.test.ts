@@ -340,6 +340,41 @@ function revisionInput(context: ReturnType<typeof fixture>, parent: ResearchFeed
 }
 
 describe('candidate review gates and continuing human work', () => {
+  it('delivers each ordinary review comment to its author as an independently readable message', () => {
+    const context = fixture(), { projects, project } = context;
+    let record = checkedCandidate(context);
+    record = projects.addReviewComment(bob, project.id, record.id, { requestId: 'comment-to-author', expectedRevision: record.revision, text: 'Explain the boundary case.' });
+    const comment = record.reviewComments![0], message = projects.collaborationInbox(alice).items.find(item => item.id === `review-comment:${comment.id}`)!;
+    expect(message).toMatchObject({ category: 'progress', read: false, text: comment.text, resolved: false });
+    const link = new URL(message.href, 'http://localhost');
+    expect(link.searchParams.get('reviewComment')).toBe(comment.id); expect(link.hash).toBe(`#feedback-${record.id}`);
+    expect(projects.collaborationInbox(bob).items.some(item => item.id === message.id)).toBe(false);
+    projects.markCollaborationItem(alice, message.id, { requestId: 'read-review-comment', action: 'read' });
+    expect(projects.collaborationInbox(alice).items.find(item => item.id === message.id)?.read).toBe(true);
+    expect(projects.feedback(alice, project.id, record.id).decision.status).toBe('pending');
+    record = projects.addReviewComment(bob, project.id, record.id, { requestId: 'another-comment-to-author', expectedRevision: record.revision, text: 'Also state the induction hypothesis.' });
+    expect(projects.collaborationInbox(alice).items.find(item => item.id === `review-comment:${record.reviewComments![1].id}`)?.read).toBe(false);
+  });
+  it('retains a downgraded reviewer in history and gives the owner an actionable reassignment', () => {
+    const context = fixture(), { projects, project } = context;
+    let record = checkedCandidate(context);
+    record = projects.reviewFeedback(alice, project.id, record.id, { requestId: 'assign-before-demotion', action: 'assign', reviewerId: projects.identity(bob), expectedRevision: record.revision });
+    const assigned = record.review;
+    let current = projects.detail(alice, project.id);
+    current = projects.setMember(alice, project.id, projects.identity(bob), { requestId: 'demote-pending-reviewer', role: 'reader', expectedRevision: current.revision });
+    const todo = projects.collaborationInbox(alice).items.find(item => item.reviewReassignment)!;
+    expect(todo).toMatchObject({ kind: 'review', category: 'decision', processed: false, resolved: false });
+    expect(todo.href).toContain(record.id); expect(projects.feedback(alice, project.id, record.id).review).toEqual(assigned);
+    expect(projects.collaborationInbox(bob).items.some(item => item.kind === 'review')).toBe(false);
+    errorStatus(() => projects.reviewFeedback(bob, project.id, record.id, { requestId: 'reader-cannot-claim', action: 'claim', expectedRevision: record.revision }), 403);
+    errorStatus(() => projects.reviewFeedback(alice, project.id, record.id, { requestId: 'author-cannot-self-review', action: 'claim', expectedRevision: record.revision }), 403);
+    projects.setMember(alice, project.id, projects.identity(carol), { requestId: 'invite-replacement-reviewer', role: 'collaborator', expectedRevision: current.revision });
+    record = projects.reviewFeedback(carol, project.id, record.id, { requestId: 'replacement-claims-review', action: 'claim', expectedRevision: record.revision });
+    expect(record.review?.reviewer.id).toBe(projects.identity(carol));
+    expect(record.reviewHistory?.some(item => item.reviewer?.id === assigned?.reviewer.id)).toBe(true);
+    expect(projects.collaborationInbox(alice).items.some(item => item.reviewReassignment)).toBe(false);
+    expect(projects.collaborationInbox(carol).items.some(item => item.kind === 'review' && item.href.includes(record.id))).toBe(true);
+  });
   it('keeps direct delivery as the default and holds checked reviewed candidates for human approval', () => {
     const context = fixture(), { projects, project } = context;
     expect(project.candidateDeliveryPolicy).toBe('direct');
@@ -503,11 +538,17 @@ describe('candidate review gates and continuing human work', () => {
     parent = projects.feedback(alice, project.id, parent.id);
     expect(parent.reviewContinuation).toMatchObject({ action: 'continue', target: nextTarget });
     expect(projects.collaborationInbox(alice).items.some(item => item.kind === 'needs-info' && item.href.includes(parent.id))).toBe(true);
+    errorStatus(() => projects.reviewFeedback(alice, project.id, parent.id, { requestId: 'cannot-resubmit-old-candidate', action: 'resubmit', text: 'A text-only explanation is not the requested candidate', expectedRevision: parent.revision }), 409);
+    expect(projects.feedback(alice, project.id, parent.id).decision).toEqual(parent.decision);
+    expect(projects.collaborationInbox(alice).items.some(item => item.kind === 'needs-info' && item.href.includes(parent.id))).toBe(true);
     expect(parent.payload).toMatchObject({ source: candidate }); expect(parent.continuation).toBeUndefined();
     const candidateItem = projects.workImpact(alice, project.id, target.runId).items.find(item => item.kind === 'candidate')!;
     const child = projects.continueWork(alice, project.id, { requestId: 'answer-review-request', kind: 'candidate', recordId: parent.id, action: 'continue', target: nextTarget,
       source: candidate, text: 'The candidate is valid under the new contract', expectedRevision: candidateItem.revision }).feedback!;
     expect(child.review?.reviewer.id).toBe(projects.identity(bob));
+    expect(projects.collaborationInbox(bob).items.some(item => item.kind === 'review' && item.href.includes(child.id))).toBe(false);
+    projects.recordProofResult(alice, project.id, child.id, { status: 'checked', sourceDigest: mathDigest(candidate), environmentDigest: env, receiptId: 'current-version-check' });
+    expect(projects.collaborationInbox(bob).items.some(item => item.kind === 'review' && item.href.includes(child.id))).toBe(true);
     expect(projects.collaborationInbox(alice).items.some(item => item.kind === 'needs-info' && item.href.includes(parent.id))).toBe(false);
     expect(projects.workImpact(bob, project.id, target.runId).items.find(item => item.kind === 'review' && item.recordId === parent.id)?.canContinue).toBe(false);
   });

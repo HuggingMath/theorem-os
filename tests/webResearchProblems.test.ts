@@ -96,7 +96,7 @@ describe('problem entry, responsibility and explicit human decision evidence', (
     task.agents = [{ id: 'worker-one', role: 'Researcher', basis: 'owner' }];
     const target = { runId: run.id, statementVersionId: 'statement', observationRef: problem.observationRef!, taskRef: { id: task.id, version: task.version } };
     const author = { id: 'peer-current', displayName: 'Current peer' }, stale = { id: 'peer-old', displayName: 'Old peer' };
-    problem.project = { id: 'project', permissions: { member: true }, runs: [{ runId: run.id, statementVersionId: 'statement' }],
+    problem.project = { id: 'project', owner: { id: 'project-owner', displayName: 'Project owner' }, members: [{ researcherId: 'independent-reviewer', role: 'collaborator' }], permissions: { member: true }, runs: [{ runId: run.id, statementVersionId: 'statement' }],
       assignments: [{ id: 'claim-current', author, target, status: 'claimed' }, { id: 'claim-old', author: stale, target: { ...target, taskRef: { id: task.id, version: 'old-version' } }, status: 'claimed' }],
       feedback: [{ id: 'review', kind: 'proof-submission', target, text: 'Candidate proof', author, review: { reviewer: { id: 'independent-reviewer', displayName: 'Independent reviewer' } }, decision: { status: 'pending', evidenceRefs: [] }, delivery: { status: 'not-sent' }, execution: { status: 'not-started', taskRefs: [], resultRefs: [] } }],
     } as unknown as ResearchProjectDetail;

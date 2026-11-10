@@ -1,11 +1,32 @@
 import { expect, it } from 'vitest';
-import { decodeChatDraft, encodeChatDraft, readEditedProblemId, type ChatDraftSettings } from '../apps/web/client/chatDraft';
+import { decodeChatDraft, encodeChatDraft, historicalChatSettings, readEditedProblemId, type ChatDraftSettings } from '../apps/web/client/chatDraft';
 import { decodeLibraryReferences, libraryReferenceId, withLibraryReferences, type ChatLibraryReference } from '../apps/web/client/chatReference';
+import type { WebFormalization } from '../apps/web/formalizationTypes';
 import { SubmissionIdentity } from '../apps/web/client/submissionIdentity';
 
 const settings: ChatDraftSettings = { providerId: 'openai', model: 'chosen-model', environment: 'standard', effort: 'low',
   participation: 'automatic', maxRunSeconds: 120, maxTotalTokens: 20_000,
   research: { maxRunSeconds: 60, maxTotalTokens: 15_000, maxTurns: 2 } };
+
+it('restores recorded historical execution settings instead of new-task defaults', () => {
+  const formalization: WebFormalization = { id: 'formal-1', original: 'Original problem', model: 'original-model',
+    providerId: 'original-provider', environment: 'standard', effort: 'high', humanReview: true,
+    maxRunSeconds: 120, maxTotalTokens: 20_000, research: { maxRunSeconds: 180, maxTotalTokens: 30_000, maxTurns: 3 },
+    status: 'confirmed', createdAt: '2026-11-11', updatedAt: '2026-11-11' };
+  const restored = historicalChatSettings(formalization, undefined, { ...settings, environment: 'mathlib', maxTotalTokens: 400_000 });
+  expect(restored).toEqual({ providerId: 'original-provider', model: 'original-model', environment: 'standard', effort: 'high',
+    participation: 'guided', maxRunSeconds: 120, maxTotalTokens: 20_000,
+    research: { maxRunSeconds: 180, maxTotalTokens: 30_000, maxTurns: 3 } });
+  expect(decodeChatDraft(encodeChatDraft({ text: formalization.original, settings: restored }))).toEqual({ text: formalization.original, settings: restored });
+  expect(restored.research).not.toBe(formalization.research);
+});
+
+it('keeps explicit unlimited historical budgets and uses fallback only for missing older fields', () => {
+  const formalization: WebFormalization = { id: 'formal-old', original: 'Old problem', model: 'older-model', environment: 'standard', effort: 'low',
+    maxRunSeconds: 0, maxTotalTokens: 0, humanReview: false, status: 'confirmed', createdAt: '', updatedAt: '' };
+  expect(historicalChatSettings(formalization, undefined, settings)).toEqual({ ...settings, model: 'older-model', participation: 'automatic',
+    maxRunSeconds: 0, maxTotalTokens: 0 });
+});
 
 it('retains exact draft text and selected budgets while projecting out credentials', () => {
   const draft = { text: '  Original statement\nSecond line.\n', settings: { ...settings, apiKey: 'never-save-this-key' } };

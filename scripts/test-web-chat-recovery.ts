@@ -12,7 +12,7 @@ import type { WebRunner } from '../apps/web/runner';
 import { webFormalizationEvidence, webFormalizationStatement } from '../tests/helpers/webFormalizationFixture';
 import { freePort, startBrowser } from './web-scenario';
 
-const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/web-chat-recovery');
+const root = path.resolve(import.meta.dirname, '..'), output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/web-chat-recovery');
 await fs.mkdir(output, { recursive: true });
 const data = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-chat-recovery-'));
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;
@@ -83,7 +83,7 @@ try {
   const draft = await snapshot();
   assert.deepEqual(draft, { fields: selected, original, participation: 'automatic' });
   await page.locator('#formalize-settings > summary').click();
-  await page.locator('[data-chat-sample]').click(); await page.waitForURL(origin + '/?sample');
+  await page.locator('[data-chat-sample]').click(); await page.waitForURL(url => url.origin === origin && url.searchParams.has('sample'));
   await page.locator('[data-chat-sample-note]').waitFor(); await page.goBack(); await page.waitForURL(origin + '/');
   await page.waitForFunction(text => (document.querySelector('#formalize-original') as HTMLTextAreaElement)?.value === text, original);
   assert.deepEqual(await snapshot(), draft);
@@ -190,7 +190,7 @@ try {
   });
   await page.locator('#formalize-start').click();
   while (!conversationHeld) await page.waitForTimeout(30);
-  await page.locator('[data-chat-sample]').click(); await page.waitForURL(origin + '/?sample');
+  await page.locator('[data-chat-sample]').click(); await page.waitForURL(url => url.origin === origin && url.searchParams.has('sample'));
   const delivered = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/conversations');
   releaseConversation(); await delivered;
   await page.goBack(); await page.waitForURL(origin + '/'); await initialized();
@@ -211,7 +211,7 @@ try {
       await sampleContext.close();
       throw new Error('Short viewport needs the authenticated recovery session');
     }
-    await samplePage.locator('[data-chat-sample]').click(); await samplePage.waitForURL(origin + '/?sample');
+    await samplePage.locator('[data-chat-sample]').click(); await samplePage.waitForURL(url => url.origin === origin && url.searchParams.has('sample'));
     await samplePage.locator('[data-chat-sample-note]').waitFor();
     assert.ok(await samplePage.locator('#research-chat-thread').evaluate(node => node.clientHeight) >= Math.min(100, height * .25));
     await samplePage.screenshot({ path: path.join(output, `conversation-${width}x${height}.png`), fullPage: true });

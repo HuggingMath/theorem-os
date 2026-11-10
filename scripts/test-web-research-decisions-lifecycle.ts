@@ -14,7 +14,7 @@ import type { WebObservation } from '../apps/web/collaboration';
 import type { ResearchFeedback, ResearchProjectDetail } from '../apps/web/researchProjectTypes';
 import { freePort, startBrowser, preferFullCollaboration, settled, waitForRun } from './web-scenario';
 
-const root = path.resolve('.'), output = path.join(root, 'out/product-continuity/research-lifecycle/decisions');
+const root = path.resolve('.'), output = path.resolve(root, process.env.THEOREMOS_TEST_OUTPUT ?? 'out/product-continuity/research-lifecycle/decisions');
 await fs.mkdir(output, { recursive: true });
 const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-candidate-continuity-'));
 const source = 'theorem target : True := by sorry\n', commit = '1'.repeat(40), environmentDigest = mathDigest('controlled-candidate-environment');

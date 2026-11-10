@@ -42,6 +42,7 @@ export type ResearchInboxItem = {
   projectId: string; projectTitle: string; title: string; text?: string; createdAt: string; href: string;
   read: boolean; processed: boolean; resolved: boolean;
   invitation?: ResearchInvitation; handoff?: ResearchHandoff;
+  reviewReassignment?: boolean;
   annotationAction?: 'create' | 'reply' | 'resolve' | 'reopen';
 };
 export type ResearchCollaborationInbox = { items: ResearchInboxItem[]; unread: number; pending: number;

@@ -301,9 +301,12 @@ export class WebResearchPersonal {
       target.set('annotation', annotation!.id); if (scope.sourceFeedbackId) target.set('feedback', scope.sourceFeedbackId); href = `problem.html?${target}`;
     } else if (input.kind === 'review' && scope.kind === 'review' && scope.projectId && scope.sourceFeedbackId === input.id) {
       const feedback = this.deps.projects.feedback(viewer, scope.projectId, input.id);
-      if (scope.purpose === 'resubmit' ? !feedback.reviewHistory?.some(item => item.action === 'resubmit' && item.actor.id === self)
+      const revision = feedback.supersededBy ? this.deps.projects.feedback(viewer, scope.projectId, feedback.supersededBy) : undefined;
+      const continued = revision?.author.id === self && revision.candidateRevision?.parentFeedbackId === feedback.id && revision.text === (value as { text: string }).text;
+      if (scope.purpose === 'resubmit' ? !continued && !feedback.reviewHistory?.some(item => item.action === 'resubmit' && item.actor.id === self)
         : !feedback.reviewComments?.some(item => item.author.id === self)) fail(409, '评审补充记录尚未保存。');
-      target.set('feedback', input.id); href = `problem.html?${target}`;
+      if (continued && revision!.target?.taskRef) target.set('taskVersion', revision!.target.taskRef.version);
+      target.set('feedback', continued ? revision!.id : input.id); href = `problem.html?${target}`;
     } else fail(400, '提交记录类型与草稿不一致。');
     return { ...input, href };
   }

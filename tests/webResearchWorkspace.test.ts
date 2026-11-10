@@ -232,6 +232,11 @@ describe('internal login destinations', () => {
     expect(workbenchReturn('?entry=lean&template=wrong&lang=en')).toBe('?lang=en');
     expect(workbenchReturn('?returnTo=https://evil.invalid&lang=xx')).toBe('');
     expect(workbenchDestination('?returnTo=workspace&tab=collections&lang=en')).toBe('workspace.html?tab=collections&lang=en');
+    expect(workbenchDestination('?returnTo=workspace&tab=search&q=lemma&kind=conversation&offset=40&lang=en'))
+      .toBe('workspace.html?tab=search&kind=conversation&q=lemma&offset=40&lang=en');
+    expect(workbenchDestination('?returnTo=workspace&tab=search&offset=100001')).toBe('workspace.html?tab=search');
+    expect(workbenchDestination('?returnTo=theorems&id=project-one&reviewComment=comment-one&lang=en'))
+      .toBe('theorems.html?id=project-one&reviewComment=comment-one&lang=en');
     const id = crypto.randomUUID(), message = crypto.randomUUID();
     expect(workbenchReturn(`?chat=${id}&message=${message}&redirect=https://evil.invalid`)).toBe(`?chat=${id}&message=${message}`);
     expect(workbenchReturn(`?run=${id}&task=goal_1&taskVersion=v1&commit=${'a'.repeat(40)}`)).toContain(`commit=${'a'.repeat(40)}`);

@@ -34,6 +34,20 @@ function register(fixture: ReturnType<typeof setup>) { return fixture.shares.reg
 function preparation(reading: SharedProofReading) { return { requestId: 'prepare', expectedDigest: reading.digest, confirmed: true }; }
 
 describe('recipient-owned shared proof continuity', () => {
+  it('looks up an existing recipient reference without writing or exposing the capability', () => {
+    const fixture = setup(), tokenDigest = mathDigest(token);
+    expect(fixture.shares.registered(reader, tokenDigest)).toBeUndefined();
+    expect(fixture.storage.listRecords(['owners', mathDigest(reader), 'shared-proofs', 'references'])).toEqual([]);
+    const reading = register(fixture), files = fixture.storage.listRecords(['owners', mathDigest(reader), 'shared-proofs', 'references']);
+    expect(fixture.shares.registered(reader, tokenDigest)).toEqual({ id: reading.id, digest: reading.digest });
+    expect(fixture.storage.listRecords(['owners', mathDigest(reader), 'shared-proofs', 'references'])).toEqual(files);
+    expect(fixture.shares.registered(stranger, tokenDigest)).toBeUndefined();
+    expect(JSON.stringify(fixture.shares.registered(reader, tokenDigest))).not.toContain(token);
+    denied(() => fixture.shares.registered('public', tokenDigest), 401);
+    denied(() => fixture.shares.registered(reader, token), 400);
+    fixture.storage.deleteShare(author, fixture.run.id);
+    denied(() => fixture.shares.registered(reader, tokenDigest), 404);
+  });
   it('returns public proof data through owner-scoped opaque references without the capability or private run', () => {
     const fixture = setup(), reading = register(fixture);
     expect(reading.share).toEqual(fixture.snapshot);
@@ -115,6 +129,7 @@ describe('recipient-owned shared proof continuity', () => {
     const registered = await call('', 'POST', { requestId: 'register', token });
     expect(registered?.status).toBe(201);
     const reading = (registered!.body as { item: SharedProofReading }).item;
+    expect(await call(`?tokenDigest=${mathDigest(token)}`, 'GET')).toMatchObject({ status: 200, body: { item: { id: reading.id, digest: reading.digest } } });
     expect(await call(`/${reading.id}`, 'GET')).toMatchObject({ status: 200, body: { item: reading } });
     const created = await call(`/${reading.id}/prepare`, 'POST', preparation(reading)); expect(created?.status).toBe(201);
     const prepared = (created!.body as { item: SharedProofPreparation }).item;

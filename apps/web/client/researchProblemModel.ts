@@ -116,12 +116,14 @@ export function problemAttention(problem: ResearchProblem, language: 'zh' | 'en'
     const newAttempt = feedback.candidateDelivery?.status === 'approved' && feedback.payload && 'base' in feedback.payload && feedback.payload.libraryTrial?.requiresNewAttempt;
     const failed = feedback.delivery.status === 'failed' || feedback.execution.status === 'failed';
     if (!needsInfo && !needsReview && !failed && !pending && !newAttempt) continue;
-    const task = currentTask(feedback.target), reviewer = feedback.review?.reviewer?.id !== feedback.author.id ? feedback.review?.reviewer : undefined;
+    const task = currentTask(feedback.target), previousReviewer = feedback.review?.reviewer?.id !== feedback.author.id ? feedback.review?.reviewer : undefined;
+    const reviewer = previousReviewer && (project!.owner.id === previousReviewer.id || project!.members.some(member => member.researcherId === previousReviewer.id && member.role === 'collaborator')) ? previousReviewer : undefined;
+    const needsReassignment = Boolean(needsReview && previousReviewer && !reviewer);
     items.push({ id: `feedback:${feedback.id}`, kind: 'feedback', title: needsInfo ? tx('评审需要补充信息', 'Review needs more information')
-      : needsReview ? tx('候选结果等待评审', 'Candidate awaits review') : newAttempt ? tx('已批准的方案需要新尝试', 'Approved proposal requires a new attempt')
+      : needsReassignment ? tx('候选需要重新指定评审人', 'Candidate needs a new reviewer') : needsReview ? tx('候选结果等待评审', 'Candidate awaits review') : newAttempt ? tx('已批准的方案需要新尝试', 'Approved proposal requires a new attempt')
         : pending ? tx('反馈正在等待处理', 'Feedback awaits a response') : tx('反馈执行遇到问题', 'Feedback execution failed'), detail: feedback.decision.reason || feedback.delivery.reason || feedback.text,
       owners: needsInfo ? [{ id: feedback.author.id, name: feedback.author.displayName, kind: 'human' }]
-        : reviewer ? [{ id: reviewer.id, name: reviewer.displayName, kind: 'human' }] : pending && task ? problemTaskOwners(problem, task) : [],
+        : reviewer ? [{ id: reviewer.id, name: reviewer.displayName, kind: 'human' }] : needsReassignment ? [{ id: project!.owner.id, name: project!.owner.displayName, kind: 'human' }] : pending && task ? problemTaskOwners(problem, task) : [],
       ...(task ? { taskRef: taskRef(task) } : {}), feedbackId: feedback.id,
       href: `problem.html?${new URLSearchParams({ run: brief.selectedRunId, project: project!.id, tab: 'discussion', feedback: feedback.id,
         ...(task ? { task: task.id, taskVersion: task.version, ...(task.commit ? { commit: task.commit } : {}) } : {}) })}#feedback-${feedback.id}`,
