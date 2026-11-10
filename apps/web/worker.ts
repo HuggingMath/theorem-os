@@ -321,7 +321,9 @@ async function main() {
       ...(knowledgeFile ? ['--knowledge-base', knowledgeFile] : []),
       ...(round.continuationFile ? ['--continuation-manifest', round.continuationFile] : []),
       ...(round.libraryCatalog ? ['--library-catalog', round.libraryCatalog.file, '--library-catalog-sha256', round.libraryCatalog.digest] : []),
-      '--max-run-seconds', String(round.limits.maxRunSeconds), '--max-turn-seconds', String(round.limits.maxRunSeconds),
+      // Cooperative role checkpoints preserve streaming requests and saved decisions; the shared run budget still applies.
+      '--max-run-seconds', String(round.limits.maxRunSeconds),
+      '--max-turn-seconds', request.input.coordination === 'cooperative' ? '0' : String(round.limits.maxRunSeconds),
       ...(round.limits.maxTotalTokens ? ['--max-total-tokens', String(round.limits.maxTotalTokens)] : []),
       '--prepare-timeout-seconds', String(round.limits.maxRunSeconds === 0 ? 0 : webPreparationSeconds[environment.id === 'mathlib' ? 'mathlib' : 'standard']),
       '--evaluator-timeout-seconds', round.limits.maxRunSeconds === 0 ? '0' : '120'], root, modules);

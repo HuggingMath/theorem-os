@@ -399,10 +399,10 @@ export class CooperativeResearch extends CooperationInputs {
     if (this.planApprovalPending()) {
       // Nothing runs until a person approves; only their own note to the Lead earns a revision turn.
       if (this.dispatchBudgetExhausted(budget, modelAllowed)) return this.exhaustedDispatch(budget, modelAllowed, this.active.size > 0 || this.proofPublications.size > 0);
-      const guidance = this.pendingLeadGuidance(this.archive.planApproval?.guidanceIds);
+      const guidance = this.pendingLeadGuidance();
       if (!guidance.length) return this.waitForDispatch();
       const record = this.archive.planApproval ??= {};
-      record.guidanceIds = [...record.guidanceIds ?? [], ...guidance].slice(-512); record.revisionAt = Date.now();
+      record.guidanceIds = [...new Set([...record.guidanceIds ?? [], ...guidance])].slice(-512); record.revisionAt = Date.now();
       this.input.emit('plan_approval_revision', { guidanceIds: guidance, planVersion: this.archive.planVersion });
       return this.leadDecision(worker, this.archive.canonicalCommit!, this.planningInputDigest());
     }
@@ -528,14 +528,15 @@ export class CooperativeResearch extends CooperationInputs {
     this.presentGoalProgressReview(action);
     return action;
   }
-  /** Undelivered unscoped notes for this Lead; approval revisions exclude notes already dispatched. */
-  private pendingLeadGuidance(answeredIds: readonly string[] = []): string[] {
-    const answered = new Set(answeredIds);
+  /** A delivered note still needs its scoped decision after an interrupted revision or a restart. */
+  private pendingLeadGuidance(): string[] {
     let records: ReturnType<typeof readHumanGuidance>;
     try { records = readHumanGuidance(path.join(path.dirname(this.lead.worktree), 'state.json'), this.input.state.runId); }
     catch { return []; }
-    return records.filter(record => record.recipient.kind === 'lead' && (!record.recipient.id || record.recipient.id === this.lead.id) && !record.taskRef &&
-      ['queued', 'deferred'].includes(record.status) && !answered.has(record.id)).map(record => record.id);
+    return records.filter(record => record.recipient.kind === 'lead' && (!record.recipient.id || record.recipient.id === this.lead.id) &&
+      !record.taskRef && !record.decision && (['queued', 'deferred'].includes(record.status) ||
+        record.status === 'delivered' && record.deliveredTo?.includes(this.lead.id) &&
+        record.deliveredScope?.planVersion === this.archive.planVersion)).map(record => record.id);
   }
   /** Work on a stalled goal's own route that settles without the Lead: a run, delivery, ready recheck, type or statement check. */
   private goalPathStallWorkRunning() {
@@ -1248,6 +1249,10 @@ export class CooperativeResearch extends CooperationInputs {
       });
       return { checkWhole: false, ...saved };
     }
+  }
+  /** A completed assistant final may report advisory decisions independently of its file delivery. */
+  async deliverCompletedGuidance(worker: ResearchWorker, action: CooperativeAction, decisions: unknown) {
+    await this.retainGuidanceDecisions(worker, action, decisions);
   }
   async deliver(worker: ResearchWorker, action: CooperativeAction, commit: string, recovering = false,
     recoveryKind: 'checkpoint' | 'request-failure' | 'scheduling-checkpoint' = 'checkpoint'): Promise<{ check?: ProofCheck; checkWhole: boolean; savedPlan?: boolean }> {

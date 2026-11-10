@@ -20,7 +20,7 @@ import { finalizeResearchDispatch, type ContextBundle } from './modules/context'
 import type { KnowledgeContextSnapshot } from './knowledgeContext';
 import { researchTaskRole, type ResearchWorker } from './modules/organization';
 import type { ResearchOperation } from './modules/value';
-import { runResearchTurn, type ResearchCandidate } from './modules/execution';
+import { completedGuidanceDecisions, runResearchTurn, type ResearchCandidate } from './modules/execution';
 import { planResearchCooldown, recoverableResearchFailure, researchFailureDetail, researchFailureReason } from './modules/search';
 import { aggregateUsage, buildTokenBudget, initializeUsageAccounting, modelDispatchAllowed } from './usageBudget';
 import { ResearchUsage } from './researchUsage';
@@ -556,12 +556,14 @@ export async function runResearchWorkers(input: {
           if (noProgressStreak && backoff) emit('cooperative_checkpoint_deferred', { turnId, checkpointAfterMs,
             noProgressStreak, protected: false, reason: 'no-durable-progress' });
           const sendNotice = () => {
-            if (!current() || noticeSent) return;
+            if (!current() || noticeSent || assignment?.kind === 'lead' && cooperation?.planSnapshot(assignment)) return;
             noticeSent = true;
             noticeDelivery = activeSession.notify ? 'pending' : 'unavailable';
             emit('cooperative_checkpoint_requested', { turnId, checkpointAfterMs, noProgressStreak, protected: false });
             void Promise.resolve().then(() => {
-              if (!current()) return;
+              // An accepted live plan already fulfilled this decision, including while human approval
+              // is pending. Recheck at delivery in case publication raced the queued notification.
+              if (!current() || assignment?.kind === 'lead' && cooperation?.planSnapshot(assignment)) return;
               // A goal turn is never yielded, so its reminder must not promise a checkpoint that will
               // not come: it asks for the durable handoff and leaves the writing turn running.
               return activeSession.notify?.(noticeOnly
@@ -1146,11 +1148,13 @@ export async function runResearchWorkers(input: {
             break;
           }
           let candidate: ResearchCandidate | undefined;
+          let executedTurnId: string | undefined;
           let executionError: string | undefined;
           const turnSession = session!;
           try {
             try {
               candidate = await modelTurn(started => modules.M1.execute(state.problem, currentContext, operation, worker, turnSession, signal, turnId => {
+                executedTurnId = turnId;
                 if (!continuation && assignment?.kind === 'task' && contextBasis && cooperation!.current(assignment)) {
                   assignment.assignment.researchBasis = contextBasis.publishedBasis;
                   save();
@@ -1205,6 +1209,12 @@ export async function runResearchWorkers(input: {
               throw request;
             }
           }
+          if (candidate.worktree !== worker.worktree || candidate.problemReceiptDigest !== state.problem.receiptDigest ||
+              candidate.operation !== action.operation || candidate.provenance.workerId !== worker.id)
+            throw new Error('math_candidate_identity_changed');
+          if (assignment && cooperation && candidate.provenance.threadId === turnSession.threadId)
+            await cooperation.deliverCompletedGuidance(worker, assignment,
+              completedGuidanceDecisions(turnSession, executedTurnId, candidate.status));
           if (await proofLifecycle?.settleTurn(assignment, candidate, operation, turnSession)) continue;
           // Closing can yield to a plan edit; check ownership after the writer has stopped.
           if (candidate.status === 'failed' || planningCheckpoint) await close();
@@ -1216,9 +1226,6 @@ export async function runResearchWorkers(input: {
             await rotateSession('context');
             continue;
           }
-          if (candidate.worktree !== worker.worktree || candidate.problemReceiptDigest !== state.problem.receiptDigest ||
-              candidate.operation !== action.operation || candidate.provenance.workerId !== worker.id)
-            throw new Error('math_candidate_identity_changed');
           research.lastInputTokens = lastInputTokens ?? research.lastInputTokens;
           research.candidate = candidate;
           const turn = cooperation && assignment && candidate.status === 'interrupted' ? 'checkpoint' : candidate.status;

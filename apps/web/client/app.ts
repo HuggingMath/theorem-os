@@ -2179,7 +2179,11 @@ function initialize(): Promise<void> {
           if (additions.length) field('source').value = additions.map(name => `import ${name}`).join('\n') + '\n' + source;
         }
         providerAddress(); updateEnvironment(); updateCounts();
-      }, field('environment').value as WebEnvironment, () => { chooseEntry('lean'); startDraft(false, 'replace'); });
+      }, field('environment').value as WebEnvironment, () => {
+        // Restoring Library choices prepares the composer without replacing an open research or conversation.
+        if (!state.composing || chatWorkspace?.id || new URLSearchParams(location.search).has('chat')) return;
+        chooseEntry('lean'); startDraft(false, 'replace');
+      });
       setGlobalNotice(session.runtime.ready && session.providers.length ? '' : localizeText(session.runtime.message) || t('运行环境未就绪'));
     } catch (error) {
       if (currentConnection(epoch)) {

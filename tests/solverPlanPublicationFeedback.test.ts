@@ -65,6 +65,8 @@ describe('live Lead publication correction feedback', () => {
   const expectCorrection = (message: string, action: Lead, reason: string) => {
     for (const detail of [reason, log(action), action.planVersion!, nonce(action)]) expect(message).toContain(detail);
     expect(message).toContain('"kind":"plan"');
+    const target = JSON.parse(message.split('current publication target: ')[1].split('. Preserve the log')[0]);
+    expect(target).toEqual({ file: log(action), kind: 'plan', dispatchNonce: nonce(action), baseVersion: action.planVersion });
     expect(message).toMatch(/append/iu);
     expect(message).toMatch(/complete/iu);
   };
@@ -163,11 +165,10 @@ describe('live Lead publication correction feedback', () => {
       expect(state.cooperation!.planPublication).toBeUndefined();
       const message = notify.mock.calls[0][0];
       const target = JSON.parse(message.match(/current publication target: (\{[^\n]+?\})\. /u)![1]);
-      const { file, nonce: currentNonce, ...envelope } = target;
+      const { file, ...envelope } = target;
       expect(file).toBe(log(action));
-      expect(currentNonce).toBe(nonce(action));
       expect(envelope.kind).toBe('plan');
-      if (kind === 'replacement') expect(envelope.dispatchNonce).toBe(nonce(action));
+      expect(envelope.dispatchNonce).toBe(nonce(action));
       expect(message).toContain('top level of the same event');
       await publish(action, { ...envelope, ...graph });
       expect(rejected()).toHaveLength(1);

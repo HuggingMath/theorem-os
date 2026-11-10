@@ -166,12 +166,10 @@ export function leadPlanPublicationFeedback(action: CooperativeAction | undefine
   if (action?.kind !== 'lead' || !file || !rejection || rejection.baseVersion !== state.planVersion) return;
   return 'Host rejected a Lead publication before accepting it:\n' + JSON.stringify(rejection) + '\n' +
     'Correct the reported error and append a new complete JSON event using the current publication target: ' +
-    JSON.stringify({ file, nonce: action.initialPlanNonce ?? action.planNonce, kind: 'plan', baseVersion: action.planVersion,
-      ...(action.planNonce ? { dispatchNonce: action.planNonce } : {}) }) + '. ' +
-    'Keep kind:"plan", baseVersion and any dispatchNonce at the top level of the same event as tasks or upsert/remove; ' +
-    'a bare plan patch is not a publication event. ' +
+    JSON.stringify({ file, kind: 'plan', dispatchNonce: action.initialPlanNonce ?? action.planNonce, baseVersion: action.planVersion }) + '. ' +
     'Preserve the log and use the current assignment protocol; a saved rejection may come from an earlier dispatch. ' +
-    'Only the first valid publication in a dispatch is accepted. This intake feedback grants no proof acceptance.';
+    'Keep kind:"plan", baseVersion and any dispatchNonce at the top level of the same event as tasks or upsert/remove; ' +
+    'a bare plan patch is not a publication event. Only the first valid publication in a dispatch is accepted. This intake feedback grants no proof acceptance.';
 }
 export const deliveryInputFields = (record: DeliveryRecord) => ({
   taskId: record.taskId, taskDigest: record.taskDigest, kind: record.kind, status: record.status,
