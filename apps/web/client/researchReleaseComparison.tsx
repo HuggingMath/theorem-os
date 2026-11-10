@@ -36,16 +36,32 @@ export function ReleaseComparison({ asset, selectedVersion, useVersion }: { asse
   const parameters = new URLSearchParams(location.search), releases = asset.releases.filter(item => !item.withdrawn);
   const [open, setOpen] = useState(parameters.has('compareFrom')), [from, setFrom] = useState(parameters.get('compareFrom') ?? releases.find(item => item.version !== selectedVersion)?.version ?? selectedVersion);
   const [to, setTo] = useState(parameters.get('compareTo') ?? selectedVersion);
-  const data = useResource<Item<ResearchReleaseComparison>>(open && from && to ? `${base}/library/${enc(asset.id)}/compare?${new URLSearchParams({ from, to })}` : undefined);
-  if (releases.length < 2) return null;
+  const fromAvailable = releases.some(item => item.version === from), toAvailable = releases.some(item => item.version === to);
+  const unavailable = !fromAvailable || !toAvailable, current = releases.find(item => item.version === selectedVersion) ?? releases.at(-1);
+  const data = useResource<Item<ResearchReleaseComparison>>(open && from && to && !unavailable ? `${base}/library/${enc(asset.id)}/compare?${new URLSearchParams({ from, to })}` : undefined);
+  if (releases.length < 2 && !parameters.has('compareFrom')) return null;
+  const select = (field: 'from' | 'to', value: string) => {
+    if (field === 'from') setFrom(value); else setTo(value);
+    const next = new URL(location.href); next.searchParams.set('compareFrom', field === 'from' ? value : from); next.searchParams.set('compareTo', field === 'to' ? value : to);
+    history.replaceState(null, '', next);
+  };
   return <details id="release-comparison" open={open} onToggle={event => setOpen(event.currentTarget.open)} data-release-comparison>
     <summary>{tx('比较发布版本', 'Compare releases')}</summary>
-    <div class="research-form research-form-row"><label>{tx('已有版本', 'Earlier version')}<select value={from} onChange={event => setFrom(event.currentTarget.value)}>
-      {releases.map(item => <option key={item.version}>{item.version}</option>)}</select></label><label>{tx('对照版本', 'Compare with')}<select value={to} onChange={event => setTo(event.currentTarget.value)}>
+    {unavailable && <div data-release-comparison-unavailable role="status"><p>{tx(`版本 ${!fromAvailable ? from : to} 已撤回或不可访问，无法完成这次比较。`,
+      `Release ${!fromAvailable ? from : to} was withdrawn or is unavailable, so this comparison cannot be completed.`)}</p>
+      {releases.length > 1 ? <p>{tx('可以选择其他可访问的版本作为比较起点。', 'Choose an accessible release to start a new comparison.')}</p>
+        : <p>{tx('目前只有一个可访问的发布版本，可以直接查看该版本。', 'Only one published release is accessible. You can view that release directly.')}</p>}
+      {current && <div class="research-actions"><a class="text-button" href={libraryHref(asset.id, current.version)}>{tx(`查看 ${current.version} 版本`, `View release ${current.version}`)}</a>
+        <button type="button" class="button" onClick={() => useVersion(current.version)}>{tx('用此版本准备新研究', 'Prepare new research with this release')}</button></div>}</div>}
+    {releases.length > 1 && <div class="research-form research-form-row"><label>{tx('已有版本', 'Earlier version')}<select value={from} onChange={event => select('from', event.currentTarget.value)}>
+      {!fromAvailable && <option value={from} disabled>{from} · {tx('不可访问', 'Unavailable')}</option>}
+      {releases.map(item => <option key={item.version}>{item.version}</option>)}</select></label><label>{tx('对照版本', 'Compare with')}<select value={to} onChange={event => select('to', event.currentTarget.value)}>
+      {!toAvailable && <option value={to} disabled>{to} · {tx('不可访问', 'Unavailable')}</option>}
       {releases.map(item => <option key={item.version}>{item.version}</option>)}</select></label></div>
-    <ErrorBox message={data.error} />{data.error && <button class="text-button" type="button" onClick={data.refresh}>{tx('重新读取差异', 'Retry comparison')}</button>}
+    }
+    {!unavailable && <><ErrorBox message={data.error} />{data.error && <button class="text-button" type="button" onClick={data.refresh}>{tx('重新读取差异', 'Retry comparison')}</button>}
     {data.loading && !data.data && <p role="status">{tx('正在读取固定版本差异…', 'Loading fixed release differences…')}</p>}
-    {data.data && <><h3>{from} → {to}</h3>{data.data.item.releaseNotes ? <><h4>{tx('作者更新说明', 'Author’s release notes')}</h4><RichProse text={data.data.item.releaseNotes} /></>
+    {data.data?.item.from === from && data.data.item.to === to && <><h3>{from} → {to}</h3>{data.data.item.releaseNotes ? <><h4>{tx('作者更新说明', 'Author’s release notes')}</h4><RichProse text={data.data.item.releaseNotes} /></>
       : <p class="research-status">{tx('作者未提供此版本的更新说明。', 'The author did not provide release notes for this version.')}</p>}
       <ChangeGroup title={tx('数学声明', 'Mathematical declarations')} items={data.data.item.declarations} />
       <ChangeGroup title={tx('固定依赖', 'Fixed dependencies')} items={data.data.item.dependencies} />
@@ -55,7 +71,7 @@ export function ReleaseComparison({ asset, selectedVersion, useVersion }: { asse
       <ChangeGroup title={tx('名称、说明与许可证', 'Name, description and license')} items={data.data.item.metadata} />
       <div class="research-actions"><button class="button" type="button" disabled={from === to || data.loading || Boolean(data.error)} onClick={() => useVersion(to)}>{tx('用对照版本准备新研究', 'Prepare new research with this version')}</button></div>
       <p class="research-field-note">{tx('采用这个版本会先带入工作台供你确认。已有研究继续保留原来的固定版本。', 'This prepares a configuration for your review in the workbench. Existing runs retain their original fixed versions.')}</p>
-    </>}
+    </>}</>}
   </details>;
 }
 function BeforeAfter({ before, after }: { before: string; after: string }) {

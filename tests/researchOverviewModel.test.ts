@@ -48,7 +48,7 @@ describe('problem research overview', () => {
     expect(model.cards[0].conversations.map(item => item.id)).toEqual(['chat-1']);
   });
 
-  it('shows actionable reviews and preserves the feedback statement/task version in its link', () => {
+  it('uses current inbox responsibility and preserves exact review links without inferring work from pending records', () => {
     const bound = project();
     bound.feedback = [{ id: 'feedback-1', kind: 'guidance', text: 'Use the other lemma', author: { id: 'reader', displayName: 'Reader' },
       statementVersionId: 'statement-1', target: { runId: 'run-1', statementVersionId: 'statement-1',
@@ -56,13 +56,43 @@ describe('problem research overview', () => {
       decision: { status: 'pending', evidenceRefs: [] }, delivery: { status: 'delivered' },
       execution: { status: 'running', taskRefs: [], resultRefs: [] }, updatedAt: at }];
     const waiting = run('run-1', { status: 'running', observation: { inspection: { planApproval: { status: 'pending', leadRevising: false } } } as WebObservation });
-    const model = buildResearchOverview({ runs: [waiting], formalizations: [], conversations: [], research: { projects: [bound], notifications: [] } });
+    const href = 'theorems.html?id=project-1&run=run-1&version=statement-1&task=helper&taskVersion=helper-v2#feedback-feedback-1';
+    const feedbackActions = [{ feedbackId: 'feedback-1', projectId: bound.id, title: 'Use the other lemma', href, updatedAt: at }];
+    const model = buildResearchOverview({ runs: [waiting], formalizations: [], conversations: [], research: { projects: [bound], notifications: [], feedbackActions } });
     expect(model.actions.map(action => action.kind).sort()).toEqual(['feedback', 'plan']);
     const link = new URL(model.actions.find(action => action.kind === 'feedback')!.href, 'https://fixture.local/');
     expect(Object.fromEntries(link.searchParams)).toEqual({ id: bound.id, run: waiting.id, version: 'statement-1', task: 'helper', taskVersion: 'helper-v2' });
     expect(link.hash).toBe('#feedback-feedback-1');
-    bound.permissions.manage = false;
+    // A pending record alone is no longer enough to put somebody else's work in my attention list.
     expect(buildResearchOverview({ runs: [], formalizations: [], conversations: [], research: { projects: [bound], notifications: [] } }).actions).toEqual([]);
+    bound.permissions.manage = false;
+    expect(buildResearchOverview({ runs: [], formalizations: [], conversations: [], research: { projects: [bound], notifications: [], feedbackActions } }).actions[0].href).toBe(href);
+  });
+
+  it('projects reviewer, author clarification and reassignment work from the same inbox as the message center', () => {
+    const service = new WebResearchProjects(new WebStorage()), alice = 'account:overview-alice', bob = 'account:overview-bob';
+    for (const [owner, displayName] of [[alice, 'Alice'], [bob, 'Bob']]) service.saveProfile(owner,
+      { requestId: `profile-${displayName}`, expectedRevision: 0, displayName, visibility: 'public' });
+    let shared = service.create(alice, { requestId: 'shared-project', title: 'Review continuity', visibility: 'members' });
+    shared = service.setMember(alice, shared.id, service.identity(bob), { requestId: 'add-reviewer', expectedRevision: shared.revision, role: 'collaborator' });
+    let record = service.submitFeedback(alice, shared.id, { requestId: 'own-discussion', kind: 'discussion', text: 'Please review this derivation' });
+    record = service.reviewFeedback(alice, shared.id, record.id, { requestId: 'assign-reviewer', expectedRevision: record.revision, action: 'assign', reviewerId: service.identity(bob) });
+    expect(researchOverview(service, alice).feedbackActions).toEqual([]);
+    expect(researchOverview(service, bob).feedbackActions).toMatchObject([{ feedbackId: record.id, projectId: shared.id }]);
+    const reviewer = service.collaborationInbox(bob).items.find(item => item.feedbackId === record.id && item.kind === 'review')!;
+    service.markCollaborationItem(bob, reviewer.id, { requestId: 'processed-review', action: 'done' });
+    expect(researchOverview(service, bob).feedbackActions).toEqual([]);
+    service.markCollaborationItem(bob, reviewer.id, { requestId: 'reopen-review', action: 'reopen' });
+    record = service.decideFeedback(bob, shared.id, record.id, { requestId: 'clarification', expectedRevision: record.revision, status: 'needs-info', reason: 'Explain the last implication.' });
+    expect(researchOverview(service, alice).feedbackActions).toMatchObject([{ feedbackId: record.id }]);
+    expect(researchOverview(service, bob).feedbackActions).toEqual([]);
+    record = service.reviewFeedback(alice, shared.id, record.id, { requestId: 'clarified', expectedRevision: record.revision, action: 'resubmit', text: 'The last step expands the definition.' });
+    shared = service.detail(alice, shared.id);
+    service.setMember(alice, shared.id, service.identity(bob), { requestId: 'reviewer-no-longer-authorized', expectedRevision: shared.revision, role: 'reader' });
+    const reassignment = service.collaborationInbox(alice).items.find(item => item.feedbackId === record.id && item.reviewReassignment)!;
+    expect(reassignment).toBeDefined();
+    expect(researchOverview(service, alice).feedbackActions).toMatchObject([{ feedbackId: record.id, href: reassignment.href }]);
+    expect(researchOverview(service, bob).feedbackActions).toEqual([]);
   });
 
   it('distinguishes a statement review from an already-confirmed statement waiting for research', () => {

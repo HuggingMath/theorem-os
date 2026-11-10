@@ -5,4 +5,5 @@ export type ResearchOverviewProject = Pick<ResearchProjectDetail, 'id' | 'title'
   runs: ResearchRunBinding[];
   feedback: Pick<ResearchFeedback, 'id' | 'kind' | 'text' | 'author' | 'target' | 'statementVersionId' | 'decision' | 'delivery' | 'execution' | 'updatedAt'>[];
 };
-export type ResearchOverviewData = { projects: ResearchOverviewProject[]; notifications: ResearchNotification[] };
+export type ResearchOverviewData = { projects: ResearchOverviewProject[]; notifications: ResearchNotification[];
+  feedbackActions?: { feedbackId: string; projectId: string; title: string; href: string; updatedAt: string }[] };

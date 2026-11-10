@@ -14,7 +14,7 @@ import { renderResearchStartCost } from './researchStartCost';
 import type { WebExplainAnswer } from '../explain';
 import type { WebFormalization } from '../formalizationTypes';
 import type { WebShareLink } from '../shareTypes';
-import type { SharedProofPreparation } from '../sharedProofTypes';
+import type { SharedProofPreparation, SharedProofReading } from '../sharedProofTypes';
 import { acceptedTitle, acceptedDescription, isStatementReviewed, statementConfirmation } from '../presentation';
 import { checkReason, effortLabels, failureGuide, formatDuration, formatTokens, isAcceptedRun, isFaultedRun, isRejectedRun, planAwaitingApproval, planGated, readableDuration, readableMetric, reportReason, resultDescription, runProgress, runTokens, stalledMinutes, stoppedLabel, usageEstimate, type RecoveryAction } from '../presentation';
 import { nextSteps, summarizeGoals, summarizeReport, summarizeStuck } from '../report';
@@ -440,7 +440,7 @@ function clearOwnedDrafts() {
   document.querySelector('[data-library-trial-start]')?.remove(); libraryTrialHandled = false;
   document.querySelector('[data-budget-attempt-start]')?.remove(); budgetDraftHandled = false;
   document.querySelector('[data-shared-proof-start]')?.remove(); sharedDraftHandled = false;
-  document.querySelector('[data-shared-proof-origin]')?.remove(); draftSharedProofOrigin = undefined;
+  document.querySelector('[data-shared-proof-origin]')?.remove(); draftSharedProofOrigin = undefined; sharedProofOriginRead = undefined;
   recoveryEntryHandled = false;
   budgetDraftOrigin = undefined;
   chatWorkspace?.bindOwner('');
@@ -478,6 +478,7 @@ let draftContinuation: WebContinuation | undefined;
 let continuationPreview: ContinuationPreview | undefined;
 let budgetDraftOrigin: { runId: string; projectId?: string; source: string; environment: WebEnvironment } | undefined;
 let draftSharedProofOrigin: TaskDraft['sharedProofOrigin'];
+let sharedProofOriginRead: { key: string; status: 'loading' | 'available' | 'unavailable' } | undefined;
 let draftFormalization: (NonNullable<TaskDraft['formalization']> & { source: string; environment: WebEnvironment; original?: string }) | undefined;
 let moduleSettingsPolicy: string | undefined;
 let settingsWorkspaceReturn: { focus?: HTMLElement; preview?: boolean } | undefined;
@@ -884,10 +885,11 @@ function renderComposerSummary() {
     : origin ? { title: origin.title, runId: origin.id, from: draftContinuation, originalSeconds: origin.maxRunSeconds, originalTurns: origin.maxTurns, originalTokens: origin.maxTotalTokens } : undefined;
   renderContinuationPreview(element('#research-continuation-preview'), context, { seconds: Number(field('max-seconds').value), turns: Number(field('max-turns').value), tokens: Number(field('max-tokens').value) * 10_000 || undefined });
   const budgetOrigin = budgetDraftOrigin ?? (origin ? { runId: origin.id, source: origin.source, environment: origin.environment } : undefined);
+  const matchingBudgetOrigin = budgetOrigin && budgetOrigin.source === field('source').value && budgetOrigin.environment === field('environment').value ? budgetOrigin : undefined;
   const budgetTokens = state.session ? tokenCap(field('max-tokens').value, state.session.limits.maxTotalTokens) : undefined;
-  renderResearchBudgetDraft(element('#research-budget-draft'), budgetOrigin && budgetOrigin.source === field('source').value && budgetOrigin.environment === field('environment').value
-    ? { runId: budgetOrigin.runId, projectId: budgetOrigin.projectId, tokens: budgetTokens ?? 0, providerId: field('provider').value, model: field('model').value.trim() } : undefined, api);
-  renderResearchStartCost(element('#research-run-cost'), state.session && !budgetOrigin ? { owner: ownerOfSession(state.session), account: Boolean(state.session.account),
+  renderResearchBudgetDraft(element('#research-budget-draft'), matchingBudgetOrigin
+    ? { runId: matchingBudgetOrigin.runId, projectId: matchingBudgetOrigin.projectId, tokens: budgetTokens ?? 0, providerId: field('provider').value, model: field('model').value.trim() } : undefined, api);
+  renderResearchStartCost(element('#research-run-cost'), state.session && !matchingBudgetOrigin ? { owner: ownerOfSession(state.session), account: Boolean(state.session.account),
     request: api, providerId: field('provider').value, model: field('model').value.trim(), stages: [{ kind: 'proof', tokens: budgetTokens ?? 0 }], locked: state.submitting,
     onSetTokenLimit: () => openSettings('max-tokens') } : undefined);
   element('#draft-formalization').hidden = !draftFormalization;
@@ -2192,15 +2194,42 @@ async function openLibraryProposalDraft() {
 }
 function renderSharedProofOrigin() {
   let panel = document.querySelector<HTMLElement>('[data-shared-proof-origin]');
-  if (!draftSharedProofOrigin) { panel?.remove(); return; }
+  const origin = draftSharedProofOrigin;
+  if (!origin) { panel?.remove(); sharedProofOriginRead = undefined; return; }
+  const tx = (zh: string, en: string) => locale === 'en' ? en : zh;
   if (!panel) {
     panel = document.createElement('aside'); panel.className = 'composer-research-selection';
     panel.dataset.sharedProofOrigin = ''; element('#run-form').prepend(panel);
   }
   const notice = document.createElement('p');
-  notice.textContent = t('已载入「{0}」的原题。核对模型与预算后开始自己的研究，结果会重新检查。', draftSharedProofOrigin.title);
-  const source = document.createElement('a'); source.href = `share.html?${new URLSearchParams({ reading: draftSharedProofOrigin.readingId, lang: locale })}`;
-  source.textContent = t('查看来源证明'); panel.replaceChildren(notice, source); panel.dataset.sharedProofReady = 'true';
+  notice.textContent = t('已载入「{0}」的原题。核对模型与预算后开始自己的研究，结果会重新检查。', origin.title);
+  const key = JSON.stringify([state.session && ownerOfSession(state.session), origin.readingId, origin.digest]);
+  if (sharedProofOriginRead?.key !== key) {
+    const reading = sharedProofOriginRead = { key, status: 'loading' };
+    void api<{ item: SharedProofReading }>(`/api/research/shared-proofs/${encodeURIComponent(origin.readingId)}`).then(({ item }) => {
+      if (sharedProofOriginRead !== reading) return;
+      sharedProofOriginRead = { key, status: item.digest === origin.digest ? 'available' : 'unavailable' }; renderSharedProofOrigin();
+    }).catch(() => {
+      if (sharedProofOriginRead !== reading) return;
+      sharedProofOriginRead = { key, status: 'unavailable' }; renderSharedProofOrigin();
+    });
+  }
+  panel.replaceChildren(notice);
+  panel.dataset.sharedProofReady = String(sharedProofOriginRead.status !== 'loading');
+  panel.dataset.sharedProofStatus = sharedProofOriginRead.status;
+  if (sharedProofOriginRead.status === 'available') {
+    const source = document.createElement('a'); source.href = `share.html?${new URLSearchParams({ reading: origin.readingId, lang: locale })}`;
+    source.textContent = t('查看来源证明'); panel.append(source);
+  } else {
+    const status = document.createElement('p'); status.setAttribute('role', 'status');
+    status.textContent = sharedProofOriginRead.status === 'loading' ? tx('正在核对来源证明…', 'Checking the source proof…')
+      : tx('暂时无法打开来源证明，已保存的原题仍可继续编辑。', 'The source proof is unavailable. You can continue editing your saved problem.');
+    panel.append(status);
+    if (sharedProofOriginRead.status === 'unavailable') {
+      const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'text-button'; retry.dataset.retrySharedProofOrigin = '';
+      retry.textContent = tx('重新核对来源', 'Check the source again'); retry.addEventListener('click', () => { sharedProofOriginRead = undefined; renderSharedProofOrigin(); }); panel.append(retry);
+    }
+  }
 }
 async function openSharedProofDraft() {
   const id = productTarget.get('sharedDraft');
@@ -3511,7 +3540,7 @@ field('template').addEventListener('change', () => applyTemplate(field('template
 for (const container of ['#run-form', '#inline-problem-fields'])
 for (const type of ['input', 'change']) element(container).addEventListener(type, event => {
   const target = event.target as HTMLElement;
-  if (target.closest('#module-plan-library')) return;
+  if (target.closest('#module-plan-library, [data-start-cost]')) return;
   // Selects emit input before change; preserve the previous environment and template until replacement finishes.
   if (type === 'input' && ['environment', 'template'].includes(target.id)) return;
   if (target.id !== 'source') draftChanged(target.id !== 'api-key');

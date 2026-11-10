@@ -86,6 +86,19 @@ describe('unsubmitted account problem drafts', () => {
     expect(() => personal.saveDraft(alice, { ...input('missing-id'), scope: { kind: 'problem' } })).toThrow('新题草稿范围无效');
     expect(() => personal.saveDraft(alice, { ...input('other-kind'), scope: { kind: 'review', draftKey: 'other-kind' }, value: { text: 'wrong scope' } })).toThrow('新题草稿范围无效');
   });
+  it('keeps recipient-owned source references across account draft versions without carrying a share capability or proof acceptance', () => {
+    const { personal } = fixture();
+    const origin = { readingId: 'shared_recipient_reference', title: 'A proof to revisit', digest: 'c'.repeat(64) };
+    const value = leanProblemDraft({ ...lean, sharedProofOrigin: origin });
+    const saved = personal.saveDraft(alice, input('shared-problem', value));
+    const restored = personal.draft(alice, saved.draft.id).version.value;
+    expect(restored).toMatchObject({ mode: 'lean', draft: { sharedProofOrigin: origin, source: lean.source } });
+    expect(JSON.stringify(restored)).not.toMatch(/shareToken|continueFrom|proofDigest|acceptance/);
+    for (const patch of [{ digest: 'invalid' }, { readingId: '../foreign' }, { token: 'a'.repeat(32) }, { href: 'https://unrelated.invalid' }]) {
+      expect(() => personal.saveDraft(alice, input('invalid-reference', { ...value, draft: { ...value.draft, sharedProofOrigin: { ...origin, ...patch } } }))).toThrow('请求格式无效');
+    }
+    expect(() => personal.draft(bob, saved.draft.id)).toThrow('不存在');
+  });
 });
 
 

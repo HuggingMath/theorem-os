@@ -21,6 +21,7 @@ export function leanProblemDraft(value: TaskDraft, libraries?: ResearchReleaseRe
     ...(value.maxTotalTokens !== undefined ? { maxTotalTokens: value.maxTotalTokens } : {}),
     ...(value.planApproval ? { planApproval: true } : {}), ...(value.modulePlan ? { modulePlan: structuredClone(value.modulePlan) } : {}),
     ...(value.knowledgeDigest !== undefined ? { knowledgeDigest: value.knowledgeDigest } : {}),
+    ...(value.sharedProofOrigin ? { sharedProofOrigin: { ...value.sharedProofOrigin } } : {}),
   };
   return { mode: 'lean', draft, ...(libraries?.length ? { libraries: libraries.map(({ assetId, version, digest }) => ({ assetId, version, ...(digest ? { digest } : {}) })) } : {}) };
 }
