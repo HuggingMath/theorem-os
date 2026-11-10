@@ -14,6 +14,7 @@ import { researchMathematics } from './researchMathematics';
 import { researchMathExampleValidator } from './researchMathExamples';
 import { researchAssetFromRun } from './researchAssetPrefill';
 import { selectWebLibraryPack } from './frozenLibrary';
+import { installedLibraryDetail, installedLibraryDirectory, installedLibrarySource } from './installedLibrary';
 import { acceptedResearchLibraryUses } from './researchLibraryUsage';
 import { WebStorage, WebStorageError } from './storage';
 import type { WebJobs } from './jobs';
@@ -298,6 +299,20 @@ export class WebResearchApi {
           runId: url.searchParams.get('run') ?? '', taskId: url.searchParams.get('task') ?? undefined,
           taskVersion: url.searchParams.get('taskVersion') ?? undefined, commit: url.searchParams.get('commit') ?? undefined });
         return item(researchAssetFromRun(this.storage, this.jobs, owner!, { ...parameters, runId: parameters.runId! }));
+      }
+      if (id === 'installed') {
+        if (method !== 'GET') fail(405, '现有 Lean 库仅支持读取。');
+        if (!action) {
+          const pagination = parse(z.object({ offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }), query(url));
+          return { status: 200, body: installedLibraryDirectory({ ...pagination, q: url.searchParams.get('q') ?? undefined,
+            area: url.searchParams.get('area') ?? undefined, environment: url.searchParams.get('environment') ?? undefined }) };
+        }
+        if (action === 'module' && !ref) {
+          const input = parse(z.object({ file: z.string().min(1), catalogDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+            view: z.enum(['metadata', 'source']).optional() }), Object.fromEntries(url.searchParams));
+          return item(input.view === 'source' ? installedLibrarySource(input.file, input.catalogDigest) : installedLibraryDetail(input.file, input.catalogDigest));
+        }
+        fail(404, '现有 Lean 库读取地址不存在。');
       }
       if (!id && method === 'GET') return { status: 200, body: { items: this.assets.list(viewer, {
         type: parse(z.enum(['mathematics', 'agent', 'skill']).optional(), url.searchParams.get('type') ?? undefined),

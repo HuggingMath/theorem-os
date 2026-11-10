@@ -147,6 +147,19 @@ describe('personal research search and accounting', () => {
 });
 
 describe('evidence-based research brief', () => {
+  it('keeps direct statement compilation separate from semantic review in the brief and each export language', () => {
+    const f = fixture(), value = run('Direct statement');
+    value.formalization = { id: crypto.randomUUID(), original: 'Prove True', confirmedAt: value.createdAt,
+      confirmation: 'automatic', reviewMode: 'direct', evidenceSha256: 'd'.repeat(64) };
+    f.save(alice, value);
+    const brief = f.workspace.brief(alice, value.id);
+    expect(brief.formalization).toMatchObject({ reviewMode: 'direct', confirmation: 'automatic' });
+    const zh = researchBriefMarkdown(brief, 'zh', 'http://localhost');
+    const en = researchBriefMarkdown(brief, 'en', 'http://localhost');
+    expect(zh).toContain('Lean 陈述编译通过'); expect(zh).not.toContain('模型审核通过');
+    expect(en).toContain('compiled'); expect(en).not.toContain('模型审核通过'); expect(en).not.toContain('model review passed');
+  });
+
   it('keeps passing partial checks distinct from full acceptance and preserves prior failed checks', () => {
     const f = fixture(), value = run('Not accepted yet');
     const observation = value.observation!, task = observation.inspection.tasks[0]!;

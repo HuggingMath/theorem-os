@@ -11,6 +11,12 @@ export type ResearcherProfile = ResearchAuthor & {
   revision: number; createdAt: string; updatedAt: string;
   following?: boolean;
 };
+/** A directory preview contains only research already visible to the current viewer. */
+export type ResearcherDirectoryProfile = ResearcherProfile & { research?: {
+  projectCount: number; contributionCount: number;
+  latestProject?: { id: string; title: string; updatedAt: string };
+  latestContribution?: Pick<ResearchContribution, 'summary' | 'createdAt' | 'projectId' | 'assetId' | 'assetVersion' | 'runId'>;
+} };
 export type ResearchMutation = { requestId: string; expectedRevision?: number };
 export type ResearchProfileInput = ResearchMutation & {
   displayName: string; fields?: string[]; bio?: string; links?: string[]; visibility?: 'private' | 'public';
@@ -120,6 +126,8 @@ export type ResearchProjectDetail = ResearchProjectSummary & {
 };
 export type ResearchQuery = { q?: string; field?: string; author?: string; offset?: number; limit?: number; after?: number };
 export type ResearchPage<T> = { items: T[]; total: number; nextOffset?: number };
+/** Field choices come from all profiles visible to this viewer, before directory filters and pagination. */
+export type ResearcherDirectory = ResearchPage<ResearcherDirectoryProfile> & { fields: string[] };
 export type ResearchNotification = ResearchActivity & { read: boolean };
 export type ResearchCommand = Exclude<WebCommand, { type: 'capture' }>;
 export type ResearchProofResult = {

@@ -94,7 +94,7 @@ try {
     context.on('page', page => { page.setDefaultTimeout(12_000); page.on('pageerror', error => errors.push(error.message)); });
     const page = await context.newPage(); active = page;
     await page.goto(origin + '/library.html');
-    await page.getByRole('heading', { name: tx('共享成果与研究方法', 'Shared mathematics and research methods'), exact: true }).waitFor();
+    await page.getByRole('heading', { name: tx('数学库', 'Library'), exact: true }).waitFor();
     const owner = (await context.cookies(origin)).find(item => item.name === 'theoremos_session')!.value;
     const run = service.jobs.create(owner, { providerId: 'openai', apiKey: 'sk-DISPOSABLE-TRIAL-FIXTURE', model: 'fixture-no-model',
       effort: 'high', environment: 'standard', source: original, task: 'Addition trial fixture', maxTurns: 1, maxRunSeconds: 30,

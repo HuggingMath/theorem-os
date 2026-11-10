@@ -140,7 +140,5 @@ export const release: Record<string, string> = {
   '最多 Token': 'Maximum tokens',
   '随后证明的预算': 'Proof budget',
   '最多研究轮次': 'Maximum research turns',
-  '形式化时间：{0}；Token：{1}。随后证明时间：{2}；Token：{3}。': 'Formalization time: {0}; tokens: {1}. Proof time: {2}; tokens: {3}.',
-  '预算留空表示不限。费用由模型服务商收取。': 'Leave budgets blank for no limit. Your model provider bills the calls.',
   '预算可留空，填写时须为允许范围内的正整数。': 'Leave budgets blank, or enter positive integers within the allowed ranges.',
 };

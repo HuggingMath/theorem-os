@@ -4,7 +4,7 @@ import {
   LogOut, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Sun, Trash2, TriangleAlert, Undo2, Upload, X,
 } from 'lucide';
 import type { WebAdminOverview, WebContinuation, WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebRun, WebRunRequest, WebSavedKey, WebSession } from '../shared';
-import { workbenchReturn } from '../shared';
+import { loginHref } from '../shared';
 import { ResearchSelection } from './researchSelection';
 import type { ResearchLibraryAttemptPreparation } from '../researchLibraryTrialTypes';
 import { consumeResearchEntry, readResearchEntry } from './researchEntry';
@@ -72,6 +72,10 @@ import { historyStorageKey, markHistoryCollapsed, readHistoryCollapsed } from '.
 import { classicLibraryUrl } from './classicLibrary';
 import { renderContinuationPreview } from './productFlowView';
 import { relatedResearchRuns, type ContinuationPreview } from './productFlow';
+import type { InstalledLibraryDetail } from '../installedLibraryTypes';
+import { libraryReferenceKeys, libraryReferenceText, readLibraryReference } from './installedLibraryReference';
+import { clearResearchProblemDraft, loadResearchProblemDraft, readResearchProblemDraft, researchProblemDraftKeys } from './researchProblemDraft';
+import { renderResearchProblemDraft } from './ui/ResearchProblemDraft';
 
 const iconSet = { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, BookOpen, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
   Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
@@ -144,6 +148,9 @@ let researchEntry: 'natural' | 'lean' = 'natural';
 document.body.dataset.entry = researchEntry;
 let naturalPage: Promise<void> | undefined;
 let chatWorkspace: ChatSession | undefined;
+let linkedLibraryReference = readLibraryReference(new URLSearchParams(location.search));
+let linkedProblemDraft = readResearchProblemDraft(new URLSearchParams(location.search));
+let problemDraftRevision = 0;
 const chatArtifacts = new ChatArtifactNavigation(element('#research-chat-thread'));
 const chatArtifactIdentity = () => chatWorkspace?.id || currentRun()?.id || 'home';
 function placeInputMode() {
@@ -176,7 +183,19 @@ async function loadNaturalResearch() {
     onNavigate: (id, mode, attached) => {
       chatArtifacts.clear();
       researchEntry = 'natural'; document.body.dataset.entry = 'natural'; placeInputMode();
-      const search = withAddressLanguage(id ? `?chat=${encodeURIComponent(id)}` : '');
+      if (linkedLibraryReference && (mode === 'push' || linkedLibraryReference.chat !== id)) linkedLibraryReference = undefined;
+      if (linkedProblemDraft && (mode === 'push' || id)) dismissProblemDraft();
+      const parameters = new URLSearchParams(id ? { chat: id } : {});
+      if (linkedLibraryReference && linkedLibraryReference.chat === id) {
+        parameters.set('libraryModule', linkedLibraryReference.file);
+        parameters.set('libraryCatalog', linkedLibraryReference.catalogDigest);
+        parameters.set('libraryDeclaration', linkedLibraryReference.declaration);
+      }
+      if (linkedProblemDraft) {
+        const original = new URLSearchParams(location.search);
+        for (const key of researchProblemDraftKeys) if (original.has(key)) parameters.set(key, original.get(key)!);
+      }
+      const search = withAddressLanguage(parameters.size ? `?${parameters}` : '');
       if (location.search !== search) history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', location.pathname + search);
       // The live workspace belongs to the task, not to one of its stages: a task moving from its statement to its proof keeps it open.
       if (!id || document.body.dataset.chatArtifact !== 'live') { document.body.dataset.chatArtifact = ''; document.body.dataset.outputOpen = 'false'; }
@@ -213,7 +232,54 @@ async function loadNaturalResearch() {
     onCancelRun: openCancellation,
     isSample,
   });
-  await chatWorkspace.start(currentRun());
+  if (linkedProblemDraft) chatWorkspace.home(false);
+  await chatWorkspace.start(linkedProblemDraft ? undefined : currentRun());
+  if (linkedProblemDraft) void showProblemDraft();
+  const reference = linkedLibraryReference, workspace = chatWorkspace, session = state.session;
+  if (reference && reference.chat === workspace.id) {
+    try {
+      const { item } = await api<{ item: InstalledLibraryDetail }>(`/api/research/library/installed/module?${new URLSearchParams({ file: reference.file, catalogDigest: reference.catalogDigest })}`);
+      if (!sameSession(session) || workspace !== chatWorkspace || workspace.id !== reference.chat) return;
+      if (!workspace.includeLibraryReference(libraryReferenceText(item, reference.declaration))) throw new Error(t('暂时无法加入引用，原有输入已保留。请重新打开此接口。'));
+      linkedLibraryReference = undefined;
+      const next = new URL(location.href);
+      for (const key of libraryReferenceKeys) next.searchParams.delete(key);
+      history.replaceState(null, '', next);
+      toast(t('已将数学库接口加入输入框，可继续补充题目或发送。'));
+    } catch (error) {
+      if (sameSession(session) && workspace === chatWorkspace && workspace.id === reference.chat)
+        workspace.libraryReferenceFailed(t('引用数学库失败：{0}', message(error)));
+    }
+  }
+}
+function dismissProblemDraft() {
+  linkedProblemDraft = undefined; problemDraftRevision++;
+  renderResearchProblemDraft(element('#research-problem-draft'));
+  const next = new URL(location.href); clearResearchProblemDraft(next.searchParams);
+  history.replaceState(null, '', next);
+}
+async function showProblemDraft() {
+  const reference = linkedProblemDraft, workspace = chatWorkspace, session = state.session;
+  if (!reference || !workspace || workspace.id) return;
+  const revision = ++problemDraftRevision;
+  const current = () => revision === problemDraftRevision && linkedProblemDraft === reference && workspace === chatWorkspace && !workspace.id && sameSession(session);
+  const common = { onDismiss: dismissProblemDraft, onRetry: () => void showProblemDraft(), onInclude: () => {} };
+  renderResearchProblemDraft(element('#research-problem-draft'), { ...common, loading: true });
+  try {
+    const candidate = await loadResearchProblemDraft(reference, { json: api, currentHref: location.href, locale, text: async url => {
+      const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', signal: readController.signal });
+      if (!response.ok) throw new Error(t('读取原题失败，请重试。'));
+      return response.text();
+    } });
+    if (!current()) return;
+    renderResearchProblemDraft(element('#research-problem-draft'), { ...common, candidate, onInclude: () => {
+      if (!current()) return;
+      if (!workspace.includeProblemDraft(candidate.text, candidate.environment)) { toast(t('暂时无法加入原题，现有草稿已保留。')); return; }
+      dismissProblemDraft(); toast(t('原题已加入草稿，可修改后发送。'));
+    } });
+  } catch (error) {
+    if (current()) renderResearchProblemDraft(element('#research-problem-draft'), { ...common, error: message(error) });
+  }
 }
 function openChatArtifact(kind: ChatArtifactKind, target?: ChatArtifactTarget, auto = false) {
   const run = currentRun(), task = chatArtifactTask(run, target?.taskId);
@@ -280,9 +346,9 @@ let sampleLink = initialAddress.size === 1 && initialAddress.get('sample') === '
 let formalizationLink = new URLSearchParams(location.search).get('formalization');
 // When the session ends, the login page keeps the run or conversation open now (login.html?run=<id>, ?chat=<id>) and
 // returns to it.
-const loginAddress = () => `login.html${workbenchReturn(location.search)}`;
+const loginAddress = () => loginHref(location.pathname + location.search + location.hash);
 // The root address opens a new problem; explicit run and sample links still open their records.
-state.composing = !linkedRun && !sampleLink;
+state.composing = !!linkedProblemDraft || !linkedRun && !sampleLink;
 if (linkedRun !== null && runIdPattern.test(linkedRun))
   saveResume(() => localStorage, { selectedId: linkedRun, seenAt: readResume(() => localStorage)?.seenAt ?? new Date().toISOString() });
 const notificationsSupported = () => typeof Notification === 'function';
@@ -347,6 +413,7 @@ const draftRecovery = new DraftRecovery(() => ownedDrafts);
 const ownerOfSession = webDraftOwner;
 function clearOwnedDrafts() {
   document.querySelector('[data-library-proposal-start]')?.remove(); libraryProposalHandled = false;
+  problemDraftRevision++; renderResearchProblemDraft(element('#research-problem-draft'));
   chatWorkspace?.bindOwner('');
   researchSelection.reset();
   collaborationView.clearPlanDrafts();
@@ -1036,7 +1103,8 @@ function applyTaskDraft(draft: TaskDraft) {
   field('environment').value = draft.environment;
   renderTemplates();
   for (const [id, value] of Object.entries({ model: draft.model, effort: draft.effort, source: draft.source, task: draft.task,
-    'max-turns': draft.maxTurns, 'max-seconds': draft.maxRunSeconds, workers: draft.workers, 'max-tokens': draft.maxTotalTokens ?? '' })) field(id).value = value;
+    'max-turns': draft.maxTurns === '0' ? '' : draft.maxTurns, 'max-seconds': draft.maxRunSeconds === '0' ? '' : draft.maxRunSeconds,
+    workers: draft.workers, 'max-tokens': draft.maxTotalTokens === '0' ? '' : draft.maxTotalTokens ?? '' })) field(id).value = value;
   const template = state.session?.templates.find(template => template.id === draft.templateId
     && template.environment === draft.environment && template.source === field('source').value && template.task === field('task').value);
   field('template').value = template?.id ?? '';
@@ -1093,7 +1161,7 @@ async function importTaskFile(file: File) {
       [t('服务商'), provider?.name ?? t('{0} · 当前不可用', draft.providerId || t('未选择'))], [t('模型'), draft.model || t('未填写'), true],
       [t('推理强度'), effortLabels[draft.effort] ?? draft.effort], [t('轮次上限'), Number(draft.maxTurns) ? draft.maxTurns : t('不限')],
       [t('解题预算 / 秒'), Number(draft.maxRunSeconds) ? draft.maxRunSeconds : t('不限')], [t('Agent 数量'), draft.workers || t('未填写')],
-      [t('用量上限 / 万 Token'), draft.maxTotalTokens || t('不限')], [t('模块方案'), planSummary],
+      [t('用量上限 / 万 Token'), Number(draft.maxTotalTokens) ? draft.maxTotalTokens! : t('不限')], [t('模块方案'), planSummary],
       [t('协作模式'), draft.coordination === 'cooperative' ? t('任务协作') : t('独立并行')],
       ...(draft.planApproval ? [[t('先审计划'), t('开启')] as [string, string]] : [])]);
     element('#import-task-preview').textContent = draft.task || t('未填写');
@@ -1745,7 +1813,7 @@ function renderDraftPreview(force = false) {
   const facts = [
     ['environment', t('证明环境'), environment?.name ?? t('未选择'), false],
     ['model', t('模型'), field('model').value || t('未设置'), true],
-    ['budget', t('解题预算'), numericLabel('max-seconds', value => readableDuration(value * 1000)), false],
+    ['budget', t('解题预算'), Number(field('max-seconds').value) === 0 ? t('不限') : numericLabel('max-seconds', value => readableDuration(value * 1000)), false],
     ['workers', t('Agent 数量'), numericLabel('workers', value => t('{0} 个 Agent', value)), false],
   ] as const;
   const title = template?.name ?? t('自定义研究');
@@ -1918,7 +1986,7 @@ let addressMode: 'push' | 'replace' = 'replace';
 function syncAddress() {
   const mode = addressMode; addressMode = 'replace';
   // Until the first list arrives the selection is not known yet, and a ?run= or ?sample link must survive until it is.
-  if (!state.resumed || sampleLink || formalizationLink || chatWorkspace?.id || new URLSearchParams(location.search).has('chat') && !chatWorkspace) return;
+  if (!state.resumed || sampleLink || formalizationLink || linkedLibraryReference || linkedProblemDraft || chatWorkspace?.id || new URLSearchParams(location.search).has('chat') && !chatWorkspace) return;
   const run = currentRun(), search = withAddressLanguage(!run ? '' : isSample(run) ? sampleAddress : `?run=${encodeURIComponent(run.id)}`);
   if (location.search === search) return;
   history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', location.pathname + search + location.hash);
@@ -2194,6 +2262,7 @@ function initialize(): Promise<void> {
       }
       state.session = session;
       chatWorkspace?.bindOwner(session.account?.email ?? 'anonymous');
+      if (ownerChanged && linkedProblemDraft) void naturalPage?.then(() => showProblemDraft());
       const previousProvider = field('provider').value;
       const providers = session.providers.map(provider => [provider.id, provider.name] as const);
       const keepProvider = session.providers.some(provider => provider.id === previousProvider);
@@ -2285,6 +2354,7 @@ function renderShell() {
     : running.length ? { label: t('{0} 项研究进行中', running.length), detail: '', tone: 'running', count: running.length } : undefined;
   renderTopbar(element('#topbar'), {
     model: researchEntry === 'natural' && !run ? t('默认版配置') : field('model').value || t('模型配置'), mac, live,
+    libraryHref: chatWorkspace?.id ? `library.html?${new URLSearchParams({ workbenchChat: chatWorkspace.id })}` : 'library.html',
     history: { docked: historyDocked(), expanded: !historyCollapsed() },
     connection: { tone: ready ? 'ready' : 'offline', label: !state.connected ? connectionRequest ? t('连接中') : t('连接中断') : ready ? t('环境就绪') : t('环境未就绪') },
     settingsDisabled: !session || state.submitting, account: session?.account?.email, onAccount: openAccount,

@@ -171,6 +171,8 @@ export interface ArchiveCatalog {
 export type ArchiveIndexSource = Omit<ArchiveSource, 'code'>;
 export interface ArchiveIndexRecord extends Omit<ArchiveRecord, 'sources' | 'process'> {
   sources: ArchiveIndexSource[];
+  /** Reading format of the exact accepted proof; full explanations stay lazy. */
+  readingMode?: 'derivation' | 'source';
   /** The first lines of the target statement, shown in the overview without loading the full source. */
   excerpt: string;
 }

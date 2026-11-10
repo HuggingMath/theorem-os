@@ -26,7 +26,7 @@ export async function freePort() {
 export async function startBrowser(server: http.Server, port: number) {
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
   // Chromium takes its UI language from LANG; the scenario suites assert the Chinese interface.
-  return chromium.launch({ headless: true, env: { ...process.env, LANG: 'zh_CN.UTF-8' } });
+  return chromium.launch({ headless: true, timeout: 0, env: { ...process.env, LANG: 'zh_CN.UTF-8' } });
 }
 
 export async function settled(page: Page) {

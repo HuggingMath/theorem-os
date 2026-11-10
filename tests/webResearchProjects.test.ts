@@ -80,6 +80,27 @@ describe('research projects and collaboration permissions', () => {
     expect(serialized).not.toContain('apiKey'); expect(serialized).not.toContain('email');
   });
 
+  it('normalizes directory field filters and offers only fields from visible profiles across pages', () => {
+    const { projects } = fixture();
+    projects.saveProfile(alice, { requestId: 'alice-fields', expectedRevision: 1, displayName: 'Alice', fields: [' Algebra ', 'Combinatorics'], visibility: 'public' });
+    projects.saveProfile(bob, { requestId: 'bob-fields', expectedRevision: 1, displayName: 'Bob', fields: ['ALGEBRA', 'Number theory'], visibility: 'public' });
+    projects.saveProfile(carol, { requestId: 'private-fields', expectedRevision: 1, displayName: 'Carol', fields: ['Private specialty'], visibility: 'private' });
+    for (const field of ['algebra', ' Algebra ', '  ALGEBRA  ']) {
+      const page = projects.directory('public', { field, limit: 1 });
+      expect(page.total, field).toBe(2); expect(page.items.map(item => item.displayName)).toEqual(['Alice']);
+      expect(page.nextOffset).toBe(1);
+      expect(page.fields.map(value => value.toLocaleLowerCase())).toEqual(['algebra', 'combinatorics', 'number theory']);
+      expect(page.fields.every(value => value === value.trim())).toBe(true);
+      const second = projects.directory('public', { field, offset: page.nextOffset, limit: 1 });
+      expect(second.items.map(item => item.displayName)).toEqual(['Bob']); expect(second.fields).toEqual(page.fields);
+    }
+    const empty = projects.directory('public', { field: 'No matching field' });
+    expect(empty.items).toEqual([]); expect(empty.fields).not.toContain('Private specialty');
+    expect(empty.fields.map(value => value.toLocaleLowerCase())).toContain('combinatorics');
+    expect(projects.directory(carol).fields).toContain('Private specialty');
+    expect(projects.directory('public', { field: '   ' }).total).toBe(2);
+  });
+
   it('enforces project visibility, per-command grants, read-only membership and immediate revocation', () => {
     const { projects, project } = fixture();
     errorStatus(() => projects.detail(carol, project.id), 404);
@@ -622,6 +643,12 @@ describe('contribution discovery, notifications and cleanup', () => {
     const publicProfile = projects.profile('public', projects.identity(carol));
     expect(publicProfile.projects.map(item => item.id)).toContain(project.id);
     expect(publicProfile.contributions.map(item => item.feedbackId)).toContain(publicFeedback.id);
+    const publicPreview = projects.directory('public').items.find(item => item.id === projects.identity(carol))!.research!;
+    expect(publicPreview.projectCount).toBe(1);
+    expect(publicPreview.contributionCount).toBe(publicProfile.contributions.length);
+    expect(publicPreview.latestProject).toMatchObject({ id: project.id, title: project.title });
+    const bobPublicPreview = projects.directory('public').items.find(item => item.id === projects.identity(bob))!.research!;
+    expect(JSON.stringify(bobPublicPreview)).not.toContain(memberFeedback.text);
     expect(projects.profile('public', projects.identity(bob)).contributions.map(item => item.feedbackId)).not.toContain(memberFeedback.id);
     expect(projects.profile(bob, projects.identity(bob)).contributions.map(item => item.feedbackId)).toContain(memberFeedback.id);
 
@@ -633,6 +660,8 @@ describe('contribution discovery, notifications and cleanup', () => {
     projects.update(alice, project.id, { requestId: 'hide-project', expectedRevision: current.revision, visibility: 'members' });
     expect(projects.profile('public', projects.identity(carol)).contributions).toEqual([]);
     expect(projects.profile('public', projects.identity(carol)).projects).toEqual([]);
+    expect(projects.directory('public').items.find(item => item.id === projects.identity(carol))!.research)
+      .toEqual({ projectCount: 0, contributionCount: 0 });
     expect(projects.profile(alice, projects.identity(carol)).contributions.map(item => item.feedbackId)).toContain(publicFeedback.id);
   });
 

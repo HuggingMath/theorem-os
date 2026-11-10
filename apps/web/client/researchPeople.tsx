@@ -1,61 +1,147 @@
-import { useState } from 'preact/hooks';
-import type { ResearchActivity, ResearchContribution, ResearcherProfile, ResearchProjectSummary } from '../researchProjectTypes';
+import { useEffect, useState } from 'preact/hooks';
+import type { ResearchActivity, ResearchContribution, ResearcherDirectory, ResearcherProfile, ResearchProjectSummary, ResearchPage } from '../researchProjectTypes';
 import { t } from '../i18n';
+import { loginHref } from '../shared';
 import { RichProse } from './richText';
 import { CollaborationInbox } from './collaborationFlow';
-import { base, enc, Empty, ErrorBox, Field, FollowButton, libraryHref, MutationState, nameOf, Panel, personHref,
+import { api, base, enc, Empty, ErrorBox, errorText, Field, FollowButton, libraryHref, MutationState, nameOf, Panel, personHref,
   Search, stamp, Tags, theoremHref, tx, useMutation, useResource, words, lines, type Item, type Items, type ResearchContext } from './researchShared';
 
 type ProfileView = ResearcherProfile & { following?: boolean; projects: ResearchProjectSummary[]; contributions: ResearchContribution[] };
 type FeedEvent = Omit<ResearchActivity, 'projectId'> & { projectId?: string; assetId?: string; assetVersion?: string; read?: boolean };
 const eventHref = (event: FeedEvent) => event.assetId ? libraryHref(event.assetId, event.assetVersion) : event.projectId ? theoremHref(event.projectId, event.runId, { statementVersionId: event.statementVersionId, feedbackId: event.feedbackId }) : undefined;
-
-export function PeoplePage({ context }: { context: ResearchContext }) {
-  const selected = new URLSearchParams(location.search).get('id') ?? context.session.researcherId ?? '';
-  const [query, setQuery] = useState(''), [field, setField] = useState(''), [offset, setOffset] = useState(0);
-  const directory = useResource<Items<ResearcherProfile>>(`${base}/people?q=${enc(query)}&field=${enc(field)}&offset=${offset}&limit=12`);
-  const profile = useResource<Item<ProfileView>>(selected ? `${base}/people/${enc(selected)}` : undefined);
-  const own = Boolean(selected && selected === context.session.researcherId);
-  return <><div class="research-heading"><div><span class="research-eyebrow">TheoremOS / People</span><h1>{tx('数学家与他们的研究', 'Mathematicians and their research')}</h1>
-    <p>{tx('从具体贡献找到同行，继续共同推进的定理。', 'Discover colleagues through their contributions and continue shared research.')}</p></div>
-    <div class="research-heading-actions"><a class="button" href={context.session.authenticated ? 'people.html' : 'login.html'}>{context.session.authenticated ? tx('我的主页', 'My profile') : tx('登录参与研究', 'Sign in to collaborate')}</a><a class="button" href="library.html?mine=1">{tx('我的 Agent 与 Skill', 'My agents and skills')}</a></div></div>
-    <div class="research-layout" data-selected={Boolean(selected)}><aside class="research-sidebar"><Panel title={tx('发现同行', 'Find colleagues')}>
-      <div class="research-form"><Search label={tx('姓名、简介或领域', 'Name, biography or field')} onSearch={value => { setQuery(value); setOffset(0); }} />
-        <Field label={tx('按研究领域筛选', 'Filter by research field')} value={field} onInput={value => { setField(value); setOffset(0); }} /></div>
-      <ErrorBox message={directory.error} />{directory.loading && <p class="research-status" role="status">{tx('正在读取…', 'Loading…')}</p>}
-      <ul class="research-list">{directory.data?.items.map(person => <li key={person.id}><a class="research-list-item" href={personHref(person.id)} aria-current={selected === person.id ? 'true' : undefined}>
-        <span class="research-item-title">{person.displayName}</span><span class="research-item-meta">{person.fields.join(' · ') || tx('尚未填写研究领域', 'No fields listed')}</span></a></li>)}</ul>
-      {directory.data && !directory.data.items.length && <Empty>{tx('暂无匹配的公开资料。', 'No matching public profiles.')}</Empty>}
-      <div class="research-actions">{offset > 0 && <button type="button" class="text-button" onClick={() => setOffset(Math.max(0, offset - 12))}>{tx('上一页', 'Previous')}</button>}
-        {directory.data?.nextOffset !== undefined && <button type="button" class="text-button" onClick={() => setOffset(directory.data!.nextOffset!)}>{tx('下一页', 'Next')}</button>}</div>
-    </Panel><Panel title={tx('从一道题开始', 'Start with a theorem')}><p class="research-description">{tx('建立研究题目、保留陈述版本，再把研究运行关联到定理。', 'Create a project, preserve statement versions and attach research runs.')}</p>
-      <a class="button" href="theorems.html">{tx('浏览与创建定理', 'Explore and create theorems')}</a></Panel></aside>
-    <div class="research-content"><ErrorBox message={profile.error} />{profile.data ? <Profile key={selected} profile={profile.data.item} own={own} canFollow={context.session.authenticated} refresh={profile.refresh} />
-      : !profile.error && <Panel title={selected ? tx('数学家主页', 'Researcher profile') : tx('发现数学家', 'Discover mathematicians')}><Empty>{selected ? tx('正在读取资料…', 'Loading profile…') : tx('从目录查看公开资料，登录后可以保存自己的研究主页。', 'Browse public profiles in the directory. Sign in to create your research profile.')}</Empty></Panel>}
-      {own && <><CollaborationInbox context={context} /><Notifications /><Feed /></>}
-    </div></div></>;
+function peoplePageHref(query: string, field: string, offset: number, id?: string) {
+  const parameters = new URLSearchParams();
+  if (id) parameters.set('id', id);
+  if (query) parameters.set('q', query);
+  if (field) parameters.set('field', field);
+  if (offset) parameters.set('offset', String(offset));
+  const search = parameters.toString();
+  return `people.html${search ? `?${search}` : ''}`;
 }
 
-function Profile({ profile, own, canFollow, refresh }: { profile: ProfileView; own: boolean; canFollow: boolean; refresh: () => void }) {
+export function PeoplePage({ context }: { context: ResearchContext }) {
+  const parameters = new URLSearchParams(location.search), selected = parameters.get('id') ?? '';
+  const [query, setQuery] = useState(parameters.get('q') ?? ''), [field, setField] = useState(parameters.get('field') ?? ''), [offset, setOffset] = useState(() => {
+    const value = Number(parameters.get('offset'));
+    return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  });
+  const directory = useResource<ResearcherDirectory>(selected ? undefined : `${base}/people?q=${enc(query)}&field=${enc(field)}&offset=${offset}&limit=12`);
+  const profile = useResource<Item<ProfileView>>(selected ? `${base}/people/${enc(selected)}` : undefined);
+  const own = Boolean(selected && selected === context.session.researcherId);
+  const directoryHref = peoplePageHref(query, field, offset), ownId = context.session.researcherId;
+  const updateDirectory = (nextQuery: string, nextField: string, nextOffset: number) => {
+    setQuery(nextQuery); setField(nextField); setOffset(nextOffset);
+    history.replaceState(null, '', peoplePageHref(nextQuery, nextField, nextOffset));
+  };
+  return <><div class="research-heading"><div><span class="research-eyebrow">TheoremOS / People</span><h1>{selected ? profile.data?.item.displayName ?? (own ? tx('我的主页', 'My profile') : tx('数学家主页', 'Researcher profile')) : tx('发现同行', 'Discover mathematicians')}</h1>
+    <p>{selected ? tx('了解研究方向、参与的定理与贡献来源。', 'Explore research interests, theorem projects and contributions.') : tx('按姓名、简介或研究领域寻找数学家，再从主页了解他们的研究。', 'Find mathematicians by name, biography or field, then explore their research.')}</p></div>
+    <div class="research-heading-actions"><a class="button" href={directoryHref} aria-current={!selected ? 'page' : undefined}>{tx('发现同行', 'Discover mathematicians')}</a>
+      <a class="button" href={context.session.authenticated && ownId ? peoplePageHref(query, field, offset, ownId) : loginHref(location.pathname + location.search + location.hash)} aria-current={own ? 'page' : undefined}>{context.session.authenticated && ownId ? tx('我的主页', 'My profile') : tx('登录参与研究', 'Sign in to collaborate')}</a>
+      <a class="button" href="library.html?mine=1&type=agent">{tx('我的 Agent 与 Skill', 'My agents and skills')}</a></div></div>
+    {!selected ? <section class="research-discovery research-page-section" aria-label={tx('数学家目录', 'Mathematician directory')}>
+      <div class="research-directory-toolbar"><Search label={tx('姓名、简介或领域', 'Name, biography or field')} initial={query} onSearch={value => updateDirectory(value, field, 0)} />
+        <label class="research-field research-people-field-input"><span>{tx('按研究领域筛选', 'Filter by research field')}</span>
+          <input value={field} list="research-directory-fields" onInput={event => updateDirectory(query, event.currentTarget.value, 0)} placeholder={tx('选择或输入研究领域', 'Choose or enter a research field')} />
+          <datalist id="research-directory-fields">{directory.data?.fields?.map(value => <option key={value} value={value} />)}</datalist></label></div>
+      <ErrorBox message={directory.error} />{directory.loading && <p class="research-status" role="status">{tx('正在读取…', 'Loading…')}</p>}
+      <ul class="research-directory-grid">{directory.data?.items.map(person => {
+        const href = peoplePageHref(query, field, offset, person.id);
+        return <li class="research-directory-card" key={person.id}>
+          <div class="research-person"><div class="research-avatar" aria-hidden="true">{person.displayName.slice(0, 1)}</div><h2 class="research-card-heading"><a href={href}>{person.displayName}</a></h2></div>
+          {person.fields.length ? <PeopleFields fields={person.fields} onSelect={value => updateDirectory(query, value, 0)} /> : <p class="research-status">{tx('尚未填写研究领域', 'No fields listed')}</p>}
+          <div class="research-card-description"><RichProse text={person.bio || tx('尚未填写简介。', 'No biography yet.')} /></div>
+          {person.research && <div class="research-person-work" data-person-research={person.id}>
+            <p class="research-status">{tx(`${person.research.projectCount} 项研究 · ${person.research.contributionCount} 项贡献`, `${person.research.projectCount} projects · ${person.research.contributionCount} contributions`)}</p>
+            {person.research.latestProject && <a href={theoremHref(person.research.latestProject.id)}>{tx('最近研究：', 'Latest project: ')}{person.research.latestProject.title}</a>}
+            {person.research.latestContribution && <p>{tx('最近贡献：', 'Latest contribution: ')}{person.research.latestContribution.summary}</p>}
+            {!person.research.projectCount && !person.research.contributionCount && <p class="research-status">{tx('暂无可见研究或贡献记录。', 'No visible projects or contributions yet.')}</p>}
+          </div>}
+          <a class="research-inline-link" href={href}>{tx('查看主页', 'View profile')} →</a>
+        </li>;
+      })}</ul>
+      {directory.data && !directory.data.items.length && <Empty>{tx('暂无匹配的公开资料。', 'No matching public profiles.')}</Empty>}
+      <div class="research-actions">{offset > 0 && <button type="button" class="text-button" onClick={() => updateDirectory(query, field, Math.max(0, offset - 12))}>{tx('上一页', 'Previous')}</button>}
+        {directory.data?.nextOffset !== undefined && <button type="button" class="text-button" onClick={() => updateDirectory(query, field, directory.data!.nextOffset!)}>{tx('下一页', 'Next')}</button>}</div>
+    </section> : <div class="research-content"><nav class="research-breadcrumb" aria-label={tx('返回目录', 'Back to directory')}><a href={directoryHref}>← {tx('返回数学家目录', 'Back to mathematicians')}</a></nav>
+      <ErrorBox message={profile.error} />{own && profile.data && <section id="profile-updates" class="research-own-overview" data-own-research-overview>
+        <CollaborationInbox context={context} /><Notifications />
+        <Panel title={tx('继续最近的研究', 'Continue recent research')}>
+          {[...profile.data.item.projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 2).map(project => <a class="research-list-item" key={project.id} href={theoremHref(project.id)}>{project.title}</a>)}
+          {!profile.data.item.projects.length && <p class="research-status">{tx('还没有研究，可以从定理页开始。', 'No projects yet. Start on the theorems page.')}</p>}
+        </Panel>
+      </section>}{profile.data ? <Profile key={selected} profile={profile.data.item} own={own} selfId={ownId ?? ''} canFollow={context.session.authenticated} refresh={profile.refresh} />
+        : !profile.error && <Panel title={tx('数学家主页', 'Researcher profile')}><Empty>{tx('正在读取资料…', 'Loading profile…')}</Empty></Panel>}
+      {own && <Feed />}
+    </div>}</>;
+}
+
+function PeopleFields({ fields, onSelect }: { fields: string[]; onSelect?: (field: string) => void }) {
+  return <div class="research-chips">{fields.map(value => onSelect
+    ? <button key={value} type="button" class="research-chip research-field-choice" data-people-field={value} onClick={() => onSelect(value)}>{value}</button>
+    : <a key={value} class="research-chip research-field-choice" data-people-field={value} href={peoplePageHref('', value, 0)}>{value}</a>)}</div>;
+}
+
+function Profile({ profile, own, selfId, canFollow, refresh }: { profile: ProfileView; own: boolean; selfId: string; canFollow: boolean; refresh: () => void }) {
+  const [adding, setAdding] = useState(false);
   const safeLinks = profile.links.filter(link => /^https?:\/\//iu.test(link));
-  return <><Panel title={profile.displayName} actions={!own && (canFollow ? <FollowButton kind="person" id={profile.id} initial={profile.following} /> : <a class="button" href="login.html">{tx('登录后关注', 'Sign in to follow')}</a>)}>
-    <div class="research-person"><div class="research-avatar" aria-hidden="true">{profile.displayName.slice(0, 1)}</div><div><Tags values={profile.fields} />
+  const signIn = loginHref(location.pathname + location.search + location.hash);
+  return <><Panel title={tx('研究方向与简介', 'Research interests and biography')} actions={!own && <div class="research-profile-actions">
+    {canFollow ? <FollowButton kind="person" id={profile.id} initial={profile.following} /> : <a class="button" href={signIn}>{tx('登录后关注', 'Sign in to follow')}</a>}
+    {canFollow && selfId ? <button class="button" type="button" data-add-researcher={profile.id} aria-expanded={adding} onClick={() => setAdding(value => !value)}>{tx('添加到我的题目', 'Add to my theorem')}</button>
+      : <a class="button" href={signIn}>{tx('登录后添加到题目', 'Sign in to add to a theorem')}</a>}
+  </div>}>
+    <div class="research-person"><div class="research-avatar" aria-hidden="true">{profile.displayName.slice(0, 1)}</div><div><PeopleFields fields={profile.fields} />
       <p class="research-status">{nameOf(profile.visibility)} · {tx('更新于 ', 'Updated ')}{stamp(profile.updatedAt)}</p></div></div>
     {profile.bio ? <div class="research-description"><RichProse text={profile.bio} /></div> : <Empty>{tx('尚未填写简介。', 'No biography yet.')}</Empty>}
     {safeLinks.length > 0 && <div class="research-actions">{safeLinks.map(link => <a key={link} class="research-inline-link" href={link} target="_blank" rel="noopener noreferrer">{link}</a>)}</div>}
-    <div class="research-counter-row"><div><span class="research-count">{profile.projects.length}</span><span>{tx('可见参与项目', 'Visible projects')}</span></div>
-      <div><span class="research-count">{profile.contributions.length}</span><span>{tx('贡献记录', 'Contributions')}</span></div><div><span class="research-count">{profile.fields.length}</span><span>{tx('研究领域', 'Fields')}</span></div></div>
-    {own && <details><summary>{tx('编辑我的资料', 'Edit my profile')}</summary><ProfileEditor profile={profile} refresh={refresh} /></details>}
-  </Panel><Panel title={own ? tx('我的研究', 'My research') : tx('参与的研究', 'Research projects')}>
+    {adding && canFollow && selfId && <ProjectPicker selfId={selfId} researcherId={profile.id} />}
+  </Panel><nav class="research-section-nav" aria-label={tx('主页内容', 'Profile sections')}><a href="#research-projects">{tx('参与的研究', 'Research projects')}</a><a href="#research-contributions">{tx('贡献与来源', 'Contributions and sources')}</a>
+    {own && <><a href="#profile-management">{tx('资料设置', 'Profile settings')}</a><a href="#profile-updates">{tx('我的更新', 'My updates')}</a></>}</nav>
+    <Panel id="research-projects" title={own ? tx('我的研究', 'My research') : tx('参与的研究', 'Research projects')}>
     <ul class="research-list">{profile.projects.map(project => <li key={project.id}><a class="research-list-item" href={theoremHref(project.id)}>
       <span class="research-item-title">{project.title}</span><span class="research-item-meta"><span>{project.owner.displayName}</span><span>{nameOf(project.visibility)}</span><span>{stamp(project.updatedAt)}</span></span></a></li>)}</ul>
     {!profile.projects.length && <Empty>{tx('还没有可展示的研究。', 'No research projects to display yet.')}</Empty>}
-  </Panel><Panel title={tx('贡献与来源', 'Contributions and sources')} note={tx('每条记录都对应实际提交的版本、反馈或产物。', 'Each record points to a submitted version, feedback or artifact.')}>
+  </Panel><Panel id="research-contributions" title={tx('贡献与来源', 'Contributions and sources')} note={tx('每条记录都对应实际提交的版本、反馈或产物。', 'Each record points to a submitted version, feedback or artifact.')}>
     {profile.contributions.map(contribution => <article class="research-event" key={contribution.id}><div class="research-item-meta"><span>{nameOf(contribution.kind)}</span><time dateTime={contribution.createdAt}>{stamp(contribution.createdAt)}</time></div>
       <p>{contribution.assetId ? <a href={libraryHref(contribution.assetId, contribution.assetVersion)}>{contribution.summary}</a>
         : contribution.projectId ? <a href={theoremHref(contribution.projectId, contribution.runId)}>{contribution.summary}</a> : contribution.summary}</p>{contribution.evidenceRefs.length > 0 && <Tags values={contribution.evidenceRefs} />}</article>)}
     {!profile.contributions.length && <Empty>{tx('尚无贡献记录。你可以在定理页发起题目、修订陈述或提出建议。', 'No contributions recorded yet. Create a theorem, revise its statement or contribute a suggestion.')}</Empty>}
-  </Panel></>;
+  </Panel>{own && <Panel id="profile-management" title={tx('资料设置', 'Profile settings')}><details><summary>{tx('编辑我的资料', 'Edit my profile')}</summary><ProfileEditor profile={profile} refresh={refresh} /></details></Panel>}</>;
+}
+
+function ProjectPicker({ selfId, researcherId }: { selfId: string; researcherId: string }) {
+  const [projects, setProjects] = useState<ResearchProjectSummary[]>([]), [loading, setLoading] = useState(true),
+    [error, setError] = useState(''), [selected, setSelected] = useState(''), [revision, setRevision] = useState(0);
+  useEffect(() => {
+    let live = true;
+    setLoading(true); setError('');
+    void (async () => {
+      const found: ResearchProjectSummary[] = [];
+      let offset: number | undefined = 0;
+      while (offset !== undefined) {
+        const page: ResearchPage<ResearchProjectSummary> = await api(`${base}/theorems?author=${enc(selfId)}&offset=${offset}&limit=100`);
+        if (!live) return;
+        found.push(...page.items.filter(project => project.permissions.manage));
+        offset = page.nextOffset;
+      }
+      if (live) { setProjects(found); setLoading(false); }
+    })().catch(cause => { if (live) { setError(errorText(cause)); setLoading(false); } });
+    return () => { live = false; };
+  }, [selfId, revision]);
+  return <form class="research-project-picker" data-researcher-project-picker onSubmit={event => {
+    event.preventDefault();
+    if (projects.some(project => project.id === selected)) location.assign(`${theoremHref(selected)}&addResearcher=${enc(researcherId)}#research-members`);
+  }}>
+    <ErrorBox message={error} />{error && <button class="text-button" type="button" onClick={() => setRevision(value => value + 1)}>{tx('重新读取我的题目', 'Reload my theorems')}</button>}
+    {loading && <p class="research-status" role="status">{tx('正在读取我管理的题目…', 'Loading theorems I manage…')}</p>}
+    {!loading && !error && (projects.length ? <><label class="research-field"><span>{tx('选择我管理的题目', 'Choose a theorem I manage')}</span>
+      <select value={selected} onChange={event => setSelected(event.currentTarget.value)} required><option value="">{tx('选择题目', 'Select a theorem')}</option>
+        {projects.map(project => <option key={project.id} value={project.id}>{project.title}</option>)}</select></label>
+      <p class="research-field-note">{tx('这里只预填成员，保存后才会加入题目。', 'This only prefills the member form. Save there to add the collaborator.')}</p>
+      <button class="button" type="submit" disabled={!selected}>{tx('前往成员表单', 'Open member form')}</button></>
+      : <p class="research-status">{tx('还没有可管理的题目。', 'You have no theorems to manage yet.')} <a href="theorems.html?collection=research&create=1">{tx('创建题目', 'Create a theorem')} →</a></p>)}
+  </form>;
 }
 
 function ProfileEditor({ profile, refresh }: { profile: ProfileView; refresh: () => void }) {
@@ -117,7 +203,7 @@ function FeedRow({ event }: { event: FeedEvent }) {
 function Notifications() {
   const notifications = useResource<Items<FeedEvent>>(`${base}/notifications?limit=20`, 15000), action = useMutation();
   const unread = notifications.data?.items.filter(item => !item.read).length ?? 0;
-  return <Panel title={tx('需要关注的更新', 'Updates for you')} actions={unread > 0 && <button class="text-button" type="button" disabled={action.busy}
+  return <Panel title={tx(`需要关注的更新 · ${unread} 条未读`, `Updates for you · ${unread} unread`)} actions={unread > 0 && <button class="text-button" type="button" disabled={action.busy}
     onClick={() => void action.run('POST', `${base}/notifications/read`, { through: new Date().toISOString() }, notifications.refresh)}>{tx('全部标为已读', 'Mark all as read')}</button>}>
     <ErrorBox message={notifications.error} /><MutationState action={action} />{notifications.data?.items.map(event => <FeedRow key={event.id} event={event} />)}
     {notifications.data && !notifications.data.items.length && <Empty>{tx('当前没有需要处理的更新。', 'You are up to date.')}</Empty>}

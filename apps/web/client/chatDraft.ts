@@ -1,10 +1,10 @@
-import type { WebFormalizationRequest } from '../formalizationTypes';
+import type { WebFormalizationRequest, WebResearchBudget } from '../formalizationTypes';
 import { webConversationLimits } from '../conversationTypes';
 
 const schema = 'theorem-os.chat-draft.v1';
 export type ChatDraftSettings = Required<Pick<WebFormalizationRequest,
   'providerId' | 'model' | 'environment' | 'effort' | 'maxRunSeconds' | 'maxTotalTokens' | 'research'>> & {
-    participation: 'guided' | 'automatic';
+    participation: 'guided' | 'automatic'; research: WebResearchBudget;
   };
 export type ChatGuidanceDraft = { runId: string; taskRef?: { id: string; version: string } };
 export type ChatPendingMessage = { requestId: string; text: string };

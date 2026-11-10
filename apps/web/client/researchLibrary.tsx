@@ -1,18 +1,20 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { FrozenResearchConfiguration, ResearchAsset, ResearchAssetPrefill, ResearchAssetPreview, ResearchAssetRelease, ResearchConfigurationSelection, ResearchLibraryUse, ResearchPublication, ResearchReleaseRef } from '../researchAssetTypes';
+import type { FrozenResearchConfiguration, ResearchAsset, ResearchAssetPrefill, ResearchAssetPreview, ResearchAssetRelease, ResearchAssetKind, ResearchConfigurationSelection, ResearchLibraryUse, ResearchPublication, ResearchReleaseRef } from '../researchAssetTypes';
 import type { ResearcherProfile } from '../researchProjectTypes';
 import { AssetEditor, FixedMathSource } from './researchAssetEditor';
 import { BookmarkControl } from './researchCollections';
 import { AssetFollowControl, ReleaseComparison } from './researchReleaseComparison';
 import { LibraryTrial } from './researchLibraryTrial';
 import { MathUsageDescription } from './researchMathUsage';
+import { InstalledLibraryDirectory, InstalledLibraryModule } from './researchInstalledLibrary';
 import { RichProse } from './richText';
 import { OwnedDrafts, researchEnvironmentStorageKey, researchSelectionStorageKey, webDraftOwner } from './ownedDrafts';
-import type { WebEnvironment } from '../shared';
-import { api, base, enc, Empty, ErrorBox, errorText, Field, libraryHref, MutationState, nameOf, Panel, personHref, Search, stamp, State, Tags, theoremHref, tx,
+import { loginHref, type WebEnvironment } from '../shared';
+import { api, base, enc, Empty, ErrorBox, errorText, Field, MutationState, nameOf, Panel, personHref, Search, stamp, State, Tags, theoremHref, tx,
   useMutation, useResource, type Item, type Items, type ResearchContext } from './researchShared';
 
 const selectionDrafts = new OwnedDrafts(() => sessionStorage);
+const libraryFilterDrafts = new OwnedDrafts(() => sessionStorage);
 function rememberedSelection(): ResearchReleaseRef[] {
   try {
     const value: unknown = JSON.parse(selectionDrafts.getItem(researchSelectionStorageKey) ?? '[]');
@@ -29,49 +31,211 @@ function saveSelection(value: ResearchReleaseRef[], environment?: WebEnvironment
   catch { return false; }
 }
 
+type MathematicsCollection = 'lean' | 'shared';
+type LibraryView = { type: ResearchAssetKind; collection: MathematicsCollection; mine: boolean;
+  query: string; area: string; author: string; environment: string; offset: number };
+const viewKey = (view: Pick<LibraryView, 'type' | 'collection' | 'mine'>) => view.type === 'mathematics' && view.collection === 'lean'
+  ? 'mathematics:lean' : `${view.type}:shared:${view.mine ? 'mine' : 'browse'}`;
+function rememberedLibraryView(key: string, owner: string): LibraryView | undefined {
+  try {
+    const value: unknown = JSON.parse(libraryFilterDrafts.getItem(`theoremos.research.library.filters.${key}`) ?? 'null');
+    if (!value || typeof value !== 'object') return;
+    const saved = value as { owner?: unknown; view?: LibraryView };
+    if (saved.owner !== owner || !saved.view) return;
+    const view = saved.view;
+    if (!['mathematics', 'agent', 'skill'].includes(view.type) || !['lean', 'shared'].includes(view.collection)
+      || typeof view.mine !== 'boolean' || !['query', 'area', 'author', 'environment'].every(field => typeof view[field as keyof LibraryView] === 'string')
+      || !Number.isSafeInteger(view.offset) || view.offset < 0) return;
+    return view;
+  } catch { return; }
+}
+function rememberLibraryView(view: LibraryView, owner: string) {
+  try {
+    const value = JSON.stringify({ owner, view });
+    libraryFilterDrafts.setItem(`theoremos.research.library.filters.${viewKey(view)}`, value);
+    libraryFilterDrafts.setItem(`theoremos.research.library.filters.type:${view.type}`, value);
+  } catch { /* Current filters and URL navigation still work when storage is unavailable. */ }
+}
+const libraryFilterKeys = ['q', 'type', 'collection', 'area', 'author', 'environment', 'mine', 'offset', 'workbenchChat', 'workbenchRun', 'lang', 'run', 'project', 'task', 'taskVersion', 'commit'] as const;
+function filteredLibraryHref(id?: string, version?: string, filters = new URLSearchParams(location.search)) {
+  const parameters = new URLSearchParams();
+  for (const key of libraryFilterKeys) {
+    const value = filters.get(key);
+    if (value) parameters.set(key, value);
+  }
+  if (id) { parameters.set('entry', id); parameters.set('collection', 'shared'); }
+  if (version) parameters.set('version', version);
+  return `library.html${parameters.size ? `?${parameters}` : ''}`;
+}
+function kindDescription(kind: ResearchAssetKind) {
+  return kind === 'mathematics' ? tx('浏览可复用的 Lean 模块、数学接口与共享库。', 'Browse reusable Lean modules, mathematical interfaces and shared libraries.')
+    : kind === 'agent' ? tx('选择一套研究配置，安排协作与研究规则。', 'Choose a research setup with coordination and research rules.')
+    : tx('为研究补充特定情境下的步骤和要求。', 'Add steps and instructions for a particular research situation.');
+}
+
 export function LibraryPage({ context }: { context: ResearchContext }) {
-  selectionDrafts.bind(webDraftOwner(context.web));
-  const parameters = new URLSearchParams(location.search), selected = parameters.get('entry') ?? '', fromRun = parameters.get('fromRun');
-  const trialEntry = (id: string) => {
-    const next = new URL(libraryHref(id), location.href);
-    for (const name of ['run', 'project', 'task', 'taskVersion', 'commit']) if (parameters.has(name)) next.searchParams.set(name, parameters.get(name)!);
-    return next.pathname.slice(next.pathname.lastIndexOf('/') + 1) + next.search;
-  };
-  const [query, setQuery] = useState(''), [type, setType] = useState('mathematics'), [area, setArea] = useState(''), [author, setAuthor] = useState(''), [environment, setEnvironment] = useState(''), [mine, setMine] = useState(parameters.get('mine') === '1'),
+  const filterOwner = webDraftOwner(context.web);
+  selectionDrafts.bind(filterOwner);
+  libraryFilterDrafts.bind(filterOwner);
+  const parameters = new URLSearchParams(location.search), selected = parameters.get('entry') ?? '', fromRun = parameters.get('fromRun'),
+    installedFile = parameters.get('source') === 'installed' ? parameters.get('module') ?? '' : '', catalogDigest = parameters.get('catalogDigest') ?? '';
+  const initialOffset = Number(parameters.get('offset') ?? 0), initialCollection = parameters.get('collection');
+  const legacyOpenAI = initialCollection === 'openai' && !selected && !parameters.get('module');
+  useEffect(() => {
+    if (!legacyOpenAI) return;
+    const next = new URL('theorems.html', location.href); next.searchParams.set('collection', 'solved');
+    if (parameters.get('q')) next.searchParams.set('q', parameters.get('q')!);
+    if (parameters.get('area')) next.searchParams.set('field', parameters.get('area')!);
+    location.replace(next.href);
+  }, [legacyOpenAI]);
+  const initialType = parameters.get('type'), hasDirectoryType = useRef(parameters.has('type'));
+  const [query, setQuery] = useState(parameters.get('q') ?? ''), [type, setType] = useState<ResearchAssetKind>(initialType === 'agent' || initialType === 'skill' ? initialType : 'mathematics'),
+    [area, setArea] = useState(parameters.get('area') ?? ''), [author, setAuthor] = useState(parameters.get('author') ?? ''), [environment, setEnvironment] = useState(parameters.get('environment') ?? ''), [mine, setMine] = useState(parameters.get('mine') === '1'),
     [creating, setCreating] = useState(context.session.authenticated && (parameters.get('create') === '1' || fromRun !== null)), [selection, setSelection] = useState<ResearchReleaseRef[]>(rememberedSelection), [storageError, setStorageError] = useState('');
-  const [creatorMounted, setCreatorMounted] = useState(creating);
-  const directory = useResource<Items<ResearchAsset>>(`${base}/library?q=${enc(query)}&type=${enc(type)}&area=${enc(area)}&author=${enc(author)}${mine ? '&mine=1' : ''}`);
+  const [creatorMounted, setCreatorMounted] = useState(creating), [searchReset, setSearchReset] = useState(0), [offset, setOffset] = useState(Number.isSafeInteger(initialOffset) && initialOffset > 0 ? initialOffset : 0),
+    [collection, setCollection] = useState<MathematicsCollection>(installedFile ? 'lean' : selected || initialCollection === 'shared' ? 'shared' : 'lean');
+  const showingAssets = Boolean(selected) || type !== 'mathematics' || collection === 'shared', ownView = mine && showingAssets;
+  const directory = useResource<Items<ResearchAsset>>(!legacyOpenAI && showingAssets ? `${base}/library?q=${enc(query)}&type=${enc(type)}&area=${enc(area)}&author=${enc(author)}${mine ? '&mine=1' : ''}` : undefined);
   const detail = useResource<Item<ResearchAsset>>(selected ? `${base}/library/${enc(selected)}` : undefined);
-  useEffect(() => { if (detail.data) setType(detail.data.item.type); }, [detail.data?.item.id]);
+  useEffect(() => { if (!hasDirectoryType.current && detail.data) setType(detail.data.item.type); }, [detail.data?.item.id]);
+  const filters = new URLSearchParams({ type });
+  for (const key of ['workbenchChat', 'workbenchRun', 'lang', 'run', 'project', 'task', 'taskVersion', 'commit']) if (parameters.has(key)) filters.set(key, parameters.get(key)!);
+  if (type === 'mathematics') filters.set('collection', collection);
+  if (query) filters.set('q', query);
+  if (area) filters.set('area', area);
+  if (author) filters.set('author', author);
+  if (environment) filters.set('environment', environment);
+  if (mine) filters.set('mine', '1');
+  if (offset) filters.set('offset', String(offset));
+  const filterQuery = filters.toString();
+  const currentView: LibraryView = { type, collection, mine, query, area, author, environment, offset };
+  useEffect(() => {
+    if (legacyOpenAI) return;
+    const next = new URL(location.href), currentFilters = new URLSearchParams(filterQuery);
+    for (const key of libraryFilterKeys) {
+      const value = currentFilters.get(key);
+      if (value) next.searchParams.set(key, value); else next.searchParams.delete(key);
+    }
+    history.replaceState(null, '', next);
+    rememberLibraryView(currentView, filterOwner);
+  }, [filterQuery, legacyOpenAI]);
   const items = directory.data?.items.filter(item => type !== 'mathematics' || !environment || item.release?.mathematics?.environment === environment) ?? [];
+  const viewFor = (nextType: ResearchAssetKind, nextCollection: MathematicsCollection, nextMine: boolean) => {
+    const target = { type: nextType, collection: nextCollection, mine: nextMine };
+    if (viewKey(target) === viewKey(currentView)) return currentView;
+    return rememberedLibraryView(viewKey(target), filterOwner) ?? { ...target, query: '', area: '', author: '', environment: '', offset: 0 };
+  };
+  const applyView = (view: LibraryView) => {
+    if (viewKey(view) === viewKey(currentView)) return;
+    rememberLibraryView(currentView, filterOwner);
+    setType(view.type); setCollection(view.collection); setMine(view.mine); setQuery(view.query); setArea(view.area);
+    setAuthor(view.author); setEnvironment(view.environment); setOffset(view.offset); setCreating(false); setSearchReset(value => value + 1);
+  };
+  const changeCollection = (value: MathematicsCollection, owned = false) => applyView(viewFor(type, value, owned));
+  const typeView = (value: ResearchAssetKind) => value === type ? currentView
+    : rememberedLibraryView(`type:${value}`, filterOwner) ?? viewFor(value, value === 'mathematics' ? 'lean' : 'shared', false);
+  const viewHref = (view: LibraryView) => {
+    const next = new URLSearchParams({ type: view.type });
+    if (view.type === 'mathematics') next.set('collection', view.collection);
+    if (view.mine) next.set('mine', '1');
+    for (const key of ['area', 'author', 'environment'] as const) if (view[key]) next.set(key, view[key]);
+    if (view.query) next.set('q', view.query);
+    if (view.offset) next.set('offset', String(view.offset));
+    for (const key of ['workbenchChat', 'workbenchRun', 'lang', 'run', 'project', 'task', 'taskVersion', 'commit']) if (filters.has(key)) next.set(key, filters.get(key)!);
+    return filteredLibraryHref(undefined, undefined, next);
+  };
+  const scopeHref = (value: 'lean' | 'shared' | 'mine') => {
+    return viewHref(viewFor(type, value === 'lean' ? 'lean' : 'shared', value === 'mine'));
+  };
   const choose = (ref: ResearchReleaseRef) => {
     const next = selection.some(item => item.assetId === ref.assetId && item.version === ref.version) ? selection.filter(item => item.assetId !== ref.assetId || item.version !== ref.version) : [...selection.filter(item => item.assetId !== ref.assetId), ref];
     setSelection(next); setStorageError(saveSelection(next) ? '' : tx('浏览器未能保存配置选择，请逐项带入工作台。', 'The browser could not save the selection. Open each asset in the workbench individually.'));
   };
   const clear = () => { setSelection([]); saveSelection([]); };
-  return <><div class="research-heading"><div><span class="research-eyebrow">TheoremOS / Library</span><h1>{tx('共享成果与研究方法', 'Shared mathematics and research methods')}</h1>
-    <p>{tx('发布可检查的数学成果，保存自己的 Agent 和 Skill，并选择固定版本用于新研究。', 'Publish verifiable mathematics, create agents and skills, and choose fixed versions for new research.')}</p></div>
+  const createAddress = new URL(location.href); createAddress.searchParams.set('create', '1'); createAddress.hash = 'new-asset';
+  if (legacyOpenAI) return <p class="research-status" role="status">{tx('正在打开定理页的已解决题目…', 'Opening solved problems on the theorems page…')}</p>;
+  return <div class="research-library-page"><div class="research-heading research-library-heading"><div><h1>{tx('数学库', 'Library')}</h1>
+    <p>{tx('查找可复用的模块、接口和研究工具。', 'Find reusable modules, interfaces and research tools.')}</p></div>
     <div class="research-heading-actions">{context.session.authenticated ? <button class="button button-primary" type="button" onClick={() => { setCreatorMounted(true); setCreating(value => !value); }} aria-expanded={creating}>{creating ? tx('收起创建表单', 'Close creator') : tx('创建成果 / 工具', 'Create an asset')}</button>
-      : <a class="button" href="login.html">{tx('登录后创建成果', 'Sign in to create an asset')}</a>}</div></div>
-    {creatorMounted && <div hidden={!creating}><Panel title={tx('创建草稿', 'Create a draft')} note={tx('先保存到个人空间；确认内容、许可证与可见范围后再发布。', 'Save it in your space, then review the content, license and visibility before publishing.')}>
-      {fromRun !== null ? <RunAssetCreator context={context} runId={fromRun} parameters={parameters} onSaved={(asset, newerInput) => { directory.refresh(); if (!newerInput) location.assign(libraryHref(asset.id)); }} />
-        : <AssetEditor context={context} onSaved={(asset, newerInput) => { directory.refresh(); if (!newerInput) location.assign(libraryHref(asset.id)); }} />}</Panel></div>}
-    {context.session.authenticated && <div class="research-actions"><a class="text-button" href="workspace.html?tab=collections">{tx('我的资料夹', 'My collections')}</a>
-      <a class="text-button" href="workspace.html?tab=inbox#asset-updates">{tx('关注更新', 'Release updates')}</a></div>}
-    <div class="research-layout" data-selected={Boolean(selected)}><aside class="research-sidebar"><Panel title={tx('浏览 Library', 'Explore Library')}>
-      <div class="research-tabs" aria-label={tx('内容类型', 'Content type')}>{(['mathematics', 'agent', 'skill'] as const).map(value => <button key={value} type="button" aria-pressed={type === value} onClick={() => setType(value)}>{nameOf(value)}</button>)}</div>
-      <div class="research-form"><Search label={tx('关键词或 Lean 名称', 'Keyword or Lean name')} onSearch={setQuery} /><Field label={tx('按研究领域筛选', 'Filter by research field')} value={area} onInput={setArea} />
-        <Field label={tx('按作者 ID 筛选', 'Filter by author ID')} value={author} onInput={setAuthor} />
-        {type === 'mathematics' && <label>{tx('按证明环境筛选', 'Filter by proof environment')}<select value={environment} onChange={event => setEnvironment(event.currentTarget.value)}><option value="">{tx('全部环境', 'All environments')}</option><option value="mathlib">mathlib</option><option value="standard">Lean standard</option></select></label>}
-        <label class="research-check"><input type="checkbox" checked={mine} onChange={event => setMine(event.currentTarget.checked)} />{tx('我的草稿与发布', 'My drafts and releases')}</label></div>
-      <ErrorBox message={directory.error} /><ul class="research-list">{items.map(asset => <li key={asset.id}><a class="research-list-item" href={trialEntry(asset.id)} aria-current={selected === asset.id ? 'true' : undefined}>
-        <span class="research-item-title">{asset.name}</span><span class="research-item-meta"><span>{asset.area || nameOf(asset.type)}</span><span>{asset.release?.version ?? tx('草稿', 'Draft')}</span><State value={asset.visibility} /></span></a></li>)}</ul>
-      {directory.data && !items.length && <Empty>{mine ? tx('还没有此类资产。创建草稿后会显示在这里。', 'No assets of this type yet. Create a draft to begin.') : tx('暂无匹配的公开版本。', 'No matching public releases.')}</Empty>}
-    </Panel><Panel title={tx('固定版本复用', 'Reuse a fixed version')}><p class="research-description">{tx('将版本加入选择后，可检查组合是否兼容，再带入工作台。研究启动前还会固定完整依赖。', 'Add versions to your selection, check their compatibility and open them in the workbench. Dependencies are frozen before research starts.')}</p></Panel></aside>
-      <div class="research-content"><ErrorBox message={detail.error} />{detail.data ? <Asset key={selected} asset={detail.data.item} context={context} refresh={detail.refresh} selection={selection} choose={choose} />
-        : <Panel title={selected ? tx('正在读取资产…', 'Loading asset…') : tx('选择一项成果或工具', 'Choose mathematics or a research tool')}><Empty>{tx('浏览数学成果、Agent 和 Skill，查看来源与版本，或创建自己的私有草稿。', 'Browse mathematics, agents and skills, inspect their sources and versions, or create a private draft.')}</Empty></Panel>}</div></div>
-    <ErrorBox message={storageError} />{selection.length > 0 && <Selection selection={selection} remove={choose} clear={clear} assets={directory.data?.items ?? []} />}
-  </>;
+      : <a class="button" href={loginHref(createAddress.pathname + createAddress.search + createAddress.hash)}>{tx('登录后创建成果', 'Sign in to create an asset')}</a>}</div></div>
+    {context.session.authenticated && <div class="research-actions"><a class="text-button" href="workspace.html?tab=collections">{tx('我的资料夹', 'My collections')}</a><a class="text-button" href="workspace.html?tab=inbox#asset-updates">{tx('关注更新', 'Release updates')}</a></div>}
+    <div class="research-library-controls">
+      <nav class="research-section-nav research-directory-grid research-library-type-tabs" aria-label={tx('内容类型', 'Content type')}>{(['mathematics', 'agent', 'skill'] as const).map(value => {
+        const label = value === 'mathematics' ? tx('数学库', 'Math libraries') : nameOf(value);
+        return selected || installedFile ? <a key={value} href={viewHref(typeView(value))} aria-current={type === value ? 'page' : undefined}>{label}</a>
+          : <button key={value} type="button" aria-pressed={type === value} onClick={() => applyView(typeView(value))}>{label}</button>;
+      })}</nav>
+      <nav class="research-section-nav research-library-collections" aria-label={type === 'mathematics' ? tx('数学内容来源', 'Mathematics collections') : tx('Library 入口', 'Library sections')}>
+        {type === 'mathematics' ? <>{(['lean', 'shared'] as const).map(value => selected || installedFile
+          ? <a key={value} data-library-collection={value} href={scopeHref(value)} aria-current={collection === value && !mine ? 'page' : undefined}>{value === 'lean' ? tx('Lean 库', 'Lean library') : tx('共享数学库', 'Shared libraries')}</a>
+          : <button key={value} type="button" data-library-collection={value} aria-pressed={collection === value && (value === 'lean' || !mine)} onClick={() => changeCollection(value)}>{value === 'lean' ? tx('Lean 库', 'Lean library') : tx('共享数学库', 'Shared libraries')}</button>)}</>
+          : selected ? <a href={scopeHref('shared')}>{tx('浏览资源', 'Browse resources')}</a>
+          : <button type="button" aria-pressed={!mine} onClick={() => changeCollection('shared')}>{tx('浏览资源', 'Browse resources')}</button>}
+        {selected || installedFile ? <a href={scopeHref('mine')} aria-current={ownView ? 'page' : undefined}>{tx('我的资源', 'My resources')}</a>
+          : <button type="button" aria-pressed={ownView} onClick={() => changeCollection('shared', true)}>{tx('我的资源', 'My resources')}</button>}
+        {!creating && selection.length > 0 && <a href="#research-library-selection">{tx('配置选择', 'Selection')} ({selection.length})</a>}
+      </nav>
+    </div>
+    {creatorMounted && <div hidden={!creating} class="research-page-section"><Panel id="new-asset" title={tx('创建草稿', 'Create a draft')} note={tx('先保存到个人空间；确认内容、许可证与可见范围后再发布。', 'Save it in your space, then review the content, license and visibility before publishing.')}>
+      {fromRun !== null ? <RunAssetCreator context={context} runId={fromRun} parameters={parameters} onSaved={(asset, newerInput) => { directory.refresh(); if (!newerInput) location.assign(filteredLibraryHref(asset.id)); }} /> : <AssetEditor context={context} onSaved={(asset, newerInput) => {
+        directory.refresh();
+        if (!newerInput) {
+          const savedFilters = new URLSearchParams(filters); savedFilters.set('type', asset.type); savedFilters.set('mine', '1');
+          location.assign(filteredLibraryHref(asset.id, undefined, savedFilters));
+        }
+      }} />}</Panel></div>}
+    <div hidden={creating}>{installedFile ? <InstalledLibraryModule key={`${installedFile}:${catalogDigest}`} file={installedFile} catalogDigest={catalogDigest} filters={filters} /> : selected ? <div class="research-content">
+      <nav class="research-breadcrumb" aria-label={tx('返回目录', 'Back to directory')}><a href={filteredLibraryHref(undefined, undefined, filters)}>← {tx('返回目录', 'Back to directory')}</a><span>{nameOf(type)}{mine ? ` · ${tx('我的资源', 'My resources')}` : ''}</span></nav>
+      <ErrorBox message={detail.error} />{detail.data ? <Asset key={selected} asset={detail.data.item} context={context} refresh={detail.refresh} selection={selection} choose={choose} />
+        : <Panel title={detail.loading ? tx('正在读取资源…', 'Loading resource…') : tx('资源暂不可查看', 'Resource unavailable')}><Empty>{detail.loading ? tx('正在读取内容与版本。', 'Loading contents and versions.') : tx('可返回目录选择其他资源，或重试读取。', 'Return to the directory to choose another resource, or reload this one.')}</Empty>
+          {!detail.loading && <button class="button" type="button" onClick={detail.refresh}>{tx('重新读取资源', 'Reload resource')}</button>}</Panel>}
+    </div> : <div class="research-library-browser">
+      {showingAssets && <div class="research-library-section-title"><h2>{type === 'mathematics' ? mine ? tx('我的数学库', 'My libraries') : tx('共享数学库', 'Shared libraries') : `${nameOf(type)}${tx('目录', ' directory')}`}</h2>
+        <p>{kindDescription(type)}</p></div>}
+      <div class="research-library-searchbar"><Search key={`${type === 'mathematics' ? collection : type}:${searchReset}`} initial={query} label={tx('关键词或 Lean 名称', 'Keyword or Lean name')} onSearch={value => { setQuery(value); setOffset(0); }} />
+        {type !== 'mathematics' && <Field label={tx('研究领域', 'Research field')} value={area} onInput={value => { setArea(value); setOffset(0); }} placeholder={tx('输入领域', 'Enter a field')} />}
+        <details class="research-library-filters" open={Boolean(author || environment)}><summary>{tx('更多筛选', 'More filters')}</summary><div class="research-form research-form-row">
+          {type === 'mathematics' && <Field label={tx('研究领域', 'Research field')} value={area} onInput={value => { setArea(value); setOffset(0); }} placeholder={tx('输入领域', 'Enter a field')} />}
+          {showingAssets && <Field label={tx('按作者 ID 筛选', 'Filter by author ID')} value={author} onInput={setAuthor} />}
+          {type === 'mathematics' && <label>{tx('按证明环境筛选', 'Filter by proof environment')}<select value={environment} onChange={event => { setEnvironment(event.currentTarget.value); setOffset(0); }}><option value="">{tx('全部环境', 'All environments')}</option><option value="mathlib">mathlib</option><option value="standard">Lean standard</option></select></label>}
+        </div></details>
+      </div>
+      {type === 'mathematics' && collection === 'lean' ? <InstalledLibraryDirectory query={query} area={area} environment={environment} offset={offset} onOffset={setOffset} onArea={value => { setArea(value); setOffset(0); }} onReset={() => {
+        setQuery(''); setArea(''); setAuthor(''); setEnvironment(''); setOffset(0); setSearchReset(value => value + 1);
+        requestAnimationFrame(() => document.querySelector<HTMLInputElement>('.research-library-searchbar input[type="search"]')?.focus());
+      }} onQuery={value => {
+        setQuery(value); setArea(''); setAuthor(''); setEnvironment(''); setOffset(0); setSearchReset(previous => previous + 1);
+      }} filters={filters} />
+        : <><ErrorBox message={directory.error} />{directory.error && <button class="button" type="button" onClick={directory.refresh}>{tx('重新读取共享成果', 'Reload shared resources')}</button>}
+          {directory.loading && <p class="research-status" role="status">{tx('正在读取目录…', 'Loading directory…')}</p>}
+          {directory.data && <p class="research-status" role="status">{items.length} {tx('项资源', 'resources')}{mine ? ` · ${tx('包含自己的草稿与发布版本', 'Includes your drafts and releases')}` : ''}</p>}
+          <div class="research-directory-grid">{items.map(asset => <DirectoryAsset key={asset.id} asset={asset} mine={mine} href={filteredLibraryHref(asset.id, asset.release?.version, filters)} />)}</div>
+          {directory.data && !items.length && <Empty>{mine ? tx('还没有匹配的个人资源。可以创建草稿，或调整筛选。', 'No matching resources of your own. Create a draft or change the filters.')
+            : tx('暂无匹配的共享成果，请调整关键词或领域。', 'No matching shared resources. Try another keyword or field.')}</Empty>}
+        </>}
+      {showingAssets && <p class="research-field-note">{tx('加入配置选择后可检查依赖与环境，再带入工作台。新研究启动前会固定完整版本和依赖。', 'Add fixed versions to your selection, check their dependencies and environment, then open the workbench. Versions and dependencies are frozen before research starts.')}</p>}
+    </div>}
+
+    <ErrorBox message={storageError} />{selection.length > 0 && <Selection selection={selection} remove={choose} clear={clear} assets={directory.data?.items ?? []} />}</div>
+  </div>;
+}
+
+function DirectoryAsset({ asset, mine, href }: { asset: ResearchAsset; mine: boolean; href: string }) {
+  const personalDraft = mine && asset.editable, shown = personalDraft ? asset : asset.release ?? asset, release = asset.release,
+    content = personalDraft ? asset.draft ?? release?.content : release?.content ?? asset.draft;
+  const details = !personalDraft && release?.mathematics ? [release.mathematics.environment, `${release.mathematics.declarations.length} ${tx('条数学声明', 'declarations')}`]
+    : content && 'modulePlan' in content ? [content.environment ?? tx('工作台默认环境', 'Workbench environment'), `${content.modulePlan.custom.length} ${tx('条研究规则', 'research rules')}`]
+    : content && 'instructions' in content ? [...content.slots, `${content.steps.length} ${tx('个步骤', 'steps')}`]
+    : content && 'source' in content ? [content.source.kind === 'run' ? tx('研究运行来源', 'Research-run source') : tx('知识目录来源', 'Knowledge-catalog source')] : [];
+  return <article class="research-directory-card">{personalDraft && <span class="research-eyebrow">{tx('个人草稿', 'Personal draft')}</span>}<a class="research-card-heading" href={href}>{shown.name}</a>
+    <div class="research-card-description"><RichProse text={shown.description || tx('作者尚未补充用途说明。', 'The author has not added a description.')} /></div>
+    <div class="research-item-meta"><span>{shown.area || tx('未标注领域', 'No field specified')}</span>{!personalDraft && <span>{release?.version ?? tx('尚无可选版本', 'No selectable release')}</span>}<State value={shown.visibility} /></div>
+    {details.length > 0 && <Tags values={details} />}
+    <p class="research-status">{release ? personalDraft ? <>{tx('已发布版本：', 'Published version: ')}<a href={href}>{release.name} · {release.version}</a></>
+      : tx('已发布固定版本，可查看内容与依赖。', 'A fixed version is published. View its contents and dependencies.')
+      : asset.releases.length ? tx('已有版本均已撤回，当前无可选版本。', 'Previous versions are withdrawn. No version is currently selectable.')
+      : tx('尚未发布，草稿不能用于新研究。', 'Unpublished. Drafts cannot be used in new research.')}</p>
+  </article>;
 }
 
 function RunAssetCreator({ context, runId, parameters, onSaved }: { context: ResearchContext; runId: string; parameters: URLSearchParams; onSaved: (asset: ResearchAsset, newerInput: boolean) => void }) {
@@ -91,7 +255,7 @@ function RunAssetCreator({ context, runId, parameters, onSaved }: { context: Res
 
 function Asset({ asset, context, refresh, selection, choose }: { asset: ResearchAsset; context: ResearchContext; refresh: () => void; selection: ResearchReleaseRef[]; choose: (ref: ResearchReleaseRef) => void }) {
   const author = useResource<Item<ResearcherProfile>>(`${base}/people/${enc(asset.authorId)}`);
-  const [version, setVersion] = useState(new URLSearchParams(location.search).get('version') ?? asset.release?.version ?? ''), [editing, setEditing] = useState(false),
+  const [version, setVersion] = useState(new URLSearchParams(location.search).get('version') ?? asset.release?.version ?? (asset.editable ? asset.releases.at(-1)?.version : '') ?? ''), [editing, setEditing] = useState(false),
     [editorKey, setEditorKey] = useState(0), [publicationId, setPublicationId] = useState(() => {
       try { return sessionStorage.getItem(`theoremos.research.publication.${asset.id}`) ?? ''; } catch { return ''; }
     });
@@ -124,17 +288,13 @@ function Asset({ asset, context, refresh, selection, choose }: { asset: Research
     const ref = { assetId: asset.id, version: selectedVersion }, next = [...selection.filter(item => item.assetId !== asset.id), ref];
     saveSelection(next); location.assign(`./?researchAsset=${enc(ref.assetId)}&researchVersion=${enc(ref.version)}`);
   };
-  return <><Panel title={asset.name} actions={asset.editable && <button type="button" class="button" onClick={() => { setEditorMounted(true); setEditing(value => !value); }} aria-expanded={editing}>{editing ? tx('收起编辑器', 'Close editor') : tx('编辑草稿', 'Edit draft')}</button>}>
-    <div class="research-item-meta"><span>{nameOf(asset.type)}</span><a href={personHref(asset.authorId)}>{author.data?.item.displayName ?? asset.authorId}</a><State value={asset.visibility} /><span>{asset.area}</span><time dateTime={asset.updatedAt}>{stamp(asset.updatedAt)}</time></div>
-    <div class="research-description"><RichProse text={asset.description || tx('暂无用途说明。', 'No description yet.')} /></div>
-    <dl class="research-facts"><div><dt>{tx('资产 ID', 'Asset ID')}</dt><dd>{asset.id}</dd></div>{asset.derivedFrom && <div><dt>{tx('派生来源', 'Derived from')}</dt><dd><a href={libraryHref(asset.derivedFrom.assetId, asset.derivedFrom.version)}>{asset.derivedFrom.assetId}@{asset.derivedFrom.version}</a></dd></div>}</dl>
-    {asset.editable && !asset.release && <p class="research-status">{tx('当前为个人草稿。发布检查完成后，才能作为固定版本使用。', 'This is a draft. Publish and complete validation before using it as a fixed version.')}</p>}
-  </Panel>{editorMounted && <div hidden={!editing}><Panel title={tx('编辑草稿', 'Edit draft')} actions={<button class="text-button" type="button" disabled={loadingDraft} onClick={() => void loadDraft()}>{tx('载入最新草稿', 'Load latest draft')}</button>}>
-    <ErrorBox message={draftError} /><AssetEditor key={editorKey} asset={editorAsset} context={context} disabled={loadingDraft}
-      onSaved={item => { setLoadedDraft(item); refresh(); }} /></Panel></div>}
-    {asset.editable && <Panel title={tx('发布固定版本', 'Publish a fixed version')} note={tx('发布前请审阅草稿；只有你选择公开的版本会进入共享目录。', 'Review the draft before publishing. Only versions you make public appear in the shared directory.')}>
-      <Publish asset={asset} onPublication={forPublication} />{publicationId && <Publication key={publicationId} id={publicationId} completed={published} />}
-    </Panel>}
+  const shown = release ?? asset.release ?? asset, shownTime = release?.createdAt ?? asset.release?.createdAt ?? asset.updatedAt;
+  const withdrawn = Boolean(asset.releases.find(item => item.version === version)?.withdrawn);
+  return <><Panel title={shown.name}>
+    <div class="research-item-meta"><span>{nameOf(asset.type)}</span><a href={personHref(asset.authorId)}>{author.data?.item.displayName ?? asset.authorId}</a><State value={shown.visibility} /><span>{shown.area}</span><time dateTime={shownTime}>{stamp(shownTime)}</time></div>
+    <div class="research-description"><RichProse text={shown.description || tx('暂无用途说明。', 'No description yet.')} /></div>
+    <details><summary>{tx('来源与资产身份', 'Source and asset identity')}</summary><dl class="research-facts"><div><dt>{tx('资产 ID', 'Asset ID')}</dt><dd>{asset.id}</dd></div>{asset.derivedFrom && <div><dt>{tx('派生来源', 'Derived from')}</dt><dd><a href={filteredLibraryHref(asset.derivedFrom.assetId, asset.derivedFrom.version)}>{asset.derivedFrom.assetId}@{asset.derivedFrom.version}</a></dd></div>}</dl></details>
+  </Panel>
     <Panel title={tx('已发布版本', 'Published versions')}>
       {asset.releases.length > 0 ? <label class="research-field">{tx('查看固定版本', 'View a fixed version')}<select value={version} onChange={event => {
         setVersion(event.currentTarget.value); const next = new URL(location.href); next.searchParams.set('version', event.currentTarget.value); history.replaceState(null, '', next);
@@ -142,12 +302,13 @@ function Asset({ asset, context, refresh, selection, choose }: { asset: Research
       : <Empty>{tx('尚无已发布版本。', 'No published versions yet.')}</Empty>}
       <ErrorBox message={releaseResult.error} />{releaseResult.error && <button class="text-button" type="button" onClick={releaseResult.refresh}>{tx('重新读取版本', 'Reload release')}</button>}
       {release && <><div class="research-item-meta"><span>{release.license}</span><State value={release.visibility} /><time dateTime={release.createdAt}>{stamp(release.createdAt)}</time></div>
-        <ReleaseContent release={release} /><h3>{tx('固定身份', 'Fixed identity')}</h3><dl class="research-facts"><div><dt>{tx('版本', 'Version')}</dt><dd>{release.version}</dd></div><div><dt>{tx('内容摘要', 'Content digest')}</dt><dd>{release.digest}</dd></div></dl>
-        <div class="research-actions"><button class="button" type="button" aria-pressed={selection.some(ref => ref.assetId === asset.id && ref.version === release.version)} onClick={() => choose({ assetId: asset.id, version: release.version })}>
-          {selection.some(ref => ref.assetId === asset.id && ref.version === release.version) ? tx('已加入配置选择', 'In configuration selection') : tx('加入配置选择', 'Add to configuration')}</button>
-          <button class="button button-primary" type="button" onClick={() => useVersion()}>{tx('用于新研究', 'Use in new research')}</button>
+        {withdrawn && <p class="research-status">{tx('此版本已撤回，不能加入新的研究配置。', 'This version is withdrawn and cannot be added to a new research configuration.')}</p>}
+        <div class="research-actions"><button class="button button-primary" type="button" disabled={withdrawn} onClick={() => useVersion()}>{tx('用于新研究', 'Use in new research')}</button>
+          <button class="button" type="button" disabled={withdrawn} aria-pressed={selection.some(ref => ref.assetId === asset.id && ref.version === release.version)} onClick={() => choose({ assetId: asset.id, version: release.version })}>
+            {selection.some(ref => ref.assetId === asset.id && ref.version === release.version) ? tx('已加入配置选择', 'In configuration selection') : tx('加入配置选择', 'Add to configuration')}</button>
           <a class="button" href={`${base}/library/${enc(asset.id)}/releases/${enc(release.version)}?download=1`} download>{tx('下载版本', 'Download release')}</a></div>
         <p class="research-field-note">{tx('带入工作台只准备研究配置，由你确认后启动。', 'Opening the workbench prepares a configuration. You choose when to start research.')}</p>
+        <ReleaseContent release={release} /><details><summary>{tx('查看固定版本身份', 'View fixed release identity')}</summary><dl class="research-facts"><div><dt>{tx('版本', 'Version')}</dt><dd>{release.version}</dd></div><div><dt>{tx('内容摘要', 'Content digest')}</dt><dd>{release.digest}</dd></div></dl></details>
         <div class="research-actions"><BookmarkControl key={`${asset.id}:${release.version}`} context={context} target={{ kind: 'release', assetId: asset.id, version: release.version, digest: release.digest }} />
           <AssetFollowControl context={context} assetId={asset.id} version={release.version} /></div>
         {release.releaseNotes && <><h3>{tx('作者更新说明', 'Author’s release notes')}</h3><RichProse text={release.releaseNotes} /></>}
@@ -155,10 +316,22 @@ function Asset({ asset, context, refresh, selection, choose }: { asset: Research
         <ReleaseComparison key={`${asset.id}:${release.version}`} asset={asset} selectedVersion={release.version} useVersion={useVersion} />
         {asset.editable && <Withdraw asset={asset} version={release.version} refresh={() => { refresh(); releaseResult.refresh(); }} />}
       </>}
-      {forkVersions.map(forkVersion => <div key={forkVersion} hidden={release?.version !== forkVersion}>
+      {forkVersions.map(forkVersion => <div key={forkVersion} hidden={release?.version !== forkVersion || withdrawn}>
         <Fork asset={asset} version={forkVersion} />
       </div>)}
-    </Panel></>;
+    </Panel>
+    {asset.editable && <Panel title={tx('个人草稿', 'Personal draft')} note={tx('草稿用于继续编辑；上方固定版本保留发布时的内容。', 'Continue editing the draft here. Fixed versions above retain their published contents.')} actions={<button type="button" class="button" onClick={() => { setEditorMounted(true); setEditing(value => !value); }} aria-expanded={editing}>{editing ? tx('收起编辑器', 'Close editor') : tx('编辑草稿', 'Edit draft')}</button>}>
+      <p class="research-item-title">{asset.name}</p><div class="research-description"><RichProse text={asset.description || tx('暂无用途说明。', 'No description yet.')} /></div>
+      <div class="research-item-meta"><State value={asset.visibility} /><span>{asset.area}</span><time dateTime={asset.updatedAt}>{stamp(asset.updatedAt)}</time></div>
+      {!asset.release && <p class="research-status">{tx('发布检查完成后，才能作为固定版本使用。', 'Publish and complete validation before using this as a fixed version.')}</p>}
+    </Panel>}
+    {editorMounted && <div hidden={!editing}><Panel title={tx('编辑草稿', 'Edit draft')} actions={<button class="text-button" type="button" disabled={loadingDraft} onClick={() => void loadDraft()}>{tx('载入最新草稿', 'Load latest draft')}</button>}>
+      <ErrorBox message={draftError} /><AssetEditor key={editorKey} asset={editorAsset} context={context} disabled={loadingDraft}
+        onSaved={item => { setLoadedDraft(item); refresh(); }} /></Panel></div>}
+    {asset.editable && <Panel title={tx('发布固定版本', 'Publish a fixed version')} note={tx('发布前请审阅草稿；只有你选择公开的版本会进入共享目录。', 'Review the draft before publishing. Only versions you make public appear in the shared directory.')}>
+      <Publish asset={asset} onPublication={forPublication} />{publicationId && <Publication key={publicationId} id={publicationId} completed={published} />}
+    </Panel>}
+  </>;
 }
 
 function ReleaseContent({ release }: { release: ResearchAssetRelease }) {
@@ -211,7 +384,7 @@ function ActualUses({ release }: { release: ResearchAssetRelease }) {
 }
 
 function Dependencies({ refs }: { refs: ResearchReleaseRef[] }) {
-  return <><h3>{tx('固定依赖', 'Fixed dependencies')}</h3>{refs.length ? <ul class="research-list">{refs.map(ref => <li key={`${ref.assetId}@${ref.version}`}><a class="research-list-item" href={libraryHref(ref.assetId, ref.version)}>
+  return <><h3>{tx('固定依赖', 'Fixed dependencies')}</h3>{refs.length ? <ul class="research-list">{refs.map(ref => <li key={`${ref.assetId}@${ref.version}`}><a class="research-list-item" href={filteredLibraryHref(ref.assetId, ref.version)}>
     <span class="research-item-title">{ref.assetId}@{ref.version}</span>{ref.digest && <span class="research-item-meta">{ref.digest}</span>}</a></li>)}</ul> : <p class="research-status">{tx('无额外发布依赖。', 'No additional release dependencies.')}</p>}</>;
 }
 
@@ -272,13 +445,13 @@ function Publication({ id, completed }: { id: string; completed: (publication: R
     if (item.status === 'completed' && !called.current) { called.current = true; onCompleted.current(item); }
   }, [result.data?.item.status]);
   return <div class="research-publication" role="status"><ErrorBox message={result.error} />{result.data && <><p>{tx('发布状态：', 'Publication: ')}<State value={result.data.item.status} /></p>
-    {result.data.item.reason && <ErrorBox message={result.data.item.reason} />}{result.data.item.release && <a href={libraryHref(result.data.item.release.assetId, result.data.item.release.version)}>{tx('查看发布版本', 'View release')}</a>}</>}</div>;
+    {result.data.item.reason && <ErrorBox message={result.data.item.reason} />}{result.data.item.release && <a href={filteredLibraryHref(result.data.item.release.assetId, result.data.item.release.version)}>{tx('查看发布版本', 'View release')}</a>}</>}</div>;
 }
 
 function Fork({ asset, version }: { asset: ResearchAsset; version: string }) {
   const [name, setName] = useState(''), action = useMutation();
   return <details><summary>{tx('复制到个人空间并修改', 'Fork into my space')}</summary><form class="research-form" onSubmit={event => { event.preventDefault(); void action.run<Item<ResearchAsset>>('POST', `${base}/library/${enc(asset.id)}/fork`,
-    { version, ...(name.trim() ? { name: name.trim() } : {}) }, result => location.assign(libraryHref(result.item.id))); }}>
+    { version, ...(name.trim() ? { name: name.trim() } : {}) }, result => location.assign(filteredLibraryHref(result.item.id))); }}>
     <Field label={tx('新名称（可选）', 'New name (optional)')} value={name} onInput={setName} maxLength={160} /><MutationState action={action} /><button class="button" type="submit" disabled={action.busy}>{tx('创建私有派生草稿', 'Create private fork')}</button>
   </form></details>;
 }
@@ -313,8 +486,8 @@ function Selection({ selection, remove, clear, assets }: { selection: ResearchRe
     if (!saveSelection(selection, validated?.environment ?? environment)) { setError(tx('浏览器未能保存组合，请从每个版本的「用于新研究」入口带入。', 'The browser could not save the selection. Use each release’s “Use in new research” action.')); return; }
     const first = selection[0]!; location.assign(`./?researchAsset=${enc(first.assetId)}&researchVersion=${enc(first.version)}`);
   };
-  return <section class="research-panel research-selection-panel" aria-label={tx('研究配置选择', 'Research configuration selection')}><h2>{tx('研究配置选择', 'Research configuration selection')} ({selection.length})</h2>
-    <ul class="research-list">{selection.map(ref => <li class="research-list-item" key={`${ref.assetId}@${ref.version}`}><div class="research-actions"><a href={libraryHref(ref.assetId, ref.version)}>{assets.find(asset => asset.id === ref.assetId)?.name ?? ref.assetId} · {ref.version}</a>
+  return <section id="research-library-selection" class="research-panel research-selection-panel" aria-label={tx('研究配置选择', 'Research configuration selection')}><h2>{tx('研究配置选择', 'Research configuration selection')} ({selection.length})</h2>
+    <ul class="research-list">{selection.map(ref => <li class="research-list-item" key={`${ref.assetId}@${ref.version}`}><div class="research-actions"><a href={filteredLibraryHref(ref.assetId, ref.version)}>{assets.find(asset => asset.id === ref.assetId)?.name ?? ref.assetId} · {ref.version}</a>
       <button type="button" class="text-button" disabled={busy} onClick={() => remove(ref)}>{tx('移除', 'Remove')}</button></div></li>)}</ul>
     <div class="research-selection"><div><label class="research-field">{tx('目标环境', 'Target environment')}<select value={environment} disabled={busy} onChange={event => setEnvironment(event.currentTarget.value as WebEnvironment)}><option value="mathlib">mathlib</option><option value="standard">Lean standard</option></select></label>
       <p>{validated ? tx('组合检查通过，版本与依赖已固定。', 'Configuration checked. Versions and dependencies are fixed.') : tx('检查依赖、环境和研究规则后带入工作台。', 'Check dependencies, environment and research rules before opening the workbench.')}</p></div>

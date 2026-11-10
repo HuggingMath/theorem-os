@@ -54,7 +54,6 @@ export const process: Record<string, string> = {
   "未满足验收约束": "The acceptance constraints were not met",
   "方法：{0}": "Method: {0}",
   // Rows and the summary a reader opens
-  "在右侧查看这次 Lean 检查": "Show this Lean check beside the chat",
   "收起 {0}": "Collapse {0}",
   "展开 {0}": "Expand {0}",
   "证明题": "Proof problem",
@@ -71,6 +70,10 @@ export const process: Record<string, string> = {
   "题目开始后，这里显示正在写的 Lean 文件和每次检查。": "Once the problem starts, the Lean file being written and every check appear here.",
   "当前 Lean 陈述": "Current Lean statement",
   "当前候选": "Current candidate",
+  "复制片段": "Copy excerpt",
+  "下载片段": "Download excerpt",
+  "源码片段": "Source excerpt",
+  "下载失败，请重试。": "Download failed. Please try again.",
   "这份文件在这次检查之后又改过，Lean 指出的行可能已经移动。": "This file changed after the check, so the lines Lean names may have moved.",
   "这次检查的文件没有单独保存，下面是任务当前的文件。": "This check kept no file of its own; below is the task's current file.",
   "文件较长，后面的部分没有保存。": "The file is long; the rest was not saved.",

@@ -10,10 +10,10 @@ export const acceptedDescription = (run: Pick<WebRun, 'formalization'>) => run.f
     : t('冻结的 Lean 陈述已通过独立验收；原文与陈述的对应关系见形式化审核。')
   : t('目标声明没有改动，没有 sorry 或额外公理，Lean 内核在隔离环境中确认通过。');
 export function statementConfirmation(confirmation: 'automatic' | 'manual' | undefined, shared = false, reviewMode?: 'direct', language?: 'zh' | 'en'): string {
-  const text = language ? translator(language) : t;
-  if (confirmation === 'manual') return shared ? text('原题含义：分享者已确认 Lean 陈述。') : text('原题含义：你已确认 Lean 陈述。');
-  if (reviewMode === 'direct') return text('Lean 陈述编译通过；原题含义请查看形式化记录。');
-  return confirmation === 'automatic' ? text('原题含义：模型审核通过，未经人工确认。') : text('原题含义：未记录确认方式，请核对 Lean 陈述。');
+  const t = translator(language ?? locale);
+  if (confirmation === 'manual') return shared ? t('原题含义：分享者已确认 Lean 陈述。') : t('原题含义：你已确认 Lean 陈述。');
+  if (reviewMode === 'direct') return t('Lean 陈述编译通过；原题含义请查看形式化记录。');
+  return confirmation === 'automatic' ? t('原题含义：模型审核通过，未经人工确认。') : t('原题含义：未记录确认方式，请核对 Lean 陈述。');
 }
 export const isRejectedRun = (run: WebRun) => ['evaluated_failed', 'evaluated_rejected'].includes(run.result?.status ?? '');
 /** A run that ended on an error or on a classified failure the user has to act on; running out of time or usage is an expected end. */

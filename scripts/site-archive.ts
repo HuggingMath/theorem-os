@@ -50,6 +50,8 @@ export async function buildArchive(root: string, output: string, catalog: Archiv
     return { ...record, process };
   }) };
   fs.writeFileSync(path.join(data, 'catalog.json'), JSON.stringify(portable, null, 2) + '\n');
+  // Library browsing needs only metadata; sources and recorded processes continue to load per problem.
+  fs.writeFileSync(path.join(data, 'index.json'), JSON.stringify(archiveIndex(catalog)) + '\n');
   for (const record of catalog.records) {
     fs.writeFileSync(path.join(data, 'sources', `${record.id}.js`), archiveSourceScript(record));
     if (record.process) fs.writeFileSync(path.join(data, 'process', `${record.id}.js`), archiveProcessScript(record));

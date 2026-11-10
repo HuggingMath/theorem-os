@@ -101,6 +101,8 @@ try {
       });
       await page.goto(origin); await page.locator('[data-first-research-start]').waitFor();
       assert.equal(await page.locator('#formalize-start').isDisabled(), true);
+      assert.match(await page.locator('[data-chat-budget]').innerText(), language === 'zh' ? /不限/u : /Unlimited/u);
+      assert.doesNotMatch(await page.locator('[data-chat-budget]').innerText(), /(?:0 Token|0 min|0 分钟)/u);
       assert.equal(await page.locator('#formalize-settings[open]').count(), 0);
       assert.match(await page.locator('[data-first-research-quota]').innerText(), /3[\s\S]*4/u);
       await noOverflow(page);
@@ -132,6 +134,7 @@ try {
       assert.equal(await page.locator('#research-minutes').inputValue(), '5');
       assert.equal(await page.locator('#research-turns').inputValue(), '5');
       await page.locator('[data-first-budget=trial]').click();
+      await page.locator('[data-chat-participation-control] > summary').click();
       await page.locator(`input[name=chat-participation][value=${participation}]`).check();
       assert.match(await page.locator('[data-first-research-stages]').innerText(), participation === 'guided'
         ? language === 'zh' ? /你确认题意[\s\S]*你批准/u : /your statement review[\s\S]*your approval/u

@@ -1,5 +1,5 @@
 import { createIcons, LogIn, MailCheck, RefreshCw } from 'lucide';
-import { workbenchDestination, type WebSession } from '../shared';
+import { loginReturn, type WebSession } from '../shared';
 import { localizeMessage, mountLocaleSwitch, t } from '../i18n';
 import { localizeSiteLinks } from './feedback';
 import { forgetKey } from './keyMemory';
@@ -22,9 +22,8 @@ type LoginStep = 'email' | 'password' | 'code';
 type CodeChallenge = { email: string; expiresAt: number; resendAt: number };
 const progressKey = 'theorem-os.login-progress.v1';
 let step: LoginStep = 'email', stepRevision = 0, progressOwner = '', challenge: CodeChallenge | undefined;
-// A run or conversation link opened while signed out, or open when the session ended, arrives as login.html?run=<id> or
-// ?chat=<id>; signing in returns to that record.
-const workbench = workbenchDestination(location.search);
+// Keep a research page's filters and intended action, or an existing workbench run/chat, through every login method.
+const destination = loginReturn(location.search);
 
 /** `message` is what the visitor sees; `reason` keeps the server's own text for the session check. */
 class LoginError extends Error {
@@ -99,7 +98,7 @@ async function loadCaptcha() {
 async function start() {
   const revision = stepRevision;
   const session = await call<WebSession>('/api/session');
-  if (session.auth !== 'email' || (session.account && !session.termsRequired)) { clearLogin(); location.replace(workbench); return; }
+  if (session.auth !== 'email' || (session.account && !session.termsRequired)) { clearLogin(); location.replace(destination); return; }
   $('#login-access').hidden = session.signup === 'open' || Boolean(session.termsRequired);
   csrf = session.csrfToken;
   progressOwner = session.draftOwner ?? '';
@@ -192,7 +191,7 @@ codeStep.addEventListener('submit', event => {
     try {
       await call('/api/auth/verify', { email: sentTo, code: code.value.trim(), ...(termsVersion ? { terms: acceptTerms.checked, termsVersion } : {}) });
       clearLogin();
-      location.replace(workbench);
+      location.replace(destination);
     } finally { verify.disabled = false; }
   });
 });
@@ -209,7 +208,7 @@ passwordStep.addEventListener('submit', event => {
         ...(termsVersion ? { terms: acceptTerms.checked, termsVersion } : {}) });
       password.value = '';
       clearLogin();
-      location.replace(workbench);
+      location.replace(destination);
     } finally { passwordSubmit.disabled = false; }
   });
 });
@@ -220,7 +219,7 @@ termsStep.addEventListener('submit', event => {
   if (button.disabled) return;
   button.disabled = true;
   void guarded(async () => {
-    try { await call('/api/auth/terms', { terms: true, termsVersion }); location.replace(workbench); }
+    try { await call('/api/auth/terms', { terms: true, termsVersion }); location.replace(destination); }
     finally { button.disabled = false; }
   });
 });

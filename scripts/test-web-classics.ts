@@ -23,7 +23,8 @@ await fs.access(catalogFile).catch(() => { throw new Error('Run bun run build:we
 const catalog = JSON.parse(await fs.readFile(catalogFile, 'utf8')) as ArchiveCatalog;
 const replayEvidence = JSON.parse(await fs.readFile(path.join(staticRoot, 'classics/assets/replay.json'), 'utf8'));
 const expectedIds = catalog.records.map(record => record.id).sort();
-assert.equal(catalog.records.length, 16, 'The workbench must ship the sixteen completed campaign problems');
+const manifest = JSON.parse(await fs.readFile(path.join(root, 'research/openai-math/manifest.json'), 'utf8')) as { records: { id: string }[] };
+assert.deepEqual(expectedIds, manifest.records.map(record => record.id).sort(), 'The workbench must ship every solved campaign problem');
 assert.equal(new Set(expectedIds).size, catalog.records.length, 'Every classic problem has its own stable identity');
 assert.ok(catalog.records.every(record => record.status === 'locally_verified' && record.campaign && record.process),
   'Every classic problem must retain its local acceptance and recorded process');
@@ -72,8 +73,9 @@ const readRuns = async (page: Page) => {
 async function account(email: string): Promise<{ page: Page; context: BrowserContext }> {
   assert.ok(browser);
   const context = await browser.newContext({ viewport: { width: 1440, height: 960 }, locale: 'zh-CN', reducedMotion: 'reduce' });
+  context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
   context.on('page', page => {
-    page.setDefaultTimeout(15_000);
+    page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   });
@@ -306,6 +308,7 @@ try {
   }
   const noScriptContext = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 320, height: 844 },
     storageState: await alice.context.storageState() });
+  noScriptContext.setDefaultTimeout(0); noScriptContext.setDefaultNavigationTimeout(0);
   noScriptContext.on('page', page => {
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });

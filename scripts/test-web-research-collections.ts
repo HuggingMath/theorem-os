@@ -61,7 +61,7 @@ try {
     });
     context.on('page', page => { page.setDefaultTimeout(12_000); page.on('pageerror', error => errors.push(error.message)); });
     const page = await context.newPage(); active = page;
-    await page.goto(origin + '/library.html'); await page.getByRole('heading', { name: '共享成果与研究方法', exact: true }).waitFor();
+    await page.goto(origin + '/library.html'); await page.getByRole('heading', { name: '数学库', exact: true }).waitFor();
     const owner = (await context.cookies(origin)).find(item => item.name === 'theoremos_session')!.value;
     const skill = fixtures.create(owner, { requestId: `skill-${width}`, type: 'skill', name: `推导核对 ${width}`, content: {
       instructions: '核对当前目标及前提', steps: ['读取精确目标', '核对依赖'], slots: ['M1'] } });

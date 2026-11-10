@@ -93,7 +93,7 @@ try {
   await membership.getByLabel('选择数学家').selectOption(sessions[1].researcherId); await membership.getByLabel('希望共同推进什么').fill('一起检查精确任务版本');
   await save(owner, 'POST', projectPath + '/invitations', () => membership.getByRole('button', { name: '发送站内邀请', exact: true }).click(), 201);
   const denied = await peer.evaluate(async path => (await fetch(path)).status, projectPath); assert.equal(denied, 404);
-  await open(peer, 'people.html'); const inbox = peer.locator('[data-collaboration-inbox]');
+  await open(peer, 'workspace.html?tab=inbox'); const inbox = peer.locator('[data-collaboration-inbox]');
   const invitation = inbox.locator('[data-inbox-item^="invitation:"]'); await invitation.waitFor();
   assert.equal(await invitation.getByRole('link', { name: '打开并继续' }).count(), 0);
   const invitationId = (await invitation.getAttribute('data-inbox-item'))!.slice('invitation:'.length);
@@ -170,7 +170,7 @@ try {
   await save(owner, 'POST', projectPath + '/issues/' + issue.id + '/resolution', () => ownerIssue.getByRole('button', { name: '记录决议', exact: true }).click());
   checks.push({ name: phase, draftPreserved: true, staleDecisionBlocked: true, explicitRevisionAcknowledgement: true, originalResolutionRetained: true });
 
-  phase = 'inbox-read-vs-processed'; await open(peer, 'people.html');
+  phase = 'inbox-read-vs-processed'; await open(peer, 'workspace.html?tab=inbox');
   const claim = inbox.locator('[data-inbox-item^="claim:"]'); await claim.waitFor(); const claimKey = (await claim.getAttribute('data-inbox-item'))!;
   await save(peer, 'POST', '/api/research/collaboration/inbox/' + encodeURIComponent(claimKey), () => claim.getByRole('button', { name: '标为已读', exact: true }).click());
   let claimState = (await http<ResearchCollaborationInbox>(peer, 'GET', '/api/research/collaboration/inbox')).items.find(item => item.id === claimKey)!;
