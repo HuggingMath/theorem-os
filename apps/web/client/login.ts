@@ -1,5 +1,5 @@
 import { createIcons, LogIn, MailCheck, RefreshCw } from 'lucide';
-import { workbenchReturn, type WebSession } from '../shared';
+import { workbenchDestination, type WebSession } from '../shared';
 import { localizeMessage, mountLocaleSwitch, t } from '../i18n';
 import { localizeSiteLinks } from './feedback';
 import { forgetKey } from './keyMemory';
@@ -24,7 +24,7 @@ const progressKey = 'theorem-os.login-progress.v1';
 let step: LoginStep = 'email', stepRevision = 0, progressOwner = '', challenge: CodeChallenge | undefined;
 // A run or conversation link opened while signed out, or open when the session ended, arrives as login.html?run=<id> or
 // ?chat=<id>; signing in returns to that record.
-const workbench = `./${workbenchReturn(location.search)}`;
+const workbench = workbenchDestination(location.search);
 
 /** `message` is what the visitor sees; `reason` keeps the server's own text for the session check. */
 class LoginError extends Error {

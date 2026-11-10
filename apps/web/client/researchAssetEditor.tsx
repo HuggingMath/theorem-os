@@ -1,5 +1,6 @@
 import { useRef, useState } from 'preact/hooks';
-import type { ResearchAgentDraft, ResearchAsset, ResearchAssetContent, ResearchAssetKind, ResearchAssetPrefill, ResearchMathDraft, ResearchMathSource, ResearchReleaseRef, ResearchSkillDraft } from '../researchAssetTypes';
+import type { ResearchAgentDraft, ResearchAsset, ResearchAssetContent, ResearchAssetKind, ResearchAssetPrefill, ResearchMathDraft, ResearchMathSource, ResearchMathUsage, ResearchReleaseRef, ResearchSkillDraft } from '../researchAssetTypes';
+import { MathUsageEditor } from './researchMathUsageEditor';
 import type { ResearchModulePlan, ResearchModuleSlot } from '../../../src/solver/modules/policy';
 import type { WebRun } from '../shared';
 import { base, Check, enc, Empty, ErrorBox, Field, lines, MutationState, nameOf, Search, tx, useMutation, useResource, type Item, type ResearchContext } from './researchShared';
@@ -22,6 +23,7 @@ export function AssetEditor({ asset, prefill, context, onSaved, disabled = false
       : tx('已通过 Lean 检查的任务成果；不代表完整原题已经验收。', 'A task result that passed its Lean check. The original problem still needs separate acceptance.') : '')), [area, setArea] = useState(asset?.area ?? ''), [visibility, setVisibility] = useState(asset?.visibility ?? 'private'),
     [revision, setRevision] = useState(asset?.revision ?? 0);
   const [math, setMath] = useState<ResearchMathSource>(initial && 'source' in initial ? initial.source : { kind: 'run', runId: '' });
+  const [mathUsage, setMathUsage] = useState<ResearchMathUsage>(initial && 'source' in initial && initial.usage ? initial.usage : { conditions: '', result: '', examples: [] });
   const [entryIds, setEntryIds] = useState(initial && 'source' in initial && initial.source.kind === 'knowledge' ? initial.source.entryIds.join('\n') : '');
   const [agent, setAgent] = useState<ResearchAgentDraft>(initial && 'modulePlan' in initial ? initial : blankAgent());
   const [agentSkills, setAgentSkills] = useState(initial && 'modulePlan' in initial ? refText(initial.skills) : ''),
@@ -35,13 +37,14 @@ export function AssetEditor({ asset, prefill, context, onSaved, disabled = false
   const [createdAsset, setCreatedAsset] = useState<ResearchAsset>();
   const savedAsset = asset ?? createdAsset;
   const currentInput = useRef('');
-  currentInput.current = JSON.stringify([kind, name, description, area, visibility, math, entryIds, agent, agentSkills, agentLibraries,
+  currentInput.current = JSON.stringify([kind, name, description, area, visibility, math, mathUsage, entryIds, agent, agentSkills, agentLibraries,
     skill, steps, inputs, outputs, examples, dependencies]);
   const action = useMutation();
   const changeAgent = (patch: Partial<ResearchAgentDraft>) => setAgent(previous => ({ ...previous, ...patch }));
   const changePlan = (patch: Partial<ResearchModulePlan>) => changeAgent({ modulePlan: { ...agent.modulePlan, ...patch } });
   const changeSkill = (patch: Partial<ResearchSkillDraft>) => setSkill(previous => ({ ...previous, ...patch }));
-  const content = (): ResearchAssetContent => kind === 'mathematics' ? { source: math.kind === 'knowledge' ? { ...math, entryIds: lines(entryIds) } : math } satisfies ResearchMathDraft
+  const content = (): ResearchAssetContent => kind === 'mathematics' ? { source: math.kind === 'knowledge' ? { ...math, entryIds: lines(entryIds) } : math,
+    ...(mathUsage.conditions || mathUsage.result || mathUsage.examples.length ? { usage: mathUsage } : {}) } satisfies ResearchMathDraft
     : kind === 'agent' ? { ...agent, skills: parseRefs(agentSkills), libraries: parseRefs(agentLibraries) }
     : { ...skill, steps: lines(steps), inputs: lines(inputs), outputs: lines(outputs), examples: lines(examples), dependencies: parseRefs(dependencies) };
   const save = () => {
@@ -67,7 +70,8 @@ export function AssetEditor({ asset, prefill, context, onSaved, disabled = false
       <label>{tx('草稿可见范围', 'Draft visibility')}<select value={visibility} onChange={event => setVisibility(event.currentTarget.value as 'private' | 'public')}>
         <option value="private">{tx('仅自己', 'Private')}</option><option value="public">{tx('发布后公开', 'Public when published')}</option></select></label></div>
     {kind === 'mathematics' ? <><h3>{tx('选择可检查的成果来源', 'Choose a verifiable source')}</h3>{math.kind === 'run' && math.scope
-      ? <FixedMathSource source={math} prefill={prefill} /> : <MathSourceEditor source={math} onChange={setMath} entryIds={entryIds} setEntryIds={setEntryIds} />}</>
+      ? <FixedMathSource source={math} prefill={prefill} /> : <MathSourceEditor source={math} onChange={setMath} entryIds={entryIds} setEntryIds={setEntryIds} />}
+      <MathUsageEditor value={mathUsage} change={setMathUsage} declarations={prefill?.evidence.declarations.map(item => item.name) ?? asset?.release?.mathematics?.declarations.map(item => item.name) ?? []} /></>
       : kind === 'agent' ? <><h3>{tx('研究配置', 'Research configuration')}</h3><div class="research-form-row"><label>{tx('证明环境', 'Environment')}<select value={agent.environment ?? 'mathlib'} onChange={event => changeAgent({ environment: event.currentTarget.value as 'standard' | 'mathlib' })}>
         <option value="mathlib">mathlib</option><option value="standard">Lean standard</option></select></label><label>{tx('模型服务商（可选）', 'Provider (optional)')}<select value={agent.providerId ?? ''} onChange={event => changeAgent({ providerId: event.currentTarget.value || undefined })}>
         <option value="">{tx('使用研究工作台设置', 'Use workbench setting')}</option>{context.web.providers.map(provider => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</select></label></div>

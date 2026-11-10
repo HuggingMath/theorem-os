@@ -2,12 +2,13 @@ import { useState } from 'preact/hooks';
 import type { ResearchActivity, ResearchContribution, ResearcherProfile, ResearchProjectSummary } from '../researchProjectTypes';
 import { t } from '../i18n';
 import { RichProse } from './richText';
+import { CollaborationInbox } from './collaborationFlow';
 import { base, enc, Empty, ErrorBox, Field, FollowButton, libraryHref, MutationState, nameOf, Panel, personHref,
   Search, stamp, Tags, theoremHref, tx, useMutation, useResource, words, lines, type Item, type Items, type ResearchContext } from './researchShared';
 
 type ProfileView = ResearcherProfile & { following?: boolean; projects: ResearchProjectSummary[]; contributions: ResearchContribution[] };
 type FeedEvent = Omit<ResearchActivity, 'projectId'> & { projectId?: string; assetId?: string; assetVersion?: string; read?: boolean };
-const eventHref = (event: FeedEvent) => event.assetId ? libraryHref(event.assetId, event.assetVersion) : event.projectId ? theoremHref(event.projectId, event.runId) : undefined;
+const eventHref = (event: FeedEvent) => event.assetId ? libraryHref(event.assetId, event.assetVersion) : event.projectId ? theoremHref(event.projectId, event.runId, { statementVersionId: event.statementVersionId, feedbackId: event.feedbackId }) : undefined;
 
 export function PeoplePage({ context }: { context: ResearchContext }) {
   const selected = new URLSearchParams(location.search).get('id') ?? context.session.researcherId ?? '';
@@ -31,7 +32,7 @@ export function PeoplePage({ context }: { context: ResearchContext }) {
       <a class="button" href="theorems.html">{tx('浏览与创建定理', 'Explore and create theorems')}</a></Panel></aside>
     <div class="research-content"><ErrorBox message={profile.error} />{profile.data ? <Profile key={selected} profile={profile.data.item} own={own} canFollow={context.session.authenticated} refresh={profile.refresh} />
       : !profile.error && <Panel title={selected ? tx('数学家主页', 'Researcher profile') : tx('发现数学家', 'Discover mathematicians')}><Empty>{selected ? tx('正在读取资料…', 'Loading profile…') : tx('从目录查看公开资料，登录后可以保存自己的研究主页。', 'Browse public profiles in the directory. Sign in to create your research profile.')}</Empty></Panel>}
-      {own && <><Notifications /><Feed /></>}
+      {own && <><CollaborationInbox context={context} /><Notifications /><Feed /></>}
     </div></div></>;
 }
 

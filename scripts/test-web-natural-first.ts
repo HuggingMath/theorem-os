@@ -85,6 +85,8 @@ try {
     assert.equal(new URL(page.url()).search, '?sample');
     assert.equal(await page.locator('[data-chat-share]').count(), 0);
     assert.equal(await page.locator('#formalize-start').isDisabled(), true);
+    assert.equal(await page.locator('[data-first-research-start], [data-chat-participation]').count(), 0,
+      'A read-only sample must not display new-submission setup over the recorded result');
     await page.locator('[data-research-artifact="result"]').click();
     await page.locator('.result-verdict').waitFor();
     assert.equal(writes.length, 0, 'Opening the sample and its acceptance report creates no paid task');
@@ -107,7 +109,7 @@ try {
       assert.equal(await page.locator('#formalize-tokens').inputValue(), '400000');
       assert.equal(await page.locator('#research-tokens').inputValue(), '200000');
       assert.equal(await page.locator('#research-turns').inputValue(), '5');
-      assert.match(await page.locator('[data-chat-budget]').innerText(), /10 分钟.*5 分钟/u);
+      assert.match(await page.locator('[data-chat-budget]').innerText(), /10 分钟[\s\S]*5 分钟/u);
       await page.locator('#formalize-key').fill('gateway-key-to-clear');
       await page.locator('#formalize-provider').selectOption('openai');
       assert.equal(await page.locator('#formalize-key').inputValue(), '', 'A gateway key cannot accidentally be sent to OpenAI');
@@ -134,7 +136,7 @@ try {
       await page.locator('#formalize-minutes').fill('4');
       await page.locator('#research-minutes').fill('3');
       assert.equal(await page.locator('#formalize-start').isEnabled(), true);
-      assert.match(await page.locator('[data-chat-budget]').innerText(), /4 分钟.*3 分钟/u);
+      assert.match(await page.locator('[data-chat-budget]').innerText(), /4 分钟[\s\S]*3 分钟/u);
       assert.equal(writes.length, 0, 'Connection checks and budget edits create no paid task');
       await page.locator('#formalize-provider').selectOption('sub2api');
       await page.locator('#formalize-original').fill('');

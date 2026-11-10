@@ -6,9 +6,12 @@ import {
 import type { WebAdminOverview, WebContinuation, WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebRun, WebRunRequest, WebSavedKey, WebSession } from '../shared';
 import { workbenchReturn } from '../shared';
 import { ResearchSelection } from './researchSelection';
+import type { ResearchLibraryAttemptPreparation } from '../researchLibraryTrialTypes';
+import { consumeResearchEntry, readResearchEntry } from './researchEntry';
+import { openFrozenTask } from './frozenTaskView';
 import type { WebExplainAnswer } from '../explain';
 import type { WebFormalization } from '../formalizationTypes';
-import type { WebShareLink } from '../share';
+import type { WebShareLink } from '../shareTypes';
 import { acceptedTitle, acceptedDescription, statementConfirmation } from '../presentation';
 import { checkReason, effortLabels, failureGuide, formatDuration, formatTokens, isAcceptedRun, isFaultedRun, isRejectedRun, planAwaitingApproval, planGated, readableDuration, readableMetric, reportReason, resultDescription, runProgress, runTokens, stalledMinutes, stoppedLabel, usageEstimate, type RecoveryAction } from '../presentation';
 import { nextSteps, summarizeGoals, summarizeReport, summarizeStuck } from '../report';
@@ -64,7 +67,7 @@ import { installTermHints, renderGlossary } from './termHints';
 import { renderAdminPanel } from './ui/AdminPanel';
 import { feedbackUrl, localizeSiteLinks } from './feedback';
 import type { TermId } from './glossary';
-import { localeTag, localizeMessage, localizeText, otherLocale, sentences, switchLocale, t } from '../i18n';
+import { locale, localeTag, localizeMessage, localizeText, otherLocale, sentences, switchLocale, t } from '../i18n';
 import { historyStorageKey, markHistoryCollapsed, readHistoryCollapsed } from './historyPreference';
 import { classicLibraryUrl } from './classicLibrary';
 import { renderContinuationPreview } from './productFlowView';
@@ -126,6 +129,16 @@ const state = {
   sample: undefined as WebRun | undefined,
 };
 const entryStorageKey = 'theorem-os.research-entry.v1';
+const productEntrySearch = location.search, productEntry = readResearchEntry(productEntrySearch);
+const productTarget = new URLSearchParams(productEntrySearch);
+let productEntryHandled = false;
+let libraryProposalHandled = false;
+function withAddressLanguage(search: string) {
+  const language = new URLSearchParams(location.search).get('lang');
+  if (language !== 'zh' && language !== 'en') return search;
+  const parameters = new URLSearchParams(search); parameters.set('lang', language);
+  return `?${parameters}`;
+}
 let researchEntry: 'natural' | 'lean' = 'natural';
 // Opening the workbench starts with the user's problem, even when an older tab used a Lean template.
 document.body.dataset.entry = researchEntry;
@@ -163,7 +176,7 @@ async function loadNaturalResearch() {
     onNavigate: (id, mode, attached) => {
       chatArtifacts.clear();
       researchEntry = 'natural'; document.body.dataset.entry = 'natural'; placeInputMode();
-      const search = id ? `?chat=${encodeURIComponent(id)}` : '';
+      const search = withAddressLanguage(id ? `?chat=${encodeURIComponent(id)}` : '');
       if (location.search !== search) history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', location.pathname + search);
       // The live workspace belongs to the task, not to one of its stages: a task moving from its statement to its proof keeps it open.
       if (!id || document.body.dataset.chatArtifact !== 'live') { document.body.dataset.chatArtifact = ''; document.body.dataset.outputOpen = 'false'; }
@@ -262,7 +275,8 @@ const runIdPattern = /^[a-f0-9-]{1,36}$/u;
 const linkedRun = new URLSearchParams(location.search).get('run');
 // The sample has an address of its own (/?sample), so Back from a run returns to it and a reload keeps it open.
 const sampleAddress = '?sample';
-let sampleLink = location.search === sampleAddress;
+const initialAddress = new URLSearchParams(location.search); initialAddress.delete('lang');
+let sampleLink = initialAddress.size === 1 && initialAddress.get('sample') === '';
 let formalizationLink = new URLSearchParams(location.search).get('formalization');
 // When the session ends, the login page keeps the run or conversation open now (login.html?run=<id>, ?chat=<id>) and
 // returns to it.
@@ -332,6 +346,7 @@ const submissionIdentity = new SubmissionIdentity(ownedDrafts);
 const draftRecovery = new DraftRecovery(() => ownedDrafts);
 const ownerOfSession = webDraftOwner;
 function clearOwnedDrafts() {
+  document.querySelector('[data-library-proposal-start]')?.remove(); libraryProposalHandled = false;
   chatWorkspace?.bindOwner('');
   researchSelection.reset();
   collaborationView.clearPlanDrafts();
@@ -1904,7 +1919,7 @@ function syncAddress() {
   const mode = addressMode; addressMode = 'replace';
   // Until the first list arrives the selection is not known yet, and a ?run= or ?sample link must survive until it is.
   if (!state.resumed || sampleLink || formalizationLink || chatWorkspace?.id || new URLSearchParams(location.search).has('chat') && !chatWorkspace) return;
-  const run = currentRun(), search = !run ? '' : isSample(run) ? sampleAddress : `?run=${encodeURIComponent(run.id)}`;
+  const run = currentRun(), search = withAddressLanguage(!run ? '' : isSample(run) ? sampleAddress : `?run=${encodeURIComponent(run.id)}`);
   if (location.search === search) return;
   history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', location.pathname + search + location.hash);
 }
@@ -1987,6 +2002,40 @@ async function openFormalizedDraft(id: string) {
     formalizationLink = null;
     toast(message(error));
   }
+}
+async function openLibraryProposalDraft() {
+  const feedbackId = productTarget.get('libraryProposal'), projectId = productTarget.get('project');
+  if (libraryProposalHandled || !feedbackId || !projectId || !/^[A-Za-z0-9_-]{1,128}$/u.test(feedbackId) || !/^[A-Za-z0-9_-]{1,128}$/u.test(projectId)) return;
+  libraryProposalHandled = true;
+  const panel = document.createElement('aside'); panel.className = 'composer-research-selection'; panel.dataset.libraryProposalStart = '';
+  const notice = document.createElement('p'); notice.setAttribute('role', 'status');
+  const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'button'; retry.hidden = true;
+  retry.textContent = t('重新准备候选草稿'); retry.dataset.retryLibraryProposal = '';
+  const back = document.createElement('a'); back.href = `theorems.html?id=${encodeURIComponent(projectId)}#feedback-${encodeURIComponent(feedbackId)}`;
+  back.textContent = t('查看已评审的任务提案'); panel.append(notice, retry, back); element('#run-form').prepend(panel);
+  const prepare = async () => {
+    if (!state.session || state.submitting) return;
+    const owner = ownerOfSession(state.session), revision = draftRevision;
+    retry.disabled = true; retry.hidden = true; notice.textContent = t('正在准备候选与固定库版本…');
+    try {
+      const { item } = await api<{ item: ResearchLibraryAttemptPreparation }>(`/api/research/theorems/${encodeURIComponent(projectId)}/library-proposals/${encodeURIComponent(feedbackId)}/prepare`);
+      const selected = await researchSelection.prepare(item.refs, item.environment);
+      if (!state.session || ownerOfSession(state.session) !== owner || draftRevision !== revision || state.submitting)
+        throw new Error(t('草稿已变化，未载入候选。请核对后重新准备。'));
+      const draft: TaskDraft = { ...captureDraft(), source: item.source, task: item.task, environment: item.environment,
+        templateId: '', modulePlan: item.modulePlan, formalization: undefined, continueFrom: undefined };
+      const contentIssue = submissionIssues(draft, field('api-key').value, state.session).find(issue => issue.field === 'source' || issue.field === 'task');
+      if (contentIssue) throw new Error(contentIssue.message);
+      replaceDraft('reuse', () => applyTaskDraft(draft));
+      researchSelection.adopt(selected);
+      chooseEntry('lean'); startDraft(false, 'replace'); draftChanged(); saveDraft(); renderDraftRecovery();
+      notice.textContent = t('候选与固定库版本已载入。核对源码、模型和预算后即可开始研究。');
+      panel.dataset.libraryProposalReady = 'true';
+    } catch (error) { notice.textContent = message(error); retry.hidden = false; }
+    finally { retry.disabled = false; }
+  };
+  retry.addEventListener('click', () => void prepare());
+  await prepare();
 }
 const currentConnection = (epoch: number) => pageActive && epoch === state.connectionEpoch;
 const sessionFailure = (error: unknown) => error instanceof ApiError
@@ -2180,6 +2229,31 @@ function initialize(): Promise<void> {
         }
         providerAddress(); updateEnvironment(); updateCounts();
       }, field('environment').value as WebEnvironment, () => { chooseEntry('lean'); startDraft(false, 'replace'); });
+      await openLibraryProposalDraft();
+      if (!productEntryHandled) {
+        productEntryHandled = true;
+        if (productEntry) {
+          await naturalPage;
+          consumeResearchEntry(productEntrySearch, session.templates, {
+            statement: draft => { chooseEntry('natural'); startDraft(false, 'replace'); chatWorkspace?.prepareOriginal(draft.statement, draft.environment); },
+            lean: draft => { chooseEntry('lean'); startDraft(false, 'replace'); field('environment').value = draft.environment;
+              renderTemplates(draft.template); applyTemplate(draft.template); updateEnvironment(); updateCounts(); saveDraft(); },
+          });
+          const cleaned = new URL(location.href); for (const key of ['entry', 'template', 'environment']) cleaned.searchParams.delete(key);
+          cleaned.searchParams.set('lang', productEntry.language); history.replaceState(null, '', cleaned);
+        } else if (productTarget.has('message') || productTarget.has('view') || productTarget.has('task')) {
+          await naturalPage;
+          const chat = productTarget.get('chat'), messageId = productTarget.get('message');
+          if (chat && messageId && chatWorkspace?.id === chat) chatWorkspace.revealMessage(messageId);
+          const run = currentRun(), taskId = productTarget.get('task'), version = productTarget.get('taskVersion'), commit = productTarget.get('commit');
+          if (run && run.id === productTarget.get('run')) {
+            if (taskId && version && commit) openFrozenTask(api, run.id, { taskId, version, commit });
+            else if (taskId && (!version || run.observation?.inspection.tasks.some(task => task.id === taskId && task.version === version))) openChatArtifact('roadmap', { taskId });
+            else if (taskId) toast(t('此任务版本已更新，可从资料夹打开保存的源码。'));
+            else openChatArtifact(productTarget.get('view') === 'source' ? 'source' : 'roadmap');
+          }
+        }
+      }
       setGlobalNotice(session.runtime.ready && session.providers.length ? '' : localizeText(session.runtime.message) || t('运行环境未就绪'));
     } catch (error) {
       if (currentConnection(epoch)) {
@@ -2339,7 +2413,7 @@ async function leaveAccount(request: () => Promise<unknown>, button: HTMLButtonE
 /** The theme itself is applied by theme.js before the first paint; this page only offers the choice. */
 const themeLabels: Record<ThemePreference, string> = { system: t('跟随系统'), light: t('浅色'), dark: t('深色') };
 function showThemeChoice() {
-  const preference = readThemePreference(localStorage);
+  const preference = readThemePreference();
   document.querySelectorAll<HTMLInputElement>('input[name="theme"]').forEach(input => { input.checked = input.value === preference; });
 }
 /** Where the reader last chose something: the pointer, or the control a key was pressed in (the palette's search for its commands). */
@@ -2348,7 +2422,7 @@ document.addEventListener('pointerdown', event => { chosenAt = { x: event.client
 // Measured only when a theme is chosen, so typing costs no layout.
 document.addEventListener('keydown', event => { chosenAt = event.target instanceof Element ? event.target : null; }, { capture: true, passive: true });
 function chooseTheme(preference: ThemePreference) {
-  if (!saveThemePreference(localStorage, preference)) toast(t('浏览器不允许保存，外观只在此页面生效'));
+  if (!saveThemePreference(() => localStorage, preference)) toast(t('浏览器不允许保存，外观只在此页面生效'));
   if (resolveTheme(preference, matchMedia('(prefers-color-scheme: dark)').matches) === document.documentElement.dataset.theme) applyTheme(preference);
   else {
     const box = chosenAt instanceof Element && chosenAt !== document.body ? chosenAt.getBoundingClientRect() : undefined;
@@ -2414,12 +2488,14 @@ function paletteCommands(): PaletteCommand[] {
     { id: 'open-history', group: t('操作'), label: t('打开研究记录'), icon: 'panel-left', keywords: 'history runs', run: openHistory },
     { id: 'open-settings', group: t('操作'), label: t('研究配置'), hint: field('model').value, icon: 'sliders-horizontal', keywords: t('settings model provider api key 模型 服务商 密钥 预算 轮次'), run: click('#open-settings') },
   ].filter(command => usable(`#${command.id}`));
-  const preference = readThemePreference(localStorage), themeIcons: Record<ThemePreference, string> = { system: 'sun-moon', light: 'sun', dark: 'moon' };
+  const preference = readThemePreference(), themeIcons: Record<ThemePreference, string> = { system: 'sun-moon', light: 'sun', dark: 'moon' };
   for (const option of ['system', 'light', 'dark'] as const) if (option !== preference)
     commands.push({ id: `theme-${option}`, group: t('外观'), label: t('外观：{0}', themeLabels[option]), icon: themeIcons[option],
       keywords: t('theme appearance dark light 外观 主题 深色 浅色 夜间'), run: () => chooseTheme(option) });
   commands.push({ id: 'switch-locale', group: t('帮助'), label: otherLocale.label, lang: otherLocale.lang, hint: otherLocale.title, icon: 'languages', keywords: 'language locale english chinese 语言 中文 英文', run: changeLocale });
   commands.push({ id: 'open-glossary', group: t('帮助'), label: t('术语说明'), icon: 'book-open', keywords: t('glossary help 术语 帮助'), run: () => openGlossary() });
+  commands.push({ id: 'open-workspace', group: t('操作'), label: t('我的研究'), icon: 'folder-open', keywords: t('inbox todo search usage brief collections 待办 搜索 用量 简报 收藏 资料夹'), run: () => location.assign('workspace.html') });
+  commands.push({ id: 'search-research', group: t('操作'), label: t('搜索全部研究记录'), icon: 'search', keywords: t('search all conversations lemmas routes 全局搜索 对话 引理 路线'), run: () => location.assign('workspace.html?tab=search') });
   commands.push({ id: 'open-classics', group: t('帮助'), label: t('经典题库'), hint: t('所有账户共享，无需 API Key'), icon: 'book-open',
     keywords: 'classic problems proofs solutions archive library 经典 题库 数学 解答 过程',
     run: () => { window.open(classicLibraryUrl, '_blank', 'noopener'); } });
@@ -2742,6 +2818,17 @@ async function openSharing(run: WebRun) {
   if (!state.connected || !isAcceptedRun(run)) return;
   sharing = { id: run.id, busy: false };
   element('#share-run-title').textContent = run.title;
+  const tx = (zh: string, en: string) => locale === 'en' ? en : zh;
+  const scopes = element('#share-dialog').querySelectorAll<HTMLElement>('.share-scope');
+  const list = (host: HTMLElement | undefined, items: string[]) => {
+    if (host) host.replaceChildren(...items.map(text => { const item = document.createElement('li'); item.textContent = text; return item; }));
+  };
+  list(scopes[0], [tx('原题、适用条件、Lean 陈述与验收证明', 'The problem, assumptions, Lean statement and accepted proof'),
+    tx('已保存的任务、推导思路和对应版本源码；已审核的逐步讲解（如有）', 'Recorded tasks, reasoning and source versions; approved step-by-step explanations, when available'),
+    tx('陈述确认与形式化对应关系、独立验收凭据', 'Statement confirmation, formalization correspondences and acceptance evidence'),
+    tx('模型名称、Agent 数量、耗时与 Token 用量', 'Model name, agent count, elapsed time and token usage')]);
+  list(scopes[1], [tx('API Key、模型服务地址与账号邮箱', 'API keys, provider addresses and account email'),
+    tx('原始运行日志、Agent 对话与未公开的协作讨论', 'Raw runtime logs, agent conversations and unpublished collaboration discussions')]);
   renderShareState();
   showDialog(element<HTMLDialogElement>('#share-dialog'));
   try {
@@ -3497,20 +3584,22 @@ window.addEventListener('online', () => void resumeConnection());
 // Back and Forward open the run the address names, or the new-research page; they never add entries themselves.
 window.addEventListener('popstate', () => {
   if (!state.resumed || state.submitting) return;
-  const chatId = new URLSearchParams(location.search).get('chat');
+  const parameters = new URLSearchParams(location.search); parameters.delete('lang');
+  const chatId = parameters.get('chat');
   if (chatId) {
     chooseEntry('natural');
     void naturalPage?.then(() => chatWorkspace?.open(chatId, 'replace'));
     return;
   }
-  const id = new URLSearchParams(location.search).get('run') ?? '';
+  const id = parameters.get('run') ?? '';
   if (id && runIdPattern.test(id) && state.runs.some(run => run.id === id)) {
     if (id !== state.selectedId || state.composing) { selectRun(id, true, 'replace'); setMobileView('runs'); }
-  } else if (location.search === sampleAddress && state.session?.sample) { if (!sampleSelected()) void openSample('replace'); }
-  else if (!id && !location.search) {
+  } else if (parameters.size === 1 && parameters.get('sample') === '' && state.session?.sample) { if (!sampleSelected()) void openSample('replace'); }
+  else if (!id && !parameters.size) {
     chooseEntry('natural'); startDraft(false, 'replace');
     void naturalPage?.then(() => {
-      if (!currentRun() && !location.search) chatWorkspace?.home(false);
+      const currentAddress = new URLSearchParams(location.search); currentAddress.delete('lang');
+      if (!currentRun() && !currentAddress.size) chatWorkspace?.home(false);
     });
   }
   else renderDetail();

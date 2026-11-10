@@ -9,6 +9,7 @@ import { errors } from '../apps/web/i18n/errors';
 import { explain } from '../apps/web/i18n/explain';
 import { formalize } from '../apps/web/i18n/formalize';
 import { guide } from '../apps/web/i18n/guide';
+import { libraryTrials } from '../apps/web/i18n/libraryTrials';
 import { modules } from '../apps/web/i18n/modules';
 import { pages } from '../apps/web/i18n/pages';
 import { process } from '../apps/web/i18n/process';
@@ -19,7 +20,7 @@ import type { WebExplanationDocument } from '../apps/web/shared';
 import { han, requiredKeys } from '../scripts/web-i18n';
 
 describe('workbench English dictionary', () => {
-  const parts = { server, pages, common, app, collaboration, modules, editor, guide, admin, errors, explain, formalize, process, release };
+  const parts = { server, pages, common, app, collaboration, modules, editor, guide, admin, errors, explain, formalize, process, release, libraryTrials };
   const { keys, stray } = requiredKeys();
   const placeholders = (text: string) => [...text.matchAll(/\{(\d+)\}/gu)].map(match => match[1]).sort().join(',');
 
@@ -100,6 +101,8 @@ describe('server error messages in an English browser', () => {
     expect(localizeMessage('候选任务的精确声明或文件已改变，请刷新后重新选择。'))
       .toBe('The candidate task declaration or file has changed. Refresh and select it again.');
     expect(localizeMessage('数学库模块内容冲突：Main.lean')).toBe('Conflicting mathematics module content: Main.lean');
+    expect(localizeMessage('成果与任务的固定库存在模块冲突：Submission/Library/Shared.lean'))
+      .toBe('The release conflicts with a frozen task library module: Submission/Library/Shared.lean');
     expect(localizeMessage('公开访问只提供已分享的研究结果。')).toBe('Public access provides shared research results only.');
     // Text that is not an error key, such as an Agent's own words, stays as written.
     expect(localizeMessage('证明在第 3 步卡住了。')).toBe('证明在第 3 步卡住了。');

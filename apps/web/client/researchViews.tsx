@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { locale, mountLocaleSwitch } from '../i18n';
+import { locale, mountLocaleSwitch, t } from '../i18n';
 import { PeoplePage } from './researchPeople';
 import { TheoremsPage } from './researchTheorems';
 import { LibraryPage } from './researchLibrary';
+import { WorkspacePage } from './researchWorkspace';
+import { ProblemPage } from './researchProblem';
 import { bindResearchSession, clearResearchSession, errorText, ErrorBox, readResearchSession, readResearchWebSession,
   ResearchSessionChangedError, tx, type ResearchContext } from './researchShared';
 import { webDraftOwner } from './ownedDrafts';
 
 const page = document.body.dataset.researchPage ?? 'people';
-const pageNames = { people: ['数学家', 'Mathematicians'], theorems: ['定理', 'Theorems'], library: ['Library', 'Library'] } as const;
+const pageNames = { workspace: ['我的研究', 'My research'], people: ['数学家', 'Mathematicians'], theorems: ['定理', 'Theorems'], library: ['Library', 'Library'] } as const;
 function Header() {
   const language = useRef<HTMLButtonElement>(null);
   useEffect(() => { if (language.current) mountLocaleSwitch(language.current); }, []);
@@ -32,7 +34,7 @@ export function ResearchApp() {
   useEffect(() => {
     document.documentElement.lang = locale === 'en' ? 'en' : 'zh-CN';
     const label = pageNames[page as keyof typeof pageNames] ?? pageNames.people;
-    document.title = `${tx(label[0], label[1])} · TheoremOS`;
+    document.title = `${page === 'problem' ? t('题目工作区') : tx(label[0], label[1])} · TheoremOS`;
     const skip = document.querySelector('.skip-link'); if (skip) skip.textContent = tx('跳到主要内容', 'Skip to main content');
     let live = true, pending: Promise<void> | undefined;
     const controller = new AbortController();
@@ -92,7 +94,7 @@ export function ResearchApp() {
   const unavailable = Boolean(error) || !context || verifyingOwner;
   return <><Header /><main id="main" class={context ? 'research-shell' : 'research-loading'} tabIndex={-1} aria-busy={checking}>
     {context && <div class={unavailable ? 'research-session-pending' : undefined} aria-hidden={unavailable} inert={unavailable} key={webDraftOwner(context.web)}>
-      {page === 'theorems' ? <TheoremsPage context={context} /> : page === 'library' ? <LibraryPage context={context} /> : <PeoplePage context={context} />}
+      {page === 'problem' ? <ProblemPage context={context} /> : page === 'workspace' ? <WorkspacePage context={context} /> : page === 'theorems' ? <TheoremsPage context={context} /> : page === 'library' ? <LibraryPage context={context} /> : <PeoplePage context={context} />}
     </div>}
     {unavailable && <div class="research-session-notice">{error ? <><ErrorBox message={error} /><div class="research-actions">
     <button class="button" type="button" onClick={() => setAttempt(value => value + 1)}>{tx('重新连接', 'Reconnect')}</button>

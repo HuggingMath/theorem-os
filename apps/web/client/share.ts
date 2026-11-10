@@ -1,12 +1,13 @@
 import { createIcons, Copy, Download, ShieldCheck } from 'lucide';
 import { h, render } from 'preact';
 import { effortLabels, formatDateTime, readableMetric, statementConfirmation } from '../presentation';
-import { webShareToken, type WebShareSnapshot } from '../share';
+import { webShareToken, type WebShareSnapshot } from '../shareTypes';
 import { localizeMessage, localizeText, mountLocaleSwitch, t } from '../i18n';
 import { localizeSiteLinks } from './feedback';
 import { leanFileName } from './leanOutline';
 import { leanLineTokens } from './sourceText';
 import { Rich } from './richText';
+import { ShareReadingView } from './ShareReadingView';
 
 createIcons({ icons: { Copy, Download, ShieldCheck }, attrs: { 'aria-hidden': 'true' } });
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
@@ -67,7 +68,7 @@ function showCode() {
 function show(share: WebShareSnapshot) {
   snapshot = share;
   document.title = `${share.title} · TheoremOS`;
-  $('#share-title').textContent = share.title;
+  prose($('#share-title'), share.title);
   facts($('#share-facts'), [
     [t('证明环境'), share.environment === 'mathlib' ? 'Mathlib' : t('Lean 标准库')],
     [t('模型'), share.model, true], [t('推理强度'), effortLabels[share.effort] ?? share.effort], [t('Agent 数量'), String(share.workers)],
@@ -126,6 +127,7 @@ function show(share: WebShareSnapshot) {
   }));
   facts($('#share-identity'), share.identity.map(item => [localizeText(item.label), item.value, true]));
   $('#share-credentials').hidden = !share.identity.length;
+  render(h(ShareReadingView, { share, shareId: location.hash.slice(1) }), $('#share-reading-host'));
   showCode();
   $('#share-loading').hidden = true;
   $('#share-content').hidden = false;
@@ -145,6 +147,10 @@ async function load() {
 document.addEventListener('click', event => {
   const target = (event.target as HTMLElement).closest<HTMLButtonElement>('button');
   if (!target || !snapshot) return;
+  if (target.dataset.shareJump) {
+    const section = document.getElementById(target.dataset.shareJump);
+    if (section) { section.scrollIntoView({ block: 'start', behavior: 'instant' }); section.focus({ preventScroll: true }); }
+  }
   if (target.dataset.shareView === 'proof' || target.dataset.shareView === 'source') { view = target.dataset.shareView; showCode(); }
   if (target.id === 'share-copy') {
     const text = view === 'proof' ? snapshot.proof : snapshot.source;
