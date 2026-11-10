@@ -21,7 +21,7 @@ import { dropLeadWakes, LEAD_MAX_BACKOFF } from './leadWakes';
 import { CooperationIntegration } from './cooperationIntegration';
 import { researchRouteGroups, researchWorkerCanNode } from './modules/organization';
 import { currentCapacityExploration } from './capacityExploration';
-import { prepareNextCheckDecisions } from './nextChecks';
+import { currentNextCheck, prepareNextCheckDecisions } from './nextChecks';
 import { prepareGoalProgressDecision } from './goalProgress';
 import { answerResearchInputs } from './researchDecisions';
 import { leadResearchInputs } from './contextCompiler';
@@ -255,6 +255,13 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     for (const node of this.archive.tasks) if (node.capacityExploration &&
         tasks.some(task => task.id === node.task.id && digest(task) === digest(node.task)) &&
         currentCapacityExploration(node, view, this.explorationIdentity)) invalidated.delete(node.task.id);
+    const checkView = this.nextCheckPlanView({ tasks, groups, proofRoutes });
+    for (const node of this.archive.tasks) if (node.nextCheckId &&
+        tasks.some(task => task.id === node.task.id && digest(task) === digest(node.task))) {
+      const record = this.archive.nextChecks?.find(record => record.id === node.nextCheckId);
+      // Group revisions and unrelated consumers cannot strip a current check's host identity.
+      if (record && currentNextCheck(record, checkView, this.explorationIdentity)) invalidated.delete(node.task.id);
+    }
     return invalidated;
   }
   protected async acceptPlan(planInput?: LeadPlan, edit?: HumanEditRecord,

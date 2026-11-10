@@ -170,7 +170,8 @@ describe('checked task integration recovery', () => {
     expect(node().feedback).toBeUndefined();
     expect(failedInput.repair?.startedAttempt).toBeUndefined();
     const accepted = records().find(record => record.kind === 'proof' && record.status === (conditional ? 'conditional' : 'verified'))!;
-    expect(accepted.summary).toBe('Fixed declaration checked; unresolved lemma assumptions remain obligations.');
+    expect(accepted.summary).toBe(conditional ? 'Fixed declaration checked; unresolved lemma assumptions remain obligations.' :
+      'Checked proof integrated with freshly validated dependencies.');
     if (child) {
       const commit = writeLemma(workers[2], 'lemma recovery_child : True := by trivial');
       await cooperative.deliver(workers[2], child, commit);
@@ -258,7 +259,7 @@ describe('checked task integration recovery', () => {
     expect(node().proof).toBe(checked);
     expect(canonicalSource()).toContain('lemma recovery_lemma : True := by trivial');
     expect(records().map(record => [record.kind, record.status, record.summary])).toEqual([
-      ['progress', 'advisory', 'Accepted prefix.'], ['proof', 'verified', 'A checked recovery lemma.'],
+      ['progress', 'advisory', 'Accepted prefix.'], ['proof', 'verified', 'Checked proof integrated with freshly validated dependencies.'],
       ['progress', 'advisory', 'Accepted suffix.'],
     ]);
     expect(cursors[key()]).toBe(fs.statSync(log()).size);
@@ -290,8 +291,9 @@ describe('checked task integration recovery', () => {
     expect(prepare).toHaveBeenCalledTimes(2);
     expect(host.verify).toHaveBeenCalledTimes(2);
     expect(records().filter(record => record.kind === 'proof')).toHaveLength(1);
-    expect(records().find(record => record.kind === 'proof')).toMatchObject({ status: 'verified', commit });
-    expect(records().map(record => record.summary)).toEqual(['Accepted prefix.', 'A checked recovery lemma.', 'Accepted suffix.']);
+    expect(records().find(record => record.kind === 'proof')).toMatchObject({ status: 'verified', commit: receipt!.commit });
+    expect(records().map(record => record.summary)).toEqual(['Accepted prefix.',
+      'Checked proof integrated with freshly validated dependencies.', 'Accepted suffix.']);
     expect(cursors[key()]).toBe(fs.statSync(log()).size);
     expectNoMathematicalFailure();
   });
@@ -314,7 +316,7 @@ describe('checked task integration recovery', () => {
     await expect(poll()).rejects.toBe(error);
 
     const core = records().find(record => record.kind === 'proof')!, checked = node().proof;
-    expect(core).toMatchObject({ status, submissionId: 'proof', commit });
+    expect(core).toMatchObject({ status, submissionId: 'proof', commit: status === 'verified' ? node().integratedCheck!.commit : commit });
     expect(node().status).toBe(status === 'verified' ? 'integrated' : 'pending');
     expect(events.filter(item => item.event === 'delivery_published' && item.details?.kind === 'proof')).toHaveLength(0);
     expect(cursors[key()]).toBe(prefixEnd);

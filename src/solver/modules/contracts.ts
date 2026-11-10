@@ -2,6 +2,16 @@ import { isAdvisoryTask, isFeasibilityReview, taskVersion, type CooperativeActio
 import { contextTaskConsumers, type TaskConsumerContext } from '../taskConsumers';
 import { researchSourceContract } from '../researchReferences';
 
+/** A route-changing claim needs an application check, not just declaration lookup. */
+export const criticalInferenceGuidance = 'For a new construction interface or a reduction that claims a core obligation is vacuous, ' +
+  'identically zero or automatic, first isolate the decisive inference and unfold the actual definitions and argument positions. ' +
+  'Check inferred structures and one discriminating small or boundary instance in the pinned environment before expanding the route. ' +
+  'Retain the exact Lean probe, assumptions and actual result. #check establishes only a declaration name and type; ' +
+  'type elaboration does not establish inhabitation, and an argument copied from peer notes is still unverified. ' +
+  'A failed tactic is inconclusive; report refuted only with a scoped counterexample or invalid inference and evidence. ' +
+  'Refuting an argument does not prove its claimed statement or the original theorem false. ' +
+  'Publish decisive negative evidence promptly so Lead can revise the contract or request an independent check. ';
+
 const finiteWorkGuidance = 'A finite range of target values is not an enumerable proof task while it still quantifies over an infinite family of objects. ' +
   'State the finite reduction or a uniform argument before proposing enumeration.';
 const planningDeliveryGuidance = 'For each new parallel task, use objective to state its distinct scope relative to in-flight work, ' +
@@ -12,7 +22,8 @@ const planningDeliveryGuidance = 'For each new parallel task, use objective to s
   'Changing the bound or restating an unresolved theorem does not supply a new method. ' +
   'When a helper or glue step is implementable from available inputs, publish a typed lemma or original-goal proof task promptly; ' +
   'give the Engineer executable proof work instead of repeatedly assigning the same research. ' +
-  'Keep unresolved mathematical questions as scoped research; no task is required merely to occupy an idle worker. ' + finiteWorkGuidance;
+  'Keep unresolved mathematical questions as scoped research; no task is required merely to occupy an idle worker. ' +
+  criticalInferenceGuidance + finiteWorkGuidance;
 const researchDeliveryGuidance = 'As soon as a useful helper or glue step has an exact interface and a concrete implementation method, ' +
   'publish it promptly in lemmaRequests with a full closed Lean type and actual typed input dependencies. ' +
   'When using a source, save sourceUses with its kind, exact reference and locator, full assumptions, definition adaptation, ' +
@@ -22,7 +33,7 @@ const researchDeliveryGuidance = 'As soon as a useful helper or glue step has an
   'Record the known typed inputs and consumers; an unrecorded consumer is a question for Lead, not an invented proof edge. ' +
   'Retain reusable Lean probe code in RESEARCH.md and request a Lead decision; do not keep researching an already implementable step. ' +
   'If the method is still unknown, report the precise missing inference instead of presenting another form of the same gap as ready proof work. ' +
-  finiteWorkGuidance + ' Proposals remain advisory and require a separate proof assignment and independent checking.';
+  criticalInferenceGuidance + finiteWorkGuidance + ' Proposals remain advisory and require a separate proof assignment and independent checking.';
 
 /** One work product per dispatch; worker slots and mathematical responsibilities are separate. */
 export function cooperativeWorkContract(action: CooperativeAction, tasks: readonly TaskRecord[], context: TaskConsumerContext = {}) {
@@ -40,9 +51,11 @@ export function cooperativeWorkContract(action: CooperativeAction, tasks: readon
     'capacity-exploration': { owner: 'idle-proof-or-research-worker', output: 'distinct-frontier-finding-retained-lean-probe-and-exact-interface',
       consumer: 'target-owner-and-lead-plan-decision', acceptance: 'advisory-only', sourcePolicy: 'read-only', deliveryGuidance: researchDeliveryGuidance },
     'feasibility-review': { owner: 'independent-researcher', output: 'core-inference-risk-and-discriminating-evidence',
-      consumer: 'lead-route-decision', acceptance: 'advisory-only', sourcePolicy: 'read-only' },
+      consumer: 'lead-route-decision', acceptance: 'advisory-only', sourcePolicy: 'read-only',
+      deliveryGuidance: criticalInferenceGuidance },
     'formal-proof': { owner: 'proof-worker', output: 'saved-exact-typed-declaration',
-      consumer: 'M2-then-canonical-integration', acceptance: 'independent-exact-source-check', sourcePolicy: 'owned-proof-sources' },
+      consumer: 'M2-then-canonical-integration', acceptance: 'independent-exact-source-check', sourcePolicy: 'owned-proof-sources',
+      deliveryGuidance: criticalInferenceGuidance },
     'consumer-connection': { owner: 'proof-worker', output: 'consumer-proof-from-fixed-typed-inputs',
       consumer: 'M2-then-input-proofs-and-unconditional-integration', acceptance: 'conditional-check-only', sourcePolicy: 'owned-proof-sources' },
     integration: { owner: 'host', output: 'fixed-original-proof-check',

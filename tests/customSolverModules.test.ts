@@ -119,7 +119,7 @@ describe('configured solver strategy rules without inference or Lean calls', () 
     expect(replaced.instructions).toContain('CUSTOM_M1_INSTRUCTIONS');
     for (const context of [appended, replaced]) {
       expect(context.instructions).toContain('Preserve original declaration kinds, names, parameters, types, assumptions');
-      expect(context.instructions).toContain('Completed proofs must not use sorry, admit, native_decide, unsafe or new axioms.');
+      expect(context.instructions).toContain('Proofs you submit for acceptance must not use sorry, admit, native_decide, unsafe or new axioms.');
       expect(context.instructions).toContain('check-lean');
       expect(context.instructions).toContain('Then return for independent host checking.');
       expect(context.message).toContain(formal);
@@ -136,7 +136,7 @@ describe('configured solver strategy rules without inference or Lean calls', () 
       access({ assignment: { kind: 'lead', seedCommit: 'fixed-source-commit' } }));
     for (const slot of ['M1', 'M3', 'M4', 'M5']) expect(context.instructions).toContain(`CUSTOM_${slot}_INSTRUCTIONS`);
     expect(context.instructions).toContain('You are the Lead.');
-    expect(context.instructions).toContain('Write one JSON object in RESEARCH.md: {"tasks":');
+    expect(context.instructions).toContain('Use this plan schema for the delivery-log event, or for a math-plan JSON fence in RESEARCH.md when returning without publication: {"tasks":');
     expect(context.instructions).toContain('Include every original target once.');
     expect(context.instructions).toContain('Exact mathematical interfaces and original assumptions are mandatory');
     expect(context.instructions).toContain('Unproved dependencies and reviews remain advisory.');

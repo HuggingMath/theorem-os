@@ -357,7 +357,7 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
     researchDrafts: z.record(z.object({ taskDigest: z.string(), workerId: z.string(), assignmentId: z.string().optional(),
       seedCommit: z.string().regex(/^[a-f0-9]{40,64}$/u), canonicalCommit: z.string().regex(/^[a-f0-9]{40,64}$/u).optional(),
       commit: z.string().regex(/^[a-f0-9]{40,64}$/u), outputDigest: z.string(), artifacts: record,
-      suspended: z.boolean().optional() }).passthrough()).optional(),
+      suspended: z.boolean().optional(), handoffNotesDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional() }).passthrough()).optional(),
     proofRoutes: z.array(z.object({ id: z.string(), targetTaskId: z.string(), prerequisiteTaskIds: z.array(z.string()),
       closingTaskId: z.string() })).optional(), progressSnapshot: progressSnapshot.optional(),
     progressReceipts: z.array(progressReceipt).max(64).optional() }).passthrough().optional(),

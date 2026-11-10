@@ -238,10 +238,46 @@ describe.skipIf(!lean)('fresh original source retention before independent kerne
     expect(proof.projection).toBeDefined();
     const checked = f.nativeChecks.at(-1)!;
     expect(checked.source).toContain('theorem first'); expect(checked.source).toContain('def frozen');
-    expect(checked.source).toContain('theorem helper (assumed : ∀ box : Retained.Box, Retained.frozen box = Retained.frozen box)');
+    expect(checked.source).toContain('theorem helper : theorem_os_conditional_type%');
+    expect(checked.source).toContain('∀ box : Retained.Box, Retained.frozen box = Retained.frozen box');
     expect(checked.output).not.toContain('sorryAx');
     expect(proof.verification.targetCommit).toBe(checked.commit);
     expect(freshlyAccepted({ task, attempts: 0, status: 'integrated', integratedCheck: proof }, taskVersion(task))).toBe(false);
+  });
+
+  it.each(['fresh', 'unaccepted', 'serialized', 'conditional', 'stale-version'] as const)
+  ('checks a short conditional type with %s original context', async kind => {
+    const f = await fixture(), originalProof = f.first.integratedCheck!;
+    const condition: CooperativeTask = { id: 'assumed', kind: 'lemma', objective: 'Prove the frozen conditional input.',
+      theoremName: 'Retained.assumed', proofPath: 'Submission.lean',
+      type: '∀ box : Retained.Box, first box = first box', dependsOn: [], revision: 0 };
+    const task = { ...f.records.find(node => node.task.id === 'final')!.task,
+      dependsOn: [condition.id], conditional: true };
+    f.records.find(node => node.task.id === task.id)!.task = task;
+    f.records.push({ task: condition, status: 'pending', attempts: 0 });
+    const commit = f.write(f.candidateSource.replace('theorem final : True := by sorry',
+      'theorem final : True := by trivial'));
+    if (kind === 'unaccepted') setTaskStatus(f.first, 'pending', 'reconstructed');
+    if (kind === 'serialized') {
+      f.first.integratedCheck = structuredClone(originalProof);
+      (f.cooperative as any).checkedDeliveries.add(f.first.integratedCheck);
+    }
+    if (kind === 'conditional') {
+      originalProof.conditions = [{ taskId: 'unfinished', taskDigest: 'unfinished-version' }];
+      markTaskAcceptance(originalProof);
+    }
+    if (kind === 'stale-version') f.first.task = { ...f.first.task, revision: f.first.task.revision + 1 };
+    const retained = (f.cooperative as any).retainedTaskGoals(task, f.records, f.workspace, commit, [condition]);
+    expect(retained).toEqual(kind === 'fresh' ? ['Retained.first'] : []);
+    const before = f.nativeChecks.length, proof = await f.check(task, commit, commit, [], [condition]);
+    expect(f.nativeChecks.length).toBeGreaterThan(before);
+    expect(proof.passed, JSON.stringify(proof.verification)).toBe(kind === 'fresh');
+    expect(proof.conditions).toEqual([{ taskId: condition.id, taskDigest: taskVersion(condition) }]);
+    expect(f.nativeChecks.at(-1)!.source).toContain('theorem final : theorem_os_conditional_type%');
+    expect(f.nativeChecks.at(-1)!.source).toContain('∀ box : Retained.Box, first box = first box');
+    expect(f.nativeChecks.at(-1)!.source.includes('theorem first')).toBe(kind === 'fresh');
+    if (kind === 'fresh') expect(f.nativeChecks.at(-1)!.output).not.toContain('sorryAx');
+    expect(f.records.find(node => node.task.id === task.id)!.integratedCheck).toBeUndefined();
   });
 
   it.each(([false, true, 'overloaded'] as const).flatMap(notation => (['unaccepted', 'serialized', 'conditional', 'stale-version'] as const)

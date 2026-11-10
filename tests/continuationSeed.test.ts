@@ -13,6 +13,7 @@ import { withMathRuntimeLease } from '../src/math/mathRuntimeIo';
 import type { MathematicsVerifierBatchRequest, MathematicsVerifierExecutionOptions } from '../src/math/verifier';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from '../src/solver/archive';
 import { captureSolverContinuationSource, seedSolverContinuation } from '../src/solver/continuationSeed';
+import { acceptContextCheckpoint } from '../src/solver/contextCheckpoint';
 import { MAX_CONTINUATION_ATTACHMENT_BYTES, readContinuationPage, readContinuationSnapshot } from '../src/solver/continuationInput';
 import { committedSource, commitSolverSources, git, readSolverProblem } from '../src/solver/problem';
 import { theoryModuleSource } from '../src/math/theoryModules';
@@ -21,12 +22,14 @@ import { setTaskStatus } from '../src/solver/taskLifecycle';
 import { expandTaskFamilies } from '../src/solver/taskFamilies';
 import type { TaskProof } from '../src/solver/cooperativeProof';
 import * as taskProofs from '../src/solver/cooperativeProof';
+import { conditionalExpectedType } from '../src/solver/conditionalProjection';
 import { hasTaskConnectionCheck, taskConnectionCheckCurrent } from '../src/solver/taskConnections';
 import { TaskTypePreflightCache } from '../src/solver/taskTypePreflight';
 import { captureResearchBasis, researchSourceDigest, settleResearch } from '../src/solver/researchRecords';
 import { researchSourceTasks, scopedResearchSources } from '../src/solver/researchSources';
 import { bindMathematicalGap } from '../src/solver/mathematicalGaps';
 import { proposedNextChecks } from '../src/solver/nextChecks';
+import { proposedDefinitionContractChecks } from '../src/solver/definitionContractChecks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { WorkerProofLifecycle } from '../src/solver/workerProofLifecycle';
 import { VerificationCheckpointError, withVerificationCheckpoints } from '../src/solver/verificationCheckpoint';
@@ -397,7 +400,7 @@ function taskDraftAttachments(stateFile: string) {
 }
 
 async function researchCheckpointFixture(kind: 'research' | 'sketch' = 'research', count = 3,
-  notes: string | null = 'Unchanged investigation.\n', dependency = false, sourceMetadata = false) {
+  notes: string | null = 'Unchanged investigation.\n', dependency = false, sourceMetadata = false, acknowledge = false) {
   const f = fixture(), state = f.oldState, peer = state.workers![1]!;
   peer.role = 'engineer'; f.newState.workers![1]!.role = 'engineer';
   const task: CooperativeTask = { id: 'investigate', kind, objective: 'Investigate the original problem',
@@ -426,6 +429,11 @@ async function researchCheckpointFixture(kind: 'research' | 'sketch' = 'research
         sessionAssignmentId: action.assignment.assignmentId, sessionRole: 'researcher' });
       if (notes === null) fs.rmSync(path.join(peer.worktree, 'RESEARCH.md'), { force: true });
       else fs.writeFileSync(path.join(peer.worktree, 'RESEARCH.md'), notes);
+      if (index === 0 && acknowledge && notes !== null) {
+        peer.contextCheckpoint = { threadId: peer.threadId!, requestedAt: Date.now(), requestId: 'confirm-accurate-notes' };
+        acceptContextCheckpoint(peer, peer.worktree, { kind: 'checkpoint', requestId: 'confirm-accurate-notes',
+          notesDigest: mathDigest(notes) });
+      }
       await cooperation.deliver(worker, action, commitSolverSources(state.problem, peer.worktree), true);
     }
     const checkpoint = structuredClone(state.cooperation!.researchCheckpoints![task.id]);
@@ -526,6 +534,50 @@ beforeEach(() => {
     { sessionId: 'fresh-seed', receipt: 'fresh-seed', checks: true }));
 });
 describe('continuation of ordinary research no-progress checkpoints', () => {
+  it.each([false, true])('preserves seed-equal note attribution through two continuations without inventing it (acknowledged: %s)', async acknowledged => {
+    const notes = '\ufeffunfinished λ notes\r\n';
+    const f = await researchCheckpointFixture('research', 1, notes, false, false, acknowledged);
+    const originalDraft = f.oldState.cooperation!.researchDrafts![f.task.id];
+    expect(committedSource(f.oldState.worktree, originalDraft.seedCommit, 'RESEARCH.md')).toBe(notes);
+    const expected = acknowledged ? mathDigest(notes) : undefined;
+    expect(originalDraft.handoffNotesDigest).toBe(expected);
+    await f.seed(); await f.seed();
+    const second = nextContinuation(f, f.stateFile, `notes-attribution-${acknowledged}-second`); await second.seed();
+    for (const stateFile of [f.stateFile, second.stateFile]) {
+      const state = readSolverRunState(stateFile), cooperation = cooperationFor(f, state);
+      const worker = { ...state.workers![1]!, ownedFiles: state.problem.ownedFiles };
+      expect(state.cooperation!.researchDrafts![f.task.id].handoffNotesDigest).toBe(expected);
+      expect(taskDraftAttachments(stateFile).find(draft => draft.taskId === f.task.id)!.handoffNotesDigest).toBe(expected);
+      try {
+        await cooperation.restore();
+        const action = await cooperation.next(worker, { maxTurns: Infinity, remainingMs: Infinity });
+        if (action?.kind !== 'task' || action.task.id !== f.task.id) throw new Error('fixture_expected_notes_attribution_resume');
+        expect(fs.readFileSync(path.join(worker.worktree, 'RESEARCH.md'), 'utf8')).toBe(notes);
+        expect(state.cooperation!.researchDrafts![f.task.id].handoffNotesDigest).toBe(expected);
+        await cooperation.deliver(worker, action, commitSolverSources(state.problem, worker.worktree), true);
+        expect(state.cooperation!.researchDrafts![f.task.id].handoffNotesDigest).toBe(expected);
+        expect(state.cooperation!.tasks.find(node => node.task.id === f.task.id)!.proof).toBeUndefined();
+      } finally { await cooperation.stop(); }
+    }
+  });
+
+  it('recovers changed legacy notes whose saved checkpoint has no attribution field', async () => {
+    const f = await researchCheckpointFixture('research', 1);
+    const draft = f.oldState.cooperation!.researchDrafts![f.task.id];
+    delete draft.handoffNotesDigest;
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    await f.seed();
+    const state = readSolverRunState(f.stateFile), cooperation = cooperationFor(f, state);
+    const worker = { ...state.workers![1]!, ownedFiles: state.problem.ownedFiles };
+    expect(state.cooperation!.researchDrafts![f.task.id].handoffNotesDigest).toBeUndefined();
+    try {
+      const action = await cooperation.next(worker, { maxTurns: Infinity, remainingMs: Infinity });
+      if (action?.kind !== 'task' || action.task.id !== f.task.id) throw new Error('fixture_expected_legacy_notes_resume');
+      expect(state.cooperation!.researchDrafts![f.task.id].handoffNotesDigest).toBe(mathDigest('Unchanged investigation.\n'));
+      expect(state.cooperation!.tasks.find(node => node.task.id === f.task.id)!.proof).toBeUndefined();
+    } finally { await cooperation.stop(); }
+  });
+
   it('retains task scheduling backoff through cold continuation when the worker slot is reset', async () => {
     const f = await researchCheckpointFixture('research', 2);
     const advisoryCheckpoint = { scope: mathDigest(canonicalMathJson({ kind: 'task', taskDigest: taskVersion(f.task) })),
@@ -2006,7 +2058,8 @@ describe('bounded continuation verification batches', () => {
         expect(source).toContain('def witness'); expect(source).toContain('def nestedWitness');
         expect(source).toContain('def combinedWitness');
         expect(source).not.toContain('theorem unused');
-        expect(source).toContain('lemma bridge (second_helper : True)');
+        expect(source).toContain('lemma bridge : theorem_os_conditional_type%');
+        expect(source).toContain('Submission.Helpers.second_helper');
       }
       return freshReceipts(request);
     });
@@ -2105,7 +2158,8 @@ describe('bounded continuation verification batches', () => {
         const projected = committedSource(f.worktree, request.targetCommit!, `${f.projectRelative}/Submission.lean`);
         expect(projected).toContain('theorem premise : True := by trivial');
         expect(projected).toContain('def conditionType');
-        expect(projected).toContain('lemma bridge (missing : Submission.conditionType)');
+        expect(projected).toContain('lemma bridge : theorem_os_conditional_type%');
+        expect(projected).toContain('Submission.conditionType');
         expect(projected).not.toContain('lemma missing');
       }
       return freshReceipts(request);
@@ -2240,7 +2294,10 @@ describe('bounded continuation verification batches', () => {
     const conditionalGroups = check.mock.calls.filter(call => call[3].some(request => request.conditions?.length));
     expect(conditionalGroups).toHaveLength(2); expect(new Set(conditionalGroups.map(call => call[2])).size).toBe(1);
     expect(host.verify.mock.calls.slice(1).map(([, options]) => options.expectedDeclarationType))
-      .toEqual(['∀ (second_helper : True), True', '∀ (first_helper : True), True']);
+      .toEqual([
+        conditionalExpectedType(f.task.theoremName!, 'True', [{ theoremName: 'Submission.Helpers.second_helper', type: 'True' }]),
+        conditionalExpectedType(task.theoremName!, 'True', [{ theoremName: 'Submission.Helpers.first_helper', type: 'True' }]),
+      ]);
     expect(state.cooperation!.tasks.filter(node => node.task.id.startsWith('bridge')).map(node => node.status))
       .toEqual(['conditional', 'conditional']);
   });
@@ -2673,6 +2730,36 @@ describe('continuation of a host-frozen unfinished delivery', () => {
     const state = readSolverRunState(f.stateFile), goal = state.cooperation!.tasks.find(node => node.task.id === 'goal')!;
     expect(goal.status).toBe('integrated'); expect(goal.integratedCheck?.passed).toBe(true);
     expect(state.cooperation!.proofReadyRecords).toBeUndefined();
+  });
+
+  it('migrates a host definition check without a fabricated gap delivery or proof acceptance', async () => {
+    const f = fixture(), cooperation = f.oldState.cooperation!;
+    const witness: CooperativeTask = { id: 'witness', kind: 'lemma', declaration: 'definition', revision: 0,
+      objective: 'Construct the shared witness.', theoremName: 'Submission.Helpers.witness',
+      proofPath: 'Submission/Helpers.lean', type: 'Nat', dependsOn: [] };
+    cooperation.tasks.push({ task: witness, status: 'pending', attempts: 0 });
+    for (const node of cooperation.tasks.filter(node => ['first', 'second'].includes(node.task.id))) {
+      node.task = { ...node.task, dependsOn: ['witness'] };
+      setTaskStatus(node, 'pending', 'reconstructed');
+      delete node.integratedCheck; delete node.assignment;
+    }
+    const identity = { problemReceiptDigest: f.oldState.problem.receiptDigest, environmentDigest: f.oldState.environmentDigest };
+    const [proposed] = proposedDefinitionContractChecks(cooperation, identity, 11);
+    expect(proposed).toBeDefined();
+    cooperation.nextChecks = [proposed.record]; cooperation.tasks.push(proposed.node);
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    const historical = fs.readFileSync(f.sourceStateFile);
+    await f.seed();
+    const restored = readSolverRunState(f.stateFile).cooperation!;
+    expect(restored.nextChecks).toEqual([proposed.record]);
+    const check = restored.tasks.find(node => node.nextCheckId === proposed.record.id)!;
+    expect(check).toMatchObject({ task: proposed.node.task, status: 'pending' });
+    expect(check.proof).toBeUndefined(); expect(check.integratedCheck).toBeUndefined();
+    expect(restored.nextChecks![0].gapDeliveryId).toBeUndefined();
+    expect(restored.deliveries!.some(delivery => delivery.mathematicalGap)).toBe(false);
+    await f.seed();
+    expect(readSolverRunState(f.stateFile).cooperation!.nextChecks).toHaveLength(1);
+    expect(fs.readFileSync(f.sourceStateFile)).toEqual(historical);
   });
 
   it('migrates a scoped pending check and its parent evidence without adding it to the editable proof plan', async () => {

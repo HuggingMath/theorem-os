@@ -111,7 +111,8 @@ describe('conservative notation context without invented dependency hints', () =
     expect(projectedGoalInputs(f.project, f.task, f.records, [condition]).map(node => node.task.theoremName)).toEqual([root.name]);
     const projected = f.project(f.task, [root.name], [condition]).get('Submission.lean')!;
     expect(projected).not.toContain('theorem assumed');
-    expect(projected).toContain('theorem target (assumed : ∀ n : choice, n = n)');
+    expect(projected).toContain('theorem target : theorem_os_conditional_type%');
+    expect(projected).toContain('∀ n : choice, n = n');
     f.accepted(projected);
     expect(possible(f, [], [])).not.toEqual(possible(f, [root.name], [condition]));
   });

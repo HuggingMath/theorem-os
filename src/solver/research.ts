@@ -41,6 +41,7 @@ import { applyOriginalLibraryTasks } from './libraryApplication';
 import { LibraryInstallationRequested, takeLibraryRequest, writeLibraryAccess, type LibraryAccess } from './libraryAccess';
 import { hasTaskConnectionCheck } from './taskConnections';
 import { DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT } from './tacticBatteryFailureCache';
+import { committedResearchNotesDigest, researchHandoffNotesDigest } from './researchCheckpoints';
 
 // Scheduling checkpoints preserve unlimited solving budgets and resume the same assignment/thread.
 const advisoryCheckpointNoticeMs = 90_000;
@@ -388,6 +389,26 @@ export async function runResearchWorkers(input: {
         usage.begin(assignment);
         const activeSession = session!;
         const advisoryScope = advisoryCheckpointScope(assignment);
+        const researchAssignment = assignment?.kind === 'task' &&
+          ['research', 'sketch'].includes(assignment.task.kind) && !isFeasibilityReview(assignment.task) ? assignment : undefined;
+        const initialNotesDigest = researchAssignment ? checkpointNotesDigest() : undefined;
+        const seedNotesDigest = researchAssignment && committedResearchNotesDigest(worker.worktree, researchAssignment.assignment.seedCommit);
+        const retainedDraft = researchAssignment && state.cooperation?.researchDrafts?.[researchAssignment.task.id];
+        const retainedNotesDigest = researchAssignment && retainedDraft &&
+          retainedDraft.taskDigest === researchAssignment.assignment.taskDigest && retainedDraft.workerId === worker.id &&
+          retainedDraft.assignmentId === researchAssignment.assignment.assignmentId &&
+          retainedDraft.seedCommit === researchAssignment.assignment.seedCommit &&
+          retainedDraft.canonicalCommit === researchAssignment.assignment.canonicalCommit
+          ? researchHandoffNotesDigest(committedResearchNotesDigest(worker.worktree, retainedDraft.commit), seedNotesDigest,
+            retainedDraft.handoffNotesDigest) : undefined;
+        const researchHandoffNotes = () => {
+          const notesDigest = checkpointNotesDigest();
+          if (!notesDigest) return undefined;
+          // A prior task's seed notes are not this investigation's handoff. A matching saved draft,
+          // a fresh notes write or the existing digest-bound acknowledgment establishes attribution.
+          return notesDigest === retainedNotesDigest || notesDigest !== initialNotesDigest && notesDigest !== seedNotesDigest ||
+            currentCheckpointNotesDigest() === notesDigest ? notesDigest : undefined;
+        };
         let finished = false, armed = false, checkpointRequested = false, checkpointClosing = false, readyRequested = false;
         let stopRequested = false;
         let noticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -626,6 +647,9 @@ export async function runResearchWorkers(input: {
           };
           const checkpoint = (yieldForProof = false) => {
             if (compactionStartedAt !== undefined) return;
+            if (researchAssignment && !researchHandoffNotes() && current() && !checkpointRequested && !readyRequested)
+              emit('research_checkpoint_missing_notes', { taskId: researchAssignment.task.id,
+                assignmentId: researchAssignment.assignment.assignmentId });
             if (interruptForCheckpoint('cooperative_checkpoint_interrupted',
               { turnId, checkpointAfterMs, noProgressStreak, protected: false }) && yieldForProof)
               emit('capacity_exploration_yielded', { turnId, reason: 'typed-work-ready' });
@@ -634,9 +658,36 @@ export async function runResearchWorkers(input: {
           // cut lands mid-request saves nothing and is parked as unchanged. A slice cut (initial plan, revision or
           // research) lets that one request return (its tool results recorded) first, bounded by advisoryRequestWaitMs.
           let waitStartedAt: number;
+          let handoffRequested = false;
           const cut = (boundary: 'request-returned' | 'wait-limit' | 'notice-failed') => {
-            cutAtRequestBoundary = undefined; afterNotice = undefined; clearTimeout(requestWaitTimer);
             if (!current() || checkpointRequested || readyRequested) return;
+            if (boundary === 'request-returned' && researchAssignment && noticeDelivery === 'delivered' &&
+                !researchHandoffNotes()) {
+              // A search result may be the first tool after a long request. Let the model write
+              // its argument before yielding, using this turn's original fixed wait deadline.
+              if (!handoffRequested) {
+                handoffRequested = true;
+                emit('research_handoff_requested', { taskId: researchAssignment.task.id,
+                  assignmentId: researchAssignment.assignment.assignmentId,
+                  remainingMs: Math.max(0, advisoryRequestWaitMs - (Date.now() - waitStartedAt)) });
+                void Promise.resolve().then(() => {
+                  if (!current() || checkpointRequested || readyRequested) return;
+                  return activeSession.notify?.('Save a concise handoff for this assignment in worktree-root RESEARCH.md now, ' +
+                    'before another search. Record the actual argument or attempted method, exact search scope and results, ' +
+                    'useful references and the precise unresolved inference. If nothing is established, state that accurately ' +
+                    'and identify the remaining question; do not invent a finding or proof. Replace inherited notes with this ' +
+                    'assignment\'s account and save it even when unfinished. The host is waiting only until the existing ' +
+                    'checkpoint deadline; after saving the notes, stop editing and return.');
+                }).catch(error => {
+                  const reason = noticeFailureReason(error);
+                  if (reason === undefined || !current()) return;
+                  emit('cooperative_checkpoint_notice_failed', { reason });
+                  cut('notice-failed');
+                });
+              }
+              return;
+            }
+            cutAtRequestBoundary = undefined; afterNotice = undefined; clearTimeout(requestWaitTimer);
             emit('cooperative_checkpoint_request_settled', { turnId, boundary, waitedMs: Date.now() - waitStartedAt });
             checkpoint();
           };
@@ -652,8 +703,10 @@ export async function runResearchWorkers(input: {
           const awaitRequest = (handoff = false) => {
             if (!current() || checkpointRequested || readyRequested) return;
             // One fixed wait window per turn, also covering a queued save notice and its response.
-            if ((requestWaited && !handoff) || toolsRunning || lastModelOutputAt === undefined ||
-                Date.now() - lastModelOutputAt > advisoryModelStreamingMs) {
+            // Notes may become visible before their writing tool finishes; wait for its result before freezing them.
+            const waitForResearchTool = researchAssignment && noticeDelivery === 'delivered';
+            const modelOutputStale = lastModelOutputAt === undefined || Date.now() - lastModelOutputAt > advisoryModelStreamingMs;
+            if ((requestWaited && !handoff) || (toolsRunning ? !waitForResearchTool : modelOutputStale)) {
               clearTimeout(requestWaitTimer); checkpoint(); return;
             }
             if (!requestWaited) startWait();

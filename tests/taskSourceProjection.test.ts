@@ -169,7 +169,8 @@ describe.skipIf(!newestLeanBinary())('anonymous instance dependency cleanup', ()
       type: '∀ n : Nat, n = n', dependsOn: [], revision: 0 };
     const projected = f.project(task, [], [premise]).get('Submission.lean')!;
     leanCheck(f, projected, 'InstanceFixture.original');
-    expect(projected).toContain('theorem original (premise : ∀ n : Nat, n = n)');
+    expect(projected).toContain('theorem original : theorem_os_conditional_type%');
+    expect(projected).toContain('∀ n : Nat, n = n');
     expect(projected).not.toContain('theorem premise');
     expectCleaned(projected);
   });
@@ -496,7 +497,8 @@ describe('owned source projection through dot notation', () => {
     const inputs = projectedGoalInputs(f.project, task, [input], [condition]);
     expect(inputs).toEqual([input]);
     const projected = f.project(task, inputs.map(node => node.task.theoremName!), [condition]).get('Submission.lean')!;
-    expect(projected).toContain('(missing : Fixture.conditionType)');
+    expect(projected).toContain('theorem bridge : theorem_os_conditional_type%');
+    expect(projected).toContain('Fixture.conditionType');
     expect(projected).toContain('def conditionType');
     leanCheck(f, projected, 'Fixture.bridge');
   });
@@ -529,7 +531,8 @@ describe('owned source projection through dot notation', () => {
     const premise: CooperativeTask = { id: 'premise', kind: 'lemma', objective: 'Prove reflexivity.',
       proofPath: 'Submission.lean', theoremName: 'Nat.fixture_premise', type: '∀ n : Nat, n = n', dependsOn: [], revision: 0 };
     const projected = f.project(task, [], [premise]).get('Submission.lean')!;
-    expect(projected).toContain('theorem fixture_field_star (fixture_premise : ∀ n : Nat, n = n)');
+    expect(projected).toContain('theorem fixture_field_star : theorem_os_conditional_type%');
+    expect(projected).toContain('∀ n : Nat, n = n');
     expect(projected).not.toContain('def fixtureFrozen');
     expect(projected).not.toContain('lemma fixture_premise');
     leanCheck(f, projected, 'Nat.fixture_field_star');

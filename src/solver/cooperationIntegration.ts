@@ -27,6 +27,10 @@ function expectedRejection(error: unknown, expected: ReadonlySet<string>): Error
 
 /** Integration of checked task proofs into the canonical commit and their rechecks. */
 export abstract class CooperationIntegration extends CooperationTaskProofs {
+  private canonicalCheckAssignment(task: CooperativeTask, seedCommit: string, tasks: readonly TaskRecord[]): TaskAssignment {
+    return { taskId: task.id, taskDigest: digest(task), workerId: this.lead.id, seedCommit,
+      dependencies: this.dependencies(task, tasks).map(node => ({ taskId: node.task.id, taskDigest: digest(node.task) })) };
+  }
   protected queueIntegration<T>(operation: () => Promise<T>, worker?: ResearchWorker, task?: CooperativeTask): Promise<T> {
     const queuedAt = Date.now();
     const waiting = this.integrationQueueDepth++ > 0 && worker && task;
@@ -210,7 +214,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
       return available.filter(item => inputs.has(item.task.id)).map(item => item.task.theoremName!);
     };
     const request = (node: TaskRecord) => ({ task: node.task,
-      assignment: { taskId: node.task.id, taskDigest: digest(node.task), workerId: this.lead.id, seedCommit: canonical },
+      assignment: this.canonicalCheckAssignment(node.task, canonical, tasks),
       retainedGoals: [...new Set([...this.retainedTaskGoals(node.task, tasks, this.lead.worktree, canonical), ...extraGoals(node)])] });
     const prerequisites = new Map(pending.map(node => [node.task.id, [...new Set([
       ...this.dependencies(node.task, tasks).map(item => item.task.id),
@@ -293,7 +297,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
       this.input.emit('task_recheck_started', { ...progress }); await persistProgress();
       this.input.signal.throwIfAborted();
       if (snapshot && !snapshot.current()) return false;
-      const assignment = { taskId: node.task.id, taskDigest: digest(node.task), workerId: this.lead.id, seedCommit: canonical };
+      const assignment = this.canonicalCheckAssignment(node.task, canonical, tasks);
       try {
         if (reusable(node)) {
           node.feedback = undefined;
@@ -484,7 +488,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
         // New declarations can expose source dependencies absent from the old canonical.
         const requests = snapshots.map(snapshot => ({ task: snapshot.task,
           retainedGoals: this.retainedTaskGoals(snapshot.task, snapshot.tasks, checkout, merged!),
-          assignment: { taskId: snapshot.task.id, taskDigest: snapshot.taskDigest, workerId: this.lead.id, seedCommit: merged! } }));
+          assignment: this.canonicalCheckAssignment(snapshot.task, merged!, snapshot.tasks) }));
         const projector = createTaskSourceProjector(problem, checkout, merged);
         const projections = requests.map(request => canonicalMathJson([...projector(request.task, request.retainedGoals)]));
         if (projections.some(projection => projection !== projections[0])) {
@@ -591,8 +595,8 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
             let existing: TaskProof;
             try {
               existing = await withSolverWorktree(this.lead.worktree, snapshot.canonical, canonicalCheckout =>
-                check(snapshot.canonical, { taskId: snapshot.task.id, taskDigest: snapshot.taskDigest,
-                  workerId: this.lead.id, seedCommit: snapshot.canonical }, [], canonicalCheckout));
+                check(snapshot.canonical, this.canonicalCheckAssignment(snapshot.task, snapshot.canonical, snapshot.tasks),
+                  [], canonicalCheckout));
             } catch (error) {
               this.input.signal.throwIfAborted();
               expectedRejection(error, integrationRejections);
@@ -605,8 +609,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
             return;
           }
           merged = commitSolverSources(problem, checkout);
-          receipt = await check(merged, { taskId: snapshot.task.id, taskDigest: snapshot.taskDigest,
-            workerId: this.lead.id, seedCommit: merged }, []);
+          receipt = await check(merged, this.canonicalCheckAssignment(snapshot.task, merged, snapshot.tasks), []);
           this.input.signal.throwIfAborted();
           if (['unavailable', 'blocked'].includes(receipt.verification.status)) throw new Error('math_verifier_unavailable');
         });
