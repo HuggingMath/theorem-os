@@ -60,24 +60,41 @@ function BookmarkForm({ target }: { target: ResearchBookmarkTarget; context: Res
 export function CollectionsPanel({ context }: { context: ResearchContext }) {
   const data = useResource<Items<ResearchCollection>>(context.session.authenticated ? `${base}/collections` : undefined, 15_000);
   const [selected, setSelected] = useState(new URLSearchParams(location.search).get('collection') ?? ''), [title, setTitle] = useState('');
-  const create = useMutation(), collection = data.data?.items.find(item => item.id === selected) ?? data.data?.items[0];
+  const [created, setCreated] = useState<ResearchCollection>(), [deleted, setDeleted] = useState('');
+  const items = [...(data.data?.items ?? []), ...(created && !data.data?.items.some(item => item.id === created.id) ? [created] : [])];
+  const create = useMutation(), collection = deleted ? undefined : selected ? items.find(item => item.id === selected) : items[0];
+  const choose = (id: string, replace = false) => {
+    const address = new URL(location.href); address.searchParams.set('collection', id);
+    if (address.href !== location.href) history[replace ? 'replaceState' : 'pushState'](null, '', address);
+    setSelected(id); setDeleted('');
+  };
+  useEffect(() => {
+    const back = () => { setSelected(new URLSearchParams(location.search).get('collection') ?? ''); setDeleted(''); };
+    window.addEventListener('popstate', back); return () => window.removeEventListener('popstate', back);
+  }, []);
+  useEffect(() => { if (!selected && collection) choose(collection.id, true); }, [selected, collection?.id]);
+  useEffect(() => { if (created && data.data?.items.some(item => item.id === created.id)) setCreated(undefined); }, [created, data.data]);
   if (!context.session.authenticated) return <Panel title={tx('专题资料夹', 'Research collections')}><a href="login.html">{tx('登录后整理收藏与私人备注', 'Sign in to organize bookmarks and private notes')}</a></Panel>;
   return <Panel id="research-collections" title={tx('专题资料夹', 'Research collections')} note={tx('将题目、精确任务版本和成果放在一起。备注仅自己可见。', 'Keep problems, exact task versions and releases together. Notes stay private.')}>
     <ErrorBox message={data.error} />{data.error && <button class="text-button" type="button" onClick={data.refresh}>{tx('重新读取', 'Try again')}</button>}
     <form class="research-form" onSubmit={event => { event.preventDefault(); const submitted = title; void create.run<Item<ResearchCollection>>('POST', `${base}/collections`, { title: title.trim() }, result => {
-      setSelected(result.item.id); data.refresh(); setTitle(current => current === submitted ? '' : current);
+      setCreated(result.item); choose(result.item.id); data.refresh(); setTitle(current => current === submitted ? '' : current);
     }); }}><div class="research-form-row"><Field label={tx('新资料夹名称', 'New collection name')} value={title} onInput={setTitle} required maxLength={120} />
       <button class="button" type="submit" disabled={create.busy}>{tx('新建资料夹', 'New collection')}</button></div><MutationState action={create} /></form>
-    {data.data && !data.data.items.length && <Empty>{tx('在题目、任务或 Library 成果旁选择「收藏到资料夹」即可整理材料。', 'Choose “Save to a collection” beside a problem, task or Library release to start collecting material.')}</Empty>}
-    {collection && <><label>{tx('打开资料夹', 'Open collection')}<select value={collection.id} onChange={event => setSelected(event.currentTarget.value)}>
-      {data.data?.items.map(item => <option key={item.id} value={item.id}>{item.title} ({item.items.length})</option>)}</select></label>
-      <CollectionDetail key={collection.id} collection={collection} context={context} refresh={data.refresh} />
-    </>}
+    {deleted && <p class="research-status" role="status" data-collection-deleted>{tx('已删除资料夹：', 'Collection deleted: ')}{deleted}</p>}
+    {data.data && selected && !collection && !deleted && <p role="status" data-collection-unavailable>{tx('这份资料夹已删除或不属于当前账号。请从下面选择其他资料夹，或新建资料夹。', 'This collection was deleted or does not belong to this account. Choose another collection below or create one.')}</p>}
+    {data.data && !items.length && !selected && <Empty>{tx('在题目、任务或 Library 成果旁选择「收藏到资料夹」即可整理材料。', 'Choose “Save to a collection” beside a problem, task or Library release to start collecting material.')}</Empty>}
+    {items.length > 0 && <label>{tx('打开资料夹', 'Open collection')}<select value={collection?.id ?? ''} onChange={event => choose(event.currentTarget.value)}>
+      {!collection && <option value="" disabled>{tx('选择另一份资料夹', 'Choose another collection')}</option>}
+      {items.map(item => <option key={item.id} value={item.id}>{item.title} ({item.items.length})</option>)}</select></label>}
+    {collection && <CollectionDetail key={collection.id} collection={collection} context={context} refresh={data.refresh}
+      onDeleted={() => { setDeleted(collection.title); setCreated(undefined); data.refresh(); }} />}
   </Panel>;
 }
 
-function CollectionDetail({ collection, context, refresh }: { collection: ResearchCollection; context: ResearchContext; refresh(): void }) {
+function CollectionDetail({ collection, context, refresh, onDeleted }: { collection: ResearchCollection; context: ResearchContext; refresh(): void; onDeleted(): void }) {
   const [selected, setSelected] = useState<string[]>([]), [name, setName] = useState(collection.title), [description, setDescription] = useState(collection.description);
+  const [deletion, setDeletion] = useState<{ revision: number; title: string; count: number; notes: number }>();
   const previous = useRef({ name: collection.title, description: collection.description });
   const action = useMutation(), prepare = useMutation();
   useEffect(() => {
@@ -102,7 +119,16 @@ function CollectionDetail({ collection, context, refresh }: { collection: Resear
       { expectedRevision: collection.revision, title: name, description }, refresh); }}>
       <Field label={tx('资料夹名称', 'Collection name')} value={name} onInput={setName} required maxLength={120} /><Field label={tx('说明', 'Description')} value={description} onInput={setDescription} multiline maxLength={2000} />
       <MutationState action={action} /><div class="research-actions"><button class="button" disabled={action.busy}>{tx('保存资料夹', 'Save collection')}</button>
-        <button class="text-button" type="button" disabled={action.busy} onClick={() => void action.run('DELETE', `${base}/collections/${enc(collection.id)}`, { expectedRevision: collection.revision }, refresh)}>{tx('删除资料夹', 'Delete collection')}</button></div>
+        <button class="text-button" type="button" disabled={action.busy} aria-expanded={Boolean(deletion)} onClick={() => setDeletion({ revision: collection.revision, title: collection.title,
+          count: collection.items.length, notes: collection.items.filter(item => item.note.trim()).length })}>{tx('删除资料夹', 'Delete collection')}</button></div>
+      {deletion && <section class="research-event" data-collection-delete-confirm aria-label={tx('确认删除资料夹', 'Confirm collection deletion')}>
+        <p><strong>{tx('将删除资料夹：', 'Delete collection: ')}{deletion.title}</strong></p>
+        <p>{tx('收藏数量：', 'Bookmarks: ')}{deletion.count} · {tx('含私人备注：', 'With private notes: ')}{deletion.notes}</p>
+        <p>{tx('其中的收藏与私人备注会一并删除，无法撤销。原成果和研究记录不受影响。', 'Its bookmarks and private notes will be deleted and cannot be undone. Original assets and research records stay unchanged.')}</p>
+        {deletion.revision !== collection.revision && <p role="status">{tx('资料夹有更新，请取消后重新核对。', 'The collection changed. Cancel and review it again.')}</p>}
+        <div class="research-actions"><button class="button" type="button" disabled={action.busy} onClick={() => setDeletion(undefined)}>{tx('取消', 'Cancel')}</button>
+          <button class="text-button" type="button" disabled={action.busy || deletion.revision !== collection.revision} onClick={() => void action.run('DELETE', `${base}/collections/${enc(collection.id)}`, { expectedRevision: deletion.revision }, onDeleted)}>{tx('确认删除资料夹与备注', 'Delete collection and notes')}</button></div>
+      </section>}
     </form></details>
     {!collection.items.length && <Empty>{tx('这个资料夹还没有收藏。', 'This collection has no bookmarks yet.')}</Empty>}
     {collection.items.map(item => <BookmarkItem key={item.id} item={item} collection={collection} refresh={refresh} selected={selected.includes(item.id)} select={checked => setSelected(previous => checked ? [...previous, item.id] : previous.filter(id => id !== item.id))} />)}

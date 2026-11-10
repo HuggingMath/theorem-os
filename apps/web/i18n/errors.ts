@@ -1,6 +1,9 @@
 /** Error messages from the server: request checks, session and login, runs, the run environment, explanations, plans and knowledge. */
 export const errors: Record<string, string> = {
   "当前账号的形式化队列已满，请等待已有任务结束。": "Your formalization queue is full. Wait for an existing task to finish.",
+  '提交的原题记录不存在。': 'The submitted problem record was not found.',
+  '提交记录与草稿内容不一致。': 'The submission does not match the draft contents.',
+  '提交的运行记录不存在。': 'The submitted run record was not found.',
   '编辑器尚未就绪，请重新选择恢复。': 'The editor is not ready yet. Choose Restore again.',
   '读取期间原题已修改，请重新选择恢复。': 'The problem changed while loading. Choose Restore again.',
   '新题草稿范围无效。': 'The scope of this new-problem draft is invalid.',

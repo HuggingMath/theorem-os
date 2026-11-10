@@ -19,6 +19,7 @@ import { decodeChatDraft, encodeChatDraft, readEditedProblemId, type ChatDraft, 
 import { libraryReferenceId, withLibraryReferences, type ChatLibraryReference } from './chatReference';
 import type { ProblemDraftValue } from '../problemDraftTypes';
 import type { ProblemDraftPanelProps } from './problemDrafts';
+import { captureProblemDraftSubmission, completeProblemDraftSubmission, resetProblemDraftBinding } from './problemDraftLifecycle';
 import { SubmissionIdentity } from './submissionIdentity';
 import { retainLatestRun } from './runSnapshot';
 import { statementTemplate } from './productFlow';
@@ -174,7 +175,7 @@ export class ChatSession {
     this.ownerRevision++; this.readRevision++; this.historyRevision++; this.capabilitiesRevision++;
     this.answers.clear(); this.lastAnswerRefresh = 0;
     clearTimeout(this.timer); this.refreshing = false;
-    this.home(true);
+    this.home(true, false);
     this.drafts.clear(); this.quotedDrafts.clear(); this.draftPositions.clear(); this.renderedDraftId = undefined; this.options.draftScope = scope; this.reading.bind(scope);
     try {
       for (const key of Object.keys(sessionStorage)) {
@@ -386,7 +387,9 @@ export class ChatSession {
     } catch (error) { if (generation === this.generation) this.error = reason(error); }
     finally { if (generation === this.generation) { this.startingResearch = false; this.draw(); this.schedule(); } }
   }
-  home(reset = true) {
+  home(reset = true, resetAccountDraft = true) {
+    const session = this.options.session();
+    if (reset && resetAccountDraft && session) resetProblemDraftBinding(session.draftOwner ?? this.options.draftScope, 'natural');
     this.reading.select('');
     this.rememberDraft(); this.generation++; this.currentId = ''; this.editedProblem = ''; this.conversation = undefined;
     this.run = undefined; this.formalization = undefined; this.seed = undefined;
@@ -612,6 +615,8 @@ export class ChatSession {
     const message = conversation ? this.pendingMessage ?? { requestId: crypto.randomUUID(), text: retryText ?? withLibraryReferences(draftText, references, locale) } : undefined;
     const text = seed?.original ?? message?.text ?? retryText ?? withLibraryReferences(draftText, references, locale);
     if (conversation?.messages.some(message => message.kind === 'text' && message.status === 'pending')) return;
+    const session = this.options.session();
+    const accountDraft = !conversation && !seed && session?.account ? captureProblemDraftSubmission(session.draftOwner ?? this.options.draftScope, this.problemDraft()) : undefined;
     this.readRevision++; this.submitting = true; this.error = ''; this.draw();
     try {
       let next: WebConversation;
@@ -633,6 +638,9 @@ export class ChatSession {
           const createdId = formalization.id;
           this.formalizations = [formalization, ...this.formalizations.filter(item => item.id !== createdId)];
           if (generation === this.generation) this.seed = formalization;
+          const archived = await completeProblemDraftSubmission(accountDraft, { kind: 'formalization', id: formalization.id }, this.options.request);
+          if (owner !== this.ownerRevision) return;
+          if (!archived && generation === this.generation) this.error = t('任务已创建，草稿归档待同步。');
         }
         ({ conversation: next } = await this.post<{ conversation: WebConversation }>('/api/conversations', { formalizationId: formalization.id }));
       }

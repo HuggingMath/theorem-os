@@ -11,6 +11,7 @@ import { BookmarkControl, CollectionsPanel } from './researchCollections';
 import { AssetUpdatesPanel } from './researchReleaseComparison';
 import { downloadResearchFile, researchBriefMarkdown } from './researchBriefExport';
 import { loadMath } from './mathAssets';
+import { briefFontUsage, embedBriefFonts } from './researchBriefFonts';
 import { ResearchHistoryReader } from './researchHistory';
 import { PersonalDraftsPanel } from './researchPersonal';
 import { LibraryTrialHistory } from './researchLibraryTrialHistory';
@@ -218,17 +219,32 @@ export function BriefPreview({ brief, context }: { brief: ResearchBrief; context
       await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
       const sheets = await Promise.all(['app.css', 'research.css', 'assets/katex/katex.min.css'].map(async href => {
         const response = await fetch(href); if (!response.ok) throw new Error(tx('导出样式未能读取，请重试。', 'Export styles could not be loaded. Please retry.'));
-        return response.text();
+        return { css: await response.text(), url: new URL(href, location.href).href };
       }));
       const copy = article.current!.cloneNode(true) as HTMLElement; copy.querySelectorAll('[data-brief-controls],details.research-bookmark-control').forEach(element => element.remove());
       copy.querySelectorAll('details').forEach(details => details.open = true);
       copy.querySelectorAll<HTMLAnchorElement>('a[href]').forEach(anchor => anchor.href = new URL(anchor.getAttribute('href')!, location.href).href);
+      const preview = document.createElement('div');
+      preview.className = 'research-page'; preview.setAttribute('aria-hidden', 'true');
+      Object.assign(preview.style, { position: 'fixed', left: '-10000px', top: '0', width: `${article.current!.getBoundingClientRect().width}px`, pointerEvents: 'none' });
+      preview.append(copy); document.body.append(preview);
+      let embedded: string[];
+      try {
+        embedded = await embedBriefFonts(sheets, briefFontUsage(copy), async url => {
+          const response = await fetch(url);
+          if (!response.ok) throw new Error(tx('导出字体未能读取，请重试。', 'Export fonts could not be loaded. Please retry.'));
+          const blob = await response.blob();
+          return await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(new Blob([blob], { type: 'font/woff2' }));
+          });
+        });
+      } finally { preview.remove(); }
       const documentCopy = document.implementation.createHTMLDocument(brief.title); documentCopy.documentElement.lang = locale === 'en' ? 'en' : 'zh-CN';
+      const charset = documentCopy.createElement('meta'); charset.setAttribute('charset', 'utf-8'); documentCopy.head.prepend(charset);
       const meta = documentCopy.createElement('meta'); meta.name = 'viewport'; meta.content = 'width=device-width, initial-scale=1'; documentCopy.head.append(meta);
-      const style = documentCopy.createElement('style'); style.textContent = sheets.join('\n').replace(/url\(([^)]+)\)/gu, (match, value: string) => {
-        const path = value.replace(/^["']|["']$/gu, ''); if (path.startsWith('data:') || path.startsWith('#')) return match;
-        return `url("${new URL(path, new URL(path.startsWith('fonts/KaTeX') ? 'assets/katex/' : './', location.href)).href}")`;
-      }) + '\nbody{display:block;margin:0;padding:40px;background:#fff;color:#222}.workspace-brief{max-width:920px;margin:auto}.topbar{display:none}@media print{body{padding:0}}';
+      const style = documentCopy.createElement('style'); style.textContent = embedded.join('\n')
+        + '\nbody{display:block;margin:0;padding:40px;background:#fff;color:#222}.workspace-brief{max-width:920px;margin:auto}.topbar{display:none}@media(max-width:700px){body{padding:16px}}@media print{body{padding:0}}';
       documentCopy.head.append(style); documentCopy.body.className = 'research-page'; documentCopy.body.append(documentCopy.importNode(copy, true));
       downloadResearchFile(`theoremos-brief-${brief.selectedRunId}.html`, `<!doctype html>\n${documentCopy.documentElement.outerHTML}`, 'text/html;charset=utf-8');
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }

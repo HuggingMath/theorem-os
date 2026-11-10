@@ -6,6 +6,7 @@ import { ResearchDraftPicker } from './researchDrafts';
 import { useResearchInputDraft } from './researchInputDraft';
 import { base, enc, Field, MutationState, stamp, tx, useMutation } from './researchShared';
 import { projectPeople, projectPersonLabel } from './researchMembers';
+import { reviewerMembersHref } from './researchReviewerNavigation';
 
 export function ResearchReview({ feedback, project, selfId, canReview, refresh, focusAnnotationId }: {
   feedback: ResearchFeedback; project: ResearchProjectDetail; selfId: string; canReview: boolean; refresh(): void; focusAnnotationId?: string;
@@ -20,7 +21,7 @@ export function ResearchReview({ feedback, project, selfId, canReview, refresh, 
   const annotations = useRef<HTMLDetailsElement>(null);
   useEffect(() => { if (focusAnnotationId && annotations.current) { annotations.current.open = true; setAnnotationsOpened(true); } }, [focusAnnotationId]);
   const path = `${base}/theorems/${enc(project.id)}/feedback/${enc(feedback.id)}/review`;
-  const assigned = feedback.review?.reviewer, canAssign = canReview && (project.permissions.manage || assigned?.id === selfId);
+  const assigned = feedback.review?.reviewer?.id !== feedback.author.id ? feedback.review?.reviewer : undefined, canAssign = canReview && (project.permissions.manage || assigned?.id === selfId);
   const canJudge = canReview && feedback.author.id !== selfId && (!assigned || assigned.id === selfId || project.permissions.manage);
   const newAttempt = feedback.payload && 'libraryTrial' in feedback.payload && feedback.payload.libraryTrial?.requiresNewAttempt;
   const canPrepareAttempt = newAttempt && canReview && feedback.proofCheck?.status === 'checked' && !feedback.supersededBy && feedback.continuation?.action !== 'end'
@@ -43,9 +44,12 @@ export function ResearchReview({ feedback, project, selfId, canReview, refresh, 
     </div>}
     <p>{assigned ? <>{tx('负责评审：', 'Responsible reviewer: ')}<strong>{assigned.displayName}</strong></> : tx('尚未指定评审人', 'No reviewer assigned')}
       {!assigned && canReview && feedback.author.id !== selfId && <button type="button" class="button" data-claim-review disabled={action.busy} onClick={() => void action.run('POST', path, { action: 'claim', expectedRevision: feedback.revision }, refresh)}>{tx('由我评审', 'Review this myself')}</button>}</p>
-    {canAssign && <form class="research-form" onSubmit={event => { event.preventDefault(); void action.run('POST', path, { action: 'assign', reviewerId: reviewer, expectedRevision: feedback.revision }, refresh); }}>
+    {!assigned && !people.length && feedback.kind === 'proof-submission' && <div class="research-empty" data-reviewer-empty><p>{tx('这份候选需要由提交者之外的协作者评审。目前还没有可接下评审的成员。', 'This candidate needs a collaborator other than its author to review it. No eligible reviewer is available yet.')}</p>
+      <a class="button" data-reviewer-members href={reviewerMembersHref(project.id, feedback)}>{project.permissions.manage ? tx('邀请评审人，随后回到此候选', 'Invite a reviewer, then return to this candidate') : tx('查看成员与项目发起者', 'View members and the project owner')}</a>
+      {!project.permissions.manage && <p>{tx('请联系项目发起者邀请协作者；对方加入后可接下评审。', 'Ask the project owner to invite a collaborator. They can take the review after joining.')}</p>}</div>}
+    {canAssign && people.length > 0 && <form class="research-form" onSubmit={event => { event.preventDefault(); if (!people.some(person => person.id === reviewer)) return; void action.run('POST', path, { action: 'assign', reviewerId: reviewer, expectedRevision: feedback.revision }, refresh); }}>
       <label>{assigned ? tx('移交评审', 'Transfer review') : tx('指定评审人', 'Assign a reviewer')}<select data-reviewer-select value={reviewer} required onChange={event => setReviewer(event.currentTarget.value)}><option value="">{tx('选择有权限的协作者', 'Choose an authorized collaborator')}</option>{people.map(person => <option key={person.id} value={person.id}>{projectPersonLabel(person)}</option>)}</select></label>
-      <button class="button" type="submit" disabled={action.busy || !reviewer}>{assigned ? tx('确认移交', 'Confirm transfer') : tx('确认分配', 'Confirm assignment')}</button></form>}
+      <button class="button" type="submit" disabled={action.busy || !people.some(person => person.id === reviewer)}>{assigned ? tx('确认移交', 'Confirm transfer') : tx('确认分配', 'Confirm assignment')}</button></form>}
     {feedback.author.id === selfId && feedback.decision.status === 'needs-info' && <form class="research-form" data-resubmit-review onSubmit={event => { event.preventDefault(); const submitted = supplement.drafts.current(), value = supplement.value;
       void action.run('POST', path, { action: 'resubmit', text, expectedRevision: feedback.revision }, () => { void supplement.complete(submitted, { kind: 'review', id: feedback.id }, value); refresh(); }); }}>
       <ResearchDraftPicker drafts={supplement.drafts} filter={item => item.scope.sourceFeedbackId === feedback.id && item.scope.purpose === 'resubmit'} onRestore={supplement.restore} />

@@ -105,7 +105,7 @@ export function PersonalDraftsPanel({ context, projectId }: { context?: Research
       {item.versions.map(version => <article class="collaboration-draft" key={version.id}><p>{version.deviceName} · {stamp(version.savedAt)} · {tx('版本', 'Version')} {version.revision}</p>
         {version.conflict && <p>{tx('与另一台设备的编辑同时保存，两份内容均保留。', 'Saved alongside another device’s work. Both versions are preserved.')}</p>}
         {version.status && version.status !== 'open' && <p data-draft-status={version.status}>{version.status === 'submitted' ? tx('已提交并归档', 'Submitted and archived') : tx('已丢弃', 'Discarded')}{version.submission?.href && <> · <a href={version.submission.href}>{tx('查看实际提交记录', 'Open the submitted record')}</a></>}</p>}
-        <a class="button" href={accountDraftHref(item, version.id)}>{tx('回到编辑器恢复', 'Open the editor to restore')}</a>
+        <a class="button" href={accountDraftHref(item, version.id)}>{item.scope.kind === 'problem' && version.status === 'submitted' ? tx('以此原题另起一题', 'Start a new problem from this version') : tx('回到编辑器恢复', 'Open the editor to restore')}</a>
         {(version.status ?? 'open') === 'open' && <button class="text-button" type="button" data-personal-discard-account-draft disabled={loading} onClick={() => void discard(item.id, version.id)}>{tx('丢弃这个账号版本', 'Discard this account version')}</button>}</article>)}</details>)}
     {account && !visible.length && !loading && !error && <p>{tx('没有未完成的账号草稿。编辑器中可保存工作，也可查看已归档版本。', 'No unfinished account drafts. Save work from an editor or show archived versions.')}</p>}
   </section>;

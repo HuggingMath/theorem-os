@@ -1,6 +1,8 @@
 /** The workbench shell: composer, settings, run list, overview, source and report views, dialogs and toasts. */
 export const app: Record<string, string> = {
   "围绕所选步骤研究": "Research the selected step",
+  '研究已提交，草稿归档待同步。': 'Research submitted. Draft archiving is waiting to sync.',
+  '任务已创建，草稿归档待同步。': 'The task was created. Draft archiving is waiting to sync.',
   "指导关联的研究已变化，请重新选择指导对象。": "The research linked to this guidance has changed. Please select its recipient again.",
   "上一条问题的发送结果尚未确认，重试会先核对原问题；新输入会保留。": "The previous question's delivery is unconfirmed. Retry checks that send first and keeps your newer draft.",
   "返回搜索结果": "Return to search results",

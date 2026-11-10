@@ -11,10 +11,10 @@ import { ResearchDraftPicker, useResearchDrafts } from './researchDrafts';
 import { IssueExecution } from './researchIssueExecution';
 import { SharedStageReference } from './researchStageReference';
 import { ProjectInvitationLinks } from './researchInvite';
+import { ResearchHandoffComposer } from './researchHandoffComposer';
 import { api, base, enc, ErrorBox, errorText, Field, MutationState, nameOf, personHref, Search, stamp, theoremHref, tx, useMutation,
   useResource, type Item, type Items, type ResearchContext } from './researchShared';
 import type { ResearcherProfile } from '../researchProjectTypes';
-import { projectPeople, projectPersonLabel } from './researchMembers';
 
 const projectPath = (id: string) => `${base}/theorems/${enc(id)}`;
 const collaborationPath = (id: string) => `${projectPath(id)}/collaboration`;
@@ -129,7 +129,16 @@ export function CollaborationMembership({ project, selfId, refresh }: { project:
   const [recipientId, setRecipient] = useState(''), [role, setRole] = useState('collaborator'), [note, setNote] = useState('');
   const action = useMutation(), changed = () => { resource.refresh(); refresh(); };
   const invitations = resource.data?.item.invitations ?? [];
-  return <section id="collaboration-members" class="collaboration-members">
+  const reviewFeedback = project.feedback.find(item => item.id === new URLSearchParams(location.search).get('reviewFeedback') && item.kind === 'proof-submission');
+  const memberPanel = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (location.hash !== '#collaboration-members') return;
+    const frame = requestAnimationFrame(() => { memberPanel.current?.scrollIntoView({ block: 'start' }); memberPanel.current?.focus({ preventScroll: true }); });
+    return () => cancelAnimationFrame(frame);
+  }, [project.id]);
+  return <section ref={memberPanel} tabIndex={-1} id="collaboration-members" class="collaboration-members">
+    {reviewFeedback && <p data-reviewer-return><a class="button" href={theoremHref(project.id, reviewFeedback.target?.runId, { ...reviewFeedback.target, feedbackId: reviewFeedback.id })}>{tx('回到原候选并指定评审人', 'Return to the candidate and assign a reviewer')}</a></p>}
+
     {project.permissions.manage && <ProjectInvitationLinks project={project} links={resource.data?.item.invitationLinks ?? []} refresh={changed} />}
     {project.permissions.manage ? <details><summary>{tx('邀请同行参与', 'Invite a colleague')}</summary><form class="research-form" onSubmit={event => { event.preventDefault(); void action.run('POST', `${projectPath(project.id)}/invitations`,
       { recipientId, role, note, expectedRevision: project.revision }, changed); }}>
@@ -233,7 +242,7 @@ export function CollaborationTaskWorkspace({ project, selfId, binding, observati
 }) {
   const resource = useResource<Item<ResearchCollaborationView>>(collaborationPath(project.id), 10000), action = useMutation();
   const taskKey = (item: { id: string; version: string }) => JSON.stringify([item.id, item.version]);
-  const [choice, setTask] = useState(selectedTask ? JSON.stringify([selectedTask.taskId, selectedTask.taskVersion]) : ''), [recipient, setRecipient] = useState(''), [note, setNote] = useState('');
+  const [choice, setTask] = useState(selectedTask ? JSON.stringify([selectedTask.taskId, selectedTask.taskVersion]) : '');
   useEffect(() => { if (selectedTask) setTask(JSON.stringify([selectedTask.taskId, selectedTask.taskVersion])); }, [selectedTask?.taskId, selectedTask?.taskVersion]);
   const current = observation.inspection.tasks.find(item => taskKey(item) === choice);
   const task = current ?? observation.history?.find(item => taskKey(item) === choice), target: ResearchFeedbackTarget | undefined = task && {
@@ -262,10 +271,7 @@ export function CollaborationTaskWorkspace({ project, selfId, binding, observati
       {feedback.length > 0 && <div class="collaboration-linked-feedback"><strong>{tx('提交物与评审进展', 'Submissions and review')}</strong>{feedback.map(item => <p key={item.id}><a href={`#feedback-${enc(item.id)}`} onClick={event => { event.preventDefault(); onRevealFeedback(item.id); }}>{item.text}</a> · {nameOf(item.proofCheck?.status ?? item.decision.status)}</p>)}</div>}
       {handoffs.map(item => <div class="collaboration-request" key={item.id}><strong>{item.author.displayName} → {item.recipient.displayName} · {invitationStatus(item)}</strong><RichProse text={item.note} />
         {!pinnedCommit && item.status === 'pending' && (item.recipient.id === selfId || item.author.id === selfId) && <div class="research-actions">{(item.recipient.id === selfId ? ['accept', 'decline'] : ['cancel']).map(choice => <button type="button" class="button" key={choice} disabled={action.busy || choice === 'accept' && !current} onClick={() => { if (choice !== 'accept' || current) void action.run('POST', `${projectPath(project.id)}/handoffs/${item.id}/respond`, { action: choice, expectedRevision: item.revision }, changed); }}>{choice === 'accept' ? tx('确认接手', 'Accept handoff') : choice === 'decline' ? tx('拒绝交接', 'Decline handoff') : tx('撤回交接', 'Cancel handoff')}</button>)}</div>}</div>)}
-      {!pinnedCommit && current && project.permissions.edit && (own?.status === 'claimed' || project.permissions.manage) && <details><summary>{tx('正式交接给同行', 'Hand off to a colleague')}</summary><form class="research-form" onSubmit={event => { event.preventDefault(); void action.run('POST', `${projectPath(project.id)}/handoffs`,
-        { recipientId: recipient, target, note, feedbackIds: feedback.map(item => item.id).slice(0, 20), expectedRevision: project.revision }, changed); }}><label>{tx('接手人', 'Next researcher')}<select value={recipient} required onChange={event => setRecipient(event.currentTarget.value)}><option value="">{tx('选择协作者', 'Choose a collaborator')}</option>
-          {projectPeople(project).filter(item => item.role !== 'reader' && item.id !== selfId).map(person => <option key={person.id} value={person.id}>{projectPersonLabel(person)}</option>)}</select></label>
-        <Field label={tx('已有结果、未解问题与下一步', 'Current results, open questions and next steps')} value={note} onInput={setNote} required multiline maxLength={4000} /><button class="button" type="submit" disabled={action.busy}>{tx('发起交接，等待确认', 'Request handoff')}</button></form></details>}
+      {!pinnedCommit && current && project.permissions.edit && (own?.status === 'claimed' || project.permissions.manage) && <ResearchHandoffComposer key={`${selfId}:${project.id}:${binding.runId}:${task.id}`} project={project} selfId={selfId} target={target} feedbackIds={feedback.map(item => item.id)} refresh={changed} />}
     </>}
     <ErrorBox message={resource.error} /><MutationState action={action} />
   </section>;

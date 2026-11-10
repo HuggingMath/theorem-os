@@ -98,7 +98,7 @@ describe('problem entry, responsibility and explicit human decision evidence', (
     const author = { id: 'peer-current', displayName: 'Current peer' }, stale = { id: 'peer-old', displayName: 'Old peer' };
     problem.project = { id: 'project', permissions: { member: true }, runs: [{ runId: run.id, statementVersionId: 'statement' }],
       assignments: [{ id: 'claim-current', author, target, status: 'claimed' }, { id: 'claim-old', author: stale, target: { ...target, taskRef: { id: task.id, version: 'old-version' } }, status: 'claimed' }],
-      feedback: [{ id: 'review', kind: 'proof-submission', target, text: 'Candidate proof', author, review: { reviewer: author }, decision: { status: 'pending', evidenceRefs: [] }, delivery: { status: 'not-sent' }, execution: { status: 'not-started', taskRefs: [], resultRefs: [] } }],
+      feedback: [{ id: 'review', kind: 'proof-submission', target, text: 'Candidate proof', author, review: { reviewer: { id: 'independent-reviewer', displayName: 'Independent reviewer' } }, decision: { status: 'pending', evidenceRefs: [] }, delivery: { status: 'not-sent' }, execution: { status: 'not-started', taskRefs: [], resultRefs: [] } }],
     } as unknown as ResearchProjectDetail;
     problem.collaboration = { projectId: 'project', revision: 1, invitations: [], handoffs: [{ id: 'handoff', status: 'pending', author: stale, recipient: author, target, note: 'Finish the closing step.' }],
       issues: [{ id: 'issue', title: 'Can the premise be weakened?', text: 'Check whether cancellation suffices.', status: 'open', target }],
@@ -106,7 +106,7 @@ describe('problem entry, responsibility and explicit human decision evidence', (
     expect(problemTaskOwners(problem, task).map(owner => owner.id)).toEqual([author.id, 'worker-one']);
     const items = problemAttention(problem, 'zh');
     expect(items.find(item => item.kind === 'dependency')?.taskRef?.id).toBe(prerequisite.id);
-    expect(items.find(item => item.kind === 'feedback')).toMatchObject({ feedbackId: 'review', owners: [{ id: author.id, name: author.displayName, kind: 'human' }] });
+    expect(items.find(item => item.kind === 'feedback')).toMatchObject({ feedbackId: 'review', owners: [{ id: 'independent-reviewer', name: 'Independent reviewer', kind: 'human' }] });
     expect(items.find(item => item.kind === 'handoff')?.href).toContain('#collaboration-task-workspace');
     expect(items.find(item => item.kind === 'issue')?.href).toContain('#issue-issue');
     expect(items.find(item => item.kind === 'claim')?.href).toContain(`taskVersion=${task.version}`);
@@ -115,7 +115,9 @@ describe('problem entry, responsibility and explicit human decision evidence', (
     problem.project.feedback[0].proofCheck = { status: 'checked', sourceDigest: 'a'.repeat(64), environmentDigest: 'b'.repeat(64), receiptId: 'candidate-check' };
     expect(problemAttention(problem, 'zh').some(item => item.kind === 'feedback')).toBe(false);
     problem.project.owner = author; problem.project.feedback[0].candidateDelivery = { policy: 'reviewed', status: 'awaiting-review' };
-    expect(problemAttention(problem, 'zh').find(item => item.kind === 'feedback')?.owners[0].id).toBe(author.id);
+    expect(problemAttention(problem, 'zh').find(item => item.kind === 'feedback')?.owners).toEqual([]);
+    problem.project.feedback[0].review = { reviewer: author } as NonNullable<ResearchProjectDetail['feedback'][number]['review']>;
+    expect(problemAttention(problem, 'zh').find(item => item.kind === 'feedback')?.owners).toEqual([]);
     problem.project.feedback[0].supersededBy = 'replacement';
     expect(problemAttention(problem, 'zh').some(item => item.kind === 'feedback')).toBe(false);
     task.feedback = undefined; problem.brief.blockers = []; task.proofStatus = 'checked'; task.checks = [{ id: 'failed-earlier', passed: false }, { id: 'passed-current', passed: true }];
@@ -123,6 +125,7 @@ describe('problem entry, responsibility and explicit human decision evidence', (
     problem.project.feedback[0].supersededBy = undefined;
     const copied = structuredClone(task); copied.dependsOn = [prerequisite.id]; copied.checks = []; copied.feedback = 'An open argument.';
     problem.brief.tasks.push(...Array.from({ length: 100 }, (_, index) => ({ ...structuredClone(copied), id: `additional-task-${index}` })));
+    problem.project.feedback[0].decision.status = 'needs-info';
     const prioritized = problemAttention(problem, 'zh', author.id);
     expect(prioritized[0].id).toBe('feedback:review');
     expect(prioritized.slice(0, 5).some(item => item.kind === 'handoff')).toBe(true);

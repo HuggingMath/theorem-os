@@ -22,7 +22,7 @@ export type ResearchDraftValues = {
   'annotation-reply': { text: string };
   review: { text: string };
 };
-export type ResearchDraftSubmission = { kind: 'feedback' | 'issue' | 'issue-reply' | 'guidance' | 'annotation' | 'annotation-reply' | 'review'; id: string; href?: string };
+export type ResearchDraftSubmission = { kind: 'feedback' | 'issue' | 'issue-reply' | 'guidance' | 'annotation' | 'annotation-reply' | 'review' | 'formalization' | 'run'; id: string; href?: string };
 export type ResearchAccountDraftVersionInfo = {
   id: string; revision: number; baseRevision: number; conflict: boolean; summary: string;
   deviceId: string; deviceName: string; clientUpdatedAt: string; savedAt: string;

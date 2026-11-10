@@ -51,6 +51,7 @@ import { renderRunMonitor as drawRunMonitor, type MonitorItem } from './ui/RunMo
 import { renderRunHeader as drawRunHeader, unmountRunHeader, type RunHeaderProps } from './ui/RunHeader';
 import { ChatSession } from './chatSession';
 import { leanProblemDraft, renderProblemDraftPanel } from './problemDrafts';
+import { clearProblemDraftTabMemory, captureProblemDraftSubmission, completeProblemDraftSubmission, resetProblemDraftBinding, syncProblemDraftSubmissions } from './problemDraftLifecycle';
 import type { ProblemDraftValue } from '../problemDraftTypes';
 import { ChatArtifactNavigation, chatArtifactLine, chatArtifactTask, type ChatArtifactKind, type ChatArtifactTarget } from './chatArtifactNavigation';
 import { createCommandPalette, type PaletteCommand } from './ui/CommandPalette';
@@ -349,6 +350,7 @@ function syncNaturalResearch() {
 async function openNaturalResearch(reset = false) {
   if (state.submitting) return;
   closeHistoryDialog();
+  if (reset && state.session) resetProblemDraftBinding(ownerOfSession(state.session), 'lean');
   chooseEntry('natural'); startDraft();
   await naturalPage;
   chatWorkspace?.home(reset);
@@ -448,11 +450,11 @@ function clearOwnedDrafts() {
   draftReady = false; draftDirty = false; clearTimeout(draftTimer);
   latestDraft = undefined; pendingImport = undefined; taskImportSequence++;
   draftContinuation = undefined; submissionIdentity.clear(); draftRecovery.clear(); ownedDrafts.clear();
-  forgetRememberedKey();
+  forgetRememberedKey(); clearProblemDraftTabMemory();
   try {
     for (const key of Object.keys(sessionStorage)) {
       if (key.startsWith('theorem-os.natural-research-draft.v1:') || key.startsWith('theorem-os.chat-draft.') || key.startsWith('theorem-os.chat-submission.')
-        || key.startsWith('theorem-os.chat-reading.') || key.startsWith('theorem-os.problem-draft.') || key === entryStorageKey) sessionStorage.removeItem(key);
+        || key.startsWith('theorem-os.chat-reading.') || key.startsWith('theorem-os.problem-draft.') || key.startsWith('theorem-os.problem-draft-pending.') || key === entryStorageKey) sessionStorage.removeItem(key);
     }
   } catch { /* In-memory drafts are also cleared when browser storage is unavailable. */ }
 }
@@ -2122,7 +2124,7 @@ function startDraft(reset = false, address: 'push' | 'replace' = 'push') {
   element('#open-draft-preview').setAttribute('aria-expanded', 'false');
   moduleView.update(undefined, moduleInput());
   state.panelSignature = ''; draftPreviewSignature = '';
-  if (reset) { submissionIdentity.clear(); resetForm(); }
+  if (reset) { if (state.session) resetProblemDraftBinding(ownerOfSession(state.session), 'lean'); submissionIdentity.clear(); resetForm(); }
   renderRunList(); renderDetail(true); setMobileView('compose');
   if (leaving && !historyQuery.matches) animateEntrance(element('.workspace'), 'workspace');
 }
@@ -2480,6 +2482,7 @@ function initialize(): Promise<void> {
         if (!ownerChanged) toast(t('会话已更新，未提交内容已保留'));
       }
       state.session = session;
+      if (session.account) void syncProblemDraftSubmissions(ownerOfSession(session), api);
       chatWorkspace?.bindOwner(ownerOfSession(session));
       if (ownerChanged && linkedProblemDraft) void naturalPage?.then(() => showProblemDraft());
       const previousProvider = field('provider').value;
@@ -2887,6 +2890,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
   }
   try {
     const capturedDraft = captureDraft();
+    const accountDraft = session.account ? captureProblemDraftSubmission(ownerOfSession(session), leanProblemDraft(capturedDraft, selectedProblemLibraries())) : undefined;
     const input: WebRunRequest = {
       providerId: field('provider').value, apiKey: field('api-key').value.trim(), model: field('model').value.trim(),
       effort: field('effort').value as WebEffort, environment: field('environment').value as WebEnvironment,
@@ -2921,6 +2925,8 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
       toast(t('研究已提交，连接已变化，请核对运行记录'));
       void poll(); return;
     }
+    const draftArchived = await completeProblemDraftSubmission(accountDraft, { kind: 'run', id: result.run.id }, api);
+    if (!currentConnection(epoch)) { void poll(); return; }
     const run = state.runs.find(item => item.id === result.run.id) ?? result.run;
     if (result.savedKeys && currentConnection(epoch) && state.session?.account) state.session.account.savedKeys = result.savedKeys;
     field('api-key').value = '';
@@ -2939,7 +2945,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     chatWorkspace?.useRunKey(run.id, input.apiKey);
     schedulePoll();
     requestRunsRefresh();
-    toast(result.keySaveFailed ? t('研究已提交，Key 未能保存，请在设置中重试保存。')
+    toast(!draftArchived ? t('研究已提交，草稿归档待同步。') : result.keySaveFailed ? t('研究已提交，Key 未能保存，请在设置中重试保存。')
       : saveKey ? t('研究已提交，Key 已保存到你的账号') : t('研究已提交'));
   } catch (error) {
     if (submission !== submissionSequence) return;

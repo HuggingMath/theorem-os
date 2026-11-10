@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { WebCommandResult, WebObservation } from '../collaboration';
+import type { WebObservation } from '../collaboration';
 import type { WebRun } from '../shared';
 import type { ResearchFeedback, ResearchFeedbackTarget, ResearchProjectDetail, ResearchRunBinding } from '../researchProjectTypes';
 import type { ResearchProblem } from '../researchProblemTypes';
 import type { ResearchBriefTask } from '../researchWorkspaceTypes';
 import { RichProse } from './richText';
-import { api, base, enc, ErrorBox, errorText, Field, MutationState, ResearchHttpError, theoremHref, tx, useMutation, useResource, type Item, type ResearchContext } from './researchShared';
+import { base, enc, ErrorBox, Field, MutationState, theoremHref, tx, useMutation, useResource, type Item, type ResearchContext } from './researchShared';
 import { FeedbackWorkspace, type FeedbackFocus } from './researchFeedback';
 import { ProofSubmission } from './researchTheorems';
 import { ProjectPlanApproval } from './researchPlanApproval';
@@ -14,7 +14,7 @@ import { ResearchAnnotations } from './researchAnnotations';
 import { ResearchDraftPicker } from './researchDrafts';
 import { useResearchInputDraft } from './researchInputDraft';
 import type { ResearchDraftValues } from '../researchPersonalTypes';
-import type { ResearchDraft } from './researchDraftStore';
+import { usePersonalGuidance } from './usePersonalGuidance';
 import './researchInlineActions.css';
 
 /** Route-local controls keep the displayed mathematical contract beside every human action. */
@@ -53,7 +53,7 @@ export function ResearchInlineActions({ problem, task, context, refresh, onTask,
         <InlineProjectClaim project={project} binding={binding} observation={observation} task={current ? task : undefined} selfId={selfId} refresh={changed} />
         <ProjectPlanApproval project={project} binding={{ ...binding, status: run.status }} observation={observation} selfId={selfId} refresh={changed} />
       </> : !project && <InlinePersonalApproval key={`${selfId}:${run.id}`} owner={selfId} run={run} observation={observation} root={root} refresh={changed} />}
-      {(!task || current) && (binding?.permissions.guidance ?? !project) && run.status === 'running' && <InlineGuidance selfId={selfId} project={project} binding={binding} observation={observation} task={task} root={root} refresh={changed}
+      {(!project || ((!task || current) && binding?.permissions.guidance && run.status === 'running')) && <InlineGuidance key={`${selfId}:${project?.id ?? ''}:${run.id}:${task?.id ?? ''}:${task?.version ?? ''}`} canSend={run.status === 'running' && (!task || Boolean(current))} running={run.status === 'running'} selfId={selfId} project={project} binding={binding} observation={observation} task={task} root={root} refresh={changed}
         onSaved={id => { setFocus(previous => ({ id, request: (previous?.request ?? 0) + 1 })); setShowFeedback(true); }} />}
       {project && binding && task && current && binding.permissions.proof && run.status === 'running' && <>
         <button class="button" type="button" data-inline-candidate onClick={() => setOpenedCandidate(value => !value)} aria-expanded={openedCandidate}>{tx('在这里编写候选证明', 'Write a candidate proof here')}</button>
@@ -86,57 +86,40 @@ function InlineProjectClaim({ project, binding, observation, task, selfId, refre
     {claim ? tx('释放我的认领', 'Release my claim') : tx('由我接着处理这一步', 'Claim this step')}</button><MutationState action={action} /></div>;
 }
 
-function usePersonalCommand(root: string, refresh: () => void, onSaved?: (receipt: WebCommandResult) => void) {
-  const pending = useRef<{ path: string; body: Record<string, unknown> }>(), lock = useRef(false), [busy, setBusy] = useState(false), [error, setError] = useState(''), [receipt, setReceipt] = useState<WebCommandResult>();
-  const [unconfirmed, setUnconfirmed] = useState(false), [submitted, setSubmitted] = useState<Record<string, unknown>>();
-  const send = async (path: string, body: Record<string, unknown>, retry = false) => {
-    if (lock.current || pending.current && !retry) return;
-    const submission = pending.current ?? { path, body: { ...body, id: crypto.randomUUID() } };
-    pending.current = submission; lock.current = true; setBusy(true); setError(''); setReceipt(undefined); setSubmitted(submission.body);
-    try {
-      let saved: WebCommandResult | undefined;
-      if (retry) {
-        try { saved = (await api<{ receipt: WebCommandResult }>(`${root}/commands/${enc(String(submission.body.id))}`)).receipt; }
-        catch (cause) { if (!(cause instanceof ResearchHttpError && cause.status === 404)) throw cause; }
-      }
-      const result = saved ?? (await api<{ receipt: WebCommandResult }>(`${root}/${submission.path}`, { method: 'POST', body: JSON.stringify(submission.body) })).receipt;
-      setReceipt(result); setUnconfirmed(result.status === 'unknown'); if (result.status !== 'unknown') pending.current = undefined;
-      if (!['unknown', 'failed', 'rejected'].includes(result.status)) onSaved?.(result); refresh();
-    } catch (cause) {
-      setError(errorText(cause)); setUnconfirmed(true);
-      if (cause instanceof ResearchHttpError && cause.status >= 400 && cause.status < 500) { pending.current = undefined; setUnconfirmed(false); }
-    } finally { lock.current = false; setBusy(false); }
-  };
-  return { busy, error, receipt, submitted, unconfirmed, send, retry: () => pending.current && send(pending.current.path, pending.current.body, true) };
-}
-
-function InlineGuidance({ selfId, project, binding, observation, task, root, refresh, onSaved }: { selfId: string; project?: ResearchProjectDetail; binding?: ResearchRunBinding; observation: WebObservation; task?: ResearchBriefTask; root: string; refresh(): void; onSaved(id: string): void }) {
+function InlineGuidance({ selfId, project, binding, observation, task, root, refresh, onSaved, canSend, running }: { canSend: boolean; running: boolean; selfId: string; project?: ResearchProjectDetail; binding?: ResearchRunBinding; observation: WebObservation; task?: ResearchBriefTask; root: string; refresh(): void; onSaved(id: string): void }) {
   const runId = binding?.runId ?? observation.webRunId;
   const scope = { runId, ...(binding ? { statementVersionId: binding.statementVersionId } : {}), ...(task ? { taskId: task.id, taskVersion: task.version } : {}) };
   const input = useResearchInputDraft<ResearchDraftValues['guidance']>(selfId, project?.id, 'guidance', scope, { text: '',
     planVersion: observation.inspection.planVersion, observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest } });
   const text = input.value.text, [confirmed, setConfirmed] = useState(''), action = useMutation();
-  const pending = useRef<{ draft?: ResearchDraft<ResearchDraftValues['guidance']>; value: ResearchDraftValues['guidance'] }>();
-  const personal = usePersonalCommand(root, refresh, receipt => { const submitted = pending.current; if (submitted) {
-    void input.complete(submitted.draft, { kind: 'guidance', id: receipt.id }, submitted.value); pending.current = undefined;
-  } });
+  const personal = usePersonalGuidance(selfId, runId, root, observation, running, !project, refresh, (submitted, receipt) => {
+    if ((submitted.body.taskRef?.id ?? '') === (task?.id ?? '') && (submitted.body.taskRef?.version ?? '') === (task?.version ?? ''))
+      void input.complete(submitted.draft, { kind: 'guidance', id: receipt.id }, submitted.value);
+    else if (submitted.draft) void input.drafts.complete(submitted.draft, { kind: 'guidance', id: receipt.id });
+  });
   const signature = JSON.stringify([task?.id, task?.version, observation.inspection.planVersion]), checked = confirmed === signature;
   const target: ResearchFeedbackTarget | undefined = binding ? { runId: binding.runId, statementVersionId: binding.statementVersionId, observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest }, ...(task ? { taskRef: { id: task.id, version: task.version } } : {}) } : undefined;
   const recipient = task ? { kind: 'task', id: task.id } : { kind: 'lead' }, busy = action.busy || personal.busy;
-  return <details data-inline-guidance open={Boolean(text) || undefined}><summary>{task ? tx('对这一步提供指导', 'Give guidance for this step') : tx('向 Lead 提供路线意见', 'Give route guidance to the Lead')}</summary>
+  return <details data-inline-guidance open={Boolean(text || personal.attempt) || undefined}><summary>{task ? tx('对这一步提供指导', 'Give guidance for this step') : tx('向 Lead 提供路线意见', 'Give route guidance to the Lead')}</summary>
     <ResearchDraftPicker drafts={input.drafts} filter={item => item.scope.runId === runId && (item.scope.taskId ?? '') === (task?.id ?? '') && (item.scope.taskVersion ?? '') === (task?.version ?? '')} onRestore={item => { input.restore(item); setConfirmed(''); action.reset(); }} />
-    <form class="research-form" onSubmit={event => { event.preventDefault(); if (!checked) return; const submitted = input.drafts.current(), value = input.value;
+    <form class="research-form" onSubmit={event => { event.preventDefault(); if (!checked || !canSend || personal.attempt || personal.blocked) return; const submitted = input.drafts.current(), value = input.value;
     if (project && target) void action.run<Item<ResearchFeedback>>('POST', `${base}/theorems/${enc(project.id)}/feedback`, { kind: 'guidance', target, recipient, text }, result => { void input.complete(submitted, { kind: 'feedback', id: result.item.id }, value); refresh(); onSaved(result.item.id); });
-    else { pending.current = { draft: submitted, value }; void personal.send('guidance', { text, recipient, observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest }, ...(task ? { taskRef: { id: task.id, version: task.version } } : {}) }); }
+    else personal.send({ draft: submitted, value, planVersion: observation.inspection.planVersion ?? '', body: { id: crypto.randomUUID(), text, recipient: task ? { kind: 'task', id: task.id } : { kind: 'lead' }, observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest }, ...(task ? { taskRef: { id: task.id, version: task.version } } : {}) } });
   }}><p>{tx('指导对象', 'Recipient')}: {task ? `${task.id} · ${task.version.slice(0, 12)}` : 'Lead'}</p>
     <Field label={tx('希望怎样改进这一步或路线', 'How should this step or route improve?')} value={text} onInput={text => input.update({ text, planVersion: observation.inspection.planVersion, observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest } })} multiline required maxLength={4000} />
     <label class="research-check"><input type="checkbox" data-inline-confirm-guidance checked={checked} onChange={event => setConfirmed(event.currentTarget.checked ? signature : '')} />{tx('已核对当前命题、前提和指导对象', 'I reviewed the statement, premises and recipient')}</label>
-    <button type="submit" class="button" data-inline-send-guidance disabled={busy || !checked || personal.unconfirmed}>{tx('发送这条指导', 'Send this guidance')}</button><MutationState action={action} />
+    <button type="submit" class="button" data-inline-send-guidance disabled={busy || !checked || !canSend || Boolean(personal.attempt) || personal.blocked}>{tx('发送这条指导', 'Send this guidance')}</button><MutationState action={action} />
     {!project && <PersonalCommandStatus command={personal} />}
   </form></details>;
 }
 
-function PersonalCommandStatus({ command }: { command: ReturnType<typeof usePersonalCommand> }) {
-  return <><ErrorBox message={command.error} />{command.unconfirmed && <p role="status">{tx('原提交结果尚待确认。请核对同一条记录后再继续。', 'The original submission is unconfirmed. Check the same record before continuing.')} <button type="button" class="button" data-inline-retry-command disabled={command.busy} onClick={() => void command.retry()}>{tx('核对并重试原提交', 'Check and retry the original submission')}</button></p>}
+function PersonalCommandStatus({ command }: { command: ReturnType<typeof usePersonalGuidance> }) {
+  return <><ErrorBox message={command.error} />{command.blocked && <button type="button" class="button" onClick={command.recover}>{tx('重新读取待确认记录', 'Reload pending records')}</button>}
+    {command.attempt && <div role="status" data-inline-pending-guidance><p>{tx('这条指导的投递结果尚待确认。刷新后会继续查询原记录。', 'Delivery of this guidance is unconfirmed. Refreshing checks the original record.')}</p>
+      <p>{tx('原指导对象', 'Original recipient')}: {command.attempt.body.taskRef ? `${command.attempt.body.taskRef.id} · ${command.attempt.body.taskRef.version}` : 'Lead'}</p><RichProse text={command.attempt.body.text} />
+      <button type="button" class="button" data-inline-query-command disabled={command.busy} onClick={() => void command.query()}>{tx('查询原回执', 'Check the original receipt')}</button>
+      {command.canRetry ? <button type="button" class="button" data-inline-retry-command disabled={command.busy} onClick={() => void command.retry()}>{tx('核对并重试原提交', 'Check and retry the original submission')}</button>
+        : <p>{tx('原路线或任务版本已变化，只能查询原回执。', 'The original route or task version has changed. Only receipt checks are available.')}</p>}
+    </div>}
     {command.receipt && <p role="status" data-inline-command-status={command.receipt.status}>{tx('运行回执', 'Run receipt')}: {command.receipt.status}{command.receipt.reason && <> · {command.receipt.reason}</>}</p>}</>;
 }

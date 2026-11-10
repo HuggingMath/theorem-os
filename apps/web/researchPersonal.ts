@@ -10,6 +10,9 @@ import type { ResearchProjectDetail } from './researchProjectTypes';
 import { researchStatementIdentity } from './client/researchOverviewModel';
 import { researchModulePlanDraftSchema } from '../../src/solver/modules/policy';
 import type { ResearchDiscussionContext } from './researchProjectTypes';
+import type { WebFormalization } from './formalizationTypes';
+import type { ProblemDraftValue } from './problemDraftTypes';
+import { matchesProblemFormalization, matchesProblemRun } from './problemDraftSubmission';
 
 const key = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u), hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const text = (max: number) => z.string().max(max).refine(value => !value.includes('\0'));
@@ -56,7 +59,7 @@ const values = {
 const mutation = { requestId: key, expectedRevision: z.number().int().nonnegative() };
 const saveDraftSchema = z.object({ ...mutation, scope: scopeSchema, value: z.unknown(), summary: text(200), deviceId: key,
   deviceName: z.string().trim().min(1).max(80), clientUpdatedAt: z.string().datetime() }).strict();
-const submissionSchema = z.object({ kind: z.enum(['feedback', 'issue', 'issue-reply', 'guidance', 'annotation', 'annotation-reply', 'review']), id: key }).strict();
+const submissionSchema = z.object({ kind: z.enum(['feedback', 'issue', 'issue-reply', 'guidance', 'annotation', 'annotation-reply', 'review', 'formalization', 'run']), id: key }).strict();
 const lifecycleSchema = z.object({ requestId: key, versionId: key, action: z.enum(['submitted', 'restore', 'discard']), submission: submissionSchema.optional() }).strict();
 const organizeSchema = z.object({ ...mutation, pinned: z.boolean(), status: z.enum(['active', 'parked', 'archived']),
   tags: z.array(z.string().trim().min(1).max(40)).max(12), nextNote: text(4000) }).strict();
@@ -255,7 +258,16 @@ export class WebResearchPersonal {
     const self = this.deps.projects.identity(viewer), target = new URLSearchParams({ ...(scope.projectId ? { project: scope.projectId } : {}),
       ...(scope.runId ? { run: scope.runId } : {}), tab: 'route', ...(scope.taskId ? { task: scope.taskId, taskVersion: scope.taskVersion! } : {}) });
     let href = `problem.html?${target}`;
-    if (input.kind === 'feedback' && scope.projectId && ['candidate', 'discussion', 'guidance'].includes(scope.kind)) {
+    if (scope.kind === 'problem' && input.kind === 'formalization') {
+      const record = this.deps.storage.getRecord<{ owner: string; formalization: WebFormalization }>(['owners', mathDigest(viewer), 'formalizations', input.id, 'record.json']);
+      if (!record || record.owner !== viewer) fail(404, '提交的原题记录不存在。');
+      if (!matchesProblemFormalization(value as ProblemDraftValue, record!.formalization)) fail(409, '提交记录与草稿内容不一致。');
+      href = `formalize.html?id=${encodeURIComponent(input.id)}`;
+    } else if (scope.kind === 'problem' && input.kind === 'run') {
+      const run = this.deps.jobs.get(viewer, input.id) ?? fail(404, '提交的运行记录不存在。');
+      if (!matchesProblemRun(value as ProblemDraftValue, run)) fail(409, '提交记录与草稿内容不一致。');
+      href = `./?run=${encodeURIComponent(input.id)}`;
+    } else if (input.kind === 'feedback' && scope.projectId && ['candidate', 'discussion', 'guidance'].includes(scope.kind)) {
       const feedback = this.deps.projects.feedback(viewer, scope.projectId, input.id);
       const kind = scope.kind === 'candidate' ? 'proof-submission' : scope.kind;
       const reference = feedback.discussionContext ?? feedback.target;

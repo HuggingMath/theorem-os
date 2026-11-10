@@ -1,5 +1,6 @@
 import { createIcons, ArrowRight, ArrowUpRight, Bug, Copy, Download, GitFork, Lightbulb, MessageCircle, X } from 'lucide';
 import { issueDestination, keepHashOnLanguageSwitch, localeOf } from './site';
+import { feedbackDraftKey, parseFeedbackDraft, serializeFeedbackDraft, type FeedbackDraft } from './feedbackDraft';
 
 createIcons({ icons: { ArrowRight, ArrowUpRight, Bug, Copy, Download, GitFork, Lightbulb, MessageCircle, X }, attrs: { 'aria-hidden': 'true' } });
 
@@ -22,6 +23,9 @@ const text = {
     longNote: '内容较长，请先复制或下载全文，再到 GitHub 粘贴发布。',
     note: '将在 GitHub 打开草稿，提交后公开。',
     copied: '已复制反馈全文。', copyFailed: '未能自动复制，已选中全文，可手动复制。', downloaded: '已准备反馈 Markdown 下载。',
+    draftSaved: '草稿已保留在此标签页。', draftRestored: '已恢复上次填写的反馈。', draftCleared: '已清空反馈草稿。',
+    draftUnavailable: '浏览器未能保留草稿，离开前请复制或下载全文。',
+    clearConfirm: '清空这份尚未发布的反馈？',
   },
   en: {
     kinds: {
@@ -35,6 +39,9 @@ const text = {
     longNote: 'This is too long for a link. Copy or download the full text, then paste it on GitHub.',
     note: 'A draft opens on GitHub. It becomes public when you submit it there.',
     copied: 'Copied the full text.', copyFailed: 'Could not copy automatically. The full text is selected so you can copy it.', downloaded: 'The Markdown download is ready.',
+    draftSaved: 'Draft saved in this tab.', draftRestored: 'Your previous feedback has been restored.', draftCleared: 'Feedback draft cleared.',
+    draftUnavailable: 'The browser could not save your draft. Copy or download it before leaving.',
+    clearConfirm: 'Clear this unpublished feedback?',
   },
 }[locale];
 const kinds = text.kinds;
@@ -48,6 +55,9 @@ const review = element<HTMLDialogElement>('feedback-review');
 const markdown = element<HTMLTextAreaElement>('feedback-markdown');
 const github = element<HTMLAnchorElement>('feedback-github');
 const status = element('feedback-export-status');
+const draftStatus = element('feedback-draft-status');
+const clearDraft = element<HTMLButtonElement>('feedback-clear-draft');
+let unsavedDraft = false;
 const kindInputs = Array.from(form.querySelectorAll<HTMLInputElement>('input[name="feedback-kind"]'));
 const selectedKind = (): Kind => {
   const value = kindInputs.find(input => input.checked)?.value;
@@ -61,9 +71,34 @@ function updateFields() {
   subject.setCustomValidity(subject.value.trim() ? '' : text.missingSubject);
   description.setCustomValidity(description.value.trim() ? '' : text.missingDescription);
   element('feedback-count').textContent = `${description.value.length} / ${description.maxLength}`;
+  clearDraft.disabled = !subject.value && !description.value && !environment.value && !area.value && selectedKind() === 'bug';
 }
-form.addEventListener('input', updateFields);
-form.addEventListener('change', updateFields);
+function saveDraft() {
+  updateFields();
+  const value: FeedbackDraft = { kind: selectedKind(), area: area.value as FeedbackDraft['area'],
+    subject: subject.value, description: description.value, environment: environment.value };
+  try {
+    sessionStorage.setItem(feedbackDraftKey, serializeFeedbackDraft(value));
+    unsavedDraft = false; draftStatus.textContent = text.draftSaved;
+  } catch { unsavedDraft = true; draftStatus.textContent = text.draftUnavailable; }
+}
+form.addEventListener('input', saveDraft);
+form.addEventListener('change', saveDraft);
+window.addEventListener('beforeunload', event => {
+  if (unsavedDraft) { event.preventDefault(); event.returnValue = ''; }
+});
+clearDraft.addEventListener('click', () => {
+  if (!window.confirm(text.clearConfirm)) return;
+  // Clear persisted content first, so a failed storage write cannot resurrect an old draft on reload.
+  try { sessionStorage.removeItem(feedbackDraftKey); }
+  catch { draftStatus.textContent = text.draftUnavailable; return; }
+  form.reset(); updateFields(); unsavedDraft = false; draftStatus.textContent = text.draftCleared;
+  // A deliberate clear also dismisses the workbench's initial prefill on the next reload.
+  const url = new URL(location.href);
+  for (const key of ['kind', 'area', 'environment']) url.searchParams.delete(key);
+  history.replaceState(null, '', url);
+  subject.focus();
+});
 
 form.addEventListener('submit', event => {
   event.preventDefault();
@@ -131,6 +166,14 @@ function prefill(params: URLSearchParams) {
   if (env && !environment.value) environment.value = env.replace(/\s+/gu, ' ').trim().slice(0, environment.maxLength);
 }
 prefill(new URLSearchParams(location.search));
+try {
+  const saved = parseFeedbackDraft(sessionStorage.getItem(feedbackDraftKey));
+  if (saved) {
+    kindInputs.forEach(input => { input.checked = input.value === saved.kind; });
+    area.value = saved.area; subject.value = saved.subject; description.value = saved.description; environment.value = saved.environment;
+    draftStatus.textContent = text.draftRestored;
+  }
+} catch { draftStatus.textContent = text.draftUnavailable; }
 
 updateFields();
 form.hidden = false;

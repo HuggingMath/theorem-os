@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebStorage } from '../apps/web/storage';
 import { WebResearchProjects } from '../apps/web/researchProjects';
 import { WebResearchPersonal } from '../apps/web/researchPersonal';
@@ -8,6 +8,12 @@ import type { ProblemDraftValue } from '../apps/web/problemDraftTypes';
 import type { TaskDraft } from '../apps/web/client/draft';
 import { leanProblemDraft, problemDraftSignature } from '../apps/web/client/problemDrafts';
 import { accountDraftHref } from '../apps/web/client/researchPersonal';
+import { mathDigest } from '../src/math/mathRuntimeIo';
+import type { WebRun } from '../apps/web/shared';
+import type { WebFormalization } from '../apps/web/formalizationTypes';
+import { matchesProblemRun } from '../apps/web/problemDraftSubmission';
+import { captureProblemDraftSubmission, completeProblemDraftSubmission, readProblemDraftBinding, rememberProblemDraftBinding,
+  resetProblemDraftBinding, problemDraftSyncPending, syncProblemDraftSubmissions, type ProblemDraftRequest } from '../apps/web/client/problemDraftLifecycle';
 
 const alice = 'account:alice@example.org', bob = 'account:bob@example.org';
 const natural: ProblemDraftValue = { mode: 'natural', text: '  设 $n\\in\\mathbb{N}$。\n证明 $n+0=n$。\n',
@@ -19,7 +25,7 @@ const lean: TaskDraft = { providerId: 'fixture', model: 'lean-model', environmen
   templateId: '', modulePlan: { scheduler: 'critical-path', context: 'essential', custom: [] }, knowledgeDigest: null };
 function fixture() {
   const storage = new WebStorage(), projects = new WebResearchProjects(storage), get = vi.fn(() => { throw new Error('No run access for an unsent problem'); });
-  return { get, personal: new WebResearchPersonal({ storage, projects, jobs: { get } as unknown as WebJobs, problems: {} as WebResearchProblems }) };
+  return { get, storage, personal: new WebResearchPersonal({ storage, projects, jobs: { get } as unknown as WebJobs, problems: {} as WebResearchProblems }) };
 }
 const input = (draftKey: string, value: ProblemDraftValue = natural, requestId = 'save', expectedRevision = 0) => ({
   scope: { kind: 'problem', draftKey }, value, requestId, expectedRevision, summary: '未完成的加法证明', deviceId: 'desktop', deviceName: 'Desktop', clientUpdatedAt: '2026-11-10T12:00:00.000Z',
@@ -79,5 +85,117 @@ describe('unsubmitted account problem drafts', () => {
     expect(() => personal.saveDraft(alice, { ...input('no-project'), scope: { kind: 'problem', draftKey: 'no-project', projectId: 'project' } })).toThrow('新题草稿范围无效');
     expect(() => personal.saveDraft(alice, { ...input('missing-id'), scope: { kind: 'problem' } })).toThrow('新题草稿范围无效');
     expect(() => personal.saveDraft(alice, { ...input('other-kind'), scope: { kind: 'review', draftKey: 'other-kind' }, value: { text: 'wrong scope' } })).toThrow('新题草稿范围无效');
+  });
+});
+
+
+function storeFormalization(storage: WebStorage, owner: string, id: string, value: Extract<ProblemDraftValue, { mode: 'natural' }> = natural as Extract<ProblemDraftValue, { mode: 'natural' }>) {
+  const { participation, ...settings } = value.settings;
+  storage.saveRecord(['owners', mathDigest(owner), 'formalizations', id, 'record.json'], { owner, formalization: {
+    id, original: value.text, ...settings, model: settings.model.trim(), workflow: 'solve', humanReview: participation === 'guided',
+    status: 'review', createdAt: '2026-11-10T12:00:00.000Z', updatedAt: '2026-11-10T12:00:00.000Z',
+  } satisfies WebFormalization });
+}
+function stubTab() {
+  const values = new Map<string, string>();
+  vi.stubGlobal('sessionStorage', { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) });
+  return values;
+}
+afterEach(() => vi.unstubAllGlobals());
+
+describe('problem draft submission lifecycle', () => {
+  it('archives only the confirmed natural branch and links its actual formalization', () => {
+    const { personal, storage } = fixture();
+    const first = personal.saveDraft(alice, input('submitted-natural'));
+    const changed = { ...natural, text: 'Submitted exact original' };
+    const submitted = personal.saveDraft(alice, input('submitted-natural', changed, 'desktop', 1));
+    const parallel = personal.saveDraft(alice, input('submitted-natural', { ...natural, text: 'Phone edits' }, 'phone', 1));
+    storeFormalization(storage, alice, 'accepted-original', changed);
+    personal.updateDraft(alice, first.draft.id, { requestId: 'complete', versionId: submitted.version.id, action: 'submitted', submission: { kind: 'formalization', id: 'accepted-original' } });
+    expect(personal.drafts(alice, undefined, 'problem').items[0].versions.map(item => item.id)).toEqual([parallel.version.id]);
+    const archived = personal.draft(alice, first.draft.id, submitted.version.id).version;
+    expect(archived.submission).toEqual({ kind: 'formalization', id: 'accepted-original', href: 'formalize.html?id=accepted-original' });
+    expect(personal.draft(alice, first.draft.id, first.version.id).version.status).toBe('submitted');
+  });
+  it('refuses foreign, missing, mismatched original and mismatched settings records without changing the draft', () => {
+    const { personal, storage } = fixture(), first = personal.saveDraft(alice, input('refused-natural'));
+    const complete = (id: string) => personal.updateDraft(alice, first.draft.id, { requestId: id, versionId: first.version.id, action: 'submitted', submission: { kind: 'formalization', id } });
+    storeFormalization(storage, bob, 'foreign');
+    storeFormalization(storage, alice, 'wrong-text', { ...natural, text: 'Different problem' });
+    storeFormalization(storage, alice, 'wrong-budget', { ...natural, settings: { ...natural.settings, maxTotalTokens: 100 } });
+    for (const id of ['missing', 'foreign', 'wrong-text', 'wrong-budget']) expect(() => complete(id)).toThrow();
+    expect(personal.drafts(alice, undefined, 'problem').items[0].versions).toHaveLength(1);
+  });
+  it('matches Lean source, instructions, budget, plan and library versions to the actual owned run', () => {
+    const { personal, get } = fixture();
+    const value = leanProblemDraft(lean);
+    const run = { id: 'lean-run', ...lean, source: lean.source.trim(), task: lean.task.trim(), maxTurns: 7, maxRunSeconds: 900, maxTotalTokens: 125000, workers: 3, knowledgeDigest: undefined } as unknown as WebRun;
+    get.mockImplementation(() => run as never);
+    const saved = personal.saveDraft(alice, input('submitted-lean', value));
+    const archived = personal.updateDraft(alice, saved.draft.id, { requestId: 'lean-complete', versionId: saved.version.id, action: 'submitted', submission: { kind: 'run', id: run.id } });
+    expect(archived.version.submission?.href).toBe('./?run=lean-run');
+    expect(get).toHaveBeenCalledWith(alice, run.id);
+    for (const patch of [{ source: 'different source' }, { task: 'other instructions' }, { model: 'other-model' }, { maxTotalTokens: 12000 }, { workers: 2 }, { planApproval: false }, { knowledgeDigest: 'unexpected' }, { modulePlan: { scheduler: 'plan', context: 'full', custom: [] } }]) {
+      expect(matchesProblemRun(value, { ...run, ...patch } as WebRun)).toBe(false);
+    }
+    expect(matchesProblemRun({ ...value, libraries: [{ assetId: 'missing-library', version: '1' }] }, run)).toBe(false);
+    expect(matchesProblemRun(natural, run)).toBe(false);
+  });
+  it('matches endpoint whitespace normalization while keeping internal source and instruction changes distinct', () => {
+    const value = leanProblemDraft({ ...lean, source: '  theorem target : True := by\n  sorry\n', task: '  Prove True\n' });
+    const run = { ...lean, source: value.draft.source.trim(), task: value.draft.task.trim(), maxTurns: 7, maxRunSeconds: 900, maxTotalTokens: 125000, workers: 3, knowledgeDigest: undefined } as unknown as WebRun;
+    expect(matchesProblemRun(value, run)).toBe(true);
+    expect(matchesProblemRun(value, { ...run, source: run.source.replace('\n  sorry', '\nsorry') })).toBe(false);
+    expect(matchesProblemRun(value, { ...run, task: 'Prove  True' })).toBe(false);
+  });
+  it('keeps the baseline through tab reload and resets explicit new problems independently', () => {
+    stubTab(); const owner = crypto.randomUUID();
+    const first = readProblemDraftBinding(owner, 'natural');
+    const savedSignature = problemDraftSignature(natural, 'Saved name');
+    rememberProblemDraftBinding(owner, 'natural', { ...first, revision: 1, title: 'Renamed locally', savedSignature });
+    const restored = readProblemDraftBinding(owner, 'natural');
+    expect(restored.savedSignature).toBe(savedSignature);
+    expect(problemDraftSignature(natural, restored.title)).not.toBe(savedSignature);
+    resetProblemDraftBinding(owner, 'natural');
+    const next = readProblemDraftBinding(owner, 'natural');
+    expect(next.draftKey).not.toBe(first.draftKey); expect(next.title).toBe(''); expect(next.revision).toBe(0);
+    expect(captureProblemDraftSubmission(owner, natural)).toBeUndefined();
+  });
+  it('saves and archives the submitted snapshot after edits, preserving a later parallel version and idempotent archive retries', async () => {
+    stubTab(); const owner = `account:${crypto.randomUUID()}@example.org`;
+    const { personal, storage } = fixture(), saved = personal.saveDraft(owner, input('edited-submit'));
+    rememberProblemDraftBinding(owner, 'natural', { draftKey: 'edited-submit', revision: 1, title: 'Renamed submitted original', draftId: saved.draft.id, versionId: saved.version.id, savedSignature: problemDraftSignature(natural, saved.version.summary) });
+    const changed = { ...natural, text: 'Exact submitted change' }, snapshot = captureProblemDraftSubmission(owner, changed)!;
+    changed.text = 'Later editor content';
+    const parallel = personal.saveDraft(owner, input('edited-submit', { ...natural, text: 'Parallel phone version' }, 'phone', 1));
+    storeFormalization(storage, owner, 'confirmed-snapshot', snapshot.value as Extract<ProblemDraftValue, { mode: 'natural' }>);
+    let loseSaveReply = true;
+    const request: ProblemDraftRequest = async <T>(url: string, init?: RequestInit) => {
+      const parsed = new URL(url, 'http://fixture'), id = parsed.pathname.split('/').at(-1)!;
+      if (init?.method === 'POST') { const item = personal.saveDraft(owner, JSON.parse(String(init.body))); if (loseSaveReply) { loseSaveReply = false; throw new TypeError('reply lost'); } return { item } as T; }
+      if (init?.method === 'PATCH') return { item: personal.updateDraft(owner, id, JSON.parse(String(init.body))) } as T;
+      return { item: personal.draft(owner, id, parsed.searchParams.get('version') ?? undefined) } as T;
+    };
+    expect(await completeProblemDraftSubmission(snapshot, { kind: 'formalization', id: 'confirmed-snapshot' }, request)).toBe(false);
+    expect(problemDraftSyncPending(owner)).toBe(true);
+    expect(personal.drafts(owner, undefined, 'problem').items[0].versions).toHaveLength(3);
+    expect(await syncProblemDraftSubmissions(owner, request)).toBe(true);
+    const all = personal.drafts(owner, undefined, 'problem', 'all').items[0];
+    expect(all.versions).toHaveLength(3);
+    expect(all.versions[0]).toMatchObject({ summary: 'Renamed submitted original', status: 'submitted', submission: { id: 'confirmed-snapshot' } });
+    expect(personal.draft(owner, all.id, all.versions[0].id).version.value).toEqual(snapshot.value);
+    expect(personal.drafts(owner, undefined, 'problem').items[0].versions.map(item => item.id)).toEqual([parallel.version.id]);
+    expect(problemDraftSyncPending(owner)).toBe(false);
+    expect(readProblemDraftBinding(owner, 'natural').revision).toBe(0);
+  });
+  it('does not create account versions for never-saved problems and preserves saved versions until a task is confirmed', async () => {
+    stubTab(); const owner = crypto.randomUUID(), request = vi.fn();
+    expect(await completeProblemDraftSubmission(captureProblemDraftSubmission(owner, natural), { kind: 'formalization', id: 'accepted' }, request)).toBe(true);
+    expect(request).not.toHaveBeenCalled();
+    rememberProblemDraftBinding(owner, 'natural', { draftKey: 'unknown-send', revision: 2, title: 'Unconfirmed' });
+    expect(captureProblemDraftSubmission(owner, natural)?.binding.revision).toBe(2);
+    expect(problemDraftSyncPending(owner)).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+    expect(readProblemDraftBinding(owner, 'natural').revision).toBe(2);
   });
 });
