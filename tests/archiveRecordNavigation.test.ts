@@ -41,6 +41,10 @@ const manifest = JSON.parse(fs.readFileSync(path.join(root, 'research/openai-mat
 const archived = manifest.records.map(native => ({ record: { ...native, sources: [], excerpt: '' },
   process: JSON.parse(fs.readFileSync(path.join(root, 'research/openai-math', native.directory, 'process.json'), 'utf8')) as ArchiveProcess }));
 const savedRuns = archived.flatMap(({ record, process }) => process.runs.map(run => ({ record, process, run })));
+const runEntries = savedRuns.map(value => ({ ...value,
+  entries: globalEntries(renderGlobalTrajectory(value.record, value.process, 'en', status => status ?? '', { run: value.run.runId }))
+    .filter(entry => entry.id.startsWith('delivery:') || entry.id.startsWith('check:')) }));
+const savedEvidence = runEntries.flatMap(({ record, process, run, entries }) => entries.map(entry => ({ record, process, run, entry })));
 
 describe('exact archived record navigation', () => {
   it('keeps unassigned and removed-task evidence on the original problem without changing current tasks or review and acceptance', () => {
@@ -101,24 +105,20 @@ describe('exact archived record navigation', () => {
       'openai_three_state_tree_clauses', 'openai_character_varieties_all_seams_support',
     ]));
     expect(savedRuns).toHaveLength(61);
-    const entries = archived.flatMap(({ record, process }) => process.runs.flatMap(run =>
-      globalEntries(renderGlobalTrajectory(record, process, 'en', status => status ?? '', { run: run.runId }))
-        .filter(entry => entry.id.startsWith('delivery:') || entry.id.startsWith('check:'))));
-    expect(entries).toHaveLength(1055);
-    expect(entries.filter(entry => entry.node === 'problem').length).toBeGreaterThan(40);
+    expect(savedEvidence).toHaveLength(1055);
+    expect(savedEvidence.filter(({ entry }) => entry.node === 'problem').length).toBeGreaterThan(40);
   });
 
-  // Every saved run keeps the normal per-test deadline while all of its evidence
-  // destinations are exercised; the growing archive no longer shares one timer.
-  it.each(savedRuns)('opens every real global delivery and check in $record.id / $run.runId', ({ record, process, run }) => {
-    const entries = globalEntries(renderGlobalTrajectory(record, process, 'en', status => status ?? '', { run: run.runId }))
-      .filter(entry => entry.id.startsWith('delivery:') || entry.id.startsWith('check:'));
+  it.each(runEntries)('lists every saved delivery and check in $record.id / $run.runId', ({ record, run, entries }) => {
     expect(entries.map(entry => entry.id).sort(), `${record.id}/${run.runId}: complete evidence`)
       .toEqual([...(run.deliveries ?? []).map(delivery => 'delivery:' + delivery.id),
         ...(run.checks ?? []).map(check => 'check:' + check.id)].sort());
-    for (const entry of entries) {
-      const selection = { ...emptyProcessSelection(), view: 'roadmap' as const, run: run.runId, node: entry.node!, step: entry.id };
-      expect(selectedRecord(renderArchiveProcess(record, process, selection, 'en')), `${record.id}/${run.runId}/${entry.id}`).toEqual([entry.id]);
-    }
+  });
+
+  // Each real navigation target keeps the normal deadline, independently of how
+  // many deliveries and checks were saved in the same historical run.
+  it.each(savedEvidence)('opens the exact archived evidence $record.id / $run.runId / $entry.id', ({ record, process, run, entry }) => {
+    const selection = { ...emptyProcessSelection(), view: 'roadmap' as const, run: run.runId, node: entry.node!, step: entry.id };
+    expect(selectedRecord(renderArchiveProcess(record, process, selection, 'en')), `${record.id}/${run.runId}/${entry.id}`).toEqual([entry.id]);
   });
 });
