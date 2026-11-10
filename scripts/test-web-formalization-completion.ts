@@ -72,8 +72,13 @@ async function approve(page: Page, pending: Formalizer) {
   const record = await read(page, pending.input.id);
   assert.equal(record.status, 'review'); assert.equal(record.workflow, undefined); assert.equal(record.runId, undefined);
   assert.equal(record.report?.statement, evidence.candidate.source);
-  assert.equal(record.report?.reviews.length, 2);
-  assert.ok(record.report!.reviews.every(review => review.verdict === 'approved'));
+  if (pending.input.reviewMode === 'direct') {
+    assert.equal(record.report?.reviews.length, 0);
+    assert.equal(record.report?.semanticReview, 'not-performed');
+  } else {
+    assert.equal(record.report?.reviews.length, 2);
+    assert.ok(record.report!.reviews.every(review => review.verdict === 'approved'));
+  }
   assert.equal(await page.locator('#formalize-actions [data-action="cancel"]').count(), 0);
   assert.equal(proofCalls, 0);
 }
@@ -96,16 +101,16 @@ try {
     await page.goto(`${origin}/formalize.html`);
     const pending = await submit(page), evidence = webFormalizationEvidence(pending.input);
     pending.send({ type: 'compiled', candidate: formalizationCompiledCandidate(evidence) });
-    pending.send({ type: 'progress', progress: { phase: 'reviewing', round: 1 } });
+    pending.send({ type: 'progress', progress: { phase: pending.input.reviewMode === 'direct' ? 'compiling' : 'reviewing', round: 1 } });
     await page.locator('#formalize-compiled').waitFor();
     assert.equal(await page.locator('#formalize-compiled pre').textContent(), evidence.candidate.source);
     assert.equal(proofCalls, 0);
     await screenshot(page, `compiled-reviewing-${width}.png`);
-    mark(`${width}px: compiled statement remains available during review without starting proof`);
+    mark(`${width}px: compiled statement remains available before report settlement without starting proof`);
 
     await approve(page, pending);
     await screenshot(page, `formalization-ready-${width}.png`);
-    mark(`${width}px: both approved reviews publish a completed formalization report`);
+    mark(`${width}px: completed formalization report reflects its actual review mode`);
     await page.reload();
     await page.locator('#formalize-review').waitFor();
     assert.equal((await read(page, pending.input.id)).status, 'review');
