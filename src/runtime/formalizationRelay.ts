@@ -8,7 +8,7 @@ import { parse as parseToml } from 'smol-toml';
 import { z } from 'zod';
 import { createParser } from 'eventsource-parser';
 import { assertMathCanonicalPath } from '../math/paths';
-import { mathDigest } from '../math/mathRuntimeIo';
+import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import { runMathProcess } from '../math/mathProcess';
 import { SUB2API_PROVIDER } from './sub2api';
 import { normalizeModelRequestUsage, type ModelRequestAdmission, type ModelRequestGate,
@@ -98,6 +98,17 @@ const textPart = z.union([
     logprobs: z.array(z.never()).optional() }).strict(),
 ]);
 const inlineContent = z.union([z.string(), z.array(textPart)]);
+const clientTool = z.union([
+  z.object({ type: z.literal('function'), name: toolName, description: z.string().optional(),
+    parameters: z.record(z.unknown()), strict: z.boolean().nullable().optional() }).strict(),
+  z.object({ type: z.literal('custom'), name: toolName, description: z.string().optional(),
+    format: z.union([z.object({ type: z.literal('text') }).strict(),
+      z.object({ type: z.literal('grammar'), syntax: z.literal('lark'), definition: z.string() }).strict()]).optional() }).strict(),
+]);
+// GPT's native code-mode dialect declares local tools inline. Namespaces contain
+// only the same client-executed tools; they grant no hosted or remote capability.
+const inlineTool = z.object({ type: z.literal('namespace'), name: toolName, description: z.string().optional(),
+  tools: z.array(clientTool) }).strict();
 const inlineInputItem = z.union([
   z.object({ type: z.literal('message').optional(), id: inlineId,
     role: z.enum(['system', 'developer', 'user', 'assistant']), content: inlineContent, status: itemStatus,
@@ -107,31 +118,29 @@ const inlineInputItem = z.union([
     content: z.array(z.object({ type: z.literal('reasoning_text'), text: z.string() }).strict()).nullable().optional(),
     encrypted_content: z.string().nullable().optional() }).strict(),
   z.object({ type: z.literal('function_call'), id: inlineId, status: itemStatus,
-    call_id: z.string().min(1), name: toolName, arguments: z.string() }).strict(),
+    call_id: z.string().min(1), name: toolName, namespace: toolName.optional(), arguments: z.string() }).strict(),
   z.object({ type: z.literal('custom_tool_call'), id: inlineId, status: itemStatus,
-    call_id: z.string().min(1), name: toolName, input: z.string() }).strict(),
+    call_id: z.string().min(1), name: toolName, namespace: toolName.optional(), input: z.string() }).strict(),
   z.object({ type: z.literal('function_call_output'), id: inlineId, status: itemStatus,
     call_id: z.string().min(1), output: inlineContent }).strict(),
   z.object({ type: z.literal('custom_tool_call_output'), id: inlineId, status: itemStatus,
     call_id: z.string().min(1), output: inlineContent }).strict(),
-]);
-const clientTool = z.union([
-  z.object({ type: z.literal('function'), name: toolName, description: z.string().optional(),
-    parameters: z.record(z.unknown()), strict: z.boolean().nullable().optional() }).strict(),
-  z.object({ type: z.literal('custom'), name: toolName, description: z.string().optional(),
-    format: z.union([z.object({ type: z.literal('text') }).strict(),
-      z.object({ type: z.literal('grammar'), syntax: z.literal('lark'), definition: z.string() }).strict()]).optional() }).strict(),
+  z.object({ type: z.literal('additional_tools'), id: inlineId,
+    role: z.literal('developer'), tools: z.array(inlineTool) }).strict(),
 ]);
 const selectedTool = z.object({ type: z.enum(['function', 'custom']), name: toolName }).strict();
 const statelessResponsesRequest = z.object({
   model: z.string(), input: z.union([z.string(), z.array(inlineInputItem)]),
   instructions: z.string().nullable().optional(), stream: z.boolean().optional(), store: z.literal(false),
   reasoning: z.object({ effort: z.enum(['low', 'high', 'max']),
-    summary: z.enum(['auto', 'concise', 'detailed', 'none']).nullable().optional() }).strict(),
+    summary: z.enum(['auto', 'concise', 'detailed', 'none']).nullable().optional(),
+    context: z.literal('all_turns').optional() }).strict(),
   tools: z.array(clientTool).optional(), tool_choice: z.union([z.enum(['auto', 'none', 'required']), selectedTool]).optional(),
   parallel_tool_calls: z.boolean().optional(),
   text: z.object({ verbosity: z.enum(['low', 'medium', 'high']).optional(),
-    format: z.object({ type: z.literal('text') }).strict().optional() }).strict().optional(),
+    format: z.union([z.object({ type: z.literal('text') }).strict(),
+      z.object({ type: z.literal('json_schema'), name: z.string(), strict: z.boolean(), schema: z.record(z.unknown()) }).strict(),
+    ]).optional() }).strict().optional(),
   include: z.array(z.literal('reasoning.encrypted_content')).optional(),
   previous_response_id: z.null().optional(), conversation: z.null().optional(),
   max_output_tokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
@@ -141,7 +150,7 @@ const statelessResponsesRequest = z.object({
   metadata: z.record(z.string()).optional(), client_metadata: z.record(z.string()).optional(),
 }).strict();
 
-function admitRequest(body: Record<string, unknown>, model: string, effort: string): void {
+function admitRequest(body: Record<string, unknown>, model: string, effort: string, outputSchema?: Record<string, unknown>): void {
   if (body.model !== model) throw new RelayError(400, 'relay_model_mismatch');
   const reasoning = body.reasoning as Record<string, unknown> | undefined;
   if (!reasoning || typeof reasoning !== 'object' || Array.isArray(reasoning) || reasoning.effort !== effort)
@@ -149,10 +158,23 @@ function admitRequest(body: Record<string, unknown>, model: string, effort: stri
   const parsed = statelessResponsesRequest.safeParse(body);
   if (!parsed.success) throw new RelayError(400, 'unsupported_responses_request');
   const request = parsed.data;
+  const format = request.text?.format;
+  if (outputSchema) {
+    if (format?.type !== 'json_schema' || format.name !== 'codex_output_schema' || !format.strict ||
+        canonicalMathJson(format.schema) !== canonicalMathJson(outputSchema))
+      throw new RelayError(400, 'relay_output_schema_mismatch');
+  } else if (format?.type === 'json_schema') throw new RelayError(400, 'unsupported_responses_request');
   const tools = new Map<string, string>();
-  for (const tool of request.tools ?? []) {
-    if (tools.has(tool.name)) throw new RelayError(400, 'duplicate_tool_name');
-    tools.set(tool.name, tool.type);
+  const declarations = [...(request.tools ?? []), ...(typeof request.input === 'string' ? [] :
+    request.input.flatMap(item => item.type === 'additional_tools' ? item.tools : []))];
+  for (const declaration of declarations) {
+    const members = declaration.type === 'namespace' ? declaration.tools.map(tool => ({
+      name: declaration.name + '.' + tool.name, type: tool.type,
+    })) : [declaration];
+    for (const tool of members) {
+      if (tools.has(tool.name)) throw new RelayError(400, 'duplicate_tool_name');
+      tools.set(tool.name, tool.type);
+    }
   }
   const choice = request.tool_choice;
   if (choice === 'required' && !tools.size || typeof choice === 'object' && tools.get(choice.name) !== choice.type)
@@ -272,6 +294,7 @@ function redactor(secret: string) {
  */
 export async function startFormalizationRelay(input: {
   socketPath?: string; transport?: 'unix-http' | 'loopback-http'; profile: string; model: string; effort: string;
+  outputSchema?: Record<string, unknown>;
   env?: NodeJS.ProcessEnv; signal?: AbortSignal; timeoutMs?: number;
   requestGate?: ModelRequestGate; onUsageIncomplete?: () => void;
 }): Promise<FormalizationRelay> {
@@ -354,7 +377,7 @@ export async function startFormalizationRelay(input: {
     timer?.unref();
     try {
       const body = await readRequest(request);
-      admitRequest(body, input.model, input.effort);
+      admitRequest(body, input.model, input.effort, input.outputSchema);
       controller.signal.throwIfAborted();
       const key = await loadCredential();
       await input.requestGate?.beforeRequest?.(controller.signal);

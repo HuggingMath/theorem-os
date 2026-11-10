@@ -21,7 +21,7 @@ import { readKnowledgeCatalog } from '../../src/solver/theoremKnowledgeStore';
 import { createWebProgressForwarder } from './progress';
 import { withoutCheckMarkers } from './report';
 import { webArtifactMaxBytes, webPreparationSeconds, type WebAgentActionBody, type WebArtifact, type WorkerInput, type WorkerMessage } from './shared';
-import { sanitizeAgentItem } from './agentActions';
+import { createAgentActionStream, sanitizeAgentItem } from './agentActions';
 import { createWebWorkerBridge, freezeWebKnowledge, writeWebActiveRun } from './workerBridge';
 import { webByokModuleIdentity } from './webModuleIdentity';
 import { webAgentLibraryAccess } from './frozenLibrary';
@@ -117,9 +117,9 @@ export function readWebResultProof(options: {
  */
 export function webIncompleteReason(raw: Record<string, unknown>, input: Pick<WorkerInput['input'], 'maxTurns' | 'maxRunSeconds'>) {
   if (raw.status !== 'incomplete' || raw.reason) return;
-  if (typeof raw.turns === 'number' && raw.turns >= input.maxTurns) return 'math_turn_limit_reached';
+  if (input.maxTurns > 0 && typeof raw.turns === 'number' && raw.turns >= input.maxTurns) return 'math_turn_limit_reached';
   const elapsed = raw.solveExecutionMs ?? raw.solveWallMs;
-  if (typeof elapsed === 'number' && elapsed >= input.maxRunSeconds * 1_000) return 'math_run_stopped';
+  if (input.maxRunSeconds > 0 && typeof elapsed === 'number' && elapsed >= input.maxRunSeconds * 1_000) return 'math_run_stopped';
   return 'math_research_routes_exhausted';
 }
 
@@ -180,6 +180,11 @@ export function configureWebProofSearchEnvironment(environment: LeanTaskEnvironm
 }
 export type WebAgentIsolation = { tools: string; hiddenRoots: readonly string[] };
 
+const webProofProgressInstructions = `Public mathematical progress for the user:
+Use public commentary messages in the language of the original problem. At the start of this turn and when meaningful mathematical progress or a change of approach occurs, explain the current proof route and why it applies. As relevant, state concrete lemma statements and their hypotheses, the mathematical conclusions established so far, how Lean feedback changes the approach, and what you will verify next. Use formulas and coherent mathematical explanations to make the results understandable. Distinguish proposed arguments, local Lean checks and independent host acceptance.
+Write user-facing mathematical explanations and observed results; keep private reasoning and scratch work private. Continue to maintain RESEARCH.md and the required protocol JSON, and also provide the public explanation through commentary. Keep the existing delivery contracts, allowed edits and independent proof acceptance unchanged.
+Continue the assigned work in this same turn after each update. Updates need no extra model request or user confirmation. Give updates at meaningful points; an update is not required before every command.`;
+
 export function webSolverModules(request: WorkerInput, actions?: { sink: (action: WebAgentActionBody) => void; hidden: readonly string[] },
   isolation?: WebAgentIsolation): SolverModules {
   const base = configurableSolverModules(request.input.modulePlan, request.input.coordination, request.input.workers);
@@ -195,13 +200,30 @@ export function webSolverModules(request: WorkerInput, actions?: { sink: (action
           tool: isolation?.tools ?? path.join(root, 'bin/math.ts'), apiKey: request.input.apiKey } : undefined;
         // Item ids are only unique within one Codex thread; a restarted session numbers its own.
         const session = ++sessions;
+        const stream = context ? createAgentActionStream(actions!.sink) : undefined;
+        if (stream) { options.signal?.addEventListener('abort', stream.stop, { once: true }); if (options.signal?.aborted) stream.stop(); }
+        const show = (phase: 'started' | 'completed', item: Record<string, unknown>, incremental = false) => {
+          const id = typeof item.id === 'string' ? `${session}:${item.id}` : item.id;
+          const action = sanitizeAgentItem(phase, { ...item, id }, context!);
+          if (typeof id === 'string') stream!.write(phase, id, action, incremental);
+        };
         return createCodexMathSession({ ...options,
           ...(isolation ? { hiddenRoots: [...(options.hiddenRoots ?? []), ...isolation.hiddenRoots] } : {}),
           environment: { ...options.environment, THEOREMOS_PROVIDER_API_KEY: request.input.apiKey },
-          ...(context ? { onItem: (phase, item) => {
-            const action = sanitizeAgentItem(phase, { ...item, id: typeof item.id === 'string' ? `${session}:${item.id}` : item.id }, context);
-            if (action) actions!.sink(action);
-          } } : {}) });
+          ...(context ? { onItem: (phase, item) => show(phase, item),
+            onItemUpdate: (item, context) => { options.onItemUpdate?.(item, context); show('started', item, true); } } : {}) })
+          .then(opened => {
+            if (!stream) return opened;
+            const run = opened.run, interrupt = opened.interrupt, close = opened.close;
+            opened.run = async (...args) => {
+              stream.reset(); if (options.signal?.aborted) stream.stop();
+              args[0] += `\n\n${webProofProgressInstructions}`;
+              try { return await run(...args); } finally { stream.stop(); }
+            };
+            opened.interrupt = async () => { stream.stop(); await interrupt(); };
+            opened.close = async () => { stream.stop(); options.signal?.removeEventListener('abort', stream.stop); await close(); };
+            return opened;
+          });
       } } };
 }
 
@@ -299,10 +321,10 @@ async function main() {
       ...(knowledgeFile ? ['--knowledge-base', knowledgeFile] : []),
       ...(round.continuationFile ? ['--continuation-manifest', round.continuationFile] : []),
       ...(round.libraryCatalog ? ['--library-catalog', round.libraryCatalog.file, '--library-catalog-sha256', round.libraryCatalog.digest] : []),
-      '--max-run-seconds', String(round.limits.maxRunSeconds), '--max-turn-seconds', '120',
+      '--max-run-seconds', String(round.limits.maxRunSeconds), '--max-turn-seconds', String(round.limits.maxRunSeconds),
       ...(round.limits.maxTotalTokens ? ['--max-total-tokens', String(round.limits.maxTotalTokens)] : []),
-      '--prepare-timeout-seconds', String(webPreparationSeconds[environment.id === 'mathlib' ? 'mathlib' : 'standard']),
-      '--evaluator-timeout-seconds', '120'], root, modules);
+      '--prepare-timeout-seconds', String(round.limits.maxRunSeconds === 0 ? 0 : webPreparationSeconds[environment.id === 'mathlib' ? 'mathlib' : 'standard']),
+      '--evaluator-timeout-seconds', round.limits.maxRunSeconds === 0 ? '0' : '120'], root, modules);
       sampleArtifact();
       await capturePending;
       await capture(true);

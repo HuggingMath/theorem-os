@@ -29,7 +29,7 @@ export async function evaluateFormalization(argv: string[]): Promise<number> {
       + 'review: --run-directory DIR --execution replay|model [--environment mathlib|standard]\n'
       + '  [--protocol v1|v2] New model runs default to v2 with --environment auto; saved v1 runs retain v1.\n'
       + '  v2 environments: auto|standard|mathlib|mathlib-4.8. Source-aware host statement elaboration, structured evidence and targeted independent recheck.\n'
-      + '  New v2 model reviews freeze kernel-v2 semantic context and direct fields of referenced imported structures; missing observations remain unknown.\n'
+      + '  New v2 model reviews freeze kernel-v3 complete local semantics and bounded imported structure fields; missing required observations remain unknown.\n'
       + '  New model reviews also freeze task-preserving-v1: whole-claim scope evidence and guarded Lean correspondence before approval.\n'
       + '  replay requires --replay JSON; runs saved preset outputs, not a model accuracy test.\n'
       + '  model requires --build-manifest FILE and invokes real models in isolated fresh sessions.\n'

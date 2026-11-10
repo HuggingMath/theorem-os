@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect, it } from 'vitest';
 import { leanStatementContextCommands, parseLeanStatementContexts } from '../src/math/leanStatementContext';
+import type { LeanStatementKernelExpr } from '../src/math/leanStatementSemantic';
 import { runLeanProcess } from '../src/math/mathProcess';
 
 it('preserves the exact default context generator while allowing an explicit known-bound omission', () => {
@@ -50,6 +51,30 @@ it('keeps known-bound failure reports invalid for the ordinary statement-context
   expect(() => parseLeanStatementContexts(JSON.stringify([{ id: 'wide', context: {
     unavailable: 'statement-type-export-bound', bytes: 24001, limit: 24000,
   } }]), ['wide'])).toThrow('math_statement_elaboration_invalid');
+});
+
+it('retains complete local meaning beyond the library quota only for a frozen v3 context', () => {
+  let value: LeanStatementKernelExpr = ['const', ['str', null, 'Nat'], []];
+  for (let depth = 0; depth < 13; depth++) value = ['app', value, value];
+  const semantic = { schema: 'theorem-os.lean-statement-semantic.v1', rawType: 'Local.definition = Local.definition',
+    kernelType: ['const', ['str', null, 'Local.definition'], []],
+    localMeaningClosure: [{ name: 'Local.definition', kind: 'definition', rawType: 'Nat',
+      type: ['const', ['str', null, 'Nat'], []], value, rawValue: 'complete local value' }] };
+  const context = { type: 'Local.definition = Local.definition', constants: [], omitted: [], semantic };
+  const text = JSON.stringify([{ id: 'scope', context }]);
+  expect(Buffer.byteLength(text)).toBeGreaterThan(256000);
+  expect(() => parseLeanStatementContexts(text, ['scope'])).toThrow('math_statement_elaboration_invalid');
+  const parsed = parseLeanStatementContexts(text, ['scope'], { boundedLibraryContext: true }).get('scope')!;
+  expect(parsed.semantic).toEqual(semantic);
+  expect(parsed.omitted).toEqual([]);
+
+  const malformed = structuredClone(context);
+  malformed.semantic.localMeaningClosure[0].value = ['app', ['mvar', 'hidden'], value] as any;
+  expect(() => parseLeanStatementContexts(JSON.stringify([{ id: 'scope', context: malformed }]),
+    ['scope'], { boundedLibraryContext: true })).toThrow('math_statement_elaboration_invalid');
+  expect(() => parseLeanStatementContexts(JSON.stringify([{ id: 'scope', context: {
+    ...context, semantic: { ...semantic, rawType: 'x'.repeat(4_000_000) },
+  } }]), ['scope'], { boundedLibraryContext: true })).toThrow('math_statement_elaboration_invalid');
 });
 
 const lean = path.join(os.homedir(), '.elan', 'toolchains', 'leanprover--lean4---v4.33.0', 'bin', 'lean');

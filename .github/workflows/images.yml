@@ -58,6 +58,8 @@ jobs:
         run: bunx vitest run --maxWorkers=4 tests/formalizationRelay.test.ts tests/formalizationReviewIsolation.test.ts tests/webFormalizationWorker.test.ts tests/codexSession.test.ts tests/codexSessionLifecycle.test.ts tests/codexSessionCheckpoint.test.ts tests/codexStreamIdle.test.ts tests/codexSessionNotifications.test.ts tests/mathProcess.test.ts tests/mathRuntimeLease.test.ts tests/mathRuntimeLeaseProcess.test.ts tests/formalization.test.ts tests/formalizationRecovery.test.ts tests/formalizationWorkflow.test.ts tests/formalizationLimits.test.ts tests/formalizationFidelityReference.test.ts
       - name: Verify research recovery, participation and shared run snapshots
         run: bunx vitest run --maxWorkers=4 tests/webRunSnapshot.test.ts tests/webResearchProjects.test.ts tests/webResearchApi.test.ts tests/webResearchAssets.test.ts tests/webResearchMathematics.test.ts tests/libraryPacks.test.ts tests/leanSource.test.ts
+      - name: Verify direct formalization and independent background review without models
+        run: bunx vitest run --maxWorkers=4 tests/directFormalizationEvidence.test.ts tests/directFormalizationWorkflow.test.ts tests/formalizationAudit.test.ts tests/formalizationContext.test.ts tests/formalizationPackagesWarmup.test.ts tests/mathProofEnvironmentSeed.test.ts tests/webFormalizationAuditWorker.test.ts tests/webFormalizationBackgroundReview.test.ts tests/webBackgroundReview.test.ts tests/webFormalizationProgress.test.ts tests/webThinkingProcess.test.ts tests/codexSessionInstructions.test.ts
       - run: bun run build && bun run build:web
       - run: bunx playwright install --with-deps chromium
       - name: Verify the browser's login and research flows with local fixtures
@@ -74,6 +76,8 @@ jobs:
         run: bun run test:frontend-round9
       - name: Verify recovered guidance, message receipts, math readers and source links
         run: bunx vitest run --maxWorkers=4 tests/webChatDraft.test.ts tests/webConversations.test.ts tests/archiveSourceLocation.test.ts tests/taskPlanEditorAccess.test.ts && bun run test:frontend-round10
+      - name: Verify formalization progress and proof thinking in the browser
+        run: bun scripts/test-web-formalization-progress.ts && bun scripts/test-web-proof-thinking.ts && bunx vitest run tests/webBackgroundReviewWorkflow.test.ts
 
   verify-solver:
     runs-on: ubuntu-latest

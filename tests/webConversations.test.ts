@@ -530,6 +530,59 @@ describe('persistent conversations use saved owned task context', () => {
     expect(() => service.create('alice', { formalizationId: crypto.randomUUID(), runId: run.id })).toThrow('不存在');
   });
 
+  it.each(['retry', 'continuation'] as const)('opens a distinct, idempotent conversation for a %s of the same formalization', async kind => {
+    const { service, run, formalization, resources, calls } = fixture();
+    const primary = service.create('alice', { formalizationId: formalization.id });
+    run.formalizationId = formalization.id; run.status = 'cancelled';
+    formalization.runId = run.id; formalization.status = 'confirmed';
+    const next: WebRun = { ...run, id: crypto.randomUUID(), status: 'running', task: `Prove using ${kind}`,
+      ...(kind === 'continuation' ? { continueFrom: { runId: run.id, taskId: 'goal', commit: 'a'.repeat(40), label: 'Recorded proof' } } : {}) };
+    const runs = new Map([[run.id, run], [next.id, next]]);
+    resources.run = (owner, id) => owner === 'alice' ? runs.get(id) : undefined;
+    const created = service.create('alice', { runId: next.id,
+      ...(kind === 'continuation' ? { formalizationId: formalization.id } : {}) });
+    expect(created.id).not.toBe(primary.id);
+    expect(created).toMatchObject({ runId: next.id, formalizationId: formalization.id });
+    expect(created.messages[0]?.text).toBe(formalization.original);
+    expect(service.create('alice', { runId: next.id }).id).toBe(created.id);
+    expect(service.create('alice', { formalizationId: formalization.id }).id).toBe(primary.id);
+    expect(service.read('alice', primary.id).runId).toBe(run.id);
+    expect(service.list('alice').map(item => [item.id, item.runId])).toEqual(expect.arrayContaining([
+      [primary.id, run.id], [created.id, next.id],
+    ]));
+    expect(service.list('alice')).toHaveLength(2);
+    expect(() => service.create('bob', { runId: next.id })).toThrow('不存在');
+    expect(() => service.read('bob', created.id)).toThrow('不存在');
+    service.send('alice', created.id, '请解释当前任务及原题。', call); await tick();
+    const context = JSON.stringify(calls.at(-1)?.input);
+    expect(context).toContain(formalization.original);
+    expect(context).toContain(next.task);
+    expect(context).not.toContain(run.task);
+  });
+
+  it('preserves a saved explicit run through read, list, restart and deletion while its primary still exists', () => {
+    const { service, run, formalization, resources, storage } = fixture();
+    run.formalizationId = formalization.id;
+    const created = service.create('alice', { runId: run.id });
+    const primary: WebRun = { ...run, id: crypto.randomUUID(), status: 'cancelled' };
+    formalization.runId = primary.id;
+    resources.run = (owner, id) => owner === 'alice' ? id === run.id ? run : id === primary.id ? primary : undefined : undefined;
+    expect(service.read('alice', created.id).runId).toBe(run.id);
+    expect(service.list('alice')[0]?.runId).toBe(run.id);
+    expect(storedConversation(storage, created.id).runId).toBe(run.id);
+    const restarted = new WebConversations(storage, resources, async () => ({ answer: 'unused' }));
+    expect(restarted.create('alice', { runId: run.id }).id).toBe(created.id);
+    // Removing this run keeps its history and association, rather than substituting the formalization's primary.
+    resources.run = (owner, id) => owner === 'alice' && id === primary.id ? primary : undefined;
+    expect(restarted.read('alice', created.id)).toMatchObject({ runId: run.id, messages: created.messages });
+    expect(restarted.list('alice')[0]?.runId).toBe(run.id);
+    restarted.delete('alice', created.id);
+    expect(restarted.list('alice')).toEqual([]);
+    expect(restarted.create('alice', { formalizationId: formalization.id })).toMatchObject({ runId: primary.id, formalizationId: formalization.id });
+    expect(resources.run('alice', primary.id)).toBe(primary);
+    expect(resources.formalization('alice', formalization.id)).toBe(formalization);
+  });
+
   it('opens a Lean run with its request and its source as a Lean block, titled like the run', () => {
     const { service, run } = fixture();
     run.title = '帮我证明高斯定理'; run.task = '帮我证明高斯定理';

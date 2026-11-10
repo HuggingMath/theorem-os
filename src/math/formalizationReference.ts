@@ -75,10 +75,16 @@ const taskFidelityIdentityResultSchema = representationResultSchema.extend({
   schema: z.literal('theoremos.formalization-reference.v6'),
   method: z.literal('cardinality-correspondence-v7'),
 }).strict();
+const strictIdentityResultSchema = representationResultSchema.extend({
+  schema: z.literal('theoremos.formalization-reference.v7'),
+  method: z.literal('definitional-identity-v1'),
+}).strict();
 export type CurrentFormalizationReferenceResult = z.infer<typeof representationResultSchema> |
-  z.infer<typeof taskFidelityV2ResultSchema> | z.infer<typeof taskFidelityIdentityResultSchema>;
+  z.infer<typeof taskFidelityV2ResultSchema> | z.infer<typeof taskFidelityIdentityResultSchema> |
+  z.infer<typeof strictIdentityResultSchema>;
 export const formalizationReferenceResultSchema = z.discriminatedUnion('schema', [legacyResultSchema, previousResultSchema,
-  finiteFamilyResultSchema, representationResultSchema, taskFidelityV2ResultSchema, taskFidelityIdentityResultSchema]);
+  finiteFamilyResultSchema, representationResultSchema, taskFidelityV2ResultSchema, taskFidelityIdentityResultSchema,
+  strictIdentityResultSchema]);
 export type FormalizationReferenceResult = z.infer<typeof formalizationReferenceResultSchema>;
 
 export const FORMALIZATION_REFERENCE_QUERY = 'ReferenceComparison.lean';
@@ -308,6 +314,94 @@ export function formalizationReferenceFiles(input: FormalizationReferenceInput):
   return referenceFiles(input, false);
 }
 
+/** A separately versioned complete-proposition check; earlier programs remain frozen. */
+export function formalizationIdentityReferenceFiles(input: FormalizationReferenceInput): Record<string, string> {
+  input = formalizationReferenceInputSchema.parse(input);
+  if (input.purpose !== 'task-fidelity-v2') throw new Error('formalization_identity_purpose_unsupported');
+  const files = referenceFiles(input, false);
+  return { ...files, [FORMALIZATION_REFERENCE_QUERY]: identityQuerySource(input) };
+}
+
+function identityQuerySource(input: FormalizationReferenceInput): string {
+  return ['import Lean', 'import ReferenceCandidate', 'import ReferenceGold',
+    'set_option maxHeartbeats 100000', 'set_option maxRecDepth 512',
+    'set_option pp.fullNames true', 'set_option pp.notation false',
+    'run_cmd Lean.Elab.Command.liftTermElabM do',
+    '  let proposition (name : Lean.Name) : Lean.Elab.Term.TermElabM Lean.Expr := do',
+    '    let info ← Lean.getConstInfo name',
+    '    let some value := info.value? | throwError "predicate value unavailable"',
+    '    let closed ← Lean.Meta.lambdaTelescope value fun xs body => Lean.Meta.mkForallFVars xs body',
+    '    let params := (Lean.collectLevelParams {} closed).params.toList',
+    input.environment === 'mathlib-4.8' ?
+      '    let levels := (List.range params.length).map fun i => Lean.Level.param (Lean.Name.mkSimple s!"theoremOSu{i}")' :
+      '    let levels := params.zipIdx |>.map fun (_, i) => Lean.Level.param (Lean.Name.mkSimple s!"theoremOSu{i}")',
+    '    let result := closed.instantiateLevelParams params levels',
+    '    unless (← Lean.Meta.isProp result) do throwError "target is not a closed proposition"',
+    '    if result.hasMVar || result.hasFVar then throwError "open target unsupported"',
+    '    return result',
+    '  let baseline (proposition : Lean.Expr) : Lean.Elab.Term.TermElabM Bool := do',
+    '    let saved ← Lean.Meta.saveState',
+    '    try',
+    '      Lean.Meta.forallTelescopeReducing proposition fun xs conclusion => do',
+    '        let conclusion ← Lean.Meta.whnf conclusion',
+    '        if conclusion.isConstOf ``True then return true',
+    '        if conclusion.isAppOfArity ``Eq 3 then',
+    '          if ← Lean.Meta.isDefEq conclusion.appFn!.appArg! conclusion.appArg! then return true',
+    '        for x in xs do',
+    '          let type ← Lean.Meta.inferType x',
+    '          if (← Lean.Meta.whnf type).isConstOf ``False then return true',
+    '          if (← Lean.Meta.isProp type) && (← Lean.Meta.isDefEq type conclusion) then return true',
+    '        return false',
+    '    finally saved.restore',
+    '  let prove (name : Lean.Name) (premise conclusion : Lean.Expr) : Lean.Elab.Term.TermElabM Unit := do',
+    '    let value ← Lean.Meta.withLocalDeclD `opposite premise fun opposite => Lean.Meta.mkLambdaFVars #[opposite] opposite',
+    '    let type := Lean.Expr.forallE `opposite premise conclusion Lean.BinderInfo.default',
+    '    let levelParams := (Lean.collectLevelParams {} type).params.toList',
+    '    Lean.addDecl (.thmDecl { name, levelParams, type, value })',
+    '  let mut reports : Array Lean.Json := #[]',
+    ...input.pairs.flatMap((pair, index) => {
+      const forward = `TheoremOSDefinitionalIdentity.candidateToReference${index}`;
+      const backward = `TheoremOSDefinitionalIdentity.referenceToCandidate${index}`;
+      return [
+        '  let pairReport ← (show Lean.Elab.Term.TermElabM Lean.Json from do',
+        `    let candidateTarget := ${JSON.stringify(pair.candidateTarget)}`,
+        `    let referenceTarget := ${JSON.stringify(pair.referenceTarget)}`,
+        '    let mut status := "not-established"', '    let mut reason := "unsupported-target"',
+        '    let mut candidateType := ""', '    let mut referenceType := ""',
+        '    let mut candidateBaseline := false', '    let mut referenceBaseline := false',
+        '    let mut definitionallyEqual := false',
+        '    try',
+        `      let candidate ← proposition (${JSON.stringify(carrierNamespaces.candidate + '.' + pair.candidateTarget)}.toName)`,
+        `      let reference ← proposition (${JSON.stringify(carrierNamespaces.reference + '.' + pair.referenceTarget)}.toName)`,
+        '      candidateType := (← Lean.Meta.ppExpr candidate).pretty',
+        '      referenceType := (← Lean.Meta.ppExpr reference).pretty',
+        '      candidateBaseline ← baseline candidate', '      referenceBaseline ← baseline reference',
+        '      definitionallyEqual ← Lean.Meta.isDefEq candidate reference',
+        '      if definitionallyEqual then',
+        `        prove (${JSON.stringify(forward)}.toName) candidate reference`,
+        `        prove (${JSON.stringify(backward)}.toName) reference candidate`,
+        '        status := "established"', '        reason := "definitional-identity-with-opposite-assumption"',
+        '      else reason := "not-definitionally-equal"',
+        '    catch _ => pure ()',
+        '    let direction (name : String) := Lean.Json.mkObj <| [("status", Lean.toJson status), ("reason", Lean.toJson reason)] ++',
+        '      (if status == "established" then [("proofDeclaration", Lean.toJson name)] else [])',
+        '    return Lean.Json.mkObj [',
+        '      ("candidateTarget", Lean.toJson candidateTarget), ("referenceTarget", Lean.toJson referenceTarget),',
+        '      ("candidateType", Lean.toJson candidateType), ("referenceType", Lean.toJson referenceType),',
+        '      ("candidateBaseline", Lean.toJson candidateBaseline), ("referenceBaseline", Lean.toJson referenceBaseline),',
+        '      ("definitionallyEqual", Lean.toJson definitionallyEqual), ("binderPermutation", Lean.toJson false),',
+        '      ("representationCorrespondence", Lean.toJson false), ("transformations", Lean.Json.arr #[]),',
+        `      ("candidateToReference", direction ${JSON.stringify(forward)}),`,
+        `      ("referenceToCandidate", direction ${JSON.stringify(backward)})])`,
+        '  reports := reports.push pairReport',
+      ];
+    }),
+    '  let report := (Lean.Json.mkObj [("schema", Lean.toJson "theoremos.reference-report.v7"), ("pairs", Lean.toJson reports)]).compress',
+    '  if report.utf8ByteSize > 1000000 then throwError "reference report bound exceeded"',
+    '  Lean.logInfo m!"THEOREMOS_REFERENCE_REPORT:{report}"',
+    `  Lean.Core.liftIOCore <| IO.FS.writeFile ${JSON.stringify(FORMALIZATION_REFERENCE_REPORT)} report`, ''].join('\n');
+}
+
 // Old v5 receipts keep their exact host program, including its baseline refusal.
 // Never reinterpret frozen evidence using the newer identity rule.
 function referenceFiles(input: FormalizationReferenceInput, legacyV2: boolean): Record<string, string> {
@@ -327,7 +421,8 @@ function referenceFiles(input: FormalizationReferenceInput, legacyV2: boolean): 
 export function assertFormalizationReferenceResult(input: FormalizationReferenceInput, value: unknown): asserts value is FormalizationReferenceResult {
   input = formalizationReferenceInputSchema.parse(input);
   const parsed = formalizationReferenceResultSchema.parse(value);
-  const taskV2Schema = parsed.schema === 'theoremos.formalization-reference.v5' || parsed.schema === 'theoremos.formalization-reference.v6';
+  const strictIdentity = parsed.schema === 'theoremos.formalization-reference.v7';
+  const taskV2Schema = parsed.schema === 'theoremos.formalization-reference.v5' || parsed.schema === 'theoremos.formalization-reference.v6' || strictIdentity;
   if (input.purpose === 'task-fidelity-v2' && !taskV2Schema ||
       input.purpose !== 'task-fidelity-v2' && (input.environment === 'mathlib-4.8' || input.purpose) &&
         parsed.schema !== 'theoremos.formalization-reference.v4')
@@ -357,7 +452,8 @@ export function assertFormalizationReferenceResult(input: FormalizationReference
   const allEstablished = result.pairs.every(pair => pair.candidateToReference.status === 'established' && pair.referenceToCandidate.status === 'established');
   if ((result.status === 'established') !== allEstablished) invalid();
   let expected: Record<string, string> | undefined;
-  try { expected = referenceFiles(input, result.schema === 'theoremos.formalization-reference.v5'); } catch (cause) {
+  try { expected = strictIdentity ? formalizationIdentityReferenceFiles(input) :
+    referenceFiles(input, result.schema === 'theoremos.formalization-reference.v5'); } catch (cause) {
     if (cause instanceof Error && cause.message === 'reference_target_mapping_incomplete') invalid();
     // Unsupported source syntax only carries an unsupported, unknown receipt.
   }
@@ -386,7 +482,8 @@ export function assertFormalizationReferenceResult(input: FormalizationReference
       mathDigest(evidence.reportText) !== evidence.reportSha256) invalid();
   const report = JSON.parse(evidence.reportText);
   const isV6 = result.schema === 'theoremos.formalization-reference.v5' || result.schema === 'theoremos.formalization-reference.v6';
-  if (report.schema !== (result.schema === 'theoremos.formalization-reference.v6' ? 'theoremos.reference-report.v6' :
+  if (report.schema !== (strictIdentity ? 'theoremos.reference-report.v7' :
+      result.schema === 'theoremos.formalization-reference.v6' ? 'theoremos.reference-report.v6' :
       isV6 ? 'theoremos.reference-report.v5' : 'theoremos.reference-report.v4') ||
       !Array.isArray(report.pairs) || report.pairs.length !== result.pairs.length ||
       canonicalMathJson(report.pairs.map((pair: any) => ({ candidateTarget: pair.candidateTarget, referenceTarget: pair.referenceTarget,
@@ -394,6 +491,12 @@ export function assertFormalizationReferenceResult(input: FormalizationReference
   report.pairs.forEach((pair: any, index: number) => {
     const established = result.pairs[index].candidateToReference.status === 'established';
     if (typeof pair.representationCorrespondence !== 'boolean' || !Array.isArray(pair.transformations)) invalid();
+    if (strictIdentity && (typeof pair.definitionallyEqual !== 'boolean' ||
+        pair.binderPermutation !== false || pair.representationCorrespondence !== false || pair.transformations.length !== 0 ||
+        pair.candidateToReference.status !== pair.referenceToCandidate.status ||
+        established && (pair.definitionallyEqual !== true ||
+          pair.candidateToReference.reason !== 'definitional-identity-with-opposite-assumption' ||
+          pair.referenceToCandidate.reason !== 'definitional-identity-with-opposite-assumption'))) invalid();
     const transformations = (isV6 ? z.array(transformationV6) : z.array(transformation)).parse(pair.transformations);
     if (pair.representationCorrespondence !== (transformations.length > 0) ||
         pair.representationCorrespondence && !established) invalid();
@@ -419,10 +522,11 @@ export function assertFormalizationReferenceResult(input: FormalizationReference
           canonicalMathJson(step.before.context) !== canonicalMathJson(step.after.context)) invalid();
     }
     const identityAllowed = input.purpose !== undefined && pair.definitionallyEqual === true;
+    const proofNamespace = strictIdentity ? 'TheoremOSDefinitionalIdentity' : 'TheoremOSCorrespondence';
     if (established && ((!identityAllowed && (pair.candidateBaseline !== false || pair.referenceBaseline !== false)) ||
         (pair.definitionallyEqual !== true && pair.binderPermutation !== true && pair.representationCorrespondence !== true) ||
-        pair.candidateToReference.proofDeclaration !== `TheoremOSCorrespondence.candidateToReference${index}` ||
-        pair.referenceToCandidate.proofDeclaration !== `TheoremOSCorrespondence.referenceToCandidate${index}`)) invalid();
+        pair.candidateToReference.proofDeclaration !== `${proofNamespace}.candidateToReference${index}` ||
+        pair.referenceToCandidate.proofDeclaration !== `${proofNamespace}.referenceToCandidate${index}`)) invalid();
   });
   if (!Array.isArray(latest.diagnosticArtifacts) || latest.diagnosticArtifacts.length !== evidence.artifacts.length ||
       new Set(evidence.artifacts.map(record => record.digest)).size !== evidence.artifacts.length ||

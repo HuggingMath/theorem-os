@@ -261,12 +261,12 @@ describe('web explanation jobs', () => {
   it('queues, runs and stores an approved explanation; the key reaches only the worker input', async () => {
     const storage = new WebStorage(), runner = new ExplainRunner(), jobs = new WebExplanations(runner, storage);
     const created = jobs.create('owner-a', run(), request());
-    expect(created).toMatchObject({ status: 'queued', queue: { position: 1, ahead: 0 }, maxRunSeconds: 8 * 60 * 60 });
+    expect(created).toMatchObject({ status: 'queued', queue: { position: 1, ahead: 0 }, maxRunSeconds: 0, maxTotalTokens: 0 });
     expect(JSON.stringify(created)).not.toContain('sk-explain-test-key');
     await settle();
     expect(runner.calls).toHaveLength(1);
     expect(runner.calls[0]!.input).toMatchObject({ id: created.id, proof: PROOF, target: 'target_thm', language: 'zh',
-      environment: 'standard', apiKey: 'sk-explain-test-key', provider, auditors: 2, maxRoundsPerBatch: 6 });
+      environment: 'standard', apiKey: 'sk-explain-test-key', provider, auditors: 2, maxRoundsPerBatch: 0, maxRunSeconds: 0, maxTotalTokens: 0 });
     expect(status(() => jobs.create('owner-a', run(), request()))).toBe(409);
     runner.calls[0]!.send({ type: 'progress', progress: { phase: 'writing', batches: 1, approvedBatches: 0, round: 1, tokens: 10 } });
     expect(jobs.get('owner-a', run().id, 'target_thm', 'zh')).toMatchObject({ status: 'running',

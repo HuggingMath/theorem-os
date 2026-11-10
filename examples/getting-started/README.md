@@ -58,7 +58,7 @@ bun run math example resume --dir "$THEOREMOS_CASE"
 ```
 
 `prepare` 和 `check` 不调用模型；`resume` 会调用模型并产生相应费用。
-默认使用单 Agent、`deepseek-flash`、`max`，最多 5 次调度和 5 分钟解题时间。
+默认使用单 Agent、`deepseek-flash`、`max`，调度轮数、解题时间和 Token 均不设上限。
 需要其他模型时，在 `prepare` 中传入 `--model`、`--effort` 或 `--codex`，后续命令会使用保存的配置。
 中断后保留原构建、环境和配置，重复 `resume` 命令继续。
 

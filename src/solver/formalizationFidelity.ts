@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fidelityReferenceInput } from '../math/formalizationFidelity';
-import { assertFormalizationReferenceResult, type FormalizationReferenceResult } from '../math/formalizationReference';
+import { assertFormalizationReferenceResult, formalizationReferenceInputSchema,
+  type FormalizationReferenceResult } from '../math/formalizationReference';
 import { canonicalMathJson, readMathText, writeMathFrozen } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath } from '../math/paths';
 import type { StructuredReviewInput, StructuredSemanticReview } from '../math/formalizationSemanticReview';
@@ -14,6 +15,37 @@ const cancellationReasons = new Set([
 ]);
 const interruptedComparison = (result: FormalizationReferenceResult) =>
   'check' in result && result.check === 'unavailable' && result.reason !== undefined && cancellationReasons.has(result.reason);
+
+/** Share only identical host obligations within one round, under the same environment and run lease. */
+export function shareFormalizationFidelityComparisons(
+  options: Omit<Parameters<typeof compareFormalizationReference>[2], 'timeoutMs'>,
+  compareReference = compareFormalizationReference,
+): typeof compareFormalizationReference {
+  const comparisons = new Map<string, Promise<FormalizationReferenceResult>>();
+  return async (directory, input, limits) => {
+    options.signal?.throwIfAborted();
+    const request = formalizationReferenceInputSchema.parse(input), key = canonicalMathJson(request);
+    let pending = comparisons.get(key);
+    if (!pending) {
+      pending = (async () => {
+        const result = await compareReference(directory, request, { ...options, timeoutMs: limits.timeoutMs });
+        options.signal?.throwIfAborted();
+        assertFormalizationReferenceResult(request, result);
+        if (result.status !== 'established' || !('check' in result) || result.check !== 'completed') comparisons.delete(key);
+        return result;
+      })();
+      comparisons.set(key, pending);
+    }
+    try {
+      const result = await pending;
+      options.signal?.throwIfAborted();
+      return structuredClone(result);
+    } catch (cause) {
+      if (comparisons.get(key) === pending) comparisons.delete(key);
+      throw cause;
+    }
+  };
+}
 
 /** The model's source reading remains advisory; this gate checks whole-target correspondence. */
 export async function checkFormalizationFidelity(directory: string, input: StructuredReviewInput,

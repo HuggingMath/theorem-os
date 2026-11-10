@@ -26,10 +26,10 @@ export function declarationRegions(source: string, names?: ReadonlySet<string>):
 export const declarationNames = (source: string) =>
   new Set(inspectScopedLeanDeclarations(maskLeanComments(lineEnds(source))).map(item => item.qualifiedName));
 
-type Review = { reviewer: string; review: FormalizationEvidence['review'] };
+type Review = { reviewer: string; review: NonNullable<FormalizationEvidence['review']> };
 const reviewsOf = (evidence: FormalizationEvidence): Review[] => evidence.workflow
   ? evidence.workflow.reviews.map(item => ({ reviewer: item.reviewerId, review: item.review }))
-  : [{ reviewer: 'reviewer', review: evidence.review }];
+  : evidence.review ? [{ reviewer: 'reviewer', review: evidence.review }] : [];
 const position = (value: number | null) => value ?? Number.MAX_SAFE_INTEGER;
 /** A statement fragment's trailing proof hole (`:= by sorry`), which a proof of that statement replaces. */
 const PROOF_HOLE = /\s*:=\s*(?:by\s+)?sorry\s*$/u;
@@ -112,7 +112,7 @@ export function formalizationCorrespondences(evidence: FormalizationEvidence, so
   return [...merged.values()].sort((a, b) => order(a.aspect) - order(b.aspect) || position(a.originalStart) - position(b.originalStart));
 }
 
-/** The comparison page's projection of approved (verified) formalization evidence. */
+/** The comparison page preserves whether a statement was independently reviewed or only compiled. */
 export function formalizationReport(evidence: FormalizationEvidence): WebFormalizationReport {
   const statement = lineEnds(evidence.candidate.source), environment = getLeanTaskEnvironment(evidence.request.environment);
   const masked = maskLeanComments(statement), regions = inspectLeanDeclarationRegions(masked);
@@ -129,8 +129,9 @@ export function formalizationReport(evidence: FormalizationEvidence): WebFormali
   return { schema: 'theorem-os.web-formalization-report.v1', problemId: evidence.request.problemId, original, statement,
     environment: evidence.request.environment, toolchain: environment.toolchain, mathlibRevision: environment.mathlibRevision ?? null,
     targets, correspondences: formalizationCorrespondences(evidence, statement, [{ start: 0, end: statement.length }]),
-    backtranslation: { mathematics: translation.mathematics, assumptions: translation.assumptions, definitions: translation.definitions,
-      targets: translation.targets.map(item => ({ name: item.name, mathematics: item.mathematics })) },
+    ...(evidence.schema === 'theorem-os.formalization-evidence.v4' ? { semanticReview: 'not-performed' as const } : {}),
+    backtranslation: translation ? { mathematics: translation.mathematics, assumptions: translation.assumptions, definitions: translation.definitions,
+      targets: translation.targets.map(item => ({ name: item.name, mathematics: item.mathematics })) } : null,
     coverage: evidence.candidate.coverage.map(item => {
       const at = original.indexOf(item.originalText);
       return { original: item.originalText, originalStart: at < 0 ? null : at, targets: item.targetNames, explanation: item.explanation };

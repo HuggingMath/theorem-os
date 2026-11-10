@@ -191,17 +191,25 @@ try {
     if (width === 1440) {
       assert.equal(pending.input.maxRunSeconds, 240); assert.equal(pending.input.maxTotalTokens, 120000);
       assert.equal(pending.input.provider.id, 'sub2api'); assert.equal(pending.input.model, 'deepseek-flash');
+    } else {
+      assert.equal(pending.input.maxRunSeconds, 0, 'Blank formalization time reaches the worker as unlimited');
+      assert.equal(pending.input.maxTotalTokens, 0, 'Blank formalization tokens reach the worker as unlimited');
     }
     pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve();
     await page.locator('[data-research-artifact="source"]:enabled').waitFor();
     await eventually(() => runs.length === formalizations.length, 'The approved formalization starts one proof');
     assert.equal((runs.at(-1)?.formalization as { request?: { statement?: string } } | undefined)?.request?.statement, original);
     assert.equal(await page.locator('.research-conversation-status').getAttribute('data-accepted'), String(width === 390));
-    assert.match(await page.locator('#research-chat-thread [data-statement-verdict]').innerText(), /模型审核通过，未经人工确认/u);
+    assert.match(await page.locator('#research-chat-thread [data-statement-verdict]').innerText(), /Lean 编译通过/u);
     if (width === 1440) {
       assert.equal(runs.at(-1)?.input.maxRunSeconds, 180); assert.equal(runs.at(-1)?.input.maxTotalTokens, 80000);
       assert.equal(runs.at(-1)?.input.maxTurns, 4);
-    } else assert.equal(await page.locator('.research-conversation-state').innerText(), 'Lean 陈述证明通过');
+    } else {
+      assert.equal(runs.at(-1)?.input.maxRunSeconds, 0, 'Blank proof time reaches the worker as unlimited');
+      assert.equal(runs.at(-1)?.input.maxTotalTokens, 0, 'Blank proof tokens reach the worker as unlimited');
+      assert.equal(runs.at(-1)?.input.maxTurns, 0, 'Blank proof turns reach the worker as unlimited');
+      assert.equal(await page.locator('.research-conversation-state').innerText(), 'Lean 陈述证明通过');
+    }
     await assertSameComposer(page);
     const sessionUrl = page.url(), id = (await conversation(page)).id;
     await page.locator('#formalize-original').fill(question);
@@ -217,9 +225,9 @@ try {
     await page.locator('#chat-original-panel').waitFor();
     assert.equal(await page.locator('#chat-original-panel .chat-original-columns .chat-message-text').first().textContent(), original);
     assert.match(await page.locator('#chat-original-panel pre code').first().textContent() ?? '', /theorem addition/u);
-    assert.equal(await page.locator('#chat-original-panel .chat-backtranslation .chat-message-text').textContent(), original);
-    assert.ok(await page.locator('#chat-original-panel .chat-correspondences article').count() > 0,
-      'The conversation still exposes specific natural-language/Lean correspondences');
+    assert.equal(await page.locator('#chat-original-panel .chat-backtranslation').count(), 0, 'Direct generation does not fabricate a blind translation');
+    assert.equal(await page.locator('#chat-original-panel .chat-correspondences article').count(), 0, 'Direct generation does not fabricate independent correspondences');
+    assert.equal(await page.locator('#chat-original-panel [data-download-statement]').count(), 1, 'The compiled statement remains downloadable');
     await page.locator('#close-research-output').click();
     assert.equal(await page.locator('#formalize-original').inputValue(), question); await assertSameComposer(page);
     const callsBefore = providerCalls.length;

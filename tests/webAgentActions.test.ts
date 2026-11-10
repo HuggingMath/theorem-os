@@ -1,13 +1,16 @@
 import { describe, expect, test, vi } from 'vitest';
-import type { MathAgentOptions } from '../src/runtime/codexSession';
+import type { MathAgentOptions, MathAgentSession } from '../src/runtime/codexSession';
 import { isWebAgentActionBody, sanitizeAgentItem, unwrapShell, type AgentActionContext } from '../apps/web/agentActions';
-import { webAgentActionLimits, type WorkerInput } from '../apps/web/shared';
+import { webAgentActionLimits, type WebAgentActionBody, type WorkerInput } from '../apps/web/shared';
 import type { SolverProblem } from '../src/solver/problem';
 import type { SolverRunState } from '../src/solver/archive';
 
-const { opened } = vi.hoisted(() => ({ opened: [] as MathAgentOptions[] }));
+const { opened, turns } = vi.hoisted(() => ({ opened: [] as MathAgentOptions[], turns: [] as Parameters<MathAgentSession['run']>[] }));
 vi.mock('../src/runtime/codexSession', async original => ({ ...await original<object>(),
-  createCodexMathSession: async (options: MathAgentOptions) => { opened.push(options); return {}; } }));
+  createCodexMathSession: async (options: MathAgentOptions) => { opened.push(options); return {
+    threadId: 'fixture', run: async (...args: Parameters<MathAgentSession['run']>) => { turns.push(args); return 'completed'; },
+    interrupt: async () => {}, close: async () => {},
+  }; } }));
 const { webSolverModules } = await import('../apps/web/worker');
 
 // The worker's layout: the application, its build state and the run directory holding every Agent's worktree.
@@ -42,9 +45,36 @@ describe('Agent actions as the run owner sees them', () => {
     expect(isWebAgentActionBody(action)).toBe(true);
     const passed = done({ type: 'commandExecution', exitCode: 0, command: `bun '${tools}' check-lean --file Submission.lean`, aggregatedOutput: checkResult(0, []) });
     expect(passed).toMatchObject({ command: 'math check-lean --file Submission.lean', lean: { passed: true, messages: [] } });
-    const many = Array.from({ length: 15 }, (_, index) => ({ severity: 'error', message: `error ${index}` }));
+    const many = Array.from({ length: webAgentActionLimits.leanMessages + 3 }, (_, index) => ({ severity: 'error', message: `error ${index}` }));
     expect(done({ type: 'commandExecution', command: 'math check-lean', aggregatedOutput: checkResult(1, many) })!.lean)
-      .toMatchObject({ omittedMessages: 3, messages: expect.arrayContaining([{ severity: 'error', text: 'error 11' }]) });
+      .toMatchObject({ omittedMessages: 3, messages: expect.arrayContaining([{ severity: 'error', text: `error ${webAgentActionLimits.leanMessages - 1}` }]) });
+  });
+
+  test('long Lean diagnostics retain their messages and survive JSON escaping within the action envelope', () => {
+    const text = `unsolved goals\n${'\u0000'.repeat(webAgentActionLimits.leanMessage - 15)}`;
+    const file = `./${'\u0000'.repeat(998)}`;
+    const messages = Array.from({ length: webAgentActionLimits.leanMessages }, () => ({ severity: 'error', file, message: text }));
+    const command = 'math check-lean';
+    const action = done({ type: 'commandExecution', exitCode: 1, command: command + '\u0000'.repeat(webAgentActionLimits.command - command.length),
+      commandActions: Array.from({ length: webAgentActionLimits.intents }, () => ({ type: 'search', path: '\u0000'.repeat(1_000), query: '\u0000'.repeat(webAgentActionLimits.query) })),
+      aggregatedOutput: checkResult(1, messages) })!;
+    expect(action.lean!.messages).toHaveLength(webAgentActionLimits.leanMessages);
+    expect(action.lean!.messages.every(message => message.text === text && message.file === file)).toBe(true);
+    expect(action.lean!.omittedMessages).toBeUndefined();
+    expect(JSON.stringify(action).length).toBeGreaterThan(512 * 1024);
+    expect(isWebAgentActionBody(action)).toBe(true);
+
+    const clipped = done({ type: 'commandExecution', exitCode: 1, command: 'math check-lean', aggregatedOutput: JSON.stringify({
+      exitCode: 1, timedOut: false, omittedMessages: 4, messages: Array.from({ length: webAgentActionLimits.leanMessages + 3 }, () => ({
+        severity: 'error', file: `${app}/hidden.lean`, message: `Inspect ${key} ${own}/Submission.lean\n${'x'.repeat(webAgentActionLimits.leanMessage)}`,
+      })),
+    }) })!;
+    expect(clipped.lean!.messages).toHaveLength(webAgentActionLimits.leanMessages);
+    expect(clipped.lean!.omittedMessages).toBe(7);
+    expect(clipped.lean!.messages.every(message => message.text.length === webAgentActionLimits.leanMessage && message.text.endsWith('…'))).toBe(true);
+    expect(clipped.lean!.messages[0]).toMatchObject({ file: '…', text: expect.stringContaining('Inspect [REDACTED] ./Submission.lean') });
+    expect(JSON.stringify(clipped)).not.toMatch(/sk-agent-actions|\/opt\/|\/work\//);
+    expect(isWebAgentActionBody(clipped)).toBe(true);
   });
 
   test('a Mathlib search reads as how many matched and the first names per query', () => {
@@ -148,10 +178,15 @@ describe('Agent actions as the run owner sees them', () => {
     const action = done({ type: 'commandExecution', exitCode: 0, cwd: own, command: `bash -lc 'echo '\\''${key}'\\'' && lake env lean --version'`,
       aggregatedOutput: `\u001b[32m${key}\u001b[0m\n{"event":"lean_lock_acquired","at":2}\nLean (version 4.28.0)\n\n` });
     expect(action).toMatchObject({ command: "echo '[REDACTED]' && lake env lean --version", output: '[REDACTED]\nLean (version 4.28.0)', status: 'done' });
-    const long = done({ type: 'commandExecution', exitCode: 2, cwd: own, command: 'lake build', aggregatedOutput: 'a'.repeat(5_000) + 'b'.repeat(5_000) })!;
+    const output = `${'first line\n'.repeat(1_600)}last line`;
+    const retained = done({ type: 'commandExecution', exitCode: 0, cwd: own, command: 'lake build', aggregatedOutput: output })!;
+    expect(retained.output).toBe(output); expect(retained.outputClipped).toBeUndefined();
+    expect(isWebAgentActionBody(retained)).toBe(true);
+    const long = done({ type: 'commandExecution', exitCode: 2, cwd: own, command: 'lake build',
+      aggregatedOutput: 'a'.repeat(webAgentActionLimits.output) + 'b'.repeat(webAgentActionLimits.output) })!;
     expect(long).toMatchObject({ status: 'failed', exitCode: 2, outputClipped: true });
-    expect(long.output!.length).toBeLessThanOrEqual(webAgentActionLimits.output);
-    expect(long.output!.startsWith('a'.repeat(100)) && long.output!.endsWith('b'.repeat(100))).toBe(true);
+    expect(long.output).toBe(`${'a'.repeat(webAgentActionLimits.outputHead)}\n…\n${'b'.repeat(webAgentActionLimits.output - webAgentActionLimits.outputHead - 3)}`);
+    expect(isWebAgentActionBody(long)).toBe(true);
     expect(sanitizeAgentItem('started', { id: 'run-1', type: 'commandExecution', status: 'inProgress', command: 'lake build', cwd: own }, context))
       .toEqual({ workerId: 'engineer', itemId: 'run-1', phase: 'started', kind: 'command', status: 'running', command: 'lake build' });
     expect(unwrapShell(`/bin/zsh -lc "echo \\"quoted\\" \\$HOME"`)).toBe('echo "quoted" $HOME');
@@ -175,10 +210,38 @@ describe('Agent actions as the run owner sees them', () => {
     expect(isWebAgentActionBody(many)).toBe(true);
   });
 
-  test('reasoning shows its summary, or its text when there is no summary; the host\'s prompts are not actions', () => {
-    expect(done({ type: 'reasoning', summary: ['**Plan** use `Nat.zero_add`.'], content: ['raw chain'] })).toMatchObject({ kind: 'reasoning', text: '**Plan** use `Nat.zero_add`.' });
+  test('long commands, tool arguments and file diffs keep their supported details within the envelope', () => {
+    const command = `lean ${'argument '.repeat(800)}`.trim();
+    const shell = done({ type: 'commandExecution', command })!;
+    expect(shell.command).toBe(command);
+    const argumentsValue = { text: 'evidence '.repeat(500), key };
+    const tool = done({ type: 'mcpToolCall', tool: 'verify', arguments: argumentsValue })!;
+    expect(tool.arguments).toBe(JSON.stringify({ ...argumentsValue, key: '[REDACTED]' }));
+    const clipped = done({ type: 'mcpToolCall', tool: 'verify', arguments: { text: 'x'.repeat(webAgentActionLimits.arguments) } })!;
+    expect(clipped.arguments).toHaveLength(webAgentActionLimits.arguments);
+    expect(clipped.arguments!.endsWith('…')).toBe(true);
+
+    const diff = '\u0000'.repeat(webAgentActionLimits.diff);
+    const changes = done({ type: 'fileChange', changes: Array.from({ length: webAgentActionLimits.changes }, (_, index) => ({
+      path: `${index}${'\u0000'.repeat(1_000)}`, kind: { type: 'update', move_path: '\u0000'.repeat(1_000) }, diff,
+    })) })!;
+    expect(changes.changes![0]!.diff).toBe(diff);
+    expect(changes.changes![1]!.diff).toBe(diff);
+    expect(changes.changes![2]).toMatchObject({ clipped: true });
+    expect(changes.changes![2]!.diff).toBeUndefined();
+    expect(changes.changes!.reduce((length, change) => length + (change.diff?.length ?? 0), 0)).toBe(webAgentActionLimits.diffs);
+    for (const action of [shell, tool, clipped, changes]) expect(isWebAgentActionBody(action)).toBe(true);
+  });
+
+  test('reasoning shows only its public summary and commentary is explicitly marked; host prompts are not actions', () => {
+    expect(done({ type: 'reasoning', summary: ['**Plan** use `Nat.zero_add`.'], content: ['raw chain'] }))
+      .toMatchObject({ kind: 'reasoning', text: '**Plan** use `Nat.zero_add`.', textSource: 'summary' });
     expect(done({ type: 'reasoning', summary: [''], content: ['First try rfl.', 'It fails: recursion is on the second argument.'] }))
-      .toMatchObject({ text: 'First try rfl.\n\nIt fails: recursion is on the second argument.' });
+      .toBeUndefined();
+    expect(done({ type: 'reasoning', content: ['raw reasoning'] })).toBeUndefined();
+    expect(done({ type: 'agentMessage', phase: 'commentary', text: 'Checking the statement.' }))
+      .toMatchObject({ kind: 'message', textSource: 'commentary', text: 'Checking the statement.' });
+    expect(done({ type: 'agentMessage', phase: 'final', text: 'Final output.' })).not.toHaveProperty('textSource');
     expect(done({ type: 'agentMessage', text: `Saved in ${own}/generated/problem/Submission.lean.` })).toMatchObject({ kind: 'message', text: 'Saved in ./generated/problem/Submission.lean.' });
     expect(done({ type: 'plan', text: '1. prove add_zero\n2. prove zero_add' })).toMatchObject({ kind: 'plan' });
     expect(done({ type: 'webSearch', query: 'Nat.zero_add mathlib' })).toMatchObject({ kind: 'search', query: 'Nat.zero_add mathlib' });
@@ -187,19 +250,90 @@ describe('Agent actions as the run owner sees them', () => {
     expect(done({ type: 'contextCompaction' })).toMatchObject({ kind: 'compaction' });
     expect(done({ type: 'userMessage', content: [{ type: 'text', text: 'host instructions' }] })).toBeUndefined();
     expect(sanitizeAgentItem('started', { id: 'm', type: 'agentMessage', text: '' }, context)).toBeUndefined();
-    expect(done({ type: 'agentMessage', text: 'x'.repeat(5_000) })).toMatchObject({ textClipped: true });
+    const clipped = done({ type: 'agentMessage', text: 'x'.repeat(webAgentActionLimits.text + 1) })!;
+    expect(clipped).toMatchObject({ textClipped: true, text: `${'x'.repeat(webAgentActionLimits.text - 1)}…` });
+    expect(isWebAgentActionBody(clipped)).toBe(true);
+  });
+
+  test('long public summaries and commentary retain their sanitized text without exposing raw reasoning', () => {
+    const paragraphs = ['First public step.\n'.repeat(500), 'Second public step.\n'.repeat(500)];
+    const summary = done({ type: 'reasoning', summary: [...paragraphs, `Inspect ${own}/Submission.lean using ${key}.`], content: ['raw reasoning'] })!;
+    expect(summary.text).toBe([...paragraphs, 'Inspect ./Submission.lean using [REDACTED].'].join('\n\n'));
+    expect(summary.text!.length).toBeGreaterThan(8_000);
+    expect(summary).toMatchObject({ textSource: 'summary' }); expect(summary.textClipped).toBeUndefined();
+    const commentary = done({ type: 'agentMessage', phase: 'commentary', text: `${paragraphs.join('\n')} ${key} ${app}/secret` })!;
+    expect(commentary.text).toBe(`${paragraphs.join('\n')} [REDACTED] …`);
+    expect(commentary).toMatchObject({ textSource: 'commentary' }); expect(commentary.textClipped).toBeUndefined();
+    for (const action of [summary, commentary]) {
+      expect(isWebAgentActionBody(action)).toBe(true);
+      expect(JSON.stringify(action)).not.toMatch(/raw reasoning|sk-agent-actions|\/opt\/|\/work\//);
+    }
+    const clipped = done({ type: 'reasoning', summary: ['x'.repeat(webAgentActionLimits.text + 1)], content: ['raw reasoning'] })!;
+    expect(clipped).toMatchObject({ textSource: 'summary', textClipped: true, text: `${'x'.repeat(webAgentActionLimits.text - 1)}…` });
   });
 
   test('the server accepts only the shape and limits the sanitizer writes', () => {
     const valid = done({ type: 'agentMessage', text: 'done' })!;
     expect(isWebAgentActionBody(valid)).toBe(true);
     for (const invalid of [{ ...valid, extra: 1 }, { ...valid, workerId: '../solver' }, { ...valid, itemId: '' }, { ...valid, kind: 'shell' },
+      { ...valid, textSource: 'summary' }, { ...valid, kind: 'command', textSource: 'commentary' },
+      { ...valid, kind: 'reasoning', textSource: 'commentary' }, { ...valid, textSource: 'raw' },
       { ...valid, output: 'x'.repeat(webAgentActionLimits.output + 1) }, { ...valid, withheld: false },
       { ...valid, lean: { passed: true, messages: [], secret: 'x' } }, { ...valid, lean: { passed: true, messages: [{ severity: 'fatal', text: 'x' }] } },
-      { ...valid, lean: { passed: false, messages: Array.from({ length: 13 }, () => ({ severity: 'error', text: 'x' })) } },
+      { ...valid, lean: { passed: false, messages: Array.from({ length: webAgentActionLimits.leanMessages + 1 }, () => ({ severity: 'error', text: 'x' })) } },
+      { ...valid, lean: { passed: false, messages: [{ severity: 'error', text: 'x'.repeat(webAgentActionLimits.leanMessage + 1) }] } },
       { ...valid, found: [] }, { ...valid, found: [{ query: 'q', total: -1, names: [] }] },
       { ...valid, changes: [{ path: 'a', change: 'rename' }] }, { ...valid, intents: [{ type: 'write' }] }])
       expect(isWebAgentActionBody(invalid)).toBe(false);
+    expect(isWebAgentActionBody({ ...valid, textSource: 'commentary' })).toBe(true);
+    expect(isWebAgentActionBody({ ...valid, kind: 'reasoning', textSource: 'summary' })).toBe(true);
+  });
+
+  test.each(['lead', 'engineer', 'researcher', 'reviewer'])('the web %s explains mathematical progress on initial and continuation turns', async workerId => {
+    const request = { id: 'fixture', input: { apiKey: key, workers: 4, coordination: 'cooperative' } } as unknown as WorkerInput;
+    const instructions = 'Keep the frozen task and existing delivery protocol. Independent host checking accepts the proof.';
+    opened.length = 0; turns.length = 0;
+    const session = await webSolverModules(request, { sink: () => {}, hidden: [app, run] }).M1.open({
+      workspace: own, instructions, environment: { DEEPSCIENTIST_MATH_WORKER_ID: workerId },
+    } as unknown as MathAgentOptions);
+    const onStarted = vi.fn(), messages = ['Original mathematical assignment.', 'Continue from the saved lemma and new Lean feedback.'];
+    try {
+      for (const [index, message] of messages.entries()) expect(await session.run(message, `turn-${index}`, own, onStarted)).toBe('completed');
+      expect(opened).toHaveLength(1); expect(opened[0]!.instructions).toBe(instructions);
+      expect(turns).toHaveLength(2);
+      for (const [index, args] of turns.entries()) {
+        expect(args[0].startsWith(`${messages[index]}\n\nPublic mathematical progress for the user:`)).toBe(true);
+        expect(args[0]).toContain('public commentary messages in the language of the original problem');
+        expect(args[0]).toContain('concrete lemma statements and their hypotheses');
+        expect(args[0]).toContain('how Lean feedback changes the approach');
+        expect(args[0]).toContain('what you will verify next');
+        expect(args[0]).toContain('keep private reasoning and scratch work private');
+        expect(args[0]).toContain('Keep the existing delivery contracts, allowed edits and independent proof acceptance unchanged');
+        expect(args[0]).toContain('Continue the assigned work in this same turn');
+        expect(args[0]).toContain('an update is not required before every command');
+        expect(args.slice(1)).toEqual([`turn-${index}`, own, onStarted]);
+      }
+    } finally { await session.close(); }
+  });
+
+  test.each([false, true])('sessions without an observable worker retain their run messages (actions enabled: %s)', async observe => {
+    const request = { id: 'fixture', input: { apiKey: key, workers: 1, coordination: 'cooperative' } } as unknown as WorkerInput;
+    opened.length = 0; turns.length = 0;
+    const originalItem = vi.fn(), originalUpdate = vi.fn(), instructions = 'Original session instructions.';
+    const session = await webSolverModules(request, observe ? { sink: () => {}, hidden: [app, run] } : undefined).M1.open({
+      workspace: own, instructions, onItem: originalItem, onItemUpdate: originalUpdate,
+      environment: observe ? {} : { DEEPSCIENTIST_MATH_WORKER_ID: 'engineer' },
+    } as unknown as MathAgentOptions);
+    const onStarted = vi.fn();
+    try {
+      await session.run('Original turn instructions.', 'first', own, onStarted);
+      await session.run('Original continuation instructions.', 'second', own, onStarted);
+      expect(opened[0]).toMatchObject({ instructions, onItem: originalItem, onItemUpdate: originalUpdate });
+      expect(turns).toEqual([
+        ['Original turn instructions.', 'first', own, onStarted],
+        ['Original continuation instructions.', 'second', own, onStarted],
+      ]);
+    } finally { await session.close(); }
   });
 
   test('the worker numbers each Codex session, so a restarted Agent never replaces its earlier items', () => {
@@ -212,7 +346,67 @@ describe('Agent actions as the run owner sees them', () => {
     void modules.M1.open({ workspace: own, environment: {} } as unknown as MathAgentOptions);
     for (const options of opened.slice(0, 2)) options.onItem!('completed', { id: 'item-1', type: 'agentMessage', text: `key ${key}` });
     expect(opened[2]!.onItem).toBeUndefined();
+    expect(opened[2]!.onItemUpdate).toBeUndefined();
     expect(sent).toEqual([1, 2].map(session => ({ workerId: 'engineer', itemId: `${session}:item-1`, phase: 'completed', kind: 'message', status: 'done', text: 'key [REDACTED]' })));
+  });
+
+  test('the worker throttles and deduplicates sanitized public snapshots, and completion is authoritative', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(10_000);
+    let session: MathAgentSession | undefined;
+    try {
+      const sent: WebAgentActionBody[] = [];
+      const request = { id: 'fixture', provider: { id: 'openai', name: 'Fixture', baseUrl: 'https://example.invalid/v1' },
+        input: { apiKey: key, workers: 1, coordination: 'cooperative' } } as unknown as WorkerInput;
+      opened.length = 0;
+      session = await webSolverModules(request, { sink: action => sent.push(action), hidden: [app, run] }).M1.open({
+        workspace: own, environment: { DEEPSCIENTIST_MATH_WORKER_ID: 'engineer' },
+      } as unknown as MathAgentOptions);
+      const observer = opened[0]!;
+      const update = (text: string) => observer.onItemUpdate!({ id: 'r', type: 'reasoning', summary: [text], content: ['raw never shown'] });
+      update(`Inspect ${own}/Submission.lean with key ${key}`);
+      update('Inspect ./Submission.lean with key [REDACTED]');
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({ workerId: 'engineer', itemId: '1:r', phase: 'started', status: 'running',
+        kind: 'reasoning', textSource: 'summary', text: 'Inspect ./Submission.lean with key [REDACTED]' });
+      for (let index = 0; index < 100; index++) update(`Public revision ${index}`);
+      expect(sent).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(999); expect(sent).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1); expect(sent).toHaveLength(2);
+      expect(sent.at(-1)!.text).toBe('Public revision 99');
+      update('A pending old snapshot');
+      observer.onItem!('completed', { id: 'r', type: 'reasoning', summary: ['Authoritative final summary'], content: ['raw final'] });
+      update('A late snapshot');
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(sent).toHaveLength(3);
+      expect(sent.at(-1)).toMatchObject({ itemId: '1:r', phase: 'completed', status: 'done', text: 'Authoritative final summary', textSource: 'summary' });
+      expect(sent.every(isWebAgentActionBody)).toBe(true);
+      expect(JSON.stringify(sent)).not.toMatch(/raw|sk-agent-actions|\/opt\/|\/work\//);
+    } finally { await session?.close(); vi.useRealTimers(); }
+  });
+
+  test('the worker preserves the last public text on a textless completion and cancels pending updates on interruption', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(10_000);
+    let session: MathAgentSession | undefined;
+    try {
+      const sent: WebAgentActionBody[] = [];
+      const request = { id: 'fixture', provider: { id: 'openai', name: 'Fixture', baseUrl: 'https://example.invalid/v1' },
+        input: { apiKey: key, workers: 1, coordination: 'cooperative' } } as unknown as WorkerInput;
+      opened.length = 0;
+      session = await webSolverModules(request, { sink: action => sent.push(action), hidden: [app, run] }).M1.open({
+        workspace: own, environment: { DEEPSCIENTIST_MATH_WORKER_ID: 'engineer' },
+      } as unknown as MathAgentOptions);
+      const observer = opened[0]!;
+      observer.onItemUpdate!({ id: 'm', type: 'agentMessage', phase: 'commentary', text: `Checking ${key}` });
+      observer.onItemUpdate!({ id: 'm', type: 'agentMessage', phase: 'commentary', text: 'Latest public explanation.' });
+      observer.onItem!('completed', { id: 'm', type: 'agentMessage', phase: 'commentary', text: '' });
+      expect(sent.at(-1)).toMatchObject({ itemId: '1:m', phase: 'completed', textSource: 'commentary', text: 'Latest public explanation.' });
+      observer.onItemUpdate!({ id: 'cancelled', type: 'reasoning', summary: ['First public snapshot'] });
+      observer.onItemUpdate!({ id: 'cancelled', type: 'reasoning', summary: ['Pending public snapshot'] });
+      const count = sent.length;
+      await session.interrupt(); await vi.advanceTimersByTimeAsync(1_000);
+      observer.onItemUpdate!({ id: 'cancelled', type: 'reasoning', summary: ['Late after cancellation'] });
+      expect(sent).toHaveLength(count);
+    } finally { await session?.close(); vi.useRealTimers(); }
   });
 
   test('an isolated worker hides the application from every session and names the bundled commands', () => {

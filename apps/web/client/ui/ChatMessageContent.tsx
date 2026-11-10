@@ -1,5 +1,5 @@
 import { Fragment, type ComponentChildren } from 'preact';
-import { useEffect, useId, useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useState } from 'preact/hooks';
 import { Marked, type Token, type Tokens, type TokenizerExtension } from 'marked';
 import { t } from '../../i18n';
 import { leanTokens } from '../sourceText';
@@ -60,14 +60,18 @@ function highlightedLean(source: string): ComponentChildren[] {
 }
 
 const previewLines = 18;
-function CodeBlock({ token }: { token: Tokens.Code }) {
+let nextCodeId = 0;
+export function ChatCodeBlock({ text, language = '', label, preview = true }: {
+  text: string; language?: string; label?: string; preview?: boolean;
+}) {
   const [expanded, setExpanded] = useState(false), [copied, setCopied] = useState<'idle' | 'copied' | 'failed'>('idle');
-  const id = useId();
-  const language = token.lang?.trim().split(/\s/u)[0] || '';
-  const lines = token.text.split('\n'), long = lines.length > previewLines;
-  const visible = long && !expanded ? lines.slice(0, previewLines).join('\n') : token.text;
-  const source = useMemo(() => /^(?:lean|lean4)$/iu.test(language) ? highlightedLean(visible) : visible, [visible, language]);
-  useEffect(() => { setCopied('idle'); }, [token.text]);
+  // Separate render roots and newly mounted records share the same document.
+  const [id] = useState(() => `chat-code-${++nextCodeId}`);
+  const lang = language.trim().split(/\s/u)[0] || '';
+  const lines = text.split('\n'), long = preview && lines.length > previewLines;
+  const visible = long && !expanded ? lines.slice(0, previewLines).join('\n') : text;
+  const source = useMemo(() => /^(?:lean|lean4)$/iu.test(lang) ? highlightedLean(visible) : visible, [visible, lang]);
+  useEffect(() => { setCopied('idle'); }, [text]);
   useEffect(() => {
     if (copied !== 'copied') return;
     const timer = setTimeout(() => setCopied('idle'), 1800);
@@ -76,17 +80,17 @@ function CodeBlock({ token }: { token: Tokens.Code }) {
   async function copy() {
     try {
       if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
-      await navigator.clipboard.writeText(token.text);
+      await navigator.clipboard.writeText(text);
       setCopied('copied');
     } catch { setCopied('failed'); }
   }
-  return <section class="chat-code" data-expanded={expanded} aria-label={language || t('代码')}>
-    <header class="chat-code-header"><span>{language || t('代码')}</span>
+  return <section class="chat-code" data-expanded={expanded} aria-label={label || lang || t('代码')}>
+    <header class="chat-code-header"><span>{label || lang || t('代码')}</span>
       <button type="button" data-chat-code-copy onClick={() => void copy()} title={t('复制代码')}
         aria-label={copied === 'copied' ? t('代码已复制') : t('复制代码')}><Icon name={copied === 'copied' ? 'check' : 'copy'} />
         <span>{copied === 'copied' ? t('代码已复制') : t('复制代码')}</span></button>
     </header>
-    <pre id={id} tabIndex={0}><code>{source}</code></pre>
+    <pre id={id} tabIndex={0} aria-label={label || lang || t('代码')} translate={false}><code>{source}</code></pre>
     {long && <button type="button" class="chat-code-toggle" data-chat-code-toggle aria-expanded={expanded} aria-controls={id}
       onClick={() => setExpanded(value => !value)}><Icon name={expanded ? 'chevron-up' : 'chevron-down'} />
       {expanded ? t('收起') : t('展开全部 {0} 行', lines.length)}</button>}
@@ -111,7 +115,10 @@ function renderToken(token: Token, suffix?: string): ComponentChildren {
   switch (token.type) {
     case 'chat_math': return <Formula token={token as MathToken} suffix={suffix} />;
     case 'space': case 'def': return null;
-    case 'code': return <CodeBlock token={token as Tokens.Code} />;
+    case 'code': {
+      const code = token as Tokens.Code;
+      return <ChatCodeBlock text={code.text} language={code.lang} />;
+    }
     case 'heading': {
       const heading = token as Tokens.Heading, Tag = ('h' + Math.min(heading.depth + 1, 6)) as 'h2';
       return <Tag><Inline tokens={heading.tokens} /></Tag>;

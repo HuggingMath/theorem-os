@@ -58,7 +58,7 @@ async function main(): Promise<number> {
     component: { type: 'string' }, workers: { type: 'string' }, help: { type: 'boolean' },
   } });
   if (values.help) {
-    console.log(`Usage: theorem-os example prepare|check|solve|resume|replay --dir DIR [--component NAME] [--workers 1..${MAX_RESEARCH_WORKERS}] [--model MODEL] [--effort LEVEL] [--codex FILE]\nprepare: create a small Lean-only problem and freeze the build and configuration.\ncheck: run the startup preflight without a model.\nsolve / resume: use the saved configuration (default: single agent, at most 5 dispatches).\nreplay: prepare a NEW directory and check two preset candidates with real Lean; no model or provider connection.\n--component uses src/components/NAME.ts; M3.ready ordering is exercised by cooperative model runs with at least 3 workers.\nInstall leanprover/lean4:v4.33.0 first. Keep the same build and environment when resuming.`);
+    console.log(`Usage: theorem-os example prepare|check|solve|resume|replay --dir DIR [--component NAME] [--workers 1..${MAX_RESEARCH_WORKERS}] [--model MODEL] [--effort LEVEL] [--codex FILE]\nprepare: create a small Lean-only problem and freeze the build and configuration.\ncheck: run the startup preflight without a model.\nsolve / resume: use the saved configuration (default: single agent, unlimited dispatches, time and tokens).\nreplay: prepare a NEW directory and check two preset candidates with real Lean; no model or provider connection.\n--component uses src/components/NAME.ts; M3.ready ordering is exercised by cooperative model runs with at least 3 workers.\nInstall leanprover/lean4:v4.33.0 first. Keep the same build and environment when resuming.`);
     return 0;
   }
   const action = positionals[0];
@@ -92,7 +92,8 @@ async function main(): Promise<number> {
     throw new Error('Replay uses preset candidates in a new case; use a separately prepared case for a model run.');
   const output = path.join(directory, 'result.json');
   const args = ['--workspace', path.join(directory, 'workspace'), '--task-file', path.join(directory, 'task.md'),
-    '--build-manifest', config.buildManifestRef, '--output', output, '--workers', String(config.workers), '--max-turns', '5', '--max-run-seconds', '300'];
+    '--build-manifest', config.buildManifestRef, '--output', output, '--workers', String(config.workers),
+    '--max-turns', '0', '--max-run-seconds', '0', '--max-turn-seconds', '0', '--max-total-tokens', '0'];
   for (const key of ['model', 'effort', 'codex'] as const) if (config[key]) args.push(`--${key}`, config[key]);
   if (action === 'check') {
     args.push('--startup-only');

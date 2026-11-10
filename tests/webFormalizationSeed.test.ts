@@ -13,6 +13,7 @@ import { LIBRARY_PACK_SCHEMA, libraryPackDigest } from '../src/math/libraryPacks
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { defaultResearchModulePlan } from '../src/solver/modules/policy';
 import { approvedFormalization } from './helpers/approvedFormalizationFixture';
+import { webDirectFormalizationEvidence, webFormalizationStatement } from './helpers/webFormalizationFixture';
 
 describe('confirmed formalization handoff to a frozen proof problem', () => {
   const roots: string[] = [], id = crypto.randomUUID();
@@ -73,10 +74,25 @@ describe('confirmed formalization handoff to a frozen proof problem', () => {
 
   it('revalidates evidence before freezing a new proof problem', () => {
     const changed = structuredClone(evidence);
-    changed.translation.mathematics = 'Changed after confirmation';
+    changed.candidate.definitionsExplanation = 'Changed after confirmation';
     const destination = directory();
     expect(() => prepareWebProblem(destination, { input: input(), formalization: changed })).toThrow();
     expect(fs.existsSync(path.join(destination, 'formalized/workspace'))).toBe(false);
+  });
+
+  it('hands a direct compilation to the same frozen proof targets without claiming semantic review', () => {
+    const direct = webDirectFormalizationEvidence({ id, original: webFormalizationStatement, environment: 'standard',
+      model: 'gpt-6.1-sol', effort: 'max', apiKey: 'sk-fixture-never-used', reviewMode: 'direct',
+      provider: { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1' },
+      maxRunSeconds: 0, maxTotalTokens: 0, maxRounds: 0, maxPlanningRounds: 0, reviewers: 2 });
+    const request = { ...input(), source: direct.candidate.source, environment: direct.request.environment };
+    const destination = directory(), seed = prepareWebProblem(destination, { input: request, formalization: direct });
+    const receipt = readLeanTaskReceipt(seed.activeProblemPath), task = fs.readFileSync(seed.taskFile, 'utf8');
+    expect(readFormalizationArtifact(path.join(destination, 'formalized/artifact'))).toEqual(direct);
+    expect(receipt.contract.formalStatement).toBe(direct.candidate.source);
+    expect(task).toContain(direct.request.statement); expect(task).toContain('No independent semantic review was performed');
+    expect(readSolverProblem(seed.workspaceRoot, seed.activeProblemPath).targets.map(target => target.theoremName))
+      .toEqual(direct.targets.map(target => target.name));
   });
 
   it('preserves ordinary Lean bootstrap behavior without a formalization binding', () => {

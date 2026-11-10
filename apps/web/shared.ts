@@ -1,5 +1,6 @@
 import type { ResearchModulePlan, ResearchModuleSlot } from '../../src/solver/modules/policy';
 import type { WebObservation, WebArchive } from './collaboration';
+import type { WebFormalizationBackgroundReview } from './formalizationTypes';
 
 export type WebEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type WebCoordination = 'cooperative' | 'independent';
@@ -132,7 +133,8 @@ export type WebRun = {
   knowledgeDigest?: string;
   continueFrom?: WebContinuation;
   formalizationId?: string;
-  formalization?: { id: string; evidenceSha256: string; original: string; confirmedAt: string; confirmation?: 'automatic' | 'manual' };
+  formalization?: { id: string; evidenceSha256: string; original: string; confirmedAt: string; confirmation?: 'automatic' | 'manual';
+    reviewMode?: 'direct' };
   /** Host-declared solver attempt; observation sequences continue across library restarts. */
   solverAttempt?: { solverRunId: string; round: number; sequence: number };
   observation?: WebObservation;
@@ -248,13 +250,15 @@ export type WebAgentActionBody = {
   exitCode?: number; durationMs?: number; lean?: WebAgentLeanCheck; found?: WebAgentLeanSearch; library?: WebAgentLibraryAction;
   changes?: WebAgentFileChange[]; omittedChanges?: number;
   text?: string; textClipped?: boolean;
+  /** Explicit public provenance; absent on older records and final assistant output. */
+  textSource?: 'summary' | 'commentary';
   query?: string; url?: string; tool?: string; arguments?: string;
 };
 export type WebAgentAction = WebAgentActionBody & { sequence: number; at: string };
-/** Per action field and per run; a run past `perRun` keeps counting what it dropped. */
-export const webAgentActionLimits = Object.freeze({ perRun: 3_000, page: 500, command: 2_000, output: 8_000, outputHead: 2_000,
-  diff: 6_000, diffs: 24_000, changes: 20, text: 4_000, intents: 8, query: 400, arguments: 1_000, encoded: 64 * 1024,
-  leanMessages: 12, leanMessage: 600, queries: 8, names: 8, name: 200 });
+/** Per action field and per run; encoded allows JSON's six-character escapes, including long Lean diagnostics and paths. */
+export const webAgentActionLimits = Object.freeze({ perRun: 3_000, page: 500, command: 8_192, output: 32_768, outputHead: 8_192,
+  diff: 32_768, diffs: 65_536, changes: 20, text: 32_768, intents: 8, query: 400, arguments: 8_192, encoded: 1536 * 1024,
+  leanMessages: 64, leanMessage: 2_000, queries: 8, names: 8, name: 200 });
 export type WorkerMessage =
   | { type: 'progress'; event: string; message: string; details?: WebEventDetails }
   | { type: 'action'; action: WebAgentActionBody }
@@ -328,7 +332,10 @@ export type WebFormalizationReport = {
   environment: WebEnvironment; toolchain: string; mathlibRevision: string | null;
   targets: { name: string; lines: WebExplanationLines }[];
   correspondences: WebFormalizationCorrespondence[];
-  backtranslation: { mathematics: string; assumptions: string[]; definitions: string[]; targets: { name: string; mathematics: string }[] };
+  /** Absent on legacy independently reviewed reports. Direct compilation does not assess natural-language meaning. */
+  semanticReview?: 'not-performed';
+  backgroundReview?: WebFormalizationBackgroundReview;
+  backtranslation: { mathematics: string; assumptions: string[]; definitions: string[]; targets: { name: string; mathematics: string }[] } | null;
   coverage: { original: string; originalStart: number | null; targets: string[]; explanation: string }[];
   plan?: { taskKind: string; conclusions: { mathematics: string; targets: string[]; quotes: string[] }[];
     assumptions: { mathematics: string; quotes: string[] }[]; definitions: { mathematics: string; names: string[]; quotes: string[] }[];

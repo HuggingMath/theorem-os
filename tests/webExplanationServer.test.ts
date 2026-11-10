@@ -111,8 +111,8 @@ describe('web proof explanation routes', () => {
     const overview = await (await request(base, alice)).json() as WebExplanationOverview;
     expect(overview).toEqual({ run: { id: run.id, title: run.title, environment: 'standard', providerId: 'sub2api', model: 'deepseek-flash',
       effort: 'xhigh', proof: PROOF }, targets: [{ name: 'target_thm', declarations: 3 }], explanations: [],
-    generation: { available: true, model: 'deepseek-flash', effort: 'max', key: 'required', maxRunSeconds: 28_800,
-      maxTotalTokens: 40_000_000, reference: { declarations: 14, seconds: 16_200, tokens: 10_750_000 } } });
+    generation: { available: true, model: 'deepseek-flash', effort: 'max', key: 'required', maxRunSeconds: 0,
+      maxTotalTokens: 0, reference: { declarations: 14, seconds: 16_200, tokens: 10_750_000 } } });
 
     expect((await request(base, alice, { body: { target: 'target_thm', language: 'zh' } })).status).toBe(400);
     expect((await request(base, alice, { body: { target: 'double_eq', language: 'zh', apiKey: KEY } })).status).toBe(400);

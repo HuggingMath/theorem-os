@@ -41,12 +41,16 @@ describe('usage estimate and token cap before submission', () => {
     expect(tokenCap('1.5', 1e8)).toBe(15_000);
     expect(tokenCap('1.0003', 1e8)).toBe(10_003);
     expect(tokenCap('9999.9999', 1e8)).toBe(99_999_999);
-    for (const value of ['0', '-3', '10001', 'abc', 'NaN', 'Infinity', '1.00001', '1.00031', '1.00001e0', '1e-5', '10000.0001'])
+    for (const value of ['-3', '10001', 'abc', 'NaN', 'Infinity', '1.00001', '1.00031', '1.00001e0', '1e-5', '10000.0001'])
       expect(tokenCap(value, 1e8)).toBeUndefined();
     expect(submissionIssues({ ...draft, maxTotalTokens: '' }, 'sk-valid-key', session)).toEqual([]);
     expect(submissionIssues({ ...draft, maxTotalTokens: '1.0003' }, 'sk-valid-key', session)).toEqual([]);
-    expect(submissionIssues({ ...draft, maxTotalTokens: '0' }, 'sk-valid-key', session).map(issue => issue.field)).toEqual(['max-tokens']);
+    expect(tokenCap('0', 1e8)).toBe(0);
+    expect(submissionIssues({ ...draft, maxTotalTokens: '0' }, 'sk-valid-key', session)).toEqual([]);
     expect(submissionIssues({ ...draft, maxTotalTokens: '1.00001' }, 'sk-valid-key', session).map(issue => issue.field)).toEqual(['max-tokens']);
+    expect(submissionIssues({ ...draft, maxTurns: '', maxRunSeconds: '', maxTotalTokens: '' }, 'sk-valid-key', session)).toEqual([]);
+    expect(submissionIssues({ ...draft, maxTurns: '0', maxRunSeconds: '0', maxTotalTokens: '0' }, 'sk-valid-key', session)).toEqual([]);
+    expect(submissionIssues({ ...draft, workers: '' }, 'sk-valid-key', session).map(issue => issue.field)).toEqual(['workers']);
   });
 
   it('keeps the cap in drafts and archives and still reads drafts saved before it existed', () => {

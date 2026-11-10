@@ -1,3 +1,4 @@
+import type { WorkerFormalizationAuditInput } from './formalizationAuditTypes';
 import { spawn } from 'node:child_process';
 import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -17,8 +18,9 @@ import { ExecutionDeadline } from '../../src/runtime/executionDeadline';
 import { allowedKnowledgeFile, validateTheoremKnowledge } from '../../src/solver/theoremKnowledge';
 import { MAX_LIBRARY_PACK_BYTES, MAX_LIBRARY_PACK_MODULES, MAX_LIBRARY_MODULE_BYTES, parseLibraryPack } from '../../src/math/libraryPacks';
 import { mathConstructionImports } from '../../src/math/mathConstructionSources';
+import { formalizationAuditResultSchema } from '../../src/math/formalizationAudit';
 import { webFormalizationPhases, webFormalizationReason, type WorkerFormalizationInput,
-  type WorkerFormalizationMessage } from './formalizationTypes';
+  type WorkerFormalizationMessage, type WorkerFormalizationAuditMessage } from './formalizationTypes';
 
 export type WebRunner = {
   readiness(): Promise<{ ready: boolean; message: string }>;
@@ -28,8 +30,10 @@ export type WebRunner = {
   check?: WebPrecheckRunner;
   /** Writes and audits a proof explanation in its own container; absent when the service cannot. */
   explain?(input: WorkerExplanationInput, onMessage: (message: WorkerExplanationMessage) => void, signal: AbortSignal): Promise<void>;
-  /** Formalizes and independently reviews an original problem; confirmation belongs to the workbench. */
+  /** Produces a frozen compiled statement; confirmation belongs to the workbench. */
   formalize?(input: WorkerFormalizationInput, onMessage: (message: WorkerFormalizationMessage) => void, signal: AbortSignal): Promise<void>;
+  /** Reviews an already available statement in a separate background container. */
+  auditFormalization?(input: WorkerFormalizationAuditInput, onMessage: (message: WorkerFormalizationAuditMessage) => void, signal: AbortSignal): Promise<void>;
 };
 const execute = promisify(execFile);
 const object = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -107,11 +111,14 @@ const formalizationMessageSchema = z.union([
   z.object({ type: z.literal('activity'), activity: z.custom(isWebFormalizationActivityBody) }).strict(),
   z.object({ type: z.literal('result'), status: z.literal('approved'), evidence: z.record(z.unknown()) }).strict(),
   z.object({ type: z.literal('result'), status: z.enum(['exhausted', 'error']), reason: z.string().regex(webFormalizationReason) }).strict(),
+  z.object({ type: z.literal('audit-progress'), tokens: count }).strict(),
+  z.object({ type: z.literal('audit-result'), result: formalizationAuditResultSchema }).strict(),
+  z.object({ type: z.literal('audit-error'), reason: z.string().regex(webFormalizationReason) }).strict(),
 ]);
-export function parseFormalizationMessage(line: string): WorkerFormalizationMessage | undefined {
+export function parseFormalizationMessage(line: string): WorkerFormalizationMessage | WorkerFormalizationAuditMessage | undefined {
   try {
     const message = formalizationMessageSchema.safeParse(JSON.parse(line));
-    return message.success ? message.data as WorkerFormalizationMessage : undefined;
+    return message.success ? message.data as WorkerFormalizationMessage | WorkerFormalizationAuditMessage : undefined;
   } catch { return undefined; }
 }
 
@@ -312,7 +319,8 @@ export class DockerWebRunner implements WebRunner {
         });
       })();
       const abort = () => { void stop(); };
-      const watchdog = new ExecutionDeadline((input.input.maxRunSeconds + (mathlib ? 600 : 0) + 240) * 1_000, abort);
+      const watchdog = new ExecutionDeadline(input.input.maxRunSeconds === 0 ? Number.POSITIVE_INFINITY
+        : (input.input.maxRunSeconds + (mathlib ? 600 : 0) + 240) * 1_000, abort);
       signal.addEventListener('abort', abort, { once: true });
       const finish = async (error?: Error) => {
         if (finished) return;
@@ -384,7 +392,8 @@ export class DockerWebRunner implements WebRunner {
           if (error) { child.kill('SIGKILL'); reject(error); } else resolve();
         };
         const abort = () => finish(new Error('explanation_cancelled'));
-        const timer = setTimeout(() => finish(new Error('explanation_timeout')), (input.maxRunSeconds + (mathlib ? 1_200 : 600)) * 1_000);
+        const timer = input.maxRunSeconds === 0 ? undefined
+          : setTimeout(() => finish(new Error('explanation_timeout')), (input.maxRunSeconds + (mathlib ? 1_200 : 600)) * 1_000);
         signal.addEventListener('abort', abort, { once: true });
         child.stdout.setEncoding('utf8');
         child.stdout.on('data', chunk => {
@@ -406,10 +415,21 @@ export class DockerWebRunner implements WebRunner {
     } finally { await remove(); }
   }
 
-  /** A private container for planning, Lean compilation, blind backtranslation and unanimous review. */
+  /** Foreground generation and background review have separate container lifetimes. */
   async formalize(input: WorkerFormalizationInput, onMessage: (message: WorkerFormalizationMessage) => void, signal: AbortSignal): Promise<void> {
+    return this.formalizationContainer(input, message => {
+      if (message.type === 'progress' || message.type === 'activity' || message.type === 'result') onMessage(message);
+    }, signal);
+  }
+  async auditFormalization(input: WorkerFormalizationAuditInput, onMessage: (message: WorkerFormalizationAuditMessage) => void, signal: AbortSignal): Promise<void> {
+    return this.formalizationContainer(input, message => {
+      if (message.type === 'audit-progress' || message.type === 'audit-result' || message.type === 'audit-error') onMessage(message);
+    }, signal);
+  }
+  private async formalizationContainer(input: WorkerFormalizationInput | WorkerFormalizationAuditInput,
+    onMessage: (message: WorkerFormalizationMessage | WorkerFormalizationAuditMessage) => void, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
-    const name = `theoremos-formalize-${input.id}`, mathlib = input.environment === 'mathlib';
+    const name = `theoremos-formalize-${'operation' in input ? 'audit-' : ''}${input.id}`, mathlib = input.environment === 'mathlib';
     const memory = mathlib ? '12g' : '4g';
     const remove = () => execute('docker', ['rm', '--force', '--volumes', name], { timeout: 15_000 }).then(() => {}, () => {});
     try {
@@ -435,7 +455,8 @@ export class DockerWebRunner implements WebRunner {
           if (error) { child.kill('SIGKILL'); reject(error); } else resolve();
         };
         const abort = () => finish(new Error('formalization_cancelled'));
-        const timer = setTimeout(() => finish(new Error('formalization_timeout')), (input.maxRunSeconds + (mathlib ? 1_200 : 600)) * 1_000);
+        const timer = input.maxRunSeconds === 0 ? undefined
+          : setTimeout(() => finish(new Error('formalization_timeout')), (input.maxRunSeconds + (mathlib ? 1_200 : 600)) * 1_000);
         signal.addEventListener('abort', abort, { once: true });
         child.stdout.setEncoding('utf8');
         child.stdout.on('data', chunk => {
@@ -443,7 +464,8 @@ export class DockerWebRunner implements WebRunner {
           for (let newline = buffer.indexOf('\n'); newline >= 0; newline = buffer.indexOf('\n')) {
             const message = parseFormalizationMessage(buffer.slice(0, newline));
             buffer = buffer.slice(newline + 1);
-            if (message?.type === 'result') received = true;
+            if ('operation' in input ? message?.type === 'audit-result' || message?.type === 'audit-error'
+              : message?.type === 'result') received = true;
             if (message && !finished) onMessage(message);
           }
           if (buffer.length > 32 * 1024 * 1024) finish(new Error('formalization_output_too_large'));

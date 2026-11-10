@@ -155,6 +155,8 @@ function automaticReviewers(evidence: FormalizationEvidence): string {
 function assertFirstProofAutomaticEvidence(evidence: FormalizationEvidence, problem: FirstProofProblem,
   manifest: FirstProofFormalizationManifest, source: string): void {
   assertFormalizationEvidence(evidence);
+  if (evidence.schema === 'theorem-os.formalization-evidence.v4')
+    throw new Error('first_proof_formalization_independent_review_required');
   if (evidence.execution !== 'model' || evidence.modelInvoked !== true)
     throw new Error('first_proof_formalization_model_execution_required');
   if (evidence.request.problemId !== problem.id || evidence.request.statement !== problem.source ||
@@ -179,6 +181,8 @@ export function importFirstProofFormalization(artifact: string, formalizationsRo
   problem: FirstProofProblem): FirstProofFormalization {
   assertProblem(problem);
   const evidence = readFormalizationArtifact(artifact);
+  if (evidence.schema === 'theorem-os.formalization-evidence.v4')
+    throw new Error('first_proof_formalization_independent_review_required');
   const { source, coverage, assumptions, assumptionsExplanation, definitionsExplanation } = evidence.candidate;
   const manifest = firstProofFormalizationManifestSchema.parse({
     schema: 'theorem-os.first-proof.formalization.v1', problemId: problem.id,

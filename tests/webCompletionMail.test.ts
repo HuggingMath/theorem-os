@@ -69,6 +69,18 @@ describe('completion mail content', () => {
     expect(text(unapproved)).not.toMatch(/secret_source|Prove it|sk-/u);
   });
 
+  it('describes a direct formalization without claiming independent semantic review in completion mail', () => {
+    const formalization: NonNullable<WebRun['formalization']> = { id: 'formalization-id', evidenceSha256: 'a'.repeat(64),
+      original: 'private natural-language original', confirmedAt: '2026-10-27T10:00:00.000Z',
+      confirmation: 'automatic', reviewMode: 'direct' };
+    const mail = completionMail(run({ formalization, result: { status: 'evaluated_passed', proof: secretProof, report: {} } as WebRun['result'] }),
+      'https://app.theoremos.top');
+    expect(mail.subject).toContain('Lean 陈述已通过验收');
+    expect(mail.text).toContain('原题含义及审核结论请查看形式化记录');
+    expect(mail.text).toContain('see the formalization record for its meaning and review results');
+    expect(mail.text).not.toContain('模型审核通过'); expect(mail.text).not.toContain('model review passed');
+  });
+
   it.each([
     ['automatic', '模型审核通过，未经人工确认', 'model review passed; not confirmed by a person'],
     ['manual', '你已确认 Lean 陈述', 'you confirmed the Lean statement'],

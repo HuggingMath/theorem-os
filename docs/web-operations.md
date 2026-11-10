@@ -164,7 +164,7 @@ docker exec theorem-os-web-1 bun scripts/web-operations.ts monitor \
 bun scripts/web-operations.ts capacity --research-concurrency 1
 ```
 
-默认同时开启一个研究、一个形式化、一个讲解与两个预检查时，容器内存上限合计 **44 GiB**、CPU 上限合计 **10 核**，建议工作盘余量 **90 GiB**。这是配置上限之和，不代表实际使用量或性能承诺。调整研究并发时，必须一起考虑其他队列和模型网关限制。
+默认同时开启一个研究、一个形式化生成、一个后台形式化审核、一个讲解与两个预检查时，容器内存上限合计 **56 GiB**、CPU 上限合计 **12 核**，建议工作盘余量 **120 GiB**。这是配置上限之和，不代表实际使用量或性能承诺。调整研究并发时，必须一起考虑其他队列和模型网关限制。
 
 发布演练使用离线 fixture 驱动已有真实 Docker/Lean 测试，不使用真实 Key：
 
@@ -182,7 +182,7 @@ bun scripts/smoke-web-first-use.ts --allow-model \
   --output /private/theoremos-first-use-add-zero
 ```
 
-脚本从浏览器提交自然语言原题，等待两位独立审核、自动进入证明及宿主 Lean 独立验收，再实际点击下载复核包，校验 ZIP、冻结陈述、证明和固定环境。`--problem add-comm` 可做第二个个案。默认保留 `deepseek-flash / max`、形式化十分钟 / 40 万 Token、证明五分钟 / 20 万 Token / 五轮；单个请求可能使已报告用量超过预算。不自动重试，不向生产账号提交任务；凭据仅从已有 profile 的 auth command 或 `SUB2API_WESTLAKE_API_KEY` 在内存读取。
+脚本从浏览器提交自然语言原题，等待两位独立审核、自动进入证明及宿主 Lean 独立验收，再实际点击下载复核包，校验 ZIP、冻结陈述、证明和固定环境。`--problem add-comm` 可做第二个个案；`--problem-file FILE --environment mathlib` 可原样提交自定义题目文件，不能同时指定 `--problem`。默认保留 `deepseek-flash / max`，形式化和证明的时间、Token 与调度轮数均不设上限，前端输入留空。需要有限预算时显式传入 `--formalization-minutes`、`--formalization-tokens`、`--proof-minutes`、`--proof-tokens` 或 `--proof-turns`；留空或 `0` 表示无限制。只在两阶段均显式设置时间上限时，脚本才使用两阶段之和加 180 秒的父进程等待上限。单个请求可能使已报告用量超过显式预算。不自动重试，不向生产账号提交任务；凭据仅从已有 profile 的 auth command 或 `SUB2API_WESTLAKE_API_KEY` 在内存读取。
 
 报告包含各阶段用时、宿主已报告 Token、截图和下载包。无法取得可归属到本次请求的账单时金额为 `unknown`，缺少用量不记作零。这是维护者真实调用验收；真人试用结果仍记录在[试用表](web-release-trial.md)。旧的 `smoke-web-release.ts` 入口调用同一脚本。
 

@@ -104,7 +104,8 @@ function packageInput(root: string, relative: string, parent?: ResolvedPackageIn
   return { input: { relative, source: cursor, links }, visited };
 }
 
-export function listLeanProbePackageInputs(root: string, checkpoint: () => void): PackageInput[] {
+export function listLeanProbePackageInputs(root: string, checkpoint: () => void,
+  contents: 'complete' | 'sources' = 'complete'): PackageInput[] {
   assertMathCanonicalPath(root);
   const files: PackageInput[] = [];
   const ancestors = new Set<string>();
@@ -119,6 +120,8 @@ export function listLeanProbePackageInputs(root: string, checkpoint: () => void)
       if (ancestors.has(input.source)) throw new Error('Lean probe package directory link cycle.');
       ancestors.add(input.source);
       for (const name of fs.readdirSync(input.source).toSorted()) {
+        // A semantic reader uses source definitions, not Lake's generated compiler outputs.
+        if (contents === 'sources' && path.basename(relative) === '.lake' && name === 'build') continue;
         // Reference sources and all their compiled artifacts stay outside the model view.
         if (name !== '.git' && !/^Solution(?:\.|$)/u.test(name)) visit(path.join(relative, name), resolved);
       }

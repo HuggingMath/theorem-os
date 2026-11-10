@@ -17,7 +17,7 @@ export const errors: Record<string, string> = {
   '这个精确任务版本没有无条件通过的 Lean 检查回执。': 'This exact task version has no unconditionally passing Lean check receipt.',
   '无法从该任务源码中确定可保存的数学声明。': 'The mathematical declarations to save could not be determined from this task source.',
   "发送编号已用于另一条问题，请重新发送。": "This send ID belongs to a different question. Please send again.",
-  "请先完成原题形式化与审核。": "Finish formalizing and reviewing the original problem first.",
+  "请先完成原题形式化。": "Finish formalizing the original problem first.",
   "模型服务地址已改变，请创建新任务。": "The provider address has changed. Create a new task.",
   "请选择是否暂停接单。": "Choose whether to pause new tasks.",
   "服务正在维护，暂不接收新任务；已有任务会继续，历史与下载仍可使用。": "Maintenance is in progress. New tasks are paused; existing tasks continue, and history and downloads remain available.",

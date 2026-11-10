@@ -143,7 +143,15 @@ export function localOperations(dataRoot: string): Operations {
       }
     }
     for (const formalization of directories(path.join(owner, 'formalizations'))) {
-      const file = path.join(formalization, 'record.json'); if (fs.existsSync(file)) record(queues.formalization, readJson(file).formalization);
+      const file = path.join(formalization, 'record.json');
+      if (fs.existsSync(file)) {
+        const value = readJson(file).formalization;
+        record(queues.formalization, value);
+        // Compiled statements can already be confirmed while their independent review is still active.
+        if (value.backgroundReview) record(queues.formalization, {
+          status: value.backgroundReview.status, createdAt: value.backgroundReview.queuedAt,
+        });
+      }
     }
     const conversations = path.join(owner, 'conversations');
     for (const file of fs.existsSync(conversations) ? fs.readdirSync(conversations, { withFileTypes: true }).filter(entry => entry.isFile() && entry.name.endsWith('.json')) : []) {
@@ -167,9 +175,9 @@ export function inspectSignals(status: Operations, options: { minFreeGiB: number
 }
 export function capacityEnvelope(researchConcurrency: number) {
   if (!Number.isInteger(researchConcurrency) || researchConcurrency < 1 || researchConcurrency > 8) throw new Error('invalid_research_concurrency');
-  return { researchConcurrency, memoryLimitSumGiB: researchConcurrency * 8 + 12 + 12 + 2 * 6,
-    cpuLimitSum: (researchConcurrency + 1 + 1 + 2) * 2, suggestedFreeDiskGiB: (researchConcurrency + 2) * 30,
-    note: 'Simultaneous Mathlib container limits, not measured usage. Includes formalization, explanation and two prechecks.' };
+  return { researchConcurrency, memoryLimitSumGiB: researchConcurrency * 8 + 12 + 12 + 12 + 2 * 6,
+    cpuLimitSum: (researchConcurrency + 1 + 1 + 1 + 2) * 2, suggestedFreeDiskGiB: (researchConcurrency + 3) * 30,
+    note: 'Simultaneous Mathlib container limits, not measured usage. Includes formalization, background review, explanation and two prechecks.' };
 }
 async function api(base: string, sessionFile: string | undefined, route: string, enabled?: boolean) {
   const origin = new URL(base);

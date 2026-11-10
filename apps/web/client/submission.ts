@@ -13,7 +13,7 @@ export function tokenCap(raw: string, maximum: number): number | undefined {
   const value = Number(raw.trim());
   const tokens = Math.round(value * 10_000);
   // Reverse the conversion to distinguish floating-point error from a fractional token.
-  return raw.trim() && value >= 1 && Number.isSafeInteger(tokens) && tokens <= maximum && tokens / 10_000 === value ? tokens : undefined;
+  return raw.trim() && value >= 0 && Number.isSafeInteger(tokens) && tokens <= maximum && tokens / 10_000 === value ? tokens : undefined;
 }
 
 // This checks input only. Provider authentication happens when a run is submitted.
@@ -48,6 +48,7 @@ export function submissionIssues(draft: TaskDraft, apiKey: string, session: WebS
     ['workers', draft.workers, t('Agent 数量'), 1, session.limits.maxWorkers],
   ] as const) {
     const value = Number(raw);
+    if (field !== 'workers' && value === 0) continue;
     if (!raw.trim() || !Number.isSafeInteger(value) || value < min || value > max) add(field, t('{0}须为 {1}–{2} 的整数', label, min, max));
   }
   const tokens = draft.maxTotalTokens?.trim() ?? '';

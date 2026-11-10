@@ -28,7 +28,7 @@
 
 <p align="center"><sub>真实界面预览 · 自然语言入口，尚未提交 · <a href="docs/assets/workbench-full-desktop.png">桌面原图</a> · <a href="docs/assets/workbench-full-mobile.png">手机原图</a></sub></p>
 
-输入自然语言、TeX 或已有 Lean 原题，使用自己的 API Key 开始研究。系统先生成 Lean 陈述并做模型回译与审核，再构造证明并独立验收；陈述含义的审核与 Lean 证明验收分别展示。可以查看过程、核对原意、下载证明和本地复核包。研究者还可替换搜索、上下文或协作策略开展对照实验。
+输入自然语言、TeX 或已有 Lean 原题，使用自己的 API Key 开始研究。系统默认直接生成 Lean 陈述，编译通过后构造证明并独立验收。可以查看过程、核对原意、下载证明和本地复核包。研究者还可替换搜索、上下文或协作策略开展对照实验。
 
 ## 选择你的入口
 
@@ -91,9 +91,9 @@
 1. 打开 <https://app.theoremos.top/>，用获准邮箱登录。可以先浏览经典题库或录制回放，无需模型 Key。
 2. 在首页「设置」中选择服务商与模型，填写对应 Key。OpenAI Key 可在[服务商后台](https://platform.openai.com/api-keys)创建；网关账号与 Key 需向该网关管理员取得。「检查 Key 与模型」只读取模型列表，不调用模型。
 3. 输入完整的自然语言或 TeX 原题，或选择「试试例题」。已有 Lean 源码时使用输入框旁的 Lean 入口。
-4. 确认两阶段预算后发送。默认形式化最多 10 分钟 / 40 万 Token，随后证明最多 5 分钟 / 20 万 Token；两阶段可分别调整。Beta 期间平台免费，模型账单由服务商向你的 API 账户收取。用量按服务商报告计数，进行中的请求可能超额，Token 预算不是金额封顶。
+4. 发送题目。形式化与证明的时间、Token 和证明轮数默认留空，表示无限制；填写正数才启用对应限制。Beta 期间平台免费，模型账单由服务商向你的 API 账户收取。用量按服务商报告计数，进行中的请求可能超额，Token 预算不是金额封顶。
 
-模型审核通过后会自动开始证明。结果页分别显示模型对自然语言含义的判断与固定 Lean 陈述的独立验收；Lean 验收不证明翻译一定忠实，请在「原题 / Lean」核对。若陈述已完成而证明未能入队，可使用「继续证明」，无需重新形式化。
+Lean 陈述编译通过后立即提供代码，并自动开始证明；独立语义审核默认在后台同步进行，不占用生成或证明的执行位。审核状态和具体意见在「原题 / Lean」持续更新，不改写已有代码或中断证明。Lean 验收检查冻结陈述的证明。若陈述已完成而证明未能入队，可使用「继续证明」，无需重新形式化。
 
 自然语言入口的 Key 只保留在当前页面内存，刷新后清空；进阶版可选择加密保存到账号，并在「模型连接」中删除。数据、分享与删除范围见[隐私说明](https://app.theoremos.top/privacy.html)。
 
@@ -166,7 +166,7 @@ bun run math example check --dir "$PWD/../theorem-os-runs/model-run"
 bun run math example resume --dir "$PWD/../theorem-os-runs/model-run"
 ```
 
-模型小题默认使用单 Agent，最多 5 次调度和 5 分钟解题时间。真实公开题目还需要对应的 Mathlib 与 FUSE 环境，见 [IMO2026 示例](examples/imo2026/README.md)；完整依赖与故障诊断见[运行指南](docs/usage.md)。
+模型小题默认使用单 Agent，调度轮数、解题时间和 Token 均不设上限。真实公开题目还需要对应的 Mathlib 与 FUSE 环境，见 [IMO2026 示例](examples/imo2026/README.md)；完整依赖与故障诊断见[运行指南](docs/usage.md)。
 
 </details>
 
@@ -245,7 +245,7 @@ TheoremOS 使用 `gpt-5.6-sol`、`xhigh`、每题 4 个 worker，通过 **6/6 �
 
 [PutnamBench 小样本](examples/putnambench/README.md)可固定种子抽取三道兼容原题，每题准备四组模块方案，共 12 次隔离运行计划，并按题目分别配对汇总。准备和汇总均不调用模型。
 
-[自然语言题面形式化](docs/formalization.md)先规划定义与依赖，再进行模型生成、Lean 编译、盲回译和多审核者对照；支持分别配置模型及可选的参考 Lean 题面比较，通过后冻结为原生 Lean 求解任务。反方向的[证明讲解](docs/informalization.md)把已编译的 Lean 证明按依赖顺序写成自然语言证明：每一步引用原文 Lean 片段和所用声明，由宿主校验，再由看不到题面的独立审核者查漏步与编造；文本仍是模型撰写、未经人工审阅。[离线审核评测](docs/formalization-evaluation.md)保留标签来源和数据划分，分别统计误放行、误拒绝、未知与编译结果。[First Proof Batch 3 Lean 接入](examples/first-proof/README.md)保存 10 道官方题面，可导入完整审核产物，也保留人工审核路径。决策题的答案合同仍待补齐；当前尚未调用模型生成这 10 题的形式化，练习题回放不计入 benchmark 成绩。
+[自然语言题面形式化](docs/formalization.md)默认直接生成 Lean 陈述，编译通过后冻结为原生 Lean 求解任务；Web 同时启动单独的后台语义审核，代码使用和证明不必等待审核。CLI 默认直接交付编译产物，可用 `--review-mode independent` 启用规划、盲回译和多审核者对照，也支持分别配置模型及参考 Lean 题面比较。反方向的[证明讲解](docs/informalization.md)把已编译的 Lean 证明按依赖顺序写成自然语言证明：每一步引用原文 Lean 片段和所用声明，由宿主校验，再由看不到题面的独立审核者查漏步与编造；文本仍是模型撰写、未经人工审阅。[离线审核评测](docs/formalization-evaluation.md)保留标签来源和数据划分，分别统计误放行、误拒绝、未知与编译结果。[First Proof Batch 3 Lean 接入](examples/first-proof/README.md)保存 10 道官方题面，可导入完整审核产物，也保留人工审核路径。决策题的答案合同仍待补齐；当前尚未调用模型生成这 10 题的形式化，练习题回放不计入 benchmark 成绩。
 
 当前通过 TypeScript 源码接口替换组件，尚未提供稳定 SDK 或动态插件加载。运行时保存组件版本，恢复时检查版本一致性。跨任务学习仍是后续扩展。
 

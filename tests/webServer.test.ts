@@ -337,11 +337,26 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     expect(runner.calls).toHaveLength(0);
   });
 
+  it('defaults omitted budgets to unlimited and preserves explicit zero budgets', async () => {
+    const alice = await session();
+    const { maxRunSeconds: _seconds, maxTurns: _turns, ...unlimited } = input();
+    for (const body of [unlimited, { ...unlimited, maxRunSeconds: 0, maxTotalTokens: 0, maxTurns: 0 }]) {
+      const response = await request('/api/runs', alice, { body });
+      expect(response.status).toBe(201);
+      const run = (await response.json()).run;
+      expect(run).toMatchObject({ maxRunSeconds: 0, maxTotalTokens: 0, maxTurns: 0 });
+      await tick();
+      expect(runner.calls.at(-1)!.value.input).toMatchObject({ maxRunSeconds: 0, maxTotalTokens: 0, maxTurns: 0 });
+      await request(`/api/runs/${run.id}/cancel`, alice, { body: {} });
+      await tick();
+    }
+  });
+
   it('rejects arbitrary providers, unrecognized fields and inputs exceeding every enforced budget', async () => {
     const alice = await session();
     const invalid = [
       { providerId: 'unconfigured' }, { baseUrl: 'https://attacker.example/v1' }, { extra: true },
-      { maxTurns: 21 }, { maxTurns: 0 }, { maxRunSeconds: 901 }, { maxRunSeconds: 29 }, { workers: 5 },
+      { maxTurns: 21 }, { maxTurns: -1 }, { maxRunSeconds: 901 }, { maxRunSeconds: 29 }, { workers: 5 },
       { workers: 0 }, { maxTurns: 1.5 }, { source: '数'.repeat(11_000) }, { task: '数'.repeat(2_800) },
       { effort: 'unlimited' }, { coordination: 'unknown' }, { model: '--model-flag' }, { apiKey: 'short' },
       { environment: 'custom' }, { environment: 'https://attacker.example/mathlib' }, { environment: null },

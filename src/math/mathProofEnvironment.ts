@@ -4,14 +4,16 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import net from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
-import { parse as parseToml } from 'smol-toml';
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { z } from 'zod';
 import { assertMathCanonicalPath } from "./paths";
-import { canonicalMathJson, mathDigest, readMathFile, withMathRuntimeLease } from "./mathRuntimeIo";
+import { canonicalMathJson, mathDigest, withMathRuntimeLease } from "./mathRuntimeIo";
 import { listLeanProbePackageInputs, readLeanProbeSnapshotFile } from "./leanProbeSnapshot";
 import { MATH_SEALED_ENVIRONMENT_HELPER } from "./mathSealedEnvironmentHelper";
 import { openMathProofEnvironmentCache } from "./mathProofEnvironmentCache";
+import { MATH_PROOF_ENVIRONMENT_METADATA as METADATA, MATH_PROOF_ENVIRONMENT_SEED_ENV, MATH_PROOF_ENVIRONMENT_SOURCE_SEED_ENV,
+  mathProofEnvironmentConfiguration as projectConfiguration, mathProofEnvironmentMetadata as metadataSchema,
+  mathProofEnvironmentStatistics as statistics, mathProofEnvironmentSeedContentDigest, readMathProofEnvironmentSeed } from './mathProofEnvironmentSeed';
 
 /** Host-generated reference, retained in the existing frozen run environment. */
 export const MATH_PROOF_ENVIRONMENT_ENV = 'DEEPSCIENTIST_MATH_PROOF_ENVIRONMENT';
@@ -23,18 +25,7 @@ export const MATH_PROOF_ENVIRONMENT_ENV = 'DEEPSCIENTIST_MATH_PROOF_ENVIRONMENT'
  * root and the lease socket into the sandbox and names them here.
  */
 export const MATH_PROOF_ENVIRONMENT_SANDBOX_ENV = 'DEEPSCIENTIST_MATH_PROOF_ENVIRONMENT_SANDBOX';
-const METADATA = '.deepscientist-proof-environment.json';
-const CONFIG_FILES = [
-  'lean-toolchain',
-  'lakefile.toml',
-  'lakefile.lean',
-  'lake-manifest.json',
-  '.lake/package-overrides.json',
-];
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
-const statistics = z
-  .object({ files: z.number().int().nonnegative(), bytes: z.number().int().nonnegative(), publications: z.literal(1) })
-  .strict();
 const descriptorSchema = z
   .object({
     schema: z.literal('deepscientist.math.proof-environment.v1'),
@@ -50,6 +41,7 @@ const descriptorSchema = z
     metadataHash: hash,
     identity: hash,
     stats: statistics,
+    contents: z.literal('sources').optional(),
     leaseSocket: z.string().min(1),
     leaseToken: z.string().min(16),
   })
@@ -73,16 +65,6 @@ function readSandboxMapping(
   const mapping = sandboxMappingSchema.parse(JSON.parse(encoded));
   return mapping.identity === descriptor.identity ? mapping : undefined;
 }
-
-const metadataSchema = z
-  .object({
-    schema: z.literal('deepscientist.math.proof-environment-inputs.v1'),
-    sourceCacheRoot: z.string(),
-    config: z.record(z.string(), hash.nullable()),
-    sourceIdentity: hash,
-    stats: statistics,
-  })
-  .strict();
 
 function proofEnvironmentBlocked(message: unknown): Error {
   const reason = [
@@ -136,6 +118,7 @@ function readJsonLine<T>(read: JsonLineRead<T>): Promise<T> {
 export type MathProofEnvironment = Readonly<{
   packagesRoot: string;
   identity: string;
+  contents: 'complete' | 'sources';
   stats: z.infer<typeof statistics>;
   verify: () => void;
 }>;
@@ -158,36 +141,17 @@ function consumerConfiguration(config: Record<string, string | null>): Record<st
   return consumed;
 }
 
-function projectConfiguration(root: string): Record<string, string | null> {
-  assertMathCanonicalPath(root);
-  return Object.fromEntries(
-    CONFIG_FILES.map((relative) => {
-      const file = path.join(root, relative);
-      try {
-        if (relative === 'lakefile.toml' || relative === 'lake-manifest.json') {
-          // The root package label does not change the dependency payload. Keep every
-          // other option and pinned revision bound, including nested package names.
-          const text = readMathFile(file, 16 * 1024 * 1024).bytes.toString('utf8');
-          const { name: _name, ...configuration } = relative.endsWith('.toml') ? parseToml(text) : JSON.parse(text);
-          return [relative, mathDigest(canonicalMathJson(configuration))];
-        }
-        return [relative, readLeanProbeSnapshotFile(file, () => {}).digest];
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [relative, null];
-        throw error;
-      }
-    })
-  );
-}
-
 /** Validate an already host-bound reference. Never discover or silently replace a dead base. */
 export function resolveMathProofEnvironment(
   projectRoot: string,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  allowedContents: 'complete' | 'sources' = 'complete'
 ): MathProofEnvironment | undefined {
   const encoded = env[MATH_PROOF_ENVIRONMENT_ENV];
   if (encoded === undefined) return undefined;
   const descriptor = descriptorSchema.parse(JSON.parse(encoded));
+  if (descriptor.contents === 'sources' && allowedContents !== 'sources')
+    throw new Error('Sealed proof environment contains source packages only.');
   const hostPath = `/proc/${descriptor.pid}/fd/${descriptor.rootFd}`;
   if (descriptor.rootPath !== hostPath) throw new Error('Sealed proof environment descriptor is invalid.');
   const mapping = readSandboxMapping(descriptor, env);
@@ -204,6 +168,8 @@ export function resolveMathProofEnvironment(
     const bytes = fs.readFileSync(path.join(expectedPath, METADATA));
     if (mathDigest(bytes) !== descriptor.metadataHash) throw new Error('Sealed proof environment metadata changed.');
     const metadata = metadataSchema.parse(JSON.parse(bytes.toString('utf8')));
+    if (metadata.contents !== descriptor.contents)
+      throw new Error('Sealed proof environment package contents changed.');
     if (
       canonicalMathJson(consumerConfiguration(metadata.config)) !==
       canonicalMathJson(consumerConfiguration(projectConfiguration(projectRoot)))
@@ -220,6 +186,7 @@ export function resolveMathProofEnvironment(
   return Object.freeze({
     packagesRoot: expectedPath,
     identity: descriptor.identity,
+    contents: descriptor.contents ?? 'complete',
     stats: Object.freeze(descriptor.stats),
     verify,
   });
@@ -246,9 +213,10 @@ export async function acquireMathProofEnvironmentLease(
   projectRoot: string,
   env: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal,
-  deadlineAt?: number
+  deadlineAt?: number,
+  allowedContents: 'complete' | 'sources' = 'complete'
 ): Promise<Readonly<{ packagesRoot: string; release: () => Promise<void> }> | undefined> {
-  const environment = resolveMathProofEnvironment(projectRoot, env);
+  const environment = resolveMathProofEnvironment(projectRoot, env, allowedContents);
   if (!environment) return undefined;
   signal?.throwIfAborted();
   if (deadlineAt !== undefined && Date.now() >= deadlineAt)
@@ -287,6 +255,8 @@ type PreparationOptions = Readonly<{
   signal?: AbortSignal;
   deadlineAt?: number;
   cacheRoot?: string;
+  seedManifestPath?: string;
+  contents?: 'sources';
   onProgress?: (phase: string, details: Readonly<Record<string, number | boolean>>) => void;
 }>;
 
@@ -319,7 +289,7 @@ async function prepareEnvironment(
   assertMathCanonicalPath(authorizedPackagesRoot);
   report('enumerating_dependencies');
   const config = projectConfiguration(projectRoot);
-  const inputs = listLeanProbePackageInputs(authorizedPackagesRoot, checkpoint);
+  const inputs = listLeanProbePackageInputs(authorizedPackagesRoot, checkpoint, options.contents);
   if (inputs.some((input) => input.relative === METADATA)) throw new Error('Reserved proof environment metadata path.');
   if (
     inputs.some(
@@ -331,12 +301,13 @@ async function prepareEnvironment(
     throw new Error('Lean probe snapshot contains an unauthorized path.');
   const bytes = inputs.reduce((sum, input) => sum + fs.statSync(input.source).size, 0);
   const sourceFingerprint = (
-    packageInputs = listLeanProbePackageInputs(authorizedPackagesRoot, checkpoint),
+    packageInputs = listLeanProbePackageInputs(authorizedPackagesRoot, checkpoint, options.contents),
     configuration = projectConfiguration(projectRoot)
   ) =>
     mathDigest(
       canonicalMathJson({
         helper: mathDigest(MATH_SEALED_ENVIRONMENT_HELPER),
+        ...(options.contents ? { contents: options.contents } : {}),
         sourceCacheRoot: authorizedPackagesRoot,
         config: configuration,
         inputs: packageInputs.map((input) => ({
@@ -374,8 +345,13 @@ async function prepareEnvironment(
     }
   }
   report(cached ? 'cache_hit' : 'cache_miss', { files: inputs.length, bytes, cacheHit: Boolean(cached) });
+  const seed = cached ? undefined : readMathProofEnvironmentSeed(
+    options.seedManifestPath ?? (options.env ?? process.env)[options.contents === 'sources'
+      ? MATH_PROOF_ENVIRONMENT_SOURCE_SEED_ENV : MATH_PROOF_ENVIRONMENT_SEED_ENV], config, options.contents);
+  if (seed) report('seed_selected', { imageBytes: seed.imageBytes });
+  const fingerprintedSeed = Boolean(seed && fingerprint);
   const preflight = spawnSync('/usr/bin/python3', [
-    '-c', MATH_SEALED_ENVIRONMENT_HELPER, '--check-tools', cached ? 'mount' : 'build',
+    '-c', MATH_SEALED_ENVIRONMENT_HELPER, '--check-tools', cached || seed ? 'mount' : 'build',
   ], {
     env: options.env ?? process.env, encoding: 'utf8', maxBuffer: 4096,
     timeout: Math.max(1, Math.min(5000, (options.deadlineAt ?? Infinity) - Date.now())),
@@ -389,7 +365,7 @@ async function prepareEnvironment(
   // Source staging and its immutable disk image may coexist. This is a preparation
   // resource check, independent from the unchanged private editable-source quota.
   const capacity = fs.statfsSync('/var/tmp', { bigint: true });
-  const requiredBytes = cached ? BigInt(cached.imageBytes) : BigInt(bytes) * BigInt(cache ? 3 : 2);
+  const requiredBytes = cached ? BigInt(cached.imageBytes) : seed ? BigInt(seed.imageBytes) * BigInt(cache ? 2 : 1) : BigInt(bytes) * BigInt(cache ? 3 : 2);
   if (requiredBytes + BigInt(64 * 1024 * 1024) > capacity.bavail * capacity.bsize)
     throw new Error('Insufficient disk capacity for complete proof environment preparation.');
   const temporary = fs.realpathSync(fs.mkdtempSync(path.join('/var/tmp', 'math-proof-environment-')));
@@ -410,16 +386,19 @@ async function prepareEnvironment(
       readLeanProbeSnapshotFile(file, checkpoint, target, buffer);
     const files: { path: string; digest: string; identity: string; mode: number }[] = [];
     for (const [index, input] of (cached ? [] : inputs).entries()) {
-      report('copying_dependencies', { files: index, bytes });
-      const target = path.join(source, input.relative);
+      report(seed ? 'hashing_dependencies' : 'copying_dependencies', { files: index, bytes });
+      const target = seed ? undefined : path.join(source, input.relative);
       const copied = readInput(input.source, target);
       files.push({ path: input.relative, digest: copied.digest, identity: copied.identity, mode: copied.mode });
       if (index % 64 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
     }
     const stats = cached?.stats ?? { files: files.length, bytes, publications: 1 as const };
+    if (seed && (seed.metadata.sourceIdentity !== mathProofEnvironmentSeedContentDigest(files) ||
+        canonicalMathJson(seed.metadata.stats) !== canonicalMathJson(stats)))
+      throw new Error('Proof environment seed does not match the authorized source.');
     const verifySource = async () => {
       if (
-        canonicalMathJson(listLeanProbePackageInputs(authorizedPackagesRoot, checkpoint)) !== canonicalMathJson(inputs)
+        canonicalMathJson(listLeanProbePackageInputs(authorizedPackagesRoot, checkpoint, options.contents)) !== canonicalMathJson(inputs)
       )
         throw new Error('Proof environment dependency set changed during preparation.');
       for (const [index, input] of inputs.entries()) {
@@ -432,20 +411,33 @@ async function prepareEnvironment(
       if (canonicalMathJson(projectConfiguration(projectRoot)) !== canonicalMathJson(config))
         throw new Error('Proof environment project configuration changed during preparation.');
     };
+    // Seed metadata binds portable content, not build-time inode identities. Only
+    // after comparing that content and the complete mounted bytes below may the
+    // current sourceFingerprint be signed into this container's private cache.
     const metadataBytes = Buffer.from(
-      canonicalMathJson({
+      canonicalMathJson(seed?.metadata ?? {
         schema: 'deepscientist.math.proof-environment-inputs.v1',
         sourceCacheRoot: authorizedPackagesRoot,
         config,
         sourceIdentity: mathDigest(canonicalMathJson(files)),
         stats,
+        ...(options.contents ? { contents: options.contents } : {}),
       })
     );
     if (!cached) {
-      fs.writeFileSync(path.join(source, METADATA), metadataBytes, { flag: 'wx', mode: 0o400 });
+      if (!seed) fs.writeFileSync(path.join(source, METADATA), metadataBytes, { flag: 'wx', mode: 0o400 });
+      // A seeded private-cache import hashes every source and mounted file.
+      // Its final fresh fingerprint also binds the original inventory, links,
+      // configuration and nanosecond file identities, as on a cache hit. Avoid
+      // two more full source reads; imports without that binding retain them.
+      if (!fingerprintedSeed) {
+        report('verifying_source', { files: files.length, bytes });
+        await verifySource();
+      }
     }
     checkpoint();
-    report(cached ? 'mounting_cached_image' : 'building_image', { cacheHit: Boolean(cached) });
+    const imagePhase = cached ? 'mounting_cached_image' : seed ? 'mounting_seed_image' : 'building_image';
+    report(imagePhase, { cacheHit: Boolean(cached) });
     child = spawn(
       '/usr/bin/python3',
       [
@@ -453,7 +445,8 @@ async function prepareEnvironment(
         MATH_SEALED_ENVIRONMENT_HELPER,
         ...(cached
           ? ['--image', cache!.imagePath(cached), '--expected-image-sha256', cached.imageSha256]
-          : ['--source', source, ...(exportedImage ? ['--export-image', exportedImage] : [])]),
+          : [...(seed ? ['--image', seed.imagePath, '--expected-image-sha256', seed.imageSha256] : ['--source', source]),
+            ...(exportedImage ? ['--export-image', exportedImage] : [])]),
       ],
       {
         env: options.env ?? process.env,
@@ -462,7 +455,7 @@ async function prepareEnvironment(
       }
     );
     // Heartbeats keep long image builds visible; stdout keeps draining shutdown diagnostics without retaining them.
-    const heartbeat = setInterval(() => report(cached ? 'mounting_cached_image' : 'building_image', { cacheHit: Boolean(cached) }), 5000);
+    const heartbeat = setInterval(() => report(imagePhase, { cacheHit: Boolean(cached) }), 5000);
     child.stderr.resume();
     const ready = await readJsonLine({ data: child.stdout, owner: child, end: 'exit', limit: 64 * 1024, signal: options.signal,
       timeoutMs: options.deadlineAt === undefined ? undefined : Math.max(1, options.deadlineAt - Date.now()),
@@ -477,6 +470,8 @@ async function prepareEnvironment(
     const metadataHash = cached?.metadataHash ?? mathDigest(metadataBytes);
     if (cached && (ready.imageSha256 !== cached.imageSha256 || ready.imageBytes !== cached.imageBytes))
       throw new Error('Cached proof environment image changed.');
+    if (seed && (ready.imageSha256 !== seed.imageSha256 || ready.imageBytes !== seed.imageBytes))
+      throw new Error('Proof environment seed image changed.');
     const descriptor = descriptorSchema.parse({
       schema: 'deepscientist.math.proof-environment.v1',
       pid: ready.pid,
@@ -491,11 +486,12 @@ async function prepareEnvironment(
       metadataHash,
       identity: mathDigest(canonicalMathJson({ metadataHash, imageSha256: ready.imageSha256 })),
       stats,
+      ...(options.contents ? { contents: options.contents } : {}),
       leaseSocket: ready.leaseSocket,
       leaseToken: ready.leaseToken,
     });
     const environmentValue = JSON.stringify(descriptor);
-    const sealed = resolveMathProofEnvironment(projectRoot, { [MATH_PROOF_ENVIRONMENT_ENV]: environmentValue })!;
+    const sealed = resolveMathProofEnvironment(projectRoot, { [MATH_PROOF_ENVIRONMENT_ENV]: environmentValue }, options.contents)!;
     // The staging directory is not an authority. Verify the actual immutable
     // mounted bytes against the complete source manifest before publication.
     const sealedPaths: string[] = [];
@@ -539,7 +535,7 @@ async function prepareEnvironment(
       if (index % 64 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
     }
     sealed.verify();
-    if (cached) {
+    if (cached || fingerprintedSeed) {
       report('verifying_cache_identity', { files: inputs.length, bytes });
     } else {
       report('verifying_source', { files: files.length, bytes });

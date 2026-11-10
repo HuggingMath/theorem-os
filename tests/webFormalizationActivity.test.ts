@@ -1,10 +1,11 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFormalizationActivity, formalizationLeanFailure, formalizationSlot } from '../apps/web/formalizationActivity';
 import { isWebFormalizationActivityBody } from '../apps/web/formalizationActivityValidation';
-import type { WebFormalizationActivityBody } from '../apps/web/formalizationTypes';
+import { webFormalizationActivityLimits, type WebFormalizationActivityBody } from '../apps/web/formalizationTypes';
+import { webAgentActionLimits } from '../apps/web/shared';
 import { parseFormalizationMessage } from '../apps/web/runner';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/codexSession';
 
@@ -84,6 +85,142 @@ describe('formalization process view for its owner', () => {
     expect(sent.filter(entry => entry.type === 'step')).toHaveLength(2);
   });
 
+  it('streams only sanitized public summaries and commentary, coalescing protocol-masked duplicates', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(10_000);
+    let session: MathAgentSession | undefined;
+    try {
+      const where = workspace('round-01-abc/generate'), view = activity();
+      let observer!: MathAgentOptions;
+      const forwarded = vi.fn();
+      session = await view.openSession(async options => { observer = options; return inner({ items: [] })(options); })({
+        ...options(where), onItemUpdate: forwarded,
+      });
+      const actions = () => sent.flatMap(entry => entry.type === 'action' ? [entry.action] : []);
+      observer.onItemUpdate!({ id: 'r', type: 'reasoning', summary: [`Inspect ${directory}/source using ${KEY}. ${PROTOCOL}`], content: ['raw never shown'] }, { turnId: 'turn' });
+      expect(actions()).toHaveLength(1);
+      expect(actions()[0]).toMatchObject({ workerId: 'r1-generate', itemId: '1:r', phase: 'started', textSource: 'summary' });
+      const masked = actions()[0]!.text!;
+      observer.onItemUpdate!({ id: 'r', type: 'reasoning', summary: [masked] });
+      expect(actions()).toHaveLength(1);
+      for (let index = 0; index < 100; index++) observer.onItemUpdate!({ id: 'r', type: 'reasoning', summary: [`Public step ${index}. ${PROTOCOL}`] });
+      expect(actions()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(actions()).toHaveLength(2); expect(actions().at(-1)!.text).toBe('Public step 99. …');
+      observer.onItemUpdate!({ id: 'r', type: 'reasoning', summary: ['Pending summary'] });
+      observer.onItem!('completed', { id: 'r', type: 'reasoning', summary: ['Final public summary'] });
+      observer.onItemUpdate!({ id: 'r', type: 'reasoning', summary: ['Late summary'] });
+      observer.onItemUpdate!({ id: 'raw', type: 'reasoning', content: ['raw never shown'] });
+      observer.onItem!('completed', { id: 'raw', type: 'reasoning', content: ['raw never shown'] });
+      observer.onItemUpdate!({ id: 'm', type: 'agentMessage', phase: 'commentary', text: `Checking ${KEY}` });
+      observer.onItemUpdate!({ id: 'm', type: 'agentMessage', phase: 'commentary', text: 'Latest public explanation' });
+      observer.onItem!('completed', { id: 'm', type: 'agentMessage', phase: 'commentary', text: '' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(actions()).toHaveLength(5);
+      expect(actions()[2]).toMatchObject({ itemId: '1:r', phase: 'completed', text: 'Final public summary', textSource: 'summary' });
+      expect(actions().at(-1)).toMatchObject({ itemId: '1:m', phase: 'completed', text: 'Latest public explanation', textSource: 'commentary' });
+      expect(forwarded).toHaveBeenCalledWith(expect.objectContaining({ id: 'r' }), { turnId: 'turn' });
+      expect(sent.every(isWebFormalizationActivityBody)).toBe(true);
+      const text = JSON.stringify(sent);
+      for (const hidden of [KEY, scratch, PROTOCOL, 'raw never shown', 'Pending summary', 'Late summary']) expect(text).not.toContain(hidden);
+    } finally { await session?.close(); vi.useRealTimers(); }
+  });
+
+  it.each(['interrupt', 'close', 'abort'] as const)('cancels pending formalization summary snapshots on %s', async method => {
+    vi.useFakeTimers(); vi.setSystemTime(10_000);
+    let session: MathAgentSession | undefined;
+    try {
+      const where = workspace('round-01-abc/generate'), view = activity();
+      let observer!: MathAgentOptions;
+      const controller = new AbortController();
+      session = await view.openSession(async options => { observer = options; return inner({ items: [] })(options); })({
+        ...options(where), signal: controller.signal,
+      });
+      const actions = () => sent.filter(entry => entry.type === 'action');
+      observer.onItemUpdate!({ id: 'r', type: 'reasoning', summary: ['First public summary'] });
+      observer.onItemUpdate!({ id: 'r', type: 'reasoning', summary: ['Pending summary'] });
+      expect(actions()).toHaveLength(1);
+      if (method === 'abort') controller.abort();
+      else await session[method]();
+      await vi.advanceTimersByTimeAsync(1_000);
+      observer.onItemUpdate!({ id: 'r', type: 'reasoning', summary: ['Late summary'] });
+      expect(actions()).toHaveLength(1);
+    } finally { await session?.close(); vi.useRealTimers(); }
+  });
+
+  it('retains long public summaries, role results, tool output and Lean diagnostics through the worker protocol', async () => {
+    const where = workspace('round-01-abc/backtranslate'), view = activity();
+    const publicText = 'A public mathematical explanation.\n'.repeat(500);
+    const roleText = `${publicText}Inspect ${KEY} ${directory}/source.`;
+    const diagnostic = `unsolved goals\n${'a detailed Lean goal\n'.repeat(70)}${KEY}`;
+    const output = `${'a line of tool output\n'.repeat(800)}${KEY}`;
+    const session = await view.openSession(inner({ items: [
+      ['completed', { type: 'reasoning', id: 'r', summary: [`${publicText}${PROTOCOL}`], content: ['raw reasoning must stay hidden'] }],
+      ['completed', { type: 'agentMessage', id: 'm', phase: 'commentary', text: `${publicText}${KEY}` }],
+      command('output', 'lake build', output),
+      command('lean', 'math check-lean', JSON.stringify({ exitCode: 1, timedOut: false,
+        messages: Array.from({ length: webAgentActionLimits.leanMessages }, () => ({ severity: 'error', file: '/workspace/Formalization.lean', message: diagnostic })) })),
+    ], output: { mathematics: roleText, assumptions: ['An assumption. '.repeat(100)], definitions: [] } }))(options(where));
+    await session.run('p', 'id', where, () => {});
+    const actions = sent.flatMap(entry => entry.type === 'action' ? [entry.action] : []);
+    expect(actions).toHaveLength(4);
+    expect(actions[0]).toMatchObject({ text: `${publicText}…`, textSource: 'summary' });
+    expect(actions[1]).toMatchObject({ text: `${publicText}[REDACTED]`, textSource: 'commentary' });
+    expect(actions[0]!.textClipped).toBeUndefined(); expect(actions[1]!.textClipped).toBeUndefined();
+    expect(actions[2]!.output).toBe(output.replaceAll(KEY, '[REDACTED]')); expect(actions[2]!.outputClipped).toBeUndefined();
+    expect(actions[3]!.lean!.messages).toHaveLength(webAgentActionLimits.leanMessages);
+    expect(actions[3]!.lean!.messages.every(message => message.text === diagnostic.replaceAll(KEY, '[REDACTED]') && message.file === './Formalization.lean')).toBe(true);
+    expect(sent.find(entry => entry.type === 'step' && entry.step.step === 'role' && entry.step.state === 'finished')).toMatchObject({
+      step: { summary: { text: `${publicText}Inspect [REDACTED] …/source.`, sections: [{ kind: 'assumptions', items: ['An assumption. '.repeat(100).trim()] }] } },
+    });
+
+    const failing = view.elaborate(async () => { throw new Error(`formalization_elaboration_failed: Formalization.lean:7:3: error: ${KEY} ${directory}/source\n${'a long Lean failure\n'.repeat(200)}`); });
+    await expect(failing(path.join(directory, 'e'), 'theorem t : True := by sorry', 'standard' as never, { timeoutMs: 0 })).rejects.toThrow('formalization_elaboration_failed');
+    const failure = sent.at(-1)!;
+    expect(failure).toMatchObject({ type: 'step', step: { step: 'compile', state: 'failed', lean: { messages: [
+      { text: expect.stringContaining('[REDACTED] …/source') },
+    ] } } });
+    if (failure.type === 'step' && failure.step.step === 'compile') {
+      expect(failure.step.lean!.messages[0]!.text).toHaveLength(webAgentActionLimits.leanMessage);
+      expect(failure.step.lean!.messages[0]!.text.endsWith('…')).toBe(true);
+    }
+    for (const entry of sent) {
+      expect(isWebFormalizationActivityBody(entry)).toBe(true);
+      expect(parseFormalizationMessage(JSON.stringify({ type: 'activity', activity: entry }))).toEqual({ type: 'activity', activity: entry });
+    }
+    expect(JSON.stringify(sent)).not.toMatch(new RegExp(`${KEY}|raw reasoning must stay hidden`));
+    for (const hidden of [scratch, PROTOCOL]) expect(JSON.stringify(sent)).not.toContain(hidden);
+    await session.close();
+  });
+
+  it('allows maximum retained diagnostics and structured role summaries even with six-character JSON escapes', async () => {
+    const where = workspace('round-01-abc/backtranslate'), view = activity();
+    const diagnostic = '\u0000'.repeat(webAgentActionLimits.leanMessage);
+    const summaryItem = '\u0000'.repeat(webFormalizationActivityLimits.summaryItem);
+    const entries = Array.from({ length: webFormalizationActivityLimits.summaryItems }, () => summaryItem);
+    const session = await view.openSession(inner({ items: [command('lean', 'math check-lean', JSON.stringify({ exitCode: 1, timedOut: false,
+      messages: Array.from({ length: webAgentActionLimits.leanMessages }, () => ({ severity: 'error', file: '\u0000'.repeat(1_000), message: diagnostic })) }))],
+      output: { mathematics: '\u0000'.repeat(webFormalizationActivityLimits.summaryText), assumptions: entries, definitions: entries,
+        targets: entries.map((mathematics, index) => ({ name: `target${index}`, mathematics })) },
+    }))(options(where));
+    await session.run('p', 'id', where, () => {});
+    const action = sent.find(entry => entry.type === 'action');
+    expect(action).toBeDefined();
+    if (action?.type === 'action') {
+      expect(action.action.lean!.messages).toHaveLength(webAgentActionLimits.leanMessages);
+      expect(action.action.lean!.messages.every(message => message.text === diagnostic)).toBe(true);
+    }
+    const role = sent.find(entry => entry.type === 'step' && entry.step.step === 'role' && entry.step.state === 'finished')!;
+    expect(JSON.stringify(action).length).toBeGreaterThan(512 * 1024);
+    expect(JSON.stringify(role).length).toBeGreaterThan(512 * 1024);
+    if (role.type === 'step' && role.step.step === 'role') expect(role.step.summary!.text).toHaveLength(webFormalizationActivityLimits.summaryText);
+    for (const entry of sent) {
+      expect(JSON.stringify(entry).length).toBeLessThanOrEqual(webFormalizationActivityLimits.encoded);
+      expect(isWebFormalizationActivityBody(entry)).toBe(true);
+      expect(parseFormalizationMessage(JSON.stringify({ type: 'activity', activity: entry }))).toEqual({ type: 'activity', activity: entry });
+    }
+    await session.close();
+  });
+
   it('records each compilation with the statement Lean read and where it failed', async () => {
     const view = activity();
     const failing = view.elaborate(async () => { throw new Error(`formalization_elaboration_failed: Formalization.lean:7:3: error(lean.unknownIdentifier): unknown identifier 'Nat.foo'\nElaboration diagnostics: ${directory}/round-01-abc/elaboration`); });
@@ -105,6 +242,89 @@ describe('formalization process view for its owner', () => {
       { round: 2, step: 'compile', state: 'started', source: 'x' },
       { round: 2, step: 'compile', state: 'failed', text: 'formalization_lean_toolchain_unavailable: missing …/lean' },
       { round: 2, step: 'compile', state: 'started', source: 'x' }]);
+  });
+
+  it('shows warnings and informational diagnostics from successful host compilations and preserves later failure details', async () => {
+    const view = activity();
+    const diagnostics = { exitCode: 0, timedOut: false, omittedMessages: 0, messages: [
+      { severity: 'warning', file: `${directory}/project/Formalization.lean`, line: 4, column: 2, message: `declaration uses sorry ${KEY}` },
+      { severity: 'info', file: '/workspace/Formalization.lean', line: 5, column: 0, message: 'elaborated target' },
+    ] };
+    const passing = view.elaborate(async (_directory, source) => ({ source, targets: [{ name: 'target', declarationHash: 'a'.repeat(64) }],
+      compilation: { exitCode: 0, timedOut: false, diagnostics } }) as never);
+    await passing(path.join(directory, 'successful-compile'), 'theorem target : True := by sorry', 'standard' as never, { timeoutMs: 0 });
+    const lean = { passed: true, messages: [
+      { severity: 'warning', file: '…/project/Formalization.lean', line: 4, column: 2, text: 'declaration uses sorry [REDACTED]' },
+      { severity: 'info', file: './Formalization.lean', line: 5, column: 0, text: 'elaborated target' },
+    ] };
+    expect(sent.at(-1)).toMatchObject({ type: 'step', step: { step: 'compile', state: 'passed', targets: ['target'], lean } });
+
+    const failing = view.elaborate(async where => {
+      fs.mkdirSync(where, { recursive: true }); fs.writeFileSync(path.join(where, 'diagnostics.json'), JSON.stringify(diagnostics));
+      throw new Error(`formalization_detailed_context_missing: ${KEY}`);
+    });
+    await expect(failing(path.join(directory, 'context-failure'), 'theorem target : True := by sorry', 'standard' as never, { timeoutMs: 0 })).rejects.toThrow('formalization_detailed_context_missing');
+    expect(sent.at(-1)).toMatchObject({ type: 'step', step: { step: 'compile', state: 'failed', lean, text: 'formalization_detailed_context_missing: [REDACTED]' } });
+    for (const entry of sent) {
+      expect(isWebFormalizationActivityBody(entry)).toBe(true);
+      expect(parseFormalizationMessage(JSON.stringify({ type: 'activity', activity: entry }))).toEqual({ type: 'activity', activity: entry });
+    }
+  });
+
+  it('reads all retained host diagnostics from the known compilation directory instead of the first-error preview', async () => {
+    const view = activity();
+    const failure = `unsolved goals\n${KEY} ${directory}/source\n${'a detailed Lean goal\n'.repeat(120)}`;
+    const messages = [
+      { severity: 'warning', file: '/workspace/Formalization.lean', line: 3, column: 1, message: `a warning ${KEY}` },
+      { severity: 'info', file: `${directory}/project/Formalization.lean`, line: 4, column: 0, message: 'an informational diagnostic' },
+      { severity: 'error', file: `${directory}/project/Formalization.lean`, line: 7, column: 2, message: failure },
+      ...Array.from({ length: webAgentActionLimits.leanMessages - 3 }, (_, index) => ({ severity: 'error', file: 'Formalization.lean', line: index + 10, column: 0, message: `error ${index}` })),
+    ];
+    const failing = view.elaborate(async where => {
+      fs.mkdirSync(where, { recursive: true });
+      fs.writeFileSync(path.join(where, 'diagnostics.json'), JSON.stringify({ exitCode: 1, timedOut: false, omittedMessages: 2,
+        stdout: 'x'.repeat(2_000_100), messages }));
+      throw new Error('formalization_elaboration_failed: Formalization.lean:1:1: error: first-error preview\nElaboration diagnostics: /profile/untrusted-path');
+    });
+    await expect(failing(path.join(directory, 'failed-compile'), 'theorem target : True := by sorry', 'standard' as never, { timeoutMs: 0 })).rejects.toThrow('first-error preview');
+    const entry = sent.at(-1)!;
+    expect(entry).toMatchObject({ type: 'step', step: { step: 'compile', state: 'failed', lean: { passed: false, omittedMessages: 2 } } });
+    if (entry.type === 'step' && entry.step.step === 'compile') {
+      const lean = entry.step.lean!;
+      expect(lean.messages).toHaveLength(webAgentActionLimits.leanMessages);
+      expect(lean.messages[0]).toMatchObject({ severity: 'error', file: '…/project/Formalization.lean', line: 7, column: 2,
+        text: expect.stringContaining('unsolved goals\n[REDACTED] …/source') });
+      expect(lean.messages[0]!.text).toHaveLength(webAgentActionLimits.leanMessage);
+      expect(lean.messages[0]!.text.endsWith('…')).toBe(true);
+      expect(lean.messages.slice(-2)).toEqual([
+        { severity: 'warning', file: './Formalization.lean', line: 3, column: 1, text: 'a warning [REDACTED]' },
+        { severity: 'info', file: '…/project/Formalization.lean', line: 4, column: 0, text: 'an informational diagnostic' },
+      ]);
+    }
+    expect(isWebFormalizationActivityBody(entry)).toBe(true);
+    expect(parseFormalizationMessage(JSON.stringify({ type: 'activity', activity: entry }))).toEqual({ type: 'activity', activity: entry });
+    const recorded = JSON.stringify(sent);
+    for (const hidden of [KEY, directory, 'first-error preview', '/profile/untrusted-path', 'x'.repeat(100)]) expect(recorded).not.toContain(hidden);
+  });
+
+  it('keeps saved diagnostic omissions and timeout state while cancellation emits no failure', async () => {
+    const view = activity(), controller = new AbortController();
+    const diagnostics = { exitCode: 124, timedOut: true, omittedMessages: 4,
+      messages: Array.from({ length: webAgentActionLimits.leanMessages + 3 }, (_, index) => ({ severity: 'error', line: index + 1, column: 0, message: `error ${index}` })) };
+    const failing = view.elaborate(async where => {
+      fs.mkdirSync(where, { recursive: true }); fs.writeFileSync(path.join(where, 'diagnostics.json'), JSON.stringify(diagnostics));
+      if (where.endsWith('cancelled')) controller.abort();
+      throw new Error('formalization_elaboration_timeout');
+    });
+    await expect(failing(path.join(directory, 'timed-out'), 'source', 'standard' as never, { timeoutMs: 0 })).rejects.toThrow('formalization_elaboration_timeout');
+    const entry = sent.at(-1)!;
+    expect(entry).toMatchObject({ type: 'step', step: { step: 'compile', state: 'failed', lean: { passed: false, timedOut: true, omittedMessages: 7 } } });
+    if (entry.type === 'step' && entry.step.step === 'compile') expect(entry.step.lean!.messages).toHaveLength(webAgentActionLimits.leanMessages);
+    const count = sent.length;
+    await expect(failing(path.join(directory, 'cancelled'), 'source', 'standard' as never, { timeoutMs: 0, signal: controller.signal })).rejects.toThrow('formalization_elaboration_timeout');
+    expect(sent).toHaveLength(count + 1);
+    expect(sent.at(-1)).toMatchObject({ type: 'step', step: { step: 'compile', state: 'started' } });
+    expect(sent.every(isWebFormalizationActivityBody)).toBe(true);
   });
 
   it('carries the host feedback between rounds and a stop without repeating it', async () => {

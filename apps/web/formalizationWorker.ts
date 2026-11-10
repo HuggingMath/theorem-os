@@ -1,14 +1,17 @@
+import type { WorkerFormalizationAuditInput } from './formalizationAuditTypes';
 import fs from 'node:fs';
 import type net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { prepareFormalization, readFormalizationArtifact } from '../../src/math/formalization';
+import { assertFormalizationEvidence, directFormalizationEvidenceSchema, prepareFormalization, readFormalizationArtifact } from '../../src/math/formalization';
+import { runFormalizationAudit } from '../../src/solver/formalizationAudit';
 import { defaultFormalizationWorkflow } from '../../src/math/formalizationWorkflow';
+import { LEAN_STATEMENT_CONTEXT_PROTOCOL } from '../../src/math/leanStatementSemantic';
 import { readMathBuildManifest } from '../../src/math/mathBuildManifest';
 import { readMathJson } from '../../src/math/mathRuntimeIo';
-import { createCodexMathSession } from '../../src/runtime/codexSession';
+import { createCodexMathSession, type MathAgentOptions } from '../../src/runtime/codexSession';
 import { prepareSub2apiProfile, SUB2API_PROVIDER } from '../../src/runtime/sub2api';
 import { readFormalizationState, runFormalization } from '../../src/solver/formalization';
 import { elaborateFormalization } from '../../src/solver/formalizationElaboration';
@@ -17,21 +20,25 @@ import { startGatewayForwarder } from './explanationWorker';
 import { createFormalizationActivity } from './formalizationActivity';
 import { prepareWebProviderProfile } from './worker';
 import { webFormalizationLimits, webFormalizationReason, type WorkerFormalizationInput,
-  type WorkerFormalizationMessage, type WebFormalizationProgress } from './formalizationTypes';
+  type WorkerFormalizationMessage, type WorkerFormalizationAuditMessage,
+  type WebFormalizationProgress } from './formalizationTypes';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-export const formalizationWorkerInputSchema = z.object({
+const formalizationWorkerInputObject = z.object({
   id: z.string().uuid(), original: z.string().min(1).max(webFormalizationLimits.maxOriginalBytes)
     .refine(value => value.trim().length > 0 && Buffer.byteLength(value) <= webFormalizationLimits.maxOriginalBytes),
   environment: z.enum(['standard', 'mathlib']), model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u),
   effort: z.enum(['low', 'high', 'max']), apiKey: z.string().regex(/^[\x21-\x7e]{8,4096}$/u),
   provider: z.object({ id: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/u), name: z.string().max(200), baseUrl: z.string().url().max(512) }).strict(),
-  maxRunSeconds: z.number().int().positive().max(webFormalizationLimits.maxRunSeconds),
-  maxTotalTokens: z.number().int().min(10_000).max(webFormalizationLimits.maxTotalTokens),
-  maxRounds: z.number().int().positive().max(webFormalizationLimits.maxRounds),
-  maxPlanningRounds: z.number().int().positive().max(webFormalizationLimits.maxPlanningRounds),
+  maxRunSeconds: z.number().int().nonnegative().max(webFormalizationLimits.maxRunSeconds),
+  maxTotalTokens: z.union([z.literal(0), z.number().int().min(10_000).max(webFormalizationLimits.maxTotalTokens)]),
+  maxRounds: z.number().int().nonnegative().max(webFormalizationLimits.maxRounds),
+  maxPlanningRounds: z.number().int().nonnegative().max(webFormalizationLimits.maxPlanningRounds),
   reviewers: z.literal(webFormalizationLimits.reviewers),
-}).strict().superRefine((input, context) => {
+  contextProtocol: z.literal(LEAN_STATEMENT_CONTEXT_PROTOCOL).optional(),
+  reviewMode: z.literal('direct').optional(),
+}).strict();
+const providerConfiguration = (input: { provider: { id: string; baseUrl: string }; model: string }, context: z.RefinementCtx) => {
   let url: URL;
   try { url = new URL(input.provider.baseUrl); }
   catch { context.addIssue({ code: z.ZodIssueCode.custom, message: 'Unsupported provider configuration' }); return; }
@@ -39,17 +46,38 @@ export const formalizationWorkerInputSchema = z.object({
   if (url.username || url.password || url.search || url.hash || (gateway
     ? url.protocol !== 'http:' || url.pathname.replace(/\/$/u, '') !== '/v1' || input.model !== SUB2API_PROVIDER.defaultModel
     : url.protocol !== 'https:')) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Unsupported provider configuration' });
-});
+};
+export const formalizationWorkerInputSchema = formalizationWorkerInputObject.superRefine(providerConfiguration);
+export const formalizationAuditWorkerInputSchema = formalizationWorkerInputObject.pick({
+  id: true, original: true, environment: true, model: true, effort: true, apiKey: true, provider: true, maxRunSeconds: true,
+}).extend({ operation: z.literal('audit'), evidence: directFormalizationEvidenceSchema,
+  maxTotalTokens: z.number().int().safe().nonnegative().max(webFormalizationLimits.maxTotalTokens),
+}).strict().superRefine(providerConfiguration);
 
-/** Keep the CLI's planned v3 fidelity protocol and unanimous independent review policy. */
+export function assertWebFormalizationAuditInput(input: WorkerFormalizationAuditInput) {
+  assertFormalizationEvidence(input.evidence);
+  const request = input.evidence.request;
+  if (request.problemId !== input.id || request.statement !== input.original || request.environment !== input.environment ||
+      request.model !== input.model || request.effort !== input.effort || request.execution !== 'model')
+    throw new Error('formalization_audit_binding_mismatch');
+}
+
+/** Add the host-only credential after the solver-visible mathematics environment has been projected. */
+export function webFormalizationSessionOptions(options: MathAgentOptions, providerId: string, apiKey: string): MathAgentOptions {
+  return { ...options, environment: { ...options.environment,
+    [providerId === SUB2API_PROVIDER.id ? SUB2API_PROVIDER.apiKeyEnvironment : 'THEOREMOS_PROVIDER_API_KEY']: apiKey } };
+}
+
+/** New direct requests generate and compile; older inputs retain their independent review workflow. */
 export function webFormalizationPreparation(input: WorkerFormalizationInput, profile: string, buildManifestRef: string,
   executable = 'codex'): Parameters<typeof prepareFormalization>[1] {
   const author = { model: input.model, effort: input.effort, profile, executable };
-  const workflow = defaultFormalizationWorkflow(author);
-  workflow.maxPlanningRounds = input.maxPlanningRounds;
-  workflow.reviewScheduling = 'parallel';
+  const workflow = input.reviewMode === 'direct' ? undefined : defaultFormalizationWorkflow(author);
+  if (workflow) { workflow.maxPlanningRounds = input.maxPlanningRounds; workflow.reviewScheduling = 'parallel'; }
   return { problemId: input.id, statement: input.original, environment: input.environment, execution: 'model',
-    ...author, workflow, fidelityPolicy: 'task-preserving-v2', buildManifestRef,
+    ...author, ...(input.reviewMode === 'direct' ? { reviewMode: 'direct' as const } :
+      { workflow, fidelityPolicy: 'task-preserving-v2' as const }), buildManifestRef,
+    contextProtocol: input.contextProtocol ?? LEAN_STATEMENT_CONTEXT_PROTOCOL,
     maxRounds: input.maxRounds, maxRunSeconds: input.maxRunSeconds, maxTurnSeconds: 0, maxCompileSeconds: 0,
     maxTotalTokens: input.maxTotalTokens };
 }
@@ -67,20 +95,22 @@ export function formalizationStopReason(status: string, error: string | undefine
   return { status: 'error', reason: webFormalizationReason.test(code) ? code : 'formalization_failed' };
 }
 
-async function readInput(): Promise<WorkerFormalizationInput> {
+async function readInput(): Promise<WorkerFormalizationInput | WorkerFormalizationAuditInput> {
   let bytes = 0;
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
     bytes += chunk.length;
-    if (bytes > 256 * 1024) throw new Error('formalization_input_too_large');
+    if (bytes > 16_000_000) throw new Error('formalization_input_too_large');
     chunks.push(chunk);
   }
-  return formalizationWorkerInputSchema.parse(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)))) as WorkerFormalizationInput;
+  const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
+  return value?.operation === 'audit' ? formalizationAuditWorkerInputSchema.parse(value) as WorkerFormalizationAuditInput
+    : formalizationWorkerInputSchema.parse(value) as WorkerFormalizationInput;
 }
 
 async function main() {
   const input = await readInput(), key = input.apiKey;
-  const send = (message: WorkerFormalizationMessage) => new Promise<void>(resolve => process.stdout.write(
+  const send = (message: WorkerFormalizationMessage | WorkerFormalizationAuditMessage) => new Promise<void>(resolve => process.stdout.write(
     JSON.stringify(message).replaceAll(JSON.stringify(key).slice(1, -1), '[REDACTED]') + '\n', () => resolve()));
   const originalLog = console.log, originalError = console.error;
   console.log = () => {}; console.error = () => {};
@@ -102,8 +132,9 @@ async function main() {
     } catch { /* The next poll reads the atomic checkpoint. */ }
   };
   try {
-    report();
+    if (!('operation' in input)) report();
     const sub2api = input.provider.id === SUB2API_PROVIDER.id;
+    const openSession = (options: MathAgentOptions) => createCodexMathSession(webFormalizationSessionOptions(options, input.provider.id, key));
     if (sub2api) {
       gateway = await startGatewayForwarder(input.provider.baseUrl);
       prepareSub2apiProfile(profile, input.model, input.effort);
@@ -113,14 +144,24 @@ async function main() {
     fs.writeFileSync(process.env.DEEPSCIENTIST_MATH_ENV_FILE, '', { mode: 0o400, flag: 'wx' });
     const buildIndex = readMathJson(process.env.THEOREMOS_WORKER_BUILD || '/opt/theoremos-build.json') as { buildManifestRef: string };
     readMathBuildManifest(buildIndex.buildManifestRef, root, path.join(root, 'out/main'));
+    if ('operation' in input) {
+      assertWebFormalizationAuditInput(input);
+      const result = await runFormalizationAudit(path.join(scratch, 'audit'), root, input.evidence,
+        { profile, executable: process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex', model: input.model,
+          effort: input.effort, buildManifestRef: buildIndex.buildManifestRef },
+        { openSession,
+          maxRunSeconds: input.maxRunSeconds, maxTotalTokens: input.maxTotalTokens,
+          onUsage: tokens => { void send({ type: 'audit-progress', tokens }); } });
+      await send({ type: 'audit-result', result });
+      return;
+    }
     prepareFormalization(directory, webFormalizationPreparation(input, profile, buildIndex.buildManifestRef,
       process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex'));
     poll = setInterval(() => { refresh(); report(); }, 10_000);
     const activity = createFormalizationActivity({ scratch, directory, root, apiKey: key, redact: [input.provider.baseUrl],
       send: entry => { void send({ type: 'activity', activity: entry }); } });
     const result = await runFormalization(directory, root, {
-      openSession: activity.openSession(options => createCodexMathSession({ ...options,
-        environment: { ...options.environment, [sub2api ? SUB2API_PROVIDER.apiKeyEnvironment : 'THEOREMOS_PROVIDER_API_KEY']: key } })),
+      openSession: activity.openSession(openSession),
       elaborate: activity.elaborate(elaborateFormalization),
       onEvent: event => {
         activity.onEvent(event);
@@ -136,12 +177,13 @@ async function main() {
     if (result.status === 'approved')
       await send({ type: 'result', status: 'approved', evidence: readFormalizationArtifact(path.join(directory, 'artifact')) });
     else {
-      const stop = formalizationStopReason(result.status, result.error, Date.now() - startedAt >= input.maxRunSeconds * 1_000);
+      const stop = formalizationStopReason(result.status, result.error, input.maxRunSeconds > 0 && Date.now() - startedAt >= input.maxRunSeconds * 1_000);
       activity.stopped(stop.reason, result.error);
       await send({ type: 'result', ...stop });
     }
   } catch (error) {
-    await send({ type: 'result', ...formalizationStopReason('stopped', error instanceof Error ? error.message : undefined, false) });
+    const stop = formalizationStopReason('stopped', error instanceof Error ? error.message : undefined, false);
+    await send('operation' in input ? { type: 'audit-error', reason: stop.reason } : { type: 'result', ...stop });
     process.exitCode = 1;
   } finally {
     clearInterval(poll);

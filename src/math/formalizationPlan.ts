@@ -36,7 +36,9 @@ const planSchema = z.object({
   definitions: z.array(z.object({ id, spanIds, mathematics: text, implementation: z.enum(['existing', 'new']),
     leanNames: z.array(leanName).min(1).max(recordLimit)
       .describe('For existing, cite pinned library constants; separate records may reuse a constant for distinct source meanings. For new, name the local def/abbrev/named instance to generate. New names must be unique across all definition records. No definition name may name a conclusion theorem.'),
-    dependsOn: z.array(id).max(recordLimit), justification: text,
+    dependsOn: z.array(id).max(recordLimit)
+      .describe('Only id values of records in this plan.definitions array. Never reference object, assumption, conclusion, span or unresolved IDs, or Lean names. Use [] when this definition has no definition dependencies; the definition dependency graph must be acyclic.'),
+    justification: text,
   }).strict()).max(recordLimit),
   unresolved: z.array(z.object({ id, spanIds, description: text }).strict()).max(recordLimit),
 }).strict();
@@ -84,8 +86,11 @@ export const formalizationPlanSchema = planSchema.superRefine((plan, context) =>
   plan.definitions.forEach((definition, index) => {
     unique(definition.leanNames, ['definitions', index, 'leanNames']);
     unique(definition.dependsOn, ['definitions', index, 'dependsOn']);
-    if (definition.dependsOn.some(dependency => !definitions.has(dependency)))
-      issue('formalization_plan_definition_reference_invalid', ['definitions', index, 'dependsOn']);
+    const invalidDependencies = definition.dependsOn.filter(dependency => !definitions.has(dependency));
+    if (invalidDependencies.length)
+      issue(`formalization_plan_definition_reference_invalid: definition ${JSON.stringify(definition.id)} has invalid dependsOn IDs ${JSON.stringify(invalidDependencies)}. ` +
+        `Allowed definition IDs: ${JSON.stringify([...definitions.keys()])}. Reference only plan.definitions IDs, not objects, assumptions, conclusions, spans or unresolved IDs or Lean names; use [] when there are no definition dependencies.`,
+      ['definitions', index, 'dependsOn']);
     for (const name of definition.leanNames) {
       const previous = definitionNames.get(name);
       // Multiple source meanings may use the same imported constant. A local

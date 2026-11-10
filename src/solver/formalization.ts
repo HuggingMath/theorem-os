@@ -8,6 +8,8 @@ import { setTimeout as wait } from 'node:timers/promises';
 import { z } from 'zod';
 import { parse as parseToml } from 'smol-toml';
 import { createCodexMathSession, type MathAgentFailureDiagnostic, type MathAgentOptions, type MathAgentSession } from '../runtime/codexSession';
+import { warmFormalizationPackages } from '../runtime/formalizationSandbox';
+import { DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT } from '../math/mathProofEnvironmentCache';
 import { readMathBuildManifest } from '../math/mathBuildManifest';
 import { canonicalMathJson, mathDigest, readMathText, withMathRuntimeLease, writeMathJsonDurable } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath, isMathPathWithin, repositoryRelativePath } from '../math/paths';
@@ -17,7 +19,7 @@ import { assertMathRetrievalCorpus } from '../math/mathRetrievalCorpus';
 import { eraseFormalizationProofs } from '../math/formalizationSource';
 import { assertFormalizationCandidate, bootstrapFormalizedProblem, formalizationCandidateSchema, formalizationDigest,
   formalizationInputDigest, formalizationReviewInput, formalizationReviewSchema, formalizationSnapshotSchema, formalizationTranslationSchema,
-  prepareFormalization, readFormalizationArtifact, readFormalizationRequest, writeFormalizationArtifact,
+  directFormalizationEvidenceSchema, prepareFormalization, readFormalizationArtifact, readFormalizationRequest, writeFormalizationArtifact,
   type FormalizationCandidate, type FormalizationEvidence, type FormalizationRequest } from '../math/formalization';
 import { elaborateFormalization, type FormalizationElaboration } from './formalizationElaboration';
 import { formalizationPlanSchema, assertFormalizationPlan, assertFormalizationPlanReady, assertFormalizationPlanCandidate,
@@ -30,7 +32,7 @@ import { defaultFormalizationWorkflow, formalizationModelConfigurations, formali
   distinctFormalizationModelConfigurations } from '../math/formalizationWorkflow';
 import { compareFormalizationReference } from './formalizationReference';
 import { assertFormalizationReferenceResult, type FormalizationReferenceResult } from '../math/formalizationReference';
-import { checkFormalizationFidelity } from './formalizationFidelity';
+import { checkFormalizationFidelity, shareFormalizationFidelityComparisons } from './formalizationFidelity';
 import { assertStructuredSemanticReview, resolveStructuredReviewPanel, structuredReviewAspects,
   formalizationReviewInstructions, STRUCTURED_REVIEW_PROTOCOL,
   type StructuredReviewInput } from '../math/formalizationSemanticReview';
@@ -46,6 +48,8 @@ import { FORMALIZATION_FALSIFICATION_AUTHOR_INSTRUCTIONS, FORMALIZATION_FALSIFIC
   FORMALIZATION_REFUTE_INSTRUCTIONS, formalizationRefutationInput, formalizationRefutationOutputSchema,
   refutationProofRejection, type FormalizationRefutationProbe } from '../math/formalizationRefutation';
 import { checkFormalizationRefutations } from './formalizationRefutation';
+import { focusFormalizationContext, FOCUSED_FORMALIZATION_CONTEXT_PROTOCOL,
+  shareFormalizationContext, SHARED_FORMALIZATION_CONTEXT_PROTOCOL } from './formalizationContext';
 
 const roleSchema = z.enum(['plan', 'generate', 'backtranslate', 'compare', 'refute']);
 type Role = z.infer<typeof roleSchema>;
@@ -95,6 +99,9 @@ const summarizeRun = (directory: string, request: FormalizationRequest, state: S
     distinctModelConfigurations: distinctFormalizationModelConfigurations(request, request.workflow),
     roleTurns: Object.fromEntries(roleSchema.options.filter(role => role !== 'refute' || request.falsification).map(role => [role,
       state.sessions.filter(item => item.role === role).reduce((sum, item) => sum + item.turns, 0)])) } : {}),
+  ...(request.reviewMode === 'direct' ? { candidateSelection: 'first-compiled', candidatesTried: state.generatedCandidates ?? 0,
+    firstCandidateApproved: state.status === 'approved' && state.generatedCandidates === 1,
+    roleTurns: { generate: state.sessions.filter(item => item.role === 'generate').reduce((sum, item) => sum + item.turns, 0) } } : {}),
   ...(state.error ? { error: state.error } : {}),
 });
 type Options = {
@@ -103,6 +110,7 @@ type Options = {
   compareReference?: typeof compareFormalizationReference;
   lookupSymbols?: typeof lookupLeanLibrarySymbols;
   refute?: typeof checkFormalizationRefutations;
+  preparePackages?: typeof warmFormalizationPackages;
   env?: NodeJS.ProcessEnv; signal?: AbortSignal;
   waitForRetry?: (delayMs: number, signal: AbortSignal) => Promise<void>;
   onEvent?: (event: { event: string; round: number; role?: Role; error?: string }) => void;
@@ -130,6 +138,29 @@ const retryableRoleFailure = (cause: unknown) => {
 // candidates forever under an unlimited round budget.
 const MAX_UNKNOWN_ROUNDS = 3;
 const INLINE_ROLE_CONTEXT_BYTES = 64 * 1024;
+const INLINE_REVIEW_CONTEXT_BYTES = 512 * 1024;
+const snapshotFieldInstructions = 'For each target, context.semantic is an object with schema, rawType (string), kernelType (tagged JSON expression) and localMeaningClosure (array). context.structures is an object with schema and entries; iterate context.structures.entries, an array of {name,class,fields}, where fields is an array of {name,type}. context.constants is an array of {name,module,type,definition?}. The omitted list and references belong to context. The reviewer translation is at INPUT.translation, outside the snapshot. Use these paths directly; do not spend requests discovering the field layout, print truncated slices as if they were complete observations, or reread observations already supplied.';
+/** Navigation only: full raw observations stay in the frozen input, unchanged. */
+function snapshotNavigation(role: Role, input: unknown): string | undefined {
+  const review = role === 'compare' ? input as StructuredReviewInput : undefined;
+  const snapshot = role === 'backtranslate' ? input as FormalizationEvidence['snapshot'] : review?.observation.snapshot;
+  if (!snapshot?.targets || !['backtranslate', 'compare'].includes(role)) return;
+  const root = role === 'backtranslate' ? '$' : '$.observation.snapshot';
+  const index = {
+    snapshotPath: root,
+    snapshotDigest: review?.observation.snapshotDigest ?? (input as { snapshotDigest?: string }).snapshotDigest,
+    source: snapshot.source,
+    ...(review ? { original: review.original, header: review.header, candidate: review.candidate, translation: review.translation } : {}),
+    targets: snapshot.targets.map((target, index) => ({ index, name: target.name,
+      type: target.context.type, bindings: target.context.bindings, omitted: target.context.omitted,
+      remainingFields: Object.entries(target.context).filter(([key, value]) => value !== undefined && !['type', 'bindings', 'omitted'].includes(key))
+        .map(([key, value]) => ({ path: `${root}.targets[${index}].context.${key}`,
+          bytes: Buffer.byteLength(canonicalMathJson(value)) })),
+    })),
+  };
+  const text = canonicalMathJson(index);
+  return Buffer.byteLength(text) <= INLINE_ROLE_CONTEXT_BYTES ? text : undefined;
+}
 const reviewOutputFeedback = (cause: unknown) => [
   'OUTPUT.json was not accepted. Repair the output contract in this same independent reviewer thread.',
   'Host validation error (data): ' + JSON.stringify(errorText(cause).slice(0, 16000)),
@@ -148,7 +179,7 @@ const roleInstructions: Record<Role, string> = {
     'objects is [{id,spanIds,description,leanType}]; describe domains and quantifiers explicitly.',
     'assumptions is [{id,spanIds,mathematics}]; list every hypothesis or convention, never a desired conclusion.',
     'conclusions is [{id,spanIds,mathematics,targetNames,assumptionIds}]; cover every original subquestion and proposed target, with faithful domains and quantifiers.',
-    'definitions is [{id,spanIds,mathematics,implementation,leanNames,dependsOn,justification}]; implementation is existing (pinned library) or new (local def/abbrev/named instance). dependsOn contains definition IDs and must be acyclic.',
+    'definitions is [{id,spanIds,mathematics,implementation,leanNames,dependsOn,justification}]; implementation is existing (pinned library) or new (local def/abbrev/named instance). dependsOn may contain only id values from this plan.definitions array, never object, assumption, conclusion, span or unresolved IDs or Lean names. Use [] when there are no definition dependencies; the definition dependency graph must be acyclic.',
     'Specify the actual meaning of specialized terms and map them to library constants or complete supported definitions. Every later local definition must be planned as new.',
     'Plan each conclusion at the type the source gives it, in the most unfolded form that still names the same mathematics. Independent carriers get independent universes (Type*), and an unrestricted carrier is not pinned to Type. An order or finiteness condition is a Fintype instance on the carrier with Fintype.card, not a Nat.card hypothesis. Name a library predicate at the type the source means, for example Nat.Prime for a natural number rather than the general Prime. A conclusion about how two given elements or objects relate is planned as the explicit equation with its own witness, not as a bundled library relation that hides the quantifier: for example plan an existential conjugating element with the equation itself, not an IsConj application. Keep the source order of the operands and the source association, and add no grouping parentheses the source does not have; the checker relates a candidate to a reference only by definitional unfolding and simple rewriting, so an equivalent claim written with another association, orientation or behind a library definition is not related and does not count. When the source says two structures are the same without placing them inside one named ambient object, plan Nonempty of the structure equivalence rather than an equality of subobjects, and never construct that equality through a derived operation the source does not name.',
     'unresolved is [{id,spanIds,description}]. Record ambiguity, missing definitions, unknown library support and unsupported source constructs honestly. An unresolved plan cannot generate a proof task.',
@@ -194,6 +225,31 @@ const roleInstructions: Record<Role, string> = {
   ].join('\n'),
   refute: FORMALIZATION_REFUTE_INSTRUCTIONS,
 };
+const directGenerationInstructions = [
+  'Translate the complete mathematical task in INPUT.json into Lean 4 declarations in the requested pinned environment.',
+  'Submit one JSON object to OUTPUT.json using the supplied schema: source, coverage, assumptions, assumptionsExplanation, definitionsExplanation. No separate planning document, backtranslation or reviewer report is needed.',
+  'source is a complete Lean file with imports, ordinary definitions and theorem targets. Every requested conclusion must be represented with its actual domains, quantifiers, hypotheses and definitions; each theorem body is := by sorry. Do not solve or prove the theorem during formalization.',
+  'Allowed source syntax is imports, namespaces, sections, variable and universe declarations, and ordinary named def, abbrev, instance, theorem and lemma declarations. Structure and inductive declarations, custom notation and metaprogramming are unsupported; do not use them.',
+  'Represent towers and nested families with ordinary predicates or existential quantifiers, not new structures. Preserve successive inclusions and construct each step over the preceding object. Ambient universes must accommodate the required embeddings.',
+  'For a requested equivalence, necessity and sufficiency belong to one iff target; do not create duplicate forward and reverse targets. Proof-method, citation and auxiliary-lemma proof requirements remain in the original task for the subsequent proof stage; they do not require additional formalization targets. Add other theorem targets only for additional mathematical conclusions explicitly requested as independent statements.',
+  'Use installed library declarations when they express the source faithfully. Inspect the pinned library only for a specific missing declaration or mathematical meaning. The host compiles the submitted file and returns diagnostics for repair.',
+  'Keep exact original quotations in coverage.originalText and map them to every generated theorem name. Briefly state the actual assumptions and definitions. Do not weaken the task, assume its conclusion, replace missing definitions with True or add unsupported axioms or syntax.',
+  'Check your statement against the original before submitting. Compilation checks Lean types; it is not an independent check of mathematical meaning. Write OUTPUT.json atomically and stop.',
+].join('\n');
+// Omit legacy benchmark shape prescriptions from this inventory prompt so the
+// planner can submit a small, source-bound result. Admission checks still apply.
+const taskPreservingPlanInstructions = [
+  'Plan the complete mathematical task in INPUT.json. Submit a concise inventory, not Lean declarations or proofs.',
+  'Write one strict JSON object with schema="theorem-os.formalization-plan.v1", taskKind, spans, objects, assumptions, conclusions, definitions and unresolved, using OUTPUT.schema.json.',
+  'taskKind is prove, decision or construction. A yes/no question is a decision; never assume an affirmative answer or replace it by excluded middle.',
+  'objects records every mathematical domain and quantifier, with a short description and intended Lean type. Describe a structured object such as a finite tower in one record, including its quantified indices, generators and exponents; do not repeat its internal binders as separate objects unless the source uses them independently. assumptions records actual premises and conventions, never a conclusion.',
+  'conclusions records every distinct requested mathematical conclusion, with its meaning, proposed qualified theorem names and applicable assumption IDs. A single iff target includes both directions; a request to prove necessity and sufficiency does not also need two duplicate implication targets unless separate theorems are explicitly requested. Preserve all quantifiers, hypotheses, directions of equivalence and boundary cases. Keep proof-method and citation restrictions with the relevant conclusion; do not invent auxiliary theorem targets to encode those instructions.',
+  'definitions records only specialized meanings that need an existing library constant or a new supported def/abbrev/named instance, with its dependency IDs and justification. dependsOn may contain only id values from this plan.definitions array, never object, assumption, conclusion, span or unresolved IDs or Lean names; use [] when there are no definition dependencies. State each complete mathematical contract once. Leave exact Lean binder encodings, universe arithmetic, sequence indexing and typeclass plumbing to the generator. Do not invent definitions for ordinary arithmetic, equality, quantifiers or number notation.',
+  'Use short unique IDs and reuse source spans. Empty assumptions, definitions and unresolved arrays are valid when nothing belongs there. A short sentence per record is enough; do not enumerate alternative inventories.',
+  'Inspect the pinned library only for a specific unresolved mathematical meaning. Record genuine ambiguity, missing definitions or unsupported constructs in unresolved; never silently omit them or assume their answer.',
+  'All references must resolve, definition dependencies must be acyclic, and targetNames names only the proposed conclusion theorems. Custom structures, inductives, syntax, metaprogramming, axioms and changed dependencies are unsupported.',
+  'Use supplied feedback to repair an earlier plan, then write OUTPUT.json atomically and stop. Compilation and independent semantic reviewers will check later stages; this plan is not their approval.',
+].join('\n');
 const refutationRejection = (refuted: FormalizationRefutationProbe[]) => 'formalization_refuted: Lean proved the negation of ' +
   refuted.map(probe => probe.target).join(', ') + ' with every universe parameter at 0, using only the axioms propext, Classical.choice and Quot.sound. ' +
   'The source is a true exercise, so the candidate states something the source does not claim.\n' +
@@ -204,12 +260,13 @@ export function readFormalizationState(directory: string): State | undefined {
   return fs.existsSync(file) ? stateSchema.parse(JSON.parse(readMathText(file, 8_000_000))) as State : undefined;
 }
 
-/** Each role gets a new thread and only the inputs of that role. No solver target exists before review succeeds. */
+/** Frozen direct requests generate and compile; older reviewed requests retain their independent role pipeline. */
 export async function runFormalization(directory: string, root: string, options: Options = {}) {
   directory = path.resolve(directory); root = path.resolve(root);
   assertMathCanonicalPath(directory);
   if (isMathPathWithin(root, directory) || isMathPathWithin(directory, root)) throw new Error('formalization_directory_must_be_external');
   const request = readFormalizationRequest(directory), requestDigest = formalizationDigest(request);
+  const direct = request.reviewMode === 'direct';
   const structured = request.schema === 'theorem-os.formalization-request.v3';
   const semanticContext = request.contextProtocol !== undefined;
   const structureContext = hasStructureContext(request.contextProtocol);
@@ -263,26 +320,69 @@ export async function runFormalization(directory: string, root: string, options:
       };
       const summary = () => summarizeRun(directory, request, state);
       const event = (name: string, role?: Role, error?: string) => options.onEvent?.({ event: name, round: state.rounds, role, error });
+      const packageController = new AbortController();
+      const abortPackages = () => packageController.abort(lease.signal.reason);
+      lease.signal.addEventListener('abort', abortPackages, { once: true });
+      if (lease.signal.aborted) abortPackages();
+      let packagePreparation: Promise<{ ok: true } | { ok: false; cause: unknown }> | undefined;
+      let packageFailure: { cause: unknown } | undefined;
+      const awaitPackages = async () => {
+        const result = await packagePreparation;
+        if (result?.ok === false) throw new Error('formalization_sandbox_packages_failed: ' + errorText(result.cause));
+      };
       // Roles in flight; reported usage reaching the allowance stops all of them, not only the next dispatch.
       const running = new Set<() => void>();
       const spent = () => allowanceReached(request.maxTotalTokens, state.sessions);
       const dispatchOnce = async (role: Role, roundDirectory: string, input: unknown, inputDigest: string,
-        slot?: { reviewerId?: string; name?: string; requireCached?: boolean }) => {
+        slot?: { reviewerId?: string; name?: string; requireCached?: boolean; retryWhen?: () => boolean }) => {
         lease.signal.throwIfAborted();
         if (remaining() <= 0) throw new Error('formalization_time_limit');
         if (currentProfileDigest() !== profileDigest) throw new Error('formalization_profile_changed_during_run');
+        const reviewing = role === 'backtranslate' || role === 'compare';
         const config = role === 'plan' ? request.workflow!.planner : (role === 'backtranslate' || role === 'refute') && request.workflow ?
           request.workflow.backtranslator : role === 'compare' && request.workflow ?
             request.workflow.reviewers.find(item => item.id === slot?.reviewerId)! : request;
         if (!config) throw new Error('formalization_role_configuration_missing');
         const inputText = canonicalMathJson(input);
+        const sharedInput = request.fidelityPolicy && reviewing ?
+          shareFormalizationContext(inputText) : undefined;
+        const focusedInput = request.fidelityPolicy && structureContext && reviewing ?
+          focusFormalizationContext(inputText, role) : undefined;
+        const focusedContext = focusedInput && Buffer.byteLength(focusedInput) + Buffer.byteLength(FOCUSED_FORMALIZATION_CONTEXT_PROTOCOL) <
+          Buffer.byteLength(sharedInput ?? inputText) * 0.8 ? focusedInput : undefined;
         const structuredInput = structured && role === 'compare' ? input as StructuredReviewInput : undefined;
+        const schemaText = canonicalMathJson(structuredInput ?
+          getStructuredFormalizationReviewOutputSchema(structuredInput) : getFormalizationRoleOutputSchema(role));
+        const inlineLimit = reviewing ? INLINE_REVIEW_CONTEXT_BYTES : INLINE_ROLE_CONTEXT_BYTES;
+        const inlineInputText = focusedContext ?? sharedInput ?? inputText;
+        const inlineContext = Boolean((request.fidelityPolicy || direct) && Buffer.byteLength(inlineInputText) + Buffer.byteLength(schemaText) <= inlineLimit);
+        const focusedInline = Boolean(focusedContext && inlineContext);
+        // The source inventory does not claim to have checked library names.
+        // A repair plan keeps full library access for unresolved meanings.
+        const sourceOnlyPlan = Boolean(request.fidelityPolicy && request.environment !== 'standard' && role === 'plan' &&
+          (input as { planningRound?: number }).planningRound === 1 && !(input as { feedback?: string }).feedback);
+        if (role === 'plan' && !sourceOnlyPlan) await awaitPackages();
+        // Exact source coordinates are bookkeeping, not mathematical reasoning.
+        // Keep large originals in INPUT.json; short tasks can reuse one host-bound
+        // span without a tool round trip or model-authored Unicode arithmetic.
+        // It must also fit a coverage quote when the generator reuses that span.
+        const sourceSpan = role === 'plan' && Buffer.byteLength(request.statement) <= INLINE_ROLE_CONTEXT_BYTES &&
+          formalizationCandidateSchema.shape.coverage.element.shape.originalText.safeParse(request.statement).success ?
+          { id: 'source', start: 0, end: request.statement.length, text: request.statement } : undefined;
         const validateOutput = (value: unknown) => structuredInput ? assertStructuredSemanticReview(structuredInput, value) :
           getFormalizationRoleOutputValidator(role).parse(value);
-        const instructionsText = (structured && role === 'compare' ? formalizationReviewInstructions('review', semanticContext, reviewStructureContext, request.fidelityPolicy) :
-          structured && role === 'backtranslate' ? formalizationReviewInstructions('backtranslate', semanticContext, reviewStructureContext) : roleInstructions[role]) +
+        const instructionsText = (direct && role === 'generate' ? directGenerationInstructions :
+          request.fidelityPolicy && role === 'plan' ? taskPreservingPlanInstructions :
+          structured && reviewing ? formalizationReviewInstructions(role === 'compare' ? 'review' : 'backtranslate',
+            semanticContext, reviewStructureContext, role === 'compare' ? request.fidelityPolicy : undefined,
+            focusedInline ? 'inline' : 'file') : roleInstructions[role]) +
+          (sourceOnlyPlan ? '\nThis first planning pass reads the original mathematical task without Mathlib access. Record the complete source inventory and proposed library mappings; the generator, Lean compiler and independent reviewers check those mappings later. Do not claim a library observation you did not make. If a meaning or mapping genuinely requires library inspection, record it in unresolved; a repair planning pass will have the pinned library. Do not guess or clear an unresolved item to save time.' : '') +
           (request.fidelityPolicy && role === 'plan' ? '\n' + [
-            'All source coordinates are UTF-16 code-unit offsets in the parsed INPUT.statement string, never INPUT.json file positions or JSON-escaped text. /usr/bin/python3 is available in this sandbox; Node.js is not provided. Parse INPUT.json with Python, set statement = input["statement"], find i = statement.index(text) (choose the intended occurrence if repeated), verify statement[i:i+len(text)] == text, then set start = len(statement[:i].encode("utf-16-le")) // 2 and end = start + len(text.encode("utf-16-le")) // 2. Python string indices alone are not UTF-16 offsets.',
+            ...(sourceSpan ? [
+              'The host has already computed this exact full-source span. Copy it unchanged into spans and reuse its ID for objects, assumptions and conclusions; finer spans are not required. Still list every distinct requested conclusion and its actual assumptions separately. Do not spend a tool request calculating these coordinates.',
+              'HOST_SOURCE_SPAN=' + canonicalMathJson(sourceSpan),
+            ] : ['All source coordinates are UTF-16 code-unit offsets in the parsed INPUT.statement string, never INPUT.json file positions or JSON-escaped text. /usr/bin/python3 is available in this sandbox; Node.js is not provided. Parse INPUT.json with Python, set statement = input["statement"], find i = statement.index(text) (choose the intended occurrence if repeated), verify statement[i:i+len(text)] == text, then set start = len(statement[:i].encode("utf-16-le")) // 2 and end = start + len(text.encode("utf-16-le")) // 2. Python string indices alone are not UTF-16 offsets.']),
+            'A direction not to add a hypothesis is a restriction on the domain, not another positive premise. Record it in the relevant object description; put only actual mathematical premises in assumptions. Do not invent specialized definitions for ordinary real arithmetic or fractional numerals.',
             'conclusions.targetNames contains only the theorem/lemma names you will generate, with namespace qualification; map imported library constants/classes/types in definitions.leanNames instead.',
             'Different existing-definition records may cite the same imported constant for distinct source meanings. A new local definition name must remain unique across every definition record, including existing mappings; names within one record may not repeat.',
           ].join('\n') : '') +
@@ -306,14 +406,24 @@ export async function runFormalization(directory: string, root: string, options:
             '\nSource search retains every explicit existing-definition name from the plan and object-type names that resolve exactly in the pinned Lean environment.\n'
             + 'INPUT.retrieval.omittedObjectQueries records object-only names absent from that environment, with their plan origins; their exact-name observations remain in librarySymbols.\n'
             + 'An omitted object word may be a local variable, universe parameter, prose, or an unresolved alias. Omission does not certify the plan or the candidate; check the intended mathematical objects and their types.\n' : '') + [
-          request.fidelityPolicy ? '\nThe developer instructions contain the complete role protocol. Read OUTPUT.schema.json and INPUT.json in this directory. ROLE.md is a frozen copy for reference; reading it again is unnecessary.' :
+          focusedInline ? '\nThe developer instructions contain the complete role protocol; the turn supplies the reading view and exact output schema. ROLE.md is a frozen copy for reference.' :
+          request.fidelityPolicy || direct ? '\nThe developer instructions contain the complete role protocol. Read OUTPUT.schema.json and INPUT.json in this directory. ROLE.md is a frozen copy for reference; reading it again is unnecessary.' :
             '\nRead ROLE.md and OUTPUT.schema.json, then INPUT.json in this directory. These files contain the complete role protocol and task data.',
           ...(request.fidelityPolicy && role !== 'refute' ? ['Preserve the complete original task. Reordering independent parameters and supported equivalent representations are allowed; changing whole-structure assumptions into pair-local assumptions, weakening premises or strengthening conclusions is not approval. Establish the comparison of full obligations, not separate provability.'] : []),
           'OUTPUT.schema.json describes the exact output structure, field types and required fields. Do not search installed libraries, old sessions or runtime source for the output protocol.',
-          ...(request.fidelityPolicy ? ['When the turn message includes the complete frozen input and output schema, use those bytes directly; rereading their files adds no evidence. Larger inputs remain in the files and must be read completely using the role protocol.',
-            'After several settled requests the host may remind a planner or backtranslator to finish its output. This is a submission reminder, not semantic approval or permission to omit required evidence.'] : []),
-          'The host still checks cross-references, exact source spans, mathematical fidelity and Lean source admission after checking JSON structure.',
-          request.fidelityPolicy && request.environment === 'standard' ?
+          ...((request.fidelityPolicy || direct) && !focusedInline ? ['When the turn message includes a complete frozen input or output schema, use those bytes directly; rereading that file adds no evidence. For inputs too large to inline, read the task data and every required snapshot field from INPUT.json using the role protocol.'] : []),
+          ...(request.fidelityPolicy ? [
+            'After a settled planning/review request or several backtranslation requests the host may remind you to finish your output. This is a submission reminder, not semantic approval or permission to omit required evidence.'] : []),
+          ...(request.fidelityPolicy && reviewing ? focusedContext ? [FOCUSED_FORMALIZATION_CONTEXT_PROTOCOL] :
+            [snapshotFieldInstructions, SHARED_FORMALIZATION_CONTEXT_PROTOCOL] : []),
+          ...(request.fidelityPolicy && role === 'compare' ? [
+            'Output construction: provide at least one correspondence for each of the six required aspects. This is not an aspect-by-target matrix: add more entries only where needed to cover distinct claims or evidence. Still examine every target and include every target separately in fidelity.targets; do not omit assumptions, definitions, ambiguity or any requested conclusion.',
+            'When the mathematical correspondence is direct, explain that correspondence once and leave forwardArgument and reverseArgument empty. For an equivalent representation, both conversion arguments remain required. Reuse exact supplied strings for quotations and digests instead of reconstructing them. Use concise complete explanations; do not repeat the same justification across fields or invent alternative output layouts.',
+          ] : []),
+          direct ? 'The host checks exact source quotations, coverage, Lean source admission and compilation; no independent semantic review is performed.' :
+            'The host still checks cross-references, exact source spans, mathematical fidelity and Lean source admission after checking JSON structure.',
+          sourceOnlyPlan ? 'This source-inventory sandbox has the pinned Lean toolchain but no Mathlib packages; /opt/lean-packages is not mounted. Library inspection is available to a repair planning pass and to the generator.' :
+          (request.fidelityPolicy || direct) && request.environment === 'standard' ?
             'This request uses only the Lean standard library. Installed Lean sources are in /opt/lean/src/lean; Mathlib is unavailable and /opt/lean-packages is not mounted.' :
             'Installed Lean sources are in /opt/lean/src/lean; pinned Mathlib and dependencies are in /opt/lean-packages (Mathlib: /opt/lean-packages/mathlib/Mathlib).',
           'Use lean directly to inspect declarations when necessary; LEAN_PATH is already configured. The installed library cache is read-only and does not need Lake setup.',
@@ -322,20 +432,25 @@ export async function runFormalization(directory: string, root: string, options:
           ...(request.fidelityPolicy && role === 'plan' ? [
             'Planning is complete when the requested objects, assumptions, conclusion types and definition dependencies are covered. Inspect declaration types only when necessary to resolve a concrete uncertainty, then submit the plan; constructing proof expressions is outside this role.',
           ] : []),
-          ...(request.fidelityPolicy && role === 'generate' ? [
-            'Implement the supplied plan as declarations with erased theorem proofs. Once the final candidate type-checks, submit it. Repeat a successful Lean check only after changing a mathematical declaration or to resolve a new diagnostic; changing comments or notes does not require another check.',
+          ...((request.fidelityPolicy || direct) && role === 'generate' ? [
+            direct ? 'Submit the complete statement with erased theorem proofs and concise coverage notes. The host compiles it and returns diagnostics for repair; do not compile scratch copies merely to repeat that check.' :
+              'Implement the supplied plan as declarations with erased theorem proofs. The host compiles your submission and returns diagnostics for repair. Inspect declarations only for a specific unresolved library fact or mathematical meaning; do not compile extra scratch copies merely to duplicate that host check. Submit OUTPUT.json atomically once the statement and coverage are ready.',
+            'For a tower or nested family, include the successive inclusions and define each relative construction over the preceding object, rather than repeatedly over the original base. Quantified ambient carriers must have universes compatible with the required embeddings; an independently quantified smaller universe can change an existence claim. Check these statement choices before submitting, without proving the theorem.',
+            ...(request.environment === 'standard' ? [] : ['Use the narrowest known imports that supply the statement symbols. For ordinary real arithmetic, Mathlib.Data.Real.Basic supplies ℝ and its arithmetic/order operations. Avoid the full import Mathlib when a known narrower module suffices: every independent Lean check must load those imports.']),
           ] : []),
           ...(request.fidelityPolicy && role === 'backtranslate' ? [
             'Use the host-observed elaborated types, binder dependencies, actual instances and supplied definition context as the primary evidence. Inspect an installed definition only to resolve a specific semantic uncertainty left by that context; do not repeat observations already supplied or recompile the snapshot merely to confirm it elaborates.',
             'The candidate declarations are supplied in INPUT.json, not installed as a library module. A fresh file importing Init or Mathlib does not contain those target names; read their actual elaborated types from the snapshot.',
             'In definitions, explain the mathematical meanings needed to interpret the statement. Do not turn the output into an inventory of kernel constructors or typeclass dispatch helpers; still examine any instance or local definition that can change the mathematical meaning. Once every target, domain, quantifier, hypothesis, conclusion and relevant definition has been interpreted, write OUTPUT.json and stop. Record any remaining uncertainty explicitly rather than repeatedly rechecking settled facts.',
+            'Refer to each target by its exact qualified theorem name throughout the translation, including assumptions and definitions; positional target numbers are ambiguous.',
           ] : []),
-          'Write your complete final JSON atomically (write a temporary file, then rename it to OUTPUT.json).',
+          'Write your complete final JSON atomically in this workspace: write ./OUTPUT.json.tmp, then rename ./OUTPUT.json.tmp to ./OUTPUT.json. Keep the temporary file beside OUTPUT.json; /tmp is a separate mount and renaming from there fails with a cross-device error.',
+          ...(request.fidelityPolicy ? [
+            'When submitting JSON with exec_command, use a quoted shell heredoc: cat > ./OUTPUT.json.tmp <<\'THEOREMOS_OUTPUT_JSON\', followed on the next line by your complete JSON, then THEOREMOS_OUTPUT_JSON on its own line, then mv ./OUTPUT.json.tmp ./OUTPUT.json. Use a delimiter absent from the JSON. The quoted heredoc preserves apostrophes, backticks, dollar signs and backslashes literally. Do not place JSON prose inside a single-quoted printf or echo argument: an apostrophe in mathematical prose would break that shell quoting and require another model request.',
+          ] : []),
           'The first complete schema-valid OUTPUT.json is your submission: the host ends this role and validates it. Stop after submitting.',
           'Do not change INPUT.json, ROLE.md or OUTPUT.schema.json. Read only this role input, protocol and installed libraries; do not search for benchmark answers.',
         ].join('\n');
-        const schemaText = canonicalMathJson(structuredInput ?
-          getStructuredFormalizationReviewOutputSchema(structuredInput) : getFormalizationRoleOutputSchema(role));
         const roleContract = { schema: 'theorem-os.formalization-role-contract.v1' as const,
           roleInstructionsSha256: mathDigest(instructionsText), outputSchemaSha256: mathDigest(schemaText) };
         // Only closed, validated writers can be reused. Bind the actual input and
@@ -389,14 +504,18 @@ export async function runFormalization(directory: string, root: string, options:
         let completionNoticeSent = false;
         const remindSubmission = () => {
           const accounting = record.requestUsageAccounting;
-          if (!request.fidelityPolicy || !['plan', 'backtranslate'].includes(role) || completionNoticeSent || !session?.notify ||
+          if (!request.fidelityPolicy || !['plan', 'backtranslate', 'compare'].includes(role) || completionNoticeSent || !session?.notify ||
               stopped || lease.signal.aborted || accounting?.incomplete || accounting?.pendingRequests ||
-              (accounting?.reportedRequests ?? 0) < 3 || fs.existsSync(outputFile)) return;
+              (accounting?.reportedRequests ?? 0) < (role === 'backtranslate' ? 3 : 1) || fs.existsSync(outputFile)) return;
           completionNoticeSent = true;
           const message = role === 'plan' ?
-            'Finish the statement plan from the evidence already available. Use the smallest inventory covering all source clauses; do not construct proofs or enumerate kernel/typeclass implementation details. Make further library queries only for a specific unresolved mathematical meaning. Record genuine remaining ambiguity in unresolved, and write the complete schema-valid OUTPUT.json atomically.' :
+            'Finish the statement plan from the evidence already available. Use the smallest inventory covering all source clauses; do not construct proofs or enumerate kernel/typeclass implementation details. Make further library queries only for a specific unresolved mathematical meaning. Record genuine remaining ambiguity in unresolved, and write the complete schema-valid OUTPUT.json atomically.' : role === 'compare' ?
+            'Finish your independent semantic review using the supplied frozen snapshot and observations. Cover every required target, domain, quantifier, hypothesis, conclusion and definition affecting the mathematical meaning. Make further queries only for a specific missing meaning; avoid repeatedly checking settled observations or constructing theorem proofs. Preserve your own verdict: unknown or changes_requested is acceptable when evidence is insufficient. Once your assessment is complete, write the complete schema-valid OUTPUT.json atomically, including the required source contract for an approved review. The host will compile and check whole-statement correspondence separately; this reminder gives no semantic verdict.' :
             'Finish the independent backtranslation from the supplied checked snapshot and observations. Cover every target, domain, quantifier, hypothesis, conclusion and definition affecting the mathematical meaning. Do not recompile or rederive observations already supplied. Make further queries only for a specific missing meaning; describe genuine uncertainty in the existing translation fields. Write the complete schema-valid OUTPUT.json atomically.';
-          void session.notify(message, { waitForRequest: true })
+          const timeLeft = remaining();
+          const budgetReminder = Number.isFinite(timeLeft) ?
+            `\nThe shared pipeline has ${Math.max(0, Math.ceil(timeLeft / 1000))} seconds remaining for generation, Lean compilation, backtranslation and independent review as well as this role.` : '';
+          void session.notify(message + budgetReminder, { waitForRequest: true })
             .then(() => event('formalization_submission_reminded', role))
             .catch(() => event('formalization_submission_reminder_cancelled', role));
         };
@@ -418,7 +537,8 @@ export async function runFormalization(directory: string, root: string, options:
             instructions: instructionsText,
             environment: env, signal: lease.signal,
             turnTimeoutMs: Number.isFinite(turnTimeout) ? turnTimeout : undefined,
-            ...(request.execution === 'model' ? { readIsolation: { environment: request.environment } } : {}),
+            ...(request.execution === 'model' ? { readIsolation: { environment: request.environment,
+              ...(sourceOnlyPlan ? { packages: 'none' as const } : {}) } } : {}),
             completedOutput: { file: outputFile, validate: value => { validateOutput(value); },
               ...(request.fidelityPolicy && structuredInput ? { validationFeedback: reviewOutputFeedback } : {}) },
             onUsage: usage => {
@@ -453,15 +573,27 @@ export async function runFormalization(directory: string, root: string, options:
           record.threadId = session.threadId;
           if (state.sessions.some(item => item !== record && item.threadId === record.threadId))
             throw new Error('formalization_role_thread_reused');
-          const inlineContext = request.fidelityPolicy && Buffer.byteLength(inputText) + Buffer.byteLength(schemaText) <= INLINE_ROLE_CONTEXT_BYTES;
           let message = inlineContext ? [
-            'Complete your assigned role using the frozen input and exact output schema below. These are the complete INPUT.json and OUTPUT.schema.json bytes; do not reread those files or ROLE.md.',
+            focusedContext ?
+              'Complete your assigned role using the review reading view and exact output schema below. The complete target and local semantics are inline; inspect indexed imported details in INPUT.json when needed, following the developer protocol.' : sharedInput ?
+              'Complete your assigned role using the complete lossless shared input and exact output schema below. Resolve dictionary references using the developer protocol; do not reread INPUT.json, OUTPUT.schema.json or ROLE.md.' :
+              'Complete your assigned role using the frozen input and exact output schema below. These are the complete INPUT.json and OUTPUT.schema.json bytes; do not reread those files or ROLE.md.',
             'Follow the developer role protocol. Use tools only for a specific missing library fact or to write the final OUTPUT.json atomically, then stop.',
-            'BEGIN INPUT.json', inputText, 'END INPUT.json',
+            focusedContext ? 'BEGIN REVIEW CONTEXT' : sharedInput ? 'BEGIN SHARED INPUT.json' : 'BEGIN INPUT.json', inlineInputText,
+            focusedContext ? 'END REVIEW CONTEXT' : sharedInput ? 'END SHARED INPUT.json' : 'END INPUT.json',
             'BEGIN OUTPUT.schema.json', schemaText, 'END OUTPUT.schema.json',
-          ].join('\n') : request.fidelityPolicy ?
+          ].join('\n') : request.fidelityPolicy || direct ?
             'Follow the complete role protocol in the developer instructions. Read OUTPUT.schema.json and INPUT.json, write OUTPUT.json atomically using that contract, then stop. ROLE.md is the same protocol and need not be reread.' :
             'Read ROLE.md, OUTPUT.schema.json and INPUT.json in the current directory. Produce OUTPUT.json using that exact contract. The complete protocol is in these files; no runtime source search or theorem proof is required.';
+          if ((request.fidelityPolicy || direct) && !inlineContext && Buffer.byteLength(schemaText) <= INLINE_ROLE_CONTEXT_BYTES) {
+            message = 'Use the complete frozen output schema below. Read INPUT.json using the developer role protocol; ROLE.md and OUTPUT.schema.json need not be reread.\n'
+              + 'BEGIN OUTPUT.schema.json\n' + schemaText + '\nEND OUTPUT.schema.json';
+            const navigation = snapshotNavigation(role, input);
+            if (navigation) message += '\nThe following host navigation index copies the snapshot digest, Lean source, complete target types, bindings and omitted-name lists. It is not the complete input or a semantic verdict. Read the required kernel, local-definition and actual-instance observations at the listed INPUT.json paths using the role protocol before judging. Use exact qualified target names in your descriptions rather than ambiguous target numbers.\n'
+              + 'BEGIN SNAPSHOT INDEX\n' + navigation + '\nEND SNAPSHOT INDEX';
+          }
+          if (request.fidelityPolicy && Number.isFinite(remaining())) message =
+            `The complete formalization pipeline has ${Math.max(0, Math.ceil(remaining() / 1000))} seconds remaining, shared with generation, Lean compilation, backtranslation and independent review. Submit the smallest complete result for your role.\n` + message;
           while (true) {
             lease.signal.throwIfAborted();
             const budget = buildTokenBudget(request.maxTotalTokens, state.sessions);
@@ -539,6 +671,7 @@ export async function runFormalization(directory: string, root: string, options:
             if (remaining() <= 0) throw new Error('formalization_time_limit');
             const budget = buildTokenBudget(request.maxTotalTokens, state.sessions);
             if (!modelDispatchAllowed(budget)) throw new Error(budget.reason ?? 'formalization_token_limit');
+            if (args[4]?.retryWhen?.() === false) throw cause;
             state.error = errorText(cause); save(); event('formalization_role_retrying', args[0], state.error);
             // This is a delay cap, not an attempt/time/token limit. Only this role
             // repeats, in a fresh isolated thread, with its input unchanged.
@@ -547,6 +680,8 @@ export async function runFormalization(directory: string, root: string, options:
             const cap = Math.min(30_000, 1000 * 2 ** Math.min(attempt, 5), remaining());
             const delay = Math.max(1, Math.round(cap * (0.5 + Math.random() * 0.5)));
             await (options.waitForRetry ?? ((ms, signal) => wait(ms, undefined, { signal })))(delay, lease.signal);
+            // A peer can submit a valid change request during this backoff.
+            if (args[4]?.retryWhen?.() === false) throw cause;
           }
         }
       };
@@ -620,6 +755,18 @@ export async function runFormalization(directory: string, root: string, options:
         }
         if (state.status === 'approved') throw new Error('formalization_approved_artifact_missing');
         state.status = 'running'; delete state.error; save();
+        if (request.execution === 'model' && (direct || request.workflow && request.fidelityPolicy) && request.environment !== 'standard') {
+          event('formalization_packages_preparing');
+          // Attach the rejection handler immediately. Preparation shares the run
+          // deadline, and its private mount is released before a role uses the cache.
+          packagePreparation = (options.preparePackages ?? warmFormalizationPackages)(request.environment, {
+            env, signal: packageController.signal,
+            ...(Number.isFinite(remaining()) ? { deadlineAt: Date.now() + Math.max(1, remaining()) } : {}),
+          }).then(() => { event('formalization_packages_ready'); return { ok: true as const }; }, cause => {
+            if (!packageController.signal.aborted) { packageFailure = { cause }; controller.abort(); }
+            return { ok: false as const, cause };
+          });
+        }
         while (state.activeRound || request.maxRounds === 0 || state.rounds < request.maxRounds) {
           lease.signal.throwIfAborted();
           if (remaining() <= 0) throw new Error('formalization_time_limit');
@@ -671,6 +818,9 @@ export async function runFormalization(directory: string, root: string, options:
               }
               if (!planning) throw new Error('formalization_planning_exhausted: ' + planningFeedback);
             }
+            // Retrieval can execute Lean too, so it must join the preparation
+            // before either symbol lookup or the generation role starts.
+            await awaitPackages();
             let retrieval;
             if (request.retrieval) {
               try {
@@ -686,6 +836,7 @@ export async function runFormalization(directory: string, root: string, options:
                   retrieval = await retrieveFormalizationPlan(directory, request.retrieval, planning!.output, {
                     directory: fs.existsSync(base) ? base + '-' + crypto.randomUUID() : base, env, signal: lease.signal,
                     timeoutMs: Number.isFinite(stageTimeout(request.maxCompileSeconds)) ? stageTimeout(request.maxCompileSeconds) : 0,
+                    proofEnvironmentCacheRoot: DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT,
                     lookupSymbols: options.lookupSymbols,
                   });
                   saveStageCheckpoint('retrieval', retrieval);
@@ -700,6 +851,8 @@ export async function runFormalization(directory: string, root: string, options:
               ...(retrieval ? { retrieval } : {}), ...exemplars };
             const generated = await dispatch('generate', roundDirectory, generationInput, formalizationDigest(generationInput));
             const generatedCandidate = formalizationCandidateSchema.parse(generated.output);
+            // Admission may reject before erasure; retain the original direct candidate for the next repair round.
+            if (direct) state.previousCandidate = generatedCandidate;
             if (!generated.record.candidateCounted) {
               state.generatedCandidates = (state.generatedCandidates ?? 0) + 1;
               generated.record.candidateCounted = true; save();
@@ -734,7 +887,8 @@ export async function runFormalization(directory: string, root: string, options:
               throw new Error('formalization_context_incomplete');
             if (structured) {
               const contexts = parseLeanStatementContexts(JSON.stringify(snapshot.targets.map(target =>
-                ({ id: target.name, context: target.context }))), snapshot.targets.map(target => target.name));
+                ({ id: target.name, context: target.context }))), snapshot.targets.map(target => target.name),
+                { boundedLibraryContext });
               if ([...contexts.values()].some(context => !context.bindings)) throw new Error('formalization_context_missing_bindings');
               if (semanticContext && [...contexts.values()].some(context => !context.semantic))
                 throw new Error('formalization_context_missing_semantic_context');
@@ -747,6 +901,27 @@ export async function runFormalization(directory: string, root: string, options:
               if (missing.length) throw new Error(nameCompatibilityRejection(missing, request.compatibility.provenance));
             }
             const inputDigest = formalizationInputDigest(request, candidate);
+            if (direct) {
+              const finalUsage = buildTokenBudget(request.maxTotalTokens, state.sessions);
+              if (finalUsage.status === 'usage-unavailable') throw new Error(finalUsage.reason);
+              const record = generated.record;
+              const evidence = directFormalizationEvidenceSchema.parse({
+                schema: 'theorem-os.formalization-evidence.v4', status: 'approved', authority: 'compiler',
+                method: 'generation-and-compilation', semanticReview: 'not-performed', execution: request.execution,
+                modelInvoked: request.execution === 'model', proofVerified: false,
+                request, requestDigest, candidate, inputDigest, sourceSha256: elaborated.sourceSha256, targets: elaborated.targets,
+                generation: { input: generationInput, output: generatedCandidate }, snapshot, snapshotDigest, compilation: elaborated.compilation,
+                sessions: [{ role: 'generate', threadId: record.threadId!, turnId: record.turnId!, status: record.status as 'completed' | 'submitted',
+                  ...(record.completionReason ? { completionReason: record.completionReason } : {}),
+                  inputDigest: record.inputDigest, outputDigest: record.outputDigest!, model: record.model, effort: record.effort, usage: record.usage }],
+                approvedAt: new Date().toISOString(), round: state.rounds,
+              });
+              writeFormalizationArtifact(directory, evidence);
+              const seed = bootstrapFormalizedProblem(directory);
+              state.status = 'approved'; delete state.error; delete state.feedback; delete state.activeRound; save();
+              event('formalization_approved');
+              return { ...summary(), ...seed };
+            }
             let translated: Awaited<ReturnType<typeof dispatch>>;
             if (request.falsification) {
               // The refuter runs beside the backtranslator; a terminal failure of either ends the other.
@@ -774,6 +949,9 @@ export async function runFormalization(directory: string, root: string, options:
                 canonicalMathJson(translation.targets.map(item => item.name).sort()) !== canonicalMathJson(elaborated.targets.map(item => item.name).sort()))
               throw new Error('formalization_translation_identity_mismatch');
             const reviewers = request.workflow?.reviewers ?? [{ id: undefined }];
+            const compareFidelity = shareFormalizationFidelityComparisons({ env, signal: lease.signal }, options.compareReference);
+            let revisionRequested = false;
+            const deferredReviews: { reviewerId?: string; error: string }[] = [];
             const runReviewer = async (reviewer: typeof reviewers[number]) => {
               const binding = { inputDigest, snapshotDigest, translationDigest,
                 ...(planning ? { planDigest: planning.digest, reviewerId: reviewer.id } : {}) };
@@ -781,7 +959,7 @@ export async function runFormalization(directory: string, root: string, options:
                 planning ? { planDigest: planning.digest, reviewerId: reviewer.id } : undefined) :
                 { original: request.statement, notes: candidate, snapshot, translation, ...binding, ...(planning ? { plan: planning.output } : {}) };
               const compared = await dispatch('compare', roundDirectory, compareInput, structured ? formalizationDigest(compareInput) : formalizationDigest(binding),
-              reviewer.id ? { reviewerId: reviewer.id } : undefined);
+              reviewer.id ? { reviewerId: reviewer.id, retryWhen: () => !revisionRequested } : undefined);
               const review = structured ? assertStructuredSemanticReview(compareInput as StructuredReviewInput, compared.output) :
                 formalizationReviewSchema.parse(compared.output);
               if (!structured && ('snapshotDigest' in review && (review.inputDigest !== inputDigest ||
@@ -791,7 +969,9 @@ export async function runFormalization(directory: string, root: string, options:
                 path.join(roundDirectory, 'fidelity-' + (reviewer.id ?? 'reviewer')), compareInput as StructuredReviewInput, review as
                   import('../math/formalizationSemanticReview').StructuredSemanticReview,
                 { env, signal: lease.signal, timeoutMs: Number.isFinite(stageTimeout(request.maxCompileSeconds)) ?
-                  stageTimeout(request.maxCompileSeconds) : 0, compareReference: options.compareReference }) : undefined;
+                  stageTimeout(request.maxCompileSeconds) : 0, compareReference: compareFidelity }) : undefined;
+              if (request.fidelityPolicy && request.workflow?.reviewScheduling === 'parallel' && review.verdict === 'changes_requested')
+                revisionRequested = true;
               return { compared, review, reviewerId: reviewer.id, ...(correspondence ? { correspondence } : {}) };
             };
             const comparisons = [];
@@ -803,6 +983,11 @@ export async function runFormalization(directory: string, root: string, options:
               const settled = await Promise.allSettled(reviewers.map(async reviewer => {
                 try { return await runReviewer(reviewer); }
                 catch (cause) {
+                  if (!lease.signal.aborted && revisionRequested && retryableRoleFailure(cause)) {
+                    deferredReviews.push({ reviewerId: reviewer.id, error: errorText(cause) });
+                    event('formalization_review_retry_deferred', 'compare', reviewer.id);
+                    throw cause;
+                  }
                   if (!lease.signal.aborted && (cause instanceof FormalizationRoleFailure || infrastructureFailure(errorText(cause)) ||
                       !modelDispatchAllowed(buildTokenBudget(request.maxTotalTokens, state.sessions)))) {
                     terminalFailure ??= { cause }; controller.abort();
@@ -812,22 +997,26 @@ export async function runFormalization(directory: string, root: string, options:
               }));
               if (terminalFailure) throw terminalFailure.cause;
               for (const result of settled) if (result.status === 'fulfilled') comparisons.push(result.value);
-              const failure = settled.find(result => result.status === 'rejected');
+              const failure = settled.find((result, index) => result.status === 'rejected' &&
+                !deferredReviews.some(item => item.reviewerId === reviewers[index]!.id));
               if (failure?.status === 'rejected') throw failure.reason;
             } else for (const reviewer of reviewers) comparisons.push(await runReviewer(reviewer));
             lease.signal.throwIfAborted();
-            // Ask every frozen reviewer before deciding, so disagreements remain observable.
+            // Both reviewers run. Once a valid change request exists, a failed
+            // sibling need not retry. An incomplete panel can only request revision.
             const rejected = comparisons.filter(item => item.review.verdict !== 'approved' || !structured && (item.review.issues.length ||
               Object.values(item.review.checks).some(value => !value)));
-            const decision = structured ? resolveStructuredReviewPanel(comparisons.map(item => item.review)) : undefined;
+            const decision = structured && !deferredReviews.length ? resolveStructuredReviewPanel(comparisons.map(item => item.review)) : undefined;
             writeMathJsonDurable(path.join(roundDirectory, 'reviews.json'), {
-              policy: 'all-approve', agreement: rejected.length === 0 ? 'unanimous-approval' :
+              policy: 'all-approve', agreement: deferredReviews.length ? 'incomplete' : rejected.length === 0 ? 'unanimous-approval' :
                 rejected.length === comparisons.length ? 'no-approval' : 'disagreement',
+              ...(deferredReviews.length ? { deferredReviews } : {}),
               ...(decision ? { protocol: STRUCTURED_REVIEW_PROTOCOL, decision } : {}),
               reviews: comparisons.map(({ review, reviewerId, correspondence }) => ({ reviewerId, review,
                 ...(correspondence ? { correspondence } : {}) })) });
-            if (rejected.length) { semanticallyRejected = !structured || decision.verdict === 'changes_requested';
-              throw new Error((decision?.verdict === 'unknown' ? 'formalization_semantic_unknown: ' : 'formalization_semantic_changes_requested: ') +
+            if (rejected.length) { semanticallyRejected = !structured || decision?.verdict === 'changes_requested';
+              throw new Error((deferredReviews.length ? 'formalization_review_revision_requested: ' :
+                decision?.verdict === 'unknown' ? 'formalization_semantic_unknown: ' : 'formalization_semantic_changes_requested: ') +
               rejected.map(item => (item.reviewerId ?? 'reviewer') + ': ' + item.review.verdict + ': ' + item.review.summary + '\n' +
                 (structured ? item.review.correspondences.filter(evidence => evidence.relation === 'mismatch' || evidence.relation === 'unresolved')
                   .map(evidence => evidence.aspect + ': ' + evidence.explanation + (evidence.mismatchEvidence ?
@@ -906,7 +1095,10 @@ export async function runFormalization(directory: string, root: string, options:
             if (lease.signal.aborted || !modelDispatchAllowed(buildTokenBudget(request.maxTotalTokens, state.sessions)) ||
                 cause instanceof FormalizationRoleFailure || state.error.includes('formalization_plan_task_kind_unsupported') || infrastructureFailure(state.error) ||
                 /formalization_role_incomplete:failed:(?:unauthorized|badRequest|misalignmentPolicyViolation|cyberPolicy)/u.test(state.error)) throw cause;
-            state.feedback = state.error; delete state.activeRound; save();
+            state.feedback = state.error;
+            if (direct && state.error.startsWith('formalization_unsupported_declaration'))
+              state.feedback += '\nUse only imports, namespaces, sections, variable/universe declarations and ordinary named def/abbrev/instance/theorem/lemma declarations. Replace structure or inductive declarations with ordinary predicates or existential quantifiers; do not use custom notation or metaprogramming.';
+            delete state.activeRound; save();
             // Another round is pointless once consecutive unknown verdicts prove
             // the ambiguity survives fresh candidates, and an unlimited round
             // budget would otherwise never end the run.
@@ -917,9 +1109,13 @@ export async function runFormalization(directory: string, root: string, options:
         state.status = 'exhausted'; save();
         return summary();
       } catch (cause) {
-        state.status = 'stopped'; state.error = errorText(cause); save();
+        state.status = 'stopped'; state.error = packageFailure ?
+          'formalization_sandbox_packages_failed: ' + errorText(packageFailure.cause) : errorText(cause); save();
         return summary();
-      } finally { cancelTimer?.(); save(false); }
+      } finally {
+        cancelTimer?.(); packageController.abort(); await packagePreparation;
+        lease.signal.removeEventListener('abort', abortPackages); save(false);
+      }
     });
   } catch (cause) {
     // A requested cancellation releases the lease after its operation has saved

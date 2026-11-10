@@ -45,6 +45,42 @@ function run(patch: Partial<WebRun> = {}): WebRun {
 }
 
 describe('solving process', () => {
+  it('shows direct formalization approval as compilation without inventing independent review', () => {
+    const process = buildSolveProcess({ formalization: formalization({ reviewMode: 'direct' }), activity: [
+      entry(2, { type: 'step', step: { round: 1, step: 'role', workerId: 'r1-generate', role: 'generate', slot: 'generate', state: 'finished' } }),
+      entry(3, { type: 'step', step: { round: 1, step: 'compile', state: 'started', source: 'theorem one : 1 + 1 = 2 := by sorry' } }),
+      entry(4, { type: 'step', step: { round: 1, step: 'compile', state: 'passed', lean: lean(true), targets: ['one'] } }),
+      entry(4, { type: 'step', step: { round: 1, step: 'approved' } }),
+    ] });
+    const stage = process.stages[0]!;
+    expect(stage.tone).toBe('done');
+    expect(stage.rows.at(-1)!.label).toBe('Lean 编译通过');
+    expect(JSON.stringify(stage)).not.toContain('审核');
+    expect(JSON.stringify(stage)).not.toContain('回译');
+    expect(process.checks.map(check => check.state)).toEqual(['passed']);
+    expect(process.stages.find(stage => stage.id === 'verify')!.tone).toBe('pending');
+  });
+
+  it('uses only generation and compilation in a direct fallback with no recorded activity', () => {
+    const direct = buildSolveProcess({ formalization: formalization({ reviewMode: 'direct' }) });
+    expect(direct.stages[0]!.rows.map(row => [row.label, row.tone])).toEqual([
+      ['写 Lean 陈述', 'done'], ['编译检查', 'done'],
+    ]);
+    const legacy = buildSolveProcess({ formalization: formalization() });
+    expect(legacy.stages[0]!.rows.map(row => row.label)).toEqual([
+      '理解题目', '写 Lean 陈述', '编译检查', '独立回译', '审核与原题是否一致',
+    ]);
+  });
+
+  it('describes a direct accepted run as a proof of its frozen Lean statement', () => {
+    const original = run(), accepted = run({ status: 'completed', phase: 'finished',
+      formalization: { ...original.formalization!, reviewMode: 'direct' },
+      result: { status: 'evaluated_passed', proof: 'theorem one : 1 + 1 = 2 := by norm_num', report: {} } });
+    const process = buildSolveProcess({ run: accepted });
+    expect(process.state).toBe('accepted'); expect(process.label).toBe('Lean 陈述证明通过');
+    expect(process.stages.find(stage => stage.id === 'verify')!.rows[0]!.label).toBe('在干净环境里重新检查完整 Lean 陈述');
+  });
+
   it('reads a formalization round by round, with its compile and the feedback between them', () => {
     const process = buildSolveProcess({ formalization: formalization(), activity: activity() });
     const stage = process.stages[0]!;

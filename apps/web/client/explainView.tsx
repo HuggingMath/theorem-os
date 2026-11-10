@@ -46,7 +46,7 @@ const unavailable: Record<string, string> = {
   sample: t('示例运行只读，不能生成讲解。'), not_accepted: t('只有通过独立验收的运行可以生成讲解。'),
   provider: t('证明讲解目前只支持 Sub2API 模型服务。'), model: t('证明讲解目前只支持 deepseek-flash 模型。'), runtime: t('当前服务不提供证明讲解。'),
 };
-const hours = (seconds: number) => seconds >= 3600 ? t('约 {0} 小时', (seconds / 3600).toFixed(1)) : t('约 {0} 分钟', Math.max(1, Math.round(seconds / 60)));
+const hours = (seconds: number) => seconds === 0 ? t('不限') : seconds >= 3600 ? t('约 {0} 小时', (seconds / 3600).toFixed(1)) : t('约 {0} 分钟', Math.max(1, Math.round(seconds / 60)));
 export const linesLabel = (lines: readonly WebExplanationLines[]) =>
   t('第 {0} 行', lines.map(item => item.start === item.end ? String(item.start) : `${item.start}–${item.end}`).join(', '));
 const Fact = (props: { label: string; value: string; mono?: boolean; wide?: boolean }) => <div class={props.wide ? 'explain-fact-wide' : undefined}><dt>{props.label}</dt><dd class={props.mono ? 'mono' : undefined}>{props.value}</dd></div>;
@@ -131,7 +131,7 @@ function ProgressView({ explanation, now }: { explanation: WebExplanation; now: 
       {explanation.queue && <Fact label={t('排队位置')} value={t('前面 {0} 份', explanation.queue.ahead)} />}
       {progress?.batches !== undefined && <Fact label={t('已通过批次')} value={`${progress.approvedBatches ?? 0}/${progress.batches}`} mono />}
       {progress?.round !== undefined && <Fact label={t('审核轮次')} value={t('第 {0} 轮', progress.round)} />}
-      <Fact label={t('Token 用量')} value={`${formatTokens(progress?.tokens ?? 0)} / ${formatTokens(explanation.maxTotalTokens)}`} mono />
+      <Fact label={t('Token 用量')} value={`${formatTokens(progress?.tokens ?? 0)} / ${explanation.maxTotalTokens ? formatTokens(explanation.maxTotalTokens) : t('不限')}`} mono />
       <Fact label={t('时间上限')} value={hours(explanation.maxRunSeconds)} />
     </dl>
     <button type="button" class="button button-danger" data-action="cancel">{fill(t('{0}停止生成'), <Icon name="square" />)}</button>
@@ -287,7 +287,7 @@ function Dialog(view: ExplainView) {
           <Fact label={t('模型')} value={`${generation.model} · ${effortLabels[generation.effort]}`} mono />
           <Fact label={t('预计时间')} value={hours(estimate.seconds)} />
           <Fact label={t('预计 Token')} value={formatTokens(estimate.tokens)} mono />
-          <Fact label={t('上限')} value={t('{0} · {1} Token', hours(generation.maxRunSeconds), formatTokens(generation.maxTotalTokens))} />
+          <Fact label={t('上限')} value={t('{0} · {1} Token', hours(generation.maxRunSeconds), generation.maxTotalTokens ? formatTokens(generation.maxTotalTokens) : t('不限'))} />
         </dl>
         <p class="field-note explain-dialog-note">{t('按 {0} 个声明估算：参考运行 {1} 个声明用了{2}和 {3} Token。实际用量取决于证明长度和审核轮数。',
           declarations, reference.declarations, hours(reference.seconds), formatTokens(reference.tokens))}</p>
