@@ -67,8 +67,9 @@ describe('mathematical walkthroughs of accepted classic proofs', () => {
     }
   });
 
-  it('renders the complete derivation before the task map, including exact source excerpts and links', () => {
-    for (const record of explainedRecords()) for (const locale of ['zh', 'en'] as const) {
+  it.each(records.filter(record => record.process?.walkthrough).flatMap(record =>
+    (['zh', 'en'] as const).map(locale => ({ record, locale, id: record.id }))))(
+    'renders the complete derivation before the task map, including exact source excerpts and links: $id / $locale', ({ record, locale }) => {
       const process = record.process!, walkthrough = process.walkthrough!;
       const index = archiveIndex({ schema: 'theoremos.public-archive.v1', repository: '', archiveRevision: '', snapshotAt: '', records: [record] }).records[0];
       const output = renderGlobalTrajectory(index, process, locale, value => value ?? '');
@@ -100,7 +101,6 @@ describe('mathematical walkthroughs of accepted classic proofs', () => {
         expect(historical).not.toContain('data-proof-walkthrough=');
         expect(historical).not.toContain('data-global-code="source"');
       }
-    }
   });
 
   it('refuses a walkthrough attached to another run or changed proof bytes', () => {
