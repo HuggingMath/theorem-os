@@ -11,10 +11,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, epilog=(
         'Names are exact and case-sensitive. Queries are literal, case-insensitive '
         'substrings of installed declaration names, not mathematical or proof search. '
+        'Queries return names and module metadata only; use --name for full types and fields. '
         'Batch related lookups in one invocation. No match does not establish that '
         'a mathematical concept is absent. Types are advisory, not proof acceptance.'))
-    parser.add_argument('--name', action='append', default=[], help='Exact qualified Lean name (repeatable, up to 32).')
-    parser.add_argument('--query', action='append', default=[], help='Name fragment (repeatable, up to 8).')
+    parser.add_argument('--name', action='append', default=[], help='Exact name to inspect full types and fields (repeatable, up to 32).')
+    parser.add_argument('--query', action='append', default=[], help='Name fragment to discover names and module metadata (repeatable, up to 8).')
     parser.add_argument('--limit', type=int, default=4, help='Matches per query, 1..8 (default 4).')
     args = parser.parse_args()
     if not args.name and not args.query:
