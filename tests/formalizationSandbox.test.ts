@@ -163,16 +163,45 @@ print('independent snapshots passed')`);
     expect(result).toMatchObject({ status: 0, stdout: 'independent snapshots passed\n', stderr: '' });
   });
 
-  it('batches real standard-library types and bounded case-insensitive name discovery in the namespace', async () => {
+  it('discovers bounded standard-library metadata before explicitly requesting full types in the namespace', async () => {
     const f = fixture(), sandbox = await prepare(f), missing = 'Nat.missing_library_api_fixture';
-    const result = await runCommand(sandbox, ['/usr/bin/python3', '-I', '/opt/formalization/library-api.py',
-      '--name', 'Nat.add_zero', '--name', 'Nat', '--name', 'Inhabited', '--name', missing,
-      '--name', 'nat.add_zero', '--name', 'Nat.add_zero',
+    const command = ['/usr/bin/python3', '-I', '/opt/formalization/library-api.py'];
+    const discovery = await runCommand(sandbox, [...command,
       '--query', 'Fin.cast', '--query', 'fIN.CAST', '--query', 'NAT.ADD_ZERO', '--query', missing, '--limit', '2'], '', 95_000);
+    expect(discovery.status, discovery.stderr + discovery.stdout).toBe(0); expect(discovery.stderr).toBe('');
+    const discovered = JSON.parse(discovery.stdout), config = getLeanTaskEnvironment('standard');
+    const identity = { schema: 'theorem-os.library-api.v2', authority: 'advisory-lean-process', environment: 'standard',
+      toolchain: config.toolchain, environmentDigest: config.dependencyDigest, mathlibRevision: null };
+    expect(discovered).toMatchObject(identity); expect(discovered.symbols).toEqual([]);
+    const [upper, lower, exact, absent] = discovered.queries;
+    expect(discovered.queries).toHaveLength(4); expect(upper.query).toBe('Fin.cast'); expect(lower.query).toBe('fIN.CAST');
+    expect(upper.names).toHaveLength(2); expect(upper.totalMatches).toBeGreaterThan(2); expect(upper.truncated).toBe(true);
+    expect(lower).toEqual({ ...upper, query: 'fIN.CAST' });
+    for (const query of discovered.queries) {
+      expect(query.matches.map((match: any) => match.name)).toEqual(query.names);
+      for (const match of query.matches) {
+        expect(match).toEqual({ name: expect.any(String), module: expect.any(String), kind: expect.any(String),
+          class: expect.any(Boolean), structure: expect.any(Boolean) });
+        expect(match.module).not.toBe(''); expect(match.kind).not.toBe('');
+        expect(match).not.toHaveProperty('type'); expect(match).not.toHaveProperty('fields');
+      }
+    }
+    for (const name of upper.names) expect(name.toLowerCase()).toContain('fin.cast');
+    expect(exact.names[0]).toBe('Nat.add_zero');
+    expect(exact.matches[0]).toMatchObject({ name: 'Nat.add_zero', kind: 'theorem', class: false, structure: false });
+    expect(absent).toEqual({ query: missing, totalMatches: 0, truncated: false, names: [], matches: [] });
+
+    const names = ['Nat.add_zero', 'Nat', 'Inhabited', missing, 'nat.add_zero', upper.names[0], 'Nat.add_zero'];
+    const result = await runCommand(sandbox, [...command, ...names.flatMap(name => ['--name', name]),
+      '--query', 'Fin.cast', '--limit', '2'], '', 95_000);
     expect(result.status, result.stderr + result.stdout).toBe(0); expect(result.stderr).toBe('');
-    const packet = JSON.parse(result.stdout), config = getLeanTaskEnvironment('standard');
-    expect(packet).toMatchObject({ schema: 'theorem-os.library-api.v1', environment: 'standard',
-      toolchain: config.toolchain, environmentDigest: config.dependencyDigest, mathlibRevision: null });
+    const packet = JSON.parse(result.stdout);
+    expect(packet).toMatchObject(identity);
+    expect(packet.symbols.map((symbol: any) => symbol.name)).toEqual([...new Set(names)]);
+    expect(packet.queries).toEqual([upper]);
+    const inspected = packet.symbols.find((symbol: any) => symbol.name === upper.names[0]);
+    expect(inspected).toMatchObject({ ...upper.matches[0], exists: true, type: expect.any(String), fields: expect.any(Array) });
+    expect(inspected.type.trim()).not.toBe('');
     const addition = packet.symbols.find((item: any) => item.name === 'Nat.add_zero');
     expect(addition).toMatchObject({ exists: true, kind: 'theorem', class: false, structure: false, fields: [] });
     expect(addition.module).toMatch(/^Init(?:\.|$)/u); expect(addition.type).toContain('Nat'); expect(addition.type).toContain('Eq');
@@ -187,16 +216,6 @@ print('independent snapshots passed')`);
       expect(symbol).not.toHaveProperty('value'); expect(symbol).not.toHaveProperty('proof');
       if (symbol.exists) expect(symbol.type).not.toContain('⋯');
     }
-    const [upper, lower, exact, absent] = packet.queries;
-    expect(packet.queries).toHaveLength(4); expect(upper.query).toBe('Fin.cast'); expect(lower.query).toBe('fIN.CAST');
-    expect(upper.names).toHaveLength(2); expect(upper.totalMatches).toBeGreaterThan(2); expect(upper.truncated).toBe(true);
-    expect(lower).toEqual({ ...upper, query: 'fIN.CAST' });
-    for (const name of upper.names) {
-      expect(name.toLowerCase()).toContain('fin.cast');
-      expect(packet.symbols.find((item: any) => item.name === name)?.exists).toBe(true);
-    }
-    expect(exact.names[0]).toBe('Nat.add_zero');
-    expect(absent).toEqual({ query: missing, totalMatches: 0, truncated: false, names: [] });
     expect(fs.readdirSync(f.workspace).sort()).toEqual(protocolFiles.map(file => file.name).sort());
     expect(observed).toEqual([]);
   }, 100_000);
