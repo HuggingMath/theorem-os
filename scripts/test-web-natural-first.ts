@@ -85,6 +85,8 @@ try {
     assert.equal(new URL(page.url()).search, '?sample');
     assert.equal(await page.locator('[data-chat-share]').count(), 0);
     assert.equal(await page.locator('#formalize-start').isDisabled(), true);
+    assert.equal(await page.locator('[data-first-research-start], [data-chat-participation]').count(), 0,
+      'A read-only sample must not display new-submission setup over the recorded result');
     await page.locator('[data-research-artifact="result"]').click();
     await page.locator('.result-verdict').waitFor();
     assert.equal(writes.length, 0, 'Opening the sample and its acceptance report creates no paid task');
@@ -106,7 +108,7 @@ try {
       assert.equal(await page.locator('#formalize-model').inputValue(), 'deepseek-flash');
       const budgetFields = ['#formalize-minutes', '#formalize-tokens', '#research-minutes', '#research-tokens', '#research-turns'];
       for (const selector of budgetFields) assert.equal(await page.locator(selector).inputValue(), '', `${selector} defaults to unlimited`);
-      assert.match(await page.locator('[data-chat-budget]').innerText(), /形式化时间：不限.*随后证明时间：不限/u);
+      assert.match(await page.locator('[data-chat-budget]').innerText(), /形式化[\s\S]*不限[\s\S]*证明[\s\S]*不限/u);
       await page.locator('#formalize-key').fill('gateway-key-to-clear');
       await page.locator('#formalize-provider').selectOption('openai');
       assert.equal(await page.locator('#formalize-key').inputValue(), '', 'A gateway key cannot accidentally be sent to OpenAI');
@@ -141,7 +143,7 @@ try {
       await page.locator('#research-minutes').fill('3');
       await page.locator('#research-turns').fill('4');
       assert.equal(await page.locator('#formalize-start').isEnabled(), true);
-      assert.match(await page.locator('[data-chat-budget]').innerText(), /4 分钟.*3 分钟/u);
+      assert.match(await page.locator('[data-chat-budget]').innerText(), /4 分钟[\s\S]*3 分钟/u);
       assert.equal(writes.length, 0, 'Connection checks and budget edits create no paid task');
       await page.locator('#formalize-provider').selectOption('sub2api');
       await page.locator('#formalize-original').fill('');

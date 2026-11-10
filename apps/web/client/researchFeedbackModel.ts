@@ -11,6 +11,7 @@ export function feedbackTaskRefs(feedback: ResearchFeedback) {
 }
 
 export function feedbackNeedsAttention(feedback: ResearchFeedback) {
+  if (feedback.supersededBy || feedback.continuation?.action === 'end' || feedback.candidateDelivery?.status === 'withdrawn') return false;
   return ['failed', 'deferred', 'unknown'].includes(feedback.delivery.status)
     || ['pending', 'not-recorded', 'needs-info'].includes(feedback.decision.status)
     || feedback.execution.status === 'failed' || feedback.proofCheck?.status === 'failed';
@@ -26,7 +27,8 @@ export function matchesFeedbackScope(feedback: ResearchFeedback, scope: Feedback
 export function matchesFeedbackStatus(feedback: ResearchFeedback, status: FeedbackStatus) {
   switch (status) {
     case 'attention': return feedbackNeedsAttention(feedback);
-    case 'pending': return ['pending', 'not-recorded'].includes(feedback.decision.status);
+    case 'pending': return !feedback.supersededBy && feedback.continuation?.action !== 'end' && feedback.candidateDelivery?.status !== 'withdrawn'
+      && ['pending', 'not-recorded'].includes(feedback.decision.status);
     case 'accepted': return feedback.decision.status === 'accepted';
     case 'executing': return feedback.execution.status === 'running';
     case 'completed': return feedback.execution.status === 'completed';

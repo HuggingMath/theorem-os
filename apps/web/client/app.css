@@ -3242,4 +3242,40 @@ button.formal-lean{vertical-align:top}
 @media (max-width: 520px) { .research-space-links a:nth-child(2) { display: none; } }
 @media (max-width: 600px) { .topbar .account-trigger { flex: 0 0 34px; padding: 0; justify-content: center; } }
 @media (min-width: 561px) and (max-width: 600px) { .topbar .brand { font-size: 16px; gap: 6px; } .topbar .brand img { width: 23px; height: 23px; } }
-@media (max-width: 360px) { .topbar { gap: 4px; padding-inline: 8px; } }
+@media (max-width: 360px) { .topbar { gap: 4px; padding-inline: 8px; } .topbar .research-space-links { display: none; } }
+
+/* First research: the connection, decisions and two budgets sit beside the problem. */
+.first-research-start{margin:4px 12px 10px;padding-top:14px;border-top:1px solid var(--line);font-size:13px;line-height:1.7;text-align:left}
+.first-research-stages{margin:0 0 12px;color:var(--ink)}
+.first-research-budget-top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px 12px;color:var(--muted)}
+.first-research-budget-top>div{display:flex;flex-wrap:wrap;gap:12px}.first-research-budget-top .text-button{min-height:36px}
+.first-research-budgets{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px 18px;margin:6px 0 10px}
+.first-research-budgets>div{min-width:0}.first-research-budgets dt{color:var(--muted);font-size:12px}.first-research-budgets dd{margin:2px 0;overflow-wrap:anywhere}
+.first-research-quota,.first-research-cost{margin:6px 0;color:var(--muted);font-size:12px;line-height:1.7}
+.first-research-connection{display:flex;align-items:center;justify-content:space-between;gap:12px;width:calc(100% - 24px);min-width:0;min-height:44px;margin:0 12px;padding:10px 0;border:0;border-top:1px solid var(--line);background:none;font:inherit;font-size:12px;text-align:left;color:var(--ink);cursor:pointer}
+.first-research-connection>span{min-width:0;overflow-wrap:anywhere}.first-research-connection>span:last-child{display:flex;align-items:center;gap:5px;color:var(--muted)}
+.first-research-connection svg{width:14px;height:14px;flex:none}.first-research-connection [data-status=error]{color:var(--red-700)!important}
+.first-research-setup-steps{display:flex;flex-wrap:wrap;gap:6px;margin:0;padding:0;list-style:none}.first-research-setup-steps li{flex:1;min-width:100px}
+.first-research-setup-steps button{display:flex;gap:7px;align-items:center;width:100%;min-height:44px;padding:6px;border:0;background:none;color:var(--muted);font:inherit;font-size:12px;text-align:left;cursor:pointer}
+.first-research-setup-steps button>span{font-variant-numeric:tabular-nums}.first-research-setup-steps button[aria-current=step]{color:var(--ink);box-shadow:inset 0 -2px var(--ink)}
+.first-research-setup-part{display:grid;gap:8px;min-width:0;padding:10px 0;border-bottom:1px solid var(--line)}
+.first-research-setup-part>label{display:grid;gap:6px;min-width:0}.first-research-setup-part input,.first-research-setup-part select{width:100%;min-width:0}.first-research-setup-part>.text-button{justify-self:start;min-height:36px}
+#natural-research .chat-composer #formalize-start.chat-send-start{width:auto;height:auto;min-height:42px;max-width:100%;padding:10px 14px;border-radius:10px;gap:8px;font-size:13px;line-height:1.5}
+#natural-research .chat-composer #formalize-start.chat-send-start span{white-space:normal;text-align:left}#natural-research .chat-composer #formalize-start.chat-send-start svg{flex:none;width:16px;height:16px}
+@media(max-width:480px){.first-research-budgets{grid-template-columns:1fr}.first-research-connection{align-items:flex-start;flex-direction:column;gap:2px}.chat-composer-toolbar:has(.chat-send-start){flex-wrap:wrap}.chat-send-start{margin-left:auto}}
+
+/* Shared proofs read as mathematical notes before their source and receipts. */
+.share-reading-nav{display:flex;flex-wrap:wrap;gap:6px 18px}.share-reading-nav button,.share-reading-contents button{min-height:44px;padding:4px 0;border:0;background:none;color:var(--ink);font:inherit;font-size:13px;cursor:pointer;text-align:left}
+.share-research-info{width:100%;font-size:13px;color:var(--muted)}.share-research-info>summary{min-height:36px;padding-block:8px;cursor:pointer}
+.share-reading-heading{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;margin-bottom:20px}
+.share-reading{min-width:0;font-size:15px;line-height:1.9;overflow-wrap:anywhere}.share-reading h3{font-size:18px;line-height:1.5;margin:26px 0 12px;font-weight:600}.share-reading h4{font-size:14px;line-height:1.6;margin:16px 0 8px;font-weight:600}.share-reading h5{font-size:13px;margin:12px 0 8px}.share-reading p{margin:8px 0 14px}.share-reading ul{padding-left:22px}
+.share-reading-conditions{margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--line)}.share-reading-conditions>h3{margin-top:0}.share-reading-select{display:grid;gap:8px;font-size:13px;max-width:100%;margin:0 0 20px}.share-reading-select select{min-width:0;max-width:100%;font:inherit;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink)}
+.share-reading-contents{display:flex;flex-wrap:wrap;gap:4px 20px;margin:18px 0 22px;padding-block:10px;border-block:1px solid var(--line)}.share-reading-contents button{color:var(--gray-600)}
+.share-reading-declaration+.share-reading-declaration{margin-top:34px;padding-top:12px;border-top:1px solid var(--line)}.share-reading-statement{margin-bottom:20px}.share-reading-declaration:target{scroll-margin-top:20px}
+.share-derivations,.share-recorded-tasks{list-style:none;padding:0;margin:18px 0}.share-derivations>li{margin:0;padding:14px 0 20px}.share-derivations>li+li{border-top:1px solid var(--line)}.share-derivations>li>h4{margin-top:0;color:var(--muted);font-size:13px}.share-recorded-tasks>li+li{margin-top:30px;padding-top:8px;border-top:1px solid var(--line)}
+.share-step-uses{color:var(--muted);font-size:13px}.share-step-uses .text-button{font-size:inherit;text-align:left;white-space:normal}.share-step-uses code{overflow-wrap:anywhere}
+.share-step-evidence{margin-top:14px;min-width:0;color:var(--gray-600);font-size:13px}.share-step-evidence>summary{min-height:44px;padding:10px 0;cursor:pointer}.share-step-evidence pre{max-width:100%;max-height:420px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:16px;margin:10px 0 16px;background:var(--gray-50);border:1px solid var(--line);border-radius:8px;font:12px/1.9 var(--mono);color:var(--ink)}.share-step-evidence p code{font-size:11px;overflow-wrap:anywhere}
+.share-goal-changes{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}.share-goal-changes>div{min-width:0}.share-reading-coverage{color:var(--muted);font-size:13px;line-height:1.8}.share-reading .solution-route{margin-inline:-12px}.share-reading .solution-route-heading h3{margin:0}
+@media(max-width:600px){.share-content>.share-reading-container{padding:22px 18px}.share-reading{font-size:14px}.share-reading-heading{align-items:flex-start}.share-reading-heading>.source-switch{width:100%;display:flex}.share-reading-heading>.source-switch button{flex:1;min-height:44px}.share-goal-changes{grid-template-columns:1fr}.share-reading-contents{gap:2px 16px}.share-reading .solution-route{margin-inline:-8px}}
+
+.chat-search-target{outline:2px solid var(--blue);outline-offset:7px;border-radius:6px}.chat-start-tools{font-size:12px;color:var(--muted);line-height:1.8}.chat-start-tools a{color:inherit}.frozen-task-dialog{width:min(960px,calc(100vw - 28px));max-height:90dvh;border:1px solid var(--line);border-radius:var(--radius-lg);background:var(--paper);color:var(--ink);padding:0}.frozen-task-view{padding:28px;overflow-wrap:anywhere}.frozen-task-view header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.frozen-task-view h2{font-size:20px;margin:4px 0}.frozen-task-view header p,.frozen-task-view dt{font-size:12px;color:var(--muted)}.frozen-task-view dd{margin:8px 0 18px;font:11px var(--mono);overflow-wrap:anywhere}.frozen-task-view pre{max-height:50dvh;overflow:auto;padding:20px;background:var(--card);border:1px solid var(--line);font:12px/1.8 var(--mono)}.frozen-task-view .button{display:inline-flex}.frozen-task-view code{overflow-wrap:anywhere}@media(max-width:500px){.frozen-task-view{padding:18px}.frozen-task-view pre{padding:12px}}

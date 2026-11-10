@@ -17,7 +17,7 @@ const bundle = (entry: string, directory: string) =>
   build({ entryPoints: [path.join(root, `apps/web/client/${entry}.ts`)], outfile: path.join(directory, `${entry}.js`),
     bundle: true, minify: true, target: 'es2023', platform: 'browser', legalComments: 'eof', logLevel: 'silent',
     jsx: 'automatic', jsxImportSource: 'preact', format: 'iife' });
-for (const entry of ['theme', 'app', 'login', 'share', 'guide', 'legal', 'explain', 'formalize', 'research']) await bundle(entry, output);
+for (const entry of ['theme', 'app', 'login', 'share', 'guide', 'legal', 'explain', 'formalize', 'research', 'practice']) await bundle(entry, output);
 // One classic script supports lazy formulas in online pages and self-contained offline reports.
 await bundle('math', output);
 await bundle('formalization', reports);
@@ -31,8 +31,10 @@ for (const [source, destination] of [['index.html', 'index.html'], ['login.html'
     + '\n' + fs.readFileSync(path.join(root, 'apps/web/math.css'), 'utf8'));
   else fs.copyFileSync(path.join(root, 'apps/web/client', source), path.join(output, destination));
 fs.mkdirSync(path.join(output, 'assets/fonts'), { recursive: true });
-for (const file of ['people.html', 'theorems.html', 'library.html', 'research.css'])
+for (const file of ['people.html', 'theorems.html', 'library.html', 'workspace.html', 'problem.html', 'practice.html', 'researchPractice.css'])
   fs.copyFileSync(path.join(root, 'apps/web/client', file), path.join(output, file));
+fs.writeFileSync(path.join(output, 'research.css'), ['research.css', 'collaborationFlow.css', 'researchCollections.css', 'researchWorkspace.css', 'researchProblem.css', 'researchLibraryTrials.css', 'researchCandidateContinuity.css']
+  .map(file => fs.readFileSync(path.join(root, 'apps/web/client', file), 'utf8')).join('\n'));
 const fonts = ['InterVariable-latin.woff2', 'Inter-LICENSE.txt', 'TheoremOSSerif-latin.woff2', 'Lora-OFL.txt', 'JetBrainsMono.woff2', 'JetBrainsMono-OFL.txt',
   'NotoSerifSC-ui.woff2', 'NotoSerifSC-ui-extra.woff2', 'NotoSerifSC-common.woff2', 'NotoSerifSC-OFL.txt', 'NotoSansSC-ui.woff2', 'NotoSansSC-ui-extra.woff2', 'NotoSansSC-common.woff2', 'NotoSansSC-OFL.txt'];
 for (const file of ['mark.svg', ...fonts.map(font => `fonts/${font}`)])

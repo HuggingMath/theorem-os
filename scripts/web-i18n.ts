@@ -27,6 +27,7 @@ const bilingualTables = new Map([
   ['apps/web/client/researchShared.tsx', 'statusNames'],
   ['apps/web/client/researchViews.tsx', 'pageNames'],
   ['apps/web/client/researchFeedback.tsx', 'statuses'],
+  ['apps/web/client/researchProblem.tsx', 'labels'],
 ]);
 
 /** Dictionary keys, plus interface text without a dictionary entry or an inline English counterpart. */
@@ -137,7 +138,7 @@ export function serverKeys() {
 export function errorKeys() {
   const keys = new Map<string, string>();
   const files = ['apps/web/conversations.ts', 'apps/web/formalizations.ts', 'apps/web/server.ts', 'apps/web/jobs.ts', 'apps/web/storage.ts', 'apps/web/auth.ts', 'apps/web/explain.ts', 'apps/web/quota.ts', 'apps/web/admission.ts', 'apps/web/providerCheck.ts',
-    'apps/web/runner.ts', 'apps/web/worker.ts', 'apps/web/moduleRegistry.ts', 'apps/web/knowledgeService.ts', 'apps/web/researchProjects.ts', 'apps/web/researchAssets.ts', 'apps/web/researchApi.ts', 'apps/web/researchMathematics.ts', 'apps/web/researchCandidateScope.ts', 'apps/web/researchAssetPrefill.ts'];
+    'apps/web/runner.ts', 'apps/web/worker.ts', 'apps/web/moduleRegistry.ts', 'apps/web/knowledgeService.ts', 'apps/web/researchProjects.ts', 'apps/web/researchAssets.ts', 'apps/web/researchApi.ts', 'apps/web/researchMathematics.ts', 'apps/web/researchCandidateScope.ts', 'apps/web/researchAssetPrefill.ts', 'apps/web/researchLibraryTrials.ts', 'apps/web/researchProblems.ts', 'apps/web/researchMathExamples.ts'];
   for (const relative of files) {
     const source = parse(path.join(root, relative));
     const add = (node: ts.Node, text: string) => {
@@ -153,7 +154,9 @@ export function errorKeys() {
     // service's table of provider statuses.
     const visit = (node: ts.Node) => {
       if (ts.isNewExpression(node) && /Error$/u.test(node.expression.getText(source))) node.arguments?.forEach(collect);
-      else if (['apps/web/researchAssets.ts', 'apps/web/researchApi.ts', 'apps/web/researchMathematics.ts', 'apps/web/researchAssetPrefill.ts'].includes(relative) && ts.isCallExpression(node) && node.expression.getText(source) === 'fail' && node.arguments[1]) collect(node.arguments[1]);
+      else if (['apps/web/researchAssets.ts', 'apps/web/researchApi.ts', 'apps/web/researchMathematics.ts', 'apps/web/researchAssetPrefill.ts', 'apps/web/researchLibraryTrials.ts'].includes(relative) && ts.isCallExpression(node) && node.expression.getText(source) === 'fail' && node.arguments[1]) collect(node.arguments[1]);
+      else if (relative === 'apps/web/researchLibraryTrials.ts' && ts.isPropertyAssignment(node) && ['incompatibility', 'error'].includes(node.name.getText(source))) collect(node.initializer);
+      else if (relative === 'apps/web/researchLibraryTrials.ts' && ts.isVariableDeclaration(node) && node.name.getText(source) === 'reason' && node.initializer) collect(node.initializer);
       else if (relative === 'apps/web/researchAssets.ts' && ts.isPropertyAssignment(node) && node.name.getText(source) === 'reason') collect(node.initializer);
       else if (relative === 'apps/web/researchApi.ts' && ts.isBinaryExpression(node) && node.left.getText(source) === 'reason') collect(node.right);
       else if (relative === 'apps/web/researchApi.ts' && ts.isVariableDeclaration(node) && node.name.getText(source) === 'reason' && node.initializer) collect(node.initializer);

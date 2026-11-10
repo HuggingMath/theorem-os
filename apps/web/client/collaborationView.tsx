@@ -369,10 +369,11 @@ export class CollaborationView {
     }
   }
   /** Open the current task, or an exact version's inspector (including its missing state); false when the run is not shown. */
-  showTask(runId: string, taskId: string, version?: string): boolean {
+  showTask(runId: string, taskId: string, version?: string, commit?: string, reveal = true): boolean {
     const view = this.views.get(runId);
     if (!view || this.current !== view || !view.observation || version === undefined && !view.observation.inspection.tasks.some(task => task.id === taskId)) return false;
-    this.selectTask(view, taskId, version, true);
+    this.selectTask(view, taskId, version, reveal);
+    if (commit && version) void this.readSource(runId, view, taskId, version, undefined, commit);
     return true;
   }
   private selectedTaskRecord(view: ViewState) {
@@ -791,14 +792,15 @@ export class CollaborationView {
     if (this.current === view) { view.navigation.reveal(heading); heading.focus({ preventScroll: true }); }
     return (body: VNode) => this.renderArtifact(view, { title, body });
   }
-  private async readSource(runId:string,view:ViewState,taskId:string,version:string,snapshotKey?:string) {
+  private async readSource(runId:string,view:ViewState,taskId:string,version:string,snapshotKey?:string,commit?:string) {
     const request=++view.artifactRequest; view.sourceComparison = undefined;
     const show = this.beginArtifact(view, t('源码 · {0}', taskId), t('正在读取版本固定的源码'));
     try {
-      const recorded = snapshotKey ? view.observation?.sources.find(source => source.taskId === taskId && source.taskVersion === version && taskSourceKey(source) === snapshotKey) : undefined;
-      const source = recorded ?? (await this.api<{source:WebTaskSource}>(`/api/runs/${encodeURIComponent(runId)}/tasks/${encodeURIComponent(taskId)}/source?version=${encodeURIComponent(version)}`)).source;
+      const recorded = view.observation?.sources.find(source => source.taskId === taskId && source.taskVersion === version
+        && (snapshotKey ? taskSourceKey(source) === snapshotKey : commit ? source.commit === commit : false));
+      const source = recorded ?? (await this.api<{source:WebTaskSource}>(`/api/runs/${encodeURIComponent(runId)}/tasks/${encodeURIComponent(taskId)}/source?version=${encodeURIComponent(version)}${commit ? `&commit=${encodeURIComponent(commit)}` : ''}`)).source;
       if(request!==view.artifactRequest)return;
-      if (source.taskId !== taskId || source.taskVersion !== version || snapshotKey && taskSourceKey(source) !== snapshotKey) throw new Error(t('读取结果与所选源码快照身份不同，未展示替代材料。'));
+      if (source.taskId !== taskId || source.taskVersion !== version || snapshotKey && taskSourceKey(source) !== snapshotKey || commit && source.commit !== commit) throw new Error(t('读取结果与所选源码快照身份不同，未展示替代材料。'));
       view.sourceComparison = new TaskSourceComparison(source, view.observation?.sources ?? [], view.observation?.inspection.tasks.find(task => task.id === taskId)?.version ?? t('当前计划已无此任务'));
       // A reader who moved on while the source loaded keeps their place.
       const waiting = document.activeElement === view.element.querySelector('[data-collab-artifact-heading]');

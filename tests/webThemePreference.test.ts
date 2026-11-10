@@ -29,4 +29,12 @@ describe('theme preference', () => {
     expect(readThemePreference(refusing)).toBe('system');
     expect(saveThemePreference(refusing, 'light')).toBe(false);
   });
+  it('keeps the page usable when access to the storage object itself is denied', () => {
+    const denied = () => { throw new DOMException('Access denied', 'SecurityError'); };
+    expect(readThemePreference(denied)).toBe('system');
+    expect(saveThemePreference(denied, 'dark')).toBe(false);
+    const storage = memory();
+    expect(saveThemePreference(() => storage, 'dark')).toBe(true);
+    expect(readThemePreference(() => storage)).toBe('dark');
+  });
 });

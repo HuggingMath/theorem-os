@@ -763,4 +763,9 @@ export const app: Record<string, string> = {
   "Agent 已请求装入新的库依赖": "The agent requested additional library dependencies",
   "库安装请求未通过校验": "The library installation request failed validation",
   "已检查库定理的实际应用": "Checked a library theorem application",
+  '重新准备候选草稿': 'Prepare the candidate draft again',
+  '查看已评审的任务提案': 'View the reviewed task proposal',
+  '正在准备候选与固定库版本…': 'Preparing the candidate and fixed library versions…',
+  '草稿已变化，未载入候选。请核对后重新准备。': 'The draft changed, so the candidate was not loaded. Review your edits and prepare it again.',
+  '候选与固定库版本已载入。核对源码、模型和预算后即可开始研究。': 'The candidate and fixed library versions are ready. Review the source, model and budget before starting research.',
 };

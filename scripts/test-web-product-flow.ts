@@ -256,6 +256,10 @@ try {
       await page.locator('[data-overview-search]').fill('');
       await shot(page, `returning-home-${locale}-${width}`);
       await page.locator(`[data-overview-action="plan:${plan.id}"]`).click();
+      await page.locator('[data-problem-page]').waitFor();
+      assert.equal(new URL(page.url()).pathname, '/problem.html');
+      await page.locator('.problem-tabs a[href*="tab=overview"]').click();
+      await page.locator('[data-problem-attention-item="plan-approval"] a.button').click();
       await page.locator('[data-chat-approve-plan]').waitFor();
       mark({ groupedRunIds: [partial.id, accepted.id, unknown.id], separateStatementRun: mismatch.id, actionablePendingPlan: plan.id });
 

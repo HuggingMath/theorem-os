@@ -381,6 +381,18 @@ export class ChatSession {
     this.draw(); this.options.onConversation();
   }
   fillOriginal(original: string) { this.quotedDrafts.delete(this.currentId || 'home'); this.draft = original; this.rememberDraft(); this.draw(); this.focus(); }
+  prepareOriginal(original: string, environment: 'standard' | 'mathlib') {
+    this.home(false); this.environment = environment; this.fillOriginal(original);
+    requestAnimationFrame(() => this.composer.querySelector<HTMLTextAreaElement>('textarea')?.scrollIntoView({ block: 'center', behavior: 'instant' }));
+  }
+  revealMessage(id: string) {
+    const message = this.thread.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`);
+    if (!message) return false;
+    this.thread.querySelectorAll('.chat-search-target').forEach(element => element.classList.remove('chat-search-target'));
+    message.classList.add('chat-search-target'); message.tabIndex = -1;
+    message.scrollIntoView({ block: 'center', behavior: 'instant' }); message.focus({ preventScroll: true });
+    this.reading.capture(); return true;
+  }
   useRunKey(id: string, key: string) { if (this.runId === id) { this.apiKey = key; this.clearConnection(); this.draw(); } }
   focus() { this.composer.querySelector<HTMLTextAreaElement>('textarea')?.focus({ preventScroll: true }); }
   private setConversation(conversation: WebConversation) {
@@ -840,7 +852,7 @@ export class ChatSession {
       onConfigure: () => {
         const settings = this.composer.querySelector<HTMLDetailsElement>('#formalize-settings');
         if (settings) settings.open = true;
-        this.composer.querySelector<HTMLInputElement>(this.options.keyRequired(this.activeProviderId()) ? '#formalize-key' : '#formalize-model')?.focus();
+        this.composer.querySelector<HTMLSelectElement>('#formalize-provider')?.focus();
       },
       onFirstExample: () => this.useExample('add-zero'),
       startGuide: { onTemplate: () => this.fillOriginal(this.draft.trim() ? this.draft : statementTemplate()), onLean: this.options.onLean,
@@ -897,7 +909,7 @@ export class ChatSession {
         || !this.guidanceMode && !pendingSubmission && !this.pendingMessage && Boolean(this.options.session()?.maintenance)
         || newProblem && ((!this.capabilities?.available && !pendingSubmission) || busyFormalization)
         || this.guidanceMode && (!canGuide || !this.run?.observation || guidanceRunChanged || staleTarget || !!unresolvedGuidance),
-      hasConversation: Boolean(this.conversation), environment: this.environment, effort: this.effort, apiKey: this.apiKey,
+      hasConversation: Boolean(this.conversation), newProblem, environment: this.environment, effort: this.effort, apiKey: this.apiKey,
       ...(editedSubmission ? { submissionRecovery: { busy: this.submitting,
         onRecover: () => void this.submit(this.seed!.original),
         onPrepareEdited: () => void this.submit(this.seed!.original, true) } } : {}),
@@ -907,6 +919,7 @@ export class ChatSession {
       providers: this.providers(), providerId: this.activeProviderId(), model: this.activeModel(),
       onProvider: value => { this.providerId = value; this.model = this.providers().find(item => item.id === value)?.defaultModel ?? ''; this.apiKey = ''; this.keyNotice = ''; this.clearConnection(); this.rememberDraft(); this.draw(); },
       onModel: value => { this.model = value; this.clearConnection(); this.rememberDraft(); this.draw(); },
+      quota: this.options.session()?.quota,
       budgets: this.budgets, budgetLimits: { maxRunSeconds: this.capabilities?.limits.maxRunSeconds ?? 1800,
         maxTotalTokens: this.capabilities?.limits.maxTotalTokens || 2_000_000,
         research: { maxRunSeconds: this.options.session()?.limits.maxRunSeconds ?? 900, maxTurns: this.options.session()?.limits.maxTurns ?? 20,
