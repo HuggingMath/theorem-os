@@ -143,6 +143,10 @@ jobs:
         run: bun run test:solver-reliability
       - name: Verify dependency snapshots and receipt cache bindings
         run: bunx vitest run --maxWorkers=4 tests/verifierSealedEnvironmentCache.test.ts tests/mathProofEnvironment.test.ts tests/leanProbeSnapshot.test.ts
+      - name: Verify projected proof contracts and retained source contexts
+        run: bunx vitest run --maxWorkers=4 tests/taskTypeContract.test.ts tests/projectionNotation.test.ts tests/taskSourceImplicitInstances.test.ts tests/taskSourceMacroProjection.test.ts tests/taskSourceNotationHints.test.ts tests/solverRetainedSourceGoals.test.ts tests/solverConditionalLibraryImports.test.ts tests/solverCanonicalGoalProof.test.ts
+      - name: Verify search tools, failure reuse and completed research delivery
+        run: bunx vitest run --maxWorkers=4 tests/declarationSearch.test.ts tests/continuationSearch.test.ts tests/tacticBatteryFailureCache.test.ts tests/solverAssemblyLeadYield.test.ts tests/solverCompletedGuidance.test.ts tests/codexCompletedResponse.test.ts
 
   publish:
     needs: [verify, verify-solver, verify-research-workflows]
