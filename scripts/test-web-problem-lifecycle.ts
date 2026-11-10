@@ -10,7 +10,7 @@ import type { WebRunner } from '../apps/web/runner';
 import type { ResearchAccountDraftResult, ResearchAccountDraft } from '../apps/web/researchPersonalTypes';
 import type { ProblemDraftValue } from '../apps/web/problemDraftTypes';
 import { freePort, startBrowser } from './web-scenario';
-import { enterLean, closeSettings } from './web-ui-controls';
+import { enterLean, closeSettings, openAdvancedChatSettings } from './web-ui-controls';
 import { webFormalizationEvidence, webFormalizationStatement } from '../tests/helpers/webFormalizationFixture';
 
 const root=path.resolve(import.meta.dirname,'..'),output=process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root,'out/product-continuity/research-lifecycle/entry');
@@ -45,7 +45,7 @@ try{
  for(const [language,width,email] of [['zh',1440,emails[0]],['en',390,emails[1]]] as const){
   const current=await context(language,width),page=await current.newPage();active=page;
   await page.goto(origin);await page.locator('#send-code:enabled').waitFor();await page.locator('#login-email').fill(email);await page.locator('#login-captcha').fill('24680');if(await page.locator('#terms-option').isVisible())await page.locator('#accept-terms').check();await page.locator('#send-code').click();await page.locator('#code-step:visible').waitFor();await page.locator('#login-code').fill(mail.at(-1)!.text.match(/\b\d{6}\b/u)![0]);await page.locator('#verify-code').click();await page.locator('#formalize-original').waitFor();
-  await page.locator('#formalize-original').fill(webFormalizationStatement);await page.locator('#formalize-settings > summary').click();await page.locator('#formalize-model').fill('fixture-model');await page.locator('#formalize-environment').selectOption('standard');await page.locator('#formalize-settings > summary').click();
+  await page.locator('#formalize-original').fill(webFormalizationStatement);await openAdvancedChatSettings(page);await page.locator('#formalize-model').fill('fixture-model');await page.locator('#formalize-environment').selectOption('standard');await page.locator('#formalize-settings > summary').click();
   phase=`refresh-status-${language}`;const first=await save(page,'Problem A');await page.reload();await page.locator('#formalize-original').waitFor();await openPanel(page);
   await panel(page).locator('[data-problem-draft-notice]').waitFor();
   await page.locator('#formalize-original').fill(webFormalizationStatement+'\nUse induction.');await panel(page).getByText(/新修改尚未保存到账号|Your new edits are not yet saved to your account/).waitFor();
