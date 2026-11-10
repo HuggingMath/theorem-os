@@ -181,6 +181,7 @@ try {
   await page.reload(); await initialized();
   await page.locator('#topbar-draft').click(); await page.locator('#formalize-original').fill(webFormalizationStatement);
   await page.locator('#open-settings').click(); await page.locator('#formalize-key').fill(credential);
+  await page.locator('#formalize-settings > summary').click();
   let releaseConversation!: () => void, conversationHeld = false;
   const gate = new Promise<void>(resolve => { releaseConversation = resolve; });
   await page.route('**/api/conversations', async route => {

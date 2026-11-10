@@ -42,7 +42,7 @@ const capabilities = { available: true, model: 'fixture', providerId: 'fixture',
 let browser: Browser, service: http.Server, origin: string;
 beforeAll(async () => {
   const [standalone, chat] = await Promise.all([
-    build({ entryPoints: [path.join(client, 'formalize.ts')], bundle: true, write: false, platform: 'browser', target: 'es2023', jsx: 'automatic', jsxImportSource: 'preact' }),
+    build({ entryPoints: [path.join(client, 'formalize.ts')], outfile: path.join(output, 'formalize.js'), bundle: true, write: false, platform: 'browser', target: 'es2023', jsx: 'automatic', jsxImportSource: 'preact' }),
     build({ stdin: { resolveDir: client, loader: 'ts', contents: `
       import { ChatSession } from './chatSession';
       import { agentRoutes, mergeAgentActions } from './agentRoute';
@@ -72,16 +72,16 @@ beforeAll(async () => {
         for (const listener of listeners) listener('proof-fixture');
       };
       session.start();
-    ` }, bundle: true, write: false, platform: 'browser', target: 'es2023', jsx: 'automatic', jsxImportSource: 'preact' }),
+    ` }, outfile: path.join(output, 'fixture-chat.js'), bundle: true, write: false, platform: 'browser', target: 'es2023', jsx: 'automatic', jsxImportSource: 'preact' }),
   ]);
-  const bundles = new Map([['/formalize.js', standalone.outputFiles[0]!.contents], ['/fixture-chat.js', chat.outputFiles[0]!.contents]]);
+  const bundles = new Map([...standalone.outputFiles, ...chat.outputFiles].map(file => [`/${path.basename(file.path)}`, file.contents]));
   service = http.createServer(async (request, response) => {
     const pathname = new URL(request.url!, 'http://fixture').pathname;
     const bundle = bundles.get(pathname);
-    if (bundle) { response.writeHead(200, { 'Content-Type': 'text/javascript' }); response.end(bundle); return; }
+    if (bundle) { response.writeHead(200, { 'Content-Type': pathname.endsWith('.css') ? 'text/css' : 'text/javascript' }); response.end(bundle); return; }
     if (pathname === '/chat-fixture.html') {
       response.writeHead(200, { 'Content-Type': 'text/html' });
-      response.end('<!doctype html><html><head><link rel="stylesheet" href="app.css"><link rel="stylesheet" href="research-conversation.css"></head><body><main><div id="research-chat-thread"></div><button data-chat-latest hidden>Latest</button><section id="natural-research"></section><nav id="chat-history-list"></nav><section id="chat-original-panel"></section><section id="chat-live-panel"></section></main><script src="fixture-chat.js"></script></body></html>'); return;
+      response.end('<!doctype html><html><head><link rel="stylesheet" href="app.css"><link rel="stylesheet" href="research-conversation.css"><link rel="stylesheet" href="fixture-chat.css"></head><body><main><div id="research-chat-thread"></div><button data-chat-latest hidden>Latest</button><section id="natural-research"></section><nav id="chat-history-list"></nav><section id="chat-original-panel"></section><section id="chat-live-panel"></section></main><script src="fixture-chat.js"></script></body></html>'); return;
     }
     if (pathname === '/theme.js') { response.writeHead(200, { 'Content-Type': 'text/javascript' }); response.end(); return; }
     const file = pathname === '/formalize.html' ? 'formalize.html' : pathname.slice(1);
