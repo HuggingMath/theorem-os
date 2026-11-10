@@ -25,7 +25,9 @@ ENV ELAN_HOME=/opt/elan \
     HOME=/work/home \
     DEEPSCIENTIST_MATH_SANDBOX_BACKEND=bwrap \
     DEEPSCIENTIST_MATH_TRUSTED_ELAN_ROOTS=/opt/elan
+COPY scripts/install-elan.sh ./scripts/install-elan.sh
 RUN npm install --global @openai/codex@0.162.0 \
+    && sh scripts/install-elan.sh \
     && elan toolchain install leanprover/lean4:v4.33.0 \
     && chmod -R a+rX /opt/elan \
     && mkdir -p /work && chown 10001:10001 /work
@@ -49,12 +51,20 @@ ENV TMPDIR=/tmp \
     DEEPSCIENTIST_MATH_TRUSTED_ELAN_ROOTS=/opt/elan/toolchains/leanprover--lean4---v4.33.0 \
     DEEPSCIENTIST_MATH_TRUSTED_CACHE_ROOTS=/opt/theoremos-mathlib/.lake/packages
 COPY --from=source /opt/theorem-os /opt/theorem-os
+RUN bun scripts/prepare-web-library.ts \
+    && chmod -R a+rX /opt/theoremos-library
 # Use the installed binaries directly: the verifier mounts the toolchain read-only.
 # Agent shells cannot read /opt/theorem-os or /opt/runtime-state; they run the bundled commands instead.
 RUN bun scripts/build.ts --state-root /opt/runtime-state > /opt/theoremos-build.json \
     && bun scripts/build-agent-tools.ts --out /opt/theoremos-agent-tools > /dev/null \
+    && bun scripts/build-proof-environment-seed.ts --project /opt/theoremos-mathlib \
+       --packages /opt/theoremos-mathlib/.lake/packages --out /opt/theoremos-proof-environment-seed \
+    && bun scripts/build-proof-environment-seed.ts --project /opt/theoremos-mathlib \
+       --packages /opt/theoremos-mathlib/.lake/packages --out /opt/theoremos-proof-source-seed --sources-only \
     && chmod -R a+rX /opt/runtime-state /opt/theoremos-agent-tools \
     && chmod 0555 apps/web/worker-entrypoint.sh
+ENV DEEPSCIENTIST_MATH_PROOF_ENVIRONMENT_SEED=/opt/theoremos-proof-environment-seed/manifest.json
+ENV DEEPSCIENTIST_MATH_PROOF_ENVIRONMENT_SOURCE_SEED=/opt/theoremos-proof-source-seed/manifest.json
 # The source commit this image was built from (scripts/web-deploy-record.sh records it with the image digests).
 ARG THEOREMOS_SOURCE_COMMIT=unknown
 LABEL org.opencontainers.image.revision=$THEOREMOS_SOURCE_COMMIT

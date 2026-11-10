@@ -142,7 +142,14 @@ function draw() {
     ...(state.active ? { active: state.active } : {}), ...(state.gap !== undefined ? { gap: state.gap } : {}), chosen: state.chosen,
     ...(step ? { step } : {}),
     ...(state.dialog ? { dialog: state.dialog } : {}), busy: state.busy,
-    ...(state.error ? { error: state.error } : {}), canReturn: depth > 0 && explained !== undefined, now: Date.now() });
+    ...(state.error ? { error: state.error } : {}), canReturn: depth > 0 && explained !== undefined, now: Date.now(),
+    onRouteOpen: target => {
+      const match = /^(section|step):(\d+)(?::(\d+))?$/u.exec(target);
+      if (!match || !explained) return;
+      const section = Number(match[2]), step = match[3] === undefined ? undefined : Number(match[3]);
+      if (!explained.sections[section] || step !== undefined && !explained.sections[section]!.steps[step]) return;
+      select({ section, ...(step === undefined ? {} : { step }) }, 'lean');
+    } });
   $('#explain-split').dataset.pane = state.pane;
   markLean(explained);
   // The heading exists only while a dialog is drawn, so the name points at it only then.
@@ -181,8 +188,8 @@ async function loadDocument() {
     const { explanation } = await call<{ explanation: WebExplanation }>(`${base()}/item?${new URLSearchParams({ target: item.target, language: item.language })}`);
     if (explanation.document) state.documents.set(explanation.id, explanation.document);
     // The server checks the saved evidence against the proof on every read; a reason means it no longer matches.
-    else state.documentError = explanation.reason ? t('已保存的讲解没有通过完整性检查，无法显示。可以删除后重新生成。') : t('这份讲解没有可显示的内容。');
-  } catch (error) { state.documentError = message(error); }
+    else if (current()?.id === item.id) state.documentError = explanation.reason ? t('已保存的讲解没有通过完整性检查，无法显示。可以删除后重新生成。') : t('这份讲解没有可显示的内容。');
+  } catch (error) { if (current()?.id === item.id) state.documentError = message(error); }
   finally { state.loading.delete(item.id); }
   draw();
 }
@@ -286,6 +293,8 @@ function follow(from: 'lean' | 'prose') {
   if (from !== driver || !state.sync || narrow() || performance.now() < holdUntil || frame) return;
   frame = requestAnimationFrame(() => {
     frame = 0;
+    // A new selection can start a reveal after this sync frame was queued.
+    if (performance.now() < holdUntil) return;
     const explained = currentDocument();
     if (!explained || !leanRows.length) return;
     if (from === 'prose') alignLean(explained); else alignProse(explained);
@@ -403,26 +412,32 @@ dialog.addEventListener('submit', event => {
 dialog.addEventListener('cancel', event => { if (state.busy) event.preventDefault(); });
 dialog.addEventListener('close', () => { if (state.dialog) { state.dialog = undefined; state.error = undefined; draw(); } });
 
-async function act(work: () => Promise<void>) {
+async function act(work: (target: string, language: 'zh' | 'en') => Promise<void>) {
+  const target = state.target, language = state.language;
   state.busy = true; state.error = undefined; draw();
-  try { await work(); state.dialog = undefined; }
-  catch (error) { state.error = message(error); }
+  try { await work(target, language); state.dialog = undefined; }
+  catch (error) {
+    if (target === state.target && language === state.language) state.error = message(error);
+    else state.dialog = undefined;
+  }
   finally { state.busy = false; draw(); schedule(); }
 }
-const generate = (apiKey: string) => act(async () => {
-  const { explanation } = await call<{ explanation: WebExplanation }>(base(), 'POST', { target: state.target, language: state.language, ...(apiKey ? { apiKey } : {}) });
-  store(explanation);
+const generate = (apiKey: string) => act(async (target, language) => {
+  const { explanation } = await call<{ explanation: WebExplanation }>(base(), 'POST', { target, language, ...(apiKey ? { apiKey } : {}) });
+  store(explanation, target, language);
   toast(t('已开始生成讲解'));
 });
-const stop = () => act(async () => {
-  const { explanation } = await call<{ explanation: WebExplanation }>(`${base()}/cancel?${query()}`, 'POST');
-  store(explanation);
+const stop = () => act(async (target, language) => {
+  const { explanation } = await call<{ explanation: WebExplanation }>(`${base()}/cancel?${new URLSearchParams({ target, language })}`, 'POST');
+  store(explanation, target, language);
   toast(t('已停止生成'));
 });
-const remove = () => act(async () => {
-  await call(`${base()}/item?${query()}`, 'DELETE');
-  store(undefined);
-  state.active = undefined; state.gap = undefined; state.chosen = new Set(); pinned = []; ladder.reset();
+const remove = () => act(async (target, language) => {
+  await call(`${base()}/item?${new URLSearchParams({ target, language })}`, 'DELETE');
+  store(undefined, target, language);
+  if (target === state.target && language === state.language) {
+    state.active = undefined; state.gap = undefined; state.chosen = new Set(); pinned = []; ladder.reset();
+  }
   toast(t('讲解已删除'));
 });
 

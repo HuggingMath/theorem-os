@@ -41,9 +41,12 @@ describe('saved task-fidelity-v2 reference compatibility', () => {
     expect(canonicalMathJson(result)).toBe(before);
   });
 
-  it('rejects relabeling old query evidence as the new identity method', () => {
+  it.each([
+    ['theoremos.formalization-reference.v6', 'cardinality-correspondence-v7'],
+    ['theoremos.formalization-reference.v7', 'definitional-identity-v1'],
+  ])('rejects relabeling old query evidence as %s', (schema, method) => {
     const { input, result } = saved();
-    const relabeled = { ...result, schema: 'theoremos.formalization-reference.v6', method: 'cardinality-correspondence-v7' };
+    const relabeled = { ...result, schema, method };
     expect(() => assertFormalizationReferenceResult(input, relabeled)).toThrow();
   });
 });
@@ -106,7 +109,8 @@ describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1' ||
       candidateToReference: { reason: 'not-definitionally-equal' },
       referenceToCandidate: { reason: 'not-definitionally-equal' },
     });
-  }, 65000);
+  // The private cold cache includes sealing Mathlib, mounting it and compiling the query.
+  }, 180000);
 });
 
 // Explicit opt-in, as in the existing native reference suite. These are actual
@@ -157,19 +161,19 @@ describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1')('task-fidelit
         pairs: [{ candidateTarget: 'Candidate.add_zero', referenceTarget: 'SourceContract.zero_identity' }],
       };
       const result = await compare('v2-add-zero-' + variant, input);
-      expect(result).toMatchObject({ schema: 'theoremos.formalization-reference.v6',
-        method: 'cardinality-correspondence-v7', check: 'completed', status: 'established',
+      expect(result).toMatchObject({ schema: 'theoremos.formalization-reference.v7',
+        method: 'definitional-identity-v1', check: 'completed', status: 'established',
         modelInvoked: false, proofVerified: false, semanticEquivalenceClaimed: false });
       expect(result.candidateSourceSha256).toBe(mathDigest(input.candidateSource));
       expect(result.referenceSourceSha256).toBe(mathDigest(input.referenceSource));
       const report = JSON.parse(result.evidence!.reportText);
-      expect(report.schema).toBe('theoremos.reference-report.v6');
+      expect(report.schema).toBe('theoremos.reference-report.v7');
       expect(report.pairs[0]).toMatchObject({ candidateBaseline: true, referenceBaseline: true,
         definitionallyEqual: true, representationCorrespondence: false, transformations: [],
         candidateToReference: { status: 'established', reason: 'definitional-identity-with-opposite-assumption',
-          proofDeclaration: 'TheoremOSCorrespondence.candidateToReference0' },
+          proofDeclaration: 'TheoremOSDefinitionalIdentity.candidateToReference0' },
         referenceToCandidate: { status: 'established', reason: 'definitional-identity-with-opposite-assumption',
-          proofDeclaration: 'TheoremOSCorrespondence.referenceToCandidate0' } });
+          proofDeclaration: 'TheoremOSDefinitionalIdentity.referenceToCandidate0' } });
     }, 65000);
 
   it.each([

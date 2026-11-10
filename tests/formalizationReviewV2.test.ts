@@ -344,6 +344,21 @@ describe('structured fragment evidence', () => {
 });
 
 describe('version-selected statement context instructions', () => {
+  it.each(['review', 'backtranslate'] as const)('keeps every mathematical obligation when %s uses inline navigation', role => {
+    const file = formalizationReviewInstructions(role, true, 'bounded', 'task-preserving-v2');
+    const inline = formalizationReviewInstructions(role, true, 'bounded', 'task-preserving-v2', 'inline');
+    // Everything between navigation and output submission is the same review contract.
+    const start = role === 'review' ? 'Use the supplied source toolchain' : 'Preserve exact quantifier scope';
+    const end = role === 'review' ? 'Read OUTPUT.schema.json and use its exact caseId' : 'Read OUTPUT.schema.json.';
+    expect(inline).toContain(file.slice(file.indexOf(start), file.indexOf(end)));
+    const semantics = file.slice(file.indexOf('rawType is a raw Lean expression view'));
+    expect(inline).toContain(semantics);
+    expect(inline).toContain('Read every target and its complete required observations');
+    expect(inline).toContain('A truncated tool response is not a complete field');
+    expect(inline).not.toContain('/usr/bin/python3');
+    expect(file).toContain('/usr/bin/python3');
+  });
+
   it('keeps frozen legacy instruction hashes and selects additional guidance only when opted in', () => {
     expect(mathDigest(formalizationReviewInstructions('review', false)))
       .toBe('d95647989931ef7083aa0f9ce2477bcf19e4713727a36b8c9e4d52445e8e05f4');

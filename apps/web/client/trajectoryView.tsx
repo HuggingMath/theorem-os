@@ -22,6 +22,8 @@ import { SideViewer } from './ui/SideViewer';
 import { localizeText, t } from '../i18n';
 import { buildResearchRoadmap } from './researchRoadmap';
 import { ResearchRoadmap } from './ui/ResearchRoadmap';
+import { recordedSolutionRoute } from './solutionRoute';
+import { SolutionRouteGraph } from './ui/SolutionRouteGraph';
 
 // A running run is re-read at most this often; each read only fetches what changed since the last one.
 const pollMs = 1_500;
@@ -670,12 +672,24 @@ export class TrajectoryView {
       const selected = model.nodes.find(node => node.id === state.mapNode);
       const selectedTask = selected?.taskId && run.observation?.inspection.tasks.find(task => task.id === selected.taskId);
       const details = (selected?.stepIndexes ?? []).map(index => items[index]).filter((item): item is Item => Boolean(item));
+      const route = this.overviewAction ? undefined : recordedSolutionRoute({ id: run.id, data: state.data, steps: built.steps, status: run.status,
+        taskDetails: run.observation?.inspection.tasks, originalSource: run.source, problem: run.observation?.inspection.problem,
+        proofRoutes: run.observation?.plan?.proofRoutes, coverage: run.observation?.coverage, roadmap: model });
+      if (route && state.mapNode && route.nodes.some(node => node.id === state.mapNode)) route.initial = state.mapNode;
       return <div class="trajectory-layout" data-mode="roadmap" data-viewer-host>
         <section class="trajectory trajectory-roadmap">
           {!this.overviewAction && heading()}{failure}
-          <ResearchRoadmap key={run.id} model={model} names={names} selected={selected?.id} onSelect={id => {
-            if (this.overviewAction) this.overviewAction(id); else this.showNode(run.id, id);
-          }} />
+          {route ? <SolutionRouteGraph key={run.id} model={route} onSelect={id => { state.mapNode = id; state.panel = undefined; this.render(); }}
+            onOpen={target => {
+              if (target.startsWith('task:')) { this.showNode(run.id, target); return; }
+              const match = /^step:(\d+)$/u.exec(target), index = match ? Number(match[1]) : -1;
+              const step = built.steps[index], key = built.keys[index];
+              if (!step || !key) return;
+              state.open.set(key, true);
+              const modes = this.modes(step, run), mode = modes.includes('code') ? 'code' : modes[0];
+              if (mode) { state.panel = { key, mode }; this.render(); }
+              else this.reveal(key);
+            }} /> : <ResearchRoadmap key={run.id} model={model} names={names} selected={selected?.id} onSelect={id => this.overviewAction?.(id)} />}
           {!this.overviewAction && selected && <section class="roadmap-detail" aria-label={t('节点详情')}>
             <header><div><span>{t('节点详情')}</span><h4>{selected.theoremName ?? selected.title}</h4></div>
               <button type="button" class="icon-button" aria-label={t('关闭节点详情')}
@@ -900,6 +914,8 @@ export class TrajectoryView {
    */
   private actions(ctx: Ctx, step: StepOf<'attempt'> | StepOf<'proof'>) {
     const version = step.ref?.version, saved = version?.source !== undefined, own = this.own;
+    const checkedVersion = version && ctx.run.observation?.checks.find(check => check.taskId === version.taskId && check.commit === version.commit
+      && step.ref?.check?.receiptIds.includes(check.id))?.taskVersion;
     const label = step.kind === 'attempt' ? `${ctx.tasks.get(step.taskId) ?? step.taskId} · ${t('第 {0} 次', step.number)}`
       : [step.assembled ? t('组装完整证明') : t('完整证明'), ctx.proofs > 1 && !step.assembled ? t('第 {0} 次', step.number) : ''].filter(Boolean).join(' · ');
     const buttons = [
@@ -911,6 +927,9 @@ export class TrajectoryView {
         data-trajectory-continue title={t('用这道题开一次新运行，把这一版的代码交给每个 Agent 参考')}
         onClick={() => own.start(ctx.run, { runId: ctx.run.id, taskId: version.taskId, commit: version.commit, label: label.slice(0, 200) })}>
         <Icon name="git-branch-plus" />{t('从这一版继续')}</button>,
+      version && saved && own?.allowed(ctx.run) && step.kind === 'attempt' && step.outcome === 'passed' && !step.reused && <a class="text-button" data-save-library
+        href={`library.html?${new URLSearchParams({ create: '1', fromRun: ctx.run.id, task: version.taskId, commit: version.commit, ...(checkedVersion ? { taskVersion: checkedVersion } : {}) })}`}>
+        <Icon name="book-open" />{t('保存到我的 Library')}</a>,
     ].filter(Boolean);
     // While the run goes on, a version may simply not be observed yet.
     const missing = step.kind === 'attempt' && !saved && !live(ctx.run);
@@ -946,7 +965,8 @@ export class TrajectoryView {
       state.panel = undefined;
       this.render();
       const opener = this.root?.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(`${panel.key}-${panel.mode}`)}"]`)
-        ?? this.root?.querySelector<HTMLElement>(`.trajectory-step[data-step="${CSS.escape(panel.key)}"]`);
+        ?? this.root?.querySelector<HTMLElement>(`.trajectory-step[data-step="${CSS.escape(panel.key)}"]`)
+        ?? this.root?.querySelector<HTMLElement>('[data-solution-open]');
       opener?.focus({ preventScroll: true });
     };
     const select = (mode: Mode) => () => { state.panel = { key: panel.key, mode }; this.render(); };

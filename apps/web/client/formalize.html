@@ -11,7 +11,7 @@
   <a class="skip-link" href="#main">跳到主要内容</a>
   <header class="topbar"><a class="brand" href="./" aria-label="TheoremOS 工作台"><img src="assets/mark.svg" alt="" width="26" height="26"><span>Theorem<span class="brand-os">OS</span></span></a><div class="topbar-actions"><button id="locale-switch" type="button" class="text-button locale-switch" hidden></button><a class="button" href="./">返回工作台</a></div></header>
   <main id="main" class="formalize-shell">
-    <header class="formalize-intro"><p class="formalize-eyebrow">准备研究原题</p><h1>自然语言 → Lean</h1><p>输入完整原题，生成 Lean 陈述。对照独立回译与审核结果，确认后带入研究。</p></header>
+    <header class="formalize-intro"><p class="formalize-eyebrow">准备研究原题</p><h1>自然语言 → Lean</h1><p>输入完整原题，直接生成并编译 Lean 陈述，用于证明研究。</p></header>
     <p id="formalize-error" class="formalize-error" role="alert" hidden></p>
     <div class="formalize-workspace">
       <section class="formalize-compose" aria-labelledby="formalize-compose-heading"><h2 id="formalize-compose-heading">原题全文</h2>
@@ -42,13 +42,13 @@
       <details id="formalize-failure" hidden><summary>故障详情</summary><code id="formalize-failure-code" translate="no"></code></details>
       <details id="formalize-source"><summary>查看保存的原题全文</summary><pre id="formalize-source-text" translate="no"></pre></details>
       <div id="formalize-review" hidden>
-        <p class="formalize-review-note">请核对原题、Lean 陈述与独立回译。模型审核通过仅表示陈述待你确认，证明仍需研究与独立验收。</p>
+        <p class="formalize-review-note">Lean 编译通过。证明仍需独立验收。</p>
         <div id="formalize-report-toolbar" class="explain-toolbar"></div>
         <div id="formalize-split" class="explain-split" data-pane="prose">
           <section class="explain-pane explain-pane-lean" aria-labelledby="formalize-lean-heading"><header class="explain-pane-head"><h3 id="formalize-lean-heading">Lean 陈述</h3></header><div id="formalize-chosen" class="formal-chosen" aria-live="polite"></div><div id="formalize-lean" class="explain-scroll explain-lean" tabindex="0" aria-labelledby="formalize-lean-heading"><div id="formalize-code" class="lean-code" translate="no"></div></div></section>
-          <section class="explain-pane explain-pane-prose" aria-labelledby="formalize-prose-heading"><header class="explain-pane-head"><h3 id="formalize-prose-heading">原题与审核</h3></header><div id="formalize-prose" class="explain-scroll explain-prose" tabindex="0" aria-labelledby="formalize-prose-heading"></div></section>
+          <section class="explain-pane explain-pane-prose" aria-labelledby="formalize-prose-heading"><header class="explain-pane-head"><h3 id="formalize-prose-heading">原题与 Lean</h3></header><div id="formalize-prose" class="explain-scroll explain-prose" tabindex="0" aria-labelledby="formalize-prose-heading"></div></section>
         </div>
-        <div id="formalize-confirmation" class="formalize-confirmation"><label><input id="formalize-checked" type="checkbox">我已核对原题、Lean 陈述及回译，确认以此陈述开始研究。</label><button id="formalize-confirm" type="button" class="button button-primary" disabled>确认陈述</button></div>
+        <div id="formalize-confirmation" class="formalize-confirmation"><label><input id="formalize-checked" type="checkbox">我已核对原题与 Lean 陈述，确认以此陈述开始研究。</label><button id="formalize-confirm" type="button" class="button button-primary" disabled>确认陈述</button></div>
         <p id="formalize-confirmed" hidden><a id="formalize-use" class="button button-primary" href="./">带入研究草稿</a><span class="field-note">带入后可设置研究要求，不会自动启动证明。</span></p>
       </div>
     </section>

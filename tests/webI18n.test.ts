@@ -15,6 +15,7 @@ import { process } from '../apps/web/i18n/process';
 import { release } from '../apps/web/i18n/release';
 import { server } from '../apps/web/i18n/server';
 import { localizeText, t } from '../apps/web/i18n';
+import type { WebExplanationDocument } from '../apps/web/shared';
 import { han, requiredKeys } from '../scripts/web-i18n';
 
 describe('workbench English dictionary', () => {
@@ -22,7 +23,7 @@ describe('workbench English dictionary', () => {
   const { keys, stray } = requiredKeys();
   const placeholders = (text: string) => [...text.matchAll(/\{(\d+)\}/gu)].map(match => match[1]).sort().join(',');
 
-  it('covers every Chinese interface string, with no Chinese text outside t()', () => {
+  it('covers every interface string through a dictionary entry or an inline language pair', () => {
     expect(stray).toEqual([]);
     expect([...keys].filter(([key]) => !Object.hasOwn(en, key)).map(([key, where]) => `${where} ${key}`)).toEqual([]);
   });
@@ -60,6 +61,29 @@ describe('server error messages in an English browser', () => {
     return import('../apps/web/i18n');
   }
 
+  it('keeps explanation route labels in the document language independently of the interface', async () => {
+    await english();
+    const { explanationSolutionRoute } = await import('../apps/web/client/explainSolutionRoute');
+    const document: WebExplanationDocument = {
+      schema: 'theorem-os.web-explanation.v1', target: 'target', language: 'zh', toolchain: 'test', mathlibRevision: null,
+      overview: 'Recorded overview.', axioms: [], model: 'fixture', effort: 'max', auditors: 2, rounds: 1, tokens: 0,
+      metrics: { declarations: 1, steps: 1, citations: 0, excerptCoverage: 1, proofLines: 1, explainedLines: 1, ambiguousExcerpts: 0 },
+      sections: [{ name: 'target', kind: 'theorem', target: true, title: 'Target', statement: 'P holds.',
+        lines: { start: 1, end: 2 }, signature: { start: 1, end: 1 }, unexplained: [], statementReviews: [],
+        steps: [{ text: 'Recorded derivation.', lines: [{ start: 2, end: 2 }], uses: [], reviews: [],
+          goals: { before: ['⊢ P'], beforeCount: 1, after: ['⊢ P', '⊢ Q'], afterCount: 3, lines: { start: 2, end: 2 } } }] }],
+    };
+    const proof = 'theorem target : P := by\n  tactic\n';
+    const chineseRoute = explanationSolutionRoute(document, proof), englishRoute = explanationSolutionRoute({ ...document, language: 'en' }, proof);
+    expect(chineseRoute).toMatchObject({ locale: 'zh', title: '证明路线' });
+    expect(englishRoute).toMatchObject({ locale: 'en', title: 'Proof route' });
+    const step = (route: typeof chineseRoute) => route.nodes.find(node => node.id === 'derivation:target:0')!;
+    expect(step(chineseRoute)).toMatchObject({ title: '第 1 步', summary: 'Recorded derivation.' });
+    expect(step(englishRoute)).toMatchObject({ title: 'Step 1', summary: 'Recorded derivation.' });
+    expect(step(chineseRoute).sections).toContainEqual({ title: '这一步之后', text: '⊢ P\n\n⊢ Q\n另有 1 个目标', code: true });
+    expect(step(englishRoute).sections).toContainEqual({ title: 'Goals after', text: '⊢ P\n\n⊢ Q\n1 more goal', code: true });
+  });
+
   it('translates exact and filled-in messages and keeps the filled values', async () => {
     const { localizeMessage } = await english();
     expect(localizeMessage('会话已过期，请刷新页面。')).toBe(en['会话已过期，请刷新页面。']);
@@ -68,6 +92,15 @@ describe('server error messages in an English browser', () => {
     expect(localizeMessage('已达到 20 条运行记录的上限。请先下载需要的档案，删除已结束的记录后重试。'))
       .toBe('You have reached the limit of 20 run records. Download the archives you need, delete finished records and try again.');
     expect(localizeMessage('模型服务返回错误（HTTP 502）。')).toBe('The model provider returned an error (HTTP 502).');
+    expect(localizeMessage('任务版本已改变，请重新核对。')).toBe('The task version has changed. Review it again.');
+    expect(localizeMessage('资产已更新，请刷新后重试。当前版本：12')).toBe('The asset has changed. Refresh and try again. Current revision: 12');
+    expect(localizeMessage('发布内容已改变，请重新预览并审阅后发布。')).toBe('The release contents have changed. Preview and review them again before publishing.');
+    expect(localizeMessage('候选证明改变了非目标原始声明 Safe.goal 的证明，请保留基础源码中的完整声明。'))
+      .toBe('The candidate changed the proof of another original declaration, Safe.goal. Keep that declaration unchanged from the base source.');
+    expect(localizeMessage('候选任务的精确声明或文件已改变，请刷新后重新选择。'))
+      .toBe('The candidate task declaration or file has changed. Refresh and select it again.');
+    expect(localizeMessage('数学库模块内容冲突：Main.lean')).toBe('Conflicting mathematics module content: Main.lean');
+    expect(localizeMessage('公开访问只提供已分享的研究结果。')).toBe('Public access provides shared research results only.');
     // Text that is not an error key, such as an Agent's own words, stays as written.
     expect(localizeMessage('证明在第 3 步卡住了。')).toBe('证明在第 3 步卡住了。');
     expect(localizeMessage('')).toBe('');

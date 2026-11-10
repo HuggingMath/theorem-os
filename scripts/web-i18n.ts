@@ -15,20 +15,49 @@ const web = (...parts: string[]) => path.join(root, 'apps/web', ...parts);
 const read = (file: string) => fs.readFileSync(file, 'utf8');
 const parse = (file: string) => ts.createSourceFile(file, read(file), ts.ScriptTarget.Latest, true, file.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
 
-/** Sources bundled for the browser, where Chinese text is only allowed as a t() key. */
+/** Sources bundled for the browser, where interface text uses t() or a checked tx() language pair. */
 export function bundleSources() {
   const client = fs.readdirSync(web('client'), { recursive: true, encoding: 'utf8' })
     .filter(name => /\.tsx?$/u.test(name) && !/\.test\./u.test(name)).map(name => web('client', name));
   return [...client, web('presentation.ts'), web('report.ts')].sort();
 }
 
-/** Every t('…') key, with the source line, plus any Chinese literal outside t() that is not on the allow list. */
+// These existing tables feed tx() with a Chinese/English pair rather than literal arguments.
+const bilingualTables = new Map([
+  ['apps/web/client/researchShared.tsx', 'statusNames'],
+  ['apps/web/client/researchViews.tsx', 'pageNames'],
+  ['apps/web/client/researchFeedback.tsx', 'statuses'],
+]);
+
+/** Dictionary keys, plus interface text without a dictionary entry or an inline English counterpart. */
 export function scanBundle(files = bundleSources()) {
   const keys = new Map<string, string>(), stray: string[] = [];
   for (const file of files) {
     const source = parse(file);
     const where = (node: ts.Node) => `${path.relative(root, file)}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`;
     const visit = (node: ts.Node) => {
+      if (ts.isVariableDeclaration(node) && bilingualTables.get(path.relative(root, file)) === node.name.getText(source) && node.initializer) {
+        const pairs = (value: ts.Node) => {
+          if (ts.isArrayLiteralExpression(value) && value.elements.every(ts.isStringLiteralLike)) {
+            const english = value.elements.at(-1);
+            if (value.elements.length < 2 || !english || !ts.isStringLiteralLike(english) || !english.text.trim() || han.test(english.text))
+              stray.push(`${where(value)} bilingual table needs a nonempty English label`);
+          } else ts.forEachChild(value, pairs);
+        };
+        pairs(node.initializer);
+        return;
+      }
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'tx') {
+        const [chinese, english] = node.arguments;
+        if (chinese && ts.isSpreadElement(chinese)) { visit(chinese.expression); return; }
+        if (!chinese || !english) stray.push(`${where(node)} tx() needs both language values`);
+        // Static Chinese belongs to this pair; interpolated expressions still need their own translation.
+        if (chinese && ts.isTemplateExpression(chinese)) chinese.templateSpans.forEach(span => visit(span.expression));
+        else if (chinese && !ts.isStringLiteralLike(chinese)) visit(chinese);
+        if (english && ts.isStringLiteralLike(english) && !english.text.trim()) stray.push(`${where(english)} tx() needs nonempty English`);
+        if (english) visit(english);
+        return;
+      }
       if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 't') {
         const [key, ...rest] = node.arguments;
         if (key && ts.isStringLiteralLike(key)) { if (!keys.has(key.text)) keys.set(key.text, where(key)); }
@@ -49,7 +78,7 @@ export function scanBundle(files = bundleSources()) {
  * Chinese literals that are not interface text: checks against server messages, the CJK-aware list separator, the
  * Chinese token units (English uses K/M), and the language switch's search keywords, which match in both languages.
  */
-const allowedText = new Set(['/会话/u', '/[，,\\s]+/u', "'会话校验'", '} 亿`', '} 万`',
+const allowedText = new Set(['/会话/u', '/[，,\\s]+/u', '/[,，\\n]/u', "'会话校验'", '} 亿`', '} 万`',
   "'language locale english chinese 语言 中文 英文'",
   "'classic problems proofs solutions archive library 经典 题库 数学 解答 过程'",
   "'formalization translation natural language 形式化 转换 回译 自然语言'",
@@ -108,7 +137,7 @@ export function serverKeys() {
 export function errorKeys() {
   const keys = new Map<string, string>();
   const files = ['apps/web/conversations.ts', 'apps/web/formalizations.ts', 'apps/web/server.ts', 'apps/web/jobs.ts', 'apps/web/storage.ts', 'apps/web/auth.ts', 'apps/web/explain.ts', 'apps/web/quota.ts', 'apps/web/admission.ts', 'apps/web/providerCheck.ts',
-    'apps/web/runner.ts', 'apps/web/worker.ts', 'apps/web/moduleRegistry.ts', 'apps/web/knowledgeService.ts'];
+    'apps/web/runner.ts', 'apps/web/worker.ts', 'apps/web/moduleRegistry.ts', 'apps/web/knowledgeService.ts', 'apps/web/researchProjects.ts', 'apps/web/researchAssets.ts', 'apps/web/researchApi.ts', 'apps/web/researchMathematics.ts', 'apps/web/researchCandidateScope.ts', 'apps/web/researchAssetPrefill.ts'];
   for (const relative of files) {
     const source = parse(path.join(root, relative));
     const add = (node: ts.Node, text: string) => {
@@ -124,6 +153,11 @@ export function errorKeys() {
     // service's table of provider statuses.
     const visit = (node: ts.Node) => {
       if (ts.isNewExpression(node) && /Error$/u.test(node.expression.getText(source))) node.arguments?.forEach(collect);
+      else if (['apps/web/researchAssets.ts', 'apps/web/researchApi.ts', 'apps/web/researchMathematics.ts', 'apps/web/researchAssetPrefill.ts'].includes(relative) && ts.isCallExpression(node) && node.expression.getText(source) === 'fail' && node.arguments[1]) collect(node.arguments[1]);
+      else if (relative === 'apps/web/researchAssets.ts' && ts.isPropertyAssignment(node) && node.name.getText(source) === 'reason') collect(node.initializer);
+      else if (relative === 'apps/web/researchApi.ts' && ts.isBinaryExpression(node) && node.left.getText(source) === 'reason') collect(node.right);
+      else if (relative === 'apps/web/researchApi.ts' && ts.isVariableDeclaration(node) && node.name.getText(source) === 'reason' && node.initializer) collect(node.initializer);
+      else if (relative === 'apps/web/researchCandidateScope.ts' && ts.isReturnStatement(node) && node.expression) collect(node.expression);
       else if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && /\.error$/u.test(node.left.getText(source))) collect(node.right);
       else if (ts.isPropertyAssignment(node) && node.name.getText(source) === 'error') collect(node.initializer);
       else if (relative === 'apps/web/providerCheck.ts' && ts.isPropertyAssignment(node) && node.name.getText(source) === 'message') collect(node.initializer);

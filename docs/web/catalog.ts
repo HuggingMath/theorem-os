@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { ArchiveCatalog, ArchiveIndex, ArchiveRecord, ArchiveSource } from './types';
 import { siteRepository } from './site';
 import { campaignRecords } from './campaignCatalog';
+import { withArchiveSourceRoute } from './archiveSourceRoute';
 
 const identifier = z.string().regex(/^[a-z0-9_]+$/);
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -331,7 +332,8 @@ export function buildSiteCatalog(root: string, archiveRevision: string): Archive
   if (new Set(records.map(record => record.id)).size !== records.length) throw new Error('Duplicate archive problem');
   return {
     schema: 'theoremos.public-archive.v1', repository, archiveRevision,
-    snapshotAt: [snapshot.captureFinishedAt, campaign.capturedAt ?? ''].sort().at(-1)!, records: records.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    snapshotAt: [snapshot.captureFinishedAt, campaign.capturedAt ?? ''].sort().at(-1)!,
+    records: records.map(record => record.process?.sourceRoute ? record : withArchiveSourceRoute(record)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
   };
 }
 
@@ -342,10 +344,16 @@ export function archiveIndex(catalog: ArchiveCatalog): ArchiveIndex {
     const lines = main.code.split('\n');
     const start = Math.max(0, lines.findIndex(line => record.declaration && line.startsWith(record.declaration)));
     const { process: _process, ...summary } = record;
-    return { ...summary, excerpt: lines.slice(start, start + 7).join('\n'), sources: record.sources.map(({ code: _code, ...source }) => source) };
+    return { ...summary, ...(record.process && record.processSummary ? { processSummary: { ...record.processSummary,
+      version: crypto.createHash('sha256').update(archiveProcessScript(record)).digest('hex').slice(0, 16) } } : {}),
+      excerpt: lines.slice(start, start + 7).join('\n'), sources: record.sources.map(({ code: _code, ...source }) => source) };
   }) };
 }
 /** One script per record, so the archive also loads sources from file:// previews where fetch is unavailable. */
 export function archiveSourceScript(record: ArchiveRecord): string {
   return `(window.theoremosSources??={})[${JSON.stringify(record.id)}]=${JSON.stringify(Object.fromEntries(record.sources.map(source => [source.name, source.code])))};\n`;
+}
+
+export function archiveProcessScript(record: ArchiveRecord): string {
+  return `(window.theoremosProcesses??={})[${JSON.stringify(record.id)}]=${JSON.stringify(record.process)};\n`;
 }

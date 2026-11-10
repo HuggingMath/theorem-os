@@ -104,6 +104,21 @@ describe('explaining a failed version', () => {
     expect(answer.answer).toHaveLength(webExplainLimits.answer); expect(answer.truncated).toBe(true);
   });
 
+  it('stops delivering buffered events and rejects completion when onText aborts the request', async () => {
+    const mock = await provider(response => {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.end(sse([
+        { type: 'response.output_text.delta', delta: 'first' },
+        { type: 'response.output_text.delta', delta: ' late' },
+        { type: 'response.completed', response: {} },
+      ]));
+    });
+    const stop = new AbortController(), partials: string[] = [];
+    await expect(askProvider({ ...call(mock.baseUrl), onText: text => { partials.push(text); stop.abort(); } }, stop.signal))
+      .rejects.toMatchObject({ status: 499 });
+    expect(partials).toEqual(['first']);
+  });
+
   it('names what went wrong without passing on the provider\'s text, and stops on abort or timeout', async () => {
     const rejected = await provider(response => { response.writeHead(401, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ error: `bad key ${key}` })); });
     const error = await askProvider(call(rejected.baseUrl)).catch(caught => caught);

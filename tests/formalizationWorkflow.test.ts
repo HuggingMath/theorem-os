@@ -1,7 +1,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import crypto from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as sandboxRuntime from '../src/runtime/formalizationSandbox';
 import { assertFormalizationEvidence, formalizationDigest, prepareFormalization, readFormalizationArtifact,
   readFormalizationRequest } from '../src/math/formalization';
 import { defaultFormalizationWorkflow, type FormalizationWorkflow } from '../src/math/formalizationWorkflow';
@@ -41,6 +44,7 @@ function preset(options: { verdicts?: ('approved' | 'changes_requested' | 'unkno
   rejectedFirstRound?: boolean; unknownFirstRound?: boolean; mismatchAspects?: (typeof structuredReviewAspects[number])[];
   changeSource?: boolean; reuseThread?: boolean; missingFinalUsage?: boolean;
   incompleteFinalUsage?: boolean; submitted?: boolean; claimShapeFirst?: boolean; afterOutput?: (role: string) => void;
+  additionalTargets?: readonly string[]; candidateSource?: string;
   refutations?: (input: any) => unknown[]; refuteStatus?: string; refuteDiagnostic?: MathAgentFailureDiagnostic } = {}) {
   let sequence = 0, plans = 0;
   const seen: { role: string; config: MathAgentOptions; input: any; message: string }[] = [];
@@ -56,6 +60,7 @@ function preset(options: { verdicts?: ('approved' | 'changes_requested' | 'unkno
         let output: unknown;
         if (role.startsWith('plan-')) {
           plans++; const value = plan(input.statement);
+          value.conclusions[0].targetNames.push(...options.additionalTargets ?? []);
           if (options.claimShapeFirst && plans === 1) value.conclusions[0].mathematics = 'IsConj (n + 0) (0 + n).';
           if (options.badSpanFirst && plans === 1) value.spans[0].text = 'x'.repeat(input.statement.length);
           if (options.unresolved) value.unresolved.push({ id: 'unknown-domain', spanIds: ['source'], description: 'The domain is unresolved.' });
@@ -63,6 +68,11 @@ function preset(options: { verdicts?: ('approved' | 'changes_requested' | 'unkno
           output = value;
         } else if (role === 'generate') {
           const value = candidateFixture(input.statement);
+          if (options.candidateSource) value.source = options.candidateSource;
+          for (const name of options.additionalTargets ?? []) {
+            value.source += `theorem ${name} (n : Nat) : n + 0 = n := by sorry\n`;
+            value.coverage[0].targetNames.push(name);
+          }
           if (options.addUnplannedDefinition) value.source = 'def hiddenMeaning : Nat := 0\n' + value.source;
           if (input.round > 1) {
             value.definitionsExplanation += ' Changed author notes.';
@@ -225,6 +235,92 @@ const elaborate: NonNullable<Parameters<typeof runFormalization>[2]>['elaborate'
     return result;
   };
 
+describe('source planning and sealed package preparation', () => {
+  function deferred() {
+    let resolve!: () => void;
+    const promise = new Promise<void>(yes => { resolve = yes; });
+    return { promise, resolve };
+  }
+  const overrides = { environment: 'mathlib', execution: 'model', fidelityPolicy: 'task-preserving-v2' };
+
+  it('warms packages when the web activity recorder wraps the real session factory', async () => {
+    const f = fixture(undefined, overrides), agent = preset({ verdicts: ['unknown', 'unknown'] });
+    const warm = vi.spyOn(sandboxRuntime, 'warmFormalizationPackages').mockResolvedValue();
+    try {
+      const result = await runFormalization(f.directory, f.root, { openSession: options => agent.open(options), elaborate });
+      expect(result.error).toContain('formalization_semantic_unknown');
+      expect(warm).toHaveBeenCalledOnce();
+      expect(warm.mock.calls[0][0]).toBe('mathlib');
+    } finally { warm.mockRestore(); }
+  });
+
+  it('runs source planning during preparation and waits before generation', async () => {
+    const f = fixture(undefined, overrides), ready = deferred(), planned = deferred();
+    const agent = preset({ verdicts: ['unknown', 'unknown'] });
+    let preparationCalls = 0;
+    const running = runFormalization(f.directory, f.root, { openSession: agent.open, elaborate,
+      preparePackages: async (environment, options) => {
+        preparationCalls++; expect(environment).toBe('mathlib');
+        expect(options.signal?.aborted).toBe(false); expect(options.deadlineAt).toBeGreaterThan(Date.now());
+        await ready.promise;
+      }, onEvent: e => { if (e.event === 'formalization_role_finished' && e.role === 'plan') planned.resolve(); },
+    });
+    try {
+      await planned.promise;
+      expect(preparationCalls).toBe(1); expect(agent.seen.map(item => item.role)).toEqual(['plan-1']);
+      expect(agent.seen[0].config.readIsolation).toEqual({ environment: 'mathlib', packages: 'none' });
+      expect(agent.seen[0].config.instructions).toContain('no Mathlib packages; /opt/lean-packages is not mounted');
+      ready.resolve();
+      const result = await running;
+      expect(result.status).toBe('exhausted'); expect(result.error).toContain('formalization_semantic_unknown');
+      expect(agent.seen.find(item => item.role === 'generate')!.config.readIsolation).toEqual({ environment: 'mathlib' });
+    } finally { ready.resolve(); await running; }
+  });
+
+  it('retains library access for a repair plan that must resolve a missing meaning', async () => {
+    const f = fixture(undefined, overrides), ready = deferred(), planned = deferred();
+    const agent = preset({ verdicts: ['unknown', 'unknown'], afterOutput: role => {
+      if (role !== 'plan-1') return;
+      const file = path.join(agent.seen.at(-1)!.config.workspace, 'OUTPUT.json');
+      const output = JSON.parse(fs.readFileSync(file, 'utf8'));
+      output.unresolved.push({ id: 'inspect-library', spanIds: ['source'], description: 'A specialized meaning needs pinned library inspection.' });
+      fs.writeFileSync(file, JSON.stringify(output));
+    } });
+    const running = runFormalization(f.directory, f.root, { openSession: agent.open, elaborate,
+      preparePackages: async () => { await ready.promise; },
+      onEvent: e => { if (e.event === 'formalization_role_finished' && e.role === 'plan') planned.resolve(); },
+    });
+    try {
+      await planned.promise;
+      expect(agent.seen.map(item => item.role)).toEqual(['plan-1']);
+      ready.resolve(); await running;
+      const repaired = agent.seen.find(item => item.role === 'plan-2')!;
+      expect(repaired.input.feedback).toContain('formalization_plan_unresolved');
+      expect(repaired.config.readIsolation).toEqual({ environment: 'mathlib' });
+      expect(repaired.config.instructions).toContain('pinned Mathlib and dependencies are in /opt/lean-packages');
+    } finally { ready.resolve(); await running; }
+  });
+
+  it.each(['cancel', 'unresolved'] as const)('joins and releases preparation when planning ends with %s', async mode => {
+    const f = fixture(workflow => { workflow.maxPlanningRounds = 1; }, overrides);
+    const controller = new AbortController(), planned = deferred();
+    const agent = preset({ unresolved: mode === 'unresolved' });
+    let released = false;
+    const running = runFormalization(f.directory, f.root, { openSession: agent.open, elaborate, signal: controller.signal,
+      preparePackages: async (_environment, options) => {
+        await new Promise<void>((_resolve, reject) => options.signal!.addEventListener('abort', () => {
+          released = true; reject(new Error('preparation cancelled'));
+        }, { once: true }));
+      }, onEvent: e => { if (e.event === 'formalization_role_finished' && e.role === 'plan') planned.resolve(); },
+    });
+    await planned.promise;
+    if (mode === 'cancel') controller.abort();
+    const result = await running;
+    expect(released).toBe(true); expect(agent.seen.map(item => item.role)).toEqual(['plan-1']);
+    expect(result.status).toBe(mode === 'cancel' ? 'stopped' : 'exhausted');
+  });
+});
+
 describe('fidelity role context and submission reminders', () => {
   it('delivers each small frozen input and schema in the first message while keeping backtranslation blind', async () => {
     const statement = fixtureStatement + '\nSource tag: "原题🙂" \\n';
@@ -240,12 +336,34 @@ describe('fidelity role context and submission reminders', () => {
       expect(message.match(/\nBEGIN INPUT\.json\n([\s\S]*?)\nEND INPUT\.json\n/u)?.[1]).toBe(inputText);
       expect(message.match(/\nBEGIN OUTPUT\.schema\.json\n([\s\S]*?)\nEND OUTPUT\.schema\.json$/u)?.[1]).toBe(schemaText);
       expect(JSON.parse(inputText)).toEqual(input);
+      expect(message).toContain('shared with generation, Lean compilation, backtranslation and independent review');
     }
     const blind = agent.seen.find(item => item.role === 'backtranslate')!;
+    const planner = agent.seen.find(item => item.role === 'plan-1')!;
+    const protocol = readMathText(path.join(planner.config.workspace, 'ROLE.md'));
+    const sourceSpan = JSON.parse(protocol.match(/^HOST_SOURCE_SPAN=(.+)$/mu)![1]);
+    expect(sourceSpan).toEqual({ id: 'source', start: 0, end: statement.length, text: statement });
+    expect(statement.slice(sourceSpan.start, sourceSpan.end)).toBe(statement);
+    expect(protocol).not.toContain('Parse INPUT.json with Python');
+    expect(protocol).not.toContain('the checker relates a candidate to a reference only');
+    expect(protocol).toContain('directions of equivalence and boundary cases');
+    expect(readMathText(path.join(blind.config.workspace, 'ROLE.md'))).not.toContain('HOST_SOURCE_SPAN');
     for (const hidden of [statement, JSON.stringify(statement), 'Source tag:', 'zero-identity'])
       expect(blind.message).not.toContain(hidden);
     expect(blind.input).not.toHaveProperty('statement'); expect(blind.input).not.toHaveProperty('plan');
     expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
+  });
+
+  it.each([32_000, 32_001])('only supplies a full-source span that fits candidate coverage at %i code units', async length => {
+    const statement = 'x'.repeat(length - fixtureStatement.length) + fixtureStatement;
+    const f = fixture(workflow => { workflow.maxPlanningRounds = 1; }, { statement, fidelityPolicy: 'task-preserving-v2' });
+    const agent = preset({ unresolved: true });
+    const result = await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate });
+    expect(result.status).toBe('exhausted'); expect(result.error).toContain('formalization_plan_unresolved');
+    expect(agent.seen).toHaveLength(1);
+    const protocol = readMathText(path.join(agent.seen[0]!.config.workspace, 'ROLE.md'));
+    expect(protocol.includes('HOST_SOURCE_SPAN=')).toBe(length === 32_000);
+    expect(protocol.includes('Parse INPUT.json with Python')).toBe(length > 32_000);
   });
 
   it.each([
@@ -264,13 +382,167 @@ describe('fidelity role context and submission reminders', () => {
     if (_kind === 'multibyte') expect(inputText.length + schemaText.length).toBeLessThan(64 * 1024);
     expect(JSON.parse(inputText).statement).toBe(statement); expect(input.statement).toBe(statement);
     expect(message).toContain('INPUT.json'); expect(message).toContain('OUTPUT.schema.json');
-    expect(message).not.toContain('BEGIN INPUT.json'); expect(message).not.toContain('BEGIN OUTPUT.schema.json');
+    expect(message).not.toContain('BEGIN INPUT.json');
+    expect(message.match(/\nBEGIN OUTPUT\.schema\.json\n([\s\S]*?)\nEND OUTPUT\.schema\.json/u)?.[1]).toBe(schemaText);
     expect(message).not.toContain('large-source-start'); expect(message).not.toContain('large-source-end');
+    expect(readMathText(path.join(config.workspace, 'ROLE.md'))).not.toContain('HOST_SOURCE_SPAN');
     expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
   });
 
+  it('inlines exact target navigation and schema while retaining all large raw observations', async () => {
+    const statement = fixtureStatement + '\nOriginal-only marker 原题🙂';
+    const f = fixture(undefined, { statement, fidelityPolicy: 'task-preserving-v2' });
+    const agent = preset({ verdicts: ['unknown', 'unknown'], additionalTargets: ['addition_copy_one', 'addition_copy_two'] });
+    const result = await runFormalization(f.directory, f.root, { openSession: agent.open,
+      elaborate: async (...args) => {
+        const result = await elaborate!(...args);
+        for (const target of result.snapshot.targets)
+          target.context.constants = Array.from({ length: 20 }, (_, index) => ({
+            name: 'ObservedConstant' + index, module: 'Init', type: 'Nat',
+            definition: 'complete-definition-' + crypto.randomBytes(8200).toString('base64'),
+          }));
+        result.snapshotDigest = formalizationDigest(result.snapshot);
+        return result;
+      },
+    });
+    expect(result.error).toContain('formalization_semantic_unknown');
+    for (const role of ['backtranslate', 'compare-reviewer-1', 'compare-reviewer-2']) {
+      const seen = agent.seen.find(item => item.role === role)!;
+      const input = JSON.parse(readMathText(path.join(seen.config.workspace, 'INPUT.json')));
+      const snapshot = role === 'backtranslate' ? input : input.observation.snapshot;
+      expect(Buffer.byteLength(JSON.stringify(input))).toBeGreaterThan(512 * 1024);
+      expect(seen.message).not.toContain('BEGIN INPUT.json');
+      const index = JSON.parse(seen.message.match(/\nBEGIN SNAPSHOT INDEX\n([\s\S]*?)\nEND SNAPSHOT INDEX/u)![1]);
+      expect(index.snapshotDigest).toBe(role === 'backtranslate' ? input.snapshotDigest : input.observation.snapshotDigest);
+      expect(index.source).toBe(snapshot.source);
+      expect(seen.config.instructions).toContain('iterate context.structures.entries');
+      expect(seen.config.instructions).toContain('INPUT.translation, outside the snapshot');
+      expect(index.targets.map((item: any) => item.name)).toEqual(snapshot.targets.map((target: any) => target.name));
+      expect(index.targets[0].type).toBe(snapshot.targets[0].context.type);
+      expect(index.targets[0].bindings).toEqual(snapshot.targets[0].context.bindings);
+      expect(index.targets[0].omitted).toEqual(snapshot.targets[0].context.omitted);
+      expect(index.targets[0].remainingFields).toContainEqual({
+        path: (role === 'backtranslate' ? '$' : '$.observation.snapshot') + '.targets[0].context.constants',
+        bytes: Buffer.byteLength(canonicalMathJson(snapshot.targets[0].context.constants)),
+      });
+      expect(snapshot.targets[0].context.constants).toHaveLength(20);
+      expect(snapshot.targets[0].context.constants[19].definition).toMatch(/^complete-definition-[A-Za-z0-9+/]+=*$/u);
+      expect(seen.message).toContain('BEGIN OUTPUT.schema.json');
+    }
+    const blind = agent.seen.find(item => item.role === 'backtranslate')!;
+    expect(blind.message).not.toContain('Original-only marker'); expect(blind.input).not.toHaveProperty('original');
+  });
+
+  it.each([
+    [4096, []], [11000, ['addition_copy_one', 'addition_copy_two']],
+  ] as const)('shares complete review observations with %i-byte definitions losslessly in the first message', async (length, additionalTargets) => {
+    const statement = fixtureStatement + '\nOriginal-only marker 原题🙂';
+    const f = fixture(undefined, { statement, fidelityPolicy: 'task-preserving-v2' });
+    const agent = preset({ verdicts: ['unknown', 'unknown'], additionalTargets });
+    const result = await runFormalization(f.directory, f.root, { openSession: agent.open,
+      elaborate: async (...args) => {
+        const result = await elaborate!(...args);
+        for (const target of result.snapshot.targets)
+          target.context.constants = Array.from({ length: 20 }, (_, index) => ({
+            name: 'ObservedConstant' + index, module: 'Init', type: 'Nat', definition: 'complete-definition-' + 'x'.repeat(length),
+          }));
+        result.snapshotDigest = formalizationDigest(result.snapshot);
+        return result;
+      },
+    });
+    expect(result.error).toContain('formalization_semantic_unknown');
+    for (const role of ['backtranslate', 'compare-reviewer-1', 'compare-reviewer-2']) {
+      const seen = agent.seen.find(item => item.role === role)!;
+      const inputText = readMathText(path.join(seen.config.workspace, 'INPUT.json'));
+      const schemaText = readMathText(path.join(seen.config.workspace, 'OUTPUT.schema.json'));
+      const bytes = Buffer.byteLength(inputText) + Buffer.byteLength(schemaText);
+      expect(bytes).toBeGreaterThan(64 * 1024);
+      expect(bytes > 512 * 1024).toBe(length === 11000);
+      const transport = JSON.parse(seen.message.match(/\nBEGIN SHARED INPUT\.json\n([\s\S]*?)\nEND SHARED INPUT\.json\n/u)![1]);
+      expect(transport.schema).toBe('theorem-os.formalization-shared-context.v1');
+      expect(transport.canonicalInputSha256).toBe(mathDigest(inputText));
+      // Independently consume the documented wire representation, including backward references.
+      const expanded: unknown[] = [];
+      const decode = (value: any): any => {
+        if (Array.isArray(value)) return value.map(decode);
+        if (value && typeof value === 'object') {
+          if (Object.keys(value).length === 1 && Object.hasOwn(value, '$ref')) {
+            expect(Number.isSafeInteger(value.$ref) && value.$ref >= 0 && value.$ref < expanded.length).toBe(true);
+            return expanded[value.$ref];
+          }
+          return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, decode(child)]));
+        }
+        return value;
+      };
+      for (const entry of transport.dictionary) expanded.push(decode(entry));
+      expect(canonicalMathJson(decode(transport.input))).toBe(inputText);
+      expect(Buffer.byteLength(JSON.stringify(transport))).toBeLessThan(Buffer.byteLength(inputText) / 2);
+      expect(seen.config.instructions).toContain('checked byte-for-byte equality');
+      expect(seen.message.match(/\nBEGIN OUTPUT\.schema\.json\n([\s\S]*?)\nEND OUTPUT\.schema\.json$/u)?.[1]).toBe(schemaText);
+      expect(seen.message).toContain('complete-definition-' + 'x'.repeat(length));
+      expect(seen.message).not.toContain('BEGIN SNAPSHOT INDEX');
+    }
+    const blind = agent.seen.find(item => item.role === 'backtranslate')!;
+    expect(blind.message).not.toContain('Original-only marker'); expect(blind.input).not.toHaveProperty('original');
+    expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
+  });
+
+  it.each([false, true])('keeps focused review input complete and selects file navigation when oversized=%s', async oversized => {
+    const statement = fixtureStatement + '\nOriginal-only marker 原题🙂';
+    const f = fixture(undefined, { statement, fidelityPolicy: 'task-preserving-v2' });
+    const agent = preset({ verdicts: ['unknown', 'unknown'],
+      additionalTargets: oversized ? ['additionSecond', 'additionThird', 'additionFourth'] : [] });
+    const result = await runFormalization(f.directory, f.root, { openSession: agent.open,
+      elaborate: async (...args) => {
+        const result = await elaborate!(...args);
+        for (const target of result.snapshot.targets) {
+          target.context.references = { statement: [], proof: [] };
+          target.context.constants = Array.from({ length: 20 }, (_, index) => ({
+            name: index === 0 ? 'True' : 'ObservedConstant' + index, module: 'Init', type: 'Prop',
+            definition: 'complete-definition-' + crypto.randomBytes(3500).toString('base64'),
+          }));
+          if (oversized) target.context.semantic!.rawType += crypto.randomBytes(100000).toString('base64');
+        }
+        result.snapshotDigest = formalizationDigest(result.snapshot); return result;
+      },
+    });
+    expect(result.error).toContain('formalization_semantic_unknown');
+    for (const role of ['backtranslate', 'compare-reviewer-1', 'compare-reviewer-2']) {
+      const seen = agent.seen.find(item => item.role === role)!;
+      const inputText = readMathText(path.join(seen.config.workspace, 'INPUT.json')), input = JSON.parse(inputText);
+      const original = role === 'backtranslate' ? input : input.observation.snapshot;
+      if (oversized) {
+        expect(seen.message).not.toContain('BEGIN REVIEW CONTEXT');
+        expect(seen.config.instructions).toContain('First list target indices and names');
+        expect(seen.config.instructions).not.toContain('Use the supplied reading view and exact output schema directly');
+        expect(seen.config.instructions).toContain('theorem-os.formalization-review-context.v3');
+        continue;
+      }
+      expect(seen.config.instructions).toContain('Use the supplied reading view and exact output schema directly');
+      expect(seen.config.instructions).not.toContain('First list target indices and names');
+      const packet = JSON.parse(seen.message.match(/\nBEGIN REVIEW CONTEXT\n([\s\S]*?)\nEND REVIEW CONTEXT/u)![1]);
+      const view = role === 'backtranslate' ? packet.input : packet.input.observation.snapshot;
+      expect(packet.canonicalInputSha256).toBe(mathDigest(inputText));
+      expect(view.source).toBe(original.source); expect(view.targets[0].context.semantic).toEqual(original.targets[0].context.semantic);
+      expect(view.targets[0].context.bindings).toEqual(original.targets[0].context.bindings);
+      const library = view.targets[0].context.importedLibrary;
+      expect(packet.schema).toBe('theorem-os.formalization-review-context.v3');
+      expect(library.constants.count).toBe(20);
+      expect(library.constants.directEntries).toHaveLength(1);
+      expect(packet.libraryCatalog.constants[library.constants.directEntries[0].catalogIndex].definition).toBe(original.targets[0].context.constants[0].definition);
+      expect(seen.message).not.toContain('ObservedConstant19');
+      expect(original.targets[0].context.constants[19].definition).toMatch(/^complete-definition-/u);
+      expect(seen.config.instructions).toContain('Read all fields of a relevant structure');
+      expect(seen.message).not.toContain('complete lossless shared input');
+      expect(seen.message).not.toContain('BEGIN SNAPSHOT INDEX');
+    }
+    const blind = agent.seen.find(item => item.role === 'backtranslate')!;
+    expect(blind.message).not.toContain('Original-only marker'); expect(blind.input).not.toHaveProperty('original');
+    expect(new Set(agent.seen.map(item => item.config.workspace)).size).toBe(5);
+  });
+
   it.each(['unknown', 'changes_requested'] as const)(
-    'reminds once after three settled requests and still requires both reviewers when they return %s', async verdict => {
+    'reminds planning and each reviewer after a settled request and preserves a %s verdict', async verdict => {
       const f = fixture(workflow => { workflow.reviewScheduling = 'parallel'; },
         { fidelityPolicy: 'task-preserving-v2', maxTotalTokens: 100 });
       const agent = preset({ verdicts: [verdict, verdict] }), provider = withProviderRequests(agent);
@@ -278,12 +550,16 @@ describe('fidelity role context and submission reminders', () => {
       expect(result.status).toBe('exhausted'); expect(result.error).toContain('formalization_semantic_' + verdict);
       expect(result.roleTurns).toMatchObject({ plan: 1, generate: 1, backtranslate: 1, compare: 2 });
       expect(provider.notices).toEqual([
-        { role: 'plan-1', reported: 3, pending: 0, waitForRequest: true },
+        { role: 'plan-1', reported: 1, pending: 0, waitForRequest: true },
         { role: 'backtranslate', reported: 3, pending: 0, waitForRequest: true },
+        { role: 'compare-reviewer-1', reported: 1, pending: 0, waitForRequest: true },
+        { role: 'compare-reviewer-2', reported: 1, pending: 0, waitForRequest: true },
       ]);
-      for (const role of ['plan-1', 'backtranslate'])
-        expect(provider.checkpoints.filter(item => item.role === role).map(item => item.notices)).toEqual([0, 0, 1, 1, 1]);
-      expect(provider.checkpoints.filter(item => !['plan-1', 'backtranslate'].includes(item.role)).every(item => item.notices === 0)).toBe(true);
+      expect(provider.checkpoints.filter(item => item.role === 'plan-1').map(item => item.notices)).toEqual([1, 1, 1, 1, 1]);
+      expect(provider.checkpoints.filter(item => item.role === 'backtranslate').map(item => item.notices)).toEqual([0, 0, 1, 1, 1]);
+      for (const role of ['compare-reviewer-1', 'compare-reviewer-2'])
+        expect(provider.checkpoints.filter(item => item.role === role).map(item => item.notices)).toEqual([1, 1, 1, 1, 1]);
+      expect(provider.checkpoints.filter(item => item.role === 'generate').every(item => item.notices === 0)).toBe(true);
       expect(provider.denied).toEqual([]); expect(provider.interrupted).toEqual([]);
       const state = readFormalizationState(f.directory);
       expect(state.sessions).toHaveLength(5);
@@ -300,6 +576,22 @@ describe('fidelity role context and submission reminders', () => {
       expect(fs.existsSync(path.join(f.directory, 'workspace'))).toBe(false);
     });
 
+  it('waits for every pending request before reminding each independent reviewer', async () => {
+    const f = fixture(workflow => { workflow.reviewScheduling = 'parallel'; },
+      { fidelityPolicy: 'task-preserving-v2', maxTotalTokens: 100 });
+    const provider = withProviderRequests(preset({ verdicts: ['unknown', 'unknown'] }),
+      Array.from({ length: 5 }, () => completeRequest), 5);
+    const result = await runFormalization(f.directory, f.root, { openSession: provider.open, elaborate });
+    expect(result.error).toContain('formalization_semantic_unknown');
+    const reviewers = provider.notices.filter(item => item.role.startsWith('compare-'));
+    expect(reviewers).toEqual(['compare-reviewer-1', 'compare-reviewer-2'].map(role =>
+      ({ role, reported: 5, pending: 0, waitForRequest: true })));
+    for (const role of ['compare-reviewer-1', 'compare-reviewer-2'])
+      expect(provider.checkpoints.filter(item => item.role === role).map(item => item.notices)).toEqual([0, 0, 0, 0, 1]);
+    expect(provider.interrupted).toEqual([]); expect(provider.denied).toEqual([]);
+    expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
+  });
+
   it('withholds reminders while requests are pending and stops after a receipt loses usage', async () => {
     const f = fixture(undefined, { fidelityPolicy: 'task-preserving-v2', maxTotalTokens: 100 }), agent = preset();
     const provider = withProviderRequests(agent, [completeRequest, completeRequest, completeRequest,
@@ -315,15 +607,15 @@ describe('fidelity role context and submission reminders', () => {
     expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
   });
 
-  it('stops for the shared token allowance before sending a third-request reminder', async () => {
-    const f = fixture(undefined, { fidelityPolicy: 'task-preserving-v2', maxTotalTokens: 3 }), agent = preset();
+  it('stops for the shared token allowance before sending a first-request reminder', async () => {
+    const f = fixture(undefined, { fidelityPolicy: 'task-preserving-v2', maxTotalTokens: 1 }), agent = preset();
     const provider = withProviderRequests(agent);
     const result = await runFormalization(f.directory, f.root, { openSession: provider.open, elaborate });
     expect(result).toMatchObject({ status: 'stopped', error: 'math_total_token_limit' });
     expect(provider.opened).toEqual(['plan-1']); expect(provider.notices).toEqual([]);
     expect(provider.interrupted).toContain('plan-1'); expect(provider.denied).toEqual(['math_model_request_stopped']);
     expect(readFormalizationState(f.directory).sessions[0].requestUsageAccounting).toMatchObject({
-      startedRequests: 3, reportedRequests: 3, pendingRequests: 0, incomplete: false,
+      startedRequests: 1, reportedRequests: 1, pendingRequests: 0, incomplete: false,
     });
     expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
   });
@@ -417,6 +709,201 @@ describe('same-thread reviewer output correction', () => {
   });
 });
 
+describe('parallel review retries after a validated revision request', () => {
+  function deferred() {
+    let resolve!: () => void;
+    const promise = new Promise<void>(done => { resolve = done; });
+    return { promise, resolve };
+  }
+  // Drain the completed review's promise chain, including host validation,
+  // before releasing its peer. This advances an event-loop turn, not a timer.
+  const afterValidation = () => new Promise<void>(resolve => setImmediate(resolve));
+  const transient: MathAgentFailureDiagnostic = { code: 'other', reason: 'upstream_request_failed' };
+
+  function setup(options: Parameters<typeof preset>[0] = {}, maxRounds = 1, reviewerCount = 2) {
+    // Reuse an authentic saved comparison only for its exact complete input;
+    // scheduling tests must never launch Lean or manufacture an acceptance.
+    const saved = JSON.parse(gunzipSync(fs.readFileSync(
+      new URL('./fixtures/web-formalization-fidelity-v2.json.gz', import.meta.url))).toString());
+    const f = fixture(workflow => {
+      workflow.reviewScheduling = 'parallel'; workflow.maxPlanningRounds = 0;
+      if (reviewerCount === 3) workflow.reviewers.push({ ...workflow.reviewers[1], id: 'reviewer-3' });
+    }, { fidelityPolicy: 'task-preserving-v2', maxRounds, maxRunSeconds: 0, maxTurnSeconds: 0,
+      maxCompileSeconds: 0, maxTotalTokens: 0 });
+    const agent = preset({ ...options, candidateSource: saved.input.candidateSource }), firstFinished = deferred();
+    const compareReference = vi.fn(async (_directory: string, input: unknown) => {
+      expect(input).toEqual(saved.input); return structuredClone(saved.result);
+    });
+    const onEvent: NonNullable<Parameters<typeof runFormalization>[2]>['onEvent'] = event => {
+      if (event.event === 'formalization_role_finished' && event.role === 'compare' &&
+          readFormalizationState(f.directory).sessions.some(session => session.round === 1 &&
+            session.reviewerId === 'reviewer-1' && session.status === 'completed')) firstFinished.resolve();
+    };
+    const readReviews = (round: number) => {
+      const name = fs.readdirSync(f.directory).find(name => name.startsWith(`round-${String(round).padStart(2, '0')}-`))!;
+      return JSON.parse(readMathText(path.join(f.directory, name, 'reviews.json')));
+    };
+    return { ...f, agent, firstFinished, compareReference, onEvent, readReviews };
+  }
+
+  function failFirstPeer(openBase: ReturnType<typeof preset>['open'], beforeFailure: () => Promise<void>,
+    diagnostic = transient) {
+    let attempts = 0;
+    const open = async (config: MathAgentOptions): Promise<MathAgentSession> => {
+      const base = await openBase(config);
+      if (path.basename(config.workspace) !== 'compare-reviewer-2' || ++attempts !== 1) return base;
+      return { ...base, lastFailureDiagnostic: diagnostic, run: async (_message, _id, _workspace, onStarted) => {
+        onStarted('preset-failed-review'); config.onUsage({ totalTokens: 1 });
+        await beforeFailure(); return 'failed';
+      } };
+    };
+    return { open, attempts: () => attempts };
+  }
+
+  it('defers a transient failed peer without blacklisting and still requires two approvals in the next round', async () => {
+    const f = setup({ rejectedFirstRound: true }, 2), waitForRetry = vi.fn(async () => {});
+    const peer = failFirstPeer(f.agent.open, async () => { await f.firstFinished.promise; await afterValidation(); });
+    const result = await runFormalization(f.directory, f.root, {
+      openSession: peer.open, elaborate, compareReference: f.compareReference, onEvent: f.onEvent, waitForRetry,
+    });
+    expect(result).toMatchObject({ status: 'approved', rounds: 2, candidatesTried: 2, firstCandidateApproved: false });
+    expect(waitForRetry).not.toHaveBeenCalled(); expect(peer.attempts()).toBe(2);
+    const incomplete = f.readReviews(1);
+    expect(incomplete).toMatchObject({ agreement: 'incomplete', policy: 'all-approve',
+      deferredReviews: [{ reviewerId: 'reviewer-2', error: 'formalization_role_incomplete:failed:other:upstream_request_failed' }] });
+    expect(incomplete).not.toHaveProperty('decision');
+    expect(incomplete.reviews.map(item => [item.reviewerId, item.review.verdict])).toEqual([['reviewer-1', 'changes_requested']]);
+    const complete = f.readReviews(2);
+    expect(complete.agreement).toBe('unanimous-approval'); expect(complete).not.toHaveProperty('deferredReviews');
+    expect(complete.reviews.map(item => [item.reviewerId, item.review.verdict])).toEqual([
+      ['reviewer-1', 'approved'], ['reviewer-2', 'approved'],
+    ]);
+    expect(readFormalizationState(f.directory).rejectedCandidates ?? []).toEqual([]);
+    const evidence = readFormalizationArtifact(path.join(f.directory, 'artifact'));
+    expect(evidence.workflow!.reviews).toHaveLength(2);
+    expect(evidence.workflow!.reviews.every(item => item.review.verdict === 'approved')).toBe(true);
+    expect(new Set(evidence.sessions.filter(item => item.role === 'compare').map(item => item.threadId)).size).toBe(2);
+  });
+
+  it('rechecks a validated change request received during retry backoff before reopening the peer', async () => {
+    const f = setup({ verdicts: ['changes_requested', 'approved'] }), releaseFirst = deferred();
+    const openFirst = async (config: MathAgentOptions): Promise<MathAgentSession> => {
+      const base = await f.agent.open(config);
+      if (path.basename(config.workspace) !== 'compare-reviewer-1') return base;
+      return { ...base, run: async (...args) => { await releaseFirst.promise; return base.run(...args); } };
+    };
+    const peer = failFirstPeer(openFirst, async () => {}), waitForRetry = vi.fn(async () => {
+      releaseFirst.resolve(); await f.firstFinished.promise; await afterValidation();
+    });
+    const result = await runFormalization(f.directory, f.root, {
+      openSession: peer.open, elaborate, compareReference: f.compareReference, onEvent: f.onEvent, waitForRetry,
+    });
+    expect(waitForRetry).toHaveBeenCalledOnce(); expect(peer.attempts()).toBe(1);
+    expect(result.status).toBe('exhausted'); expect(result.error).toContain('formalization_review_revision_requested:');
+    expect(f.readReviews(1)).toMatchObject({ agreement: 'incomplete', deferredReviews: [{ reviewerId: 'reviewer-2' }] });
+    expect(readFormalizationState(f.directory).rejectedCandidates ?? []).toEqual([]);
+    expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
+  });
+
+  it.each(['unknown', 'approved'] as const)('continues retrying a transient peer after the other reviewer returns %s', async verdict => {
+    const f = setup({ verdicts: [verdict, 'approved'] }), waitForRetry = vi.fn(async () => {});
+    const peer = failFirstPeer(f.agent.open, async () => { await f.firstFinished.promise; await afterValidation(); });
+    const result = await runFormalization(f.directory, f.root, {
+      openSession: peer.open, elaborate, compareReference: f.compareReference, onEvent: f.onEvent, waitForRetry,
+    });
+    expect(waitForRetry).toHaveBeenCalledOnce(); expect(peer.attempts()).toBe(2);
+    const reviews = f.readReviews(1);
+    expect(reviews).not.toHaveProperty('deferredReviews'); expect(reviews.agreement).not.toBe('incomplete');
+    expect(reviews.reviews.map(item => item.review.verdict)).toEqual([verdict, 'approved']);
+    expect(result.status).toBe(verdict === 'approved' ? 'approved' : 'exhausted');
+    if (verdict === 'unknown') expect(result.error).toContain('formalization_semantic_unknown');
+  });
+
+  it('does not use an invalid changes_requested output to suppress peer retries', async () => {
+    const verdicts: ('changes_requested' | 'unknown' | 'approved')[] = ['changes_requested', 'approved'];
+    const f = setup({ verdicts }), waitForRetry = vi.fn(async () => {}); let firstTurns = 0;
+    const openFirst = async (config: MathAgentOptions): Promise<MathAgentSession> => {
+      const base = await f.agent.open(config);
+      if (path.basename(config.workspace) !== 'compare-reviewer-1') return base;
+      return { ...base, run: async (...args) => {
+        const status = await base.run(...args);
+        if (++firstTurns === 1) {
+          const file = path.join(config.workspace, 'OUTPUT.json'), output = JSON.parse(readMathText(file));
+          output.correspondences[0].candidateFragment = 'this fragment is absent from the frozen candidate';
+          fs.writeFileSync(file, JSON.stringify(output)); verdicts[0] = 'unknown';
+        }
+        return status;
+      } };
+    };
+    const peer = failFirstPeer(openFirst, async () => { await f.firstFinished.promise; await afterValidation(); });
+    const result = await runFormalization(f.directory, f.root, {
+      openSession: peer.open, elaborate, compareReference: f.compareReference, onEvent: f.onEvent, waitForRetry,
+    });
+    expect(firstTurns).toBe(2); expect(peer.attempts()).toBe(2); expect(waitForRetry).toHaveBeenCalledOnce();
+    expect(result.error).toContain('formalization_semantic_unknown');
+    expect(f.readReviews(1)).not.toHaveProperty('deferredReviews');
+  });
+
+  it.each(['permanent error', 'cancellation'] as const)('preserves %s after a valid change request', async mode => {
+    const f = setup({ verdicts: ['changes_requested', 'approved'] }), controller = new AbortController();
+    const waitForRetry = vi.fn(async () => {});
+    const peer = failFirstPeer(f.agent.open, async () => {
+      await f.firstFinished.promise; await afterValidation();
+      if (mode === 'cancellation') controller.abort();
+    }, mode === 'permanent error' ? { code: 'unauthorized', httpStatusCode: 401 } : transient);
+    const result = await runFormalization(f.directory, f.root, {
+      signal: controller.signal, openSession: peer.open, elaborate, compareReference: f.compareReference,
+      onEvent: f.onEvent, waitForRetry,
+    });
+    expect(result.status).toBe('stopped'); expect(peer.attempts()).toBe(1); expect(waitForRetry).not.toHaveBeenCalled();
+    expect(result.error).not.toContain('formalization_review_revision_requested');
+    if (mode === 'permanent error') expect(result.error).toBe('formalization_role_incomplete:failed:unauthorized');
+    expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
+  });
+
+  it('lets a normally running peer finish after a validated change request', async () => {
+    const f = setup({ verdicts: ['changes_requested', 'approved'] }), interrupted: string[] = [];
+    const open = async (config: MathAgentOptions): Promise<MathAgentSession> => {
+      const base = await f.agent.open(config), role = path.basename(config.workspace);
+      return { ...base, interrupt: async () => { interrupted.push(role); await base.interrupt(); },
+        run: async (...args) => {
+          if (role === 'compare-reviewer-2') { await f.firstFinished.promise; await afterValidation(); }
+          return base.run(...args);
+        } };
+    };
+    const result = await runFormalization(f.directory, f.root, {
+      openSession: open, elaborate, compareReference: f.compareReference, onEvent: f.onEvent,
+    });
+    expect(result.status).toBe('exhausted'); expect(result.error).toContain('formalization_semantic_unknown');
+    expect(interrupted).toEqual([]);
+    const reviews = f.readReviews(1);
+    expect(reviews.agreement).toBe('disagreement'); expect(reviews).not.toHaveProperty('deferredReviews');
+    expect(reviews.reviews.map(item => item.review.verdict)).toEqual(['changes_requested', 'approved']);
+  });
+
+  it('does not hide a third reviewer error behind another deferred transient failure', async () => {
+    const f = setup({ verdicts: ['changes_requested', 'approved'] }, 1, 3), peerDeferred = deferred();
+    const openThird = async (config: MathAgentOptions): Promise<MathAgentSession> => {
+      const base = await f.agent.open(config);
+      if (path.basename(config.workspace) !== 'compare-reviewer-3') return base;
+      return { ...base, run: async (_message, _id, _workspace, onStarted) => {
+        onStarted('preset-third-review-failure'); config.onUsage({ totalTokens: 1 });
+        await peerDeferred.promise; throw new Error('unexpected third reviewer failure');
+      } };
+    };
+    const peer = failFirstPeer(openThird, async () => { await f.firstFinished.promise; await afterValidation(); });
+    const result = await runFormalization(f.directory, f.root, {
+      openSession: peer.open, elaborate, compareReference: f.compareReference,
+      onEvent: event => {
+        f.onEvent!(event);
+        if (event.event === 'formalization_review_retry_deferred') peerDeferred.resolve();
+      },
+    });
+    expect(result.status).toBe('exhausted'); expect(result.error).toBe('unexpected third reviewer failure');
+    expect(peer.attempts()).toBe(1); expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
+  });
+});
+
 describe('planned formalization and unanimous review protocol', () => {
   it('retains frozen v2 workflow evidence and restores its artifact without model calls', async () => {
     const f = fixture(), agent = preset(), legacy = { ...f.request, schema: 'theorem-os.formalization-request.v2' };
@@ -445,7 +932,7 @@ describe('planned formalization and unanimous review protocol', () => {
     expect(result).toMatchObject({ status: 'approved', modelInvoked: false, candidatesTried: 1, firstCandidateApproved: true,
       distinctModelConfigurations: 5, roleTurns: { plan: 1, generate: 1, backtranslate: 1, compare: 2 } });
     expect(readFormalizationRequest(f.directory).schema).toBe('theorem-os.formalization-request.v3');
-    expect(readFormalizationRequest(f.directory).contextProtocol).toBe('kernel-v2');
+    expect(readFormalizationRequest(f.directory).contextProtocol).toBe('kernel-v3');
     expect(agent.seen.map(item => item.role)).toEqual(['plan-1', 'generate', 'backtranslate', 'compare-reviewer-1', 'compare-reviewer-2']);
     expect(agent.seen.map(item => item.config.model)).toEqual(['preset-planner', 'preset-author', 'preset-translator', 'preset-judge-a', 'preset-judge-b']);
     expect(agent.seen[1].input.plan).toEqual(plan(fixtureStatement));

@@ -52,7 +52,10 @@ describe('web failure classification from solver results', () => {
     expect(webIncompleteReason({ status: 'incomplete', turns: 6, solveWallMs: 31_000 }, input)).toBe('math_turn_limit_reached');
     expect(webIncompleteReason({ status: 'incomplete', turns: 3, solveWallMs: 30_000 }, input)).toBe('math_run_stopped');
     expect(webIncompleteReason({ status: 'incomplete', turns: 3, solveWallMs: 9_000 }, input)).toBe('math_research_routes_exhausted');
+    expect(webIncompleteReason({ status: 'incomplete', turns: 3, solveWallMs: 600_000, solveExecutionMs: 9_000 }, input)).toBe('math_research_routes_exhausted');
     expect(webIncompleteReason({ status: 'incomplete' }, input)).toBe('math_research_routes_exhausted');
+    expect(webIncompleteReason({ status: 'incomplete', turns: 1000, solveWallMs: 86_400_000 }, { maxTurns: 0, maxRunSeconds: 0 }))
+      .toBe('math_research_routes_exhausted');
     for (const raw of [{ status: 'incomplete', reason: 'math_total_token_limit', turns: 5 }, { status: 'limit_reached', turns: 5 },
       { status: 'evaluated_failed', turns: 5 }, { status: 'evaluated_passed', turns: 1 }, { status: 'runtime_error' }])
       expect(webIncompleteReason(raw, input)).toBeUndefined();

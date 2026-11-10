@@ -96,13 +96,40 @@ describe('operator backup, recovery and monitoring with disposable offline data'
     expect(JSON.stringify(status)).not.toMatch(/private-proof|private question/);
   });
 
+  it('counts background reviews after statement handoff and uses their own queue age', () => {
+    write('owners/owner/formalizations/generating/record.json', { formalization: { status: 'running' } });
+    write('owners/owner/formalizations/auditing/record.json', { formalization: { status: 'confirmed',
+      backgroundReview: { status: 'running', queuedAt: '2026-11-07T02:00:00Z' } } });
+    write('owners/owner/formalizations/waiting-review/record.json', { formalization: { status: 'review',
+      createdAt: '2026-11-06T00:00:00Z', backgroundReview: { status: 'queued', queuedAt: '2026-11-07T03:00:00Z' } } });
+    write('owners/owner/formalizations/waiting-generation/record.json', { formalization: { status: 'queued', createdAt: '2026-11-07T04:00:00Z' } });
+    for (const status of ['approved', 'changes_requested', 'unknown', 'error', 'interrupted', 'cancelled'])
+      write(`owners/owner/formalizations/finished-${status}/record.json`, { formalization: { status: 'review',
+        backgroundReview: { status, queuedAt: '2026-11-05T00:00:00Z' } } });
+    expect(localOperations(data).queues.formalization).toEqual({ running: 2, queued: 2, oldestQueuedAt: '2026-11-07T03:00:00Z' });
+  });
+
+  it('does not report drained while a handed-off statement still has a queued review', async () => {
+    maintenanceFile(data, true);
+    write('owners/owner/formalizations/first/record.json', { formalization: { status: 'confirmed',
+      backgroundReview: { status: 'queued', queuedAt: '2026-11-07T03:00:00Z' } } });
+    const binary = path.join(root, 'docker');
+    fs.writeFileSync(binary, `#!${process.execPath}\nif(!['ps','logs'].includes(process.argv[2])) process.exit(23);\n`, { mode: 0o700 });
+    vi.stubEnv('PATH', root);
+    vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValue(2000);
+    const print = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await expect(main(['wait-drained', '--data-root', data, '--container', 'disposable-fixture', '--timeout-seconds', '1']))
+      .rejects.toThrow('drain_timeout_tasks_left_running');
+    expect(JSON.parse(print.mock.calls[0][0])).toMatchObject({ active: 1, queues: { formalization: { running: 0, queued: 1 } } });
+  });
+
   it('reports readiness, disk, queue and recent SMTP failures without paging anyone', () => {
     const now = Date.parse('2026-11-07T01:00:00Z');
     const status = { maintenance: false, ready: false, disk: { availableBytes: 10, totalBytes: 100 },
       queues: { research: { running: 1, queued: 2, oldestQueuedAt: '2026-11-07T00:00:00Z' } }, failures: { smtp: 1 } };
     expect(inspectSignals(status, { minFreeGiB: 1, maxQueueSeconds: 60, now })).toEqual(['service_not_ready', 'disk_space_low', 'research_queue_wait_long', 'smtp_delivery_failed']);
     expect(inspectSignals({ ...status, maintenance: true, failures: { smtp: 1, lastSmtpFailureAt: '2026-11-06T00:00:00Z' } }, { minFreeGiB: 1, maxQueueSeconds: 60, now })).toEqual(['disk_space_low', 'research_queue_wait_long']);
-    expect(capacityEnvelope(1)).toMatchObject({ memoryLimitSumGiB: 44, cpuLimitSum: 10, suggestedFreeDiskGiB: 90 });
+    expect(capacityEnvelope(1)).toMatchObject({ memoryLimitSumGiB: 56, cpuLimitSum: 12, suggestedFreeDiskGiB: 120 });
   });
 
   it('requires an explicitly offline source for file backup and a service origin for monitor', async () => {
@@ -148,6 +175,21 @@ else process.exit(23);\n`, { mode: 0o700 });
     const result = JSON.parse(print.mock.calls[0][0]);
     expect(result.failures.smtp).toBe(1); expect(result.queues.precheck.running).toBe(1); expect(result.queues.untrackedWorkers.running).toBe(1);
     expect(JSON.stringify(print.mock.calls)).not.toContain('secret-fixture-content');
+  });
+
+  it('recognizes an active audit container without counting its persisted workload twice', async () => {
+    write('owners/owner/formalizations/first/record.json', { formalization: { status: 'confirmed',
+      backgroundReview: { status: 'running', queuedAt: '2026-11-07T03:00:00Z' } } });
+    const binary = path.join(root, 'docker');
+    fs.writeFileSync(binary, `#!${process.execPath}\nif(process.argv[2]==='ps') console.log('theoremos-formalize-audit-first');
+else if(process.argv[2]!=='logs') process.exit(23);\n`, { mode: 0o700 });
+    vi.stubEnv('PATH', root);
+    const print = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await main(['status', '--data-root', data, '--container', 'disposable-fixture']);
+    const result = JSON.parse(print.mock.calls[0][0]);
+    expect(result.active).toBe(1);
+    expect(result.queues.formalization).toEqual({ running: 1, queued: 0 });
+    expect(result.queues.untrackedWorkers).toEqual({ running: 0, queued: 0 });
   });
 
   it('uses a private session file and same-origin CSRF without including credentials in output', async () => {

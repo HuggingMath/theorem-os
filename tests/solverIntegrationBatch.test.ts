@@ -246,15 +246,26 @@ describe('same-layer checked task integration batches', () => {
     const log = path.join(secondWorker.worktree, assignmentDeliveryFile(second.assignment!));
     fs.writeFileSync(log, JSON.stringify({ id: 'incremental-second', kind: 'proof', commit: secondCommit,
       summary: 'Second helper incremental evidence.', evidenceRefs: ['second-evidence-reference'] }) + '\n');
+    state.workers = workers.map(worker => ({ id: worker.id, role: worker.role, worktree: worker.worktree,
+      phase: 'running', turns: 0 }));
+    const canonical = deferred(), releaseCanonical = () => canonical.resolve();
+    releases.push(releaseCanonical);
+    const heldCanonical = track((cooperative as any).queueIntegration(() => canonical.promise));
     cooperative.activate(secondWorker, secondAction, async () => {}, async () => {});
     const incremental = track(cooperative.pulse(secondWorker.id));
     const secondRequest = await secondEntered.promise;
     const direct = track(cooperative.deliver(secondWorker, secondAction, secondCommit));
     const firstDelivery = track(cooperative.deliver(firstWorker, firstAction, firstCommit));
     const firstRequest = await firstEntered.promise;
-    // Both checks finish together so the first canonical operation can integrate the ready pair.
-    firstCheck.resolve(verified(firstRequest)); secondCheck.resolve(verified(secondRequest));
-    await Promise.all([firstDelivery, incremental, direct]);
+    // Queue the first worker before the incremental peer, then let the real queue integrate the ready pair.
+    firstCheck.resolve(verified(firstRequest));
+    await vi.waitFor(() => expect(state.workers!.find(worker => worker.id === firstWorker.id)?.scheduling?.wait?.stage)
+      .toBe('integration-queue'));
+    secondCheck.resolve(verified(secondRequest));
+    await vi.waitFor(() => expect(state.workers!.find(worker => worker.id === secondWorker.id)?.scheduling?.wait?.stage)
+      .toBe('integration-queue'));
+    releaseCanonical();
+    await Promise.all([heldCanonical, firstDelivery, incremental, direct]);
 
     expect(calls().map(request => request.items.length)).toEqual([1, 1, 2]);
     expect(events.filter(item => item.event === 'task_integration_batch_started').map(item => item.details?.taskIds))
@@ -271,9 +282,9 @@ describe('same-layer checked task integration batches', () => {
     expect(events.filter(item => item.event === 'knowledge_use_observed' && item.details?.taskId === second.task.id)).toHaveLength(1);
     expect(events.filter(item => item.event === 'delivery_published' && item.details?.taskId === second.task.id)).toHaveLength(1);
     const queueStarts = events.flatMap((item, index) => item.event === 'integration_queue_started' ? [index] : []);
-    expect(queueStarts).toHaveLength(2);
+    expect(queueStarts).toHaveLength(3);
     // The first operation publishes its batched peer before that peer's own canonical turn.
-    expect(events.findIndex(item => item.event === 'delivery_published' && item.details?.taskId === second.task.id)).toBeLessThan(queueStarts[1]!);
+    expect(events.findIndex(item => item.event === 'delivery_published' && item.details?.taskId === second.task.id)).toBeLessThan(queueStarts[2]!);
 
     await track(cooperative.pulse(secondWorker.id));
     await track(cooperative.deliver(secondWorker, secondAction, secondCommit));

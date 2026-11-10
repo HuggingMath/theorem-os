@@ -40,13 +40,18 @@ const singular = (text: string) => text.replace(countedPlural, (_match, middle: 
   // "Lines {0}" names one line unless a range or a list follows.
   .replace(/\bLines (\d+)(?![\d–,-])/gu, 'Line $1');
 
-/** Translates a Chinese key; {0}, {1}… are replaced by the arguments in order. A key without an entry stays Chinese. */
-export function t(key: string, ...values: unknown[]): string {
-  const text = locale === 'en' ? en[key] ?? key : key;
-  if (!values.length) return text;
-  const filled = text.replace(/\{(\d+)\}/gu, (match, index: string) => index in values ? String(values[Number(index)]) : match);
-  return locale === 'en' ? singular(filled) : filled;
+/** Translates labels for content whose language can differ from the interface, such as a saved explanation. */
+export function translator(language: Locale) {
+  return (key: string, ...values: unknown[]): string => {
+    const text = language === 'en' ? en[key] ?? key : key;
+    if (!values.length) return text;
+    const filled = text.replace(/\{(\d+)\}/gu, (match, index: string) => index in values ? String(values[Number(index)]) : match);
+    return language === 'en' ? singular(filled) : filled;
+  };
 }
+
+/** Translates a Chinese key; {0}, {1}… are replaced by the arguments in order. A key without an entry stays Chinese. */
+export const t = translator(locale);
 
 /** Joins translated sentences: Chinese runs them together after their 。, English needs a space between them. */
 export const sentences = (...parts: string[]) => parts.filter(Boolean).join(locale === 'en' ? ' ' : '');

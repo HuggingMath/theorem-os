@@ -356,16 +356,16 @@ const selectedRowReady = async page => {
     return bounds.top >= 0 && bounds.bottom <= innerHeight;
   });
 };
-const assertGeometryState = async (page, proof) => {
-  await page.waitForFunction(proof => {
+const assertGeometryState = async (page, proof, tab = 'evidence') => {
+  await page.waitForFunction(({ proof, tab }) => {
     const params = new URLSearchParams(location.hash.slice(1));
     return params.get('proof') === proof && params.get('q') === 'geometry' &&
-      params.get('status') === 'accepted' && params.get('sort') === 'title' && params.get('tab') === 'evidence';
-  }, proof);
+      params.get('status') === 'accepted' && params.get('sort') === 'title' && params.get('tab') === tab;
+  }, { proof, tab });
   assert.equal(await page.locator('#search').inputValue(), 'geometry');
   assert.equal(await page.locator('input[name="status"][value="accepted"]').isChecked(), true);
   assert.equal(await page.locator('#sort').inputValue(), 'title');
-  assert.equal(await page.locator('.detail-tabs #tab-evidence').getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator(`.detail-tabs #tab-${tab}`).getAttribute('aria-selected'), 'true');
   assert.equal(await page.locator('.proof-row.is-selected').getAttribute('data-proof-id'), proof);
 };
 
@@ -452,8 +452,8 @@ try {
     assert.match(await page.locator('.campaign-evidence').innerText(), /kernel_verified/);
     assert.deepEqual(await cjkIn(page), [], `English local acceptance at ${width}px`);
     assert.equal(await page.locator('.campaign-evidence a').getAttribute('href'), '../data/proofs/openai_totient_companion_zero/verification.json');
-    await page.getByRole('tab', { name: 'Research process' }).click();
-    await page.locator('.process-run').first().waitFor();
+    await page.getByRole('tab', { name: 'Routes and trajectory' }).click();
+    await page.locator('.global-history-panel > summary').waitFor();
     await checkOverflow(page, `English research process at ${width}px`);
 
     if (width <= 700) {
@@ -468,11 +468,18 @@ try {
       const selectedId = await row.getAttribute('data-proof-id');
       assert.notEqual(selectedId, 'hopf_rinow', 'The geometry filter must offer a second proof to open');
       await row.click();
-      await mobileInspectorReady(page);
-      await assertGeometryState(page, selectedId);
-      await page.locator('[data-action="back-list"]').last().click();
+      await page.locator('[data-solution-route-state="ready"]').waitFor();
+      await page.waitForFunction(() => {
+        const toolbar = document.querySelector('.process-view-toolbar');
+        const node = document.querySelector('[data-solution-node]'), bounds = node?.getBoundingClientRect();
+        return toolbar && document.activeElement === toolbar.querySelector('h4')
+          && Math.abs(toolbar.getBoundingClientRect().top - parseFloat(getComputedStyle(toolbar).scrollMarginTop)) <= 2
+          && bounds && bounds.top >= 0 && bounds.bottom <= innerHeight && bounds.left >= 0 && bounds.right <= innerWidth;
+      });
+      await assertGeometryState(page, selectedId, 'process');
+      await page.locator('#inspector .detail-topline [data-action="back-list"]').click();
       await selectedRowReady(page);
-      await assertGeometryState(page, selectedId);
+      await assertGeometryState(page, selectedId, 'overview');
       assert.deepEqual(await cjkIn(page), [], `English mobile archive navigation at ${width}px`);
     }
 

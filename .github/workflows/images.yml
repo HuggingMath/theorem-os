@@ -53,13 +53,31 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck && bun run typecheck:web
       - name: Verify account, job, persistence and operations boundaries without models
-        run: bunx vitest run --maxWorkers=4 tests/webAuth.test.ts tests/webSignup.test.ts tests/webAuthPolicy.test.ts tests/webQuota.test.ts tests/webAdmission.test.ts tests/webAdmissionRace.test.ts tests/webProviderCheck.test.ts tests/webI18n.test.ts tests/webFonts.test.ts tests/webKeyVault.test.ts tests/webJobs.test.ts tests/webFormalizations.test.ts tests/webServer.test.ts tests/webRunner.test.ts tests/webPrecheck.test.ts tests/webOperations.test.ts tests/webOperationsApi.test.ts tests/webOperationsScheduled.test.ts tests/webOperationsMonitor.test.ts
+        run: bunx vitest run --maxWorkers=4 tests/webAuth.test.ts tests/webSignup.test.ts tests/webAuthPolicy.test.ts tests/webQuota.test.ts tests/webAdmission.test.ts tests/webAdmissionRace.test.ts tests/webProviderCheck.test.ts tests/webI18n.test.ts tests/webFonts.test.ts tests/webKeyVault.test.ts tests/webJobs.test.ts tests/webLifecyclePersistence.test.ts tests/webCollaboration.test.ts tests/webConversations.test.ts tests/webExplain.test.ts tests/webPersistence.test.ts tests/webFormalizations.test.ts tests/webExplanation.test.ts tests/webExplanationServer.test.ts tests/webServer.test.ts tests/webRunStream.test.ts tests/webRunner.test.ts tests/webPrecheck.test.ts tests/webOperations.test.ts tests/webOperationsApi.test.ts tests/webOperationsScheduled.test.ts tests/webOperationsMonitor.test.ts
       - name: Verify isolated provider routing and usage accounting without models
-        run: bunx vitest run --maxWorkers=4 tests/formalizationRelay.test.ts tests/formalizationReviewIsolation.test.ts tests/webFormalizationWorker.test.ts tests/codexStreamIdle.test.ts tests/codexSessionNotifications.test.ts tests/formalization.test.ts tests/formalizationRecovery.test.ts tests/formalizationWorkflow.test.ts tests/formalizationLimits.test.ts tests/formalizationFidelityReference.test.ts
+        run: bunx vitest run --maxWorkers=4 tests/formalizationRelay.test.ts tests/formalizationReviewIsolation.test.ts tests/webFormalizationWorker.test.ts tests/codexSession.test.ts tests/codexSessionLifecycle.test.ts tests/codexSessionCheckpoint.test.ts tests/codexStreamIdle.test.ts tests/codexSessionNotifications.test.ts tests/mathProcess.test.ts tests/mathRuntimeLease.test.ts tests/mathRuntimeLeaseProcess.test.ts tests/formalization.test.ts tests/formalizationRecovery.test.ts tests/formalizationWorkflow.test.ts tests/formalizationLimits.test.ts tests/formalizationFidelityReference.test.ts
+      - name: Verify research recovery, participation and shared run snapshots
+        run: bunx vitest run --maxWorkers=4 tests/webRunSnapshot.test.ts tests/webResearchProjects.test.ts tests/webResearchApi.test.ts tests/webResearchAssets.test.ts tests/webResearchMathematics.test.ts tests/libraryPacks.test.ts tests/leanSource.test.ts
+      - name: Verify direct formalization and independent background review without models
+        run: bunx vitest run --maxWorkers=4 tests/directFormalizationEvidence.test.ts tests/directFormalizationWorkflow.test.ts tests/formalizationAudit.test.ts tests/formalizationContext.test.ts tests/formalizationPackagesWarmup.test.ts tests/mathProofEnvironmentSeed.test.ts tests/webFormalizationAuditWorker.test.ts tests/webFormalizationBackgroundReview.test.ts tests/webBackgroundReview.test.ts tests/webFormalizationProgress.test.ts tests/webThinkingProcess.test.ts tests/codexSessionInstructions.test.ts
       - run: bun run build && bun run build:web
       - run: bunx playwright install --with-deps chromium
       - name: Verify the browser's login and research flows with local fixtures
-        run: bun run test:web-login && bun run test:web-natural-first && bun run test:web-chat-session && bun run test:web-solve-process
+        run: bun run test:web-login && bun run test:web-natural-first && bun run test:web-chat-session && bun run test:web-chat-cancel-recovery && bun run test:web-key-memory && bun run test:web-saved-key && bun run test:web-solve-process && bun run test:web-review-regressions && bun run test:web-plan-recovery && bun run test:web-plan-ownership && bun run test:web-explain && bun run test:web-explain-recovery
+      - name: Verify research account switching and interrupted frontend operations
+        run: bun run test:frontend-round5
+      - name: Verify session renewal, candidate review and route evidence readers
+        run: bun run test:frontend-round6
+      - name: Verify delayed session responses and draft recovery
+        run: bunx vitest run --maxWorkers=4 tests/webSessionCookies.test.ts tests/webResearchSession.test.ts && bun run test:frontend-round7
+      - name: Verify archive budgets, saved keys, plan approvals and historical record navigation
+        run: bunx vitest run --maxWorkers=4 tests/webDraft.test.ts tests/webLongRun.test.ts tests/researchPlanApproval.test.ts tests/archiveRecordNavigation.test.ts tests/globalTrajectory.test.ts && bun run test:frontend-round8
+      - name: Verify historical guidance, mobile controls and native route search input
+        run: bun run test:frontend-round9
+      - name: Verify recovered guidance, message receipts, math readers and source links
+        run: bunx vitest run --maxWorkers=4 tests/webChatDraft.test.ts tests/webConversations.test.ts tests/archiveSourceLocation.test.ts tests/taskPlanEditorAccess.test.ts && bun run test:frontend-round10
+      - name: Verify formalization progress and proof thinking in the browser
+        run: bun scripts/test-web-formalization-progress.ts && bun scripts/test-web-proof-thinking.ts && bunx vitest run tests/webBackgroundReviewWorkflow.test.ts
 
   verify-solver:
     runs-on: ubuntu-latest
@@ -72,7 +90,14 @@ jobs:
         lean: ['4.33.0', '4.34.1']
     env:
       THEOREMOS_TEST_LEAN_VERSION: ${{ matrix.lean }}
+      # Mocked project fixtures also probe elan; use the installed matrix release.
+      ELAN_TOOLCHAIN: leanprover/lean4:v${{ matrix.lean }}
     steps:
+      - name: Free disk for the native Lean toolchain and solver fixtures
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune --all --force
+          df -h /
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -81,10 +106,10 @@ jobs:
         with:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile
-      - name: Install the pinned native Lean toolchain
+      - name: Install the pinned elan release
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends elan
+          sh scripts/install-elan.sh
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - uses: actions/cache@v4
         with:
           path: ~/.elan/toolchains
@@ -93,6 +118,8 @@ jobs:
       - run: elan run "leanprover/lean4:v$THEOREMOS_TEST_LEAN_VERSION" lean --version
       - name: Verify solver timeout, recovery, projection and acceptance without models
         run: bun run test:solver-reliability
+      - name: Verify dependency snapshots and receipt cache bindings
+        run: bunx vitest run --maxWorkers=4 tests/verifierSealedEnvironmentCache.test.ts tests/mathProofEnvironment.test.ts tests/leanProbeSnapshot.test.ts
 
   publish:
     needs: [verify, verify-solver]
@@ -122,12 +149,14 @@ jobs:
           file: apps/web/Dockerfile
           target: ${{ matrix.target }}
           push: true
-          tags: ghcr.io/likc1606/theorem-os-${{ matrix.target }}:${{ github.sha }}
+          tags: ghcr.io/huggingmath/theorem-os-${{ matrix.target }}:${{ github.sha }}
           build-args: THEOREMOS_SOURCE_COMMIT=${{ github.sha }}
           labels: org.opencontainers.image.revision=${{ github.sha }}
           # This tag is a build cache, never a deployable release alias.
-          cache-from: type=registry,ref=ghcr.io/likc1606/theorem-os-${{ matrix.target }}:buildcache
-          cache-to: type=registry,ref=ghcr.io/likc1606/theorem-os-${{ matrix.target }}:buildcache,mode=min
+          cache-from: |
+            type=registry,ref=ghcr.io/huggingmath/theorem-os-${{ matrix.target }}:buildcache
+            type=registry,ref=ghcr.io/likc1606/theorem-os-${{ matrix.target }}:buildcache
+          cache-to: type=registry,ref=ghcr.io/huggingmath/theorem-os-${{ matrix.target }}:buildcache,mode=min
 
   release:
     needs: publish
@@ -145,8 +174,8 @@ jobs:
           RELEASE_COMMIT: ${{ github.sha }}
         run: |
           set -eu
-          web="ghcr.io/likc1606/theorem-os-web:$RELEASE_COMMIT"
-          worker="ghcr.io/likc1606/theorem-os-worker:$RELEASE_COMMIT"
+          web="ghcr.io/huggingmath/theorem-os-web:$RELEASE_COMMIT"
+          worker="ghcr.io/huggingmath/theorem-os-worker:$RELEASE_COMMIT"
           web_digest=$(docker buildx imagetools inspect "$web" --format '{{.Manifest.Digest}}')
           worker_digest=$(docker buildx imagetools inspect "$worker" --format '{{.Manifest.Digest}}')
           jq -n --arg commit "$RELEASE_COMMIT" --arg web "$web" --arg webDigest "$web_digest" \

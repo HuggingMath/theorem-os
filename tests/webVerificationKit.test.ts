@@ -243,6 +243,16 @@ describe('nextSteps', () => {
     expect(steps(stuckRun(inspection))).toEqual([['continue-checked', '从已检查的代码继续', ['g1']], ['ask-failed', '问为什么没通过', ['g2', 'bridge']],
       ['budget', '提高解题预算', undefined]]);
   });
+  it('offers checked helper code when every original goal is still open, without reviving stopped or conditional helpers', () => {
+    const helpers = [task('helper', { kind: 'lemma', theorem: 'A.helper', proof: { status: 'checked' } }),
+      task('conditional', { kind: 'lemma', proof: { status: 'conditional' } }),
+      task('stopped', { kind: 'lemma', control: 'stopped', proof: { status: 'checked' } }),
+      task('g2', { kind: 'goal', theorem: 'A.other', proof: { status: 'none' } })];
+    const value = stuckRun({ ...inspection, tasks: helpers });
+    expect(summarizeGoals(value)?.checked).toBe(0);
+    expect(steps(value)).toEqual([['continue-checked', '从已检查的代码继续', ['helper']], ['budget', '提高解题预算', undefined]]);
+    expect(nextSteps(value)[0]).toMatchObject({ id: 'continue-checked', tasks: ['helper'] });
+  });
   it('falls back to a plain rerun when the stop has no recovery of its own, and offers nothing while running or once accepted', () => {
     expect(steps(stuckRun({ ...inspection, tasks: [], mathematics: undefined }, { status: 'cancelled', result: undefined }))).toEqual([['retry', '复用配置重新研究', undefined]]);
     expect(steps(stuckRun(inspection, { status: 'running', result: undefined }))).toEqual([]);

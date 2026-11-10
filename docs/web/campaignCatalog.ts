@@ -3,6 +3,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import type { ArchiveProcess, ArchiveRecord } from './types';
+import { withProofWalkthrough } from './proofWalkthroughCatalog';
+import { withArchiveSourceRoute } from './archiveSourceRoute';
 
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const campaignSchema = z.object({
@@ -48,18 +50,19 @@ export function campaignRecords(root: string): { records: ArchiveRecord[]; captu
     }
     const { target, runId, targets, proofCommit, proofSha256, kernelReceiptIds, comparatorExitCode, reviewStatus,
       attribution, attributionEn, evidenceUrl } = entry.campaign;
-    return { id: entry.id, title: entry.title, subtitle: entry.subtitle, area: entry.area, summary: entry.summary,
+    const campaign = { target, runId, targets, proofCommit, proofSha256, kernelReceiptIds, comparatorExitCode, reviewStatus,
+      attribution, attributionEn, evidenceUrl };
+    return withArchiveSourceRoute({ id: entry.id, title: entry.title, subtitle: entry.subtitle, area: entry.area, summary: entry.summary,
       en: { subtitle: entry.en.subtitle, area: entry.en.area, summary: entry.en.summary },
       status: entry.status, model: entry.model, updatedAt: entry.updatedAt, declaration: entry.declaration,
-      campaign: { target, runId, targets, proofCommit, proofSha256, kernelReceiptIds, comparatorExitCode, reviewStatus,
-        attribution, attributionEn, evidenceUrl },
-      processSummary: { runs: entry.processSummary.runs, tasks: entry.processSummary.tasks }, process,
+      campaign,
+      processSummary: { runs: entry.processSummary.runs, tasks: entry.processSummary.tasks }, process: withProofWalkthrough({ id: entry.id, campaign }, process),
       archiveUrl: `data/proofs/${entry.id}/process.json`,
       sources: [...content.entries()].filter(([name]) => name.endsWith('.lean')).map(([name, code]) => ({
         name, code, path: `research/openai-math/${entry.directory}/${name}`, url: `data/proofs/${entry.id}/${name}`,
         sha256: entry.files[name], lines: code.split('\n').length - Number(code.endsWith('\n')),
       })),
-    } satisfies ArchiveRecord;
+    } satisfies ArchiveRecord);
   });
   return { records, capturedAt: parsed.capturedAt };
 }

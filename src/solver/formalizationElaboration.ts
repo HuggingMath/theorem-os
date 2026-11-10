@@ -7,6 +7,7 @@ import { renderLeanDiagnosticMessage } from '../math/leanDiagnosticMessages';
 import { leanStatementContextCommands, parseLeanStatementContexts } from '../math/leanStatementContext';
 import { checkResolvedLeanToolchainReadiness } from '../math/leanToolchainReadiness';
 import { MATH_PROOF_ENVIRONMENT_ENV, prepareMathProofEnvironment } from '../math/mathProofEnvironment';
+import { DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT } from '../math/mathProofEnvironmentCache';
 import { resolveMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnvironment';
 import { canonicalMathJson, mathDigest, readMathFile, readMathText, writeMathFrozen } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath } from '../math/paths';
@@ -93,8 +94,11 @@ export async function elaborateFormalization(directory: string, source: string, 
       if (!packages && manifest.packages.length) throw new Error('formalization_lake_packages_unavailable');
       if (packages) {
         bindLeanPackages(project, packages);
+        // Reuse the language roles' private image; preparation still verifies and
+        // mounts an independent sealed copy for this compilation.
         proofEnvironment = await prepareMathProofEnvironment(project, packages, { env, signal: options.signal,
-          deadlineAt: Number.isFinite(deadlineAt) ? deadlineAt : undefined, cacheRoot: options.proofEnvironmentCacheRoot });
+          deadlineAt: Number.isFinite(deadlineAt) ? deadlineAt : undefined,
+          cacheRoot: options.proofEnvironmentCacheRoot ?? DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT });
         env = { ...env, [MATH_PROOF_ENVIRONMENT_ENV]: proofEnvironment.environmentValue };
         prepareLeanDiagnosticOverrides(project);
       }
@@ -146,7 +150,7 @@ export async function elaborateFormalization(directory: string, source: string, 
       const contextPath = path.join(project, contextFile);
       assertMathCanonicalPath(contextPath);
       const contextText = readMathText(contextPath, 4_000_000);
-      const contexts = parseLeanStatementContexts(contextText, targets.map(target => target.name));
+      const contexts = parseLeanStatementContexts(contextText, targets.map(target => target.name), options);
       if ((options.detailedContext === true || options.structureContext === true) && [...contexts.values()].some(context => !context.bindings))
         throw new Error('formalization_detailed_context_missing');
       if ((options.semanticContext === true || options.structureContext === true) && [...contexts.values()].some(context => !context.semantic))

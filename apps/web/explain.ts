@@ -83,10 +83,11 @@ export type WebExplainCall = { baseUrl: string; apiKey: string; model: string; i
  */
 export async function askProvider(call: WebExplainCall, signal?: AbortSignal): Promise<WebExplainAnswer> {
   const timeout = AbortSignal.timeout(call.timeoutMs ?? 180_000);
+  const active = signal ? AbortSignal.any([signal, timeout]) : timeout;
   try {
     // Redirects are refused so the key is never sent anywhere but the configured address.
     const response = await fetch(`${call.baseUrl}/responses`, { method: 'POST', redirect: 'error',
-      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      signal: active,
       headers: { Authorization: `Bearer ${call.apiKey}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
       body: JSON.stringify({ model: call.model, instructions: call.instructions ?? webExplainInstructions, input: call.input,
         reasoning: { effort: 'low' }, stream: true, store: false }) });
@@ -96,9 +97,12 @@ export async function askProvider(call: WebExplainCall, signal?: AbortSignal): P
     }
     if (!/^text\/event-stream/iu.test(response.headers.get('content-type') ?? '')) {
       const body = await response.json() as Record<string, unknown>;
+      active.throwIfAborted();
       return answerOf(outputText(body.output), true, body.usage);
     }
-    return await streamed(response.body!, call.onText);
+    const answer = await streamed(response.body!, active, call.onText);
+    active.throwIfAborted();
+    return answer;
   } catch (error) {
     if (error instanceof WebExplainError) throw error;
     if (signal?.aborted) throw new WebExplainError(499, '已停止。');
@@ -108,12 +112,13 @@ export async function askProvider(call: WebExplainCall, signal?: AbortSignal): P
 }
 
 /** Reads the Responses event stream: text deltas until `response.completed`, whose usage it keeps. */
-async function streamed(body: ReadableStream<Uint8Array>, onText?: (text: string) => void): Promise<WebExplainAnswer> {
+async function streamed(body: ReadableStream<Uint8Array>, signal: AbortSignal, onText?: (text: string) => void): Promise<WebExplainAnswer> {
   const reader = body.getReader(), decoder = new TextDecoder();
   let buffer = '', text = '', usage: unknown, finished = false;
   try {
     for (;;) {
       const { done, value } = await reader.read();
+      signal.throwIfAborted();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       for (let end = /\r?\n\r?\n/u.exec(buffer); end; end = /\r?\n\r?\n/u.exec(buffer)) {
@@ -125,6 +130,7 @@ async function streamed(body: ReadableStream<Uint8Array>, onText?: (text: string
         if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
           text += event.delta;
           onText?.(text.trimStart().slice(0, webExplainLimits.answer));
+          signal.throwIfAborted();
         }
         else if (event.type === 'response.completed' || event.type === 'response.incomplete') {
           usage = response?.usage; finished = event.type === 'response.completed';

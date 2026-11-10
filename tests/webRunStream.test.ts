@@ -187,6 +187,25 @@ describe('session-owned run notifications over disposable local HTTP streams', (
     expect(service.jobs.list(alice.owner)).toEqual([]); expect(stream.error).toBeUndefined();
   });
 
+  it('contains background cleanup failures while ending every expired stream and worker', async () => {
+    await service.close();
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    service = createWebService(config, runner);
+    await new Promise<void>(resolve => service.server.listen(config.port, '127.0.0.1', resolve));
+    const alice = await session(), bob = await session(), first = await open(alice), second = await open(bob);
+    create(alice); create(bob); await tick();
+    vi.spyOn(service.storage, 'deleteOwner').mockImplementationOnce(() => { throw new Error('private deletion failure'); });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + config.sessionTtlMs + 1);
+    expect(() => vi.advanceTimersByTime(60_000)).not.toThrow();
+    await expect.poll(() => first.ended && second.ended).toBe(true);
+    expect(service.storage.listSessions()).toEqual([]);
+    for (const client of [alice, bob]) expect(service.jobs.list(client.owner)).toEqual([]);
+    expect(runner.calls.every(call => call.input.input.apiKey === '')).toBe(true);
+    expect(errors.mock.calls).toEqual([['[web_cleanup_failed] background cleanup failed']]);
+    expect(first.error).toBeUndefined(); expect(second.error).toBeUndefined();
+  });
+
   it('ends open streams and shuts down without waiting for clients to disconnect', async () => {
     const alice = await session(), bob = await session(), first = await open(alice), second = await open(bob);
     create(alice); await tick();

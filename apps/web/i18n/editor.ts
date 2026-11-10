@@ -106,7 +106,6 @@ export const editor: Record<string, string> = {
   "提交 {0} 的结果尚未确认，请先核对原命令回执。当前草稿已保留。{1}": "The result of submission {0} is not confirmed yet; check the original command receipt first. The current draft was kept.{1}",
   "尚未找到回执；可重试原提交，重试会保留原命令内容和 ID。": "No receipt found yet. You can retry the original submission; the retry keeps the original command content and ID.",
   "待核对的原提交": "Original submission to check",
-  "受影响任务：{0}": "Affected tasks: {0}",
   "当前服务器计划 · 本地草稿保留": "Current server plan · local draft kept",
   "原始目标的类型、文件和声明名称固定；任务依赖与调度仍可调整。": "The type, file and declaration name of an original goal are fixed; its dependencies and scheduling can still change.",
   "切换为研究或草图时，会清除本任务的证明位置、类型与证明专用选项。": "Switching to research or sketch clears this task's proof location, type and proof-only options.",

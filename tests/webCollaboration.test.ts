@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import http from 'node:http';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createWebService } from '../apps/web/server';
 import { readWebConfig } from '../apps/web/config';
 import { isAcceptedRun } from '../apps/web/presentation';
@@ -14,6 +14,7 @@ import type { WebRunner } from '../apps/web/runner';
 import { parseWorkerMessage } from '../apps/web/runner';
 import type { WebRunInput, WorkerInput, WorkerMessage } from '../apps/web/shared';
 import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
+import { buildTheoremKnowledge } from '../src/solver/theoremKnowledge';
 
 const key = 'sk-collaboration-offline-test';
 const input = (): WebRunInput => ({ providerId: 'openai', apiKey: key, model: 'fixture', effort: 'high',
@@ -140,6 +141,111 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
     expect(jobs.guidance('alice', run.id, 'guidance-one')?.status).toBe('queued');
     expect(run.observation?.plan?.baseVersion).toBe('plan-1');
     runner.calls[0].finish(); await tick();
+  });
+
+  it.each(['queued', 'rejected'] as const)('keeps a saved %s command receipt when saving its activity event fails', async status => {
+    const runner = new FixtureRunner(), jobs = new WebJobs(runner, { concurrency: 1, queueLimit: 2 }); closing.push(() => jobs.close());
+    const run = jobs.create('alice', input(), provider); await tick();
+    const proposal = { ...observation(run.id).plan!, id: `event-failure-${status}` }, command = { type: 'edit' as const, proposal };
+    runner.commandResult = () => ({ id: proposal.id, status, ...(status === 'rejected' ? { reason: 'math_edit_version_conflict' } : {}) });
+    const save = vi.spyOn(jobs.storage, 'saveRun').mockImplementationOnce(() => { throw new Error(`disk unavailable ${key}`); });
+    try {
+      const receipt = await jobs.command('alice', run.id, command);
+      expect(receipt.status).toBe(status);
+      expect(receipt.reason).toBe(status === 'rejected' ? 'math_edit_version_conflict' : undefined);
+      expect(jobs.storage.getCommand('alice', run.id, proposal.id)).toMatchObject({ status, commandDigest: receipt.commandDigest });
+      expect(jobs.commandReceipt('alice', run.id, proposal.id)).toEqual(receipt);
+      const sent = runner.commands.length;
+      expect(await jobs.command('alice', run.id, command)).toEqual(receipt);
+      expect(runner.commands).toHaveLength(sent);
+      expect(JSON.stringify([run, receipt, jobs.storage.getCommand('alice', run.id, proposal.id)])).not.toContain(key);
+      runner.calls[0]!.finish(); await tick();
+    } finally { save.mockRestore(); }
+  });
+
+  it.each(['receipt', 'failure'] as const)('redacts a late command %s after the worker has cleared its credential', async outcome => {
+    const runner = new FixtureRunner(), jobs = new WebJobs(runner, { concurrency: 1, queueLimit: 2 });
+    closing.push(() => jobs.close());
+    const run = jobs.create('alice', input(), provider); await tick();
+    const response = Promise.withResolvers<WebCommandResult>();
+    runner.command = () => response.promise;
+    const command = { type: 'plan-approval' as const, approval: { id: 'late-approval', planVersion: 'plan-1' } };
+    const pending = jobs.command('alice', run.id, command);
+    runner.calls[0].finish(); await tick();
+    expect(run.status).toBe('completed');
+    expect(runner.calls[0].value.input.apiKey).toBe('');
+    if (outcome === 'receipt') response.resolve({ id: command.approval.id, status: 'rejected', reason: `Provider echoed ${key}` });
+    else response.reject(new Error(`Transport echoed ${key}`));
+    const receipt = await pending;
+    expect(receipt.status).toBe(outcome === 'receipt' ? 'rejected' : 'unknown');
+    expect(receipt.reason).toContain('[REDACTED]');
+    expect(JSON.stringify(receipt)).not.toContain(key);
+    expect(jobs.storage.getCommand('alice', run.id, command.approval.id)?.reason).toBe(receipt.reason);
+    expect(JSON.stringify(jobs.storage.getRun('alice', run.id))).not.toContain(key);
+  });
+
+  it.each([
+    ['run', 'receipt'], ['run', 'failure'], ['owner', 'receipt'], ['owner', 'failure'],
+  ] as const)('does not recreate deleted %s data when a command returns a late %s', async (removed, outcome) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-deleted-command-')); roots.push(root);
+    const storage = new WebStorage(root), runner = new FixtureRunner();
+    const jobs = new WebJobs(runner, { concurrency: 1, queueLimit: 2 }, { storage }); closing.push(() => jobs.close());
+    const run = jobs.create('alice', input(), provider); await tick();
+    const response = Promise.withResolvers<WebCommandResult>();
+    runner.command = () => response.promise;
+    const command = { type: 'plan-approval' as const, approval: { id: 'deleted-approval', planVersion: 'plan-1' } };
+    const pending = jobs.command('alice', run.id, command);
+    runner.calls[0].finish(); await tick();
+    if (removed === 'run') expect(jobs.remove('alice', run.id)).toBe('deleted');
+    else { jobs.forget('alice'); storage.deleteOwner('alice'); }
+    const settled = expect(pending).rejects.toThrow(/不存在|不属于/);
+    if (outcome === 'receipt') response.resolve({ id: command.approval.id, status: 'queued', observation: observation(run.id) });
+    else response.reject(new Error('Late transport failure'));
+    await settled;
+    expect(jobs.list('alice')).toEqual([]);
+    const restarted = new WebStorage(root);
+    expect(restarted.getRun('alice', run.id)).toBeUndefined();
+    expect(restarted.getCommand('alice', run.id, command.approval.id)).toBeUndefined();
+    expect(fs.existsSync(path.join(storage.ownerDirectory('alice')!, 'runs', run.id))).toBe(false);
+    if (removed === 'owner') expect(fs.existsSync(storage.ownerDirectory('alice')!)).toBe(false);
+  });
+
+  it('redacts a capture that finishes after the main worker clears its credential', async () => {
+    const runner = new FixtureRunner(), jobs = new WebJobs(runner, { concurrency: 1, queueLimit: 2 });
+    closing.push(() => jobs.close());
+    const run = jobs.create('alice', input(), provider); await tick();
+    const response = Promise.withResolvers<WebCommandResult>();
+    runner.command = () => response.promise;
+    const pending = jobs.archive('alice', run.id);
+    runner.calls[0].finish(); await tick();
+    expect(runner.calls[0].value.input.apiKey).toBe('');
+    const captured = observation(run.id); captured.sources[0].source = `-- Provider echoed ${key}`;
+    response.resolve({ id: 'capture', status: 'captured', observation: captured });
+    const archive = await pending;
+    const saved = jobs.storage.getArchive('alice', run.id, archive.id)!;
+    expect(saved.sources[0].source).toBe('-- Provider echoed [REDACTED]');
+    expect(JSON.stringify(saved)).not.toContain(key);
+    expect(JSON.stringify(jobs.storage.getRun('alice', run.id))).not.toContain(key);
+    expect(run.status).toBe('completed');
+  });
+
+  it.each(['run', 'owner'] as const)('does not import a late archive catalog after deleting the %s', async removed => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-deleted-capture-')); roots.push(root);
+    const storage = new WebStorage(root), runner = new FixtureRunner();
+    const jobs = new WebJobs(runner, { concurrency: 1, queueLimit: 2 }, { storage }); closing.push(() => jobs.close());
+    const run = jobs.create('alice', input(), provider); await tick();
+    const response = Promise.withResolvers<WebCommandResult>();
+    runner.command = () => response.promise;
+    const pending = jobs.archive('alice', run.id);
+    runner.calls[0].finish(); await tick();
+    if (removed === 'run') expect(jobs.remove('alice', run.id)).toBe('deleted');
+    else { jobs.forget('alice'); storage.deleteOwner('alice'); }
+    const settled = expect(pending).rejects.toThrow(/不存在|不属于/);
+    response.resolve({ id: 'capture', status: 'captured', catalog: buildTheoremKnowledge([]) });
+    await settled;
+    expect(jobs.knowledge.listCatalogs('alice')).toEqual([]);
+    expect(fs.existsSync(path.join(storage.ownerDirectory('alice')!, 'runs', run.id))).toBe(false);
+    if (removed === 'owner') expect(fs.existsSync(storage.ownerDirectory('alice')!)).toBe(false);
   });
 
   it('settles a plan approval from the observed solver record and keeps a known rejection', async () => {

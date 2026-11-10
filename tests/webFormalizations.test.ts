@@ -13,9 +13,11 @@ import { WebStorage } from '../apps/web/storage';
 import type { WebRun, WebSession, WorkerInput, WorkerMessage } from '../apps/web/shared';
 import { assertFormalizationEvidence, formalizationDigest, formalizationInputDigest, formalizationReviewInput } from '../src/math/formalization';
 import { mathDigest } from '../src/math/mathRuntimeIo';
+import { LEAN_STATEMENT_CONTEXT_PROTOCOL } from '../src/math/leanStatementSemantic';
 
 import { semanticReviewFixture } from './helpers/formalizationFixture';
-import { webFormalizationStatement as fixtureStatement, webFormalizationEvidence } from './helpers/webFormalizationFixture';
+import { webFormalizationStatement as fixtureStatement, webFormalizationEvidence,
+  webDirectFormalizationEvidence, webReviewedFormalizationEvidence } from './helpers/webFormalizationFixture';
 
 const KEY = 'sk-synthetic-formalization-test';
 const body = { original: fixtureStatement, environment: 'standard', effort: 'max', apiKey: KEY };
@@ -56,11 +58,12 @@ describe('online formalization ownership and evidence handoff', () => {
   });
   afterEach(async () => { await service.close(); fs.rmSync(root, { recursive: true, force: true }); });
   async function client(): Promise<Client> {
-    const response = await fetch(base + '/api/session'), value = await response.json() as WebSession;
+    const response = await fetch(base + '/api/session', { headers: { Connection: 'close' } }), value = await response.json() as WebSession;
     return { cookie: response.headers.get('set-cookie')!.split(';')[0], csrf: value.csrfToken };
   }
   function request(client: Client, route: string, value?: unknown, method = value === undefined ? 'GET' : 'POST') {
-    return fetch(base + route, { method, headers: { Cookie: client.cookie, 'X-CSRF-Token': client.csrf,
+    // Restarts must not reuse a keep-alive connection from the previous service instance.
+    return fetch(base + route, { method, headers: { Connection: 'close', Cookie: client.cookie, 'X-CSRF-Token': client.csrf,
       ...(value === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: value === undefined ? undefined : JSON.stringify(value) });
   }
   async function create(client: Client, solve = false, humanReview?: boolean) {
@@ -113,6 +116,54 @@ describe('online formalization ownership and evidence handoff', () => {
     expect((await request(alice, route)).status).toBe(404);
   });
 
+  it('retains formalization history and accepts new work after a crash before the initial record was published', async () => {
+    const alice = await client(), owner = alice.cookie.slice('theoremos_session='.length);
+    const orphan = path.join(service.storage.ownerDirectory(owner)!, 'formalizations', 'a'.repeat(8) + '-aaaa-aaaa-aaaa-' + 'a'.repeat(12));
+    fs.mkdirSync(orphan, { recursive: true });
+    // saveRecord creates its directory and writes a temporary file before atomically publishing record.json.
+    fs.writeFileSync(path.join(orphan, 'record.json.abandoned.tmp'), '{"owner":');
+    const restarted = new WebFormalizations(runner, new WebStorage(config.dataRoot!));
+    expect(restarted.list(owner)).toEqual([]);
+    const response = await request(alice, '/api/formalizations');
+    expect(response.status).toBe(200);
+    expect((await response.json()).formalizations).toEqual([]);
+    const created = await create(alice);
+    expect(restarted.list(owner).map(item => item.id)).toEqual([created.id]);
+    expect(fs.readFileSync(path.join(orphan, 'record.json.abandoned.tmp'), 'utf8')).toBe('{"owner":');
+  });
+
+  it('replays a lost formalization receipt before admission, survives restart, and retains deletion identity', async () => {
+    const alice = await client(), bob = await client(), requestId = 'natural-receipt-loss';
+    const input = { ...body, requestId, solve: true, humanReview: true };
+    const responses = await Promise.all([request(alice, '/api/formalizations', input), request(alice, '/api/formalizations', input)]);
+    expect(responses.map(response => response.status).sort()).toEqual([200, 201]);
+    const receipts = await Promise.all(responses.map(response => response.json()));
+    const value = receipts[0].formalization as WebFormalization;
+    expect(receipts[1].formalization.id).toBe(value.id);
+    await settle(); expect(runner.inputs).toHaveLength(1);
+    expect((await request(alice, '/api/formalizations', { ...input, apiKey: '' })).status).toBe(200);
+    expect((await request(alice, '/api/formalizations', { ...input, original: 'Changed statement' })).status).toBe(409);
+    expect((await request(bob, `/api/formalizations/${value.id}`)).status).toBe(404);
+    const other = await request(bob, '/api/formalizations', input);
+    expect(other.status).toBe(201); expect((await other.json()).formalization.id).not.toBe(value.id);
+    const pending = runner.pending[0]!;
+    pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) });
+    pending.resolve(); await settle();
+    await service.close();
+    runner = new Runner(); service = createWebService(config, runner, { sample: null });
+    await new Promise<void>(resolve => service.server.listen(config.port, '127.0.0.1', resolve));
+    runner.ready = false;
+    const replay = await request(alice, '/api/formalizations', { ...input, apiKey: '' });
+    expect(replay.status).toBe(200);
+    expect((await replay.json()).formalization).toMatchObject({ id: value.id, status: 'review' });
+    expect(runner.inputs).toHaveLength(0);
+    expect((await request(alice, `/api/formalizations/${value.id}`, undefined, 'DELETE')).status).toBe(200);
+    expect((await request(alice, '/api/formalizations', input)).status).toBe(410);
+    const persisted = fs.readdirSync(config.dataRoot!, { recursive: true }).filter(file => String(file).endsWith('.json'))
+      .map(file => fs.readFileSync(path.join(config.dataRoot!, String(file)), 'utf8')).join('\n');
+    expect(persisted).not.toContain(KEY);
+  });
+
   it('keeps the process view with its owner, pages it and removes it with the record', async () => {
     const alice = await client(), bob = await client();
     const value = await create(alice), route = `/api/formalizations/${value.id}`, pending = runner.pending.at(-1)!;
@@ -160,7 +211,7 @@ describe('online formalization ownership and evidence handoff', () => {
     expect((await request(alice, route, undefined, 'DELETE')).status).toBe(409);
     const recordOwner = alice.cookie.slice('theoremos_session='.length);
     const evidencePath = ['owners', mathDigest(recordOwner), 'formalizations', value.id, 'evidence.json'];
-    const evidence = service.storage.getRecord<any>(evidencePath); evidence.translation.mathematics = 'Changed after confirmation';
+    const evidence = service.storage.getRecord<any>(evidencePath); evidence.candidate.definitionsExplanation = 'Changed after confirmation';
     service.storage.saveRecord(evidencePath, evidence);
     expect((await request(alice, route)).status).toBe(409);
     expect((await request(alice, '/api/runs', runBody(value))).status).toBe(409);
@@ -183,6 +234,9 @@ describe('online formalization ownership and evidence handoff', () => {
   it.each([undefined, false])('automatically creates exactly one proof with verified evidence when humanReview is %s', async humanReview => {
     const alice = await client(), value = await create(alice, true, humanReview), pending = runner.pending.at(-1)!;
     expect(value.workflow).toBe('solve'); expect(runner.runs).toHaveLength(0);
+    expect(value).toMatchObject({ maxRunSeconds: 0, maxTotalTokens: 0, maxRounds: 0, maxPlanningRounds: 0,
+      research: { maxRunSeconds: 0, maxTotalTokens: 0, maxTurns: 0 } });
+    expect(pending.input).toMatchObject({ maxRunSeconds: 0, maxTotalTokens: 0, maxRounds: 0, maxPlanningRounds: 0 });
     const evidence = webFormalizationEvidence(pending.input);
     pending.send({ type: 'result', status: 'approved', evidence }); pending.resolve(); await settle();
     const route = `/api/formalizations/${value.id}`;
@@ -192,6 +246,7 @@ describe('online formalization ownership and evidence handoff', () => {
     expect(runner.runs).toHaveLength(1);
     expect(runner.runs[0].input).toMatchObject({ ...webDefaults, environment: 'standard', apiKey: KEY,
       providerId: 'sub2api', model: 'deepseek-flash', source: evidence.candidate.source, formalizationId: value.id });
+    expect(runner.runs[0].input).toMatchObject({ maxRunSeconds: 0, maxTotalTokens: 0, maxTurns: 0 });
     expect(runner.runs[0].formalization).toEqual(evidence);
     expect(runner.inputs[0].apiKey).toBe('');
     const run = (await (await request(alice, `/api/runs/${completed.runId}`)).json()).run;
@@ -329,12 +384,22 @@ describe('online formalization ownership and evidence handoff', () => {
     expect(runner.runs.map(run => run.input.formalizationId)).toEqual([a.id, b.id]);
   });
 
-  it('retries a queue-rejected proof with frozen evidence, once, without regenerating or leaking credentials', async () => {
+  it.each([false, true])('retries a queue-rejected proof with its frozen protocol, once, without regenerating (legacy=%s)', async legacy => {
     const alice = await client(), value = await create(alice, true), pending = runner.pending.at(-1)!;
     config.queueLimit = 0;
     pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve(); await settle();
     const route = `/api/formalizations/${value.id}`;
-    const completed = (await (await request(alice, route)).json()).formalization as WebFormalization;
+    let completed = (await (await request(alice, route)).json()).formalization as WebFormalization;
+    if (legacy) {
+      const recordPath = ['owners', mathDigest(alice.cookie.slice('theoremos_session='.length)), 'formalizations', value.id];
+      const stored = service.storage.getRecord<any>([...recordPath, 'record.json']);
+      const evidence = webFormalizationEvidence({ ...pending.input, contextProtocol: 'kernel-v2' });
+      delete stored.formalization.contextProtocol;
+      stored.evidenceSha256 = formalizationDigest(evidence);
+      service.storage.saveRecord([...recordPath, 'evidence.json'], evidence);
+      service.storage.saveRecord([...recordPath, 'record.json'], stored);
+      completed = (await (await request(alice, route)).json()).formalization as WebFormalization;
+    }
     expect(completed).toMatchObject({ status: 'confirmed', confirmation: 'automatic', researchError: 'formalization_research_queue_failed' });
     expect(completed.runId).toBeUndefined(); expect(runner.inputs[0].apiKey).toBe('');
     expect((await request(alice, route + '/research', { apiKey: KEY })).status).toBe(429);
@@ -352,6 +417,8 @@ describe('online formalization ownership and evidence handoff', () => {
     expect((await (await request(alice, route + '/research', {})).json()).formalization.runId).toBe(restored.runId);
     await settle(); expect(runner.inputs).toHaveLength(1); expect(runner.runs).toHaveLength(1);
     expect(runner.runs[0].input).toMatchObject(webFormalizationDefaults.research);
+    expect(runner.runs[0].formalization?.request.contextProtocol).toBe(legacy ? 'kernel-v2' : LEAN_STATEMENT_CONTEXT_PROTOCOL);
+    expect(restored.contextProtocol).toBe(legacy ? undefined : LEAN_STATEMENT_CONTEXT_PROTOCOL);
   });
 
   it('never starts proof research for cancelled, failed, exhausted or unverified automatic formalizations', async () => {
@@ -391,12 +458,42 @@ describe('online formalization ownership and evidence handoff', () => {
     next.resolve(); await settle();
     expect((await (await request(alice, `/api/formalizations/${other.id}`)).json()).formalization)
       .toMatchObject({ status: 'error', reason: 'formalization_binding_mismatch' });
-    const { maxRunSeconds: _seconds, maxTotalTokens: _tokens, ...legacy } = current;
+    const { maxRunSeconds: _seconds, maxTotalTokens: _tokens, maxRounds: _rounds, maxPlanningRounds: _planning,
+      contextProtocol: _protocol, reviewMode: _reviewMode, ...legacy } = current;
     for (const maxTotalTokens of [0, 200_000]) {
-      const evidence = webFormalizationEvidence({ ...pending.input, maxRunSeconds: 1800, maxTotalTokens });
+      const evidence = webReviewedFormalizationEvidence({ ...pending.input, reviewMode: undefined, maxRunSeconds: 1800, maxTotalTokens, maxRounds: 3,
+        maxPlanningRounds: 2, contextProtocol: 'kernel-v2' });
       expect(() => verifyWebFormalizationEvidence(evidence, legacy)).not.toThrow();
       expect(() => verifyWebFormalizationEvidence(evidence, current)).toThrow('formalization_binding_mismatch');
     }
+  });
+
+  it('freezes the shared context protocol for new records and reads legacy kernel-v2 evidence exactly', async () => {
+    const alice = await client(), current = await create(alice), pending = runner.pending.at(-1)!;
+    expect(current.contextProtocol).toBe(LEAN_STATEMENT_CONTEXT_PROTOCOL);
+    expect(pending.input.contextProtocol).toBe(LEAN_STATEMENT_CONTEXT_PROTOCOL);
+    const currentEvidence = webFormalizationEvidence(pending.input);
+    expect(() => verifyWebFormalizationEvidence(currentEvidence, current)).not.toThrow();
+    const legacyEvidence = webReviewedFormalizationEvidence({ ...pending.input, reviewMode: undefined, contextProtocol: 'kernel-v2' });
+    const { contextProtocol: _protocol, reviewMode: _reviewMode, ...legacy } = current;
+    expect(() => verifyWebFormalizationEvidence(legacyEvidence, legacy)).not.toThrow();
+    expect(() => verifyWebFormalizationEvidence(legacyEvidence, { ...legacy, contextProtocol: 'kernel-v2' })).not.toThrow();
+    const mismatched = { ...current, contextProtocol: 'kernel-v1' as const };
+    expect(() => verifyWebFormalizationEvidence(currentEvidence, mismatched)).toThrow('formalization_binding_mismatch');
+    if (current.contextProtocol !== 'kernel-v2') {
+      expect(() => verifyWebFormalizationEvidence(legacyEvidence, current)).toThrow('formalization_binding_mismatch');
+      expect(() => verifyWebFormalizationEvidence(currentEvidence, legacy)).toThrow('formalization_binding_mismatch');
+    }
+    pending.send({ type: 'result', status: 'approved', evidence: currentEvidence }); pending.resolve(); await settle();
+    const recordPath = ['owners', mathDigest(alice.cookie.slice('theoremos_session='.length)), 'formalizations', current.id];
+    const stored = service.storage.getRecord<any>([...recordPath, 'record.json']);
+    stored.formalization = { ...legacy, status: 'review' };
+    stored.evidenceSha256 = formalizationDigest(legacyEvidence);
+    service.storage.saveRecord([...recordPath, 'evidence.json'], legacyEvidence);
+    service.storage.saveRecord([...recordPath, 'record.json'], stored);
+    const response = await request(alice, `/api/formalizations/${current.id}`);
+    expect(response.status).toBe(200);
+    expect((await response.json()).formalization.status).toBe('review');
   });
 
   it('preserves provider, model and the two submitted budgets through the proof handoff', async () => {
@@ -414,7 +511,7 @@ describe('online formalization ownership and evidence handoff', () => {
     const completed = (await (await request(alice, `/api/formalizations/${value.id}`)).json()).formalization;
     expect(completed.runId).toBeTruthy();
     expect(runner.runs[0].input).toMatchObject({ providerId: 'openai', model: 'gpt-6.1-sol', ...research });
-    expect((await request(alice, '/api/formalizations', { ...body, maxTotalTokens: 0 })).status).toBe(400);
+    expect((await request(alice, '/api/formalizations', { ...body, maxTotalTokens: 0 })).status).toBe(201);
     expect((await request(alice, '/api/formalizations', { ...body, providerId: 'sub2api', model: 'other' })).status).toBe(400);
   });
 
@@ -433,9 +530,9 @@ describe('online formalization ownership and evidence handoff', () => {
     expect((await fetch(base + '/readyz')).status).toBe(200);
   });
 
-  it('rejects otherwise valid evidence that omits the production fidelity review policy', async () => {
+  it('keeps the independent fidelity policy mandatory on legacy reviewed records', async () => {
     const alice = await client(), value = await create(alice), pending = runner.pending.at(-1)!;
-    const evidence = webFormalizationEvidence(pending.input);
+    const evidence = webReviewedFormalizationEvidence({ ...pending.input, reviewMode: undefined });
     delete evidence.request.fidelityPolicy;
     evidence.requestDigest = formalizationDigest(evidence.request);
     evidence.inputDigest = formalizationInputDigest(evidence.request, evidence.candidate);
@@ -448,9 +545,41 @@ describe('online formalization ownership and evidence handoff', () => {
     });
     evidence.review = evidence.workflow!.reviews[0].review;
     expect(() => assertFormalizationEvidence(evidence)).not.toThrow();
+    expect(() => verifyWebFormalizationEvidence(evidence, { ...value, reviewMode: undefined }))
+      .toThrow('formalization_binding_mismatch');
     pending.send({ type: 'result', status: 'approved', evidence }); pending.resolve(); await settle();
     expect((await (await request(alice, `/api/formalizations/${value.id}`)).json()).formalization)
       .toMatchObject({ status: 'error', reason: 'formalization_binding_mismatch' });
+  });
+
+  it('defaults new formalizations to direct compilation and hands the original to proof without semantic review claims', async () => {
+    const alice = await client(), value = await create(alice, true), pending = runner.pending.at(-1)!;
+    expect(value).toMatchObject({ reviewMode: 'direct', maxRunSeconds: 0, maxTotalTokens: 0, maxRounds: 0 });
+    expect(pending.input).toMatchObject({ reviewMode: 'direct', maxRunSeconds: 0, maxTotalTokens: 0 });
+    const evidence = webDirectFormalizationEvidence(pending.input);
+    expect(() => verifyWebFormalizationEvidence(evidence, value)).not.toThrow();
+    for (const field of ['translation', 'review', 'workflow']) expect(evidence).not.toHaveProperty(field);
+    expect(evidence.sessions.map(session => session.role)).toEqual(['generate']);
+    pending.send({ type: 'result', status: 'approved', evidence }); pending.resolve(); await settle();
+    const completed = (await (await request(alice, `/api/formalizations/${value.id}`)).json()).formalization;
+    expect(completed).toMatchObject({ status: 'confirmed', confirmation: 'automatic', reviewMode: 'direct',
+      report: { semanticReview: 'not-performed', backtranslation: null, reviews: [], correspondences: [] } });
+    expect(runner.runs).toHaveLength(1);
+    expect(runner.runs[0].formalization).toMatchObject({ schema: 'theorem-os.formalization-evidence.v4',
+      semanticReview: 'not-performed', request: { statement: fixtureStatement, reviewMode: 'direct' } });
+    const run = (await (await request(alice, `/api/runs/${completed.runId}`)).json()).run;
+    expect(run.formalization).toMatchObject({ reviewMode: 'direct', original: fixtureStatement, confirmation: 'automatic' });
+  });
+
+  it('binds the frozen review mode and refuses reviewed/direct evidence substitution', async () => {
+    const alice = await client(), value = await create(alice), pending = runner.pending.at(-1)!;
+    const direct = webDirectFormalizationEvidence(pending.input), reviewed = webReviewedFormalizationEvidence(pending.input);
+    expect(() => verifyWebFormalizationEvidence(reviewed, value)).toThrow('formalization_binding_mismatch');
+    expect(() => verifyWebFormalizationEvidence(direct, { ...value, reviewMode: undefined })).toThrow('formalization_binding_mismatch');
+    const invalid = { ...direct, review: reviewed.review };
+    pending.send({ type: 'result', status: 'approved', evidence: invalid }); pending.resolve(); await settle();
+    expect((await (await request(alice, `/api/formalizations/${value.id}`)).json()).formalization.status).toBe('error');
+    expect(runner.runs).toHaveLength(0);
   });
 
   it('rejects a Lean candidate that cannot fit the research source limit', async () => {

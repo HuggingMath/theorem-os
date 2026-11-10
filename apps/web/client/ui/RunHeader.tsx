@@ -23,6 +23,7 @@ export type RunHeaderProps = {
   approval?: PlanApprovalProps;
 };
 export type PlanApprovalProps = {
+  /** The visible plan is the exact version awaiting this decision. */ reviewable?: boolean;
   /** Tasks in the plan waiting for approval. */ tasks: number;
   /** The Lead is revising the plan after a note from the owner; approving waits for the revised version. */ revising: boolean;
   /** The owner's approval was sent and the run has not answered yet. */ busy: boolean;
@@ -116,7 +117,10 @@ function RunMenu(props: RunHeaderProps) {
     <summary class="icon-button" aria-label={t('更多操作')} title={t('更多操作')}><Icon name="ellipsis" /></summary>
     <div class="run-menu-panel">
       <button type="button" class="run-menu-item" data-action="show-modules"><Icon name="blocks" />{t('模块方案')}</button>
-      {props.download && <a class="run-menu-item" data-action="download-run" href={props.download} download><Icon name="download" />{t('下载运行档案')}</a>}
+      {props.download && <>
+        <a class="run-menu-item" data-action="download-run" href={props.download} download><Icon name="download" />{t('下载完整研究归档')}</a>
+        <a class="run-menu-item" data-action="download-snapshot" href={props.download.replace(/\/download$/u, '/snapshot')} download><Icon name="download" />{t('下载运行快照')}</a>
+      </>}
       <button type="button" class="run-menu-item" data-action="copy-id"><Icon name="copy" />{t('复制运行 ID')}</button>
       {!props.sample && !props.active && <button type="button" class="run-menu-item danger" data-action="delete-run" disabled={!props.connected || props.deleting}>
         <Icon name="trash-2" />{t('删除运行记录')}</button>}
@@ -145,10 +149,10 @@ function ApprovalBanner({ approval, connected }: { approval: PlanApprovalProps; 
       <h3 id="run-approval-heading">{approval.revising ? t('Lead 正在按你的留言修改计划') : t('研究计划等你批准')}</h3>
       <p>{approval.revising ? t('修改完成后可以再看一遍再批准。')
         : t('Lead 把题目拆成了 {0} 项任务。批准后 Agent 才开始工作；也可以先改计划，或给 Lead 留言让它修改。', approval.tasks)}</p>
-      <p class="run-approval-note">{t('等待批准的时间也计入解题预算。')}</p>
+      <p class="run-approval-note">{t('等待确认不计入证明预算；拟定和修改计划正常计时。')}</p>
       {approval.error && <p class="run-approval-error" role="alert">{approval.error}</p>}
       <div class="run-approval-actions">
-        <button type="button" class="button button-primary" data-action="approve-plan" disabled={!connected || approval.busy || approval.revising}>
+        <button type="button" class="button button-primary" data-action="approve-plan" disabled={!connected || approval.busy || approval.revising || approval.reviewable === false}>
           {approval.busy ? <Spinner /> : <Icon name="check" />}{approval.busy ? t('正在批准') : t('批准并开始')}</button>
         <button type="button" class="button" data-action="show-plan"><Icon name="network" />{t('查看计划')}</button>
         <button type="button" class="button" data-action="edit-plan" disabled={!connected || approval.busy}><Icon name="square-pen" />{t('修改计划')}</button>

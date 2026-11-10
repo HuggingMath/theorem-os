@@ -35,12 +35,22 @@ describe('usage estimate and token cap before submission', () => {
     expect([formatTokens(1_000_000), formatTokens(250_000_000), formatTokens(800)]).toEqual(['100 万', '2.5 亿', '800']);
   });
 
-  it('accepts an empty cap as unlimited and a whole number of 万 tokens within the limit', () => {
+  it('accepts an empty cap as unlimited and integer token caps expressed in 万 within the limit', () => {
     expect(tokenCap('', 1e8)).toBeUndefined();
     expect(tokenCap('50', 1e8)).toBe(500_000);
-    for (const value of ['0', '1.5', '-3', '10001', 'abc']) expect(tokenCap(value, 1e8)).toBeUndefined();
+    expect(tokenCap('1.5', 1e8)).toBe(15_000);
+    expect(tokenCap('1.0003', 1e8)).toBe(10_003);
+    expect(tokenCap('9999.9999', 1e8)).toBe(99_999_999);
+    for (const value of ['-3', '10001', 'abc', 'NaN', 'Infinity', '1.00001', '1.00031', '1.00001e0', '1e-5', '10000.0001'])
+      expect(tokenCap(value, 1e8)).toBeUndefined();
     expect(submissionIssues({ ...draft, maxTotalTokens: '' }, 'sk-valid-key', session)).toEqual([]);
-    expect(submissionIssues({ ...draft, maxTotalTokens: '0' }, 'sk-valid-key', session).map(issue => issue.field)).toEqual(['max-tokens']);
+    expect(submissionIssues({ ...draft, maxTotalTokens: '1.0003' }, 'sk-valid-key', session)).toEqual([]);
+    expect(tokenCap('0', 1e8)).toBe(0);
+    expect(submissionIssues({ ...draft, maxTotalTokens: '0' }, 'sk-valid-key', session)).toEqual([]);
+    expect(submissionIssues({ ...draft, maxTotalTokens: '1.00001' }, 'sk-valid-key', session).map(issue => issue.field)).toEqual(['max-tokens']);
+    expect(submissionIssues({ ...draft, maxTurns: '', maxRunSeconds: '', maxTotalTokens: '' }, 'sk-valid-key', session)).toEqual([]);
+    expect(submissionIssues({ ...draft, maxTurns: '0', maxRunSeconds: '0', maxTotalTokens: '0' }, 'sk-valid-key', session)).toEqual([]);
+    expect(submissionIssues({ ...draft, workers: '' }, 'sk-valid-key', session).map(issue => issue.field)).toEqual(['workers']);
   });
 
   it('keeps the cap in drafts and archives and still reads drafts saved before it existed', () => {
@@ -48,7 +58,7 @@ describe('usage estimate and token cap before submission', () => {
     expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(capped)))).toEqual(capped);
     expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(draft)))).not.toHaveProperty('maxTotalTokens');
     expect(decodeTaskDraft({ schema: 'theorem-os.web-export.v1', run: { ...draft, maxTurns: 5, maxRunSeconds: 300, workers: 1, maxTotalTokens: 800_000 } }).maxTotalTokens)
-      .toBe('800000');
+      .toBe('80');
   });
 });
 

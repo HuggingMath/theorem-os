@@ -5,10 +5,13 @@ export const isAcceptedRun = (run: WebRun) => run.status === 'completed' && run.
 /** Acceptance proves the frozen Lean statement; natural-language meaning has its own confirmation. */
 export const acceptedTitle = (run: Pick<WebRun, 'formalization'>) => run.formalization ? t('Lean 陈述证明通过') : t('完整原题通过');
 export const acceptedDescription = (run: Pick<WebRun, 'formalization'>) => run.formalization
-  ? t('冻结的 Lean 陈述已通过独立验收；原文与陈述的对应关系见形式化审核。')
+  ? run.formalization.reviewMode === 'direct'
+    ? t('冻结的 Lean 陈述已通过独立验收；原题含义请查看形式化记录。')
+    : t('冻结的 Lean 陈述已通过独立验收；原文与陈述的对应关系见形式化审核。')
   : t('目标声明没有改动，没有 sorry 或额外公理，Lean 内核在隔离环境中确认通过。');
-export function statementConfirmation(confirmation: 'automatic' | 'manual' | undefined, shared = false): string {
+export function statementConfirmation(confirmation: 'automatic' | 'manual' | undefined, shared = false, reviewMode?: 'direct'): string {
   if (confirmation === 'manual') return shared ? t('原题含义：分享者已确认 Lean 陈述。') : t('原题含义：你已确认 Lean 陈述。');
+  if (reviewMode === 'direct') return t('Lean 陈述编译通过；原题含义请查看形式化记录。');
   return confirmation === 'automatic' ? t('原题含义：模型审核通过，未经人工确认。') : t('原题含义：未记录确认方式，请核对 Lean 陈述。');
 }
 export const isRejectedRun = (run: WebRun) => ['evaluated_failed', 'evaluated_rejected'].includes(run.result?.status ?? '');
@@ -208,9 +211,9 @@ export function failureGuide(run: WebRun): FailureGuide | undefined {
   if (kind) {
     if (kind === 'time_limit' && preparationStopped(run)) return preparationGuide(run);
     const guide = kind === 'time_limit' ? timeGuide(run) : guides[kind], detail = run.failure?.reason && reasonDetails[run.failure.reason];
-    // The budget ran out while the plan still waited for its owner: say so rather than blame the Agents.
+    // A stop before approval can include planning/revision work, or a historical run whose wait used its old budget.
     const unapproved = kind === 'time_limit' && run.observation?.inspection.planApproval?.status === 'pending'
-      && t('研究计划直到解题时间用完都没有批准，Agent 还没有开始工作。可以重新运行并在计划出来后及时批准，或者不勾选「先审计划」。');
+      && t('这次运行在计划批准前结束，已保存的计划与研究材料仍可查看。');
     const text = unapproved || detail;
     return { ...guide, kind, ...(text ? { detail: text } : {}) };
   }

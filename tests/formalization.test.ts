@@ -223,7 +223,7 @@ describe('formalization generation and independent statement review', () => {
     const result = await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate });
     expect(result.status).toBe('approved');
     expect(f.request.schema).toBe('theorem-os.formalization-request.v3');
-    expect(f.request.contextProtocol).toBe('kernel-v2');
+    expect(f.request.contextProtocol).toBe('kernel-v3');
     const evidence = readFormalizationArtifact(path.join(f.directory, 'artifact'));
     const reviewed = agent.seen.find(item => item.role === 'compare')!.input;
     expect(reviewed).toMatchObject({ schema: 'theorem-os.formalization-review-input.v2', original: fixtureStatement,
@@ -405,7 +405,7 @@ describe('formalization generation and independent statement review', () => {
   });
 
   it('requires all targets to be covered and all imported semantic context to be visible', async () => {
-    const f = fixture({ maxRounds: 1 }), agent = preset();
+    const f = fixture({ maxRounds: 1, contextProtocol: 'kernel-v2' }), agent = preset();
     const result = await runFormalization(f.directory, f.root, { openSession: agent.open,
       elaborate: async (_dir, source, environment, options) => {
         const result = syntheticElaboration(source, environment, options); result.snapshot.targets[0].context.omitted.push('hidden definition' as never);
@@ -477,7 +477,7 @@ describe('formalization generation and independent statement review', () => {
   });
 
   it('keeps kernel-v2 role contracts free of kernel-v3 text', async () => {
-    const f = fixture(), agent = preset();
+    const f = fixture({ contextProtocol: 'kernel-v2' }), agent = preset();
     expect(await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate: async (_directory, source, environment, options) => {
       expect(options).not.toHaveProperty('boundedLibraryContext');
       return syntheticElaboration(source, environment, options);

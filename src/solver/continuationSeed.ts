@@ -12,12 +12,13 @@ import { resolveMathematicsLakePackagesCache } from '../math/verifier';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from './archive';
 import { checkTaskProofs, createTaskSourceProjector, isAttributedTaskProof, ownedSourceDigest, projectedGoalInputs, type TaskProof, type TaskProofRequest } from './cooperativeProof';
 import { rejectionCode, taskSourceRejections } from './cooperationShared';
-import { freezeContinuationInput, readContinuationSnapshot, type ContinuationManifest } from './continuationInput';
+import { freezeContinuationInput, MAX_CONTINUATION_ATTACHMENT_BYTES, readContinuationSnapshot, type ContinuationManifest } from './continuationInput';
 import { readRunInspection } from './inspection';
 import type { DeliveryRecord } from './deliveries';
 import { researchRecordSchema, researchSourceDigest, restoreResearch } from './researchRecords';
 import { researchSourceTasks, scopedResearchSources, type ResearchSourceTask } from './researchSources';
-import { researchSourceKinds } from './researchReferences';
+import { researchSourceKinds, researchSourceUseSchema } from './researchReferences';
+import { proofSearchCheckpointReferenceSchema } from './proofSearchRecords';
 import { mathematicalGapSchema } from './mathematicalGaps';
 import { checkOutcomeSchema, nextCheckRecordSchema, nextCheckScopeSchema } from './nextCheckContract';
 import { goalProgressStateSchema, resetGoalProgressClock } from './goalProgress';
@@ -26,10 +27,15 @@ import { CAPACITY_EXPLORATION_FOCUSES, currentCapacityExploration, plannedTaskRe
 import { assertSolverSources, committedSource, commitSolverSources, git, readSolverProblem, withSolverWorktree, type SolverProblem } from './problem';
 import { assignmentDeliveryFile, assumableLemma, isAdvisoryTask, isDefinitionTask, isFinalCandidateReview, parseCooperationPlan, taskGroup, taskVersion, type CooperativeTask, type TaskAssignment, type TaskRecord } from './tasks';
 import { proofReadyRecord, proofReadyRecordSchema } from './proofReady';
-import { createTaskConnectionCheck } from './taskConnections';
+import { automaticTaskConnection, createTaskConnectionCheck } from './taskConnections';
 import { setTaskStatus } from './taskLifecycle';
 import { taskDependencyRecords } from './modules/search';
 import { hasDeterministicLeanFailure } from './proofReuse';
+import { VerificationCheckpointError, withVerificationCheckpoints } from './verificationCheckpoint';
+import { captureDeliveryArtifacts } from './deliveryArtifacts';
+import { researchCheckpointInputDigest, researchCheckpointLocalInputDigest, researchCheckpointOutputDigest,
+  UNCHANGED_RESEARCH_CHECKPOINT, type ResearchCheckpoint } from './researchCheckpoints';
+import { recordRouteBlockers, validateBlockerProposals } from './routeControl';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/u), oid = z.string().regex(/^[a-f0-9]{40,64}$/u);
 const id = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/u);
@@ -107,6 +113,8 @@ const researchDelivery = z.object({ id: z.string().min(1), producer: id, taskId:
   finding: z.string().optional(), findingDigest: hash.optional(),
   researchRecord: researchRecordSchema.optional(), mathematicalGap: mathematicalGapSchema.optional(),
   checkOutcome: checkOutcomeSchema.optional(), checkOutcomeScope: nextCheckScopeSchema.optional(),
+  sourceUses: z.array(researchSourceUseSchema).max(32).optional(),
+  searchCheckpoint: proofSearchCheckpointReferenceSchema.optional(),
   mathematicalGapScope: z.object({ problemReceiptDigest: hash, environmentDigest: hash,
     source: handoffTask, consumer: handoffTask, dependencies: z.array(handoffReference) }).strict()
     .transform(value => ({ ...value, problemReceiptDigest: value.problemReceiptDigest,
@@ -130,6 +138,24 @@ const researchTaskInput = z.object({ task: handoffTask,
   visibleDependencies: value.visibleDependencies, sourceDependencies: value.sourceDependencies, sourceHelpers: value.sourceHelpers }));
 const researchContext = z.object({ environmentDigest: hash, problemReceiptDigest: hash,
   tasks: z.array(researchTaskInput), deliveries: z.array(researchDelivery) }).strict();
+const savedTaskDraft = z.object({ taskId: id, taskDigest: hash, workerId: id,
+  assignmentId: z.string().optional(), seedCommit: oid, canonicalCommit: oid.optional(), commit: oid,
+  outputDigest: hash, task: handoffTask.optional(), suspended: z.boolean().optional(), archived: z.literal(true).optional(),
+  sources: z.record(z.string()), notes: z.string().nullable(),
+  source: z.object({ runId: z.string(), stateFile: z.string(), environmentDigest: hash,
+    problemReceiptDigest: hash, sourcePolicyDigest: hash }).strict(),
+}).strict();
+type SavedTaskDraft = z.infer<typeof savedTaskDraft>;
+const savedResearchCheckpoint = z.object({ taskId: id, workerId: id,
+  checkpoint: z.object({ taskDigest: hash, inputDigest: hash, outputDigest: hash,
+    count: z.number().int().positive(), localInputDigest: hash.optional(), candidateOutputDigest: hash.optional(),
+    unchangedEvidenceCount: z.number().int().positive().optional(),
+    candidateStatus: z.enum(['structured-candidate', 'unclassified-draft']).optional(), paused: z.boolean().optional(),
+  }).strict().transform((value): ResearchCheckpoint => ({ ...value, taskDigest: value.taskDigest,
+    inputDigest: value.inputDigest, outputDigest: value.outputDigest, count: value.count })),
+  source: savedTaskDraft.shape.source,
+}).strict();
+type SavedResearchCheckpoint = z.infer<typeof savedResearchCheckpoint>;
 const sourceSchema = z.object({
   schema: z.literal('theorem-os.continuation-seed-source.v1'), capturedAt: z.number().int().nonnegative(),
   taskDigest: hash, problemReceiptDigest: hash, sourcePolicyDigest: hash,
@@ -147,6 +173,8 @@ const sourceSchema = z.object({
     attempts: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     at: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     targetCommit: z.string(), receiptIds: z.array(z.string()) }).strict()).max(32).optional(),
+  taskDrafts: z.array(savedTaskDraft).optional(),
+  researchCheckpoints: z.array(savedResearchCheckpoint).optional(),
   workers: z.array(z.object({ id, role: z.string(), headBefore: oid, headAfter: oid,
     sources: z.record(z.string()), notes: z.string().nullable(), assignment: z.unknown().optional() }).strict()),
   history: z.unknown(),
@@ -244,7 +272,8 @@ const emptyInitialPlan = z.object({ tasks: z.array(z.never()).length(0), groups:
 function validateSeedPlan(state: SolverRunState, source: SeedSource): ReturnType<typeof validatePlan> {
   if (!source.initialPlanning) return validatePlan(state, source.plan);
   if (source.candidateIds.length || source.conditionalCandidates?.length || source.frozenCandidates?.length || source.capacityExplorations ||
-      source.completedResearch || source.researchContext || source.nextChecks) throw new Error('math_continuation_seed_initial_plan_invalid');
+      source.completedResearch || source.researchContext || source.nextChecks || source.taskDrafts?.length)
+    throw new Error('math_continuation_seed_initial_plan_invalid');
   return emptyInitialPlan.parse(source.plan);
 }
 
@@ -388,6 +417,7 @@ function advisoryResearchDelivery(delivery: DeliveryRecord): DeliveryRecord {
     findingDigest: delivery.findingDigest, researchRecord: delivery.researchRecord,
     mathematicalGap: delivery.mathematicalGap, mathematicalGapScope: delivery.mathematicalGapScope,
     checkOutcome: delivery.checkOutcome, checkOutcomeScope: delivery.checkOutcomeScope,
+    sourceUses: delivery.sourceUses, searchCheckpoint: delivery.searchCheckpoint,
     lemmaRequests: delivery.lemmaRequests });
 }
 
@@ -411,6 +441,123 @@ function restoredResearchDeliveries(source: SeedSource, state: SolverRunState): 
     return [delivery.id, { ...delivery, status: current ? delivery.status : 'superseded' as const }];
   }));
   return [...deliveries.values()];
+}
+
+const draftOutputDigest = researchCheckpointOutputDigest;
+const ordinaryCheckpointTask = (node: TaskRecord) => continuableResearch(node.task) && !node.capacityExploration && !node.nextCheckId;
+const pausedResearchCheckpoint = (node: TaskRecord, checkpoint?: ResearchCheckpoint) => ordinaryCheckpointTask(node) &&
+  checkpoint?.paused && checkpoint.taskDigest === taskVersion(node.task) && node.status === 'blocked' &&
+  node.feedback?.startsWith('math_research_checkpoint_unchanged');
+
+function capturedTaskDrafts(state: SolverRunState, stateFile: string, previous: readonly SavedTaskDraft[] = []) {
+  const key = (draft: SavedTaskDraft) => canonicalMathJson([draft.source, draft.taskId, draft.taskDigest,
+    draft.workerId, draft.seedCommit, draft.canonicalCommit ?? null, draft.commit]);
+  const drafts = new Map<string, SavedTaskDraft>(previous.map(draft => [key(draft), { ...draft, archived: true }]));
+  const origin = { runId: state.runId, stateFile, environmentDigest: state.environmentDigest,
+    problemReceiptDigest: state.problem.receiptDigest, sourcePolicyDigest: policyDigest(state.problem) };
+  for (const [taskId, snapshot] of Object.entries(state.cooperation!.researchDrafts ?? {})) {
+    const node = state.cooperation!.tasks.find(node => node.task.id === taskId);
+    const task = node?.task && taskVersion(node.task) === snapshot.taskDigest ? node.task :
+      state.cooperation!.history?.find(record => record.task.id === taskId && taskVersion(record.task) === snapshot.taskDigest)?.task;
+    const assignment = node?.assignment;
+    const checkpoint = state.cooperation!.researchCheckpoints?.[taskId];
+    const current = node && taskVersion(node.task) === snapshot.taskDigest &&
+      (['pending', 'running'].includes(node.status) || pausedResearchCheckpoint(node, checkpoint) &&
+        checkpoint!.outputDigest === snapshot.outputDigest) &&
+      assignment?.taskDigest === snapshot.taskDigest && assignment.workerId === snapshot.workerId &&
+      assignment.assignmentId === snapshot.assignmentId && assignment.seedCommit === snapshot.seedCommit &&
+      assignment.canonicalCommit === snapshot.canonicalCommit &&
+      snapshot.outputDigest === draftOutputDigest(state.problem, state.worktree, snapshot.commit) &&
+      snapshot.artifacts.problemReceiptDigest === state.problem.receiptDigest && snapshot.artifacts.taskId === taskId &&
+      snapshot.artifacts.taskDigest === snapshot.taskDigest && snapshot.artifacts.seedCommit === snapshot.seedCommit &&
+      snapshot.artifacts.commit === snapshot.commit;
+    const prior = previous.find(draft => !draft.archived && draft.taskId === taskId && draft.taskDigest === snapshot.taskDigest &&
+      draft.workerId === snapshot.workerId && draft.seedCommit === snapshot.seedCommit &&
+      draft.canonicalCommit === snapshot.canonicalCommit && draft.commit === snapshot.commit &&
+      draft.outputDigest === snapshot.outputDigest && draft.source.environmentDigest === origin.environmentDigest &&
+      draft.source.problemReceiptDigest === origin.problemReceiptDigest && draft.source.sourcePolicyDigest === origin.sourcePolicyDigest);
+    const draft = savedTaskDraft.parse({ taskId, taskDigest: snapshot.taskDigest, workerId: snapshot.workerId,
+      assignmentId: prior?.assignmentId ?? snapshot.assignmentId, seedCommit: snapshot.seedCommit,
+      canonicalCommit: snapshot.canonicalCommit, commit: snapshot.commit, outputDigest: snapshot.outputDigest,
+      task, suspended: snapshot.suspended, ...(current ? {} : { archived: true }),
+      sources: Object.fromEntries(state.problem.ownedFiles.map(file => [file,
+        committedSource(state.worktree, snapshot.commit, `${state.problem.projectRelative}/${file}`)])),
+      notes: git(state.worktree, ['ls-tree', '--format=%(objectname)', snapshot.commit, '--', 'RESEARCH.md'])
+        ? committedSource(state.worktree, snapshot.commit, 'RESEARCH.md') : null,
+      source: prior?.source ?? origin });
+    drafts.set(key(draft), draft);
+  }
+  return [...drafts.values()];
+}
+
+function capturedResearchCheckpoints(state: SolverRunState, stateFile: string, drafts: readonly SavedTaskDraft[]) {
+  const checkpoints: SavedResearchCheckpoint[] = [];
+  for (const [taskId, checkpoint] of Object.entries(state.cooperation!.researchCheckpoints ?? {})) {
+    const node = state.cooperation!.tasks.find(node => node.task.id === taskId);
+    const draft = drafts.find(draft => !draft.archived && draft.taskId === taskId &&
+      draft.taskDigest === checkpoint.taskDigest && draft.outputDigest === checkpoint.outputDigest &&
+      draft.workerId === node?.assignment?.workerId);
+    if (!node || !ordinaryCheckpointTask(node) || taskVersion(node.task) !== checkpoint.taskDigest || !draft ||
+        !(['pending', 'running'].includes(node.status) || pausedResearchCheckpoint(node, checkpoint))) continue;
+    const { blockerId: _oldBlocker, ...scheduling } = checkpoint;
+    checkpoints.push(savedResearchCheckpoint.parse({ taskId, workerId: draft.workerId, checkpoint: scheduling,
+      source: { runId: state.runId, stateFile, environmentDigest: state.environmentDigest,
+        problemReceiptDigest: state.problem.receiptDigest, sourcePolicyDigest: policyDigest(state.problem) } }));
+  }
+  return checkpoints;
+}
+
+/** Saved bytes and the effective current inputs must agree before restoring a scheduling pause. */
+function currentResearchCheckpoints(source: SeedSource, state: SolverRunState) {
+  const checkpoints = new Map<string, SavedResearchCheckpoint>();
+  if (source.ownershipExtension || !state.cooperation) return checkpoints;
+  const cooperation = state.cooperation;
+  for (const saved of source.researchCheckpoints ?? []) {
+    const node = cooperation.tasks.find(node => node.task.id === saved.taskId);
+    const draft = cooperation.researchDrafts?.[saved.taskId], checkpoint = saved.checkpoint;
+    if (!node || !ordinaryCheckpointTask(node) || !['pending', 'blocked'].includes(node.status) ||
+        taskVersion(node.task) !== checkpoint.taskDigest || node.assignment?.workerId !== saved.workerId ||
+        !draft || draft.taskDigest !== checkpoint.taskDigest || draft.workerId !== saved.workerId ||
+        draft.assignmentId !== node.assignment.assignmentId || draft.outputDigest !== checkpoint.outputDigest ||
+        saved.source.environmentDigest !== state.environmentDigest ||
+        saved.source.problemReceiptDigest !== state.problem.receiptDigest ||
+        saved.source.sourcePolicyDigest !== policyDigest(state.problem)) continue;
+    const input = { task: node.task, workerId: saved.workerId, tasks: cooperation.tasks, deliveries: cooperation.deliveries ?? [],
+      environmentDigest: state.environmentDigest, problemReceiptDigest: state.problem.receiptDigest };
+    const sameInput = checkpoint.localInputDigest
+      ? checkpoint.localInputDigest === researchCheckpointLocalInputDigest(input)
+      : checkpoint.inputDigest === researchCheckpointInputDigest({ ...input, problem: state.problem,
+        worktree: state.worktree, canonicalCommit: cooperation.canonicalCommit! });
+    if (sameInput) checkpoints.set(saved.taskId, saved);
+  }
+  return checkpoints;
+}
+
+function taskDraftAssignment(draft: SavedTaskDraft, task: CooperativeTask,
+  tasks: readonly TaskRecord[], state: SolverRunState): TaskAssignment {
+  const assignment: TaskAssignment = { taskId: draft.taskId, taskDigest: draft.taskDigest, workerId: draft.workerId,
+    seedCommit: draft.seedCommit, canonicalCommit: draft.canonicalCommit,
+    assignmentId: mathDigest(canonicalMathJson({ runId: state.runId, draft: { source: draft.source,
+      taskId: draft.taskId, taskDigest: draft.taskDigest, workerId: draft.workerId,
+      assignmentId: draft.assignmentId, seedCommit: draft.seedCommit, commit: draft.commit } })),
+    groupId: taskGroup(task), dependencies: taskDependencyRecords(task, tasks)
+      .map(node => ({ taskId: node.task.id, taskDigest: taskVersion(node.task) })) };
+  if (automaticTaskConnection(task, tasks, state.cooperation!.groups))
+    assignment.connectionCheck = createTaskConnectionCheck(task, assignment, tasks,
+      { environmentDigest: state.environmentDigest, problemReceiptDigest: state.problem.receiptDigest },
+      input => committedSource(state.worktree, draft.seedCommit, `${state.problem.projectRelative}/${input.proofPath}`));
+  return assignment;
+}
+
+function restorableTaskDraft(draft: SavedTaskDraft, node: TaskRecord, state: SolverRunState) {
+  const worker = state.workers!.find(worker => worker.id === draft.workerId);
+  return !draft.archived && (node.status === 'pending' ||
+    pausedResearchCheckpoint(node, state.cooperation!.researchCheckpoints?.[node.task.id])) && !node.alternativeRoutes?.length &&
+    draft.taskId === node.task.id && draft.taskDigest === taskVersion(node.task) &&
+    draft.source.environmentDigest === state.environmentDigest && draft.source.problemReceiptDigest === state.problem.receiptDigest &&
+    draft.source.sourcePolicyDigest === policyDigest(state.problem) && worker &&
+    assessTaskResponsibility({ ...node, assignment: undefined }, worker,
+      { tasks: state.cooperation!.tasks, groups: state.cooperation!.groups }).kind === 'matches';
 }
 
 function frozenTaskAssignment(candidate: z.infer<typeof frozenCandidate>, task: CooperativeTask,
@@ -545,6 +692,7 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
   const capacities = capturedCapacityRecords(archived);
   let previousCapacity: z.infer<typeof capacitySource> | undefined;
   let previousResearch: CompletedResearchRecord[] | undefined;
+  let previousDrafts: SavedTaskDraft[] | undefined;
   if (snapshot) {
     const attachment = snapshot.manifest.attachments.find(item => item.id === 'seed-capacity-explorations');
     if (attachment) {
@@ -563,7 +711,16 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
         throw new Error('math_continuation_content_changed');
       previousResearch = z.array(completedResearchRecord).parse(JSON.parse(bytes.toString('utf8')));
     }
+    const drafts = snapshot.manifest.attachments.filter(item => /^seed-task-drafts(?:-[1-9][0-9]*)?$/u.test(item.id));
+    if (drafts.length) previousDrafts = drafts.flatMap(attachment => {
+      const bytes = readMathFile(path.join(sourceDirectory, attachment.contentPath), attachment.bytes).bytes;
+      if (bytes.length !== attachment.bytes || mathDigest(bytes) !== attachment.sha256)
+        throw new Error('math_continuation_content_changed');
+      return z.array(savedTaskDraft).parse(JSON.parse(bytes.toString('utf8')));
+    });
   }
+  const taskDrafts = capturedTaskDrafts(archived, sourceStateFile, previousDrafts);
+  const researchCheckpoints = capturedResearchCheckpoints(archived, sourceStateFile, taskDrafts);
   const capacityVersions = new Set(capacities.map(record =>
     canonicalMathJson([record.task.id, record.capacityExploration.taskDigest])));
   const notes = new Map<string, z.infer<typeof capacitySource>['notes'][number]>();
@@ -606,6 +763,8 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
     ...(frozenCandidates.length ? { frozenCandidates } : {}),
     ...(sameProblem && archived.environmentDigest === state.environmentDigest && archived.verificationCheckpoints?.length
       ? { verificationCheckpoints: archived.verificationCheckpoints } : {}),
+    ...(taskDrafts.length ? { taskDrafts } : {}),
+    ...(researchCheckpoints.length ? { researchCheckpoints } : {}),
     candidateIds: planned.filter(node => !isAdvisoryTask(node.task) &&
       ((node.proof?.passed && !node.proof.conditions?.length) ||
         (node.integratedCheck?.passed && !node.integratedCheck.conditions?.length) ||
@@ -648,6 +807,22 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
 /** Capture advisory source bytes and history without initializing a run or checking a proof. */
 export { captureSource as captureSolverContinuationSource };
 
+function taskDraftDocuments(drafts: readonly SavedTaskDraft[]) {
+  const chunks: string[] = [];
+  let entries: string[] = [], bytes = 2;
+  for (const draft of drafts) {
+    const text = canonicalMathJson(draft), size = Buffer.byteLength(text);
+    if (size + 2 > MAX_CONTINUATION_ATTACHMENT_BYTES) throw new Error('math_continuation_snapshot_invalid');
+    if (entries.length && bytes + 1 + size > MAX_CONTINUATION_ATTACHMENT_BYTES) {
+      chunks.push(`[${entries.join(',')}]`); entries = []; bytes = 2;
+    }
+    bytes += size + (entries.length ? 1 : 0); entries.push(text);
+  }
+  if (entries.length || !chunks.length) chunks.push(`[${entries.join(',')}]`);
+  return chunks.map((text, index) => ({ id: index ? `seed-task-drafts-${index + 1}` : 'seed-task-drafts',
+    kind: 'proof-source' as const, text, commit: null }));
+}
+
 function freezeSource(source: SeedSource, directory: string) {
   const documents: { id: string; kind: ContinuationManifest['attachments'][number]['kind']; text: string; commit?: null }[] = [
     { id: 'seed-recovery-guide', kind: 'research-notes' as const, text:
@@ -655,7 +830,8 @@ function freezeSource(source: SeedSource, directory: string) {
         ? 'The source published no accepted initial plan. Canonical owned sources, worker drafts and notes were preserved; prior planning turns and usage remain recorded in seed-history. The Lead still owes the first plan covering every original target.\n'
         : 'The canonical owned sources and exact task graph were explicitly initialized in this new run. ') +
       'Historical proof flags, threads and assignments do not authorize work or acceptance. Only freshly checked helpers are integrated; conditional proofs retain their typed obligations.\n' +
-      'For an unfinished task, inspect draft-WORKER_ID for its complete source strings and RESEARCH.md notes. Match the captured task id and digest to your current assignment before recovering useful code. Preserve the current canonical proofs; recovered drafts still require ordinary typed host checks.\n' +
+      'Per-task saved drafts, including suspended tasks, are preserved in seed-task-drafts with exact sources, missing-versus-empty notes and their original run/commit identities. Compatible drafts resume through the normal task draft restoration; changed task or environment snapshots remain advisory. Inspect draft-WORKER_ID for the current worker workspace as well. Match captured task ids and digests before recovering useful code. Preserve current canonical proofs; recovered drafts still require ordinary typed host checks.\n' +
+      'Ordinary research/sketch no-progress counts and pauses are retained in seed-research-checkpoints only while the task, environment, effective inputs and saved task output still match. A pause is scheduling state and never proof acceptance, research completion or mathematical refutation.\n' +
       'The original run may still be progressing. Its canonical sources are pinned to the recorded commit; worker files are individually stable captured bytes, not a globally atomic observation. Repeated initialization uses this same frozen capture.\n' +
       (source.ownershipExtension ? `This run re-bootstraps the same problem with added owned files ${JSON.stringify(source.ownershipExtension.addedFiles)}; ` +
         'they start at their baseline and worker drafts hold only the former owned files. Research findings bound to the former problem receipt are history and their tasks reopen.\n' : '') },
@@ -675,6 +851,9 @@ function freezeSource(source: SeedSource, directory: string) {
       text: canonicalMathJson(source.completedResearch), commit: null }] : []),
     ...(source.researchContext ? [{ id: 'seed-research-context', kind: 'research-notes' as const,
       text: canonicalMathJson(source.researchContext), commit: null }] : []),
+    ...(source.taskDrafts ? taskDraftDocuments(source.taskDrafts) : []),
+    ...(source.researchCheckpoints ? [{ id: 'seed-research-checkpoints', kind: 'diagnostics' as const,
+      text: canonicalMathJson(source.researchCheckpoints), commit: null }] : []),
   ];
   const manifest: ContinuationManifest = { schema: 'theorem-os.continuation-snapshot.v1', taskDigest: source.taskDigest,
     problemReceiptDigest: source.problemReceiptDigest, attachments: documents.map(document => {
@@ -744,9 +923,18 @@ export async function seedSolverContinuation(options: {
     const pendingResearch = new Map<string, z.infer<typeof immutableCompletedResearchRecord>>();
     const restoredResearch = state.cooperation ? currentCompletedResearch(source, state, plan.tasks,
       state.cooperation.tasks, restoredResearchDeliveries(source, state)) : pendingResearch;
+    const restoredCheckpoints = currentResearchCheckpoints(source, state);
+    const matchesCheckpoint = (taskId: string, checkpoint: ResearchCheckpoint) => {
+      const saved = restoredCheckpoints.get(taskId);
+      const { blockerId: _localBlocker, ...scheduling } = checkpoint;
+      return saved && canonicalMathJson(scheduling) === canonicalMathJson(saved.checkpoint);
+    };
     const matchesResearch = (node: TaskRecord, records: typeof pendingResearch) => {
       const record = records.get(node.task.id);
-      return node.status === (record ? 'completed' : 'pending') && node.finding === record?.finding &&
+      const checkpoint = state.cooperation?.researchCheckpoints?.[node.task.id];
+      const paused = checkpoint?.paused && matchesCheckpoint(node.task.id, checkpoint) &&
+        node.feedback === UNCHANGED_RESEARCH_CHECKPOINT;
+      return node.status === (record ? 'completed' : paused ? 'blocked' : 'pending') && node.finding === record?.finding &&
         canonicalMathJson(node.researchCompletion ?? null) === canonicalMathJson(record?.record ?? null);
     };
     if (seeded && state.cooperation && (state.cooperation.planVersion !== planVersion ||
@@ -758,14 +946,19 @@ export async function seedSolverContinuation(options: {
         canonicalMathJson(state.cooperation.nextChecks ?? []) !== canonicalMathJson(source.nextChecks?.records ?? []) ||
         source.researchContext && canonicalMathJson(state.cooperation.deliveries ?? []) !==
           canonicalMathJson(restoredResearchDeliveries(source, state)) ||
-        source.completedResearch && ![pendingResearch, restoredResearch].some(records =>
+        (source.completedResearch || source.researchCheckpoints) && ![pendingResearch, restoredResearch].some(records =>
           state.cooperation.tasks.filter(node => isAdvisoryTask(node.task) && !node.capacityExploration && !node.nextCheckId)
             .every(node => matchesResearch(node, records))) ||
+        source.researchCheckpoints && Object.entries(state.cooperation.researchCheckpoints ?? [])
+          .some(([taskId, checkpoint]) => !matchesCheckpoint(taskId, checkpoint)) ||
         state.cooperation.tasks.some(node => node.assignment && !conditional.some(candidate =>
           candidate.taskId === node.task.id && node.status === 'conditional' &&
           node.assignment!.taskDigest === candidate.taskDigest && node.assignment!.workerId === 'continuation') &&
           !(source.frozenCandidates ?? []).some(candidate => candidate.taskId === node.task.id && node.status === 'pending' &&
-            canonicalMathJson(node.assignment) === canonicalMathJson(frozenAssignment(candidate, state.cooperation!.canonicalCommit!))))))
+            canonicalMathJson(node.assignment) === canonicalMathJson(frozenAssignment(candidate, state.cooperation!.canonicalCommit!))) &&
+          !(source.taskDrafts ?? []).some(draft => !source.ownershipExtension && restorableTaskDraft(draft, node, state) &&
+            canonicalMathJson(node.assignment) === canonicalMathJson(taskDraftAssignment(draft, node.task,
+              state.cooperation!.tasks, state))))))
       throw new Error('math_continuation_seed_destination_changed');
     if (seeded && state.cooperation) {
       const previous = fs.existsSync(reportFile) ? readMathJson(reportFile) as Partial<ContinuationSeedReport> : undefined;
@@ -778,6 +971,18 @@ export async function seedSolverContinuation(options: {
     if (!seeded && (git(state.worktree, ['rev-parse', 'HEAD']) !== state.problem.baseCommit ||
         git(state.worktree, ['status', '--porcelain', '--untracked-files=no']) || fs.existsSync(path.join(state.worktree, 'RESEARCH.md'))))
       throw new Error('math_continuation_seed_destination_changed');
+    // Restoring frozen deliveries also resets their worker checkouts. Preserve
+    // new destination work before publishing state or rechecking any sources.
+    for (const candidate of source.frozenCandidates ?? []) {
+      const worker = state.workers!.find(worker => worker.id === candidate.workerId);
+      if (!worker || worker.worktree === state.worktree) continue;
+      const restoredSources = git(worker.worktree, ['ls-tree', '-r', '--name-only', '-z', candidate.snapshotCommit, '--',
+        ...state.problem.ownedFiles.map(file => path.join(state.problem.projectRelative, file)), 'RESEARCH.md']).split('\0').filter(Boolean);
+      if (![state.problem.baseCommit, candidate.snapshotCommit].includes(git(worker.worktree, ['rev-parse', 'HEAD'])) ||
+          git(worker.worktree, ['status', '--porcelain', '--untracked-files=no']) ||
+          restoredSources.length && git(worker.worktree, ['ls-files', '--others', '-z', '--', ...restoredSources]))
+        throw new Error('math_continuation_seed_destination_changed');
+    }
     lease.assertHeld();
     if (!seeded) writeMathJsonDurable(sourceFile, source, 0o400);
     const report: ContinuationSeedReport = { schema: 'theorem-os.continuation-seed.v1', sourceRunId: source.source.runId,
@@ -817,8 +1022,8 @@ export async function seedSolverContinuation(options: {
         attempts: 0, status: node.status === 'completed' ? 'completed' : node.status === 'blocked' ? 'blocked' : 'pending',
         ...(node.finding ? { finding: node.finding } : {}) });
       // A timeout only grants more time to the identical tree/items/environment key;
-      // it never restores proof acceptance. Reinitialization reuses these frozen budgets.
-      if (source.verificationCheckpoints) state.verificationCheckpoints = source.verificationCheckpoints.map(record => ({
+      // it never restores proof acceptance. Retries retain this run's later timeout progress.
+      if (!state.continuationDigest && source.verificationCheckpoints) state.verificationCheckpoints = source.verificationCheckpoints.map(record => ({
         key: record.key, timeoutMs: record.timeoutMs, attempts: record.attempts, at: record.at,
         targetCommit: record.targetCommit, receiptIds: [...record.receiptIds],
       }));
@@ -996,10 +1201,14 @@ export async function seedSolverContinuation(options: {
         lease.signal.throwIfAborted(); lease.assertHeld();
         let proofs: TaskProof[];
         try {
-          proofs = await checkTaskProofs(state.problem, state.worktree, batch[0].sourceCommit, batch.map(candidate => candidate.request),
-            env, lease.signal, timeoutMs, state.environmentDigest);
+          proofs = await withVerificationCheckpoints({ environmentDigest: state.environmentDigest,
+            problemReceiptDigest: state.problem.receiptDigest, checkpoints: state.verificationCheckpoints ??= [],
+            save: () => { lease.assertOwned(); writeSolverRunState(stateFile, state); }, emit },
+          () => checkTaskProofs(state.problem, state.worktree, batch[0].sourceCommit, batch.map(candidate => candidate.request),
+            env, lease.signal, timeoutMs, state.environmentDigest));
         } catch (error) {
           lease.signal.throwIfAborted(); lease.assertHeld();
+          if (error instanceof VerificationCheckpointError) throw error;
           if (batch.length > 1 && error instanceof Error && seedBatchFallbacks.has(rejectionCode(error))) {
             for (const candidate of batch) await checkBatch([candidate]);
           } else for (const { node } of batch) { blockCandidate(node, error); completeCandidate(node); }
@@ -1117,6 +1326,52 @@ export async function seedSolverContinuation(options: {
         emit('continuation_seed_frozen_pending', { taskId: candidate.taskId, workerId: worker.id, readyId: ready.id,
           sourceRunId: source.source.runId, sourceReadyId: candidate.readyId, snapshotCommit: candidate.snapshotCommit,
           sourceDigest: candidate.sourceDigest, acceptance: 'not-assessed' });
+      }
+      // A worker's current workspace may belong to a different task. Install the
+      // saved task snapshots, not its workspace, for ordinary on-dispatch recovery.
+      for (const draft of source.taskDrafts ?? []) {
+        const node = tasks.find(node => node.task.id === draft.taskId);
+        if (source.ownershipExtension || !node || node.assignment || !restorableTaskDraft(draft, node, state)) continue;
+        lease.signal.throwIfAborted(); lease.assertHeld();
+        const assignment = taskDraftAssignment(draft, node.task, tasks, state);
+        const artifacts = await withSolverWorktree(state.worktree, draft.commit, async checkout => {
+          assertSolverSources(state.problem, checkout);
+          if (canonicalMathJson(Object.keys(draft.sources).sort()) !== canonicalMathJson([...state.problem.ownedFiles].sort()) ||
+              state.problem.ownedFiles.some(file => committedSource(checkout, draft.commit,
+                `${state.problem.projectRelative}/${file}`) !== draft.sources[file]) ||
+              (git(checkout, ['ls-tree', '--format=%(objectname)', draft.commit, '--', 'RESEARCH.md'])
+                ? committedSource(checkout, draft.commit, 'RESEARCH.md') : null) !== draft.notes ||
+              draftOutputDigest(state.problem, checkout, draft.commit) !== draft.outputDigest)
+            throw new Error('math_continuation_seed_draft_source_changed');
+          // Compare the retained canonical basis during normal restoration. A newer
+          // canonical keeps precedence; its saved notes and source evidence survive.
+          ownedSourceDigest(state.problem, checkout, draft.canonicalCommit ?? draft.seedCommit);
+          return captureDeliveryArtifacts({ problem: state.problem, worktree: checkout, commit: draft.commit, assignment });
+        });
+        for (const commit of new Set([draft.seedCommit, draft.canonicalCommit ?? draft.seedCommit, draft.commit]))
+          git(state.worktree, ['update-ref', `refs/math/${state.runId}/continuation/drafts/${draft.taskId}/${commit}`, commit]);
+        node.assignment = assignment;
+        (state.cooperation.researchDrafts ??= {})[draft.taskId] = { taskDigest: draft.taskDigest, workerId: draft.workerId,
+          assignmentId: assignment.assignmentId, seedCommit: draft.seedCommit, canonicalCommit: draft.canonicalCommit,
+          commit: draft.commit, outputDigest: draft.outputDigest, artifacts, suspended: true };
+        emit('continuation_seed_task_draft_pending', { taskId: draft.taskId, workerId: draft.workerId,
+          sourceRunId: draft.source.runId, snapshotCommit: draft.commit, acceptance: 'not-assessed' });
+      }
+      for (const [taskId, saved] of currentResearchCheckpoints(source, state)) {
+        const node = tasks.find(node => node.task.id === taskId)!, checkpoint = { ...saved.checkpoint };
+        (state.cooperation.researchCheckpoints ??= {})[taskId] = checkpoint;
+        if (checkpoint.paused) {
+          const scope = `assigned-local-inference/checkpoint:${mathDigest(canonicalMathJson({
+            inputDigest: checkpoint.inputDigest, outputDigest: checkpoint.outputDigest }))}`;
+          const [blocker] = recordRouteBlockers(state.cooperation.blockers ??= [],
+            validateBlockerProposals([{ mechanism: 'unchanged-research-checkpoint', scope }], node.task, tasks),
+            node.task, tasks, state.environmentDigest, state.problem.receiptDigest, source.capturedAt);
+          blocker.status = 'parked'; blocker.count = 2; checkpoint.blockerId = blocker.id;
+          setTaskStatus(node, 'blocked', 'reconstructed'); node.feedback = UNCHANGED_RESEARCH_CHECKPOINT;
+        }
+        emit('continuation_seed_research_checkpoint_restored', { taskId, workerId: saved.workerId,
+          sourceRunId: saved.source.runId, count: checkpoint.count, paused: Boolean(checkpoint.paused),
+          acceptance: 'not-assessed' });
       }
       writeSolverRunState(stateFile, state);
       report.stage = 'complete'; saveReport();

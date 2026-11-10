@@ -6,6 +6,7 @@ import {
 import { gsap } from 'gsap';
 import { createSelectionIndicator } from './selectionIndicator';
 import { initializeReplay } from './replay';
+import { initializeHumanDecision } from './humanDecision';
 import { keepHashOnLanguageSwitch, localeOf, rootOf } from './site';
 
 const iconSet = { ArrowDown, ArrowDownRight, ArrowRight, ArrowUpRight, Blocks, Check, ChevronLeft, ChevronRight, Clock, Code2,
@@ -205,6 +206,7 @@ for (const node of graphNodes) {
 element('.module-graph').addEventListener('keydown', event => handleTabKeys(event, graphNodes, node => {
   selectComponent(node.dataset.graphComponent as Component);
   node.focus({ preventScroll: true });
+  node.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
 }));
 const graphCanvas = element('.module-graph-canvas');
 const graphSvg = graphCanvas.querySelector<SVGSVGElement>('.module-graph-edges')!;
@@ -291,6 +293,7 @@ narrow.addEventListener('change', () => selectModulePreview(modulePreview));
 selectModulePreview(modulePreview);
 
 initializeReplay(locale);
+initializeHumanDecision(locale);
 reducedMotion.addEventListener('change', () => {
   if (selectionTargets.size) {
     gsap.killTweensOf([...selectionTargets]);

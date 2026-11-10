@@ -3,10 +3,16 @@ import { inspectScopedLeanDeclarations } from '../../src/math/leanSource';
 import { LEAN_TASK_DECLARATIONS_MAX } from '../../src/math/leanTask';
 import { maskLeanCommentsAndStrings } from '../../src/math/leanSyntax';
 import type { WebEnvironment, WebPrecheck, WebPrecheckDiagnostic } from './shared';
+import { libraryPackDigest, type LibraryPack } from '../../src/math/libraryPacks';
 
 /** What the runner reports for one compile of the statement; `output` is Lean's `--json` stream. */
-export type WebPrecheckOutput = { output: string; exitCode: number | null; timedOut: boolean };
-export type WebPrecheckRunner = (input: { environment: WebEnvironment; source: string }, signal: AbortSignal) => Promise<WebPrecheckOutput>;
+export type WebPrecheckOutput = { output: string; exitCode: number | null; timedOut: boolean;
+  /** Set only after the host's isolated query checked this declaration and its transitive axioms. */
+  checkedTarget?: string };
+export type WebPrecheckRunner = (input: { environment: WebEnvironment; source: string; libraryPack?: LibraryPack;
+  /** Host-selected immutable candidate context; ordinary editor checks do not supply files. */
+  sourceFile?: string; dependencySources?: { file: string; source: string }[];
+  candidateTarget?: { name: string; expectedType?: string } }, signal: AbortSignal) => Promise<WebPrecheckOutput>;
 
 const maxDiagnostics = 40, maxMessage = 1_500;
 // Lean counts lines from 1 and columns in code points from 0; offsets here are JavaScript string indexes.
@@ -105,7 +111,7 @@ export class WebPrechecker {
     const oldestQueuedAt = this.waiting[0]?.createdAt;
     return { running: this.running, queued: this.waiting.length, ...(oldestQueuedAt ? { oldestQueuedAt } : {}) };
   }
-  async check(owner: string, input: { environment: WebEnvironment; source: string; checkScope?: string }, signal: AbortSignal): Promise<WebPrecheck> {
+  async check(owner: string, input: { environment: WebEnvironment; source: string; checkScope?: string; libraryPack?: LibraryPack }, signal: AbortSignal): Promise<WebPrecheck> {
     signal.throwIfAborted();
     const scope = JSON.stringify([owner, input.checkScope ?? 'legacy']);
     this.inflight.get(scope)?.abort(new PrecheckSuperseded());
@@ -113,7 +119,7 @@ export class WebPrechecker {
     const targets = structural.some(item => item.code === 'lean_task_input_invalid') ? 0
       : inspectScopedLeanDeclarations(input.source).filter(item => item.kind === 'theorem').length;
     if (structural.length) return { status: 'invalid', environment: input.environment, targets, sorries: 0, diagnostics: structural };
-    const key = crypto.createHash('sha256').update(`${input.environment}\0${input.source}`).digest('hex');
+    const key = crypto.createHash('sha256').update(`${input.environment}\0${input.source}\0${input.libraryPack ? libraryPackDigest(input.libraryPack) : ''}`).digest('hex');
     const cached = this.cache.get(key);
     if (cached) { this.cache.delete(key); this.cache.set(key, cached); return { ...cached, cached: true }; }
     const busy = (): WebPrecheck => ({ status: 'busy', environment: input.environment, targets, sorries: 0, diagnostics: [] });

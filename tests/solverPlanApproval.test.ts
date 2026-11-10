@@ -9,6 +9,8 @@ import { commitSolverSources, type SolverProblem } from '../src/solver/problem';
 import { leadPlanDeliveryFile, type CooperativeAction } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
+import { ExecutionDeadline } from '../src/runtime/executionDeadline';
+import * as statementReview from '../src/solver/statementReview';
 
 describe('plan approval before dispatch (--plan-approval)', () => {
   let directory: string, problem: SolverProblem, state: SolverRunState, lead: ResearchWorker, peer: ResearchWorker;
@@ -18,10 +20,12 @@ describe('plan approval before dispatch (--plan-approval)', () => {
   const budget = { maxTurns: Infinity, remainingMs: Infinity };
   const plan = (suffix = '') => ({ tasks: problem.targets.map((target, index) => ({ id: `goal_${index + 1}${suffix}`, kind: 'goal',
     objective: `Prove ${target.theoremName}.`, theoremName: target.theoremName, proofPath: target.proofPath })) });
-  const create = () => {
+  const create = (onPlanApprovalWaiting?: (waiting: boolean) => void,
+    exclusiveCheck?: ConstructorParameters<typeof CooperativeResearch>[0]['exclusiveCheck']) => {
     const controller = new AbortController();
     const cooperative = cooperativeResearch({ state, workers: [lead, peer], retrievalRoot: directory,
-      signal: controller.signal, emit: (event, details) => events.push({ event, details }) });
+      signal: controller.signal, onPlanApprovalWaiting, ...(exclusiveCheck ? { exclusiveCheck } : {}),
+      emit: (event, details) => events.push({ event, details }) });
     instances.push({ cooperative, controller });
     return cooperative;
   };
@@ -77,7 +81,7 @@ describe('plan approval before dispatch (--plan-approval)', () => {
     for (const instance of instances) instance.controller.abort();
     await Promise.allSettled(pending);
     await Promise.allSettled(instances.map(instance => instance.cooperative.stop()));
-    vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true });
+    vi.useRealTimers(); vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true });
   });
   it('holds every worker after the first plan until the exact version is approved', async () => {
     const cooperative = create(), action = await startLead(cooperative);
@@ -202,7 +206,100 @@ describe('plan approval before dispatch (--plan-approval)', () => {
     expect(planApprovalInspection(state)).toMatchObject({ status: 'approved', approvedId: 'owner' });
   });
 
-  it('reports an unanswered plan at stop, and the time budget still ends the wait', async () => {
+  it('preserves execution time while a person reads, rejects a stale approval, and continues the same run', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const expire = vi.fn(), clock = new ExecutionDeadline(1_000, expire);
+    const cooperative = create(waiting => clock.setWaiting(waiting)), action = await startLead(cooperative);
+    await vi.advanceTimersByTimeAsync(200);
+    await publish(cooperative, action);
+    expect(clock.waiting).toBe(false); // A published plan does not waive the remainder of the running Lead turn.
+    cooperative.deactivate(lead);
+    expect(clock.waiting).toBe(true);
+    const runId = state.runId, problemReceiptDigest = state.problem.receiptDigest;
+    await vi.advanceTimersByTimeAsync(600_000);
+    await approve(cooperative, 'old-version', 'obsolete');
+    expect(clock.waiting).toBe(true);
+    expect(clock.remainingMs()).toBe(800);
+    expect(expire).not.toHaveBeenCalled();
+    const waiting = track(cooperative.next(peer, { maxTurns: Infinity, remainingMs: clock.remainingMs() }));
+    await approve(cooperative, 'owner');
+    expect(await waiting).toMatchObject({ kind: 'task', task: { id: 'goal_1' } });
+    expect(clock.waiting).toBe(false);
+    expect(state.runId).toBe(runId);
+    expect(state.problem.receiptDigest).toBe(problemReceiptDigest);
+    await vi.advanceTimersByTimeAsync(799);
+    expect(expire).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(expire).toHaveBeenCalledOnce();
+    clock.stop();
+  });
+
+  it('counts owner-requested model revisions, then freezes again when the revision finishes', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const clock = new ExecutionDeadline(1_000, vi.fn());
+    const cooperative = create(waiting => clock.setWaiting(waiting)), action = await startLead(cooperative);
+    await publish(cooperative, action);
+    cooperative.deactivate(lead);
+    await cooperative.deliver(lead, action, commitSolverSources(problem, lead.worktree));
+    expect(clock.waiting).toBe(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    guideLead('revision-note'); await cooperative.pulse();
+    const revision = await cooperative.next(lead, { maxTurns: Infinity, remainingMs: clock.remainingMs() });
+    if (!revision) throw new Error('expected_owner_revision');
+    cooperative.reserveTurn(lead);
+    expect(clock.waiting).toBe(false);
+    expect(cooperative.started(lead, revision)).toBe(true);
+    cooperative.activate(lead, revision, async () => {}, async () => {});
+    cooperative.settleTurn(lead);
+    await vi.advanceTimersByTimeAsync(250);
+    await publish(cooperative, revision, '_revised');
+    cooperative.deactivate(lead);
+    expect(clock.waiting).toBe(true);
+    expect(clock.remainingMs()).toBe(750);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(clock.remainingMs()).toBe(750);
+    clock.stop();
+  });
+
+  it('charges host rechecks of a human-edited plan before returning to idle approval waiting', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.spyOn(statementReview, 'captureStatementContexts').mockImplementation(async (_problem, tasks) =>
+      new Map(tasks.map(task => [task.id, { type: 'True', constants: [], omitted: [] }])));
+    const clock = new ExecutionDeadline(1_000, vi.fn());
+    let hold = false, release!: () => void, checking!: () => void;
+    const released = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { checking = resolve; });
+    const cooperative = create(waiting => clock.setWaiting(waiting), async check => {
+      if (hold && state.cooperation!.tasks.some(node => node.pendingValidation)) {
+        hold = false; checking(); await released;
+      }
+      return check();
+    });
+    try {
+      const action = await startLead(cooperative);
+      await publish(cooperative, action);
+      cooperative.deactivate(lead);
+      await cooperative.deliver(lead, action, commitSolverSources(problem, lead.worktree));
+      expect(clock.waiting).toBe(true);
+      await vi.advanceTimersByTimeAsync(60_000);
+      hold = true;
+      fs.appendFileSync(path.join(directory, 'edits.jsonl'), JSON.stringify({ id: 'owner-edit',
+        baseVersion: state.cooperation!.planVersion, tasks: plan('_edited').tasks.map(task =>
+          ({ ...task, statementReview: true, informalStatement: 'The stated equality holds.' })) }) + '\n');
+      const pulse = track(cooperative.pulse());
+      await started;
+      expect(clock.waiting).toBe(false);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(clock.remainingMs()).toBe(700);
+      release(); await pulse;
+      for (let index = 0; index < 5; index++) await new Promise<void>(resolve => setImmediate(resolve));
+      expect(clock.waiting).toBe(true);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(clock.remainingMs()).toBe(700);
+    } finally { release(); clock.stop(); }
+  });
+
+  it('reports an unanswered plan at stop and respects an already exhausted execution allowance', async () => {
     const cooperative = create(), action = await startLead(cooperative);
     await publish(cooperative, action);
     cooperative.deactivate(lead);

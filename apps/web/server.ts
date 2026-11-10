@@ -8,9 +8,9 @@ import { z } from 'zod';
 import { getWebEnvironments, readWebConfig, webDefaults, webExplanationLimits, webLimits, webTemplates, type WebConfig } from './config';
 import { DockerWebRunner, type WebRunner } from './runner';
 import { WebJobs } from './jobs';
-import { webAgentActionLimits, webContinuationLabelMax, type WebAdminOverview, type WebContinuation, type WebEffort, type WebEnvironment,
+import { webAgentActionLimits, webContinuationLabelMax, type WebAdminOverview, type WebContinuation, type WebEffort,
   type WebExplanationLanguage, type WebExplanationOverview, type WebProvider, type WebRun, type WebRunInput, type WebSession, workbenchReturn } from './shared';
-import { researchModulePlanSchema } from '../../src/solver/modules/policy';
+import { researchModulePlanSchema, type ResearchModulePlan } from '../../src/solver/modules/policy';
 import { WebStorage, WebStorageError } from './storage';
 import { WebKnowledgeService, type WebKnowledgeDetailOptions } from './knowledgeService';
 import { WebModuleRegistry } from './moduleRegistry';
@@ -39,6 +39,11 @@ import { inspectScopedLeanDeclarations } from '../../src/math/leanSource';
 import { formalizationDigest } from '../../src/math/formalization';
 import { WebConversations } from './conversations';
 import { webConversationLimits } from './conversationTypes';
+import { WebResearchApi, researchSelectionSchema } from './researchApi';
+import { combineWebLibraryPacks } from './formalizationSeed';
+import { selectWebLibraryPack } from './frozenLibrary';
+import type { ResearchConfigurationSelection, ResearchLibraryPack } from './researchAssetTypes';
+import { canonicalMathJson, mathDigest } from '../../src/math/mathRuntimeIo';
 
 const inputSchema = z.object({
   requestId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u).optional(),
@@ -49,13 +54,14 @@ const inputSchema = z.object({
   environment: z.enum(['standard', 'mathlib']).default('standard'),
   source: z.string().min(1).refine(value => value.trim().length > 0 && Buffer.byteLength(value) <= webLimits.maxSourceBytes),
   task: z.string().trim().min(1).refine(value => Buffer.byteLength(value) <= webLimits.maxTaskBytes),
-  maxTurns: z.number().int().min(1).max(webLimits.maxTurns),
-  maxRunSeconds: z.number().int().min(30).max(webLimits.maxRunSeconds),
-  maxTotalTokens: z.number().int().min(10_000).max(webLimits.maxTotalTokens).optional(),
+  maxTurns: z.union([z.literal(0), z.number().int().min(1).max(webLimits.maxTurns)]).default(0),
+  maxRunSeconds: z.union([z.literal(0), z.number().int().min(30).max(webLimits.maxRunSeconds)]).default(0),
+  maxTotalTokens: z.union([z.literal(0), z.number().int().min(10_000).max(webLimits.maxTotalTokens)]).default(0),
   workers: z.number().int().min(1).max(webLimits.maxWorkers),
   coordination: z.enum(['cooperative', 'independent']),
   planApproval: z.boolean().optional(),
   modulePlan: researchModulePlanSchema.optional(),
+  researchSelection: researchSelectionSchema.optional(),
   knowledgeDigest: z.string().regex(/^[a-f0-9]{64}$/u).nullable().optional(),
   formalizationId: z.string().uuid().optional(),
   // Names a version of one of the account's runs; its saved file is looked up here, never taken from the request.
@@ -75,6 +81,7 @@ const precheckSchema = z.object({
   checkScope: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u).optional(),
   environment: z.enum(['standard', 'mathlib']),
   source: z.string().min(1).refine(value => Buffer.byteLength(value) <= webLimits.maxSourceBytes),
+  researchSelection: researchSelectionSchema.optional(),
 }).strict();
 const explanationLanguage = z.enum(['zh', 'en']);
 const explanationSchema = z.object({
@@ -83,19 +90,21 @@ const explanationSchema = z.object({
   apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default(''),
 }).strict();
 const formalizationSchema = z.object({
+  requestId: inputSchema.shape.requestId,
   original: z.string().min(1).refine(value => value.trim().length > 0 && Buffer.byteLength(value) <= webFormalizationLimits.maxOriginalBytes),
   environment: z.enum(['standard', 'mathlib']), effort: z.enum(['low', 'high', 'max']).default('max'),
   apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default(''),
   solve: z.boolean().optional(), humanReview: z.boolean().optional(),
   providerId: inputSchema.shape.providerId.optional(), model: inputSchema.shape.model.optional(),
-  maxRunSeconds: z.number().int().min(30).max(webFormalizationLimits.maxRunSeconds).optional(),
-  maxTotalTokens: z.number().int().min(10_000).max(webFormalizationLimits.maxTotalTokens).optional(),
+  maxRunSeconds: z.union([z.literal(0), z.number().int().min(30).max(webFormalizationLimits.maxRunSeconds)]).optional(),
+  maxTotalTokens: z.union([z.literal(0), z.number().int().min(10_000).max(webFormalizationLimits.maxTotalTokens)]).optional(),
   research: z.object({ maxRunSeconds: inputSchema.shape.maxRunSeconds, maxTurns: inputSchema.shape.maxTurns,
-    maxTotalTokens: z.number().int().min(10_000).max(webLimits.maxTotalTokens) }).strict().optional(),
+    maxTotalTokens: inputSchema.shape.maxTotalTokens }).strict().optional(),
 }).strict();
 const conversationSchema = z.object({ formalizationId: z.string().uuid().optional(), runId: z.string().uuid().optional() })
   .strict().refine(value => Boolean(value.formalizationId || value.runId));
 const conversationMessageSchema = z.object({ text: z.string().trim().min(1).max(webConversationLimits.question),
+  requestId: inputSchema.shape.requestId,
   apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default('') }).strict();
 // Explanation roles accept only these Codex efforts (src/runtime/sub2api.ts).
 const explanationEffort = (effort: WebEffort): 'low' | 'high' | 'max' =>
@@ -245,6 +254,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     onFinished: (owner, run) => { if (mailsCompletion(run)) mailOwner(owner, run, 'completion', completionMail); },
     onPlanWaiting: (owner, run) => mailOwner(owner, run, 'plan approval', planApprovalMail) });
   const trajectories = new WebTrajectories(storage);
+  const research = new WebResearchApi(storage, jobs, knowledge, runner);
   const explanations = new WebExplanations(runner, storage);
   const formalizations = new WebFormalizations(runner, storage, webFormalizationLimits, (owner, formalization, evidence, input) => {
     const existing = jobs.list(owner).find(run => run.formalizationId === formalization.id && !run.continueFrom);
@@ -253,9 +263,10 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
       ...(formalization.humanReview ? { workers: 2, coordination: 'cooperative' as const, planApproval: true } : {}),
       providerId: input.provider.id, apiKey: input.apiKey,
       model: input.model, effort: input.effort, source: evidence.candidate.source, environment: evidence.request.environment,
-      task: '依据自然语言原题及其已审核的 Lean 陈述，证明全部目标，保留所有定义、假设与声明。', formalizationId: formalization.id }, input.provider, undefined, undefined,
+      task: '依据自然语言原题及其 Lean 陈述，证明全部目标，保留所有定义、假设与声明。', formalizationId: formalization.id }, input.provider, undefined, undefined,
     { evidence, provenance: { id: formalization.id, evidenceSha256: formalizationDigest(evidence), original: formalization.original,
-      confirmedAt: formalization.confirmedAt!, confirmation: formalization.confirmation ?? 'automatic' } });
+      confirmedAt: formalization.confirmedAt!, confirmation: formalization.confirmation ?? 'automatic',
+      ...(formalization.reviewMode ? { reviewMode: formalization.reviewMode } : {}) } });
     milestone(owner, 'firstRunAt');
     return run.id;
   });
@@ -270,11 +281,21 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   const runStreams = new Map<string, Set<() => void>>();
   const origin = new URL(config.publicUrl);
   const secure = origin.protocol === 'https:';
+  const sessionCookie = 'theoremos_session', bootstrapCookie = 'theoremos_bootstrap';
+  const cookieValue = (name: string, value: string, maxAge: number) =>
+    `${name}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
   const setSessionCookie = (response: ServerResponse, session: Session) => {
-    response.setHeader('Set-Cookie', `theoremos_session=${session.id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(config.sessionTtlMs / 1000)}${secure ? '; Secure' : ''}`);
+    // A delayed anonymous bootstrap must not replace an identity established by another tab.
+    // Keep the existing signed-in cookie name so persisted browser sessions continue to work.
+    const anonymous = auth && !session.account;
+    const maxAge = auth && session.account ? 365 * 24 * 60 * 60
+      : Math.floor((anonymous ? Math.min(config.sessionTtlMs, 60 * 60_000) : config.sessionTtlMs) / 1000);
+    const value = cookieValue(anonymous ? bootstrapCookie : sessionCookie, session.id, maxAge);
+    response.setHeader('Set-Cookie', auth && session.account ? [value, cookieValue(bootstrapCookie, '', 0)] : value);
   };
   const clearSessionCookie = (response: ServerResponse) => {
-    response.setHeader('Set-Cookie', `theoremos_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure ? '; Secure' : ''}`);
+    const value = cookieValue(sessionCookie, '', 0);
+    response.setHeader('Set-Cookie', auth ? [value, cookieValue(bootstrapCookie, '', 0)] : value);
   };
   const startSession = (account?: Session['account'], verifiedByEmail = false) => {
     const session: Session = { id: crypto.randomBytes(32).toString('hex'), csrf: crypto.randomBytes(32).toString('hex'), touchedAt: Date.now(),
@@ -284,31 +305,63 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   };
   /** Ends one browser session. Anonymous records go with it; account records stay with the account. */
   const endSession = (id: string) => {
+    // Revocation must take effect even when deleting persisted records fails.
+    sessions.delete(id);
     for (const stop of runStreams.get(id) ?? []) stop();
-    if (!auth) { conversations.forget(id); formalizations.forget(id); explanations.forget(id); jobs.forget(id); storage.deleteOwner(id); trajectories.forgetOwner(id); }
-    sessions.delete(id); storage.deleteSession(id);
+    let failure: unknown;
+    if (!auth) {
+      conversations.forget(id); formalizations.forget(id); explanations.forget(id);
+      research.projects.forgetOwner(id);
+      void research.assets.deleteOwner(id).catch(() => console.error('[web_cleanup_failed] research cleanup failed'));
+      try { jobs.forget(id); } catch (error) { failure = error; }
+      try { storage.deleteOwner(id); } catch (error) { failure ??= error; }
+      trajectories.forgetOwner(id);
+    }
+    try { storage.deleteSession(id); } catch (error) { failure ??= error; }
+    if (failure) throw failure;
+  };
+  const endSessions = (matches: (session: Session) => boolean) => {
+    let failure: unknown;
+    for (const [id, session] of sessions) if (matches(session)) {
+      try { endSession(id); } catch (error) { failure ??= error; }
+    }
+    if (failure) throw failure;
   };
   const prune = () => {
     admission.prune(); quota?.prune();
-    for (const [id, session] of sessions) {
-      // Login-page sessions without an account only need to outlive one sign-in attempt.
-      const ttl = auth && !session.account ? Math.min(config.sessionTtlMs, 60 * 60_000) : config.sessionTtlMs;
-      if (Date.now() - session.touchedAt > ttl) endSession(id);
-    }
+    let failure: unknown;
+    try {
+      endSessions(session => {
+        // Login-page sessions without an account only need to outlive one sign-in attempt.
+        const ttl = auth && !session.account ? Math.min(config.sessionTtlMs, 60 * 60_000) : config.sessionTtlMs;
+        return Date.now() - session.touchedAt > ttl;
+      });
+    } catch (error) { failure = error; }
     for (const [ip, rate] of rates) if (rate.expiresAt <= Date.now()) rates.delete(ip);
     prechecker?.prune();
     explainer.prune();
     auth?.prune();
+    if (failure) throw failure;
   };
-  const maintenance = setInterval(prune, 60_000).unref();
+  const maintenance = setInterval(() => {
+    try { prune(); } catch { console.error('[web_cleanup_failed] background cleanup failed'); }
+  }, 60_000).unref();
   /** The browser session named by the cookie. An address removed from the allowlist, or a deleted account, loses its signed-in sessions. */
   const cookieSession = (request: IncomingMessage) => {
-    const cookie = request.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith('theoremos_session='))?.slice(18);
-    const session = cookie ? sessions.get(cookie) : undefined;
-    if (session?.account && auth && !(auth.allowed(session.account.email) && auth.getAccount(session.account.email)?.id === session.account.id)) {
-      endSession(session.id); return undefined;
+    const cookies = request.headers.cookie?.split(';').map(value => value.trim()) ?? [];
+    const read = (name: string) => {
+      const value = cookies.find(value => value.startsWith(`${name}=`))?.slice(name.length + 1);
+      return value ? sessions.get(value) : undefined;
+    };
+    let session = read(sessionCookie);
+    if (!auth) return session;
+    if (session?.account && !(auth.allowed(session.account.email) && auth.getAccount(session.account.email)?.id === session.account.id)) {
+      endSession(session.id); session = undefined;
     }
-    return session;
+    if (session?.account) return session;
+    const bootstrap = read(bootstrapCookie);
+    // Accept legacy anonymous cookies until their normal expiry; bootstrap cookies never authenticate.
+    return bootstrap && !bootstrap.account ? bootstrap : session;
   };
   const server = http.createServer(async (request, response) => {
     const encoding = acceptedEncoding(request.headers['accept-encoding']);
@@ -357,8 +410,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             const displaced = admission.admit(ip, sessions.values());
             if (displaced) endSession(displaced);
             session = startSession();
-          }
-          setSessionCookie(response, session);
+            setSessionCookie(response, session);
+          } else if (!auth) setSessionCookie(response, session);
           session.touchedAt = Date.now();
           storage.saveSession(session);
           const usage = usageOf(session);
@@ -379,18 +432,34 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (owner) body.runs = { runs: jobs.list(owner), version: jobs.version(owner) };
           json(response, 200, body); return;
         }
+        if (!session && request.method === 'GET' && url.pathname.startsWith('/api/research/')) {
+          const denied = (): never => { throw new HttpError(401, '请先登录。'); };
+          const result = await research.handle(url, 'GET', undefined, async () => denied(), denied);
+          if (result.filename) response.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+          json(response, result.status, result.body); return;
+        }
         if (session) response.setHeader('X-Theoremos-Owner', crypto.createHash('sha256').update(ownerOf(session) || session.id).digest('hex'));
         if (!session) throw new HttpError(401, '会话已过期，请刷新页面。');
         session.touchedAt = Date.now();
         if (request.method !== 'GET' && !equal(String(request.headers['x-csrf-token'] || ''), session.csrf))
           throw new HttpError(403, '会话校验失败，请刷新页面。');
-        setSessionCookie(response, session);
+        // An earlier response may arrive after another tab logs in. It must not replace the new identity cookie.
+        if (!auth) setSessionCookie(response, session);
         storage.saveSession(session);
+        const requireSession = () => {
+          if (cookieSession(request) !== session) throw new HttpError(401, '会话已过期，请刷新页面。');
+        };
+        const readBody = async () => {
+          const body = await readJson(request);
+          // A request may still be uploading when another request revokes its session.
+          requireSession();
+          return body;
+        };
         if (url.pathname.startsWith('/api/auth/')) {
           if (!auth) throw new HttpError(404, '当前服务未启用登录。');
           if (url.pathname === '/api/auth/captcha' && request.method === 'POST') { json(response, 200, auth.captcha(ip)); return; }
           if (url.pathname === '/api/auth/code' && request.method === 'POST') {
-            try { json(response, 200, await auth.requestCode(ip, objectBody(await readJson(request)))); }
+            try { json(response, 200, await auth.requestCode(ip, objectBody(await readBody()))); }
             catch (error) {
               if (error instanceof WebAuthError && error.status === 502) {
                 operations.mailFailed(); console.error('[smtp_delivery_failed] verification code delivery failed');
@@ -400,7 +469,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             return;
           }
           if (url.pathname === '/api/auth/verify' && request.method === 'POST') {
-            const account = auth.verifyCode(objectBody(await readJson(request)));
+            const account = auth.verifyCode(objectBody(await readBody()));
             quota?.restore(account.id, account.email);
             // A fresh identifier and CSRF token after login; the pre-login cookie stops working.
             endSession(session.id);
@@ -409,7 +478,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             json(response, 200, { account: { email: account.email }, csrfToken: next.csrf }); return;
           }
           if (url.pathname === '/api/auth/password/login' && request.method === 'POST') {
-            const account = await auth.loginPassword(ip, objectBody(await readJson(request)));
+            const account = await auth.loginPassword(ip, objectBody(await readBody()), requireSession);
             quota?.restore(account.id, account.email);
             endSession(session.id);
             const next = startSession({ id: account.id, email: account.email });
@@ -421,37 +490,41 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           }
           if (url.pathname === '/api/auth/terms' && request.method === 'POST') {
             if (!session.account) throw new HttpError(401, '请先登录。');
-            auth.acceptTerms(session.account.email, objectBody(await readJson(request)));
+            auth.acceptTerms(session.account.email, objectBody(await readBody()));
             json(response, 200, { ok: true }); return;
           }
           if (url.pathname === '/api/auth/account' && request.method === 'PATCH') {
             if (!session.account) throw new HttpError(401, '请先登录。');
-            const completionEmail = objectBody(await readJson(request)).completionEmail;
+            const completionEmail = objectBody(await readBody()).completionEmail;
             if (typeof completionEmail !== 'boolean') throw new HttpError(400, '设置格式不正确。');
             auth.setCompletionEmail(session.account.email, completionEmail);
             json(response, 200, { completionEmail }); return;
           }
           if (url.pathname === '/api/auth/password' && request.method === 'PATCH') {
             if (!session.account) throw new HttpError(401, '请先登录。');
-            const body = objectBody(await readJson(request));
+            const body = objectBody(await readBody());
             await auth.setPassword(session.account.email, body.password, body.currentPassword,
-              Boolean(session.passwordResetUntil && session.passwordResetUntil > Date.now()));
+              Boolean(session.passwordResetUntil && session.passwordResetUntil > Date.now()), requireSession);
             session.passwordResetUntil = undefined;
-            storage.saveSession(session);
-            for (const [id, other] of sessions) if (id !== session.id && other.account?.id === session.account.id) endSession(id);
+            let failure: unknown;
+            try { storage.saveSession(session); } catch (error) { failure = error; }
+            try { endSessions(other => other.id !== session.id && other.account?.id === session.account!.id); }
+            catch (error) { failure ??= error; }
+            if (failure) throw failure;
             json(response, 200, { passwordSet: true }); return;
           }
           if (url.pathname === '/api/auth/account' && request.method === 'DELETE') {
             const account = session.account;
             if (!account) throw new HttpError(401, '请先登录。');
-            const confirmation = objectBody(await readJson(request)).email;
+            const confirmation = objectBody(await readBody()).email;
             if (typeof confirmation !== 'string' || confirmation.trim().toLowerCase() !== account.email)
               throw new HttpError(400, '请输入当前账号的邮箱以确认删除。');
             const owner = ownerOf(session)!;
+            research.projects.forgetOwner(owner); await research.assets.deleteOwner(owner);
             conversations.forget(owner); formalizations.forget(owner); explanations.forget(owner); jobs.forget(owner); storage.deleteOwner(owner); trajectories.forgetOwner(owner); vault?.forgetAccount(account.id);
             quota?.forget(account.id, account.email);
             auth.deleteAccount(account.email);
-            for (const [id, other] of sessions) if (other.account?.id === account.id) endSession(id);
+            endSessions(other => other.account?.id === account.id);
             clearSessionCookie(response); json(response, 200, { deleted: true }); return;
           }
           const savedKey = /^\/api\/auth\/keys\/([a-z][a-z0-9-]{0,39})$/u.exec(url.pathname);
@@ -462,10 +535,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
               if (auth.needsTerms(session.account.email)) throw new HttpError(428, '使用条款已更新，请先确认后继续。');
               const provider = config.providers.find(item => item.id === savedKey[1]);
               if (!provider) throw new HttpError(400, '请选择可用的服务商');
-              const body = z.object({ apiKey: inputSchema.shape.apiKey.min(8) }).strict().safeParse(await readJson(request));
+              const body = z.object({ apiKey: inputSchema.shape.apiKey.min(8) }).strict().safeParse(await readBody());
               if (!body.success) throw new HttpError(400, '请填写有效的 API Key。');
-              // Reading the body yields; a logout, suspension or account deletion must prevent a later save.
-              if (cookieSession(request) !== session) throw new HttpError(401, '会话已过期，请刷新页面。');
               if (auth.needsTerms(session.account.email)) throw new HttpError(428, '使用条款已更新，请先确认后继续。');
               vault.save(session.account.id, provider.id, provider.baseUrl, body.data.apiKey);
             } else vault.forget(session.account.id, savedKey[1]);
@@ -488,12 +559,12 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
                 precheck: prechecker?.counts() ?? { running: 0, queued: 0 }, conversation: explainer.counts() } }); return;
           }
           if (url.pathname === '/api/admin/maintenance' && request.method === 'PUT') {
-            const enabled = objectBody(await readJson(request)).enabled;
+            const enabled = objectBody(await readBody()).enabled;
             if (typeof enabled !== 'boolean') throw new HttpError(400, '请选择是否暂停接单。');
             operations.setMaintenance(enabled); json(response, 200, { maintenance: enabled }); return;
           }
           if (url.pathname === '/api/admin/accounts' && request.method === 'PATCH') {
-            const body = objectBody(await readJson(request));
+            const body = objectBody(await readBody());
             if (typeof body.email !== 'string' || typeof body.suspended !== 'boolean') throw new HttpError(400, '请检查账号与暂停状态。');
             const account = auth.setSuspended(body.email, body.suspended);
             if (body.suspended) {
@@ -504,32 +575,42 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
               }
               for (const item of formalizations.list(owner)) formalizations.cancel(owner, item.id);
               for (const item of conversations.list(owner)) conversations.stop(owner, item.id);
-              for (const [id, other] of sessions) if (other.account?.id === account.id) endSession(id);
+              endSessions(other => other.account?.id === account.id);
             }
             json(response, 200, adminOverview(auth, quota)); return;
           }
           if (url.pathname === '/api/admin/allowlist' && ['POST', 'DELETE'].includes(request.method ?? '')) {
-            const email = objectBody(await readJson(request)).email;
+            const email = objectBody(await readBody()).email;
             if (request.method === 'POST') auth.addToAllowlist(email);
             else {
               auth.removeFromAllowlist(email);
               // The removed address is signed out now, not at its next request.
-              for (const [id, other] of sessions) if (other.account && !auth.allowed(other.account.email)) endSession(id);
+              endSessions(other => Boolean(other.account && !auth.allowed(other.account.email)));
             }
             json(response, 200, adminOverview(auth, quota)); return;
           }
           throw new HttpError(405, '请求方法不受支持。');
         }
         const owner = ownerOf(session);
+        if (url.pathname.startsWith('/api/research/')) {
+          const writable = () => {
+            requireSession();
+            if (!owner) throw new HttpError(401, '请先登录。');
+            if (auth && session.account && auth.needsTerms(session.account.email)) throw new HttpError(428, '使用条款已更新，请先确认后继续。');
+            if (operations.maintenance || !operations.writable()) throw new HttpError(503, '服务暂不接收研究修改，请稍后重试。');
+          };
+          const result = await research.handle(url, request.method ?? 'GET', owner, readBody, writable);
+          if (result.filename) response.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+          json(response, result.status, result.body); return;
+        }
         if (!owner) throw new HttpError(401, '请先登录。');
         const newWork = request.method === 'POST' && (['/api/runs', '/api/formalizations', '/api/precheck'].includes(url.pathname)
-          || /^\/api\/conversations\/[^/]+\/messages$/u.test(url.pathname)
           || /^\/api\/runs\/[^/]+\/(?:explain|explanations)$/u.test(url.pathname)
           || /^\/api\/formalizations\/[^/]+\/research$/u.test(url.pathname));
         // Body reads and readiness checks yield. Recheck admission immediately before dispatch so a pending
         // submission cannot start work after logout, suspension, account deletion or maintenance activation.
         const admitWork = () => {
-          if (cookieSession(request) !== session) throw new HttpError(401, '会话已过期，请刷新页面。');
+          requireSession();
           if (auth && session.account && auth.needsTerms(session.account.email)) throw new HttpError(428, '使用条款已更新，请先确认后继续。');
           if (operations.maintenance) throw new HttpError(503, '服务正在维护，暂不接收新任务；已有任务会继续，历史与下载仍可使用。');
           if (!operations.writable()) throw new HttpError(503, '存储空间暂时不足，请稍后重试。');
@@ -538,7 +619,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         const connection = /^\/api\/providers\/([a-z][a-z0-9-]{0,39})\/check$/u.exec(url.pathname);
         if (connection && request.method === 'POST') {
           const provider = config.providers.find(item => item.id === connection[1]);
-          const body = z.object({ apiKey: formalizationSchema.shape.apiKey, model: inputSchema.shape.model }).strict().safeParse(await readJson(request));
+          const body = z.object({ apiKey: formalizationSchema.shape.apiKey, model: inputSchema.shape.model }).strict().safeParse(await readBody());
           if (!provider || !body.success) throw new HttpError(400, '请检查服务商、模型名与 API Key。');
           const key = body.data.apiKey || heldKey(session, provider);
           if (!key) throw new HttpError(400, '请填写 API Key。');
@@ -548,7 +629,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         if (url.pathname === '/api/conversations') {
           if (request.method === 'GET') { json(response, 200, { conversations: conversations.list(owner) }); return; }
           if (request.method === 'POST') {
-            const parsed = conversationSchema.safeParse(await readJson(request));
+            const parsed = conversationSchema.safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请选择要讨论的题目。');
             json(response, 201, { conversation: conversations.create(owner, parsed.data) }); return;
           }
@@ -560,8 +641,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (!action && request.method === 'GET') { json(response, 200, { conversation: conversations.read(owner, id) }); return; }
           if (!action && request.method === 'PATCH') {
             conversations.read(owner, id);
-            const parsed = z.object({ title: z.string() }).strict().safeParse(await readJson(request));
-            if (cookieSession(request) !== session) throw new HttpError(401, '会话已过期，请刷新页面。');
+            const parsed = z.object({ title: z.string() }).strict().safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请输入不超过 80 字的对话标题。');
             json(response, 200, { conversation: conversations.rename(owner, id, parsed.data.title) }); return;
           }
@@ -570,15 +650,17 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           }
           if (action === 'stop' && request.method === 'POST') { json(response, 200, { conversation: conversations.stop(owner, id) }); return; }
           if (action === 'guidance' && request.method === 'POST') {
-            const parsed = webGuidanceSchema.safeParse(await readJson(request));
+            const parsed = webGuidanceSchema.safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请检查指导对象、任务版本与内容。');
             const conversation = await conversations.guide(owner, id, parsed.data, (runId, guidance) => jobs.command(owner, runId, { type: 'guidance', guidance }));
             json(response, 200, { conversation }); return;
           }
           if (action === 'messages' && request.method === 'POST') {
             const conversation = conversations.read(owner, id);
-            const parsed = conversationMessageSchema.safeParse(await readJson(request));
+            const parsed = conversationMessageSchema.safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请检查问题内容与 API Key。');
+            const accepted = conversations.messageReceipt(owner, id, parsed.data.requestId, parsed.data.text);
+            if (accepted) { json(response, 202, { conversation: accepted }); return; }
             const run = conversation.runId ? jobs.get(owner, conversation.runId) : undefined;
             const formalization = conversation.formalizationId ? formalizations.read(owner, conversation.formalizationId) : undefined;
             const provider = config.providers.find(item => item.id === (run?.providerId ?? formalization?.providerId ?? SUB2API_PROVIDER.id));
@@ -587,7 +669,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             if (!apiKey) throw new HttpError(400, '请填写 API Key。');
             const model = run?.model ?? formalization?.model ?? providerModel(provider);
             admitWork();
-            json(response, 202, { conversation: conversations.send(owner, id, parsed.data.text, { baseUrl: provider.baseUrl, apiKey, model }) }); return;
+            json(response, 202, { conversation: conversations.send(owner, id, parsed.data.text, { baseUrl: provider.baseUrl, apiKey, model }, parsed.data.requestId) }); return;
           }
           throw new HttpError(405, '请求方法不受支持。');
         }
@@ -610,7 +692,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             json(response, 200, { formalizations: formalizations.list(owner), generation }); return;
           }
           if (request.method === 'POST') {
-            const parsed = formalizationSchema.safeParse(await readJson(request));
+            const parsed = formalizationSchema.safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请检查原题、证明环境与 API Key。');
             if (parsed.data.humanReview && !parsed.data.solve) throw new HttpError(400, '人工审核模式需要启用证明研究。');
             const provider = parsed.data.providerId ? providers.find(item => item.id === parsed.data.providerId) : defaultProvider;
@@ -618,7 +700,13 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             const model = parsed.data.model ?? providerModel(provider);
             if (provider.id === SUB2API_PROVIDER.id && model !== SUB2API_PROVIDER.defaultModel)
               throw new HttpError(400, 'Sub2API 形式化目前支持 deepseek-flash 模型。');
-            if (!runner.formalize || !(await runner.readiness()).ready) throw new HttpError(503, '形式化运行环境尚未就绪。');
+            const previous = formalizations.replay(owner, parsed.data as WebFormalizationRequest, provider, model);
+            if (previous) { json(response, 200, { formalization: previous }); return; }
+            const ready = Boolean(runner.formalize) && (await runner.readiness()).ready;
+            // Readiness yields to concurrent requests; replay again before spending quota.
+            const raced = formalizations.replay(owner, parsed.data as WebFormalizationRequest, provider, model);
+            if (raced) { json(response, 200, { formalization: raced }); return; }
+            if (!ready) throw new HttpError(503, '形式化运行环境尚未就绪。');
             const apiKey = parsed.data.apiKey || heldKey(session, provider);
             if (!apiKey) throw new HttpError(400, '请填写 API Key。');
             // A confirmed formalization starts its proof through jobs.create itself, so it costs this kind only.
@@ -649,7 +737,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           }
           if (action === 'cancel' && request.method === 'POST') { json(response, 200, { formalization: formalizations.cancel(owner, id) }); return; }
           if (action === 'research' && request.method === 'POST') {
-            const parsed = z.object({ apiKey: formalizationSchema.shape.apiKey }).strict().safeParse(await readJson(request));
+            const parsed = z.object({ apiKey: formalizationSchema.shape.apiKey }).strict().safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请检查 API Key。');
             const item = formalizations.read(owner, id);
             if (item.runId) { json(response, 200, { formalization: item }); return; }
@@ -668,7 +756,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             return;
           }
           if (action === 'confirm' && request.method === 'POST') {
-            const parsed = z.object({ evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/u) }).strict().safeParse(await readJson(request));
+            const parsed = z.object({ evidenceSha256: z.string().regex(/^[a-f0-9]{64}$/u) }).strict().safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请提供当前核对版本。');
             json(response, 200, { formalization: formalizations.confirm(owner, id, parsed.data.evidenceSha256) }); return;
           }
@@ -680,7 +768,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         if (url.pathname === '/api/module-plans') {
           if (request.method === 'GET') { json(response, 200, { plans: registry.listPlans(owner) }); return; }
           if (request.method === 'POST') {
-            json(response, 200, { plan: registry.savePlan(owner, await readJson(request)) }); return;
+            json(response, 200, { plan: registry.savePlan(owner, await readBody()) }); return;
           }
           throw new HttpError(405, '请求方法不受支持。');
         }
@@ -761,13 +849,18 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         }
         if (url.pathname === '/api/precheck' && request.method === 'POST') {
           if (!prechecker) throw new HttpError(503, '当前服务不提供提交前检查。');
-          const parsed = precheckSchema.safeParse(await readJson(request));
+          const parsed = precheckSchema.safeParse(await readBody());
           if (!parsed.success) throw new HttpError(400, '请检查证明环境与 Lean 源码。');
           // A closed tab or a newer edit stops the compile; a superseded check has no reader left to answer.
           const gone = new AbortController();
           response.once('close', () => { if (!response.writableFinished) gone.abort(new PrecheckSuperseded()); });
           admitWork();
-          try { json(response, 200, { precheck: await prechecker.check(owner, parsed.data as { environment: WebEnvironment; source: string }, gone.signal) }); }
+          const frozen = parsed.data.researchSelection ? research.assets.freeze(owner,
+            parsed.data.researchSelection as ResearchConfigurationSelection, parsed.data.environment) : undefined;
+          const libraryPack = frozen ? combineWebLibraryPacks(frozen.libraryPack,
+            selectWebLibraryPack({ source: parsed.data.source!, task: '', environment: parsed.data.environment })) : undefined;
+          try { json(response, 200, { precheck: await prechecker.check(owner, { ...parsed.data,
+            ...(libraryPack ? { libraryPack } : {}) } as Parameters<WebPrechecker['check']>[1], gone.signal) }); }
           catch (error) {
             if (error instanceof PrecheckSuperseded) { if (!response.destroyed) json(response, 409, { error: '检查已被更新的版本取代。' }); return; }
             throw error;
@@ -775,7 +868,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           return;
         }
         if (url.pathname === '/api/runs' && request.method === 'POST') {
-          const parsed = inputSchema.safeParse(await readJson(request));
+          const parsed = inputSchema.safeParse(await readBody());
           if (!parsed.success) throw new HttpError(400, '请检查题目、API Key、模型、模块方案及运行预算。');
           const provider = config.providers.find(item => item.id === parsed.data.providerId);
           if (!provider) throw new HttpError(400, '该模型服务尚未配置。');
@@ -789,10 +882,26 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (input.planApproval && (input.coordination !== 'cooperative' || input.workers < 2))
             throw new HttpError(400, '先审计划需要协作模式和至少 2 个 Agent。');
           if (!input.planApproval) delete input.planApproval;
-          const previous = jobs.replay(owner, input as WebRunInput, provider, requestId);
-          if (previous) { json(response, 200, { run: previous, ...(vault ? { savedKeys: savedKeysFor(session) } : {}) }); return; }
-          // A typed key wins; an empty one uses the account's saved key, then the server's key for admins.
           const typed = input.apiKey;
+          const submissionKeys = (failed = false) => vault ? { savedKeys: savedKeysFor(session),
+            ...(failed || saveKey && typed && session.account && vault.get(session.account.id, provider.id, provider.baseUrl) !== typed
+              ? { keySaveFailed: true } : {}) } : {};
+          const previous = jobs.replay(owner, input as WebRunInput, provider, requestId);
+          if (previous) { json(response, 200, { run: previous, ...submissionKeys() }); return; }
+          const frozenResearch = input.researchSelection
+            ? research.assets.freeze(owner, input.researchSelection as ResearchConfigurationSelection, input.environment,
+              input.researchSelection.agent ? undefined : input.modulePlan as ResearchModulePlan | undefined) : undefined;
+          if (frozenResearch && input.researchSelection?.agent && input.modulePlan
+              && JSON.stringify(input.modulePlan) !== JSON.stringify(frozenResearch.modulePlan))
+            throw new HttpError(409, '所选 Agent 的方案与当前自定义方案不同，请清除自定义方案后重新提交。');
+          if (frozenResearch) {
+            // Freeze the exact combined source pack once. The worker and future evidence reads use this copy.
+            const libraryPack = combineWebLibraryPacks(selectWebLibraryPack(input as WebRunInput), frozenResearch.libraryPack);
+            if (libraryPack) frozenResearch.libraryPack = libraryPack as ResearchLibraryPack;
+            const { digest: _digest, ...configuration } = frozenResearch;
+            frozenResearch.digest = mathDigest(canonicalMathJson(configuration));
+          }
+          // A typed key wins; an empty one uses the account's saved key, then the server's key for admins.
           if (!typed) {
             const held = heldKey(session, provider);
             if (!held) throw new HttpError(400, '请填写 API Key。');
@@ -801,7 +910,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const readiness = await runner.readiness();
           // Another request can be accepted while readiness is being checked.
           const raced = jobs.replay(owner, input as WebRunInput, provider, requestId);
-          if (raced) { json(response, 200, { run: raced, ...(vault ? { savedKeys: savedKeysFor(session) } : {}) }); return; }
+          if (raced) { json(response, 200, { run: raced, ...submissionKeys() }); return; }
           if (!readiness.ready) throw new HttpError(503, '运行环境尚未就绪，请先构建 worker 镜像。');
           const from = input.continueFrom as WebContinuation | undefined;
           const saved = from && jobs.get(owner, from.runId) ? trajectories.version(owner, from.runId, from.taskId, from.commit)?.source : undefined;
@@ -814,14 +923,13 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           // Only a new run costs allowance; a replayed request above already returned the run it created.
           admitWork();
           const refund = spend(session, 'runs');
+          let run: WebRun;
           try {
-            const run = jobs.create(owner, input as WebRunInput, provider, from && saved ? { ...from, file: saved.file, source: saved.source } : undefined, requestId,
+            run = jobs.create(owner, input as WebRunInput, provider, from && saved ? { ...from, file: saved.file, source: saved.source } : undefined, requestId,
               approved ? { evidence: approved.evidence, provenance: { id: approved.formalization.id,
                 evidenceSha256: approved.formalization.report!.evidenceSha256, original: approved.formalization.original,
-                confirmedAt: approved.formalization.confirmedAt!, confirmation: approved.formalization.confirmation ?? 'manual' } } : undefined);
-            milestone(owner, 'firstRunAt');
-            if (saveKey && typed && vault && session.account) vault.save(session.account.id, provider.id, provider.baseUrl, typed);
-            json(response, 201, { run, ...(vault ? { savedKeys: savedKeysFor(session) } : {}) });
+                confirmedAt: approved.formalization.confirmedAt!, confirmation: approved.formalization.confirmation ?? 'manual' } } : undefined,
+              frozenResearch);
           }
           catch (error) {
             // A submit that never became a run gives the allowance back.
@@ -829,6 +937,14 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             if (error instanceof WebStorageError) throw error;
             throw new HttpError(429, error instanceof Error ? error.message : '运行队列已满。');
           }
+          milestone(owner, 'firstRunAt');
+          let keySaveFailed = false;
+          if (saveKey && typed && vault && session.account) {
+            try { vault.save(session.account.id, provider.id, provider.baseUrl, typed); }
+            catch { keySaveFailed = true; }
+          }
+          // The run has been accepted. An optional key save must not reject or refund its work.
+          json(response, 201, { run, ...submissionKeys(keySaveFailed) });
           return;
         }
         const match = /^\/api\/runs\/([a-f0-9-]{36})(?:\/(.*))?$/.exec(url.pathname);
@@ -861,7 +977,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             json(response, 200, overview); return;
           }
           if (match[2] === 'explanations' && request.method === 'POST') {
-            const parsed = explanationSchema.safeParse(await readJson(request));
+            const parsed = explanationSchema.safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请检查讲解的目标定理、语言与 API Key。');
             const generation = explanationGeneration(session, run, isSample);
             if ('reason' in generation) throw new HttpError(409, {
@@ -879,6 +995,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             }
             if (!(await runner.readiness()).ready) throw new HttpError(503, '运行环境尚未就绪，请先构建 worker 镜像。');
             admitWork();
+            // The owned run may have been deleted while its body or readiness was awaited.
+            if (!jobs.get(owner, run.id)) throw new HttpError(404, '运行不存在或不属于当前会话。');
             const refund = spend(session, 'explanations');
             try {
               json(response, 201, { explanation: explanations.create(owner, run, { target: parsed.data.target,
@@ -963,7 +1081,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           json(response, 200, { version }); return;
         }
         if (operation === 'explain' && request.method === 'POST') {
-          const parsed = explainSchema.safeParse(await readJson(request));
+          const parsed = explainSchema.safeParse(await readBody());
           if (!parsed.success) throw new HttpError(400, '请检查问题、版本与 API Key。');
           const provider = config.providers.find(item => item.id === run.providerId);
           if (!provider) throw new HttpError(409, '这次运行的模型服务已不在配置中。');
@@ -1012,21 +1130,21 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           json(response, 200, { receipt }); return;
         }
         if (operation === 'guidance' && request.method === 'POST') {
-          const parsed = webGuidanceSchema.safeParse(await readJson(request));
+          const parsed = webGuidanceSchema.safeParse(await readBody());
           if (!parsed.success) throw new HttpError(400, '请检查指导对象、任务版本与内容。');
           try { json(response, 200, { receipt: await jobs.command(owner, run.id, { type: 'guidance', guidance: parsed.data }) }); }
           catch (error) { throw new HttpError(409, error instanceof Error ? error.message : '指导未能提交。'); }
           return;
         }
         if (operation === 'plan-approval' && request.method === 'POST') {
-          const parsed = webPlanApprovalSchema.safeParse(await readJson(request));
+          const parsed = webPlanApprovalSchema.safeParse(await readBody());
           if (!parsed.success) throw new HttpError(400, '请重新读取当前计划后再批准。');
           try { json(response, 200, { receipt: await jobs.command(owner, run.id, { type: 'plan-approval', approval: parsed.data }) }); }
           catch (error) { throw new HttpError(409, error instanceof Error ? error.message : '计划批准未能提交。'); }
           return;
         }
         if (['edits/preview', 'edits'].includes(operation ?? '') && request.method === 'POST') {
-          const parsed = webPlanProposalSchema.safeParse(await readJson(request));
+          const parsed = webPlanProposalSchema.safeParse(await readBody());
           if (!parsed.success) throw new HttpError(400, '计划草稿格式无效，请保留完整计划与基线版本。');
           try { json(response, 200, { receipt: await jobs.command(owner, run.id, {
             type: operation === 'edits/preview' ? 'edit-preview' : 'edit', proposal: parsed.data,
@@ -1077,11 +1195,12 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           trajectories.forget(owner, run.id);
           json(response, 200, { deletedId: run.id }); return;
         }
-        if (match[2] === 'download' && request.method === 'GET') {
+        if (['download', 'snapshot'].includes(operation ?? '') && request.method === 'GET') {
           if (!run.result && !['completed', 'cancelled', 'error'].includes(run.status))
             throw new HttpError(409, '运行尚未结束，且结果尚未生成。');
-          response.setHeader('Content-Disposition', `attachment; filename="theoremos-${run.id}.json"`);
-          json(response, 200, { schema: 'theorem-os.web-export.v1', run }); return;
+          response.setHeader('Content-Disposition', `attachment; filename="theoremos-${run.id}${operation === 'snapshot' ? '-snapshot' : ''}.json"`);
+          json(response, 200, operation === 'snapshot' ? { schema: 'theorem-os.web-export.v1', run }
+            : storage.exportRun(owner, run, run.knowledgeCatalogDigest)); return;
         }
         if (!match[2] && request.method === 'GET') { json(response, 200, { run }); return; }
         throw new HttpError(405, '请求方法不受支持。');
@@ -1124,9 +1243,10 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     prechecker?.close();
     for (const streams of runStreams.values()) for (const stop of streams) stop();
     server.closeIdleConnections();
-    await Promise.all([jobs.close(), explanations.close(), formalizations.close(), conversations.close(), new Promise<void>(resolve => server.close(() => resolve()))]);
+    const closed = await Promise.allSettled([jobs.close(), research.close(), explanations.close(), formalizations.close(), conversations.close(), new Promise<void>(resolve => server.close(() => resolve()))]);
+    for (const result of closed) if (result.status === 'rejected') throw result.reason;
   };
-  return { server, jobs, explanations, formalizations, conversations, storage, knowledge, registry, auth, close };
+  return { server, jobs, research, explanations, formalizations, conversations, storage, knowledge, registry, auth, close };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

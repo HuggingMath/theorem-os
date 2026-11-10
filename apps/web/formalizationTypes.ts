@@ -1,12 +1,20 @@
-import type { WebAgentActionBody, WebAgentLeanCheck, WebEnvironment, WebFormalizationReport, WebProvider } from './shared';
+import { webAgentActionLimits, type WebAgentActionBody, type WebAgentLeanCheck, type WebEnvironment, type WebFormalizationReport, type WebProvider } from './shared';
+import type { LeanStatementContextProtocol } from '../../src/math/leanStatementSemantic';
+import type { FormalizationAuditResult } from '../../src/math/formalizationAuditProtocol';
 
 export const webFormalizationLimits = Object.freeze({ maxOriginalBytes: 32_768, maxRunSeconds: 1800, maxTotalTokens: 2_000_000,
   maxRounds: 3, maxPlanningRounds: 2, reviewers: 2, concurrency: 1, queueLimit: 8, perOwner: 1, recordsPerOwner: 20 });
+/** Execution time includes planning/revisions; idle time waiting for human plan approval is excluded. */
 export type WebResearchBudget = { maxRunSeconds: number; maxTurns: number; maxTotalTokens: number };
-export const webFormalizationDefaults = Object.freeze({ maxRunSeconds: 600, maxTotalTokens: 400_000,
-  research: Object.freeze({ maxRunSeconds: 300, maxTurns: 5, maxTotalTokens: 200_000 }) });
+export const webFormalizationDefaults = Object.freeze({ maxRunSeconds: 0, maxTotalTokens: 0,
+  research: Object.freeze({ maxRunSeconds: 0, maxTurns: 0, maxTotalTokens: 0 }) });
 export const webFormalizationPhases = ['queued', 'preparing', 'planning', 'generating', 'compiling', 'translating', 'reviewing', 'finishing'] as const;
 export type WebFormalizationProgress = { phase: typeof webFormalizationPhases[number]; round?: number; tokens?: number; updatedAt?: string };
+export type WebFormalizationBackgroundReview = {
+  status: 'queued' | 'running' | 'approved' | 'changes_requested' | 'unknown' | 'error' | 'cancelled' | 'interrupted';
+  evidenceSha256: string; sourceSha256: string; queuedAt: string; startedAt?: string; finishedAt?: string;
+  tokens?: number; reason?: string; result?: FormalizationAuditResult;
+};
 export type WebFormalization = {
   id: string; original: string; environment: WebEnvironment; model: string; effort: 'low' | 'high' | 'max';
   status: 'queued' | 'running' | 'review' | 'confirmed' | 'exhausted' | 'cancelled' | 'error';
@@ -17,16 +25,26 @@ export type WebFormalization = {
   /** Authorizes proof research after formalization, with an optional manual statement and plan review. */
   workflow?: 'solve'; humanReview?: boolean; confirmation?: 'automatic' | 'manual'; runId?: string; researchError?: string;
   /** Absent on older records; new generations bind the exact submitted budgets and provider. */
-  providerId?: string; maxRunSeconds?: number; maxTotalTokens?: number; research?: WebResearchBudget;
+  providerId?: string; maxRunSeconds?: number; maxTotalTokens?: number; maxRounds?: number; maxPlanningRounds?: number; research?: WebResearchBudget;
+  /** Absent on legacy kernel-v2 records; new generations freeze their context export protocol. */
+  contextProtocol?: LeanStatementContextProtocol;
+  /** Frozen on new direct generations; absent on independently reviewed legacy records. */
+  reviewMode?: 'direct';
+  /** Advisory review of the frozen compiled statement; never gates confirmation or proof research. */
+  backgroundReview?: WebFormalizationBackgroundReview;
 };
 export type WebFormalizationCapabilities = { available: boolean; reason?: 'provider' | 'runtime'; providerId?: string;
   model: string; key: 'required' | 'saved' | 'server'; limits: typeof webFormalizationLimits;
   providers?: (WebProvider & { defaultModel: string; key: 'required' | 'saved' | 'server'; keyUrl?: string })[];
   defaults?: typeof webFormalizationDefaults };
 export type WebFormalizationRequest = { original: string; environment: WebEnvironment; apiKey: string; effort: 'low' | 'high' | 'max'; solve?: boolean; humanReview?: boolean;
-  providerId?: string; model?: string; maxRunSeconds?: number; maxTotalTokens?: number; research?: WebResearchBudget };
-export type WorkerFormalizationInput = Omit<WebFormalizationRequest, 'solve' | 'humanReview' | 'providerId' | 'research'> & { id: string; model: string; provider: WebProvider;
-  maxRunSeconds: number; maxTotalTokens: number; maxRounds: number; maxPlanningRounds: number; reviewers: number };
+  requestId?: string; providerId?: string; model?: string; maxRunSeconds?: number; maxTotalTokens?: number; research?: WebResearchBudget };
+export type WorkerFormalizationInput = Omit<WebFormalizationRequest, 'solve' | 'humanReview' | 'requestId' | 'providerId' | 'research'> & { id: string; model: string; provider: WebProvider;
+  maxRunSeconds: number; maxTotalTokens: number; maxRounds: number; maxPlanningRounds: number; reviewers: number;
+  contextProtocol?: LeanStatementContextProtocol; reviewMode?: 'direct' };
+export type WorkerFormalizationAuditMessage = { type: 'audit-progress'; tokens: number }
+  | { type: 'audit-result'; result: FormalizationAuditResult }
+  | { type: 'audit-error'; reason: string };
 /**
  * The roles of one formalization round (src/solver/formalization.ts): plan reads the problem, generate writes the Lean
  * statement, the host compiles it, backtranslate reads it back blind, and each reviewer compares (compare); refute is an
@@ -58,8 +76,8 @@ export type WebFormalizationStep = { round: number } & (
 export type WebFormalizationActivityBody = { type: 'action'; action: WebAgentActionBody } | { type: 'step'; step: WebFormalizationStep };
 /** `sequence` and `at` are the server's; an action reads as a run's (WebAgentAction) with the entry's. */
 export type WebFormalizationActivity = WebFormalizationActivityBody & { sequence: number; at: string };
-export const webFormalizationActivityLimits = Object.freeze({ perRecord: 3_000, page: 500, summaryText: 4_000, summaryItems: 12,
-  summaryItem: 600, feedback: 6_000, source: 32_768, targets: 64, encoded: 96 * 1024 });
+export const webFormalizationActivityLimits = Object.freeze({ perRecord: 3_000, page: 500, summaryText: 32_768, summaryItems: 12,
+  summaryItem: 2_000, feedback: 6_000, source: 32_768, targets: 64, encoded: webAgentActionLimits.encoded + 256 * 1024 });
 export type WorkerFormalizationMessage = { type: 'progress'; progress: WebFormalizationProgress }
   | { type: 'activity'; activity: WebFormalizationActivityBody }
   | { type: 'result'; status: 'approved'; evidence: unknown }

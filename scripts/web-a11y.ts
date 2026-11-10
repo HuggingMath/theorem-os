@@ -82,10 +82,16 @@ export async function tabStops(page: Page, limit: number) {
     const stop = await page.evaluate(() => {
       const element = document.activeElement;
       if (!element || element === document.body) return undefined;
-      const style = getComputedStyle(element), box = element.getBoundingClientRect();
-      const indicated = (style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0) || style.boxShadow !== 'none' || element.matches(':focus-within') && element !== document.activeElement;
-      const label = element.getAttribute('aria-label') || (element.textContent ?? '').replace(/\s+/gu, ' ').trim().slice(0, 40) || element.id || element.tagName;
-      return { name: `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ''} ${label}`, visible: box.width > 0 && box.height > 0, indicated };
+      const box = element.getBoundingClientRect();
+      const hasIndicator = (node: Element) => {
+        const style = getComputedStyle(node);
+        return (style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0) || style.boxShadow !== 'none';
+      };
+      // Search fields draw their visible :focus-within ring on the wrapping label.
+      const label = element.closest('label');
+      const indicated = hasIndicator(element) || Boolean(label?.matches(':focus-within') && hasIndicator(label));
+      const name = element.getAttribute('aria-label') || (element.textContent ?? '').replace(/\s+/gu, ' ').trim().slice(0, 40) || element.id || element.tagName;
+      return { name: `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ''} ${name}`, visible: box.width > 0 && box.height > 0, indicated };
     });
     if (!stop) break;
     stops.push(stop);

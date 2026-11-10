@@ -11,7 +11,9 @@ export type SubmissionIssue = { field: SubmissionField; message: string; check?:
 /** The field is in units of 10,000 tokens (万), the unit providers bill in Chinese consoles. */
 export function tokenCap(raw: string, maximum: number): number | undefined {
   const value = Number(raw.trim());
-  return raw.trim() && Number.isSafeInteger(value) && value >= 1 && value * 10_000 <= maximum ? value * 10_000 : undefined;
+  const tokens = Math.round(value * 10_000);
+  // Reverse the conversion to distinguish floating-point error from a fractional token.
+  return raw.trim() && value >= 0 && Number.isSafeInteger(tokens) && tokens <= maximum && tokens / 10_000 === value ? tokens : undefined;
 }
 
 // This checks input only. Provider authentication happens when a run is submitted.
@@ -46,11 +48,12 @@ export function submissionIssues(draft: TaskDraft, apiKey: string, session: WebS
     ['workers', draft.workers, t('Agent 数量'), 1, session.limits.maxWorkers],
   ] as const) {
     const value = Number(raw);
+    if (field !== 'workers' && value === 0) continue;
     if (!raw.trim() || !Number.isSafeInteger(value) || value < min || value > max) add(field, t('{0}须为 {1}–{2} 的整数', label, min, max));
   }
   const tokens = draft.maxTotalTokens?.trim() ?? '';
   if (tokens && tokenCap(tokens, session.limits.maxTotalTokens) === undefined)
-    add('max-tokens', t('用量上限须为 1–{0} 万 Token 的整数，留空表示不限', session.limits.maxTotalTokens / 10_000));
+    add('max-tokens', t('用量上限须为 1–{0} 万 Token，最多 4 位小数；留空表示不限', session.limits.maxTotalTokens / 10_000));
   if (draft.modulePlan) {
     const plan = researchModulePlanSchema.safeParse(draft.modulePlan);
     if (!plan.success) add('module-plan', t('请检查自定义模块的名称、规则及替换冲突'));

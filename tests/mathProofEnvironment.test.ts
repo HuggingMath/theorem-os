@@ -107,6 +107,35 @@ describe.skipIf(process.platform !== 'linux')('proof environment tool preflight'
 });
 
 it.skipIf(process.env.DEEPSCIENTIST_TEST_FUSE !== '1')(
+  'rejects source changes after copying without publishing a cached image', async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join('/var/tmp', 'proof-environment-source-change-')));
+    const project = path.join(root, 'project'), packages = path.join(root, 'packages');
+    const cacheRoot = path.join(root, 'cache'), source = path.join(packages, 'Public.lean');
+    let changed = false;
+    let prepared: Awaited<ReturnType<typeof prepareMathProofEnvironment>> | undefined;
+    try {
+      fs.mkdirSync(project);
+      fs.mkdirSync(packages);
+      fs.writeFileSync(source, 'theorem helper : True := by trivial\n');
+      const preparation = prepareMathProofEnvironment(project, packages, { cacheRoot,
+        env: { PATH: `${process.env.PATH ?? '/usr/bin:/bin'}:/usr/sbin` }, deadlineAt: Date.now() + 20_000,
+        onProgress: phase => {
+          if (phase === 'building_image' && !changed) {
+            fs.appendFileSync(source, '-- changed after the snapshot was copied\n');
+            changed = true;
+          }
+        } }).then(proof => { prepared = proof; return proof; });
+      await expect(preparation).rejects.toThrow('Proof environment dependency changed during preparation.');
+      expect(changed).toBe(true);
+      expect(fs.readdirSync(cacheRoot).filter(file => file.endsWith('.json') || file.endsWith('.squashfs'))).toEqual([]);
+    } finally {
+      await prepared?.dispose();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 25_000,
+);
+
+it.skipIf(process.env.DEEPSCIENTIST_TEST_FUSE !== '1')(
   'builds one real immutable image for concurrent projects and retains independent project bindings', async () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join('/var/tmp', 'proof-environment-sharing-')));
     const packages = path.join(root, 'packages'), cacheRoot = path.join(root, 'cache');

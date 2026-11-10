@@ -1,18 +1,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { assertFormalizationReferenceResult, formalizationReferenceFiles, formalizationReferenceInputSchema,
+import { assertFormalizationReferenceResult, formalizationIdentityReferenceFiles, formalizationReferenceFiles, formalizationReferenceInputSchema,
   FORMALIZATION_REFERENCE_QUERY, FORMALIZATION_REFERENCE_REPORT, type FormalizationReferenceInput,
   type FormalizationReferenceResult, type CurrentFormalizationReferenceResult } from '../math/formalizationReference';
 import { bindLeanPackages, prepareLeanDiagnosticOverrides, runLeanDiagnostics } from '../math/leanDiagnostics';
 import { getLeanTaskEnvironment } from '../math/leanTaskEnvironment';
 import { checkResolvedLeanToolchainReadiness } from '../math/leanToolchainReadiness';
 import { MATH_PROOF_ENVIRONMENT_ENV, prepareMathProofEnvironment } from '../math/mathProofEnvironment';
+import { DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT } from '../math/mathProofEnvironmentCache';
 import { resolveMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnvironment';
 import { canonicalMathJson, mathDigest, readMathFile, readMathText, writeMathFrozen } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath } from '../math/paths';
 import { resolveMathematicsLakePackagesCache } from '../math/verifier';
 
 type ReferenceOptions = { env: NodeJS.ProcessEnv; signal?: AbortSignal; timeoutMs: number; proofEnvironmentCacheRoot?: string };
+type ReferenceExecution = { deadlineAt: number; proofEnvironment?: Awaited<ReturnType<typeof prepareMathProofEnvironment>> };
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
 const frozenJson = (file: string, value: unknown) => writeMathFrozen(file, canonicalMathJson(value) + '\n');
 
@@ -29,14 +31,37 @@ export async function compareFormalizationReference(directory: string, input: Fo
   directory = path.resolve(directory);
   assertMathCanonicalPath(directory);
   if (fs.existsSync(directory)) throw new Error('Formalization reference comparison needs a fresh directory.');
+  const execution: ReferenceExecution = { deadlineAt: options.timeoutMs === 0 ? Infinity : Date.now() + options.timeoutMs };
+  let result: FormalizationReferenceResult;
+  try {
+    if (input.purpose !== 'task-fidelity-v2') return await referenceAttempt(directory, input, options, execution, false);
+    // Reject a malformed mapping before creating even the parent attempt directory.
+    try { formalizationIdentityReferenceFiles(input); } catch (cause) {
+      if (errorText(cause) === 'reference_target_mapping_incomplete') throw cause;
+    }
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    result = await referenceAttempt(path.join(directory, 'identity'), input, options, execution, true);
+    // Every target must pass the same strict check. A fallback is a complete new
+    // comparison with its own files and receipts, sharing only the total deadline
+    // and the already checked, identically configured dependency environment.
+    if (result.status !== 'established' && !options.signal?.aborted &&
+        result.reason !== 'formalization_reference_aborted' && Date.now() < execution.deadlineAt)
+      result = await referenceAttempt(path.join(directory, 'correspondence'), input, options, execution, false);
+  } finally { await execution.proofEnvironment?.dispose(); }
+  frozenJson(path.join(directory, 'comparison.json'), result);
+  return result;
+}
+
+async function referenceAttempt(directory: string, input: FormalizationReferenceInput, options: ReferenceOptions,
+  execution: ReferenceExecution, identityOnly: boolean): Promise<FormalizationReferenceResult> {
   // A malformed target mapping is a caller error, not an unsupported source.
   let files: Record<string, string> | undefined, preparationError: unknown;
-  try { files = formalizationReferenceFiles(input); } catch (cause) {
+  try { files = identityOnly ? formalizationIdentityReferenceFiles(input) : formalizationReferenceFiles(input); } catch (cause) {
     if (errorText(cause) === 'reference_target_mapping_incomplete') throw cause;
     preparationError = cause;
   }
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const config = getLeanTaskEnvironment(input.environment), deadlineAt = options.timeoutMs === 0 ? Infinity : Date.now() + options.timeoutMs;
+  const config = getLeanTaskEnvironment(input.environment), deadlineAt = execution.deadlineAt;
   const remaining = () => {
     options.signal?.throwIfAborted();
     const remainingMs = deadlineAt - Date.now();
@@ -47,7 +72,9 @@ export async function compareFormalizationReference(directory: string, input: Fo
     candidateToReference: { status: 'not-established' as const, reason },
     referenceToCandidate: { status: 'not-established' as const, reason } }));
   let result: CurrentFormalizationReferenceResult = {
-    ...(input.purpose === 'task-fidelity-v2' ? {
+    ...(identityOnly ? {
+      schema: 'theoremos.formalization-reference.v7' as const, method: 'definitional-identity-v1' as const,
+    } : input.purpose === 'task-fidelity-v2' ? {
       schema: 'theoremos.formalization-reference.v6' as const, method: 'cardinality-correspondence-v7' as const,
     } : {
       schema: 'theoremos.formalization-reference.v4' as const, method: 'cardinality-correspondence-v5' as const,
@@ -59,7 +86,6 @@ export async function compareFormalizationReference(directory: string, input: Fo
     limits: { timeoutMs: options.timeoutMs, maxPairs: 16, maxHeartbeats: 100000 },
     pairs: unknownPairs('not-run'), files: [],
   };
-  let proofEnvironment: Awaited<ReturnType<typeof prepareMathProofEnvironment>> | undefined;
   try {
     if (!files) { result.check = 'unsupported'; throw preparationError; }
     result.files = Object.entries(files).map(([file, text]) => ({ file, text, sha256: mathDigest(text) }));
@@ -75,9 +101,10 @@ export async function compareFormalizationReference(directory: string, input: Fo
     if (!packages && manifest.packages.length) throw new Error('formalization_reference_packages_unavailable');
     if (packages) {
       bindLeanPackages(project, packages);
-      proofEnvironment = await prepareMathProofEnvironment(project, packages, { env, signal: options.signal,
-        deadlineAt: Number.isFinite(deadlineAt) ? deadlineAt : undefined, cacheRoot: options.proofEnvironmentCacheRoot });
-      env = { ...env, [MATH_PROOF_ENVIRONMENT_ENV]: proofEnvironment.environmentValue };
+      execution.proofEnvironment ??= await prepareMathProofEnvironment(project, packages, { env, signal: options.signal,
+        deadlineAt: Number.isFinite(deadlineAt) ? deadlineAt : undefined,
+        cacheRoot: options.proofEnvironmentCacheRoot ?? DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT });
+      env = { ...env, [MATH_PROOF_ENVIRONMENT_ENV]: execution.proofEnvironment.environmentValue };
       prepareLeanDiagnosticOverrides(project);
     }
     const diagnostics = await runLeanDiagnostics({ projectRoot: project, files: [FORMALIZATION_REFERENCE_QUERY],
@@ -120,7 +147,7 @@ export async function compareFormalizationReference(directory: string, input: Fo
     const reason = errorText(cause).slice(0, 1000) || 'formalization_reference_not_established';
     result = { ...result, status: 'not-established', check: files ? 'unavailable' : 'unsupported',
       pairs: unknownPairs(reason), reason, evidence: undefined };
-  } finally { await proofEnvironment?.dispose(); }
+  }
   assertFormalizationReferenceResult(input, result);
   frozenJson(path.join(directory, 'comparison.json'), result);
   return result;

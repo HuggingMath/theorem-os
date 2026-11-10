@@ -33,10 +33,11 @@ function review(input: StructuredReviewInput) {
 }
 
 /** Runs a replayed formalization to approval; returns its run directory, whose artifact/ the informalization reads. */
-export async function approvedFormalization(roots: string[], problemId = 'synthetic_addition'): Promise<string> {
+export async function approvedFormalization(roots: string[], problemId = 'synthetic_addition',
+  environment: 'standard' | 'mathlib' = 'standard'): Promise<string> {
   const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'approved-formalization-'))); roots.push(parent);
   const { root, manifest } = buildFixture(parent), directory = path.join(parent, 'run');
-  prepareFormalization(directory, { problemId, statement: fixtureStatement, environment: 'standard', execution: 'replay', ...author,
+  prepareFormalization(directory, { problemId, statement: fixtureStatement, environment, execution: 'replay', ...author,
     workflow: defaultFormalizationWorkflow(author), buildManifestRef: manifest, maxRounds: 1, maxRunSeconds: 60, maxTurnSeconds: 10,
     maxCompileSeconds: 10, maxTotalTokens: 0 });
   let sequence = 0;

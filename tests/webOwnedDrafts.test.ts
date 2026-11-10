@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { OwnedDrafts, submissionStorageKey } from '../apps/web/client/ownedDrafts';
+import { OwnedDrafts, researchEnvironmentStorageKey, researchSelectionStorageKey, submissionStorageKey } from '../apps/web/client/ownedDrafts';
 import { taskDraftStorageKey } from '../apps/web/client/draft';
 import { draftRecoveryStorageKey } from '../apps/web/client/draftRecovery';
 import { SubmissionIdentity } from '../apps/web/client/submissionIdentity';
@@ -12,9 +12,10 @@ it('preserves same-owner drafts, rejects unbound and other-owner drafts, and dis
   const raw = storage(), owned = new OwnedDrafts(() => raw);
   raw.setItem(taskDraftStorageKey, 'legacy private source'); owned.bind('alice');
   expect(owned.getItem(taskDraftStorageKey)).toBeNull();
-  for (const key of [taskDraftStorageKey, draftRecoveryStorageKey, submissionStorageKey]) owned.setItem(key, 'alice private source');
+  const privateKeys = [taskDraftStorageKey, draftRecoveryStorageKey, submissionStorageKey, researchSelectionStorageKey, researchEnvironmentStorageKey];
+  for (const key of privateKeys) owned.setItem(key, 'alice private source');
   const refreshed = new OwnedDrafts(() => raw); refreshed.bind('alice');
-  expect(refreshed.getItem(taskDraftStorageKey)).toBe('alice private source');
+  for (const key of privateKeys) expect(refreshed.getItem(key)).toBe('alice private source');
   refreshed.bind('bob');
   expect([...raw.values.values()]).toEqual(['bob']);
   expect(() => owned.setItem(taskDraftStorageKey, 'late Alice pagehide')).toThrow();
@@ -31,4 +32,13 @@ it('retains uncertain submission identity through refresh and credential changes
   expect(await refreshed.prepare({ ...input, apiKey: '', saveKey: true })).toBe(id);
   expect(await refreshed.prepare({ ...input, task: 'new task' })).not.toBe(id);
   refreshed.clear(); expect(await refreshed.prepare(input)).not.toBe(id);
+});
+it('preserves a pending submission created by the previous client digest format', async () => {
+  const raw = storage();
+  const visible = { task: 'prove t', source: 'theorem t : True := by sorry', model: 'fixture' };
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(visible)));
+  const digest = [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  const requestId = crypto.randomUUID();
+  raw.setItem(submissionStorageKey, JSON.stringify({ requestId, digest }));
+  expect(await new SubmissionIdentity(raw).prepare({ ...visible, apiKey: '' })).toBe(requestId);
 });

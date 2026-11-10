@@ -7,7 +7,7 @@ import { OwnedDrafts } from './ownedDrafts';
 
 createIcons({ icons: { LogIn, MailCheck, RefreshCw }, attrs: { 'aria-hidden': 'true' } });
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
-mountLocaleSwitch($<HTMLButtonElement>('#locale-switch'));
+mountLocaleSwitch($<HTMLButtonElement>('#locale-switch'), rememberLogin);
 localizeSiteLinks();
 const emailStep = $<HTMLFormElement>('#email-step'), codeStep = $<HTMLFormElement>('#code-step'), passwordStep = $<HTMLFormElement>('#password-step');
 const email = $<HTMLInputElement>('#login-email'), captcha = $<HTMLInputElement>('#login-captcha'), code = $<HTMLInputElement>('#login-code');
@@ -18,6 +18,10 @@ const termsOption = $('#terms-option'), acceptTerms = $<HTMLInputElement>('#acce
 const termsStep = $<HTMLFormElement>('#terms-step');
 let termsVersion: string | undefined, termsAccount: string | undefined, termsOwner: string | undefined;
 let csrf = '', captchaId = '', sentTo = '', resendTimer: ReturnType<typeof setInterval> | undefined;
+type LoginStep = 'email' | 'password' | 'code';
+type CodeChallenge = { email: string; expiresAt: number; resendAt: number };
+const progressKey = 'theorem-os.login-progress.v1';
+let step: LoginStep = 'email', stepRevision = 0, progressOwner = '', challenge: CodeChallenge | undefined;
 // A run or conversation link opened while signed out, or open when the session ended, arrives as login.html?run=<id> or
 // ?chat=<id>; signing in returns to that record.
 const workbench = `./${workbenchReturn(location.search)}`;
@@ -39,6 +43,53 @@ function showError(text = '') {
   $('#login-error').textContent = text;
   $('#login-error').hidden = !text;
 }
+function clearLogin() {
+  challenge = undefined; sentTo = ''; clearInterval(resendTimer);
+  try { sessionStorage.removeItem(progressKey); } catch { /* Login also works without browser storage. */ }
+}
+/** Keep only the address and non-secret verification state across a language reload. */
+function rememberLogin() {
+  if (!progressOwner) return;
+  try {
+    sessionStorage.setItem(progressKey, JSON.stringify({ owner: progressOwner, step, termsVersion,
+      email: step === 'password' ? passwordEmail.value : email.value, challenge }));
+  } catch { /* The current form remains usable when storage is unavailable. */ }
+}
+function setStep(next: LoginStep) {
+  step = next; stepRevision++;
+  emailStep.hidden = next !== 'email'; passwordStep.hidden = next !== 'password'; codeStep.hidden = next !== 'code';
+  rememberLogin();
+}
+function drawResend() {
+  const left = Math.max(0, Math.ceil(((challenge?.resendAt ?? 0) - Date.now()) / 1000));
+  resend.disabled = left > 0;
+  resend.textContent = left ? t('{0} 秒后可重新发送', left) : t('重新发送');
+  if (!left) clearInterval(resendTimer);
+}
+function showCodeStep() {
+  if (!challenge || challenge.expiresAt <= Date.now()) return false;
+  sentTo = challenge.email;
+  $('#code-sent').textContent = t('验证码已发送至 {0}，{1} 分钟内有效。', sentTo, Math.max(1, Math.ceil((challenge.expiresAt - Date.now()) / 60_000)));
+  setStep('code'); code.value = ''; code.focus();
+  clearInterval(resendTimer); drawResend();
+  if (resend.disabled) resendTimer = setInterval(drawResend, 1000);
+  return true;
+}
+function restoreLogin() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(progressKey) ?? 'null') as {
+      owner?: unknown; step?: unknown; email?: unknown; termsVersion?: unknown; challenge?: CodeChallenge;
+    } | null;
+    if (!saved || saved.owner !== progressOwner || saved.termsVersion !== termsVersion) { clearLogin(); setStep('email'); return; }
+    if (typeof saved.email === 'string') email.value = passwordEmail.value = saved.email.slice(0, 254);
+    const pending = saved.challenge;
+    if (pending && typeof pending.email === 'string' && Number.isFinite(pending.expiresAt) && Number.isFinite(pending.resendAt)
+      && pending.expiresAt > Date.now()) challenge = pending;
+    else { challenge = undefined; sentTo = ''; }
+    if (saved.step === 'code' && showCodeStep()) return;
+    setStep(saved.step === 'password' ? 'password' : 'email');
+  } catch { clearLogin(); setStep('email'); }
+}
 async function loadCaptcha() {
   captcha.value = ''; sendCode.disabled = true;
   const next = await call<{ id: string; image: string }>('/api/auth/captcha', {});
@@ -46,10 +97,12 @@ async function loadCaptcha() {
   sendCode.disabled = false;
 }
 async function start() {
+  const revision = stepRevision;
   const session = await call<WebSession>('/api/session');
-  if (session.auth !== 'email' || (session.account && !session.termsRequired)) { location.replace(workbench); return; }
+  if (session.auth !== 'email' || (session.account && !session.termsRequired)) { clearLogin(); location.replace(workbench); return; }
   $('#login-access').hidden = session.signup === 'open' || Boolean(session.termsRequired);
   csrf = session.csrfToken;
+  progressOwner = session.draftOwner ?? '';
   if (termsVersion !== session.termsVersion) acceptTerms.checked = false;
   termsVersion = session.termsVersion;
   termsAccount = session.account?.email;
@@ -58,6 +111,7 @@ async function start() {
   const wasTerms = !termsStep.hidden;
   termsStep.hidden = !session.termsRequired;
   if (session.termsRequired) {
+    clearLogin();
     emailStep.hidden = true; codeStep.hidden = true; passwordStep.hidden = true;
     $('#login-heading').textContent = t('请确认更新后的条款');
     $('#login-lead').textContent = t('使用条款已更新。请阅读当前版本并确认，已有记录和运行会保留。');
@@ -75,6 +129,8 @@ async function start() {
     : t('请使用已获准的内测邮箱。');
   // The password form waits for the session cookie and CSRF token; sent earlier, it reads as an expired page.
   passwordSubmit.disabled = false;
+  if (stepRevision === revision) restoreLogin();
+  else rememberLogin();
   await loadCaptcha();
 }
 /** An expired login-page session is replaced; the visitor only has to repeat the current step. */
@@ -93,13 +149,14 @@ async function guarded(action: () => Promise<void>) {
   }
 }
 function showEmailStep(focus: HTMLInputElement) {
-  codeStep.hidden = true; passwordStep.hidden = true; emailStep.hidden = false;
+  setStep('email');
   clearInterval(resendTimer);
-  void guarded(loadCaptcha).then(() => focus.focus());
+  const revision = stepRevision;
+  void guarded(loadCaptcha).then(() => { if (stepRevision === revision) focus.focus(); });
 }
 function showPasswordStep() {
-  emailStep.hidden = true; codeStep.hidden = true; passwordStep.hidden = false;
   passwordEmail.value = email.value || sentTo;
+  setStep('password');
   showError(); passwordEmail.focus();
 }
 
@@ -110,21 +167,15 @@ emailStep.addEventListener('submit', event => {
   if (!/^\d{5}$/u.test(captcha.value.trim())) { showError(t('请输入图中的 5 位数字。')); captcha.focus(); return; }
   if (termsVersion && !acceptTerms.checked) { showError(t('请先阅读并同意使用条款与隐私说明。')); acceptTerms.focus(); return; }
   sendCode.disabled = true;
+  const revision = stepRevision, requestedEmail = email.value.trim().toLowerCase();
   void guarded(async () => {
     try {
       const sent = await call<{ email: string; resendAfterSeconds: number; expiresInSeconds: number }>('/api/auth/code',
-        { email: email.value, captchaId, captcha: captcha.value.trim() });
+        { email: requestedEmail, captchaId, captcha: captcha.value.trim() });
       sentTo = sent.email;
-      $('#code-sent').textContent = t('验证码已发送至 {0}，{1} 分钟内有效。', sent.email, Math.round(sent.expiresInSeconds / 60));
-      emailStep.hidden = true; codeStep.hidden = false; code.value = ''; code.focus();
-      let left = sent.resendAfterSeconds;
-      resend.disabled = true; resend.textContent = t('{0} 秒后可重新发送', left);
-      clearInterval(resendTimer);
-      resendTimer = setInterval(() => {
-        left--;
-        if (left > 0) { resend.textContent = t('{0} 秒后可重新发送', left); return; }
-        clearInterval(resendTimer); resend.disabled = false; resend.textContent = t('重新发送');
-      }, 1000);
+      challenge = { email: sent.email, expiresAt: Date.now() + sent.expiresInSeconds * 1000, resendAt: Date.now() + sent.resendAfterSeconds * 1000 };
+      if (step === 'email' && stepRevision === revision && email.value.trim().toLowerCase() === requestedEmail) showCodeStep();
+      else rememberLogin();
     } catch (error) {
       // Every code request spends its captcha, so a failed attempt always needs a new image.
       await loadCaptcha().catch(() => undefined);
@@ -140,6 +191,7 @@ codeStep.addEventListener('submit', event => {
   void guarded(async () => {
     try {
       await call('/api/auth/verify', { email: sentTo, code: code.value.trim(), ...(termsVersion ? { terms: acceptTerms.checked, termsVersion } : {}) });
+      clearLogin();
       location.replace(workbench);
     } finally { verify.disabled = false; }
   });
@@ -156,6 +208,7 @@ passwordStep.addEventListener('submit', event => {
       await call('/api/auth/password/login', { email: passwordEmail.value, password: password.value,
         ...(termsVersion ? { terms: acceptTerms.checked, termsVersion } : {}) });
       password.value = '';
+      clearLogin();
       location.replace(workbench);
     } finally { passwordSubmit.disabled = false; }
   });
@@ -172,6 +225,7 @@ termsStep.addEventListener('submit', event => {
   });
 });
 function forgetAccountDrafts() {
+  clearLogin();
   try { localStorage.setItem('theorem-os.web-account-left.v1', JSON.stringify({ owner: termsOwner, nonce: crypto.randomUUID() })); }
   catch { /* Other tabs also check their session on the next request. */ }
   new OwnedDrafts(() => sessionStorage).clear();
@@ -203,5 +257,10 @@ $('#refresh-captcha').addEventListener('click', () => void guarded(loadCaptcha).
 $('#change-email').addEventListener('click', () => showEmailStep(email));
 resend.addEventListener('click', () => showEmailStep(captcha));
 $('#use-password').addEventListener('click', showPasswordStep);
-$('#use-code').addEventListener('click', () => { email.value = passwordEmail.value; showEmailStep(email); });
+$('#use-code').addEventListener('click', () => {
+  email.value = passwordEmail.value;
+  showError();
+  if (challenge?.email === email.value.trim().toLowerCase() && showCodeStep()) return;
+  showEmailStep(email);
+});
 void guarded(start);

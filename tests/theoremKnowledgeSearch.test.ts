@@ -49,6 +49,34 @@ describe('theorem knowledge retrieval', () => {
       preferenceEvidence: 'recorded-metadata-not-applicability' });
   });
 
+  it('ranks the needed conclusion ahead of many matches confined to the goal premises', () => {
+    const desired = entry('Saved.probability_univ',
+      'forall (p : Ω → Real) (hp : IsDistribution p), probability p Finset.univ = 1');
+    const crowded = Array.from({ length: 20 }, (_, index) => entry(`Saved.rowStochastic_matrix_${index}`,
+      'forall (matrix : Matrix Ω Ω Real) (h : RowStochastic matrix) (row : Ω), matrix row = matrix row'));
+    const result = searchTheoremKnowledge(base(...crowded, desired), '', { limit: 12,
+      goal: 'forall (matrix : Matrix Ω Ω Real) (h : RowStochastic matrix) (row : Ω), probability (matrix row) Finset.univ = 1' });
+    expect(result.hits[0]?.id).toBe(desired.id);
+    expect(result.hits[0]?.matched).toContain('probability');
+    expect(result.hits[0]?.matched).not.toContain('stochastic');
+  });
+
+  it('falls back to the complete type when a general conclusion has no matching searchable terms', () => {
+    const general = entry('Saved.reflexivity', 'forall (n : Nat), n = n');
+    expect(searchTheoremKnowledge(base(general), '', { goal: 'forall (n : Nat), n + 0 = n' }).hits.map(hit => hit.id))
+      .toEqual([general.id]);
+  });
+
+  it('uses current assumptions to rank a premise constructor ahead of namespaced methods', () => {
+    const desired = entry('Saved.isDistribution_row',
+      'forall (matrix : Matrix Ω Ω Real) (h : RowStochastic matrix) (row : Ω), IsDistribution (matrix row)');
+    const methods = Array.from({ length: 20 }, (_, index) => entry(`Saved.IsDistribution.method_${index}`,
+      'forall (p : Ω → Real) (hp : IsDistribution p), IsDistribution (map p)'));
+    const result = searchTheoremKnowledge(base(...methods, desired), '', { limit: 3,
+      goal: 'forall (matrix : Matrix Ω Ω Real) (h : RowStochastic matrix) (row : Ω), IsDistribution _' });
+    expect(result.hits[0]?.id).toBe(desired.id);
+  });
+
   it('treats unicode types and quantifiers as the corresponding Lean identifiers', () => {
     const desired = entry('Submission.Helpers.real_reflexivity', '∀ (x : ℝ), x = x');
     const distractor = entry('Submission.Helpers.complex_reflexivity', '∀ (z : ℂ), z = z');

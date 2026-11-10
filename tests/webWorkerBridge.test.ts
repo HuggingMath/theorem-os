@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createWebWorkerBridge, freezeWebKnowledge, handleWebWorkerCommand } from '../apps/web/workerBridge';
+import { createWebWorkerBridge, freezeWebKnowledge, handleWebWorkerCommand, writeWebActiveRun } from '../apps/web/workerBridge';
+import { writeSolverRunState } from '../src/solver/archive';
 import { exportRunPlan } from '../src/solver/inspection';
 import { taskVersion } from '../src/solver/tasks';
 import { readKnowledgeCatalog } from '../src/solver/theoremKnowledgeStore';
@@ -9,6 +10,8 @@ import { WebKnowledgeService } from '../apps/web/knowledgeService';
 import { WebStorage } from '../apps/web/storage';
 import type { WorkerInput, WorkerMessage } from '../apps/web/shared';
 import { webWorkerFixture } from './helpers/webWorkerBridge';
+import { mathDigest } from '../src/math/mathRuntimeIo';
+import { webGuidanceSchema } from '../apps/web/collaborationValidation';
 
 const roots: string[] = [];
 const fixture = () => { const value = webWorkerFixture(); roots.push(value.directory); return value; };
@@ -41,6 +44,104 @@ describe('isolated Web worker bridge', () => {
     expect(messages.filter(message => message.type === 'catalog')).toHaveLength(1);
   });
 
+  it('continues observation sequences across a host-authorized library round and retires old guidance references', async () => {
+    const f = fixture(), messages: WorkerMessage[] = [];
+    const options = { webRunId: 'web-fixture', directory: f.directory, onMessage: (message: WorkerMessage) => messages.push(message) };
+    const original = createWebWorkerBridge({ ...options, output: f.output });
+    await original.capture(); f.state.turns++; f.save();
+    const before = (await original.capture()).observation;
+    expect(before.sequence).toBe(2);
+
+    const output = path.join(f.directory, 'rounds', '1', 'result.json');
+    fs.mkdirSync(`${output}.runtime`, { recursive: true });
+    writeSolverRunState(`${output}.runtime/state.json`, { ...f.state, runId: 'solver-next' });
+    const next = createWebWorkerBridge({ ...options, output,
+      libraryRestart: { previousSolverRunId: f.state.runId, round: 1 } });
+    const start = messages.length, captured = await next.capture();
+    const roundMessages = messages.slice(start);
+    expect(roundMessages[0]).toEqual({ type: 'library_restart', previousSolverRunId: f.state.runId,
+      solverRunId: 'solver-next', round: 1 });
+    expect(roundMessages.findIndex(message => message.type === 'observation')).toBeGreaterThan(0);
+    expect(captured.observation).toMatchObject({ solverRunId: 'solver-next', sequence: 3, acceptance: 'not-assessed' });
+    expect((await next.capture()).observation.sequence).toBe(3);
+    expect(messages.filter(message => message.type === 'library_restart')).toHaveLength(1);
+    expect(JSON.parse(fs.readFileSync(path.join(f.directory, 'web-bridge.json'), 'utf8'))).toMatchObject({
+      solverRunId: 'solver-next', libraryRound: 1, sequence: 3,
+      observations: [{ sequence: 3, stateDigest: captured.observation.snapshot.stateDigest }] });
+
+    writeWebActiveRun({ ...options, output }, f.activeRunFile);
+    const commandOptions = { activeRunFile: f.activeRunFile };
+    expect((await handleWebWorkerCommand({ type: 'capture' }, commandOptions)).observation)
+      .toMatchObject({ solverRunId: 'solver-next', sequence: 3 });
+    const guidance = { id: 'old-round-direction', recipient: { kind: 'task', id: 'goal' },
+      taskRef: { id: 'goal', version: taskVersion(f.goal) }, text: 'Inspect the intermediate implication.',
+      observationRef: { sequence: before.sequence, stateDigest: before.snapshot.stateDigest } };
+    expect(await handleWebWorkerCommand({ type: 'guidance', guidance }, commandOptions)).toMatchObject({
+      status: 'rejected', reason: 'web_guidance_observation_unknown' });
+    expect(await handleWebWorkerCommand({ type: 'guidance', guidance: { ...guidance, id: 'new-round-direction',
+      observationRef: { sequence: captured.observation.sequence, stateDigest: captured.observation.snapshot.stateDigest } } }, commandOptions))
+      .toMatchObject({ status: 'queued' });
+    await expect(original.capture({ force: true })).rejects.toThrow('web_bridge_run_identity_changed');
+  });
+
+  it('projects dependency sources from the same committed owned snapshot, preserving their paths and bytes', async () => {
+    const f = fixture(), dependency = 'Support/Bridge.lean', dependencySource = '-- 原始字节\nnamespace Support\ntheorem bridge : True := by trivial\nend Support\n';
+    fs.mkdirSync(path.join(f.project, 'Support'));
+    fs.writeFileSync(path.join(f.project, dependency), dependencySource);
+    const source = 'import Support.Bridge\n' + f.source;
+    fs.writeFileSync(path.join(f.project, 'Submission.lean'), source);
+    const commit = f.commit();
+    f.state.problem.ownedFiles = ['Submission.lean', dependency];
+    f.state.cooperation!.canonicalCommit = commit;
+    f.state.cooperation!.tasks[0].integratedCheck = undefined; f.state.cooperation!.history = [];
+    f.save();
+    fs.writeFileSync(path.join(f.project, dependency), 'mutable dependency must not be projected');
+    const result = await handleWebWorkerCommand({ type: 'capture' }, { activeRunFile: f.activeRunFile });
+    const saved = result.observation!.sources.find(item => item.taskId === 'goal')!;
+    expect(saved.source).toBe(source); expect(saved.commit).toBe(commit);
+    expect(saved.dependencySources).toEqual([{ file: dependency, source: dependencySource }]);
+    expect(saved.dependencySources!.some(item => item.file === saved.file)).toBe(false);
+  });
+
+  it('rejects a different solver without the exact previous identity and next library round', async () => {
+    const f = fixture(), options = { webRunId: 'web-fixture', directory: f.directory };
+    await createWebWorkerBridge({ ...options, output: f.output }).capture();
+    const output = path.join(f.directory, 'rounds', '1', 'result.json');
+    fs.mkdirSync(`${output}.runtime`, { recursive: true });
+    writeSolverRunState(`${output}.runtime/state.json`, { ...f.state, runId: 'solver-next' });
+    const metaFile = path.join(f.directory, 'web-bridge.json'), before = fs.readFileSync(metaFile);
+    for (const libraryRestart of [undefined,
+      { previousSolverRunId: 'unrelated-solver', round: 1 },
+      { previousSolverRunId: f.state.runId, round: 2 },
+      { previousSolverRunId: 'solver-next', round: 1 }]) {
+      await expect(createWebWorkerBridge({ ...options, output, libraryRestart }).capture())
+        .rejects.toThrow('web_bridge_run_identity_changed');
+      expect(fs.readFileSync(metaFile)).toEqual(before);
+    }
+    const restarted = createWebWorkerBridge({ ...options, output,
+      libraryRestart: { previousSolverRunId: f.state.runId, round: 1 } });
+    expect((await restarted.capture()).observation.sequence).toBe(2);
+    const thirdOutput = path.join(f.directory, 'rounds', '2', 'result.json');
+    fs.mkdirSync(`${thirdOutput}.runtime`, { recursive: true });
+    writeSolverRunState(`${thirdOutput}.runtime/state.json`, { ...f.state, runId: 'solver-third' });
+    expect((await createWebWorkerBridge({ ...options, output: thirdOutput,
+      libraryRestart: { previousSolverRunId: 'solver-next', round: 2 } }).capture()).observation)
+      .toMatchObject({ solverRunId: 'solver-third', sequence: 3 });
+    await expect(restarted.capture()).rejects.toThrow('web_bridge_run_identity_changed');
+  });
+
+  it('binds the first observed round directly when the previous round never wrote bridge metadata', async () => {
+    const f = fixture(), messages: WorkerMessage[] = [], output = path.join(f.directory, 'rounds', '1', 'result.json');
+    fs.mkdirSync(`${output}.runtime`, { recursive: true });
+    writeSolverRunState(`${output}.runtime/state.json`, { ...f.state, runId: 'solver-next' });
+    const options = { webRunId: 'web-fixture', directory: f.directory, output, onMessage: (message: WorkerMessage) => messages.push(message) };
+    const captured = await createWebWorkerBridge({ ...options,
+      libraryRestart: { previousSolverRunId: f.state.runId, round: 1 } }).capture();
+    expect(captured.observation).toMatchObject({ solverRunId: 'solver-next', sequence: 1 });
+    expect(messages.filter(message => message.type === 'library_restart')).toEqual([]);
+    expect((await createWebWorkerBridge(options).capture()).observation.sequence).toBe(1);
+  });
+
   it('previews control changes without changing state and queues the same full versioned plan once', async () => {
     const f = fixture(), before = fs.readFileSync(f.stateFile);
     const proposal = { ...exportRunPlan(f.state), id: 'pause-goal' };
@@ -54,6 +155,31 @@ describe('isolated Web worker bridge', () => {
     expect(await handleWebWorkerCommand({ type: 'edit', proposal }, options)).toMatchObject({ id: 'pause-goal', status: 'already_queued' });
     expect(fs.readFileSync(path.join(path.dirname(f.stateFile), 'edits.jsonl'), 'utf8').trim().split('\n')).toHaveLength(1);
     await expect(handleWebWorkerCommand({ type: 'edit', proposal: { ...proposal, id: 'stale', baseVersion: 'stale' } }, options)).rejects.toThrow('version_conflict');
+  });
+
+  it.each(['edit-preview', 'edit'] as const)('rejects an unowned proofPath in %s with its proposal id and repair details before opening the queue', async type => {
+    const f = fixture(), before = fs.readFileSync(f.stateFile);
+    const proposal = { ...exportRunPlan(f.state), id: 'invalid-proof-path' };
+    proposal.tasks = proposal.tasks.map(task => task.id === 'goal' ? { ...task, proofPath: 'generated/problem/Submission.lean' } : task);
+    const result = await handleWebWorkerCommand({ type, proposal }, { activeRunFile: f.activeRunFile });
+    expect(result).toMatchObject({ id: proposal.id, status: 'rejected', baseVersion: 'plan-v1' });
+    expect(result.reason).toMatch(/^math_plan_invalid_proof_target:/u);
+    expect(result.reason).toContain('"taskId":"goal"');
+    expect(result.reason).toContain('"proofPath":"generated/problem/Submission.lean"');
+    expect(result.reason).toContain('Use an owned proofPath');
+    expect(fs.readFileSync(f.stateFile)).toEqual(before);
+    expect(fs.existsSync(path.join(path.dirname(f.stateFile), 'edits.jsonl'))).toBe(false);
+    expect(fs.existsSync(path.join(path.dirname(f.stateFile), 'edits.lock'))).toBe(false);
+  });
+
+  it('keeps malformed edit queue persistence distinct from a rejected proposal', async () => {
+    const f = fixture(), before = fs.readFileSync(f.stateFile);
+    const proposal = { ...exportRunPlan(f.state), id: 'valid-proposal' };
+    const log = path.join(path.dirname(f.stateFile), 'edits.jsonl'), damaged = '{invalid-json}\n';
+    fs.writeFileSync(log, damaged);
+    await expect(handleWebWorkerCommand({ type: 'edit', proposal }, { activeRunFile: f.activeRunFile })).rejects.toThrow(SyntaxError);
+    expect(fs.readFileSync(log, 'utf8')).toBe(damaged);
+    expect(fs.readFileSync(f.stateFile)).toEqual(before);
   });
 
   it('allows capture before cancellation and freezes reusable catalog input with its exact digest', async () => {
@@ -115,6 +241,29 @@ describe('isolated Web worker bridge', () => {
     expect((await handleWebWorkerCommand({ type: 'capture' }, options)).observation!.guidance).toEqual([]);
     fs.writeFileSync(path.join(path.dirname(f.stateFile), 'human-guidance.json'), '{invalid');
     await expect(handleWebWorkerCommand({ type: 'guidance', guidance }, options)).rejects.toThrow();
+  });
+
+  it('passes a validated candidate attachment through the worker command and captures it without editing source', async () => {
+    const f = fixture(), options = { activeRunFile: f.activeRunFile };
+    const observation = (await handleWebWorkerCommand({ type: 'capture' }, options)).observation!;
+    const baseline = observation.sources.find(item => item.taskId === 'goal')!, source = baseline.source.replace('by sorry', 'by trivial');
+    const taskRef = { id: baseline.taskId, version: baseline.taskVersion };
+    const guidance = webGuidanceSchema.parse({ id: 'candidate-direction', recipient: { kind: 'task', id: taskRef.id }, taskRef,
+      text: 'Please assess this independently checked candidate through the ordinary task protocol.',
+      observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest },
+      candidate: { source, sourceDigest: mathDigest(source), file: baseline.file, baseCommit: baseline.commit,
+        baseSourceDigest: baseline.sourceDigest, environmentDigest: baseline.environmentDigest, taskRef } });
+    const before = fs.readFileSync(path.join(f.project, baseline.file));
+    expect(await handleWebWorkerCommand({ type: 'guidance', guidance }, options)).toMatchObject({
+      id: guidance.id, status: 'queued', guidance: { candidate: guidance.candidate },
+    });
+    const captured = (await handleWebWorkerCommand({ type: 'capture' }, options)).observation!;
+    expect(captured.guidance[0].candidate).toEqual(guidance.candidate);
+    expect(await handleWebWorkerCommand({ type: 'guidance', guidance: { ...guidance, id: 'changed-environment',
+      candidate: { ...guidance.candidate, environmentDigest: '0'.repeat(64) } } }, options)).toMatchObject({
+      status: 'rejected', reason: 'math_guidance_candidate_environment_changed',
+    });
+    expect(fs.readFileSync(path.join(f.project, baseline.file))).toEqual(before);
   });
 
   it('queues a plan approval only for the exact pending version and reports each saved-checkpoint rejection', async () => {

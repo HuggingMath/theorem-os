@@ -5,8 +5,8 @@
 # The workflow publishes no moving main tag. Verify both images before replacing a running service.
 services:
   web:
-    image: ghcr.io/likc1606/theorem-os-web:${THEOREMOS_IMAGE_TAG:?Set THEOREMOS_IMAGE_TAG to a verified full commit SHA}
+    image: ghcr.io/huggingmath/theorem-os-web:${THEOREMOS_IMAGE_TAG:?Set THEOREMOS_IMAGE_TAG to a verified full commit SHA}
     environment:
-      THEOREMOS_WEB_WORKER_IMAGE: ghcr.io/likc1606/theorem-os-worker:${THEOREMOS_IMAGE_TAG:?Set THEOREMOS_IMAGE_TAG to a verified full commit SHA}
+      THEOREMOS_WEB_WORKER_IMAGE: ghcr.io/huggingmath/theorem-os-worker:${THEOREMOS_IMAGE_TAG:?Set THEOREMOS_IMAGE_TAG to a verified full commit SHA}
   worker:
-    image: ghcr.io/likc1606/theorem-os-worker:${THEOREMOS_IMAGE_TAG:?Set THEOREMOS_IMAGE_TAG to a verified full commit SHA}
+    image: ghcr.io/huggingmath/theorem-os-worker:${THEOREMOS_IMAGE_TAG:?Set THEOREMOS_IMAGE_TAG to a verified full commit SHA}

@@ -210,7 +210,7 @@ try {
     await openSettings(page); await restore(page, defaults, true); await closeSettings(page);
     await selectConfig(page, 'environment', 'standard'); await dismiss(page);
     const addition = await snapshot(page);
-    assert.equal(addition.templateId, 'addition');
+    assert.equal(addition.templateId, 'add-zero');
     await selectConfig(page, 'template', 'logic'); await assertBackup(page, addition, 'template');
     await fillConfig(page, 'model', 'edited-after-switch');
     await page.locator('#task').fill('Edited task after replacement');

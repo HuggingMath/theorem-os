@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import type { Page } from 'playwright';
 import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
+import { sanitizeAgentItem } from '../apps/web/agentActions';
 import { loadWebSample } from '../apps/web/sample';
 import type { WebRunner } from '../apps/web/runner';
 import { webSampleRunId, type WebRunInput, type WorkerMessage } from '../apps/web/shared';
@@ -28,9 +29,33 @@ const lead = sample.observations.at(-1)!.inspection.workers.find(worker => worke
 // Two pauses in the live replay: before the Engineer's second turn starts, and before that turn's Lean check ends.
 const turnGate = { reached: deferred(), open: deferred() }, checkGate = { reached: deferred(), open: deferred() };
 const gate = (held: typeof turnGate) => { held.reached.resolve(); return held.open.promise; };
+const libraryIdentity = { id: 'theorem-os-standard', revision: 'standard-v1', catalogDigest: 'a'.repeat(64), environmentDigest: 'b'.repeat(64) };
+const libraryEntry = (name: string, installation = 'not-installed') => ({ name, installation, file: 'Submission/Library/Tutorial.lean',
+  import: 'Submission.Library.Tutorial', sourceDigest: 'c'.repeat(64), origin: { file: '/opt/theorem-os/private-library.lean' } });
 const runner: WebRunner = {
   async readiness() { return { ready: true, message: '本地路线图验证环境' }; },
   async run(input, send, signal) {
+    if (input.input.model === 'fixture-route-library') {
+      send({ type: 'progress', event: 'turn_started', message: 'Library tool fixture', details: { workerId: 'solver', turn: 1 } });
+      const declaration = libraryEntry('Tutorial.zero_add'), installed = libraryEntry('Tutorial.add_zero', 'installed-frozen');
+      const results: [string, object][] = [
+        ['search', { schema: 'theorem-os.library-search.v1', library: libraryIdentity, query: 'zero_add', goal: '0 + n = n',
+          hits: [declaration, installed], namedReferences: [declaration] }],
+        ['get', { schema: 'theorem-os.library-source.v1', library: libraryIdentity, declaration, installation: 'not-installed',
+          source: { text: 'library-source-private', offset: 0, nextOffset: 2048, complete: false } }],
+        ['get', { schema: 'theorem-os.library-source.v1', library: libraryIdentity, declaration, installation: 'not-installed',
+          source: { text: 'library-source-private', offset: 2048, nextOffset: null, complete: true } }],
+        ['request', { schema: 'theorem-os.library-request-result.v1', library: libraryIdentity, declarations: [declaration], status: 'queued' }],
+        ['request', { schema: 'theorem-os.library-request-result.v1', library: libraryIdentity, declarations: [installed], status: 'already-installed' }],
+      ];
+      for (const [index, [operation, result]] of results.entries()) {
+        const action = sanitizeAgentItem('completed', { id: `library-${index}`, type: 'commandExecution', status: 'completed', exitCode: 0,
+          command: `math library ${operation}`, aggregatedOutput: JSON.stringify(result), cwd: '/work/run-fixture/workspace/workers/solver' },
+        { workerId: 'solver', worktree: '/work/run-fixture/workspace/workers/solver', hidden: ['/opt/theorem-os', '/work/run-fixture'], apiKey: input.input.apiKey });
+        assert.ok(action); send({ type: 'action', action });
+      }
+      send({ type: 'result', result: { status: 'incomplete', proof: '', report: { turns: 1 } } }); return;
+    }
     if (input.input.model === 'fixture-route-long') {
       // One message every few milliseconds, so each keeps its own server time and order.
       for (const message of longLane(30)) { send(message); await new Promise(resolve => setTimeout(resolve, 3)); }
@@ -278,6 +303,42 @@ try {
   assert.match(await chips(page, 'solver').last().innerText(), /Lean 检查\s*通过/u);
   await shot(page, '1440-long-lane.png', `${map} .agent-route-lane[data-worker-id="solver"]`);
   mark('a lane of 60 steps shows its newest 24 and opens the earlier 36 on request');
+
+  // Library tools report what they returned, separately from the proof's Lean checks and actual references.
+  const libraryRun = await postRun({ page }, input('fixture-route-library'));
+  await waitForRun({ page }, libraryRun.id, run => run.status !== 'running' && run.status !== 'queued', 20_000);
+  await page.goto(`${origin}/?run=${libraryRun.id}`); await ready(page); await openTab(page, 'result');
+  await page.locator('.result-agent-actions>summary').click(); await lane(page, 'solver').waitFor();
+  await chips(page, 'solver').last().click();
+  await inspector(page, 'solver').getByRole('button', { name: '全部展开' }).click();
+  const libraryCards = page.locator(`${map} [data-library-operation]`);
+  assert.equal(await libraryCards.count(), 5);
+  assert.deepEqual(await rows(page, 'solver').locator('.route-item-label').allInnerTexts(),
+    ['Library tool fixture', '搜索定理库', '读取库源码', '读取库源码', '请求装入库声明', '请求装入库声明']);
+  assert.deepEqual(await rows(page, 'solver').locator('.route-item-outcome').allInnerTexts(),
+    ['2 个候选', '还有后续页', '已到文件末尾', '请求已排队', '已冻结装入']);
+  assert.equal(await rows(page, 'solver').locator('.route-item-outcome[data-tone="passed"]').count(), 0);
+  const search = libraryCards.filter({ has: page.locator('[data-library-identity]') }).first();
+  assert.deepEqual(await search.locator('[data-library-identity] code').allInnerTexts(), [libraryIdentity.id, libraryIdentity.revision]);
+  assert.ok((await search.innerText()).includes(libraryIdentity.catalogDigest));
+  assert.match(await search.innerText(), /Tutorial.zero_add\s+未装入[\s\S]*Tutorial.add_zero\s+已冻结装入/u);
+  assert.match(await libraryCards.nth(1).innerText(), /源码偏移 0；下一页从 2048 开始。/u);
+  assert.match(await libraryCards.nth(2).innerText(), /源码偏移 2048；已到文件末尾。/u);
+  assert.match(await libraryCards.nth(3).innerText(), /请求已排队，等待校验并在后续轮次装入。/u);
+  assert.match(await libraryCards.nth(4).innerText(), /请求的声明已冻结装入。/u);
+  const libraryServed = await page.evaluate(async id => (await fetch(`/api/runs/${id}/actions?after=0`)).text(), libraryRun.id);
+  assert.ok(!/library-source-private|private-library|\/opt\/|\/work\//u.test(libraryServed), 'library activities carry no source text or host origin');
+  await inspector(page, 'solver').locator('.route-filter[data-group="look"]').click();
+  assert.equal(await rows(page, 'solver').count(), 3, 'library search and source reads belong to 查看');
+  await inspector(page, 'solver').locator('.route-filter[data-group="run"]').click();
+  assert.equal(await rows(page, 'solver').count(), 2, 'installation requests belong to 命令');
+  await inspector(page, 'solver').locator('.route-filter', { hasText: '全部' }).first().click();
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 }); await settled(page);
+    assert.ok(await fits(page), `library activities fit a ${width}px screen`);
+  }
+  await shot(page, '320-library-tools.png', '#route-inspector-solver');
+  mark('library searches, source pages and installation requests show bounded tool reports with no proof acceptance or source leakage');
 
   assert.deepEqual(errors, [], 'no page errors');
   console.log(`agent route checks passed; screenshots in ${path.relative(root, output)}`);

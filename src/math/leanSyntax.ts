@@ -2,6 +2,12 @@
 export const isSimpleLeanName = (value: unknown): value is string => typeof value === 'string' &&
   /^[\p{L}_][\p{L}\p{M}\p{N}_'?!]*(?:\.[\p{L}_][\p{L}\p{M}\p{N}_'?!]*)*$/u.test(value);
 
+/** Ordinary qualified names explicitly written in prose; preserve first mention and normalize root prefixes. */
+export function qualifiedLeanReferences(text: string): string[] {
+  return [...new Set([...text.matchAll(/(?<![\p{L}\p{M}\p{N}_'?!\.])[\p{L}_][\p{L}\p{M}\p{N}_'?!]*(?:\.[\p{L}_][\p{L}\p{M}\p{N}_'?!]*)+/gu)]
+    .map(match => match[0].replace(/^_root_\./u, '')))];
+}
+
 /** Mask comments and string literals while preserving line boundaries and source offsets. */
 export function maskLeanCommentsAndStrings(source: string): string {
   return maskLeanText(source, true);

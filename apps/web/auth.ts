@@ -30,6 +30,7 @@ export class WebAuthError extends Error {
 
 const codeTtlMs = 10 * 60_000, captchaTtlMs = 5 * 60_000, resendAfterMs = 60_000;
 type PasswordRecord = { algorithm: 'scrypt'; salt: string; digest: string };
+const samePasswordRecord = (a?: PasswordRecord, b?: PasswordRecord) => a?.salt === b?.salt && a?.digest === b?.digest;
 const derivePassword = (password: string, salt: Buffer) => new Promise<Buffer>((resolve, reject) =>
   crypto.scrypt(password, salt, 64, { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 },
     (error, key) => error ? reject(error) : resolve(key)));
@@ -257,7 +258,7 @@ export class WebAuth {
     const actual = await derivePassword(value, salt);
     return Boolean(record) && crypto.timingSafeEqual(actual, expected);
   }
-  async loginPassword(ip: string, body: { email?: unknown; password?: unknown; terms?: unknown; termsVersion?: unknown }): Promise<WebAccount> {
+  async loginPassword(ip: string, body: { email?: unknown; password?: unknown; terms?: unknown; termsVersion?: unknown }, authorize?: () => void): Promise<WebAccount> {
     const email = normalizeEmail(body.email);
     if (!this.allow('password-ip:' + ip, 20, 60 * 60_000) || !this.allow('password-email:' + email, 5, 60 * 60_000))
       throw new WebAuthError(429, '密码尝试过多，请一小时后再试，或使用邮箱验证码登录。');
@@ -265,12 +266,14 @@ export class WebAuth {
       throw new WebAuthError(401, '邮箱或密码不正确。');
     const initialAccount = this.getAccount(email), record = this.passwordRecord(email);
     const matches = await this.matchesPassword(body.password, record);
+    authorize?.();
     const account = this.getAccount(email);
-    if (!matches || !account || account.id !== initialAccount?.id || !this.allowed(email)) throw new WebAuthError(401, '邮箱或密码不正确。');
+    if (!matches || !account || account.id !== initialAccount?.id || !this.allowed(email)
+      || !samePasswordRecord(record, this.passwordRecord(email))) throw new WebAuthError(401, '邮箱或密码不正确。');
     const version = this.checkTerms(body, account);
     return version ? this.account(email, version) : account;
   }
-  async setPassword(email: string, next: unknown, current: unknown, verifiedByEmail: boolean) {
+  async setPassword(email: string, next: unknown, current: unknown, verifiedByEmail: boolean, authorize?: () => void) {
     const account = this.getAccount(email);
     if (!account) throw new WebAuthError(404, '账号不存在。');
     if (!validPassword(next)) throw new WebAuthError(400, '密码至少 12 位且不超过 256 字节。');
@@ -281,8 +284,10 @@ export class WebAuth {
     const salt = crypto.randomBytes(16);
     const digest = await derivePassword(next, salt);
     // Derivation yields; deletion, recreation or suspension must not leave a password written by the old session.
+    authorize?.();
     if (this.getAccount(email)?.id !== account.id) throw new WebAuthError(404, '账号不存在。');
     if (!this.allowed(email)) throw new WebAuthError(403, '这个账号目前无法使用，请联系支持。');
+    if (!samePasswordRecord(record, this.passwordRecord(email))) throw new WebAuthError(409, '密码已变更，请刷新页面后重试。');
     this.storage.saveRecord(this.passwordPath(email), { algorithm: 'scrypt', salt: salt.toString('hex'), digest: digest.toString('hex') } satisfies PasswordRecord);
   }
   /** Every account record; the funnel report and run milestones read these (a closed beta keeps the list short). */
@@ -307,7 +312,12 @@ export class WebAuth {
     this.storage.saveRecord(this.accountPath(email), enabled ? rest : { ...rest, completionEmail: false });
   }
   async sendCompletion(to: string, message: { subject: string; text: string }) { await this.mailer({ to, ...message }); }
-  deleteAccount(email: string) { this.storage.deleteRecord(this.accountPath(email)); this.storage.deleteRecord(this.passwordPath(email)); this.codes.delete(email); }
+  deleteAccount(email: string) {
+    // Keep the account retryable if credential deletion fails; a recreated account must never inherit its password.
+    this.storage.deleteRecord(this.passwordPath(email));
+    this.storage.deleteRecord(this.accountPath(email));
+    this.codes.delete(email);
+  }
 }
 
 export const allowlistFile = (dataRoot?: string) => dataRoot ? path.join(dataRoot, 'allowlist.txt') : undefined;

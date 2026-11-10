@@ -191,17 +191,25 @@ try {
     if (width === 1440) {
       assert.equal(pending.input.maxRunSeconds, 240); assert.equal(pending.input.maxTotalTokens, 120000);
       assert.equal(pending.input.provider.id, 'sub2api'); assert.equal(pending.input.model, 'deepseek-flash');
+    } else {
+      assert.equal(pending.input.maxRunSeconds, 0, 'Blank formalization time reaches the worker as unlimited');
+      assert.equal(pending.input.maxTotalTokens, 0, 'Blank formalization tokens reach the worker as unlimited');
     }
     pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve();
     await page.locator('[data-research-artifact="source"]:enabled').waitFor();
     await eventually(() => runs.length === formalizations.length, 'The approved formalization starts one proof');
     assert.equal((runs.at(-1)?.formalization as { request?: { statement?: string } } | undefined)?.request?.statement, original);
     assert.equal(await page.locator('.research-conversation-status').getAttribute('data-accepted'), String(width === 390));
-    assert.match(await page.locator('#research-chat-thread [data-statement-verdict]').innerText(), /模型审核通过，未经人工确认/u);
+    assert.match(await page.locator('#research-chat-thread [data-statement-verdict]').innerText(), /Lean 编译通过/u);
     if (width === 1440) {
       assert.equal(runs.at(-1)?.input.maxRunSeconds, 180); assert.equal(runs.at(-1)?.input.maxTotalTokens, 80000);
       assert.equal(runs.at(-1)?.input.maxTurns, 4);
-    } else assert.equal(await page.locator('.research-conversation-state').innerText(), 'Lean 陈述证明通过');
+    } else {
+      assert.equal(runs.at(-1)?.input.maxRunSeconds, 0, 'Blank proof time reaches the worker as unlimited');
+      assert.equal(runs.at(-1)?.input.maxTotalTokens, 0, 'Blank proof tokens reach the worker as unlimited');
+      assert.equal(runs.at(-1)?.input.maxTurns, 0, 'Blank proof turns reach the worker as unlimited');
+      assert.equal(await page.locator('.research-conversation-state').innerText(), 'Lean 陈述证明通过');
+    }
     await assertSameComposer(page);
     const sessionUrl = page.url(), id = (await conversation(page)).id;
     await page.locator('#formalize-original').fill(question);
@@ -217,9 +225,9 @@ try {
     await page.locator('#chat-original-panel').waitFor();
     assert.equal(await page.locator('#chat-original-panel .chat-original-columns .chat-message-text').first().textContent(), original);
     assert.match(await page.locator('#chat-original-panel pre code').first().textContent() ?? '', /theorem addition/u);
-    assert.equal(await page.locator('#chat-original-panel .chat-backtranslation .chat-message-text').textContent(), original);
-    assert.ok(await page.locator('#chat-original-panel .chat-correspondences article').count() > 0,
-      'The conversation still exposes specific natural-language/Lean correspondences');
+    assert.equal(await page.locator('#chat-original-panel .chat-backtranslation').count(), 0, 'Direct generation does not fabricate a blind translation');
+    assert.equal(await page.locator('#chat-original-panel .chat-correspondences article').count(), 0, 'Direct generation does not fabricate independent correspondences');
+    assert.equal(await page.locator('#chat-original-panel [data-download-statement]').count(), 1, 'The compiled statement remains downloadable');
     await page.locator('#close-research-output').click();
     assert.equal(await page.locator('#formalize-original').inputValue(), question); await assertSameComposer(page);
     const callsBefore = providerCalls.length;
@@ -268,6 +276,25 @@ try {
     assert.equal(providerCalls.at(-1)?.input.at(-1).content[0].text, followup);
     await expectMessage(page, followup); await assertSameComposer(page);
     mark(`${width}px: exact original, automatic proof, stable composer, IME and contextual follow-ups`);
+
+    if (width === 1440) {
+      await waitForAnswerStatus(page, 'complete');
+      let readHeld = false, readDelivered = false, releaseRead!: () => void;
+      const readGate = new Promise<void>(resolve => { releaseRead = resolve; });
+      await page.route(`**/api/conversations/${id}`, async route => {
+        readHeld = true; await readGate;
+        await route.fulfill({ status: 503, json: { error: '过期的读取错误' } }); readDelivered = true;
+      }, { times: 1 });
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await eventually(() => readHeld, 'The old conversation read remains in flight before another send');
+      const { reply, message } = await openStream(page, '成功发送后，旧读取失败不应覆盖这次对话。');
+      await message.waitFor();
+      releaseRead(); await eventually(() => readDelivered, 'The failed old read returns after the successful send');
+      await page.evaluate(() => new Promise<void>(resolve => setTimeout(resolve, 150)));
+      assert.equal(await page.locator('#formalize-error').count(), 0, 'A superseded read cannot report a stale error over a successful send');
+      reply.delta('本地测试的成功回答。'); reply.complete(); await waitForAnswerStatus(page, 'complete');
+      mark('a failed old conversation read cannot overwrite a successful send with a stale error');
+    }
 
     const draft = '保留这条尚未发送的追问';
     await page.locator('#formalize-original').fill(draft);
@@ -329,6 +356,7 @@ try {
       const split = richAnswer.indexOf('```lean');
       reply.delta(richAnswer.slice(0, split));
       await message.locator('[data-chat-markdown]').getByRole('heading', { name: '证明思路', exact: true }).waitFor();
+      await message.locator('.katex').nth(1).waitFor({ state: 'attached' });
       assert.equal(await message.getAttribute('data-message-status'), 'pending', 'Partial mathematical text is visible before completion');
       assert.ok(await message.locator('.katex').count() >= 2, 'Inline and block mathematics are typeset while the answer is pending');
       reply.delta(richAnswer.slice(split)); reply.complete(); await waitForAnswerStatus(page, 'complete');
@@ -562,12 +590,24 @@ try {
       mark(`${width}px: a delayed conversation response still attaches its completed proof before idle polling`);
       const saved = await conversation(page);
       assert.ok(saved.runId && saved.formalizationId);
+      await page.reload(); await expectMessage(page, webFormalizationStatement);
       await openChatHistory(page);
       const row = page.locator(`[data-chat-row="${saved.id}"]`), title = `History ${width}: additive identity`;
+      let releaseHistory!: () => void, historyHeld = false, historyDelivered = false;
+      const historyGate = new Promise<void>(resolve => { releaseHistory = resolve; });
+      await page.route('**/api/conversations', async route => {
+        const response = await route.fetch(); historyHeld = true;
+        await historyGate; await route.fulfill({ response }); historyDelivered = true;
+      }, { times: 1 });
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await eventually(() => historyHeld, 'The history snapshot predates the title change');
       await row.locator('[data-chat-rename]').click();
       await row.locator('[data-chat-title]').fill(title);
       await row.locator('[data-chat-history-confirm]').click();
       await row.locator('a.chat-history-item').filter({ hasText: title }).waitFor();
+      releaseHistory(); await eventually(() => historyDelivered, 'The old history arrives after the title update');
+      await page.evaluate(() => new Promise<void>(resolve => setTimeout(resolve, 150)));
+      assert.equal(await row.locator('a.chat-history-item').innerText(), title, 'A stale list cannot restore the previous conversation title');
       await page.locator('[data-chat-search]').fill('NO MATCHING CONVERSATION');
       await row.waitFor({ state: 'detached' });
       await page.getByText('没有匹配的对话', { exact: true }).waitFor();
@@ -589,11 +629,23 @@ try {
       assert.equal((await rejected).status(), 409);
       await linked.locator('[role="alert"]').filter({ hasText: '已有研究使用这份原题' }).waitFor();
       await linked.getByRole('button', { name: '取消', exact: true }).click();
+      let releaseDeletedHistory!: () => void, deletedHistoryHeld = false, deletedHistoryDelivered = false;
+      const deletedHistoryGate = new Promise<void>(resolve => { releaseDeletedHistory = resolve; });
+      await page.route('**/api/conversations', async route => {
+        const response = await route.fetch(); deletedHistoryHeld = true;
+        await deletedHistoryGate; await route.fulfill({ response }); deletedHistoryDelivered = true;
+      }, { times: 1 });
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await eventually(() => deletedHistoryHeld, 'A history snapshot predates conversation deletion');
       await row.locator('[data-chat-delete]').click();
       assert.match(await row.locator('.chat-history-edit').innerText(), /只删除这段对话，题目、证明任务和分享链接仍保留。/u);
       await row.locator('[data-chat-history-confirm]').click();
       await page.waitForURL(url => !url.search);
       await row.waitFor({ state: 'detached' });
+      releaseDeletedHistory(); await eventually(() => deletedHistoryDelivered, 'The old list returns after deletion');
+      await page.evaluate(() => new Promise<void>(resolve => setTimeout(resolve, 150)));
+      assert.equal(await row.count(), 0, 'An older history response cannot restore a deleted conversation');
+      mark(`${width}px: older history responses cannot undo a rename or restore a deleted conversation`);
       const retained = await page.evaluate(async ({ id, runId, formalizationId }) => ({
         conversation: (await fetch(`/api/conversations/${id}`)).status,
         run: (await fetch(`/api/runs/${runId}`)).status,
@@ -616,12 +668,25 @@ try {
       assert.equal(await page.locator('#chat-problem-records[open]').count(), 1, 'The expanded record list updates without toggling it');
       const record = page.locator(`[data-chat-record="${unlinked.formalizationId}"]`);
       await record.locator('[data-chat-delete-record]:enabled').waitFor();
+      let releaseRecords!: () => void, recordsHeld = false, recordsDelivered = false;
+      const recordsGate = new Promise<void>(resolve => { releaseRecords = resolve; });
+      await page.route('**/api/formalizations', async route => {
+        const response = await route.fetch(); recordsHeld = true;
+        await recordsGate; await route.fulfill({ response }); recordsDelivered = true;
+      }, { times: 1 });
+      await page.locator('#chat-problem-records > summary').click();
+      await page.locator('#chat-problem-records > summary').click();
+      await eventually(() => recordsHeld, 'The record list snapshot predates deletion');
       await record.locator('[data-chat-delete-record]').click();
       const removed = page.waitForResponse(response => response.request().method() === 'DELETE'
         && new URL(response.url()).pathname === `/api/formalizations/${unlinked.formalizationId}`);
       await record.locator('[data-chat-history-confirm]').click();
       assert.equal((await removed).status(), 200);
       await record.waitFor({ state: 'detached' });
+      releaseRecords(); await eventually(() => recordsDelivered, 'The old record list returns after deletion');
+      await page.evaluate(() => new Promise<void>(resolve => setTimeout(resolve, 150)));
+      assert.equal(await record.count(), 0, 'An old capabilities response cannot restore a deleted statement record');
+      mark(`${width}px: a deleted statement stays removed when an older record list arrives`);
       assert.equal(await page.evaluate(async id => (await fetch(`/api/formalizations/${id}`)).status, unlinked.formalizationId), 404);
       const kept = await conversation(page);
       assert.equal(kept.id, unlinked.id);

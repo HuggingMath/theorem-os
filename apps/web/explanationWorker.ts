@@ -20,8 +20,8 @@ const inputSchema = z.object({
   language: z.enum(['zh', 'en']), environment: z.enum(['standard', 'mathlib']), model: z.literal(SUB2API_PROVIDER.defaultModel),
   effort: z.enum(['low', 'high', 'max']), apiKey: z.string().regex(/^[\x21-\x7e]{8,4096}$/u),
   provider: z.object({ id: z.literal(SUB2API_PROVIDER.id), name: z.string().max(200), baseUrl: z.string().url().max(512) }).strict(),
-  maxRunSeconds: z.number().int().positive().max(24 * 60 * 60), maxTotalTokens: z.number().int().positive(),
-  maxRoundsPerBatch: z.number().int().min(1).max(20), auditors: z.number().int().min(1).max(5),
+  maxRunSeconds: z.number().int().nonnegative().max(24 * 60 * 60), maxTotalTokens: z.number().int().nonnegative(),
+  maxRoundsPerBatch: z.number().int().min(0).max(20), auditors: z.number().int().min(1).max(5),
 }).strict();
 
 const relayUrl = new URL(SUB2API_PROVIDER.baseUrl);
@@ -143,7 +143,7 @@ async function main() {
     if (result.status === 'approved')
       await send({ type: 'result', status: 'approved', evidence: readInformalizationArtifact(path.join(directory, 'artifact')) });
     else await send({ type: 'result', ...explanationStopReason(result.status, result.error,
-      Date.now() - startedAt >= input.maxRunSeconds * 1_000) });
+      input.maxRunSeconds > 0 && Date.now() - startedAt >= input.maxRunSeconds * 1_000) });
   } catch (error) {
     await send({ type: 'result', ...explanationStopReason('stopped', error instanceof Error ? error.message : undefined, false) });
     process.exitCode = 1;

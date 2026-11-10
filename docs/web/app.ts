@@ -1,22 +1,31 @@
 import {
   createIcons, ArrowDownWideNarrow, ArrowRight, ArrowUpRight, BadgeCheck,
-  CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Code, Copy, Download, FileCheck2, FileClock, FileCode2,
+  BookOpen, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Code, Copy, Download, FileCheck2, FileClock, FileCode2,
   FileJson2, Files, FlaskConical, GitBranch, GitCommitHorizontal, GitFork, Hash, Info, Link2,
   ListStart, MessageCircle, Pause, Play, RotateCcw, Search, SearchX, ShieldCheck,
 } from 'lucide';
 import catalog from 'virtual:archive';
+import figuresVersion from 'virtual:proof-figures';
+import mathVersion from 'virtual:math';
+import { configureMathAssets } from '../../apps/web/client/mathAssets';
 import type { ArchiveIndexRecord, ArchiveIndexSource, ArchiveProcess } from './types';
 import { keepHashOnLanguageSwitch, localeOf, localizeRecord, rootOf } from './site';
 import { initializeReplay } from './replay';
 import { emptyProcessSelection, renderArchiveProcess, selectedProcessRun } from './process';
+import { buildArchiveRoadmap, mountArchiveRoadmap } from './processRoadmap';
+import { mountProofReading } from './proofReading';
+import { mountProofFigures } from './proofFigures';
+import { mountArchiveSolutionRoutes, typesetArchiveProse } from './solutionRouteClient';
+import { readSourceLocation, verifiedSourceLocation, writeSourceLocation, type SourceLocation } from './sourceLocation';
 
 const iconSet = {
-  ArrowDownWideNarrow, ArrowRight, ArrowUpRight, BadgeCheck, CalendarDays, Check,
+  ArrowDownWideNarrow, ArrowRight, ArrowUpRight, BadgeCheck, BookOpen, CalendarDays, Check,
   ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Clock, Code, Copy, Download, FileCheck2, FileClock, FileCode2, FileJson2, Files, FlaskConical,
   GitBranch, GitCommitHorizontal, GitFork, Hash, Info, Link2, ListStart, MessageCircle, Search,
   Pause, Play, RotateCcw, SearchX, ShieldCheck,
 };
 const locale = localeOf(document.documentElement.lang);
+configureMathAssets({ script: `${rootOf(locale)}data/math.js?v=${mathVersion}`, stylesheet: `${rootOf(locale)}assets/katex/katex.min.css` });
 document.documentElement.classList.add('js');
 const replayController = initializeReplay(locale);
 const strings = {
@@ -29,7 +38,7 @@ const strings = {
     installedModules: '已安装', draftModules: '草稿引用（未验证）', canonicalModules: '集成提交引用', checkedModules: '通过检查的提交引用',
     lexicalMentions: '源码名称提及', moduleNote: '模块引用和名称提及仅反映保存的源码。',
     applicationChecks: { elaborated: '局部表达式检查通过', failed: '局部表达式检查失败', unavailable: '局部检查不可用' } as Record<string, string>,
-    processCount: (runs: number, tasks: number) => `${runs} 次记录运行 · ${tasks} 项任务`,
+    processCount: (runs: number, tasks: number) => runs ? `${runs} 次记录运行 · ${tasks} 项任务` : '证明结构与步骤',
     loadingProcess: '正在载入解题过程…', processUnavailable: '解题过程载入失败，请重新打开此视图重试。',
     objectives: '原题目标', attempts: '尝试次数', dependencies: '依赖任务', rawSource: '证明原文件',
     nativeEvidence: '本地独立验收', nativeScope: '原题通过 Lean 内核检查和原题 comparator 验收。',
@@ -52,7 +61,7 @@ const strings = {
     empty: '没有可显示的记录', details: '档案详情', backList: '返回题目列表',
     accessPrompt: '想用 TheoremOS 研究自己的题目？', requestAccess: '申请内测',
     copyLink: '复制题目链接', downloadRecord: '下载此题档案 JSON',
-    detailTabs: '档案详情视图', tabs: { overview: '概览', source: 'Lean 源码', evidence: '验证证据', process: '解题过程' },
+    detailTabs: '档案详情视图', tabs: { overview: '概览', source: 'Lean 源码', evidence: '验证证据', process: '路线与轨迹' },
     copied: '已复制', copyFailed: '复制失败，请检查浏览器剪贴板权限',
     loadingSource: '正在载入 Lean 源码…', sourceUnavailable: '源码载入失败。可以通过原文件链接查看。',
     row: (title: string, accepted: boolean) => `${title}，${accepted ? '官方已验收' : '尚未官方验收'}`,
@@ -66,7 +75,7 @@ const strings = {
     installedModules: 'Installed', draftModules: 'Draft imports (unchecked)', canonicalModules: 'Integrated commit imports', checkedModules: 'Checked commit imports',
     lexicalMentions: 'Names mentioned in source', moduleNote: 'Imports and name mentions describe the saved source.',
     applicationChecks: { elaborated: 'Local expression elaborated', failed: 'Local expression check failed', unavailable: 'Local check unavailable' } as Record<string, string>,
-    processCount: (runs: number, tasks: number) => `${runs} recorded runs · ${tasks} tasks`,
+    processCount: (runs: number, tasks: number) => runs ? `${runs} recorded runs · ${tasks} tasks` : 'Proof structure and steps',
     loadingProcess: 'Loading the research process…', processUnavailable: 'The research process could not be loaded. Reopen this view to retry.',
     objectives: 'Original targets', attempts: 'Attempts', dependencies: 'Dependencies', rawSource: 'Original proof file',
     nativeEvidence: 'Independent local acceptance', nativeScope: 'The original targets passed the Lean kernel checks and the original comparator.',
@@ -89,7 +98,7 @@ const strings = {
     empty: 'No records to show', details: 'Record details', backList: 'Back to results',
     accessPrompt: 'Have a problem to research with TheoremOS?', requestAccess: 'Request access',
     copyLink: 'Copy link to this proof', downloadRecord: 'Download this record as JSON',
-    detailTabs: 'Record detail views', tabs: { overview: 'Overview', source: 'Lean source', evidence: 'Evidence', process: 'Research process' },
+    detailTabs: 'Record detail views', tabs: { overview: 'Overview', source: 'Lean source', evidence: 'Evidence', process: 'Routes and trajectory' },
     copied: 'Copied', copyFailed: 'Copy failed. Check the clipboard permission of your browser.',
     loadingSource: 'Loading the Lean source…', sourceUnavailable: 'The source could not be loaded. You can use the original file link.',
     row: (title: string, accepted: boolean) => `${title}, ${accepted ? 'officially accepted' : 'not yet officially accepted'}`,
@@ -98,6 +107,7 @@ const strings = {
 const records = catalog.records.map(record => localizeRecord(record, locale));
 type ArchiveRecord = ArchiveIndexRecord;
 type ArchiveSource = ArchiveIndexSource & { code: string };
+let sourceLocation: SourceLocation | undefined;
 
 declare global { interface Window { theoremosSources?: Record<string, Record<string, string>>; theoremosProcesses?: Record<string, ArchiveProcess> } }
 // Lean sources are most of the archive's weight, so each record's files load on first use.
@@ -121,7 +131,7 @@ function loadProcess(record: ArchiveRecord): Promise<ArchiveProcess | undefined>
   let request = processRequests.get(record.id);
   if (!request) processRequests.set(record.id, request = new Promise<ArchiveProcess>((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = `${rootOf(locale)}data/process/${record.id}.js`;
+    script.src = `${rootOf(locale)}data/process/${record.id}.js${record.processSummary?.version ? `?v=${record.processSummary.version}` : ''}`;
     script.onload = () => { script.remove(); const value = window.theoremosProcesses?.[record.id];
       if (value) resolve(value); else { processRequests.delete(record.id); reject(new Error('Missing process')); } };
     script.onerror = () => { script.remove(); processRequests.delete(record.id); reject(new Error('Missing process')); };
@@ -129,7 +139,18 @@ function loadProcess(record: ArchiveRecord): Promise<ArchiveProcess | undefined>
   }));
   return request;
 }
-const icons = () => createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } });
+const icons = () => {
+  createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } }); mountArchiveRoadmap(); mountProofReading();
+  const inspector = document.querySelector<HTMLElement>('#inspector');
+  if (inspector) void typesetArchiveProse(inspector, locale);
+  const record = selectedRecord(), process = record && window.theoremosProcesses?.[record.id];
+  if (record && process) void mountArchiveSolutionRoutes(record, process, locale).then(() => {
+    const toolbar = document.querySelector<HTMLElement>('.process-view-toolbar');
+    if (selectedRecord() === record && state.tab === 'process' && document.activeElement === toolbar?.querySelector('h4'))
+      toolbar?.scrollIntoView({ block: 'start' });
+  });
+  mountProofFigures(`${rootOf(locale)}data/proof-figures.js?v=${figuresVersion}`);
+};
 const icon = (name: string) => `<i data-lucide="${name}"></i>`;
 const html = (value: string | number) => String(value).replace(/[&<>"']/g, character => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -162,6 +183,7 @@ const state = {
 const selectedRecord = () => records.find(record => record.id === state.selected);
 let processSelection = emptyProcessSelection();
 let processRecordId = '';
+const sourceContext = (record: ArchiveRecord) => ({ record, tab: state.tab, ...processSelection, process: window.theoremosProcesses?.[record.id] });
 
 function readLocation() {
   const params = new URLSearchParams(location.hash.slice(1));
@@ -169,13 +191,20 @@ function readLocation() {
   state.filter = ['accepted', 'verified', 'progress'].includes(params.get('status') ?? '') ? params.get('status') as Filter : 'all';
   state.query = params.get('q') ?? '';
   state.sort = ['title', 'recent'].includes(params.get('sort') ?? '') ? params.get('sort') as Sort : 'verified';
-  state.tab = ['source', 'evidence', 'process'].includes(params.get('tab') ?? '') ? params.get('tab') as Tab : 'overview';
+  state.tab = ['overview', 'source', 'evidence', 'process'].includes(params.get('tab') ?? '') ? params.get('tab') as Tab : 'overview';
   const id = params.get('proof');
   state.selected = records.find(record => record.id === id)?.id ?? records.find(accepted)?.id ?? '';
+  if (id && !params.has('tab') && selectedRecord()?.processSummary) state.tab = 'process';
   state.sourceName = '';
   processRecordId = state.selected;
   processSelection = { ...emptyProcessSelection(), run: params.get('run') ?? '', task: params.get('task') ?? '', step: params.get('step') ?? '',
+    code: params.get('code') === 'source' ? 'source' : params.get('code') === 'diff' ? 'diff' : 'closed',
+    view: params.get('mode') === 'steps' ? 'steps' : params.get('mode') === 'roadmap' ? 'roadmap'
+      : params.get('mode') === 'global' ? 'global' : ['run', 'node', 'task', 'step'].some(key => params.has(key)) ? 'roadmap' : 'global', node: params.get('node') ?? '',
     filter: params.get('filter') === 'checks' ? 'checks' : params.get('filter') === 'decisions' ? 'decisions' : 'all' };
+  sourceLocation = id === state.selected ? readSourceLocation(params) : undefined;
+  const record = selectedRecord();
+  if (record && state.tab === 'source') state.sourceName = verifiedSourceLocation(sourceLocation, sourceContext(record))?.name ?? '';
   return id === state.selected ? id : undefined;
 }
 
@@ -184,16 +213,23 @@ function writeLocation(push = false) {
   if (state.view === 'quickstart') params.set('view', 'quickstart');
   else {
     if (state.selected) params.set('proof', state.selected);
-    if (state.tab !== 'overview') params.set('tab', state.tab);
+    params.set('tab', state.tab);
     if (state.filter !== 'all') params.set('status', state.filter);
     if (state.query) params.set('q', state.query);
     if (state.sort !== 'verified') params.set('sort', state.sort);
     if (state.tab === 'process') {
+      params.set('mode', processSelection.view);
       if (processSelection.run) params.set('run', processSelection.run);
-      if (processSelection.task) params.set('task', processSelection.task);
-      if (processSelection.step) params.set('step', processSelection.step);
-      if (processSelection.filter !== 'all') params.set('filter', processSelection.filter);
+      if (processSelection.view !== 'global') {
+        if (processSelection.task) params.set('task', processSelection.task);
+        if (processSelection.step) params.set('step', processSelection.step);
+        if (processSelection.node && processSelection.node !== 'problem') params.set('node', processSelection.node);
+        if (processSelection.filter !== 'all') params.set('filter', processSelection.filter);
+        if (processSelection.code !== 'closed') params.set('code', processSelection.code);
+      }
     }
+    const record = selectedRecord();
+    if (record && (state.tab !== 'process' || processSelection.view !== 'global')) writeSourceLocation(params, sourceLocation, sourceContext(record));
   }
   const url = `#${params.toString() || 'view=archive'}`;
   if (push) history.pushState(null, '', url);
@@ -222,7 +258,7 @@ function renderList(shown: ArchiveRecord[]) {
       <span class="row-symbol ${verified(record) ? '' : 'progress'}">${icon(verified(record) ? 'file-check-2' : 'file-clock')}</span>
       <span><span class="row-title">${html(record.title)}</span><span class="row-subtitle">${html(record.subtitle)}<span class="area-label">${html(record.area)}</span></span></span>
       <span class="row-end">${statusBadge(record)}<span class="row-date">${date(record.updatedAt)}</span></span>
-    </button></li>`).join('');
+    </button>${record.processSummary ? `<button class="row-route-open" data-proof-route="${record.id}" aria-label="${html((locale === 'en' ? 'Open routes and trajectory: ' : '打开路线与轨迹：') + record.title)}">${icon('git-branch')}<span>${locale === 'en' ? 'Routes & trajectory' : '路线图与全局轨迹'}</span>${icon('arrow-right')}</button>` : ''}</li>`).join('');
   element('#empty-state').hidden = shown.length > 0;
   element('#result-count').textContent = strings.results(shown.length, state.query);
 }
@@ -267,6 +303,12 @@ function currentSource(record: ArchiveRecord): ArchiveSource {
     record.sources.find(source => source.name === (verified(record) ? 'Submission.lean' : 'Challenge.lean')) ?? record.sources[0]);
 }
 
+function sourceLines(code: string, declaration?: string) {
+  const lines = code.split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  return lines.map((line, index) => `<span class="code-line ${declaration && line.startsWith(declaration) ? 'is-declaration' : ''}" data-source-line="${index + 1}"><span class="line-number" aria-hidden="true">${index + 1}</span><span>${html(line) || ' '}</span></span>`).join('');
+}
+
 function sourceView(record: ArchiveRecord) {
   const source = currentSource(record);
   state.sourceName = source.name;
@@ -274,13 +316,11 @@ function sourceView(record: ArchiveRecord) {
     loadSources(record.id).then(() => showLoadedSource(record), () => showLoadedSource(record, true));
     return `<p class="source-loading" role="status">${strings.loadingSource}</p>`;
   }
-  const lines = source.code.split('\n');
-  if (lines.at(-1) === '') lines.pop();
   return `<div class="source-toolbar"><label class="sr-only" for="source-file">${strings.leanFile}</label>
       <select id="source-file">${record.sources.map(file => `<option value="${html(file.name)}" ${file.name === source.name ? 'selected' : ''}>${html(file.name)}</option>`).join('')}</select>
       ${iconButton('jump-declaration', strings.jump, 'list-start')}${iconButton('copy-source', strings.copySource, 'copy')}${iconButton('download-source', strings.downloadSource, 'download')}
     </div>
-    <pre class="source-code" tabindex="0" aria-label="${html(strings.sourceLabel(source.name))}"><code>${lines.map((line, index) => `<span class="code-line ${record.declaration && line.startsWith(record.declaration) ? 'is-declaration' : ''}"><span class="line-number" aria-hidden="true">${index + 1}</span><span>${html(line) || ' '}</span></span>`).join('')}</code></pre>
+    <pre class="source-code" tabindex="0" aria-label="${html(strings.sourceLabel(source.name))}" data-source-name="${html(source.name)}" data-source-digest="${source.sha256}"><code>${sourceLines(source.code, record.declaration)}</code></pre>
     <p class="source-facts"><strong>${source.lines.toLocaleString('en')} lines · SHA-256</strong><br>${source.sha256}</p>
     <div class="detail-links">${external(source.url, record.campaign ? strings.rawSource : strings.githubFile, 'button')}${iconButton('copy-hash', strings.copyHash, 'hash', source.sha256)}</div>`;
 }
@@ -359,12 +399,14 @@ function processView(record: ArchiveRecord): string {
       icons();
       writeLocation();
       revealProcessStep();
+      revealCheckedSource(record);
+      if (!failed && revealProcessAfterLoad) { revealProcessAfterLoad = false; revealProcessContent(); }
     };
     void loadProcess(record).then(() => refresh(false), () => refresh(true));
     return `<p class="source-loading" role="status">${strings.loadingProcess}</p>`;
   }
   const run = selectedProcessRun(process, record, processSelection);
-  processSelection.run = run?.runId ?? '';
+  if (processSelection.view !== 'global') processSelection.run = run?.runId ?? '';
   if (processSelection.task && !run?.tasks.some(task => task.id === processSelection.task)) processSelection.task = '';
   return renderArchiveProcess(record, process, processSelection, locale, run ? processEvidenceView(run) : '');
 }
@@ -378,7 +420,16 @@ function refreshProcess(record: ArchiveRecord, target?: HTMLElement) {
   const list = document.querySelector('#process-step-list');
   if (list) list.scrollTop = scroll;
   revealProcessStep();
+  revealCheckedSource(record);
   if (attribute && value !== null) document.querySelector<HTMLElement>(`#detail-panel [${attribute}="${CSS.escape(value ?? '')}"]`)?.focus({ preventScroll: true });
+}
+
+let revealProcessAfterLoad = false;
+function revealProcessContent() {
+  const content = document.querySelector<HTMLElement>('.process-view-toolbar');
+  content?.scrollIntoView({ block: 'start' });
+  const heading = content?.querySelector<HTMLElement>('h4');
+  heading?.setAttribute('tabindex', '-1'); heading?.focus({ preventScroll: true });
 }
 
 function revealProcessStep() {
@@ -408,8 +459,8 @@ function renderInspector(record?: ArchiveRecord) {
     ] as const).map(([tab, label]) => `<button type="button" role="tab" id="tab-${tab}" aria-controls="detail-panel" aria-selected="${state.tab === tab}" tabindex="${state.tab === tab ? 0 : -1}" data-tab="${tab}">${label}</button>`).join('')}</div>
     <div class="detail-panel" id="detail-panel" role="tabpanel" tabindex="0" aria-labelledby="tab-${state.tab}">${state.tab === 'overview' ? overview(record) : state.tab === 'source' ? sourceView(record) : state.tab === 'process' ? processView(record) : evidence(record)}</div>
     <div class="archive-access"><p>${strings.accessPrompt}</p><div class="archive-access-actions"><a class="inline-link" href="index.html#start">${strings.requestAccess}${icon('arrow-up-right')}</a>${backToList}</div></div>`;
-  if (state.tab === 'source' && loadedSources(record.id)) requestAnimationFrame(() => jumpToDeclaration(record));
-  if (state.tab === 'process') revealProcessStep();
+  if (state.tab === 'source' && loadedSources(record.id)) requestAnimationFrame(() => revealSource(record));
+  if (state.tab === 'process') { revealProcessStep(); revealCheckedSource(record); }
 }
 
 function showLoadedSource(record: ArchiveRecord, failed = false) {
@@ -417,21 +468,64 @@ function showLoadedSource(record: ArchiveRecord, failed = false) {
   if (!panel || state.tab !== 'source' || selectedRecord() !== record) return;
   panel.innerHTML = failed ? `<p class="source-loading" role="status">${strings.sourceUnavailable}</p><div class="detail-links">${external(currentSource(record).url, record.campaign ? strings.rawSource : strings.githubFile, 'button')}</div>` : sourceView(record);
   icons();
-  if (!failed) jumpToDeclaration(record);
+  if (!failed) revealSource(record);
+}
+
+function revealSourceRange(panel: HTMLElement, line: number, endLine: number) {
+  for (const previous of panel.querySelectorAll<HTMLElement>('[data-source-highlight]')) {
+    delete previous.dataset.sourceHighlight; previous.removeAttribute('aria-current');
+    previous.style.removeProperty('background-color'); previous.style.removeProperty('box-shadow');
+  }
+  for (const row of panel.querySelectorAll<HTMLElement>('[data-source-line]')) {
+    const number = Number(row.dataset.sourceLine);
+    if (number < line || number > endLine) continue;
+    row.dataset.sourceHighlight = 'true';
+    row.style.backgroundColor = 'var(--orange-wash)'; row.style.boxShadow = 'inset 3px 0 0 var(--green)';
+    if (number === line) row.setAttribute('aria-current', 'location');
+  }
+  const first = panel.querySelector<HTMLElement>(`[data-source-line="${line}"]`);
+  if (!first) return;
+  const row = first.getBoundingClientRect(), viewport = panel.getBoundingClientRect();
+  const context = (parseFloat(getComputedStyle(first).lineHeight) || row.height) * 2;
+  panel.scrollTop += row.top - viewport.top - panel.clientTop - context;
+}
+
+function revealSource(record: ArchiveRecord) {
+  if (state.tab !== 'source' || selectedRecord() !== record) return;
+  const source = currentSource(record), panel = document.querySelector<HTMLElement>('.source-code');
+  if (!panel) return;
+  const location = verifiedSourceLocation(sourceLocation, sourceContext(record));
+  const line = location?.line ?? Math.max(1, source.code.split('\n').findIndex(value => record.declaration && value.startsWith(record.declaration)) + 1);
+  revealSourceRange(panel, line, location?.endLine ?? line);
+  if (location) { panel.focus({ preventScroll: true }); panel.scrollIntoView({ block: 'nearest' }); }
+}
+
+function revealCheckedSource(record: ArchiveRecord, focus = false) {
+  const location = verifiedSourceLocation(sourceLocation, sourceContext(record));
+  if (state.tab !== 'process' || selectedRecord() !== record || !location) return;
+  const process = window.theoremosProcesses?.[record.id], run = process?.runs.find(item => item.runId === processSelection.run);
+  const check = run?.checks?.find(item => `check:${item.id}` === processSelection.step);
+  const source = check?.sourceDigest && process?.sources?.[check.sourceDigest];
+  if (!source || check?.sourceDigest !== location.sha256 || source.sha256 !== location.sha256 || source.path !== location.name) return;
+  const section = [...document.querySelectorAll<HTMLElement>('.process-check-source')]
+    .find(item => item.querySelector('.process-code-digest')?.textContent?.includes(location.sha256));
+  const panel = section?.querySelector<HTMLElement>('.process-code:not(.process-diff)'), code = panel?.querySelector('code');
+  if (!panel || !code) return;
+  if (panel.dataset.sourceDigest !== source.sha256) code.innerHTML = sourceLines(source.code);
+  panel.dataset.sourceName = source.path; panel.dataset.sourceDigest = source.sha256;
+  revealSourceRange(panel, location.line, location.endLine);
+  if (focus) { panel.focus({ preventScroll: true }); panel.scrollIntoView({ block: 'nearest' }); }
 }
 
 function jumpToDeclaration(record: ArchiveRecord) {
-  const source = currentSource(record);
-  const start = source.code.split('\n').findIndex(line => record.declaration && line.startsWith(record.declaration));
-  const panel = document.querySelector<HTMLElement>('.source-code');
-  if (panel) panel.scrollTop = Math.max(0, start - 3) * 20;
+  sourceLocation = undefined; revealSource(record); writeLocation();
 }
 
 function render() {
   const shown = filteredRecords();
   if (!shown.some(record => record.id === state.selected)) {
     state.selected = shown[0]?.id ?? '';
-    state.sourceName = '';
+    state.sourceName = ''; sourceLocation = undefined;
   }
   element('#archive-view').hidden = state.view !== 'archive';
   element('#quickstart-view').hidden = state.view !== 'quickstart';
@@ -467,7 +561,10 @@ function restoreLocation() {
     // processView renders the loaded process or its failure message before revealing it.
     const ready = state.tab === 'process' && record ? loadProcess(record).catch(() => undefined) : Promise.resolve();
     void ready.then(() => document.fonts.ready).then(() => {
-      if (state.selected === requested) revealRecord();
+      if (state.selected === requested) {
+        revealRecord();
+        if (record) revealCheckedSource(record, true);
+      }
     });
   }
 }
@@ -512,8 +609,43 @@ function download(name: string, content: string, type: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+document.addEventListener('theoremos-solution-open', event => {
+  const record = selectedRecord();
+  if (!record) return;
+  const detail = (event as CustomEvent<{ run?: string; node?: string; step?: string; code?: string; sourceName?: string; sourceDigest?: string;
+    sourceLine?: number; sourceEndLine?: number }>).detail;
+  const process = window.theoremosProcesses?.[record.id];
+  let run = process?.runs.find(candidate => candidate.runId === detail.run);
+  let check = run?.checks?.find(candidate => `check:${candidate.id}` === detail.step);
+  if (!run && detail.sourceDigest) {
+    run = process?.runs.find(candidate => candidate.checks?.some(item => item.sourceDigest === detail.sourceDigest));
+    check = run?.checks?.find(candidate => candidate.sourceDigest === detail.sourceDigest);
+  }
+  const line = detail.sourceLine, endLine = detail.sourceEndLine ?? line;
+  sourceLocation = undefined;
+  const location = detail.sourceName && detail.sourceDigest && line !== undefined && endLine !== undefined
+    ? { recordId: record.id, name: detail.sourceName, sha256: detail.sourceDigest, line, endLine } : undefined;
+  if (run && (detail.node || check)) {
+    processSelection = { ...emptyProcessSelection(), view: 'roadmap', run: run.runId,
+      node: detail.node ?? (check!.scope === 'original' ? 'original' : check!.taskId ? `task:${check!.taskId}` : 'problem'),
+      step: detail.step ?? (check ? `check:${check.id}` : ''), code: detail.code === 'source' || check && detail.sourceDigest ? 'source' : 'closed' };
+    if (location) sourceLocation = verifiedSourceLocation({ ...location, tab: 'process', run: processSelection.run, step: processSelection.step }, sourceContext(record));
+    refreshProcess(record);
+    const panel = document.querySelector<HTMLElement>('#process-step-detail, #process-map-inspector');
+    panel?.setAttribute('tabindex', '-1'); panel?.focus({ preventScroll: true }); panel?.scrollIntoView({ block: 'start' });
+    revealCheckedSource(record, true);
+    return;
+  }
+  if (detail.sourceName && record.sources.some(source => source.name === detail.sourceName && (!detail.sourceDigest || source.sha256 === detail.sourceDigest))) {
+    state.sourceName = detail.sourceName; state.tab = 'source';
+    if (location) sourceLocation = verifiedSourceLocation({ ...location, tab: 'source' }, sourceContext(record));
+    renderInspector(record); icons(); writeLocation();
+    document.querySelector<HTMLElement>('#tab-source')?.focus({ preventScroll: true });
+  }
+});
+
 document.addEventListener('click', event => {
-  const target = (event.target as Element).closest<HTMLElement>('[data-proof-id], [data-tab], [data-action], [data-view-link], [data-process-run], [data-process-task], [data-process-step], [data-process-filter], [data-process-code], [data-process-copy-source], [data-process-download-source], [data-process-open-tab]');
+  const target = (event.target as Element).closest<HTMLElement>('[data-proof-id], [data-proof-route], [data-global-run], [data-global-select], [data-global-scroll], [data-tab], [data-action], [data-view-link], [data-process-run], [data-process-task], [data-process-step], [data-process-filter], [data-process-code], [data-process-copy-source], [data-process-download-source], [data-process-open-tab], [data-process-node], [data-process-view]');
   if (!target) return;
   if (target.dataset.viewLink) {
     event.preventDefault();
@@ -523,11 +655,15 @@ document.addEventListener('click', event => {
     render();
     return;
   }
-  if (target.dataset.proofId) {
-    state.selected = target.dataset.proofId;
-    state.sourceName = '';
+  if (target.dataset.proofId || target.dataset.proofRoute) {
+    state.selected = target.dataset.proofId ?? target.dataset.proofRoute!;
+    state.sourceName = ''; sourceLocation = undefined;
+    if (selectedRecord()?.processSummary) { state.tab = 'process'; processSelection = emptyProcessSelection(); processRecordId = state.selected; revealProcessAfterLoad = true; }
+    else if (state.tab === 'process') state.tab = 'overview';
     render();
-    if (!revealRecord()) element(`[data-proof-id="${state.selected}"]`).focus({ preventScroll: true });
+    if (state.tab === 'process') {
+      if (document.querySelector('.process-view-toolbar')) { revealProcessAfterLoad = false; revealProcessContent(); }
+    } else if (!revealRecord()) element(`[data-proof-id="${state.selected}"]`).focus({ preventScroll: true });
     return;
   }
   if (target.dataset.tab) {
@@ -541,6 +677,28 @@ document.addEventListener('click', event => {
     return;
   }
   const record = selectedRecord();
+  if (target.dataset.globalScroll) {
+    const section = document.getElementById(target.dataset.globalScroll);
+    section?.scrollIntoView({ block: 'start' });
+    section?.querySelector<HTMLElement>('h5')?.focus({ preventScroll: true });
+    return;
+  }
+  if (record && target.dataset.globalSelect) {
+    processSelection = { ...emptyProcessSelection(), run: target.dataset.globalSelect };
+    refreshProcess(record);
+    document.querySelector<HTMLElement>('.global-history-panel > summary')?.focus({ preventScroll: true });
+    return;
+  }
+  if (record && target.dataset.globalRun) {
+    processSelection = { ...emptyProcessSelection(), view: 'roadmap', run: target.dataset.globalRun, node: target.dataset.globalNode ?? 'problem', step: target.dataset.globalStep ?? '',
+      code: target.dataset.globalCode === 'source' ? 'source' : 'closed' };
+    refreshProcess(record);
+    const detail = document.querySelector<HTMLElement>('#process-step-detail, #process-map-inspector');
+    detail?.setAttribute('tabindex', '-1');
+    detail?.focus({ preventScroll: true });
+    detail?.scrollIntoView({ block: 'start' });
+    return;
+  }
   if (record && Object.keys(target.dataset).some(key => key.startsWith('process'))) {
     if (target.dataset.processOpenTab) {
       state.tab = target.dataset.processOpenTab as Tab;
@@ -554,9 +712,25 @@ document.addEventListener('click', event => {
         else download(`${record.id}-${digest.slice(0, 12)}.lean`, source.code, 'text/plain;charset=utf-8');
       }
     } else {
-      if (target.dataset.processRun !== undefined) processSelection = { ...emptyProcessSelection(), run: target.dataset.processRun };
-      if (target.dataset.processTask !== undefined) { processSelection.task = target.dataset.processTask; processSelection.step = ''; processSelection.code = 'closed'; }
-      if (target.dataset.processStep !== undefined) { processSelection.step = target.dataset.processStep; processSelection.code = 'closed'; }
+      if (target.dataset.processRun !== undefined) processSelection = { ...emptyProcessSelection(), view: processSelection.view === 'global' ? 'roadmap' : processSelection.view, run: target.dataset.processRun };
+      if (target.dataset.processView) processSelection.view = target.dataset.processView as typeof processSelection.view;
+      if (target.dataset.processNode !== undefined) {
+        if (processSelection.view === 'global') processSelection.view = 'roadmap';
+        const process = window.theoremosProcesses?.[record.id];
+        const run = process && selectedProcessRun(process, record, processSelection);
+        const node = run && buildArchiveRoadmap(record, run, locale).nodes.find(node => node.id === target.dataset.processNode);
+        if (node) { processSelection.node = node.id; processSelection.task = node.taskId ?? ''; processSelection.step = node.stepId ?? ''; processSelection.code = 'closed'; }
+      }
+      if (target.dataset.processTask !== undefined) { processSelection.task = target.dataset.processTask; processSelection.node = target.dataset.processTask ? `task:${target.dataset.processTask}` : 'problem'; processSelection.step = ''; processSelection.code = 'closed'; }
+      if (target.dataset.processStep !== undefined) {
+        processSelection.step = target.dataset.processStep; processSelection.code = 'closed';
+        const process = window.theoremosProcesses?.[record.id];
+        const run = process && selectedProcessRun(process, record, processSelection);
+        const model = run && buildArchiveRoadmap(record, run, locale);
+        const step = target.dataset.processStep;
+        const node = model?.nodes.find(node => step === node.stepId || node.checkIds.some(id => `check:${id}` === step) || node.deliveryIds.some(id => `delivery:${id}` === step));
+        if (node) processSelection.node = node.id;
+      }
       if (target.dataset.processFilter !== undefined) { processSelection.filter = target.dataset.processFilter as typeof processSelection.filter; processSelection.step = ''; processSelection.code = 'closed'; }
       if (target.dataset.processCode !== undefined) processSelection.code = target.dataset.processCode as typeof processSelection.code;
       refreshProcess(record, target);
@@ -582,7 +756,8 @@ document.addEventListener('click', event => {
     case 'download-source': if (record) download(`${record.id}-${currentSource(record).name.replaceAll('/', '-')}`, currentSource(record).code, 'text/plain;charset=utf-8'); break;
     case 'download-record': if (record) void Promise.all([loadSources(record.id), loadProcess(record)]).then(([, process]) => {
       const { excerpt: _excerpt, ...full } = record;
-      download(`${record.id}.json`, JSON.stringify({ ...full, ...(process ? { process } : {}), sources: record.sources.map(source => withCode(record, source)) }, null, 2), 'application/json');
+      const { sourceRoute: _routeIndex, ...nativeProcess } = process ?? {};
+      download(`${record.id}.json`, JSON.stringify({ ...full, ...(process ? { process: nativeProcess } : {}), sources: record.sources.map(source => withCode(record, source)) }, null, 2), 'application/json');
     }, () => toast(strings.sourceUnavailable)); break;
   }
 });
@@ -602,8 +777,10 @@ document.querySelectorAll<HTMLInputElement>('input[name="status"]').forEach(inpu
 element('#inspector').addEventListener('change', event => {
   if ((event.target as HTMLElement).id !== 'source-file') return;
   state.sourceName = (event.target as HTMLSelectElement).value;
+  sourceLocation = undefined;
   renderInspector(selectedRecord());
   icons();
+  writeLocation();
   element('#source-file').focus({ preventScroll: true });
 });
 document.addEventListener('keydown', event => {
@@ -625,7 +802,7 @@ document.addEventListener('keydown', event => {
     const index = event.key === 'Home' ? 0 : event.key === 'End' ? shown.length - 1 :
       (current + (event.key === 'ArrowDown' ? 1 : shown.length - 1)) % shown.length;
     state.selected = shown[index].id;
-    state.sourceName = '';
+    state.sourceName = ''; sourceLocation = undefined;
     render();
     element(`[data-proof-id="${state.selected}"]`).focus();
   }

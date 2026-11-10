@@ -412,15 +412,18 @@ describe('library module guidance in research prompts', () => {
 
   it('omits frozen libraries from editable files, proof paths and source bindings and references them once', () => {
     const lead = build();
-    expect(lead.instructions).toContain('Edit only /proof/Submission.lean, /proof/RESEARCH.md.');
-    expect(lead.instructions).toContain(`${lib} is a frozen host library that Lean rechecked before this run: import the module that holds a declaration`);
-    expect(lead.instructions).toContain('lines whose file starts with Submission/Library/ are library declarations');
+    expect(lead.instructions).toContain('Leave Lean sources, frozen problem inputs, packages and the pinned toolchain unchanged.');
+    expect(lead.instructions).toContain('Save route notes in /proof/RESEARCH.md and publish plans');
     expect(lead.instructions).toContain('Choose proofPath from ["Submission.lean"]; goals infer');
     const prover = build(lemma);
+    expect(prover.instructions).toContain('Edit only /proof/Submission.lean, /proof/RESEARCH.md,');
+    expect(prover.instructions).toContain(`${lib} is a frozen host library that Lean rechecked before this run: import the module that holds a declaration`);
+    expect(prover.instructions).toContain('lines whose file starts with Submission/Library/ are library declarations');
     expect(prover.instructions).toContain('Its keys must be exactly ["Submission.lean"]');
     expect(prover.message).toContain(JSON.stringify({ commit: 'fixed-commit', path: lib, digest: 'd'.repeat(64), frozenLibrary: true, declarationCount: 1 }));
     expect(prover.message).not.toContain('frozen-context:');
     expect(prover.message).not.toContain('two_mul_two');
     expect(lead.instructions).not.toContain(`/proof/${lib}`);
+    expect(prover.instructions).not.toContain(`/proof/${lib}`);
   });
 });

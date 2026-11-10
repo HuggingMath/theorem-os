@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import crypto from 'node:crypto';
+import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -176,6 +178,46 @@ describe('email login with captcha, allowlist and account-owned records', () => 
     } finally { clock.mockRestore(); }
   });
 
+  it('keeps login cookies stable while activity renews server-side idle expiry', async () => {
+    config.sessionTtlMs = 60_000;
+    const bootstrap = await request('/api/session');
+    expect(bootstrap.headers.get('set-cookie')).toMatch(/; Max-Age=60(?:;|$)/u);
+    const anonymous = await bootstrap.json() as WebSession;
+    const visitor: Client = { cookie: bootstrap.headers.get('set-cookie')!.split(';')[0], csrf: anonymous.csrfToken, session: anonymous };
+    await code(visitor, 'alice@example.org');
+    const sent = mail.at(-1)!.text.match(/\b\d{6}\b/u)![0];
+    const verified = await request('/api/auth/verify', visitor, { email: 'alice@example.org', code: sent });
+    expect(verified.status).toBe(200);
+    expect(verified.headers.getSetCookie()[0]).toMatch(/; Max-Age=31536000(?:;|$)/u);
+    const alice: Client = { cookie: verified.headers.get('set-cookie')!.split(';')[0], csrf: (await verified.json()).csrfToken, session: anonymous };
+    expect(alice.cookie).not.toBe(visitor.cookie);
+    const now = Date.now(), clock = vi.spyOn(Date, 'now');
+    try {
+      for (const elapsed of [45_000, 90_000]) {
+        clock.mockReturnValue(now + elapsed);
+        const checked = await request('/api/session', alice);
+        expect(checked.status).toBe(200);
+        expect(checked.headers.get('set-cookie')).toBeNull();
+        expect((await checked.json()).account.email).toBe('alice@example.org');
+        const reads = await request('/api/runs', alice);
+        expect(reads.status).toBe(200);
+        expect(reads.headers.get('set-cookie')).toBeNull();
+      }
+      const saved = await request('/api/auth/account', alice, { completionEmail: false }, 'PATCH');
+      expect(saved.status).toBe(200);
+      expect(saved.headers.get('set-cookie')).toBeNull();
+      clock.mockReturnValue(now + 150_001);
+      const expired = await request('/api/runs', alice);
+      expect(expired.status).toBe(401);
+      expect(expired.headers.get('set-cookie')).toBeNull();
+      const next = await request('/api/session', alice);
+      expect(next.headers.get('set-cookie')).toMatch(/; Max-Age=60(?:;|$)/u);
+      const signedOut = await next.json();
+      expect(signedOut.account).toBeUndefined();
+      expect(signedOut.csrfToken).not.toBe(alice.csrf);
+    } finally { clock.mockRestore(); }
+  });
+
   it('reads the allowlist file on every login and signs out an address once it is removed', async () => {
     const file = path.join(root, 'data', 'allowlist.txt');
     expect((await code(await session(), 'bob@example.org')).status).toBe(403);
@@ -270,6 +312,28 @@ describe('email login with captcha, allowlist and account-owned records', () => 
     expect((await login('alice@example.org')).cookie).toBeTruthy();
   });
 
+  it.each(['save', 'delete'] as const)('revokes every other session after a password change even if a session %s fails', async boundary => {
+    const laptop = await login('alice@example.org'), phone = await login('alice@example.org'), tablet = await login('alice@example.org');
+    await request('/api/runs', laptop, input());
+    await tick();
+    const deletion = vi.spyOn(service.storage, 'deleteSession');
+    const saveSession = service.storage.saveSession.bind(service.storage);
+    const save = vi.spyOn(service.storage, 'saveSession').mockImplementation(stored => {
+      if (boundary === 'save' && stored.id === laptop.cookie.slice('theoremos_session='.length) && !stored.passwordResetUntil)
+        throw new Error('fixture save unavailable');
+      saveSession(stored);
+    });
+    if (boundary === 'delete') deletion.mockImplementationOnce(() => { throw new Error('fixture deletion unavailable'); });
+    try {
+      expect((await request('/api/auth/password', laptop, { password: 'new-fixture-password' }, 'PATCH')).status).toBe(500);
+      save.mockRestore();
+      for (const client of [phone, tablet]) expect((await request('/api/runs', client)).status).toBe(401);
+      expect((await request('/api/runs', laptop)).status).toBe(200);
+      expect(runner.calls[0]!.signal.aborted).toBe(false);
+      expect(deletion.mock.calls.map(([id]) => id)).toEqual([phone.cookie.slice('theoremos_session='.length), tablet.cookie.slice('theoremos_session='.length)]);
+    } finally { deletion.mockRestore(); save.mockRestore(); }
+  });
+
   it('deletes an account with its records, cancels its runs and ends every session', async () => {
     const alice = await login('alice@example.org'), other = await login('alice@example.org');
     await request('/api/runs', alice, input());
@@ -283,5 +347,60 @@ describe('email login with captcha, allowlist and account-owned records', () => 
     expect(service.storage.listRecords(['accounts'])).toEqual([]);
     for (const client of [alice, other]) expect((await request('/api/runs', client)).status).toBe(401);
     expect((await (await request('/api/runs', await login('alice@example.org'))).json()).runs).toEqual([]);
+  });
+
+  it.each([
+    { route: '/api/auth/account', method: 'PATCH', body: { completionEmail: false } },
+    { route: '/api/auth/account', method: 'DELETE', body: { email: 'alice@example.org' } },
+    { route: '/api/auth/password', method: 'PATCH', body: { password: 'late-fixture-password' } },
+    { route: '/api/auth/terms', method: 'POST', body: { terms: true, termsVersion: 'new-terms' } },
+  ])('refuses $method $route when logout occurs before its body finishes', async ({ route, method, body }) => {
+    const alice = await login('alice@example.org'), account = service.auth!.getAccount('alice@example.org')!;
+    config.auth!.termsVersion = 'new-terms';
+    const started = new Promise<void>(resolve => service.server.once('request', () => setImmediate(resolve)));
+    const upload = http.request(`${baseUrl}${route}`, { method, headers: {
+      Cookie: alice.cookie, 'X-CSRF-Token': alice.csrf, 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked',
+    } });
+    const completed = new Promise<number | undefined>((resolve, reject) => {
+      upload.on('error', reject);
+      upload.on('response', response => {
+        response.resume(); response.on('end', () => resolve(response.statusCode)); response.on('error', reject);
+      });
+    });
+    upload.write('{');
+    try {
+      await started;
+      expect((await request('/api/auth/logout', alice, {})).status).toBe(200);
+      upload.end(JSON.stringify(body).slice(1));
+      expect(await completed).toBe(401);
+      expect(service.auth!.getAccount(account.email)).toEqual(account);
+      expect(service.auth!.hasPassword(account.email)).toBe(false);
+      expect((await request('/api/runs', alice)).status).toBe(401);
+    } finally { upload.destroy(); }
+  });
+
+  it.each(['change', 'login'] as const)('does not complete a password %s after its session is revoked during derivation', async operation => {
+    const alice = await login('alice@example.org'), password = 'original-fixture-password';
+    if (operation === 'login') await service.auth!.setPassword('alice@example.org', password, undefined, true);
+    const client = operation === 'login' ? await session() : alice;
+    const scrypt = crypto.scrypt;
+    let release!: () => void, entered!: () => void;
+    const deriving = new Promise<void>(resolve => { entered = resolve; });
+    const derivation = vi.spyOn(crypto, 'scrypt').mockImplementationOnce((value, salt, length, options, callback) => {
+      scrypt(value, salt, length, options, (error, key) => { release = () => callback(error, key); entered(); });
+    });
+    const pending = operation === 'login'
+      ? request('/api/auth/password/login', client, { email: 'alice@example.org', password })
+      : request('/api/auth/password', client, { password: 'late-fixture-password' }, 'PATCH');
+    try {
+      await deriving;
+      expect((await request('/api/auth/logout', client, {})).status).toBe(200);
+      release();
+      const response = await pending;
+      expect(response.status).toBe(401);
+      await response.arrayBuffer();
+      expect(service.auth!.hasPassword('alice@example.org')).toBe(operation === 'login');
+      expect(service.storage.listSessions().some(stored => stored.id === client.cookie.slice(client.cookie.indexOf('=') + 1))).toBe(false);
+    } finally { release?.(); derivation.mockRestore(); await pending; }
   });
 });

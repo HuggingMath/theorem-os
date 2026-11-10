@@ -72,15 +72,50 @@ describe('Lean dependency snapshots', () => {
     }
   });
 
-  it('excludes reference sources and artifacts without changing the source cache', () => {
+  it('retains library sources and package metadata while excluding only generated Lake builds in the sources view', () => {
+    const retained = [
+      'aesop/Aesop.lean', 'aesop/.lake/package-overrides.json',
+      'mathlib/Mathlib/FieldTheory/Basic.lean', 'mathlib/lake-manifest.json',
+      'mathlib/lakefile.lean', 'mathlib/.lake/package-overrides.json',
+      'mathlib/build/Source.lean',
+    ];
+    const generated = [
+      'aesop/.lake/build/lib/lean/Aesop.olean',
+      'mathlib/.lake/build/lib/lean/Mathlib/FieldTheory/Basic.olean',
+      'mathlib/.lake/build/ir/Mathlib/FieldTheory/Basic.c',
+    ];
+    for (const relative of [...retained, ...generated]) {
+      const file = path.join(directory, relative);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, relative);
+    }
+    expect(listLeanProbePackageInputs(directory, () => {}, 'sources').map(input => input.relative))
+      .toEqual(retained.toSorted());
+    const complete = listLeanProbePackageInputs(directory, () => {}).map(input => input.relative);
+    expect(complete).toEqual([...retained, ...generated].toSorted());
+    expect(listLeanProbePackageInputs(directory, () => {}, 'complete').map(input => input.relative)).toEqual(complete);
+    for (const relative of generated) expect(fs.readFileSync(path.join(directory, relative), 'utf8')).toBe(relative);
+  });
+
+  it('does not descend into excluded generated directories in the sources view', () => {
+    const generated = path.join(directory, 'mathlib', '.lake', 'build');
+    fs.mkdirSync(generated, { recursive: true });
+    fs.writeFileSync(path.join(directory, 'mathlib', 'Public.lean'), 'theorem public : True := by trivial\n');
+    fs.symlinkSync('/outside-authorized-packages', path.join(generated, 'unavailable-link'));
+    expect(listLeanProbePackageInputs(directory, () => {}, 'sources').map(input => input.relative))
+      .toEqual(['mathlib/Public.lean']);
+    expect(() => listLeanProbePackageInputs(directory, () => {})).toThrow('escapes the authorized package root');
+  });
+
+  it.each(['complete', 'sources'] as const)('excludes reference sources and artifacts from %s without changing the source cache', contents => {
     for (const file of ['Solution.lean', '.lake/build/lib/lean/Solution.olean', '.lake/build/ir/Solution.c', 'Public.lean']) {
       fs.mkdirSync(path.dirname(path.join(directory, file)), { recursive: true });
       fs.writeFileSync(path.join(directory, file), 'bytes');
     }
-    expect(listLeanProbePackageInputs(directory, () => {}).map(input => input.relative)).toEqual(['Public.lean']);
+    expect(listLeanProbePackageInputs(directory, () => {}, contents).map(input => input.relative)).toEqual(['Public.lean']);
     expect(fs.existsSync(path.join(directory, 'Solution.lean'))).toBe(true);
     fs.symlinkSync('Solution.lean', path.join(directory, 'Alias.lean'));
-    expect(() => listLeanProbePackageInputs(directory, () => {})).toThrow('excluded reference module');
+    expect(() => listLeanProbePackageInputs(directory, () => {}, contents)).toThrow('excluded reference module');
   });
 
   it('rejects a directory link to an ancestor', () => {

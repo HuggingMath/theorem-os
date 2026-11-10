@@ -165,7 +165,7 @@ describe('existing Sub2API relay request boundary (mock upstream only)', () => {
   it.each(['complete', 'missing', 'failed', 'http-error'] as const)('observes %s terminal receipts without changing stream bytes', async mode => {
     const directory = temporaryDirectory('usage-relay-'); directories.push(directory); fs.chmodSync(directory, 0o700);
     const profile = path.join(directory, 'profile'); fs.mkdirSync(profile);
-    fs.writeFileSync(path.join(profile, 'config.toml'), `model_provider = "sub2api"\n[model_providers.sub2api]\nbase_url = "${SUB2API_PROVIDER.baseUrl}"\nwire_api = "responses"\nenv_key = "${SUB2API_PROVIDER.apiKeyEnvironment}"\n`);
+    fs.writeFileSync(path.join(profile, 'config.toml'), `model = "${SUB2API_PROVIDER.defaultModel}"\nmodel_provider = "sub2api"\n[model_providers.sub2api]\nbase_url = "${SUB2API_PROVIDER.baseUrl}"\nwire_api = "responses"\nenv_key = "${SUB2API_PROVIDER.apiKeyEnvironment}"\n`);
     const event = { type: mode === 'failed' ? 'response.failed' : 'response.completed', response: { id: 'response-fixture',
       status: mode === 'failed' ? 'failed' : 'completed', ...(mode === 'missing' ? {} : { usage: { input_tokens: 10, output_tokens: 3, total_tokens: 13 } }) } };
     const stream = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
@@ -237,7 +237,7 @@ describe('actual solver Codex session provider wiring (fake app-server and upstr
     const directory = temporaryDirectory('usage-codex-'); directories.push(directory);
     const profile = path.join(directory, 'profile'), workspace = path.join(directory, 'worker');
     fs.mkdirSync(profile); fs.mkdirSync(workspace);
-    const config = `model_provider = "sub2api"\n[model_providers.sub2api]\nbase_url = "${SUB2API_PROVIDER.baseUrl}"\nwire_api = "responses"\nenv_key = "${SUB2API_PROVIDER.apiKeyEnvironment}"\n`;
+    const config = `model = "${SUB2API_PROVIDER.defaultModel}"\nmodel_provider = "sub2api"\n[model_providers.sub2api]\nbase_url = "${SUB2API_PROVIDER.baseUrl}"\nwire_api = "responses"\nenv_key = "${SUB2API_PROVIDER.apiKeyEnvironment}"\n`;
     fs.writeFileSync(path.join(profile, 'config.toml'), config);
     const executable = path.join(directory, 'fake-codex'), trace = path.join(directory, 'trace.json');
     fs.writeFileSync(executable, '#!' + process.execPath + '\n' + fakeCodex, { mode: 0o700 });

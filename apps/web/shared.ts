@@ -1,5 +1,6 @@
 import type { ResearchModulePlan, ResearchModuleSlot } from '../../src/solver/modules/policy';
 import type { WebObservation, WebArchive } from './collaboration';
+import type { WebFormalizationBackgroundReview } from './formalizationTypes';
 
 export type WebEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type WebCoordination = 'cooperative' | 'independent';
@@ -62,6 +63,8 @@ export type WebRunInput = {
   continueFrom?: WebContinuation;
   /** Owned verified evidence, accepted manually or through an explicitly requested automatic solve workflow. */
   formalizationId?: string;
+  /** References only. The server resolves and freezes all contents before starting work. */
+  researchSelection?: import('./researchAssetTypes').ResearchConfigurationSelection;
 };
 /**
  * A version recorded in one of the account's runs that a new run starts from: its code reaches every Agent as an
@@ -130,11 +133,15 @@ export type WebRun = {
   knowledgeDigest?: string;
   continueFrom?: WebContinuation;
   formalizationId?: string;
-  formalization?: { id: string; evidenceSha256: string; original: string; confirmedAt: string; confirmation?: 'automatic' | 'manual' };
+  formalization?: { id: string; evidenceSha256: string; original: string; confirmedAt: string; confirmation?: 'automatic' | 'manual';
+    reviewMode?: 'direct' };
+  /** Host-declared solver attempt; observation sequences continue across library restarts. */
+  solverAttempt?: { solverRunId: string; round: number; sequence: number };
   observation?: WebObservation;
   archives?: WebArchive[];
   knowledgeCatalogDigest?: string;
   moduleConfiguration?: WebFrozenModuleConfiguration;
+  researchConfiguration?: import('./researchAssetTypes').FrozenResearchConfiguration;
   events: WebEvent[];
   /** How many Agent actions are stored (read them from /actions) and how many arrived past the per-run limit. */
   actions?: { count: number; dropped?: number };
@@ -203,6 +210,7 @@ export type WebProofOutlineDeclaration = {
 export type WebProofOutline = { references: 'recorded' | 'unrecorded'; declarations: WebProofOutlineDeclaration[]; omitted: number };
 /** Catalog payloads are opaque on the Web transport; worker/service consumers validate the full knowledge schema. */
 export type WorkerInput = { id: string; input: WebRunInput; provider: WebProvider; knowledgeCatalog?: unknown;
+  researchConfiguration?: import('./researchAssetTypes').FrozenResearchConfiguration;
   /** Validated server-side artifact; never supplied directly by the browser. */
   formalization?: unknown;
   /** The saved file of `input.continueFrom`, read by the server from the account's own run. */
@@ -211,7 +219,8 @@ export type WorkerInput = { id: string; input: WebRunInput; provider: WebProvide
  * One thing an Agent did inside its session, as Codex reported it: a command with the end of its output, a file
  * change with its diff, its reasoning, a message or plan, a search or a tool call. The worker writes these after
  * removing credentials and the host's own paths; `withheld` means a command touched host files, so only the command
- * itself is kept. Lean checks and Mathlib searches keep what they reported (`lean`, `found`) in place of their JSON.
+ * itself is kept. Lean checks, Mathlib searches and library tools keep bounded reports (`lean`, `found`, `library`)
+ * in place of their JSON; a tool report never means the proof applied a declaration or passed acceptance.
  * `sequence` and `at` are the server's, so actions order with the run's events.
  */
 export const webAgentActionKinds = ['command', 'edit', 'reasoning', 'message', 'plan', 'search', 'tool', 'compaction'] as const;
@@ -226,24 +235,35 @@ export type WebAgentLeanCheck = {
 };
 /** What `math search-lean` found, per query: how many matches and the first declaration names. */
 export type WebAgentLeanSearch = { query: string; total: number; names: string[] }[];
+/** A library tool's own report. Installation and queued requests say nothing about proof applicability or acceptance. */
+export type WebAgentLibraryDeclaration = { name: string; installation: 'installed-frozen' | 'not-installed' };
+export type WebAgentLibraryAction = { library: { id: string; revision: string; catalogDigest: string } } & (
+  | { operation: 'search'; query: string; goal?: string; hits: WebAgentLibraryDeclaration[]; namedReferences: WebAgentLibraryDeclaration[];
+      omittedHits?: number; omittedReferences?: number }
+  | { operation: 'get'; declaration: WebAgentLibraryDeclaration; source: { offset: number; nextOffset: number | null; complete: boolean } }
+  | { operation: 'request'; status: 'queued' | 'already-installed'; declarations: WebAgentLibraryDeclaration[]; omittedDeclarations?: number }
+);
 export type WebAgentActionBody = {
   workerId: string; itemId: string; phase: 'started' | 'completed'; kind: WebAgentActionKind;
   status: 'running' | 'done' | 'failed' | 'declined';
   command?: string; intents?: WebAgentActionIntent[]; output?: string; outputClipped?: boolean; withheld?: boolean;
-  exitCode?: number; durationMs?: number; lean?: WebAgentLeanCheck; found?: WebAgentLeanSearch;
+  exitCode?: number; durationMs?: number; lean?: WebAgentLeanCheck; found?: WebAgentLeanSearch; library?: WebAgentLibraryAction;
   changes?: WebAgentFileChange[]; omittedChanges?: number;
   text?: string; textClipped?: boolean;
+  /** Explicit public provenance; absent on older records and final assistant output. */
+  textSource?: 'summary' | 'commentary';
   query?: string; url?: string; tool?: string; arguments?: string;
 };
 export type WebAgentAction = WebAgentActionBody & { sequence: number; at: string };
-/** Per action field and per run; a run past `perRun` keeps counting what it dropped. */
-export const webAgentActionLimits = Object.freeze({ perRun: 3_000, page: 500, command: 2_000, output: 8_000, outputHead: 2_000,
-  diff: 6_000, diffs: 24_000, changes: 20, text: 4_000, intents: 8, query: 400, arguments: 1_000, encoded: 64 * 1024,
-  leanMessages: 12, leanMessage: 600, queries: 8, names: 8, name: 200 });
+/** Per action field and per run; encoded allows JSON's six-character escapes, including long Lean diagnostics and paths. */
+export const webAgentActionLimits = Object.freeze({ perRun: 3_000, page: 500, command: 8_192, output: 32_768, outputHead: 8_192,
+  diff: 32_768, diffs: 65_536, changes: 20, text: 32_768, intents: 8, query: 400, arguments: 8_192, encoded: 1536 * 1024,
+  leanMessages: 64, leanMessage: 2_000, queries: 8, names: 8, name: 200 });
 export type WorkerMessage =
   | { type: 'progress'; event: string; message: string; details?: WebEventDetails }
   | { type: 'action'; action: WebAgentActionBody }
   | { type: 'artifact'; artifact: WebArtifact }
+  | { type: 'library_restart'; previousSolverRunId: string; solverRunId: string; round: number }
   | { type: 'observation'; observation: WebObservation }
   | { type: 'catalog'; catalog: unknown }
   | { type: 'result'; result: WebResult }
@@ -312,7 +332,10 @@ export type WebFormalizationReport = {
   environment: WebEnvironment; toolchain: string; mathlibRevision: string | null;
   targets: { name: string; lines: WebExplanationLines }[];
   correspondences: WebFormalizationCorrespondence[];
-  backtranslation: { mathematics: string; assumptions: string[]; definitions: string[]; targets: { name: string; mathematics: string }[] };
+  /** Absent on legacy independently reviewed reports. Direct compilation does not assess natural-language meaning. */
+  semanticReview?: 'not-performed';
+  backgroundReview?: WebFormalizationBackgroundReview;
+  backtranslation: { mathematics: string; assumptions: string[]; definitions: string[]; targets: { name: string; mathematics: string }[] } | null;
   coverage: { original: string; originalStart: number | null; targets: string[]; explanation: string }[];
   plan?: { taskKind: string; conclusions: { mathematics: string; targets: string[]; quotes: string[] }[];
     assumptions: { mathematics: string; quotes: string[] }[]; definitions: { mathematics: string; names: string[]; quotes: string[] }[];

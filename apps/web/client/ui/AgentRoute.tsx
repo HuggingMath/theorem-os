@@ -1,6 +1,7 @@
 import { render } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { webAgentActionLimits, type WebAgentAction, type WebAgentLeanCheck, type WebEvent, type WebRun } from '../../shared';
+import { webAgentActionLimits, type WebAgentAction, type WebAgentLeanCheck, type WebAgentLibraryAction,
+  type WebAgentLibraryDeclaration, type WebEvent, type WebRun } from '../../shared';
 import type { AgentActivity } from '../agentActivity';
 import { checkLeanFile, routeStepLabel, type AgentRoute, type RouteItem, type RouteStep } from '../agentRoute';
 import { readableDuration } from '../../presentation';
@@ -48,7 +49,8 @@ export const groupOf = (item: RouteItem): Group => {
     case 'edit': return 'edit';
     case 'search': return 'look';
     case 'tool': return action.tool === 'view_image' ? 'look' : 'run';
-    case 'command': return leanCommand.test(action.command ?? '') ? 'lean' : action.intents?.length ? 'look' : 'run';
+    case 'command': return action.library ? action.library.operation === 'request' ? 'run' : 'look'
+      : leanCommand.test(action.command ?? '') ? 'lean' : action.intents?.length ? 'look' : 'run';
   }
 };
 
@@ -102,6 +104,16 @@ export function summarize(action: WebAgentAction): Summary {
 }
 function summarizeCommand(action: WebAgentAction): Summary {
   const command = action.command ?? '';
+  if (action.library) {
+    const entry = action.library;
+    const outcome = (text: string): Outcome | undefined => action.status === 'done' ? { text, tone: 'muted' } : undefined;
+    if (entry.operation === 'search') return { icon: 'book-open', label: t('搜索定理库'), code: entry.query || entry.goal || entry.library.id,
+      outcome: outcome(t('{0} 个候选', entry.hits.length + (entry.omittedHits ?? 0))) };
+    if (entry.operation === 'get') return { icon: 'file-search', label: t('读取库源码'), code: entry.declaration.name,
+      outcome: outcome(entry.source.complete ? t('已到文件末尾') : t('还有后续页')) };
+    return { icon: 'download', label: t('请求装入库声明'), code: entry.declarations.map(item => item.name).join(' · '),
+      outcome: outcome(entry.status === 'queued' ? t('请求已排队') : t('已冻结装入')) };
+  }
   const checked = checkLeanFile(action);
   if (checked !== undefined) {
     const file = checked || undefined, lean = action.lean;
@@ -184,10 +196,42 @@ export function LeanReport({ lean }: { lean: WebAgentLeanCheck }) {
     {lean.omittedMessages ? <Note>{t('另有 {0} 条消息没有显示。', lean.omittedMessages)}</Note> : null}
   </div>;
 }
+const installationLabel = (entry: WebAgentLibraryDeclaration) => entry.installation === 'installed-frozen' ? t('已冻结装入') : t('未装入');
+function LibraryDeclarations({ entries }: { entries: WebAgentLibraryDeclaration[] }) {
+  return <ul class="route-found">{entries.map((entry, index) => <li key={index} data-installation={entry.installation}>
+    <code class="route-found-query">{entry.name}</code><span class="route-found-total">{installationLabel(entry)}</span>
+  </li>)}</ul>;
+}
+function LibraryReport({ entry }: { entry: WebAgentLibraryAction }) {
+  return <div class="route-library" data-library-operation={entry.operation}>
+    <p class="route-change-path" data-library-identity><span>{t('定理库')}</span><code>{entry.library.id}</code>
+      <span>{t('版本')}</span><code>{entry.library.revision}</code></p>
+    <p class="route-change-path"><span>{t('目录摘要')}</span><code>{entry.library.catalogDigest}</code></p>
+    {entry.operation === 'search' ? <>
+      {entry.query && <p class="route-change-path"><span>{t('查询')}</span><code>{entry.query}</code></p>}
+      {entry.goal && <p class="route-change-path"><span>{t('目标')}</span><code>{entry.goal}</code></p>}
+      <Note>{t('搜索候选')}</Note><LibraryDeclarations entries={entry.hits} />
+      {!entry.hits.length && <Note>{t('没有搜索候选。')}</Note>}
+      {entry.omittedHits ? <Note>{t('另有 {0} 个候选没有显示。', entry.omittedHits)}</Note> : null}
+      {entry.namedReferences.length > 0 && <><Note>{t('按名称匹配的声明')}</Note><LibraryDeclarations entries={entry.namedReferences} /></>}
+      {entry.omittedReferences ? <Note>{t('另有 {0} 个名称匹配没有显示。', entry.omittedReferences)}</Note> : null}
+    </> : entry.operation === 'get' ? <>
+      <LibraryDeclarations entries={[entry.declaration]} />
+      <Note>{entry.source.complete ? t('源码偏移 {0}；已到文件末尾。', entry.source.offset)
+        : t('源码偏移 {0}；下一页从 {1} 开始。', entry.source.offset, entry.source.nextOffset)}</Note>
+    </> : <>
+      <LibraryDeclarations entries={entry.declarations} />
+      {entry.omittedDeclarations ? <Note>{t('另有 {0} 个声明没有显示。', entry.omittedDeclarations)}</Note> : null}
+      <Note>{entry.status === 'queued' ? t('请求已排队，等待校验并在后续轮次装入。') : t('请求的声明已冻结装入。')}</Note>
+    </>}
+    <Note>{t('这是库工具的返回记录；证明中的实际使用以 Lean 引用记录为准。')}</Note>
+  </div>;
+}
 export function ActionBody({ action }: { action: WebAgentAction }) {
   switch (action.kind) {
     case 'command': return <>
       <pre class="route-command"><code>{action.command}</code></pre>
+      {action.library && <LibraryReport entry={action.library} />}
       {action.lean && <LeanReport lean={action.lean} />}
       {action.found && <ul class="route-found">{action.found.map((query, index) => <li key={index}>
         <span class="route-found-query">{query.query}</span><span class="route-found-total">{t('{0} 条结果', query.total)}</span>
@@ -195,7 +239,7 @@ export function ActionBody({ action }: { action: WebAgentAction }) {
       {action.output && <pre class="route-output" tabIndex={0} aria-label={t('命令输出')}>{action.output}</pre>}
       {action.withheld && <Note>{t('这条命令读到了平台自己的文件，输出不显示。')}</Note>}
       {action.outputClipped && <Note>{t('输出较长，只显示开头和结尾。')}</Note>}
-      {!action.output && !action.lean && !action.found && !action.withheld && action.status !== 'running' && <Note>{t('没有输出。')}</Note>}
+      {!action.output && !action.lean && !action.found && !action.library && !action.withheld && action.status !== 'running' && <Note>{t('没有输出。')}</Note>}
     </>;
     case 'edit': return <>
       {(action.changes ?? []).map((change, index) => <div key={index} class="route-change">
@@ -237,8 +281,8 @@ type Context = {
   refresh: () => void; select: (lane: Lane, index: number, options?: { toggle?: boolean }) => void; close: () => void; focus?: string;
 };
 
-export function ItemRow({ item, ctx }: { item: RouteItem; ctx: ItemContext }) {
-  const key = itemKey(item), open = ctx.memory.open.has(key), body = hasBody(item), at = itemAt(item);
+export function ItemRow({ item, ctx, detailId }: { item: RouteItem; ctx: ItemContext; detailId?: string }) {
+  const key = detailId ?? itemKey(item), open = ctx.memory.open.has(key), body = hasBody(item), at = itemAt(item);
   let head;
   if (item.type === 'event') {
     const outcome = eventOutcome(item.event);
@@ -255,7 +299,7 @@ export function ItemRow({ item, ctx }: { item: RouteItem; ctx: ItemContext }) {
   const kind = item.type === 'event' ? 'event' : item.action.kind;
   if (!body) return <li class="route-item" data-kind={kind}><div class="route-item-head">{head}</div></li>;
   return <li class="route-item" data-kind={kind}>
-    <details open={open} onToggle={event => {
+    <details open={open} data-thinking-detail={detailId} onToggle={event => {
       const now = (event.currentTarget as HTMLDetailsElement).open;
       if (now === ctx.memory.open.has(key)) return;
       if (now) ctx.memory.open.add(key); else ctx.memory.open.delete(key);

@@ -126,7 +126,7 @@ async function assertNoResultArchive(h: Harness, run: WebRun, status: 'cancelled
     assert.equal(downloaded.suggestedFilename(), `theoremos-${run.id}.json`);
     const raw = await fs.readFile((await downloaded.path())!, 'utf8');
     const archive = JSON.parse(raw) as { schema: string; run: WebRun };
-    assert.equal(archive.schema, 'theorem-os.web-export.v1');
+    assert.equal(archive.schema, 'theorem-os.web-archive.v1');
     assert.equal(archive.run.id, run.id);
     assert.equal(archive.run.status, status);
     assert.equal(archive.run.result, undefined);
@@ -159,6 +159,40 @@ const writeReport = (status: 'passed' | 'failed', error?: unknown) => writeScena
   { workerStarts, checks, widths, screenshots, archiveDownloads });
 try {
   browser = await startBrowser(service.server, port);
+
+  await scenario('Library installation and accepted proof references stay distinct and fit every result viewport', async h => {
+    const declaration = `TheoremOS.${'long_library_namespace_'.repeat(7)}.exchange`;
+    const libraryUsage = { schema: 'theorem-os.web-library-usage.v1', library: { id: 'example/proof-library', revision: 'v1',
+      catalogDigest: 'c'.repeat(64) }, installedModules: 3, installationRounds: 1,
+      proof: { scope: 'independently-accepted-original-proofs', coverage: 'available', targetCount: 1, coveredTargets: 1,
+        referenceCount: 1, references: [{ name: declaration, file: 'Submission/Library/NativeLib/Exchange.lean', sourceDigest: 'd'.repeat(64) }],
+        omittedReferences: 0 } };
+    const report = { libraryUsage, evaluator: { status: 'passed', method: 'host-lean-kernel-all-targets' } };
+    const run = await createRun(h, 'Accepted library proof', result(report, 'evaluated_passed'));
+    await refresh(h); await select(h, run.id); await showArtifacts(h.page);
+    const section = h.page.locator('[data-report-library]'); await section.waitFor();
+    assert.deepEqual(await section.locator('.report-metrics dd').allTextContents(), ['3', '1', '1']);
+    await section.locator('summary').filter({ hasText: '查看引用的公开声明' }).click();
+    await section.locator('summary').filter({ hasText: '库版本凭据' }).click();
+    for (const width of widths) {
+      await h.page.setViewportSize({ width, height: width > 850 ? 900 : 812 });
+      assert.ok((await section.innerText()).includes(declaration));
+      await assertHorizontalFit(h.page, '[data-report-library]', width);
+    }
+    await h.page.setViewportSize({ width: 1440, height: 900 });
+    await h.page.locator('[data-report-view="json"]').click();
+    assert.deepEqual(JSON.parse((await h.page.locator('.code-scroll.report code').textContent())!), report);
+
+    const pending = await createRun(h, 'Installed library without accepted proof', result({ libraryUsage: {
+      ...libraryUsage, proof: { ...libraryUsage.proof, coverage: 'unknown', coveredTargets: 0, referenceCount: null, references: [] },
+    } }));
+    await refresh(h); await select(h, pending.id); await showArtifacts(h.page);
+    const unverified = h.page.locator('[data-report-library]'); await unverified.waitFor();
+    assert.deepEqual(await unverified.locator('.report-metrics dd').allTextContents(), ['3', '1', '未记录']);
+    assert.ok((await unverified.innerText()).includes('尚无独立验收的库引用记录。'));
+    assert.equal(await unverified.locator('li').count(), 0);
+    assert.equal(h.requests.filter(request => request.method === 'POST' && request.pathname === '/api/runs').length, 2);
+  });
 
   await scenario('The conversation opens accepted results, explanation, verification download and sharing directly', async h => {
     const run = await createRun(h, 'Accepted conversation actions', result({

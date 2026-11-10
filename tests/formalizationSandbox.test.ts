@@ -96,6 +96,16 @@ afterEach(async () => {
 });
 
 describe.skipIf(process.platform !== 'linux' || !nativePython || !fs.existsSync('/usr/bin/bwrap'))('formalization full-process sandbox', () => {
+  it('binds a native final-response schema to the independently mounted frozen schema', async () => {
+    const f = fixture(), outputSchema = JSON.parse(protocolFiles[2].text);
+    const sandbox = await prepare(f, { outputSchema });
+    expect(mocks.relay.mock.calls[0]![0].outputSchema).toEqual(outputSchema);
+    expect(sandbox.receipt.outputSchemaSha256).toBe(mathDigest(protocolFiles[2].text));
+    await expect(prepare(f, { outputSchema: { ...outputSchema, additionalProperties: true } }))
+      .rejects.toThrow('formalization_sandbox_output_schema_mismatch');
+    expect(mocks.relay).toHaveBeenCalledOnce();
+  });
+
   it('denies host gold, sibling reviews, history, host proc roots, networking and all three protocol writes', async () => {
     const f = fixture(), sandbox = await prepare(f);
     fs.symlinkSync(path.join(f.directory, 'gold.lean'), path.join(f.workspace, 'escape'));
@@ -239,31 +249,60 @@ print('separate')`)));
     expect(fs.readFileSync(path.join(second.receipt.auditDirectory, 'role.json'), 'utf8')).toBe('1');
   });
 
-  for (const environment of ['mathlib', 'mathlib-4.8'] as const) {
-  it.skipIf(environment === 'mathlib-4.8' && !legacyElanRoot)(`attaches only sealed ${environment} dependencies and holds their lease until close`, async () => {
+  it('keeps a source-only Mathlib planner isolated without preparing or exposing packages', async () => {
+    const f = fixture(), raw = path.join(f.directory, 'unfiltered-cache');
+    fs.mkdirSync(raw); fs.writeFileSync(path.join(raw, 'Mathlib.lean'), 'PRIVATE_PACKAGE_CANARY');
+    const config = getLeanTaskEnvironment('mathlib');
+    const sandbox = await prepare(f, { environment: 'mathlib', packages: 'none', env: {
+      PATH: '/usr/bin:/bin', DEEPSCIENTIST_MATH_TRUSTED_CACHE_ROOTS: raw,
+      [MATH_PROOF_ENVIRONMENT_ENV]: 'host-only-descriptor',
+    } });
+    expect(sandbox.receipt).toMatchObject({ toolchain: config.toolchain,
+      environmentDigest: config.dependencyDigest, packages: { kind: 'none' }, canary: 'passed' });
+    expect(sandbox.inheritedFds).toBeUndefined(); expect(sandbox.args).not.toContain('--ro-bind-fd');
+    for (const mock of [mocks.cache, mocks.resolve, mocks.prepare, mocks.lease]) expect(mock).not.toHaveBeenCalled();
+    const result = await run(sandbox, `import os
+assert not os.path.exists('/opt/lean-packages')
+assert not os.path.exists(${JSON.stringify(raw)})
+assert os.environ['LEAN_PATH'] == '/opt/lean/lib/lean'
+assert 'MATHLIB_ROOT' not in os.environ
+assert 'DEEPSCIENTIST_MATH_PROOF_ENVIRONMENT' not in os.environ
+print('source-only planner isolated')`);
+    expect(result).toMatchObject({ status: 0, stdout: 'source-only planner isolated\n', stderr: '' });
+    expect(observed).toEqual([]);
+  });
+
+  for (const { environment, contents } of [{ environment: 'mathlib' }, { environment: 'mathlib-4.8' },
+    { environment: 'mathlib', contents: 'sources' }] as const) {
+  it.skipIf(environment === 'mathlib-4.8' && !legacyElanRoot)(`attaches only sealed ${environment} ${contents ?? 'complete'} dependencies and holds their lease until close`, async () => {
     const f = fixture(), sealed = path.join(f.directory, 'synthetic-sealed-packages'), raw = path.join(f.directory, 'unfiltered-cache');
     fs.mkdirSync(sealed); fs.mkdirSync(raw); fs.writeFileSync(path.join(raw, 'gold.lean'), 'UNFILTERED_GOLD_CANARY');
     const config = getLeanTaskEnvironment(environment), libraryDirectory = config.packageLibraryDirectory ?? '.lake/build/lib/lean';
     const names = JSON.parse(config.files['lake-manifest.json']).packages.map((item: { name: string }) => item.name);
-    for (const name of names) fs.mkdirSync(path.join(sealed, name, libraryDirectory), { recursive: true });
+    for (const name of names) fs.mkdirSync(path.join(sealed, name, contents ? '' : libraryDirectory), { recursive: true });
     fs.writeFileSync(path.join(sealed, 'mathlib', 'Synthetic.lean'), '-- synthetic dependency mapping fixture only');
     const release = vi.fn(async () => {}), dispose = vi.fn(async () => {}), verify = vi.fn();
     mocks.cache.mockReturnValue(raw);
     mocks.prepare.mockResolvedValue({ environmentValue: 'synthetic-sealed-descriptor', dispose });
     mocks.resolve.mockImplementation((_project, env) => env[MATH_PROOF_ENVIRONMENT_ENV] === 'synthetic-sealed-descriptor'
-      ? { packagesRoot: sealed, identity: 'a'.repeat(64), verify } : undefined);
+      ? { packagesRoot: sealed, identity: 'a'.repeat(64), contents: contents ?? 'complete', verify } : undefined);
     mocks.lease.mockResolvedValue({ packagesRoot: sealed, release });
-    const sandbox = await prepare(f, { environment,
+    const sandbox = await prepare(f, { environment, ...(contents ? { packages: contents } : {}),
       ...(environment === 'mathlib-4.8' ? { env: { PATH: '/usr/bin:/bin', ELAN_HOME: legacyElanRoot } } : {}) });
     expect(mocks.prepare.mock.calls[0]![2]).not.toHaveProperty('deadlineAt');
+    expect(mocks.prepare.mock.calls[0]![2].contents).toBe(contents);
+    expect(mocks.resolve.mock.calls.every(call => call[2] === contents)).toBe(true);
+    expect(mocks.lease.mock.calls[0]![4]).toBe(contents);
     expect(sandbox.receipt.toolchain).toBe(config.toolchain);
     expect(sandbox.receipt.environmentDigest).toBe(config.dependencyDigest);
-    expect(sandbox.receipt.packages).toEqual({ kind: 'sealed', root: '/opt/lean-packages', identity: 'a'.repeat(64) });
+    expect(sandbox.receipt.packages).toEqual({ kind: 'sealed', root: '/opt/lean-packages', identity: 'a'.repeat(64),
+      ...(contents ? { contents } : {}) });
     expect(sandbox.inheritedFds).toHaveLength(1); expect(sandbox.args).toContain('--ro-bind-fd');
     expect(sandbox.args).not.toContain(raw); expect(release).not.toHaveBeenCalled();
     const result = await run(sandbox, `import os
 assert '/opt/lean-packages/mathlib/${libraryDirectory}' in os.environ['LEAN_PATH'].split(':')
 assert open('/opt/lean-packages/mathlib/Synthetic.lean').read().startswith('-- synthetic')
+assert os.path.exists('/opt/lean-packages/mathlib/.lake/build') == ${contents ? 'False' : 'True'}
 assert not os.path.exists('/opt/lean-packages/gold.lean')
 try:
     open('/opt/lean-packages/mathlib/Synthetic.lean', 'a').write('changed')

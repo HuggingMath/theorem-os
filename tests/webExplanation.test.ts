@@ -1,4 +1,7 @@
+import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { excerptLines, explanationDocument, explanationMarkdownFilename, verifyExplanationEvidence } from '../apps/web/explanation';
 import { explanationKey, WebExplanations } from '../apps/web/explanations';
@@ -189,15 +192,81 @@ const status = (action: () => unknown) => {
 };
 
 describe('web explanation jobs', () => {
+  it.each(['before', 'after'] as const)('permits a retry when initial persistence fails %s the record is saved', async when => {
+    const storage = new WebStorage(), runner = new ExplainRunner(), jobs = new WebExplanations(runner, storage);
+    const persist = storage.saveExplanation.bind(storage);
+    const save = vi.spyOn(storage, 'saveExplanation').mockImplementationOnce((owner, key, explanation) => {
+      if (when === 'after') persist(owner, key, explanation);
+      throw new Error('disk unavailable');
+    });
+    try {
+      expect(() => jobs.create('owner-a', run(), request())).toThrow('disk unavailable');
+      await settle();
+      expect(runner.calls).toHaveLength(0);
+      expect(jobs.active('owner-a', run().id)).toBe(false);
+      expect(jobs.counts()).toEqual({ running: 0, queued: 0 });
+      if (when === 'before') expect(jobs.get('owner-a', run().id, 'target_thm', 'zh')).toBeUndefined();
+      save.mockRestore();
+      expect(jobs.create('owner-a', run(), request())).toMatchObject({ status: 'queued' });
+      await settle();
+      expect(runner.calls).toHaveLength(1);
+    } finally {
+      save.mockRestore();
+      await jobs.close();
+    }
+  });
+
+  it('releases the slot and runs the next job when saving its running state fails', async () => {
+    const storage = new WebStorage(), runner = new ExplainRunner();
+    const jobs = new WebExplanations(runner, storage, { concurrency: 1, queueLimit: 3, perOwner: 3 });
+    const save = storage.saveExplanation.bind(storage);
+    let failed = false;
+    vi.spyOn(storage, 'saveExplanation').mockImplementation((owner, key, explanation) => {
+      if (!failed && explanation.status === 'running') { failed = true; throw new Error('disk unavailable'); }
+      save(owner, key, explanation);
+    });
+    jobs.create('owner-a', run(), request());
+    const next = jobs.create('owner-b', run(), request());
+    await settle();
+    expect(jobs.get('owner-a', run().id, 'target_thm', 'zh')).toMatchObject({ status: 'error', reason: 'explanation_failed' });
+    expect(jobs.active('owner-a', run().id)).toBe(false);
+    expect(runner.calls).toHaveLength(1);
+    expect(runner.calls[0]!.input.id).toBe(next.id);
+    expect(jobs.counts()).toMatchObject({ running: 1, queued: 0 });
+    await jobs.close();
+  });
+
+  it('keeps the queue moving and permits retry after saving an error state also fails', async () => {
+    const storage = new WebStorage(), runner = new ExplainRunner();
+    const jobs = new WebExplanations(runner, storage, { concurrency: 1, queueLimit: 3, perOwner: 3 });
+    const persist = storage.saveExplanation.bind(storage);
+    const save = vi.spyOn(storage, 'saveExplanation').mockImplementation((owner, key, explanation) => {
+      if (owner === 'owner-a' && explanation.status === 'error') throw new Error('disk unavailable');
+      persist(owner, key, explanation);
+    });
+    jobs.create('owner-a', run(), request());
+    const next = jobs.create('owner-b', run(), request());
+    await settle();
+    runner.calls[0]!.reject(new Error('explanation_failed'));
+    await settle();
+    expect(jobs.active('owner-a', run().id)).toBe(false);
+    expect(runner.calls).toHaveLength(2);
+    expect(runner.calls[1]!.input.id).toBe(next.id);
+    expect(jobs.counts()).toMatchObject({ running: 1, queued: 0 });
+    save.mockRestore();
+    expect(jobs.create('owner-a', run(), request())).toMatchObject({ status: 'queued' });
+    await jobs.close();
+  });
+
   it('queues, runs and stores an approved explanation; the key reaches only the worker input', async () => {
     const storage = new WebStorage(), runner = new ExplainRunner(), jobs = new WebExplanations(runner, storage);
     const created = jobs.create('owner-a', run(), request());
-    expect(created).toMatchObject({ status: 'queued', queue: { position: 1, ahead: 0 }, maxRunSeconds: 8 * 60 * 60 });
+    expect(created).toMatchObject({ status: 'queued', queue: { position: 1, ahead: 0 }, maxRunSeconds: 0, maxTotalTokens: 0 });
     expect(JSON.stringify(created)).not.toContain('sk-explain-test-key');
     await settle();
     expect(runner.calls).toHaveLength(1);
     expect(runner.calls[0]!.input).toMatchObject({ id: created.id, proof: PROOF, target: 'target_thm', language: 'zh',
-      environment: 'standard', apiKey: 'sk-explain-test-key', provider, auditors: 2, maxRoundsPerBatch: 6 });
+      environment: 'standard', apiKey: 'sk-explain-test-key', provider, auditors: 2, maxRoundsPerBatch: 0, maxRunSeconds: 0, maxTotalTokens: 0 });
     expect(status(() => jobs.create('owner-a', run(), request()))).toBe(409);
     runner.calls[0]!.send({ type: 'progress', progress: { phase: 'writing', batches: 1, approvedBatches: 0, round: 1, tokens: 10 } });
     expect(jobs.get('owner-a', run().id, 'target_thm', 'zh')).toMatchObject({ status: 'running',
@@ -307,6 +376,49 @@ describe('web explanation jobs', () => {
     new WebExplanations(new ExplainRunner(), storage);
     expect(storage.getExplanation('owner-b', run().id, explanationKey('target_thm', 'zh')))
       .toMatchObject({ status: 'error', reason: 'explanation_interrupted', finishedAt: expect.any(String) });
+  });
+
+  it('restores approved evidence and interrupts queued and running explanations after a disk-backed restart', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'web-explanation-'));
+    const snapshot = fs.mkdtempSync(path.join(os.tmpdir(), 'web-explanation-crash-'));
+    const storage = new WebStorage(root), runner = new ExplainRunner();
+    const jobs = new WebExplanations(runner, storage, { concurrency: 1, queueLimit: 3, perOwner: 3 });
+    let restarted: WebExplanations | undefined;
+    try {
+      const firstRun = run(), nextRun = run('22222222-3333-4444-8555-666666666666');
+      storage.saveRun('owner-a', firstRun);
+      storage.saveRun('owner-a', nextRun);
+      jobs.create('owner-a', firstRun, request());
+      await settle();
+      runner.calls[0]!.send({ type: 'result', status: 'approved', evidence: roundTrip(evidence()) });
+      runner.calls[0]!.resolve();
+      await settle();
+      jobs.create('owner-a', firstRun, request('target_thm', 'en'));
+      await settle();
+      jobs.create('owner-a', nextRun, request());
+      expect(jobs.counts()).toMatchObject({ running: 1, queued: 1 });
+      // Freeze the files before close, as if the process stopped with work in flight.
+      fs.cpSync(root, snapshot, { recursive: true });
+      await jobs.close();
+
+      const reopened = new WebStorage(snapshot), restartedRunner = new ExplainRunner();
+      restarted = new WebExplanations(restartedRunner, reopened);
+      expect(reopened.loadRuns()).toHaveLength(2);
+      expect(restarted.read('owner-a', firstRun, 'target_thm', 'zh')).toMatchObject({ status: 'approved',
+        document: { target: 'target_thm', tokens: 240, metrics: { proofLines: 4, explainedLines: 4 } } });
+      for (const [runId, language] of [[firstRun.id, 'en'], [nextRun.id, 'zh']] as const) {
+        expect(reopened.getExplanation('owner-a', runId, explanationKey('target_thm', language))).toMatchObject({
+          status: 'error', reason: 'explanation_interrupted', finishedAt: expect.any(String) });
+      }
+      expect(restarted.counts()).toEqual({ running: 0, queued: 0 });
+      await settle();
+      expect(restartedRunner.calls).toHaveLength(0);
+    } finally {
+      await restarted?.close();
+      await jobs.close();
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(snapshot, { recursive: true, force: true });
+    }
   });
 });
 

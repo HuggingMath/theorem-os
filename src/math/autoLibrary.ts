@@ -11,7 +11,7 @@ import { mathGitBytes } from './mathGit';
 import { mathConstructionImports, mathConstructionImportSpans } from './mathConstructionSources';
 import { canonicalMathJson, mathDigest, readMathText, withMathRuntimeLease, writeMathJsonDurable } from './mathRuntimeIo';
 import { assertMathCanonicalPath } from './paths';
-import { knowledgeUseSchema } from '../solver/knowledgeUsage';
+import { knowledgeUseSchema } from '../solver/knowledgeUsageContract';
 
 /**
  * Auto-library modules are Lean modules the solving system writes for itself before it solves a problem. A planner
@@ -311,7 +311,7 @@ export function autoLibraryPackFor(input: { base?: LibraryPack; effective?: Effe
   return { pack: base ? mergeLibraryPacks([base, added]) : parseLibraryPack(added), included, skipped };
 }
 
-type SourceModules = Pick<LibraryPack, 'modules'>;
+type SourceModules = { modules?: readonly Pick<LibraryPackModule, 'file' | 'source'>[] };
 
 /** Library modules of `pack` that `source` imports, directly or through other pack modules. */
 export function libraryImportClosure(pack: SourceModules | undefined, source: string): string[] {

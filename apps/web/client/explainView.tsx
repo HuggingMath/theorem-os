@@ -1,4 +1,5 @@
 import { Component, render } from 'preact';
+import { useMemo } from 'preact/hooks';
 import type { WebExplanation, WebExplanationDocument, WebExplanationGoals, WebExplanationLines, WebExplanationLink, WebExplanationOverview,
   WebExplanationSection, WebExplanationUse } from '../shared';
 import { effortLabels, formatDuration, formatTokens } from '../presentation';
@@ -8,6 +9,8 @@ import { ChosenBar, ProblemCard, type FragmentStep } from './correspondence';
 import { LeanName, Rich, type RichLink } from './richText';
 import { Icon, Spinner } from './ui/Icon';
 import { fill } from './ui/Section';
+import { explanationSolutionRoute } from './explainSolutionRoute';
+import { SolutionRouteGraph } from './ui/SolutionRouteGraph';
 
 /** What explain.ts draws from; every button carries a data-action that explain.ts handles. */
 export type ExplainView = {
@@ -19,6 +22,7 @@ export type ExplainView = {
   dialog?: 'generate' | 'cancel' | 'delete'; busy: boolean; error?: string; now: number;
   /** An offline report: the Markdown is a blob URL, and nothing can be generated or deleted. */ report?: { href: string; filename: string };
   /** The reader followed a cited lemma and can go back to where they cited it. */ canReturn?: boolean;
+  onRouteOpen?: (target: string) => void;
 };
 
 const reasons: Record<string, string> = {
@@ -42,7 +46,7 @@ const unavailable: Record<string, string> = {
   sample: t('示例运行只读，不能生成讲解。'), not_accepted: t('只有通过独立验收的运行可以生成讲解。'),
   provider: t('证明讲解目前只支持 Sub2API 模型服务。'), model: t('证明讲解目前只支持 deepseek-flash 模型。'), runtime: t('当前服务不提供证明讲解。'),
 };
-const hours = (seconds: number) => seconds >= 3600 ? t('约 {0} 小时', (seconds / 3600).toFixed(1)) : t('约 {0} 分钟', Math.max(1, Math.round(seconds / 60)));
+const hours = (seconds: number) => seconds === 0 ? t('不限') : seconds >= 3600 ? t('约 {0} 小时', (seconds / 3600).toFixed(1)) : t('约 {0} 分钟', Math.max(1, Math.round(seconds / 60)));
 export const linesLabel = (lines: readonly WebExplanationLines[]) =>
   t('第 {0} 行', lines.map(item => item.start === item.end ? String(item.start) : `${item.start}–${item.end}`).join(', '));
 const Fact = (props: { label: string; value: string; mono?: boolean; wide?: boolean }) => <div class={props.wide ? 'explain-fact-wide' : undefined}><dt>{props.label}</dt><dd class={props.mono ? 'mono' : undefined}>{props.value}</dd></div>;
@@ -87,7 +91,8 @@ function Prose(view: ExplainView) {
   const { generation } = view.overview, explanation = view.explanation;
   const declarations = view.overview.targets.find(item => item.name === view.target)?.declarations ?? 1;
   if (explanation?.status === 'approved') {
-    if (view.document) return <DocumentView document={view.document} active={view.active} gap={view.gap} chosen={view.chosen} />;
+    if (view.document) return <DocumentView document={view.document} proof={view.overview.run.proof} runId={view.overview.run.id}
+      active={view.active} gap={view.gap} chosen={view.chosen} onRouteOpen={view.onRouteOpen} />;
     return view.documentError ? <div class="inline-error" role="alert">{view.documentError}</div>
       : <p class="explain-state" role="status"><Spinner />{t('正在读取讲解…')}</p>;
   }
@@ -126,7 +131,7 @@ function ProgressView({ explanation, now }: { explanation: WebExplanation; now: 
       {explanation.queue && <Fact label={t('排队位置')} value={t('前面 {0} 份', explanation.queue.ahead)} />}
       {progress?.batches !== undefined && <Fact label={t('已通过批次')} value={`${progress.approvedBatches ?? 0}/${progress.batches}`} mono />}
       {progress?.round !== undefined && <Fact label={t('审核轮次')} value={t('第 {0} 轮', progress.round)} />}
-      <Fact label={t('Token 用量')} value={`${formatTokens(progress?.tokens ?? 0)} / ${formatTokens(explanation.maxTotalTokens)}`} mono />
+      <Fact label={t('Token 用量')} value={`${formatTokens(progress?.tokens ?? 0)} / ${explanation.maxTotalTokens ? formatTokens(explanation.maxTotalTokens) : t('不限')}`} mono />
       <Fact label={t('时间上限')} value={hours(explanation.maxRunSeconds)} />
     </dl>
     <button type="button" class="button button-danger" data-action="cancel">{fill(t('{0}停止生成'), <Icon name="square" />)}</button>
@@ -148,8 +153,9 @@ const richLinks = (links: readonly WebExplanationLink[] | undefined, at: Record<
     title: t('在 Lean 中标出') }));
 // Which section explains each declaration, once per document, so a section's props stay the same between draws.
 const ownedBy = new WeakMap<WebExplanationDocument, Map<string, number>>();
-function DocumentView({ document, active, gap, chosen }: { document: WebExplanationDocument; active?: StepRef; gap?: number;
-  chosen?: ReadonlySet<number> }) {
+function DocumentView({ document, proof, runId, active, gap, chosen, onRouteOpen }: { document: WebExplanationDocument; proof: string; runId: string;
+  active?: StepRef; gap?: number; chosen?: ReadonlySet<number>; onRouteOpen?: (target: string) => void }) {
+  const route = useMemo(() => explanationSolutionRoute(document, proof, `${runId}:explanation:${document.target}:${document.language}`), [document, proof, runId]);
   let owned = ownedBy.get(document);
   if (!owned) ownedBy.set(document, owned = new Map(document.sections.map((section, index) => [section.name, index])));
   return <article class="explain-document" lang={document.language === 'en' ? 'en' : 'zh-CN'}>
@@ -160,6 +166,7 @@ function DocumentView({ document, active, gap, chosen }: { document: WebExplanat
       <p class="explain-rich"><Rich text={document.overview} /></p>
       {linkedDocument(document) && <p class="formal-note"><Icon name="locate-fixed" />
         <span>{t('讲解中划虚线的短语各对应一段 Lean，点它标出那段 Lean；审核模型核对过每一对。')}</span></p>}</section>
+    <SolutionRouteGraph model={route} onOpen={onRouteOpen} />
     {document.sections.map((section, index) => <CachedSection key={section.name} section={section} index={index} owned={owned}
       active={active?.section === index ? active : undefined} gap={active?.section === index ? gap : undefined} />)}
     <Footer document={document} />
@@ -280,7 +287,7 @@ function Dialog(view: ExplainView) {
           <Fact label={t('模型')} value={`${generation.model} · ${effortLabels[generation.effort]}`} mono />
           <Fact label={t('预计时间')} value={hours(estimate.seconds)} />
           <Fact label={t('预计 Token')} value={formatTokens(estimate.tokens)} mono />
-          <Fact label={t('上限')} value={t('{0} · {1} Token', hours(generation.maxRunSeconds), formatTokens(generation.maxTotalTokens))} />
+          <Fact label={t('上限')} value={t('{0} · {1} Token', hours(generation.maxRunSeconds), generation.maxTotalTokens ? formatTokens(generation.maxTotalTokens) : t('不限'))} />
         </dl>
         <p class="field-note explain-dialog-note">{t('按 {0} 个声明估算：参考运行 {1} 个声明用了{2}和 {3} Token。实际用量取决于证明长度和审核轮数。',
           declarations, reference.declarations, hours(reference.seconds), formatTokens(reference.tokens))}</p>

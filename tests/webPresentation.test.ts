@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { acceptedTitle, endedSummary, formatDuration, formatTokens, isAcceptedRun, isRejectedRun, planGated, readableDuration, readableMetric, resultDescription, runProgress, runTokens, shownLines, stalledMinutes, stoppedLabel } from '../apps/web/presentation';
+import { acceptedTitle, endedSummary, formatDuration, formatTokens, isAcceptedRun, isRejectedRun, planGated, readableDuration, readableMetric, resultDescription, runProgress, runTokens, shownLines, stalledMinutes, statementConfirmation, stoppedLabel } from '../apps/web/presentation';
 import type { WebRun } from '../apps/web/shared';
 
 const at = (seconds: number) => new Date(Date.UTC(2026, 9, 16) + seconds * 1000).toISOString();
@@ -39,6 +39,17 @@ describe('workbench phase and elapsed-time presentation', () => {
     expect(acceptedTitle(directLean)).toContain('完整原题');
     expect(resultDescription(directLean)).toBe('完整原题通过独立 Lean 验收。');
     expect(endedSummary(directLean)).toBe('研究已结束，原题已通过验收。');
+  });
+
+  it('keeps direct formalization separate from proof acceptance and independent meaning review', () => {
+    const accepted = run({ status: 'completed', result: { status: 'evaluated_passed', proof: 'by trivial', report: {} },
+      formalization: { id: 'formalization', original: 'Prove that True holds.', evidenceSha256: 'f'.repeat(64),
+        confirmedAt: at(0), confirmation: 'automatic', reviewMode: 'direct' } });
+    expect(resultDescription(accepted)).toContain('Lean 陈述已通过独立验收');
+    expect(resultDescription(accepted)).toContain('原题含义请查看形式化记录');
+    expect(statementConfirmation('automatic', false, 'direct')).toBe('Lean 陈述编译通过；原题含义请查看形式化记录。');
+    expect(statementConfirmation('automatic', true, 'direct')).not.toContain('模型审核通过');
+    expect(statementConfirmation('automatic')).toContain('模型审核通过');
   });
 
   it('keeps queue and Mathlib preparation separate from the solving clock', () => {
@@ -190,9 +201,9 @@ describe('workbench phase and elapsed-time presentation', () => {
     const approved = approval({ status: 'approved', approvedAt: Date.parse(at(1_800)) });
     expect(stalledMinutes(approved, Date.parse(at(1_800 + 9 * 60)))).toBeUndefined();
     expect(stalledMinutes(approved, Date.parse(at(1_800 + 10 * 60)))).toBe(10);
-    // The budget ran out before anyone approved: the guide says so instead of blaming the Agents.
+    // A run stopped before approval keeps its saved plan and research available.
     const expired = { ...pending, status: 'error', failure: { kind: 'time_limit' } } as unknown as WebRun;
-    expect(resultDescription(expired)).toContain('研究计划直到解题时间用完都没有批准');
+    expect(resultDescription(expired)).toContain('这次运行在计划批准前结束');
   });
 });
 

@@ -57,7 +57,8 @@ const moduleEvents: Record<WebModuleId, readonly string[]> = {
     'statement_review_assigned', 'statement_review_completed', 'task_integrated', 'delivery_published', 'research_delivered',
     'initial_plan_published', 'plan_published', 'initial_plan_rejected', 'plan_publication_rejected', 'edit_applied', 'edit_rejected',
     'delivery_rejected', 'task_repair_requested', 'task_integration_batch_started', 'statement_review_reused', 'feasibility_review_reassigned',
-    'plan_approval_requested', 'plan_approved', 'plan_approval_rejected', 'plan_approval_revision'],
+    'plan_approval_requested', 'plan_approved', 'plan_approval_rejected', 'plan_approval_revision',
+    'plan_approval_wait_started', 'plan_approval_wait_ended'],
   S3: ['evaluation_started', 'evaluation_finished'],
 };
 const eventModules = new Map<string, WebModuleId>(Object.entries(moduleEvents)

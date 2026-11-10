@@ -10,7 +10,7 @@ import { canonicalMathJson, mathDigest, writeMathJsonDurable } from '../math/mat
 import type { SolverRunState, SolverWorkerState } from './archive';
 import { commitSolverSources, git, solverScratchDigest } from './problem';
 import { CooperativeResearch } from './cooperation';
-import { assignmentDeliveryFile, leadPlanDeliveryFile, isFeasibilityReview, taskGroup, type CooperativeAction } from './tasks';
+import { assignmentDeliveryFile, leadPlanDeliveryFile, isFeasibilityReview, isFinalCandidateReview, taskGroup, type CooperativeAction } from './tasks';
 import { isStatementAction } from './statementReview';
 import { rememberSolverFailure, solverSourceFeedback } from './feedback';
 import type { SolverModules } from './modules';
@@ -32,10 +32,12 @@ import type { ContinuationSnapshot } from './continuationInput';
 import type { MathTools } from '../math/mathTools';
 import { setWorkerResearchPhase, WorkerProofLifecycle } from './workerProofLifecycle';
 import { importAssignedProof, syncProofImports } from './proofImport';
-import type { TaskProof } from './cooperativeProof';
+import { checkTaskProof, type TaskProof } from './cooperativeProof';
 import { captureResearchBasis, researchSourceDigest, type ResearchBasis } from './researchRecords';
 import { writeOwnedDeclarationIndex } from './declarationIndex';
 import { LEAD_MAX_BACKOFF } from './leadWakes';
+import { applyOriginalLibraryTasks } from './libraryApplication';
+import { LibraryInstallationRequested, takeLibraryRequest, writeLibraryAccess, type LibraryAccess } from './libraryAccess';
 
 // Scheduling checkpoints preserve unlimited solving budgets and resume the same assignment/thread.
 const advisoryCheckpointNoticeMs = 90_000;
@@ -103,6 +105,8 @@ export function advisoryCheckpointNoticeOnly(assignment: CooperativeAction | und
 export type WorkerAccess = { environment: NodeJS.ProcessEnv; corpusFile?: string; retrievalRoot: string;
   continuation?: ContinuationSnapshot; mathTools?: MathTools;
   assertKnowledgeCurrent?: () => void;
+  installedLibrary?: KnowledgeContextSnapshot;
+  libraryCatalog?: LibraryAccess;
   knowledgeFile?: string; knowledgeDigest?: string; knowledgeSnapshot?: KnowledgeContextSnapshot };
 
 /** Lead and isolated task workers share one budget; only a full canonical check grants acceptance. */
@@ -110,6 +114,7 @@ export async function runResearchWorkers(input: {
   state: SolverRunState; workers: readonly ResearchWorker[]; access: ReadonlyMap<string, WorkerAccess>;
   modules: SolverModules; root: string; buildFile: string; taskText: string; executable: string; profile: string;
   signal: AbortSignal; deadline: number; maxTurns: number; maxTurnMs: number; maxTotalTokens: number; proofTimeoutMs?: number;
+  executionBudget?: { remainingMs(): number; setWaiting(waiting: boolean): void };
   freshContinuationChecks?: readonly TaskProof[]; goalProgressReviewMs?: number;
   save: () => void; emit: (event: string, details?: Record<string, unknown>) => void;
 }): Promise<{ worktree: string; check: ProofCheck } | undefined> {
@@ -140,7 +145,8 @@ export async function runResearchWorkers(input: {
   const abort = () => controller.abort();
   input.signal.addEventListener('abort', abort, { once: true });
   if (input.signal.aborted) abort();
-  const budget = () => ({ maxTurns: input.maxTurns, remainingMs: Math.max(0, input.deadline - Date.now()), aborted: signal.aborted });
+  const budget = () => ({ maxTurns: input.maxTurns,
+    remainingMs: input.executionBudget?.remainingMs() ?? Math.max(0, input.deadline - Date.now()), aborted: signal.aborted });
   let winner: { worktree: string; check: ProofCheck } | undefined;
   let verificationQueue = Promise.resolve();
   const exclusiveCheck = async <T>(check: () => Promise<T>): Promise<T> => {
@@ -155,6 +161,7 @@ export async function runResearchWorkers(input: {
       // A finite solving deadline still permits frontier recovery while budget remains.
       // The caller's abort timer and dispatch admission enforce the time limit.
       continuousResearch: input.maxTurns === Infinity,
+      onPlanApprovalWaiting: waiting => input.executionBudget?.setWaiting(waiting),
       modelDispatchAllowed: dispatchAllowed }) : undefined;
   const updateUsage = () => {
     if (parallel) state.usage = aggregateUsage(state.workers!);
@@ -210,6 +217,7 @@ export async function runResearchWorkers(input: {
       const context = (feedback?: string, previousCheck?: ProofCheck, previousFailures = research.failures,
         assignment?: CooperativeAction) => {
         access.assertKnowledgeCurrent?.();
+        if (access.libraryCatalog) writeLibraryAccess(state.problem, worker.worktree, access.libraryCatalog);
         const scoped = cooperation?.contextState(assignment, worker);
         const currentContext = { ...modules.M4.build(state.problem,
           { ...view(), ...(scoped ? { cooperation: scoped } : {}) }, {
@@ -820,7 +828,7 @@ export async function runResearchWorkers(input: {
         emit('proof_checked', { passed: research.check.passed, commit: research.check.commit,
           reused: research.check === lastCheck || research.check.verification === lastCheck?.verification,
           durationMs: Date.now() - checkStarted });
-        if (access.knowledgeSnapshot) {
+        if (access.knowledgeSnapshot || access.installedLibrary) {
           let claims: unknown;
           try { claims = parseMathResponse(committedSource(worker.worktree, research.check.commit, 'RESEARCH.md'),
             'math-result', {}, 'summary').knowledgeUses; } catch { /* Ordinary notes need no usage response. */ }
@@ -830,7 +838,7 @@ export async function runResearchWorkers(input: {
               const task = state.cooperation?.tasks.find(node => node.task.kind === 'goal' && node.task.theoremName === target.theoremName &&
                 node.task.proofPath === target.proofPath)?.task ?? { id: `original_goal_${index + 1}`, kind: 'goal' as const,
                 objective: `Prove ${target.theoremName}`, revision: 0, dependsOn: [], ...target };
-              const observed = inspectKnowledgeUses(claims, access.knowledgeSnapshot, task, research.check);
+              const observed = inspectKnowledgeUses(claims, access.knowledgeSnapshot, task, research.check, access.installedLibrary);
               const checked = await checkKnowledgeApplications(observed.uses, { task, projectRoot: path.join(worker.worktree, state.problem.projectRelative),
                 env: access.environment, environmentDigest: state.environmentDigest, commit: research.check.commit,
                 signal, timeoutMs: input.proofTimeoutMs, originalContexts: state.problem.targets, previous: records,
@@ -862,6 +870,26 @@ export async function runResearchWorkers(input: {
         close, save, emit, checked: () => { retries = 0; } });
       try {
         await waitForRecovery(true);
+        access.assertKnowledgeCurrent?.();
+        if (!cooperation && !research.turns && access.installedLibrary && modules.M2.applyLibrary && budget().remainingMs > 0) {
+          const closed = await applyOriginalLibraryTasks({ problem: state.problem, library: access.installedLibrary,
+            taskText: input.taskText, environmentDigest: state.environmentDigest, worktree: worker.worktree, workerId: worker.id,
+            env: access.environment, signal, timeoutMs: Math.min(input.proofTimeoutMs ?? Infinity, budget().remainingMs),
+            prepare: modules.M2.applyLibrary, check: modules.M2.checkTask ?? checkTaskProof, emit,
+            onProof: (task, proof) => {
+              // A saved host proof still needs whole-problem acceptance after a restart.
+              setWorkerResearchPhase(state, research, 'checking');
+              const records = state.knowledgeUses ??= [];
+              for (const use of inspectKnowledgeUses(undefined, access.knowledgeSnapshot, task, proof, access.installedLibrary).uses) {
+                const record = { ...use, workerId: worker.id, commit: proof.commit };
+                if (!records.some(previous => canonicalMathJson(previous) === canonicalMathJson(record))) {
+                  records.push(record); emit('knowledge_use_observed', { ...record });
+                }
+              }
+              save();
+            } });
+          if ((closed || research.phase === 'checking') && !signal.aborted) await exclusiveCheck(() => checkWhole());
+        }
         while (!signal.aborted) {
           if (research.phase === 'checking') { setWorkerResearchPhase(state, research, 'running'); save(); }
           if (compactionRestart) {
@@ -1084,6 +1112,24 @@ export async function runResearchWorkers(input: {
           const lastInputTokens = session?.lastInputTokens;
           const diagnostic = safeFailureDiagnostic(session?.lastFailureDiagnostic);
           const turnError = executionError ?? failureDetail(session?.lastError, undefined, diagnostic);
+          if (access.libraryCatalog && candidate.status !== 'failed') {
+            let request: LibraryInstallationRequested | undefined;
+            try {
+              if (assignment?.kind === 'task' && (isFeasibilityReview(assignment.task) || isFinalCandidateReview(assignment.task)) &&
+                  fs.existsSync(path.join(worker.worktree, 'LIBRARY_REQUEST.json'))) throw new Error('math_library_request_fixed_review');
+              request = takeLibraryRequest(state.problem, worker.worktree, access.libraryCatalog);
+            }
+            catch (error) {
+              emit('library_request_rejected', { reason: error instanceof Error ? error.message : String(error) });
+              fs.rmSync(path.join(worker.worktree, 'LIBRARY_REQUEST.json'), { force: true });
+            }
+            if (request) {
+              await close();
+              if (!sourceFeedback()) commitSolverSources(state.problem, worker.worktree);
+              emit('library_installation_requested', { names: request.request.names, catalogDigest: request.request.catalogDigest });
+              throw request;
+            }
+          }
           if (await proofLifecycle?.settleTurn(assignment, candidate, operation, turnSession)) continue;
           // Closing can yield to a plan edit; check ownership after the writer has stopped.
           if (candidate.status === 'failed' || planningCheckpoint) await close();
@@ -1175,11 +1221,12 @@ export async function runResearchWorkers(input: {
         if (!signal.aborted) {
           errors.push(error);
           if (error instanceof VerificationCheckpointError) emit('worker_checkpoint', { reason: error.message, key: error.checkpoint.key });
+          else if (error instanceof LibraryInstallationRequested) emit('worker_checkpoint', { reason: error.message });
           else {
             research.error = error instanceof Error ? error.message : 'math_worker_failed';
             emit('worker_failed', { reason: research.error });
           }
-          if (!parallel || (cooperation && worker.id === input.workers[0].id && research.error !== 'math_model_context_capacity_blocked') ||
+          if (error instanceof LibraryInstallationRequested || !parallel || (cooperation && worker.id === input.workers[0].id && research.error !== 'math_model_context_capacity_blocked') ||
               (error instanceof VerificationCheckpointError || error instanceof Error && error.message === 'math_verifier_unavailable')) abort();
         }
       } finally {
@@ -1199,7 +1246,8 @@ export async function runResearchWorkers(input: {
       error.message.startsWith('math_writer_stop_unconfirmed:'));
     if (unconfirmedStop) throw unconfirmedStop;
     if (cleanupErrors.length) throw cleanupErrors[0];
-    if (!winner && errors.length) throw errors.find(error => error instanceof VerificationCheckpointError) ?? errors[0];
+    if (!winner && errors.length) throw errors.find(error => error instanceof LibraryInstallationRequested) ??
+      errors.find(error => error instanceof VerificationCheckpointError) ?? errors[0];
     return winner;
   } finally {
     try { await cooperation?.stop(); } finally { input.signal.removeEventListener('abort', abort); }

@@ -88,6 +88,43 @@ The Web user archive APIs remain personal archive operations, not task-authorize
 queries. Passing their snapshots to a configured solver still requires the task
 authorization above; production Web host configuration deployment remains pending.
 
+## Integration with the main runtime and Web deployment
+
+The installed-library context and automatic application path recheck the current
+host binding before use, including runs without `--knowledge-base`. Subsequent
+worker contexts recheck it as well. Frozen installed modules remain available
+through this task-authorized path.
+
+The main runtime's separate `--library-catalog` feature exposes a complete release,
+including uninstalled modules. Its search, source retrieval, installation requests
+and continuation flow have no EffectivePack projection yet. Host-bound tasks
+therefore reject that catalog at admission and at the shared access/installation
+interfaces with `library_knowledge_catalog_unauthorized`. The ordinary unconfigured
+catalog flow remains supported.
+
+Production Web enablement requires a separate migration. `formalizationSeed.ts`
+currently chooses a raw pack, which the configured bootstrap rejects with
+`library_host_sources_conflict`. Web offers `standard` and `mathlib` environments
+with the existing Lean 4.33 default; a Lean 4.34.1 host release needs a compatible
+bootstrap environment. The image preparation script also publishes the complete
+catalog and source objects under agent-readable `/opt/theoremos-library`.
+Deployment must isolate these files from restricted agents; disabling the catalog
+flag alone does not provide that filesystem boundary.
+
+Keep the host setting unset in the existing deployment until those changes are
+ready. This integration leaves the default benchmark pin
+(`38361be884302c7edce1908c4aef8296eb2cb27e`) and normal task workflows unchanged.
+Enabling policy rejects unbound old tasks and
+unauthorized history; create new tasks with the approved binding. Library release
+approval pins are independent of the Library repository's current default branch:
+
+- Source commit: `f7a402f6994e0193eefd824fc8285c16dadb905e`.
+- Five-file manifest SHA-256: `f0a378ef4a3d3d69bbc299cab0009d508c2409e5470c5da8903fc15d78676af8`.
+
+These pins identify the approved artifacts; synthetic fixtures and historical
+three-file releases do not substitute for validating that release on a final
+integration candidate.
+
 ## Historical three-file releases
 
 Set `"format": "legacy"` to select an approved `legacy-library-binding.json` alongside the original `pack.json`, `library.json` and `verification.json`. In this mode `manifestSha256` pins the mapping's exact bytes; `sourceLakeManifest` remains the exact historical source lock. Omitting `format` or selecting `"release"` keeps the five-file path. Unsupported formats fail.

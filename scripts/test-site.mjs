@@ -14,9 +14,9 @@ const replayEvidence = JSON.parse(fs.readFileSync(path.join(root, 'out/site/asse
 const official = catalog.records.filter(record => record.status === 'official_accepted');
 const ongoing = catalog.records.filter(record => record.status === 'in_progress_not_officially_accepted');
 const local = catalog.records.filter(record => record.status === 'locally_verified');
-// The shared replay adds GSAP; Lean sources still load per record from data/sources.
+// The shared replay, roadmap layout and bilingual node labels are UI code. Lean sources still load per record.
 const archiveBundle = fs.readFileSync(path.join(root, 'out/site/site.js'), 'utf8');
-assert.ok(Buffer.byteLength(archiveBundle) < 300_000, 'site.js with the shared replay must not bundle the archive sources');
+assert.ok(Buffer.byteLength(archiveBundle) < 390_000, 'site.js with the replay, roadmap and translated research summaries must not bundle the archive sources');
 assert.equal(archiveBundle.includes('The no-seed alternative of the weighted totient companion theorem.'), false,
   'The Totient Lean source must stay in its lazy source asset');
 const errors = [];
@@ -44,9 +44,9 @@ try {
     assert.match(await page.locator('.campaign-evidence').innerText(), /kernel_verified/);
     assert.match(await page.locator('.campaign-evidence').innerText(), new RegExp(record.campaign.proofSha256));
     assert.equal(await page.locator('.official-result-link').count(), 0);
-    await page.getByRole('tab', { name: '解题过程' }).click();
-    await page.locator('.process-run').first().waitFor();
-    assert.equal(await page.locator('.process-run').count(), record.process.runs.length);
+    await page.getByRole('tab', { name: '路线与轨迹' }).click();
+    await page.locator('.global-history-panel > summary').waitFor();
+    assert.equal(await page.locator('.global-run-lane').count(), record.process.runs.length);
     await page.locator('[data-action="back-list"]').first().click();
   }
   const example = local.find(record => record.campaign.target === 'TotientCompanionZero');
@@ -56,10 +56,10 @@ try {
   await page.locator('#source-file').waitFor();
   assert.equal(await page.locator('#source-file option').count(), example.sources.length);
   assert.match(await page.locator('.source-code').innerText(), /companion_zero_case/);
-  await page.getByRole('tab', { name: '解题过程' }).click();
+  await page.getByRole('tab', { name: '路线与轨迹' }).click();
   const processLink = page.url();
   await page.reload();
-  await page.locator('.process-run').first().waitFor();
+  await page.locator('.global-history-panel > summary').waitFor();
   assert.equal(page.url(), processLink);
   const localDownload = page.waitForEvent('download');
   await page.getByRole('button', { name: '下载此题档案 JSON' }).click();
@@ -97,7 +97,9 @@ try {
   const titles = await page.locator('.row-title').allTextContents();
   assert.deepEqual(titles, [...titles].sort((a, b) => a.localeCompare(b, 'en')));
   await page.locator('[data-proof-id="annals_rademacher_enflo_type"]').click();
-  await page.keyboard.press('Enter');
+  await page.locator('[data-solution-route-state="ready"]').waitFor();
+  assert.equal(await page.locator('.solution-route').getAttribute('data-solution-route-basis'), 'source');
+  await page.locator('[data-action="back-list"]').first().click();
   await page.keyboard.press('ArrowDown');
   assert.notEqual(await page.locator('.proof-row.is-selected').getAttribute('data-proof-id'), 'annals_rademacher_enflo_type');
   await page.locator('[data-proof-id="annals_rademacher_enflo_type"]').click();
@@ -161,18 +163,26 @@ try {
     await page.getByRole('searchbox').fill('');
     await page.locator('[data-proof-id="hopf_rinow"]').click();
     if (viewport.width <= 700) {
-      assert.equal(await page.locator('#inspector').evaluate(element => document.activeElement === element), true);
-      assert.ok(Math.abs(await page.locator('#inspector').evaluate(element => element.getBoundingClientRect().top)) <= 1);
+      await page.locator('[data-solution-route-state="ready"]').waitFor();
+      assert.equal(await page.locator('.process-view-toolbar h4').evaluate(element => document.activeElement === element), true);
+      assert.ok(await page.locator('.process-view-toolbar').evaluate(element =>
+        Math.abs(element.getBoundingClientRect().top - parseFloat(getComputedStyle(element).scrollMarginTop)) <= 1),
+      'The route heading must reach its configured scroll clearance');
+      assert.ok(await page.locator('[data-solution-node]').first().evaluate(element => {
+        const bounds = element.getBoundingClientRect();
+        return bounds.top >= 0 && bounds.bottom <= innerHeight && bounds.left >= 0 && bounds.right <= innerWidth;
+      }), 'The first route node must be visible after opening the mobile source route');
       await page.locator('[data-action="back-list"]').first().click();
       assert.equal(await page.locator('[data-proof-id="hopf_rinow"]').evaluate(element => document.activeElement === element), true);
       await page.keyboard.press('Enter');
-      assert.equal(await page.locator('#inspector').evaluate(element => document.activeElement === element), true);
+      await page.locator('[data-solution-route-state="ready"]').waitFor();
+      assert.equal(await page.locator('.process-view-toolbar h4').evaluate(element => document.activeElement === element), true);
     }
     await page.getByRole('tab', { name: 'Lean 源码' }).click();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `Source overflow at ${viewport.width}px`);
     await page.screenshot({ path: path.join(output, `source-${viewport.width}.png`), fullPage: true });
     await page.goto(`${url}?deep-link=${viewport.width}#proof=${example.id}&tab=process&status=verified`);
-    await page.locator('.process-run').first().waitFor();
+    await page.locator('.global-history-panel > summary').waitFor();
     await page.evaluate(() => document.fonts.ready);
     if (viewport.width <= 700) {
       await page.waitForFunction(() => document.activeElement?.id === 'inspector');

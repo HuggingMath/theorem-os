@@ -8,7 +8,7 @@ import { mathDigest } from '../src/math/mathRuntimeIo';
 import { readSolverRunState } from '../src/solver/archive';
 import { hashMathFormalSourceDeclaration, type MathematicsVerifierBatchRequest, type MathematicsVerifierBatchResult } from '../src/math/verifier';
 import * as verifier from '../src/math/verifier';
-import { readSolverProblem, assertSolverSources, assertSolverProjectSources, commitSolverSources, git, withSolverWorktree, SolverSourceError, type SolverProblem } from '../src/solver/problem';
+import { readSolverProblem, assertSolverSources, assertSolverProjectSources, committedSource, commitSolverSources, git, withSolverWorktree, SolverSourceError, type SolverProblem } from '../src/solver/problem';
 import { ownedSourceDeclarations } from '../src/solver/declarationIndex';
 import { checkProjectedDeclarations, checkSolverProof } from '../src/solver/modules/evidence';
 import { assessTaskResponsibility } from '../src/solver/modules/organization';
@@ -42,6 +42,7 @@ import { deferred } from './helpers/async';
 import { bootstrapLeanTask, leanTaskId } from '../src/math/leanTask';
 import { writeLibraryHostFixture } from './helpers/libraryHostFixture';
 import { prepareLibraryKnowledge } from '../src/solver/theoremKnowledgeLibrary';
+import { planApprovalLog } from '../src/solver/planApproval';
 
 const host = vi.hoisted(() => ({ verify: vi.fn(), createSession: vi.fn(), officialGate: vi.fn(), build: vi.fn(), delay: vi.fn(),
   prepare: vi.fn(), freeze: vi.fn(), readiness: vi.fn(), connectivity: vi.fn(), packages: undefined as string | undefined }));
@@ -429,6 +430,41 @@ describe('isolated solver and host acceptance', () => {
     expect(await runSolver([...f.hostedArgs, '--workers', '2', '--continuation-source-run', '/missing'], directory)).toBe(1);
     expect(host.createSession).not.toHaveBeenCalled();
   });
+  it('rejects a full release catalog before reading it or admitting a hosted provider', async () => {
+    const f = hostedKnowledgeFixture();
+    expect(await runSolver([...f.hostedArgs, '--library-catalog', '/missing',
+      '--library-catalog-sha256', 'a'.repeat(64)], directory)).toBe(1);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('library_knowledge_catalog_unauthorized'));
+    expect(host.connectivity).not.toHaveBeenCalled();
+    expect(host.createSession).not.toHaveBeenCalled();
+  });
+  it('rechecks host policy after preparation without a historical knowledge catalog', async () => {
+    const f = hostedKnowledgeFixture();
+    const applyLibrary = vi.spyOn(directSolverModules.M2, 'applyLibrary');
+    host.connectivity.mockImplementation(async () => {
+      fs.appendFileSync(f.configPath, ' '); return { status: 'reachable', httpStatus: 401 };
+    });
+    expect(await runSolver(f.hostedArgs, directory)).toBe(1);
+    expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ status: 'runtime_error', reason: 'library_host_binding_changed' });
+    expect(applyLibrary).not.toHaveBeenCalled();
+    expect(host.createSession).not.toHaveBeenCalled();
+  });
+  it('rechecks installed-only host policy between model turns', async () => {
+    const f = hostedKnowledgeFixture();
+    vi.spyOn(directSolverModules.M2, 'applyLibrary').mockResolvedValue({ status: 'skipped', reason: 'fixture-policy-check', candidates: [] });
+    host.verify.mockImplementation(async request => failed(verified(request)));
+    const turn = vi.fn(async () => {
+      fs.appendFileSync(f.configPath, ' ');
+      return 'completed';
+    });
+    host.createSession.mockImplementation(session('hosted-policy-drift', turn));
+    expect(await runSolver([...f.hostedArgs, '--max-turns', '2'], directory)).toBe(1);
+    expect(turn).toHaveBeenCalledOnce();
+    expect(host.createSession).toHaveBeenCalledOnce();
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('library_host_binding_changed'));
+    expect(readSolverRunState(output + '.runtime/state.json').knowledgeDigest).toBeUndefined();
+    expect(host.officialGate).not.toHaveBeenCalled();
+  });
   it('rejects host policy changes during preparation before copying knowledge to a worker', async () => {
     const f = hostedKnowledgeFixture();
     host.connectivity.mockImplementation(async () => {
@@ -514,10 +550,10 @@ describe('isolated solver and host acceptance', () => {
         contextDigest: expect.any(String) }),
     ]));
     expect(recorded.knowledgeUses).toEqual([
-      { ...claim, consumer: { taskId: 'original_goal_1', taskDigest: expect.any(String) },
+      { ...claim, source: 'catalog', consumer: { taskId: 'original_goal_1', taskDigest: expect.any(String) },
         status: 'checked-reference', attribution: 'model-reported-origin', catalogDeclarationMatch: false, workerId: 'solver',
         commit: recorded.check!.commit, checkedCommit: recorded.check!.commit, checkedSourceDigest: recorded.check!.sourceDigest },
-      { ...claim, consumer: { taskId: 'original_goal_2', taskDigest: expect.any(String) },
+      { ...claim, source: 'catalog', consumer: { taskId: 'original_goal_2', taskDigest: expect.any(String) },
         status: 'reported-attempt', attribution: 'model-reported-origin', catalogDeclarationMatch: false, workerId: 'solver', commit: recorded.check!.commit },
     ]);
     expect(vi.mocked(console.log).mock.calls.map(([line]) => JSON.parse(line)).filter(item => item.event === 'knowledge_use_rejected'))
@@ -2375,15 +2411,59 @@ describe('isolated solver and host acceptance', () => {
       }
       return 'completed';
     });
-    expect(await runSolver([...args, '--workers', '2', '--max-turns', '3'], directory)).toBe(4);
+    const exitCode = await runSolver([...args, '--workers', '2', '--max-turns', '3'], directory);
+    expect(exitCode, fs.readFileSync(output, 'utf8')).toBe(4);
     expect(attempts).toBe(2);
-    // An absent file is never staged, so a deletion leaves the inherited notes in the delivery commit.
-    const notes = mode === 'deleted' ? 'An old route that has not been checked.' : '';
+    // Tracked deletions are checkpointed; both missing-file cases submit no current findings.
     expect(cooperationState().tasks[0]).toMatchObject({ status: 'blocked', attempts: 2,
       feedback: expect.stringContaining(mode === 'deleted' ? 'Replace inherited RESEARCH.md' : 'Write RESEARCH.md') });
     expect(cooperationState().deliveryReceipts).toEqual(expect.arrayContaining([expect.objectContaining({ taskId: 'question',
-      code: 'math_research_delivery_unchanged', submissionDigest: mathDigest(notes) })]));
+      code: 'math_research_delivery_unchanged', submissionDigest: mathDigest('') })]));
     expect(host.verify).not.toHaveBeenCalled();
+  });
+
+  it('lets a worker replace deleted inherited notes and complete the same research assignment', async () => {
+    const tasks: CooperativeTask[] = [
+      { id: 'question', kind: 'research', objective: 'Find a current proof route', dependsOn: [], revision: 0 },
+      ...planTasks().slice(2).map(task => ({ ...task, dependsOn: task.id === 'first' ? ['question'] : ['first'] })),
+    ];
+    let attempts = 0, seed = '', researchWorkspace = '', seeded = false;
+    const finding = 'The current route uses True.intro for both original targets.';
+    configureCooperation(async (action, options, message) => {
+      if (action.kind === 'lead') {
+        writePlan(options.workspace, tasks);
+        if (!seeded) {
+          seeded = true;
+          for (const worker of JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8')).workers.slice(1)) {
+            fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), 'An old route that has not been checked.');
+            commitSolverSources(problem, worker.worktree);
+          }
+        }
+      } else if (action.kind === 'task' && action.task.id === 'question') {
+        if (++attempts === 1) {
+          seed = action.assignment.seedCommit; researchWorkspace = options.workspace;
+          fs.rmSync(path.join(options.workspace, 'RESEARCH.md'));
+        } else {
+          expect(action.assignment.seedCommit).toBe(seed);
+          expect(options.workspace).toBe(researchWorkspace);
+          expect(message).toContain('math_research_delivery_unchanged: Replace inherited RESEARCH.md');
+          expect(cooperationState().deliveries ?? []).toEqual([]);
+          fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), finding);
+        }
+      } else if (action.kind === 'task') {
+        const file = path.join(options.workspace, 'generated/p/Submission.lean');
+        fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(`${action.task.id} : True := by sorry`, `${action.task.id} : True := by trivial`));
+      } else finishAssignment(action, options);
+      return 'completed';
+    });
+    const exitCode = await runSolver([...args, '--workers', '2', '--max-turns', '8'], directory);
+    expect(exitCode, fs.readFileSync(output, 'utf8')).toBe(0);
+    expect(attempts).toBe(2);
+    expect(cooperationState().tasks[0]).toMatchObject({ status: 'completed', attempts: 2 });
+    expect(cooperationState().deliveries.filter((record: any) => record.kind === 'research'))
+      .toMatchObject([{ taskId: 'question', summary: finding }]);
+    expect(host.verify).toHaveBeenCalled();
+    expect(host.officialGate).toHaveBeenCalledOnce();
   });
 
   it('resumes a proof review checkpoint without accepting its saved verdict prematurely', async () => {
@@ -3917,9 +3997,10 @@ describe('isolated solver and host acceptance', () => {
     expect(host.officialGate).toHaveBeenCalledOnce();
   });
 
-  it('keeps cooperative proof checks bounded independently of an unlimited solving budget', async () => {
+  it.each([0, 1800])('honors default unlimited or explicit proof-check time %s with an unlimited solving budget', async seconds => {
     configureCooperation();
-    const exitCode = await runSolver([...args, '--workers', '4', '--max-turns', '0', '--max-run-seconds', '0'], directory);
+    const exitCode = await runSolver([...args, '--workers', '4', '--max-turns', '0', '--max-run-seconds', '0',
+      ...(seconds ? ['--proof-timeout-seconds', String(seconds)] : [])], directory);
     const state = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
     expect(exitCode, JSON.stringify({ result: JSON.parse(fs.readFileSync(output, 'utf8')),
       tasks: state.cooperation.tasks.map((node: any) => ({ id: node.task.id, status: node.status, feedback: node.feedback })),
@@ -3928,7 +4009,8 @@ describe('isolated solver and host acceptance', () => {
         .filter(event => /error|failed|blocked|idle/u.test(event.event)) }, null, 2)).toBe(0);
     const partialChecks = host.verify.mock.calls.filter(([request]) => request.items.length === 1);
     expect(partialChecks).toHaveLength(6);
-    for (const [request] of partialChecks) expect(request).toMatchObject({ timeoutMs: 1_800_000, batchTimeoutMs: 1_800_000 });
+    for (const [request] of partialChecks) expect(request).toMatchObject({ timeoutMs: seconds ? seconds * 1000 : Infinity,
+      batchTimeoutMs: seconds ? seconds * 1000 : Infinity });
   });
 
   const routeGroups = (): RouteGroup[] => [
@@ -6278,6 +6360,68 @@ describe('isolated solver and host acceptance', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('keeps a pending human plan alive beyond its execution allowance and accepts the original run after approval', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.spyOn(CooperativeResearch.prototype, 'start').mockImplementation(() => {});
+    let cooperative: CooperativeResearch | undefined;
+    const activate = CooperativeResearch.prototype.activate;
+    vi.spyOn(CooperativeResearch.prototype, 'activate').mockImplementation(function (this: CooperativeResearch, ...inputs) {
+      cooperative = this; return activate.apply(this, inputs);
+    });
+    const waiting = deferred();
+    vi.mocked(console.log).mockImplementation(line => {
+      if (typeof line === 'string' && JSON.parse(line).event === 'plan_approval_wait_started') waiting.resolve();
+    });
+    configureCooperation(async (action, options) => {
+      if (action.kind === 'lead') await vi.advanceTimersByTimeAsync(200);
+      finishAssignment(action, options); return 'completed';
+    });
+    const completion = runSolver([...args, '--workers', '4', '--max-turns', '10', '--max-run-seconds', '1', '--plan-approval'], directory);
+    await Promise.race([waiting.promise, completion.then(code => { throw new Error(`fixture_finished_before_approval:${code}`); })]);
+    const stateFile = `${output}.runtime/state.json`, pending = readSolverRunState(stateFile);
+    expect(pending.cooperation!.planApproval!.approvedAt).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(fs.existsSync(output)).toBe(false);
+    expect(host.officialGate).not.toHaveBeenCalled();
+    fs.appendFileSync(planApprovalLog(stateFile), JSON.stringify({ id: 'owner', planVersion: pending.cooperation!.planVersion }) + '\n');
+    await cooperative!.pulse();
+    expect(await completion).toBe(0);
+    const result = JSON.parse(fs.readFileSync(output, 'utf8'));
+    expect(result).toMatchObject({ runId: pending.runId, status: 'evaluated_passed', solveExecutionMs: 200,
+      solveWaitingMs: 600_000, solveWallMs: 600_200 });
+    const accepted = readSolverRunState(stateFile);
+    expect(accepted.problem.receiptDigest).toBe(pending.problem.receiptDigest);
+    expect(accepted.cooperation!.planApproval).toMatchObject({ approvedId: 'owner' });
+    expect(accepted.solveWaitingMs).toBe(600_000);
+    expect(host.officialGate).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['SIGINT', 'SIGTERM'] as const)('still stops a human approval wait on %s and preserves its checkpoint', async interrupt => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.spyOn(CooperativeResearch.prototype, 'start').mockImplementation(() => {});
+    const waiting = deferred();
+    vi.mocked(console.log).mockImplementation(line => {
+      if (typeof line === 'string' && JSON.parse(line).event === 'plan_approval_wait_started') waiting.resolve();
+    });
+    configureCooperation(async (action, options) => {
+      if (action.kind === 'lead') await vi.advanceTimersByTimeAsync(200);
+      finishAssignment(action, options); return 'completed';
+    });
+    const completion = runSolver([...args, '--workers', '4', '--max-turns', '10', '--max-run-seconds', '1', '--plan-approval'], directory);
+    await Promise.race([waiting.promise, completion.then(code => { throw new Error(`fixture_finished_before_approval:${code}`); })]);
+    const stateFile = `${output}.runtime/state.json`, pending = readSolverRunState(stateFile);
+    await vi.advanceTimersByTimeAsync(600_000);
+    process.emit(interrupt);
+    expect(await completion).toBe(4);
+    expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ runId: pending.runId,
+      status: 'limit_reached', reason: 'math_run_stopped', solveExecutionMs: 200, solveWaitingMs: 600_000 });
+    expect(readSolverRunState(stateFile)).toMatchObject({ runId: pending.runId, phase: 'finished',
+      cooperation: { planApproval: { requestedVersion: pending.cooperation!.planVersion } } });
+    expect(host.officialGate).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it.each([1, 300, 3_000_000])('applies a finite %s-second evaluator budget to the integrated Lean recheck', async seconds => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     host.officialGate.mockImplementation(async ({ signal }) => {
@@ -6601,13 +6745,49 @@ describe('isolated solver and host acceptance', () => {
       return { exitCode: 0, timedOut: false, phases: [] };
     });
     expect(await runSolver([...args, '--max-run-seconds', '1'], directory)).toBe(0);
-    expect(host.createSession.mock.calls[0][0].turnTimeoutMs).toBe(180000);
+    expect(host.createSession.mock.calls[0][0].turnTimeoutMs).toBeUndefined();
     const rejected = path.join(directory, 'rejected.json');
     host.prepare.mockResolvedValueOnce({ exitCode: 1, timedOut: false, phases: [], stderr: 'error: unknown module prefix Mathlib' });
     expect(await runSolver([...args, '--output', rejected], directory)).toBe(1);
     expect(host.createSession).toHaveBeenCalledTimes(1);
     expect(JSON.parse(fs.readFileSync(`${rejected}.runtime/state.json`, 'utf8')).phase).toBe('finished');
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('error: unknown module prefix Mathlib'));
+  });
+
+  it('records installed library proof references without a historical catalog or a model usage report', async () => {
+    vi.spyOn(directSolverModules.M2, 'applyLibrary').mockResolvedValue({ status: 'skipped', reason: 'fixture-model-reference', candidates: [] });
+    const lib = 'Submission/Library/Fixture/Lemmas.lean';
+    const source = 'namespace Frozen\ntheorem library_true : True := trivial\nend Frozen\n';
+    fs.mkdirSync(path.join(project, path.dirname(lib)), { recursive: true });
+    fs.writeFileSync(path.join(project, lib), source);
+    const receipt = JSON.parse(fs.readFileSync(problem.activeProblemPath, 'utf8'));
+    fs.writeFileSync(problem.activeProblemPath, JSON.stringify({ ...receipt, solverOwnedFiles: ['Submission.lean', lib],
+      libraryPack: { digest: 'c'.repeat(64), files: { [lib]: mathDigest(source) } } }));
+    git(workspace, ['add', 'generated']);
+    commitFixture(workspace, 'Install library for reference observation');
+    host.createSession.mockImplementation(session('installed-library-use', async options => {
+      fs.writeFileSync(path.join(options.workspace, 'generated/p/Submission.lean'),
+        'import Submission.Library.Fixture.Lemmas\n' + original
+          .replace('first : True := by sorry', 'first : True := by exact Frozen.library_true')
+          .replace('second : True := by sorry', 'second : True := by trivial'));
+      return 'completed';
+    }));
+    host.verify.mockImplementation(async (request: MathematicsVerifierBatchRequest) => {
+      const result = verified(request);
+      return { ...result, results: result.results.map(item => ({ ...item, declarationReferences: { statement: [],
+        proof: item.theoremName === 'Submission.first' ? [{ name: 'Frozen.library_true', file: lib }] : [] } })) };
+    });
+
+    expect(await runSolver(args, directory)).toBe(0);
+
+    const recorded = readSolverRunState(`${output}.runtime/state.json`);
+    expect(recorded.knowledgeDigest).toBeUndefined();
+    expect(recorded.knowledgeUses).toEqual([expect.objectContaining({ source: 'installed-library',
+      declaration: { name: 'Frozen.library_true', file: lib }, consumer: { taskId: 'original_goal_1', taskDigest: expect.any(String) },
+      status: 'checked-reference', attribution: 'host-observed-reference', checkedCommit: recorded.check!.commit,
+    })]);
+    expect(recorded.knowledgeUses![0].application).toBeUndefined();
+    expect(host.officialGate).toHaveBeenCalledOnce();
   });
 
   it('rechecks frozen library-pack modules at startup and stops before the model when one uses sorry', async () => {
@@ -6619,7 +6799,15 @@ describe('isolated solver and host acceptance', () => {
       libraryPack: { digest: 'c'.repeat(64), files: { [lib]: mathDigest(source) } } }));
     git(workspace, ['add', 'generated']);
     commitFixture(workspace, 'Install library pack');
+    host.createSession.mockImplementation(() => { throw new Error('fixture-library-should-close-before-model'); });
     expect(await runSolver(args, directory)).toBe(0);
+    expect(host.createSession).not.toHaveBeenCalled();
+    const solved = readSolverRunState(`${output}.runtime/state.json`);
+    const savedSource = committedSource(solved.worktree, solved.check!.commit, `${solved.problem.projectRelative}/Submission.lean`);
+    expect(savedSource).toContain('import Submission.Library.Fixture.Lemmas');
+    expect(savedSource).toContain('exact _root_.Submission.library_true');
+    expect(savedSource).not.toContain('by sorry');
+    expect(solved.turns).toBe(0);
     const libraryCheck = host.prepare.mock.calls.find(([input]) => input.files.includes(lib));
     expect(libraryCheck?.[0]).toMatchObject({ files: [lib] });
     expect(libraryCheck?.[0]).not.toHaveProperty('dependenciesOnly');

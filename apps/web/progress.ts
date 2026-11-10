@@ -4,6 +4,9 @@ import type { WebEventDetails, WorkerMessage } from './shared';
 const descriptions: Record<string, string> = {
   ready: '原题与运行环境已固定', dependency_check: '正在检查 Lean 依赖',
   proof_environment: '正在准备只读数学依赖', library_index: '正在准备数学库检索',
+  library_pack_check: '正在用 Lean 检查已装入的库', library_pack_cache: '正在准备库编译缓存',
+  library_installation_requested: 'Agent 已请求装入新的库依赖', library_request_rejected: '库安装请求未通过校验',
+  task_library_application: '已检查库定理的实际应用',
   preparation_finished: '题目准备完成', solve_started: '开始研究', turn_started: 'Agent 正在构造候选',
   worker_activity: 'Agent 正在运行', turn_checkpoint: '当前尝试已记录检查点', turn_failed: '当前尝试未完成',
   turn_retry: '准备继续尝试', proof_check_started: '正在检查候选证明',
@@ -38,6 +41,8 @@ const descriptions: Record<string, string> = {
   plan_approval_requested: '研究计划等待你批准，Agent 暂不开始工作', plan_approved: '研究计划已批准，Agent 开始工作',
   plan_approval_rejected: '计划批准未生效，请看当前计划后再批准', plan_approval_revision: 'Lead 正在按你的留言修改计划',
   plan_approval_unanswered: '运行结束时研究计划仍未批准',
+  plan_approval_wait_started: '等待你确认计划，证明预算已暂停',
+  plan_approval_wait_ended: '继续本次研究，证明预算恢复计时',
   // Lead planning and the goal path.
   initial_plan_published: '初始研究计划已发布', plan_published: '研究计划已发布',
   initial_plan_rejected: '初始研究计划未通过校验', plan_publication_rejected: '研究计划发布未通过校验',
@@ -97,6 +102,7 @@ const fields: Record<string, readonly (keyof WebEventDetails)[]> = {
   turn_started: ['turn'], turn_checkpoint: ['turn', 'reason'], proof_check_started: ['turn'],
   proof_checked: ['passed', 'reused'], research_action: ['operation'],
   context_compiled: ['usedBytes', 'maxBytes'], evaluation_finished: ['status'],
+  library_request_rejected: ['reason'], task_library_application: ['taskId', 'passed'],
   task_assigned: ['taskId'], task_checked: ['taskId', 'passed', 'conditional'],
   task_check_reused: ['taskId'], task_failure_check_reused: ['taskId'],
   task_recheck_started: ['taskId'], task_recheck_finished: ['taskId', 'passed'], task_integrated: ['taskId'],

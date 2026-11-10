@@ -66,6 +66,7 @@ export abstract class CooperationCore {
   }>();
   /** Exact helper contracts already tried by the host tactic battery in this process. */
   protected readonly tacticBatteryAttempts = new Set<string>();
+  protected readonly libraryApplicationAttempts = new Set<string>();
   /** Exact family contracts whose host assembly was already checked in this process. */
   protected readonly familyAssemblyAttempts = new Set<string>();
   protected invalidTaskTypes = new Map<TaskRecord, { canonical: string; environment: string; taskDigest: string;
@@ -92,6 +93,7 @@ export abstract class CooperationCore {
   }>();
   protected proofDeliveryChecks = new Set<Promise<void>>();
   protected integrationQueue = Promise.resolve();
+  protected integrationQueueDepth = 0;
   protected leadEvidence = new WeakMap<CooperativeAction, string>();
   private goalProgressTimer?: NodeJS.Timeout;
   protected goalProgressBudget?: { maxTurns: number; deadline: number };
@@ -122,12 +124,14 @@ export abstract class CooperationCore {
   protected abstract canAssemble(commit: string): boolean;
   abstract contextState(action?: CooperativeAction, worker?: ResearchWorker, versions?: TaskVersions): CooperationState;
   constructor(protected readonly input: { state: SolverRunState; workers: readonly ResearchWorker[];
-    access: ReadonlyMap<string, WorkerAccess>; signal: AbortSignal; timeoutMs?: number;
+    access: ReadonlyMap<string, WorkerAccess>; signal: AbortSignal; timeoutMs?: number; taskText?: string;
     /** Fresh, unconditional continuation checks already verified in this process. */
     freshContinuationChecks?: readonly TaskProof[];
     continuousResearch?: boolean;
     modelDispatchAllowed?: () => boolean;
     goalProgressReviewMs?: number;
+    /** Only idle human approval time is excluded; initial planning and owner-requested revisions still execute. */
+    onPlanApprovalWaiting?: (waiting: boolean) => void;
     save: () => void; emit: (event: string, details?: Record<string, unknown>) => void;
     modules: SolverModules; exclusiveCheck: <T>(check: () => Promise<T>) => Promise<T> }) {
     this.lead = input.workers[0];
@@ -636,10 +640,21 @@ export abstract class CooperationCore {
   protected planApprovalPending() {
     return planApprovalStatus(this.input.state) === 'pending';
   }
-  private refreshPlanApproval() {
-    if (!this.planApprovalPending() || this.archive.planApproval?.requestedAt !== undefined) return;
-    this.archive.planApproval = { ...this.archive.planApproval, requestedAt: Date.now(), requestedVersion: this.archive.planVersion };
-    this.input.emit('plan_approval_requested', { planVersion: this.archive.planVersion });
+  protected refreshPlanApproval() {
+    const pending = this.planApprovalPending();
+    if (pending && this.archive.planApproval?.requestedAt === undefined) {
+      this.archive.planApproval = { ...this.archive.planApproval, requestedAt: Date.now(), requestedVersion: this.archive.planVersion };
+      this.input.emit('plan_approval_requested', { planVersion: this.archive.planVersion });
+    }
+    const waiting = pending && !this.stopping && !this.failure && !this.input.signal.aborted &&
+      this.liveWorkers.has(this.lead.id) && !this.active.size && !this.reservedTurns.size &&
+      !this.preparingTaskTypes.size && !this.preparingStatements && !this.planSynchronizations.size &&
+      !this.leadDeliveries.size && !this.deliveryChecks.size && !this.proofPublications.size &&
+      !this.proofDeliveryChecks.size && !this.checkingTaskInputs.size && !this.integrationQueueDepth;
+    // A planning checkpoint may close every model session. Keep the CLI alive to receive approval
+    // while its execution timer is paused, using the existing input poller.
+    if (waiting) this.timer?.ref(); else this.timer?.unref();
+    this.input.onPlanApprovalWaiting?.(waiting);
   }
   protected cancelStaleTaskTypes() {
     for (const pending of this.preparingTaskTypes.values())
@@ -647,6 +662,7 @@ export abstract class CooperationCore {
   }
   protected wake() {
     this.cancelStaleTaskTypes();
+    this.refreshPlanApproval();
     for (const wake of this.waiters) wake();
     this.waiters.clear();
   }

@@ -328,7 +328,7 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     expect(reviews.every(turn => turn.progressReview)).toBe(true);
     expect(idleWakes()).toHaveLength(3);
     expect(fixtureState.check).not.toHaveBeenCalled(); await run.stop();
-  });
+  }, 30_000); // Several simulated hours still perform real disposable Git work at each checkpoint.
 
   it('routes a needs-decision finding arriving during a Lead plan to the next Lead slice instead of letting that plan swallow it', async () => {
     const fixtureState = fixture(), run = fixtureState.start({ saveResearchProgress: true }); await run.ready();

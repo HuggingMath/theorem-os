@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { LeanDeclarationReferences } from './leanReferences';
-import { leanStatementSemanticCommands, leanStatementSemanticSchema, type LeanStatementSemantic } from './leanStatementSemantic';
+import { LEAN_STATEMENT_CONTEXT_BYTES, leanStatementSemanticCommands, leanStatementSemanticSchema,
+  type LeanStatementSemantic } from './leanStatementSemantic';
 
 const structureName = z.string().min(1).max(1000);
 export const leanStatementStructuresSchema = z.object({
@@ -56,6 +57,8 @@ export function leanStatementContextCommands(roots: readonly { id: string; name:
     boundedLibraryContext?: boolean }): string {
   const semanticContext = options?.semanticContext === true || options?.structureContext === true;
   const detailedContext = options?.detailedContext === true || semanticContext;
+  const boundedLibraryContext = options?.structureContext === true && options.boundedLibraryContext === true;
+  const completeContextBytes = boundedLibraryContext ? LEAN_STATEMENT_CONTEXT_BYTES : 240000;
   return [
     'set_option pp.fullNames true',
     'set_option pp.notation false',
@@ -65,7 +68,7 @@ export function leanStatementContextCommands(roots: readonly { id: string; name:
     '  let env <- Lean.getEnv',
     `  let localModules : List String := ${JSON.stringify(projectModules.map(item => item.module))}`,
     `  let projectModules : List (String × String) := [${projectModules.map(item => `(${JSON.stringify(item.module)}, ${JSON.stringify(item.file)})`).join(', ')}]`,
-    ...(semanticContext ? leanStatementSemanticCommands() : []),
+    ...(semanticContext ? leanStatementSemanticCommands(completeContextBytes) : []),
     ...(options?.structureContext === true ? [
       '  let collectStructure (name : Lean.Name) : Lean.Elab.Term.TermElabM (Option Lean.Json) := do',
       '    let some structureInfo := Lean.getStructureInfo? env name | return none',
@@ -162,13 +165,16 @@ export function leanStatementContextCommands(roots: readonly { id: string; name:
       ...(detailedContext ? [
         '    let bindings <- collectBindings root.type',
         '    let mut bytes := statement.utf8ByteSize + bindings.compress.utf8ByteSize',
-        '    if bytes > 240000 then throwError "Statement bindings exceed their export bound"',
+        `    if bytes > ${completeContextBytes} then throwError "Statement bindings exceed their export bound"`,
       ] : ['    let mut bytes := statement.utf8ByteSize']),
       ...(semanticContext ? [
         '    let semantic <- collectStatementSemantic root',
         '    bytes := bytes + semantic.compress.utf8ByteSize',
-        '    if bytes > 240000 then throwError "Statement semantics exceed their export bound"',
+        `    if bytes > ${completeContextBytes} then throwError "Statement semantics exceed their export bound"`,
       ] : []),
+      // v3 gives optional library expansion its own quota. Complete local meaning
+      // remains present and the final report still must fit the transport bound.
+      ...(boundedLibraryContext ? ['    bytes := 0'] : []),
       '    let mut fuel := 10000',
       '    while !todo.isEmpty && fuel > 0 && constants.size < 256 do',
       '      fuel := fuel - 1',
@@ -245,7 +251,8 @@ export function leanStatementContextCommands(roots: readonly { id: string; name:
   ].join('\n');
 }
 
-export function parseLeanStatementContexts(text: string, ids: readonly string[]): Map<string, LeanStatementContext> {
+export function parseLeanStatementContexts(text: string, ids: readonly string[],
+  options?: { boundedLibraryContext?: boolean }): Map<string, LeanStatementContext> {
   const invalid = () => { throw new Error('math_statement_elaboration_invalid'); };
   if (Buffer.byteLength(text) > 4_000_000) return invalid();
   const reports: unknown = JSON.parse(text);
@@ -259,7 +266,7 @@ export function parseLeanStatementContexts(text: string, ids: readonly string[])
           typeof item.module === 'string' && item.module.length <= 1000 && typeof item.type === 'string' && Buffer.byteLength(item.type) <= 8000 &&
           (item.definition === undefined || (typeof item.definition === 'string' && Buffer.byteLength(item.definition) <= 12000))) ||
         !Array.isArray(context.omitted) || context.omitted.length > 257 || !context.omitted.every((item: unknown) => typeof item === 'string' && item.length <= 1000) ||
-        Buffer.byteLength(JSON.stringify(context)) > 256000) return invalid();
+        Buffer.byteLength(JSON.stringify(context)) > (options?.boundedLibraryContext ? LEAN_STATEMENT_CONTEXT_BYTES : 256000)) return invalid();
     const references = context.references;
     if (references !== undefined && (!references || !Array.isArray(references.statement) || references.statement.length > 256 ||
         !Array.isArray(references.proof) || references.proof.length !== 0 || Buffer.byteLength(JSON.stringify(references)) > 8000 || !references.statement.every((item: any) => item &&
@@ -291,7 +298,8 @@ export function parseLeanStatementContexts(text: string, ids: readonly string[])
       if (!validDependencies(bindings.conclusionDependencies, bindings.binders.length)) return invalid();
     }
     const semantic = context.semantic;
-    if (semantic !== undefined && !leanStatementSemanticSchema.safeParse(semantic).success) return invalid();
+    if (semantic !== undefined && (!leanStatementSemanticSchema.safeParse(semantic).success ||
+        !options?.boundedLibraryContext && Buffer.byteLength(JSON.stringify(semantic)) > 240000)) return invalid();
     const structures = context.structures;
     if (structures !== undefined && (!leanStatementStructuresSchema.safeParse(structures).success ||
         structures.entries.some((entry: LeanStatementStructures['entries'][number]) =>

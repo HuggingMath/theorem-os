@@ -5,7 +5,8 @@ import { originalGoalTaskFocus } from './modules/search';
 import type { SolverProblem } from './problem';
 import { isAdvisoryTask, isFinalCandidateReview, taskVersion, type CooperativeAction, type CooperativeTask } from './tasks';
 import type { TheoremKnowledgeBase } from './theoremKnowledge';
-import { knowledgeTypeExpression, searchTheoremKnowledgeRequests } from './theoremKnowledgeSearch';
+import { createTheoremKnowledgeSearchIndex, knowledgeTypeExpression, searchTheoremKnowledgeRequests,
+  type KnowledgeSearchOptions, type KnowledgeSearchRequest } from './theoremKnowledgeSearch';
 import { searchKnowledgeRouteFindingRequests } from './theoremKnowledgeFindings';
 import type { LeanResidualGoal, LeanResidualGoalConsumer, LeanResidualGoalOmission } from '../math/leanResidualGoals';
 import { knowledgeResidualViews, type KnowledgeResidualView } from './theoremKnowledgeGoal';
@@ -15,6 +16,21 @@ export type KnowledgeContextSnapshot = Readonly<{
   digest: string;
   base: Pick<TheoremKnowledgeBase, 'entries' | 'evidence' | 'contexts' | 'routeFindings'>;
 }>;
+const snapshotIndexes = new WeakMap<KnowledgeContextSnapshot, ReturnType<typeof createTheoremKnowledgeSearchIndex>>();
+
+/** Process-local acceleration stays outside the serializable frozen metadata and its identity. */
+export function indexKnowledgeContextSnapshot(snapshot: KnowledgeContextSnapshot): KnowledgeContextSnapshot {
+  snapshotIndexes.set(snapshot, createTheoremKnowledgeSearchIndex(snapshot.base, { displayGrouping: 'exact-interface' }));
+  return snapshot;
+}
+
+/** All searches of a frozen snapshot share its prepared metadata index. */
+export function searchKnowledgeContextSnapshot(snapshot: KnowledgeContextSnapshot, requests: readonly KnowledgeSearchRequest[],
+  options: Pick<KnowledgeSearchOptions, 'limit' | 'environmentDigest' | 'problemReceiptDigest'> = {}) {
+  const index = snapshotIndexes.get(snapshot);
+  return index ? index.search(requests, options) :
+    searchTheoremKnowledgeRequests(snapshot.base, requests, { ...options, displayGrouping: 'exact-interface' });
+}
 export type KnowledgeRetrieval = Readonly<{
   sectionId: string; catalogDigest: string; searchInputDigest: string; consumer: SearchTarget['consumer'];
   candidateIds: readonly string[]; routeFindingIds: readonly string[];
@@ -46,7 +62,7 @@ function originalTarget(problem: SolverProblem, target: { theoremName?: string; 
     goal: knowledgeTypeExpression({ type: matches[0]!.header, typeKind: 'source-header' }) };
 }
 
-function taskTarget(problem: SolverProblem, task: CooperativeTask): SearchTarget | undefined {
+export function taskKnowledgeSearchTarget(problem: SolverProblem, task: CooperativeTask): SearchTarget | undefined {
   if (isFinalCandidateReview(task)) return undefined;
   const target: SearchTarget | undefined = isAdvisoryTask(task)
     ? { consumer: {}, source: 'research-objective', query: task.objective }
@@ -59,7 +75,7 @@ function taskTarget(problem: SolverProblem, task: CooperativeTask): SearchTarget
 function searchTargets(problem: SolverProblem, cooperation?: CooperationState, action?: CooperativeAction,
   environmentDigest?: string): SearchTarget[] {
   if (action?.kind === 'task') {
-    const target = taskTarget(problem, action.task);
+    const target = taskKnowledgeSearchTarget(problem, action.task);
     return target ? [target] : [];
   }
   if (action && action.kind !== 'lead') return [];
@@ -67,7 +83,7 @@ function searchTargets(problem: SolverProblem, cooperation?: CooperationState, a
     const focus = originalGoalTaskFocus(cooperation.tasks, cooperation.groups, environmentDigest);
     const targets = cooperation.tasks.filter(node => focus.frontier.has(node.task.id))
       .toSorted((a, b) => Number(focus.preferred.frontier.has(b.task.id)) - Number(focus.preferred.frontier.has(a.task.id)))
-      .flatMap(node => { const target = taskTarget(problem, node.task); return target ? [target] : []; });
+      .flatMap(node => { const target = taskKnowledgeSearchTarget(problem, node.task); return target ? [target] : []; });
     if (targets.length) return targets.slice(0, maxTargets);
   }
   return problem.targets.flatMap(target => {
@@ -85,6 +101,7 @@ export function knowledgeContextConsumers(problem: SolverProblem, cooperation?: 
 export function knowledgeContextSections(input: {
   problem: SolverProblem; cooperation?: CooperationState; action?: CooperativeAction;
   knowledge: KnowledgeContextSnapshot; environmentDigest?: string;
+  installedLibrary?: KnowledgeContextSnapshot;
   residualGoals?: readonly LeanResidualGoal[];
   residualOmissions?: readonly LeanResidualGoalOmission[];
 }): (ContextSection & { knowledge: KnowledgeRetrieval })[] {
@@ -135,9 +152,8 @@ export function knowledgeContextSections(input: {
       requests.push({ query: item.target.query, goal: item.target.goal });
     }
   }
-  const searches = requests.length ? searchTheoremKnowledgeRequests(knowledge.base, requests, { limit: poolLimit,
-    displayGrouping: 'exact-interface', environmentDigest: input.environmentDigest,
-    problemReceiptDigest: problem.receiptDigest }) : [];
+  const searchOptions = { limit: poolLimit, environmentDigest: input.environmentDigest, problemReceiptDigest: problem.receiptDigest };
+  const searches = requests.length ? searchKnowledgeContextSnapshot(knowledge, requests, searchOptions) : [];
   const findingSearches = requests.length ? searchKnowledgeRouteFindingRequests(knowledge.base, requests, { limit: 2,
     environmentDigest: input.environmentDigest, problemReceiptDigest: problem.receiptDigest }) : [];
   return targets.flatMap(({ items, omissions, inputDigest }) => {
@@ -165,14 +181,21 @@ export function knowledgeContextSections(input: {
       selected = [...new Map([...protectedHits, ...(relation ? [relation] : []), ...alternatives]
         .map(hit => [hit.id, hit])).values()].slice(0, displayLimit);
     }
-    const candidates = selected.map(hit => ({ id: hit.id, name: hit.name, kind: hit.kind,
+    const candidates = selected.map(hit => {
+      const entry = entries.get(hit.id)!;
+      const installed = input.installedLibrary?.base.entries.find(item => item.name === entry.name && item.file === entry.file &&
+        input.installedLibrary!.base.contexts[item.contextDigest]?.[item.file] === knowledge.base.contexts?.[entry.contextDigest]?.[entry.file]);
+      return { id: hit.id, name: hit.name, kind: hit.kind,
       typeKind: hit.typeKind, typePreview: hit.typePreview, typeTruncated: hit.typeTruncated,
       dependencyCoverage: hit.dependencyCoverage, environmentMatch: hit.environmentMatch,
       consumers: hit.consumers,
       problemReceiptMatch: hit.problemReceiptMatch, versionCount: hit.versionCount,
       declarationVariantCount: hit.declarationVariantCount,
+      ...(installed ? { installation: { status: 'installed-frozen',
+        import: `import ${entry.file.slice(0, -5).replaceAll('/', '.')}`, file: entry.file } } : {}),
       ...(hit.exactMatch ? { exactMatch: hit.exactMatch } : {}), ...(hit.relation ? { relation: hit.relation } : {}),
-      ...(applicationSummary(hit.id) ? { applicationHints: applicationSummary(hit.id) } : {}) }));
+      ...(applicationSummary(hit.id) ? { applicationHints: applicationSummary(hit.id) } : {}) };
+    });
     const routeFindings = [...new Map(items.flatMap(item => item.requestIndex !== undefined ? findingSearches[item.requestIndex]!.hits : [])
       .map(hit => [hit.id, hit])).values()].slice(0, 2);
     const residualSearches = items.flatMap(item => item.view && item.target.diagnostic ? [{ inputDigest: item.inputDigest,
@@ -213,7 +236,7 @@ export function knowledgeContextSections(input: {
     }
     const sectionId = `knowledge:${inputDigest}`;
     const sections: (ContextSection & { knowledge: KnowledgeRetrieval })[] = Buffer.byteLength(text) <= maxSectionBytes
-      ? [{ id: sectionId, kind: 'sources' as const, text, priority: 7, knowledge: { sectionId,
+      ? [{ id: sectionId, kind: 'sources' as const, text, priority: 4, knowledge: { sectionId,
         catalogDigest: knowledge.digest, searchInputDigest: inputDigest, consumer: target.consumer,
         searchSource: target.source, ...(target.diagnostic ? { diagnostic: target.diagnostic } : {}),
         ...(residualSearches.length ? { residualSearches } : {}),

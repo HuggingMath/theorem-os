@@ -93,6 +93,13 @@ async function open(browser: Browser, url: string, options: { locale?: 'zh' | 'e
   return { context, page };
 }
 const explainReady = (page: Page) => page.locator('#explain-content:not([hidden])').waitFor();
+const mathReady = async (page: Page) => {
+  await page.waitForFunction(() => {
+    const formulas = [...document.querySelectorAll<HTMLElement>('.explain-document .math')];
+    return formulas.length > 0 && formulas.every(formula => ['ready', 'source'].includes(formula.dataset.mathState ?? ''));
+  });
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
+};
 /** Proof lines carrying a mark, as 1-based numbers. */
 const marked = (page: Page, kind: string) => page.locator(`#explain-lean-code .lean-row.is-${kind}`)
   .evaluateAll(rows => rows.map(row => Number((row as HTMLElement).dataset.line)));
@@ -185,6 +192,7 @@ try {
   await card.locator('[data-action="generate"]').waitFor();
   assert.match(await card.locator('.explain-estimate').innerText(), /^预计约 [\d.]+ 小时，约 [\d.]+ 万 Token。$/u);
   assert.equal(await page.locator('#explain-lean-legend').isVisible(), false, 'no margin legend before there is an explanation');
+  assert.equal(await page.locator('#explain-prose .solution-route').count(), 0, 'an unapproved source does not install a mathematical explanation graph');
   mark('the page opens on the full Lean proof with an estimate and a generate button, nothing generated yet');
 
   // Generation asks for a Key, shows the run's model, and never echoes the Key.
@@ -206,6 +214,7 @@ try {
   { apiKey: credential, target: 'target_thm', language: 'zh', model: 'deepseek-flash', proof });
   assert.equal((await page.content()).includes(credential), false, 'the Key never reaches the page');
   await page.locator('#explain-prose .explain-progress').waitFor();
+  assert.equal(await page.locator('#explain-prose .solution-route').count(), 0, 'generation progress is not a completed derivation');
   explains[0]!.send({ type: 'progress', progress: { phase: 'auditing', batches: 1, approvedBatches: 0, round: 1, tokens: 1234 } });
   await page.locator('.explain-phases li.active').filter({ hasText: '正在审核' }).waitFor({ timeout: 15_000 });
   await page.screenshot({ path: path.join(output, 'explain-progress-1440.png') });
@@ -234,15 +243,40 @@ try {
   assert.equal(await page.locator('.explain-steps > li').count(), 14);
   mark('an approved explanation appears without a reload: one section per declaration, the target marked');
 
-  // Mathematics is drawn with elements; what does not parse stays as written.
-  assert.equal(await page.locator('.explain-document .math-source').count(), 1, 'only the unclosed formula falls back');
-  assert.equal(await page.locator('.explain-document .math-source').innerText(), 'x^{');
-  assert.equal(await page.locator('.explain-document .math-frac').count(), 6);
-  assert.ok(await page.locator('.explain-document .math-scripts').count() >= 2, 'the sums carry both limits');
-  const titled = await page.locator('.explain-document .math').evaluateAll(nodes => nodes.map(node => [node.getAttribute('title'), node.textContent]));
-  assert.ok(titled.some(([title, text]) => title === 'a, b \\in \\mathbb{N}' && text?.includes('ℕ') && text.includes('∈')), 'a formula keeps its source as the title');
-  assert.equal(await page.locator('.explain-document strong').filter({ hasText: '前三个引理' }).count(), 1);
+  // Mathematics finishes loading before its semantic MathML and source fallback are checked.
+  await mathReady(page);
+  assert.equal(await page.locator('.explain-section .math-source').count(), 1, 'only the unclosed formula falls back in the prose sections');
+  assert.equal(await page.locator('.explain-section .math-source').innerText(), 'x^{');
+  assert.equal(await page.locator('.explain-section .math-source').getAttribute('data-math-state'), 'source');
+  assert.equal(await page.locator('.explain-section .math-source').getAttribute('title'), 'x^{');
+  assert.equal(await page.locator('.explain-section math mfrac').count(), 6, 'each saved fraction has a MathML numerator and denominator');
+  const sums = await page.locator('.explain-section math').evaluateAll(nodes => nodes.flatMap(node =>
+    [...node.querySelectorAll('msubsup, munderover')].filter(script => script.firstElementChild?.textContent?.includes('∑'))
+      .map(script => [...script.children].slice(1).map(limit => limit.textContent?.replace(/\s/gu, '')))));
+  assert.deepEqual(sums, [['i=1', '3'], ['i=1', '3']], 'both sums carry their actual lower and upper limits');
+  const titled = await page.locator('.explain-section .math').evaluateAll(nodes => nodes.map(node => ({ title: node.getAttribute('title'),
+    membership: [...node.querySelectorAll('math mo')].some(operator => operator.textContent === '∈'),
+    naturals: [...node.querySelectorAll('math mi')].some(identifier => identifier.textContent === 'ℕ'
+      || (identifier.textContent === 'N' && identifier.getAttribute('mathvariant') === 'double-struck')) })));
+  assert.ok(titled.some(formula => formula.title === 'a, b \\in \\mathbb{N}' && formula.membership && formula.naturals),
+    'a formula keeps its source as the title and renders set membership in the natural numbers');
+  assert.equal(await page.locator('.explain-section strong').filter({ hasText: '前三个引理' }).count(), 1);
   mark('formulas, bold and code render as elements and an unparseable formula shows its source');
+
+  const route = page.locator('#explain-prose .solution-route');
+  await route.waitFor();
+  assert.equal(await route.getAttribute('data-solution-route-basis'), 'explanation');
+  assert.equal(await route.locator('[data-solution-edge="dependency"][data-to="declaration:target_thm"]').count(), 6,
+    'the common graph connects each cited helper to the target');
+  await route.locator('[data-solution-select="derivation:target_thm:0"]').click();
+  assert.match(await route.locator('[data-solution-inspector]').innerText(), /前三个引理/u, 'the graph retains the full saved derivation');
+  assert.match(await route.locator('[data-solution-inspector]').innerText(), /have k1 := step_1 a b/u, 'the graph shows the exact source of this step');
+  await route.locator('[data-solution-open]').click();
+  const graphLines = explained.sections.at(-1)!.steps[0]!.lines.flatMap(item => range(item.start, item.end));
+  await until(async () => JSON.stringify(await marked(page, 'active')) === JSON.stringify(graphLines), 'the graph selects its exact Lean step');
+  assert.equal(await page.locator('.explain-steps > li.is-active[data-step="0"]').getAttribute('data-anchor'), '6');
+  await route.locator('[data-solution-node="declaration:target_thm"]').click();
+  mark('the same graph displays saved derivations and opens their exact Lean lines in the explanation reader');
 
   // Clicking a step marks its Lean lines and scrolls the proof to them; clicking a Lean line does the reverse.
   const sections = explained.sections, last = sections.length - 1;
@@ -486,6 +520,7 @@ try {
   const storageState = await owner.context.storageState(), url = page.url();
   const dark = await open(browser, url, { theme: 'dark', storageState });
   await dark.page.locator('#explain-prose .explain-document').waitFor();
+  await mathReady(dark.page);
   await dark.page.locator(`[data-action="lines"][data-section="${last}"][data-step="1"]`).click();
   await dark.page.locator('.explain-steps > li[data-anchor="0"][data-step="0"] [data-action="use-lean"]').click();
   await dark.page.waitForTimeout(800);
@@ -506,24 +541,29 @@ try {
   // Phones show one pane at a time; a step's line chip switches to the proof.
   const phone = await open(browser, url, { width: 390, height: 844, storageState });
   await phone.page.locator('#explain-prose .explain-document').waitFor();
+  await mathReady(phone.page);
   assert.equal(await phone.page.locator('#explain-split').getAttribute('data-pane'), 'prose');
   assert.equal(await phone.page.locator('#explain-lean').isVisible(), false, 'the proof pane waits behind the switch');
   assert.equal(await phone.page.locator('#explain-sync').isVisible(), false, 'sync has no meaning with one pane');
   await phone.page.screenshot({ path: path.join(output, 'explain-prose-390.png') });
-  // A long inline formula wraps only after its relations and operators: it stays inside the phone's width, and in a step
-  // too narrow for anything it takes every break it has, one line per piece, without splitting a piece. Chromium also breaks
-  // at the margins of operators, so the <wbr>s, which every browser honors, are counted rather than seen.
+  // Long formulas stay within the phone pane; an indivisible expression can scroll inside its own box when needed.
   const formulas = await phone.page.locator('#explain-prose').evaluate(pane => {
-    const lines = (element: Element) => new Set([...element.getClientRects()].map(rect => Math.round(rect.top))).size;
-    const right = pane.getBoundingClientRect().left + pane.clientWidth - parseFloat(getComputedStyle(pane).paddingRight);
-    const all = [...pane.querySelectorAll('.math')], long = all.find(item => item.getAttribute('title')?.includes('succ'))!, step = long.closest('li')!;
-    const over = all.filter(item => Math.max(...[...item.getClientRects()].map(rect => rect.right)) > right + 1).length;
-    step.style.width = '1px';
-    const pieces = [...long.querySelectorAll('.math-piece')], narrow = { lines: lines(long), pieces: pieces.length, split: pieces.filter(piece => lines(piece) > 1).length };
-    step.style.width = '';
-    return { over, ...narrow, breaks: long.querySelectorAll(':scope > wbr').length, wraps: getComputedStyle(long).whiteSpace, text: long.textContent!.replace(/\s/gu, '') === 'a+b+1=succ(a+b)=succ(b+a)=b+a+1' };
+    const style = getComputedStyle(pane), bounds = pane.getBoundingClientRect();
+    const left = bounds.left + parseFloat(style.paddingLeft), right = bounds.left + pane.clientWidth - parseFloat(style.paddingRight);
+    const all = [...pane.querySelectorAll<HTMLElement>('.explain-section .math')], long = all.find(item => item.getAttribute('title')?.includes('succ'))!;
+    const over = all.filter(item => [...item.getClientRects()].some(rect => rect.left < left - 1 || rect.right > right + 1)).length;
+    const source = long.title, width = long.style.width, maxWidth = long.style.maxWidth;
+    long.style.width = '3em'; long.style.maxWidth = '3em';
+    const overflow = long.scrollWidth > long.clientWidth + 1, scrollable = /auto|scroll/u.test(getComputedStyle(long).overflowX);
+    long.scrollLeft = long.scrollWidth;
+    const scrolled = long.scrollLeft > 0;
+    long.style.width = width; long.style.maxWidth = maxWidth; long.scrollLeft = 0;
+    return { over, paneWide: pane.scrollWidth > pane.clientWidth + 1, pageWide: document.documentElement.scrollWidth > innerWidth + 1,
+      ready: long.dataset.mathState === 'ready', semantic: Boolean(long.querySelector('math')), overflow, scrollable, scrolled, source };
   });
-  assert.deepEqual(formulas, { over: 0, lines: 8, pieces: 8, split: 0, breaks: 7, wraps: 'normal', text: true });
+  assert.deepEqual(formulas, { over: 0, paneWide: false, pageWide: false, ready: true, semantic: true,
+    overflow: true, scrollable: true, scrolled: true,
+    source: 'a + b + 1 = \\mathrm{succ}\\,(a + b) = \\mathrm{succ}\\,(b + a) = b + a + 1' });
   const phoneGoals = phone.page.locator(`.explain-steps > li[data-anchor="${last}"][data-step="0"] .explain-goals`);
   await phoneGoals.locator('summary').click();
   assert.equal(await phone.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'open goals do not widen the phone page');
@@ -558,7 +598,7 @@ try {
   await phone.page.locator('#explain-split[data-pane="prose"]').waitFor();
   await until(async () => await phoneProse() === phoneBefore, 'the phone explanation is back at the citation');
   await phone.context.close();
-  mark('on a 390 pixel phone the panes switch, long Lean lines and formulas wrap, a line chip or a cited name opens the proof there, and Back after a cited lemma returns to the citation from either pane');
+  mark('on a 390 pixel phone the panes switch, long Lean lines wrap and formulas stay within their own scrollable boxes, a line chip or a cited name opens the proof there, and Back after a cited lemma returns to the citation from either pane');
 
   // In English the page chrome is English; the explanation keeps its own language and English has its own empty card.
   const english = await open(browser, url, { locale: 'en', storageState });

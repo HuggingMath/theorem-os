@@ -1,3 +1,4 @@
+import type { WorkerFormalizationAuditInput } from './formalizationAuditTypes';
 import { spawn } from 'node:child_process';
 import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -12,9 +13,14 @@ import { isWebFormalizationActivityBody } from './formalizationActivityValidatio
 import type { WebEventDetails } from './shared';
 import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
 import type { WebPrecheckOutput, WebPrecheckRunner } from './precheck';
-import { validateTheoremKnowledge } from '../../src/solver/theoremKnowledge';
+import { candidateTargetQuery, candidateTargetWasChecked } from './candidateTargetCheck';
+import { ExecutionDeadline } from '../../src/runtime/executionDeadline';
+import { allowedKnowledgeFile, validateTheoremKnowledge } from '../../src/solver/theoremKnowledge';
+import { MAX_LIBRARY_PACK_BYTES, MAX_LIBRARY_PACK_MODULES, MAX_LIBRARY_MODULE_BYTES, parseLibraryPack } from '../../src/math/libraryPacks';
+import { mathConstructionImports } from '../../src/math/mathConstructionSources';
+import { formalizationAuditResultSchema } from '../../src/math/formalizationAudit';
 import { webFormalizationPhases, webFormalizationReason, type WorkerFormalizationInput,
-  type WorkerFormalizationMessage } from './formalizationTypes';
+  type WorkerFormalizationMessage, type WorkerFormalizationAuditMessage } from './formalizationTypes';
 
 export type WebRunner = {
   readiness(): Promise<{ ready: boolean; message: string }>;
@@ -24,8 +30,10 @@ export type WebRunner = {
   check?: WebPrecheckRunner;
   /** Writes and audits a proof explanation in its own container; absent when the service cannot. */
   explain?(input: WorkerExplanationInput, onMessage: (message: WorkerExplanationMessage) => void, signal: AbortSignal): Promise<void>;
-  /** Formalizes and independently reviews an original problem; confirmation belongs to the workbench. */
+  /** Produces a frozen compiled statement; confirmation belongs to the workbench. */
   formalize?(input: WorkerFormalizationInput, onMessage: (message: WorkerFormalizationMessage) => void, signal: AbortSignal): Promise<void>;
+  /** Reviews an already available statement in a separate background container. */
+  auditFormalization?(input: WorkerFormalizationAuditInput, onMessage: (message: WorkerFormalizationAuditMessage) => void, signal: AbortSignal): Promise<void>;
 };
 const execute = promisify(execFile);
 const object = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -53,6 +61,8 @@ export function isWebObservation(value: unknown): value is WebObservation {
       ['id', 'taskId', 'taskVersion', 'commit', 'sourceDigest', 'environmentDigest'].every(field => typeof check[field] === 'string'));
 }
 const workerMessageSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('library_restart'), previousSolverRunId: z.string().min(1).max(128),
+    solverRunId: z.string().min(1).max(128), round: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict(),
   z.object({ type: z.literal('progress'), event: z.string().min(1).max(100), message: z.string().max(2_000),
     details: z.custom<WebEventDetails>(isWebEventDetails).optional() }).strict(),
   z.object({ type: z.literal('error'), message: z.string().min(1).max(2_000),
@@ -101,11 +111,14 @@ const formalizationMessageSchema = z.union([
   z.object({ type: z.literal('activity'), activity: z.custom(isWebFormalizationActivityBody) }).strict(),
   z.object({ type: z.literal('result'), status: z.literal('approved'), evidence: z.record(z.unknown()) }).strict(),
   z.object({ type: z.literal('result'), status: z.enum(['exhausted', 'error']), reason: z.string().regex(webFormalizationReason) }).strict(),
+  z.object({ type: z.literal('audit-progress'), tokens: count }).strict(),
+  z.object({ type: z.literal('audit-result'), result: formalizationAuditResultSchema }).strict(),
+  z.object({ type: z.literal('audit-error'), reason: z.string().regex(webFormalizationReason) }).strict(),
 ]);
-export function parseFormalizationMessage(line: string): WorkerFormalizationMessage | undefined {
+export function parseFormalizationMessage(line: string): WorkerFormalizationMessage | WorkerFormalizationAuditMessage | undefined {
   try {
     const message = formalizationMessageSchema.safeParse(JSON.parse(line));
-    return message.success ? message.data as WorkerFormalizationMessage : undefined;
+    return message.success ? message.data as WorkerFormalizationMessage | WorkerFormalizationAuditMessage : undefined;
   } catch { return undefined; }
 }
 
@@ -149,23 +162,76 @@ export class DockerWebRunner implements WebRunner {
    * Compiles the statement as one file in a throwaway container: no network, no workspace, read-only image, a few
    * seconds of CPU. The source travels over stdin. Mathlib checks read the image's prebuilt packages directly.
    */
-  check: WebPrecheckRunner = async ({ environment, source }, signal) => {
+  check: WebPrecheckRunner = async ({ environment, source, libraryPack, sourceFile = 'Submission.lean', dependencySources = [], candidateTarget }, signal) => {
     signal.throwIfAborted();
     const name = `theoremos-check-${crypto.randomUUID()}`;
     const mathlib = environment === 'mathlib';
     const memory = mathlib ? '6g' : '2g';
-    const script = 'cat > /tmp/Submission.lean && ' + (mathlib
-      ? 'LP=; for d in /opt/theoremos-mathlib/.lake/packages/*/.lake/build/lib/lean; do LP="$LP:$d"; done; LEAN_PATH="${LP#:}" '
-      : '') + 'exec lean --json /tmp/Submission.lean';
+    // A pack is validated before any of its paths reach the container. Compile dependencies first,
+    // then the submitted source, under the same pinned environment as an ordinary statement check.
+    const pack = libraryPack && parseLibraryPack(libraryPack);
+    if (pack?.requires?.length) throw new Error('math_library_pack_external_requirements_unavailable');
+    const packed = (pack?.modules ?? []) as { file: string; source: string }[];
+    const validFile = (file: string) => file.length <= 512 && allowedKnowledgeFile(file) && file.endsWith('.lean') && file !== 'lakefile.lean';
+    if (!validFile(sourceFile)) throw new Error('web_check_source_path_invalid');
+    const modules = new Map<string, { file: string; source: string }>();
+    let bytes = 0;
+    for (const item of [...packed, ...dependencySources]) {
+      if (!validFile(item.file) || item.file === sourceFile) throw new Error('web_check_dependency_path_invalid');
+      const name = item.file.slice(0, -5).replaceAll('/', '.'), previous = modules.get(name);
+      if (previous) {
+        if (previous.source !== item.source) throw new Error('web_check_dependency_conflict');
+        continue;
+      }
+      bytes += Buffer.byteLength(item.source);
+      if (modules.size >= MAX_LIBRARY_PACK_MODULES || Buffer.byteLength(item.source) > MAX_LIBRARY_MODULE_BYTES || bytes > MAX_LIBRARY_PACK_BYTES)
+        throw new Error('web_check_dependencies_too_large');
+      if (item.source.includes('\0') || Buffer.from(item.source).toString('utf8') !== item.source) throw new Error('web_check_dependency_source_invalid');
+      modules.set(name, item);
+    }
+    const ordered: { file: string; source: string }[] = [], visited = new Set<string>(), visiting = new Set<string>();
+    const visit = (name: string) => {
+      if (visited.has(name)) return;
+      if (visiting.has(name) || name === sourceFile.slice(0, -5).replaceAll('/', '.')) throw new Error('web_check_dependency_cycle');
+      const item = modules.get(name);
+      if (!item) return;
+      visiting.add(name);
+      for (const dependency of mathConstructionImports(item.source)) visit(dependency);
+      visiting.delete(name); visited.add(name); ordered.push(item);
+    };
+    // Published packs are checked in full. Mutable owned files are only compiled when this candidate imports them.
+    for (const item of packed) visit(item.file.slice(0, -5).replaceAll('/', '.'));
+    for (const name of mathConstructionImports(source)) visit(name);
+    const marker = candidateTarget && `THEOREMOS_CANDIDATE_TARGET_${crypto.randomBytes(16).toString('hex')}`;
+    const query = candidateTarget && candidateTargetQuery(sourceFile.slice(0, -5).replaceAll('/', '.'), source, candidateTarget, marker!);
+    const queryFile = query && `TheoremOSCandidateCheck${crypto.randomBytes(16).toString('hex')}.lean`;
+    const withFiles = Boolean(pack || dependencySources.length || sourceFile !== 'Submission.lean' || candidateTarget);
+    const compilePack = `const fs=require("node:fs"); const p=JSON.parse(await Bun.stdin.text());
+      process.chdir("/tmp");
+      for(const m of p.modules){fs.mkdirSync(require("node:path").dirname(m.file),{recursive:true});fs.writeFileSync(m.file,m.source);
+        const r=Bun.spawnSync(["lean","--json","-o",m.file.slice(0,-5)+".olean",m.file],{stdout:"inherit",stderr:"inherit"});if(r.exitCode!==0)process.exit(r.exitCode??1);}
+      fs.mkdirSync(require("node:path").dirname(p.sourceFile),{recursive:true});fs.writeFileSync(p.sourceFile,p.source);
+      const args=["lean","--json",...(p.query?["-o",p.sourceFile.slice(0,-5)+".olean"]:[]),p.sourceFile];
+      const checked=Bun.spawnSync(args,{stdout:"inherit",stderr:"inherit"});if(checked.exitCode!==0)process.exit(checked.exitCode??1);
+      if(p.query){fs.writeFileSync(p.queryFile,p.query);
+        process.exit(Bun.spawnSync(["lean","--json",p.queryFile],{stdout:"inherit",stderr:"inherit"}).exitCode??1);}`;
+    const pathSetup = mathlib
+      ? 'LP=/opt/theoremos-library/.lake/build/lib/lean; for d in /opt/theoremos-mathlib/.lake/packages/*/.lake/build/lib/lean; do LP="$LP:$d"; done; LEAN_PATH="$LP" '
+      : '';
+    const script = withFiles
+      ? (mathlib ? pathSetup.replace('LEAN_PATH="$LP" ', 'export LEAN_PATH="/tmp:$LP"; ') : 'export LEAN_PATH=/tmp; ')
+        + "exec bun -e '" + compilePack + "'"
+      : 'cat > /tmp/Submission.lean && ' + pathSetup + 'exec lean --json /tmp/Submission.lean';
     const remove = () => execute('docker', ['rm', '--force', name], { timeout: 15_000 }).then(() => {}, () => {});
     try {
       await execute('docker', ['create', '--interactive', '--pull=never', '--name', name, '--network=none', '--log-driver=none',
         '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--cpus=2', `--memory=${memory}`, `--memory-swap=${memory}`,
-        '--pids-limit=128', '--ulimit', 'nofile=1024:1024', '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=16777216,mode=1777',
+        '--pids-limit=128', '--ulimit', 'nofile=1024:1024', '--tmpfs', `/tmp:rw,noexec,nosuid,nodev,size=${withFiles ? 134217728 : 16777216},mode=1777`,
         ...webPrivateImagePaths.flatMap(hidden => ['--tmpfs', `${hidden}:ro,noexec,nosuid,nodev,size=4096,mode=0555`]),
         '--entrypoint', 'sh', this.config.workerImage, '-c', script], { timeout: 30_000, maxBuffer: 8_192 });
     } catch (error) { await remove(); throw error; }
     try {
+      signal.throwIfAborted();
       return await new Promise<WebPrecheckOutput>((resolve, reject) => {
         const child = spawn('docker', ['start', '--attach', '--interactive', name], { stdio: ['pipe', 'pipe', 'ignore'] });
         let output = '', timedOut = false, settled = false;
@@ -185,8 +251,9 @@ export class DockerWebRunner implements WebRunner {
         });
         child.stdin.on('error', () => {});
         child.once('error', error => finish(undefined, error));
-        child.once('close', code => finish({ output, exitCode: code, timedOut }));
-        child.stdin.end(source);
+        child.once('close', code => finish({ output, exitCode: code, timedOut,
+          ...(candidateTarget && code === 0 && !timedOut && candidateTargetWasChecked(output, marker!) ? { checkedTarget: candidateTarget.name } : {}) }));
+        child.stdin.end(withFiles ? JSON.stringify({ source, sourceFile, modules: ordered, ...(query ? { query, queryFile } : {}) }) : source);
       });
     } finally { await remove(); }
   };
@@ -252,11 +319,12 @@ export class DockerWebRunner implements WebRunner {
         });
       })();
       const abort = () => { void stop(); };
-      const timer = setTimeout(abort, (input.input.maxRunSeconds + (mathlib ? 600 : 0) + 240) * 1_000);
+      const watchdog = new ExecutionDeadline(input.input.maxRunSeconds === 0 ? Number.POSITIVE_INFINITY
+        : (input.input.maxRunSeconds + (mathlib ? 600 : 0) + 240) * 1_000, abort);
       signal.addEventListener('abort', abort, { once: true });
       const finish = async (error?: Error) => {
         if (finished) return;
-        finished = true; clearTimeout(timer); signal.removeEventListener('abort', abort);
+        finished = true; watchdog.stop(); signal.removeEventListener('abort', abort);
         if (error || signal.aborted) await stop();
         await stopping;
         if (error) reject(error); else resolve();
@@ -271,6 +339,10 @@ export class DockerWebRunner implements WebRunner {
           const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1);
           const message = parseWorkerMessage(line);
           if (message) {
+            if (input.input.planApproval && message.type === 'progress') {
+              if (message.event === 'plan_approval_wait_started') watchdog.setWaiting(true);
+              else if (message.event === 'plan_approval_wait_ended') watchdog.setWaiting(false);
+            }
             if (message.type === 'result') receivedResult = true;
             onMessage(message);
           }
@@ -320,7 +392,8 @@ export class DockerWebRunner implements WebRunner {
           if (error) { child.kill('SIGKILL'); reject(error); } else resolve();
         };
         const abort = () => finish(new Error('explanation_cancelled'));
-        const timer = setTimeout(() => finish(new Error('explanation_timeout')), (input.maxRunSeconds + (mathlib ? 1_200 : 600)) * 1_000);
+        const timer = input.maxRunSeconds === 0 ? undefined
+          : setTimeout(() => finish(new Error('explanation_timeout')), (input.maxRunSeconds + (mathlib ? 1_200 : 600)) * 1_000);
         signal.addEventListener('abort', abort, { once: true });
         child.stdout.setEncoding('utf8');
         child.stdout.on('data', chunk => {
@@ -342,10 +415,21 @@ export class DockerWebRunner implements WebRunner {
     } finally { await remove(); }
   }
 
-  /** A private container for planning, Lean compilation, blind backtranslation and unanimous review. */
+  /** Foreground generation and background review have separate container lifetimes. */
   async formalize(input: WorkerFormalizationInput, onMessage: (message: WorkerFormalizationMessage) => void, signal: AbortSignal): Promise<void> {
+    return this.formalizationContainer(input, message => {
+      if (message.type === 'progress' || message.type === 'activity' || message.type === 'result') onMessage(message);
+    }, signal);
+  }
+  async auditFormalization(input: WorkerFormalizationAuditInput, onMessage: (message: WorkerFormalizationAuditMessage) => void, signal: AbortSignal): Promise<void> {
+    return this.formalizationContainer(input, message => {
+      if (message.type === 'audit-progress' || message.type === 'audit-result' || message.type === 'audit-error') onMessage(message);
+    }, signal);
+  }
+  private async formalizationContainer(input: WorkerFormalizationInput | WorkerFormalizationAuditInput,
+    onMessage: (message: WorkerFormalizationMessage | WorkerFormalizationAuditMessage) => void, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
-    const name = `theoremos-formalize-${input.id}`, mathlib = input.environment === 'mathlib';
+    const name = `theoremos-formalize-${'operation' in input ? 'audit-' : ''}${input.id}`, mathlib = input.environment === 'mathlib';
     const memory = mathlib ? '12g' : '4g';
     const remove = () => execute('docker', ['rm', '--force', '--volumes', name], { timeout: 15_000 }).then(() => {}, () => {});
     try {
@@ -371,7 +455,8 @@ export class DockerWebRunner implements WebRunner {
           if (error) { child.kill('SIGKILL'); reject(error); } else resolve();
         };
         const abort = () => finish(new Error('formalization_cancelled'));
-        const timer = setTimeout(() => finish(new Error('formalization_timeout')), (input.maxRunSeconds + (mathlib ? 1_200 : 600)) * 1_000);
+        const timer = input.maxRunSeconds === 0 ? undefined
+          : setTimeout(() => finish(new Error('formalization_timeout')), (input.maxRunSeconds + (mathlib ? 1_200 : 600)) * 1_000);
         signal.addEventListener('abort', abort, { once: true });
         child.stdout.setEncoding('utf8');
         child.stdout.on('data', chunk => {
@@ -379,7 +464,8 @@ export class DockerWebRunner implements WebRunner {
           for (let newline = buffer.indexOf('\n'); newline >= 0; newline = buffer.indexOf('\n')) {
             const message = parseFormalizationMessage(buffer.slice(0, newline));
             buffer = buffer.slice(newline + 1);
-            if (message?.type === 'result') received = true;
+            if ('operation' in input ? message?.type === 'audit-result' || message?.type === 'audit-error'
+              : message?.type === 'result') received = true;
             if (message && !finished) onMessage(message);
           }
           if (buffer.length > 32 * 1024 * 1024) finish(new Error('formalization_output_too_large'));

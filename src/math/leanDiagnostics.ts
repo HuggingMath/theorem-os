@@ -6,12 +6,13 @@ import { assertMathCanonicalPath } from './paths';
 import { canonicalMathJson, mathDigest, writeMathJsonDurable } from './mathRuntimeIo';
 import { runMathematicsSandboxedCommand } from './verifier';
 import { resolveMathematicsRuntimeEnvironment } from './mathRuntimeEnvironment';
-import { acquireMathProofEnvironmentLease, MATH_PROOF_ENVIRONMENT_SANDBOX_ENV } from './mathProofEnvironment';
+import { acquireMathProofEnvironmentLease, MATH_PROOF_ENVIRONMENT_SANDBOX_ENV, resolveMathProofEnvironment } from './mathProofEnvironment';
 import { checkResolvedLeanToolchainReadiness } from './leanToolchainReadiness';
 import { parseLeanDiagnosticOutput, renderLeanDiagnosticOutput } from './leanDiagnosticMessages';
 import type { LeanDiagnosticArtifactReference, LeanDiagnosticMessage } from './leanTypes';
 import { leanDiagnosticEnvironmentIdentity } from './leanResidualGoals';
 import { getLeanTaskEnvironment } from './leanTaskEnvironment';
+import { completeLeanCompilationOutput, leanLibraryConfiguration, openLeanCompilationCache } from './leanCompilationCache';
 
 const DIAGNOSTIC_CAPTURE_LIMIT = 4_000_000;
 type DiagnosticCacheRecord = { source: string; output: string; stdout?: string; stderr?: string;
@@ -57,6 +58,9 @@ export async function runLeanDiagnostics(input: {
   onProgress?: (file: string) => void;
   /** Host projections retain a larger diagnostic window than ordinary model prompts. */
   outputLimit?: number;
+  /** Only the host's frozen library-pack preparation may share compiler outputs across projects. */
+  sharedLibraryCache?: { root: string; files: Readonly<Record<string, string>> };
+  onSharedCache?: (event: 'hit' | 'miss' | 'waiting' | 'unavailable', file?: string) => void;
 }) {
   const outputLimit = input.outputLimit ?? 8000;
   if (!Number.isSafeInteger(outputLimit) || outputLimit < 1 || outputLimit > 4_000_000)
@@ -82,13 +86,20 @@ export async function runLeanDiagnostics(input: {
   });
   const config = configuration();
   const { environmentDigest: environmentIdentity, toolIdentity } = leanDiagnosticEnvironmentIdentity(project, env);
+  let sharedCache: ReturnType<typeof openLeanCompilationCache> | undefined;
+  const sharedConfiguration = input.sharedLibraryCache && !env[MATH_PROOF_ENVIRONMENT_SANDBOX_ENV] && toolIdentity &&
+    resolveMathProofEnvironment(project, env)?.identity ? leanLibraryConfiguration(project) : undefined;
+  if (sharedConfiguration) {
+    try { sharedCache = openLeanCompilationCache(input.sharedLibraryCache!.root); }
+    catch { input.onSharedCache?.('unavailable'); }
+  }
   const sourceFiles = () => modules.map(module => [module.file, mathDigest(fs.readFileSync(path.join(project, module.file)))]);
   const initialSources = sourceFiles();
   const sourceIdentity = () => mathDigest(JSON.stringify([configuration(), sourceFiles()]));
   const sourceDigest = sourceIdentity();
   const sources: string[] = [];
   const deadline = Date.now() + input.timeoutMs;
-  const phases: { file: string; cached: boolean; durationMs: number; exitCode: number | null }[] = [];
+  const phases: { file: string; cached: boolean; durationMs: number; exitCode: number | null; cacheSource?: 'shared' }[] = [];
   const cap = (text: string) => {
     if (Buffer.byteLength(text) <= outputLimit) return text;
     const notice = '\n[truncated; inspect diagnosticArtifacts for captured output and completeness]';
@@ -166,10 +177,13 @@ export async function runLeanDiagnostics(input: {
     return { reference, observed };
   };
   const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  let sharedPrefix = true;
   try {
   for (const module of modules) {
     input.signal?.throwIfAborted();
-    sources.push(mathDigest(fs.readFileSync(path.join(project, module.file))));
+    const moduleDigest = mathDigest(fs.readFileSync(path.join(project, module.file)));
+    sources.push(moduleDigest);
+    sharedPrefix &&= input.sharedLibraryCache?.files[module.file] === moduleDigest;
     if (input.dependenciesOnly && (input.files.includes(module.file) || excluded.has(module.file))) continue;
     const output = `${libraryDirectory}/${path.posix.relative(module.sourceRoot, module.file).replace(/\.lean$/u, '.olean')}`;
     const absoluteOutput = path.join(project, output);
@@ -183,17 +197,34 @@ export async function runLeanDiagnostics(input: {
       stderr = appendOutput(stderr, cap(typeof saved.stderr === 'string' ? saved.stderr : ''));
       diagnosticArtifacts.push(saved.diagnosticArtifact); messages.push(...(saved.messages ?? []));
       sources.push(saved.output);
+      if (saved.diagnosticArtifact.captureComplete !== true ||
+          /declaration uses '?sorry'?/u.test((saved.stdout ?? '') + '\n' + (saved.stderr ?? ''))) sharedPrefix = false;
       continue;
     }
-    input.onProgress?.(module.file);
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return finish({ exitCode: null, timedOut: true, stdout, stderr, phases, ...summary() });
-    const result = env[MATH_PROOF_ENVIRONMENT_SANDBOX_ENV]
+    const compile = async () => {
+      input.onProgress?.(module.file);
+      return env[MATH_PROOF_ENVIRONMENT_SANDBOX_ENV]
       ? await runWorkerLean(project, module, output, libraryDirectory, env, remainingMs, input.signal, DIAGNOSTIC_CAPTURE_LIMIT)
       : await runMathematicsSandboxedCommand({ checkoutRoot: project, command: 'lake',
       args: ['env', '/bin/sh', '-ceu', `mkdir -p ${quote(path.posix.dirname(output))}\nexec lean --json -j1 -R ${quote(module.sourceRoot)} -o ${quote(output)} ${quote(module.file)}`],
-      env, signal: input.signal, timeoutMs: remainingMs, outputCapture: 'head', outputLimit: DIAGNOSTIC_CAPTURE_LIMIT });
-    phases.push({ file: module.file, cached: false, durationMs: result.durationMs, exitCode: result.exitCode });
+      env, signal: input.signal, timeoutMs: Math.max(1, deadline - Date.now()), outputCapture: 'head', outputLimit: DIAGNOSTIC_CAPTURE_LIMIT });
+    };
+    const shared = sharedCache && sharedPrefix ? await sharedCache.use({
+      key: mathDigest(canonicalMathJson(['lean-library-module.v1', environmentIdentity, toolIdentity, sharedConfiguration,
+        libraryDirectory, module.file, module.sourceRoot, sources])), output: absoluteOutput, deadline, signal: input.signal,
+      // Sorry-bearing libraries are rejected by preparation and must not be published for another task.
+      current: result => sourceIdentity() === sourceDigest && !/declaration uses '?sorry'?/u.test(result.stdout + '\n' + result.stderr),
+      compile, onWait: () => input.onSharedCache?.('waiting', module.file),
+      onPublishError: () => input.onSharedCache?.('unavailable', module.file),
+    }) : { hit: false, result: await compile() };
+    const result = shared.result;
+    if (sharedCache && sharedPrefix) input.onSharedCache?.(shared.hit ? 'hit' : 'miss', module.file);
+    if (!completeLeanCompilationOutput(result) || /declaration uses '?sorry'?/u.test(result.stdout + '\n' + result.stderr))
+      sharedPrefix = false;
+    phases.push({ file: module.file, cached: shared.hit, durationMs: result.durationMs, exitCode: result.exitCode,
+      ...(shared.hit ? { cacheSource: 'shared' as const } : {}) });
     const retained = retain(module.file, result);
     if (sourceIdentity() !== sourceDigest) return finish({ exitCode: 1, timedOut: false,
       stdout: cap(renderLeanDiagnosticOutput(result.stdout)), stderr: 'math_diagnostics_source_changed: saved sources changed during compilation',

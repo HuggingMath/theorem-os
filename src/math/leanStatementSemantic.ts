@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
-export const LEAN_STATEMENT_CONTEXT_PROTOCOL = 'kernel-v2' as const;
+export const LEAN_STATEMENT_CONTEXT_PROTOCOL = 'kernel-v3' as const;
+/** The complete export already has this transport bound; local meaning is never omitted. */
+export const LEAN_STATEMENT_CONTEXT_BYTES = 4_000_000;
 export const leanStatementContextProtocolSchema = z.enum(['kernel-v1', 'kernel-v2', 'kernel-v3']);
 export type LeanStatementContextProtocol = z.infer<typeof leanStatementContextProtocolSchema>;
 
@@ -96,7 +98,7 @@ export const leanStatementSemanticSchema = z.object({
   const names = value.localMeaningClosure.map(entry => entry.name);
   if (new Set(names).size !== names.length)
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'Duplicate local declaration' });
-  if (Buffer.byteLength(JSON.stringify(value)) > 240000)
+  if (new TextEncoder().encode(JSON.stringify(value)).byteLength > LEAN_STATEMENT_CONTEXT_BYTES)
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'Statement semantic export exceeds its context bound' });
 });
 export type LeanStatementSemantic = z.infer<typeof leanStatementSemanticSchema>;
@@ -106,7 +108,7 @@ export type LeanStatementSemantic = z.infer<typeof leanStatementSemanticSchema>;
  * skeleton_probe.lean; attribution and MIT license: third_party/autoform-bot-LICENSE.txt.
  * The default exporter never includes these commands, preserving frozen legacy queries.
  */
-export function leanStatementSemanticCommands(): string[] {
+export function leanStatementSemanticCommands(maxBytes = 240000): string[] {
   return [
     // Explicit postorder stacks work inside run_cmd in both supported Lean versions.
     "  let semanticName (root : Lean.Name) : Lean.Json := Id.run do",
@@ -247,7 +249,7 @@ export function leanStatementSemanticCommands(): string[] {
     '      closure := closure.push (Lean.Json.mkObj fields)',
     '    let report := Lean.Json.mkObj [("schema", Lean.toJson "theorem-os.lean-statement-semantic.v1"),',
     '      ("rawType", Lean.toJson rawType), ("kernelType", kernelType), ("localMeaningClosure", Lean.toJson closure)]',
-    '    if report.compress.utf8ByteSize > 240000 then throwError "Statement semantic export exceeds its context byte bound"',
+    `    if report.compress.utf8ByteSize > ${maxBytes} then throwError "Statement semantic export exceeds its context byte bound"`,
     '    return report',
   ];
 }

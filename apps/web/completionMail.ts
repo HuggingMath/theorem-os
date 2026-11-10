@@ -37,10 +37,10 @@ const outcome = (run: WebRun): Outcome => {
   if (run.result?.status === 'evaluated_rejected')
     return { zh: run.formalization ? 'Lean 陈述未通过验收' : '未通过验收', en: 'not accepted', detailZh: '候选未满足验收约束，详情见报告。', detailEn: 'The candidate did not meet the verification constraints; see the report.' };
   const cause = stopCause(run);
-  // The owner was mailed when the plan was ready; a budget that ran out on that wait is theirs to know about.
+  // Planning or a revision can exhaust execution time before approval; historical runs may include old wait timing.
   if (cause === 'time' && run.observation?.inspection.planApproval?.status === 'pending')
-    return { ...stopped.time, detailZh: '研究计划直到解题时间用完都没有批准，Agent 没有开始工作。',
-      detailEn: 'The research plan was not approved before the solve time ran out, so the Agents never started.' };
+    return { ...stopped.time, detailZh: '这次运行在计划批准前结束，已保存的计划与研究材料仍可查看。',
+      detailEn: 'This run ended before its plan was approved. The saved plan and research materials remain available.' };
   if (cause) return { ...stopped[cause], ...stoppedReasons[run.failure?.reason ?? ''] };
   return { zh: '已结束', en: 'finished', detailZh: run.formalization ? '本次研究尚未得到通过 Lean 陈述验收的证明。' : '本次研究尚未得到通过完整原题验收的证明。',
     detailEn: 'This run did not produce a proof that passed verification.' };
@@ -59,10 +59,12 @@ export function completionMail(run: WebRun, publicUrl: string): { subject: strin
   const result = outcome(run), took = minutes(run);
   const meaning = run.formalization && {
     zh: run.formalization.confirmation === 'manual' ? '原题含义：你已确认 Lean 陈述。'
-      : run.formalization.confirmation === 'automatic' ? '原题含义：模型审核通过，未经人工确认。'
+      : run.formalization.reviewMode === 'direct' ? 'Lean 陈述编译通过；原题含义及审核结论请查看形式化记录。'
+        : run.formalization.confirmation === 'automatic' ? '原题含义：模型审核通过，未经人工确认。'
         : '原题含义：未记录确认方式，请核对 Lean 陈述。',
     en: run.formalization.confirmation === 'manual' ? 'Problem meaning: you confirmed the Lean statement.'
-      : run.formalization.confirmation === 'automatic' ? 'Problem meaning: model review passed; not confirmed by a person.'
+      : run.formalization.reviewMode === 'direct' ? 'The Lean statement compiled; see the formalization record for its meaning and review results.'
+        : run.formalization.confirmation === 'automatic' ? 'Problem meaning: model review passed; not confirmed by a person.'
         : 'Problem meaning: the confirmation method was not recorded; please check the Lean statement.',
   };
   const title = run.title.replace(/\s+/gu, ' ').trim().slice(0, 80) || 'TheoremOS';
@@ -92,8 +94,8 @@ export function planApprovalMail(run: WebRun, publicUrl: string): { subject: str
   return {
     subject: `TheoremOS · 研究计划等你批准：${title}`,
     text: [
-      `你的研究「${title}」的研究计划已经拟好。批准之前 Agent 不会开始工作，等待的时间也计入解题预算。`, '', `查看并批准：${link}`, '',
-      `The research plan for "${title}" is ready. The Agents start only after you approve it, and the wait counts toward the solve budget.`,
+      `你的研究「${title}」的研究计划已经拟好。等待确认不计入证明预算；返回工作台批准后，继续本次研究。`, '', `查看并批准：${link}`, '',
+      `The research plan for "${title}" is ready. Waiting for approval pauses the proof budget. Return to approve it and continue this run.`,
       `Review and approve: ${link}`, '',
       '不想收到这类邮件，可以在工作台的账号菜单里关闭「研究结束时发邮件」。',
       'To stop these emails, turn off "Email me when research ends" in the account menu.',

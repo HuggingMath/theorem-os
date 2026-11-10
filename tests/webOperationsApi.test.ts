@@ -8,6 +8,7 @@ import type { WebRunner } from '../apps/web/runner';
 import { createWebService } from '../apps/web/server';
 import type { WebRunInput, WebSession } from '../apps/web/shared';
 import { inspectSignals, type Operations } from '../scripts/web-operations';
+import { webDirectFormalizationEvidence, webFormalizationStatement } from './helpers/webFormalizationFixture';
 
 const input = (): WebRunInput => ({ providerId: 'openai', apiKey: 'sk-operations-fixture', model: 'gpt-6.1-sol',
   effort: 'high', source: 'theorem example : True := by sorry', task: 'Prove the theorem', maxTurns: 2,
@@ -23,6 +24,7 @@ class HeldRunner implements WebRunner {
   }
   run: WebRunner['run'] = async (_input, _send, signal) => this.hold(signal);
   formalize: NonNullable<WebRunner['formalize']> = async (_input, _send, signal) => this.hold(signal);
+  auditFormalization: NonNullable<WebRunner['auditFormalization']> = async (_input, _send, signal) => this.hold(signal);
   explain: NonNullable<WebRunner['explain']> = async (_input, _send, signal) => this.hold(signal);
   check: NonNullable<WebRunner['check']> = async (_input, signal) => this.hold(signal);
 }
@@ -188,5 +190,22 @@ describe('administrator operations HTTP API', () => {
       expect(inspectSignals(await status(admin), { minFreeGiB: 0, maxQueueSeconds: 60, now: Date.now() + 120_000 })).toContain('precheck_queue_wait_long');
     } finally { controllers.forEach(controller => controller.abort()); await settled; }
     await expect.poll(async () => (await status(admin)).queues.precheck).toEqual({ running: 0, queued: 0 });
+  });
+
+  it('keeps active and queued background reviews visible during maintenance until workers finish', async () => {
+    const admin = await login('boss@example.org'), provider = config.providers.find(item => item.id === 'openai')!;
+    runner.formalize = async (input, send) => { send({ type: 'result', status: 'approved', evidence: webDirectFormalizationEvidence(input) }); };
+    const values = Array.from({ length: 2 }, (_, index) => service.formalizations.create(`fixture:${index}`,
+      { original: webFormalizationStatement, apiKey: 'sk-operations-fixture', environment: 'standard', effort: 'high' }, provider, 'gpt-6.1-sol'));
+    await expect.poll(async () => (await status(admin)).queues.formalization).toMatchObject({ running: 1, queued: 1 });
+    const queuedAt = service.formalizations.read('fixture:1', values[1].id).backgroundReview!.queuedAt;
+    expect((await status(admin)).queues.formalization).toEqual({ running: 1, queued: 1, oldestQueuedAt: queuedAt });
+    expect((await maintenance(admin, true)).status).toBe(200);
+    expect((await request('/api/formalizations', admin, {})).status).toBe(503);
+    expect(await status(admin)).toMatchObject({ maintenance: true, queues: { formalization: { running: 1, queued: 1 } } });
+    service.formalizations.cancel('fixture:0', values[0].id);
+    await expect.poll(async () => (await status(admin)).queues.formalization).toEqual({ running: 1, queued: 0 });
+    service.formalizations.cancel('fixture:1', values[1].id);
+    await expect.poll(async () => (await status(admin)).queues.formalization).toEqual({ running: 0, queued: 0 });
   });
 });

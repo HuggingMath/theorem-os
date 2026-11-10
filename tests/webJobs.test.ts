@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebJobs } from '../apps/web/jobs';
 import type { WebRunner } from '../apps/web/runner';
+import type { WebObservation } from '../apps/web/collaboration';
 import type { WebProvider, WebResult, WebRunInput, WorkerInput, WorkerMessage } from '../apps/web/shared';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { buildTheoremKnowledge, type KnowledgeCandidate } from '../src/solver/theoremKnowledge';
@@ -20,6 +21,14 @@ const result = (proof = 'theorem example : True := by trivial'): WebResult => ({
   status: 'evaluated_passed', proof, report: { acceptance: 'kernel_verified' },
 });
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
+const observation = (webRunId: string, solverRunId: string, sequence: number): WebObservation => {
+  const snapshot = { schema: 'theoremos.run-observation.v1', runId: solverRunId,
+    stateDigest: mathDigest(`${solverRunId}:${sequence}`), resultDigest: null };
+  return { schema: 'theorem-os.web-observation.v1', webRunId, solverRunId, sequence,
+    observedAt: new Date(1_800_000_000_000 + sequence).toISOString(), evidence: 'recorded-not-replayed', acceptance: 'not-assessed',
+    snapshot, inspection: { runId: solverRunId, snapshot, tasks: [], workers: [], edits: [] } as unknown as WebObservation['inspection'],
+    plan: null, sources: [], checks: [], guidance: [], coverage: { sources: 'recorded', checks: 'recorded' } };
+};
 
 type Call = { input: WorkerInput; signal: AbortSignal; send(message: WorkerMessage): void;
   finish(value?: WebResult): void; end(): void; fail(error: Error): void };
@@ -52,6 +61,57 @@ describe('web job ownership, scheduling and secret lifetime without provider cal
     return { runner, jobs };
   };
   afterEach(async () => { await Promise.all(queues.splice(0).map(jobs => jobs.close())); });
+
+  it('accepts only host-declared solver transitions and preserves observation history without granting acceptance', async () => {
+    const { jobs, runner } = setup(), run = jobs.create('owner', input(), provider);
+    await tick();
+    const send = runner.calls[0].send;
+    send({ type: 'observation', observation: observation(run.id, 'solver-first', 1) });
+    send({ type: 'observation', observation: observation(run.id, 'solver-next', 2) });
+    expect(run.observation?.solverRunId).toBe('solver-first');
+    // Runs saved before solverAttempt existed must retain the same identity guard.
+    delete run.solverAttempt;
+    for (const message of [
+      { previousSolverRunId: 'unrelated-solver', solverRunId: 'solver-next', round: 1 },
+      { previousSolverRunId: 'solver-first', solverRunId: 'solver-first', round: 1 },
+      { previousSolverRunId: 'solver-first', solverRunId: 'solver-next', round: 0 },
+    ]) send({ type: 'library_restart', ...message });
+    expect(run.observation?.solverRunId).toBe('solver-first');
+
+    send({ type: 'library_restart', previousSolverRunId: 'solver-first', solverRunId: 'solver-next', round: 1 });
+    expect(run.solverAttempt).toEqual({ solverRunId: 'solver-next', round: 1, sequence: 1 });
+    expect(run.observation).toBeUndefined();
+    expect(run.status).toBe('running'); expect(run.result).toBeUndefined();
+    for (const candidate of [observation(run.id, 'solver-first', 2), observation(run.id, 'unrelated-solver', 2),
+      observation(run.id, 'solver-next', 1)]) send({ type: 'observation', observation: candidate });
+    expect(run.observation).toBeUndefined();
+    send({ type: 'observation', observation: observation(run.id, 'solver-next', 2) });
+    expect(run.observation).toMatchObject({ solverRunId: 'solver-next', sequence: 2, acceptance: 'not-assessed' });
+    send({ type: 'library_restart', previousSolverRunId: 'solver-next', solverRunId: 'solver-third', round: 1 });
+    expect(run.observation?.solverRunId).toBe('solver-next');
+    send({ type: 'library_restart', previousSolverRunId: 'solver-next', solverRunId: 'solver-third', round: 2 });
+    send({ type: 'observation', observation: observation(run.id, 'solver-third', 3) });
+    expect(run.solverAttempt).toEqual({ solverRunId: 'solver-third', round: 2, sequence: 3 });
+    expect(jobs.storage.listObservations('owner', run.id).map(item => [item.solverRunId, item.sequence]))
+      .toEqual([['solver-first', 1], ['solver-next', 2], ['solver-third', 3]]);
+    expect(run.result).toBeUndefined();
+    runner.calls[0].finish({ status: 'incomplete', proof: '', report: {} }); await tick();
+  });
+
+  it('binds the first observed solver directly when an earlier library round had no observation', async () => {
+    const { jobs, runner } = setup(), run = jobs.create('owner', input(), provider);
+    await tick();
+    const send = runner.calls[0].send;
+    send({ type: 'library_restart', previousSolverRunId: 'unobserved-solver', solverRunId: 'solver-next', round: 1 });
+    expect(run.solverAttempt).toBeUndefined();
+    send({ type: 'observation', observation: observation(run.id, 'solver-next', 1) });
+    expect(run.solverAttempt).toEqual({ solverRunId: 'solver-next', round: 0, sequence: 1 });
+    send({ type: 'library_restart', previousSolverRunId: 'solver-next', solverRunId: 'solver-third', round: 2 });
+    send({ type: 'observation', observation: observation(run.id, 'solver-third', 2) });
+    expect(run.solverAttempt).toEqual({ solverRunId: 'solver-third', round: 2, sequence: 2 });
+    expect(run.status).toBe('running'); expect(run.result).toBeUndefined();
+    runner.calls[0].finish({ status: 'incomplete', proof: '', report: {} }); await tick();
+  });
 
   it('starts queued jobs in order, respects concurrency and rejects excess active work', async () => {
     const { jobs, runner } = setup(2, 4);
@@ -480,6 +540,56 @@ describe('web job ownership, scheduling and secret lifetime without provider cal
     await tick();
   });
 
+  it('keeps a delayed action-count save failure inside the timer and persists the count at the next checkpoint', async () => {
+    const { jobs, runner } = setup();
+    const key = 'sk-delayed-action-fixture', run = jobs.create('owner', input(key), provider);
+    await tick();
+    const action = (itemId: string) => ({ type: 'action' as const, action: { workerId: 'solver', itemId, phase: 'completed' as const,
+      kind: 'command' as const, status: 'done' as const, command: `echo ${key}` } });
+    const save = vi.spyOn(jobs.storage, 'saveRun');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      runner.calls[0]!.send(action('1:first'));
+      const version = jobs.version('owner');
+      save.mockImplementationOnce(() => { throw new Error(`disk unavailable ${key}`); });
+      expect(() => vi.advanceTimersByTime(2_000)).not.toThrow();
+      expect(run.error).toBe('运行状态未能保存；服务恢复后请重新查看。');
+      expect(jobs.version('owner')).not.toBe(version);
+      expect(run.status).toBe('running');
+      expect(runner.calls[0]!.signal.aborted).toBe(false);
+      expect(jobs.storage.listActionsAfter('owner', run.id, 0, 10)).toHaveLength(1);
+      runner.calls[0]!.send(action('1:second'));
+      runner.calls[0]!.send({ type: 'progress', event: 'solve_started', message: 'Checkpoint after storage recovery' });
+      expect(jobs.storage.getRun('owner', run.id)?.actions).toEqual({ count: 2 });
+      expect(JSON.stringify(jobs.storage.getRun('owner', run.id))).not.toContain(key);
+      runner.calls[0]!.finish();
+      await tick();
+      expect(run.status).toBe('completed');
+      expect(run.result?.status).toBe('evaluated_passed');
+      expect(runner.calls[0]!.input.input.apiKey).toBe('');
+    } finally { save.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it('does not write a delayed action count after forgetting its owner', async () => {
+    const { jobs, runner } = setup();
+    const run = jobs.create('alice', input(), provider);
+    await tick();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      runner.calls[0]!.send({ type: 'action', action: { workerId: 'solver', itemId: '1:first', phase: 'completed',
+        kind: 'message', status: 'done', text: 'Fixture action' } });
+      jobs.forget('alice'); jobs.storage.deleteOwner('alice');
+      await tick();
+      const save = vi.spyOn(jobs.storage, 'saveRun');
+      try {
+        vi.advanceTimersByTime(2_000);
+        expect(save).not.toHaveBeenCalled();
+        expect(jobs.storage.getRun('alice', run.id)).toBeUndefined();
+        expect(jobs.storage.listActionsAfter('alice', run.id, 0, 10)).toEqual([]);
+      } finally { save.mockRestore(); }
+    } finally { vi.useRealTimers(); }
+  });
+
   it('redacts a long key pasted into task text before deriving its truncated public title', async () => {
     const { jobs } = setup();
     const key = 'sk-long-credential-' + '1234567890abcdef'.repeat(10);
@@ -546,6 +656,32 @@ describe('web job ownership, scheduling and secret lifetime without provider cal
     expect(third.queue).toBeUndefined();
     expect(() => { for (let index = 0; index < 4; index++) jobs.create('carol', input(), provider); })
       .toThrow('运行队列已满：1 个任务正在运行，3 个在排队。');
+  });
+
+  it.each([false, true])('reindexes and notifies remaining owners after forgetting queued work (delete failure: %s)', async deleteFails => {
+    const { jobs, runner } = setup();
+    const active = jobs.create('carol', input(), provider);
+    const removed = jobs.create('alice', input(), provider);
+    const waiting = jobs.create('bob', input(), provider);
+    await tick();
+    expect(waiting.queue).toEqual({ position: 2, ahead: 1, running: 1, slots: 1 });
+    const version = jobs.version('bob'), notify = vi.fn(), unsubscribe = jobs.subscribe('bob', notify);
+    const deletion = vi.spyOn(jobs.storage, 'deleteRun');
+    if (deleteFails) deletion.mockImplementationOnce(() => { throw new Error('delete unavailable'); });
+    try {
+      if (deleteFails) expect(() => jobs.forget('alice')).toThrow('delete unavailable');
+      else jobs.forget('alice');
+      await tick();
+      expect(jobs.list('alice')).toEqual([]);
+      expect(removed.status).toBe('cancelled');
+      expect(waiting.queue).toEqual({ position: 1, ahead: 0, running: 1, slots: 1 });
+      expect(jobs.version('bob')).not.toBe(version);
+      expect(notify).toHaveBeenCalledTimes(1);
+      expect(notify).toHaveBeenCalledWith(jobs.version('bob'));
+      expect(active.status).toBe('running');
+      expect(runner.calls).toHaveLength(1);
+      expect(runner.calls[0]!.signal.aborted).toBe(false);
+    } finally { unsubscribe(); deletion.mockRestore(); }
   });
 
   it('keeps the worker failure category and marks runner and restart failures', async () => {

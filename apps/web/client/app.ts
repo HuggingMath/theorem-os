@@ -5,13 +5,14 @@ import {
 } from 'lucide';
 import type { WebAdminOverview, WebContinuation, WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebRun, WebRunRequest, WebSavedKey, WebSession } from '../shared';
 import { workbenchReturn } from '../shared';
+import { ResearchSelection } from './researchSelection';
 import type { WebExplainAnswer } from '../explain';
 import type { WebFormalization } from '../formalizationTypes';
 import type { WebShareLink } from '../share';
 import { acceptedTitle, acceptedDescription, statementConfirmation } from '../presentation';
 import { checkReason, effortLabels, failureGuide, formatDuration, formatTokens, isAcceptedRun, isFaultedRun, isRejectedRun, planAwaitingApproval, planGated, readableDuration, readableMetric, reportReason, resultDescription, runProgress, runTokens, stalledMinutes, stoppedLabel, usageEstimate, type RecoveryAction } from '../presentation';
 import { nextSteps, summarizeGoals, summarizeReport, summarizeStuck } from '../report';
-import { continuationsOf, filterRuns, ownerFirst, type RunFilter } from './history';
+import { filterRuns, ownerFirst, type RunFilter } from './history';
 import { looksLikeLeanSource, readLeanFile } from './sourceFile';
 import { sourceIndentEdit, type IndentDirection } from './sourceIndent';
 import type { SourceSelection } from './sourceText';
@@ -29,12 +30,13 @@ import { CollaborationView } from './collaborationView';
 import type { CollaborationSection } from './collaborationNavigation';
 import { TrajectoryView, type ExplainKey } from './trajectoryView';
 import { RunUpdates } from './runUpdates';
+import { retainLatestRun } from './runSnapshot';
 import type { WebCommandResult, WebObservation } from '../collaboration';
 import { ServerModulePlans } from './serverModulePlans';
 import { ModulePlanLibrary, modulePlanLibraryStorageKey } from './modulePlanLibrary';
 import { ModulePlanLibraryView } from './modulePlanLibraryView';
 import type { ResearchModuleSlot } from '../../../src/solver/modules/policy';
-import { OwnedDrafts } from './ownedDrafts';
+import { draftOwnerStorageKey, OwnedDrafts, webDraftOwner } from './ownedDrafts';
 import { SubmissionIdentity } from './submissionIdentity';
 import { DraftRecovery, type ReplacementReason } from './draftRecovery';
 import { animateEntrance, arriveRow, finishHiddenMotion, finishMotion, glideSelection, revealTheme, selectionBox } from './motion';
@@ -65,6 +67,8 @@ import type { TermId } from './glossary';
 import { localeTag, localizeMessage, localizeText, otherLocale, sentences, switchLocale, t } from '../i18n';
 import { historyStorageKey, markHistoryCollapsed, readHistoryCollapsed } from './historyPreference';
 import { classicLibraryUrl } from './classicLibrary';
+import { renderContinuationPreview } from './productFlowView';
+import { relatedResearchRuns, type ContinuationPreview } from './productFlow';
 
 const iconSet = { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, BookOpen, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
   Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
@@ -151,6 +155,8 @@ async function loadNaturalResearch() {
   chatWorkspace = new ChatSession({
     request: api,
     session: () => state.session,
+    runs: () => state.runs,
+    onOpenRun: id => selectRun(id),
     connected: () => state.connected,
     draftScope: state.session?.account?.email ?? 'anonymous',
     keyRequired: providerId => !state.session?.account?.serverKeys?.includes(providerId) && !state.session?.account?.savedKeys?.some(key => key.providerId === providerId),
@@ -164,7 +170,8 @@ async function loadNaturalResearch() {
       // Arrow keys in the phone history open each run in turn; its conversation arriving must not close the list.
       if (!attached) closeHistoryDialog();
     },
-    onSelection: run => {
+    onSelection: received => {
+      const run = received && retainLatestRun(received, state.runs.find(item => item.id === received.id));
       const changed = currentRun()?.id !== run?.id;
       // A known run is refreshed where it stands, so the history keeps its order; a new one joins at the top.
       if (run) state.runs = state.runs.some(item => item.id === run.id) ? state.runs.map(item => item.id === run.id ? run : item) : [run, ...state.runs];
@@ -323,13 +330,22 @@ let replacingDraft = false;
 const ownedDrafts = new OwnedDrafts(() => sessionStorage);
 const submissionIdentity = new SubmissionIdentity(ownedDrafts);
 const draftRecovery = new DraftRecovery(() => ownedDrafts);
-const ownerOfSession = (session: WebSession) => session.draftOwner ?? (session.account ? `account:${session.account.email}` : session.csrfToken);
+const ownerOfSession = webDraftOwner;
 function clearOwnedDrafts() {
+  chatWorkspace?.bindOwner('');
+  researchSelection.reset();
+  collaborationView.clearPlanDrafts();
   submissionSequence++;
   draftReady = false; draftDirty = false; clearTimeout(draftTimer);
   latestDraft = undefined; pendingImport = undefined; taskImportSequence++;
   draftContinuation = undefined; submissionIdentity.clear(); draftRecovery.clear(); ownedDrafts.clear();
   forgetRememberedKey();
+  try {
+    for (const key of Object.keys(sessionStorage)) {
+      if (key.startsWith('theorem-os.natural-research-draft.v1:') || key.startsWith('theorem-os.chat-draft.')
+        || key.startsWith('theorem-os.chat-reading.') || key === entryStorageKey) sessionStorage.removeItem(key);
+    }
+  } catch { /* In-memory drafts are also cleared when browser storage is unavailable. */ }
 }
 
 let taskImportSequence = 0;
@@ -347,6 +363,7 @@ let draftPreviewSignature = '';
 let draftSourceExpanded = false;
 /** The recorded version the next run starts from (「从这一版继续」); one submission uses it. */
 let draftContinuation: WebContinuation | undefined;
+let continuationPreview: ContinuationPreview | undefined;
 let draftFormalization: (NonNullable<TaskDraft['formalization']> & { source: string; environment: WebEnvironment; original?: string }) | undefined;
 let moduleSettingsPolicy: string | undefined;
 let settingsWorkspaceReturn: { focus?: HTMLElement; preview?: boolean } | undefined;
@@ -385,14 +402,16 @@ const editorReview = new EditorReview(element<HTMLDialogElement>('#source-editor
 const validationShown = new Set<SubmissionField>();
 const checkScope = crypto.randomUUID();
 const sourceCheck = new SourceCheck({
-  input: () => ({ environment: field('environment').value as WebEnvironment, source: field('source').value }),
+  input: () => ({ environment: field('environment').value as WebEnvironment, source: field('source').value,
+    ...(researchSelection.value() ? { researchSelection: researchSelection.value() } : {}) }),
   enabled: () => Boolean(researchEntry === 'lean' && state.session?.precheck && state.connected && state.session.runtime.ready
     && new TextEncoder().encode(field('source').value).length <= state.session.limits.maxSourceBytes),
   post: async (input, signal) => (await api<{ precheck: WebPrecheck }>('/api/precheck',
-    { method: 'POST', body: JSON.stringify({ ...input, checkScope }), signal, timeoutMs: 120_000 })).precheck,
+    { method: 'POST', body: JSON.stringify({ ...input, checkScope, ...(researchSelection.value() ? { researchSelection: researchSelection.value() } : {}) }), signal, timeoutMs: 120_000 })).precheck,
   message: error => message(error),
   render: () => { renderSourceCheckView(); renderPreparation(); },
 });
+const researchSelection = new ResearchSelection(api, () => { sourceCheck.schedule(); saveDraft(); }, ownedDrafts);
 function renderSourceCheckView() {
   renderSourceCheck(element('#source-check'), element('#source-check-status'), {
     check: sourceCheck, onJump: jumpToSourceDiagnostic, onRecheck: () => { void sourceCheck.run(); },
@@ -431,16 +450,32 @@ class ApiError extends Error {
   constructor(readonly reason: string, readonly status: number) { super(localizeMessage(reason)); }
 }
 type ApiInit = RequestInit & { timeoutMs?: number };
+const sameSession = (session: WebSession | undefined) => session?.draftOwner === state.session?.draftOwner && session?.csrfToken === state.session?.csrfToken;
+let keyChangeSession: WebSession | undefined, keyChangeTail: Promise<void> = Promise.resolve();
 function api<T>(url: string, init?: ApiInit): Promise<T>;
 function api<T>(url: string, init: ApiInit, etag: (value: string | null) => void): Promise<T | undefined>;
 async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}, etag?: (value: string | null) => void): Promise<T | undefined> {
-  const requestOwner = state.session?.draftOwner;
+  const requestSession = state.session, requestOwner = requestSession?.draftOwner;
+  // Both input modes update the same saved-key metadata. Send their changes in order, including runs
+  // whose response carries that metadata, so a slow deletion cannot replace a later saved key.
+  const keyChange = Boolean(requestSession?.account?.keyVault && (
+    url.startsWith('/api/auth/keys/') && (init.method === 'PUT' || init.method === 'DELETE')
+    || url === '/api/runs' && init.method === 'POST'));
+  let finishKeyChange: (() => void) | undefined;
+  if (keyChange) {
+    if (!sameSession(keyChangeSession)) { keyChangeSession = requestSession; keyChangeTail = Promise.resolve(); }
+    const previous = keyChangeTail;
+    keyChangeTail = new Promise<void>(resolve => { finishKeyChange = resolve; });
+    await previous;
+  }
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(new Error(t('请求超时，请重新连接'))), timeoutMs);
   const signals = [timeout.signal];
   if (!init.method || init.method === 'GET') signals.push(readController.signal);
   if (init.signal) signals.push(init.signal);
   try {
+    // A queued change still belongs to the identity that requested it, even after another tab logs in.
+    if (keyChange && !sameSession(requestSession)) throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
     // fetch rejects with a TypeError when the server cannot be reached; its text ("Failed to fetch") means nothing to a reader.
     const response = await fetch(url, { ...init, credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.any(signals),
       headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}),
@@ -457,6 +492,8 @@ async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}
       if (!response.ok) return undefined;
       throw error;
     });
+    // The headers may have arrived before another tab's login; a slow body still belongs to its original session.
+    if (!url.startsWith('/api/session') && !sameSession(requestSession)) throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
     if (!response.ok) {
       if (response.status === 428) { saveDraft(); draftReady = false; forgetKey(keyStorage); location.replace(loginAddress()); }
       const message = payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string'
@@ -471,6 +508,7 @@ async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}
     throw error;
   } finally {
     clearTimeout(timer);
+    finishKeyChange?.();
   }
 }
 const message = (error: unknown) => error instanceof Error ? error.message : t('请求失败，请重试');
@@ -687,10 +725,10 @@ function renderPreparation(issues?: SubmissionIssue[]) {
 /** Time and turns are hard stops; tokens are estimated from this account's finished runs on the same model. */
 function renderBudgetEstimate() {
   const turns = Number(field('max-turns').value), seconds = Number(field('max-seconds').value), model = field('model').value.trim();
-  if (!Number.isSafeInteger(turns) || turns < 1 || !Number.isSafeInteger(seconds) || seconds < 30) { patchText(element('#budget-estimate'), ''); return; }
+  if (!Number.isSafeInteger(turns) || turns < 0 || !Number.isSafeInteger(seconds) || seconds < 0) { patchText(element('#budget-estimate'), ''); return; }
   const cap = state.session ? tokenCap(field('max-tokens').value, state.session.limits.maxTotalTokens) : undefined;
-  const estimate = usageEstimate(state.runs, model, turns);
-  const limits = t('最多 {0} 分钟，全部 Agent 合计 {1} 轮。', Math.ceil(seconds / 60), turns);
+  const estimate = turns ? usageEstimate(state.runs, model, turns) : undefined;
+  const limits = t('解题时间：{0}；研究轮次：{1}。', seconds ? t('{0} 分钟', Math.ceil(seconds / 60)) : t('不限'), turns || t('不限'));
   const target = element('#budget-estimate');
   target.title = estimate ? t('根据最近 {0} 次 {1} 运行，预计约 {2} Token。', estimate.samples, model, formatTokens(estimate.ceiling)) : '';
   patchText(target, sentences(limits, cap ? t('按已报告用量在 {0} Token 停止，在途请求可能超额；不代表金额封顶。', formatTokens(cap)) : ''));
@@ -725,6 +763,12 @@ function renderComposerSummary() {
   patchText(element('#composer-environment'), environmentName(field('environment').value));
   element('#draft-continuation').hidden = !draftContinuation;
   if (draftContinuation) patchText(element('#draft-continuation-label'), t('从「{0}」继续', draftContinuation.label));
+  element('#settings-continuation').hidden = !draftContinuation;
+  if (draftContinuation) patchText(element('#settings-continuation'), t('带入成果：{0}。原题保持不变，新运行仍需重新通过 Lean 检查与独立验收。', draftContinuation.label));
+  const origin = draftContinuation && state.runs.find(run => run.id === draftContinuation!.runId);
+  const context: ContinuationPreview | undefined = continuationPreview ? { ...continuationPreview, from: draftContinuation }
+    : origin ? { title: origin.title, runId: origin.id, from: draftContinuation, originalSeconds: origin.maxRunSeconds, originalTurns: origin.maxTurns, originalTokens: origin.maxTotalTokens } : undefined;
+  renderContinuationPreview(element('#research-continuation-preview'), context, { seconds: Number(field('max-seconds').value), turns: Number(field('max-turns').value), tokens: Number(field('max-tokens').value) * 10_000 || undefined });
   element('#draft-formalization').hidden = !draftFormalization;
   element('#confirmed-original').hidden = !draftFormalization;
   element('#creation-mode').textContent = draftFormalization ? t('已确认的自然语言原题') : t('已有 Lean 原题');
@@ -914,6 +958,7 @@ function replaceDraft(reason: ReplacementReason, change: () => void) {
   replacingDraft = true;
   // Another problem or a fresh draft no longer continues the version; editing the statement or reusing a run keeps its own.
   if (reason !== 'edit' && reason !== 'reuse') draftContinuation = undefined;
+  if (reason !== 'edit' && reason !== 'reuse') continuationPreview = undefined;
   if (reason !== 'edit') draftFormalization = undefined;
   try { change(); } finally { replacingDraft = nested; }
   if (track) {
@@ -968,6 +1013,7 @@ function saveDraft() {
   }
 }
 function applyTaskDraft(draft: TaskDraft) {
+  continuationPreview = undefined;
   modulePlanLibrary.resetSelection();
   clearValidation();
   draftSourceExpanded = false;
@@ -1030,8 +1076,8 @@ async function importTaskFile(file: File) {
       t('启用 {0} / {1} 条自定义规则', plan?.custom.filter(rule => rule.enabled).length ?? 0, plan?.custom.length ?? 0)].join(' · ');
     renderFacts(element('#import-facts'), [[t('证明环境'), environmentName(draft.environment)],
       [t('服务商'), provider?.name ?? t('{0} · 当前不可用', draft.providerId || t('未选择'))], [t('模型'), draft.model || t('未填写'), true],
-      [t('推理强度'), effortLabels[draft.effort] ?? draft.effort], [t('轮次上限'), draft.maxTurns || t('未填写')],
-      [t('解题预算 / 秒'), draft.maxRunSeconds || t('未填写')], [t('Agent 数量'), draft.workers || t('未填写')],
+      [t('推理强度'), effortLabels[draft.effort] ?? draft.effort], [t('轮次上限'), Number(draft.maxTurns) ? draft.maxTurns : t('不限')],
+      [t('解题预算 / 秒'), Number(draft.maxRunSeconds) ? draft.maxRunSeconds : t('不限')], [t('Agent 数量'), draft.workers || t('未填写')],
       [t('用量上限 / 万 Token'), draft.maxTotalTokens || t('不限')], [t('模块方案'), planSummary],
       [t('协作模式'), draft.coordination === 'cooperative' ? t('任务协作') : t('独立并行')],
       ...(draft.planApproval ? [[t('先审计划'), t('开启')] as [string, string]] : [])]);
@@ -1069,7 +1115,7 @@ function resetForm() {
     element<HTMLInputElement>('#api-key').type = 'password';
     updateKeyToggle();
     for (const [id, value] of Object.entries({ model: session.defaults.model, effort: session.defaults.effort,
-      'max-turns': session.defaults.maxTurns, 'max-seconds': session.defaults.maxRunSeconds, workers: session.defaults.workers, 'max-tokens': '' })) field(id).value = String(value);
+      'max-turns': session.defaults.maxTurns || '', 'max-seconds': session.defaults.maxRunSeconds || '', workers: session.defaults.workers, 'max-tokens': '' })) field(id).value = String(value);
     element<HTMLInputElement>(`input[name="coordination"][value="${session.defaults.coordination}"]`).checked = true;
     field('provider').value = session.providers[0]?.id ?? '';
     field('environment').value = session.defaults.environment;
@@ -1317,6 +1363,7 @@ function closeHistoryDialog() {
 }
 function renderRunList(force = false) {
   renderRunMonitor();
+  chatWorkspace?.updateOverview();
   // The readiness line warns at the record limit, so it follows the record count too.
   if (recordsFull() !== readinessFull) renderPreparation();
   // Plans waiting for the owner's approval stand in their own group above the rest; nothing in them runs until approved.
@@ -1426,22 +1473,23 @@ function resultProps(run: WebRun): ResultPanelProps {
   const environment = environmentInfo(run.environment);
   const item = (label: string, value: unknown, mono = false) => ({ label, value: String(value), mono });
   const latest = working ? run.events.at(-1) : undefined;
-  const proof = candidateSource(run), goals = summarizeGoals(run), approval = planAwaitingApproval(run), later = continuationsOf(state.runs, run.id);
+  const proof = candidateSource(run), goals = summarizeGoals(run), approval = planAwaitingApproval(run), later = relatedResearchRuns(state.runs, run);
   const compare = compareProps(run, later);
   return {
     // The plan waiting on its owner has nothing running: no spinner, unless the Lead is revising it from their note.
     verdict: { run: run.id, tone: value.tone, symbol: value.symbol, title: resultTitle(run), description: passed(run) && !guide ? acceptedDescription(run) : resultDescription(run),
-      ...(run.formalization ? { meaning: statementConfirmation(run.formalization.confirmation) } : {}),
+      ...(run.formalization ? { meaning: statementConfirmation(run.formalization.confirmation, false, run.formalization.reviewMode) } : {}),
       active: working && (!approval || approval.leadRevising), candidate: Boolean(run.artifact && working),
       ...(latest ? { latest: { at: latest.at, time: timestamp(latest.at, true), message: readableMessage(latest, workerNames(run.observation?.inspection.workers)) } } : {}),
       ...(run.status === 'running' && !planGated(run) && !isSample(run) ? { away: awayNote() } : {}) },
-    recovery: isSample(run) ? [] : nextSteps(run, goals), ...(working ? { notify: notifyState() } : {}),
+    recovery: isSample(run) ? [] : nextSteps(run, goals), ...(!isSample(run) ? { recoveryContext: { run, limits: state.session?.limits } } : {}), ...(working ? { notify: notifyState() } : {}),
+    ...(!isSample(run) && passed(run) ? { saveLibrary: `library.html?${new URLSearchParams({ create: '1', fromRun: run.id })}` } : {}),
     ...(['environment', 'unknown', 'interrupted'].includes(guide?.kind ?? '') ? { feedback: feedbackUrl({ failure: guide!.kind }) } : {}),
     ...(proof ? { proof: { source: proof, verified: Boolean(run.result?.proof && passed(run)), rejected: isRejectedRun(run),
       ...(passed(run) && run.result?.proof ? { explainRun: run.id } : {}) } } : {}), ...(goals ? { goals } : {}),
     ...(proof && state.proofViewer === run.id ? { viewer: { onClose: closeProofViewer } } : {}),
-    ...(later.length ? { later: later.map(item => ({ id: item.id, label: item.continueFrom!.label, status: status(item), createdAt: item.createdAt, time: timestamp(item.createdAt),
-      comparable: Boolean(proof && candidateSource(item)) })) } : {}),
+    ...(later.length ? { later: later.map(item => ({ id: item.id, label: item.continueFrom?.label ?? item.title, status: status(item), createdAt: item.createdAt, time: timestamp(item.createdAt),
+      comparable: true })) } : {}),
     ...(compare ? { compare } : {}),
     active: working, report: reportProps(run), task: run.formalization?.original ?? run.task,
     // Helpers are declared in the proof, the original targets in both; before a proof exists the problem names them.
@@ -1453,7 +1501,7 @@ function resultProps(run: WebRun): ResultPanelProps {
     config: [item(t('服务商'), provider?.name ?? (isSample(run) ? t('离线示例') : run.providerId)), item(t('推理强度'), effortLabels[run.effort] ?? run.effort),
       item(t('协作模式'), run.coordination === 'cooperative' ? t('任务协作') : t('独立并行')), item(t('Agent 数量'), run.workers),
       ...(run.planApproval ? [item(t('先审计划'), t('开启'))] : []),
-      item(t('轮次上限'), run.maxTurns), item(t('解题预算'), readableDuration(run.maxRunSeconds * 1000)),
+      item(t('轮次上限'), run.maxTurns || t('不限')), item(t('解题预算'), run.maxRunSeconds ? readableDuration(run.maxRunSeconds * 1000) : t('不限')),
       item(t('用量上限'), run.maxTotalTokens ? `${formatTokens(run.maxTotalTokens)} Token` : t('不限')),
       ...(!working && progress.solvingElapsed !== null ? [item(t('研究用时'), readableDuration(progress.solvingElapsed))] : []),
       ...(run.finishedAt ? [item(t('创建时间'), timestamp(run.createdAt))] : []),
@@ -1465,10 +1513,10 @@ function resultProps(run: WebRun): ResultPanelProps {
 function compareProps(run: WebRun, later: readonly WebRun[]): CompareProps | undefined {
   const other = state.compare?.runId === run.id ? later.find(item => item.id === state.compare!.laterId) : undefined;
   const before = candidateSource(run), after = other ? candidateSource(other) : '';
-  if (!other || !before || !after) return;
-  if (runComparison?.before !== before || runComparison.after !== after || runComparison.folded !== state.foldUnchanged)
+  if (!other) return;
+  if (before && after && (runComparison?.before !== before || runComparison.after !== after || runComparison.folded !== state.foldUnchanged))
     runComparison = { before, after, folded: state.foldUnchanged, result: compareSources(before, after, state.foldUnchanged) };
-  return { id: other.id, label: other.continueFrom!.label, comparison: runComparison.result, folded: state.foldUnchanged, onClose: closeCompare };
+  return { id: other.id, label: other.continueFrom?.label ?? other.title, ...(before && after ? { comparison: runComparison!.result } : {}), research: { before: run, after: other }, folded: state.foldUnchanged, onClose: closeCompare };
 }
 function closeCompare() {
   const id = state.compare?.laterId;
@@ -1568,12 +1616,12 @@ function reportProps(run: WebRun): ReportPanelProps {
   const stuck = summarizeStuck(run);
   const summary = summarizeReport(run), reason = reportReason(summary.reason);
   // A run stopped before any check (a refused Key, say) has nothing to summarize; the verdict says why, the raw report stays folded.
-  if (!reason.text && !reason.code && !stuck && !summary.checks.length && !summary.metrics.length && !summary.identity.length && !run.result.proof)
+  if (!reason.text && !reason.code && !stuck && !summary.checks.length && !summary.metrics.length && !summary.identity.length && !summary.library && !run.result.proof)
     return { kind: 'error', error: JSON.stringify(run.result.report, null, 2) };
   if (state.reportMode === 'json') return { kind: 'json', report: run.result.report };
   return { kind: 'summary', summary: { ...(reason.text ? { reason: reason.text } : {}), ...(reason.code ? { diagnostic: reason.code } : {}),
     checks: summary.checks.map(check => { const why = checkReason(check); return { ...check, ...(why ? { reason: why } : {}) }; }),
-    metrics: summary.metrics.map(readableMetric), identity: summary.identity }, accepted: passed(run), ...(stuck ? { stuck } : {}),
+    metrics: summary.metrics.map(readableMetric), identity: summary.identity, ...(summary.library ? { library: summary.library } : {}) }, accepted: passed(run), ...(stuck ? { stuck } : {}),
     ...(run.result.proof ? { outline: { state: outlines.get(run.id), kitUrl: `/api/runs/${encodeURIComponent(run.id)}/verification-kit`, headings: headingsOf(run.result.proof),
       mathlib: Boolean(environmentInfo(run.environment)?.mathlibRevision ?? run.environment === 'mathlib'),
       ...(isAcceptedRun(run) ? { explainRun: run.id } : {}) } } : {}) };
@@ -1596,7 +1644,7 @@ function renderPanel(force = false) {
   const content = state.tab === 'source' ? sourceContent(run) : undefined;
   const signature = JSON.stringify([run.id, state.tab, content ? [state.foldUnchanged, content.source, content.props]
     : state.tab === 'result' ? [state.reportMode, run, outlines.get(run.id), notifyState(), state.proofViewer === run.id,
-      continuationsOf(state.runs, run.id).map(item => [item.id, status(item), Boolean(candidateSource(item))]),
+      relatedResearchRuns(state.runs, run).map(item => [item.id, item.updatedAt, status(item), Boolean(candidateSource(item))]),
       state.compare?.runId === run.id ? [state.compare.laterId, state.foldUnchanged, candidateSource(state.runs.find(item => item.id === state.compare!.laterId) ?? run)] : ''] : state.tab === 'events' ? run.events
       : state.tab === 'modules' ? [run, state.connected] : run]);
   if (!force && signature === state.panelSignature) {
@@ -1813,14 +1861,15 @@ function approvalProps(run: WebRun): RunHeaderProps['approval'] {
   if (!approval || !observation || isSample(run)) return;
   const sent = state.approving.get(run.id), rejected = sent && approval.rejections.find(item => item.id === sent.id);
   const error = sent?.error ?? (rejected ? approvalError(rejected.reason) : undefined);
-  return { tasks: observation.inspection.tasks.length, revising: approval.leadRevising, busy: Boolean(sent && !error), ...(error ? { error } : {}) };
+  return { tasks: observation.inspection.tasks.length, revising: approval.leadRevising, busy: Boolean(sent && !error),
+    reviewable: Boolean(observation.plan && observation.plan.baseVersion === approval.planVersion && observation.plan.baseVersion === observation.inspection.planVersion), ...(error ? { error } : {}) };
 }
 /** Approve the plan as the owner last saw it; the run rejects the approval if the plan has changed since. */
 async function approvePlan(run: WebRun) {
   const pending = planAwaitingApproval(run), planVersion = run.observation?.inspection.planVersion, sent = state.approving.get(run.id);
   // One approval at a time: another is sent only after the last one was rejected or could not be sent.
   const settled = !sent || sent.error !== undefined || pending?.rejections.some(item => item.id === sent.id);
-  if (!state.connected || !pending || pending.leadRevising || !planVersion || !settled) return;
+  if (!state.connected || !pending || pending.leadRevising || !planVersion || !settled || run.observation?.plan?.baseVersion !== planVersion || pending.planVersion !== planVersion) return;
   const approval = { id: commandId(), planVersion };
   state.approving.set(run.id, approval); renderDetail();
   try {
@@ -1961,16 +2010,12 @@ function disconnected(text: string) {
   element('#runs-error').hidden = false;
   renderRuntime(); renderDetail();
 }
-function retainLatestObservation(run: WebRun, previous?: WebRun): WebRun {
-  const observation = previous?.observation;
-  if (!observation || run.observation && run.observation.solverRunId === observation.solverRunId
-    && run.observation.sequence > observation.sequence) return run;
-  return { ...run, observation, updatedAt: run.updatedAt > previous.updatedAt ? run.updatedAt : previous.updatedAt };
-}
 function receiveRunObservation(observation: WebObservation) {
   const previous = state.runs.find(run => run.id === observation.webRunId);
-  if (!previous || previous.observation && (previous.observation.solverRunId !== observation.solverRunId
-    || previous.observation.sequence >= observation.sequence)) return;
+  const solverRunId = previous?.solverAttempt?.solverRunId ?? previous?.observation?.solverRunId;
+  if (!previous || solverRunId && solverRunId !== observation.solverRunId ||
+    previous.solverAttempt && observation.sequence < previous.solverAttempt.sequence ||
+    previous.observation && previous.observation.sequence >= observation.sequence) return;
   const run = { ...previous, observation,
     updatedAt: previous.updatedAt > observation.observedAt ? previous.updatedAt : observation.observedAt };
   state.runs = state.runs.map(item => item.id === run.id ? run : item);
@@ -1992,7 +2037,7 @@ async function refreshRuns(epoch: number, force = false, listed?: WebSession['ru
   if (!result) return;
   const previous = state.runs;
   const byId = new Map(previous.map(run => [run.id, run]));
-  state.runs = result.runs.map(run => retainLatestObservation(run, byId.get(run.id))).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  state.runs = result.runs.map(run => retainLatestRun(run, byId.get(run.id))).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   // The first list is the history as it stands; only later ones bring arrivals.
   if (state.resumed) for (const run of state.runs) if (!byId.has(run.id)) arrivals.add(run.id);
   const resume = state.resumed ? undefined : readResume(() => localStorage);
@@ -2084,7 +2129,12 @@ function initialize(): Promise<void> {
       }
       const ownerChanged = Boolean(state.session && ownerOfSession(state.session) !== ownerOfSession(session));
       const firstLoad = !state.session || ownerChanged;
-      if (ownerChanged) { clearOwnedDrafts(); state.submitting = false; }
+      let storedOwnerChanged = false;
+      if (!state.session) {
+        try { storedOwnerChanged = sessionStorage.getItem(draftOwnerStorageKey) !== ownerOfSession(session); }
+        catch { /* Unavailable storage cannot restore a previous owner's draft. */ }
+      }
+      if (ownerChanged || storedOwnerChanged) { clearOwnedDrafts(); state.submitting = false; }
       ownedDrafts.bind(ownerOfSession(session));
       if (state.session && state.session.csrfToken !== session.csrfToken) {
         state.runs = []; state.selectedId = ''; state.selectedRun = undefined;
@@ -2094,6 +2144,7 @@ function initialize(): Promise<void> {
         if (!ownerChanged) toast(t('会话已更新，未提交内容已保留'));
       }
       state.session = session;
+      chatWorkspace?.bindOwner(session.account?.email ?? 'anonymous');
       const previousProvider = field('provider').value;
       const providers = session.providers.map(provider => [provider.id, provider.name] as const);
       const keepProvider = session.providers.some(provider => provider.id === previousProvider);
@@ -2113,6 +2164,22 @@ function initialize(): Promise<void> {
       if (!currentConnection(epoch)) return;
       state.connected = true; state.lost = false;
       if (formalizationLink) await openFormalizedDraft(formalizationLink);
+      await researchSelection.load((configuration, imports) => {
+        field('environment').value = configuration.environment;
+        const preferences = configuration.preferences;
+        if (preferences.providerId && session.providers.some(provider => provider.id === preferences.providerId)) field('provider').value = preferences.providerId;
+        if (preferences.model) field('model').value = preferences.model;
+        if (preferences.effort) field('effort').value = preferences.effort;
+        if (preferences.workers) field('workers').value = String(preferences.workers);
+        if (preferences.coordination) element<HTMLInputElement>(`input[name="coordination"][value="${preferences.coordination}"]`).checked = true;
+        if (configuration.agent) modulePlanEditor.setValue(undefined);
+        if (!draftFormalization && imports.length) {
+          const source = field('source').value;
+          const additions = [...new Set(imports)].filter(name => !source.split('\n').some(line => line.trim() === `import ${name}`));
+          if (additions.length) field('source').value = additions.map(name => `import ${name}`).join('\n') + '\n' + source;
+        }
+        providerAddress(); updateEnvironment(); updateCounts();
+      }, field('environment').value as WebEnvironment, () => { chooseEntry('lean'); startDraft(false, 'replace'); });
       setGlobalNotice(session.runtime.ready && session.providers.length ? '' : localizeText(session.runtime.message) || t('运行环境未就绪'));
     } catch (error) {
       if (currentConnection(epoch)) {
@@ -2147,7 +2214,7 @@ function renderShell() {
     history: { docked: historyDocked(), expanded: !historyCollapsed() },
     connection: { tone: ready ? 'ready' : 'offline', label: !state.connected ? connectionRequest ? t('连接中') : t('连接中断') : ready ? t('环境就绪') : t('环境未就绪') },
     settingsDisabled: !session || state.submitting, account: session?.account?.email, onAccount: openAccount,
-    onHistory: toggleHistory, onDraft: openDraft, onSettings: () => openSettings(), onPalette: () => palette.open(), onGlossary: () => openGlossary(), onLocale: changeLocale,
+    onHistory: toggleHistory, onHome: () => { void openNaturalResearch(); }, onDraft: openDraft, onSettings: () => openSettings(), onPalette: () => palette.open(), onGlossary: () => openGlossary(), onLocale: changeLocale,
     onLive: () => {
       const target = run && activeRun(run) ? run : state.runs.filter(activeRun).at(-1);
       if (!target) return;
@@ -2208,19 +2275,20 @@ async function openAdmin() {
   renderAdmin();
 }
 async function changeCompletionEmail(input: HTMLInputElement) {
-  const wanted = input.checked;
+  const wanted = input.checked, session = state.session;
   input.disabled = true;
   try {
     await api('/api/auth/account', { method: 'PATCH', body: JSON.stringify({ completionEmail: wanted }) });
+    if (!sameSession(session)) return;
     if (state.session?.account) state.session.account.completionEmail = wanted;
     toast(wanted ? t('研究结束时会发邮件到登录邮箱') : t('已关闭结束邮件'));
-  } catch (error) { input.checked = !wanted; toast(message(error)); }
+  } catch (error) { if (sameSession(session)) { input.checked = !wanted; toast(message(error)); } }
   finally { input.disabled = false; }
 }
 async function changePassword(event: Event) {
   event.preventDefault();
   const error = element('#account-password-error'), button = element<HTMLButtonElement>('#save-password');
-  const password = field('account-new-password').value, repeat = field('account-repeat-password').value;
+  const password = field('account-new-password').value, repeat = field('account-repeat-password').value, session = state.session;
   error.hidden = true;
   if (password.length < 12 || new TextEncoder().encode(password).length > 256) {
     error.textContent = t('密码至少 12 位且不超过 256 字节。'); error.hidden = false; return;
@@ -2230,14 +2298,15 @@ async function changePassword(event: Event) {
   try {
     await api('/api/auth/password', { method: 'PATCH', body: JSON.stringify({ password,
       currentPassword: field('account-current-password').value }) });
+    if (!sameSession(session)) return;
     if (state.session?.account) { state.session.account.passwordSet = true; state.session.account.passwordResetAllowed = false; }
     element('#account-current-wrap').hidden = false;
     element('#account-password-note').textContent = t('输入当前密码和至少 12 位的新密码。忘记密码请用邮箱验证码重新登录。');
     button.textContent = t('修改密码');
     toast(t('密码已更新；其他设备需要重新登录'));
-  } catch (cause) { error.textContent = message(cause); error.hidden = false; }
+  } catch (cause) { if (sameSession(session)) { error.textContent = message(cause); error.hidden = false; } }
   finally {
-    for (const id of ['account-current-password', 'account-new-password', 'account-repeat-password']) field(id).value = '';
+    if (sameSession(session)) for (const id of ['account-current-password', 'account-new-password', 'account-repeat-password']) field(id).value = '';
     button.disabled = false;
   }
 }
@@ -2251,20 +2320,21 @@ async function changeAllowlist(method: 'POST' | 'DELETE', email: string): Promis
   finally { admin.busy = undefined; renderAdmin(); }
 }
 async function leaveAccount(request: () => Promise<unknown>, button: HTMLButtonElement) {
+  const session = state.session;
   button.disabled = true; element('#account-error').hidden = true;
   try {
     await request();
+    if (!sameSession(session)) return;
     try { localStorage.setItem('theorem-os.web-account-left.v1', JSON.stringify({ owner: state.session && ownerOfSession(state.session), nonce: crypto.randomUUID() })); } catch { /* Other tabs also detect session changes on their next request. */ }
     clearOwnedDrafts();
-    try {
-      for (const key of Object.keys(sessionStorage)) if (key.startsWith('theorem-os.natural-research-draft.v1:') || key.startsWith('theorem-os.chat-draft.') || key === entryStorageKey) sessionStorage.removeItem(key);
-    } catch { /* Session storage may be unavailable. */ }
     location.replace('login.html');
   }
   catch (error) {
+    if (!sameSession(session)) return;
     element('#account-error').textContent = message(error); element('#account-error').hidden = false;
     button.disabled = false;
   }
+  finally { if (!sameSession(session)) button.disabled = false; }
 }
 /** The theme itself is applied by theme.js before the first paint; this page only offers the choice. */
 const themeLabels: Record<ThemePreference, string> = { system: t('跟随系统'), light: t('浅色'), dark: t('深色') };
@@ -2384,7 +2454,7 @@ function paletteCommands(): PaletteCommand[] {
         run: () => void openSharing(run) },
       Boolean(state.session) && !state.submitting && { id: 'run-reuse', group: t('当前研究'), label: sample ? t('用这道题开始研究') : t('复用任务配置'), icon: 'copy-plus',
         keywords: t('reuse retry again rerun 复用 再试 重新 配置'), run: () => reuseRun(run) },
-      Boolean(run.result || !activeRun(run)) && { id: 'run-download-archive', group: t('当前研究'), label: t('下载运行档案'), icon: 'download', keywords: t('download archive zip run 下载 档案 记录'),
+      Boolean(run.result || !activeRun(run)) && { id: 'run-download-archive', group: t('当前研究'), label: t('下载完整研究归档'), icon: 'download', keywords: t('download archive zip run 下载 档案 记录'),
         run: () => { const link = document.createElement('a'); link.href = downloadUrl(run.id); link.download = ''; document.body.append(link); link.click(); link.remove(); } },
       !sample && activeRun(run) && state.connected && !state.cancelling.has(run.id) && { id: 'run-cancel', group: t('当前研究'), label: t('取消运行'), icon: 'square',
         keywords: t('cancel stop 取消 停止'), run: () => openCancellation(run) },
@@ -2449,6 +2519,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
       ...(capturedDraft.knowledgeDigest !== undefined ? { knowledgeDigest: capturedDraft.knowledgeDigest } : {}),
       ...(draftContinuation ? { continueFrom: draftContinuation } : {}),
       ...(draftFormalization ? { formalizationId: draftFormalization.id } : {}),
+      ...(researchSelection.value() ? { researchSelection: researchSelection.value() } : {}),
     };
     const saveKey = Boolean(session.account?.keyVault && input.apiKey && element<HTMLInputElement>('#save-key').checked);
     if (saveKey) input.saveKey = true;
@@ -2464,7 +2535,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     modulePlanEditor.clearDeleted();
     modulePlanLibrary.clearUndo();
     draftRecovery.clear(); renderDraftRecovery();
-    const result = await api<{ run: WebRun; savedKeys?: WebSavedKey[] }>('/api/runs', { method: 'POST', body: JSON.stringify(input) });
+    const result = await api<{ run: WebRun; savedKeys?: WebSavedKey[]; keySaveFailed?: boolean }>('/api/runs', { method: 'POST', body: JSON.stringify(input) });
     if (!currentConnection(epoch)) {
       toast(t('研究已提交，连接已变化，请核对运行记录'));
       void poll(); return;
@@ -2487,7 +2558,8 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     chatWorkspace?.useRunKey(run.id, input.apiKey);
     schedulePoll();
     requestRunsRefresh();
-    toast(saveKey ? t('研究已提交，Key 已保存到你的账号') : t('研究已提交'));
+    toast(result.keySaveFailed ? t('研究已提交，Key 未能保存，请在设置中重试保存。')
+      : saveKey ? t('研究已提交，Key 已保存到你的账号') : t('研究已提交'));
   } catch (error) {
     if (submission !== submissionSequence) return;
     const key = field('api-key').value.trim();
@@ -2550,7 +2622,7 @@ async function cancelRun(id: string) {
     state.listGeneration++;
     const previous = state.runs.slice();
     const index = state.runs.findIndex(item => item.id === run.id);
-    const updated = retainLatestObservation(result.run, state.runs[index]);
+    const updated = retainLatestRun(result.run, state.runs[index]);
     if (index >= 0) state.runs[index] = updated;
     if (state.selectedId === run.id) state.selectedRun = updated;
     rememberFinishedRuns(previous);
@@ -2730,8 +2802,8 @@ async function continueChecked(run: WebRun, taskIds: readonly string[], button: 
   try {
     const from = await trajectoryView.checkedContinuation(run, taskIds);
     if (state.selectedId !== run.id) return;
+    if (!from) { toast(t('已检查版本的源码没有保存，无法带入成果。请在路线图中查看已有记录。')); return; }
     reuseRun(run, 'retry', from);
-    if (!from) toast(t('已检查的代码没有保存，已载入原始题目与执行配置，请输入 API Key'));
   } catch (error) {
     toast(t('读取已检查的代码失败：{0}', message(error)));
   } finally { button.disabled = false; }
@@ -2743,6 +2815,7 @@ function reuseRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 'report'>
   if (recovery === 'key') forgetRememberedKey();
   replaceDraft('reuse', () => {
     draftContinuation = from;
+    continuationPreview = { title: run.title, runId: run.id, from, originalSeconds: run.maxRunSeconds, originalTurns: run.maxTurns, originalTokens: run.maxTotalTokens };
     draftFormalization = run.formalization ? { id: run.formalization.id, evidenceSha256: run.formalization.evidenceSha256,
       source: run.source, environment: run.environment, original: run.formalization.original } : undefined;
     clearValidation();
@@ -2752,7 +2825,7 @@ function reuseRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 'report'>
     field('environment').value = run.environment;
     renderTemplates();
     for (const [id, value] of Object.entries({ ...connection, source: run.source, task: run.task,
-      'max-turns': run.maxTurns, 'max-seconds': run.maxRunSeconds, workers: run.workers,
+      'max-turns': run.maxTurns || '', 'max-seconds': run.maxRunSeconds || '', workers: run.workers,
       'max-tokens': run.maxTotalTokens ? run.maxTotalTokens / 10_000 : '' })) field(id).value = String(value);
     // 提高解题预算 / 提高轮次上限 open with the limit already doubled (up to the highest allowed); the field stays open to change it.
     const limit = recovery === 'budget' ? { id: 'max-seconds', value: run.maxRunSeconds, highest: session.limits.maxRunSeconds, say: (value: number) => readableDuration(value * 1000) }
@@ -3032,11 +3105,14 @@ async function loadSourceFile(file: File) {
     const source = await readLeanFile(file, state.session.limits.maxSourceBytes);
     if (revision !== sourceRevision || state.submitting) { toast(t('草稿已变化，未导入文件')); return; }
     replaceDraft('source', () => setCustomSource(source));
+    chooseEntry('lean'); setMobileView('compose');
+    field('source').focus();
     toast(t('Lean 文件已载入'));
   } catch (error) {
     if (revision !== sourceRevision) return;
     element('#source-error').textContent = message(error); element('#source-error').hidden = false;
-    openSettings('source');
+    if (researchEntry === 'natural') toast(message(error));
+    else openSettings('source');
   }
 }
 // The browser opens a file dropped anywhere it is not handled, in place of the workbench and its draft; here it is the
@@ -3434,7 +3510,7 @@ window.addEventListener('popstate', () => {
   else if (!id && !location.search) {
     chooseEntry('natural'); startDraft(false, 'replace');
     void naturalPage?.then(() => {
-      if (!currentRun() && !location.search) chatWorkspace?.home(true);
+      if (!currentRun() && !location.search) chatWorkspace?.home(false);
     });
   }
   else renderDetail();

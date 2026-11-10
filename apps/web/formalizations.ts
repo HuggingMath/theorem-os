@@ -1,19 +1,27 @@
+import type { WorkerFormalizationAuditInput } from './formalizationAuditTypes';
 import crypto from 'node:crypto';
 import { assertFormalizationEvidence, formalizationDigest, formalizationEvidenceSchema, type FormalizationEvidence } from '../../src/math/formalization';
+import { assertFormalizationAuditResult } from '../../src/math/formalizationAudit';
+import { reportedTotalTokens } from '../../src/solver/usageBudget';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
-import { mathDigest } from '../../src/math/mathRuntimeIo';
+import { canonicalMathJson, mathDigest } from '../../src/math/mathRuntimeIo';
+import { LEAN_STATEMENT_CONTEXT_PROTOCOL } from '../../src/math/leanStatementSemantic';
 import { webLimits } from './config';
 import { formalizationReport } from './formalizationReport';
 import { webFormalizationActivityLimits, webFormalizationDefaults, webFormalizationLimits, webFormalizationReason, webFormalizationTokenBudgets, type WebFormalization,
-  type WebFormalizationActivity, type WebFormalizationRequest, type WorkerFormalizationInput, type WorkerFormalizationMessage } from './formalizationTypes';
+  type WebFormalizationActivity, type WebFormalizationRequest, type WorkerFormalizationInput, type WorkerFormalizationMessage,
+  type WorkerFormalizationAuditMessage } from './formalizationTypes';
 import type { WebRunner } from './runner';
 import type { WebProvider } from './shared';
-import { WebStorage, WebStorageError } from './storage';
+import { WebStorage, WebStorageError, type WebCreation } from './storage';
 
-type Record = { owner: string; formalization: WebFormalization; evidenceSha256?: string; provider?: WebProvider };
+type Record = { owner: string; formalization: WebFormalization; evidenceSha256?: string; provider?: WebProvider; creation?: WebCreation };
 type Job = { record: Record; input: WorkerFormalizationInput; controller: AbortController; persistedAt: number };
+type AuditJob = { record: Record; input: WorkerFormalizationAuditInput; controller: AbortController; deadline?: number };
 type StartResearch = (owner: string, formalization: WebFormalization, evidence: FormalizationEvidence, input: WorkerFormalizationInput) => string;
 const active = (value: WebFormalization) => value.status === 'queued' || value.status === 'running';
+const reviewing = (value: WebFormalization) => value.backgroundReview?.status === 'queued' || value.backgroundReview?.status === 'running';
+const readableContextProtocols: readonly string[] = ['kernel-v2', LEAN_STATEMENT_CONTEXT_PROTOCOL];
 const reasonOf = (error: unknown) => error instanceof Error && webFormalizationReason.test(error.message) ? error.message : 'formalization_failed';
 const directory = (owner: string) => ['owners', mathDigest(owner), 'formalizations'];
 const recordPath = (owner: string, id: string) => {
@@ -27,18 +35,23 @@ export function verifyWebFormalizationEvidence(value: unknown, formalization: We
   if (Buffer.byteLength(evidence.candidate.source) > webLimits.maxSourceBytes) throw new Error('formalization_source_too_large');
   assertFormalizationEvidence(evidence);
   const request = evidence.request, workflow = request.workflow;
-  if (request.schema !== 'theorem-os.formalization-request.v3' || request.contextProtocol !== 'kernel-v2' ||
-    request.fidelityPolicy !== 'task-preserving-v2' || request.problemId !== formalization.id || request.statement !== formalization.original ||
+  const contextProtocol = formalization.contextProtocol ?? 'kernel-v2';
+  if (request.schema !== 'theorem-os.formalization-request.v3' || request.contextProtocol !== contextProtocol ||
+    !readableContextProtocols.includes(contextProtocol) ||
+    request.reviewMode !== formalization.reviewMode || request.problemId !== formalization.id || request.statement !== formalization.original ||
     request.statementSha256 !== mathDigest(formalization.original) || request.environment !== formalization.environment ||
     request.environmentDigest !== getLeanTaskEnvironment(formalization.environment).dependencyDigest ||
     request.model !== formalization.model || request.effort !== formalization.effort ||
     request.execution !== 'model' || evidence.execution !== 'model' || !evidence.modelInvoked ||
-    request.maxRounds !== webFormalizationLimits.maxRounds || request.maxRunSeconds !== (formalization.maxRunSeconds ?? 1800) ||
+    request.maxRounds !== (formalization.maxRounds ?? 3) || request.maxRunSeconds !== (formalization.maxRunSeconds ?? 1800) ||
     (formalization.maxTotalTokens === undefined ? !webFormalizationTokenBudgets.includes(request.maxTotalTokens)
-      : request.maxTotalTokens !== formalization.maxTotalTokens) || !workflow ||
-    workflow.maxPlanningRounds !== webFormalizationLimits.maxPlanningRounds || workflow.reviewers.length !== webFormalizationLimits.reviewers ||
-    [workflow.planner, workflow.backtranslator, ...workflow.reviewers].some(role => role.model !== request.model ||
-      role.effort !== request.effort || role.profile !== request.profile || role.executable !== request.executable))
+      : request.maxTotalTokens !== formalization.maxTotalTokens))
+    throw new Error('formalization_binding_mismatch');
+  if (formalization.reviewMode === 'direct' ? evidence.schema !== 'theorem-os.formalization-evidence.v4' :
+    request.fidelityPolicy !== 'task-preserving-v2' || !workflow ||
+      workflow.maxPlanningRounds !== (formalization.maxPlanningRounds ?? 2) || workflow.reviewers.length !== webFormalizationLimits.reviewers ||
+      [workflow.planner, workflow.backtranslator, ...workflow.reviewers].some(role => role.model !== request.model ||
+        role.effort !== request.effort || role.profile !== request.profile || role.executable !== request.executable))
     throw new Error('formalization_binding_mismatch');
   return evidence;
 }
@@ -47,6 +60,8 @@ export function verifyWebFormalizationEvidence(value: unknown, formalization: We
 export class WebFormalizations {
   private jobs = new Map<string, Job>();
   private running = 0;
+  private auditJobs = new Map<string, AuditJob>();
+  private auditsRunning = 0;
   private closing = false;
   constructor(private readonly runner: WebRunner, private readonly storage: WebStorage,
     private readonly limits: Pick<typeof webFormalizationLimits, 'concurrency' | 'queueLimit' | 'perOwner' | 'recordsPerOwner'> = webFormalizationLimits,
@@ -65,19 +80,32 @@ export class WebFormalizations {
         && !stored.formalization.runId && !stored.formalization.researchError) {
         stored.formalization.researchError = 'formalization_research_interrupted'; this.save(stored);
       }
+      if (stored && reviewing(stored.formalization)) {
+        Object.assign(stored.formalization.backgroundReview!, { status: 'interrupted',
+          reason: 'formalization_audit_interrupted', finishedAt: new Date().toISOString() });
+        this.save(stored);
+      }
     }
   }
   list(owner: string): WebFormalization[] {
-    return this.storage.listRecords(directory(owner)).map(id => this.record(owner, id)!.formalization)
+    // A crash before the first atomic record rename may leave only the task directory and a temporary file.
+    return this.storage.listRecords(directory(owner)).flatMap(id => {
+      const record = this.record(owner, id);
+      return record ? [record.formalization] : [];
+    })
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
   counts() {
     const queued = [...this.jobs.values()].filter(job => job.record.formalization.status === 'queued');
-    const oldestQueuedAt = queued.map(job => job.record.formalization.createdAt).sort()[0];
-    return { running: this.running, queued: queued.length, ...(oldestQueuedAt ? { oldestQueuedAt } : {}) };
+    const auditQueued = [...this.auditJobs.values()].filter(job => job.record.formalization.backgroundReview?.status === 'queued');
+    const oldestQueuedAt = [...queued.map(job => job.record.formalization.createdAt),
+      ...auditQueued.map(job => job.record.formalization.backgroundReview!.queuedAt)].sort()[0];
+    return { running: this.running + this.auditsRunning, queued: queued.length + auditQueued.length,
+      ...(oldestQueuedAt ? { oldestQueuedAt } : {}) };
   }
   private record(owner: string, id: string): Record | undefined {
-    return this.jobs.get(this.key(owner, id))?.record ?? this.storage.getRecord<Record>([...recordPath(owner, id), 'record.json']);
+    return this.jobs.get(this.key(owner, id))?.record ?? this.auditJobs.get(this.key(owner, id))?.record
+      ?? this.storage.getRecord<Record>([...recordPath(owner, id), 'record.json']);
   }
   private required(owner: string, id: string) {
     const record = this.record(owner, id);
@@ -93,7 +121,27 @@ export class WebFormalizations {
   }
   read(owner: string, id: string): WebFormalization {
     const record = this.required(owner, id), value = record.formalization;
-    return value.status === 'review' || value.status === 'confirmed' ? { ...value, report: formalizationReport(this.evidence(record)) } : value;
+    return value.status === 'review' || value.status === 'confirmed' ? this.withReport(record) : value;
+  }
+  private withReport(record: Record) {
+    const evidence = this.evidence(record), value = record.formalization;
+    let backgroundReview = value.backgroundReview;
+    if (backgroundReview?.result) {
+      try {
+        if (evidence.schema !== 'theorem-os.formalization-evidence.v4') throw new Error('formalization_audit_binding_mismatch');
+        assertFormalizationAuditResult(evidence, backgroundReview.result);
+        if (backgroundReview.evidenceSha256 !== record.evidenceSha256 || backgroundReview.sourceSha256 !== evidence.sourceSha256 ||
+            backgroundReview.status !== backgroundReview.result.review.verdict || backgroundReview.result.model !== value.model ||
+            backgroundReview.result.effort !== value.effort || formalizationDigest(backgroundReview.result) !== formalizationDigest(
+              this.storage.getRecord([...recordPath(record.owner, value.id), 'audit.json'])))
+          throw new Error('formalization_audit_binding_mismatch');
+      } catch {
+        backgroundReview = { ...backgroundReview, status: 'error', reason: 'formalization_audit_evidence_changed' };
+        delete backgroundReview.result;
+      }
+    }
+    return { ...value, ...(backgroundReview ? { backgroundReview } : {}),
+      report: { ...formalizationReport(evidence), ...(backgroundReview ? { backgroundReview } : {}) } };
   }
   /** What the formalization did after `after`, oldest first; only its owner reads it. */
   activity(owner: string, id: string, after: number) {
@@ -111,27 +159,31 @@ export class WebFormalizations {
       Object.assign(record.formalization, { status: 'confirmed', confirmation: 'manual', confirmedAt: now, updatedAt: now });
       this.save(record);
     }
-    return { ...record.formalization, report: formalizationReport(evidence) };
+    return this.withReport(record);
   }
   confirmed(owner: string, id: string): { formalization: WebFormalization; evidence: FormalizationEvidence } {
     const record = this.required(owner, id);
     if (record.formalization.status !== 'confirmed') throw new WebStorageError(409, '请先确认原题与 Lean 声明的对应关系。');
     const evidence = this.evidence(record);
-    return { formalization: { ...record.formalization, report: formalizationReport(evidence) }, evidence };
+    return { formalization: this.withReport(record), evidence };
   }
   /** Starts or retries research from confirmed frozen evidence; it never calls the formalizer again. */
   retryResearch(owner: string, id: string, provider: WebProvider, apiKey: string): WebFormalization {
     const record = this.required(owner, id), item = record.formalization;
     if (item.runId) return this.read(owner, id);
     if (this.closing || !this.startResearch) throw new WebStorageError(503, '自动证明运行环境尚未就绪。');
-    if (item.status !== 'confirmed' || item.workflow !== 'solve') throw new WebStorageError(409, '请先完成原题形式化与审核。');
+    if (item.status !== 'confirmed' || item.workflow !== 'solve') throw new WebStorageError(409, '请先完成原题形式化。');
     if (provider.id !== (item.providerId ?? 'sub2api') || record.provider && record.provider.baseUrl !== provider.baseUrl)
       throw new WebStorageError(409, '模型服务地址已改变，请创建新任务。');
     const evidence = this.evidence(record);
     const input: WorkerFormalizationInput = { id, original: item.original, environment: item.environment, model: item.model,
       effort: item.effort, apiKey, provider, maxRunSeconds: item.maxRunSeconds ?? 1800,
+      contextProtocol: evidence.request.contextProtocol,
+      ...(item.reviewMode ? { reviewMode: item.reviewMode } : {}),
       maxTotalTokens: item.maxTotalTokens ?? evidence.request.maxTotalTokens,
-      maxRounds: webFormalizationLimits.maxRounds, maxPlanningRounds: webFormalizationLimits.maxPlanningRounds, reviewers: webFormalizationLimits.reviewers };
+      maxRounds: item.maxRounds ?? evidence.request.maxRounds,
+      maxPlanningRounds: item.maxPlanningRounds ?? evidence.request.workflow?.maxPlanningRounds ?? 0,
+      reviewers: webFormalizationLimits.reviewers };
     try {
       item.runId = this.startResearch(owner, item, evidence, input);
       delete item.researchError; item.updatedAt = new Date().toISOString(); this.save(record);
@@ -141,7 +193,32 @@ export class WebFormalizations {
       throw error;
     } finally { input.apiKey = ''; }
   }
+  private creation(request: WebFormalizationRequest, provider: WebProvider, model: string): WebCreation | undefined {
+    if (!request.requestId) return;
+    if (!/^[A-Za-z0-9_-]{1,128}$/u.test(request.requestId)) throw new WebStorageError(400, '提交请求标识无效。');
+    return { schema: 'theorem-os.web-creation.v1', requestId: request.requestId, digest: mathDigest(canonicalMathJson({
+      original: request.original, environment: request.environment, effort: request.effort, model,
+      provider: { id: provider.id, baseUrl: provider.baseUrl }, solve: Boolean(request.solve), humanReview: Boolean(request.humanReview),
+      maxRunSeconds: request.maxRunSeconds ?? webFormalizationDefaults.maxRunSeconds,
+      maxTotalTokens: request.maxTotalTokens ?? webFormalizationDefaults.maxTotalTokens,
+      research: { ...webFormalizationDefaults.research, ...request.research },
+    })) };
+  }
+  /** A receipt can be recovered before readiness, credentials, queue or quota admission. */
+  replay(owner: string, request: WebFormalizationRequest, provider: WebProvider, model: string): WebFormalization | undefined {
+    const expected = this.creation(request, provider, model);
+    if (!expected) return;
+    const record = this.storage.listRecords(directory(owner)).map(id => this.record(owner, id))
+      .find(item => item?.owner === owner && item.creation?.requestId === expected.requestId);
+    const previous = record?.creation ?? this.storage.getRecord<WebCreation>(['owners', mathDigest(owner), 'deleted-formalization-requests', `${mathDigest(expected.requestId)}.json`]);
+    if (!previous) return;
+    if (previous.digest !== expected.digest) throw new WebStorageError(409, '同一提交请求不能使用不同的题目或配置。');
+    if (!record) throw new WebStorageError(410, '这次提交对应的形式化已删除，请发起新研究。');
+    return this.read(owner, record.formalization.id);
+  }
   create(owner: string, request: WebFormalizationRequest, provider: WebProvider, model: string): WebFormalization {
+    const previous = this.replay(owner, request, provider, model);
+    if (previous) return previous;
     if (this.closing) throw new WebStorageError(503, '服务正在停止，请稍后重试。');
     if (request.humanReview && !request.solve) throw new WebStorageError(400, '人工审核模式需要启用证明研究。');
     if (request.solve && !this.startResearch) throw new WebStorageError(503, '自动证明运行环境尚未就绪。');
@@ -151,37 +228,69 @@ export class WebFormalizations {
     if (this.list(owner).length >= this.limits.recordsPerOwner) throw new WebStorageError(429, '形式化记录已满，请先删除不需要的记录。');
     const now = new Date().toISOString(), id = crypto.randomUUID();
     const formalization: WebFormalization = { id, original: request.original, environment: request.environment, model, providerId: provider.id,
+      contextProtocol: LEAN_STATEMENT_CONTEXT_PROTOCOL,
+      reviewMode: 'direct',
       maxRunSeconds: request.maxRunSeconds ?? webFormalizationDefaults.maxRunSeconds,
       maxTotalTokens: request.maxTotalTokens ?? webFormalizationDefaults.maxTotalTokens,
+      maxRounds: 0, maxPlanningRounds: 0,
       research: { ...webFormalizationDefaults.research, ...request.research },
       effort: request.effort, status: 'queued', createdAt: now, updatedAt: now, progress: { phase: 'queued', updatedAt: now },
       ...(request.solve ? { workflow: 'solve' } : {}), ...(request.humanReview ? { humanReview: true } : {}) };
     const input: WorkerFormalizationInput = { original: request.original, environment: request.environment, effort: request.effort,
+      contextProtocol: formalization.contextProtocol,
+      reviewMode: formalization.reviewMode,
       apiKey: request.apiKey, id, model, provider, maxRunSeconds: formalization.maxRunSeconds!,
-      maxTotalTokens: formalization.maxTotalTokens!, maxRounds: webFormalizationLimits.maxRounds,
-      maxPlanningRounds: webFormalizationLimits.maxPlanningRounds, reviewers: webFormalizationLimits.reviewers };
-    const job: Job = { record: { owner, formalization, provider: { ...provider } }, input, controller: new AbortController(), persistedAt: 0 };
-    this.jobs.set(this.key(owner, id), job); this.persist(job, true);
+      maxTotalTokens: formalization.maxTotalTokens!, maxRounds: formalization.maxRounds!,
+      maxPlanningRounds: formalization.maxPlanningRounds!, reviewers: webFormalizationLimits.reviewers };
+    const creation = this.creation(request, provider, model);
+    const job: Job = { record: { owner, formalization, provider: { ...provider }, ...(creation ? { creation } : {}) }, input, controller: new AbortController(), persistedAt: 0 };
+    this.jobs.set(this.key(owner, id), job);
+    try { this.persist(job, true); }
+    catch (error) { this.release(job); throw error; }
     queueMicrotask(() => this.pump());
     return formalization;
   }
   cancel(owner: string, id: string): WebFormalization {
     const record = this.required(owner, id), job = this.jobs.get(this.key(owner, id));
-    if (job) { this.finish(job, 'cancelled'); this.release(job); job.controller.abort(); this.pump(); }
+    if (job) {
+      try { this.finish(job, 'cancelled'); }
+      finally { this.release(job); job.controller.abort(); this.pump(); }
+    } else if (active(record.formalization)) {
+      // A failed terminal save can leave an active record after its worker has already stopped.
+      const now = new Date().toISOString();
+      Object.assign(record.formalization, { status: 'cancelled', updatedAt: now, finishedAt: now });
+      this.save(record);
+    }
+    const audit = this.auditJobs.get(this.key(owner, id));
+    if (audit) this.stopAudit(audit, 'cancelled');
     return record.formalization;
   }
   remove(owner: string, id: string) {
     const record = this.required(owner, id);
     if (active(record.formalization)) throw new WebStorageError(409, '请先取消进行中的形式化任务。');
+    if (record.creation) this.storage.saveRecord(['owners', mathDigest(owner), 'deleted-formalization-requests', `${mathDigest(record.creation.requestId)}.json`], record.creation, true);
+    const audit = this.auditJobs.get(this.key(owner, id));
+    if (audit) this.stopAudit(audit, 'cancelled');
     this.storage.deleteRecord(recordPath(owner, id));
   }
   forget(owner: string) {
     for (const job of [...this.jobs.values()]) if (job.record.owner === owner) { this.release(job); job.controller.abort(); }
+    for (const job of [...this.auditJobs.values()]) if (job.record.owner === owner) this.stopAudit(job, 'cancelled');
   }
   async close() {
     this.closing = true;
-    for (const job of [...this.jobs.values()]) { this.finish(job, 'error', 'formalization_interrupted'); this.release(job); job.controller.abort(); }
-    while (this.running) await new Promise(resolve => setTimeout(resolve, 25));
+    let failure: unknown;
+    for (const job of [...this.jobs.values()]) {
+      try { this.finish(job, 'error', 'formalization_interrupted'); }
+      catch (error) { failure ??= error; }
+      finally { this.release(job); job.controller.abort(); }
+    }
+    for (const job of [...this.auditJobs.values()]) {
+      try { this.stopAudit(job, 'interrupted', 'formalization_audit_interrupted'); }
+      catch (error) { failure ??= error; }
+    }
+    while (this.running || this.auditsRunning) await new Promise(resolve => setTimeout(resolve, 25));
+    if (failure) throw failure;
   }
   private key(owner: string, id: string) { return `${mathDigest(owner)}/${id}`; }
   private current(job: Job) { return this.jobs.get(this.key(job.record.owner, job.record.formalization.id)) === job; }
@@ -197,39 +306,129 @@ export class WebFormalizations {
     Object.assign(job.record.formalization, { status, updatedAt: now, finishedAt: now, ...(reason ? { reason } : {}) });
     this.persist(job, true);
   }
+  private queueAudit(job: Job, evidence: FormalizationEvidence) {
+    if (evidence.schema !== 'theorem-os.formalization-evidence.v4') return;
+    const value = job.record.formalization, now = new Date().toISOString();
+    value.backgroundReview = { status: 'queued', evidenceSha256: formalizationDigest(evidence),
+      sourceSha256: evidence.sourceSha256, queuedAt: now, tokens: 0 };
+    const fail = (reason: string) => {
+      Object.assign(value.backgroundReview!, { status: 'error', reason, finishedAt: now }); this.save(job.record);
+    };
+    if (!this.runner.auditFormalization) { fail('formalization_audit_runtime_unavailable'); return; }
+    if (this.auditJobs.size >= this.limits.queueLimit) { fail('formalization_audit_queue_full'); return; }
+    const usage = evidence.sessions.map(session => reportedTotalTokens(session.usage));
+    if (job.input.maxTotalTokens > 0 && usage.some(tokens => tokens === null)) {
+      fail('formalization_usage_missing'); return;
+    }
+    const used = Math.max(value.progress?.tokens ?? 0, usage.reduce<number>((sum, tokens) => sum + (tokens ?? 0), 0));
+    const maxTotalTokens = job.input.maxTotalTokens > 0 ? job.input.maxTotalTokens - used : 0;
+    if (job.input.maxTotalTokens > 0 && maxTotalTokens <= 0) { fail('formalization_token_limit'); return; }
+    const deadline = job.input.maxRunSeconds > 0 ? Date.parse(value.createdAt) + job.input.maxRunSeconds * 1_000 : undefined;
+    if (deadline !== undefined && deadline <= Date.now()) { fail('formalization_time_limit'); return; }
+    const input: WorkerFormalizationAuditInput = { operation: 'audit', id: value.id, original: value.original,
+      environment: value.environment, model: value.model, effort: value.effort, provider: job.input.provider,
+      apiKey: job.input.apiKey, evidence, maxTotalTokens, maxRunSeconds: 0 };
+    this.auditJobs.set(this.key(job.record.owner, value.id), { record: job.record, input, controller: new AbortController(), deadline });
+    this.save(job.record);
+    queueMicrotask(() => this.pumpAudits());
+  }
+  private currentAudit(job: AuditJob) {
+    return this.auditJobs.get(this.key(job.record.owner, job.record.formalization.id)) === job;
+  }
+  private releaseAudit(job: AuditJob) {
+    if (this.currentAudit(job)) this.auditJobs.delete(this.key(job.record.owner, job.record.formalization.id));
+    job.input.apiKey = '';
+  }
+  private stopAudit(job: AuditJob, status: 'error' | 'cancelled' | 'interrupted', reason?: string) {
+    if (!this.currentAudit(job)) return;
+    const now = new Date().toISOString();
+    Object.assign(job.record.formalization.backgroundReview!, { status, finishedAt: now, ...(reason ? { reason } : {}) });
+    job.record.formalization.updatedAt = now;
+    try { this.save(job.record); }
+    finally { this.releaseAudit(job); job.controller.abort(); queueMicrotask(() => this.pumpAudits()); }
+  }
+  private pumpAudits() {
+    // Review has its own slot. It cannot occupy a generation slot or hold up proof handoff.
+    while (!this.closing && this.auditsRunning < 1) {
+      const job = [...this.auditJobs.values()].find(value => value.record.formalization.backgroundReview?.status === 'queued');
+      if (!job) break;
+      if (job.deadline !== undefined && job.deadline <= Date.now()) {
+        this.stopAudit(job, 'error', 'formalization_time_limit'); continue;
+      }
+      const now = new Date().toISOString();
+      Object.assign(job.record.formalization.backgroundReview!, { status: 'running', startedAt: now });
+      job.record.formalization.updatedAt = now; this.save(job.record);
+      this.auditsRunning++;
+      void this.executeAudit(job).finally(() => { this.auditsRunning--; this.pumpAudits(); });
+    }
+  }
+  private async executeAudit(job: AuditJob) {
+    let result: Extract<WorkerFormalizationAuditMessage, { type: 'audit-result' | 'audit-error' }> | undefined;
+    const timer = job.deadline === undefined ? undefined : setTimeout(() => this.stopAudit(job, 'error', 'formalization_time_limit'),
+      Math.max(0, job.deadline - Date.now()));
+    if (job.deadline !== undefined) job.input.maxRunSeconds = Math.max(1, Math.ceil((job.deadline - Date.now()) / 1_000));
+    try {
+      await this.runner.auditFormalization!(job.input, message => {
+        if (!this.currentAudit(job)) return;
+        if (message.type !== 'audit-progress') { result ??= message; return; }
+        job.record.formalization.backgroundReview!.tokens = message.tokens;
+        job.record.formalization.updatedAt = new Date().toISOString(); this.save(job.record);
+      }, job.controller.signal);
+      if (!this.currentAudit(job)) return;
+      if (!result) throw new Error('formalization_audit_no_result');
+      if (result.type === 'audit-error') throw new Error(result.reason);
+      // Audit failure never invalidates the compiled artifact or an already running proof.
+      const evidence = this.evidence(job.record);
+      if (evidence.schema !== 'theorem-os.formalization-evidence.v4') throw new Error('formalization_audit_binding_mismatch');
+      assertFormalizationAuditResult(evidence, result.result);
+      if (result.result.model !== job.input.model || result.result.effort !== job.input.effort)
+        throw new Error('formalization_audit_binding_mismatch');
+      const now = new Date().toISOString();
+      this.storage.saveRecord([...recordPath(job.record.owner, job.record.formalization.id), 'audit.json'], result.result, true);
+      Object.assign(job.record.formalization.backgroundReview!, { status: result.result.review.verdict, result: result.result, finishedAt: now });
+      job.record.formalization.updatedAt = now;
+      this.save(job.record);
+    } catch (error) {
+      if (this.currentAudit(job)) this.stopAudit(job, 'error', reasonOf(error));
+    } finally { clearTimeout(timer); this.releaseAudit(job); }
+  }
   private pump() {
     while (!this.closing && this.running < this.limits.concurrency) {
       const job = [...this.jobs.values()].find(item => item.record.formalization.status === 'queued');
       if (!job) break;
       this.running++;
       Object.assign(job.record.formalization, { status: 'running', progress: { phase: 'preparing', updatedAt: new Date().toISOString() } });
-      this.persist(job, true);
       void this.execute(job).finally(() => { this.running--; this.pump(); });
     }
   }
   private async execute(job: Job) {
     let result: Extract<WorkerFormalizationMessage, { type: 'result' }> | undefined;
+    let messageError: unknown;
     try {
+      this.persist(job, true);
       if (!this.runner.formalize) throw new Error('formalization_runtime_unavailable');
       await this.runner.formalize(job.input, message => {
-        if (!this.current(job) || !active(job.record.formalization)) return;
-        if (message.type === 'result') { result = message; return; }
-        if (message.type === 'activity') {
-          // Past the per-record limit only the count grows, as with a run's actions.
-          const tally = job.record.formalization.activity ??= { count: 0 };
-          if (tally.count >= webFormalizationActivityLimits.perRecord) tally.dropped = (tally.dropped ?? 0) + 1;
-          else {
-            tally.count++;
-            this.storage.saveRecord([...recordPath(job.record.owner, job.record.formalization.id), 'activity', `${tally.count}.json`],
-              { ...message.activity, sequence: tally.count, at: new Date().toISOString() } satisfies WebFormalizationActivity, true);
+        if (messageError || !this.current(job) || !active(job.record.formalization)) return;
+        try {
+          if (message.type === 'result') { result = message; return; }
+          if (message.type === 'activity') {
+            // Past the per-record limit only the count grows, as with a run's actions.
+            const tally = job.record.formalization.activity ??= { count: 0 };
+            if (tally.count >= webFormalizationActivityLimits.perRecord) tally.dropped = (tally.dropped ?? 0) + 1;
+            else {
+              tally.count++;
+              this.storage.saveRecord([...recordPath(job.record.owner, job.record.formalization.id), 'activity', `${tally.count}.json`],
+                { ...message.activity, sequence: tally.count, at: new Date().toISOString() } satisfies WebFormalizationActivity, true);
+            }
+            this.persist(job);
+            return;
           }
-          this.persist(job);
-          return;
-        }
-        const previous = job.record.formalization.progress, now = new Date().toISOString();
-        job.record.formalization.progress = { ...message.progress, updatedAt: now }; job.record.formalization.updatedAt = now;
-        this.persist(job, previous?.phase !== message.progress.phase);
+          const previous = job.record.formalization.progress, now = new Date().toISOString();
+          job.record.formalization.progress = { ...message.progress, updatedAt: now }; job.record.formalization.updatedAt = now;
+          this.persist(job, previous?.phase !== message.progress.phase);
+        } catch (error) { messageError = error; job.controller.abort(); }
       }, job.controller.signal);
+      if (messageError) throw messageError;
       if (!this.current(job) || !active(job.record.formalization)) return;
       if (!result) throw new Error('formalization_worker_no_result');
       if (result.status !== 'approved') { this.finish(job, result.status, webFormalizationReason.test(result.reason) ? result.reason : 'formalization_failed'); return; }
@@ -244,7 +443,11 @@ export class WebFormalizations {
         catch { job.record.formalization.researchError = 'formalization_research_queue_failed'; }
         this.persist(job, true);
       } else this.finish(job, 'review');
-    } catch (error) { this.finish(job, 'error', reasonOf(error)); }
+      this.queueAudit(job, evidence);
+    } catch (error) {
+      try { this.finish(job, 'error', reasonOf(messageError ?? error)); }
+      catch { /* A failed final save is interrupted on restart; the worker still releases its slot and key. */ }
+    }
     finally { this.release(job); }
   }
 }

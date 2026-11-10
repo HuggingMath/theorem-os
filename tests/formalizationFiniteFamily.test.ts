@@ -43,7 +43,9 @@ const positiveInput = request({
 describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1')('native Lean finite-family representation correspondence', () => {
   let root: string, positive: FormalizationReferenceResult;
   const compare = async (name: string, input: FormalizationReferenceInput) => {
-    const result = await compareFormalizationReference(path.join(root, name), input, { env: process.env, timeoutMs: 0 });
+    const result = await compareFormalizationReference(path.join(root, name), input, {
+      env: process.env, timeoutMs: 0, proofEnvironmentCacheRoot: path.join(root, 'proof-environment-cache'),
+    });
     expect(() => assertFormalizationReferenceResult(input, result)).not.toThrow();
     for (const artifact of result.evidence?.artifacts ?? []) {
       const capture = JSON.parse(artifact.text);
@@ -186,7 +188,9 @@ describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1')('native Lean 
   };
 
   it('proves the strict proper-condition conversion and keeps its trace auditable', async () => {
-    const result = await compareFormalizationReference(path.join(root, 'positive'), properInput, { env: process.env, timeoutMs: 0 });
+    const result = await compareFormalizationReference(path.join(root, 'positive'), properInput, {
+      env: process.env, timeoutMs: 0, proofEnvironmentCacheRoot: path.join(root, 'proof-environment-cache'),
+    });
     expect(() => assertFormalizationReferenceResult(properInput, result)).not.toThrow();
     checkCompleted(result, 'positive');
     expect(result).toMatchObject({ schema: 'theoremos.formalization-reference.v6', method: 'cardinality-correspondence-v7',
@@ -204,7 +208,9 @@ describe.skipIf(process.env.THEOREMOS_TEST_REFERENCE_LEAN !== '1')('native Lean 
   it('does not treat a non-equivalent non-strict condition as properness', async () => {
     const changed: FormalizationReferenceInput = { ...properInput,
       candidateSource: source({ not_union_finset_proper_subspaces: candidate.replace('p < ⊤', 'p ≤ ⊤') }) };
-    const result = await compareFormalizationReference(path.join(root, 'negative'), changed, { env: process.env, timeoutMs: 0 });
+    const result = await compareFormalizationReference(path.join(root, 'negative'), changed, {
+      env: process.env, timeoutMs: 0, proofEnvironmentCacheRoot: path.join(root, 'proof-environment-cache'),
+    });
     checkCompleted(result, 'negative');
     expect(result).toMatchObject({ check: 'completed', status: 'not-established' });
     expect(result.pairs[0]).toMatchObject({ candidateToReference: { status: 'not-established' }, referenceToCandidate: { status: 'not-established' } });

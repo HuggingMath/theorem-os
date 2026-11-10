@@ -17,6 +17,7 @@ export type WebShareSnapshot = {
   finishedAt?: string;
   sharedAt: string;
   formalization?: { original: string; confirmation?: 'automatic' | 'manual'; evidenceSha256: string;
+    reviewMode?: 'direct';
     review?: Pick<WebFormalizationReport, 'backtranslation' | 'correspondences'> };
   checks: { label: string; status: string; tone: ReportTone; method?: string;
     targets: { name: string; status: string; tone: ReportTone; sorryCount?: number; admitCount?: number }[] }[];
@@ -37,8 +38,9 @@ export function shareSnapshot(run: WebRun, sharedAt = new Date().toISOString(), 
     environment: run.environment, model: run.model, effort: run.effort, workers: run.workers,
     createdAt: run.createdAt, ...(run.finishedAt ? { finishedAt: run.finishedAt } : {}), sharedAt,
     ...(run.formalization ? { formalization: { original: run.formalization.original, confirmation: run.formalization.confirmation,
+      ...(run.formalization.reviewMode ? { reviewMode: run.formalization.reviewMode } : {}),
       evidenceSha256: run.formalization.evidenceSha256,
-      ...(review?.evidenceSha256 === run.formalization.evidenceSha256 ? { review: {
+      ...(review?.backtranslation && review.evidenceSha256 === run.formalization.evidenceSha256 ? { review: {
         backtranslation: review.backtranslation, correspondences: review.correspondences } } : {}) } } : {}),
     // Diagnostics and reasons can carry paths or provider text; a share shows outcomes only.
     checks: report.checks.map(check => ({ label: check.label, status: check.status, tone: check.tone,

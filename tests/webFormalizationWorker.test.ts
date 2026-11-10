@@ -7,6 +7,7 @@ import { DockerWebRunner, parseFormalizationMessage } from '../apps/web/runner';
 import { formalizationStopReason, formalizationWorkerInputSchema, webFormalizationPreparation } from '../apps/web/formalizationWorker';
 import { webFormalizationLimits, type WorkerFormalizationInput, type WorkerFormalizationMessage } from '../apps/web/formalizationTypes';
 import { readWebConfig } from '../apps/web/config';
+import { LEAN_STATEMENT_CONTEXT_PROTOCOL } from '../src/math/leanStatementSemantic';
 import { parse as parseToml } from 'smol-toml';
 import { prepareWebProviderProfile } from '../apps/web/worker';
 
@@ -17,14 +18,22 @@ const input = (): WorkerFormalizationInput => ({ id: crypto.randomUUID(), origin
   maxPlanningRounds: webFormalizationLimits.maxPlanningRounds, reviewers: webFormalizationLimits.reviewers });
 
 describe('formalization worker input and protocol', () => {
-  it('preserves the original and requires bounded production budgets and supported credentials', () => {
+  it('preserves the original and accepts unlimited or explicit budgets with supported credentials', () => {
     const request = input();
     expect(formalizationWorkerInputSchema.parse(request)).toEqual(request);
     for (const override of [{ original: ' ' }, { original: '原'.repeat(11_000) }, { apiKey: 'bad\nkey' },
-      { model: 'other' }, { reviewers: 1 }, { maxRounds: 0 }, { maxPlanningRounds: 0 }, { maxTotalTokens: 9_999 },
+      { model: 'other' }, { reviewers: 1 }, { maxRounds: -1 }, { maxPlanningRounds: -1 }, { maxTotalTokens: 9_999 },
       { maxTotalTokens: webFormalizationLimits.maxTotalTokens + 1 },
       { maxRunSeconds: webFormalizationLimits.maxRunSeconds + 1 }, { profile: '/private/profile' }])
       expect(formalizationWorkerInputSchema.safeParse({ ...request, ...override }).success).toBe(false);
+    const unlimited = { ...request, maxRounds: 0, maxPlanningRounds: 0, maxRunSeconds: 0, maxTotalTokens: 0 };
+    expect(formalizationWorkerInputSchema.parse(unlimited)).toEqual(unlimited);
+    expect(webFormalizationPreparation(unlimited, '/private/profile', '/private/manifest.json'))
+      .toMatchObject({ maxRounds: 0, maxRunSeconds: 0, maxTurnSeconds: 0, maxCompileSeconds: 0, maxTotalTokens: 0,
+        contextProtocol: LEAN_STATEMENT_CONTEXT_PROTOCOL, workflow: { maxPlanningRounds: 0 } });
+    expect(formalizationWorkerInputSchema.parse({ ...unlimited, contextProtocol: LEAN_STATEMENT_CONTEXT_PROTOCOL }))
+      .toMatchObject({ contextProtocol: LEAN_STATEMENT_CONTEXT_PROTOCOL });
+    expect(formalizationWorkerInputSchema.safeParse({ ...unlimited, contextProtocol: 'kernel-v1' }).success).toBe(false);
   });
 
   it('preserves a configured HTTPS provider, model and reduced token budget through every independent role', () => {
@@ -53,16 +62,29 @@ describe('formalization worker input and protocol', () => {
         provider: { id: 'compatible', name: 'Fixture', baseUrl } }).success).toBe(false);
     });
 
-  it('keeps independent roles, planned fidelity review and exact provenance', () => {
+  it('keeps the independent review workflow on legacy inputs without a direct mode', () => {
     const request = input(), prepared = webFormalizationPreparation(request, '/private/profile', '/private/manifest.json');
     expect(prepared).toMatchObject({ problemId: request.id, statement: request.original, execution: 'model',
-      fidelityPolicy: 'task-preserving-v2', maxTotalTokens: request.maxTotalTokens,
+      fidelityPolicy: 'task-preserving-v2', contextProtocol: LEAN_STATEMENT_CONTEXT_PROTOCOL, maxTotalTokens: request.maxTotalTokens,
       maxRunSeconds: request.maxRunSeconds, maxRounds: request.maxRounds,
       workflow: { reviewPolicy: 'all-approve', candidateSelection: 'first-unanimously-approved',
         reviewScheduling: 'parallel', maxPlanningRounds: request.maxPlanningRounds } });
     expect(prepared.workflow!.reviewers.map(role => role.id)).toEqual(['reviewer-1', 'reviewer-2']);
     expect(prepared.workflow!.planner).not.toBe(prepared.workflow!.backtranslator);
     expect(JSON.stringify(prepared)).not.toContain(request.apiKey);
+  });
+
+  it('prepares new direct inputs with generation and compilation only and unlimited budgets', () => {
+    const request = { ...input(), reviewMode: 'direct' as const, maxRunSeconds: 0, maxTotalTokens: 0,
+      maxRounds: 0, maxPlanningRounds: 0 };
+    expect(formalizationWorkerInputSchema.parse(request)).toEqual(request);
+    const prepared = webFormalizationPreparation(request, '/private/profile', '/private/manifest.json');
+    expect(prepared).toMatchObject({ problemId: request.id, statement: request.original, model: request.model,
+      effort: request.effort, reviewMode: 'direct', execution: 'model', contextProtocol: LEAN_STATEMENT_CONTEXT_PROTOCOL,
+      maxRunSeconds: 0, maxTotalTokens: 0, maxTurnSeconds: 0, maxCompileSeconds: 0, maxRounds: 0 });
+    expect(prepared).not.toHaveProperty('workflow'); expect(prepared).not.toHaveProperty('fidelityPolicy');
+    expect(JSON.stringify(prepared)).not.toContain(request.apiKey);
+    expect(formalizationWorkerInputSchema.safeParse({ ...request, reviewMode: 'unchecked' }).success).toBe(false);
   });
 
   it('accepts phase updates and evidence objects while excluding private diagnostics', () => {

@@ -1,5 +1,7 @@
 # Formalization planning contract
 
+This contract applies to the optional `--review-mode independent` workflow and historical reviewed requests. The default direct workflow generates and compiles the statement without a separate planning session.
+
 `src/math/formalizationPlan.ts` records a model-authored inventory before Lean statement generation. The version is `theorem-os.formalization-plan.v1`. All objects are strict Zod objects. Each collection contains at most 256 records, every record has a unique safe ID, and each mathematical record links to one or more original source spans.
 
 `spans` use zero-based UTF-16 offsets in the parsed `INPUT.statement` string with an exclusive end: `statement.slice(start, end) === text`. These are not positions in the `INPUT.json` file, escaped JSON text, UTF-8 bytes or Unicode code points. Parse the input, copy the exact excerpt, compute `start = statement.indexOf(text)` (selecting the intended occurrence when repeated), compute `end = start + text.length`, and check the slice before submitting. Preserve whitespace and punctuation. An astral character such as `🧮` occupies two UTF-16 code units. A span cannot split a surrogate pair. Spans may overlap, but duplicate ranges are rejected. The frozen original can contain up to 256 KiB of valid UTF-8 text; validation never truncates it.
@@ -15,6 +17,8 @@ The plan fields are:
 - `unresolved`: `{ id, spanIds, description }`.
 
 Every conclusion names at least one theorem/lemma to generate; `targetNames` never lists library constants, classes, definitions or dependencies. Several conclusion records may map to the same target, for example when one theorem captures multiple source sentences. `dependsOn` contains definition IDs and must form a DAG. `assumptionIds` contains assumption IDs. References within a record cannot be repeated or dangling. Target names and definition mappings must use the same ordinary qualified Lean names admitted by the existing source inspector. Use canonical names without a `_root_.` prefix.
+
+The inventory describes mathematical objects and complete definition contracts. A finite tower can be one object record containing its quantified indices, generators and exponents; the generator chooses the exact Lean binder, universe and sequence encoding. A single `iff` target covers necessity and sufficiency unless the user explicitly requests separate theorems. Proof-method and citation restrictions stay with the relevant conclusion. These choices reduce duplicate planning work while retaining every domain, hypothesis, conclusion, definition and proof requirement from the frozen original.
 
 Run these checks in order:
 

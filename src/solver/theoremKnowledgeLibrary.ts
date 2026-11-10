@@ -4,7 +4,6 @@ import { readLeanTaskReceipt, LEAN_TASK_SOURCE_MAX_BYTES } from '../math/leanTas
 import { getLeanTaskEnvironment } from '../math/leanTaskEnvironment';
 import { isLibraryPackFile, MAX_LIBRARY_MODULE_BYTES } from '../math/libraryPacks';
 import { mathGitBytes } from '../math/mathGit';
-import { inspectLeanDeclarationRegions, inspectScopedLeanDeclarations } from '../math/leanSource';
 import { canonicalMathJson, mathDigest, parseMathJson, readMathFile } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath } from '../math/paths';
 import { buildTheoremKnowledge, theoremKnowledgeStats, type KnowledgeCandidate } from './theoremKnowledge';
@@ -13,20 +12,10 @@ import { importKnowledgeRuns } from './theoremKnowledgeRuns';
 import { readLibraryApplicationHints } from './libraryKnowledgeApplications';
 import { libraryHostConfigPath } from '../math/libraryHostConfig';
 import { prepareAuthorizedLibraryKnowledge } from './theoremKnowledgeAuthorization';
+import { libraryKnowledgeCandidates } from './libraryKnowledgeCandidates';
+export { libraryKnowledgeCandidates } from './libraryKnowledgeCandidates';
 
 const configurationFiles = new Set(['lean-toolchain', 'lakefile.toml', 'lakefile.lean', 'lake-manifest.json']);
-
-/** Generated module documentation is searchable advice, never an application or proof receipt. */
-function libraryDescription(file: string, header: string): string {
-  const fallback = `Frozen library declaration from ${file.slice(0, -5).replaceAll('/', '.')}.`;
-  const name = /^Submission\/Library\/Auto\/([A-Z][A-Za-z0-9]{2,47})\.lean$/u.exec(file)?.[1];
-  if (!name) return fallback;
-  const documentation = /^\/-! # TheoremOS auto-library module `([A-Z][A-Za-z0-9]{2,47})`\r?\n([\s\S]*?)-\//mu.exec(header);
-  if (documentation?.[1] !== name) return fallback;
-  // Keep every planned use and remaining obligation in the catalog. Search hits use a shorter preview.
-  return 'Advisory frozen auto-library documentation for the triggering challenge; applicability here is unverified. ' +
-    `Search previews may omit remaining obligations; read the full frozen source: ${file}.\n${documentation[2]!.trim()}`;
-}
 
 export type PrepareLibraryKnowledgeOptions = {
   receiptFile?: string;
@@ -66,28 +55,13 @@ export function prepareLibraryKnowledge(workspaceInput: string, outputInput: str
     environmentDigest: receipt.environmentDigest ?? getLeanTaskEnvironment(receipt.environment ?? 'standard').dependencyDigest,
     problemReceiptDigest: mathDigest(canonicalMathJson(receipt)), receiptIds: [],
   };
-  const candidates: KnowledgeCandidate[] = [], skipped: { source: string; name?: string; reason: string }[] = [];
+  const { candidates, skipped } = libraryKnowledgeCandidates(files, provenance);
   const applications = readLibraryApplicationHints(options.autoLibraryBuilds ?? [], receipt, files, provenance.environmentDigest!);
   skipped.push(...applications.skipped);
-  for (const file of libraryFiles) {
-    const source = files[file], regions = new Map(inspectLeanDeclarationRegions(source).map(item => [item.startOffset, item]));
-    const declarations = inspectScopedLeanDeclarations(source), counts = new Map<string, number>();
-    const description = libraryDescription(file, source.slice(0, declarations[0]?.startOffset ?? source.length));
-    for (const item of declarations) counts.set(item.qualifiedName, (counts.get(item.qualifiedName) ?? 0) + 1);
-    for (const item of declarations) {
-      if (item.kind !== 'theorem' && item.kind !== 'definition') continue;
-      const region = regions.get(item.startOffset);
-      if (!region || counts.get(item.qualifiedName) !== 1) {
-        skipped.push({ source: file, name: item.qualifiedName, reason: 'declaration-missing-or-ambiguous' });
-        continue;
-      }
-      const hints = applications.hints.filter(hint => hint.declaration.file === file && hint.declaration.name === item.qualifiedName);
-      if (hints.length > 64) skipped.push({ source: file, name: item.qualifiedName, reason: 'math_library_application_hint_limit' });
-      candidates.push({ name: item.qualifiedName, file, type: region.declarationType, typeKind: 'source-header',
-        kind: item.kind === 'definition' ? 'definition' : 'lemma',
-        description, premises: [], ...(hints.length ? { applicationHints: hints.slice(0, 64) } : {}),
-        dependencies: { statement: [], proof: [], tasks: [], coverage: 'unavailable' }, files, provenance });
-    }
+  for (const candidate of candidates) {
+    const hints = applications.hints.filter(hint => hint.declaration.file === candidate.file && hint.declaration.name === candidate.name);
+    if (hints.length > 64) skipped.push({ source: candidate.file, name: candidate.name, reason: 'math_library_application_hint_limit' });
+    if (hints.length) candidate.applicationHints = hints.slice(0, 64);
   }
   const stateDigest = (source: string) => {
     try { assertMathCanonicalPath(source); return mathDigest(readMathFile(source, 32 * 1024 * 1024).bytes); }

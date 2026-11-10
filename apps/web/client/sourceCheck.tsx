@@ -31,8 +31,8 @@ export type SourceCheckState =
   | { phase: 'checking'; key: string; previous?: WebPrecheck }
   | { phase: 'done'; key: string; result: WebPrecheck }
   | { phase: 'failed'; key: string; message: string };
-type Input = { environment: WebEnvironment; source: string };
-const keyOf = (input: Input) => `${input.environment}\0${input.source}`;
+type Input = { environment: WebEnvironment; source: string; researchSelection?: import('../researchAssetTypes').ResearchConfigurationSelection };
+const keyOf = (input: Input) => `${input.environment}\0${input.source}\0${JSON.stringify(input.researchSelection ?? null)}`;
 
 /**
  * Compiles the statement shortly after it stops changing. Only a finished result for the exact current text can

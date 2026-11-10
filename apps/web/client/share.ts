@@ -1,10 +1,12 @@
 import { createIcons, Copy, Download, ShieldCheck } from 'lucide';
+import { h, render } from 'preact';
 import { effortLabels, formatDateTime, readableMetric, statementConfirmation } from '../presentation';
 import { webShareToken, type WebShareSnapshot } from '../share';
 import { localizeMessage, localizeText, mountLocaleSwitch, t } from '../i18n';
 import { localizeSiteLinks } from './feedback';
 import { leanFileName } from './leanOutline';
 import { leanLineTokens } from './sourceText';
+import { Rich } from './richText';
 
 createIcons({ icons: { Copy, Download, ShieldCheck }, attrs: { 'aria-hidden': 'true' } });
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
@@ -27,6 +29,7 @@ function facts(target: HTMLElement, items: [string, string, boolean?][]) {
     return row;
   }));
 }
+function prose(target: HTMLElement, text: string) { render(h(Rich, { text }), target); }
 function missing(text?: string) {
   $('#share-loading').hidden = true;
   if (text) $('#share-missing-text').textContent = text;
@@ -71,27 +74,26 @@ function show(share: WebShareSnapshot) {
     ...share.metrics.map(readableMetric).map(item => [item.label, item.value] as [string, string]),
     [t('完成时间'), formatDateTime(share.finishedAt ?? share.createdAt)], [t('分享时间'), formatDateTime(share.sharedAt)],
   ]);
-  $('#share-task').textContent = share.task;
+  prose($('#share-task'), share.formalization?.original ?? share.task);
   const formalization = share.formalization;
   $('#share-verdict').textContent = t('Lean 陈述证明通过');
-  $('#share-confirmation').textContent = formalization ? statementConfirmation(formalization.confirmation, true)
+  $('#share-confirmation').textContent = formalization ? formalization.reviewMode === 'direct' ? t('Lean 编译通过') : statementConfirmation(formalization.confirmation, true)
     : t('此分享仅包含 Lean 陈述与证明，未提供自然语言原题的确认记录。');
   if (formalization) {
     $('#share-task-heading').textContent = t('自然语言原题');
-    $('#share-task').textContent = formalization.original;
     const review = formalization.review;
-    if (review) {
+    if (review?.backtranslation) {
       $('#share-review').hidden = false;
-      $('#share-backtranslation').textContent = [review.backtranslation.mathematics, ...review.backtranslation.assumptions,
-        ...review.backtranslation.definitions].join('\n\n');
+      prose($('#share-backtranslation'), [review.backtranslation.mathematics, ...review.backtranslation.assumptions,
+        ...review.backtranslation.definitions].join('\n\n'));
       const relations = { direct: t('直接对应'), equivalent: t('等价表达'), unresolved: t('待核对'), mismatch: t('不一致') };
       $('#share-correspondences').replaceChildren(...review.correspondences.map(item => {
         const row = document.createElement('article'), heading = document.createElement('strong');
         heading.textContent = relations[item.relation]; row.dataset.relation = item.relation;
         const original = document.createElement('blockquote'), lean = document.createElement('pre');
-        original.textContent = item.original; original.translate = false; lean.textContent = item.leanText; lean.translate = false;
+        prose(original, item.original); original.translate = false; lean.textContent = item.leanText; lean.translate = false;
         row.append(heading, original, lean, ...item.explanations.map(text => {
-          const explanation = document.createElement('p'); explanation.textContent = text; explanation.translate = false; return explanation;
+          const explanation = document.createElement('p'); prose(explanation, text); explanation.translate = false; return explanation;
         }));
         return row;
       }));

@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWebService } from '../apps/web/server';
 import { readWebConfig, type WebConfig } from '../apps/web/config';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
+import { loadWebSample } from '../apps/web/sample';
+import { decodeTaskDraft } from '../apps/web/client/draft';
 import type { WebRunner } from '../apps/web/runner';
 import { webSampleRunId, type WebResult, type WebRun, type WebRunInput, type WebSession, type WorkerInput, type WorkerMessage } from '../apps/web/shared';
 import type { WebObservation } from '../apps/web/collaboration';
@@ -335,11 +337,26 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     expect(runner.calls).toHaveLength(0);
   });
 
+  it('defaults omitted budgets to unlimited and preserves explicit zero budgets', async () => {
+    const alice = await session();
+    const { maxRunSeconds: _seconds, maxTurns: _turns, ...unlimited } = input();
+    for (const body of [unlimited, { ...unlimited, maxRunSeconds: 0, maxTotalTokens: 0, maxTurns: 0 }]) {
+      const response = await request('/api/runs', alice, { body });
+      expect(response.status).toBe(201);
+      const run = (await response.json()).run;
+      expect(run).toMatchObject({ maxRunSeconds: 0, maxTotalTokens: 0, maxTurns: 0 });
+      await tick();
+      expect(runner.calls.at(-1)!.value.input).toMatchObject({ maxRunSeconds: 0, maxTotalTokens: 0, maxTurns: 0 });
+      await request(`/api/runs/${run.id}/cancel`, alice, { body: {} });
+      await tick();
+    }
+  });
+
   it('rejects arbitrary providers, unrecognized fields and inputs exceeding every enforced budget', async () => {
     const alice = await session();
     const invalid = [
       { providerId: 'unconfigured' }, { baseUrl: 'https://attacker.example/v1' }, { extra: true },
-      { maxTurns: 21 }, { maxTurns: 0 }, { maxRunSeconds: 901 }, { maxRunSeconds: 29 }, { workers: 5 },
+      { maxTurns: 21 }, { maxTurns: -1 }, { maxRunSeconds: 901 }, { maxRunSeconds: 29 }, { workers: 5 },
       { workers: 0 }, { maxTurns: 1.5 }, { source: '数'.repeat(11_000) }, { task: '数'.repeat(2_800) },
       { effort: 'unlimited' }, { coordination: 'unknown' }, { model: '--model-flag' }, { apiKey: 'short' },
       { environment: 'custom' }, { environment: 'https://attacker.example/mathlib' }, { environment: null },
@@ -406,7 +423,7 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
       expect(visible.status).toBe('completed');
       if (route.endsWith('/download')) {
         expect(response.headers.get('content-disposition')).toContain(`theoremos-${run.id}.json`);
-        expect(data.schema).toBe('theorem-os.web-export.v1');
+        expect(data.schema).toBe('theorem-os.web-archive.v1');
       }
     }
     expect((await request(`/api/runs/${run.id}/download`, bob)).status).toBe(404);
@@ -447,6 +464,46 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     expect(sample.count).toBe(sample.actions.length);
     expect(sample.actions.map((action: { workerId: string; kind: string }) => `${action.workerId}:${action.kind}`)).toEqual(
       ['solver:edit', 'engineer:edit', 'solver:edit', 'engineer:edit', 'researcher-1:edit']);
+    const bundleResponse = await request(`${route}/download`, alice), bundle = await bundleResponse.json();
+    expect(bundle.schema).toBe('theorem-os.web-archive.v1');
+    expect(bundle.events.length).toBeGreaterThan(250);
+    expect(bundle.events[0].sequence).toBe(1);
+    expect(bundle.actions).toHaveLength(3);
+    expect(bundle.actions.map((action: { sequence: number }) => action.sequence)).toEqual([1, 2, 3]);
+    expect(bundle.summary.coverage).toMatchObject({ events: 'complete', actions: 'complete', commands: 'recorded' });
+    expect(JSON.stringify(bundle)).not.toContain(key);
+    expect((await (await request(route, alice)).json()).run.archives).toBeUndefined();
+    const snapshot = await (await request(`${route}/snapshot`, alice)).json();
+    expect(snapshot.schema).toBe('theorem-os.web-export.v1');
+    expect(snapshot.run.events).toHaveLength(200);
+    expect(snapshot).not.toHaveProperty('actions');
+    expect((await request(`${route}/snapshot`, bob)).status).toBe(404);
+  });
+
+  it('downloads all retained observations, source versions, checks and commands, while imports project only the draft', async () => {
+    const alice = await session(), bob = await session();
+    const { run } = await (await request('/api/runs', alice, { body: input() })).json(); await tick();
+    const recording = loadWebSample()!;
+    for (const original of recording.observations.slice(0, 4))
+      runner.calls[0].send({ type: 'observation', observation: { ...structuredClone(original), webRunId: run.id } });
+    const owner = alice.cookie.slice('theoremos_session='.length);
+    service.storage.saveCommand(owner, run.id, 'saved-guidance', { id: 'saved-guidance', status: 'delivered' });
+    runner.calls[0].finish(); await tick();
+    const archive = await (await request(`/api/runs/${run.id}/download`, alice)).json();
+    expect(archive.observations).toHaveLength(4);
+    expect(archive.sources.length).toBeGreaterThan(0); expect(archive.checks.length).toBeGreaterThan(0);
+    expect(archive.sources).toContainEqual(recording.observations[0].sources[0]);
+    expect(archive.commands).toEqual([{ id: 'saved-guidance', status: 'delivered' }]);
+    expect(archive.summary).toMatchObject({ observations: 4, commands: 1, requiresFreshCheck: true,
+      coverage: { observations: 'complete', actions: 'complete', commands: 'recorded' } });
+    const projected = decodeTaskDraft(archive);
+    expect(projected.source).toBe(input().source); expect(projected.task).toBe(input().task);
+    expect(projected).not.toHaveProperty('result'); expect(projected).not.toHaveProperty('observations');
+    expect(projected).not.toHaveProperty('continueFrom');
+    const { archive: summary } = await (await request(`/api/runs/${run.id}/archive`, alice, { method: 'POST' })).json();
+    const retained = await (await request(`/api/runs/${run.id}/archives/${summary.id}`, alice)).json();
+    expect(retained.actions).toEqual(archive.actions); expect(retained.observations).toEqual(archive.observations);
+    expect((await request(`/api/runs/${run.id}/archives/${summary.id}`, bob)).status).toBe(404);
   });
 
   it('redacts provider failures and exports their archive without inventing a result', async () => {
@@ -464,7 +521,8 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     expect(data.run.error).toContain('[REDACTED]');
     const download = await request(`/api/runs/${run.id}/download`, alice);
     expect(download.status).toBe(200);
-    expect(await download.json()).toEqual({ schema: 'theorem-os.web-export.v1', run: data.run });
+    expect(await download.json()).toMatchObject({ schema: 'theorem-os.web-archive.v1', run: data.run,
+      events: data.run.events, observations: [], actions: [], sources: [], checks: [], commands: [] });
     expect(data.run).not.toHaveProperty('result');
     expect(await (await request('/api/runs', alice)).text()).not.toContain(key);
     expect(runner.calls[0].value.input.apiKey).toBe('');
@@ -490,7 +548,7 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     const text = await response.text();
     expect(text).not.toContain(key);
     const archive = JSON.parse(text);
-    expect(archive.schema).toBe('theorem-os.web-export.v1');
+    expect(archive.schema).toBe('theorem-os.web-archive.v1');
     expect(archive.run).toEqual((await (await request(`/api/runs/${run.id}`, alice)).json()).run);
     expect(archive.run.status).toBe(status);
     expect(archive.run.source).toBe(submitted.source.replaceAll(key, '[REDACTED]'));
@@ -519,7 +577,7 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     const received = await request(`/api/runs/${first.id}/download`, alice);
     expect(received.status).toBe(200);
     const archive = await received.json();
-    expect(archive.schema).toBe('theorem-os.web-export.v1');
+    expect(archive.schema).toBe('theorem-os.web-archive.v1');
     expect(archive.run.status).toBe('running');
     expect(archive.run.result).toEqual(result);
     expect(runner.calls[0].signal.aborted).toBe(false);
@@ -682,6 +740,29 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     expect((await request(`/api/runs/${run.id}`, renewed)).status).toBe(404);
     // The privacy page promises that an expired session leaves nothing behind.
     expect(service.storage.listRecords(['owners'])).toEqual([]);
+  });
+
+  it.each(['deleteRun', 'deleteOwner'] as const)('revokes all expired sessions even when %s fails', async method => {
+    config.concurrency = 2;
+    const alice = await session(), bob = await session();
+    const owner = (client: Client) => client.cookie.slice('theoremos_session='.length);
+    for (const client of [alice, bob]) expect((await request('/api/runs', client, { body: input() })).status).toBe(201);
+    await tick();
+    expect(runner.calls).toHaveLength(2);
+    const failure = vi.spyOn(service.storage, method).mockImplementationOnce(() => { throw new Error('fixture deletion unavailable'); });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + config.sessionTtlMs + 1);
+    try {
+      expect((await request('/api/runs', alice)).status).toBe(500);
+      expect(runner.calls.every(call => call.signal.aborted && call.value.input.apiKey === '')).toBe(true);
+      expect(service.storage.listSessions()).toEqual([]);
+      expect(service.jobs.list(owner(alice))).toEqual([]);
+      expect(service.jobs.list(owner(bob))).toEqual([]);
+      if (method === 'deleteRun') expect(service.storage.listRecords(['owners'])).toEqual([]);
+      else expect(service.storage.listRecords(['owners'])).toHaveLength(1);
+      // Restoring the clock must not make a failed cleanup's revoked cookie usable again.
+      clock.mockRestore();
+      for (const client of [alice, bob]) expect((await request('/api/runs', client)).status).toBe(401);
+    } finally { clock.mockRestore(); failure.mockRestore(); }
   });
 
   it('shares an accepted run only on the owner\'s request and serves the snapshot publicly until revoked', async () => {

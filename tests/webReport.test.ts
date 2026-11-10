@@ -30,8 +30,26 @@ const fixture = () => ({
   environment: { id: 'mathlib', toolchain: 'leanprover/lean4:v4.33.0',
     dependencyDigest: 'c'.repeat(64), mathlibRevision: 'd'.repeat(40) },
 });
+const libraryReference = (index = 0) => ({ name: `TheoremOS.Fixture.helper_${index}`,
+  file: 'Submission/Library/TheoremOS/Fixture.lean', sourceDigest: 'e'.repeat(64) });
+const libraryUsage = (proof: Record<string, unknown> = {}) => ({
+  schema: 'theorem-os.web-library-usage.v1',
+  library: { id: 'theorem-os/library', revision: 'fixture-v1', catalogDigest: 'f'.repeat(64) },
+  installedModules: 12, installationRounds: 2,
+  proof: { scope: 'independently-accepted-original-proofs', coverage: 'available',
+    targetCount: 2, coveredTargets: 2, referenceCount: 1, references: [libraryReference()], omittedReferences: 0, ...proof },
+});
 
 describe('web report summaries from structured worker fields', () => {
+  it('shows execution time separately from the human approval wait', () => {
+    const summary = summarizeReport(run({ ...fixture(), solveWallMs: 600_200, solveExecutionMs: 200, solveWaitingMs: 600_000 }));
+    expect(summary.metrics).toContainEqual({ label: '求解耗时', value: '0.2 秒' });
+    expect(summary.metrics).toContainEqual({ label: '等待确认', value: '600 秒' });
+    const legacy = summarizeReport(run(fixture()));
+    expect(legacy.metrics).toContainEqual({ label: '求解耗时', value: '26.302 秒' });
+    expect(legacy.metrics.some(metric => metric.label === '等待确认')).toBe(false);
+  });
+
   it('summarizes the real host-final report shape without merging candidate and final targets', () => {
     const summary = summarizeReport(run(fixture()));
     expect(summary.checks.map(check => check.id)).toEqual(['candidate', 'evaluation']);
@@ -50,6 +68,116 @@ describe('web report summaries from structured worker fields', () => {
     expect(summary.identity.some(item => item.label === '原题摘要')).toBe(false);
     expect(summary.identity).toContainEqual({ label: 'Mathlib 版本', value: 'd'.repeat(40) });
     expect(summary).not.toHaveProperty('accepted');
+  });
+
+  it('separates installed modules and installation rounds from declarations used by accepted original proofs', () => {
+    const report = fixture(), previous = summarizeReport(run(report));
+    const summary = summarizeReport(run({ ...report, libraryUsage: libraryUsage() }));
+    expect(summary.library).toEqual({ id: 'theorem-os/library', revision: 'fixture-v1', catalogDigest: 'f'.repeat(64),
+      installedModules: 12, installationRounds: 2, coverage: 'available', referenceCount: 1,
+      references: [libraryReference()], omittedReferences: 0 });
+    const { library: _library, ...existing } = summary;
+    expect(existing).toEqual(previous);
+    expect(summary).not.toHaveProperty('accepted');
+  });
+
+  it('keeps a complete observed zero separate from an unknown reference total', () => {
+    const complete = summarizeReport(run({ ...fixture(), libraryUsage: libraryUsage({ referenceCount: 0, references: [] }) }));
+    expect(complete.library).toMatchObject({ installedModules: 12, installationRounds: 2,
+      coverage: 'available', referenceCount: 0, references: [], omittedReferences: 0 });
+    const unknown = summarizeReport(run({ ...fixture(), libraryUsage: libraryUsage({ coverage: 'unknown',
+      coveredTargets: 0, referenceCount: null, references: [] }) }));
+    expect(unknown.library).toMatchObject({ installedModules: 12, installationRounds: 2, coverage: 'unknown', references: [] });
+    expect(unknown.library).not.toHaveProperty('referenceCount');
+  });
+
+  it('shows partial observed declarations without converting them into a complete total or zero', () => {
+    const summary = summarizeReport(run({ ...fixture(), libraryUsage: libraryUsage({ coverage: 'partial',
+      coveredTargets: 1, referenceCount: null, omittedReferences: 4 }) }));
+    expect(summary.library).toMatchObject({ coverage: 'partial', references: [libraryReference()], omittedReferences: 4 });
+    expect(summary.library).not.toHaveProperty('referenceCount');
+    const suppliedTotal = summarizeReport(run({ ...fixture(), libraryUsage: libraryUsage({ coverage: 'partial',
+      coveredTargets: 1, referenceCount: 99 }) }));
+    expect(suppliedTotal.library?.coverage).toBe('partial');
+    expect(suppliedTotal.library).not.toHaveProperty('referenceCount');
+  });
+
+  it('hides reference claims when coverage is unknown while retaining installation metadata', () => {
+    const summary = summarizeReport(run({ ...fixture(), libraryUsage: libraryUsage({ coverage: 'unknown',
+      coveredTargets: 0, referenceCount: 25, omittedReferences: 24 }) }));
+    expect(summary.library).toMatchObject({ installedModules: 12, installationRounds: 2,
+      coverage: 'unknown', references: [], omittedReferences: 0 });
+    expect(summary.library).not.toHaveProperty('referenceCount');
+  });
+
+  it.each(['queued', 'running', 'cancelled', 'error'] as const)
+    ('does not show verified library references for a %s run even when its report claims acceptance', status => {
+      const report = { ...fixture(), libraryUsage: libraryUsage() }, input = run(report, { status });
+      const summary = summarizeReport(input);
+      expect(summary.library).toMatchObject({ installedModules: 12, installationRounds: 2,
+        coverage: 'unknown', references: [], omittedReferences: 0 });
+      expect(summary.library).not.toHaveProperty('referenceCount');
+      expect(summary.checks).toEqual(summarizeReport(run(fixture(), { status })).checks);
+      expect(input.status).toBe(status); expect(input.result?.status).toBe('evaluated_passed');
+    });
+
+  it.each(['incomplete', 'limit_reached', 'evaluated_failed', 'evaluated_rejected'])
+    ('does not show verified library references when the final result is %s', status => {
+      const report = { ...fixture(), libraryUsage: libraryUsage() };
+      const input = run(report, { result: { status, proof: 'candidate proof', report } });
+      const summary = summarizeReport(input);
+      expect(summary.library).toMatchObject({ coverage: 'unknown', references: [] });
+      expect(summary.library).not.toHaveProperty('referenceCount');
+      expect(input.result?.status).toBe(status);
+      expect(summary.checks[1]).toMatchObject({ status: '验收阶段通过', tone: 'passed' });
+      expect(summary).not.toHaveProperty('accepted');
+    });
+
+  it.each([
+    { scope: 'candidate-proofs' }, { scope: null }, { coverage: 'future-coverage' },
+    { coveredTargets: 0 }, { coveredTargets: 3 }, { coveredTargets: 1 }, { targetCount: 0 },
+    { targetCount: '2' }, { coveredTargets: 1.5 }, { referenceCount: null }, { referenceCount: -1 },
+    { referenceCount: Number.MAX_SAFE_INTEGER + 1 },
+  ])('keeps invalid or incomplete proof coverage unknown (%#)', proof => {
+    const summary = summarizeReport(run({ ...fixture(), libraryUsage: libraryUsage(proof) }));
+    expect(summary.library).toMatchObject({ installedModules: 12, installationRounds: 2, coverage: 'unknown', references: [] });
+    expect(summary.library).not.toHaveProperty('referenceCount');
+  });
+
+  it.each([
+    undefined, null, [], true, 'legacy', {}, { ...libraryUsage(), schema: 'future-schema' },
+    { ...libraryUsage(), library: [] }, { ...libraryUsage(), library: { id: '', revision: 'v1', catalogDigest: 'f'.repeat(64) } },
+    { ...libraryUsage(), library: { id: 'id', revision: 'v1', catalogDigest: 'not-a-digest' } },
+    { ...libraryUsage(), installedModules: '12' }, { ...libraryUsage(), installedModules: -1 },
+    { ...libraryUsage(), installationRounds: 0.5 }, { ...libraryUsage(), installationRounds: Number.MAX_SAFE_INTEGER + 1 },
+  ])('preserves legacy report fields when library usage is missing or malformed (%#)', usage => {
+    expect(summarizeReport(run({ ...fixture(), libraryUsage: usage }))).toEqual(summarizeReport(run(fixture())));
+  });
+
+  it.each([undefined, null, [], 'unknown', {}])('retains only installation metadata when proof usage is absent or malformed (%#)', proof => {
+    const summary = summarizeReport(run({ ...fixture(), libraryUsage: { ...libraryUsage(), proof } }));
+    expect(summary.library).toMatchObject({ installedModules: 12, installationRounds: 2,
+      coverage: 'unknown', references: [], omittedReferences: 0 });
+    expect(summary.library).not.toHaveProperty('referenceCount');
+  });
+
+  it.each(['available', 'partial'])('bounds %s proof references at 64 and reports omitted references', coverage => {
+    const references = Array.from({ length: 70 }, (_, index) => libraryReference(index));
+    const proof = { coverage, coveredTargets: coverage === 'available' ? 2 : 1,
+      referenceCount: coverage === 'available' ? 70 : null, references, omittedReferences: 6 };
+    const summary = summarizeReport(run({ ...fixture(), libraryUsage: libraryUsage(proof) }));
+    expect(summary.library).toMatchObject({ coverage, references: references.slice(0, 64), omittedReferences: 6 });
+    expect(summary.library?.references).toHaveLength(64);
+    if (coverage === 'available') expect(summary.library?.referenceCount).toBe(70);
+    else expect(summary.library).not.toHaveProperty('referenceCount');
+  });
+
+  it('retains only valid declaration rows without guessing references from installed-module counts', () => {
+    const summary = summarizeReport(run({ ...fixture(), libraryUsage: libraryUsage({ referenceCount: 3,
+      references: [null, [], {}, { ...libraryReference(1), name: '' }, { ...libraryReference(2), sourceDigest: 'invalid' },
+        libraryReference(), libraryReference(3)], omittedReferences: 1 }) }));
+    expect(summary.library).toMatchObject({ coverage: 'available', referenceCount: 3,
+      references: [libraryReference(), libraryReference(3)], omittedReferences: 1 });
   });
 
   it('shows Lean output without the checker delimiters in candidate and acceptance diagnostics', () => {

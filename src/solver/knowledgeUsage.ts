@@ -33,38 +33,45 @@ export function knowledgeReferenceCoverage(task: CooperativeTask, proof?: ProofC
 
 /** Optional usage claims cannot reject a proof or establish where a mathematical idea originated. */
 export function inspectKnowledgeUses(value: unknown, knowledge: KnowledgeContextSnapshot | undefined,
-  task: CooperativeTask, proof?: ProofCheck & { references?: ProofReferences }): {
+  task: CooperativeTask, proof?: ProofCheck & { references?: ProofReferences }, installedLibrary?: KnowledgeContextSnapshot): {
     uses: KnowledgeUse[]; rejected: number; referenceCoverage: 'available' | 'unknown';
   } {
   const observation = knowledgeReferenceCoverage(task, proof);
-  const entries = new Map(knowledge?.base.entries.map(entry => [entry.id, entry])), seen = new Set<string>();
+  const snapshots = ([['catalog', knowledge], ['installed-library', installedLibrary]] as const)
+    .flatMap(([source, snapshot]) => snapshot ? [{ source, snapshot,
+      entries: new Map(snapshot.base.entries.map(entry => [entry.id, entry])) }] : []);
+  const seen = new Set<string>();
   const uses: KnowledgeUse[] = [];
   let rejected = value !== undefined && !Array.isArray(value) ? 1 : 0;
   const reports = Array.isArray(value) ? value : [];
   for (const item of reports.slice(0, 16)) {
-    if (!knowledge || !item || item.catalogDigest !== knowledge.digest || typeof item.id !== 'string' || !entries.has(item.id) ||
+    const selected = item && snapshots.find(({ source, snapshot, entries }) => item.catalogDigest === snapshot.digest &&
+      (item.source === undefined || item.source === source) && typeof item.id === 'string' && entries.has(item.id));
+    if (!selected ||
         !item.declaration || typeof item.declaration.name !== 'string' || !item.declaration.name.trim() ||
         typeof item.declaration.file !== 'string' || !item.declaration.file.trim()) { rejected++; continue; }
+    const { source, snapshot, entries } = selected;
     // An application report is optional telemetry; malformed details cannot discard a valid reference claim.
     const report = item.application === undefined ? undefined : knowledgeApplicationReportSchema.safeParse(item.application);
     if (report && !report.success) rejected++;
-    const key = JSON.stringify([item.id, item.declaration.name, item.declaration.file, report?.success ? report.data : null]);
+    const key = JSON.stringify([source, snapshot.digest, item.id, item.declaration.name, item.declaration.file, report?.success ? report.data : null]);
     if (seen.has(key)) continue;
     seen.add(key);
     // Adapted references retain model-reported origin; the frozen catalog match is a separate observation.
     const catalogDeclarationMatch = knowledgeDeclarationMatches(entries.get(item.id)!, item.declaration);
-    const referenced = observation.references?.some(reference => knowledgeDeclarationMatches(reference, item.declaration));
-    uses.push({ id: item.id, catalogDigest: knowledge.digest, consumer: { taskId: task.id, taskDigest: taskVersion(task) },
+    const referenced = (source === 'catalog' || catalogDeclarationMatch) &&
+      observation.references?.some(reference => knowledgeDeclarationMatches(reference, item.declaration));
+    uses.push({ source, id: item.id, catalogDigest: snapshot.digest, consumer: { taskId: task.id, taskDigest: taskVersion(task) },
       declaration: { name: item.declaration.name, file: item.declaration.file },
       status: referenced ? 'checked-reference' : 'reported-attempt', attribution: 'model-reported-origin',
       catalogDeclarationMatch,
       ...(report?.success ? { application: report.data } : {}),
       ...(referenced ? { checkedCommit: proof!.commit, checkedSourceDigest: proof!.sourceDigest } : {}) });
   }
-  if (knowledge) for (const entry of knowledge.base.entries) {
+  for (const { source, snapshot } of snapshots) for (const entry of snapshot.base.entries) {
     if (!observation.references?.some(reference => knowledgeDeclarationMatches(reference, entry))) continue;
-    if (uses.some(use => use.id === entry.id && use.status === 'checked-reference')) continue;
-    uses.push({ id: entry.id, catalogDigest: knowledge.digest,
+    if (uses.some(use => use.source === source && use.id === entry.id && use.status === 'checked-reference')) continue;
+    uses.push({ source, id: entry.id, catalogDigest: snapshot.digest,
       consumer: { taskId: task.id, taskDigest: taskVersion(task) }, declaration: { name: entry.name, file: entry.file },
       status: 'checked-reference', attribution: 'host-observed-reference',
       catalogDeclarationMatch: true,

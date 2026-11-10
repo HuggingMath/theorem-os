@@ -136,6 +136,24 @@ describe('formalization plan structure and source binding', () => {
     expect(() => assertFormalizationPlan(statement, plan)).toThrow(/formalization_plan_.*reference_invalid/u);
   });
 
+  it.each(['o-n', 'a-even', 'c-even', 's-domain', 'u-context', 'Planned.Domain', 'missing-definition'])
+    ('rejects a non-definition dependency %s and reports the permitted definition IDs', dependency => {
+      const plan = fixture();
+      plan.unresolved.push({ id: 'u-context', spanIds: ['s-domain'], description: 'The intended domain still needs review.' });
+      plan.definitions[0].dependsOn = ['d-nat', dependency];
+      const result = formalizationPlanSchema.safeParse(plan);
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      const issue = result.error.issues.find(issue => issue.message.startsWith('formalization_plan_definition_reference_invalid'))!;
+      expect(issue.path).toEqual(['definitions', 0, 'dependsOn']);
+      expect(issue.message).toContain(`invalid dependsOn IDs ${JSON.stringify([dependency])}`);
+      expect(issue.message).toContain('Allowed definition IDs: ["d-domain","d-nat","d-even"]');
+      expect(issue.message).toContain('use [] when there are no definition dependencies');
+      expect(plan.definitions[0].dependsOn).toEqual(['d-nat', dependency]);
+      plan.definitions[0].dependsOn = [];
+      expect(() => assertFormalizationPlan(statement, plan)).not.toThrow();
+    });
+
   it.each([false, true])('rejects definition cycles (self-cycle: %s)', self => {
     const plan = fixture(); plan.definitions[0].dependsOn = [self ? 'd-domain' : 'd-even'];
     expect(() => assertFormalizationPlan(statement, plan)).toThrow('formalization_plan_definition_cycle');

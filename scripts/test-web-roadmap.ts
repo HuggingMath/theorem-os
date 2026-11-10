@@ -9,6 +9,7 @@ import { loadWebSample } from '../apps/web/sample';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRunInput, WorkerMessage } from '../apps/web/shared';
 import { audit } from './web-a11y';
+import { contrastProblems } from './web-contrast';
 import { freePort, postRun, settled, startBrowser, waitForRun } from './web-scenario';
 import { openTab, selectHistoryRun } from './web-ui-controls';
 import { replaySample, withFailedAttempt } from './web-trajectory-fixture';
@@ -39,12 +40,13 @@ const page = await context.newPage(), errors: string[] = [], writes: string[] = 
 page.setDefaultTimeout(10_000);
 page.on('pageerror', error => errors.push(error.message));
 page.on('request', request => { if (request.method() !== 'GET' && new URL(request.url()).pathname.startsWith('/api/runs')) writes.push(request.url()); });
-const map = () => page.locator('.research-roadmap');
+const map = () => page.locator('.solution-route');
 const node = (id: string) => page.locator(`[data-roadmap-node="${id}"]`);
+const attempts = () => page.locator('.solution-route-records [data-solution-select^="record:attempt:goal_2:"]');
 const shot = async (name: string) => { await page.locator('#detail-panel').evaluate(element => { element.scrollTop = 0; });
   await settled(page); await page.screenshot({ path: path.join(output, name) }); };
 const fits = () => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth
-  && document.querySelector('.research-roadmap')!.getBoundingClientRect().right <= innerWidth + 1);
+  && document.querySelector('.solution-route')!.getBoundingClientRect().right <= innerWidth + 1);
 try {
   await page.route(/\/api\/runs\/[^/]+\/trajectory(?:\?|$)/u,
     route => route.fulfill({ status: 503, json: { error: 'Recorded read failure' } }), { times: 1 });
@@ -64,28 +66,29 @@ try {
   assert.equal(await page.locator('[data-trajectory-view="roadmap"]').getAttribute('aria-pressed'), 'true');
   assert.equal(await map().locator('output').innerText(), '100%', 'the graph starts at readable size instead of shrinking to fit');
   assert.equal(await page.locator('.trajectory-steps').count(), 0, 'the first view is a graph, without a text history');
-  assert.equal(await page.locator('[data-node-kind="task"]').count(), 2);
+  assert.equal(await page.locator('[data-solution-node^="task:"]').count(), 2);
   assert.equal(await node('evaluation').getAttribute('data-status'), 'passed');
-  assert.match(await node('task:goal_2').locator('.roadmap-node-type').innerText(), /0 \+ n = n/u, 'the proposition is visible on the node');
-  assert.match(await node('task:goal_2').innerText(), /原始目标/u);
-  assert.match(await node('task:goal_2').locator('strong').innerText(), /Tutorial\.zero_add/u, 'the full theorem name is shown');
-  assert.ok((await node('task:goal_2').boundingBox())!.width >= 300, 'task cards have room for their mathematical content');
-  assert.ok(await node('task:goal_2').locator('.roadmap-node-type').evaluate(element => parseFloat(getComputedStyle(element).fontSize)) >= 14);
-  assert.ok(await page.locator('.roadmap-connectors>path[data-edge-kind="assignment"]').count() > 0);
-  assert.ok(await page.locator('.roadmap-connectors>path[data-edge-kind="guidance"][data-active=true]').count() > 0);
-  assert.deepEqual(await node('task:goal_2').locator('.roadmap-attempt').evaluateAll(items => items.map(item => item.getAttribute('data-outcome'))), ['failed', 'passed']);
+  assert.match(await node('task:goal_2').locator('.solution-route-node-summary').innerText(), /0 \+ n = n/u, 'the recorded proposition is visible on the node');
+  assert.ok((await node('task:goal_2').boundingBox())!.width >= 220, 'task cards keep a readable width at the default zoom');
+  assert.ok(await node('task:goal_2').locator('strong').evaluate(element => parseFloat(getComputedStyle(element).fontSize)) >= 13);
+  assert.equal(await page.locator('[data-solution-edge="dependency"][data-from="task:goal_1"][data-to="task:goal_2"]').count(), 1, 'the saved plan supplies the real dependency');
+  assert.ok(await page.locator('[data-solution-edge="decision"][data-from^="guidance:"]').count() > 0, 'delivered human guidance keeps its real destination');
+  await node('task:goal_2').click();
+  assert.match(await page.locator('[data-solution-inspector]').innerText(), /Tutorial\.zero_add/u, 'the full theorem name is available in the inspector');
+  assert.deepEqual(await attempts().evaluateAll(items => items.map(item => item.getAttribute('data-status'))), ['failed', 'passed']);
   assert.deepEqual(await audit(page, { scope: '#detail-panel' }), [], 'the graph is accessible');
   await shot('roadmap-desktop.png');
-  await map().getByRole('button', { name: '展开画布', exact: true }).click();
-  await page.locator('.roadmap-dialog[open]').waitFor();
-  assert.ok(await page.locator('.roadmap-dialog').evaluate(element => element.matches(':modal')));
+  await map().locator('[data-solution-expand]').click();
+  await map().locator('[data-solution-expand][aria-expanded="true"]').waitFor();
+  assert.equal(await map().getAttribute('role'), 'dialog');
+  assert.equal(await map().getAttribute('aria-modal'), 'true');
   assert.ok((await map().boundingBox())!.width > 1400, 'the expanded graph uses the full screen');
   assert.equal(await map().locator('output').innerText(), '100%', 'expanding preserves readable size');
-  assert.deepEqual(await audit(page, { scope: '.roadmap-dialog[open]' }), [], 'expanded canvas is accessible');
+  assert.deepEqual(await audit(page, { scope: '.solution-route' }), [], 'expanded canvas is accessible');
   await shot('roadmap-expanded.png');
   await page.keyboard.press('Escape');
-  await page.locator('.roadmap-dialog[open]').waitFor({ state: 'detached' });
-  assert.equal(await map().getByRole('button', { name: '展开画布', exact: true }).evaluate(element => element === document.activeElement), true);
+  await map().locator('[data-solution-expand][aria-expanded="false"]').waitFor();
+  assert.equal(await map().locator('[data-solution-expand]').evaluate(element => element === document.activeElement), true);
   console.log('PASS the graph is the default; assignments, delivered guidance, failed retry and acceptance come from the recording');
 
   await node('task:goal_2').click();
@@ -93,6 +96,13 @@ try {
   assert.match(await page.locator('.roadmap-detail-summary').innerText(), /0 \+ n = n/u, 'the selected task keeps its full proposition');
   assert.match(await page.locator('.roadmap-detail-summary').innerText(), /可以直接用 Nat\.zero_add/u, 'the task objective remains available in the detail reader');
   assert.equal(await page.locator('.roadmap-detail .trajectory-step[data-kind="attempt"]').count(), 2);
+  await attempts().filter({ hasText: '未通过' }).first().click();
+  await page.locator('[data-solution-open]').click();
+  await page.locator('#trajectory-viewer[open]').waitFor();
+  assert.match(await page.locator('#trajectory-viewer').innerText(), /rfl/u, 'the shared attempt opens its own saved source version');
+  await page.keyboard.press('Escape');
+  await page.locator('#trajectory-viewer').waitFor({ state: 'detached' });
+  await node('task:goal_2').click();
   await page.locator('.roadmap-detail .trajectory-step[data-tone="failed"] [data-trajectory-mode="feedback"]').click();
   await page.locator('#trajectory-viewer[open]').waitFor();
   assert.match(await page.locator('#trajectory-viewer').innerText(), /rfl/u);
@@ -136,12 +146,12 @@ try {
   await node('plan').focus(); await page.keyboard.press('ArrowRight');
   assert.match(await page.evaluate(() => (document.activeElement as HTMLElement).dataset.roadmapNode ?? ''), /^task:/u);
   await page.keyboard.press('Enter');
-  assert.equal(await page.locator('[data-node-kind="task"][aria-pressed=true]').count(), 1);
+  assert.equal(await page.locator('[data-solution-node^="task:"][aria-pressed=true]').count(), 1);
   await page.getByRole('button', { name: '关闭节点详情', exact: true }).click();
   const before = await map().locator('output').innerText();
   await map().getByRole('button', { name: '放大', exact: true }).click();
   assert.notEqual(await map().locator('output').innerText(), before);
-  await map().getByRole('button', { name: '适应画布', exact: true }).click();
+  await map().locator('[data-solution-zoom="fit"]').click();
   console.log('PASS nodes open the saved failed check; keyboard navigation and zoom work');
 
   await page.locator('#expand-research-output').click();
@@ -162,6 +172,15 @@ try {
   assert.equal(await page.locator('#trajectory-viewer').count(), 0, 'switching modes closes an unrelated source panel');
   await page.getByRole('button', { name: '关闭节点详情', exact: true }).click();
   await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
+  const darkBackgrounds = await map().locator('.solution-route-node,[data-solution-inspector],.solution-route-viewport').evaluateAll(elements =>
+    elements.map(element => ({ part: element.className, background: getComputedStyle(element).backgroundColor })));
+  assert.ok(darkBackgrounds.length >= 4, 'Check the canvas, inspector and task nodes in the dark theme');
+  for (const color of darkBackgrounds) {
+    const channels = color.background.match(/[\d.]+/gu)?.slice(0, 3).map(Number);
+    assert.ok(channels?.length === 3 && channels.every(value => value < 128),
+      'The route must use dark surfaces with the dark text palette: ' + JSON.stringify(color));
+  }
+  assert.deepEqual(await contrastProblems(page, '.solution-route'), [], 'dark route nodes and inspector text retain WCAG AA contrast');
   await shot('roadmap-dark.png');
   assert.deepEqual(await audit(page, { scope: '#detail-panel' }), [], 'the dark graph is accessible');
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
@@ -169,17 +188,21 @@ try {
   await node('evaluation').waitFor();
   assert.ok(await fits(), 'the map scrolls inside its frame on mobile');
   assert.ok(await node('problem').evaluate(element => {
-    const viewport = element.closest('.roadmap-viewport')!.getBoundingClientRect(), box = element.getBoundingClientRect();
+    const viewport = element.closest('.solution-route-viewport')!.getBoundingClientRect(), box = element.getBoundingClientRect();
     return box.top >= viewport.top && box.bottom <= viewport.bottom && box.left >= viewport.left && box.right <= viewport.right;
   }), 'the original problem is visible when the mobile roadmap opens');
   await shot('roadmap-mobile.png');
-  const viewport = page.locator('.roadmap-viewport');
+  await map().locator('[data-solution-zoom="reset"]').click();
+  const viewport = page.locator('.solution-route-viewport');
+  await viewport.scrollIntoViewIfNeeded();
+  assert.ok(await viewport.evaluate(element => element.scrollWidth > element.clientWidth + 200),
+    'Panning starts at readable size with enough canvas overflow to move');
   await viewport.evaluate(element => { element.scrollLeft = 100; });
   const area = (await viewport.boundingBox())!;
   await page.mouse.move(area.x + 170, area.y + 12); await page.mouse.down();
   await page.mouse.move(area.x + 65, area.y + 12, { steps: 8 }); await page.mouse.up();
   assert.ok(await viewport.evaluate(element => element.scrollLeft) > 150, 'dragging the canvas pans the map');
-  await map().getByRole('button', { name: '适应画布', exact: true }).click();
+  await map().locator('[data-solution-zoom="fit"]').click();
   assert.ok(await fits());
   assert.deepEqual(errors, []); assert.deepEqual(writes, []);
   console.log('PASS graph/detail preference survives tab changes; mobile panning, both themes, and read-only interaction work');
@@ -203,21 +226,21 @@ try {
   await map().getByRole('button', { name: '放大', exact: true }).click();
   const liveZoom = await map().locator('output').innerText();
   beforeFailure.release(); await beforePass.reached;
-  await node('task:goal_2').locator('.roadmap-attempt[data-outcome="failed"]').waitFor();
+  await attempts().filter({ hasText: '未通过' }).first().waitFor();
   assert.equal(await node('task:goal_2').getAttribute('aria-pressed'), 'true');
   assert.equal(await map().locator('output').innerText(), liveZoom, 'live updates preserve the chosen zoom');
   assert.equal(await node('evaluation').getAttribute('data-status'), 'pending');
   await shot('roadmap-live-failed.png');
   beforePass.release(); await beforeIntegration.reached;
-  await node('task:goal_2').locator('.roadmap-attempt[data-outcome="passed"]').waitFor();
-  const integration = page.locator('.roadmap-connectors>path[data-edge-kind="integration"]').last();
-  assert.equal(await integration.getAttribute('data-active'), 'false', 'a local pass does not claim integration');
+  await attempts().filter({ hasText: '已通过' }).first().waitFor();
+  const integration = page.locator('[data-solution-edge="integration"][data-from="task:goal_2"][data-to="proof"]');
+  assert.equal(await integration.count(), 0, 'a local pass does not claim integration');
   assert.equal(await node('evaluation').getAttribute('data-status'), 'pending');
   beforeIntegration.release();
   await waitForRun({ page }, run.id, run => run.status === 'completed');
   await page.waitForFunction(() => document.querySelector('[data-roadmap-node="evaluation"]')?.getAttribute('data-status') === 'passed');
-  assert.deepEqual(await node('task:goal_2').locator('.roadmap-attempt').evaluateAll(items => items.map(item => item.getAttribute('data-outcome'))), ['failed', 'passed']);
-  assert.equal(await integration.getAttribute('data-active'), 'true');
+  assert.deepEqual(await attempts().evaluateAll(items => items.map(item => item.getAttribute('data-status'))), ['failed', 'passed']);
+  assert.equal(await integration.count(), 1);
   assert.equal(await node('task:goal_2').getAttribute('aria-pressed'), 'true');
   assert.equal(await map().locator('output').innerText(), liveZoom);
   await shot('roadmap-live-completed.png');

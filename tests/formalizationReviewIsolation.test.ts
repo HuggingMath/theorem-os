@@ -26,4 +26,17 @@ describe('review receipt compatibility across the fixed gateway and HTTPS provid
   it.each(['openai', 'other', '', undefined])('rejects unrecognized provider identities: %s', providerId => {
     expect(() => check({ ...receipt('sub2api'), providerId })).toThrow('formalization_review_isolation_invalid');
   });
+  it('permits source packages only for an explicitly source-reading Mathlib audit', () => {
+    const config = getLeanTaskEnvironment('mathlib');
+    const full = { ...receipt('web_provider'), toolchain: config.toolchain, environmentDigest: config.dependencyDigest,
+      packages: { kind: 'sealed', root: '/opt/lean-packages', identity: 'c'.repeat(64) } };
+    const source = { ...full, packages: { ...full.packages, contents: 'sources' } };
+    for (const value of [full, source])
+      expect(() => assertFormalizationReviewIsolation(value, 'mathlib', input, instructions, schema, 'sources')).not.toThrow();
+    expect(() => assertFormalizationReviewIsolation(full, 'mathlib', input, instructions, schema)).not.toThrow();
+    expect(() => assertFormalizationReviewIsolation(source, 'mathlib', input, instructions, schema))
+      .toThrow('formalization_review_isolation_invalid');
+    expect(() => check({ ...receipt('web_provider'), packages: { kind: 'none', contents: 'sources' } }))
+      .toThrow('formalization_review_isolation_invalid');
+  });
 });

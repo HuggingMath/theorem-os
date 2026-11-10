@@ -76,14 +76,15 @@ export class WebExplanations {
     model: string; effort: 'low' | 'high' | 'max' }): WebExplanation {
     if (this.closing) throw new WebStorageError(503, '服务正在停止，请稍后重试。');
     const key = explanationKey(request.target, request.language), id = this.id(owner, run.id, key);
-    const existing = this.jobs.get(id)?.explanation ?? this.storage.getExplanation(owner, run.id, key);
-    if (existing && active(existing)) throw new WebStorageError(409, '这份讲解正在生成。');
+    const existingJob = this.jobs.get(id);
+    const existing = existingJob?.explanation ?? this.storage.getExplanation(owner, run.id, key);
+    if (existingJob && active(existingJob.explanation)) throw new WebStorageError(409, '这份讲解正在生成。');
     if (existing?.status === 'approved') throw new WebStorageError(409, '这份讲解已经生成；如需重新生成，请先删除它。');
     const jobs = [...this.jobs.values()];
     if (jobs.length >= this.limits.queueLimit) throw new WebStorageError(429, `讲解队列已满：${jobs.length} 份正在生成或排队，请稍后再试。`);
     if (jobs.filter(job => job.owner === owner).length >= this.limits.perOwner)
       throw new WebStorageError(429, `每个账号最多同时生成 ${this.limits.perOwner} 份讲解，请等其中一份结束。`);
-    // A failed or cancelled attempt is replaced by the new one; it never had evidence.
+    // A record without a live job can remain after a failed save; an explicit retry replaces it.
     if (existing) this.storage.deleteExplanation(owner, run.id, key);
     const now = new Date().toISOString();
     const explanation: WebExplanation = { id: crypto.randomUUID(), runId: run.id, target: request.target, language: request.language,
@@ -96,16 +97,16 @@ export class WebExplanations {
       maxRoundsPerBatch: webExplanationLimits.maxRoundsPerBatch, auditors: webExplanationLimits.auditors };
     const job: Job = { owner, key, run, explanation, input, controller: new AbortController(), persistedAt: 0 };
     this.jobs.set(id, job);
-    this.persist(job, true);
+    try { this.persist(job, true); }
+    catch (error) { this.release(job); throw error; }
     queueMicrotask(() => this.pump());
     return this.view(job);
   }
   cancel(owner: string, runId: string, target: string, language: WebExplanationLanguage): WebExplanation | undefined {
     const job = this.jobs.get(this.id(owner, runId, explanationKey(target, language)));
     if (!job) return this.storage.getExplanation(owner, runId, explanationKey(target, language));
-    this.finish(job, { status: 'cancelled' });
-    this.release(job);
-    job.controller.abort();
+    try { this.finish(job, { status: 'cancelled' }); }
+    finally { this.release(job); job.controller.abort(); }
     return job.explanation;
   }
   /** Deletes a finished explanation and its evidence; a queued or generating one must be cancelled first. */
@@ -122,11 +123,14 @@ export class WebExplanations {
   }
   async close() {
     this.closing = true;
+    let failure: unknown;
     for (const job of [...this.jobs.values()]) {
-      this.finish(job, { status: 'error', reason: 'explanation_interrupted' });
-      this.release(job); job.controller.abort();
+      try { this.finish(job, { status: 'error', reason: 'explanation_interrupted' }); }
+      catch (error) { failure ??= error; }
+      finally { this.release(job); job.controller.abort(); }
     }
     while (this.running) await new Promise(resolve => setTimeout(resolve, 25));
+    if (failure) throw failure;
   }
 
   private id(owner: string, runId: string, key: string) { return `${mathDigest(owner)}/${runId}/${key}`; }
@@ -163,23 +167,27 @@ export class WebExplanations {
       this.running++;
       const now = new Date().toISOString();
       Object.assign(job.explanation, { status: 'running', updatedAt: now, progress: { phase: 'preparing', updatedAt: now } });
-      this.persist(job, true);
       void this.execute(job).finally(() => { this.running--; this.pump(); });
     }
   }
   private async execute(job: Job) {
     let result: Extract<WorkerExplanationMessage, { type: 'result' }> | undefined;
+    let messageError: unknown;
     const handle = (message: WorkerExplanationMessage) => {
-      if (!this.current(job) || !active(job.explanation)) return;
-      if (message.type === 'result') { result = message; return; }
-      const previous = job.explanation.progress, now = new Date().toISOString();
-      const progress: WebExplanationProgress = { ...previous, ...message.progress, updatedAt: now };
-      job.explanation.progress = progress; job.explanation.updatedAt = now;
-      this.persist(job, previous?.phase !== progress.phase || previous?.approvedBatches !== progress.approvedBatches);
+      if (messageError || !this.current(job) || !active(job.explanation)) return;
+      try {
+        if (message.type === 'result') { result = message; return; }
+        const previous = job.explanation.progress, now = new Date().toISOString();
+        const progress: WebExplanationProgress = { ...previous, ...message.progress, updatedAt: now };
+        job.explanation.progress = progress; job.explanation.updatedAt = now;
+        this.persist(job, previous?.phase !== progress.phase || previous?.approvedBatches !== progress.approvedBatches);
+      } catch (error) { messageError = error; job.controller.abort(); }
     };
     try {
+      this.persist(job, true);
       if (!this.runner.explain) throw new Error('explanation_runtime_unavailable');
       await this.runner.explain(job.input, handle, job.controller.signal);
+      if (messageError) throw messageError;
       if (!this.current(job) || !active(job.explanation)) return;
       if (!result) throw new Error('explanation_worker_no_result');
       if (result.status !== 'approved') { this.finish(job, { status: result.status, reason: result.reason }); return; }
@@ -190,7 +198,8 @@ export class WebExplanations {
       this.storage.saveExplanationEvidence(job.owner, job.run.id, job.key, evidence);
       this.finish(job, { status: 'approved' });
     } catch (error) {
-      this.finish(job, { status: 'error', reason: reasonOf(error) });
+      try { this.finish(job, { status: 'error', reason: reasonOf(messageError ?? error) }); }
+      catch { /* A failed final save is interrupted on restart or replaced on explicit retry. */ }
     } finally {
       this.release(job);
     }

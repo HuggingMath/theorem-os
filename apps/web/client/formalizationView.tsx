@@ -5,6 +5,8 @@ import { t } from '../i18n';
 import { ChosenBar, Correspondences, OriginalText, originalPieces, type FragmentStep } from './correspondence';
 import { LeanName, Rich } from './richText';
 import { Icon } from './ui/Icon';
+import { BackgroundReview } from './backgroundReview';
+import { downloadLean } from './downloadLean';
 
 /** What formalization.ts draws from; correspondence marks and items carry data-action="correspondence". */
 export type FormalizationView = { report: WebFormalizationReport; pane: 'lean' | 'prose'; active: ReadonlySet<number>; step?: FragmentStep; confirmed?: boolean };
@@ -25,17 +27,20 @@ function Toolbar({ report, pane }: FormalizationView) {
   return <>
     <div class="explain-target"><span class="explain-target-label">{report.targets.length > 1 ? t('目标定理 ({0})', report.targets.length) : t('目标定理')}</span>
       {report.targets.map(item => <code key={item.name} translate={false}><LeanName name={item.name} /></code>)}</div>
+    <button type="button" class="text-button" data-download-statement onClick={() => downloadLean(report.statement)}><Icon name="download" />{t('下载 Lean')}</button>
     <div class="source-switch explain-pane-switch" role="group" aria-label={t('显示的一侧')}>{button('lean', 'Lean')}{button('prose', t('原题'))}</div>
   </>;
 }
 
 /** The right pane: the original with its matched fragments, each correspondence, the blind back-translation, plan and reviews. */
 function Report({ report, active, confirmed }: FormalizationView) {
+  const direct = report.semanticReview === 'not-performed';
   const pieces = originalPieces(report.original, report.correspondences);
   const located = pieces.some(piece => report.correspondences[piece.quote]!.lean.length), wider = pieces.some(piece => piece.wider.length);
   return <article class="explain-document">
-    <p class="explain-notice"><Icon name="triangle-alert" />
-      <span>{confirmed ? t('你已确认此陈述作为研究原题。证明仍需独立验收。') : t('这份 Lean 陈述由模型写出。另一个模型只看 Lean，把它译回数学；{0} 个审核模型拿原题逐项对照 Lean 陈述和这份回译后才通过，未经人工审阅。Lean 只检查了陈述能编译，没有检查它是否忠实于原题。', report.reviews.length)}</span></p>
+    <p class="explain-notice"><Icon name={direct ? 'circle-check' : 'triangle-alert'} />
+      <span>{direct ? t('Lean 编译通过。证明仍需独立验收。') : confirmed ? t('你已确认此陈述作为研究原题。证明仍需独立验收。') : t('这份 Lean 陈述由模型写出。另一个模型只看 Lean，把它译回数学；{0} 个审核模型拿原题逐项对照 Lean 陈述和这份回译后才通过，未经人工审阅。Lean 只检查了陈述能编译，没有检查它是否忠实于原题。', report.reviews.length)}</span></p>
+    {report.backgroundReview && <BackgroundReview review={report.backgroundReview} />}
     <section class="explain-section formal-problem" aria-labelledby="formal-original-heading">
       <header class="explain-section-head"><div class="explain-section-meta"><code translate={false}><LeanName name={report.problemId} /></code></div>
         <h3 id="formal-original-heading">{t('原题')}</h3></header>
@@ -57,6 +62,7 @@ function Report({ report, active, confirmed }: FormalizationView) {
 /** What another model read from the Lean statement alone; it saw neither the original nor the writing model's notes. */
 function Backtranslation({ report }: { report: WebFormalizationReport }) {
   const { backtranslation: back } = report;
+  if (!back) return null;
   return <section class="explain-section" aria-labelledby="formal-back-heading">
     <header class="explain-section-head"><h3 id="formal-back-heading">{t('盲回译')}</h3>
       <p class="formal-lead">{t('另一个模型只看 Lean 陈述（看不到原题，也看不到写作模型的说明），写出这份陈述说的数学；审核模型拿它和原题对照。')}</p></header>
@@ -88,7 +94,7 @@ function Plan({ plan }: { plan: NonNullable<WebFormalizationReport['plan']> }) {
 function Coverage({ report }: { report: WebFormalizationReport }) {
   return <section class="explain-section" aria-labelledby="formal-coverage-heading">
     <header class="explain-section-head"><h3 id="formal-coverage-heading">{t('原文覆盖')}</h3>
-      <p class="formal-lead">{t('写作模型逐段说明原文由哪个定理陈述；审核模型看不到这些说明。')}</p></header>
+      <p class="formal-lead">{report.semanticReview === 'not-performed' ? t('写作模型逐段说明原文由哪个定理陈述。') : t('写作模型逐段说明原文由哪个定理陈述；审核模型看不到这些说明。')}</p></header>
     <ul class="formal-list">{report.coverage.map((item, index) => <li key={index}>
       <blockquote class="formal-quote explain-rich"><Rich text={item.original} /></blockquote>
       {item.targets.length > 0 && <code class="formal-detail" translate={false}>{item.targets.join(', ')}</code>}

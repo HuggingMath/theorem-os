@@ -75,6 +75,7 @@ export type SolverRunState = {
   moduleConfiguration?: { id: string; versions: Record<string, string> };
   retrievalDigest?: string;
   knowledgeDigest?: string;
+  libraryCatalogDigest?: string;
   continuationDigest?: string;
   knowledgeRetrievals?: { dropped: number; observations: KnowledgeRetrievalObservation[] };
   knowledgeUses?: (KnowledgeUse & { workerId: string; commit: string })[];
@@ -104,6 +105,8 @@ export type SolverRunState = {
   dispatchCounts?: Partial<Record<'planning' | 'research' | 'proof' | 'review', number>>;
   solveStartedAt?: number;
   solveFinishedAt?: number;
+  /** Wall time excluded from this solve's execution allowance while waiting for human approval. */
+  solveWaitingMs?: number;
   verificationCheckpoints?: VerificationCheckpoint[];
   usage?: Record<string, unknown>;
   usageBeforeThread?: Record<string, unknown>;
@@ -179,7 +182,7 @@ const check = z.object({ commit: z.string().min(1), sourceDigest: z.string().min
     targetCommit: z.string().optional(), results: z.array(record) }).passthrough() }).passthrough();
 const research = z.object({ worktree: z.string().min(1), phase, turns: count, threadId: z.string().optional(),
   dispatchCounts: z.object({ planning: count.optional(), research: count.optional(), proof: count.optional(), review: count.optional() }).optional(),
-  solveStartedAt: count.optional(), solveFinishedAt: count.optional(),
+  solveStartedAt: count.optional(), solveFinishedAt: count.optional(), solveWaitingMs: count.optional(),
   previousThreadIds: z.array(z.string()).optional(), lastInputTokens: count.optional(), check: check.optional(),
   lastActivity: z.object({ at: count, event: z.string().min(1).max(64), itemType: z.string().max(64).optional() }).optional(),
   lastFailure: z.object({ at: count, reason: z.string(), taskId: z.string().optional(),
@@ -291,6 +294,7 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
   verificationCheckpoints: z.array(z.object({ key: z.string().regex(/^[a-f0-9]{64}$/u), timeoutMs: safeCount,
     attempts: safeCount, at: safeCount, targetCommit: z.string(), receiptIds: z.array(z.string()) }).strict()).max(32).optional(),
   knowledgeDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  libraryCatalogDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
   knowledgeRetrievals: z.object({ dropped: safeCount, observations: z.array(z.object({
     sectionId: z.string(), catalogDigest: z.string(), searchInputDigest: z.string(),
     searchSource: z.enum(['closed-task-type', 'frozen-source-header', 'research-objective', 'residual-goal']).optional(),

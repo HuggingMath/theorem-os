@@ -31,6 +31,8 @@ import { visibleNextChecks } from './nextChecks';
 import { goalProgressForTask } from './goalProgress';
 import { automaticTaskConnection, createTaskConnectionCheck } from './taskConnections';
 import { TACTIC_BATTERY_TIMEOUT_MS } from './tacticBattery';
+import { LIBRARY_APPLICATION_TIMEOUT_MS } from './libraryApplication';
+import { knowledgeReferenceCoverage } from './knowledgeUsage';
 import { taskTypePreflightEnvironmentIdentity, typeDiagnosticExcerpt, type TaskTypePreflight } from './taskTypePreflight';
 import { assignmentDeliveryFile, isDefinitionTask, isFeasibilityReview, taskGroup, type CooperativeTask, type CooperativeAction, type TaskAssignment, type TaskRecord } from './tasks';
 import { consumeLeadWakes, dropLeadWakes, LEAD_MAX_BACKOFF, leadWakePending, settleLeadWakes } from './leadWakes';
@@ -47,9 +49,9 @@ export type { ReviewRecord, HumanEditRecord, InitialPlanPublication, Cooperation
 
 /** Lead plans; workers claim distinct ready obligations; only checked source enters the canonical proof. */
 export class CooperativeResearch extends CooperationInputs {
-  private guidancePulse?: Promise<void>;
   private humanGuidanceCheckpoint(stopped = false): Promise<void> {
-    return this.guidancePulse ??= deliverHumanGuidance({
+    if (this.guidancePulse) return this.guidancePulse;
+    const pending = deliverHumanGuidance({
       stateFile: path.join(path.dirname(this.lead.worktree), 'state.json'), state: this.input.state, stopped,
       recipients: () => [...this.active].flatMap(([workerId, active]) => {
         const worker = this.input.workers.find(item => item.id === workerId);
@@ -57,6 +59,7 @@ export class CooperativeResearch extends CooperationInputs {
         const action = active.action;
         return [{ workerId, role: worker.role,
           ...(action.kind === 'task' ? { taskRef: { id: action.task.id, version: action.assignment.taskDigest } } : {}),
+          ...(action.kind === 'lead' && action.planVersion ? { planVersion: action.planVersion } : {}),
           current: () => !this.stopping && !this.input.signal.aborted && this.active.get(workerId) === active &&
             !active.cancelled && this.current(action), notify: message => active.notify(message, { requireTurn: true }) }];
       }),
@@ -70,7 +73,9 @@ export class CooperativeResearch extends CooperationInputs {
     }).catch(error => {
       if (error instanceof Error && error.message === 'math_runtime_lease_busy') return;
       this.input.emit('human_guidance_unavailable', { reason: error instanceof Error ? error.message : 'math_guidance_unavailable' });
-    }).finally(() => { this.guidancePulse = undefined; });
+    }).finally(() => { if (this.guidancePulse === pending) this.guidancePulse = undefined; });
+    this.guidancePulse = pending;
+    return pending;
   }
   /**
    * Optional advisory supply for otherwise idle expanded teams, without a Lead graph mutation. A small team gets
@@ -227,6 +232,7 @@ export class CooperativeResearch extends CooperationInputs {
       if (error instanceof VerificationCheckpointError || error instanceof Error && error.message === 'math_verifier_unavailable') { this.failure = error; this.changed(); }
     }); }, 200);
     this.timer.unref();
+    this.refreshPlanApproval();
   }
   async stop() {
     this.stopping = true;
@@ -606,7 +612,7 @@ export class CooperativeResearch extends CooperationInputs {
     if (node.assignment && node.alternativeRoutes?.length && node.assignment.routeId !== selectedRoute?.id)
       node.assignment = undefined;
     let resuming = node.assignment?.workerId === worker.id;
-    if (resuming && advisory(node.task) &&
+    if (resuming &&
         (this.archive.researchDrafts?.[node.task.id]?.suspended || this.researchWorkspaceChanged(worker, node))) {
       const previousAssignment = node.assignment;
       const restored = await this.restoreResearchDraft(worker, node);
@@ -629,7 +635,7 @@ export class CooperativeResearch extends CooperationInputs {
       seedCommit: scopedSeed, assignmentId: crypto.randomUUID(), canonicalCommit: seed, groupId: taskGroup(node.task),
       routeId: selectedRoute?.id,
       dependencies: this.dependencies(node.task).map(item => ({ taskId: item.task.id, taskDigest: digest(item.task) })) };
-    if (node.task.kind === 'lemma') {
+    if (node.task.kind === 'lemma' || node.task.kind === 'goal' && this.input.access.get(worker.id)?.installedLibrary) {
       const task = node.task, taskDigest = digest(task), environment = this.input.state.environmentDigest;
       const dependencies = this.typePreflightDependencies(task), head = git(worker.worktree, ['rev-parse', 'HEAD']);
       const project = path.join(worker.worktree, this.input.state.problem.projectRelative), started = Date.now();
@@ -661,34 +667,9 @@ export class CooperativeResearch extends CooperationInputs {
       this.preparingTaskTypes.set(node, { workerId: worker.id, controller, current, settled });
       this.changed();
       try {
-        const checked: { result: TaskTypePreflight; current: () => boolean } = workerAccess ? await this.taskTypePreflight.check({ problem: this.input.state.problem, task,
-          projectRoot: project,
-          // A family type never names its own members, which do not exist in source until they are proved.
-          dependencies: this.dependencies(task).map(item => item.task).filter(input => input.familyMember !== task.id), environmentDigest: environment,
-          env: workerAccess.environment, signal,
-          timeoutMs: this.input.timeoutMs ?? Infinity }) : {
-            result: { status: 'unavailable', inputDigest: mathDigest(canonicalMathJson([taskDigest, environment, 'worker-environment-unavailable'])),
-              taskDigest, reason: 'worker-environment-unavailable', evidence: 'advisory-type-elaboration', proofAcceptance: 'not-assessed' },
-            current: () => !this.input.signal.aborted,
-          };
-        if (!current() || !checked.current() || git(worker.worktree, ['rev-parse', 'HEAD']) !== head ||
-            this.input.modules.M5.assign([node], worker, this.allocationPeers, this.archive.groups, this.archive.tasks, this.stoppedWorkers) !== node)
-          return RETRY_DISPATCH;
-        node.typePreflight = checked.result;
-        this.input.emit('task_type_preflight', { taskId: node.task.id, workerId: worker.id, ...checked.result });
-        if (checked.result.status === 'invalid') {
-          this.invalidTaskTypes.set(node, { canonical: seed, environment, taskDigest, dependencies, project, workerId: worker.id,
-            environmentIdentity: taskTypePreflightEnvironmentIdentity(project, workerAccess!.environment) });
-          this.moveTask(node, 'blocked', 'rejected');
-          const excerpt = typeDiagnosticExcerpt(task.type!, checked.result.reason);
-          node.feedback = 'math_task_type_invalid\n' + bounded(checked.result.reason, 2000) + (excerpt ? `\n${excerpt}` : '') +
-            (checked.result.artifact ? `\nAdvisory type diagnostics in ${worker.id}'s worktree: ${checked.result.artifact.path} (${checked.result.artifact.digest})` : '') +
-            '\nRevise the closed helper type or its context before proving it. This is not proof acceptance or a mathematical refutation.';
-          this.wakeLead('task-type-invalid'); this.changed(); return RETRY_DISPATCH;
-        }
         const checker = this.input.modules.M2.checkTask ?? checkTaskProof;
         const retainedGoals = () => this.retainedTaskGoals(task, this.archive.tasks, worker.worktree, head);
-        const publishable = () => current() && checked.current() && taskDependenciesReady(task, this.archive.tasks) &&
+        const publishable = () => current() && taskDependenciesReady(task, this.archive.tasks) &&
           git(worker.worktree, ['rev-parse', 'HEAD']) === head &&
           this.input.modules.M5.assign([node], worker, this.allocationPeers, this.archive.groups, this.archive.tasks, this.stoppedWorkers) === node;
         const claim = () => {
@@ -696,115 +677,189 @@ export class CooperativeResearch extends CooperationInputs {
           this.preparingTaskTypes.delete(node);
           node.assignment = dispatchAssignment;
         };
-        const assembleFamily = this.input.modules.M2.assembleFamily;
-        const familyKey = canonicalMathJson([taskDigest, dependencies, environment]);
-        if (assembleFamily && task.family && !node.assignment && leadAccess && workerAccess && checked.result.status === 'elaborated' &&
-            checked.result.context && !this.familyAssemblyAttempts.has(familyKey)) {
-          // One host assembly per exact family contract in this process; a failure falls through to a model.
-          this.familyAssemblyAttempts.add(familyKey);
-          const assemblyStarted = Date.now();
-          const assembly = await assembleFamily({ problem: this.input.state.problem, task, worktree: worker.worktree,
-            seedCommit: scopedSeed, context: checked.result.context });
-          if (!current()) { this.familyAssemblyAttempts.delete(familyKey); return RETRY_DISPATCH; }
-          // Unproved members (and other fixed lemma inputs) are bound exactly as in the ordinary conditional check.
-          const conditions = this.assignmentConditions(task, dispatchAssignment);
+        const applyLibrary = this.input.modules.M2.applyLibrary, library = workerAccess?.installedLibrary;
+        const libraryKey = canonicalMathJson([taskDigest, scopedSeed, environment, library?.digest ?? null]);
+        if (applyLibrary && library && leadAccess && workerAccess && !node.assignment && !isDefinitionTask(task) &&
+            !task.conditional && !automaticTaskConnection(task, this.archive.tasks, this.archive.groups) &&
+            taskDependenciesReady(task, this.archive.tasks) && !this.libraryApplicationAttempts.has(libraryKey)) {
+          this.libraryApplicationAttempts.add(libraryKey);
+          const applicationStarted = Date.now();
+          const application = await applyLibrary({ problem: this.input.state.problem, task, library, taskText: this.input.taskText, environmentDigest: environment,
+            worktree: worker.worktree, seedCommit: scopedSeed });
+          if (!current()) { this.libraryApplicationAttempts.delete(libraryKey); return RETRY_DISPATCH; }
           let proof, checkError: string | undefined;
-          if (assembly.commit) {
+          if (application.commit && application.status === 'candidate') {
             try {
-              proof = await checker(this.input.state.problem, worker.worktree, assembly.commit, task, dispatchAssignment,
-                retainedGoals(), leadAccess.environment, signal, this.input.timeoutMs, conditions, environment,
-                ...(checker === checkTaskProof ? [this.taskProofCache] : []));
+              proof = await checker(this.input.state.problem, worker.worktree, application.commit, task, dispatchAssignment,
+                retainedGoals(), leadAccess.environment, signal,
+                Math.min(this.input.timeoutMs ?? Infinity, LIBRARY_APPLICATION_TIMEOUT_MS, budget.remainingMs - (Date.now() - started)),
+                [], environment, ...(checker === checkTaskProof ? [this.taskProofCache] : []));
             } catch (error) {
               if (!current()) return RETRY_DISPATCH;
-              checkError = bounded(error instanceof Error ? error.message : String(error), 600);
+              checkError = bounded(error instanceof Error ? error.message : String(error), 1000);
             }
-          }
-          this.input.emit('task_family_assembly', { taskId: task.id, taskDigest, workerId: worker.id, seedCommit: scopedSeed,
-            status: assembly.status, reason: assembly.reason, durationMs: Date.now() - assemblyStarted,
-            assumedInputs: conditions.map(input => input.id), ...(checkError ? { checkError } : {}),
-            ...(assembly.commit ? { commit: assembly.commit } : {}), ...(proof ? { passed: proof.passed,
-              verificationStatus: proof.verification.status, receiptIds: proof.verification.results.map(result => result.receiptId) } : {}) });
-          // A conditional family starts before its members are checked, so this omits the dependency-readiness gate.
-          const assembled = () => current() && checked.current() && git(worker.worktree, ['rev-parse', 'HEAD']) === head &&
-            this.input.modules.M5.assign([node], worker, this.allocationPeers, this.archive.groups, this.archive.tasks, this.stoppedWorkers) === node;
-          if (proof?.passed) {
-            if (!assembled()) return RETRY_DISPATCH;
-            await this.publishTaskProof(worker, { kind: 'task', task, assignment: dispatchAssignment }, assembly.commit!,
-              'Host assembled this family lemma from its member lemmas before starting a model.' + (conditions.length
-                ? ` Its check binds its ${conditions.length} lemma input(s) as explicit hypotheses; the host rechecks it unconditionally once they integrate.` : ''),
-              {}, false, { proof, current: assembled, claim });
-            return RETRY_DISPATCH;
-          }
-          if (!assembled()) return RETRY_DISPATCH;
-        }
-        const canonicalCandidate = leadAccess && workerAccess && this.canonicalHelperCandidate(node, worker, scopedSeed);
-        if (canonicalCandidate) {
-          // A failed probe is not a model delivery. Keep it outside failure memory and archive acceptance.
-          const probeStarted = Date.now();
-          let proof;
-          try {
-            proof = await checker(this.input.state.problem, worker.worktree, scopedSeed, task, dispatchAssignment,
-              retainedGoals(), leadAccess!.environment, signal, this.input.timeoutMs, [], environment,
-              ...(checker === checkTaskProof ? [this.taskProofCache] : []));
-          } catch (error) {
-            if (!current()) return RETRY_DISPATCH;
-            throw error;
           }
           if (!publishable()) return RETRY_DISPATCH;
-          const receiptIds = proof.verification.results.map(result => result.receiptId);
-          const feedback = !proof.passed ? bounded(solverProofFeedback(proof), 2000) : undefined;
-          this.input.emit('task_canonical_probe', { taskId: task.id, taskDigest, workerId: worker.id, seedCommit: scopedSeed,
-            passed: proof.passed, status: proof.verification.status, durationMs: Date.now() - probeStarted,
-            receiptIds, ...(feedback ? { feedback } : {}) });
-          if (proof.passed) {
-            await this.publishTaskProof(worker, { kind: 'task', task, assignment: dispatchAssignment }, scopedSeed,
-              'Existing canonical helper checked against this exact task before starting a model.', {}, false,
-              { proof, current: publishable, claim });
-            return RETRY_DISPATCH;
-          }
-          dispatchAssignment.canonicalProbe = { evidence: 'advisory-canonical-check', proofAcceptance: 'not-accepted',
-            sourceCommit: scopedSeed, environmentDigest: environment, verificationStatus: proof.verification.status,
-            receiptIds, feedback: feedback! };
-        }
-        const closeTask = this.input.modules.M2.closeTask;
-        const batteryKey = canonicalMathJson([taskDigest, dependencies, environment]);
-        if (closeTask && !canonicalCandidate && leadAccess && workerAccess && checked.result.status === 'elaborated' &&
-            checked.result.context && !isDefinitionTask(task) && this.tacticBatteryCandidate(node) && !this.tacticBatteryAttempts.has(batteryKey)) {
-          // One host attempt per exact helper contract in this process; a failure is not model feedback.
-          this.tacticBatteryAttempts.add(batteryKey);
-          const batteryStarted = Date.now();
-          const battery = await closeTask({ problem: this.input.state.problem, task, worktree: worker.worktree, seedCommit: scopedSeed,
-            context: checked.result.context, env: workerAccess.environment, signal,
-            timeoutMs: Math.min(this.input.timeoutMs ?? Infinity, TACTIC_BATTERY_TIMEOUT_MS) });
-          // A superseded preparation has not tried this contract; leave it to the next eligible dispatch.
-          if (!current()) { this.tacticBatteryAttempts.delete(batteryKey); return RETRY_DISPATCH; }
-          let proof, checkError: string | undefined;
-          if (battery.status === 'closed' && battery.commit) {
-            try {
-              proof = await checker(this.input.state.problem, worker.worktree, battery.commit, task, dispatchAssignment,
-                retainedGoals(), leadAccess.environment, signal, this.input.timeoutMs, [], environment,
-                ...(checker === checkTaskProof ? [this.taskProofCache] : []));
-            } catch (error) {
-              // Host automation never blocks the ordinary model assignment.
-              if (!current()) return RETRY_DISPATCH;
-              checkError = bounded(error instanceof Error ? error.message : String(error), 600);
-            }
-          }
-          this.input.emit('task_tactic_battery', { taskId: task.id, taskDigest, workerId: worker.id, seedCommit: scopedSeed,
-            status: battery.status, reason: battery.reason, durationMs: Date.now() - batteryStarted, ...(checkError ? { checkError } : {}),
-            ...(battery.commit ? { commit: battery.commit } : {}), ...(battery.artifact ? { artifact: battery.artifact } : {}),
-            ...(battery.vacuous ? { vacuous: true } : {}), ...(proof ? { passed: proof.passed, verificationStatus: proof.verification.status,
+          const references = proof && knowledgeReferenceCoverage(task, proof);
+          this.input.emit('task_library_application', { taskId: task.id, taskDigest, workerId: worker.id, seedCommit: scopedSeed,
+            libraryDigest: library.digest, candidates: application.candidates, status: application.status, reason: application.reason,
+            durationMs: Date.now() - applicationStarted, ...(checkError ? { checkError } : {}),
+            ...(application.commit ? { commit: application.commit } : {}),
+            ...(references ? { referenceCoverage: references.coverage, usedDeclarations: application.candidates.filter(candidate =>
+              references.references?.some(reference => reference.name === candidate.name && reference.file === candidate.file)) } : {}),
+            ...(proof ? { passed: proof.passed, verificationStatus: proof.verification.status,
               receiptIds: proof.verification.results.map(result => result.receiptId) } : {}) });
           if (proof?.passed) {
-            if (!publishable()) return RETRY_DISPATCH;
-            await this.publishTaskProof(worker, { kind: 'task', task, assignment: dispatchAssignment }, battery.commit!,
-              'Host tactic battery closed this exact helper type before starting a model.' + (battery.vacuous
-                ? ' Host vacuity probe: its hypotheses alone derive False, so no consumer can discharge them; ' +
-                  'revise the helper unless it is an intended impossible case.' : ''), {}, false,
+            await this.publishTaskProof(worker, { kind: 'task', task, assignment: dispatchAssignment }, application.commit!,
+              'Host applied an installed library theorem to this exact task before starting a model.', {}, false,
               { proof, current: publishable, claim });
             return RETRY_DISPATCH;
           }
-          if (!publishable()) return RETRY_DISPATCH;
+          if (proof || checkError) node.feedback = [bounded(node.feedback ?? '', 3000),
+            'Host library application attempt (advisory): ' + JSON.stringify(application.candidates) + '\n' +
+            bounded(checkError ?? solverProofFeedback(proof!), 2000) +
+            '\nThese bounded exact/apply attempts did not close this task. Inspect the full interfaces and adapt the application or continue the proof.']
+            .filter(Boolean).join('\n\n');
+        }
+        if (task.kind === 'lemma') {
+          const checked: { result: TaskTypePreflight; current: () => boolean } = workerAccess ? await this.taskTypePreflight.check({ problem: this.input.state.problem, task,
+            projectRoot: project,
+            // A family type never names its own members, which do not exist in source until they are proved.
+            dependencies: this.dependencies(task).map(item => item.task).filter(input => input.familyMember !== task.id), environmentDigest: environment,
+            env: workerAccess.environment, signal,
+            timeoutMs: this.input.timeoutMs ?? Infinity }) : {
+              result: { status: 'unavailable', inputDigest: mathDigest(canonicalMathJson([taskDigest, environment, 'worker-environment-unavailable'])),
+                taskDigest, reason: 'worker-environment-unavailable', evidence: 'advisory-type-elaboration', proofAcceptance: 'not-assessed' },
+              current: () => !this.input.signal.aborted,
+            };
+          if (!current() || !checked.current() || git(worker.worktree, ['rev-parse', 'HEAD']) !== head ||
+              this.input.modules.M5.assign([node], worker, this.allocationPeers, this.archive.groups, this.archive.tasks, this.stoppedWorkers) !== node)
+            return RETRY_DISPATCH;
+          node.typePreflight = checked.result;
+          this.input.emit('task_type_preflight', { taskId: node.task.id, workerId: worker.id, ...checked.result });
+          if (checked.result.status === 'invalid') {
+            this.invalidTaskTypes.set(node, { canonical: seed, environment, taskDigest, dependencies, project, workerId: worker.id,
+              environmentIdentity: taskTypePreflightEnvironmentIdentity(project, workerAccess!.environment) });
+            this.moveTask(node, 'blocked', 'rejected');
+            const excerpt = typeDiagnosticExcerpt(task.type!, checked.result.reason);
+            node.feedback = 'math_task_type_invalid\n' + bounded(checked.result.reason, 2000) + (excerpt ? `\n${excerpt}` : '') +
+              (checked.result.artifact ? `\nAdvisory type diagnostics in ${worker.id}'s worktree: ${checked.result.artifact.path} (${checked.result.artifact.digest})` : '') +
+              '\nRevise the closed helper type or its context before proving it. This is not proof acceptance or a mathematical refutation.';
+            this.wakeLead('task-type-invalid'); this.changed(); return RETRY_DISPATCH;
+          }
+          const publishable = () => current() && checked.current() && taskDependenciesReady(task, this.archive.tasks) &&
+            git(worker.worktree, ['rev-parse', 'HEAD']) === head &&
+            this.input.modules.M5.assign([node], worker, this.allocationPeers, this.archive.groups, this.archive.tasks, this.stoppedWorkers) === node;
+          const assembleFamily = this.input.modules.M2.assembleFamily;
+          const familyKey = canonicalMathJson([taskDigest, dependencies, environment]);
+          if (assembleFamily && task.family && !node.assignment && leadAccess && workerAccess && checked.result.status === 'elaborated' &&
+              checked.result.context && !this.familyAssemblyAttempts.has(familyKey)) {
+            // One host assembly per exact family contract in this process; a failure falls through to a model.
+            this.familyAssemblyAttempts.add(familyKey);
+            const assemblyStarted = Date.now();
+            const assembly = await assembleFamily({ problem: this.input.state.problem, task, worktree: worker.worktree,
+              seedCommit: scopedSeed, context: checked.result.context });
+            if (!current()) { this.familyAssemblyAttempts.delete(familyKey); return RETRY_DISPATCH; }
+            // Unproved members (and other fixed lemma inputs) are bound exactly as in the ordinary conditional check.
+            const conditions = this.assignmentConditions(task, dispatchAssignment);
+            let proof, checkError: string | undefined;
+            if (assembly.commit) {
+              try {
+                proof = await checker(this.input.state.problem, worker.worktree, assembly.commit, task, dispatchAssignment,
+                  retainedGoals(), leadAccess.environment, signal, this.input.timeoutMs, conditions, environment,
+                  ...(checker === checkTaskProof ? [this.taskProofCache] : []));
+              } catch (error) {
+                if (!current()) return RETRY_DISPATCH;
+                checkError = bounded(error instanceof Error ? error.message : String(error), 600);
+              }
+            }
+            this.input.emit('task_family_assembly', { taskId: task.id, taskDigest, workerId: worker.id, seedCommit: scopedSeed,
+              status: assembly.status, reason: assembly.reason, durationMs: Date.now() - assemblyStarted,
+              assumedInputs: conditions.map(input => input.id), ...(checkError ? { checkError } : {}),
+              ...(assembly.commit ? { commit: assembly.commit } : {}), ...(proof ? { passed: proof.passed,
+                verificationStatus: proof.verification.status, receiptIds: proof.verification.results.map(result => result.receiptId) } : {}) });
+            // A conditional family starts before its members are checked, so this omits the dependency-readiness gate.
+            const assembled = () => current() && checked.current() && git(worker.worktree, ['rev-parse', 'HEAD']) === head &&
+              this.input.modules.M5.assign([node], worker, this.allocationPeers, this.archive.groups, this.archive.tasks, this.stoppedWorkers) === node;
+            if (proof?.passed) {
+              if (!assembled()) return RETRY_DISPATCH;
+              await this.publishTaskProof(worker, { kind: 'task', task, assignment: dispatchAssignment }, assembly.commit!,
+                'Host assembled this family lemma from its member lemmas before starting a model.' + (conditions.length
+                  ? ` Its check binds its ${conditions.length} lemma input(s) as explicit hypotheses; the host rechecks it unconditionally once they integrate.` : ''),
+                {}, false, { proof, current: assembled, claim });
+              return RETRY_DISPATCH;
+            }
+            if (!assembled()) return RETRY_DISPATCH;
+          }
+          const canonicalCandidate = leadAccess && workerAccess && this.canonicalHelperCandidate(node, worker, scopedSeed);
+          if (canonicalCandidate) {
+            // A failed probe is not a model delivery. Keep it outside failure memory and archive acceptance.
+            const probeStarted = Date.now();
+            let proof;
+            try {
+              proof = await checker(this.input.state.problem, worker.worktree, scopedSeed, task, dispatchAssignment,
+                retainedGoals(), leadAccess!.environment, signal, this.input.timeoutMs, [], environment,
+                ...(checker === checkTaskProof ? [this.taskProofCache] : []));
+            } catch (error) {
+              if (!current()) return RETRY_DISPATCH;
+              throw error;
+            }
+            if (!publishable()) return RETRY_DISPATCH;
+            const receiptIds = proof.verification.results.map(result => result.receiptId);
+            const feedback = !proof.passed ? bounded(solverProofFeedback(proof), 2000) : undefined;
+            this.input.emit('task_canonical_probe', { taskId: task.id, taskDigest, workerId: worker.id, seedCommit: scopedSeed,
+              passed: proof.passed, status: proof.verification.status, durationMs: Date.now() - probeStarted,
+              receiptIds, ...(feedback ? { feedback } : {}) });
+            if (proof.passed) {
+              await this.publishTaskProof(worker, { kind: 'task', task, assignment: dispatchAssignment }, scopedSeed,
+                'Existing canonical helper checked against this exact task before starting a model.', {}, false,
+                { proof, current: publishable, claim });
+              return RETRY_DISPATCH;
+            }
+            dispatchAssignment.canonicalProbe = { evidence: 'advisory-canonical-check', proofAcceptance: 'not-accepted',
+              sourceCommit: scopedSeed, environmentDigest: environment, verificationStatus: proof.verification.status,
+              receiptIds, feedback: feedback! };
+          }
+          const closeTask = this.input.modules.M2.closeTask;
+          const batteryKey = canonicalMathJson([taskDigest, dependencies, environment]);
+          if (closeTask && !canonicalCandidate && leadAccess && workerAccess && checked.result.status === 'elaborated' &&
+              checked.result.context && !isDefinitionTask(task) && this.tacticBatteryCandidate(node) && !this.tacticBatteryAttempts.has(batteryKey)) {
+            // One host attempt per exact helper contract in this process; a failure is not model feedback.
+            this.tacticBatteryAttempts.add(batteryKey);
+            const batteryStarted = Date.now();
+            const battery = await closeTask({ problem: this.input.state.problem, task, worktree: worker.worktree, seedCommit: scopedSeed,
+              context: checked.result.context, env: workerAccess.environment, signal,
+              timeoutMs: Math.min(this.input.timeoutMs ?? Infinity, TACTIC_BATTERY_TIMEOUT_MS) });
+            // A superseded preparation has not tried this contract; leave it to the next eligible dispatch.
+            if (!current()) { this.tacticBatteryAttempts.delete(batteryKey); return RETRY_DISPATCH; }
+            let proof, checkError: string | undefined;
+            if (battery.status === 'closed' && battery.commit) {
+              try {
+                proof = await checker(this.input.state.problem, worker.worktree, battery.commit, task, dispatchAssignment,
+                  retainedGoals(), leadAccess.environment, signal, this.input.timeoutMs, [], environment,
+                  ...(checker === checkTaskProof ? [this.taskProofCache] : []));
+              } catch (error) {
+                // Host automation never blocks the ordinary model assignment.
+                if (!current()) return RETRY_DISPATCH;
+                checkError = bounded(error instanceof Error ? error.message : String(error), 600);
+              }
+            }
+            this.input.emit('task_tactic_battery', { taskId: task.id, taskDigest, workerId: worker.id, seedCommit: scopedSeed,
+              status: battery.status, reason: battery.reason, durationMs: Date.now() - batteryStarted, ...(checkError ? { checkError } : {}),
+              ...(battery.commit ? { commit: battery.commit } : {}), ...(battery.artifact ? { artifact: battery.artifact } : {}),
+              ...(battery.vacuous ? { vacuous: true } : {}), ...(proof ? { passed: proof.passed, verificationStatus: proof.verification.status,
+                receiptIds: proof.verification.results.map(result => result.receiptId) } : {}) });
+            if (proof?.passed) {
+              if (!publishable()) return RETRY_DISPATCH;
+              await this.publishTaskProof(worker, { kind: 'task', task, assignment: dispatchAssignment }, battery.commit!,
+                'Host tactic battery closed this exact helper type before starting a model.' + (battery.vacuous
+                  ? ' Host vacuity probe: its hypotheses alone derive False, so no consumer can discharge them; ' +
+                    'revise the helper unless it is an intended impossible case.' : ''), {}, false,
+                { proof, current: publishable, claim });
+              return RETRY_DISPATCH;
+            }
+            if (!publishable()) return RETRY_DISPATCH;
+          }
         }
       } finally {
         this.preparingTaskTypes.delete(node); finishPreparation(); this.changed();
@@ -978,7 +1033,15 @@ export class CooperativeResearch extends CooperationInputs {
         record.status === 'awaiting-decision' && record.outcome ? [{ checkId: record.id, outcomeDeliveryId: record.outcome.deliveryId }] : []));
     const searchScope = action?.kind === 'task' ? this.proofSearchScope(action) : undefined;
     const searchRecord = searchScope && this.archive.proofSearchRecords?.[searchScope.taskId];
-    return { ...this.archive, tasks: scopedTasks, leadInbox: leadInboxView,
+    const guidance = checkpointWorkerId ? readHumanGuidance(path.join(path.dirname(this.lead.worktree), 'state.json'), this.input.state.runId)
+      .filter(item => {
+        if (item.status !== 'delivered' || !item.deliveredTo?.includes(checkpointWorkerId)) return false;
+        const target = item.deliveredScope?.taskRef ?? item.taskRef;
+        return target ? task?.id === target.id && digest(task) === target.version : !task &&
+          (!item.deliveredScope?.planVersion || item.deliveredScope.planVersion ===
+            (action?.kind === 'lead' ? action.planVersion ?? this.archive.planVersion : this.archive.planVersion));
+      }) : undefined;
+    return { ...this.archive, tasks: scopedTasks, leadInbox: leadInboxView, humanGuidance: guidance,
       researchDecisions: action?.kind === 'lead' || worker?.id === this.lead.id ? this.archive.researchDecisions : undefined,
       ...(action?.kind === 'lead' && this.presentedResearchInputs.has(action) ? {
         leadResearchInputIds: this.presentedResearchInputs.get(action)!.shown.map(record => record.id),
@@ -1154,6 +1217,11 @@ export class CooperativeResearch extends CooperationInputs {
   async deliver(worker: ResearchWorker, action: CooperativeAction, commit: string, recovering = false,
     recoveryKind: 'checkpoint' | 'request-failure' | 'scheduling-checkpoint' = 'checkpoint'): Promise<{ check?: ProofCheck; checkWhole: boolean; savedPlan?: boolean }> {
     if (isStatementAction(action)) return this.deliverStatement(worker, action);
+    // Optional handling decisions are metadata; malformed/forged ones cannot change mathematical delivery acceptance.
+    let response: any;
+    try { response = block(worker.worktree, action.kind === 'lead' ? 'math-plan' : action.kind === 'review' ? 'math-review' : 'math-result', {}, 'summary'); }
+    catch { /* Saved proof work and ordinary Markdown still follow their existing delivery protocols. */ }
+    await this.retainGuidanceDecisions(worker, action, response?.guidanceDecisions);
     if (action.kind === 'review') {
       const review = this.archive.review;
       if (!review || !this.current(action) || review.workerId !== worker.id) {
@@ -1188,6 +1256,7 @@ export class CooperativeResearch extends CooperationInputs {
     if (action.kind !== 'task') {
       const pending = this.deliverLead(worker, action, commit, recovering, recoveryKind);
       this.leadDeliveries.add(pending);
+      this.refreshPlanApproval();
       try { return await pending; } finally { this.leadDeliveries.delete(pending); this.wake(); }
     }
     const node = this.node(action.task.id);
@@ -1212,7 +1281,8 @@ export class CooperativeResearch extends CooperationInputs {
         taskChanges(this.input.state.problem, worker.worktree, commit, node.task, action.assignment);
         const notesBlob = (version: string) => git(worker.worktree, ['ls-tree', '--format=%(objectname)', version, '--', 'RESEARCH.md']);
         const inherited = notesBlob(action.assignment.seedCommit);
-        if (inherited === notesBlob(commit)) {
+        const submitted = notesBlob(commit);
+        if (!submitted || inherited === submitted) {
           unchangedNotesBlob = inherited;
           throw new Error(inherited ? 'math_research_delivery_unchanged: Replace inherited RESEARCH.md with findings for the current task.'
             : 'math_research_delivery_unchanged: Write RESEARCH.md with findings for the current task.');
@@ -1335,8 +1405,8 @@ export class CooperativeResearch extends CooperationInputs {
   waitForTurn(maxTurns: number): Promise<void> | undefined {
     return this.input.state.turns >= maxTurns && this.reservedTurns.size ? this.wait() : undefined;
   }
-  reserveTurn(worker: ResearchWorker) { this.reservedTurns.add(worker.id); }
-  settleTurn(worker: ResearchWorker) { if (this.reservedTurns.delete(worker.id)) this.wake(); }
+  reserveTurn(worker: ResearchWorker) { this.reservedTurns.add(worker.id); this.refreshPlanApproval(); }
+  settleTurn(worker: ResearchWorker) { if (this.reservedTurns.delete(worker.id)) { this.refreshPlanApproval(); this.wake(); } }
   release(worker: ResearchWorker, action: CooperativeAction) {
     if (action.kind === 'task' && this.current(action)) {
       const node = this.node(action.task.id);

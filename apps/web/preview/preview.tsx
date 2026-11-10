@@ -170,9 +170,9 @@ function Preview() {
       <Specimen id="topbar" title="Topbar" note="Connected with a live run and an account; offline without them.">
         <Mount class="topbar" data-variant="live" draw={root => renderTopbar(root, { history: { docked: true, expanded: true }, model: 'deepseek-flash', connection: { tone: 'ready', label: t('环境就绪') },
           settingsDisabled: false, mac: false, account: 'reader@example.com', live: { label: t('构造证明'), detail: '6:18', tone: 'running', count: 1 },
-          onHistory: noop, onDraft: noop, onSettings: noop, onPalette: () => palette.open(), onLive: noop, onAccount: noop, onGlossary: noop, onLocale: noop })} />
+          onHistory: noop, onHome: noop, onDraft: noop, onSettings: noop, onPalette: () => palette.open(), onLive: noop, onAccount: noop, onGlossary: noop, onLocale: noop })} />
         <Mount class="topbar" data-variant="offline" draw={root => renderTopbar(root, { history: { docked: false, expanded: false }, model: 'deepseek-flash', connection: { tone: 'offline', label: t('连接中断') },
-          settingsDisabled: true, mac: true, onHistory: noop, onDraft: noop, onSettings: noop, onPalette: noop, onLive: noop, onAccount: noop, onGlossary: noop, onLocale: noop })} />
+          settingsDisabled: true, mac: true, onHistory: noop, onHome: noop, onDraft: noop, onSettings: noop, onPalette: noop, onLive: noop, onAccount: noop, onGlossary: noop, onLocale: noop })} />
         {/* The docked history button controls the workbench's sidebar; this stands in for it. */}
         <div id="history-sidebar" hidden />
       </Specimen>

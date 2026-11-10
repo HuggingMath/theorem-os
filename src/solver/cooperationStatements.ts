@@ -79,6 +79,7 @@ export abstract class CooperationStatements extends CooperationCore {
         this.wake();
       });
     this.preparingStatements = pending;
+    this.refreshPlanApproval();
     return pending;
   }
   protected syncStatementReviews(invalidated = new Set<string>()) {

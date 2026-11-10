@@ -122,9 +122,159 @@ describe('owned conversation names and deletion', () => {
     expect(restarted.list('alice')).toEqual([]);
     expect(run.status).toBe('running');
   });
+
+  it.each(['before', 'after'] as const)('still aborts an answer when deletion fails %s removing its record, and allows deletion retry', async when => {
+    let input!: WebExplainCall, signal!: AbortSignal, finish!: (answer: { answer: string }) => void;
+    const { service, run, storage } = fixture(undefined, (_owner, request, active) => {
+      input = request; signal = active; return new Promise(resolve => { finish = resolve; });
+    });
+    cleanups.push(async () => { finish?.({ answer: 'cleanup' }); await service.close(); });
+    const conversation = service.create('alice', { runId: run.id });
+    service.send('alice', conversation.id, '删除前的问题', call); await tick();
+    input.onText!('已保存的部分');
+    const remove = storage.deleteRecord.bind(storage);
+    vi.spyOn(storage, 'deleteRecord').mockImplementationOnce(where => {
+      if (when === 'after') remove(where);
+      throw new Error('delete unavailable');
+    });
+    expect(() => service.delete('alice', conversation.id)).toThrow('delete unavailable');
+    expect(signal.aborted).toBe(true);
+    input.onText!('删除后迟到的文本'); finish({ answer: '删除后迟到的回答' }); await tick();
+    if (when === 'before') {
+      expect(storedConversation(storage, conversation.id).messages.at(-1)).toMatchObject({ status: 'interrupted', text: '已保存的部分' });
+      service.delete('alice', conversation.id);
+    }
+    expect(storedConversation(storage, conversation.id)).toBeUndefined();
+    const reopened = service.create('alice', { runId: run.id });
+    expect(reopened.id).not.toBe(conversation.id);
+    expect(() => service.send('alice', reopened.id, '新对话的问题', call)).not.toThrow(); await tick();
+  });
 });
 
 describe('streaming conversation persistence', () => {
+  it.each(['immediate', 'delayed'] as const)('aborts an answer without throwing from its %s text checkpoint when persistence fails', async when => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    let input!: WebExplainCall, signal!: AbortSignal, finish!: (answer: { answer: string }) => void;
+    const { service, run, storage } = fixture(undefined, (_owner, request, active) => {
+      input = request; signal = active; return new Promise(resolve => { finish = resolve; });
+    });
+    const save = vi.spyOn(storage, 'saveRecord');
+    cleanups.push(async () => { save.mockRestore(); finish?.({ answer: 'cleanup' }); await service.close().catch(() => {}); });
+    const conversation = service.create('alice', { runId: run.id });
+    service.send('alice', conversation.id, '解释保存故障', call); await tick();
+    if (when === 'delayed') input.onText!('第一个检查点');
+    save.mockImplementationOnce(() => { throw new Error(`disk unavailable ${key}`); });
+    if (when === 'immediate') expect(() => input.onText!('未能保存的部分')).not.toThrow();
+    else {
+      input.onText!('未能保存的部分');
+      expect(() => vi.advanceTimersByTime(250)).not.toThrow();
+    }
+    expect(signal.aborted).toBe(true);
+    input.onText!('取消后迟到的文本'); finish({ answer: '取消后迟到的完整回答' }); await tick();
+    const reply = storedConversation(storage, conversation.id).messages.at(-1)!;
+    expect(reply).toMatchObject({ status: 'error', text: '未能保存的部分', error: expect.stringContaining('保存') });
+    expect(JSON.stringify(reply)).not.toContain(key);
+    expect(() => service.send('alice', conversation.id, '恢复后的新问题', call)).not.toThrow(); await tick();
+  });
+
+  it('still aborts the provider when flushing text during stop fails', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    let input!: WebExplainCall, signal!: AbortSignal, finish!: (answer: { answer: string }) => void;
+    const { service, run, storage } = fixture(undefined, (_owner, request, active) => {
+      input = request; signal = active; return new Promise(resolve => { finish = resolve; });
+    });
+    const save = vi.spyOn(storage, 'saveRecord');
+    cleanups.push(async () => { save.mockRestore(); finish?.({ answer: 'cleanup' }); await service.close().catch(() => {}); });
+    const conversation = service.create('alice', { runId: run.id });
+    service.send('alice', conversation.id, '停止前保存', call); await tick();
+    input.onText!('已保存'); input.onText!('最后一段');
+    save.mockImplementationOnce(() => { throw new Error('disk unavailable'); });
+    expect(() => service.stop('alice', conversation.id)).toThrow('disk unavailable');
+    expect(signal.aborted).toBe(true);
+    finish({ answer: '停止后完成' }); await tick();
+    expect(storedConversation(storage, conversation.id).messages.at(-1)).toMatchObject({ status: 'interrupted', text: '最后一段' });
+  });
+
+  it.each(['before', 'after'] as const)('releases an answer after its final save fails %s writing, preserving an already-saved completion', async when => {
+    let finish!: (answer: { answer: string }) => void, attempts = 0;
+    const { service, run, storage } = fixture(undefined, async () => {
+      if (++attempts > 1) return { answer: '恢复后的回答' };
+      return new Promise(resolve => { finish = resolve; });
+    });
+    const persist = storage.saveRecord.bind(storage), save = vi.spyOn(storage, 'saveRecord');
+    cleanups.push(async () => { save.mockRestore(); finish?.({ answer: 'cleanup' }); await service.close().catch(() => {}); });
+    const conversation = service.create('alice', { runId: run.id });
+    service.send('alice', conversation.id, '完成前保存', call); await tick();
+    save.mockImplementationOnce((where, value, immutable) => {
+      if (when === 'after') persist(where, value, immutable);
+      throw new Error(`disk unavailable ${key}`);
+    });
+    finish({ answer: '完整回答' }); await tick();
+    expect(storedConversation(storage, conversation.id).messages.at(-1)).toMatchObject({ status: when === 'after' ? 'complete' : 'error' });
+    expect(() => service.send('alice', conversation.id, '恢复后再问', call)).not.toThrow(); await tick();
+    expect(storedConversation(storage, conversation.id).messages.at(-1)).toMatchObject({ status: 'complete', text: '恢复后的回答' });
+    expect(JSON.stringify(storedConversation(storage, conversation.id))).not.toContain(key);
+  });
+
+  it('starts a stopped answer replacement after the old provider cleanup fails to read its checkpoint', async () => {
+    let finish!: (answer: { answer: string }) => void, attempts = 0;
+    const { service, run, storage } = fixture(undefined, async () => {
+      if (++attempts > 1) return { answer: '新回答' };
+      return new Promise(resolve => { finish = resolve; });
+    });
+    const read = vi.spyOn(storage, 'getRecord');
+    cleanups.push(async () => { read.mockRestore(); finish?.({ answer: 'cleanup' }); await service.close().catch(() => {}); });
+    const conversation = service.create('alice', { runId: run.id });
+    service.send('alice', conversation.id, '旧问题', call); await tick();
+    service.stop('alice', conversation.id);
+    service.send('alice', conversation.id, '新问题', call);
+    read.mockImplementationOnce(() => { throw new Error('checkpoint unavailable'); });
+    finish({ answer: '旧回答' }); await tick();
+    expect(attempts).toBe(2);
+    expect(storedConversation(storage, conversation.id).messages.at(-1)).toMatchObject({ status: 'complete', text: '新回答' });
+  });
+
+  it('waits for every provider cleanup before reporting a failed shutdown save', async () => {
+    const storage = new WebStorage(), { run } = fixture();
+    const finishes: (() => void)[] = [], signals: AbortSignal[] = [];
+    const service = new WebConversations(storage, { run: (_owner, id) => id === run.id ? run : undefined, formalization: () => undefined },
+      (_owner, _input, signal) => new Promise(resolve => { signals.push(signal); finishes.push(() => resolve({ answer: 'late completion' })); }));
+    const save = vi.spyOn(storage, 'saveRecord');
+    cleanups.push(async () => { save.mockRestore(); for (const finish of finishes) finish(); await service.close().catch(() => {}); });
+    for (const owner of ['alice', 'bob']) {
+      const conversation = service.create(owner, { runId: run.id }); service.send(owner, conversation.id, '解释', call);
+    }
+    await tick();
+    save.mockImplementation(() => { throw new Error('disk unavailable'); });
+    let closed = false;
+    const closing = service.close().then(() => { closed = true; return undefined; }, error => { closed = true; return error; });
+    expect(signals.every(signal => signal.aborted)).toBe(true);
+    finishes[0]!(); await tick();
+    expect(closed).toBe(false);
+    finishes[1]!();
+    expect(await closing).toMatchObject({ message: 'disk unavailable' });
+  });
+
+  it('does not access deleted owner data when a forgotten answer flushes or finishes', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    let input!: WebExplainCall, finish!: (answer: { answer: string }) => void;
+    const { service, run, storage } = fixture(undefined, (_owner, request) => {
+      input = request; return new Promise(resolve => { finish = resolve; });
+    });
+    const read = vi.spyOn(storage, 'getRecord');
+    cleanups.push(async () => { read.mockRestore(); finish?.({ answer: 'cleanup' }); await service.close().catch(() => {}); });
+    const conversation = service.create('alice', { runId: run.id });
+    service.send('alice', conversation.id, '账号清理前的问题', call); await tick();
+    input.onText!('已保存'); input.onText!('缓冲文本');
+    service.forget('alice'); storage.deleteOwner('alice');
+    read.mockImplementation(() => { throw new Error('owner data unavailable'); });
+    expect(() => vi.advanceTimersByTime(250)).not.toThrow();
+    finish({ answer: '删除后完成' });
+    await expect(service.close()).resolves.toBeUndefined();
+    read.mockRestore();
+    expect(storedConversation(storage, conversation.id)).toBeUndefined();
+  });
+
   it('persists onText before completion, coalesces updates, and saves the final answer and truncation state', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     let input!: WebExplainCall, finish!: (answer: { answer: string; truncated?: true }) => void;
@@ -193,6 +343,24 @@ describe('streaming conversation persistence', () => {
 });
 
 describe('conversation guidance persists the original command and its real receipt', () => {
+  it.each(['delivered', 'failed', 'rejected'] as const)('keeps a recorded %s outcome when an older queued acknowledgement returns', async status => {
+    const { service, run, storage, receipts } = fixture();
+    const conversation = service.create('alice', { runId: run.id }), input = guidanceInput();
+    let finish!: (receipt: WebCommandResult) => void;
+    const pending = service.guide('alice', conversation.id, input, () => new Promise(resolve => { finish = resolve; }));
+    const at = new Date().toISOString(), reason = status === 'delivered' ? undefined : '记录的终态原因';
+    receipts.set(input.id, { id: input.id, status, reason, ...(status === 'rejected' ? {} : {
+      guidance: { ...input, status, reason, createdAt: at, updatedAt: at, ...(status === 'delivered' ? { deliveredTo: ['engineer-2'] } : {}) },
+    }) });
+    finish({ id: input.id, status: 'queued' });
+    const returned = await pending;
+    const expected = { status: status === 'delivered' ? 'complete' : 'error',
+      guidance: { receipt: { status, ...(status === 'delivered' ? { deliveredTo: ['engineer-2'] } : { reason }) } } };
+    expect(returned.messages.at(-1)).toMatchObject(expected);
+    expect(storedConversation(storage, conversation.id).messages.at(-1)).toMatchObject(expected);
+    expect(storedConversation(storage, conversation.id).messages.filter(message => message.kind === 'guidance')).toHaveLength(1);
+  });
+
   it('saves the exact payload before sending, persists its receipt, and rejects another owner or changed content under the same ID', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'web-conversation-guidance-'));
     cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -249,6 +417,103 @@ describe('conversation guidance persists the original command and its real recei
 });
 
 describe('persistent conversations use saved owned task context', () => {
+  it('recovers the same accepted send during answering, after completion and after restart without calling the provider again', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'web-message-receipt-'));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    let finish!: (answer: { answer: string }) => void;
+    const answer = vi.fn(async () => new Promise<{ answer: string }>(resolve => { finish = resolve; }));
+    const { service, run, storage, resources } = fixture(new WebStorage(root), answer);
+    cleanups.push(async () => { finish?.({ answer: 'cleanup' }); await service.close(); });
+    const conversation = service.create('alice', { runId: run.id });
+    const first = service.send('alice', conversation.id, '  请解释原问题  ', call, 'send-original'); await tick();
+    const duplicate = service.send('alice', conversation.id, '请解释原问题', call, 'send-original');
+    expect(duplicate.messages.map(message => message.id)).toEqual(first.messages.map(message => message.id));
+    expect(duplicate.messages.at(-1)).toMatchObject({ status: 'pending' }); expect(answer).toHaveBeenCalledTimes(1);
+    expect(() => service.send('alice', conversation.id, '另一条内容', call, 'send-original')).toThrow('另一条问题');
+    expect(() => service.messageReceipt('bob', conversation.id, 'send-original', '请解释原问题')).toThrow('不存在');
+    finish({ answer: '已保存回答' }); await tick();
+    expect(service.send('alice', conversation.id, '请解释原问题', call, 'send-original').messages.at(-1)).toMatchObject({ text: '已保存回答', status: 'complete' });
+    expect(answer).toHaveBeenCalledTimes(1);
+    const restartedAnswer = vi.fn(async () => ({ answer: '不应调用' }));
+    const restarted = new WebConversations(new WebStorage(root), resources, restartedAnswer);
+    expect(restarted.send('alice', conversation.id, '请解释原问题', call, 'send-original').messages.at(-1)).toMatchObject({ text: '已保存回答' });
+    expect(restartedAnswer).not.toHaveBeenCalled();
+    expect(JSON.stringify(storedConversation(storage, conversation.id))).not.toContain(key);
+    await restarted.close();
+  });
+
+  it('allows identical questions as new explicit sends and preserves no-ID callers', async () => {
+    const { service, run, calls } = fixture();
+    const conversation = service.create('alice', { runId: run.id });
+    for (const requestId of ['first', 'second', undefined, undefined]) {
+      service.send('alice', conversation.id, '相同问题', call, requestId); await tick();
+    }
+    expect(calls).toHaveLength(4);
+    const questions = service.read('alice', conversation.id).messages.filter(message => message.role === 'user' && message.text === '相同问题');
+    expect(questions).toHaveLength(4); expect(new Set(questions.map(message => message.id)).size).toBe(4);
+    expect(questions.map(message => message.requestId)).toEqual(['first', 'second', undefined, undefined]);
+    await service.close();
+  });
+
+  it('returns the saved interruption for the original send after restart instead of starting another answer', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'web-message-restart-'));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    let finish!: (answer: { answer: string }) => void;
+    const { service, run, resources } = fixture(new WebStorage(root), async () => new Promise(resolve => { finish = resolve; }));
+    cleanups.push(async () => { finish?.({ answer: 'cleanup' }); await service.close(); });
+    const conversation = service.create('alice', { runId: run.id });
+    service.send('alice', conversation.id, '中断前的问题', call, 'interrupted-send'); await tick();
+    const answer = vi.fn(async () => ({ answer: '不应自动重答' }));
+    const restarted = new WebConversations(new WebStorage(root), resources, answer);
+    expect(restarted.send('alice', conversation.id, '中断前的问题', call, 'interrupted-send').messages.at(-1)).toMatchObject({ status: 'interrupted' });
+    expect(answer).not.toHaveBeenCalled(); await restarted.close();
+  });
+
+  it('uses the newly associated research and current formalization when a replacement waits for old provider cleanup', async () => {
+    let finish!: (answer: { answer: string }) => void;
+    const inputs: WebExplainCall[] = [];
+    const { service, run, formalization, resources, storage } = fixture(undefined, async (_owner, request) => {
+      inputs.push(request);
+      return inputs.length === 1 ? new Promise(resolve => { finish = resolve; }) : { answer: '依据最新研究回答。' };
+    });
+    cleanups.push(async () => { finish?.({ answer: 'cleanup' }); await service.close(); });
+    // The real formalization reader projects review/confirmed records into fresh objects.
+    resources.formalization = (owner, id) => owner === 'alice' && id === formalization.id ? structuredClone(formalization) : undefined;
+    const conversation = service.create('alice', { formalizationId: formalization.id });
+    service.send('alice', conversation.id, '旧问题', call); await tick();
+    service.stop('alice', conversation.id);
+    service.send('alice', conversation.id, '新研究完成了吗？', call); await tick();
+    expect(inputs).toHaveLength(1);
+    formalization.status = 'confirmed'; formalization.runId = run.id; run.formalizationId = formalization.id;
+    run.status = 'completed'; run.result = { status: 'evaluated_passed', proof: 'theorem latest_evidence : True := by trivial', report: { accepted: true } };
+    finish({ answer: '迟到的旧回答' }); await tick();
+    expect(inputs).toHaveLength(2);
+    const context = JSON.stringify(inputs[1]!.input);
+    for (const part of [run.source, run.result.proof, 'confirmed', 'evaluated_passed']) expect(context).toContain(part);
+    expect(storedConversation(storage, conversation.id)).toMatchObject({ runId: run.id });
+    expect(storedConversation(storage, conversation.id).messages.at(-1)).toMatchObject({ status: 'complete', text: '依据最新研究回答。' });
+  });
+
+  it('omits removed research evidence when a replacement starts after the task was deleted', async () => {
+    let finish!: (answer: { answer: string }) => void;
+    const inputs: WebExplainCall[] = [];
+    const { service, run, resources } = fixture(undefined, async (_owner, request) => {
+      inputs.push(request);
+      return inputs.length === 1 ? new Promise(resolve => { finish = resolve; }) : { answer: '当前研究记录已不在。' };
+    });
+    cleanups.push(async () => { finish?.({ answer: 'cleanup' }); await service.close(); });
+    run.status = 'completed'; run.result = { status: 'evaluated_passed', proof: 'theorem removed_evidence : True := by trivial', report: { accepted: true } };
+    const conversation = service.create('alice', { runId: run.id });
+    service.send('alice', conversation.id, '旧问题', call); await tick();
+    service.stop('alice', conversation.id);
+    service.send('alice', conversation.id, '还有什么记录？', call); await tick();
+    resources.run = () => undefined;
+    finish({ answer: '迟到的旧回答' }); await tick();
+    expect(inputs).toHaveLength(2);
+    expect(JSON.stringify(inputs[1]!.input)).not.toContain(run.result.proof);
+    expect(service.read('alice', conversation.id).messages.at(-1)).toMatchObject({ status: 'complete', text: '当前研究记录已不在。' });
+  });
+
   it('associates owned resources idempotently and follows the formalization into its run', () => {
     const { service, run, formalization } = fixture();
     const created = service.create('alice', { formalizationId: formalization.id });
@@ -263,6 +528,59 @@ describe('persistent conversations use saved owned task context', () => {
     expect(service.create('alice', { runId: run.id }).id).toBe(created.id);
     expect(service.list('alice')).toHaveLength(1);
     expect(() => service.create('alice', { formalizationId: crypto.randomUUID(), runId: run.id })).toThrow('不存在');
+  });
+
+  it.each(['retry', 'continuation'] as const)('opens a distinct, idempotent conversation for a %s of the same formalization', async kind => {
+    const { service, run, formalization, resources, calls } = fixture();
+    const primary = service.create('alice', { formalizationId: formalization.id });
+    run.formalizationId = formalization.id; run.status = 'cancelled';
+    formalization.runId = run.id; formalization.status = 'confirmed';
+    const next: WebRun = { ...run, id: crypto.randomUUID(), status: 'running', task: `Prove using ${kind}`,
+      ...(kind === 'continuation' ? { continueFrom: { runId: run.id, taskId: 'goal', commit: 'a'.repeat(40), label: 'Recorded proof' } } : {}) };
+    const runs = new Map([[run.id, run], [next.id, next]]);
+    resources.run = (owner, id) => owner === 'alice' ? runs.get(id) : undefined;
+    const created = service.create('alice', { runId: next.id,
+      ...(kind === 'continuation' ? { formalizationId: formalization.id } : {}) });
+    expect(created.id).not.toBe(primary.id);
+    expect(created).toMatchObject({ runId: next.id, formalizationId: formalization.id });
+    expect(created.messages[0]?.text).toBe(formalization.original);
+    expect(service.create('alice', { runId: next.id }).id).toBe(created.id);
+    expect(service.create('alice', { formalizationId: formalization.id }).id).toBe(primary.id);
+    expect(service.read('alice', primary.id).runId).toBe(run.id);
+    expect(service.list('alice').map(item => [item.id, item.runId])).toEqual(expect.arrayContaining([
+      [primary.id, run.id], [created.id, next.id],
+    ]));
+    expect(service.list('alice')).toHaveLength(2);
+    expect(() => service.create('bob', { runId: next.id })).toThrow('不存在');
+    expect(() => service.read('bob', created.id)).toThrow('不存在');
+    service.send('alice', created.id, '请解释当前任务及原题。', call); await tick();
+    const context = JSON.stringify(calls.at(-1)?.input);
+    expect(context).toContain(formalization.original);
+    expect(context).toContain(next.task);
+    expect(context).not.toContain(run.task);
+  });
+
+  it('preserves a saved explicit run through read, list, restart and deletion while its primary still exists', () => {
+    const { service, run, formalization, resources, storage } = fixture();
+    run.formalizationId = formalization.id;
+    const created = service.create('alice', { runId: run.id });
+    const primary: WebRun = { ...run, id: crypto.randomUUID(), status: 'cancelled' };
+    formalization.runId = primary.id;
+    resources.run = (owner, id) => owner === 'alice' ? id === run.id ? run : id === primary.id ? primary : undefined : undefined;
+    expect(service.read('alice', created.id).runId).toBe(run.id);
+    expect(service.list('alice')[0]?.runId).toBe(run.id);
+    expect(storedConversation(storage, created.id).runId).toBe(run.id);
+    const restarted = new WebConversations(storage, resources, async () => ({ answer: 'unused' }));
+    expect(restarted.create('alice', { runId: run.id }).id).toBe(created.id);
+    // Removing this run keeps its history and association, rather than substituting the formalization's primary.
+    resources.run = (owner, id) => owner === 'alice' && id === primary.id ? primary : undefined;
+    expect(restarted.read('alice', created.id)).toMatchObject({ runId: run.id, messages: created.messages });
+    expect(restarted.list('alice')[0]?.runId).toBe(run.id);
+    restarted.delete('alice', created.id);
+    expect(restarted.list('alice')).toEqual([]);
+    expect(restarted.create('alice', { formalizationId: formalization.id })).toMatchObject({ runId: primary.id, formalizationId: formalization.id });
+    expect(resources.run('alice', primary.id)).toBe(primary);
+    expect(resources.formalization('alice', formalization.id)).toBe(formalization);
   });
 
   it('opens a Lean run with its request and its source as a Lean block, titled like the run', () => {
@@ -439,6 +757,27 @@ describe('conversation HTTP boundary with local fake provider only', () => {
     expect(saved.messages.at(-1)).toMatchObject({ status: 'complete', text: '来自本地模拟服务的回答。' });
     expect(seen[0]?.instructions).toBe(webConversationInstructions);
     expect(JSON.stringify(seen[0]?.input)).toContain(run.source);
+    const identified = { text: '按发送身份恢复', apiKey: key, requestId: 'http-send-1' };
+    for (const requestId of ['', 'bad/id', 'x'.repeat(129)]) expect((await fetch(route + '/messages', {
+      method: 'POST', headers, body: JSON.stringify({ ...identified, requestId }) })).status).toBe(400);
+    const identifiedResponse = await fetch(route + '/messages', { method: 'POST', headers, body: JSON.stringify(identified) });
+    expect(identifiedResponse.status).toBe(202);
+    const identifiedFirst = (await identifiedResponse.json() as { conversation: WebConversation }).conversation;
+    // Acceptance can be recovered without the key even after maintenance begins. It dispatches no new answer.
+    service.storage.saveRecord(['operations', 'maintenance.json'], { enabled: true });
+    const recovered = await fetch(route + '/messages', { method: 'POST', headers, body: JSON.stringify({ ...identified, apiKey: '' }) });
+    expect(recovered.status).toBe(202);
+    expect((await recovered.json() as { conversation: WebConversation }).conversation.messages.map(message => message.id))
+      .toEqual(identifiedFirst.messages.map(message => message.id));
+    expect((await fetch(route + '/messages', { method: 'POST', headers, body: JSON.stringify({ ...identified, text: '不能更换原内容' }) })).status).toBe(409);
+    expect((await fetch(route + '/messages', { method: 'POST', headers, body: JSON.stringify({ ...identified, requestId: 'http-send-new' }) })).status).toBe(503);
+    service.storage.saveRecord(['operations', 'maintenance.json'], { enabled: false });
+    for (let i = 0; i < 100; i++) {
+      saved = (await (await fetch(route, { headers })).json() as { conversation: WebConversation }).conversation;
+      if (saved.messages.at(-1)?.status === 'complete') break;
+      await tick();
+    }
+    expect(seen).toHaveLength(2);
     const other = await fetch(`${base}/api/session`), otherCookie = other.headers.get('set-cookie')!.split(';')[0]!;
     expect((await fetch(route, { headers: { Cookie: otherCookie } })).status).toBe(404);
     const otherSession = await other.json() as WebSession;
@@ -469,7 +808,7 @@ describe('conversation HTTP boundary with local fake provider only', () => {
     const reopened = await fetch(`${base}/api/conversations`, { method: 'POST', headers, body: JSON.stringify({ runId: run.id }) });
     expect(reopened.status).toBe(201);
     expect((await reopened.json() as { conversation: WebConversation }).conversation.id).not.toBe(conversation.id);
-    expect(seen).toHaveLength(1);
+    expect(seen).toHaveLength(2);
   });
 
   it('refuses a rename after logout while its body is still arriving', async () => {

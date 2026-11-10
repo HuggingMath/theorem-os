@@ -187,7 +187,7 @@ export function ProblemCard(props: { problemId: string; original: string; corres
     </header>
     <OriginalText original={props.original} correspondences={props.correspondences} active={props.active} />
     <p class="formal-note"><Icon name="shield-check" /><span>{!pieces.length
-      ? t('主定理的陈述来自一份通过审核的形式化，审核模型逐项对照过原题和 Lean 陈述。')
+      ? t('主定理的 Lean 陈述由原题形式化生成，未记录逐项审核对应。')
       : wider ? t('主定理的陈述来自一份通过审核的形式化，审核模型逐项对照过原题和 Lean 陈述。点原文中划线的片段，标出对应的 Lean；再点一次，选中包含它的更长片段。')
         : t('主定理的陈述来自一份通过审核的形式化，审核模型逐项对照过原题和 Lean 陈述。点原文中划线的片段，标出对应的 Lean。')}</span></p>
     {props.correspondences.length > 0 && <details class="explain-reviews formal-problem-details">
