@@ -97,6 +97,9 @@ const needsPoll = (item: WebFormalization) => active(item) || backgroundReviewPe
 const statusNames: Record<WebFormalization['status'], string> = { queued: t('等待执行'), running: t('生成中'), review: t('待你确认'), confirmed: t('已确认陈述'), exhausted: t('未在预算内完成'), cancelled: t('已取消'), error: t('生成失败') };
 const phaseNames: Record<string, string> = { queued: t('等待执行'), preparing: t('准备环境'), planning: t('规划陈述'), generating: t('编写 Lean'), compiling: t('检查 Lean 编译'), translating: t('独立回译'), reviewing: t('审核原题一致性'), finishing: t('整理形式化结果') };
 function statusName(item: WebFormalization) {
+  if (item.compiled && ['queued', 'running'].includes(item.status)) return item.runId
+    ? t('证明与后台审核同时进行') : t('Lean 陈述已编译，原题含义审核中');
+  if (['error', 'exhausted', 'cancelled'].includes(item.status)) return statusNames[item.status];
   if (!solving(item)) return statusNames[item.status];
   if (item.researchError) return t('证明研究未启动');
   if (item.runId) return t('已进入证明研究');
@@ -217,17 +220,19 @@ function drawCurrent() {
   const automatic = solving(item);
   const direct = item.reviewMode === 'direct';
   $('#formalize-stages').hidden = !automatic;
-  const stage = item.status === 'confirmed' ? 'research' : (direct ? ['compiling', 'finishing'] : ['translating', 'reviewing', 'finishing']).includes(item.progress?.phase ?? '') ? 'review' : 'formalize';
+  const stage = item.runId || item.status === 'confirmed' ? 'research' : (direct ? ['compiling', 'finishing'] : ['translating', 'reviewing', 'finishing']).includes(item.progress?.phase ?? '') ? 'review' : 'formalize';
   for (const node of shell.querySelectorAll<HTMLElement>('[data-stage]')) {
     if (node.dataset.stage === 'review') node.textContent = direct ? t('检查 Lean 编译') : t('检查原题一致性');
     if (node.dataset.stage === stage) node.setAttribute('aria-current', 'step'); else node.removeAttribute('aria-current');
   }
   const researchStatus = $('#formalize-research-status'); researchStatus.hidden = !automatic;
   researchStatus.textContent = item.researchError ? t('原题形式化已完成，但证明研究未能启动。没有生成证明结果，可重新发起解题。')
+    : item.runId && ['queued', 'running'].includes(item.status) ? t('证明与原题含义审核同时进行，已有代码可以立即使用。')
     : item.runId ? direct ? t('Lean 编译通过，已进入证明研究。是否完成证明以最终独立验收为准。') : t('原题检查已通过，已进入证明研究。是否完成证明以最终 Lean 验证结果为准。')
     : item.status === 'confirmed' ? direct ? t('Lean 编译通过，正在创建证明研究。') : t('原题检查已通过，正在创建证明研究。')
-    : direct ? t('正在生成并编译 Lean 陈述，通过后自动开始证明。') : t('正在形式化并检查原题。通过后自动开始证明，无需再次确认。');
-  if (['error', 'exhausted', 'cancelled'].includes(item.status)) researchStatus.textContent = t('形式化尚未完成，未启动证明研究。');
+    : direct ? t('正在生成并编译 Lean 陈述，通过后自动开始证明。') : t('正在生成 Lean 陈述，编译完成后开始证明，原题含义审核在后台继续。');
+  if (['error', 'exhausted', 'cancelled'].includes(item.status)) researchStatus.textContent = item.runId
+    ? t('原题含义审核已停止，候选陈述与已有证明记录已保留。') : t('形式化尚未完成，未启动证明研究。');
   $('#formalize-result').hidden = !item.runId;
   const resultLink = $<HTMLAnchorElement>('#formalize-result-link');
   if (item.runId) resultLink.href = `/?run=${encodeURIComponent(item.runId)}`; else resultLink.removeAttribute('href');
@@ -240,12 +245,13 @@ function drawCurrent() {
     const button = document.createElement('button'); button.className = 'button'; button.type = 'button'; button.textContent = label; button.dataset.action = name;
     button.addEventListener('click', handler); actions.append(button);
   }
-  if (item.status === 'queued' || item.status === 'running') action(t('取消生成'), 'cancel', () => void mutate('cancel'));
+  if (item.status === 'queued' || item.status === 'running') action(item.runId ? t('停止解题与审核') : t('取消生成'), 'cancel', () => void mutate('cancel'));
   else action(t('复制原题到输入框'), 'reuse', () => {
     if (!mayReplaceOriginal(item)) return;
     loadOriginal(item); original.focus(); original.scrollIntoView({ block: 'center' });
   });
   if (!active(item)) action(t('删除记录'), 'delete', () => void remove());
+  drawCompiled(item);
   $('#formalize-review').hidden = !item.report;
   if (item.report) {
     const newStatement = report?.evidenceSha256 !== item.report.evidenceSha256;
@@ -264,6 +270,35 @@ function drawCurrent() {
   controls();
   if (embedded && autoOpen === item.id && item.runId && matchesInput(item) && document.body.dataset.entry === 'natural') {
     autoOpen = ''; window.postMessage({ type: 'theoremos:natural-run', id: item.runId }, location.origin);
+  }
+}
+/** The compiler's frozen source is usable before a semantic report exists. */
+function drawCompiled(item: WebFormalization) {
+  let section = shell.querySelector<HTMLDetailsElement>('#formalize-compiled');
+  if (!section && item.compiled) {
+    section = document.createElement('details'); section.id = 'formalize-compiled'; section.open = true;
+    const heading = document.createElement('summary'); heading.textContent = t('已编译的候选 Lean 陈述');
+    const actions = document.createElement('div'); actions.className = 'formalize-actions';
+    const copy = document.createElement('button'); copy.type = 'button'; copy.className = 'text-button'; copy.dataset.compiledCopy = '';
+    copy.textContent = t('复制代码'); copy.addEventListener('click', () => {
+      const source = state.item?.compiled?.source;
+      if (!source) return;
+      void (navigator.clipboard?.writeText(source) ?? Promise.reject()).then(() => { copy.textContent = t('代码已复制'); },
+        () => error(t('复制失败，请选择代码复制。')));
+    });
+    const download = document.createElement('a'); download.className = 'text-button'; download.dataset.compiledDownload = '';
+    download.textContent = t('下载 Lean'); download.download = 'Formalization.lean';
+    const code = document.createElement('pre'); code.tabIndex = 0; code.translate = false;
+    actions.append(copy, download); section.append(heading, actions, code);
+    $('#formalize-review').before(section);
+  }
+  if (!section) return;
+  section.hidden = !item.compiled || Boolean(item.report);
+  if (item.compiled && section.dataset.digest !== item.compiled.digest) {
+    section.dataset.digest = item.compiled.digest;
+    section.querySelector('pre')!.textContent = item.compiled.source;
+    section.querySelector<HTMLAnchorElement>('[data-compiled-download]')!.href = `data:text/plain;charset=utf-8,${encodeURIComponent(item.compiled.source)}`;
+    section.querySelector('[data-compiled-copy]')!.textContent = t('复制代码');
   }
 }
 async function select(id: string) {

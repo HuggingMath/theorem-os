@@ -1,3 +1,5 @@
+import type { WebRun } from './shared';
+
 /** Personal research tools use the same visibility rules as their source records. */
 export type ResearchSearchKind = 'problem' | 'conversation' | 'lemma' | 'route' | 'library' | 'history' | 'decision' | 'stage';
 export type ResearchHistoryRecord = {
@@ -47,7 +49,8 @@ export type ResearchBriefDecision = {
 export type ResearchBrief = {
   schema: 'theorem-os.research-brief.v1'; generatedAt: string; title: string; statement: string; leanStatement: string;
   sourceDigest: string; environment: string; environmentDigest?: string;
-  formalization?: { id: string; confirmation?: 'automatic' | 'manual'; reviewMode?: 'direct'; evidenceDigest: string };
+  formalization?: { id: string; confirmation?: NonNullable<WebRun['formalization']>['confirmation'];
+    reviewMode?: 'direct'; evidenceDigest?: string };
   attempts: { id: string; title: string; status: string; accepted: boolean; createdAt: string; href: string;
     failure?: string; sourceDigest: string; failedChecks: number; tasks: number }[];
   selectedRunId: string; runHref: string; accepted: boolean; status: string;

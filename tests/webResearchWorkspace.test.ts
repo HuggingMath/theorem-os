@@ -147,6 +147,23 @@ describe('personal research search and accounting', () => {
 });
 
 describe('evidence-based research brief', () => {
+  it.each(['pending', 'rejected', 'interrupted', 'superseded'] as const)('exports %s candidate review without approved evidence', confirmation => {
+    const f = fixture(), value = run();
+    value.formalization = { id: crypto.randomUUID(), original: 'Prove True', candidateDigest: 'c'.repeat(64), confirmation };
+    f.save(alice, value);
+    const brief = f.workspace.brief(alice, value.id);
+    expect(brief.formalization).toMatchObject({ confirmation });
+    expect(brief.formalization?.evidenceDigest).toBeUndefined();
+    for (const language of ['zh', 'en'] as const) {
+      const markdown = researchBriefMarkdown(brief, language, 'http://localhost');
+      expect(markdown).not.toContain('undefined');
+      expect(markdown).not.toContain('Formalization evidence:');
+      expect(markdown).not.toContain('形式化证据:');
+      expect(markdown).not.toContain('model review passed');
+      expect(markdown).not.toContain('模型审核通过');
+    }
+  });
+
   it('keeps direct statement compilation separate from semantic review in the brief and each export language', () => {
     const f = fixture(), value = run('Direct statement');
     value.formalization = { id: crypto.randomUUID(), original: 'Prove True', confirmedAt: value.createdAt,

@@ -18,6 +18,7 @@ import { getLeanTaskEnvironment } from '../math/leanTaskEnvironment';
 import { assertMathRetrievalCorpus } from '../math/mathRetrievalCorpus';
 import { eraseFormalizationProofs } from '../math/formalizationSource';
 import { assertFormalizationCandidate, bootstrapFormalizedProblem, formalizationCandidateSchema, formalizationDigest,
+  assertFormalizationCompiledCandidate, formalizationCompiledCandidate, type FormalizationCompiledCandidate,
   formalizationInputDigest, formalizationReviewInput, formalizationReviewSchema, formalizationSnapshotSchema, formalizationTranslationSchema,
   directFormalizationEvidenceSchema, prepareFormalization, readFormalizationArtifact, readFormalizationRequest, writeFormalizationArtifact,
   type FormalizationCandidate, type FormalizationEvidence, type FormalizationRequest } from '../math/formalization';
@@ -114,6 +115,7 @@ type Options = {
   env?: NodeJS.ProcessEnv; signal?: AbortSignal;
   waitForRetry?: (delayMs: number, signal: AbortSignal) => Promise<void>;
   onEvent?: (event: { event: string; round: number; role?: Role; error?: string }) => void;
+  onCompiledCandidate?: (candidate: FormalizationCompiledCandidate) => void | Promise<void>;
 };
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
 const infrastructureFailure = (message: string) =>
@@ -175,6 +177,8 @@ const roleInstructions: Record<Role, string> = {
     'Produce the smallest complete mathematical inventory, not a Lean implementation or a proof. A complete source clause can be one span reused by its objects and conclusions; do not split every word or symbol into a separate record.',
     'Empty assumptions, definitions and unresolved arrays are correct when the source has no separate hypotheses, specialized definitions or ambiguity. Ordinary quantifiers, equality and number notation do not require invented library identifiers, instance helpers or local abbreviations. Still record every mathematical domain, convention and specialized concept that affects the claim.',
     'schema is theorem-os.formalization-plan.v1; taskKind is prove, decision or construction. Classify yes/no questions as decision. Do not assume the answer is yes, and never replace a requested decision with excluded middle.',
+    'Use prove for a specified proposition, including an existence theorem that asks to explicitly construct a witness and prove its stated properties. The word construct does not by itself make a theorem a construction task. Preserve the explicit witness definition and every required property proof; do not reduce an explicit construction requirement to a bare existential statement.',
+    'Use decision when the source leaves the truth or existence of the answer open. Use construction for an object, formula or algorithm deliverable without a complete stated theorem-proof obligation. Classify from the source, never relabel an unsupported task merely to pass admission.',
     'spans is an array of {id,start,end,text}: exact nonempty original text at JavaScript UTF-16 slice(start,end), without splitting a surrogate pair. Use stable unique alphanumeric IDs.',
     'objects is [{id,spanIds,description,leanType}]; describe domains and quantifiers explicitly.',
     'assumptions is [{id,spanIds,mathematics}]; list every hypothesis or convention, never a desired conclusion.',
@@ -242,6 +246,8 @@ const taskPreservingPlanInstructions = [
   'Plan the complete mathematical task in INPUT.json. Submit a concise inventory, not Lean declarations or proofs.',
   'Write one strict JSON object with schema="theorem-os.formalization-plan.v1", taskKind, spans, objects, assumptions, conclusions, definitions and unresolved, using OUTPUT.schema.json.',
   'taskKind is prove, decision or construction. A yes/no question is a decision; never assume an affirmative answer or replace it by excluded middle.',
+  'Use prove for a specified proposition, including an existence theorem that asks to explicitly construct a witness and prove its stated properties. The word construct does not by itself make a theorem a construction task. Preserve the explicit witness definition and every required property proof; do not reduce an explicit construction requirement to a bare existential statement.',
+  'Use decision when the source leaves the truth or existence of the answer open. Use construction for an object, formula or algorithm deliverable without a complete stated theorem-proof obligation. Classify from the source, never relabel an unsupported task merely to pass admission.',
   'objects records every mathematical domain and quantifier, with a short description and intended Lean type. Describe a structured object such as a finite tower in one record, including its quantified indices, generators and exponents; do not repeat its internal binders as separate objects unless the source uses them independently. assumptions records actual premises and conventions, never a conclusion.',
   'conclusions records every distinct requested mathematical conclusion, with its meaning, proposed qualified theorem names and applicable assumption IDs. A single iff target includes both directions; a request to prove necessity and sufficiency does not also need two duplicate implication targets unless separate theorems are explicitly requested. Preserve all quantifiers, hypotheses, directions of equivalence and boundary cases. Keep proof-method and citation restrictions with the relevant conclusion; do not invent auxiliary theorem targets to encode those instructions.',
   'definitions records only specialized meanings that need an existing library constant or a new supported def/abbrev/named instance, with its dependency IDs and justification. dependsOn may contain only id values from this plan.definitions array, never object, assumption, conclusion, span or unresolved IDs or Lean names; use [] when there are no definition dependencies. State each complete mathematical contract once. Leave exact Lean binder encodings, universe arithmetic, sequence indexing and typeclass plumbing to the generator. Do not invent definitions for ordinary arithmetic, equality, quantifiers or number notation.',
@@ -930,6 +936,14 @@ export async function runFormalization(directory: string, root: string, options:
               state.status = 'approved'; delete state.error; delete state.feedback; delete state.activeRound; save();
               event('formalization_approved');
               return { ...summary(), ...seed };
+            }
+            if (options.onCompiledCandidate) {
+              const compiled = formalizationCompiledCandidate({ request, requestDigest, candidate, inputDigest,
+                sourceSha256: elaborated.sourceSha256, targets: elaborated.targets, snapshot, snapshotDigest,
+                compilation: { ...elaborated.compilation, diagnostics: z.record(z.unknown()).parse(elaborated.compilation.diagnostics) },
+                round: state.rounds });
+              assertFormalizationCompiledCandidate(compiled);
+              await options.onCompiledCandidate(compiled);
             }
             let translated: Awaited<ReturnType<typeof dispatch>>;
             if (request.falsification) {

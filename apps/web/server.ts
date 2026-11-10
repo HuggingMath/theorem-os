@@ -37,7 +37,8 @@ import { WebFormalizations } from './formalizations';
 import { webFormalizationDefaults, webFormalizationLimits, type WebFormalizationCapabilities, type WebFormalizationRequest } from './formalizationTypes';
 import { SUB2API_PROVIDER } from '../../src/runtime/sub2api';
 import { inspectScopedLeanDeclarations } from '../../src/math/leanSource';
-import { formalizationDigest } from '../../src/math/formalization';
+import { formalizationCompiledCandidate, formalizationCompiledCandidateDigest, formalizationDigest } from '../../src/math/formalization';
+import { isStatementReviewed } from './presentation';
 import { WebConversations } from './conversations';
 import { webConversationLimits } from './conversationTypes';
 import { WebResearchApi, researchSelectionSchema } from './researchApi';
@@ -218,7 +219,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   };
   const explanationGeneration = (session: Session, run: WebRun, isSample: boolean): WebExplanationOverview['generation'] => {
     if (isSample) return { available: false, reason: 'sample' };
-    if (run.status !== 'completed' || run.result?.status !== 'evaluated_passed') return { available: false, reason: 'not_accepted' };
+    if (run.status !== 'completed' || run.result?.status !== 'evaluated_passed' || !isStatementReviewed(run)) return { available: false, reason: 'not_accepted' };
     const provider = config.providers.find(item => item.id === run.providerId);
     if (!gatewayProvider(provider)) return { available: false, reason: 'provider' };
     if (run.model !== SUB2API_PROVIDER.defaultModel) return { available: false, reason: 'model' };
@@ -261,7 +262,11 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   const research = new WebResearchApi(storage, jobs, knowledge, runner);
   const explanations = new WebExplanations(runner, storage);
   const formalizations = new WebFormalizations(runner, storage, webFormalizationLimits, (owner, formalization, evidence, input) => {
-    const existing = jobs.list(owner).find(run => run.formalizationId === formalization.id && !run.continueFrom);
+    const digest = formalizationCompiledCandidateDigest(formalizationCompiledCandidate(evidence));
+    const existing = jobs.list(owner).find(run => run.formalizationId === formalization.id && !run.continueFrom &&
+      run.source === evidence.candidate.source && run.environment === evidence.request.environment &&
+      !['rejected', 'interrupted', 'superseded'].includes(run.formalization?.confirmation ?? '') &&
+      (!run.formalization?.candidateDigest || run.formalization.candidateDigest === digest));
     if (existing) return existing.id;
     const run = jobs.create(owner, { ...webDefaults, ...webFormalizationDefaults.research, ...formalization.research,
       ...(formalization.humanReview ? { workers: 2, coordination: 'cooperative' as const, planApproval: true } : {}),
@@ -269,10 +274,25 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
       model: input.model, effort: input.effort, source: evidence.candidate.source, environment: evidence.request.environment,
       task: '依据自然语言原题及其 Lean 陈述，证明全部目标，保留所有定义、假设与声明。', formalizationId: formalization.id }, input.provider, undefined, undefined,
     { evidence, provenance: { id: formalization.id, evidenceSha256: formalizationDigest(evidence), original: formalization.original,
-      confirmedAt: formalization.confirmedAt!, confirmation: formalization.confirmation ?? 'automatic',
+      candidateDigest: digest, confirmedAt: formalization.confirmedAt!, confirmation: formalization.confirmation ?? 'automatic',
       ...(formalization.reviewMode ? { reviewMode: formalization.reviewMode } : {}) } });
     milestone(owner, 'firstRunAt');
     return run.id;
+  }, {
+    start: (owner, formalization, compiled, input) => {
+      const digest = formalizationCompiledCandidateDigest(compiled);
+      const existing = jobs.list(owner).find(run => run.formalizationId === formalization.id && !run.continueFrom &&
+        run.formalization?.candidateDigest === digest && run.source === compiled.candidate.source && run.environment === compiled.request.environment);
+      if (existing) return existing.id;
+      const run = jobs.create(owner, { ...webDefaults, ...webFormalizationDefaults.research, ...formalization.research,
+        providerId: input.provider.id, apiKey: input.apiKey, model: input.model, effort: input.effort,
+        source: compiled.candidate.source, environment: compiled.request.environment, formalizationId: formalization.id,
+        task: '证明编译通过的固定候选陈述的全部目标，保留所有定义、假设与声明。原题含义审核正在后台进行。' }, input.provider, undefined, undefined,
+      { compiled, provenance: { id: formalization.id, original: formalization.original, candidateDigest: digest, confirmation: 'pending' } });
+      milestone(owner, 'firstRunAt');
+      return run.id;
+    },
+    update: (owner, id, digest, confirmation, approved) => jobs.reviewFormalization(owner, id, digest, confirmation, approved),
   });
   const prechecker = runner.check ? new WebPrechecker(runner.check.bind(runner)) : undefined;
   const explainer = new WebExplainer();

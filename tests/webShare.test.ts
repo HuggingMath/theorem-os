@@ -49,6 +49,13 @@ describe('web share snapshots', () => {
     expect(shareSnapshot(run({ result: { status: 'evaluated_passed', proof: '', report: {} } }))).toBeUndefined();
   });
 
+  it.each(['pending', 'rejected', 'interrupted', 'superseded'] as const)(
+    'retains an accepted candidate for its owner while withholding public sharing when meaning is %s', confirmation => {
+      const value = run({ formalization: { id: 'candidate-id', original: 'Prove True.', candidateDigest: 'a'.repeat(64), confirmation } });
+      expect(value.result?.status).toBe('evaluated_passed');
+      expect(shareSnapshot(value)).toBeUndefined();
+    });
+
   it('keeps outcomes and reproducibility pins but drops diagnostics, internal identifiers and private fields', () => {
     const snapshot = shareSnapshot(run(), '2026-10-26T02:00:00.000Z')!;
     expect(snapshot).toMatchObject({ schema: 'theorem-os.web-share.v1', title: 'Shared identity', task: 'Prove identity',
@@ -95,6 +102,13 @@ describe('web share snapshots', () => {
     expect(snapshot.formalization).toMatchObject({ original: formalization.original, evidenceSha256: formalization.evidenceSha256 });
     expect(snapshot.formalization?.review).toBeUndefined();
     expect(shareSnapshot(run(), undefined, formalizationReport())!.formalization).toBeUndefined();
+  });
+
+  it('withholds legacy metadata without evidence instead of attaching an unbound review', () => {
+    const value = run({ formalization: { id: 'legacy-id', original: formalization.original } });
+    expect(shareSnapshot(value)).toBeUndefined();
+    const malformed = { ...formalizationReport(), evidenceSha256: undefined } as unknown as WebFormalizationReport;
+    expect(shareSnapshot(value, undefined, malformed)).toBeUndefined();
   });
 
   it('resolves a token only while the run-side record exists and removes the index with the run or owner', () => {

@@ -24,7 +24,8 @@ const spanSchema = z.object({
 
 const planSchema = z.object({
   schema: z.literal('theorem-os.formalization-plan.v1'),
-  taskKind: z.enum(['prove', 'decision', 'construction']),
+  taskKind: z.enum(['prove', 'decision', 'construction'])
+    .describe('prove: a specified proposition, including an existence theorem requiring an explicit witness definition and proof of its stated properties. decision: the truth or existence of the answer is left open. construction: an object, formula or algorithm deliverable without a complete stated theorem-proof obligation. Do not classify by the word construct alone, omit an explicit witness requirement, or relabel a task merely to pass admission.'),
   spans: z.array(spanSchema).min(1).max(recordLimit),
   objects: z.array(z.object({ id, spanIds, description: text, leanType: text }).strict()).max(recordLimit),
   assumptions: z.array(z.object({ id, spanIds, mathematics: text }).strict()).max(recordLimit),

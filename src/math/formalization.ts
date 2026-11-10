@@ -155,6 +155,23 @@ export type DirectFormalizationEvidence = z.infer<typeof directFormalizationEvid
 export const formalizationEvidenceSchema = z.union([reviewedFormalizationEvidenceSchema, directFormalizationEvidenceSchema]);
 export type FormalizationEvidence = z.infer<typeof formalizationEvidenceSchema>;
 
+/** A host-compiled statement, with no claim that its natural-language meaning has been approved. */
+export const formalizationCompiledCandidateSchema = reviewedFormalizationEvidenceSchema.pick({
+  request: true, requestDigest: true, candidate: true, inputDigest: true, sourceSha256: true,
+  targets: true, snapshot: true, snapshotDigest: true, compilation: true, round: true,
+}).extend({ schema: z.literal('theorem-os.formalization-compiled-candidate.v1') }).strict();
+export type FormalizationCompiledCandidate = z.infer<typeof formalizationCompiledCandidateSchema>;
+export function formalizationCompiledCandidate(value: Omit<FormalizationCompiledCandidate, 'schema'>): FormalizationCompiledCandidate {
+  const { request, requestDigest, candidate, inputDigest, sourceSha256, targets, snapshot, snapshotDigest, compilation, round } = value;
+  return formalizationCompiledCandidateSchema.parse({ schema: 'theorem-os.formalization-compiled-candidate.v1',
+    request, requestDigest, candidate, inputDigest, sourceSha256, targets, snapshot, snapshotDigest, compilation, round });
+}
+/** Proof work is bound to the request and statement, independently of review rounds and receipt timestamps. */
+export function formalizationCompiledCandidateDigest(value: FormalizationCompiledCandidate): string {
+  const { requestDigest, inputDigest, sourceSha256, snapshotDigest, targets } = value;
+  return formalizationDigest({ requestDigest, inputDigest, sourceSha256, snapshotDigest, targets });
+}
+
 export const formalizationDigest = (value: unknown): string => mathDigest(canonicalMathJson(value));
 export const formalizationInputDigest = (request: FormalizationRequest, candidate: FormalizationCandidate): string =>
   formalizationDigest({ requestDigest: formalizationDigest(request), candidate });
@@ -336,31 +353,16 @@ export function assertFormalizationEvidence(evidence: FormalizationEvidence): vo
     assertFormalizationRetrieval(r.retrieval, e.generation.input.plan, e.generation.input.retrieval!);
   }
   const structured = r.schema === 'theorem-os.formalization-request.v3';
-  if (hasStructureContext(r.contextProtocol) && e.snapshot.targets.some(item => !item.context.structures))
-    throw new Error('formalization_context_missing_structures');
   if ((e.schema === 'theorem-os.formalization-evidence.v4') !== (r.reviewMode === 'direct') ||
       e.schema !== 'theorem-os.formalization-evidence.v4' && ((e.schema === 'theorem-os.formalization-evidence.v3') !== structured ||
       !structured && (e.schema === 'theorem-os.formalization-evidence.v2') !== Boolean(r.workflow) ||
       Boolean(e.workflow) !== Boolean(r.workflow) || e.workflow && e.workflow.schema !== (structured ?
         'theorem-os.formalization-workflow-evidence.v3' : 'theorem-os.formalization-workflow-evidence.v2')))
     throw new Error('formalization_evidence_workflow_version_mismatch');
-  if (e.requestDigest !== formalizationDigest(r) || r.statementSha256 !== mathDigest(r.statement) ||
-      r.environmentDigest !== getLeanTaskEnvironment(r.environment).dependencyDigest ||
-      e.execution !== r.execution || e.modelInvoked !== (r.execution === 'model') ||
-      e.inputDigest !== formalizationInputDigest(r, e.candidate) || r.maxRounds > 0 && e.round > r.maxRounds)
+  if (e.execution !== r.execution || e.modelInvoked !== (r.execution === 'model'))
     throw new Error('formalization_evidence_input_mismatch');
-  const targets = assertFormalizationCandidate(r, e.candidate);
-  if (e.sourceSha256 !== mathDigest(e.candidate.source) || e.snapshot.source !== e.candidate.source ||
-      e.snapshot.sourceSha256 !== e.sourceSha256 || e.snapshot.environment !== r.environment ||
-      e.snapshot.environmentDigest !== r.environmentDigest || e.snapshotDigest !== formalizationDigest(e.snapshot) ||
-      canonicalMathJson(e.targets) !== canonicalMathJson(targets) ||
-      canonicalMathJson(e.snapshot.targets.map(({ context: _context, ...item }) => item)) !== canonicalMathJson(targets) ||
-      !allowsOmittedLibraryContext(r.contextProtocol) && e.snapshot.targets.some(item => item.context.omitted.length > 0) ||
-      e.compilation.sourceSha256 !== e.sourceSha256 || e.compilation.diagnostics.exitCode !== 0 ||
-      e.compilation.diagnostics.timedOut !== false ||
-      e.compilation.diagnostics.environmentDigest !== e.compilation.environmentDigest)
-    throw new Error('formalization_evidence_compilation_mismatch');
-  assertCompilationEvidence(e);
+  assertFormalizationCompiledCandidate(formalizationCompiledCandidate(e));
+  const targets = e.targets;
   if (e.schema === 'theorem-os.formalization-evidence.v4') {
     assertDirectEvidence(e);
     return;
@@ -471,7 +473,30 @@ function assertWorkflowEvidence(e: ReviewedFormalizationEvidence): void {
   }
 }
 
-function assertCompilationEvidence(e: FormalizationEvidence): void {
+export function assertFormalizationCompiledCandidate(value: FormalizationCompiledCandidate): void {
+  const e = formalizationCompiledCandidateSchema.parse(value), r = e.request;
+  assertRequestWorkflow(r);
+  if (e.requestDigest !== formalizationDigest(r) || r.statementSha256 !== mathDigest(r.statement) ||
+      r.environmentDigest !== getLeanTaskEnvironment(r.environment).dependencyDigest ||
+      e.inputDigest !== formalizationInputDigest(r, e.candidate) || r.maxRounds > 0 && e.round > r.maxRounds)
+    throw new Error('formalization_evidence_input_mismatch');
+  if (hasStructureContext(r.contextProtocol) && e.snapshot.targets.some(item => !item.context.structures))
+    throw new Error('formalization_context_missing_structures');
+  const targets = assertFormalizationCandidate(r, e.candidate);
+  if (e.sourceSha256 !== mathDigest(e.candidate.source) || e.snapshot.source !== e.candidate.source ||
+      e.snapshot.sourceSha256 !== e.sourceSha256 || e.snapshot.environment !== r.environment ||
+      e.snapshot.environmentDigest !== r.environmentDigest || e.snapshotDigest !== formalizationDigest(e.snapshot) ||
+      canonicalMathJson(e.targets) !== canonicalMathJson(targets) ||
+      canonicalMathJson(e.snapshot.targets.map(({ context: _context, ...item }) => item)) !== canonicalMathJson(targets) ||
+      !allowsOmittedLibraryContext(r.contextProtocol) && e.snapshot.targets.some(item => item.context.omitted.length > 0) ||
+      e.compilation.sourceSha256 !== e.sourceSha256 || e.compilation.diagnostics.exitCode !== 0 ||
+      e.compilation.diagnostics.timedOut !== false ||
+      e.compilation.diagnostics.environmentDigest !== e.compilation.environmentDigest)
+    throw new Error('formalization_evidence_compilation_mismatch');
+  assertCompilationEvidence(e);
+}
+
+function assertCompilationEvidence(e: FormalizationCompiledCandidate): void {
   const diagnostics = e.compilation.diagnostics, latest = diagnostics.latest as Record<string, unknown> | undefined;
   const config = getLeanTaskEnvironment(e.request.environment);
   const query = 'import Lean\nimport Formalization\n' + leanStatementContextCommands(

@@ -60,7 +60,7 @@ describe('formalization role output contracts derived from host Zod schemas', ()
   it('preserves the actual planning field names, literal, task/definition enums and source offset bounds', () => {
     const properties = getFormalizationRoleOutputSchema('plan').properties!;
     expect(properties.schema).toMatchObject({ type: 'string', const: 'theorem-os.formalization-plan.v1' });
-    expect(properties.taskKind).toEqual({ type: 'string', enum: ['prove', 'decision', 'construction'] });
+    expect(properties.taskKind).toMatchObject({ type: 'string', enum: ['prove', 'decision', 'construction'] });
     expect(properties.spans).toMatchObject({ type: 'array', minItems: 1, maxItems: 256 });
     const span = properties.spans.items!.properties!;
     expect(span.start).toMatchObject({ type: 'integer', minimum: 0, maximum: 256 * 1024 });
@@ -79,6 +79,9 @@ describe('formalization role output contracts derived from host Zod schemas', ()
 
   it('explains source coordinates and theorem-only coverage at the fields models write', () => {
     const plan = getFormalizationRoleOutputSchema('plan').properties!, span = plan.spans.items!.properties!;
+    expect(plan.taskKind.description).toContain('explicit witness definition and proof');
+    expect(plan.taskKind.description).toContain('truth or existence of the answer is left open');
+    expect(plan.taskKind.description).toContain('without a complete stated theorem-proof obligation');
     expect(span.start.description).toContain('parsed INPUT.statement');
     expect(span.start.description).toContain('statement.indexOf(text)');
     expect(span.end.description).toContain('statement.slice(start, end) === text');

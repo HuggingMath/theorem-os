@@ -177,6 +177,29 @@ describe('formalization plan structure and source binding', () => {
 });
 
 describe('formalization plan readiness', () => {
+  it('admits a constructive theorem with its witness definition and property target intact', () => {
+    const original = 'For every natural number n, explicitly construct a natural number w and prove n < w.';
+    const plan: FormalizationPlan = {
+      schema: 'theorem-os.formalization-plan.v1', taskKind: 'prove',
+      spans: [span(original, 's-all', original)],
+      objects: [{ id: 'o-n', spanIds: ['s-all'], description: 'An arbitrary natural number n.', leanType: 'Nat' }],
+      assumptions: [],
+      conclusions: [{ id: 'c-larger', spanIds: ['s-all'], mathematics: 'For each n, the explicitly defined witness w n satisfies n < w n.',
+        targetNames: ['Constructive.larger'], assumptionIds: [] }],
+      definitions: [{ id: 'd-witness', spanIds: ['s-all'], mathematics: 'The explicit witness w n is n + 1.',
+        implementation: 'new', leanNames: ['Constructive.w'], dependsOn: [], justification: 'Preserve the requested explicit construction.' }],
+      unresolved: [],
+    };
+    const candidate = 'namespace Constructive\ndef w (n : Nat) : Nat := n + 1\ntheorem larger (n : Nat) : n < w n := by sorry\nend Constructive';
+    const mapping = [{ originalText: original, targetNames: ['Constructive.larger'], explanation: 'Define the requested witness and prove its property for every n.' }];
+    expect(() => assertFormalizationPlan(original, plan)).not.toThrow();
+    expect(() => assertFormalizationPlanReady(plan)).not.toThrow();
+    expect(() => assertFormalizationPlanCandidate(plan, candidate, mapping)).not.toThrow();
+    expect(() => assertFormalizationPlanCandidate(plan,
+      'namespace Constructive\ntheorem larger (n : Nat) : ∃ w : Nat, n < w := by sorry\nend Constructive', mapping))
+      .toThrow('formalization_plan_definition_missing');
+  });
+
   it('retains a structurally valid unresolved plan for repair but blocks generation', () => {
     const plan = fixture();
     plan.unresolved.push({ id: 'u-domain', spanIds: ['s-domain'], description: 'Confirm whether zero belongs to D.' });

@@ -15,7 +15,7 @@ import type { WebExplainAnswer } from '../explain';
 import type { WebFormalization } from '../formalizationTypes';
 import type { WebShareLink } from '../shareTypes';
 import type { SharedProofPreparation } from '../sharedProofTypes';
-import { acceptedTitle, acceptedDescription, statementConfirmation } from '../presentation';
+import { acceptedTitle, acceptedDescription, isStatementReviewed, statementConfirmation } from '../presentation';
 import { checkReason, effortLabels, failureGuide, formatDuration, formatTokens, isAcceptedRun, isFaultedRun, isRejectedRun, planAwaitingApproval, planGated, readableDuration, readableMetric, reportReason, resultDescription, runProgress, runTokens, stalledMinutes, stoppedLabel, usageEstimate, type RecoveryAction } from '../presentation';
 import { nextSteps, summarizeGoals, summarizeReport, summarizeStuck } from '../report';
 import { filterRuns, ownerFirst, type RunFilter } from './history';
@@ -1646,7 +1646,7 @@ function resultProps(run: WebRun): ResultPanelProps {
     ...(!isSample(run) && passed(run) ? { saveLibrary: `library.html?${new URLSearchParams({ create: '1', fromRun: run.id })}` } : {}),
     ...(['environment', 'unknown', 'interrupted'].includes(guide?.kind ?? '') ? { feedback: feedbackUrl({ failure: guide!.kind }) } : {}),
     ...(proof ? { proof: { source: proof, verified: Boolean(run.result?.proof && passed(run)), rejected: isRejectedRun(run),
-      ...(passed(run) && run.result?.proof ? { explainRun: run.id } : {}) } } : {}), ...(goals ? { goals } : {}),
+      ...(passed(run) && isStatementReviewed(run) && run.result?.proof ? { explainRun: run.id } : {}) } } : {}), ...(goals ? { goals } : {}),
     ...(proof && state.proofViewer === run.id ? { viewer: { onClose: closeProofViewer } } : {}),
     ...(later.length ? { later: later.map(item => ({ id: item.id, label: item.continueFrom?.label ?? item.title, status: status(item), createdAt: item.createdAt, time: timestamp(item.createdAt),
       comparable: true })) } : {}),
@@ -1728,8 +1728,8 @@ function sourceContent(run: WebRun) {
   const lineCount = source.split(/\r\n|\r|\n/).length;
   const author = showingProof && !run.result?.proof ? run.artifact?.workerId : undefined;
   const props: SourcePanelProps = { hasProof, proofLabel, view: state.sourceView, showingProof, verified,
-    ...(verified ? { explainRun: run.id } : {}),
-    status: showingProof ? verified ? t('完整原题已通过验收') : isRejectedRun(run) ? t('候选 · 验收未通过') : t('候选 · 尚未验收通过') : activeRun(run) && !hasProof ? t('原始题目 · 等待候选') : t('原始题目'),
+    ...(verified && isStatementReviewed(run) ? { explainRun: run.id } : {}),
+    status: showingProof ? verified ? run.formalization ? acceptedTitle(run) : t('完整原题已通过验收') : isRejectedRun(run) ? t('候选 · 验收未通过') : t('候选 · 尚未验收通过') : activeRun(run) && !hasProof ? t('原始题目 · 等待候选') : t('原始题目'),
     tone: showingProof ? verified ? 'verified' : 'candidate' : '',
     ...(author ? { origin: t('来自 {0}', workerNames(run.observation?.inspection.workers).get(author) ?? author) } : {}) };
   return { props, diff: hasProof && state.sourceView === 'diff', source: source.replace(/\r\n?/g, '\n'),
@@ -1784,7 +1784,7 @@ function reportProps(run: WebRun): ReportPanelProps {
     metrics: summary.metrics.map(readableMetric), identity: summary.identity, ...(summary.library ? { library: summary.library } : {}) }, accepted: passed(run), ...(stuck ? { stuck } : {}),
     ...(run.result.proof ? { outline: { state: outlines.get(run.id), kitUrl: `/api/runs/${encodeURIComponent(run.id)}/verification-kit`, headings: headingsOf(run.result.proof),
       mathlib: Boolean(environmentInfo(run.environment)?.mathlibRevision ?? run.environment === 'mathlib'),
-      ...(isAcceptedRun(run) ? { explainRun: run.id } : {}) } } : {}) };
+      ...(isAcceptedRun(run) && isStatementReviewed(run) ? { explainRun: run.id } : {}) } } : {}) };
 }
 const outlines = new Map<string, OutlineState>();
 /** Starts loading the proof outline; the report re-renders when it arrives. Returns whether a request started. */
@@ -1996,7 +1996,7 @@ function renderRunHeader(run: WebRun) {
       ...(step.id === 'solving' && run.maxRunSeconds > 0 ? { budget: formatDuration(run.maxRunSeconds * 1000) } : {}) })),
     elapsed: formatDuration(progress.elapsed), tabs: detailTabs(), tab: state.tab,
     active: activeRun(run), cancelling, deleting: state.deleting.has(run.id), connected: state.connected,
-    download: run.result || !activeRun(run) ? downloadUrl(run.id) : undefined, shareable: !isSample(run) && isAcceptedRun(run) && Boolean(run.result?.proof),
+    download: run.result || !activeRun(run) ? downloadUrl(run.id) : undefined, shareable: !isSample(run) && isAcceptedRun(run) && isStatementReviewed(run) && Boolean(run.result?.proof),
     sample: isSample(run), ...(stalledMinutes(run) !== undefined ? { stalled: stalledMinutes(run)! } : {}),
     ...(run.formalizationId ? { formalizationId: run.formalizationId } : {}),
     automaticFormalization: run.formalization?.confirmation === 'automatic',
@@ -3215,7 +3215,7 @@ function reuseRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 'report'>
     budgetDraftOrigin = { runId: run.id, source: run.source, environment: run.environment };
     draftContinuation = from;
     continuationPreview = { title: run.title, runId: run.id, from, originalSeconds: run.maxRunSeconds, originalTurns: run.maxTurns, originalTokens: run.maxTotalTokens };
-    draftFormalization = run.formalization ? { id: run.formalization.id, evidenceSha256: run.formalization.evidenceSha256,
+    draftFormalization = isStatementReviewed(run) && run.formalization?.evidenceSha256 ? { id: run.formalization.id, evidenceSha256: run.formalization.evidenceSha256,
       source: run.source, environment: run.environment, original: run.formalization.original } : undefined;
     clearValidation();
     // The sample's agent was a script, so its provider and model are no choice to copy; the visitor keeps their own.

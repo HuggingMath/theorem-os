@@ -2,16 +2,27 @@ import { webLimits, webPreparationSeconds, type WebEffort, type WebFailureKind, 
 import { locale, localeTag, localizeMessage, localizeText, t, translator } from './i18n';
 
 export const isAcceptedRun = (run: WebRun) => run.status === 'completed' && run.result?.status === 'evaluated_passed';
+/** A compiled candidate can pass Lean while its correspondence to the original is still unapproved. */
+export const isStatementReviewed = (run: Pick<WebRun, 'formalization'>) => !run.formalization ||
+  Boolean(run.formalization.evidenceSha256 && run.formalization.confirmedAt &&
+    (run.formalization.confirmation === undefined || ['automatic', 'manual'].includes(run.formalization.confirmation)));
 /** Acceptance proves the frozen Lean statement; natural-language meaning has its own confirmation. */
-export const acceptedTitle = (run: Pick<WebRun, 'formalization'>) => run.formalization ? t('Lean 陈述证明通过') : t('完整原题通过');
+export const acceptedTitle = (run: Pick<WebRun, 'formalization'>) => !run.formalization ? t('完整原题通过')
+  : isStatementReviewed(run) ? t('Lean 陈述证明通过') : t('候选 Lean 陈述证明通过');
 export const acceptedDescription = (run: Pick<WebRun, 'formalization'>) => run.formalization
-  ? run.formalization.reviewMode === 'direct'
+  ? !isStatementReviewed(run)
+    ? t('候选 Lean 陈述已通过独立验收。') + ' ' + statementConfirmation(run.formalization.confirmation)
+    : run.formalization.reviewMode === 'direct'
     ? t('冻结的 Lean 陈述已通过独立验收；原题含义请查看形式化记录。')
     : t('冻结的 Lean 陈述已通过独立验收；原文与陈述的对应关系见形式化审核。')
   : t('目标声明没有改动，没有 sorry 或额外公理，Lean 内核在隔离环境中确认通过。');
-export function statementConfirmation(confirmation: 'automatic' | 'manual' | undefined, shared = false, reviewMode?: 'direct', language?: 'zh' | 'en'): string {
+export function statementConfirmation(confirmation: NonNullable<WebRun['formalization']>['confirmation'], shared = false, reviewMode?: 'direct', language?: 'zh' | 'en'): string {
   const t = translator(language ?? locale);
   if (confirmation === 'manual') return shared ? t('原题含义：分享者已确认 Lean 陈述。') : t('原题含义：你已确认 Lean 陈述。');
+  if (confirmation === 'pending') return t('原题含义：后台审核中；代码与已有 Lean 验收结果可继续使用。');
+  if (confirmation === 'rejected') return t('原题含义：审核要求修改陈述；已有代码与证明对应此候选。');
+  if (confirmation === 'interrupted') return t('原题含义：审核已停止，尚未审核通过；已有代码与 Lean 验收结果已保留。');
+  if (confirmation === 'superseded') return t('原题含义：此陈述已被新版本替代；已有代码与证明对应旧候选。');
   if (reviewMode === 'direct') return t('Lean 陈述编译通过；原题含义请查看形式化记录。');
   return confirmation === 'automatic' ? t('原题含义：模型审核通过，未经人工确认。') : t('原题含义：未记录确认方式，请核对 Lean 陈述。');
 }
@@ -44,7 +55,8 @@ const endedSummaries: Record<StopCause, string> = {
 };
 /** One line for an ended run under its route map: accepted, rejected at acceptance, or why it stopped before a verdict. */
 export function endedSummary(run: WebRun): string {
-  if (isAcceptedRun(run)) return run.formalization ? t('研究已结束，Lean 陈述已通过验收。') : t('研究已结束，原题已通过验收。');
+  if (isAcceptedRun(run)) return !run.formalization ? t('研究已结束，原题已通过验收。')
+    : isStatementReviewed(run) ? t('研究已结束，Lean 陈述已通过验收。') : acceptedDescription(run);
   if (isRejectedRun(run)) return t('研究已结束，候选证明没有通过验收。');
   if (run.status === 'cancelled') return t('研究已取消，没有得到通过验收的完整证明。');
   if (run.status === 'error') return t('运行出错后中止，没有得到通过验收的完整证明。');
@@ -298,7 +310,7 @@ export function resultDescription(run: WebRun): string {
   if (run.status === 'running') {
     const stage = runProgress(run).index;
     if (stage === 1) return t('{0}准备中，解题尚未开始；解题预算从构造证明开始计时。', run.environment === 'mathlib' ? t('Mathlib 依赖') : t('Lean 环境'));
-    if (stage === 3) return t('正在独立验证完整原题。');
+    if (stage === 3) return run.formalization ? t('正在独立验证固定的 Lean 陈述。') : t('正在独立验证完整原题。');
     const approval = planAwaitingApproval(run);
     if (approval) return approval.leadRevising ? t('Lead 正在按你的留言修改研究计划，改完后再请你批准。')
       : t('Lead 已经拟好研究计划，等你批准后 Agent 才开始工作。');

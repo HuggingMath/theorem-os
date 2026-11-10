@@ -106,6 +106,7 @@ export function parseExplanationMessage(line: string): WorkerExplanationMessage 
 }
 
 const formalizationMessageSchema = z.union([
+  z.object({ type: z.literal('compiled'), candidate: z.record(z.unknown()) }).strict(),
   z.object({ type: z.literal('progress'), progress: z.object({ phase: z.enum(webFormalizationPhases),
     round: count.optional(), tokens: count.optional() }).strict() }).strict(),
   z.object({ type: z.literal('activity'), activity: z.custom(isWebFormalizationActivityBody) }).strict(),

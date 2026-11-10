@@ -10,9 +10,11 @@ import { WebStorage, type WebCreation } from './storage';
 import { WebKnowledgeService } from './knowledgeService';
 import { freezeModuleConfiguration } from './moduleRegistry';
 import { WebStorageError } from './storage';
+import { isAcceptedRun, isStatementReviewed } from './presentation';
 
 type Job = { owner: string; run: WebRun; input: WebRunInput; provider: WebProvider; controller: AbortController;
   formalization?: WorkerInput['formalization'];
+  compiledFormalization?: WorkerInput['compiledFormalization'];
   researchConfiguration?: WorkerInput['researchConfiguration'];
   continuation?: WorkerInput['continuation'] };
 const terminal = (run: WebRun) => ['completed', 'cancelled', 'error'].includes(run.status);
@@ -104,7 +106,7 @@ export class WebJobs {
   }
   /** The source goes only to the worker; its exact host-resolved identity stays with the visible run. */
   create(owner: string, input: WebRunInput, provider: WebProvider, continuation?: WorkerInput['continuation'], requestId?: string,
-    formalization?: { evidence: unknown; provenance: NonNullable<WebRun['formalization']> },
+    formalization?: { evidence?: unknown; compiled?: unknown; provenance: NonNullable<WebRun['formalization']> },
     researchConfiguration?: WorkerInput['researchConfiguration']): WebRun {
     const previous = this.replay(owner, input, provider, requestId);
     if (previous) return previous;
@@ -147,10 +149,34 @@ export class WebJobs {
     this.jobs.set(run.id, { owner, input: pinnedInput, provider, run, controller: new AbortController(),
       ...(researchConfiguration ? { researchConfiguration: structuredClone(researchConfiguration) } : {}),
       ...(formalization ? { formalization: formalization.evidence } : {}),
+      ...(formalization?.compiled ? { compiledFormalization: formalization.compiled } : {}),
       ...(continuation ? { continuation } : {}) });
     this.reindex();
     queueMicrotask(() => this.pump());
     return run;
+  }
+  /** Review updates only the Web provenance; the solver's frozen task and Lean receipt never change. */
+  reviewFormalization(owner: string, id: string, candidateDigest: string,
+    confirmation: NonNullable<WebRun['formalization']>['confirmation'],
+    approved?: { evidenceSha256: string; confirmedAt: string; sourceSha256: string; environment: WebRun['environment'] }) {
+    const job = this.jobs.get(id), provenance = job?.run.formalization;
+    if (!job || job.owner !== owner || !provenance || provenance.candidateDigest !== candidateDigest) return;
+    const reviewed = isStatementReviewed(job.run);
+    if (confirmation === 'interrupted' && provenance.confirmation !== 'pending') return;
+    if (approved && !['automatic', 'manual'].includes(confirmation ?? '')) throw new Error('formalization_binding_changed');
+    if (approved && (crypto.createHash('sha256').update(job.run.source).digest('hex') !== approved.sourceSha256 ||
+        job.run.environment !== approved.environment)) throw new Error('formalization_binding_changed');
+    Object.assign(provenance, { confirmation }, approved ? { evidenceSha256: approved.evidenceSha256, confirmedAt: approved.confirmedAt } : {});
+    const message = confirmation === 'automatic' ? '后台审核通过，已关联同一份固定 Lean 陈述。'
+      : confirmation === 'rejected' ? '后台审核要求修改陈述，已停止旧候选的证明。'
+        : confirmation === 'superseded' ? '陈述已更新，旧候选的证明与新版本分开保留。'
+          : '原题含义审核已停止；现有代码与 Lean 验收结果保留。';
+    this.event(job.run, 'statement_review_updated', message);
+    if (!['automatic', 'manual', 'pending'].includes(confirmation ?? '')) this.cancel(owner, id);
+    if (approved && !reviewed && isAcceptedRun(job.run)) {
+      this.onAccepted?.(owner);
+      this.onFinished?.(owner, job.run);
+    }
   }
   cancel(owner: string, id: string): WebRun | undefined {
     const job = this.jobs.get(id);
@@ -162,7 +188,7 @@ export class WebJobs {
       try { this.event(job.run, 'cancelled', '运行已取消'); }
       finally {
         job.controller.abort();
-        job.input.apiKey = ''; delete job.continuation; delete job.formalization;
+        job.input.apiKey = ''; delete job.continuation; delete job.formalization; delete job.compiledFormalization;
         if (queued) this.reindex();
       }
     }
@@ -185,7 +211,7 @@ export class WebJobs {
       this.jobs.delete(id);
       if (!terminal(job.run)) { job.run.status = 'cancelled'; job.run.phase = 'cancelled'; job.run.finishedAt = new Date().toISOString(); }
       job.controller.abort();
-      job.input.apiKey = ''; delete job.continuation; delete job.formalization;
+      job.input.apiKey = ''; delete job.continuation; delete job.formalization; delete job.compiledFormalization;
       removed = true;
       try { this.storage.deleteRun(owner, id); }
       catch (error) { failure ??= error; }
@@ -443,6 +469,7 @@ export class WebJobs {
       await this.runner.run({ id: job.run.id, input: job.input, provider: job.provider,
         ...(job.researchConfiguration ? { researchConfiguration: job.researchConfiguration } : {}),
         ...(job.formalization ? { formalization: job.formalization } : {}),
+        ...(job.compiledFormalization ? { compiledFormalization: job.compiledFormalization } : {}),
         ...(job.input.knowledgeDigest ? { knowledgeCatalog: this.knowledge.getCatalog(job.owner, job.input.knowledgeDigest) } : {}),
         ...(job.continuation ? { continuation: job.continuation } : {}) }, handle, job.controller.signal);
       if (messageError) throw messageError;
@@ -451,11 +478,12 @@ export class WebJobs {
         job.run.status = job.run.result.status === 'runtime_error' ? 'error' : 'completed';
         const accepted = job.run.result.status === 'evaluated_passed';
         const acceptance = !job.run.formalization ? '完整原题通过独立 Lean 验收'
+          : !isStatementReviewed(job.run) ? '候选 Lean 陈述通过独立验收；原题含义尚未审核通过。'
           : job.run.formalization.confirmation === 'manual' ? 'Lean 陈述通过独立 Lean 验收；原题含义已由你确认。Lean 验收不能替代自然语言原意核对。'
             : job.run.formalization.confirmation === 'automatic' ? 'Lean 陈述通过独立 Lean 验收；原题含义仅经模型审核，未经人工确认。Lean 验收不能替代自然语言原意核对。'
               : 'Lean 陈述通过独立 Lean 验收；原题含义未记录确认方式，请核对 Lean 陈述。Lean 验收不能替代自然语言原意核对。';
         this.event(job.run, 'finished', accepted ? acceptance : '运行结束，请查看验收状态');
-        if (accepted) this.onAccepted?.(job.owner);
+        if (accepted && isStatementReviewed(job.run)) this.onAccepted?.(job.owner);
       }
     } catch (error) {
       if (!terminal(job.run)) {
@@ -470,6 +498,7 @@ export class WebJobs {
       job.input.apiKey = '';
       delete job.continuation;
       delete job.formalization;
+      delete job.compiledFormalization;
       job.run.finishedAt ??= new Date().toISOString();
       try { this.persist(job.run); }
       catch (error) {

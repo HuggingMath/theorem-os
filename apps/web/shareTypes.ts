@@ -1,5 +1,5 @@
 import type { ReportTone } from './report';
-import type { WebEffort, WebEnvironment, WebFormalizationReport } from './shared';
+import type { WebEffort, WebEnvironment, WebFormalizationReport, WebRun } from './shared';
 import type { WebShareReading } from './shareReadingTypes';
 
 /** The public payload is frozen when its owner creates a link. */
@@ -8,7 +8,7 @@ export type WebShareSnapshot = {
   environment: WebEnvironment; model: string; effort: WebEffort; workers: number;
   createdAt: string; finishedAt?: string; sharedAt: string;
   reading?: WebShareReading;
-  formalization?: { original: string; confirmation?: 'automatic' | 'manual'; evidenceSha256: string;
+  formalization?: { original: string; confirmation?: NonNullable<WebRun['formalization']>['confirmation']; evidenceSha256?: string;
     reviewMode?: 'direct';
     review?: Pick<WebFormalizationReport, 'backtranslation' | 'correspondences'> };
   checks: { label: string; status: string; tone: ReportTone; method?: string;

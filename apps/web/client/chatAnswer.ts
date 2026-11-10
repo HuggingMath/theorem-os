@@ -1,5 +1,5 @@
 import type { WebExplanation, WebExplanationDocument, WebExplanationLanguage, WebExplanationOverview, WebExplanationSection, WebRun } from '../shared';
-import { isAcceptedRun } from '../presentation';
+import { isAcceptedRun, isStatementReviewed } from '../presentation';
 import { t } from '../i18n';
 
 export type ChatAnswer = { runId: string; target: string; loading: boolean; overview?: WebExplanationOverview;
@@ -28,7 +28,7 @@ export class ChatAnswers {
     return status === 'queued' || status === 'running';
   }
   sync(run?: WebRun): ChatAnswer | undefined {
-    if (!run || !isAcceptedRun(run) || !run.result?.proof) return;
+    if (!run || !isAcceptedRun(run) || !isStatementReviewed(run) || !run.result?.proof) return;
     let entry = this.entries.get(run.id);
     if (!entry || entry.proof !== run.result.proof) {
       const targetTitles = Object.fromEntries((run.observation?.inspection.tasks ?? [])

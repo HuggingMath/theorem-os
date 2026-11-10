@@ -163,7 +163,7 @@ export class ChatSession {
     window.addEventListener('pageshow', event => { if (event.persisted) void this.refresh(); });
   }
   get id() { return this.currentId; }
-  get runId() { return this.conversation?.runId ?? this.run?.id; }
+  get runId() { return this.formalization?.runId ?? this.conversation?.runId ?? this.run?.id; }
   get selected() { return this.conversation; }
   updateOverview() { if (!this.conversation && !this.run) this.draw(); }
   get editingProblem() { return this.editedProblem; }
@@ -547,7 +547,13 @@ export class ChatSession {
     if (failed?.status === 'rejected') throw failed.reason;
     this.formalization = formal.status === 'fulfilled' ? formal.value?.formalization : undefined;
     if (this.formalization) this.formalizations = [this.formalization, ...this.formalizations.filter(item => item.id !== this.formalization!.id)];
-    const received = run.status === 'fulfilled' ? run.value?.run : undefined;
+    let received = run.status === 'fulfilled' ? run.value?.run : undefined;
+    // A compiled revision can be published while the conversation response still names the previous candidate.
+    const currentRunId = this.formalization?.runId ?? conversation.runId;
+    if (currentRunId && received?.id !== currentRunId) {
+      received = (await this.options.request<{ run: WebRun }>(`/api/runs/${currentRunId}`)).run;
+      if (generation !== this.generation || revision !== this.readRevision) return;
+    }
     const next = received && retainLatestRun(received, this.run);
     const hadRun = this.run;
     this.run = next;
@@ -572,7 +578,7 @@ export class ChatSession {
     const reviewing = backgroundReviewPending(this.formalization?.backgroundReview ?? this.formalization?.report?.backgroundReview);
     // A completed formalization can overtake the conversation response that first linked it.
     // Keep refreshing until that conversation has also attached the proof run.
-    const unlinkedRun = Boolean(this.formalization?.runId && this.conversation && !this.conversation.runId);
+    const unlinkedRun = Boolean(this.formalization?.runId && this.conversation && this.conversation.runId !== this.formalization.runId);
     // Nothing in progress: a slow check, since returning to the tab refreshes at once. A fast idle poll on every open tab
     // reached the site's per-address request limit.
     this.timer = setTimeout(() => void this.refresh(), document.hidden && reviewing ? 15_000
@@ -763,17 +769,29 @@ export class ChatSession {
   }
   private recoverGuidance(message: WebConversationMessage) { if (message.guidance) void this.sendGuidance(message.guidance.input); }
   private async cancelTask() {
-    if (this.run) { this.options.onCancelRun(this.run); return; }
+    if (this.run && !running(this.formalization)) { this.options.onCancelRun(this.run); return; }
     const id = this.formalization?.id, generation = this.generation;
     if (!id) return;
     this.readRevision++;
     try {
-      const { formalization } = await this.post<{ formalization: WebFormalization }>(`/api/formalizations/${id}/cancel`);
+      // Attempt both stops even if one request fails; the server also stops a review's linked proof.
+      const [review, proof] = await Promise.allSettled([
+        this.post<{ formalization: WebFormalization }>(`/api/formalizations/${id}/cancel`),
+        this.run && running(this.run) ? this.post<{ run: WebRun }>(`/api/runs/${this.run.id}/cancel`) : undefined,
+      ]);
       if (generation === this.generation) {
         this.readRevision++; this.capabilitiesRevision++;
-        this.formalization = formalization;
-        this.formalizations = this.formalizations.map(item => item.id === id ? formalization : item);
-        this.draw();
+        if (review.status === 'fulfilled') {
+          this.formalization = review.value.formalization;
+          this.formalizations = this.formalizations.map(item => item.id === id ? review.value.formalization : item);
+        }
+        if (proof.status === 'fulfilled' && proof.value) this.run = retainLatestRun(proof.value.run, this.run);
+        await this.loadTask(generation);
+        if (generation === this.generation) {
+          const failed = [review, proof].find(result => result.status === 'rejected');
+          this.error = failed?.status === 'rejected' && (running(this.formalization) || running(this.run)) ? reason(failed.reason) : '';
+          this.draw();
+        }
       }
     } catch (error) { if (generation === this.generation) { this.error = reason(error); this.draw(); } }
   }

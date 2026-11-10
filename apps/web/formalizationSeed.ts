@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { bootstrapLeanTask } from '../../src/math/leanTask';
-import { bootstrapFormalizedProblem, formalizationEvidenceSchema, writeFormalizationArtifact } from '../../src/math/formalization';
+import { assertFormalizationCompiledCandidate, bootstrapFormalizedProblem, formalizationCompiledCandidateDigest,
+  formalizationCompiledCandidateSchema, formalizationEvidenceSchema, writeFormalizationArtifact } from '../../src/math/formalization';
 import type { WorkerInput } from './shared';
 import { selectWebLibraryPack } from './frozenLibrary';
 import { LIBRARY_PACK_SCHEMA, parseLibraryPack, type LibraryPack } from '../../src/math/libraryPacks';
@@ -28,11 +29,27 @@ export function combineWebLibraryPacks(...packs: (LibraryPack | undefined)[]): L
 }
 
 /** Keep the approved original and evidence digest in the native frozen problem, across disposable containers. */
-export function prepareWebProblem(directory: string, request: Pick<WorkerInput, 'input' | 'formalization' | 'researchConfiguration'>,
+export function prepareWebProblem(directory: string, request: Pick<WorkerInput, 'input' | 'formalization' | 'compiledFormalization' | 'researchConfiguration'>,
   options: { libraryPack?: LibraryPack } = {}) {
   const { input } = request;
   const libraryPack = options.libraryPack ?? request.researchConfiguration?.libraryPack ?? selectWebLibraryPack(input);
   const taskFile = path.join(directory, 'task.md');
+  if (request.compiledFormalization) {
+    if (request.formalization || !input.formalizationId) throw new Error('formalization_binding_missing');
+    const compiled = formalizationCompiledCandidateSchema.parse(request.compiledFormalization);
+    assertFormalizationCompiledCandidate(compiled);
+    if (compiled.request.problemId !== input.formalizationId || compiled.candidate.source !== input.source ||
+        compiled.request.environment !== (input.environment ?? 'standard')) throw new Error('formalization_binding_changed');
+    const task = 'Prove every frozen Lean target. Natural-language meaning is still under independent review.\n'
+      + 'Original problem:\n' + compiled.request.statement + '\nOriginal SHA256: ' + compiled.request.statementSha256
+      + '\nCompiled candidate SHA256: ' + formalizationCompiledCandidateDigest(compiled)
+      + '\nPreserve all definitions, assumptions and target declarations.\n' + input.task;
+    const receipt = bootstrapLeanTask(path.join(directory, 'workspace'), {
+      source: compiled.candidate.source, task, environment: compiled.request.environment, libraryPack });
+    fs.writeFileSync(path.join(directory, 'compiled-formalization.json'), JSON.stringify(compiled), { flag: 'wx', mode: 0o400 });
+    fs.writeFileSync(taskFile, task + '\nProve every target in generated/problem/Submission.lean.\n', { mode: 0o600 });
+    return { workspaceRoot: receipt.workspaceRoot, activeProblemPath: receipt.activeProblemPath, taskFile };
+  }
   if (input.formalizationId || request.formalization) {
     if (!input.formalizationId || !request.formalization) throw new Error('formalization_binding_missing');
     const evidence = formalizationEvidenceSchema.parse(request.formalization);

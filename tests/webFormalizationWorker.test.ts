@@ -103,11 +103,13 @@ describe('formalization worker input and protocol', () => {
   it('accepts phase updates and evidence objects while excluding private diagnostics', () => {
     const message = { type: 'progress', progress: { phase: 'reviewing', round: 2, tokens: 123 } };
     expect(parseFormalizationMessage(JSON.stringify(message))).toEqual(message);
+    expect(parseFormalizationMessage('{"type":"compiled","candidate":{}}')).toEqual({ type: 'compiled', candidate: {} });
     expect(parseFormalizationMessage('{"type":"result","status":"approved","evidence":{}}'))
       .toEqual({ type: 'result', status: 'approved', evidence: {} });
     for (const message of [null, { type: 'progress', progress: { phase: 'reviewing', apiKey: 'secret' } },
       { type: 'progress', progress: { phase: 'finished' } }, { type: 'progress', progress: { phase: 'compiling', round: -1 } },
       { type: 'result', status: 'approved', evidence: [] }, { type: 'result', status: 'error', reason: 'provider said secret' },
+      { type: 'compiled', candidate: [], apiKey: 'secret' }, { type: 'compiled', candidate: {} , approved: true },
       { type: 'result', status: 'confirmed', evidence: {} }])
       expect(parseFormalizationMessage(JSON.stringify(message))).toBeUndefined();
   });

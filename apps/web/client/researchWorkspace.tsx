@@ -265,7 +265,7 @@ export function BriefPreview({ brief, context }: { brief: ResearchBrief; context
       {brief.formalization && <p>{statementConfirmation(brief.formalization.confirmation, false, brief.formalization.reviewMode)}</p>}
       <details><summary>{tx('冻结身份', 'Frozen identities')}</summary><dl><dt>{tx('原题源码摘要', 'Original source digest')}</dt><dd><code>{brief.sourceDigest}</code></dd>
         {brief.environmentDigest && <><dt>{tx('环境摘要', 'Environment digest')}</dt><dd><code>{brief.environmentDigest}</code></dd></>}
-        {brief.formalization && <><dt>{tx('形式化证据', 'Formalization evidence')}</dt><dd><code>{brief.formalization.evidenceDigest}</code></dd></>}</dl></details>
+        {brief.formalization?.evidenceDigest && <><dt>{tx('形式化证据', 'Formalization evidence')}</dt><dd><code>{brief.formalization.evidenceDigest}</code></dd></>}</dl></details>
     </section>
     <section><h3>{tx('历次尝试', 'Research attempts')}</h3><ol class="workspace-attempts">{brief.attempts.map(attempt => <li key={attempt.id}>
       <a href={attempt.href}><Rich text={attempt.title} /></a><span>{attempt.accepted ? tx('验收通过', 'Accepted') : evidenceStatus(attempt.status)}</span><time dateTime={attempt.createdAt}>{stamp(attempt.createdAt)}</time>

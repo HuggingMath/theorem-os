@@ -22,6 +22,7 @@ export type WebFormalization = {
   progress?: WebFormalizationProgress; report?: WebFormalizationReport;
   /** Live waiting position, projected on reads; never persisted as execution authority. */
   queue?: { position: number; ahead: number; running: number; slots: number };
+  compiled?: { digest: string; source: string; sourceSha256: string; round: number };
   /** How many process records are stored (read them from /activity) and how many arrived past the limit. */
   activity?: { count: number; dropped?: number };
   /** Authorizes proof research after formalization, with an optional manual statement and plan review. */
@@ -81,6 +82,7 @@ export type WebFormalizationActivity = WebFormalizationActivityBody & { sequence
 export const webFormalizationActivityLimits = Object.freeze({ perRecord: 3_000, page: 500, summaryText: 32_768, summaryItems: 12,
   summaryItem: 2_000, feedback: 6_000, source: 32_768, targets: 64, encoded: webAgentActionLimits.encoded + 256 * 1024 });
 export type WorkerFormalizationMessage = { type: 'progress'; progress: WebFormalizationProgress }
+  | { type: 'compiled'; candidate: unknown }
   | { type: 'activity'; activity: WebFormalizationActivityBody }
   | { type: 'result'; status: 'approved'; evidence: unknown }
   | { type: 'result'; status: 'exhausted' | 'error'; reason: string };

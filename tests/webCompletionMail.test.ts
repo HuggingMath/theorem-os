@@ -121,6 +121,26 @@ describe('completion mail content', () => {
     expect(mailsCompletion(run({ status: 'cancelled', phase: 'cancelled' }))).toBe(false);
     expect(mailsCompletion(run({ status: 'error', phase: 'interrupted' }))).toBe(false);
   });
+
+  it.each([
+    ['pending', '仍在后台审核', 'review is still running'],
+    ['rejected', '审核要求修改候选陈述', 'review requested statement changes'],
+    ['interrupted', '审核已中断', 'review was interrupted'],
+    ['superseded', '候选陈述已更新', 'the candidate statement has changed'],
+  ] as const)('withholds completion mail and preserves Lean acceptance while statement meaning is %s', (confirmation, zh, en) => {
+    const candidate = run({ formalization: { id: 'candidate-id', original: 'private natural-language original',
+      candidateDigest: 'a'.repeat(64), confirmation }, result: { status: 'evaluated_passed', proof: secretProof, report: {} } });
+    expect(mailsCompletion(candidate)).toBe(false);
+    const mail = completionMail(candidate, 'https://app.theoremos.top');
+    expect(mail.subject).toContain('Lean 陈述已通过验收');
+    expect(mail.text).toContain('冻结的 Lean 陈述通过独立 Lean 验收');
+    expect(mail.text).toContain(zh);
+    expect(mail.text).toContain(en);
+    expect(mail.text).not.toMatch(/完整原题通过|模型审核通过|private natural-language original/u);
+    candidate.formalization = { ...candidate.formalization!, confirmation: 'automatic', evidenceSha256: 'b'.repeat(64),
+      confirmedAt: '2026-10-27T10:43:00.000Z' };
+    expect(mailsCompletion(candidate)).toBe(true);
+  });
 });
 
 describe('natural-language final event acceptance wording', () => {

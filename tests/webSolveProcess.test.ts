@@ -108,6 +108,35 @@ describe('solving process', () => {
     expect(process.current).toMatchObject({ kind: 'statement', file: 'Submission.lean' });
   });
 
+  it('publishes the compiled snapshot without waiting for a report or activity transcript', () => {
+    const source = 'theorem one : 1 + 1 = 2 := by sorry';
+    const process = buildSolveProcess({ formalization: formalization({ status: 'running', confirmedAt: undefined,
+      compiled: { digest: 'a'.repeat(64), source, sourceSha256: 'b'.repeat(64), round: 1 }, progress: { phase: 'reviewing', updatedAt: at(10) } }) });
+    expect(process.current).toMatchObject({ kind: 'statement', file: 'Formalization.lean', source });
+    expect(process.active).toBe(true); expect(process.endedAt).toBeUndefined();
+  });
+
+  it('keeps review live beside a completed candidate proof and finishes when the same statement is approved', () => {
+    const candidate = run({ status: 'completed', finishedAt: at(15), result: { status: 'evaluated_passed', proof: 'theorem one : 1 + 1 = 2 := by decide', report: {} },
+      formalization: { id: 'f1', original: 'Prove 1 + 1 = 2.', candidateDigest: 'a'.repeat(64), confirmation: 'pending' } });
+    const reviewing = formalization({ status: 'running', confirmedAt: undefined, runId: candidate.id, progress: { phase: 'reviewing', updatedAt: at(15) } });
+    const process = buildSolveProcess({ formalization: reviewing, run: candidate });
+    expect(process).toMatchObject({ state: 'accepted', active: true, label: '候选 Lean 陈述证明通过' });
+    expect(process.endedAt).toBeUndefined(); expect(process.current?.kind).toBe('proof');
+    expect(process.stages.map(stage => [stage.id, stage.tone])).toEqual([['formalize', 'active'], ['prove', 'done'], ['verify', 'done']]);
+    expect(process.stages[2].rows[0].label).toBe('在干净环境里重新检查固定的 Lean 陈述');
+    const approved = buildSolveProcess({ formalization: formalization({ runId: candidate.id }), run: { ...candidate,
+      formalization: { ...candidate.formalization!, confirmation: 'automatic', evidenceSha256: 'b'.repeat(64), confirmedAt: at(20) } } });
+    expect(approved).toMatchObject({ state: 'accepted', active: false, label: 'Lean 陈述证明通过' });
+  });
+
+  it('continues showing statement revision after a rejected candidate proof stops', () => {
+    const process = buildSolveProcess({ formalization: formalization({ status: 'running', progress: { phase: 'generating', updatedAt: at(11) } }),
+      run: run({ status: 'cancelled', formalization: { id: 'f1', original: 'Prove 1 + 1 = 2.', confirmation: 'rejected' } }) });
+    expect(process).toMatchObject({ state: 'formalizing', active: true });
+    expect(process.stages[0].tone).toBe('active');
+  });
+
   it('an Agent’s own Lean check is a check the live workspace can show under its file', () => {
     const check = action(30, 'prover', 'item-1', { command: "check-lean --file 'Submission.lean'", lean: lean(false, 3) });
     const process = buildSolveProcess({ run: run(), events: run().events, routes: [] });

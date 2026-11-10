@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { acceptedTitle, endedSummary, formatDuration, formatTokens, isAcceptedRun, isRejectedRun, planGated, readableDuration, readableMetric, resultDescription, runProgress, runTokens, shownLines, stalledMinutes, statementConfirmation, stoppedLabel } from '../apps/web/presentation';
+import { acceptedTitle, endedSummary, formatDuration, formatTokens, isAcceptedRun, isRejectedRun, isStatementReviewed, planGated,
+  readableDuration, readableMetric, resultDescription, runProgress, runTokens, shownLines, stalledMinutes,
+  statementConfirmation, stoppedLabel } from '../apps/web/presentation';
 import type { WebRun } from '../apps/web/shared';
 
 const at = (seconds: number) => new Date(Date.UTC(2026, 9, 16) + seconds * 1000).toISOString();
@@ -30,6 +32,7 @@ describe('workbench phase and elapsed-time presentation', () => {
       formalization: { id: 'formalization', original: 'Prove that True holds.', evidenceSha256: 'f'.repeat(64), confirmedAt: at(0),
         ...(confirmation ? { confirmation } : {}) } });
     expect(isAcceptedRun(accepted)).toBe(true);
+    expect(isStatementReviewed(accepted)).toBe(true);
     for (const text of [acceptedTitle(accepted), resultDescription(accepted), endedSummary(accepted)]) {
       expect(text).toContain('Lean 陈述');
       expect(text).not.toContain('原题已通过');
@@ -50,6 +53,51 @@ describe('workbench phase and elapsed-time presentation', () => {
     expect(statementConfirmation('automatic', false, 'direct')).toBe('Lean 陈述编译通过；原题含义请查看形式化记录。');
     expect(statementConfirmation('automatic', true, 'direct')).not.toContain('模型审核通过');
     expect(statementConfirmation('automatic')).toContain('模型审核通过');
+  });
+
+  it.each(['pending', 'rejected', 'interrupted', 'superseded'] as const)(
+    'preserves independent Lean acceptance without original-problem approval for a %s statement', confirmation => {
+      const accepted = run({ status: 'completed', phase: 'evaluation_finished',
+        result: { status: 'evaluated_passed', proof: 'by trivial', report: {} },
+        formalization: { id: 'candidate', original: 'Prove that True holds.', candidateDigest: 'a'.repeat(64), confirmation } });
+      expect(isAcceptedRun(accepted)).toBe(true);
+      expect(isStatementReviewed(accepted)).toBe(false);
+      expect(runProgress(accepted).phaseLabel).toBe('验收通过');
+      expect(acceptedTitle(accepted)).toBe('候选 Lean 陈述证明通过');
+      for (const text of [resultDescription(accepted), endedSummary(accepted)]) {
+        expect(text).toContain('候选 Lean 陈述已通过独立验收');
+        expect(text).toContain(statementConfirmation(confirmation));
+        expect(text).not.toContain('原题已通过');
+      }
+      // Stale evidence fields never override an explicit rejected/interrupted review.
+      expect(isStatementReviewed({ formalization: { ...accepted.formalization!, evidenceSha256: 'e'.repeat(64), confirmedAt: at(0) } }))
+        .toBe(false);
+      const direct = { ...accepted, formalization: { ...accepted.formalization!, reviewMode: 'direct' as const } };
+      expect(resultDescription(direct)).toContain('候选 Lean 陈述已通过独立验收');
+      expect(statementConfirmation(confirmation, false, 'direct')).toBe(statementConfirmation(confirmation));
+    });
+
+  it('requires the approved evidence binding before opening original-problem completion actions', () => {
+    expect(isStatementReviewed({})).toBe(true);
+    const formalization = { id: 'candidate', original: 'Prove True.', candidateDigest: 'a'.repeat(64) };
+    expect(isStatementReviewed({ formalization })).toBe(false);
+    for (const confirmation of ['automatic', 'manual'] as const) {
+      expect(isStatementReviewed({ formalization: { ...formalization, confirmation } })).toBe(false);
+      expect(isStatementReviewed({ formalization: { ...formalization, confirmation, evidenceSha256: 'e'.repeat(64) } })).toBe(false);
+      expect(isStatementReviewed({ formalization: { ...formalization, confirmation, evidenceSha256: 'e'.repeat(64), confirmedAt: at(0) } }))
+        .toBe(true);
+    }
+    expect(statementConfirmation('pending')).toContain('后台审核中');
+    expect(statementConfirmation('rejected')).toContain('审核要求修改陈述');
+    expect(statementConfirmation('interrupted')).toContain('审核已停止');
+    expect(statementConfirmation('superseded')).toContain('新版本替代');
+    expect(statementConfirmation('manual', true)).toContain('分享者已确认');
+  });
+
+  it('describes candidate evaluation independently of the original-problem meaning review', () => {
+    const evaluating = run({ phase: 'evaluation_started', timings: { evaluating: at(10) },
+      formalization: { id: 'candidate', original: 'Prove True.', confirmation: 'pending' } });
+    expect(resultDescription(evaluating)).toBe('正在独立验证固定的 Lean 陈述。');
   });
 
   it('keeps queue and Mathlib preparation separate from the solving clock', () => {

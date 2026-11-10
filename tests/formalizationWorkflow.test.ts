@@ -5,8 +5,9 @@ import crypto from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as sandboxRuntime from '../src/runtime/formalizationSandbox';
-import { assertFormalizationEvidence, formalizationDigest, prepareFormalization, readFormalizationArtifact,
-  readFormalizationRequest } from '../src/math/formalization';
+import { assertFormalizationCompiledCandidate, assertFormalizationEvidence, formalizationCompiledCandidate,
+  formalizationCompiledCandidateDigest, formalizationDigest, formalizationEvidenceSchema, prepareFormalization,
+  readFormalizationArtifact, readFormalizationRequest, type FormalizationCompiledCandidate } from '../src/math/formalization';
 import { defaultFormalizationWorkflow, type FormalizationWorkflow } from '../src/math/formalizationWorkflow';
 import type { FormalizationPlan } from '../src/math/formalizationPlan';
 import type { MathAgentFailureDiagnostic, MathAgentOptions, MathAgentSession } from '../src/runtime/codexSession';
@@ -341,6 +342,8 @@ describe('fidelity role context and submission reminders', () => {
     const blind = agent.seen.find(item => item.role === 'backtranslate')!;
     const planner = agent.seen.find(item => item.role === 'plan-1')!;
     const protocol = readMathText(path.join(planner.config.workspace, 'ROLE.md'));
+    expect(protocol).toContain('explicitly construct a witness and prove its stated properties');
+    expect(protocol).toContain('never relabel an unsupported task merely to pass admission');
     const sourceSpan = JSON.parse(protocol.match(/^HOST_SOURCE_SPAN=(.+)$/mu)![1]);
     expect(sourceSpan).toEqual({ id: 'source', start: 0, end: statement.length, text: statement });
     expect(statement.slice(sourceSpan.start, sourceSpan.end)).toBe(statement);
@@ -905,6 +908,41 @@ describe('parallel review retries after a validated revision request', () => {
 });
 
 describe('planned formalization and unanimous review protocol', () => {
+  it('publishes a complete frozen candidate and awaits its handoff before starting semantic review', async () => {
+    const f = fixture(), agent = preset();
+    let publish!: (candidate: FormalizationCompiledCandidate) => void, release!: () => void;
+    const published = new Promise<FormalizationCompiledCandidate>(resolve => { publish = resolve; });
+    const handoff = new Promise<void>(resolve => { release = resolve; });
+    const running = runFormalization(f.directory, f.root, { openSession: agent.open, elaborate,
+      onCompiledCandidate: async candidate => { publish(candidate); await handoff; } });
+    let result: Awaited<typeof running>;
+    try {
+      const candidate = await Promise.race([published, running.then(() => { throw new Error('Candidate was never published'); })]);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(agent.seen.map(item => item.role)).toEqual(['plan-1', 'generate']);
+      expect(() => assertFormalizationCompiledCandidate(candidate)).not.toThrow();
+      expect(candidate.candidate.source).toBe(candidate.snapshot.source);
+      expect(candidate.sourceSha256).toBe(mathDigest(candidate.candidate.source));
+      expect(formalizationEvidenceSchema.safeParse(candidate).success).toBe(false);
+      expect(fs.existsSync(path.join(f.directory, 'artifact'))).toBe(false);
+      expect(fs.existsSync(path.join(f.directory, 'workspace'))).toBe(false);
+    } finally { release(); result = await running; }
+    expect(result.status).toBe('approved');
+    const approved = formalizationCompiledCandidate(readFormalizationArtifact(path.join(f.directory, 'artifact')));
+    expect(formalizationCompiledCandidateDigest(await published)).toBe(formalizationCompiledCandidateDigest(approved));
+    expect(agent.seen.map(item => item.role)).toEqual(['plan-1', 'generate', 'backtranslate', 'compare-reviewer-1', 'compare-reviewer-2']);
+  });
+
+  it('does not publish a candidate whose compilation failed', async () => {
+    const f = fixture(), agent = preset(), published: FormalizationCompiledCandidate[] = [];
+    const result = await runFormalization(f.directory, f.root, { openSession: agent.open,
+      elaborate: async () => { throw new Error('synthetic_compilation_failed'); },
+      onCompiledCandidate: candidate => { published.push(candidate); } });
+    expect(result).toMatchObject({ status: 'exhausted', error: 'synthetic_compilation_failed' });
+    expect(published).toEqual([]);
+    expect(agent.seen.map(item => item.role)).toEqual(['plan-1', 'generate']);
+  });
+
   it('retains frozen v2 workflow evidence and restores its artifact without model calls', async () => {
     const f = fixture(), agent = preset(), legacy = { ...f.request, schema: 'theorem-os.formalization-request.v2' };
     delete legacy.contextProtocol;

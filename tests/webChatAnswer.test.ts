@@ -45,6 +45,23 @@ describe('chat reads existing approved explanations without model or generation 
     expect(request).not.toHaveBeenCalled();
   });
 
+  it.each(['pending', 'rejected', 'interrupted', 'superseded'] as const)('keeps %s candidates usable as Lean proofs without reading an original-problem explanation', async confirmation => {
+    const { answers, request } = fixture(() => { throw new Error('No original-problem explanation request is allowed'); });
+    const candidate = run({ formalization: { id: 'formalization', original: 'Original problem', candidateDigest: 'a'.repeat(64), confirmation } });
+    expect(answers.sync(candidate)).toBeUndefined(); answers.refresh(candidate); await settle();
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('reads the same accepted proof after background review binds its approval', async () => {
+    const { answers, request } = fixture(url => url.endsWith('/explanations') ? overview() : { explanation: explanation('first') });
+    const candidate = run({ formalization: { id: 'formalization', original: 'Original problem', candidateDigest: 'a'.repeat(64), confirmation: 'pending' } });
+    expect(answers.sync(candidate)).toBeUndefined(); expect(request).not.toHaveBeenCalled();
+    const reviewed = run({ formalization: { ...candidate.formalization!, confirmation: 'automatic', evidenceSha256: 'b'.repeat(64), confirmedAt: at } });
+    const answer = answers.sync(reviewed)!; await settle();
+    expect(answer.document).toEqual(document('first'));
+    expect(request.mock.calls).toEqual([['/api/runs/accepted-run/explanations'], ['/api/runs/accepted-run/explanations/item?target=first&language=zh']]);
+  });
+
   it('prefers an approved target in the current language and only reads its saved document', async () => {
     const entries = [explanation('first', { language: 'en' }), explanation('second')];
     const { answers, request } = fixture(url => url.endsWith('/explanations') ? overview(run(), entries) : { explanation: explanation('second') });

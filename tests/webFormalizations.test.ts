@@ -11,11 +11,14 @@ import type { WebRunner } from '../apps/web/runner';
 import { WebKeyVault } from '../apps/web/keyVault';
 import { WebStorage } from '../apps/web/storage';
 import type { WebRun, WebSession, WorkerInput, WorkerMessage } from '../apps/web/shared';
-import { assertFormalizationEvidence, formalizationDigest, formalizationInputDigest, formalizationReviewInput } from '../src/math/formalization';
+import { assertFormalizationEvidence, formalizationCompiledCandidate, formalizationCompiledCandidateDigest, formalizationDigest,
+  formalizationInputDigest, formalizationReviewInput } from '../src/math/formalization';
+import { mailsCompletion } from '../apps/web/completionMail';
+import { shareSnapshot } from '../apps/web/share';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { LEAN_STATEMENT_CONTEXT_PROTOCOL } from '../src/math/leanStatementSemantic';
 
-import { semanticReviewFixture } from './helpers/formalizationFixture';
+import { semanticReviewFixture, syntheticElaboration } from './helpers/formalizationFixture';
 import { webFormalizationStatement as fixtureStatement, webFormalizationEvidence,
   webDirectFormalizationEvidence, webReviewedFormalizationEvidence } from './helpers/webFormalizationFixture';
 
@@ -27,11 +30,15 @@ class Runner implements WebRunner {
   pending: Pending[] = [];
   inputs: WorkerFormalizationInput[] = [];
   runs: WorkerInput[] = [];
+  proofs: { input: WorkerInput; signal: AbortSignal; send(message: WorkerMessage): void; resolve(): void }[] = [];
   ready = true;
   async readiness() { return { ready: this.ready, message: 'Disposable test runner' }; }
-  run(input: WorkerInput, _send: (message: WorkerMessage) => void, signal: AbortSignal) {
+  run(input: WorkerInput, send: (message: WorkerMessage) => void, signal: AbortSignal) {
     this.runs.push(input);
-    return new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
+    return new Promise<void>(resolve => {
+      this.proofs.push({ input, send, resolve, signal });
+      signal.addEventListener('abort', () => resolve(), { once: true });
+    });
   }
   formalize(input: WorkerFormalizationInput, send: (message: WorkerFormalizationMessage) => void, signal: AbortSignal) {
     this.inputs.push(input);
@@ -88,6 +95,148 @@ describe('online formalization ownership and evidence handoff', () => {
       source: formalization.report!.statement, task: 'Prove the confirmed statement', maxTurns: 1, maxRunSeconds: 60,
       workers: 1, coordination: 'cooperative', formalizationId: formalization.id };
   }
+
+  it('starts one proof from the compiled snapshot before review finishes and later binds the same candidate', async () => {
+    const alice = await client(), bob = await client(), value = await create(alice, true);
+    const pending = runner.pending.at(-1)!, evidence = webFormalizationEvidence(pending.input);
+    const candidate = formalizationCompiledCandidate(evidence), digest = formalizationCompiledCandidateDigest(candidate);
+    pending.send({ type: 'compiled', candidate }); await settle();
+    const route = `/api/formalizations/${value.id}`;
+    const live = (await (await request(alice, route)).json()).formalization as WebFormalization;
+    expect(live).toMatchObject({ status: 'running', compiled: { digest, source: evidence.candidate.source } });
+    expect(live.runId).toBeTruthy(); expect(live.report).toBeUndefined(); expect(live.confirmation).toBeUndefined();
+    expect(runner.runs).toHaveLength(1);
+    expect(runner.runs[0].compiledFormalization).toEqual(candidate);
+    expect(runner.runs[0].formalization).toBeUndefined();
+    expect(runner.runs[0].input).toMatchObject({ source: candidate.candidate.source, maxTurns: 0, maxRunSeconds: 0, maxTotalTokens: 0 });
+    const run = (await (await request(alice, `/api/runs/${live.runId}`)).json()).run as WebRun;
+    expect(run.formalization).toMatchObject({ id: value.id, candidateDigest: digest, confirmation: 'pending' });
+    expect(run.formalization?.evidenceSha256).toBeUndefined(); expect(run.formalization?.confirmedAt).toBeUndefined();
+    expect((await request(bob, `/api/runs/${live.runId}`)).status).toBe(404);
+    pending.send({ type: 'compiled', candidate: structuredClone(candidate) }); await settle();
+    expect(runner.runs).toHaveLength(1);
+    const frozenTask = runner.runs[0].input.task;
+    pending.send({ type: 'result', status: 'approved', evidence }); pending.resolve(); await settle();
+    const done = (await (await request(alice, route)).json()).formalization as WebFormalization;
+    expect(done).toMatchObject({ status: 'confirmed', runId: live.runId, confirmation: 'automatic' });
+    const updated = (await (await request(alice, `/api/runs/${live.runId}`)).json()).run as WebRun;
+    expect(updated.formalization).toMatchObject({ confirmation: 'automatic', candidateDigest: digest, evidenceSha256: formalizationDigest(evidence) });
+    expect(updated.events.some(event => event.type === 'statement_review_updated')).toBe(true);
+    expect(runner.runs).toHaveLength(1); expect(runner.runs[0].input.task).toBe(frozenTask);
+    expect(runner.runs[0].compiledFormalization).toEqual(candidate); expect(runner.runs[0].formalization).toBeUndefined();
+  });
+
+  it('keeps a completed Lean proof usable while meaning is pending and withholds sharing and completion until approval', async () => {
+    const alice = await client(); await create(alice, true); const pending = runner.pending.at(-1)!;
+    const evidence = webFormalizationEvidence(pending.input), candidate = formalizationCompiledCandidate(evidence);
+    pending.send({ type: 'compiled', candidate }); await settle();
+    const proof = runner.proofs[0];
+    proof.send({ type: 'result', result: { status: 'evaluated_passed',
+      proof: 'theorem addition (n : Nat) : n + 1 = 1 + n := by omega\n', report: {} } });
+    proof.resolve(); await settle();
+    const run = (await (await request(alice, `/api/runs/${proof.input.id}`)).json()).run as WebRun;
+    expect(run).toMatchObject({ status: 'completed', result: { status: 'evaluated_passed' }, formalization: { confirmation: 'pending' } });
+    expect(run.result?.proof).toContain('by omega');
+    expect(shareSnapshot(run)).toBeUndefined(); expect(mailsCompletion(run)).toBe(false);
+    const generation = await (await request(alice, `/api/runs/${proof.input.id}/explanations`)).json();
+    expect(generation.generation.available).toBe(false);
+    pending.send({ type: 'result', status: 'approved', evidence }); pending.resolve(); await settle();
+    const approved = (await (await request(alice, `/api/runs/${proof.input.id}`)).json()).run as WebRun;
+    expect(approved.formalization?.confirmation).toBe('automatic');
+    expect(approved.result).toEqual(run.result); expect(mailsCompletion(approved)).toBe(true);
+    expect(runner.runs).toHaveLength(1);
+  });
+
+  it.each([false, true])('does not begin background proof when solve/manual review requests it: manual=%s', async manual => {
+    const alice = await client(), value = await create(alice, manual, manual || undefined), pending = runner.pending.at(-1)!;
+    const candidate = formalizationCompiledCandidate(webFormalizationEvidence(pending.input));
+    pending.send({ type: 'compiled', candidate }); await settle();
+    const live = (await (await request(alice, `/api/formalizations/${value.id}`)).json()).formalization as WebFormalization;
+    expect(live.compiled?.source).toBe(candidate.candidate.source); expect(live.runId).toBeUndefined();
+    expect(runner.runs).toEqual([]);
+  });
+
+  it('stops background review and its proof together and ignores late approved messages', async () => {
+    const alice = await client(), value = await create(alice, true), pending = runner.pending.at(-1)!;
+    const evidence = webFormalizationEvidence(pending.input);
+    pending.send({ type: 'compiled', candidate: formalizationCompiledCandidate(evidence) }); await settle();
+    const runId = runner.runs[0].id;
+    const cancelled = await request(alice, `/api/formalizations/${value.id}/cancel`, {});
+    expect((await cancelled.json()).formalization.status).toBe('cancelled');
+    expect(pending.signal.aborted).toBe(true); expect(runner.proofs[0].signal.aborted).toBe(true);
+    pending.send({ type: 'result', status: 'approved', evidence }); await settle();
+    const run = (await (await request(alice, `/api/runs/${runId}`)).json()).run as WebRun;
+    expect(run).toMatchObject({ status: 'cancelled', formalization: { confirmation: 'interrupted' } });
+    expect(run.formalization?.evidenceSha256).toBeUndefined(); expect(runner.runs).toHaveLength(1);
+  });
+
+  it.each(['source', 'snapshot', 'original', 'environment'] as const)('refuses a compiled handoff with changed %s before starting proof', async field => {
+    const alice = await client(), value = await create(alice, true), pending = runner.pending.at(-1)!;
+    const candidate = formalizationCompiledCandidate(webFormalizationEvidence(pending.input));
+    if (field === 'source') candidate.candidate.source += '\n-- changed';
+    if (field === 'snapshot') candidate.snapshotDigest = '0'.repeat(64);
+    if (field === 'original') candidate.request.statement += ' changed';
+    if (field === 'environment') candidate.request.environment = 'mathlib';
+    pending.send({ type: 'compiled', candidate }); await settle();
+    const ended = (await (await request(alice, `/api/formalizations/${value.id}`)).json()).formalization as WebFormalization;
+    expect(ended.status).toBe('error'); expect(ended.runId).toBeUndefined();
+    expect(runner.runs).toEqual([]); expect(pending.signal.aborted).toBe(true);
+  });
+
+  it('marks an interrupted background review after restart without approving or restarting its proof', async () => {
+    const alice = await client(), value = await create(alice, true), pending = runner.pending.at(-1)!;
+    pending.send({ type: 'compiled', candidate: formalizationCompiledCandidate(webFormalizationEvidence(pending.input)) }); await settle();
+    const runId = runner.runs[0].id;
+    await service.close();
+    // Reproduce the saved state of a crash while the review was still running.
+    const ownerDirectory = fs.readdirSync(path.join(config.dataRoot!, 'owners'))[0];
+    const recordPath = path.join(config.dataRoot!, 'owners', ownerDirectory, 'formalizations', value.id, 'record.json');
+    const record = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+    record.formalization.status = 'running'; delete record.formalization.finishedAt;
+    fs.writeFileSync(recordPath, JSON.stringify(record));
+    service = createWebService(config, runner, { sample: null });
+    await new Promise<void>(resolve => service.server.listen(config.port, '127.0.0.1', resolve));
+    const restored = (await (await request(alice, `/api/formalizations/${value.id}`)).json()).formalization as WebFormalization;
+    expect(restored).toMatchObject({ status: 'error', reason: 'formalization_interrupted', runId });
+    const run = (await (await request(alice, `/api/runs/${runId}`)).json()).run as WebRun;
+    expect(run.formalization?.confirmation).toBe('interrupted'); expect(run.formalization?.evidenceSha256).toBeUndefined();
+    expect(runner.runs).toHaveLength(1); expect(runner.pending).toHaveLength(1);
+  });
+
+  it('cancels a rejected candidate and gives a revised compiled source its own proof identity', async () => {
+    const alice = await client(), value = await create(alice, true), pending = runner.pending.at(-1)!;
+    const evidence = webFormalizationEvidence(pending.input), first = formalizationCompiledCandidate(evidence);
+    pending.send({ type: 'compiled', candidate: first }); await settle();
+    pending.send({ type: 'activity', activity: { type: 'step', step: { step: 'revision', stage: 'round', round: 1,
+      text: 'formalization_semantic_changes_requested: preserve an omitted condition' } } }); await settle();
+    const oldId = runner.runs[0].id;
+    expect(runner.proofs[0].signal.aborted).toBe(true);
+    const rejected = (await (await request(alice, `/api/runs/${oldId}`)).json()).run as WebRun;
+    expect(rejected.formalization?.confirmation).toBe('rejected');
+    const source = first.candidate.source.replace('n + 1 = 1 + n', '1 + n = n + 1');
+    const elaborated = syntheticElaboration(source, 'standard', { detailedContext: true, semanticContext: true, structureContext: true,
+      boundedLibraryContext: first.request.contextProtocol === 'kernel-v3' });
+    const candidate = { ...first.candidate, source: elaborated.source };
+    const revised = formalizationCompiledCandidate({ ...first, candidate, inputDigest: formalizationInputDigest(first.request, candidate),
+      sourceSha256: elaborated.sourceSha256, targets: elaborated.targets, snapshot: elaborated.snapshot,
+      snapshotDigest: elaborated.snapshotDigest, compilation: elaborated.compilation as typeof first.compilation, round: 2 });
+    expect(formalizationCompiledCandidateDigest(revised)).not.toBe(formalizationCompiledCandidateDigest(first));
+    pending.send({ type: 'compiled', candidate: revised }); await settle();
+    const live = (await (await request(alice, `/api/formalizations/${value.id}`)).json()).formalization as WebFormalization;
+    expect(live).toMatchObject({ status: 'running', compiled: { digest: formalizationCompiledCandidateDigest(revised) } });
+    expect(live.researchError).toBeUndefined();
+    expect(live.runId).not.toBe(oldId);
+    const revisedRun = (await (await request(alice, `/api/runs/${live.runId}`)).json()).run as WebRun;
+    expect(revisedRun).toMatchObject({ status: 'running', formalization: { confirmation: 'pending' } });
+    expect(runner.runs).toHaveLength(2); expect(runner.runs[1].id).not.toBe(oldId);
+    expect(live.runId).toBe(runner.runs[1].id); expect(live.compiled?.source).toBe(revised.candidate.source);
+    // An old approved result must never bless the new candidate or reuse its proof.
+    pending.send({ type: 'result', status: 'approved', evidence }); pending.resolve(); await settle();
+    const ended = (await (await request(alice, `/api/formalizations/${value.id}`)).json()).formalization as WebFormalization;
+    expect(ended).toMatchObject({ status: 'error', reason: 'formalization_candidate_changed_after_compilation' });
+    expect(runner.proofs[1].signal.aborted).toBe(true);
+    expect(runner.runs).toHaveLength(2);
+  });
 
   it('uses authenticated session and CSRF boundaries, hides other owners and never stores keys', async () => {
     const alice = await client(), bob = await client();

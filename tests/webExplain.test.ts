@@ -1,6 +1,6 @@
 import http from 'node:http';
 import type net from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { askProvider, explainInput, failedFeedback, webExplainInstructions, WebExplainer, webExplainLimits } from '../apps/web/explain';
 import type { WebCheckReceipt } from '../apps/web/collaboration';
 import type { TrajectoryVersionDetail } from '../apps/web/trajectory';
@@ -8,7 +8,7 @@ import type { TrajectoryVersionDetail } from '../apps/web/trajectory';
 const key = 'sk-explain-offline-test';
 type Seen = { headers: http.IncomingHttpHeaders; body: Record<string, unknown>; url: string };
 const servers: http.Server[] = [];
-afterEach(async () => { await Promise.all(servers.splice(0).map(server => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }))); });
+afterEach(async () => { vi.restoreAllMocks(); await Promise.all(servers.splice(0).map(server => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }))); });
 
 /** A local stand-in for the provider; `reply` answers each request after its body has arrived. */
 async function provider(reply: (response: http.ServerResponse, seen: Seen) => void) {
@@ -21,6 +21,7 @@ async function provider(reply: (response: http.ServerResponse, seen: Seen) => vo
       seen.push(item); reply(response, item);
     });
   });
+  server.requestTimeout = 0; server.headersTimeout = 0; server.setTimeout(0);
   servers.push(server);
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   return { seen, baseUrl: `http://127.0.0.1:${(server.address() as net.AddressInfo).port}/v1` };
@@ -37,7 +38,7 @@ const version: TrajectoryVersionDetail = { taskId: 'goal_2', commit: 'c'.repeat(
   source: { taskId: 'goal_2', taskVersion: 'v1', commit: 'c'.repeat(40), sourceDigest: 'd'.repeat(64), environmentDigest: 'env',
     file: 'Submission.lean', source: 'theorem zero_add (n : Nat) : 0 + n = n := by rfl', scope: 'owned-file' } };
 const call = (baseUrl: string, timeoutMs?: number) => ({ baseUrl, apiKey: key, model: 'fixture-model', input: [{ type: 'message', role: 'user', content: [] }],
-  ...(timeoutMs ? { timeoutMs } : {}) });
+  ...(timeoutMs !== undefined ? { timeoutMs } : {}) });
 
 describe('explaining a failed version', () => {
   it('passes on what Lean said about the failed checks only, without the checker\'s delimiters', () => {
@@ -104,7 +105,18 @@ describe('explaining a failed version', () => {
     expect(answer.answer).toHaveLength(webExplainLimits.answer); expect(answer.truncated).toBe(true);
   });
 
-  it('stops delivering buffered events and rejects completion when onText aborts the request', async () => {
+  it.each([undefined, 0])('does not create a deadline for provider or explainer calls with timeout %s', async timeoutMs => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    const mock = await provider(response => {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.end(sse(completed('ok')));
+    });
+    expect((await askProvider(call(mock.baseUrl, timeoutMs))).answer).toBe('ok');
+    expect((await new WebExplainer(timeoutMs).ask('alice', call(mock.baseUrl))).answer).toBe('ok');
+    expect(timeout).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, 0])('stops delivering buffered events when onText aborts an unlimited request with timeout %s', async timeoutMs => {
     const mock = await provider(response => {
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
       response.end(sse([
@@ -114,7 +126,7 @@ describe('explaining a failed version', () => {
       ]));
     });
     const stop = new AbortController(), partials: string[] = [];
-    await expect(askProvider({ ...call(mock.baseUrl), onText: text => { partials.push(text); stop.abort(); } }, stop.signal))
+    await expect(askProvider({ ...call(mock.baseUrl, timeoutMs), onText: text => { partials.push(text); stop.abort(); } }, stop.signal))
       .rejects.toMatchObject({ status: 499 });
     expect(partials).toEqual(['first']);
   });
@@ -130,20 +142,24 @@ describe('explaining a failed version', () => {
     await expect(askProvider(call(empty.baseUrl))).rejects.toMatchObject({ status: 502, message: '模型服务没有给出回答。' });
     const silent = await provider(response => { response.writeHead(200, { 'Content-Type': 'text/event-stream' }); response.write(': waiting\n\n'); });
     await expect(askProvider(call(silent.baseUrl, 300))).rejects.toMatchObject({ status: 504 });
-    const stop = new AbortController(), asked = askProvider(call(silent.baseUrl), stop.signal);
-    setTimeout(() => stop.abort(), 100);
-    await expect(asked).rejects.toMatchObject({ status: 499 });
+    await expect(new WebExplainer(300).ask('alice', call(silent.baseUrl))).rejects.toMatchObject({ status: 504 });
+    const stop = new AbortController();
+    const cancelled = await provider(response => { response.writeHead(200, { 'Content-Type': 'text/event-stream' }); response.write(': waiting\n\n'); stop.abort(); });
+    await expect(new WebExplainer().ask('alice', call(cancelled.baseUrl), stop.signal)).rejects.toMatchObject({ status: 499 });
     await expect(askProvider(call('http://127.0.0.1:9/v1'))).rejects.toMatchObject({ status: 502, message: '没能连上模型服务，或它的回答无法读取。' });
   });
 
   it('answers one question per owner at a time and at most twenty in ten minutes', async () => {
     let release = () => {};
+    let received!: () => void;
+    const requested = new Promise<void>(resolve => { received = resolve; });
     const mock = await provider(response => {
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
       release = () => response.end(sse(completed('ok')));
+      received();
     });
-    const explainer = new WebExplainer(5_000), first = explainer.ask('alice', call(mock.baseUrl));
-    for (let wait = 0; !mock.seen.length && wait < 100; wait++) await new Promise(resolve => setTimeout(resolve, 10));
+    const explainer = new WebExplainer(), first = explainer.ask('alice', call(mock.baseUrl));
+    await requested;
     await expect(explainer.ask('alice', call(mock.baseUrl))).rejects.toMatchObject({ status: 429 });
     release();
     expect((await first).answer).toBe('ok');

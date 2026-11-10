@@ -5,6 +5,7 @@ import type { WebObservation } from '../apps/web/collaboration';
 import type { WebProvider, WebResult, WebRunInput, WorkerInput, WorkerMessage } from '../apps/web/shared';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { buildTheoremKnowledge, type KnowledgeCandidate } from '../src/solver/theoremKnowledge';
+import { mailsCompletion } from '../apps/web/completionMail';
 
 const provider: WebProvider = { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1' };
 const input = (apiKey = 'sk-test-job-secret'): WebRunInput => ({ providerId: provider.id, apiKey,
@@ -61,6 +62,52 @@ describe('web job ownership, scheduling and secret lifetime without provider cal
     return { runner, jobs };
   };
   afterEach(async () => { await Promise.all(queues.splice(0).map(jobs => jobs.close())); });
+
+  it.each(['proof-first', 'review-first'] as const)('notifies completion once after both proof and statement approval (%s)', async order => {
+    const runner = new ControlledRunner(), accepted = vi.fn(), mailed: string[] = [];
+    const jobs = new WebJobs(runner, { concurrency: 1, queueLimit: 8 }, { onAccepted: accepted,
+      onFinished: (_owner, run) => { if (mailsCompletion(run)) mailed.push(run.id); } });
+    queues.push(jobs);
+    const original = input(), run = jobs.create('owner', original, provider, undefined, undefined,
+      { compiled: { fixture: true }, provenance: { id: 'formalization', original: 'Original problem',
+        candidateDigest: 'candidate', confirmation: 'pending' } });
+    const approved = { evidenceSha256: 'a'.repeat(64), confirmedAt: new Date().toISOString(),
+      sourceSha256: mathDigest(run.source), environment: run.environment };
+    await tick();
+    if (order === 'proof-first') {
+      runner.calls[0].finish(); await tick();
+      expect(run.result?.status).toBe('evaluated_passed');
+      expect(accepted).not.toHaveBeenCalled(); expect(mailed).toEqual([]);
+    }
+    jobs.reviewFormalization('owner', run.id, 'candidate', 'automatic', approved);
+    if (order === 'review-first') {
+      expect(accepted).not.toHaveBeenCalled(); expect(mailed).toEqual([]);
+      runner.calls[0].finish(); await tick();
+    }
+    jobs.reviewFormalization('owner', run.id, 'candidate', 'automatic', approved);
+    expect(accepted).toHaveBeenCalledExactlyOnceWith('owner'); expect(mailed).toEqual([run.id]);
+    expect(run.status).toBe('completed'); expect(run.result?.status).toBe('evaluated_passed');
+    expect(runner.calls).toHaveLength(1); expect(runner.calls[0].input.formalization).toBeUndefined();
+    expect(runner.calls[0].input.input.task).toBe(original.task);
+  });
+
+  it('keeps an independently accepted proof when its meaning is rejected and ignores updates for other identities', async () => {
+    const { jobs, runner } = setup();
+    const run = jobs.create('owner', input(), provider, undefined, undefined,
+      { compiled: { fixture: true }, provenance: { id: 'formalization', original: 'Original problem',
+        candidateDigest: 'candidate', confirmation: 'pending' } });
+    await tick(); runner.calls[0].finish(); await tick();
+    jobs.reviewFormalization('another-owner', run.id, 'candidate', 'rejected');
+    jobs.reviewFormalization('owner', run.id, 'different-candidate', 'rejected');
+    expect(run.formalization?.confirmation).toBe('pending');
+    const proof = run.result?.proof;
+    jobs.reviewFormalization('owner', run.id, 'candidate', 'rejected');
+    jobs.reviewFormalization('owner', run.id, 'candidate', 'interrupted');
+    expect(run).toMatchObject({ status: 'completed', result: { status: 'evaluated_passed', proof },
+      formalization: { confirmation: 'rejected' } });
+    expect(mailsCompletion(run)).toBe(false);
+    expect(run.formalization?.evidenceSha256).toBeUndefined();
+  });
 
   it('accepts only host-declared solver transitions and preserves observation history without granting acceptance', async () => {
     const { jobs, runner } = setup(), run = jobs.create('owner', input(), provider);

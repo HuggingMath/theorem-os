@@ -79,11 +79,11 @@ const upstreamStatus: Record<number, string> = {
 export type WebExplainCall = { baseUrl: string; apiKey: string; model: string; input: unknown[]; timeoutMs?: number; instructions?: string; onText?(text: string): void };
 /**
  * One streamed call to the provider's Responses API, the endpoint the run's workers use, with light reasoning and
- * nothing stored. Aborting `signal` (the reader closed the panel) stops it; so does running past `timeoutMs`.
+ * nothing stored. Aborting `signal` (the reader closed the panel) stops it; only a positive `timeoutMs` adds a deadline.
  */
 export async function askProvider(call: WebExplainCall, signal?: AbortSignal): Promise<WebExplainAnswer> {
-  const timeout = AbortSignal.timeout(call.timeoutMs ?? 180_000);
-  const active = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  const timeout = call.timeoutMs !== undefined && call.timeoutMs > 0 ? AbortSignal.timeout(call.timeoutMs) : undefined;
+  const active = signal && timeout ? AbortSignal.any([signal, timeout]) : signal ?? timeout ?? new AbortController().signal;
   try {
     // Redirects are refused so the key is never sent anywhere but the configured address.
     const response = await fetch(`${call.baseUrl}/responses`, { method: 'POST', redirect: 'error',
@@ -106,7 +106,7 @@ export async function askProvider(call: WebExplainCall, signal?: AbortSignal): P
   } catch (error) {
     if (error instanceof WebExplainError) throw error;
     if (signal?.aborted) throw new WebExplainError(499, '已停止。');
-    if (timeout.aborted) throw new WebExplainError(504, '模型服务太久没有回答，请稍后再问。');
+    if (timeout?.aborted) throw new WebExplainError(504, '模型服务太久没有回答，请稍后再问。');
     throw new WebExplainError(502, '没能连上模型服务，或它的回答无法读取。');
   }
 }
@@ -171,7 +171,7 @@ function usageOf(value: unknown): WebExplainUsage | undefined {
 export class WebExplainer {
   private readonly busy = new Set<string>();
   private readonly asked = new Map<string, number[]>();
-  constructor(private readonly timeoutMs = 180_000) {}
+  constructor(private readonly timeoutMs = 0) {}
   counts() { return { running: this.busy.size, queued: 0 }; }
 
   async ask(owner: string, call: Omit<WebExplainCall, 'timeoutMs'>, signal?: AbortSignal): Promise<WebExplainAnswer> {

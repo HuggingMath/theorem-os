@@ -32,7 +32,7 @@ export const webConversationInstructions = [
   'Answer follow-up questions, explain ideas and Lean code, and distinguish recorded results from suggestions. If evidence is missing, say so.',
   'This conversation does not execute tools, modify a proof, start another task, or run Lean. Never say that your suggested code has been checked or accepted.',
   'When asked to change the active proof strategy, explain the suggestion and direct the user to the task guidance control to send it to the running research team.',
-  'Only a completed run with result status evaluated_passed is accepted. Other progress, successful partial checks and a model response are not final acceptance.',
+  'A completed run with result status evaluated_passed proves only its frozen Lean statement. Natural-language meaning is separate: pending, rejected, interrupted or superseded review is not approval of the original problem. Other progress and a model response are not final acceptance.',
   'Answer naturally and concisely in the language of the latest question.',
 ].join('\n');
 
@@ -41,11 +41,12 @@ export function conversationInput(conversation: WebConversation, run?: WebRun, f
   const context = {
     original: clip(formalization?.original ?? run?.formalization?.original ?? conversation.messages[0]?.text ?? '', 16_000),
     formalization: formalization && { status: formalization.status, progress: formalization.progress,
-      reason: formalization.reason, statement: clip(formalization.report?.statement ?? '', 16_000),
+      reason: formalization.reason, statement: clip(formalization.report?.statement ?? formalization.compiled?.source ?? '', 16_000),
       semanticReview: formalization.report?.semanticReview,
       backtranslation: formalization.report?.backtranslation },
     run: run && { status: run.status, phase: run.phase, task: clip(run.task, 4_000), source: clip(run.source, 16_000),
       accepted: run.status === 'completed' && run.result?.status === 'evaluated_passed',
+      statementReview: run.formalization?.confirmation,
       resultStatus: run.result?.status, proof: clip(run.result?.proof ?? '', 24_000),
       error: run.error, recentEvents: run.events.slice(-8),
       // The recorded observation carries task names, dependencies and check states, not a fabricated progress narrative.

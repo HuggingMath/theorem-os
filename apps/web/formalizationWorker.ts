@@ -163,6 +163,7 @@ async function main() {
     const result = await runFormalization(directory, root, {
       openSession: activity.openSession(openSession),
       elaborate: activity.elaborate(elaborateFormalization),
+      onCompiledCandidate: candidate => send({ type: 'compiled', candidate }),
       onEvent: event => {
         activity.onEvent(event);
         if (event.round) progress.round = event.round;

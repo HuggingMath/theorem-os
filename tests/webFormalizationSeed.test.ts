@@ -6,7 +6,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { prepareWebProblem } from '../apps/web/formalizationSeed';
 import { webDefaults } from '../apps/web/config';
 import type { WebRunInput } from '../apps/web/shared';
-import { formalizationDigest, readFormalizationArtifact, type FormalizationEvidence } from '../src/math/formalization';
+import { formalizationCompiledCandidate, formalizationCompiledCandidateDigest, formalizationDigest,
+  readFormalizationArtifact, type FormalizationEvidence } from '../src/math/formalization';
 import { readLeanTaskReceipt } from '../src/math/leanTask';
 import { readSolverProblem } from '../src/solver/problem';
 import { LIBRARY_PACK_SCHEMA, libraryPackDigest } from '../src/math/libraryPacks';
@@ -110,6 +111,56 @@ describe('confirmed formalization handoff to a frozen proof problem', () => {
     expect(task).toContain('preserve other original goal proofs, including existing sorry placeholders');
     expect(task).toContain('the host integrates checked tasks and verifies all targets');
     expect(fs.existsSync(path.join(destination, 'formalized'))).toBe(false);
+  });
+
+  it('freezes the compiled candidate and original problem before semantic review without an approved artifact', () => {
+    const destination = directory(), request = input(), compiled = formalizationCompiledCandidate(evidence);
+    const seed = prepareWebProblem(destination, { input: request, compiledFormalization: compiled });
+    const receipt = readLeanTaskReceipt(seed.activeProblemPath), task = fs.readFileSync(seed.taskFile, 'utf8');
+    expect(receipt.contract.formalStatement).toBe(compiled.candidate.source);
+    expect(receipt.environment).toBe(compiled.request.environment);
+    expect(receipt.environmentDigest).toBe(compiled.request.environmentDigest);
+    expect(receipt.contract.informalStatement).toContain('Natural-language meaning is still under independent review.');
+    expect(receipt.contract.informalStatement).toContain('Original problem:\n' + compiled.request.statement);
+    expect(receipt.contract.informalStatement).toContain('Original SHA256: ' + compiled.request.statementSha256);
+    expect(receipt.contract.informalStatement).toContain('Compiled candidate SHA256: ' + formalizationCompiledCandidateDigest(compiled));
+    expect(receipt.contract.informalStatement).not.toContain('Formalization evidence SHA256:');
+    expect(task).toContain(request.task);
+    expect(task).toContain(receipt.contract.informalStatement);
+    expect(fs.readFileSync(path.join(receipt.projectRoot, 'Submission.lean'), 'utf8')).toBe(compiled.candidate.source);
+    expect(readSolverProblem(seed.workspaceRoot, seed.activeProblemPath).targets.map(target => target.theoremName))
+      .toEqual(compiled.targets.map(target => target.name));
+    const snapshotFile = path.join(destination, 'compiled-formalization.json');
+    expect(JSON.parse(fs.readFileSync(snapshotFile, 'utf8'))).toEqual(compiled);
+    expect(fs.statSync(snapshotFile).mode & 0o777).toBe(0o400);
+    expect(fs.existsSync(path.join(destination, 'formalized'))).toBe(false);
+  });
+
+  it.each(['source', 'environment', 'id'] as const)(
+    'rejects a compiled %s binding mismatch before creating the proof workspace', field => {
+      const destination = directory(), request = input(), compiled = formalizationCompiledCandidate(evidence);
+      if (field === 'source') request.source += '\n-- changed';
+      else if (field === 'environment') request.environment = 'mathlib';
+      else request.formalizationId = crypto.randomUUID();
+      expect(() => prepareWebProblem(destination, { input: request, compiledFormalization: compiled }))
+        .toThrow('formalization_binding_changed');
+      expect(fs.readdirSync(destination)).toEqual([]);
+    });
+
+  it('requires a candidate identifier and refuses simultaneous compiled and approved inputs', () => {
+    const compiled = formalizationCompiledCandidate(evidence), missingId = input(); delete missingId.formalizationId;
+    expect(() => prepareWebProblem(directory(), { input: missingId, compiledFormalization: compiled }))
+      .toThrow('formalization_binding_missing');
+    expect(() => prepareWebProblem(directory(), { input: input(), formalization: evidence, compiledFormalization: compiled }))
+      .toThrow('formalization_binding_missing');
+  });
+
+  it('revalidates the compiler receipt before freezing a compiled candidate', () => {
+    const destination = directory(), compiled = formalizationCompiledCandidate(evidence);
+    compiled.snapshot.targets[0].context.type = 'False';
+    compiled.snapshotDigest = formalizationDigest(compiled.snapshot);
+    expect(() => prepareWebProblem(destination, { input: input(), compiledFormalization: compiled })).toThrow();
+    expect(fs.readdirSync(destination)).toEqual([]);
   });
 
   it('installs the exact selected Library snapshot into the native worker problem', () => {

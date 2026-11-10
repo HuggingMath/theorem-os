@@ -1,6 +1,6 @@
 import type { WebFormalization, WebFormalizationActivity, WebFormalizationRole, WebFormalizationRoleSummary } from '../formalizationTypes';
 import type { WebAgentAction, WebAgentLeanCheck, WebEvent, WebRun } from '../shared';
-import { checkReason, isAcceptedRun, isFaultedRun, isRejectedRun, planGated, queueDescription, readableDuration, runProgress, runStages, runTokens, stoppedLabel } from '../presentation';
+import { acceptedTitle, checkReason, isAcceptedRun, isFaultedRun, isRejectedRun, planGated, queueDescription, readableDuration, runProgress, runStages, runTokens, stoppedLabel } from '../presentation';
 import { summarizeReport } from '../report';
 import { localizeText, t } from '../i18n';
 import { checkLeanFile, routeStepLabel, taskNames, type AgentRoute, type RouteItem } from './agentRoute';
@@ -360,7 +360,7 @@ function verifyStage(run: WebRun, events: readonly WebEvent[], checks: LiveCheck
   if (report?.method) details.push({ kind: 'note', text: t('方法：{0}', report.method) });
   if (report?.reason) details.push({ kind: 'note', text: checkReason(report) ?? report.reason });
   if (feedback) details.push({ kind: 'feedback', text: feedback });
-  return { id: 'verify', label, tone: !done ? 'active' : accepted ? 'done' : 'failed', rows: [{ id: 'v:evaluation', label: run.formalization?.reviewMode === 'direct' ? t('在干净环境里重新检查完整 Lean 陈述') : t('在干净环境里重新检查完整原题'),
+  return { id: 'verify', label, tone: !done ? 'active' : accepted ? 'done' : 'failed', rows: [{ id: 'v:evaluation', label: run.formalization?.reviewMode === 'direct' ? t('在干净环境里重新检查完整 Lean 陈述') : run.formalization ? t('在干净环境里重新检查固定的 Lean 陈述') : t('在干净环境里重新检查完整原题'),
     tone: !done ? 'active' : accepted ? 'done' : 'failed', ...(check.at ? { at: check.at } : {}), ...(outcome ? { outcome } : {}), details, check: check.id }] };
 }
 
@@ -369,6 +369,7 @@ function solveState(item: WebFormalization | undefined, run: WebRun | undefined)
     if (run.status === 'queued') return 'queued';
     if (run.status === 'running') return runProgress(run).index >= 3 ? 'verifying' : 'proving';
     if (isAcceptedRun(run)) return 'accepted';
+    if (item?.status === 'running') return 'formalizing';
     if (run.status === 'cancelled') return 'cancelled';
     return isFaultedRun(run) || isRejectedRun(run) ? 'failed' : 'stopped';
   }
@@ -390,7 +391,7 @@ function stateLabel(state: SolveState, item: WebFormalization | undefined, run: 
     case 'review': return item?.status === 'confirmed' ? t('陈述已确认') : t('陈述待核对');
     case 'proving': return run && planGated(run) ? runProgress(run).phaseLabel : run && runProgress(run).index === 1 ? t('准备证明环境') : t('正在证明');
     case 'verifying': return t('正在独立验收');
-    case 'accepted': return run?.formalization?.reviewMode === 'direct' ? t('Lean 陈述证明通过') : t('完整原题通过');
+    case 'accepted': return run ? acceptedTitle(run) : t('完整原题通过');
     case 'failed': return run ? isRejectedRun(run) ? t('验收未通过') : t('运行失败') : item?.researchError ? t('证明研究未能启动') : t('形式化未完成');
     case 'stopped': return run ? stoppedLabel(run) : t('形式化未完成');
     case 'cancelled': return t('已取消');
@@ -412,20 +413,22 @@ export function buildSolveProcess(input: SolveProcessInput): SolveProcess {
   } else if (item) {
     // Before its run: proving waits for the statement, or will not happen because formalizing ended without one.
     const ended = ['exhausted', 'cancelled', 'error'].includes(item.status) || Boolean(item.researchError);
-    const starting = item.status === 'confirmed' && !ended;
+    const starting = (item.status === 'confirmed' || Boolean(item.runId)) && !ended;
     stages.push({ id: 'prove', label: t('证明'), tone: starting ? 'active' : ended ? 'skipped' : 'pending',
       rows: starting ? [{ id: 'p:starting', label: t('正在启动证明研究'), tone: 'active', details: [] }]
         : item.researchError ? [{ id: 'p:start-failed', label: t('证明研究未能启动'), tone: 'failed', outcome: { text: formalizationReasonText(item.researchError), tone: 'muted' }, details: [] }] : [] },
     { id: 'verify', label: t('独立验收'), tone: ended ? 'skipped' : 'pending', rows: [] });
   }
-  const state = solveState(item, run), active = ['queued', 'formalizing', 'proving', 'verifying'].includes(state);
+  const state = solveState(item, run), active = ['queued', 'formalizing', 'proving', 'verifying'].includes(state)
+    || item?.status === 'queued' || item?.status === 'running';
   const names = workerNames(run?.observation?.inspection.workers ?? []);
   const compiled = [...activity].reverse().find(entry => entry.type === 'step' && entry.step.step === 'compile' && entry.step.state === 'started');
   const statement = compiled?.type === 'step' && compiled.step.step === 'compile' ? compiled.step : undefined;
   const current: SolveProcess['current'] = run?.result?.proof ? { kind: isAcceptedRun(run) ? 'proof' : 'candidate', file: 'Submission.lean', source: run.result.proof, at: run.finishedAt ?? run.updatedAt }
     : run?.artifact ? { kind: 'candidate', file: 'Submission.lean', source: run.artifact.source, at: run.artifact.capturedAt, who: names.get(run.artifact.workerId) ?? run.artifact.workerId }
       : run ? { kind: 'statement', file: 'Submission.lean', source: run.source }
-        : statement?.source !== undefined && !item?.report ? { kind: 'statement', file: 'Formalization.lean', source: statement.source, at: compiled!.at, ...(statement.sourceClipped ? { clipped: true } : {}) }
+        : item?.compiled ? { kind: 'statement', file: 'Formalization.lean', source: item.compiled.source }
+          : statement?.source !== undefined && !item?.report ? { kind: 'statement', file: 'Formalization.lean', source: statement.source, at: compiled!.at, ...(statement.sourceClipped ? { clipped: true } : {}) }
           : item?.report ? { kind: 'statement', file: 'Formalization.lean', source: item.report.statement } : undefined;
   const tokens = (item?.progress?.tokens ?? 0) + (run ? runTokens(run) ?? 0 : 0);
   const endedAt = active ? undefined : run ? run.finishedAt ?? run.updatedAt : item?.finishedAt ?? item?.updatedAt;

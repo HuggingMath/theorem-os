@@ -138,8 +138,8 @@ export type WebRun = {
   knowledgeDigest?: string;
   continueFrom?: WebContinuation;
   formalizationId?: string;
-  formalization?: { id: string; evidenceSha256: string; original: string; confirmedAt: string; confirmation?: 'automatic' | 'manual';
-    reviewMode?: 'direct' };
+  formalization?: { id: string; evidenceSha256?: string; original: string; confirmedAt?: string; candidateDigest?: string;
+    confirmation?: 'automatic' | 'manual' | 'pending' | 'rejected' | 'interrupted' | 'superseded'; reviewMode?: 'direct' };
   /** Host-declared solver attempt; observation sequences continue across library restarts. */
   solverAttempt?: { solverRunId: string; round: number; sequence: number };
   observation?: WebObservation;
@@ -218,6 +218,8 @@ export type WorkerInput = { id: string; input: WebRunInput; provider: WebProvide
   researchConfiguration?: import('./researchAssetTypes').FrozenResearchConfiguration;
   /** Validated server-side artifact; never supplied directly by the browser. */
   formalization?: unknown;
+  /** Host-compiled statement; its semantic review may still be running. Never supplied by the browser. */
+  compiledFormalization?: unknown;
   /** The saved file of `input.continueFrom`, read by the server from the account's own run. */
   continuation?: WebContinuation & { file: string; source: string } };
 /**

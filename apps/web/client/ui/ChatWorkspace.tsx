@@ -5,7 +5,7 @@ import type { WebFormalization } from '../../formalizationTypes';
 import type { WebProvider, WebQuotaView, WebRun } from '../../shared';
 import { researchExamples } from '../../problemExamples';
 import { formatTokens, isAcceptedRun, isFaultedRun, isRejectedRun, resultDescription, runProgress, stoppedLabel } from '../../presentation';
-import { acceptedDescription, acceptedTitle, statementConfirmation } from '../../presentation';
+import { acceptedDescription, acceptedTitle, isStatementReviewed, statementConfirmation } from '../../presentation';
 import type { NextStep } from '../../report';
 import { locale, localizeText, t } from '../../i18n';
 import type { SolveProcess } from '../solveProcess';
@@ -26,7 +26,6 @@ import type { WebGuidanceRecord } from '../../collaboration';
 import { FormalizationProgress, formalizationProgress } from './FormalizationProgress';
 import { ThinkingProcess } from './ThinkingProcess';
 import { BackgroundReview } from '../backgroundReview';
-import { downloadLean } from '../downloadLean';
 import { FirstResearchStart } from './FirstResearchStart';
 import type { ChatAnswer } from '../chatAnswer';
 import type { ChatMathematics } from '../chatMathematics';
@@ -126,7 +125,7 @@ function FormalizationFailure({ item }: { item: WebFormalization }) {
     generating: t("生成 Lean 陈述"), compiling: t("检查 Lean 陈述"), translating: t("核对自然语言与 Lean"),
     reviewing: t("审核原题一致性"), finishing: t("整理形式化结果") };
   const stage = item.researchError ? t('启动证明研究') : phases[item.progress?.phase ?? ''] ?? t('形式化');
-  const kept = item.report ? t('已保存这次生成的 Lean 陈述与检查记录，可在“原题 / Lean”中查看。') : t('没有保存可用的 Lean 陈述。');
+  const kept = item.report || item.compiled ? t('已保存这次生成的 Lean 陈述与检查记录，可在“原题 / Lean”中查看。') : t('没有保存可用的 Lean 陈述。');
   return <details class="chat-task-details" data-formalization-failure open>
     <summary>{t("查看详情")}</summary>
     <dl>
@@ -141,11 +140,14 @@ function FormalizationFailure({ item }: { item: WebFormalization }) {
 
 function TaskMessage(props: ChatThreadProps) {
   const { run, formalization: item } = props;
-  const active = run ? ['queued', 'running'].includes(run.status) : !!item && ['queued', 'running'].includes(item.status);
+  const proofActive = !!run && ['queued', 'running'].includes(run.status);
+  const reviewActive = !!item && ['queued', 'running'].includes(item.status);
+  const active = proofActive || reviewActive;
   const accepted = !!run && isAcceptedRun(run);
+  const reviewed = !!run && isStatementReviewed(run);
   const natural = !!(item || run?.formalization);
   const statementDecision = !run && !!item?.humanReview && !!item.report && ['review', 'confirmed'].includes(item.status);
-  const confirmation = item?.confirmation ?? run?.formalization?.confirmation;
+  const confirmation = run?.formalization?.confirmation ?? item?.confirmation ?? (item?.compiled && reviewActive ? 'pending' : undefined);
   const reviewMode = item?.reviewMode ?? run?.formalization?.reviewMode;
   const direct = reviewMode === 'direct' || item?.report?.semanticReview === 'not-performed';
   const formalProgress = item && formalizationProgress(item, props.solve?.process);
@@ -157,28 +159,30 @@ function TaskMessage(props: ChatThreadProps) {
     compiling: t("检查 Lean 陈述"), translating: t("核对自然语言与 Lean"),
     reviewing: t("审核原题一致性"), finishing: t("整理形式化结果"),
   };
-  const title = run ? accepted ? acceptedTitle(run) : active ? runProgress(run).phaseLabel
+  const title = run ? accepted ? acceptedTitle(run) : proofActive ? runProgress(run).phaseLabel
+    : reviewActive ? phaseNames[item?.progress?.phase ?? 'queued']
     : run.status === 'cancelled' ? t('已取消') : failed ? t('运行失败') : stoppedLabel(run)
     : failed ? t("形式化未完成") : item?.status === 'cancelled' ? t('已取消')
       : active ? formalProgress?.revising ? t('根据 Lean 报错修改陈述') : phaseNames[item?.progress?.phase ?? 'queued']
         : item?.status === 'review' ? direct ? t('Lean 代码已就绪') : t("陈述待核对")
           : item?.status === 'confirmed' ? direct ? t('Lean 代码已就绪') : t("陈述已确认") : props.missingTask ? t('关联任务记录已删除') : t("正在读取任务");
-  const description = props.missingTask ? t('原题和对话仍保留，可以修改题目后重新发送。') : run ? accepted && natural ? acceptedDescription(run) : resultDescription(run) : failed
+  const description = props.missingTask ? t('原题和对话仍保留，可以修改题目后重新发送。') : run ? accepted ? acceptedDescription(run) : resultDescription(run) : failed
     ? item?.researchError ? t("Lean 陈述已生成，但证明研究未能启动。")
       : t("本次未能完成原题形式化，请查看详情中的原因和下一步。")
     : item?.status === 'cancelled' ? t("任务已停止，已保存的消息仍可查看。")
-      : formalProgress?.description ?? t("陈述检查不代表证明通过，最终结果以 Lean 独立验收为准。");
+      : active && item?.compiled ? t('Lean 陈述已编译，可以查看和下载；原题含义正在后台审核。')
+        : formalProgress?.description ?? t("陈述检查不代表证明通过，最终结果以 Lean 独立验收为准。");
   const proof = run?.result?.proof || run?.artifact?.source;
   const solve = props.solve;
   const hasSource = solve?.process.current !== undefined || solve?.process.checks.some(check => check.source !== undefined);
   const liveAvailable = Boolean(solve && (solve.process.active || hasSource));
-  const resultActions = run && !active && <>
+  const resultActions = run && !proofActive && <>
     {accepted && <button type="button" class="text-button" data-research-artifact="roadmap" onClick={() => props.onArtifact('roadmap')}><Icon name="network" />{t('路线图')}</button>}
     <button type="button" class="button" data-research-artifact="result" onClick={() => props.onArtifact('result')}>
       <Icon name="shield-check" />{accepted ? t('查看验收报告') : t('查看原因与报告')}</button>
     {accepted && <>
       <a class="button" data-chat-download-kit href={`/api/runs/${encodeURIComponent(run.id)}/verification-kit`} download>{t('下载本地复核包')}</a>
-      {props.onShare && <button type="button" class="button" data-chat-share onClick={props.onShare}><Icon name="share-2" />{t('分享研究成果')}</button>}
+      {reviewed && props.onShare && <button type="button" class="button" data-chat-share onClick={props.onShare}><Icon name="share-2" />{t('分享研究成果')}</button>}
       {!props.sample && <a class="button" data-save-library href={`library.html?${new URLSearchParams({ create: '1', fromRun: run.id })}`}>{t('保存到我的 Library')}</a>}
     </>}
     <a class="text-button" href={`/api/runs/${encodeURIComponent(run.id)}/download`} download>{t('下载完整研究归档')}</a>
@@ -205,8 +209,12 @@ function TaskMessage(props: ChatThreadProps) {
       </div>}
       {item && <FormalizationProgress item={item} process={solve?.process} wide={solve?.wide}
         onCode={() => props.onArtifact('live')} />}
-      {!statementDecision && natural && (item?.report || run?.formalization) && <p class="chat-statement-verdict" data-statement-verdict>
-        {direct ? t('Lean 编译通过') : statementConfirmation(confirmation, false, reviewMode)}
+      {item?.compiled && reviewActive && <p class="chat-statement-verdict" data-chat-background-review role="status">
+        {accepted ? t('候选 Lean 陈述已证明，原题含义仍在后台审核。') : proofActive ? t('证明与原题含义审核同时进行，已有代码可以立即使用。')
+          : t('Lean 陈述已编译，可以查看和下载；原题含义正在后台审核。')}
+      </p>}
+      {!statementDecision && natural && (item?.report || item?.compiled || run?.formalization) && <p class="chat-statement-verdict" data-statement-verdict>
+        {direct && (!confirmation || ['automatic', 'manual'].includes(confirmation)) ? t('Lean 编译通过') : statementConfirmation(confirmation, false, reviewMode)}
         {' '}{t('Lean 验收证明的是这份陈述，不能替代对自然语言原意的核对。')}
       </p>}
     </div>
@@ -214,12 +222,12 @@ function TaskMessage(props: ChatThreadProps) {
     {backgroundReview && <BackgroundReview review={backgroundReview} compact />}
     <StatementDecision {...props} />
     <PlanDecision {...props} />
-    {accepted && run && <ChatMathematicalAnswer runId={run.id} answer={props.answer} onRetry={() => props.onAnswerRetry?.()} onTarget={target => props.onAnswerTarget?.(target)} onQuestion={props.onAnswerQuestion} />}
+    {accepted && reviewed && run && <ChatMathematicalAnswer runId={run.id} answer={props.answer} onRetry={() => props.onAnswerRetry?.()} onTarget={target => props.onAnswerTarget?.(target)} onQuestion={props.onAnswerQuestion} />}
     {!accepted && props.mathematics && <ChatMathematicalProgress work={props.mathematics} onTask={taskId => props.onArtifact('roadmap', { taskId })} />}
     {solve && <SolveProcessView process={solve.process} wide={solve.wide} time={solve.time} onCheck={solve.onCheck}
       loading={solve.loading} failed={solve.failed} onRetry={solve.onRetry} />}
-    {!run && failed && item && (item.reason || item.researchError) && <FormalizationFailure item={item} />}
-    {!statementDecision && (run || item?.report) && <div class="research-conversation-artifacts" role="group" aria-label={t('结果')}>
+    {item && (['error', 'exhausted'].includes(item.status) || item.researchError) && (item.reason || item.researchError) && <FormalizationFailure item={item} />}
+    {!statementDecision && (run || item?.report || item?.compiled) && <div class="research-conversation-artifacts" role="group" aria-label={t('结果')}>
       {accepted && <button type="button" class="chat-result-primary" data-research-artifact="source" disabled={!proof} onClick={() => props.onArtifact('source')}><Icon name="file-code-2" /><span>{t('查看验收证明')}</span><Icon name="arrow-up-right" /></button>}
       {run && !accepted && <button type="button" data-research-artifact="roadmap" onClick={() => props.onArtifact('roadmap')}><Icon name="network" /><span>{t('路线图')}</span><Icon name="arrow-up-right" /></button>}
       <button type="button" data-research-artifact="original" onClick={() => props.onArtifact('original')}><Icon name="languages" /><span>{t('原题')} / Lean</span><Icon name="arrow-up-right" /></button>
@@ -668,7 +676,11 @@ function ChatOriginal({ formalization, run }: ChatOriginalProps) {
   const reviewMode = formalization?.reviewMode ?? run?.formalization?.reviewMode;
   const direct = reviewMode === 'direct' || report?.semanticReview === 'not-performed';
   const original = report?.original ?? formalization?.original ?? run?.formalization?.original;
-  const source = report?.statement ?? run?.source;
+  const source = report?.statement ?? formalization?.compiled?.source ?? run?.source;
+  const [copied, setCopied] = useState<string>();
+  const [copyError, setCopyError] = useState(false);
+  const confirmation = run?.formalization?.confirmation ?? formalization?.confirmation
+    ?? (formalization?.compiled && ['queued', 'running'].includes(formalization.status) ? 'pending' : undefined);
   const formalizationId = formalization?.id ?? run?.formalizationId;
   const backgroundReview = formalization?.backgroundReview ?? report?.backgroundReview;
   const relations: Record<string, string> = { direct: t("直接对应"), equivalent: t("等价表达"), unresolved: t("待核对"), mismatch: t("不一致") };
@@ -677,12 +689,19 @@ function ChatOriginal({ formalization, run }: ChatOriginalProps) {
     <header class="chat-original-header"><h2>{t("原题与 Lean")}</h2>
       {formalizationId && <a class="text-button" href={`formalize.html?id=${encodeURIComponent(formalizationId)}`} target="_blank" rel="noreferrer">{direct ? t('形式化详情') : t("完整审核")}<Icon name="arrow-up-right" /></a>}
     </header>
-    {(report || run?.formalization) && <p class="chat-statement-verdict">{direct ? t('Lean 编译通过') : statementConfirmation(formalization?.confirmation ?? run?.formalization?.confirmation, false)}
+    {(report || formalization?.compiled || run?.formalization) && <p class="chat-statement-verdict">{direct && (!confirmation || ['automatic', 'manual'].includes(confirmation)) ? t('Lean 编译通过') : statementConfirmation(confirmation, false, formalization?.reviewMode ?? run?.formalization?.reviewMode)}
       {' '}{t('Lean 验收证明的是这份陈述，不能替代对自然语言原意的核对。')}</p>}
     {backgroundReview && <BackgroundReview review={backgroundReview} />}
     <div class="chat-original-columns">
       <section><h3>{t("自然语言原题")}</h3><div class="chat-message-text" translate={false}><Rich text={original ?? t("此题直接从 Lean 陈述开始。")} /></div></section>
-      <section><div class="chat-original-header"><h3>{t("Lean 陈述")}</h3>{source && <button type="button" class="text-button" data-download-statement onClick={() => downloadLean(source)}><Icon name="download" />{t('下载 Lean')}</button>}</div>{source ? <pre tabIndex={0} translate={false}><code>{source}</code></pre> : <p>{t("陈述尚未生成。")}</p>}</section>
+      <section><h3>{t("Lean 陈述")}</h3>{source ? <>
+        <div class="chat-task-actions"><button type="button" class="text-button" data-chat-statement-copy onClick={() => {
+          setCopyError(false); void (navigator.clipboard?.writeText(source) ?? Promise.reject()).then(() => setCopied(source), () => setCopyError(true));
+        }}><Icon name={copied === source ? 'check' : 'copy'} />{copied === source ? t('代码已复制') : t('复制代码')}</button>
+        <a class="text-button" data-chat-statement-download data-download-statement href={`data:text/plain;charset=utf-8,${encodeURIComponent(source)}`} download="Formalization.lean"><Icon name="download" />{t('下载 Lean')}</a></div>
+        {copyError && <p role="status">{t('复制失败，请选择代码复制。')}</p>}
+        <pre tabIndex={0} translate={false}><code>{source}</code></pre>
+      </> : <p>{t("陈述尚未生成。")}</p>}</section>
     </div>
     {report && <>
       {report.backtranslation && <section class="chat-backtranslation"><h3>{t("独立回译")}</h3><p class="chat-message-text" translate={false}><Rich text={report.backtranslation?.mathematics ?? report.original} /></p>

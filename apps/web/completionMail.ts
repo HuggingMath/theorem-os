@@ -1,8 +1,9 @@
 import type { WebRun } from './shared';
-import { stopCause, type StopCause } from './presentation';
+import { isStatementReviewed, stopCause, type StopCause } from './presentation';
 
 /** Runs that end on their own get a mail; a run the user stopped or a restart interrupted does not. */
-export const mailsCompletion = (run: WebRun) => run.status === 'completed' || (run.status === 'error' && run.phase !== 'interrupted');
+export const mailsCompletion = (run: WebRun) => isStatementReviewed(run) &&
+  (run.status === 'completed' || (run.status === 'error' && run.phase !== 'interrupted'));
 
 type Outcome = { zh: string; en: string; detailZh: string; detailEn: string };
 // A run that stopped on a limit says which one, as its badge in the workbench does.
@@ -24,6 +25,18 @@ const stoppedReasons: Record<string, Pick<Outcome, 'detailZh' | 'detailEn'>> = {
   math_model_usage_unavailable: { detailZh: '服务商没有返回完整的用量回执，为避免超出用量上限，后续调用已停止。已检查的成果保存在报告中。',
     detailEn: 'The provider did not return a complete usage receipt, so further calls stopped to avoid exceeding the usage cap. Checked results are saved in the report.' },
 };
+const meaningConfirmations = {
+  manual: { zh: '原题含义：你已确认 Lean 陈述。', en: 'Problem meaning: you confirmed the Lean statement.' },
+  automatic: { zh: '原题含义：模型审核通过，未经人工确认。', en: 'Problem meaning: model review passed; not confirmed by a person.' },
+  pending: { zh: '原题含义：仍在后台审核，候选 Lean 陈述的证明尚不能代表原题已解决。',
+    en: 'Problem meaning: review is still running; proving the candidate Lean statement does not yet establish that the original problem is solved.' },
+  rejected: { zh: '原题含义：审核要求修改候选陈述，这份证明对应修改前的陈述。',
+    en: 'Problem meaning: review requested statement changes; this proof is for the earlier candidate.' },
+  interrupted: { zh: '原题含义：审核已中断，尚未确认候选陈述与原题一致。',
+    en: 'Problem meaning: review was interrupted; correspondence with the original problem is unconfirmed.' },
+  superseded: { zh: '原题含义：候选陈述已更新，这份证明保留的是旧版本。',
+    en: 'Problem meaning: the candidate statement has changed; this proof is for the previous version.' },
+} satisfies Record<NonNullable<NonNullable<WebRun['formalization']>['confirmation']>, { zh: string; en: string }>;
 const outcome = (run: WebRun): Outcome => {
   if (run.status === 'completed' && run.result?.status === 'evaluated_passed')
     return run.formalization
@@ -57,16 +70,13 @@ const minutes = (run: WebRun) => {
  */
 export function completionMail(run: WebRun, publicUrl: string): { subject: string; text: string } {
   const result = outcome(run), took = minutes(run);
-  const meaning = run.formalization && {
-    zh: run.formalization.confirmation === 'manual' ? '原题含义：你已确认 Lean 陈述。'
-      : run.formalization.reviewMode === 'direct' ? 'Lean 陈述编译通过；原题含义及审核结论请查看形式化记录。'
-        : run.formalization.confirmation === 'automatic' ? '原题含义：模型审核通过，未经人工确认。'
-        : '原题含义：未记录确认方式，请核对 Lean 陈述。',
-    en: run.formalization.confirmation === 'manual' ? 'Problem meaning: you confirmed the Lean statement.'
-      : run.formalization.reviewMode === 'direct' ? 'The Lean statement compiled; see the formalization record for its meaning and review results.'
-        : run.formalization.confirmation === 'automatic' ? 'Problem meaning: model review passed; not confirmed by a person.'
-        : 'Problem meaning: the confirmation method was not recorded; please check the Lean statement.',
-  };
+  const meaning = run.formalization && (run.formalization.confirmation !== 'manual' && run.formalization.reviewMode === 'direct' ? {
+    zh: 'Lean 陈述编译通过；原题含义及审核结论请查看形式化记录。',
+    en: 'The Lean statement compiled; see the formalization record for its meaning and review results.',
+  } : run.formalization.confirmation ? meaningConfirmations[run.formalization.confirmation] : {
+    zh: '原题含义：未记录确认方式，请核对 Lean 陈述。',
+    en: 'Problem meaning: the confirmation method was not recorded; please check the Lean statement.',
+  });
   const title = run.title.replace(/\s+/gu, ' ').trim().slice(0, 80) || 'TheoremOS';
   const link = new URL(`/?run=${encodeURIComponent(run.id)}`, publicUrl).href;
   return {
