@@ -16,22 +16,27 @@ import { runSolver } from '../../src/solver/run';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const challenge = 'theorem replay_target : True := by\n  sorry\n';
-const spec = 'import Submission.Library.TheoremOS.Fixture.E\nnamespace TheoremOS.Auto.Checked\n' +
-  'theorem checked : True := by\n  sorry\nend TheoremOS.Auto.Checked\n';
 const expect = (value: unknown, message: string) => { if (!value) throw new Error('auto_host_replay_failed: ' + message); };
 
-/** Synthetic release metadata, actual 4.34.1 Lean and independent solver evaluation; all model outputs are preset. */
-export async function replayHostAutoLibrary(directory: string) {
+/** All model outputs are preset. An external host config lets release acceptance reuse the actual build/recovery path. */
+export async function replayHostAutoLibrary(directory: string, host?: { configPath: string; importModule: string }) {
   if (fs.existsSync(directory)) throw new Error('Use a fresh replay directory');
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const fixture = writeLibraryHostFixture(path.join(directory, 'host'), [
+  const fixture = host ? undefined : writeLibraryHostFixture(path.join(directory, 'host'), [
     { taskId: 'auto-replay', selection: { mode: 'mapped', exclusionKeys: ['FixtureTask'] } },
   ]);
-  fixture.config.autoLibraryDirectory = path.join(directory, 'registry');
-  fs.writeFileSync(fixture.configPath, canonicalLibraryJson(fixture.config));
+  if (fixture) {
+    fixture.config.autoLibraryDirectory = path.join(directory, 'registry');
+    fs.writeFileSync(fixture.configPath, canonicalLibraryJson(fixture.config));
+  }
   const previous = process.env.THEOREMOS_LIBRARY_HOST_CONFIG;
-  process.env.THEOREMOS_LIBRARY_HOST_CONFIG = fixture.configPath;
+  process.env.THEOREMOS_LIBRARY_HOST_CONFIG = host?.configPath ?? fixture!.configPath;
   try {
+    const expected = resolveAutoLibraryBase('auto-replay', 'openai-math', path.join(directory, 'auto-build'))!;
+    const importModule = host?.importModule ?? 'Submission.Library.TheoremOS.Fixture.E';
+    expect(expected.modules.some(item => item.module === importModule), 'replay import is authorized');
+    const spec = `import ${importModule}\nnamespace TheoremOS.Auto.Checked\n` +
+      'theorem checked : True := by\n  sorry\nend TheoremOS.Auto.Checked\n';
     const built = await runMathProcess(process.execPath, [path.join(root, 'scripts/build.ts'), '--state-root', path.join(directory, 'builds')],
       { cwd: root, env: process.env, timeoutMs: 600_000, outputLimit: 8000 });
     expect(built.exitCode === 0, built.stderr || built.stdout);
@@ -41,14 +46,15 @@ export async function replayHostAutoLibrary(directory: string) {
       task: 'Prove replay_target.', environment: 'openai-math', pool, buildManifestRef,
       planner: { model: 'preset', effort: 'none', profile: path.join(directory, 'unused'), executable: 'preset' },
       prover: { model: 'preset', effort: 'none', executable: 'preset', workers: 1, coordination: 'cooperative',
-        maxRunSeconds: 300, maxTurns: 3, maxTurnSeconds: 120, maxTotalTokens: 0, prepareTimeoutSeconds: 600 },
+        maxRunSeconds: 300, maxTurns: 3, maxTurnSeconds: 120, maxTotalTokens: 0, prepareTimeoutSeconds: host ? 1800 : 600 },
       maxModules: 1, maxRounds: 1, maxRunSeconds: 0, maxTotalTokens: 0, plannerTurnSeconds: 0 });
     let planned = 0;
     const openSession = async (options: MathAgentOptions): Promise<MathAgentSession> => ({ threadId: 'preset-planner',
       run: async (_message, _id, workspace, started) => {
         planned++; started('preset-plan');
         const input = JSON.parse(readMathText(path.join(workspace, 'INPUT.json')));
-        expect(input.library.length === 2 && input.library.every((item: { module: string }) => /\.(D|E)$/u.test(item.module)), 'effective planner library');
+        expect(canonicalLibraryJson(input.library.map((item: { module: string }) => item.module).sort()) ===
+          canonicalLibraryJson(expected.modules.map(item => item.module).sort()), 'effective planner library');
         const output = { inputDigest: input.inputDigest, decision: 'module', reason: 'Replay dependency', name: 'Checked',
           summary: 'A checked True lemma', sources: [], lean: spec, target: 'replay_target',
           application: 'Use TheoremOS.Auto.Checked.checked.', remaining: [],
@@ -66,7 +72,7 @@ export async function replayHostAutoLibrary(directory: string) {
         run: async (_message, _id, worktree, started) => {
           started('preset-proof');
           const file = path.join(worktree, 'generated/problem/Submission.lean'), source = fs.readFileSync(file, 'utf8');
-          fs.writeFileSync(file, source.includes('namespace TheoremOS.Auto.Checked') ? source.replace('sorry', 'exact TheoremOS.Fixture.e') :
+          fs.writeFileSync(file, source.includes('namespace TheoremOS.Auto.Checked') ? source.replace('sorry', host ? 'exact True.intro' : 'exact TheoremOS.Fixture.e') :
             'import Submission.Library.Auto.Checked\n' + challenge.replace('sorry', 'exact TheoremOS.Auto.Checked.checked'));
           options.onUsage({ inputTokens: 0, outputTokens: 0, totalTokens: 0 });
           return 'completed';
@@ -101,8 +107,10 @@ export async function replayHostAutoLibrary(directory: string) {
     expect(readLeanTaskReceipt(receipt.activeProblemPath).libraryBinding?.autoComposition, 'authorized receipt recovery');
     const again = await runAutoLibraryBuild(build, root, { openSession: async () => { throw new Error('unexpected planner'); }, solve });
     expect(again.status === 'built', 'finished recovery');
-    return { schema: 'theorem-os.auto-host-replay.v1', modelInvoked: false, metadata: 'synthetic-fixture-not-a-release',
-      toolchain: fixture.environment.toolchain, mathlib: fixture.environment.mathlibRevision,
+    return { schema: 'theorem-os.auto-host-replay.v1', modelInvoked: false,
+      metadata: host ? 'host-pinned-release' : 'synthetic-fixture-not-a-release',
+      workspace: receipt.workspaceRoot, activeProblemPath: receipt.activeProblemPath, pool,
+      toolchain: expected.binding.environment.toolchain, mathlib: expected.binding.environment.mathlib,
       stopped: stopped.status, resumed: result.status, published: result.published, planned,
       application: result.modules[0]?.rounds[0]?.applicationCheck, destination: evaluated.status,
       binding: receipt.libraryBinding, visible: records[0]!.provenance!.visible };

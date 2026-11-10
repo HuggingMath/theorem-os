@@ -2,6 +2,7 @@
 /** Create one pinned public Lean-Eval solver workspace for a held-out run. */
 
 import fs from 'node:fs';
+import { leanEvalBenchmarkCommit } from '../../src/math/leanEvalBenchmark';
 import { parseFlags, required } from './arguments';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,13 +14,14 @@ import { resolveMathematicsRuntimeEnvironment } from "../../src/math/mathRuntime
 
 async function main(): Promise<void> {
   const flags = parseFlags(process.argv.slice(2), ['repo', 'problem', 'workspace', 'receipt', 'evaluation-mode',
-    'certificate-slots', 'theory-modules', 'library-pack']);
+    'certificate-slots', 'theory-modules', 'library-pack', 'benchmark-profile']);
   if (flags.has('help')) {
     console.log(
       'Usage: bun scripts/mathematics/bootstrapLeanEvalHeldOut.ts --repo DIR --problem ID --workspace DIR [--receipt FILE] [--certificate-slots N] [--theory-modules M] [--library-pack FILE]\n' +
       'N > 0 adds solver-owned Submission/Certificates/Kernel.lean (KernelCompute library) and N empty PartNN.lean modules for kernel-certificate.\n' +
       'M > 0 adds M solver-owned Submission/Theory/TNN.lean modules (empty namespace Submission.Theory) for a reusable theory library.\n' +
       'THEOREMOS_LIBRARY_HOST_CONFIG selects a host-owned pinned release and exact problem/benchmark policy.\n' +
+      '--benchmark-profile lean-eval-4.34.1-v1 requires --evaluation-mode benchmark and uses pinned historical inputs without live leaderboard credits.\n' +
       '--library-pack is a legacy input and is rejected when host policy is configured.'
     );
     return;
@@ -28,6 +30,7 @@ async function main(): Promise<void> {
   if (libraryHostConfigPath() && flags.has('library-pack')) throw new Error('library_host_sources_conflict');
   const evaluationMode = flags.get('evaluation-mode') ?? 'official';
   if (!['official', 'benchmark'].includes(evaluationMode)) throw new Error('Invalid --evaluation-mode');
+  leanEvalBenchmarkCommit(flags.get('benchmark-profile'), evaluationMode as 'official' | 'benchmark');
   const slots = flags.get('certificate-slots') ?? '0';
   if (!/^[0-9]{1,2}$/u.test(slots)) throw new Error('Invalid --certificate-slots');
   const theoryModules = flags.get('theory-modules') ?? '0';
@@ -44,6 +47,7 @@ async function main(): Promise<void> {
   } else fs.mkdirSync(workspaceRoot, { recursive: true, mode: 0o700 });
   const result = await bootstrapLeanEvalProblem({
     repositoryRoot,
+    benchmarkProfile: flags.get('benchmark-profile'),
     problemId: required(flags, 'problem'),
     evaluationMode: evaluationMode as 'official' | 'benchmark',
     workspaceRoot,

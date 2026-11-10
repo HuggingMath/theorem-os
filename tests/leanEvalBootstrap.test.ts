@@ -15,6 +15,7 @@ import { prepareLibraryKnowledge } from '../src/solver/theoremKnowledgeLibrary';
 import { readAuthorizedKnowledgeCatalog } from '../src/solver/theoremKnowledgeAuthorization';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import { canonicalLibraryJson } from '../src/math/libraryRelease';
+import { LEAN_EVAL_4341_PROFILE } from '../src/math/leanEvalBenchmark';
 
 const host = vi.hoisted(() => ({ commit: '', catalog: {} as unknown, verify: vi.fn(), compare: vi.fn() }));
 vi.mock('../src/math/leanEvalCatalogAdapter', async importOriginal => ({
@@ -102,6 +103,30 @@ describe('Lean-Eval bootstrap without planning state', () => {
       .replace('by sorry', 'by trivial').replace('by sorry', 'by rfl'));
   });
   afterEach(() => { vi.unstubAllEnvs(); fs.rmSync(directory, { recursive: true, force: true }); });
+
+  it('rejects unknown or official historical selections before materializing a workspace', async () => {
+    for (const selection of [{ benchmarkProfile: 'unapproved', evaluationMode: 'benchmark' as const },
+      { benchmarkProfile: LEAN_EVAL_4341_PROFILE, evaluationMode: 'official' as const }]) {
+      const workspaceRoot = path.join(directory, 'invalid-profile');
+      await expect(bootstrapLeanEvalProblem({ repositoryRoot, problemId: 'p', workspaceRoot, credits: [], ...selection }))
+        .rejects.toThrow(/profile_unknown|benchmark_mode_required/);
+      expect(fs.existsSync(workspaceRoot)).toBe(false);
+      expect(fs.existsSync(workspaceRoot + '.source')).toBe(false);
+    }
+  });
+
+  it('rejects adding a historical profile to an existing default receipt', () => {
+    fs.writeFileSync(bootstrapped.receipt.activeProblemPath, JSON.stringify({ ...bootstrapped.receipt,
+      benchmarkProfile: LEAN_EVAL_4341_PROFILE, evaluationMode: 'benchmark' }));
+    expect(() => readLeanEvalBootstrapReceipt(bootstrapped.receipt.activeProblemPath)).toThrow(/invalid or not pinned/);
+  });
+
+  it('rejects live or supplied historical credits before source checkout', async () => {
+    for (const credits of [{ useOfficialCredits: true }, { credits: [{ problemId: 'p', statementRevision: 1 }] }]) {
+      await expect(bootstrapLeanEvalProblem({ repositoryRoot, problemId: 'p', benchmarkProfile: LEAN_EVAL_4341_PROFILE,
+        evaluationMode: 'benchmark', ...credits })).rejects.toThrow(/historical_credits_override/);
+    }
+  });
 
   async function bootstrapWithHostLibrary(largeModule = false) {
     const environment = getLeanTaskEnvironment('openai-math');
