@@ -18,7 +18,7 @@
 
 首次云端验证中，两组 Lean 检查通过，Web 检查在旧聊天测试的异步公式断言失败。补跑既有浏览器套件还发现恢复按钮作用域和计划回执空容器断言需要适配新增界面。后续仅修改四个测试脚本：等待实际公式渲染、限定结果区按钮，并允许当前计划摘要而继续拒绝串入其他运行或账号的回执。修正后聊天、Key 管理、计划、解释和第五至第十轮浏览器检查均通过；产品代码和已发布镜像保持原版本。
 
-测试修复已在 `7fbe3d789b9bf970f25d627924483ec24a5141ee` 推送 main，[新云端工作流](https://github.com/HuggingMath/theorem-os/actions/runs/42750135655)正在运行。本文不将尚未完成的云端验证或 GHCR 发布记为成功；当前生产使用已完整核验的本地 SHA 镜像对。
+测试修复已在 `7fbe3d789b9bf970f25d627924483ec24a5141ee` 推送 main。[修复版云端工作流](https://github.com/HuggingMath/theorem-os/actions/runs/42750135655)于 12:10:48（北京时间）完成，六项全部成功：Web 验证、Lean 4.33.0 / 4.34.1 验证、Web / Worker 镜像发布和成对摘要归档。下载的发布摘要与两个构建日志中的镜像 digest 一致。生产仍使用已核验的 `9eaf433` 镜像对；后续差异仅为测试脚本与发布文档，产品源码一致。
 
 本次未调用真实模型、发送邮件或创建生产测试题目。登录后的新增流程使用隔离数据完成本地集成验证，线上通过镜像身份和静态摘要确认；不将匿名浏览检查记作真实账号业务验收。
 
@@ -32,5 +32,8 @@
 - `ci-source-status.json`、`verification/ci-web-job.log`：产品源码的云端检查原始结果。
 - `verification/ci-compat/`：四个旧浏览器测试的兼容修复与剩余套件结果。
 - `verification/main-product-identity.json`：后续 main 测试提交与已部署产品源码仅有四个测试脚本的差异。
+- `ci-completed-status.json`：修复版云端工作流六项全部成功的最终状态。
+
+云端复核与镜像归档证据另存于 `/home/lzh/workspace/outputs/theoremos-product-flow-ci-recovery-20261110/`，入口为 `README.md`、`cloud-verification-passed.json` 和 `image-release-verification.json`。
 
 上一工作台版本为 `bf6f35deffe59910fc3d239fcd44eeefe57fe153`。切换前私有快照、旧 override 和恢复校验记录已保存，本次没有执行回滚。宿主定时运维仍固定在独立版本 `cfb49a2eafbc22c23298978f100f4cdf1c2f4577`。
