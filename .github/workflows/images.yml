@@ -79,6 +79,29 @@ jobs:
       - name: Verify formalization progress and proof thinking in the browser
         run: bun scripts/test-web-formalization-progress.ts && bun scripts/test-web-proof-thinking.ts && bunx vitest run tests/webBackgroundReviewWorkflow.test.ts
 
+  verify-research-workflows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - name: Verify product continuity, fixed proof reading and research navigation without models
+        run: bun run test:frontend-research-unit
+      - run: bun run build:web && bun run build:site
+      - run: bunx playwright install --with-deps chromium
+      - name: Verify the problem workspace, collaboration, library trials and public reading with disposable fixtures
+        run: bun run test:frontend-product-continuity
+      - name: Verify installed libraries, archived problems, mathematical reading and login returns with disposable fixtures
+        run: bun run test:frontend-research-redesign && bun run test:site-research-entry
+
   verify-solver:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -122,7 +145,7 @@ jobs:
         run: bunx vitest run --maxWorkers=4 tests/verifierSealedEnvironmentCache.test.ts tests/mathProofEnvironment.test.ts tests/leanProbeSnapshot.test.ts
 
   publish:
-    needs: [verify, verify-solver]
+    needs: [verify, verify-solver, verify-research-workflows]
     runs-on: ubuntu-latest
     timeout-minutes: 300
     strategy:

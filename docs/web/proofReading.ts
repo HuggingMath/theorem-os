@@ -8,6 +8,7 @@ export function mountProofReading(): void {
   current?.dispose(); current = undefined;
   if (!found) return;
   const root: HTMLElement = found;
+  const linear = root.dataset.proofReading === 'linear';
 
   const panel = root.querySelector<HTMLDetailsElement>('.proof-route-panel')!;
   const summary = panel.querySelector<HTMLElement>('summary')!;
@@ -81,8 +82,8 @@ export function mountProofReading(): void {
   function update() {
     frame = 0;
     if (!root!.isConnected) return;
-    const stages = root!.closest('.global-workflow')!.querySelector<HTMLElement>('.global-workflow-stages')!;
-    const top = parseFloat(getComputedStyle(stages).top) + stages.getBoundingClientRect().height + 1;
+    const stages = root!.closest('.global-workflow')?.querySelector<HTMLElement>('.global-workflow-stages');
+    const top = stages ? parseFloat(getComputedStyle(stages).top) + stages.getBoundingClientRect().height + 1 : 0;
     const reader = narrow.matches ? summary : root!.querySelector<HTMLElement>('.proof-reading-bar')!;
     root!.style.setProperty('--proof-reader-top', top + 'px');
     root!.style.setProperty('--proof-heading-clearance', (top + reader.getBoundingClientRect().height + 20) + 'px');
@@ -94,7 +95,7 @@ export function mountProofReading(): void {
     select(index); draw();
   }
   function schedule() { if (!frame) frame = requestAnimationFrame(update); }
-  function size() { panel.open = !narrow.matches; summary.setAttribute('aria-expanded', String(panel.open)); schedule(); }
+  function size() { panel.open = !linear && !narrow.matches; summary.setAttribute('aria-expanded', String(panel.open)); schedule(); }
 
   root.addEventListener('click', event => {
     const target = (event.target as Element).closest<HTMLElement>('[data-global-scroll]');

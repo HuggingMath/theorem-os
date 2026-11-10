@@ -78,8 +78,8 @@ const rowOpen = (row: ProcessRow, memory: Memory) => memory.rows.get(row.id) ?? 
 function Row({ row, ctx }: { row: ProcessRow; ctx: Ctx }) {
   const open = rowOpen(row, ctx.memory), expandable = row.details.length > 0 || Boolean(row.rows?.length);
   const toggle = () => { ctx.memory.rows.set(row.id, !open); ctx.refresh(); };
-  // On a wide screen a row with a Lean check opens it beside the chat; its own records still open with the chevron.
-  const jump = ctx.wide && row.check && ctx.onCheck ? () => ctx.onCheck!(row.check!) : undefined;
+  // A check opens the saved code on every screen; its other records open with the chevron.
+  const jump = row.check && ctx.onCheck ? () => ctx.onCheck!(row.check!) : undefined;
   const head = <>
     <ToneMark tone={row.tone} />
     <span class="solve-row-title"><span class="solve-row-label">{row.label}</span>{row.code && <code translate={false}>{row.code}</code>}
@@ -90,7 +90,7 @@ function Row({ row, ctx }: { row: ProcessRow; ctx: Ctx }) {
   const id = `solve-row-${row.id.replace(/[^\w-]/gu, '_')}`;
   return <li class="solve-row" data-solve-row={row.id} data-tone={row.tone}>
     <div class="solve-row-line">
-      {jump ? <button type="button" class="solve-row-head" data-solve-check={row.check} onClick={jump} title={t('在右侧查看这次 Lean 检查')}>{head}</button>
+      {jump ? <button type="button" class="solve-row-head" data-solve-check={row.check} onClick={jump} title={t('查看这次 Lean 检查与代码')}>{head}</button>
         : expandable ? <button type="button" class="solve-row-head" aria-expanded={open} aria-controls={open ? id : undefined} onClick={toggle}>{head}</button>
           : <div class="solve-row-head">{head}</div>}
       {jump && expandable && <button type="button" class="icon-button solve-row-toggle" aria-expanded={open} aria-controls={open ? id : undefined}

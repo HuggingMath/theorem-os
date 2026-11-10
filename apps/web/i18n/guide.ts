@@ -76,8 +76,8 @@ export const guide: Record<string, string> = {
   "在「结果」的验收报告里下载本地复核包，按里面的说明在自己的电脑上用 Lean 重新检查证明。":
     "Download the verification kit from the acceptance report in Result and follow its instructions to recheck the proof with Lean on your own computer.",
   "分享": "Share",
-  "验收通过的运行可以创建只读分享链接，公开 Lean 原题、证明和验收结论，以及自然语言原题、确认方式、形式化回译和对应关系（如有）。链接不包含 API Key、邮箱、服务地址、运行日志和 Agent 对话，可以随时停止分享。":
-    "An accepted run can get a read-only share link showing the Lean problem, proof and acceptance result, plus the natural-language problem, confirmation method, back-translation and formalization correspondences when available. It excludes API keys, email, provider addresses, run logs and Agent conversations. You can stop sharing at any time.",
+  "验收通过的运行可以创建只读分享链接，公开 Lean 原题、证明和验收结论，以及自然语言原题、确认方式、形式化回译和对应关系（如有），以及已记录的推导、任务依赖与版本和已有的审核讲解。链接不包含 API Key、邮箱、服务地址、运行日志和 Agent 对话，可以随时停止分享。":
+    "An accepted run can get a read-only share link showing the Lean problem, proof and acceptance result, plus the natural-language problem, confirmation method, back-translation and formalization correspondences when available, together with recorded derivations, task dependencies and versions, and existing approved explanations. It excludes API keys, email, provider addresses, run logs and Agent conversations. You can stop sharing at any time.",
   "继续研究": "Keep researching",
   "形式化已完成、证明队列未能接收时，点「继续证明」使用已有陈述，不重新生成形式化。已有运行可用「复用任务配置」新建草稿；「从这一版继续」以所选保存版本的源码与摘要新建研究，保留冻结原题。新运行仍需 Lean 检查与独立验收。":
     "If formalization finished but the proof queue could not accept it, choose “Continue proof” to reuse the statement without formalizing again. “Reuse task settings” creates a new draft. “Continue from this version” starts a new run from the selected saved source and digest while retaining the frozen original problem. The new run needs Lean checks and independent acceptance.",

@@ -22,7 +22,19 @@ export type ResearchAssetPrefill = {
     sourceDigest: string; environmentDigest?: string; dependencyDigest?: string; proofDigest?: string; checkRefs: string[];
     declarations: ResearchMathDeclaration[] };
 };
-export type ResearchMathDraft = { source: ResearchMathSource };
+export type ResearchMathExample = {
+  id: string; title: string; declaration: string; type: string; proof: string; argumentNotes: string;
+};
+export type ResearchMathUsage = { conditions: string; result: string; examples: ResearchMathExample[] };
+export type ResearchMathExampleReceipt = {
+  schema: 'theorem-os.research-library-example-check.v1'; exampleId: string; declaration: string;
+  sourceDigest: string; libraryPackDigest: string; environment: 'standard' | 'mathlib'; environmentDigest: string;
+  checkedDeclaration: string; passed: boolean; exitCode: number | null; timedOut: boolean;
+  diagnostics: import('./shared').WebPrecheckDiagnostic[]; checkedAt: string;
+};
+export type ResearchCheckedMathExample = ResearchMathExample & { source: string; sourceDigest: string;
+  check: { receiptId: string; receipt: ResearchMathExampleReceipt } };
+export type ResearchMathDraft = { source: ResearchMathSource; usage?: ResearchMathUsage };
 export type ResearchSkillDraft = {
   instructions: string;
   steps: string[];
@@ -56,6 +68,7 @@ export type ResearchVerifiedMathematics = {
   receiptRefs: string[];
   sourceReceiptRefs?: string[];
   source: ResearchMathSource;
+  usage?: { conditions: string; result: string; examples: ResearchCheckedMathExample[] };
 };
 export type ResearchAssetRelease = {
   schema: 'theorem-os.research-asset-release.v1';
@@ -69,6 +82,7 @@ export type ResearchAssetRelease = {
   area: string;
   license: string;
   visibility: ResearchAssetVisibility;
+  releaseNotes?: string;
   content: ResearchAssetContent;
   dependencies: ResearchReleaseRef[];
   mathematics?: ResearchVerifiedMathematics;
@@ -99,6 +113,7 @@ export type ResearchAssetPreview = {
   type: ResearchAssetKind; name: string; description: string; revision: number; previewDigest: string;
   content?: ResearchAssetContent;
   mathematics?: Pick<ResearchVerifiedMathematics, 'pack' | 'environment' | 'environmentDigest' | 'declarations' | 'sourceReceiptRefs'>;
+  mathematicsUsage?: ResearchMathUsage;
   validation: 'not-run';
 };
 export type ResearchPublication = {

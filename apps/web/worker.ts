@@ -326,6 +326,7 @@ async function main() {
       '--max-turn-seconds', request.input.coordination === 'cooperative' ? '0' : String(round.limits.maxRunSeconds),
       ...(round.limits.maxTotalTokens ? ['--max-total-tokens', String(round.limits.maxTotalTokens)] : []),
       '--prepare-timeout-seconds', String(round.limits.maxRunSeconds === 0 ? 0 : webPreparationSeconds[environment.id === 'mathlib' ? 'mathlib' : 'standard']),
+      ...(round.limits.maxRunSeconds === 0 ? ['--proof-timeout-seconds', '0'] : []),
       '--evaluator-timeout-seconds', round.limits.maxRunSeconds === 0 ? '0' : '120'], root, modules);
       sampleArtifact();
       await capturePending;

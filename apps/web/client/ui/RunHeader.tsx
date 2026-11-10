@@ -116,8 +116,12 @@ function RunMenu(props: RunHeaderProps) {
   return <details class="run-menu" data-run-menu>
     <summary class="icon-button" aria-label={t('更多操作')} title={t('更多操作')}><Icon name="ellipsis" /></summary>
     <div class="run-menu-panel">
+      {!props.sample && <a class="run-menu-item" href={`problem.html?${new URLSearchParams({ run: props.id })}`}><Icon name="book-open" />{t('题目工作区')}</a>}
       <button type="button" class="run-menu-item" data-action="show-modules"><Icon name="blocks" />{t('模块方案')}</button>
       {props.download && <>
+        {!props.sample && <a class="run-menu-item" href={`workspace.html?${new URLSearchParams({ tab: 'brief', run: props.id })}`}><Icon name="book-open" />{t('研究简报')}</a>}
+        {!props.sample && <a class="run-menu-item" href={`workspace.html?${new URLSearchParams({ tab: 'usage', run: props.id })}`}><Icon name="list-ordered" />{t('用量账本')}</a>}
+        {!props.sample && <a class="run-menu-item" href={`workspace.html?${new URLSearchParams({ tab: 'collections', saveRun: props.id })}`}><Icon name="folder-open" />{t('收藏到资料夹')}</a>}
         <a class="run-menu-item" data-action="download-run" href={props.download} download><Icon name="download" />{t('下载完整研究归档')}</a>
         <a class="run-menu-item" data-action="download-snapshot" href={props.download.replace(/\/download$/u, '/snapshot')} download><Icon name="download" />{t('下载运行快照')}</a>
       </>}

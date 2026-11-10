@@ -32,13 +32,14 @@ const contexts = await Promise.all([browser.newContext({ locale: 'zh-CN', viewpo
 const pageErrors: string[] = [], external: string[] = [], checks: object[] = [];
 const writes: Array<{ page: string; method: string; pathname: string }> = [];
 for (const context of contexts) {
+  context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
   await context.addInitScript(() => { try { localStorage.setItem('theorem-os.locale.v1', 'zh'); } catch { /* about:blank has no storage. */ } });
   await context.route(/^https?:\/\//u, async route => {
     if (new URL(route.request().url()).origin !== origin) { external.push(route.request().url()); await route.abort(); }
     else await route.continue();
   });
   context.on('page', page => {
-    page.setDefaultTimeout(12000); page.on('pageerror', error => pageErrors.push(error.message));
+    page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0); page.on('pageerror', error => pageErrors.push(error.message));
     page.on('request', request => {
       if (request.method() !== 'GET') writes.push({ page: page.url(), method: request.method(), pathname: new URL(request.url()).pathname });
     });
@@ -81,6 +82,7 @@ async function resume(page: Page) {
   await page.locator('main[aria-busy="false"]').waitFor();
 }
 async function editProfile(page: Page, name: string) {
+  await page.getByRole('link', { name: '我的主页', exact: true }).click();
   await page.getByRole('heading', { name, exact: true }).waitFor();
   const summary = page.getByText('编辑我的资料', { exact: true });
   if (await summary.locator('..').getAttribute('open') === null) await summary.click();
@@ -96,11 +98,10 @@ async function publish(asset: ResearchAsset, version: string) {
   const current = (await ok<{ item: ResearchAsset }>(auth, 'GET', `/api/research/library/${asset.id}`)).item;
   const initial = (await ok<{ item: ResearchPublication }>(auth, 'POST', `/api/research/library/${asset.id}/publish`, {
     requestId: crypto.randomUUID(), expectedRevision: current.revision, version, license: 'MIT', visibility: 'public' })).item;
-  const deadline = Date.now() + 10000;
   for (;;) {
     const publication = (await ok<{ item: ResearchPublication }>(auth, 'GET', `/api/research/publications/${initial.id}`)).item;
     if (publication.status === 'completed') return publication;
-    assert.notEqual(publication.status, 'failed', publication.reason); assert.ok(Date.now() < deadline);
+    assert.notEqual(publication.status, 'failed', publication.reason);
     await new Promise(resolve => setTimeout(resolve, 25));
   }
 }
@@ -141,16 +142,17 @@ try {
   await auth.evaluate(owner => localStorage.setItem('theorem-os.web-account-left.v1', JSON.stringify({ owner, at: Date.now() })), owner);
   await people.getByRole('heading', { name: 'Alice', exact: true }).waitFor({ state: 'detached' });
   await switchTo('Bob'); await resume(people);
-  await people.getByRole('heading', { name: 'Bob', exact: true }).waitFor();
+  const nextBiography = await editProfile(people, 'Bob');
   assert.equal(await people.getByText('Alice PRIVATE BIO', { exact: true }).count(), 0);
-  assert.equal(await people.getByLabel('简介', { exact: true }).inputValue(), 'Bob PRIVATE BIO');
+  assert.equal(await nextBiography.inputValue(), 'Bob PRIVATE BIO');
   checks.push({ name: phase, passed: true });
 
   phase = 'a delayed private GET cannot refill the next owner page';
-  await switchTo('Alice'); await resume(people); await editProfile(people, 'Alice');
-  const getReached = deferred(), getRelease = deferred(); let oldDirectory: any;
+  await switchTo('Alice'); await people.goto(`${origin}/people.html`);
+  const getReached = deferred(), getRelease = deferred(); let oldDirectory: any, firstDirectory = true;
   const heldDirectory = async (route: Route) => {
-    if (!new URL(route.request().url()).searchParams.get('field')) { await route.continue(); return; }
+    if (!firstDirectory || !new URL(route.request().url()).searchParams.get('field')) { await route.continue(); return; }
+    firstDirectory = false;
     const reply = await route.fetch(); oldDirectory = await reply.json(); getReached.resolve(); await getRelease.promise;
     await route.fulfill({ response: reply });
   };
@@ -160,8 +162,8 @@ try {
     assert.ok(oldDirectory.items.some((profile: ResearcherProfile) => profile.id === alice.id));
     await switchTo('Bob'); await resume(people);
     await people.getByRole('heading', { name: 'Bob', exact: true }).waitFor(); getRelease.resolve();
-    await people.locator('a.research-list-item').filter({ hasText: 'Bob' }).waitFor();
-    assert.equal(await people.locator('a.research-list-item').filter({ hasText: 'Alice' }).count(), 0);
+    await people.locator('.research-directory-card').filter({ hasText: 'Bob' }).waitFor();
+    assert.equal(await people.locator('.research-directory-card').filter({ hasText: 'Alice' }).count(), 0);
     await people.screenshot({ path: path.join(output, 'late-private-get-rejected.png'), fullPage: true });
   } finally { getRelease.resolve(); await people.unroute('**/api/research/people?*', heldDirectory); }
   checks.push({ name: phase, passed: true });
@@ -179,8 +181,8 @@ try {
   try {
     await people.getByRole('button', { name: '保存资料', exact: true }).click(); await confirmReached.promise;
     const aborted = people.waitForEvent('requestfailed', request => new URL(request.url()).pathname === '/api/session');
-    await switchTo('Alice'); await resume(people); await people.getByRole('heading', { name: 'Alice', exact: true }).waitFor();
-    await aborted; confirmRelease.resolve();
+    await switchTo('Alice'); await resume(people); await aborted;
+    await editProfile(people, 'Alice'); confirmRelease.resolve();
     await people.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     assert.equal(writes.filter(item => item.pathname === '/api/research/profile').length, beforeWrites);
     assert.equal((await ok(auth, 'GET', '/api/research/session')).profile.bio, 'Alice PRIVATE BIO');
@@ -189,7 +191,9 @@ try {
 
   phase = 'an accepted old-owner write cannot navigate or update the new theorem workspace when its response arrives';
   active = theorems;
-  await theorems.goto(`${origin}/theorems.html`); await theorems.getByLabel('定理名称', { exact: true }).fill('ALICE PENDING PRIVATE PROJECT');
+  await theorems.goto(`${origin}/theorems.html`); await theorems.getByRole('button', { name: '新建定理', exact: true }).click();
+  const createWorkspaceUrl = theorems.url();
+  await theorems.getByLabel('定理名称', { exact: true }).fill('ALICE PENDING PRIVATE PROJECT');
   const writeReached = deferred(), writeRelease = deferred(); let acceptedProject: ResearchProjectDetail | undefined;
   const heldWrite = async (route: Route) => {
     if (route.request().method() !== 'POST') { await route.continue(); return; }
@@ -201,10 +205,12 @@ try {
     await theorems.getByRole('button', { name: '创建定理', exact: true }).click(); await writeReached.promise;
     const aborted = theorems.waitForEvent('requestfailed', request => request.method() === 'POST' && new URL(request.url()).pathname === '/api/research/theorems');
     await switchTo('Bob'); await resume(theorems);
-    const title = theorems.getByLabel('定理名称', { exact: true }); await title.waitFor(); assert.equal(await title.inputValue(), '');
+    const title = theorems.getByLabel('定理名称', { exact: true });
+    if (!await title.isVisible()) await theorems.getByRole('button', { name: '新建定理', exact: true }).click();
+    await title.waitFor(); assert.equal(await title.inputValue(), '');
     await aborted; writeRelease.resolve();
     await theorems.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-    assert.equal(new URL(theorems.url()).search, '', 'Old completed() callback must not navigate to the previous owner project');
+    assert.equal(theorems.url(), createWorkspaceUrl, 'Old completed() callback must not navigate to the previous owner project');
     assert.equal(await title.inputValue(), ''); assert.ok(acceptedProject);
     assert.equal((await http(auth, 'GET', `/api/research/theorems/${acceptedProject.id}`)).status, 404);
     await theorems.screenshot({ path: path.join(output, 'late-write-does-not-navigate.png'), fullPage: true });

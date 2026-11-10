@@ -1,5 +1,6 @@
 import { en } from './i18n/en';
 import { errors } from './i18n/errors';
+import { libraryTrials } from './i18n/libraryTrials';
 
 /**
  * Interface language for the workbench, login and share pages. Chinese strings are the keys and the default;
@@ -12,6 +13,11 @@ const browser = typeof window !== 'undefined' && typeof document !== 'undefined'
 
 function detect(): Locale {
   if (!browser) return 'zh';
+  const linked = new URLSearchParams(window.location?.search ?? '').get('lang');
+  if (linked === 'zh' || linked === 'en') {
+    try { localStorage.setItem(localeStorageKey, linked); } catch { /* The address still selects this page's language. */ }
+    return linked;
+  }
   try {
     const saved = localStorage.getItem(localeStorageKey);
     if (saved === 'zh' || saved === 'en') return saved;
@@ -75,7 +81,7 @@ let templates: Array<[RegExp, string]> | undefined;
  */
 export function localizeMessage(text: string): string {
   if (locale === 'zh' || !text || en[text]) return localizeText(text);
-  templates ??= Object.keys(errors).filter(key => /\{\d+\}/u.test(key)).map(key => [new RegExp(`^${key.split(/\{\d+\}/u)
+  templates ??= Object.keys({ ...errors, ...libraryTrials }).filter(key => /\{\d+\}/u.test(key)).map(key => [new RegExp(`^${key.split(/\{\d+\}/u)
     .map(part => part.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')).join('(.+?)')}$`, 'u'), key]);
   // Error keys come from template literals, so their slots are numbered in order (scripts/web-i18n.ts errorKeys).
   for (const [pattern, key] of templates) {
@@ -87,7 +93,10 @@ export function localizeMessage(text: string): string {
 
 /** Saves the choice and reloads; callers save drafts first. */
 export function switchLocale(next: Locale) {
-  try { localStorage.setItem(localeStorageKey, next); } catch { /* The choice then lasts for this load only. */ }
+  let saved = false;
+  try { localStorage.setItem(localeStorageKey, next); saved = true; } catch { /* The address can keep the choice. */ }
+  const url = new URL(location.href);
+  if (url.searchParams.has('lang') || !saved) { url.searchParams.set('lang', next); history.replaceState(null, '', url); }
   location.reload();
 }
 

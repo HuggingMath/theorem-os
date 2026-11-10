@@ -1107,7 +1107,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         }
         const sourceMatch = /^tasks\/([^/]+)\/source$/u.exec(operation ?? '');
         if (sourceMatch && request.method === 'GET') {
-          const source = storage.getTaskSource(owner, run.id, decodeURIComponent(sourceMatch[1]), url.searchParams.get('version') ?? undefined);
+          const source = storage.getTaskSource(owner, run.id, decodeURIComponent(sourceMatch[1]), url.searchParams.get('version') ?? undefined,
+            url.searchParams.get('commit') ?? undefined);
           if (!source) throw new HttpError(404, '该任务版本没有已保存的源码。');
           json(response, 200, { source }); return;
         }
@@ -1177,7 +1178,11 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
               try { review = formalizations.read(owner, run.formalization.id).report; }
               catch (error) { if (!(error instanceof WebStorageError && error.status === 404)) throw error; }
             }
-            const createdAt = new Date().toISOString(), snapshot = shareSnapshot(run, createdAt, review);
+            const approved = explanations.list(owner, run.id).filter(item => item.status === 'approved').flatMap(item => {
+              const document = explanations.read(owner, run, item.target, item.language)?.document;
+              return document ? [document] : [];
+            });
+            const createdAt = new Date().toISOString(), snapshot = shareSnapshot(run, createdAt, review, { explanations: approved });
             if (!snapshot) throw new HttpError(409, '只有通过独立验收的运行可以分享。');
             const token = crypto.randomBytes(24).toString('base64url');
             storage.saveShare(owner, run.id, { token, createdAt, snapshot });

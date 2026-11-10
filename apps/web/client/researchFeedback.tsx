@@ -6,6 +6,10 @@ import { RichProse } from './richText';
 import { DiscussionGuidance } from './researchDiscussionGuidance';
 import { GuidanceOutcome } from './guidanceOutcome';
 import { CandidateReview } from './researchCandidateReview';
+import { ResearchReview } from './researchReview';
+import { CandidateHistory } from './researchCandidateHistory';
+import { LibraryCandidateEvidence } from './researchLibraryCandidate';
+import './researchCandidateContinuity.css';
 import { feedbackNeedsAttention, matchesFeedbackQuery, matchesFeedbackScope, matchesFeedbackStatus,
   type FeedbackScope, type FeedbackStatus, type FeedbackTask } from './researchFeedbackModel';
 import { base, enc, Empty, Field, MutationState, nameOf, personHref, stamp, State, Tags, theoremHref, tx, useMutation, lines, type Item } from './researchShared';
@@ -31,11 +35,12 @@ export function TaskFeedbackContext({ project, runId, task, onBrowse }: {
   </div>;
 }
 
-export function FeedbackWorkspace({ project, selfId, runId, task, refresh, onOpenTask, onOpenStatement, focus, browseTask, onRevealFeedback, children }: {
+export function FeedbackWorkspace({ project, selfId, runId, task, refresh, onOpenTask, onOpenStatement, focus, browseTask, onRevealFeedback, onOpenIssue, children }: {
   selfId: string;
   project: ResearchProjectDetail; runId?: string; task?: FeedbackTask; refresh: () => void; onOpenTask: OpenFeedbackTask;
   onOpenStatement: (versionId: string) => void;
   focus?: FeedbackFocus; browseTask: number; onRevealFeedback: (id: string) => void; children?: ComponentChildren;
+  onOpenIssue?: (feedback: ResearchFeedback) => void;
 }) {
   const [scope, setScope] = useState<FeedbackScope>('all'), [status, setStatus] = useState<FeedbackStatus>('all'), [query, setQuery] = useState('');
   const root = useRef<HTMLDivElement>(null), focused = useRef(''), browsed = useRef(browseTask);
@@ -79,7 +84,7 @@ export function FeedbackWorkspace({ project, selfId, runId, task, refresh, onOpe
       {scope === 'task' && currentTask && <> · {currentTask.taskId} · <code>{currentTask.taskVersion}</code></>}</p>
     {children}
     {project.feedback.slice().reverse().map(feedback => <Feedback key={feedback.id} feedback={feedback} project={project} refresh={refresh}
-      selfId={selfId} runId={runId} hidden={!visibleIds.has(feedback.id)} onOpenTask={onOpenTask} onOpenStatement={onOpenStatement} onRevealFeedback={onRevealFeedback} />)}
+      selfId={selfId} runId={runId} hidden={!visibleIds.has(feedback.id)} onOpenTask={onOpenTask} onOpenStatement={onOpenStatement} onRevealFeedback={onRevealFeedback} onOpenIssue={onOpenIssue} />)}
     {!visible.length && <Empty>{project.feedback.length ? tx('当前范围和条件下没有反馈。', 'No feedback matches this scope and filters.') : tx('尚无讨论或干预记录。', 'No discussion or intervention records yet.')}</Empty>}
   </div>;
 }
@@ -93,17 +98,22 @@ function TaskLink({ projectId, target, task, execution, onOpenTask }: {
     </a>{execution && <span> · {task.id} · {task.version.slice(0, 12)}</span>}</span>;
 }
 
-function Feedback({ feedback, project, selfId, runId, refresh, hidden, onOpenTask, onOpenStatement, onRevealFeedback }: {
+function Feedback({ feedback, project, selfId, runId, refresh, hidden, onOpenTask, onOpenStatement, onRevealFeedback, onOpenIssue }: {
   selfId: string; runId?: string;
   feedback: ResearchFeedback; project: ResearchProjectDetail; refresh: () => void; hidden: boolean; onOpenTask: OpenFeedbackTask; onRevealFeedback: (id: string) => void;
   onOpenStatement: (versionId: string) => void;
+  onOpenIssue?: (feedback: ResearchFeedback) => void;
 }) {
   const permission = feedback.kind === 'guidance' ? 'guidance' : feedback.kind === 'plan-approval' ? 'approve' : feedback.kind === 'proof-submission' ? 'proof' : 'edit';
-  const canDecide = project.permissions.edit && (!feedback.target || Boolean(project.runs.find(item => item.runId === feedback.target!.runId)?.permissions[permission]));
+  const canReview = project.permissions.edit && (!feedback.target || Boolean(project.runs.find(item => item.runId === feedback.target!.runId)?.permissions[permission]));
+  const canDecide = canReview && (!feedback.review || feedback.review.reviewer.id === selfId || project.permissions.manage);
   const source = feedback.sourceFeedbackId && project.feedback.find(item => item.id === feedback.sourceFeedbackId);
   const forwarded = project.feedback.filter(item => item.sourceFeedbackId === feedback.id);
+  const needsNewAttempt = feedback.payload && 'libraryTrial' in feedback.payload && feedback.payload.libraryTrial?.requiresNewAttempt;
   const canForward = feedback.kind === 'discussion' && Boolean(selfId) && project.runs.some(run => run.permissions.guidance && run.status === 'running');
   const [opened, setOpened] = useState(false);
+  const reviseUrl = feedback.target ? new URL(theoremHref(project.id, feedback.target.runId, { statementVersionId: feedback.target.statementVersionId, taskRef: feedback.target.taskRef }), location.href) : undefined;
+  if (reviseUrl) { reviseUrl.searchParams.set('revise', feedback.id); reviseUrl.hash = 'candidate-composer'; }
   return <article class="research-event research-feedback-event" id={`feedback-${feedback.id}`} tabIndex={-1} hidden={hidden}>
     <div class="research-item-meta">{source && <span>{tx('投递人', 'Forwarded by')}</span>}<a href={personHref(feedback.author.id)}>{feedback.author.displayName}</a><span>{nameOf(feedback.kind)}</span><time dateTime={feedback.createdAt}>{stamp(feedback.createdAt)}</time>
       {feedback.visibility === 'members' && feedback.authorReadable ? <span class="research-state">{tx('成员和作者可见', 'Members and author')}</span> : <State value={feedback.visibility} />}</div>
@@ -125,6 +135,10 @@ function Feedback({ feedback, project, selfId, runId, refresh, hidden, onOpenTas
     {source && <div class="research-feedback-source" data-feedback-source><span class="research-field-note">{tx('原建议作者：', 'Original author: ')}<a href={personHref(source.author.id)}>{source.author.displayName}</a></span>
       <a class="research-inline-link" href={`#feedback-${enc(source.id)}`} onClick={event => { event.preventDefault(); onRevealFeedback(source.id); }}>{tx('查看原始建议', 'View original suggestion')}</a>
       <details><summary>{tx('原始建议内容', 'Original suggestion text')}</summary><div class="research-description"><RichProse text={source.text} /></div></details></div>}
+    {feedback.issueSource && <details data-feedback-issue-source><summary>{tx('来自议题决议：', 'From issue resolution: ')}{feedback.issueSource.title}</summary><a href={`#issue-${feedback.issueSource.issueId}`}>{tx('查看议题', 'View issue')}</a><RichProse text={feedback.issueSource.resolution.text} />
+      {feedback.issueSource.proposal && <><p>{feedback.issueSource.proposal.author.displayName} · {tx('采用的方案', 'Selected proposal')}</p><RichProse text={feedback.issueSource.proposal.text} /></>}
+      <p>{tx('决议版本', 'Resolution revision')} {feedback.issueSource.issueRevision} · {stamp(feedback.issueSource.resolutionAt)}</p>
+      {feedback.issueSource.originalTarget?.taskRef && <code>{feedback.issueSource.originalTarget.runId} · {feedback.issueSource.originalTarget.taskRef.id} · {feedback.issueSource.originalTarget.taskRef.version}</code>}</details>}
     {forwarded.length > 0 && <div class="research-feedback-forwards" data-feedback-forwards><p class="research-field-note">{tx('由此建议转投的指导', 'Guidance forwarded from this suggestion')}</p>
       <ul>{forwarded.map(item => <li key={item.id}><a class="research-inline-link" href={`#feedback-${enc(item.id)}`} onClick={event => { event.preventDefault(); onRevealFeedback(item.id); }}>{tx('查看指导', 'View guidance')}</a>
         <span> · {item.author.displayName} · {project.runs.find(run => run.runId === item.target?.runId)?.title ?? tx('对应运行', 'Related run')} · {item.target?.taskRef?.id ?? 'Lead'} · </span><State value={item.delivery.status} /></li>)}</ul></div>}
@@ -133,8 +147,15 @@ function Feedback({ feedback, project, selfId, runId, refresh, hidden, onOpenTas
       <TaskLink key={`${task.id}:${task.version}`} projectId={project.id} target={feedback.target!} task={task} execution onOpenTask={onOpenTask} />)}</div>}
     {feedback.proofCheck && <p class="research-status">{tx('独立候选检查：', 'Independent candidate check: ')}<State value={feedback.proofCheck.status} /> · {feedback.proofCheck.receiptId}{feedback.proofCheck.reason ? ` · ${localizeMessage(feedback.proofCheck.reason)}` : ''}</p>}
     {feedback.kind === 'proof-submission' && <CandidateReview projectId={project.id} feedback={feedback} />}
+    {feedback.payload && 'libraryTrial' in feedback.payload && feedback.payload.libraryTrial && <LibraryCandidateEvidence attachment={feedback.payload.libraryTrial} />}
+    {feedback.candidateRevision && <CandidateHistory feedback={feedback} onReveal={onRevealFeedback} />}
+    {feedback.supersededBy && <p>{tx('已有后续候选修订。', 'A newer candidate revision is available.')} <button class="text-button" type="button" onClick={() => onRevealFeedback(feedback.supersededBy!)}>{tx('打开最新修订', 'Open the newer revision')}</button></p>}
+    {feedback.kind === 'proof-submission' && reviseUrl && feedback.author.id === selfId && !feedback.supersededBy && feedback.continuation?.action !== 'end'
+      && project.runs.some(run => run.runId === feedback.target?.runId && (run.status === 'running' || needsNewAttempt && ['completed', 'cancelled', 'error'].includes(run.status)) && run.permissions.proof) && <a class="button" data-revise-candidate href={`${reviseUrl.pathname.split('/').at(-1)}${reviseUrl.search}${reviseUrl.hash}`}>{tx('基于此候选继续修改', 'Continue revising this candidate')}</a>}
     {feedback.kind !== 'guidance' && (feedback.decision.evidenceRefs.length > 0 || feedback.execution.resultRefs.length > 0) && <details><summary>{tx('结果与证据引用', 'Result and evidence references')}</summary><Tags values={[...new Set([...feedback.decision.evidenceRefs, ...feedback.execution.resultRefs])]} /></details>}
+    {selfId && <ResearchReview feedback={feedback} project={project} selfId={selfId} canReview={canReview} refresh={refresh} />}
     {canDecide && <details><summary>{tx('记录采纳决定', 'Record an adoption decision')}</summary><Decision projectId={project.id} feedback={feedback} refresh={refresh} /></details>}
+    {project.permissions.edit && onOpenIssue && <button class="text-button" type="button" onClick={() => onOpenIssue(feedback)}>{tx('就此反馈发起议题', 'Open an issue from this feedback')}</button>}
     {(canForward || opened) && <details data-forward-discussion onToggle={event => { if (event.currentTarget.open) setOpened(true); }}><summary>{tx('转为运行指导', 'Forward to a run')}</summary>
       {opened && <DiscussionGuidance project={project} source={feedback} selfId={selfId} initialRunId={runId} refresh={refresh} onRevealFeedback={onRevealFeedback} />}</details>}
   </article>;
@@ -143,12 +164,13 @@ function Feedback({ feedback, project, selfId, runId, refresh, hidden, onOpenTas
 function Decision({ projectId, feedback, refresh }: { projectId: string; feedback: ResearchFeedback; refresh: () => void }) {
   const [status, setStatus] = useState('accepted'), [reason, setReason] = useState(''), [evidence, setEvidence] = useState(''), [planVersion, setPlanVersion] = useState(''), action = useMutation();
   const [revision, setRevision] = useState(feedback.revision);
-  return <form class="research-form" onSubmit={event => { event.preventDefault(); void action.run<Item<ResearchFeedback>>('POST', `${base}/theorems/${enc(projectId)}/feedback/${enc(feedback.id)}/decision`,
+  useEffect(() => { if (!reason && !evidence && !planVersion) setRevision(feedback.revision); }, [feedback.revision]);
+  return <form class="research-form" onSubmit={event => { event.preventDefault(); if (revision !== feedback.revision) return; void action.run<Item<ResearchFeedback>>('POST', `${base}/theorems/${enc(projectId)}/feedback/${enc(feedback.id)}/decision`,
     { status, reason, evidenceRefs: lines(evidence), ...(planVersion ? { planVersion } : {}), expectedRevision: revision }, result => { setRevision(result.item.revision); refresh(); }); }}>
     <label>{tx('决定', 'Decision')}<select value={status} onChange={event => setStatus(event.currentTarget.value)}><option value="accepted">{tx('采纳', 'Accept')}</option><option value="declined">{tx('未采纳', 'Decline')}</option><option value="needs-info">{tx('需要补充', 'Needs information')}</option></select></label>
     <Field label={tx('理由', 'Reason')} value={reason} onInput={setReason} multiline required rows={2} /><Field label={tx('关联计划版本（可选）', 'Related plan version (optional)')} value={planVersion} onInput={setPlanVersion} />
     <Field label={tx('证据引用，每行一项', 'Evidence references, one per line')} value={evidence} onInput={setEvidence} multiline rows={2} />
     {revision !== feedback.revision && <p class="research-status">{tx('反馈状态已有更新，你的草稿已保留。', 'Feedback has changed. Your draft is preserved.')} <button type="button" class="text-button" onClick={() => setRevision(feedback.revision)}>{tx('基于最新反馈提交', 'Use latest feedback revision')}</button></p>}
-    <MutationState action={action} /><button type="submit" class="button" disabled={action.busy}>{tx('保存决定', 'Save decision')}</button>
+    <MutationState action={action} /><button type="submit" class="button" disabled={action.busy || revision !== feedback.revision}>{tx('保存决定', 'Save decision')}</button>
   </form>;
 }

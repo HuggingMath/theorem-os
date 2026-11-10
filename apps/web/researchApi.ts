@@ -5,9 +5,16 @@ import { researchCandidateScopeReason } from './researchCandidateScope';
 import { WebResearchProjects } from './researchProjects';
 import { WebResearchAssets } from './researchAssets';
 import { researchOverview } from './researchOverview';
+import { WebResearchWorkspace } from './researchWorkspace';
+import { WebResearchProblems } from './researchProblems';
+import { handleResearchCollaboration } from './researchCollaborationApi';
+import { createResearchCollectionsHandler } from './researchCollections';
+import { createResearchLibraryTrialsHandler } from './researchLibraryTrials';
 import { researchMathematics } from './researchMathematics';
+import { researchMathExampleValidator } from './researchMathExamples';
 import { researchAssetFromRun } from './researchAssetPrefill';
 import { selectWebLibraryPack } from './frozenLibrary';
+import { installedLibraryDetail, installedLibraryDirectory, installedLibrarySource } from './installedLibrary';
 import { acceptedResearchLibraryUses } from './researchLibraryUsage';
 import { WebStorage, WebStorageError } from './storage';
 import type { WebJobs } from './jobs';
@@ -48,13 +55,21 @@ export const researchSelectionSchema = configurationSchema.shape.selection;
 export class WebResearchApi {
   readonly projects: WebResearchProjects;
   readonly assets: WebResearchAssets;
+  readonly workspace: WebResearchWorkspace;
+  readonly problems: WebResearchProblems;
+  private collections: ReturnType<typeof createResearchCollectionsHandler>;
+  private libraryTrials: ReturnType<typeof createResearchLibraryTrialsHandler>;
   private pendingProofs = new Map<string, Promise<ResearchFeedback>>();
   private controller = new AbortController();
   constructor(private storage: WebStorage, private jobs: WebJobs, knowledge: WebKnowledgeService, private runner: WebRunner) {
     this.projects = new WebResearchProjects(storage);
     const mathematics = researchMathematics(storage, knowledge, jobs, runner);
     this.assets = new WebResearchAssets(storage, { identity: owner => this.projects.identity(owner),
-      resolveMathematics: mathematics.resolve, validateMathematics: mathematics.validate });
+      resolveMathematics: mathematics.resolve, validateMathematics: mathematics.validate, validateMathematicsExample: researchMathExampleValidator(storage, runner) });
+    this.workspace = new WebResearchWorkspace(storage, jobs, this.projects, this.assets, knowledge);
+    this.problems = new WebResearchProblems(storage, jobs, this.projects, this.workspace);
+    this.collections = createResearchCollectionsHandler({ storage, projects: this.projects, assets: this.assets });
+    this.libraryTrials = createResearchLibraryTrialsHandler({ storage, projects: this.projects, assets: this.assets, jobs, runner });
   }
   private aliases(viewer: string, projectId: string) {
     const author = this.projects.identity(viewer);
@@ -161,21 +176,26 @@ export class WebResearchApi {
     const matches = inspectScopedLeanDeclarations(submission.source)
       .filter(item => item.qualifiedName === name || name && !name.includes('.') && item.name === name);
     const declaration = matches.length === 1 ? matches[0] : undefined;
-    const candidateTarget = declaration ? { name: declaration.qualifiedName, ...(task?.kind === 'lemma' && (task.type ?? planned?.type)
+    const inferredTarget = declaration ? { name: declaration.qualifiedName, ...(task?.kind === 'lemma' && (task.type ?? planned?.type)
       ? { expectedType: task.type ?? planned?.type } : {}) } : undefined;
+    const attachment = submission.libraryTrial;
+    const candidateTarget = attachment?.candidateTarget ?? inferredTarget;
+    const prefix = attachment?.imports.map(name => `import ${name}\n`).join('') ?? '';
+    const dependencySources = attachment?.dependencySources ?? baseline.dependencySources;
     const expectedKind = task?.kind === 'lemma' ? planned?.declaration === 'definition' ? 'definition' : 'theorem'
       : inspectScopedLeanDeclarations(run.source).find(item => item.qualifiedName === candidateTarget?.name)?.kind ?? 'theorem';
-    let reason = !candidateTarget || !task || !['lemma', 'goal'].includes(task.kind) || planned?.proofPath && planned.proofPath !== base.file
+    let reason = !candidateTarget || !inferredTarget || attachment && canonicalMathJson(candidateTarget) !== canonicalMathJson(inferredTarget)
+      || !task || !['lemma', 'goal'].includes(task.kind) || planned?.proofPath && planned.proofPath !== base.file
       ? '候选任务的精确声明或文件已改变，请刷新后重新选择。'
       : declaration?.kind !== expectedKind ? expectedKind === 'definition' ? '此任务要求定义，请保留计划指定的声明种类。'
         : '此任务要求定理或引理，请勿用定义替代证明。'
       : task.kind === 'lemma' && !candidateTarget.expectedType ? '候选辅助声明的计划类型不可用，请刷新后重新选择。'
-      : researchCandidateScopeReason({ originalSource: run.source, baselineSource: baseline.source,
+      : researchCandidateScopeReason({ originalSource: prefix + run.source, baselineSource: prefix + baseline.source,
         candidateSource: submission.source, targetName: candidateTarget.name });
     const result = reason ? undefined : await this.runner.check!({ environment: run.environment, source: submission.source,
-      sourceFile: base.file, dependencySources: baseline.dependencySources,
+      sourceFile: base.file, dependencySources,
       candidateTarget,
-      libraryPack: run.researchConfiguration?.libraryPack ?? selectWebLibraryPack(run) }, this.controller.signal);
+      libraryPack: attachment?.libraryPack ?? run.researchConfiguration?.libraryPack ?? selectWebLibraryPack(run) }, this.controller.signal);
     const diagnostics = result && leanDiagnostics(result.output);
     const passed = Boolean(result && result.exitCode === 0 && !result.timedOut && !diagnostics?.errors
       && result.checkedTarget === candidateTarget?.name);
@@ -184,7 +204,7 @@ export class WebResearchApi {
     const receipt: ResearchCandidateCheckReceipt = { schema: 'theorem-os.research-candidate-check.v1', sourceDigest, base,
       target: submission.target, environment: run.environment, passed, diagnostics: diagnostics?.diagnostics ?? [],
       declaration: candidateTarget, scope: 'task-declaration', remainingOriginalSorries: diagnostics?.sorries ?? 0,
-      dependencies: (baseline.dependencySources ?? []).map(file => ({ file: file.file, digest: mathDigest(file.source) })),
+      dependencies: (dependencySources ?? []).map(file => ({ file: file.file, digest: mathDigest(file.source) })),
       ...(reason ? { reason } : {}), checkedAt: new Date().toISOString() };
     const receiptId = mathDigest(canonicalMathJson(receipt));
     this.storage.saveRecord(['research', 'checks', `${receiptId}.json`], receipt, true);
@@ -225,6 +245,29 @@ export class WebResearchApi {
     const item = (body: unknown, status = 200): Reply => ({ status, body: { item: body } });
     if (method !== 'GET') { writable(); if (!owner) fail(401, '请先登录。'); }
     const body = async () => { const value = await readBody(); writable(); return value; };
+    const collaboration = await handleResearchCollaboration(url, method, viewer, body, this.projects);
+    if (collaboration) return collaboration;
+    const collections = await this.collections(url, method, viewer, body);
+    if (collections) return collections;
+    const libraryTrial = await this.libraryTrials.handle(url, method, viewer, body);
+    if (libraryTrial) return libraryTrial;
+    if (section === 'workspace' && method === 'GET') {
+      if (id === 'search') {
+        const parameters = parse(z.object({ q: z.string().trim().max(128),
+          kind: z.enum(['problem', 'conversation', 'lemma', 'route', 'library']).optional(),
+          offset: z.coerce.number().int().min(0).max(100_000).default(0) }), {
+          q: url.searchParams.get('q') ?? '', kind: url.searchParams.get('kind') || undefined,
+          offset: url.searchParams.get('offset') ?? 0 });
+        return { status: 200, body: this.workspace.search(viewer, parameters.q, parameters.kind, parameters.offset) };
+      }
+      if (id === 'usage') return { status: 200, body: this.workspace.ledger(viewer) };
+      if (id === 'knowledge' && action) return item(this.workspace.knowledgeRecord(viewer, action));
+      if (id === 'brief' && action) return item(this.workspace.brief(viewer, action, url.searchParams.get('project') ?? undefined));
+      if (id === 'problem' && action) return item(this.problems.detail(viewer, action, url.searchParams.get('project') ?? undefined));
+    }
+    if (section === 'workspace' && id === 'problem' && action && ref === 'stages' && method === 'POST')
+      return item(this.problems.saveStage(viewer, action, url.searchParams.get('project') ?? undefined, await body()), 201);
+    if (section === 'workspace' && id === 'rates' && method === 'PUT') return item(this.workspace.saveRate(viewer, await body()));
     if (section === 'session' && method === 'GET') return { status: 200, body: { authenticated: Boolean(owner),
       researcherId: owner ? this.projects.identity(owner) : null,
       profile: owner ? this.projects.profile(owner, this.projects.identity(owner)) : null } };
@@ -256,6 +299,20 @@ export class WebResearchApi {
           runId: url.searchParams.get('run') ?? '', taskId: url.searchParams.get('task') ?? undefined,
           taskVersion: url.searchParams.get('taskVersion') ?? undefined, commit: url.searchParams.get('commit') ?? undefined });
         return item(researchAssetFromRun(this.storage, this.jobs, owner!, { ...parameters, runId: parameters.runId! }));
+      }
+      if (id === 'installed') {
+        if (method !== 'GET') fail(405, '现有 Lean 库仅支持读取。');
+        if (!action) {
+          const pagination = parse(z.object({ offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).optional() }), query(url));
+          return { status: 200, body: installedLibraryDirectory({ ...pagination, q: url.searchParams.get('q') ?? undefined,
+            area: url.searchParams.get('area') ?? undefined, environment: url.searchParams.get('environment') ?? undefined }) };
+        }
+        if (action === 'module' && !ref) {
+          const input = parse(z.object({ file: z.string().min(1), catalogDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+            view: z.enum(['metadata', 'source']).optional() }), Object.fromEntries(url.searchParams));
+          return item(input.view === 'source' ? installedLibrarySource(input.file, input.catalogDigest) : installedLibraryDetail(input.file, input.catalogDigest));
+        }
+        fail(404, '现有 Lean 库读取地址不存在。');
       }
       if (!id && method === 'GET') return { status: 200, body: { items: this.assets.list(viewer, {
         type: parse(z.enum(['mathematics', 'agent', 'skill']).optional(), url.searchParams.get('type') ?? undefined),
@@ -312,8 +369,20 @@ export class WebResearchApi {
         if (method === 'GET') { const project = this.refreshProject(viewer, id);
           return ref ? item(this.projects.feedback(viewer, id, ref)) : { status: 200, body: { items: project.feedback } }; }
         if (ref && subaction === 'decision' && method === 'POST') return item(this.projects.decideFeedback(viewer, id, ref, await body()));
-        if (!ref && method === 'POST') return item(await this.dispatch(viewer, id, this.projects.submitFeedback(viewer, id, await body())), 201);
+        if (ref && subaction === 'candidate-delivery' && method === 'POST') return item(await this.dispatch(viewer, id, this.projects.candidateDelivery(viewer, id, ref, await body())));
+        if (!ref && method === 'POST') {
+          const input = await body() as Record<string, unknown>;
+          if (input.libraryTrialId && input.shareLibraryTrial !== true) fail(403, '请明确确认向项目成员共享这份固定试用证据。');
+          const attachment = input.kind === 'proof-submission' && typeof input.libraryTrialId === 'string'
+            ? this.libraryTrials.resolveCandidateAttachment(viewer, id, input.libraryTrialId, String(input.libraryTrialDigest ?? ''), true) : undefined;
+          return item(await this.dispatch(viewer, id, this.projects.submitFeedback(viewer, id, input, attachment ? { libraryTrial: attachment } : undefined)), 201);
+        }
       }
+      if (action === 'work-continuations' && method === 'POST') {
+        const result = this.projects.continueWork(viewer, id, await body());
+        return { status: 200, body: { ...result, ...(result.feedback ? { feedback: await this.dispatch(viewer, id, result.feedback) } : {}) } };
+      }
+      if (action === 'library-proposals' && ref && subaction === 'prepare' && method === 'GET') return item(this.libraryTrials.prepareAttempt(viewer, id, ref));
       if (action === 'runs' && ref) {
         if (method === 'POST' && ['guidance', 'edits', 'plan-approval'].includes(subaction)) {
           const permission = subaction === 'guidance' ? 'guidance' : subaction === 'edits' ? 'edit' : 'approve';
@@ -362,7 +431,8 @@ export class WebResearchApi {
           if (subaction === 'observation') return { status: 200, body: { run, observation: run.observation ?? null } };
           if (!subaction) return { status: 200, body: { run } };
           if (subaction === 'tasks' && parts[6] === 'source') return { status: 200, body: { source:
-            this.storage.getTaskSource(resolved.runOwner, ref, parts[5], url.searchParams.get('version') ?? undefined) ?? fail(404, '源码未保存。') } };
+            this.storage.getTaskSource(resolved.runOwner, ref, parts[5], url.searchParams.get('version') ?? undefined,
+              url.searchParams.get('commit') ?? undefined) ?? fail(404, '源码未保存。') } };
           if (subaction === 'checks') return { status: 200, body: { check: this.storage.getCheckReceipt(resolved.runOwner, ref, parts[5]) ?? fail(404, '回执未保存。') } };
           if (['commands', 'guidance'].includes(subaction)) {
             const author = this.projects.identity(viewer), feedback = this.projects.detail(viewer, id).feedback.find(feedback =>
@@ -382,5 +452,5 @@ export class WebResearchApi {
     }
     return fail(404, '研究接口不存在。');
   }
-  async close() { this.controller.abort(); await this.assets.close(); await Promise.allSettled([...this.pendingProofs.values()]); }
+  async close() { this.controller.abort(); await this.libraryTrials.close(); await this.assets.close(); await Promise.allSettled([...this.pendingProofs.values()]); }
 }

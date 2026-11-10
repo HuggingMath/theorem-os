@@ -1,21 +1,26 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { locale, mountLocaleSwitch } from '../i18n';
+import { locale, mountLocaleSwitch, t } from '../i18n';
 import { PeoplePage } from './researchPeople';
 import { TheoremsPage } from './researchTheorems';
 import { LibraryPage } from './researchLibrary';
+import { WorkspacePage } from './researchWorkspace';
+import { ProblemPage } from './researchProblem';
 import { bindResearchSession, clearResearchSession, errorText, ErrorBox, readResearchSession, readResearchWebSession,
   ResearchSessionChangedError, tx, type ResearchContext } from './researchShared';
 import { webDraftOwner } from './ownedDrafts';
+import { loginHref, researchNavigation } from '../shared';
 
 const page = document.body.dataset.researchPage ?? 'people';
-const pageNames = { people: ['数学家', 'Mathematicians'], theorems: ['定理', 'Theorems'], library: ['Library', 'Library'] } as const;
+const pageNames = { workspace: ['我的研究', 'My research'], theorems: ['定理', 'Theorems'], people: ['数学家', 'Mathematicians'], library: ['Library', 'Library'] } as const;
 function Header() {
   const language = useRef<HTMLButtonElement>(null);
+  const navigation = researchNavigation(location.search);
   useEffect(() => { if (language.current) mountLocaleSwitch(language.current); }, []);
-  return <header class="topbar"><a class="brand" href="./" aria-label="TheoremOS"><img src="assets/mark.svg" alt="" width="26" height="26" />
+  return <header class="topbar"><a class="brand" href={navigation.workbench} aria-label="TheoremOS"><img src="assets/mark.svg" alt="" width="26" height="26" />
     <span>Theorem<span class="brand-os">OS</span></span></a><nav class="research-nav" aria-label={tx('研究空间', 'Research space')}>
-    {Object.entries(pageNames).map(([id, label]) => <a key={id} href={`${id}.html`} aria-current={page === id ? 'page' : undefined}>{tx(label[0], label[1])}</a>)}
-    <a href="./">{tx('工作台', 'Workbench')}</a></nav><button ref={language} type="button" class="text-button locale-switch" /></header>;
+    <a href={navigation.workbench}>{tx('工作台', 'Workbench')}</a>
+    {Object.entries(pageNames).map(([id, label]) => <a key={id} href={navigation[id as keyof typeof pageNames]} aria-current={page === id ? 'page' : undefined}>{tx(label[0], label[1])}</a>)}
+    </nav><button ref={language} type="button" class="text-button locale-switch" /></header>;
 }
 export function ResearchApp() {
   const [context, setContext] = useState<ResearchContext>(), [error, setError] = useState(''), [attempt, setAttempt] = useState(0);
@@ -32,7 +37,7 @@ export function ResearchApp() {
   useEffect(() => {
     document.documentElement.lang = locale === 'en' ? 'en' : 'zh-CN';
     const label = pageNames[page as keyof typeof pageNames] ?? pageNames.people;
-    document.title = `${tx(label[0], label[1])} · TheoremOS`;
+    document.title = `${page === 'problem' ? t('题目工作区') : tx(label[0], label[1])} · TheoremOS`;
     const skip = document.querySelector('.skip-link'); if (skip) skip.textContent = tx('跳到主要内容', 'Skip to main content');
     let live = true, pending: Promise<void> | undefined;
     const controller = new AbortController();
@@ -92,10 +97,10 @@ export function ResearchApp() {
   const unavailable = Boolean(error) || !context || verifyingOwner;
   return <><Header /><main id="main" class={context ? 'research-shell' : 'research-loading'} tabIndex={-1} aria-busy={checking}>
     {context && <div class={unavailable ? 'research-session-pending' : undefined} aria-hidden={unavailable} inert={unavailable} key={webDraftOwner(context.web)}>
-      {page === 'theorems' ? <TheoremsPage context={context} /> : page === 'library' ? <LibraryPage context={context} /> : <PeoplePage context={context} />}
+      {page === 'problem' ? <ProblemPage context={context} /> : page === 'workspace' ? <WorkspacePage context={context} /> : page === 'theorems' ? <TheoremsPage context={context} /> : page === 'library' ? <LibraryPage context={context} /> : <PeoplePage context={context} />}
     </div>}
     {unavailable && <div class="research-session-notice">{error ? <><ErrorBox message={error} /><div class="research-actions">
     <button class="button" type="button" onClick={() => setAttempt(value => value + 1)}>{tx('重新连接', 'Reconnect')}</button>
-    <a class="button" href="login.html">{tx('登录', 'Sign in')}</a></div></> : <p role="status">{tx('正在读取研究空间…', 'Loading the research space…')}</p>}</div>}
+    <a class="button" href={loginHref(location.pathname + location.search + location.hash)}>{tx('登录', 'Sign in')}</a></div></> : <p role="status">{tx('正在读取研究空间…', 'Loading the research space…')}</p>}</div>}
   </main></>;
 }

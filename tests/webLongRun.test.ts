@@ -35,7 +35,7 @@ describe('usage estimate and token cap before submission', () => {
     expect([formatTokens(1_000_000), formatTokens(250_000_000), formatTokens(800)]).toEqual(['100 万', '2.5 亿', '800']);
   });
 
-  it('accepts an empty cap as unlimited and integer token caps expressed in 万 within the limit', () => {
+  it('accepts blank or zero budgets as unlimited and positive caps within the allowed range', () => {
     expect(tokenCap('', 1e8)).toBeUndefined();
     expect(tokenCap('50', 1e8)).toBe(500_000);
     expect(tokenCap('1.5', 1e8)).toBe(15_000);
@@ -50,6 +50,11 @@ describe('usage estimate and token cap before submission', () => {
     expect(submissionIssues({ ...draft, maxTotalTokens: '1.00001' }, 'sk-valid-key', session).map(issue => issue.field)).toEqual(['max-tokens']);
     expect(submissionIssues({ ...draft, maxTurns: '', maxRunSeconds: '', maxTotalTokens: '' }, 'sk-valid-key', session)).toEqual([]);
     expect(submissionIssues({ ...draft, maxTurns: '0', maxRunSeconds: '0', maxTotalTokens: '0' }, 'sk-valid-key', session)).toEqual([]);
+    expect(submissionIssues({ ...draft, maxTurns: '20', maxRunSeconds: '900', maxTotalTokens: '50' }, 'sk-valid-key', session)).toEqual([]);
+    for (const value of ['-1', '1.5', '21'])
+      expect(submissionIssues({ ...draft, maxTurns: value }, 'sk-valid-key', session).map(issue => issue.field)).toEqual(['max-turns']);
+    for (const value of ['-1', '20', '30.5', '901'])
+      expect(submissionIssues({ ...draft, maxRunSeconds: value }, 'sk-valid-key', session).map(issue => issue.field)).toEqual(['max-seconds']);
     expect(submissionIssues({ ...draft, workers: '' }, 'sk-valid-key', session).map(issue => issue.field)).toEqual(['workers']);
   });
 

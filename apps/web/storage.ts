@@ -209,9 +209,9 @@ export class WebStorage {
     if (sequence !== undefined) return this.getRecord([...this.runPath(owner, runId), 'observations', `${sequence}.json`]);
     return this.listObservations(owner, runId).at(-1);
   }
-  getTaskSource(owner: string, runId: string, taskId: string, version?: string): WebTaskSource | undefined {
+  getTaskSource(owner: string, runId: string, taskId: string, version?: string, commit?: string): WebTaskSource | undefined {
     return this.listObservations(owner, runId).reverse().flatMap(item => item.sources)
-      .find(item => item.taskId === taskId && (version === undefined || item.taskVersion === version));
+      .find(item => item.taskId === taskId && (version === undefined || item.taskVersion === version) && (commit === undefined || item.commit === commit));
   }
   getCheckReceipt(owner: string, runId: string, receiptId: string): WebCheckReceipt | undefined {
     return this.listObservations(owner, runId).reverse().flatMap(item => item.checks).find(item => item.id === receiptId);
