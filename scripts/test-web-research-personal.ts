@@ -138,9 +138,15 @@ try {
   checks.push({ name: phase, pinnedParkedTagsAndNotePersist: true, runStatusUnchanged: true, homepageFiltersAndSort: true });
 
   phase = 'archived-problem-is-recoverable-and-not-run-acceptance';
-  await organization.locator('[data-personal-status]').selectOption('archived'); await organization.locator('[data-save-personal-problem]').click();
-  await organization.locator('[data-personal-notice]').waitFor(); await desktop.reload();
-  assert.equal(await desktop.locator(`[data-overview-card="project:${project.id}"]`).count(), 0);
+  await organization.locator('[data-personal-status]').selectOption('archived');
+  const archivedResponse = responseTo(phone, 'PUT', '/api/research/personal/problems');
+  await organization.locator('[data-save-personal-problem]').click();
+  const archivedHttp = await archivedResponse; assert.equal(archivedHttp.status(), 200);
+  assert.equal((await archivedHttp.json()).item.status, 'archived');
+  const personalReload = responseTo(desktop, 'GET', '/api/research/personal/problems');
+  await desktop.reload(); assert.equal((await personalReload).status(), 200);
+  await desktop.locator('[data-overview-personal-tools]').waitFor(); await card.waitFor({ state: 'hidden' });
+  assert.equal(await card.count(), 0);
   await desktop.locator('[data-overview-organization]').selectOption('archived'); await card.waitFor();
   assert.equal(run.status, 'running'); await noOverflow(phone);
   checks.push({ name: phase, hiddenFromDefaultAndRecoverableInArchive: true });
