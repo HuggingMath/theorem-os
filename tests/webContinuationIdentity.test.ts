@@ -22,7 +22,7 @@ describe('web continuation frozen source identity', () => {
     const post = (body: unknown) => fetch(origin + '/api/runs', { method: 'POST', headers: { Cookie: cookie, 'X-CSRF-Token': session.csrfToken,
       'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const sample = loadWebSample()!, input = { providerId: provider.id, apiKey: 'sk-offline-continuation', model: 'fixture-model', effort: 'high' as const,
-      source: sample.run.source.trim(), task: 'Offline parent', maxTurns: 2, maxRunSeconds: 60, workers: 2, coordination: 'cooperative' as const,
+      source: sample.run.source.trim(), task: 'Offline parent', maxTurns: 2, maxRunSeconds: 60, maxTotalTokens: 0, workers: 2, coordination: 'cooperative' as const,
       environment: sample.run.environment };
     const parent = service.jobs.create(owner, input, provider);
     await new Promise<void>(resolve => setImmediate(resolve));

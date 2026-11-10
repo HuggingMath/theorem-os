@@ -163,7 +163,7 @@ try {
       await nav.locator(`a[href^="${destination}.html"]`).click();
       await page.waitForURL(url => url.pathname === `/${destination}.html` && url.searchParams.get('workbenchChat') === chatId, { timeout: 0 });
       const shared = page.locator('.research-nav'); await shared.waitFor({ timeout: 0 });
-      assert.deepEqual(await shared.locator('a').allTextContents(), labels);
+      assert.deepEqual(await shared.locator('a').allTextContents(), [...labels, '帮助']);
       for (const link of await shared.locator('a').evaluateAll(nodes => nodes.map(node => ({ text: node.textContent, href: (node as HTMLAnchorElement).href })))) {
         const url = new URL(link.href);
         assert.equal(url.searchParams.get(link.text === '工作台' ? 'chat' : 'workbenchChat'), chatId);

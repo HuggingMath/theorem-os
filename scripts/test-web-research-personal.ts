@@ -153,8 +153,9 @@ try {
   await signedOut.goto(`${origin}/theorems.html?${restoreParameters}`);
   const signIn = signedOut.locator('[data-account-draft-login]'); await signIn.waitFor();
   const loginTarget = new URL(await signIn.getAttribute('href') ?? '', origin);
-  assert.equal(loginTarget.searchParams.get('returnTo'), 'theorems');
-  for (const [name, value] of restoreParameters) assert.equal(loginTarget.searchParams.get(name), value);
+  const draftReturn = new URL(loginTarget.searchParams.get('returnTo')!, origin);
+  assert.equal(draftReturn.pathname, '/theorems.html');
+  for (const [name, value] of restoreParameters) assert.equal(draftReturn.searchParams.get(name), value);
   await signIn.click(); await signedOut.waitForURL(url => url.pathname === '/login.html');
   await signedOut.context().addCookies([{ name: 'theoremos_session', value: sessions[0].id, url: origin }]);
   await signedOut.reload(); await signedOut.waitForURL(url => url.pathname === '/theorems.html');

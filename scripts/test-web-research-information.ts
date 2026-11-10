@@ -102,6 +102,7 @@ function api(method: string, url: URL) {
     projectId: theorem.id, type: 'statement', summary: 'Updated field-extension statement', createdAt, read: false }], total: 1 });
   if (pathname === '/api/research/feed') return reply({ items: [], total: 0 });
   if (pathname === '/api/research/collaboration/inbox') return reply({ items: [], unread: 0, pending: 0 });
+  if (pathname === '/api/research/personal/drafts') return reply({ items: [], total: 0 });
   if (pathname === '/api/research/asset-follows') return reply({ items: [], updates: [] });
   const collaboration = /^\/api\/research\/theorems\/([^/]+)\/collaboration$/u.exec(pathname);
   if (collaboration) return reply({ item: { projectId: collaboration[1], revision: 0, invitations: [], handoffs: [], issues: [] } });
