@@ -133,7 +133,7 @@ try {
       await page.getByLabel('我已核对自然语言题意与 Lean 陈述一致').check();
       await request(page, 'POST', `${projectPath}/versions`, () => page.getByRole('button', { name: '保存新版本', exact: true }).click());
       await page.getByText('提交者已确认题意', { exact: true }).waitFor();
-      await page.getByLabel('数学家').fill(b.researcherId);
+      await page.getByLabel('数学家', { exact: true }).fill(b.researcherId);
       await request(page, 'PUT', `${projectPath}/members/${b.researcherId}`, () => page.getByRole('button', { name: '保存成员', exact: true }).click());
       const ownRun = await postRun({ page }, runInput); assert.ok(controls.has(ownRun.id));
       await page.getByText('关联我的研究运行', { exact: true }).click();
@@ -174,7 +174,7 @@ try {
       await page.getByLabel('适用情境与执行要求').fill('Before proposing a proof route, list the hypotheses used by each supporting lemma.');
       await page.getByLabel('执行步骤，每行一步').fill('Read the frozen statement.\nList assumptions for each lemma.\nReturn a dependency-aware plan.');
       await request(page, 'POST', '/api/research/library', () => page.getByRole('button', { name: '创建私有草稿', exact: true }).click(), false);
-      await page.waitForURL(/library\.html\?entry=/u); created.assetId = new URL(page.url()).searchParams.get('entry')!;
+      await page.waitForURL(url => url.pathname === '/library.html' && url.searchParams.has('entry')); created.assetId = new URL(page.url()).searchParams.get('entry')!;
       await request(page, 'GET', `/api/research/library/${created.assetId}/preview`, () => page.getByRole('button', { name: '预览将公开的内容', exact: true }).click());
       await page.locator('.research-draft-preview').waitFor();
       await page.getByLabel('许可证', { exact: true }).fill('MIT'); await page.getByRole('combobox', { name: /^发布范围/u }).selectOption('public'); await page.getByLabel('我已审阅保存的草稿及发布范围').check();
@@ -273,7 +273,8 @@ try {
     assert.deepEqual(await visibleFeedback(page), [`feedback-${historical.id}`]);
     await status.selectOption('all'); await scope.selectOption('task');
     assert.deepEqual(await visibleFeedback(page), [historical, current].map(item => `feedback-${item.id}`).sort(), 'an explicit execution reference can associate the older feedback with v2');
-    const executionLinks = oldArticle.getByText('查看执行节点', { exact: true });
+    await oldArticle.locator('.guidance-outcome-details > summary').click();
+    const executionLinks = oldArticle.getByRole('link', { name: /^查看执行节点/u });
     assert.equal(await executionLinks.count(), 2, 'both recorded execution nodes can be inspected');
     for (const link of await executionLinks.all()) {
       const target = new URL((await link.getAttribute('href'))!, page.url());
@@ -306,17 +307,20 @@ try {
     assert.equal(await scope.inputValue(), 'task');
     assert.deepEqual(await visibleFeedback(page), [`feedback-${historical.id}`], 'historical task scope excludes the current-version suggestion');
     await fit(page, 'historical feedback mobile'); await page.screenshot({ path: path.join(output, 'feedback-route-mobile.png'), fullPage: true });
-    const executionHref = await oldArticle.getByText('查看执行节点', { exact: true }).evaluateAll(links => links.map(link => link.getAttribute('href')!));
+    const outcomeDetails = oldArticle.locator('.guidance-outcome-details');
+    if (!await outcomeDetails.evaluate(element => (element as HTMLDetailsElement).open)) await outcomeDetails.locator(':scope > summary').click();
+    const executionHref = await oldArticle.getByRole('link', { name: /^查看执行节点/u }).evaluateAll(links => links.map(link => link.getAttribute('href')!));
     const toCurrent = executionHref.find(value => new URL(value, page.url()).searchParams.get('task') === 'lemma')!;
     await oldArticle.locator(`a[href="${toCurrent}"]`).click();
     await page.waitForURL(url => url.searchParams.get('taskVersion') === 'lemma-v2');
     await page.locator('[data-inspected-task-version]').filter({ hasText: 'lemma-v2' }).waitFor();
     await page.getByRole('button', { name: 'English', exact: true }).click();
-    await page.getByRole('heading', { name: 'Work together on a theorem', exact: true }).waitFor();
+    await page.getByRole('heading', { name: project.item.title, level: 1, exact: true }).waitFor();
     assert.equal(await page.locator('html').getAttribute('lang'), 'en');
     await status.selectOption('all'); await scope.selectOption('all');
     await oldArticle.getByText('View corresponding node', { exact: true }).waitFor();
-    assert.equal(await oldArticle.getByText('View execution node', { exact: true }).count(), 2);
+    await oldArticle.locator('.guidance-outcome-details > summary').click();
+    assert.equal(await oldArticle.getByRole('link', { name: /^View execution node/u }).count(), 2);
     assert.ok((await page.locator('[data-feedback-summary]').innerText()).trim());
     await fit(page, 'English feedback mobile'); await page.screenshot({ path: path.join(output, 'feedback-route-en-mobile.png'), fullPage: true });
     await page.goto(href('lemma', 'lemma-never-retained'));
@@ -351,7 +355,7 @@ try {
     await page.goto(`${origin}/people.html?id=${created.authorId}`); await page.getByRole('heading', { name: 'Fixture Mathematician A', exact: true }).waitFor();
     await page.keyboard.press('Tab'); assert.equal(await page.locator('.skip-link').evaluate(node => node === document.activeElement), true);
     await page.keyboard.press('Enter'); assert.equal(await page.locator('#main').evaluate(node => node === document.activeElement), true);
-    await page.getByRole('button', { name: 'English', exact: true }).click(); await page.getByRole('heading', { name: 'Mathematicians and their research', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'English', exact: true }).click(); await page.locator('html[lang="en"]').waitFor();
     assert.equal(await page.locator('html').getAttribute('lang'), 'en'); await fit(page, 'English mobile');
   }, { context: { viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' }, init: async context => { if (created.thirdCookies) await context.addCookies(created.thirdCookies); },
     harness: (page, context) => ({ page, context, requests: [] }), routes: { local: 'Mobile research fixture must stay local' }, timeout: { label: 'Research mobile', seconds: 45 }, failure: { fullPage: true } });

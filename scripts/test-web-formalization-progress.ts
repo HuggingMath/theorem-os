@@ -320,7 +320,10 @@ try {
     await expectProgress('prepare', 'queued');
     assert.equal(await progress.locator('[data-formalization-code]').count(), 0);
     assert.equal(await thinking.locator('[data-thinking-entry]').count(), 0, 'No summary or code is invented while the task is queued');
-    assert.equal(await page.locator('details.solve-process').getAttribute('open'), null, 'Diagnostic records stay folded beside the readable thinking section');
+    const diagnostics = page.locator('details.solve-process');
+    assert.equal(await diagnostics.getAttribute('open'), '', 'The research redesign starts with the process overview expanded');
+    await diagnostics.locator(':scope > summary').click();
+    assert.equal(await diagnostics.getAttribute('open'), null, 'Readers can fold diagnostics beside the readable thinking section');
     await capture('queued', true);
     update('preparing'); await expectProgress('prepare', 'preparing'); await capture('preparing');
     update('generating', [{ round: 1, step: 'role', workerId: 'r1-generate', role: 'generate', slot: 'generate', state: 'started' }]);
@@ -477,8 +480,8 @@ try {
       const records = page.locator('details.solve-process');
       if (!await records.evaluate(node => (node as HTMLDetailsElement).open)) await records.locator(':scope > summary').click();
       const row = page.locator('[data-solve-row^="f:compile:"][data-tone="failed"]').first();
-      const head = row.locator('.solve-row-head');
-      if (await head.getAttribute('aria-expanded') !== 'true') await head.click();
+      const toggle = row.locator('.solve-row-toggle');
+      if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
       assert.ok((await row.innerText()).includes(diagnostic));
       const bounds = await row.locator('.route-lean pre').evaluateAll(pres => pres.map(pre => ({
         scrollWidth: pre.scrollWidth, clientWidth: pre.clientWidth,

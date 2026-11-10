@@ -16,7 +16,7 @@ export function selectedProofWalkthrough(record: Pick<ArchiveIndexRecord, 'id' |
     && walkthrough.proofSha256 === record.campaign.proofSha256 && process.sources?.[walkthrough.proofSha256] ? walkthrough : undefined;
 }
 
-export function renderProofWalkthrough(walkthrough: ProofWalkthrough, process: ArchiveProcess, run: Run, locale: Locale, options: { linear?: boolean } = {}): string {
+export function renderProofWalkthrough(walkthrough: ProofWalkthrough, process: ArchiveProcess, run: Run, locale: Locale, options: { linear?: boolean; researchHref?: string } = {}): string {
   const source = process.sources![walkthrough.proofSha256];
   const lines = source.code.split('\n');
   const original = run.checks!.find(check => check.scope === 'original' && check.status === 'kernel_verified' && check.sourceDigest === walkthrough.proofSha256)!;
@@ -24,10 +24,10 @@ export function renderProofWalkthrough(walkthrough: ProofWalkthrough, process: A
   const positions = new Map(walkthrough.steps.map((step, index) => [step.id, { step, number: String(index + 1).padStart(2, '0') }]));
   const stages = new Map(walkthrough.stages.flatMap((stage, index) => stage.stepIds.map(id => [id, { stage, index }] as const)));
   return `<div class="proof-walkthrough" data-proof-walkthrough="${html(walkthrough.recordId)}" data-proof-sha="${walkthrough.proofSha256}"${options.linear ? ' data-proof-reading="linear"' : ''}>
-    ${options.linear ? `<details class="proof-reading-intro"><summary>${text(locale, '证明思路与完整题目', 'Strategy and full problem')}<span>${text(locale, `${walkthrough.steps.length} 步`, `${walkthrough.steps.length} steps`)}</span></summary>` : ''}
+    ${options.linear ? `<details class="proof-reading-intro"><summary>${text(locale, '完整题目与符号', 'Full problem and notation')}<span>${text(locale, `${walkthrough.steps.length} 步`, `${walkthrough.steps.length} steps`)}</span></summary>` : ''}
     <header class="proof-walkthrough-intro"><div class="proof-walkthrough-heading workflow-section-heading"><h5 tabindex="-1">${html(label(walkthrough.title, locale))}</h5></div>
       <p class="proof-walkthrough-strategy">${html(label(walkthrough.strategy, locale))}</p>
-      <div class="proof-walkthrough-meta"><span>${text(locale, `${walkthrough.steps.length} 步 · ${walkthrough.steps.reduce((sum, step) => sum + step.derivation.length, 0)} 行推导`, `${walkthrough.steps.length} steps · ${walkthrough.steps.reduce((sum, step) => sum + step.derivation.length, 0)} lines`)}</span><details class="proof-walkthrough-problem"><summary>${text(locale, '题目与符号', 'Problem and notation')}</summary><p class="proof-walkthrough-goal">${html(label(walkthrough.goal, locale))}</p>${walkthrough.notation ? `<p class="proof-walkthrough-notation">${html(label(walkthrough.notation, locale))}</p>` : ''}</details></div>
+      <div class="proof-walkthrough-meta"><span>${text(locale, `${walkthrough.steps.length} 步 · ${walkthrough.steps.reduce((sum, step) => sum + step.derivation.length, 0)} 行推导`, `${walkthrough.steps.length} steps · ${walkthrough.steps.reduce((sum, step) => sum + step.derivation.length, 0)} lines`)}</span>${options.linear ? '<section class="proof-walkthrough-problem">' : `<details class="proof-walkthrough-problem"><summary>${text(locale, '题目与符号', 'Problem and notation')}</summary>`}<p class="proof-walkthrough-goal">${html(label(walkthrough.goal, locale))}</p>${walkthrough.notation ? `<p class="proof-walkthrough-notation">${html(label(walkthrough.notation, locale))}</p>` : ''}${options.linear ? '</section>' : '</details>'}</div>
       ${options.linear ? `<details class="workflow-full-text"><summary>${text(locale, '证明主线', 'Proof outline')}</summary>` : ''}<ol class="proof-overview" aria-label="${text(locale, '证明主线', 'Proof outline')}">${walkthrough.stages.map((stage, index) => {
         const first = stage.stepIds[0], last = stage.stepIds.at(-1)!;
         const range = [positions.get(first)!.number, positions.get(last)!.number].filter((value, i, values) => i === 0 || value !== values[0]).join('–');
@@ -61,7 +61,7 @@ export function renderProofWalkthrough(walkthrough: ProofWalkthrough, process: A
         <footer class="proof-walkthrough-links"><button class="proof-walkthrough-source-open" ${destination('original', `check:${original.id}`)} data-global-code="source" data-walkthrough-source-check="${html(original.id)}">${text(locale, '打开已检查的完整源码', 'Open the complete checked source')} ↗</button>${(step.evidence.taskIds ?? []).map(id => `<button ${destination(`task:${id}`)}>${html(archiveRoadmapTaskLabel(run.tasks.find(task => task.id === id)!, locale))} ↗</button>`).join('')}${(step.evidence.deliveryIds ?? []).map((id, i) => {
           const delivery = run.deliveries!.find(delivery => delivery.id === id)!;
           return `<button ${destination(delivery.taskId ? `task:${delivery.taskId}` : delivery.kind === 'review' ? 'review' : 'problem', `delivery:${id}`)}>${text(locale, '研究记录', 'Research record')}${(step.evidence.deliveryIds?.length ?? 0) > 1 ? ` ${i + 1}` : ''} ↗</button>`;
-        }).join('')}${checkLinks}</footer>
+        }).join('')}${checkLinks}${options.linear ? `<button type="button" data-action="copy-link" data-proof-copy-reading="${stepId(step.id)}">${text(locale, '复制此处链接', 'Copy link here')}</button>` : ''}${options.researchHref ? `<a class="proof-reading-research" data-proof-position-research="${stepId(step.id)}" href="${html(options.researchHref)}">${text(locale, '以此题开始研究', 'Research this problem')} ↗</a>` : ''}</footer>
       </li>`;
     }).join('')}</ol></div>${options.linear ? '' : '</div>'}
   </div>`;

@@ -3,7 +3,7 @@ import { isAcceptedRun } from '../presentation';
 import { t } from '../i18n';
 
 export type ChatAnswer = { runId: string; target: string; loading: boolean; overview?: WebExplanationOverview;
-  document?: WebExplanationDocument; error?: string };
+  explanation?: WebExplanation; document?: WebExplanationDocument; error?: string };
 type Entry = { proof: string; value: ChatAnswer; revision: number; documentVersion?: string };
 type Request = <T>(url: string) => Promise<T>;
 
@@ -12,6 +12,10 @@ export class ChatAnswers {
   private entries = new Map<string, Entry>();
   constructor(private readonly request: Request, private readonly language: WebExplanationLanguage, private readonly changed: () => void) {}
   clear() { this.entries.clear(); }
+  generating(runId?: string): boolean {
+    const status = runId ? this.entries.get(runId)?.value.explanation?.status : undefined;
+    return status === 'queued' || status === 'running';
+  }
   sync(run?: WebRun): ChatAnswer | undefined {
     if (!run || !isAcceptedRun(run) || !run.result?.proof) return;
     let entry = this.entries.get(run.id);
@@ -29,7 +33,7 @@ export class ChatAnswers {
   select(runId: string, target: string) {
     const entry = this.entries.get(runId);
     if (!entry?.value.overview?.targets.some(item => item.name === target) || entry.value.target === target) return;
-    entry.value.target = target; entry.value.document = undefined; entry.documentVersion = undefined;
+    entry.value.target = target; entry.value.explanation = undefined; entry.value.document = undefined; entry.documentVersion = undefined;
     void this.load(entry, false);
   }
   private async load(entry: Entry, readOverview: boolean) {
@@ -47,6 +51,7 @@ export class ChatAnswers {
           ?? overview.targets[0]?.name ?? '';
       }
       const item = state.overview?.explanations.find(item => item.target === state.target && item.language === this.language);
+      state.explanation = item;
       if (item?.status !== 'approved') { state.document = undefined; entry.documentVersion = undefined; return; }
       const version = `${item.id}:${item.updatedAt}`;
       if (entry.documentVersion === version && state.document) return;

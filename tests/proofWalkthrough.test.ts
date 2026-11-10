@@ -229,6 +229,9 @@ describe('direct reading of the current accepted proof', () => {
       expect(output).toContain('data-proof-reading="linear"');
       expect(output).toContain('<details class="proof-reading-intro"><summary>');
       expect(output).not.toContain('<details class="proof-reading-intro" open>');
+      expect(output).toContain(`<summary>${locale === 'en' ? 'Full problem and notation' : '完整题目与符号'}`);
+      expect(output).toContain('<section class="proof-walkthrough-problem">');
+      expect(output).not.toContain('<details class="proof-walkthrough-problem">');
       expect(output).toContain(escaped(walkthrough.strategy[locale]));
       expect(output).toContain(escaped(walkthrough.steps[0].given[locale]));
       expect(output).toContain(escaped(walkthrough.steps[0].derivation[0].statement[locale]));

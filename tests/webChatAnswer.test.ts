@@ -60,7 +60,24 @@ describe('chat reads existing approved explanations without model or generation 
     const { answers, request } = fixture(() => overview(run(), [explanation('first', { status })]));
     const value = answers.sync(run())!; await settle();
     expect(value).toMatchObject({ target: 'first', loading: false }); expect(value.document).toBeUndefined();
+    expect(value.explanation?.status).toBe(status);
+    expect(answers.generating(value.runId)).toBe(['queued', 'running'].includes(status));
     expect(request.mock.calls).toEqual([['/api/runs/accepted-run/explanations']]);
+  });
+
+  it('preserves queued progress and updates to the approved document without starting generation', async () => {
+    let saved = explanation('first', { status: 'queued', queue: { position: 3, ahead: 2 }, progress: { phase: 'queued', updatedAt: at } });
+    const { answers, request } = fixture(url => url.endsWith('/explanations') ? overview(run(), [saved]) : { explanation: saved });
+    const value = answers.sync(run())!; await settle();
+    expect(answers.generating(value.runId)).toBe(true);
+    expect(value.explanation?.queue?.ahead).toBe(2);
+    saved = explanation('first', { status: 'running', progress: { phase: 'auditing', batches: 3, approvedBatches: 1, updatedAt: at } });
+    answers.refresh(run()); await settle();
+    expect(value.explanation?.progress).toMatchObject({ phase: 'auditing', batches: 3, approvedBatches: 1 });
+    saved = explanation('first'); answers.refresh(run()); await settle();
+    expect(answers.generating(value.runId)).toBe(false); expect(value.document).toEqual(document('first'));
+    expect(request.mock.calls.every(call => call.length === 1)).toBe(true);
+    answers.clear(); expect(answers.generating(value.runId)).toBe(false);
   });
 
   it('keeps missing explanations empty and reuses an unchanged approved document on refresh', async () => {

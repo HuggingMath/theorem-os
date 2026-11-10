@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { campaignRecords } from '../docs/web/campaignCatalog';
 import { archiveIndex } from '../docs/web/catalog';
 import type { ResearchProjectDetail } from '../apps/web/researchProjectTypes';
+import { archiveReadingReturn, readProofReadingPosition } from '../docs/web/proofReadingLocation';
 import {
   archiveProblemDraftHref, clearResearchProblemDraft, loadResearchProblemDraft, projectProblemDraftHref,
   readResearchProblemDraft, researchProblemDraftHref,
@@ -21,11 +22,53 @@ describe('explicit problem-to-draft handoff', () => {
     const project = { kind: 'project' as const, id: 'project-1', version: 'statement-1', sourceDigest: 'b'.repeat(64) };
     expect(projectProblemDraftHref(project.id, { id: project.version, sourceDigest: project.sourceDigest })).toBe(researchProblemDraftHref(project));
     expect(readResearchProblemDraft(new URL(researchProblemDraftHref(project), currentHref).searchParams)).toEqual(project);
-    const parameters = new URLSearchParams({ chat: 'preserved-chat', libraryModule: 'preserved-reference', archiveProblem: archive.id, archiveSource: archive.sourceDigest });
+    const parameters = new URLSearchParams({ chat: 'preserved-chat', libraryModule: 'preserved-reference', archiveProblem: archive.id, archiveSource: archive.sourceDigest, archiveReading: '/classics/archive.html' });
     clearResearchProblemDraft(parameters);
     expect([...parameters]).toEqual([['chat', 'preserved-chat'], ['libraryModule', 'preserved-reference']]);
     expect(readResearchProblemDraft(parameters)).toBeUndefined();
     expect(archiveProblemDraftHref({ id: archive.id, sources: [] }, '../')).toBeUndefined();
+  });
+
+  it('returns to the original accepted reading step and directory without allowing the handoff to choose a different source', async () => {
+    const records = campaignRecords(root).records, record = records.find(record => record.id === 'openai_triangle_face')!;
+    const index = archiveIndex({ schema: 'theoremos.public-archive.v1', repository: '', archiveRevision: '', snapshotAt: '', records });
+    const original = record.sources.find(source => source.name === 'Challenge.lean')!;
+    const directory = `/theorems.html?collection=solved&q=triangle&field=Combinatorial+optimization&sort=title&offset=14#problem-${record.id}`;
+    const reading = new URL('/classics/en/archive.html', currentHref);
+    reading.hash = new URLSearchParams({ proof: record.id, tab: 'reading', reading: 'proof-derivation-take-the-slice-of-the-hull',
+      readingSha: record.campaign!.proofSha256, return: directory, run: 'historical-run', code: 'source' }).toString();
+    const reference = { kind: 'archive' as const, id: record.id, sourceDigest: original.sha256, readingUrl: reading.href };
+    const roundTrip = readResearchProblemDraft(new URL(researchProblemDraftHref(reference), currentHref).searchParams)!;
+    expect(roundTrip).toEqual(reference);
+    const candidate = await loadResearchProblemDraft(roundTrip, { json: async <T,>() => index as T, text: async () => original.code, currentHref, locale: 'zh' });
+    expect(candidate.source).toBe(original.code); expect(candidate.sourceDigest).toBe(original.sha256);
+    const destination = new URL(candidate.sourceUrl), parameters = new URLSearchParams(destination.hash.slice(1));
+    expect(destination.pathname).toBe('/classics/en/archive.html');
+    expect(parameters.get('proof')).toBe(record.id); expect(parameters.get('tab')).toBe('reading');
+    expect(parameters.get('reading')).toBe('proof-derivation-take-the-slice-of-the-hull');
+    expect(parameters.get('readingSha')).toBe(record.campaign!.proofSha256); expect(parameters.get('return')).toBe(directory);
+    expect(parameters.has('run')).toBe(false); expect(parameters.has('code')).toBe(false);
+    expect(candidate.text).toContain(candidate.sourceUrl);
+    for (const invalid of ['https://evil.example/classics/en/archive.html' + reading.hash,
+      'https://user:password@workbench.example/classics/en/archive.html' + reading.hash,
+      '/theorems.html' + reading.hash, '/classics/data/proofs/openai_triangle_face/Submission.lean' + reading.hash,
+      '/classics/archive.html#proof=other&tab=reading', '/classics/archive.html#proof=openai_triangle_face&tab=process', 'javascript:alert(1)'])
+      expect(archiveReadingReturn(invalid, record.id, currentHref, record.campaign!.proofSha256), invalid).toBeUndefined();
+    const stale = new URL(reading); stale.hash = new URLSearchParams({ proof: record.id, tab: 'reading', reading: 'proof-source-helper-1', readingSha: 'a'.repeat(64), return: directory }).toString();
+    const safeStale = new URL(archiveReadingReturn(stale.href, record.id, currentHref, record.campaign!.proofSha256)!);
+    const staleParameters = new URLSearchParams(safeStale.hash.slice(1));
+    expect(staleParameters.has('reading')).toBe(false); expect(staleParameters.has('readingSha')).toBe(false);
+    expect(staleParameters.get('return')).toBe(directory);
+    const externalReturn = new URL(reading); externalReturn.hash = new URLSearchParams({ proof: record.id, tab: 'reading', return: 'https://evil.example/theorems.html?collection=solved' }).toString();
+    expect(new URLSearchParams(new URL(archiveReadingReturn(externalReturn.href, record.id, currentHref, record.campaign!.proofSha256)!).hash.slice(1)).has('return')).toBe(false);
+  });
+
+  it('only accepts bounded step and declaration anchors pinned to a proof digest', () => {
+    for (const anchor of ['proof-derivation-label-and-extend', 'proof-source-target-2', 'proof-source-helper-17'])
+      expect(readProofReadingPosition(new URLSearchParams({ reading: anchor, readingSha: 'a'.repeat(64) }))).toEqual({ anchor, proofSha: 'a'.repeat(64) });
+    for (const anchor of ['global-review', 'proof-source-helper-0', 'proof-derivation-../../other', 'proof-derivation-' + 'x'.repeat(201)])
+      expect(readProofReadingPosition(new URLSearchParams({ reading: anchor, readingSha: 'a'.repeat(64) }))).toBeUndefined();
+    expect(readProofReadingPosition(new URLSearchParams({ reading: 'proof-source-target-1', readingSha: 'changed' }))).toBeUndefined();
   });
 
   it('reads all 18 original statements from fixed archive files and never reuses the accepted proof as a new input', async () => {

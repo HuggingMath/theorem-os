@@ -1,4 +1,4 @@
-import type { InstalledLibraryEntry } from './installedLibraryTypes';
+import type { InstalledLibraryDefinition, InstalledLibraryEntry } from './installedLibraryTypes';
 
 type Text = { zh: string; en: string };
 export type InstalledLibraryMathematics = {
@@ -8,6 +8,7 @@ export type InstalledLibraryMathematics = {
   expression: string;
   usage: string;
   context: Text;
+  scopeConditions: { label: Text; expression: string; meaning: Text }[];
 };
 const text = (zh: string, en: string): Text => ({ zh, en });
 
@@ -114,6 +115,12 @@ function typeMeaning(value: string): Text {
   if (/^Finset\s/u.test(value)) return text('有限集合', 'finite set');
   if (/^Set\s/u.test(value)) return text('集合', 'set');
   if (/^Matrix\s/u.test(value)) return text('矩阵', 'matrix');
+  if (/^Submodule\s/u.test(value)) return text('线性子空间', 'linear subspace');
+  if (/^Seminorm\s/u.test(value)) return text('半范数', 'seminorm');
+  if (/^List\s/u.test(value)) return text('列表', 'list');
+  if (/^Multiset\s/u.test(value)) return text('多重集合', 'multiset');
+  if (/^Fin\s/u.test(value)) return text('有限下标', 'finite index');
+  if (/^Type\b|^Type\*/u.test(value)) return text('类型', 'type');
   if (/^Polynomial\s/u.test(value)) return text('多项式', 'polynomial');
   if (/^∀/u.test(value)) return text('依赖所列指标的函数', 'dependent function over the indicated indices');
   if (value.includes('≃')) return text('所示类型间的等价', 'equivalence between the displayed types');
@@ -144,6 +151,12 @@ function condition(group: string) {
       AddCommGroup: text('加法交换群结构', 'additive commutative group structure'),
       CommRing: text('交换环结构', 'commutative ring structure'), Field: text('域结构', 'field structure'),
       Fintype: text('有限类型及其枚举', 'finite type with an enumeration'), DecidableEq: text('可判定的相等关系', 'decidable equality'),
+      NormedAddCommGroup: text('带范数的加法交换群', 'normed additive commutative group'),
+      NormedSpace: text('赋范向量空间结构', 'normed vector space structure'),
+      InnerProductSpace: text('内积空间结构', 'inner product space structure'),
+      FiniteDimensional: text('有限维向量空间', 'finite-dimensional vector space'),
+      Nonempty: text('类型非空', 'nonempty type'), Finite: text('有限类型', 'finite type'),
+      Group: text('群结构', 'group structure'), Semiring: text('半环结构', 'semiring structure'),
     };
     return { label: text('结构条件', 'Structure'), expression,
       meaning: structures[expression.split(/\s/u)[0]] ?? text('所示类型类条件', 'the displayed typeclass condition') };
@@ -184,16 +197,19 @@ function generalConclusion(entry: InstalledLibraryEntry, expression: string): Te
 }
 
 /** Derives visible mathematics from the frozen declaration header without inventing missing section variables. */
-export function installedLibraryMathematics(entry: InstalledLibraryEntry, moduleImport: string): InstalledLibraryMathematics {
+export function installedLibraryMathematics(entry: InstalledLibraryEntry, moduleImport: string,
+  definition?: InstalledLibraryDefinition): InstalledLibraryMathematics {
   const colon = topLevelColon(entry.type), header = colon < 0 ? entry.type : entry.type.slice(0, colon);
   const matching = entry.name === 'TheoremOS.Combinatorics.LooplessMultigraph.Matching';
-  const expression = definitionBodies[entry.name]
+  const expression = definition?.body ?? definitionBodies[entry.name]
     ?? (colon < 0 ? entry.type : entry.type.slice(colon + 1).trim()).replace(/\s+where\s.+$/u, '');
   const conclusion = generalConclusion(entry, expression);
-  return { summary: explanations[entry.name] ?? conclusion,
+  const scopeGroups = definition?.context.flatMap(binderGroups).filter(group => group.startsWith('[') || topLevelColon(group.slice(1, -1)) >= 0) ?? [];
+  return { summary: explanations[entry.name] ?? (definition?.documentation ? text(definition.documentation, definition.documentation) : conclusion),
     conditions: matching ? [{ label: text('参数 G', 'Input G'), expression: 'G : LooplessMultigraph V E',
       meaning: text('顶点类型 V、边类型 E 上的无自环多重图', 'a loopless multigraph on vertex type V and edge type E') }]
       : binderGroups(header).map(condition), conclusion, expression,
+    scopeConditions: [...new Set(scopeGroups)].map(condition),
     usage: `${moduleImport}\n\n#check ${entry.name}\n#check @${entry.name}`,
     context: text('参数与假设沿用所在模块的上下文；#check @ 可展开全部隐式参数。',
       'Parameters and assumptions also follow the module context; #check @ displays all implicit parameters.') };

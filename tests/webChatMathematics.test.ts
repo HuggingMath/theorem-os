@@ -42,6 +42,7 @@ describe('mathematical progress from recorded work', () => {
       task('paused', { status: 'running', control: 'paused', proof: { status: 'none', receiptIds: [] } }),
     ]));
     expect(value.working.map(item => item.id)).toEqual(['running', 'delivered', 'conditional']);
+    expect(value.working.map(item => item.status)).toEqual(['running', 'delivered', 'conditional']);
     expect(value.working[0]!.statement).toBe('n = n'); expect(value.working[1]!.name).toBe('My.delivered');
     expect(value.checked.map(item => item.id)).toEqual(['checked']);
   });

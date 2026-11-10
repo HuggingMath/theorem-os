@@ -2,6 +2,7 @@ import { webLibraryCatalog } from './frozenLibrary';
 import { WebStorageError } from './storage';
 import { installedLibraryLabels } from './installedLibraryLabels';
 import { matchesInstalledLibraryModuleAlias } from './installedLibrarySearch';
+import { installedLibraryDefinitions } from './installedLibraryDefinitions';
 import type { InstalledLibraryDetail, InstalledLibraryDirectory, InstalledLibraryInfo, InstalledLibraryModule,
   InstalledLibraryModuleSummary, InstalledLibrarySource } from './installedLibraryTypes';
 
@@ -56,7 +57,11 @@ function pinnedModule(file: string, digest: string) {
 }
 export function installedLibraryDetail(file: string, digest: string): InstalledLibraryDetail {
   const { catalog, module } = pinnedModule(file, digest);
-  return { library: libraryInfo(catalog), module };
+  try {
+    const definitions = module.entries.some(entry => entry.kind === 'definition')
+      ? installedLibraryDefinitions(catalog.readModule(file).source, module.entries) : {};
+    return { library: libraryInfo(catalog), module, definitions };
+  } catch { throw new WebStorageError(503, '定义源码读取失败或与固定版本不一致，请检查服务的库文件后重试。'); }
 }
 export function installedLibrarySource(file: string, digest: string): InstalledLibrarySource {
   const { catalog, module } = pinnedModule(file, digest);

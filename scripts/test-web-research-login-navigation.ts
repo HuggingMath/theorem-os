@@ -30,6 +30,14 @@ const config = readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_P
   THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web'), THEOREMOS_WEB_DATA_ROOT: temporary,
   THEOREMOS_WEB_AUTH: 'email', THEOREMOS_WEB_SMTP_URL: 'log:', THEOREMOS_WEB_ALLOWLIST: 'navigation@example.org' });
 const service = createWebService(config, runner, { sample: null, captchaAnswer: () => '24680', mailer: async message => { mail.push(message); } });
+const colleagueOwner = 'navigation-colleague';
+const colleague = service.research.projects.saveProfile(colleagueOwner, { requestId: 'colleague', expectedRevision: 0, displayName: '林若水',
+  fields: ['Algebra', 'Galois theory'], bio: '研究 Galois 域扩张。', visibility: 'public' });
+const colleagueProject = service.research.projects.create(colleagueOwner, { requestId: 'colleague-project', title: '域扩张合作题目', fields: ['Algebra'], visibility: 'public' });
+for (let index = 1; index < 14; index++) service.research.projects.saveProfile(`navigation-peer-${index}`, {
+  requestId: `peer-${index}`, expectedRevision: 0, displayName: `代数同行 ${index}`, fields: ['Algebra'], bio: '研究域扩张。', visibility: 'public' });
+let allowProjectCreate = false;
+const projectWrites: string[] = [];
 service.server.requestTimeout = 0; service.server.headersTimeout = 0; service.server.setTimeout(0);
 await new Promise<void>((resolve, reject) => { service.server.once('error', reject); service.server.listen(port, '127.0.0.1', resolve); });
 const browser = await chromium.launch({ headless: true, timeout: 0 });
@@ -42,6 +50,9 @@ const conversation: WebConversation = { id: chatId, title: 'Retained navigation 
 await context.route('**/*', async route => {
   const request = route.request(), url = new URL(request.url());
   if (url.origin !== origin) { external.push(request.url()); await route.abort(); return; }
+  if (allowProjectCreate && request.method() === 'POST' && url.pathname === '/api/research/theorems') {
+    projectWrites.push(url.pathname); await route.continue(); return;
+  }
   if (!['GET', 'HEAD'].includes(request.method()) && !url.pathname.startsWith('/api/auth/')) {
     writes.push(`${request.method()} ${url.pathname}`); await route.abort(); return;
   }
@@ -166,6 +177,107 @@ try {
     mark(`${width}px: all four destinations are reachable and each research page returns to the original conversation and unsent draft`);
   }
 
+  const sourceRun = crypto.randomUUID();
+  const assertContext = (address = page.url()) => {
+    const url = new URL(address, origin);
+    assert.equal(url.searchParams.get('workbenchChat'), chatId); assert.equal(url.searchParams.get('workbenchRun'), sourceRun);
+  };
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.goto(`${origin}/people.html?workbenchChat=${chatId}&workbenchRun=${sourceRun}`, { timeout: 0 });
+    const search = page.getByRole('searchbox', { name: '姓名、简介或领域', exact: true });
+    const field = page.getByLabel('按研究领域筛选', { exact: true });
+    await search.waitFor({ timeout: 0 }); await search.fill('Galois');
+    await page.getByRole('button', { name: '搜索', exact: true }).click();
+    await page.waitForFunction(() => document.querySelectorAll('.research-directory-card').length === 1, undefined, { timeout: 0 });
+    assertContext();
+    await search.fill(''); await field.fill('Algebra');
+    await page.waitForFunction(() => document.querySelectorAll('.research-directory-card').length === 12, undefined, { timeout: 0 });
+    assert.equal(new URL(page.url()).searchParams.has('q'), false, 'changing the field applies the visible cleared search draft');
+    assertContext();
+    await page.getByRole('button', { name: '下一页', exact: true }).click();
+    await page.waitForFunction(() => new URL(location.href).searchParams.get('offset') === '12' && document.querySelectorAll('.research-directory-card').length === 2, undefined, { timeout: 0 });
+    assertContext(); await page.locator('.research-directory-card .research-card-heading a').first().click();
+    await page.locator('.research-breadcrumb a').waitFor({ timeout: 0 }); assertContext();
+    assert.equal(new URL(page.url()).searchParams.get('offset'), '12');
+    await page.locator('.research-breadcrumb a').click();
+    await page.getByRole('button', { name: '上一页', exact: true }).waitFor({ timeout: 0 }); assertContext();
+    await search.fill('Galois'); await page.getByRole('button', { name: '搜索', exact: true }).click();
+    await page.waitForFunction(() => document.querySelectorAll('.research-directory-card').length === 1, undefined, { timeout: 0 });
+    await page.getByRole('link', { name: colleague.displayName, exact: true }).click();
+    await page.getByRole('heading', { level: 1, name: colleague.displayName, exact: true }).waitFor({ timeout: 0 }); assertContext();
+    await page.locator('#research-projects').getByText(colleagueProject.title, { exact: true }).click();
+    await page.getByRole('heading', { level: 1, name: colleagueProject.title, exact: true }).waitFor({ timeout: 0 }); assertContext();
+    await page.getByRole('link', { name: colleague.displayName, exact: true }).first().click();
+    await page.getByRole('heading', { level: 1, name: colleague.displayName, exact: true }).waitFor({ timeout: 0 }); assertContext();
+    const workbench = page.locator('.research-nav').getByRole('link', { name: '工作台', exact: true });
+    assert.equal(new URL((await workbench.getAttribute('href'))!, origin).searchParams.get('chat'), chatId);
+    await fit(); await screenshot(`people-context-detail-${width}.png`, false);
+    await workbench.click();
+    await page.waitForURL(url => url.pathname === '/' && url.searchParams.get('chat') === chatId, { timeout: 0 });
+    await page.locator('#research-chat-thread').getByText(conversation.messages[0]!.text, { exact: true }).waitFor({ timeout: 0 });
+    mark(`${width}px: cleared search draft, field filter, pagination, profile, project and author retain the original conversation and run source`);
+  }
+  await page.goto(`${origin}/people.html?workbenchChat=${chatId}&workbenchRun=${sourceRun}`, { timeout: 0 });
+  await page.getByRole('link', { name: '我的主页', exact: true }).click();
+  await page.getByRole('heading', { level: 1, name: '我的主页', exact: true }).waitFor({ timeout: 0 });
+  assertContext(); await page.getByRole('link', { name: '完善我的资料', exact: true }).click();
+  const profileName = page.getByLabel('显示名', { exact: true }); await profileName.waitFor({ timeout: 0 });
+  await page.waitForFunction(() => document.querySelector('#profile-management input') === document.activeElement, undefined, { timeout: 0 });
+  assert.equal(await profileName.inputValue(), ''); assert.equal(await profileName.evaluate(element => element === document.activeElement), true);
+  await screenshot('blank-profile-editor.png', false);
+  mark('a first-time blank profile has a visible heading and top action that opens and focuses its editor');
+
+  await page.goto(`${origin}/people.html?q=no-such-researcher&workbenchChat=${chatId}&workbenchRun=${sourceRun}`, { timeout: 0 });
+  await page.locator('[data-people-empty]').waitFor({ timeout: 0 });
+  await page.locator('[data-people-reset]').click();
+  await page.waitForFunction(() => document.querySelectorAll('.research-directory-card').length === 12, undefined, { timeout: 0 });
+  assert.equal(await page.getByRole('searchbox', { name: '姓名、简介或领域', exact: true }).inputValue(), ''); assertContext();
+  mark('the unmatched directory clears applied and visible filters while retaining the workbench source');
+
+  await page.route('**/api/research/people?*', route => route.fulfill({ json: { items: [], fields: [], total: 0 } }));
+  await page.goto(`${origin}/people.html?workbenchChat=${chatId}&workbenchRun=${sourceRun}`, { timeout: 0 });
+  await page.getByText('还没有公开的数学家资料。完善并公开你的资料，让同行找到你。', { exact: true }).waitFor({ timeout: 0 });
+  assert.equal(await page.locator('[data-people-reset]').count(), 0);
+  await page.locator('[data-people-empty]').getByRole('link', { name: '完善我的资料', exact: true }).click();
+  await page.getByLabel('显示名', { exact: true }).waitFor({ timeout: 0 }); assertContext();
+  await page.unroute('**/api/research/people?*');
+  mark('an unfiltered empty public directory explains profile publication and opens the signed-in profile editor');
+
+  await page.goto(`${origin}/theorems.html?id=${colleagueProject.id}&run=${crypto.randomUUID()}`, { timeout: 0 });
+  await page.getByRole('heading', { level: 1, name: colleagueProject.title, exact: true }).waitFor({ timeout: 0 });
+  assert.equal(new URL((await page.locator('.research-nav').getByRole('link', { name: '工作台', exact: true }).getAttribute('href'))!, origin).search, '');
+  mark('a project target run is never promoted into a workbench return source');
+
+  await page.goto(`${origin}/theorems.html?collection=research&create=1&workbenchChat=${chatId}&workbenchRun=${sourceRun}`, { timeout: 0 });
+  await page.getByLabel('定理名称', { exact: true }).fill('新项目的首个陈述');
+  allowProjectCreate = true;
+  await page.getByRole('button', { name: '创建定理', exact: true }).click();
+  await page.waitForURL(url => url.pathname === '/theorems.html' && url.searchParams.has('id') && url.hash === '#statement-versions', { timeout: 0 });
+  allowProjectCreate = false;
+  const firstStatement = page.locator('[data-project-statement-editor]');
+  await firstStatement.getByLabel('自然语言 / TeX 原题', { exact: true }).waitFor({ timeout: 0 });
+  await page.waitForFunction(() => document.querySelector('[data-project-statement-editor] textarea') === document.activeElement, undefined, { timeout: 0 });
+  assert.equal(await firstStatement.evaluate((element: HTMLDetailsElement) => element.open), true); assertContext();
+  assert.equal(await firstStatement.getByLabel('自然语言 / TeX 原题', { exact: true }).evaluate(element => element === document.activeElement), true);
+  await fit(); await screenshot('created-project-first-statement.png', false);
+  assert.equal(projectWrites.length, 1);
+  mark('creating one disposable project opens and focuses its first statement editor with the original context and starts no research');
+
+  await logout();
+  const filteredPerson = `/people.html?id=${colleague.id}&q=Galois&field=Algebra&offset=12&workbenchChat=${chatId}&workbenchRun=${sourceRun}#research-contributions`;
+  await page.goto(origin + filteredPerson, { timeout: 0 });
+  const followLogin = page.getByRole('link', { name: '登录后关注', exact: true }); await followLogin.waitFor({ timeout: 0 });
+  assert.equal(new URL((await followLogin.getAttribute('href'))!, origin).searchParams.get('returnTo'), filteredPerson);
+  await followLogin.click(); await page.locator('#password-submit:enabled').waitFor({ state: 'attached', timeout: 0 });
+  await page.locator('#use-password').click(); await page.locator('#password-email').fill('navigation@example.org');
+  await page.locator('#accept-terms').check(); await page.locator('#login-password').fill(password); await page.locator('#password-submit').click();
+  await returned(filteredPerson); assertContext();
+  const follow = page.getByRole('button', { name: '关注', exact: true }); await follow.waitFor({ timeout: 0 });
+  assert.equal(await follow.getAttribute('aria-pressed'), 'false');
+  await fit(); await screenshot('filtered-profile-login-return.png', false);
+  mark('the real profile sign-in retains filters, contribution fragment and original conversation/run without automatically following');
+
   await logout();
   const anonymousLibraryTarget = '/library.html?type=skill&q=radicals&workbenchChat=' + chatId + '&tag=algebra';
   await page.goto(origin + anonymousLibraryTarget, { timeout: 0 });
@@ -195,6 +307,6 @@ try {
   await browser.close(); await service.close(); await fs.rm(temporary, { recursive: true, force: true });
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: failure ? 'failed' : 'passed', checkedAt: new Date().toISOString(),
     checks, screenshots, browserTimeouts: 0, deadline: null, tokenLimit: null, roundLimit: null,
-    realModelCalls: 0, realLeanProcesses: 0, externalMail: false, fixturesRemoved: true, errors, external, writes, forbiddenCalls,
+    realModelCalls: 0, realLeanProcesses: 0, externalMail: false, fixturesRemoved: true, errors, external, writes, projectWrites, forbiddenCalls,
     ...(failure ? { error: failure instanceof Error ? failure.stack : String(failure) } : {}) }, null, 2) + '\n');
 }

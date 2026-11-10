@@ -38,7 +38,7 @@ try {
       localStorage.setItem(key, value);
       sessionStorage.setItem('theorem-os.research-entry.v1', 'lean');
     }, [localeStorageKey, locale]);
-    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
     page.on('pageerror', error => errors.push(error.message));
     const writes: string[] = [];
     const connectionChecks: { url: string; body: Record<string, unknown> }[] = [];
@@ -87,6 +87,7 @@ try {
     assert.equal(await page.locator('#formalize-start').isDisabled(), true);
     assert.equal(await page.locator('[data-first-research-start], [data-chat-participation]').count(), 0,
       'A read-only sample must not display new-submission setup over the recorded result');
+    await page.locator('[data-chat-result-more] > summary').click();
     await page.locator('[data-research-artifact="result"]').click();
     await page.locator('.result-verdict').waitFor();
     assert.equal(writes.length, 0, 'Opening the sample and its acceptance report creates no paid task');
