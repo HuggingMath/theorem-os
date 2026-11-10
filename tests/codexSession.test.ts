@@ -26,7 +26,7 @@ if (process.env.WESTLAKEHPC_API_KEY) fs.writeFileSync(process.env.CODEX_HOME + '
   receivedLocalCredential: process.env.WESTLAKEHPC_API_KEY !== 'upstream-westlake-fixture-secret',
   receivedSecondaryCredential: Boolean(process.env.WESTLAKEHPC_API_KEY_2),
 }));
-let settings, turn, deferredSteerError, catalogs = 0;
+let settings, turn, deferredSteerError, publicStream = false, catalogs = 0;
 const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const call = JSON.parse(line);
@@ -70,6 +70,21 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (message === 'invalid-result') { result([]); return; }
     if (message === 'noise') for (let i = 0; i < 100; i++) send({ method: 'turn/completed', params: {
       threadId: settings.threadId || 'thread-fixture', turn: { id: 'unrelated-' + i, status: 'failed' } } });
+    publicStream = message.startsWith('public-stream');
+    if (publicStream) {
+      if (message === 'public-stream-early' || message === 'public-stream-early-settled') {
+        const notice = (method, extra, turnId = turn.id) => send({ method, params: { threadId: settings.threadId || 'thread-fixture', turnId, ...extra } });
+        notice('item/started', { item: { id: 'early', type: 'reasoning', summary: [] } }, 'old-turn');
+        notice('item/reasoning/summaryTextDelta', { itemId: 'early', summaryIndex: 0, delta: 'wrong turn' }, 'old-turn');
+        notice('item/started', { item: { id: 'early', type: 'reasoning', summary: [] } });
+        notice('item/reasoning/summaryTextDelta', { itemId: 'early', summaryIndex: 0, delta: 'Early public summary' });
+        if (message === 'public-stream-early-settled') {
+          notice('turn/completed', { turn: { id: turn.id, status: 'completed' } });
+          notice('item/reasoning/summaryTextDelta', { itemId: 'early', summaryIndex: 0, delta: ' after settlement' });
+        }
+      }
+      result({ turn }); return;
+    }
     if (message === 'activity') {
       const notify = (method, extra, threadId = settings.threadId || 'thread-fixture') => send({ method, params: { threadId, ...extra } });
       notify('item/started', { item: { id: 'unrelated', type: 'commandExecution', command: 'secret' } }, 'other-thread');
@@ -112,8 +127,12 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   if (call.method === 'turn/interrupt') {
     if (process.env.THEOREM_OS_FIXTURE_INTERRUPT_EXIT === '1') return process.exit(28);
     const complete = () => {
+      if (publicStream) send({ method: 'item/reasoning/summaryTextDelta', params: {
+        threadId: settings.threadId || 'thread-fixture', turnId: turn.id, itemId: 'r', summaryIndex: 0, delta: ' after cancellation' } });
       send({ method: 'turn/completed', params: { threadId: settings.threadId || 'thread-fixture', turn: {
         ...turn, status: process.env.THEOREM_OS_FIXTURE_INTERRUPT_STATUS || 'interrupted' } } });
+      if (publicStream) send({ method: 'item/reasoning/summaryTextDelta', params: {
+        threadId: settings.threadId || 'thread-fixture', turnId: turn.id, itemId: 'r', summaryIndex: 0, delta: ' after settlement' } });
       result({});
     };
     // Keep the output watcher alive briefly after interruption cancels the queued feedback.
@@ -121,6 +140,11 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     else complete();
   }
   if (call.method === 'turn/steer') {
+    const message = call.params.input?.[0]?.text;
+    if (publicStream && message?.startsWith('fixture-events:')) {
+      for (const event of JSON.parse(message.slice('fixture-events:'.length))) send(event);
+      result({ turnId: turn.id }); return;
+    }
     if (process.env.THEOREM_OS_FIXTURE_DEFER_STEER_ERROR === '1') {
       deferredSteerError = () => send({ id: call.id, error: { code: -32600, message: 'Turn already finished' } });
       return;
@@ -352,6 +376,129 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     expect(await session.run('activity', 'activity-turn', root, () => {})).toBe('completed');
     expect(items).toEqual([['started', { id: 'tool', type: 'commandExecution', command: 'secret' }],
       ['completed', { id: 'tool', type: 'commandExecution', aggregatedOutput: 'secret' }]]);
+  });
+
+  const streamEvent = (turnId: string, method: string, extra: Record<string, unknown> = {}, threadId = 'thread-fixture') =>
+    ({ method, params: { threadId, turnId, ...extra } });
+  const streamEvents = async (events: { method: string; params: unknown }[]) => {
+    try { await session!.notify!('fixture-events:' + JSON.stringify(events), { waitForRequest: false }); }
+    catch (error) {
+      // Settlement may precede this fixture control request's acknowledgement.
+      if (!events.some(event => event.method === 'turn/completed')) throw error;
+      expect((error as Error).message).toBe('math_codex_notification_turn_settled');
+    }
+  };
+  const startStream = async (turnId: string, message = 'public-stream') => {
+    let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const done = session!.run(message, turnId, root, started);
+    await ready; return { done };
+  };
+
+  it('streams only public summary sections and commentary, retaining ordinary authoritative item callbacks', async () => {
+    const updates: unknown[] = [], items: unknown[] = [];
+    session = await createCodexMathSession({ ...options, onItemUpdate: (item, context) => updates.push({ item, context }),
+      onItem: (phase, item) => items.push({ phase, item }) });
+    const { done } = await startStream('public-turn');
+    const event = (method: string, extra: Record<string, unknown>) => streamEvent('public-turn', method, extra);
+    await streamEvents([
+      event('item/started', { item: { id: 'r', type: 'reasoning', summary: ['First'], content: ['private content'] } }),
+      event('item/reasoning/textDelta', { itemId: 'r', delta: 'private raw reasoning' }),
+      event('item/reasoning/summaryTextDelta', { itemId: 'r', summaryIndex: 0, delta: ' section' }),
+      event('item/reasoning/summaryPartAdded', { itemId: 'r', summaryIndex: 1 }),
+      event('item/reasoning/summaryTextDelta', { itemId: 'r', summaryIndex: 1, delta: 'Second' }),
+      event('item/reasoning/summaryPartAdded', { itemId: 'r', summaryIndex: 1 }),
+      event('item/reasoning/summaryTextDelta', { itemId: 'r', summaryIndex: 1, delta: ' section' }),
+      event('item/reasoning/summaryTextDelta', { itemId: 'r', summaryIndex: -1, delta: 'invalid index' }),
+      streamEvent('public-turn', 'item/reasoning/summaryTextDelta', { itemId: 'r', summaryIndex: 0, delta: 'wrong thread' }, 'other-thread'),
+      streamEvent('other-turn', 'item/reasoning/summaryTextDelta', { itemId: 'r', summaryIndex: 0, delta: 'wrong turn' }),
+      event('item/started', { item: { id: 'm', type: 'agentMessage', phase: 'commentary', text: 'Checking ' } }),
+      event('item/agentMessage/delta', { itemId: 'm', delta: 'the statement.' }),
+      event('item/started', { item: { id: 'final', type: 'agentMessage', phase: 'final', text: '' } }),
+      event('item/agentMessage/delta', { itemId: 'final', delta: 'final output is not a progress summary' }),
+      event('item/started', { item: { id: 'unknown', type: 'agentMessage', text: '' } }),
+      event('item/agentMessage/delta', { itemId: 'unknown', phase: 'commentary', delta: 'unknown phase' }),
+      event('item/completed', { item: { id: 'r', type: 'reasoning', summary: ['Authoritative final summary'], content: ['private final content'] } }),
+      event('item/reasoning/summaryTextDelta', { itemId: 'r', summaryIndex: 0, delta: 'late item delta' }),
+      event('item/completed', { item: { id: 'm', type: 'agentMessage', phase: 'commentary', text: 'Authoritative explanation.' } }),
+      event('item/agentMessage/delta', { itemId: 'm', delta: 'late commentary' }),
+      event('turn/completed', { turn: { id: 'public-turn', status: 'completed' } }),
+      event('item/reasoning/summaryTextDelta', { itemId: 'r', summaryIndex: 0, delta: 'late turn delta' }),
+    ]);
+    expect(await done).toBe('completed');
+    expect(updates).toEqual([
+      { item: { id: 'r', type: 'reasoning', summary: ['First section'] }, context: { turnId: 'public-turn' } },
+      { item: { id: 'r', type: 'reasoning', summary: ['First section', 'Second'] }, context: { turnId: 'public-turn' } },
+      { item: { id: 'r', type: 'reasoning', summary: ['First section', 'Second section'] }, context: { turnId: 'public-turn' } },
+      { item: { id: 'm', type: 'agentMessage', phase: 'commentary', text: 'Checking the statement.' }, context: { turnId: 'public-turn' } },
+    ]);
+    expect(JSON.stringify(updates)).not.toMatch(/private|wrong|late|invalid|unknown|final output/);
+    expect(items).toContainEqual({ phase: 'completed', item: { id: 'r', type: 'reasoning', summary: ['Authoritative final summary'], content: ['private final content'] } });
+  });
+
+  it('binds early public updates to the returned turn and rejects a previous turn after cancellation', async () => {
+    const updates: unknown[] = [];
+    session = await createCodexMathSession({ ...options, onItemUpdate: item => updates.push(item) });
+    const first = await startStream('first-public-turn', 'public-stream-early');
+    expect(updates).toEqual([{ id: 'early', type: 'reasoning', summary: ['Early public summary'] }]);
+    await streamEvents([
+      streamEvent('first-public-turn', 'item/started', { item: { id: 'r', type: 'reasoning', summary: [] } }),
+      streamEvent('first-public-turn', 'item/reasoning/summaryTextDelta', { itemId: 'r', summaryIndex: 0, delta: 'Before cancellation' }),
+    ]);
+    await session.interrupt(); expect(await first.done).toBe('interrupted');
+    const cancelled = [...updates];
+    const second = await startStream('second-public-turn');
+    await streamEvents([
+      streamEvent('first-public-turn', 'item/started', { item: { id: 'r', type: 'reasoning', summary: [] } }),
+      streamEvent('first-public-turn', 'item/reasoning/summaryTextDelta', { itemId: 'r', summaryIndex: 0, delta: 'Old turn' }),
+      streamEvent('second-public-turn', 'item/started', { item: { id: 'r', type: 'reasoning', summary: [] } }),
+      streamEvent('second-public-turn', 'item/reasoning/summaryTextDelta', { itemId: 'r', summaryIndex: 0, delta: 'Current turn' }),
+      streamEvent('second-public-turn', 'turn/completed', { turn: { id: 'second-public-turn', status: 'completed' } }),
+    ]);
+    expect(await second.done).toBe('completed');
+    expect(updates).toEqual([...cancelled, { id: 'r', type: 'reasoning', summary: ['Current turn'] }]);
+    expect(JSON.stringify(updates)).not.toMatch(/after cancellation|after settlement|Old turn|wrong turn/);
+  });
+
+  it('keeps public observation optional and isolates throwing update observers', async () => {
+    for (const observe of [false, true]) {
+      const onItemUpdate = observe ? vi.fn(() => { throw new Error('observer failed'); }) : undefined;
+      session = await createCodexMathSession({ ...options, onItemUpdate });
+      const { done } = await startStream('optional-public-turn');
+      await streamEvents([
+        streamEvent('optional-public-turn', 'item/started', { item: { id: 'r', type: 'reasoning', summary: [] } }),
+        streamEvent('optional-public-turn', 'item/reasoning/summaryTextDelta', { itemId: 'r', summaryIndex: 0, delta: 'Public summary' }),
+        streamEvent('optional-public-turn', 'turn/completed', { turn: { id: 'optional-public-turn', status: 'completed' } }),
+      ]);
+      expect(await done).toBe('completed');
+      if (onItemUpdate) expect(onItemUpdate).toHaveBeenCalledOnce();
+      await session.close(); session = undefined;
+    }
+  });
+
+  it('does not publish public deltas after its abort signal is cancelled', async () => {
+    const controller = new AbortController(), updates: unknown[] = [];
+    session = await createCodexMathSession({ ...options, signal: controller.signal, onItemUpdate: item => updates.push(item) });
+    const { done } = await startStream('aborted-public-turn');
+    await streamEvents([
+      streamEvent('aborted-public-turn', 'item/started', { item: { id: 'r', type: 'reasoning', summary: [] } }),
+      streamEvent('aborted-public-turn', 'item/reasoning/summaryTextDelta', { itemId: 'r', summaryIndex: 0, delta: 'Before abort' }),
+    ]);
+    controller.abort();
+    await streamEvents([
+      streamEvent('aborted-public-turn', 'item/reasoning/summaryTextDelta', { itemId: 'r', summaryIndex: 0, delta: 'After abort' }),
+      streamEvent('aborted-public-turn', 'item/started', { item: { id: 'new', type: 'reasoning', summary: [] } }),
+      streamEvent('aborted-public-turn', 'item/reasoning/summaryTextDelta', { itemId: 'new', summaryIndex: 0, delta: 'After abort' }),
+    ]);
+    await session.interrupt(); expect(await done).toBe('interrupted');
+    expect(updates).toEqual([{ id: 'r', type: 'reasoning', summary: ['Before abort'] }]);
+  });
+
+  it('does not replay early snapshots after the turn settled before turn/start returned', async () => {
+    const updates: unknown[] = [];
+    session = await createCodexMathSession({ ...options, onItemUpdate: item => updates.push(item) });
+    expect(await session.run('public-stream-early-settled', 'early-settled-turn', root, () => {})).toBe('completed');
+    expect(updates).toEqual([]);
   });
 
   it('rejects an invalid proof environment before launching the app-server', async () => {

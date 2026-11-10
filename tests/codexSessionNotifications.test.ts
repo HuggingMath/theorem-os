@@ -4,7 +4,7 @@ import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createCodexMathSession, type MathAgentSession } from '../src/runtime/codexSession';
-import type { ModelRequestReceipt } from '../src/runtime/modelRequest';
+import type { ModelRequestGate, ModelRequestReceipt } from '../src/runtime/modelRequest';
 import { prepareSub2apiProfile, SUB2API_PROVIDER } from '../src/runtime/sub2api';
 import { prepareWestlakeProfile, WESTLAKE_PROVIDER } from '../src/runtime/westlake';
 
@@ -31,6 +31,15 @@ const request = async () => {
         ? 'THEOREM_OS_MODEL_RELAY_CAPABILITY' : 'WESTLAKEHPC_API_KEY'] },
       body: JSON.stringify({ model: settings.model, input: 'fixture', stream: true, store: false, reasoning: { effort: 'max' } }) });
     await response.text(); record('request-returned', { status: response.status });
+    if (process.env.FIXTURE_SUBMIT_TOOL === '1' && response.ok) {
+      // A finished model response still has a tool to execute. Steering now can discard it.
+      record('submission-tool-started');
+      await new Promise(resolve => setTimeout(resolve, 40));
+      if (signal.aborted) { record('submission-tool-cancelled'); return; }
+      const file = process.env.FIXTURE_OUTPUT;
+      fs.writeFileSync(file + '.tmp', JSON.stringify({ approved: true })); fs.renameSync(file + '.tmp', file);
+      record('submission-tool-finished'); void request();
+    }
     send({ method: 'item/started', params: { threadId: 'notice-thread', item: { id: 'tool', type: 'commandExecution' } } });
   } catch { record('local-request-cancelled'); }
 };
@@ -82,6 +91,8 @@ const control = (command: string) => fs.writeFileSync(path.join(directory, 'cont
 
 async function fixture(provider: 'sub2api' | 'westlake' = 'sub2api', extra: {
   holdAck?: boolean; turnTimeoutMs?: number; completedOutput?: boolean; validationFeedback?: boolean;
+  submitTool?: boolean;
+  beforeRequest?: (requestNumber: number) => void;
 } = {}) {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-notice-'));
   const profile = path.join(directory, 'profile'), executable = path.join(directory, 'fake-codex');
@@ -90,7 +101,9 @@ async function fixture(provider: 'sub2api' | 'westlake' = 'sub2api', extra: {
   fs.writeFileSync(executable, '#!' + process.execPath + '\n' + appServer, { mode: 0o700 });
   streams = []; receipts = []; cancelled = []; sources = []; validatedOutputs = 0; incompleteUsage = 0;
   const feedback = vi.fn(() => 'Repair the output contract in the same role.');
+  const feedbackAtAdmission: number[] = [];
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+    feedbackAtAdmission.push(feedback.mock.calls.length);
     const index = streams.length;
     let source!: ReadableStreamDefaultController<Uint8Array>;
     const stream: Stream = { ended: false, finish: options => {
@@ -116,6 +129,12 @@ async function fixture(provider: 'sub2api' | 'westlake' = 'sub2api', extra: {
     streams.push(stream);
     return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
   });
+  let requestNumber = 0;
+  const requestGate: ModelRequestGate = identity => {
+    sources.push(identity!.source!);
+    return { allowed: true, settle: receipt => { receipts.push(receipt); } };
+  };
+  requestGate.beforeRequest = async () => { extra.beforeRequest?.(++requestNumber); };
   session = await createCodexMathSession({ executable, profile, workspace: directory, model: 'deepseek-flash', effort: 'max',
     instructions: 'offline fixture', onUsage: () => {}, turnTimeoutMs: extra.turnTimeoutMs,
     onUsageIncomplete: () => { incompleteUsage++; },
@@ -125,16 +144,14 @@ async function fixture(provider: 'sub2api' | 'westlake' = 'sub2api', extra: {
     }, ...(extra.validationFeedback ? { validationFeedback: feedback } : {}) } } : {}),
     environment: { PATH: process.env.PATH, [selected.apiKeyEnvironment]: 'offline-fixture-key',
       FIXTURE_TRACE: path.join(directory, 'trace.jsonl'), FIXTURE_CONTROL: path.join(directory, 'control'),
+      ...(extra.submitTool ? { FIXTURE_SUBMIT_TOOL: '1', FIXTURE_OUTPUT: path.join(directory, 'OUTPUT.json') } : {}),
       ...(extra.holdAck ? { FIXTURE_HOLD_ACK: '1' } : {}) },
-    requestGate: identity => {
-      sources.push(identity!.source!);
-      return { allowed: true, settle: receipt => { receipts.push(receipt); } };
-    },
+    requestGate,
   });
   const running = session.run('work', 'first-turn', directory, () => {});
   void running.catch(() => {});
   await expect.poll(() => streams.length).toBe(1);
-  return { running, feedback };
+  return { running, feedback, feedbackAtAdmission };
 }
 
 afterEach(async () => {
@@ -144,6 +161,39 @@ afterEach(async () => {
 });
 
 describe('soft notifications at real provider request boundaries', () => {
+  it.each(['sub2api', 'westlake'] as const)('lets a settled %s response submit its tool before a deferred reminder', async provider => {
+    const { running } = await fixture(provider, { completedOutput: true, submitTool: true });
+    const notice = session!.notify!('Finish your independent review', { waitForRequest: true });
+    const noticeResult = notice.then(() => 'delivered', error => String(error));
+    streams[0].finish();
+    await expect.poll(() => trace().some(item => item.event === 'submission-tool-finished')).toBe(true);
+    expect(await running).toBe('submitted');
+    expect(await noticeResult).toContain('math_codex_notification_turn_settled');
+    expect(trace().filter(item => item.event === 'steer')).toEqual([]);
+    expect(trace().filter(item => item.event === 'submission-tool-cancelled')).toEqual([]);
+    expect(streams).toHaveLength(1); expect(sources).toHaveLength(1);
+    expect(receipts).toMatchObject([{ complete: true, usage: { totalTokens: 12 } }]);
+    expect(cancelled).toEqual([]); expect(incompleteUsage).toBe(0);
+  });
+
+  it.each(['sub2api', 'westlake'] as const)('delivers a deferred %s reminder at the next unpaid admission', async provider => {
+    const { running } = await fixture(provider);
+    const delivered = session!.notify!('Finish your independent review', { waitForRequest: true });
+    void delivered.catch(() => {});
+    streams[0].finish();
+    await expect.poll(() => receipts.length).toBe(1);
+    await expect.poll(() => trace().some(item => item.event === 'request-returned')).toBe(true);
+    expect(trace().filter(item => item.event === 'steer')).toEqual([]);
+    control('request');
+    await delivered;
+    await expect.poll(() => trace().filter(item => item.event === 'local-request-cancelled').length).toBe(1);
+    expect(trace().filter(item => item.event === 'steer')).toHaveLength(1);
+    expect(streams).toHaveLength(1); expect(sources).toHaveLength(1);
+    expect(receipts).toMatchObject([{ complete: true, usage: { totalTokens: 12 } }]);
+    expect(cancelled).toEqual([]);
+    await session!.interrupt(); expect(await running).toBe('interrupted');
+  });
+
   it.each(['sub2api', 'westlake'] as const)(
     'defers invalid-output feedback until the %s request settles and fences the next admission', async provider => {
       const { running, feedback } = await fixture(provider, { validationFeedback: true, holdAck: true });
@@ -207,6 +257,83 @@ describe('soft notifications at real provider request boundaries', () => {
     streams[0].finish();
     expect(await running).toBe('submitted');
     expect(receipts).toMatchObject([{ complete: true, usage: { totalTokens: 12 } }]);
+    expect(cancelled).toEqual([]); expect(incompleteUsage).toBe(0);
+  });
+
+  it.each(['sub2api', 'westlake'] as const)('checks an atomic submission before admitting a same-tick %s request', async provider => {
+    const { running } = await fixture(provider, { completedOutput: true, beforeRequest: requestNumber => {
+      if (requestNumber !== 2) return;
+      // Submit at the request boundary so the next admission runs before the polling timer.
+      const file = path.join(directory, 'OUTPUT.json');
+      fs.writeFileSync(file + '.tmp', JSON.stringify({ approved: true })); fs.renameSync(file + '.tmp', file);
+    } });
+    streams[0].finish();
+    await expect.poll(() => receipts.length).toBe(1);
+    control('request');
+    await expect.poll(() => validatedOutputs).toBe(1);
+    expect(streams).toHaveLength(1); expect(sources).toHaveLength(1);
+    expect(await running).toBe('submitted');
+    expect(trace().filter(item => item.event === 'interrupt')).toHaveLength(1);
+    expect(receipts).toMatchObject([{ complete: true, usage: { totalTokens: 12 } }]);
+    expect(cancelled).toEqual([]); expect(incompleteUsage).toBe(0);
+  });
+
+  it.each(['invalid', 'partial'] as const)('allows repair requests when the same-tick output is %s', async kind => {
+    const { running } = await fixture('sub2api', { completedOutput: true, beforeRequest: requestNumber => {
+      if (requestNumber === 2) fs.writeFileSync(path.join(directory, 'OUTPUT.json'),
+        kind === 'invalid' ? JSON.stringify({ approved: false }) : '{"approved":');
+    } });
+    streams[0].finish();
+    await expect.poll(() => receipts.length).toBe(1);
+    control('request');
+    await expect.poll(() => streams.length).toBe(2);
+    expect(validatedOutputs).toBe(0); expect(sources).toHaveLength(2);
+    expect(trace().filter(item => item.event === 'interrupt')).toEqual([]);
+    const file = path.join(directory, 'OUTPUT.json');
+    fs.writeFileSync(file + '.tmp', JSON.stringify({ approved: true })); fs.renameSync(file + '.tmp', file);
+    await expect.poll(() => validatedOutputs).toBe(1);
+    streams[1].finish();
+    expect(await running).toBe('submitted');
+    expect(receipts).toMatchObject([
+      { complete: true, usage: { totalTokens: 12 } }, { complete: true, usage: { totalTokens: 12 } },
+    ]);
+    expect(cancelled).toEqual([]); expect(incompleteUsage).toBe(0);
+  });
+
+  it.each(['sub2api', 'westlake'] as const)('queues same-tick invalid-output feedback until the paid %s request settles', async provider => {
+    const { running, feedback, feedbackAtAdmission } = await fixture(provider, {
+      validationFeedback: true, holdAck: true, beforeRequest: requestNumber => {
+        if (requestNumber === 2) fs.writeFileSync(path.join(directory, 'OUTPUT.json'), JSON.stringify({ approved: false }));
+      },
+    });
+    streams[0].finish();
+    await expect.poll(() => receipts.length).toBe(1);
+    control('request');
+    await expect.poll(() => streams.length).toBe(2);
+    expect(feedbackAtAdmission).toEqual([0, 0]);
+    await expect.poll(() => feedback.mock.calls.length).toBe(1);
+    await delay(30);
+    expect(streams[1].ended).toBe(false); expect(receipts).toHaveLength(1);
+    expect(trace().filter(item => item.event === 'steer')).toEqual([]);
+    expect(cancelled).toEqual([]);
+
+    streams[1].finish();
+    await expect.poll(() => trace().filter(item => item.event === 'steer').length).toBe(1);
+    await expect.poll(() => trace().filter(item => item.event === 'local-request').length).toBe(3);
+    await delay(30);
+    expect(streams).toHaveLength(2); expect(sources).toHaveLength(2);
+    expect(receipts).toMatchObject([
+      { complete: true, usage: { totalTokens: 12 } }, { complete: true, usage: { totalTokens: 12 } },
+    ]);
+    control('ack');
+    await expect.poll(() => streams.length).toBe(3);
+    const file = path.join(directory, 'OUTPUT.json');
+    fs.writeFileSync(file + '.tmp', JSON.stringify({ approved: true })); fs.renameSync(file + '.tmp', file);
+    await expect.poll(() => validatedOutputs).toBe(1);
+    streams[2].finish();
+    expect(await running).toBe('submitted');
+    expect(feedback).toHaveBeenCalledTimes(1); expect(receipts).toHaveLength(3);
+    expect(receipts.every(receipt => receipt.complete)).toBe(true);
     expect(cancelled).toEqual([]); expect(incompleteUsage).toBe(0);
   });
 

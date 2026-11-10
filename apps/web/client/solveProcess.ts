@@ -6,6 +6,7 @@ import { localizeText, t } from '../i18n';
 import { checkLeanFile, routeStepLabel, taskNames, type AgentRoute, type RouteItem } from './agentRoute';
 import { workerNames } from './collaborationUi';
 import { formalizationReasonText } from './formalizationReasons';
+import { buildThinkingEntries, type ThinkingEntry } from './thinkingProcess';
 
 /**
  * The solving process as one checklist: formalizing the problem, proving it, the independent acceptance. Built from the
@@ -43,6 +44,8 @@ export type SolveProcess = {
   /** The Lean file the task is on now: the statement being formalized, the latest candidate, or the accepted proof. */
   current?: { kind: 'statement' | 'candidate' | 'proof'; file: string; source: string; at?: string; who?: string; clipped?: boolean };
   /** Records past the stored limit, which no row shows. */ dropped: number;
+  /** Public summary/commentary and actual operations, deduplicated across streaming snapshots. */
+  thinking?: ThinkingEntry[];
 };
 export type SolveProcessInput = {
   formalization?: WebFormalization; activity?: readonly WebFormalizationActivity[]; activityDropped?: number;
@@ -79,7 +82,7 @@ const verdicts: Record<NonNullable<WebFormalizationRoleSummary['verdict']>, Proc
  * A formalization round by round: each role's session (its actions and what it handed in), each Lean compilation, the
  * host's feedback between rounds. `live` is whether it still runs, so an unfinished row reads as stopped once it ended.
  */
-function formalizationRows(activity: readonly WebFormalizationActivity[], live: boolean, checks: LiveCheck[]) {
+function formalizationRows(activity: readonly WebFormalizationActivity[], live: boolean, checks: LiveCheck[], direct: boolean) {
   type Round = { round: number; rows: ProcessRow[]; result?: 'approved' | 'revision' };
   const rounds = new Map<number, Round>(), lanes = new Map<string, { row: ProcessRow; items: RouteItem[]; starts: number }>();
   const roundOf = (round: number) => { let value = rounds.get(round); if (!value) rounds.set(round, value = { round, rows: [] }); return value; };
@@ -149,7 +152,7 @@ function formalizationRows(activity: readonly WebFormalizationActivity[], live: 
         break;
       }
       case 'approved': roundOf(step.round).result = 'approved';
-        roundOf(step.round).rows.push({ id: `f:approved:${entry.sequence}`, label: t('两位审核都认为与原题一致'), tone: 'done', at: entry.at, details: [] }); break;
+        roundOf(step.round).rows.push({ id: `f:approved:${entry.sequence}`, label: direct ? t('Lean 编译通过') : t('两位审核都认为与原题一致'), tone: 'done', at: entry.at, details: [] }); break;
       case 'stopped': stopped = { id: `f:stopped:${entry.sequence}`, label: t('形式化停止'), tone: 'stopped', at: entry.at,
         outcome: { text: formalizationReasonText(step.reason), tone: 'muted' },
         details: step.text ? [{ kind: 'feedback', text: step.text, ...(step.textClipped ? { clipped: true } : {}) }] : [] }; break;
@@ -174,15 +177,16 @@ const phaseRows = ['planning', 'generating', 'compiling', 'translating', 'review
 /** A formalization without recorded activity (started before it was recorded): its phases, up to the one it reached. */
 function phaseFallback(item: WebFormalization, live: boolean): ProcessRow[] {
   const phase = item.progress?.phase ?? 'queued', ok = ['review', 'confirmed'].includes(item.status);
-  const current = ok || phase === 'finishing' ? phaseRows.length : phaseRows.findIndex(id => id === phase);
+  const rows = item.reviewMode === 'direct' ? phaseRows.filter(id => id === 'generating' || id === 'compiling') : phaseRows;
+  const current = ok || phase === 'finishing' ? rows.length : rows.findIndex(id => id === phase);
   const labels: Record<string, string> = { planning: t('理解题目'), generating: t('写 Lean 陈述'), compiling: t('编译检查'), translating: t('独立回译'), reviewing: t('审核与原题是否一致') };
-  return phaseRows.map((id, index): ProcessRow => ({ id: `f:phase:${id}`, label: labels[id]!, details: [],
+  return rows.map((id, index): ProcessRow => ({ id: `f:phase:${id}`, label: labels[id]!, details: [],
     tone: index < current ? 'done' : index > current || current < 0 ? live ? 'pending' : 'skipped' : live ? 'active' : item.status === 'cancelled' ? 'stopped' : 'failed' }));
 }
 
 function formalizeStage(item: WebFormalization, activity: readonly WebFormalizationActivity[], checks: LiveCheck[]): ProcessStage {
   const live = item.status === 'queued' || item.status === 'running';
-  const built = activity.length ? formalizationRows(activity, live, checks) : undefined;
+  const built = activity.length ? formalizationRows(activity, live, checks, item.reviewMode === 'direct') : undefined;
   const rows = built?.rows ?? phaseFallback(item, live);
   const tone: ProcessTone = live ? 'active' : ['review', 'confirmed'].includes(item.status) ? 'done' : item.status === 'cancelled' ? 'stopped' : 'failed';
   const summary = built ? [built.rounds > 1 ? t('{0} 轮', built.rounds) : '', built.compiles ? t('编译 {0} 次', built.compiles) : ''].filter(Boolean).join(' · ') : undefined;
@@ -356,7 +360,7 @@ function verifyStage(run: WebRun, events: readonly WebEvent[], checks: LiveCheck
   if (report?.method) details.push({ kind: 'note', text: t('方法：{0}', report.method) });
   if (report?.reason) details.push({ kind: 'note', text: checkReason(report) ?? report.reason });
   if (feedback) details.push({ kind: 'feedback', text: feedback });
-  return { id: 'verify', label, tone: !done ? 'active' : accepted ? 'done' : 'failed', rows: [{ id: 'v:evaluation', label: t('在干净环境里重新检查完整原题'),
+  return { id: 'verify', label, tone: !done ? 'active' : accepted ? 'done' : 'failed', rows: [{ id: 'v:evaluation', label: run.formalization?.reviewMode === 'direct' ? t('在干净环境里重新检查完整 Lean 陈述') : t('在干净环境里重新检查完整原题'),
     tone: !done ? 'active' : accepted ? 'done' : 'failed', ...(check.at ? { at: check.at } : {}), ...(outcome ? { outcome } : {}), details, check: check.id }] };
 }
 
@@ -386,7 +390,7 @@ function stateLabel(state: SolveState, item: WebFormalization | undefined, run: 
     case 'review': return item?.status === 'confirmed' ? t('陈述已确认') : t('陈述待核对');
     case 'proving': return run && planGated(run) ? runProgress(run).phaseLabel : run && runProgress(run).index === 1 ? t('准备证明环境') : t('正在证明');
     case 'verifying': return t('正在独立验收');
-    case 'accepted': return t('完整原题通过');
+    case 'accepted': return run?.formalization?.reviewMode === 'direct' ? t('Lean 陈述证明通过') : t('完整原题通过');
     case 'failed': return run ? isRejectedRun(run) ? t('验收未通过') : t('运行失败') : item?.researchError ? t('证明研究未能启动') : t('形式化未完成');
     case 'stopped': return run ? stoppedLabel(run) : t('形式化未完成');
     case 'cancelled': return t('已取消');
@@ -429,6 +433,6 @@ export function buildSolveProcess(input: SolveProcessInput): SolveProcess {
   return { key: item?.id ?? run?.formalizationId ?? run?.id ?? '', state, label: stateLabel(state, item, run), active,
     ...(item?.createdAt ?? run?.createdAt ? { startedAt: item?.createdAt ?? run?.createdAt } : {}), ...(endedAt ? { endedAt } : {}), ...(tokens ? { tokens } : {}),
     stages, checks, counts: { checks: checks.length, attempts, agents }, ...(current ? { current } : {}),
-    dropped: (input.activityDropped ?? 0) + (input.actionsDropped ?? 0) };
+    dropped: (input.activityDropped ?? 0) + (input.actionsDropped ?? 0), thinking: buildThinkingEntries(input, checks) };
 }
 

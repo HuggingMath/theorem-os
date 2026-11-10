@@ -5,6 +5,7 @@ import { request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stringify as stringifyToml } from 'smol-toml';
+import { formalizationAuditOutputSchema } from '../src/math/formalizationAudit';
 import { startFormalizationRelay, type FormalizationRelay } from '../src/runtime/formalizationRelay';
 import type { ModelRequestGate } from '../src/runtime/modelRequest';
 
@@ -20,6 +21,29 @@ const nativeTools = [
   { type: 'custom', name: 'apply_patch', description: 'Edit role-local files.',
     format: { type: 'grammar', syntax: 'lark', definition: 'start: /.+/' } },
 ];
+// Wire shape from a credential-free, network-disabled Codex 0.162.0 GPT-6.1 Sol
+// capture. Tool descriptions, parameter schemas, task text and IDs are synthetic.
+const solFunction = (name: string) => ({ type: 'function', name, description: 'Role-local tool.', strict: false,
+  parameters: { type: 'object', properties: {}, additionalProperties: false } });
+const solAdditionalTools = {
+  type: 'additional_tools', id: 'at-native-sol-fixture', role: 'developer', tools: [
+    { type: 'namespace', name: 'functions', description: '', tools: [
+      { ...nativeTools[3], name: 'exec' },
+      ...['wait', 'request_user_input', 'request_user_input_async'].map(solFunction),
+    ] },
+    { type: 'namespace', name: 'clock', description: 'Tools for reading and waiting on time.', tools: [solFunction('sleep')] },
+    { type: 'namespace', name: 'collaboration', description: 'Tools for spawning and managing sub-agents.',
+      tools: ['followup_task', 'interrupt_agent', 'list_agents', 'send_message', 'spawn_agent', 'wait_agent'].map(solFunction) },
+  ],
+};
+const nativeSolRequest = {
+  model: 'gpt-6.1-sol', stream: true, input: [solAdditionalTools,
+    { type: 'message', id: null, role: 'developer', content: [{ type: 'input_text', text: 'Review only the frozen task.' }] },
+    { type: 'message', id: null, role: 'user', content: [{ type: 'input_text', text: 'Formalize the synthetic source.' }] },
+  ], tool_choice: 'auto', parallel_tool_calls: false, reasoning: { effort, context: 'all_turns' },
+  store: false, include: ['reasoning.encrypted_content'], prompt_cache_key: 'native-sol-fixture', text: { verbosity: 'low' },
+  client_metadata: { session_id: 'native-sol-fixture', 'x-codex-turn-metadata': JSON.stringify({ model: 'gpt-6.1-sol', reasoning_effort: effort }) },
+};
 const fakeResponse = (text = 'data: {"type":"response.completed"}\n\n') =>
   new Response(text, { headers: { 'Content-Type': 'text/event-stream' } });
 
@@ -219,6 +243,170 @@ describe('host credential relay for isolated formalization roles', () => {
     expect((await send(await start(), { body: JSON.stringify(request) })).status).toBe(200);
     const [, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(init.body).toBe(JSON.stringify(request));
+  });
+
+  it('forwards the native GPT-6.1 Sol additional_tools and all_turns request unchanged through BYOK admission', async () => {
+    writeWebProfile({}, nativeSolRequest.model);
+    const order: string[] = [], settle = vi.fn(), beforeRequest = vi.fn(async () => { order.push('before'); });
+    const gate = Object.assign(vi.fn(() => {
+      order.push('admit'); return { allowed: true as const, settle };
+    }), { beforeRequest }) satisfies ModelRequestGate;
+    const terminal = 'data: ' + JSON.stringify({ type: 'response.completed', response: { status: 'completed',
+      usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 }, output: secret } }) + '\n\n';
+    const fetch = vi.fn(async () => { order.push('fetch'); return fakeResponse(terminal); }); vi.stubGlobal('fetch', fetch);
+    const relay = await start({ model: nativeSolRequest.model, env: { THEOREMOS_PROVIDER_API_KEY: secret }, requestGate: gate });
+    const result = await send(relay, { body: JSON.stringify(nativeSolRequest), headers: { 'X-Api-Key': 'caller-key', 'X-Upstream-Url': 'https://attacker.invalid' } });
+    expect(result.status).toBe(200); expect(order).toEqual(['before', 'admit', 'fetch']);
+    expect(gate).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ source: 'responses-relay', requestId: expect.any(String) }));
+    expect(settle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ complete: true, outcome: 'completed',
+      usage: expect.objectContaining({ inputTokens: 10, outputTokens: 5, totalTokens: 15 }) }));
+    expect(fetch).toHaveBeenCalledExactlyOnceWith('https://models.example.test/compatible/v1/responses', expect.objectContaining({
+      body: JSON.stringify(nativeSolRequest), redirect: 'error', headers: { Authorization: 'Bearer ' + secret,
+        'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    }));
+    expect(relay.apiKey).not.toBe(secret); expect(result.text).toContain('[redacted]');
+    expect(JSON.stringify({ ...relay, close: undefined, result, gateCalls: gate.mock.calls })).not.toContain(secret);
+    expect(fs.readdirSync(profile)).toEqual(['config.toml']);
+  });
+
+  it('forwards the exact host-bound native output schema with the complete mathematical request and tool history', async () => {
+    writeWebProfile({}, nativeSolRequest.model);
+    const request = { ...nativeSolRequest, instructions: 'Compare the complete frozen original and compiled types.',
+      input: [...nativeSolRequest.input,
+        { type: 'custom_tool_call', call_id: 'schema-lookup', name: 'exec', namespace: 'functions', input: 'text("resolved meaning")' },
+        { type: 'custom_tool_call_output', call_id: 'schema-lookup', output: 'resolved meaning' },
+      ], text: { ...nativeSolRequest.text, format: { type: 'json_schema', strict: true,
+        name: 'codex_output_schema', schema: formalizationAuditOutputSchema } } };
+    const fetch = vi.fn(async () => fakeResponse()), settle = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const gate = vi.fn(() => ({ allowed: true as const, settle }));
+    const result = await send(await start({ model: request.model, outputSchema: formalizationAuditOutputSchema,
+      env: { THEOREMOS_PROVIDER_API_KEY: secret }, requestGate: gate }), { body: JSON.stringify(request) });
+    expect(result.status).toBe(200); expect(gate).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledExactlyOnceWith('https://models.example.test/compatible/v1/responses',
+      expect.objectContaining({ body: JSON.stringify(request) }));
+  });
+
+  it.each([
+    { format: undefined },
+    { format: { type: 'text' } },
+    { format: { type: 'json_schema', strict: true, name: 'codex_output_schema',
+      schema: { ...formalizationAuditOutputSchema, required: ['verdict'] } } },
+    { format: { type: 'json_schema', strict: true, name: 'codex_output_schema', schema: {
+      ...formalizationAuditOutputSchema, properties: { ...formalizationAuditOutputSchema.properties,
+        checks: { ...formalizationAuditOutputSchema.properties.checks, additionalProperties: true } },
+    } } },
+    { format: { type: 'json_schema', strict: true, name: 'caller_schema', schema: formalizationAuditOutputSchema } },
+    { format: { type: 'json_schema', strict: false, name: 'codex_output_schema', schema: formalizationAuditOutputSchema } },
+    { format: { type: 'json_schema', name: 'codex_output_schema', schema: formalizationAuditOutputSchema } },
+  ])('rejects a missing or changed host-bound output schema before credentials, admission or fetch: %j', async text => {
+    writeWebProfile({}, nativeSolRequest.model);
+    const fetch = vi.fn(), gate = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const result = await send(await start({ model: nativeSolRequest.model, outputSchema: formalizationAuditOutputSchema,
+      env: {}, requestGate: gate }), { body: JSON.stringify({ ...nativeSolRequest, text: { ...nativeSolRequest.text, ...text } }) });
+    expect(result.status).toBe(400); expect(result.text).toMatch(/relay_output_schema_mismatch|unsupported_responses_request/u);
+    expect(result.text).not.toContain('host_credential_unavailable');
+    expect(gate).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps schema output unavailable to a default relay that has no host output-schema binding', async () => {
+    const fetch = vi.fn(), gate = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const request = { ...body, text: { format: { type: 'json_schema', strict: true,
+      name: 'codex_output_schema', schema: formalizationAuditOutputSchema } } };
+    const result = await send(await start({ env: {}, requestGate: gate }), { body: JSON.stringify(request) });
+    expect(result.status).toBe(400);
+    expect(result.text).toMatch(/unsupported_responses_request|relay_output_schema_mismatch/u);
+    expect(gate).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('blocks the native GPT-6.1 Sol request at the request gate before any upstream call', async () => {
+    writeWebProfile({}, nativeSolRequest.model);
+    const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const gate = vi.fn(() => ({ allowed: false as const, reason: 'math_total_token_limit' }));
+    const relay = await start({ model: nativeSolRequest.model, env: { THEOREMOS_PROVIDER_API_KEY: secret }, requestGate: gate });
+    const result = await send(relay, { body: JSON.stringify(nativeSolRequest) });
+    expect(result.status).toBe(403); expect(result.text).toContain('math_total_token_limit');
+    expect(gate).toHaveBeenCalledOnce(); expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { call: { type: 'custom_tool_call', id: 'ct-native-sol', call_id: 'call-sol', name: 'exec', namespace: 'functions',
+      input: 'text("offline fixture")' }, output: { type: 'custom_tool_call_output', id: 'ctco-native-sol', call_id: 'call-sol',
+      output: [{ type: 'input_text', text: 'Script completed\nWall time 0.0 seconds\nOutput:\n' }, { type: 'input_text', text: 'offline fixture' }] } },
+    { call: { type: 'function_call', id: 'fc-native-sol', call_id: 'call-sol', name: 'wait', namespace: 'functions',
+      arguments: '{"cell_id":"fixture-cell"}' }, output: { type: 'function_call_output', id: 'fco-native-sol', call_id: 'call-sol',
+      output: [{ type: 'input_text', text: 'offline fixture' }] } },
+  ])('preserves namespaced native GPT tool history and inline outputs: $call.type', async ({ call, output }) => {
+    writeWebProfile({}, nativeSolRequest.model);
+    const fetch = vi.fn(async () => fakeResponse()); vi.stubGlobal('fetch', fetch);
+    const settle = vi.fn(), gate = vi.fn(() => ({ allowed: true as const, settle }));
+    const request = { ...nativeSolRequest, input: [...nativeSolRequest.input, call, output] };
+    const result = await send(await start({ model: nativeSolRequest.model,
+      env: { THEOREMOS_PROVIDER_API_KEY: secret }, requestGate: gate }), { body: JSON.stringify(request) });
+    expect(result.status).toBe(200); expect(gate).toHaveBeenCalledOnce(); expect(settle).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledExactlyOnceWith('https://models.example.test/compatible/v1/responses',
+      expect.objectContaining({ body: JSON.stringify(request) }));
+  });
+
+  it.each([
+    { type: 'custom_tool_call', id: 'ct-native-sol', call_id: 'call-sol', name: 'exec', input: 'text("fixture")', namespace: 1 },
+    { type: 'custom_tool_call', id: 'ct-native-sol', call_id: 'call-sol', name: 'exec', input: 'text("fixture")', namespace: {} },
+    { type: 'function_call', id: 'fc-native-sol', call_id: 'call-sol', name: 'wait', arguments: '{}', namespace: null },
+    { type: 'function_call', id: 'fc-native-sol', call_id: 'call-sol', name: 'wait', arguments: '{}', namespace: ['functions'] },
+    { type: 'custom_tool_call', id: 'ct-native-sol', call_id: 'call-sol', name: 'exec', input: 'text("fixture")', namespace: 'bad namespace' },
+  ])('rejects an invalid native call namespace before credentials: %j', async call => {
+    const fetch = vi.fn(), gate = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const request = { ...body, reasoning: nativeSolRequest.reasoning, input: [solAdditionalTools, call] };
+    const result = await send(await start({ env: {}, requestGate: gate }), { body: JSON.stringify(request) });
+    expect(result.status).toBe(400); expect(result.text).toContain('unsupported_responses_request');
+    expect(gate).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { type: 'web_search' }, { type: 'file_search', vector_store_ids: ['vs-private'] },
+    { type: 'mcp', server_label: 'private', server_url: 'https://private.invalid' },
+    { type: 'namespace', name: 'nested', tools: nativeTools },
+    { ...nativeTools[0], remote: { id: 'tool-private' } },
+  ])('rejects hosted, nested or extended tools inside native additional_tools before credentials: %j', async member => {
+    const declaration = { ...solAdditionalTools, tools: [{ type: 'namespace', name: 'functions', description: '', tools: [member] }] };
+    const fetch = vi.fn(), gate = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const relay = await start({ env: {}, requestGate: gate });
+    const result = await send(relay, { body: JSON.stringify({ ...body, reasoning: nativeSolRequest.reasoning, input: [declaration] }) });
+    expect(result.status).toBe(400); expect(result.text).toContain('unsupported_responses_request');
+    expect(gate).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { ...solAdditionalTools, role: 'user' }, { ...solAdditionalTools, role: 'assistant' },
+    { ...solAdditionalTools, role: 'system' }, { ...solAdditionalTools, extra: true },
+    { ...solAdditionalTools, tools: [{ ...solAdditionalTools.tools[0], server_url: 'https://private.invalid' }] },
+    { ...solAdditionalTools, tools: [nativeTools[0]] },
+  ])('rejects an unsupported additional_tools declaration before credentials: %j', async declaration => {
+    const fetch = vi.fn(), gate = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const result = await send(await start({ env: {}, requestGate: gate }), { body: JSON.stringify({ ...body,
+      reasoning: nativeSolRequest.reasoning, input: [declaration] }) });
+    expect(result.status).toBe(400); expect(result.text).toContain('unsupported_responses_request');
+    expect(gate).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(['current_turn', '', null, {}, 1])('rejects an unknown native reasoning.context before credentials: %j', async context => {
+    const fetch = vi.fn(), gate = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const result = await send(await start({ env: {}, requestGate: gate }), { body: JSON.stringify({ ...body,
+      reasoning: { effort, context }, input: [solAdditionalTools] }) });
+    expect(result.status).toBe(400); expect(result.text).toContain('unsupported_responses_request');
+    expect(gate).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { choice: { type: 'custom', name: 'functions.exec' }, status: 200 },
+    { choice: { type: 'function', name: 'clock.sleep' }, status: 200 },
+    { choice: { type: 'function', name: 'functions.exec' }, status: 400 },
+    { choice: { type: 'custom', name: 'exec' }, status: 400 },
+  ])('binds native inline tool choices to qualified namespace members: %j', async ({ choice, status }) => {
+    const fetch = vi.fn(async () => fakeResponse()); vi.stubGlobal('fetch', fetch);
+    const result = await send(await start(), { body: JSON.stringify({ ...body, reasoning: nativeSolRequest.reasoning,
+      input: [solAdditionalTools], tool_choice: choice }) });
+    expect(result.status).toBe(status); expect(fetch).toHaveBeenCalledTimes(status === 200 ? 1 : 0);
+    if (status === 400) expect(result.text).toContain('unknown_tool_choice');
   });
 
   it('permits complete inline reasoning, tool history and literal URLs without retrieving remote data', async () => {

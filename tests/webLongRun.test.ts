@@ -38,9 +38,12 @@ describe('usage estimate and token cap before submission', () => {
   it('accepts an empty cap as unlimited and a whole number of 万 tokens within the limit', () => {
     expect(tokenCap('', 1e8)).toBeUndefined();
     expect(tokenCap('50', 1e8)).toBe(500_000);
-    for (const value of ['0', '1.5', '-3', '10001', 'abc']) expect(tokenCap(value, 1e8)).toBeUndefined();
+    expect(tokenCap('0', 1e8)).toBe(0);
+    for (const value of ['1.5', '-3', '10001', 'abc']) expect(tokenCap(value, 1e8)).toBeUndefined();
     expect(submissionIssues({ ...draft, maxTotalTokens: '' }, 'sk-valid-key', session)).toEqual([]);
-    expect(submissionIssues({ ...draft, maxTotalTokens: '0' }, 'sk-valid-key', session).map(issue => issue.field)).toEqual(['max-tokens']);
+    expect(submissionIssues({ ...draft, maxTurns: '', maxRunSeconds: '', maxTotalTokens: '' }, 'sk-valid-key', session)).toEqual([]);
+    expect(submissionIssues({ ...draft, maxTurns: '0', maxRunSeconds: '0', maxTotalTokens: '0' }, 'sk-valid-key', session)).toEqual([]);
+    expect(submissionIssues({ ...draft, workers: '' }, 'sk-valid-key', session).map(issue => issue.field)).toEqual(['workers']);
   });
 
   it('keeps the cap in drafts and archives and still reads drafts saved before it existed', () => {

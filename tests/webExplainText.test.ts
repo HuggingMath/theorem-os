@@ -93,6 +93,7 @@ describe('generation estimate', () => {
     expect(explanationEstimate(7, reference, { maxRunSeconds: 28_800, maxTotalTokens: 40_000_000 })).toEqual({ seconds: 8100, tokens: 5_375_000 });
     expect(explanationEstimate(0, reference, { maxRunSeconds: 28_800, maxTotalTokens: 40_000_000 })).toEqual({ seconds: 1157, tokens: 767_857 });
     expect(explanationEstimate(100, reference, { maxRunSeconds: 28_800, maxTotalTokens: 40_000_000 })).toEqual({ seconds: 28_800, tokens: 40_000_000 });
+    expect(explanationEstimate(28, reference, { maxRunSeconds: 0, maxTotalTokens: 0 })).toEqual({ seconds: 32_400, tokens: 21_500_000 });
   });
 });
 

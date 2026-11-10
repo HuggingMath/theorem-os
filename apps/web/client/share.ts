@@ -74,13 +74,13 @@ function show(share: WebShareSnapshot) {
   $('#share-task').textContent = share.task;
   const formalization = share.formalization;
   $('#share-verdict').textContent = t('Lean 陈述证明通过');
-  $('#share-confirmation').textContent = formalization ? statementConfirmation(formalization.confirmation, true)
+  $('#share-confirmation').textContent = formalization ? formalization.reviewMode === 'direct' ? t('Lean 编译通过') : statementConfirmation(formalization.confirmation, true)
     : t('此分享仅包含 Lean 陈述与证明，未提供自然语言原题的确认记录。');
   if (formalization) {
     $('#share-task-heading').textContent = t('自然语言原题');
     $('#share-task').textContent = formalization.original;
     const review = formalization.review;
-    if (review) {
+    if (review?.backtranslation) {
       $('#share-review').hidden = false;
       $('#share-backtranslation').textContent = [review.backtranslation.mathematics, ...review.backtranslation.assumptions,
         ...review.backtranslation.definitions].join('\n\n');

@@ -8,6 +8,7 @@ import { getLeanTaskEnvironment, type LeanTaskEnvironment } from '../math/leanTa
 import { bindLeanPackages, prepareLeanDiagnosticOverrides, runLeanDiagnostics } from '../math/leanDiagnostics';
 import { checkResolvedLeanToolchainReadiness } from '../math/leanToolchainReadiness';
 import { MATH_PROOF_ENVIRONMENT_ENV, prepareMathProofEnvironment } from '../math/mathProofEnvironment';
+import { DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT } from '../math/mathProofEnvironmentCache';
 import { resolveMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnvironment';
 import { canonicalMathJson, mathDigest, readMathText, writeMathFrozen } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath } from '../math/paths';
@@ -56,7 +57,8 @@ export async function checkFormalizationRefutations(directory: string, source: s
     if (!packages && manifest.packages.length) throw new Error('formalization_refutation_harness_failed: Lake packages unavailable');
     if (packages) {
       bindLeanPackages(project, packages);
-      proofEnvironment = await prepareMathProofEnvironment(project, packages, { env, signal: options.signal, deadlineAt });
+      proofEnvironment = await prepareMathProofEnvironment(project, packages, { env, signal: options.signal, deadlineAt,
+        cacheRoot: DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT });
       env = { ...env, [MATH_PROOF_ENVIRONMENT_ENV]: proofEnvironment.environmentValue };
       prepareLeanDiagnosticOverrides(project);
     }

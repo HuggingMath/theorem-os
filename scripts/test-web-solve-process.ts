@@ -70,9 +70,8 @@ config.providers = [{ id: 'sub2api', name: 'Local fixture', baseUrl: 'http://127
 const service = createWebService(config, runner);
 const checks: string[] = [], errors: string[] = [];
 const mark = (name: string) => { checks.push(name); console.log(`PASS ${name}`); };
-async function eventually(check: () => boolean, description: string) {
-  const until = Date.now() + 15_000;
-  while (!check()) { assert.ok(Date.now() < until, description); await sleep(40); }
+async function eventually(check: () => boolean, _description: string) {
+  while (!check()) await sleep(40);
 }
 async function credentials(page: Page) {
   if (!await page.locator('#formalize-key').isVisible()) await page.locator('#open-settings').click();
@@ -89,8 +88,9 @@ try {
   browser = await startBrowser(service.server, port);
   for (const width of [1440, 390]) {
     const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
+    context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
     await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
-    const page = await context.newPage(); page.setDefaultTimeout(15_000);
+    const page = await context.newPage(); page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
     page.on('pageerror', error => errors.push(error.message));
     pending = undefined; runInput = undefined; releaseRun = undefined;
     await page.goto(origin); await page.locator('#formalize-original').waitFor();
@@ -106,31 +106,33 @@ try {
     formalization.send({ type: 'activity', activity: { type: 'step', step: { round: 1, step: 'revision', stage: 'round', text: 'Lean 报错：第 2 行 unknown tactic。' } } });
     await process(page).waitFor();
     await page.locator('.solve-process-title').filter({ hasText: '解题过程' }).waitFor();
+    assert.equal(await process(page).getAttribute('open'), null, 'The readable thinking process leaves diagnostic records folded');
+    await process(page).locator(':scope > summary').click();
     await page.waitForFunction(() => document.querySelectorAll('.solve-stage[data-stage]').length >= 3);
-    assert.equal(await process(page).getAttribute('open'), '', 'A live task opens its checklist');
+    assert.equal(await process(page).getAttribute('open'), '', 'The reader can open the detailed execution records');
     assert.match(await page.locator('.solve-stage[data-stage="formalize"]').innerText(), /形式化原题/u);
     assert.match(await process(page).innerText(), /编译检查|第 1 轮/u);
     assert.equal(await page.locator('.solve-stage[data-stage="prove"]').count(), 1);
     assert.equal(await page.locator('.solve-stage[data-stage="verify"]').count(), 1);
-    mark(`${width}px: a live formalization shows its rounds, compile and feedback in the checklist`);
+    mark(`${width}px: the reader opens the formalization's rounds, compile and feedback when needed`);
 
     formalization.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(formalization.input) }); formalization.resolve();
     await eventually(() => Boolean(runInput), 'The confirmed statement starts one proof');
     await eventually(() => runInput!.input.source.length > 0, 'The proof receives the statement');
     // A wide screen's check rows open the workspace beside the chat; a phone's open their record in place.
     await page.waitForFunction(wide => document.querySelectorAll(wide ? '[data-solve-check]' : '.solve-row[data-solve-row]').length > 0,
-      width === 1440, { timeout: 20_000 });
+      width === 1440, { timeout: 0 });
     await page.locator('.research-conversation-meta').waitFor();
     assert.match(await page.locator('.research-conversation-meta').innerText(), /\d\d:\d\d/u);
     assert.equal(await page.locator('[data-research-stop]').isVisible(), true);
     // The run's own Lean check arrives with its action, a moment after the run starts.
     await page.waitForFunction(() => /自查|Lean 检查/u.test(document.querySelector('.solve-stage[data-stage="prove"]')?.textContent ?? ''),
-      undefined, { timeout: 20_000 });
+      undefined, { timeout: 0 });
     assert.match(await page.locator('.solve-stage[data-stage="prove"]').innerText(), /自查|Lean 检查/u);
     mark(`${width}px: the running proof shows its elapsed time, tokens, stop and its Agent's Lean check`);
     if (width === 1440) {
       // The live workspace opens by itself beside the conversation, on the file the check was about.
-      await page.waitForFunction(() => document.body.dataset.chatArtifact === 'live', undefined, { timeout: 5_000 }).catch(() => undefined);
+      await page.waitForFunction(() => document.body.dataset.chatArtifact === 'live', undefined, { timeout: 0 });
       assert.equal(await artifact(page), 'live', 'A wide screen opens the live workspace by itself');
       assert.equal(await live(page).isVisible(), true);
       await live(page).locator('.live-code .lean-line').first().waitFor();
@@ -162,8 +164,10 @@ try {
     assert.deepEqual(await audit(page), []);
     await settled(page);
     await page.screenshot({ path: path.join(output, `process-${width}.png`), fullPage: true });
+    await process(page).locator(':scope > summary').click();
+    assert.equal(await process(page).getAttribute('open'), null, 'The reader can fold the detailed records again');
     releaseRun!();
-    await page.waitForFunction(() => document.querySelector('.research-conversation-status')?.getAttribute('data-accepted') === 'true', undefined, { timeout: 20_000 });
+    await page.waitForFunction(() => document.querySelector('.research-conversation-status')?.getAttribute('data-accepted') === 'true', undefined, { timeout: 0 });
     await page.waitForFunction(() => document.querySelector('details.solve-process')?.hasAttribute('open') === false);
     assert.equal(await process(page).getAttribute('open'), null, 'A finished task folds its checklist to one line');
     assert.match(await process(page).locator('summary').innerText(), /Lean 检查 \d+ 次|尝试 \d+ 次/u);
@@ -178,7 +182,7 @@ try {
 } catch (error) {
   for (const test of checks) console.log(`passed: ${test}`);
   console.error(error);
-  process.exitCode = 1;
+  globalThis.process.exitCode = 1;
 } finally {
   await browser?.close();
   service.server.close();

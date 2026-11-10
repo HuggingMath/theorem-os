@@ -60,6 +60,7 @@ export const formalizationRequestSchema = z.object({
   buildManifestRef: text, buildDigest: hash, maxRounds: executionLimit,
   maxRunSeconds: executionLimit, maxTurnSeconds: executionLimit,
   maxCompileSeconds: executionLimit, maxTotalTokens: executionLimit,
+  reviewMode: z.literal('direct').optional(),
   workflow: formalizationWorkflowSchema.optional(),
   contextProtocol: leanStatementContextProtocolSchema.optional(),
   fidelityPolicy: fidelityPolicySchema.optional(),
@@ -123,7 +124,7 @@ const workflowEvidenceSchema = z.object({
   selectionPolicy: z.literal('first-unanimously-approved'),
   reference: formalizationReferenceResultSchema.optional(),
 }).strict();
-export const formalizationEvidenceSchema = z.object({
+export const reviewedFormalizationEvidenceSchema = z.object({
   schema: z.enum(['theorem-os.formalization-evidence.v1', 'theorem-os.formalization-evidence.v2', 'theorem-os.formalization-evidence.v3']), status: z.literal('approved'),
   authority: z.literal('model'), method: z.literal('independent-backtranslation-and-comparison'),
   execution: z.enum(['model', 'replay']), modelInvoked: z.boolean(), proofVerified: z.literal(false),
@@ -139,6 +140,18 @@ export const formalizationEvidenceSchema = z.object({
   sessions: z.array(sessionSchema).min(3).max(8), approvedAt: z.string().datetime(), round: z.number().int().positive(),
   workflow: workflowEvidenceSchema.optional(),
 }).strict();
+export type ReviewedFormalizationEvidence = z.infer<typeof reviewedFormalizationEvidenceSchema>;
+export const directFormalizationEvidenceSchema = reviewedFormalizationEvidenceSchema.omit({
+  translation: true, translationDigest: true, review: true, workflow: true,
+}).extend({
+  schema: z.literal('theorem-os.formalization-evidence.v4'), authority: z.literal('compiler'),
+  method: z.literal('generation-and-compilation'), semanticReview: z.literal('not-performed'),
+  sessions: z.array(sessionSchema).length(1),
+  translation: z.undefined().optional(), translationDigest: z.undefined().optional(),
+  review: z.undefined().optional(), workflow: z.undefined().optional(),
+}).strict();
+export type DirectFormalizationEvidence = z.infer<typeof directFormalizationEvidenceSchema>;
+export const formalizationEvidenceSchema = z.union([reviewedFormalizationEvidenceSchema, directFormalizationEvidenceSchema]);
 export type FormalizationEvidence = z.infer<typeof formalizationEvidenceSchema>;
 
 export const formalizationDigest = (value: unknown): string => mathDigest(canonicalMathJson(value));
@@ -209,6 +222,9 @@ export function readFormalizationRequest(directory: string): FormalizationReques
 }
 
 function assertRequestWorkflow(request: FormalizationRequest): void {
+  if (request.reviewMode === 'direct' && (request.schema !== 'theorem-os.formalization-request.v3' ||
+      request.workflow || request.fidelityPolicy || request.retrieval || request.exemplars || request.falsification))
+    throw new Error('formalization_direct_review_configuration_invalid');
   if (request.fidelityPolicy && (request.schema !== 'theorem-os.formalization-request.v3' || !request.workflow))
     throw new Error('formalization_fidelity_requires_planned_v3');
   if (request.retrieval && (request.schema !== 'theorem-os.formalization-request.v3' || !request.workflow || request.environment !== 'mathlib'))
@@ -253,10 +269,11 @@ export function assertFormalizationEvidence(evidence: FormalizationEvidence): vo
   const structured = r.schema === 'theorem-os.formalization-request.v3';
   if (hasStructureContext(r.contextProtocol) && e.snapshot.targets.some(item => !item.context.structures))
     throw new Error('formalization_context_missing_structures');
-  if ((e.schema === 'theorem-os.formalization-evidence.v3') !== structured ||
+  if ((e.schema === 'theorem-os.formalization-evidence.v4') !== (r.reviewMode === 'direct') ||
+      e.schema !== 'theorem-os.formalization-evidence.v4' && ((e.schema === 'theorem-os.formalization-evidence.v3') !== structured ||
       !structured && (e.schema === 'theorem-os.formalization-evidence.v2') !== Boolean(r.workflow) ||
       Boolean(e.workflow) !== Boolean(r.workflow) || e.workflow && e.workflow.schema !== (structured ?
-        'theorem-os.formalization-workflow-evidence.v3' : 'theorem-os.formalization-workflow-evidence.v2'))
+        'theorem-os.formalization-workflow-evidence.v3' : 'theorem-os.formalization-workflow-evidence.v2')))
     throw new Error('formalization_evidence_workflow_version_mismatch');
   if (e.requestDigest !== formalizationDigest(r) || r.statementSha256 !== mathDigest(r.statement) ||
       r.environmentDigest !== getLeanTaskEnvironment(r.environment).dependencyDigest ||
@@ -275,6 +292,10 @@ export function assertFormalizationEvidence(evidence: FormalizationEvidence): vo
       e.compilation.diagnostics.environmentDigest !== e.compilation.environmentDigest)
     throw new Error('formalization_evidence_compilation_mismatch');
   assertCompilationEvidence(e);
+  if (e.schema === 'theorem-os.formalization-evidence.v4') {
+    assertDirectEvidence(e);
+    return;
+  }
   const names = targets.map(item => item.name).sort();
   if (e.translation.snapshotDigest !== e.snapshotDigest || e.translationDigest !== formalizationDigest(e.translation) ||
       canonicalMathJson(e.translation.targets.map(item => item.name).sort()) !== canonicalMathJson(names))
@@ -298,7 +319,19 @@ export function assertFormalizationEvidence(evidence: FormalizationEvidence): vo
   if (r.workflow) assertWorkflowEvidence(e);
 }
 
-function assertEvidenceReview(e: FormalizationEvidence, value: FormalizationEvidence['review'],
+function assertDirectEvidence(e: DirectFormalizationEvidence): void {
+  const r = e.request, generation = e.generation, input = generation.input, session = e.sessions[0]!;
+  if (input.problemId !== r.problemId || input.statement !== r.statement || input.environment !== r.environment ||
+      input.toolchain !== getLeanTaskEnvironment(r.environment).toolchain || input.round !== e.round ||
+      input.plan !== undefined || input.planDigest !== undefined || input.retrieval !== undefined || input.exemplars !== undefined ||
+      canonicalMathJson({ ...generation.output, source: eraseFormalizationProofs(generation.output.source) }) !== canonicalMathJson(e.candidate) ||
+      eraseFormalizationProofs(e.candidate.source) !== e.candidate.source || session.role !== 'generate' ||
+      session.model !== r.model || session.effort !== r.effort || session.reviewerId !== undefined || session.configurationDigest !== undefined ||
+      session.inputDigest !== formalizationDigest(input) || session.outputDigest !== formalizationDigest(generation.output))
+    throw new Error('formalization_evidence_session_mismatch');
+}
+
+function assertEvidenceReview(e: ReviewedFormalizationEvidence, value: ReviewedFormalizationEvidence['review'],
   reviewer?: { reviewerId: string; planDigest: string }): string {
   if (e.request.schema === 'theorem-os.formalization-request.v3') {
     const input = formalizationReviewInput(e.request, e.candidate, e.snapshot, e.translation, reviewer);
@@ -315,7 +348,7 @@ function assertEvidenceReview(e: FormalizationEvidence, value: FormalizationEvid
     translationDigest: e.translationDigest, ...reviewer });
 }
 
-function assertWorkflowEvidence(e: FormalizationEvidence): void {
+function assertWorkflowEvidence(e: ReviewedFormalizationEvidence): void {
   const r = e.request, w = r.workflow!, observed = e.workflow!;
   const fail = () => { throw new Error('formalization_workflow_evidence_invalid'); };
   assertFormalizationPlan(r.statement, observed.plan.output);
@@ -414,7 +447,8 @@ function assertCompilationEvidence(e: FormalizationEvidence): void {
   const exported = diagnostics.contextExport as { path: string; digest: string; text: string } | undefined;
   if (!exported || exported.path !== '.lake/formalization-context.json' || typeof exported.text !== 'string' ||
       mathDigest(exported.text) !== exported.digest) return fail();
-  const contexts = parseLeanStatementContexts(exported.text, e.targets.map(item => item.name));
+  const contexts = parseLeanStatementContexts(exported.text, e.targets.map(item => item.name),
+    { boundedLibraryContext: allowsOmittedLibraryContext(e.request.contextProtocol) });
   if (e.request.schema === 'theorem-os.formalization-request.v3' && [...contexts.values()].some(context => !context.bindings)) return fail();
   if (e.request.contextProtocol && [...contexts.values()].some(context => !context.semantic)) return fail();
   if (hasStructureContext(e.request.contextProtocol) && [...contexts.values()].some(context => !context.structures))
@@ -454,7 +488,9 @@ export function bootstrapFormalizedProblem(directory: string) {
   const workspace = path.join(directory, 'workspace'), taskFile = path.join(directory, 'task.md');
   const shortTask = 'Prove every frozen target of ' + evidence.request.problemId + '.\nOriginal SHA256: ' +
     evidence.request.statementSha256 + '\nFormalization evidence SHA256: ' + formalizationDigest(evidence) +
-    '\nStatement review authority: model. Preserve all definitions, assumptions and target declarations.';
+    (evidence.schema === 'theorem-os.formalization-evidence.v4'
+      ? '\nStatement check authority: compiler. No independent semantic review was performed. Preserve all definitions, assumptions and target declarations.'
+      : '\nStatement review authority: model. Preserve all definitions, assumptions and target declarations.');
   if (!fs.existsSync(workspace)) {
     const staging = path.join(path.resolve(directory), '.workspace-' + crypto.randomUUID());
     const prepared = bootstrapLeanTask(staging, { source: evidence.candidate.source, task: shortTask, environment: evidence.request.environment });

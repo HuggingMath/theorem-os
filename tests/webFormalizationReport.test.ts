@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { declarationNames, declarationRegions, formalizationCorrespondences } from '../apps/web/formalizationReport';
+import { declarationNames, declarationRegions, formalizationCorrespondences, formalizationReport } from '../apps/web/formalizationReport';
 import type { FormalizationEvidence } from '../src/math/formalization';
+import type { WorkerFormalizationInput } from '../apps/web/formalizationTypes';
+import { webDirectFormalizationEvidence, webReviewedFormalizationEvidence,
+  webFormalizationStatement } from './helpers/webFormalizationFixture';
 
 // Reviewer correspondences placed in a proof of the formalized statement, as the explanation page's 「原题」 card does.
 const ORIGINAL = 'Prove that for every natural number n, n + 0 = n.';
@@ -11,6 +14,27 @@ const evidence = (fragments: readonly string[]) => ({
   review: { correspondences: fragments.map(candidateFragment => ({ aspect: 'conclusions', relation: 'direct',
     originalFragment: 'n + 0 = n', candidateFragment, explanation: '' })) },
 }) as unknown as FormalizationEvidence;
+
+describe('direct and reviewed formalization reports', () => {
+  const input: WorkerFormalizationInput = { id: '11111111-1111-4111-8111-111111111111', original: webFormalizationStatement,
+    environment: 'standard', model: 'gpt-6.1-sol', effort: 'max', apiKey: 'sk-disposable-fixture',
+    provider: { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1' }, reviewMode: 'direct',
+    maxRunSeconds: 0, maxTotalTokens: 0, maxRounds: 0, maxPlanningRounds: 0, reviewers: 2 };
+
+  it('preserves direct coverage and source without inventing a translation or independent approval', () => {
+    const receipt = webDirectFormalizationEvidence(input), report = formalizationReport(receipt);
+    expect(report).toMatchObject({ original: input.original, statement: receipt.candidate.source,
+      semanticReview: 'not-performed', backtranslation: null, reviews: [], correspondences: [] });
+    expect(report.targets.map(target => target.name)).toEqual(['addition']);
+    expect(report.coverage).toHaveLength(1); expect(report).not.toHaveProperty('plan');
+  });
+
+  it('continues presenting the actual independent review and translation on old evidence', () => {
+    const report = formalizationReport(webReviewedFormalizationEvidence({ ...input, reviewMode: undefined }));
+    expect(report).not.toHaveProperty('semanticReview'); expect(report.backtranslation?.mathematics).toBe(input.original);
+    expect(report.reviews).toHaveLength(2); expect(report.correspondences.length).toBeGreaterThan(0);
+  });
+});
 
 describe('formalization correspondences in a proof', () => {
   const regions = declarationRegions(PROOF, declarationNames(STATEMENT));

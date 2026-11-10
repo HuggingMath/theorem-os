@@ -189,6 +189,9 @@ try {
     if (width === 1440) {
       assert.equal(pending.input.maxRunSeconds, 240); assert.equal(pending.input.maxTotalTokens, 120000);
       assert.equal(pending.input.provider.id, 'sub2api'); assert.equal(pending.input.model, 'deepseek-flash');
+    } else {
+      assert.equal(pending.input.maxRunSeconds, 0, 'Blank formalization time reaches the worker as unlimited');
+      assert.equal(pending.input.maxTotalTokens, 0, 'Blank formalization tokens reach the worker as unlimited');
     }
     pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve();
     await page.locator('[data-research-artifact="source"]:enabled').waitFor();
@@ -199,7 +202,12 @@ try {
     if (width === 1440) {
       assert.equal(runs.at(-1)?.input.maxRunSeconds, 180); assert.equal(runs.at(-1)?.input.maxTotalTokens, 80000);
       assert.equal(runs.at(-1)?.input.maxTurns, 4);
-    } else assert.equal(await page.locator('.research-conversation-state').innerText(), 'Lean 陈述证明通过');
+    } else {
+      assert.equal(runs.at(-1)?.input.maxRunSeconds, 0, 'Blank proof time reaches the worker as unlimited');
+      assert.equal(runs.at(-1)?.input.maxTotalTokens, 0, 'Blank proof tokens reach the worker as unlimited');
+      assert.equal(runs.at(-1)?.input.maxTurns, 0, 'Blank proof turns reach the worker as unlimited');
+      assert.equal(await page.locator('.research-conversation-state').innerText(), 'Lean 陈述证明通过');
+    }
     await assertSameComposer(page);
     const sessionUrl = page.url(), id = (await conversation(page)).id;
     await page.locator('#formalize-original').fill(question);

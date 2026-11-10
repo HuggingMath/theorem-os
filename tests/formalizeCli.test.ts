@@ -76,11 +76,12 @@ describe('formalize offline CLI', () => {
     expect(result.report).toMatchObject({ phase: 'prepare', status: 'prepared', modelInvoked: false, proofVerified: false,
       request: { problemId: 'natural_add_zero', environment: 'mathlib', execution: 'model', model: 'deepseek-flash', effort: 'max',
         maxRounds: 0, maxRunSeconds: 0, maxTurnSeconds: 0, maxCompileSeconds: 0, maxTotalTokens: 0,
-        workflow: { maxPlanningRounds: 0 } } });
+        reviewMode: 'direct' } });
     const request = readFormalizationRequest(f.directory);
     expect(request.schema).toBe('theorem-os.formalization-request.v3');
-    expect(request.contextProtocol).toBe('kernel-v2');
-    expect(request.workflow.reviewers).toHaveLength(2);
+    expect(request.contextProtocol).toBe('kernel-v3');
+    expect(request.workflow).toBeUndefined();
+    expect(request.fidelityPolicy).toBeUndefined();
     expect(request.statement).toBe(original);
     expect(request.buildDigest).toBe(mathDigest(fs.readFileSync(f.manifest)));
     expect(result.report.requestDigest).toBe(formalizationDigest(request));
@@ -101,6 +102,23 @@ describe('formalize offline CLI', () => {
       profile: path.join(f.base, 'unused-profile'), executable: '/unused/codex', maxRounds: 2,
       maxRunSeconds: 60, maxTurnSeconds: 20, maxCompileSeconds: 10, maxTotalTokens: 8000 });
     expect(fs.readdirSync(f.directory)).toEqual(['request.json']);
+  });
+
+  it('retains independent review only when explicitly selected', async () => {
+    const f = fixture();
+    await invoke([...f.args, '--review-mode', 'independent']);
+    const request = readFormalizationRequest(f.directory);
+    expect(request.reviewMode).toBeUndefined();
+    expect(request.workflow.reviewers).toHaveLength(2);
+    expect(request.fidelityPolicy).toBe('task-preserving-v2');
+  });
+
+  it('rejects an invalid mode or mixing direct generation with review configuration', async () => {
+    const f = fixture();
+    await expect(invoke([...f.args, '--review-mode', 'fastest'])).rejects.toThrow('--review-mode must be direct or independent');
+    await expect(invoke([...f.args, '--review-mode', 'direct', '--max-planning-rounds', '0']))
+      .rejects.toThrow('require --review-mode independent');
+    expect(fs.existsSync(f.directory)).toBe(false);
   });
 
   it('freezes an opt-in matching Mathlib corpus offline and preserves the snapshot on inspect', async () => {
@@ -361,7 +379,8 @@ describe('formalize offline CLI', () => {
     expect(result.code).toBe(0);
     expect(result.output).toContain('prepare|run|inspect|replay|report');
     expect(result.output).toContain('report (offline): --output FILE.html');
-    expect(result.output).toContain('independent statement review');
+    expect(result.output).toContain('default: direct generation and Lean compilation');
+    expect(result.output).toContain('--review-mode direct|independent');
     expect(result.output).toContain('--retrieval-symbols lean-exact-names-v1');
     expect(result.output).toContain('--retrieval-queries lean-resolved-objects-v1');
     expect(result.output).toContain('docs/formalization.md');

@@ -80,9 +80,43 @@ it.each([false, true])('asks the Lead to return executable work promptly on ever
     expect(message).toContain('Preserve route gates, group scope, independent reviewer eligibility and running assignments');
   }
   expect(context.instructions).toContain('Return the plan without running Lean diagnostics');
+  expect(context.instructions).toContain('Leave Lean sources, frozen problem inputs, packages and the pinned toolchain unchanged.');
+  expect(context.instructions).toContain('completed proofs require independent host Lean checking');
+  expect(context.instructions).not.toContain('You prove the original mathematical problem in Lean.');
+  expect(context.instructions).not.toContain(' check-lean ');
+  expect(context.instructions).not.toContain(' check-finite ');
+  expect(context.instructions).not.toContain('Check the actual saved file');
+  expect(context.message).toContain('Prove the target');
+  if (!existing) {
+    expect(context.instructions).toContain('smallest valid executable graph covering every original target');
+    expect(context.instructions).toContain('direct original-goal tasks and distinct research tasks for unknown inferences');
+    expect(context.instructions).toContain('leave uncertain interfaces as untyped research/sketch tasks');
+  }
   // Only an accepted graph can be revised; initial planning still writes a complete plan.
   for (const message of [context.instructions, context.continuationMessage])
     expect(message?.includes('Revise the accepted graph instead of retyping it.')).toBe(existing);
+});
+
+it('keeps pinned paginated retrieval available to Lead without proof-tool instructions', () => {
+  const problem = { projectRelative: '.', ownedFiles: ['Submission.lean'], declarations: {}, targets: [], receiptDigest: 'problem',
+    baseCommit: 'fixed-commit', contract: { formalStatement: 'theorem target : True := by sorry', assumptions: [] } } as unknown as SolverProblem;
+  const context = buildResearchContext(problem, { problem, environmentDigest: 'environment', cooperation: { tasks: [] } } as unknown as SolverRunState,
+    { root: '/runtime', tools: '/opt/agent-tools/math.mjs', worktree: '/proof', taskText: 'Prove the target',
+      retrievalRoot: '/library', corpusFile: '/library/corpus.json', knowledgeFile: '/catalog.json', knowledgeDigest: 'catalog',
+      environment: { DEEPSCIENTIST_MATH_PANTOGRAPH_MANIFEST: '/tools/proof-search.json',
+        DEEPSCIENTIST_MATH_RETRIEVAL_CORPUS_SHA256: 'corpus' },
+      frozenContexts: { 'Submission.lean': 'theorem target : True := /- body omitted -/' },
+      assignment: { kind: 'lead', seedCommit: 'fixed-commit' } });
+  expect(context.instructions).toContain("bun '/opt/agent-tools/math.mjs' knowledge search --catalog '/catalog.json' --sha256 'catalog'");
+  expect(context.instructions).toContain("--id 'THEOREM_ID' --metadata --max-bytes 16000");
+  expect(context.instructions).toContain("--field 'FIELD_NAME' --offset OFFSET");
+  expect(context.instructions).toContain('parse JSON fields only after all pages are joined');
+  expect(context.instructions).toContain("knowledge source --catalog '/catalog.json' --sha256 'catalog'");
+  expect(context.instructions).toContain("search-lean --workspace '/library' --corpus '/library/corpus.json' --sha256 'corpus'");
+  expect(context.instructions).toContain('Historical receipts never accept a proof in the current problem.');
+  expect(context.instructions).not.toContain(' check-lean ');
+  expect(context.instructions).not.toContain(' proof-search ');
+  expect(context.instructions).not.toContain('check-finite');
 });
 
 const gapContext = (kind: 'research' | 'lemma' | 'goal' | 'lead' | 'review') => {

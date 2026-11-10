@@ -56,14 +56,14 @@ export function createAgentPathMask(context: AgentActionContext) {
 
 const statuses: Record<string, WebAgentActionBody['status']> = { inProgress: 'running', completed: 'done', failed: 'failed', declined: 'declined' };
 // Streaming items start empty; only those that run for a while are worth a "running" row.
-const startedKinds = new Set(['commandExecution', 'webSearch', 'mcpToolCall', 'dynamicToolCall', 'reasoning']);
+const startedKinds = new Set(['commandExecution', 'webSearch', 'mcpToolCall', 'dynamicToolCall', 'reasoning', 'agentMessage']);
 
 /** The last JSON object a command printed; the Agent's tools end with their result on one line. */
 function lastJson(output: string): Item | undefined {
   const line = output.trimEnd().split('\n').reverse().find(value => value.startsWith('{'));
   try { return line ? object(JSON.parse(line)) : undefined; } catch { return; }
 }
-function leanCheck(result: Item, mask: (value: string) => string): WebAgentLeanCheck | undefined {
+export function sanitizeAgentLeanCheck(result: Item, mask: (value: string) => string): WebAgentLeanCheck | undefined {
   if (typeof result.timedOut !== 'boolean' || !Array.isArray(result.messages)) return;
   const all = result.messages.flatMap((value): WebAgentLeanCheck['messages'] => {
     const message = object(value), severity = string(message?.severity), text = string(message?.message);
@@ -119,7 +119,7 @@ export function sanitizeAgentItem(phase: 'started' | 'completed', item: Item, co
       // shown are masked, so host paths elsewhere in that JSON (Lean's package directories) do not withhold it.
       const result = !command.hidden && !outsideCwd && phase === 'completed' ? lastJson(output.text) : undefined;
       const masked = (value: string) => mask(value).text;
-      const lean = result && /\bcheck-lean\b/u.test(command.text) ? leanCheck(result, masked) : undefined;
+      const lean = result && /\bcheck-lean\b/u.test(command.text) ? sanitizeAgentLeanCheck(result, masked) : undefined;
       const found = result && !lean && /\bsearch-lean\b/u.test(command.text) ? leanSearch(result, masked) : undefined;
       const withheld = !lean && !found && (command.hidden || output.hidden || outsideCwd);
       const shownCommand = clip(command.text.replace(/\b([a-f0-9]{12})[a-f0-9]{52}\b/gu, '$1…'), limits.command);
@@ -157,9 +157,13 @@ export function sanitizeAgentItem(phase: 'started' | 'completed', item: Item, co
     case 'reasoning': {
       const parts = (value: unknown) => Array.isArray(value) ? value.filter((part): part is string => typeof part === 'string' && part.trim() !== '') : [];
       const summary = parts(item.summary);
-      return text((summary.length ? summary : parts(item.content)).join('\n\n'), 'reasoning');
+      if (!summary.length) return;
+      return { ...text(summary.join('\n\n'), 'reasoning'), textSource: 'summary' };
     }
-    case 'agentMessage': return text(string(item.text), 'message');
+    case 'agentMessage': {
+      if (phase === 'started' && (item.phase !== 'commentary' || !string(item.text)?.trim())) return;
+      return { ...text(string(item.text), 'message'), ...(item.phase === 'commentary' ? { textSource: 'commentary' as const } : {}) };
+    }
     case 'plan': return text(string(item.text), 'plan');
     case 'webSearch': {
       const action = object(item.action), query = string(item.query) ?? string(action?.query), url = string(action?.url);
@@ -181,7 +185,7 @@ export function sanitizeAgentItem(phase: 'started' | 'completed', item: Item, co
 }
 
 const keys = new Set(['workerId', 'itemId', 'phase', 'kind', 'status', 'command', 'intents', 'output', 'outputClipped', 'withheld', 'exitCode',
-  'durationMs', 'lean', 'found', 'changes', 'omittedChanges', 'text', 'textClipped', 'query', 'url', 'tool', 'arguments']);
+  'durationMs', 'lean', 'found', 'changes', 'omittedChanges', 'text', 'textClipped', 'textSource', 'query', 'url', 'tool', 'arguments']);
 const short = (value: unknown, limit: number) => value === undefined || typeof value === 'string' && value.length <= limit;
 const flag = (value: unknown) => value === undefined || value === true;
 const integer = (value: unknown) => value === undefined || typeof value === 'number' && Number.isSafeInteger(value);
@@ -213,6 +217,8 @@ export function isWebAgentActionBody(value: unknown): value is WebAgentActionBod
   if (typeof action.itemId !== 'string' || !action.itemId || action.itemId.length > 200) return false;
   if (!['started', 'completed'].includes(action.phase as string) || !(webAgentActionKinds as readonly unknown[]).includes(action.kind)) return false;
   if (!['running', 'done', 'failed', 'declined'].includes(action.status as string)) return false;
+  if (action.textSource !== undefined && !(action.textSource === 'summary' && action.kind === 'reasoning'
+    || action.textSource === 'commentary' && action.kind === 'message')) return false;
   if (!short(action.command, limits.command) || !short(action.output, limits.output) || !short(action.text, limits.text) ||
       !short(action.query, limits.query) || !short(action.url, limits.query) || !short(action.tool, 200) || !short(action.arguments, limits.arguments)) return false;
   if (![action.outputClipped, action.withheld, action.textClipped].every(flag) || ![action.exitCode, action.durationMs, action.omittedChanges].every(integer)) return false;
@@ -228,4 +234,58 @@ export function isWebAgentActionBody(value: unknown): value is WebAgentActionBod
       short(item.path, 1_000) && ['add', 'delete', 'update'].includes(item.change as string) && short(item.movedTo, 1_000) && short(item.diff, limits.diff) && flag(item.clipped);
   }))) return false;
   return JSON.stringify(action).length <= limits.encoded;
+}
+
+/** Coalesce only sanitized public text snapshots; lifecycle reports and tool actions remain immediate. */
+export function createAgentActionStream(send: (action: WebAgentActionBody) => void) {
+  type Entry = { sentAt?: number; signature?: string; latest?: WebAgentActionBody; pending?: WebAgentActionBody;
+    timer?: ReturnType<typeof setTimeout>; completed?: boolean };
+  const entries = new Map<string, Entry>();
+  let accepting = true;
+  const deliver = (action: WebAgentActionBody) => { try { send(action); } catch { /* Observation never changes the run. */ } };
+  const signature = (action: WebAgentActionBody) => JSON.stringify([action.kind, action.textSource, action.text, action.textClipped]);
+  const emit = (entry: Entry, action: WebAgentActionBody) => {
+    entry.pending = undefined; entry.sentAt = Date.now(); entry.signature = signature(action);
+    deliver(action);
+  };
+  const stop = () => {
+    accepting = false;
+    for (const entry of entries.values()) { clearTimeout(entry.timer); entry.timer = undefined; entry.pending = undefined; }
+  };
+  return {
+    reset() { stop(); entries.clear(); accepting = true; },
+    stop,
+    write(phase: 'started' | 'completed', itemId: string, action?: WebAgentActionBody, incremental = false) {
+      let entry = entries.get(itemId);
+      if (phase === 'completed') {
+        if (entry?.completed) return;
+        if (!entry) { entry = {}; entries.set(itemId, entry); }
+        clearTimeout(entry.timer); entry.timer = undefined; entry.pending = undefined; entry.completed = true;
+        // Some clients omit text in the final lifecycle item. Preserve only an already sanitized public snapshot.
+        const retained = entry.latest ? { ...entry.latest, phase: 'completed' as const, status: 'done' as const } : undefined;
+        const final = action?.text === undefined && retained && (!action || action.textSource === retained.textSource)
+          ? { ...retained, ...action } : action;
+        if (final) deliver(final);
+        return;
+      }
+      if (!action || entry?.completed || incremental && (!accepting || !action.textSource || !action.text)) return;
+      if (!action.textSource) { if (!incremental) deliver(action); return; }
+      if (!entry) { entry = {}; entries.set(itemId, entry); }
+      entry.latest = action;
+      if (!incremental) { emit(entry, action); return; }
+      if (entry.signature === signature(action)) {
+        clearTimeout(entry.timer); entry.timer = undefined; entry.pending = undefined; return;
+      }
+      entry.pending = action;
+      const remaining = entry.sentAt === undefined ? 0 : Math.max(0, 1_000 - (Date.now() - entry.sentAt));
+      if (!remaining) { clearTimeout(entry.timer); entry.timer = undefined; emit(entry, action); }
+      else if (!entry.timer) {
+        entry.timer = setTimeout(() => {
+          entry!.timer = undefined;
+          if (accepting && !entry!.completed && entry!.pending) emit(entry!, entry!.pending);
+        }, remaining);
+        entry.timer.unref?.();
+      }
+    },
+  };
 }

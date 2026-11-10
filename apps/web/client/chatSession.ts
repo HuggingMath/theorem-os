@@ -10,13 +10,16 @@ import { ChatReadingPosition } from './chatReadingPosition';
 import type { AgentActivity } from './agentActivity';
 import type { FormalizationActivityStore } from './formalizationActivityStore';
 import { buildSolveProcess, type SolveProcess } from './solveProcess';
+import { quoteThinkingStep, type ThinkingStep } from './thinkingProcess';
 import { nextSteps, summarizeGoals } from '../report';
 import type { ChatArtifactKind } from './chatArtifactNavigation';
 import { clockTime } from './collaborationUi';
+import { backgroundReviewPending } from './backgroundReview';
 
 const running = (item?: { status: string }) => item?.status === 'queued' || item?.status === 'running';
 const reason = (error: unknown) => localizeMessage(error instanceof Error ? error.message : String(error));
 type Request = <T>(url: string, init?: RequestInit) => Promise<T>;
+type DraftPosition = { start: number; end: number; direction: 'forward' | 'backward' | 'none'; top: number };
 type Options = {
   request: Request;
   draftScope: string;
@@ -85,6 +88,9 @@ export class ChatSession {
   private uncertainSubmission?: { original: string; startedAt: string; settings: string };
   private currentId = new URLSearchParams(location.search).get('chat') ?? '';
   private readonly drafts = new Map<string, string>();
+  private readonly quotedDrafts = new Map<string, string[]>();
+  private readonly draftPositions = new Map<string, DraftPosition>();
+  private renderedDraftId?: string;
   private readonly thread = document.querySelector<HTMLElement>('#research-chat-thread')!;
   private readonly composer = document.querySelector<HTMLElement>('#natural-research')!;
   private readonly list = document.querySelector<HTMLElement>('#chat-history-list')!;
@@ -146,11 +152,64 @@ export class ChatSession {
   }
   private rememberDraft() {
     const id = this.currentId || 'home';
+    const quotes = this.draftQuoteBlocks();
+    const input = this.composer.querySelector<HTMLTextAreaElement>('textarea');
+    // A replacement draft starts at its own editing position; explicit quote actions place their caret below.
+    if (!this.draft || input && input.value !== this.draft) this.draftPositions.delete(id);
+    else if (input) this.draftPositions.set(id, {
+      start: input.selectionStart, end: input.selectionEnd, direction: input.selectionDirection, top: input.scrollTop,
+    });
+    const position = this.draftPositions.get(id);
     this.drafts.set(id, this.draft);
-    try { sessionStorage.setItem(`theorem-os.chat-draft.${this.options.draftScope}.${id}`, this.draft); } catch { /* In-memory draft remains. */ }
+    try {
+      const key = `theorem-os.chat-draft.${this.options.draftScope}.${id}`;
+      sessionStorage.setItem(key, this.draft);
+      if (quotes.length) sessionStorage.setItem(`${key}.quotes`, JSON.stringify(quotes));
+      else sessionStorage.removeItem(`${key}.quotes`);
+      if (position) sessionStorage.setItem(`${key}.position`, JSON.stringify(position));
+      else sessionStorage.removeItem(`${key}.position`);
+    } catch { /* In-memory draft remains. */ }
   }
   private restoredDraft(id: string) {
+    if (!this.quotedDrafts.has(id)) {
+      let quotes: string[] = [];
+      try {
+        const saved: unknown = JSON.parse(sessionStorage.getItem(`theorem-os.chat-draft.${this.options.draftScope}.${id}.quotes`) ?? '[]');
+        if (Array.isArray(saved) && saved.every(block => typeof block === 'string' && block.length > 0)) quotes = saved;
+      } catch { /* Plain drafts from earlier versions need no quote metadata. */ }
+      this.quotedDrafts.set(id, quotes);
+    }
     try { return this.drafts.get(id) ?? sessionStorage.getItem(`theorem-os.chat-draft.${this.options.draftScope}.${id}`) ?? ''; } catch { return this.drafts.get(id) ?? ''; }
+  }
+  private restoreDraftPosition(id: string) {
+    const input = this.composer.querySelector<HTMLTextAreaElement>('textarea');
+    if (!input || !this.draft) return;
+    let position = this.draftPositions.get(id);
+    if (!position) {
+      try {
+        const saved = JSON.parse(sessionStorage.getItem(`theorem-os.chat-draft.${this.options.draftScope}.${id}.position`) ?? 'null');
+        if (saved && Number.isInteger(saved.start) && saved.start >= 0 && Number.isInteger(saved.end) && saved.end >= saved.start
+          && ['forward', 'backward', 'none'].includes(saved.direction) && Number.isFinite(saved.top) && saved.top >= 0) {
+          position = saved as DraftPosition;
+          this.draftPositions.set(id, position);
+        }
+      } catch { /* A draft can be restored without a saved editing position. */ }
+    }
+    if (position) {
+      input.setSelectionRange(position.start, position.end, position.direction);
+      input.scrollTop = position.top;
+    }
+  }
+  /** Only intact blocks inserted by the quote action can be removed automatically. */
+  private draftQuoteBlocks() {
+    const id = this.currentId || 'home', quotes: string[] = [];
+    let offset = 0;
+    for (const block of this.quotedDrafts.get(id) ?? []) {
+      if (!this.draft.startsWith(block, offset)) break;
+      quotes.push(block); offset += block.length;
+    }
+    this.quotedDrafts.set(id, quotes);
+    return quotes;
   }
   private providers(): ChatProvider[] {
     const providers = this.capabilities?.providers ?? (this.options.session()?.providers ?? []).map(provider => ({ ...provider,
@@ -230,7 +289,7 @@ export class ChatSession {
     document.body.dataset.outputOpen = 'false';
     this.draw(); this.options.onConversation();
   }
-  fillOriginal(original: string) { this.draft = original; this.rememberDraft(); this.draw(); this.focus(); }
+  fillOriginal(original: string) { this.quotedDrafts.delete(this.currentId || 'home'); this.draft = original; this.rememberDraft(); this.draw(); this.focus(); }
   useRunKey(id: string, key: string) { if (this.runId === id) { this.apiKey = key; this.clearConnection(); this.draw(); } }
   focus() { this.composer.querySelector<HTMLTextAreaElement>('textarea')?.focus({ preventScroll: true }); }
   private setConversation(conversation: WebConversation) {
@@ -320,12 +379,15 @@ export class ChatSession {
   private schedule() {
     clearTimeout(this.timer);
     const pending = this.conversation?.messages.some(message => message.status === 'pending');
+    const reviewing = backgroundReviewPending(this.formalization?.backgroundReview ?? this.formalization?.report?.backgroundReview);
     // Nothing in progress: a slow check, since returning to the tab refreshes at once. A fast idle poll on every open tab
     // reached the site's per-address request limit.
-    this.timer = setTimeout(() => void this.refresh(), pending ? 500 : running(this.run) || running(this.formalization) ? 1500 : 30_000);
+    this.timer = setTimeout(() => void this.refresh(), document.hidden && reviewing ? 15_000
+      : pending ? 500 : running(this.run) || running(this.formalization) || reviewing ? 1500 : 30_000);
   }
   async refresh() {
-    if (this.refreshing || this.submitting || this.startingResearch || document.hidden) { this.schedule(); return; }
+    const reviewing = backgroundReviewPending(this.formalization?.backgroundReview ?? this.formalization?.report?.backgroundReview);
+    if (this.refreshing || this.submitting || this.startingResearch || document.hidden && !reviewing) { this.schedule(); return; }
     this.refreshing = true; const generation = this.generation, revision = this.readRevision;
     try {
       if (this.currentId && !this.loading) {
@@ -405,8 +467,30 @@ export class ChatSession {
   }
   private beginGuidance(text?: string, taskId = '') {
     this.guidanceMode = true; this.selectGuidanceTarget(taskId);
-    if (text !== undefined) { this.draft = text; this.rememberDraft(); }
+    if (text !== undefined) { this.quotedDrafts.delete(this.currentId || 'home'); this.draft = text; this.rememberDraft(); }
     this.error = ''; this.draw(); this.focus();
+  }
+  private questionStep(entry: ThinkingStep) {
+    const quote = quoteThinkingStep(entry);
+    this.reading.capture();
+    if (!this.draft.includes(quote)) {
+      const blocks = this.draftQuoteBlocks(), block = `${quote}\n\n`;
+      this.draft = `${block}${this.draft}`;
+      this.quotedDrafts.set(this.currentId || 'home', [block, ...blocks]);
+      this.rememberDraft();
+    }
+    this.draw(); this.focus();
+    const input = this.composer.querySelector<HTMLTextAreaElement>('textarea');
+    if (input) { input.setSelectionRange(input.value.length, input.value.length); input.scrollTop = input.scrollHeight; }
+  }
+  private undoStepQuote() {
+    const [block, ...remaining] = this.draftQuoteBlocks();
+    if (!block) return;
+    this.draft = this.draft.slice(block.length);
+    this.quotedDrafts.set(this.currentId || 'home', remaining);
+    this.rememberDraft(); this.draw(); this.focus();
+    const input = this.composer.querySelector<HTMLTextAreaElement>('textarea');
+    if (input) { input.setSelectionRange(input.value.length, input.value.length); input.scrollTop = input.scrollHeight; }
   }
   private selectGuidanceTarget(id: string) {
     this.guidanceTarget = id;
@@ -479,8 +563,12 @@ export class ChatSession {
       this.summaries = this.summaries.filter(item => item.id !== id);
       if (this.currentId === id) { this.home(false); this.options.onNavigate('', 'replace'); this.options.onSelection(); }
       this.drafts.delete(id);
+      this.quotedDrafts.delete(id);
+      this.draftPositions.delete(id);
       try {
         sessionStorage.removeItem(`theorem-os.chat-draft.${this.options.draftScope}.${id}`);
+        sessionStorage.removeItem(`theorem-os.chat-draft.${this.options.draftScope}.${id}.quotes`);
+        sessionStorage.removeItem(`theorem-os.chat-draft.${this.options.draftScope}.${id}.position`);
         sessionStorage.removeItem(`theorem-os.chat-reading.${this.options.draftScope}.${id}`);
       } catch { /* Server deletion does not depend on browser storage. */ }
       this.drawHistory();
@@ -528,13 +616,15 @@ export class ChatSession {
     if (run && !sample) { if (poll) this.lastActionPoll = Date.now(); agents.sync(run, poll); }
     const state = item ? roles.state(item.id) : undefined, activity = item && !sample ? roles.activity(item.id) : [];
     const records = run && !sample ? agents.records(run) : { events: run?.events ?? [], actions: [] };
+    const agentState = run && !sample ? agents.state(run.id) : undefined;
     const routes = run && !sample ? agents.routes(run, run.observation?.inspection.workers.find(worker => worker.role === 'Lead')?.id) : [];
     const key = JSON.stringify([run?.id, run?.status, run?.updatedAt, records.events.length, records.events.at(-1)?.sequence ?? 0,
-      records.actions.length, routes.map(route => `${route.workerId}:${route.steps.length}`).join(','),
+      records.actions.length, agentState?.version ?? 0, run?.observation?.sequence, run?.observation?.snapshot?.stateDigest,
+      routes.map(route => `${route.workerId}:${route.steps.length}`).join(','),
       item?.id, item?.status, item?.updatedAt, item?.activity?.count ?? 0, activity.length, state?.version ?? 0]);
     if (this.solveCache?.key !== key) this.solveCache = { key, process: buildSolveProcess({
       ...(item ? { formalization: item } : {}), ...(activity.length ? { activity } : {}), ...(state ? { activityDropped: state.dropped } : {}),
-      ...(run && !sample ? { run, events: records.events, routes } : {}),
+      ...(run && !sample ? { run, events: records.events, routes, actionsDropped: agentState?.dropped ?? 0 } : {}),
     }) };
     const process = this.solveCache.process;
     const onRetry = () => { if (item && state?.failed) roles.retry(item); if (run && !sample && agents.state(run.id).failed) agents.retry(run); this.draw(); };
@@ -582,6 +672,8 @@ export class ChatSession {
           onAction: (action: string, button: HTMLButtonElement) => this.options.onRecover(this.run!, action, button) },
       } : {}),
       ...(canGuide ? { onGuidance: (text?: string, taskId?: string) => this.beginGuidance(text, taskId) } : {}),
+      ...(this.conversation && !this.loading && !this.submitting && !this.guidanceMode && !(this.run && this.options.isSample(this.run))
+        ? { onQuestion: (entry: ThinkingStep) => this.questionStep(entry) } : {}),
       onGuidanceReceipt: message => this.recoverGuidance(message),
       ...(this.formalization?.status === 'confirmed' && !this.formalization.runId && this.formalization.researchError
         ? { onStartResearch: () => void this.startResearch(), startingResearch: this.startingResearch } : {}),
@@ -602,8 +694,10 @@ export class ChatSession {
         } else { this.lastListRefresh = 0; void this.refresh(); }
       },
     });
+    const quotedBlocks = this.draftQuoteBlocks();
     renderChatComposer(this.composer, {
       input: this.draft, onInput: value => { this.draft = value; this.rememberDraft(); this.draw(); },
+      ...(!this.guidanceMode && quotedBlocks.length ? { quote: { count: quotedBlocks.length, onUndo: () => this.undoStepQuote() } } : {}),
       onSubmit: () => void this.submit(), onStop: () => void this.stop(), pending: pending && !this.guidanceMode, submitting: this.submitting,
       disabled: this.loading || Boolean(this.run && this.options.isSample(this.run)) || Boolean(this.currentId && !this.conversation)
         || !this.guidanceMode && Boolean(this.options.session()?.maintenance)
@@ -646,6 +740,11 @@ export class ChatSession {
       onExample: id => this.useExample(id),
       onLean: this.options.onLean,
     });
+    const draftId = this.currentId || 'home';
+    if (this.renderedDraftId !== draftId) {
+      this.renderedDraftId = draftId;
+      this.restoreDraftPosition(draftId);
+    }
     this.reading.rendered();
     this.drawHistory(); this.drawOriginal(); this.drawLive(solve);
   }

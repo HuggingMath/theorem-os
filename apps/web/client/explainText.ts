@@ -129,8 +129,8 @@ export function leanGutter(document: WebExplanationDocument): Map<number, Gutter
 export function explanationEstimate(declarations: number, reference: { declarations: number; seconds: number; tokens: number },
   limits: { maxRunSeconds: number; maxTotalTokens: number }) {
   const scale = Math.max(1, declarations) / Math.max(1, reference.declarations);
-  return { seconds: Math.min(limits.maxRunSeconds, Math.round(reference.seconds * scale)),
-    tokens: Math.min(limits.maxTotalTokens, Math.round(reference.tokens * scale)) };
+  return { seconds: Math.min(limits.maxRunSeconds || Infinity, Math.round(reference.seconds * scale)),
+    tokens: Math.min(limits.maxTotalTokens || Infinity, Math.round(reference.tokens * scale)) };
 }
 /** Prose split at inline code, bold, and `$…$`, `$$…$$`, `\(…\)`, `\[…\]` mathematics. */
 export type ProseSegment = { kind: 'text' | 'code' | 'strong' | 'math' | 'display'; text: string };

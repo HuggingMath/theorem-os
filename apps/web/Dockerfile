@@ -53,8 +53,14 @@ COPY --from=source /opt/theorem-os /opt/theorem-os
 # Agent shells cannot read /opt/theorem-os or /opt/runtime-state; they run the bundled commands instead.
 RUN bun scripts/build.ts --state-root /opt/runtime-state > /opt/theoremos-build.json \
     && bun scripts/build-agent-tools.ts --out /opt/theoremos-agent-tools > /dev/null \
+    && bun scripts/build-proof-environment-seed.ts --project /opt/theoremos-mathlib \
+       --packages /opt/theoremos-mathlib/.lake/packages --out /opt/theoremos-proof-environment-seed \
+    && bun scripts/build-proof-environment-seed.ts --project /opt/theoremos-mathlib \
+       --packages /opt/theoremos-mathlib/.lake/packages --out /opt/theoremos-proof-source-seed --sources-only \
     && chmod -R a+rX /opt/runtime-state /opt/theoremos-agent-tools \
     && chmod 0555 apps/web/worker-entrypoint.sh
+ENV DEEPSCIENTIST_MATH_PROOF_ENVIRONMENT_SEED=/opt/theoremos-proof-environment-seed/manifest.json
+ENV DEEPSCIENTIST_MATH_PROOF_ENVIRONMENT_SOURCE_SEED=/opt/theoremos-proof-source-seed/manifest.json
 # The source commit this image was built from (scripts/web-deploy-record.sh records it with the image digests).
 ARG THEOREMOS_SOURCE_COMMIT=unknown
 LABEL org.opencontainers.image.revision=$THEOREMOS_SOURCE_COMMIT

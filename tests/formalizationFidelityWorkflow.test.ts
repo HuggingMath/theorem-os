@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { gunzipSync } from 'node:zlib';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { assertFormalizationEvidence, formalizationDigest, formalizationReviewInput,
   prepareFormalization, readFormalizationArtifact } from '../src/math/formalization';
 import { defaultFormalizationWorkflow } from '../src/math/formalizationWorkflow';
@@ -16,7 +16,7 @@ import { getStructuredFormalizationReviewOutputSchema } from '../src/math/formal
 import { canonicalMathJson, mathDigest, readMathText } from '../src/math/mathRuntimeIo';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/codexSession';
 import { readFormalizationState, runFormalization } from '../src/solver/formalization';
-import { checkFormalizationFidelity } from '../src/solver/formalizationFidelity';
+import { checkFormalizationFidelity, shareFormalizationFidelityComparisons } from '../src/solver/formalizationFidelity';
 import { buildFixture, candidateFixture, fixtureStatement, semanticReviewFixture,
   syntheticElaboration } from './helpers/formalizationFixture';
 
@@ -123,6 +123,103 @@ function comparisonAdapter(negative = false) {
   return { compare, calls };
 }
 
+describe('round-local host fidelity comparison sharing', () => {
+  const limits = { env: {}, timeoutMs: 1000 };
+
+  it('joins identical in-flight work and reuses the authentic receipt without sharing mutable results', async () => {
+    const saved = receiptFixture(), release = deferred();
+    const compare = vi.fn(async () => { await release.promise; return structuredClone(saved.positive); });
+    const shared = shareFormalizationFidelityComparisons({ env: {} }, compare);
+    const first = shared('/first-attempt', saved.input, limits);
+    const second = shared('/second-attempt', structuredClone(saved.input), limits);
+    expect(compare).toHaveBeenCalledOnce();
+    release.resolve();
+    const [a, b] = await Promise.all([first, second]);
+    expect(a).toEqual(saved.positive); expect(b).toEqual(saved.positive); expect(a).not.toBe(b);
+    assertFormalizationReferenceResult(saved.input, a); assertFormalizationReferenceResult(saved.input, b);
+    a.files[0]!.text += '\n-- caller-local mutation\n';
+    expect(await shared('/third-attempt', saved.input, { ...limits, timeoutMs: 500 })).toEqual(saved.positive);
+    expect(compare).toHaveBeenCalledOnce();
+    expect(compare).toHaveBeenCalledWith('/first-attempt', saved.input, { env: {}, timeoutMs: 1000 });
+  });
+
+  it('keeps distinct complete inputs separate even when the candidate source is identical', async () => {
+    const saved = receiptFixture();
+    expect(saved.input.candidateSource).toBe(saved.negativeInput.candidateSource);
+    const compare = vi.fn(async (_directory: string, input: FormalizationReferenceInput) => structuredClone(
+      canonicalMathJson(input) === canonicalMathJson(saved.input) ? saved.positive : saved.negative));
+    const shared = shareFormalizationFidelityComparisons({ env: {} }, compare);
+    const [positive, negative] = await Promise.all([
+      shared('/positive', saved.input, limits), shared('/negative', saved.negativeInput, limits),
+    ]);
+    expect(compare).toHaveBeenCalledTimes(2);
+    assertFormalizationReferenceResult(saved.input, positive);
+    assertFormalizationReferenceResult(saved.negativeInput, negative);
+  });
+
+  it('does not retain an unresolved completed comparison', async () => {
+    const saved = receiptFixture(), compare = vi.fn(async () => structuredClone(saved.negative));
+    const shared = shareFormalizationFidelityComparisons({ env: {} }, compare);
+    await shared('/first', saved.negativeInput, limits); await shared('/retry', saved.negativeInput, limits);
+    expect(compare).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['formalization_reference_aborted', 'formalization_reference_toolchain_unavailable'])(
+    'does not retain an unavailable receipt (%s)', async reason => {
+      const saved = receiptFixture(), unavailable = structuredClone(saved.positive);
+      if (!('check' in unavailable)) throw new Error('Expected a current-protocol receipt.');
+      unavailable.status = 'not-established'; unavailable.check = 'unavailable'; unavailable.reason = reason;
+      unavailable.evidence = undefined;
+      unavailable.pairs = unavailable.pairs.map(pair => ({ ...pair,
+        candidateToReference: { status: 'not-established', reason }, referenceToCandidate: { status: 'not-established', reason } }));
+      assertFormalizationReferenceResult(saved.input, unavailable);
+      const compare = vi.fn(async () => structuredClone(unavailable));
+      const shared = shareFormalizationFidelityComparisons({ env: {} }, compare);
+      await shared('/first', saved.input, limits); await shared('/retry', saved.input, limits);
+      expect(compare).toHaveBeenCalledTimes(2);
+    });
+
+  it.each(['rejected', 'synchronous-throw', 'invalid'] as const)('evicts %s work so the same obligation can retry', async failure => {
+    const saved = receiptFixture();
+    const compare = vi.fn(async () => structuredClone(saved.positive));
+    if (failure === 'synchronous-throw') compare.mockImplementationOnce(() => { throw new Error('disposable_comparison_failure'); });
+    else compare.mockImplementationOnce(async () => {
+      if (failure === 'rejected') throw new Error('disposable_comparison_failure');
+      return { ...structuredClone(saved.positive), inputDigest: '0'.repeat(64) };
+    });
+    const shared = shareFormalizationFidelityComparisons({ env: {} }, compare);
+    await expect(shared('/first', saved.input, limits)).rejects.toThrow(
+      failure === 'invalid' ? 'formalization_reference_evidence_invalid' : 'disposable_comparison_failure');
+    expect(await shared('/retry', saved.input, limits)).toEqual(saved.positive);
+    expect(compare).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects joined results on lease cancellation and never reuses a cached receipt after cancellation', async () => {
+    const saved = receiptFixture(), release = deferred(), controller = new AbortController();
+    const compare = vi.fn(async () => { await release.promise; return structuredClone(saved.positive); });
+    const shared = shareFormalizationFidelityComparisons({ env: {}, signal: controller.signal }, compare);
+    const first = shared('/first', saved.input, limits), second = shared('/second', saved.input, limits);
+    controller.abort(); release.resolve();
+    const settled = await Promise.allSettled([first, second]);
+    expect(settled.map(result => result.status)).toEqual(['rejected', 'rejected']);
+    await expect(shared('/after-abort', saved.input, limits)).rejects.toThrow(/aborted/u);
+    expect(compare).toHaveBeenCalledOnce();
+    const next = new AbortController(), retry = shareFormalizationFidelityComparisons({ env: {}, signal: next.signal }, compare);
+    expect(await retry('/new-lease', saved.input, limits)).toEqual(saved.positive);
+    next.abort(); await expect(retry('/cached-after-abort', saved.input, limits)).rejects.toThrow(/aborted/u);
+    expect(compare).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not carry successful work into a new round or run', async () => {
+    const saved = receiptFixture(), compare = vi.fn(async () => structuredClone(saved.positive));
+    for (const directory of ['/round-one', '/round-two']) {
+      const shared = shareFormalizationFidelityComparisons({ env: {} }, compare);
+      expect(await shared(directory, saved.input, limits)).toEqual(saved.positive);
+    }
+    expect(compare).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('frozen fidelity policy and parallel formalization workflow', () => {
   it('requires fidelity only for opted-in inputs and preserves legacy input, output, schema and instructions', () => {
     const f = fixture(false, false), candidate = candidateFixture();
@@ -175,7 +272,14 @@ describe('frozen fidelity policy and parallel formalization workflow', () => {
       expect(evidence.sessions.filter(item => item.role === 'compare').map(item => item.reviewerId))
         .toEqual(['reviewer-1', 'reviewer-2']);
       expect(agent.closed.filter(role => role.startsWith('compare-'))).toEqual(['compare-reviewer-2', 'compare-reviewer-1']);
-      expect(adapter.calls).toHaveLength(2);
+      expect(adapter.calls).toHaveLength(1);
+      expect(evidence.workflow!.reviews[0]!.correspondence).toEqual(evidence.workflow!.reviews[1]!.correspondence);
+      const round = fs.readdirSync(f.directory).find(name => name.startsWith('round-'))!;
+      for (const reviewer of ['reviewer-1', 'reviewer-2']) {
+        const receipt = path.join(f.directory, round, 'fidelity-' + reviewer, 'comparison.json');
+        expect(fs.lstatSync(receipt).mode & 0o222).toBe(0);
+        expect(JSON.parse(readMathText(receipt))).toEqual(evidence.workflow!.reviews[0]!.correspondence);
+      }
       const reviews = agent.seen.filter(item => item.role.startsWith('compare-'));
       expect(reviews.every(item => item.input.fidelityPolicy === 'task-preserving-v1')).toBe(true);
       expect(reviews.every(item => JSON.parse(item.schemaText).required.includes('fidelity'))).toBe(true);
@@ -185,7 +289,8 @@ describe('frozen fidelity policy and parallel formalization workflow', () => {
       expect(agent.seen.every(item => item.instructions.includes('Mathlib is unavailable and /opt/lean-packages is not mounted.'))).toBe(true);
       expect(agent.seen.every(item => !item.instructions.includes('pinned Mathlib and dependencies are in /opt/lean-packages'))).toBe(true);
       expect(agent.seen.find(item => item.role.startsWith('plan-'))!.instructions).toContain('Inspect declaration types only when necessary');
-      expect(agent.seen.find(item => item.role === 'generate')!.instructions).toContain('changing comments or notes does not require another check.');
+      expect(agent.seen.find(item => item.role === 'generate')!.instructions).toContain('do not compile extra scratch copies merely to duplicate that host check.');
+      expect(agent.seen.find(item => item.role === 'generate')!.instructions).not.toContain('Mathlib.Data.Real.Basic');
       expect(() => assertFormalizationEvidence(evidence)).not.toThrow();
     } finally { first.resolve(); second.resolve(); await running; }
   });
@@ -217,7 +322,8 @@ describe('frozen fidelity policy and parallel formalization workflow', () => {
   });
 
   it('keeps approved model reviews unresolved when complete correspondence is not established', async () => {
-    const f = fixture(true, true, 2), agent = preset({ contractSource: negativeSource }), adapter = comparisonAdapter(true);
+    // Sequential reviewers also prove that an unresolved result is not retained for the next caller or round.
+    const f = fixture(true, false, 2), agent = preset({ contractSource: negativeSource }), adapter = comparisonAdapter(true);
     const result = await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate,
       compareReference: adapter.compare });
     expect(result).toMatchObject({ status: 'exhausted', candidatesTried: 2, firstCandidateApproved: false });

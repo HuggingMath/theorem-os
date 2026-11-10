@@ -41,6 +41,7 @@ export function conversationInput(conversation: WebConversation, run?: WebRun, f
     original: clip(formalization?.original ?? run?.formalization?.original ?? conversation.messages[0]?.text ?? '', 16_000),
     formalization: formalization && { status: formalization.status, progress: formalization.progress,
       reason: formalization.reason, statement: clip(formalization.report?.statement ?? '', 16_000),
+      semanticReview: formalization.report?.semanticReview,
       backtranslation: formalization.report?.backtranslation },
     run: run && { status: run.status, phase: run.phase, task: clip(run.task, 4_000), source: clip(run.source, 16_000),
       accepted: run.status === 'completed' && run.result?.status === 'evaluated_passed',
@@ -82,7 +83,8 @@ export class WebConversations {
   }
   private resourceState(owner: string, conversation: WebConversation) {
     const formalization = conversation.formalizationId ? this.resources.formalization(owner, conversation.formalizationId) : undefined;
-    const run = (formalization?.runId ?? conversation.runId) ? this.resources.run(owner, (formalization?.runId ?? conversation.runId)!) : undefined;
+    const runId = conversation.runId ?? formalization?.runId;
+    const run = runId ? this.resources.run(owner, runId) : undefined;
     return { formalization, run };
   }
   read(owner: string, id: string): WebConversation {
@@ -130,7 +132,7 @@ export class WebConversations {
     if (run && formalization && run.formalizationId !== formalization.id)
       throw new WebStorageError(400, '题目与研究不属于同一任务。');
     const runId = run?.id ?? formalization?.runId;
-    const existing = this.list(owner).find(item => formalizationId && item.formalizationId === formalizationId || runId && item.runId === runId);
+    const existing = this.list(owner).find(item => runId ? item.runId === runId : formalizationId && item.formalizationId === formalizationId);
     if (existing) return this.read(owner, existing.id);
     const natural = formalization?.original ?? run?.formalization?.original, at = now();
     const { text: original, title } = natural === undefined ? leanOpening(run!) : { text: natural, title: titled(natural) };

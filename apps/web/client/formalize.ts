@@ -1,11 +1,13 @@
 import type { WebSession, WebFormalizationReport } from '../shared';
 import type { WebFormalization, WebFormalizationCapabilities, WebFormalizationRequest } from '../formalizationTypes';
+import { webFormalizationDefaults } from '../formalizationTypes';
 import { locale, localeTag, localizeDocument, localizeMessage, mountLocaleSwitch, sentences, t } from '../i18n';
 import { researchExamples } from '../problemExamples';
 import { renderFormalization } from './formalizationView';
 import { formalizationReasonText } from './formalizationReasons';
 import { correspondenceSpans, fragmentLadder } from './correspondence';
 import { buildLeanRows, highlightSpans } from './leanPane';
+import { backgroundReviewPending } from './backgroundReview';
 
 const embedded = document.body.dataset.formalizeEmbedded === 'true';
 const shell = document.querySelector<HTMLElement>(embedded ? '#natural-research' : '.formalize-shell')!;
@@ -80,6 +82,7 @@ const ladder = fragmentLadder();
 const solving = (item: WebFormalization) => item.workflow === 'solve';
 const active = (item: WebFormalization) => item.status === 'queued' || item.status === 'running'
   || solving(item) && item.status === 'confirmed' && !item.runId && !item.researchError;
+const needsPoll = (item: WebFormalization) => active(item) || backgroundReviewPending(item.backgroundReview ?? item.report?.backgroundReview);
 const statusNames: Record<WebFormalization['status'], string> = { queued: t('等待执行'), running: t('生成中'), review: t('待你确认'), confirmed: t('已确认陈述'), exhausted: t('未在预算内完成'), cancelled: t('已取消'), error: t('生成失败') };
 const phaseNames: Record<string, string> = { queued: t('等待执行'), preparing: t('准备环境'), planning: t('规划陈述'), generating: t('编写 Lean'), compiling: t('检查 Lean 编译'), translating: t('独立回译'), reviewing: t('审核原题一致性'), finishing: t('整理形式化结果') };
 function statusName(item: WebFormalization) {
@@ -145,13 +148,15 @@ function drawCapabilities() {
   $('#formalize-key-note').textContent = caps.key === 'saved' ? t('留空使用已保存的 Key；填写则仅用于这次生成。')
     : caps.key === 'server' ? t('留空使用服务器 Key；填写则仅用于这次生成。') : t('填写当前服务商的 Key，仅用于这次生成。');
   key.required = !embedded && caps.key === 'required';
-  const budget = caps.defaults ?? caps.limits;
-  $('#formalize-budget').textContent = t('模型 {0} · 最多 {1} 分钟 / {2} Token · {3} 轮写作 · {4} 位审核模型', caps.model,
-    Math.ceil(budget.maxRunSeconds / 60), budget.maxTotalTokens ? budget.maxTotalTokens.toLocaleString(localeTag) : t('不限'), caps.limits.maxRounds, caps.limits.reviewers);
+  const budget: { maxRunSeconds: number; maxTotalTokens: number } = caps.defaults ?? webFormalizationDefaults;
+  $('#formalize-budget').textContent = t('模型 {0} · 时间：{1} · Token：{2} · 直接形式化', caps.model,
+    budget.maxRunSeconds ? t('{0} 分钟', Math.ceil(budget.maxRunSeconds / 60)) : t('不限'),
+    budget.maxTotalTokens ? budget.maxTotalTokens.toLocaleString(localeTag) : t('不限'));
   if (embedded) {
-    const research = caps.defaults?.research ?? { maxRunSeconds: 300, maxTurns: 5, maxTotalTokens: 200_000 };
-    $('#formalize-budget').append(document.createTextNode(' ' + t('随后证明研究最多 {0} 分钟、{1} 轮研究、{2} Token，共用本次 Key。',
-      Math.ceil(research.maxRunSeconds / 60), research.maxTurns, research.maxTotalTokens.toLocaleString(localeTag))));
+    const research: { maxRunSeconds: number; maxTurns: number; maxTotalTokens: number } = caps.defaults?.research ?? webFormalizationDefaults.research;
+    $('#formalize-budget').append(document.createTextNode(' ' + t('随后证明时间：{0}；轮次：{1}；Token：{2}，共用本次 Key。',
+      research.maxRunSeconds ? t('{0} 分钟', Math.ceil(research.maxRunSeconds / 60)) : t('不限'), research.maxTurns || t('不限'),
+      research.maxTotalTokens ? research.maxTotalTokens.toLocaleString(localeTag) : t('不限'))));
   }
   const note = $('#formalize-unavailable'); note.hidden = caps.available;
   note.textContent = caps.reason === 'provider' ? t('当前未配置支持形式化的服务商，请联系管理员配置。') : t('当前运行环境尚未支持在线形式化。已有结果仍可查看。');
@@ -193,16 +198,18 @@ function drawCurrent() {
   $('#formalize-source-text').textContent = item.original;
   if (embedded) $<HTMLDetailsElement>('#formalize-source').open = true;
   const automatic = solving(item);
+  const direct = item.reviewMode === 'direct';
   $('#formalize-stages').hidden = !automatic;
-  const stage = item.status === 'confirmed' ? 'research' : ['translating', 'reviewing', 'finishing'].includes(item.progress?.phase ?? '') ? 'review' : 'formalize';
+  const stage = item.status === 'confirmed' ? 'research' : (direct ? ['compiling', 'finishing'] : ['translating', 'reviewing', 'finishing']).includes(item.progress?.phase ?? '') ? 'review' : 'formalize';
   for (const node of shell.querySelectorAll<HTMLElement>('[data-stage]')) {
+    if (node.dataset.stage === 'review') node.textContent = direct ? t('检查 Lean 编译') : t('检查原题一致性');
     if (node.dataset.stage === stage) node.setAttribute('aria-current', 'step'); else node.removeAttribute('aria-current');
   }
   const researchStatus = $('#formalize-research-status'); researchStatus.hidden = !automatic;
   researchStatus.textContent = item.researchError ? t('原题形式化已完成，但证明研究未能启动。没有生成证明结果，可重新发起解题。')
-    : item.runId ? t('原题检查已通过，已进入证明研究。是否完成证明以最终 Lean 验证结果为准。')
-    : item.status === 'confirmed' ? t('原题检查已通过，正在创建证明研究。')
-    : t('正在形式化并检查原题。通过后自动开始证明，无需再次确认。');
+    : item.runId ? direct ? t('Lean 编译通过，已进入证明研究。是否完成证明以最终独立验收为准。') : t('原题检查已通过，已进入证明研究。是否完成证明以最终 Lean 验证结果为准。')
+    : item.status === 'confirmed' ? direct ? t('Lean 编译通过，正在创建证明研究。') : t('原题检查已通过，正在创建证明研究。')
+    : direct ? t('正在生成并编译 Lean 陈述，通过后自动开始证明。') : t('正在形式化并检查原题。通过后自动开始证明，无需再次确认。');
   if (['error', 'exhausted', 'cancelled'].includes(item.status)) researchStatus.textContent = t('形式化尚未完成，未启动证明研究。');
   $('#formalize-result').hidden = !item.runId;
   const resultLink = $<HTMLAnchorElement>('#formalize-result-link');
@@ -223,12 +230,17 @@ function drawCurrent() {
   });
   if (!active(item)) action(t('删除记录'), 'delete', () => void remove());
   $('#formalize-review').hidden = !item.report;
-  if (item.report && report?.evidenceSha256 !== item.report.evidenceSha256) {
-    report = item.report; state.active.clear(); ladder.reset();
-    rows = buildLeanRows(report.statement); $('#formalize-code').replaceChildren(...rows);
+  if (item.report) {
+    const newStatement = report?.evidenceSha256 !== item.report.evidenceSha256;
+    // A background review updates its own snapshot without changing the compiled evidence.
+    report = item.report;
+    if (newStatement) {
+      state.active.clear(); ladder.reset();
+      rows = buildLeanRows(report.statement); $('#formalize-code').replaceChildren(...rows);
+    }
   }
   if (item.report) drawReport();
-  $('.formalize-review-note').textContent = automatic ? t('下方保留原题形式化与一致性检查记录。陈述通过检查不等于证明完成，请查看研究中的最终 Lean 验证结果。')
+  $('.formalize-review-note').textContent = direct ? t('Lean 编译通过。证明仍需独立验收。') : automatic ? t('下方保留原题形式化与一致性检查记录。陈述通过检查不等于证明完成，请查看研究中的最终 Lean 验证结果。')
     : t('请核对原题、Lean 陈述与独立回译。模型审核通过仅表示陈述待你确认，证明仍需研究与独立验收。');
   $('#formalize-confirmation').hidden = automatic || item.status !== 'review';
   $('#formalize-confirmed').hidden = automatic || item.status !== 'confirmed';
@@ -266,7 +278,7 @@ async function refresh() {
 }
 function schedule() {
   clearTimeout(timer);
-  if (state.items.some(active)) timer = setTimeout(() => void poll(), document.hidden ? 15_000 : 3_000);
+  if (state.items.some(needsPoll)) timer = setTimeout(() => void poll(), document.hidden ? 15_000 : 3_000);
 }
 async function poll() { try { await refresh(); } catch (cause) { failure(cause); } finally { schedule(); } }
 async function remove() {
@@ -376,7 +388,7 @@ if (embedded) window.addEventListener('theoremos:new-natural', () => {
 $('#formalize-checked').addEventListener('change', controls);
 $('#formalize-confirm').addEventListener('click', () => void mutate('confirm'));
 $('#formalize-refresh').addEventListener('click', () => { error(); void poll(); });
-document.addEventListener('visibilitychange', () => { if (!document.hidden && state.items.some(active)) { clearTimeout(timer); void poll(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && state.items.some(needsPoll)) { clearTimeout(timer); void poll(); } });
 $('#formalize-review').addEventListener('click', event => {
   if (!report || !(getSelection()?.isCollapsed ?? true)) return;
   const target = event.target as HTMLElement, action = target.closest<HTMLElement>('[data-action]'), row = target.closest<HTMLElement>('.lean-row');

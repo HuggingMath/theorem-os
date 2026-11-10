@@ -1,10 +1,12 @@
 import fs from 'node:fs';
 import { gunzipSync } from 'node:zlib';
-import { formalizationDigest, formalizationInputDigest, formalizationRequestSchema, formalizationReviewInput, type FormalizationEvidence } from '../../src/math/formalization';
+import { formalizationDigest, formalizationInputDigest, formalizationRequestSchema, formalizationReviewInput,
+  type FormalizationEvidence, type ReviewedFormalizationEvidence, type DirectFormalizationEvidence } from '../../src/math/formalization';
 import { defaultFormalizationWorkflow, formalizationModelConfigurationDigest } from '../../src/math/formalizationWorkflow';
 import type { FormalizationPlan } from '../../src/math/formalizationPlan';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { mathDigest } from '../../src/math/mathRuntimeIo';
+import { LEAN_STATEMENT_CONTEXT_PROTOCOL } from '../../src/math/leanStatementSemantic';
 import { fidelityReferenceInput } from '../../src/math/formalizationFidelity';
 import { assertFormalizationReferenceResult } from '../../src/math/formalizationReference';
 import type { WorkerFormalizationInput } from '../../apps/web/formalizationTypes';
@@ -13,7 +15,7 @@ import { candidateFixture, semanticReviewFixture, syntheticElaboration } from '.
 export const webFormalizationStatement = 'For every natural number n, prove n + 1 = 1 + n.';
 // Compilation and model receipts below are synthetic contract data. The saved guarded correspondence
 // receipt was generated locally on 2026-11-02 with Lean 4.33.0 and no model. Tests replay it unchanged.
-export function webFormalizationEvidence(input: WorkerFormalizationInput): FormalizationEvidence {
+export function webReviewedFormalizationEvidence(input: WorkerFormalizationInput): ReviewedFormalizationEvidence {
   const round = 1, author = { model: input.model, effort: input.effort, profile: '/synthetic', executable: '/no-model' };
   const workflow = { ...defaultFormalizationWorkflow(author), maxPlanningRounds: input.maxPlanningRounds, reviewScheduling: 'parallel' as const };
   const r = formalizationRequestSchema.parse({ schema: 'theorem-os.formalization-request.v3', problemId: input.id,
@@ -21,10 +23,11 @@ export function webFormalizationEvidence(input: WorkerFormalizationInput): Forma
     environmentDigest: getLeanTaskEnvironment(input.environment).dependencyDigest, execution: 'model', ...author,
     buildManifestRef: '/synthetic-build.json', buildDigest: 'a'.repeat(64), maxRounds: input.maxRounds, maxRunSeconds: input.maxRunSeconds,
     maxTotalTokens: input.maxTotalTokens, maxTurnSeconds: 0, maxCompileSeconds: 0, workflow,
-    fidelityPolicy: 'task-preserving-v2', contextProtocol: 'kernel-v2' });
+    fidelityPolicy: 'task-preserving-v2', contextProtocol: input.contextProtocol ?? LEAN_STATEMENT_CONTEXT_PROTOCOL });
   const rawCandidate = { ...candidateFixture(input.original), source: 'theorem addition (n : Nat) : n + 1 = 1 + n := by sorry\n' };
   // The web formalization schemas accept only the standard and mathlib environments that this fixture uses.
-  const elaborated = syntheticElaboration(rawCandidate.source, 'standard', { detailedContext: true, semanticContext: true, structureContext: true });
+  const elaborated = syntheticElaboration(rawCandidate.source, 'standard', { detailedContext: true, semanticContext: true,
+    structureContext: true, ...(r.contextProtocol === 'kernel-v3' ? { boundedLibraryContext: true } : {}) });
   const candidate = { ...rawCandidate, source: elaborated.source };
   const snapshot = elaborated.snapshot as Parameters<typeof formalizationReviewInput>[2];
   const inputDigest = formalizationInputDigest(r, candidate), snapshotDigest = elaborated.snapshotDigest;
@@ -72,4 +75,24 @@ export function webFormalizationEvidence(input: WorkerFormalizationInput): Forma
     approvedAt: '2026-11-02T00:00:00Z', round, workflow: { schema: 'theorem-os.formalization-workflow-evidence.v3',
       plan: { input: planInput, output: plan, digest: planDigest }, reviews: reviews.map(({ inputDigest: _, ...review }) => review),
       reviewAgreement: 'unanimous', distinctModelConfigurations: 1, profileDigest: 'b'.repeat(64), selectionPolicy: 'first-unanimously-approved' } };
+}
+
+/** Synthetic generation/compilation evidence; it contains no semantic review or invented reviewer sessions. */
+export function webDirectFormalizationEvidence(input: WorkerFormalizationInput): DirectFormalizationEvidence {
+  const reviewed = webReviewedFormalizationEvidence(input);
+  const { workflow: _workflow, fidelityPolicy: _policy, ...baseRequest } = reviewed.request;
+  const request = { ...baseRequest, reviewMode: 'direct' as const };
+  const { plan: _plan, planDigest: _planDigest, ...generationInput } = reviewed.generation.input;
+  const { configurationDigest: _configuration, reviewerId: _reviewer, ...generationSession } = reviewed.sessions[1]!;
+  const { translation: _translation, translationDigest: _translationDigest, review: _review,
+    workflow: _evidenceWorkflow, ...base } = reviewed;
+  return { ...base, schema: 'theorem-os.formalization-evidence.v4', authority: 'compiler',
+    method: 'generation-and-compilation', semanticReview: 'not-performed', request,
+    requestDigest: formalizationDigest(request), inputDigest: formalizationInputDigest(request, reviewed.candidate),
+    generation: { input: generationInput, output: reviewed.generation.output },
+    sessions: [{ ...generationSession, inputDigest: formalizationDigest(generationInput) }] };
+}
+
+export function webFormalizationEvidence(input: WorkerFormalizationInput): FormalizationEvidence {
+  return input.reviewMode === 'direct' ? webDirectFormalizationEvidence(input) : webReviewedFormalizationEvidence(input);
 }

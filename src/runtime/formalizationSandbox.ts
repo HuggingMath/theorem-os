@@ -8,6 +8,8 @@ import { canonicalMathJson, mathDigest, readMathFile } from '../math/mathRuntime
 import { getLeanTaskEnvironment, type LeanTaskEnvironment } from '../math/leanTaskEnvironment';
 import { acquireMathProofEnvironmentLease, MATH_PROOF_ENVIRONMENT_ENV, prepareMathProofEnvironment,
   resolveMathProofEnvironment } from '../math/mathProofEnvironment';
+import { DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT } from '../math/mathProofEnvironmentCache';
+import { projectMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnvironment';
 import { resolveMathematicsLakePackagesCache } from '../math/verifier';
 import { startFormalizationRelay } from './formalizationRelay';
 import type { ModelRequestGate } from './modelRequest';
@@ -90,7 +92,7 @@ export type FormalizationSandboxReceipt = Readonly<{
   network: 'role-model-relay-only'; credentials: 'host-only'; input: 'read-only';
   toolchain: string; environmentDigest: string; executableSha256: string; profileDigest: string; inputSha256: string;
   roleInstructionsSha256: string; outputSchemaSha256: string;
-  packages: Readonly<{ kind: 'none' | 'sealed'; root?: '/opt/lean-packages'; identity?: string }>;
+  packages: Readonly<{ kind: 'none' | 'sealed'; root?: '/opt/lean-packages'; identity?: string; contents?: 'sources' }>;
   auditDirectory: string; canary: 'passed';
 }>;
 export type FormalizationSandbox = Readonly<{
@@ -101,6 +103,8 @@ export type FormalizationSandbox = Readonly<{
 type Input = Readonly<{
   workspace: string; executable: string; profile: string; model: string; effort: string;
   environment: LeanTaskEnvironment; env?: NodeJS.ProcessEnv; signal?: AbortSignal;
+  packages?: 'none' | 'sources';
+  outputSchema?: Record<string, unknown>;
   requestGate?: ModelRequestGate; onUsageIncomplete?: () => void;
 }>;
 
@@ -155,6 +159,39 @@ function leanToolchain(toolchain: string, env: NodeJS.ProcessEnv): string {
   throw new Error('formalization_sandbox_lean_toolchain_unavailable');
 }
 
+/** Warm only the private disk cache; consumers still create independent sealed mounts. */
+export async function warmFormalizationPackages(environment: LeanTaskEnvironment, options: {
+  env?: NodeJS.ProcessEnv; signal?: AbortSignal; deadlineAt?: number;
+} = {}): Promise<void> {
+  const checkpoint = () => {
+    options.signal?.throwIfAborted();
+    if (options.deadlineAt !== undefined && Date.now() >= options.deadlineAt)
+      throw new Error('Sealed proof environment preparation deadline exceeded.');
+  };
+  checkpoint();
+  const config = getLeanTaskEnvironment(environment);
+  if (!config.mathlibRevision) return;
+  // Only the pinned mathematics tool settings enter preparation, never model credentials.
+  const env = projectMathematicsRuntimeEnvironment(options.env ?? process.env);
+  const probe = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'theorem-os-formalization-packages-')));
+  let prepared: Awaited<ReturnType<typeof prepareMathProofEnvironment>> | undefined;
+  try {
+    for (const [name, text] of Object.entries(config.files)) {
+      fs.mkdirSync(path.dirname(path.join(probe, name)), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(probe, name), text, { flag: 'wx', mode: 0o400 });
+    }
+    if (resolveMathProofEnvironment(probe, env)) return;
+    const root = resolveMathematicsLakePackagesCache(probe, env);
+    if (!root) throw new Error('formalization_sandbox_pinned_mathlib_unavailable');
+    prepared = await prepareMathProofEnvironment(probe, root, { env, signal: options.signal,
+      deadlineAt: options.deadlineAt, cacheRoot: DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT });
+    checkpoint();
+  } finally {
+    try { await prepared?.dispose(); }
+    finally { fs.rmSync(probe, { recursive: true, force: true }); }
+  }
+}
+
 /** Full-process isolation. No host profile, campaign directory or credential enters the mount namespace. */
 export async function prepareFormalizationSandbox(input: Input): Promise<FormalizationSandbox> {
   if (process.platform !== 'linux') throw new Error('formalization_sandbox_requires_linux');
@@ -170,6 +207,8 @@ export async function prepareFormalizationSandbox(input: Input): Promise<Formali
     return { name, bytes: readMathFile(file, maxBytes).bytes };
   });
   const environment = input.env ?? process.env, config = getLeanTaskEnvironment(input.environment);
+  if (input.outputSchema && canonicalMathJson(input.outputSchema) !== canonicalMathJson(JSON.parse(protocol[2].bytes.toString('utf8'))))
+    throw new Error('formalization_sandbox_output_schema_mismatch');
   const executable = codexExecutable(input.executable, environment), toolchain = leanToolchain(config.toolchain, environment);
   const command = nativeFile('/usr/bin/bwrap');
   const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'theorem-os-formalization-role-')));
@@ -198,17 +237,18 @@ export async function prepareFormalizationSandbox(input: Input): Promise<Formali
       fs.mkdirSync(path.dirname(path.join(probe, name)), { recursive: true }); fs.writeFileSync(path.join(probe, name), text);
     }
     let packages: FormalizationSandboxReceipt['packages'] = { kind: 'none' }, packageNames: string[] = [];
-    if (config.mathlibRevision) {
+    if (config.mathlibRevision && input.packages !== 'none') {
+      const contents = input.packages === 'sources' ? 'sources' : undefined;
       let packageEnvironment = environment;
-      if (!resolveMathProofEnvironment(probe, environment)) {
+      if (!resolveMathProofEnvironment(probe, environment, contents)) {
         const root = resolveMathematicsLakePackagesCache(probe, environment);
         if (!root) throw new Error('formalization_sandbox_pinned_mathlib_unavailable');
         prepared = await prepareMathProofEnvironment(probe, root, { env: environment, signal: input.signal,
-          cacheRoot: path.join(os.homedir(), '.cache', 'theorem-os', 'formalization-packages') });
+          cacheRoot: DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT, ...(contents ? { contents } : {}) });
         packageEnvironment = { ...environment, [MATH_PROOF_ENVIRONMENT_ENV]: prepared.environmentValue };
       }
-      const sealed = resolveMathProofEnvironment(probe, packageEnvironment)!;
-      lease = await acquireMathProofEnvironmentLease(probe, packageEnvironment, input.signal);
+      const sealed = resolveMathProofEnvironment(probe, packageEnvironment, contents)!;
+      lease = await acquireMathProofEnvironmentLease(probe, packageEnvironment, input.signal, undefined, contents);
       if (!lease) throw new Error('formalization_sandbox_sealed_mathlib_unavailable');
       packagesFd = fs.openSync(lease.packagesRoot, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY);
       const opened = fs.fstatSync(packagesFd, { bigint: true }), expected = fs.statSync(lease.packagesRoot, { bigint: true });
@@ -217,11 +257,13 @@ export async function prepareFormalizationSandbox(input: Input): Promise<Formali
         throw new Error('formalization_sandbox_mathlib_identity_changed');
       packageNames = JSON.parse(config.files['lake-manifest.json']).packages.map((item: { name: string }) => item.name);
       if (packageNames.some(name => !/^[A-Za-z0-9_-]+$/u.test(name))) throw new Error('formalization_sandbox_package_name_invalid');
-      packages = { kind: 'sealed', root: '/opt/lean-packages', identity: sealed.identity };
+      packages = { kind: 'sealed', root: '/opt/lean-packages', identity: sealed.identity,
+        ...(sealed.contents === 'sources' ? { contents: 'sources' } : {}) };
     }
     input.signal?.throwIfAborted();
     relay = await startFormalizationRelay({ socketPath: path.join(temporary, 'model.sock'), profile: input.profile,
       model: input.model, effort: input.effort, env: environment, signal: input.signal,
+      outputSchema: input.outputSchema,
       requestGate: input.requestGate, onUsageIncomplete: input.onUsageIncomplete });
     const providerId = relay.receipt.providerId, modelCatalog = providerId === 'sub2api' ? '/profile/models.json' : undefined;
     const profileConfig = stringifyToml({ model: input.model, model_provider: providerId,

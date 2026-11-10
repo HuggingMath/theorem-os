@@ -5,14 +5,19 @@ import type { WebFormalization } from '../../formalizationTypes';
 import type { WebProvider, WebRun } from '../../shared';
 import { researchExamples } from '../../problemExamples';
 import { formatTokens, isAcceptedRun, isFaultedRun, isRejectedRun, resultDescription, runProgress, stoppedLabel } from '../../presentation';
-import { acceptedTitle, statementConfirmation } from '../../presentation';
+import { acceptedDescription, acceptedTitle, statementConfirmation } from '../../presentation';
 import type { NextStep } from '../../report';
 import { locale, localizeText, t } from '../../i18n';
 import type { SolveProcess } from '../solveProcess';
+import type { ThinkingStep } from '../thinkingProcess';
 import { formalizationReasonText } from '../formalizationReasons';
 import { Icon } from './Icon';
 import { ChatMessageContent } from './ChatMessageContent';
 import { Elapsed, SolveProcessView } from './SolveProcess';
+import { FormalizationProgress, formalizationProgress } from './FormalizationProgress';
+import { ThinkingProcess } from './ThinkingProcess';
+import { BackgroundReview } from '../backgroundReview';
+import { downloadLean } from '../downloadLean';
 
 
 export type ChatThreadProps = {
@@ -29,6 +34,7 @@ export type ChatThreadProps = {
   onShare?(): void;
   recovery?: { steps: NextStep[]; onAction(id: string, button: HTMLButtonElement): void };
   onGuidance?(text?: string, taskId?: string): void;
+  onQuestion?(entry: ThinkingStep): void;
   onGuidanceReceipt?(message: WebConversationMessage): void;
   onEditProblem?(): void;
   onCancelTask?(): void;
@@ -67,6 +73,10 @@ function TaskMessage(props: ChatThreadProps) {
   const accepted = !!run && isAcceptedRun(run);
   const natural = !!(item || run?.formalization);
   const confirmation = item?.confirmation ?? run?.formalization?.confirmation;
+  const reviewMode = item?.reviewMode ?? run?.formalization?.reviewMode;
+  const direct = reviewMode === 'direct' || item?.report?.semanticReview === 'not-performed';
+  const formalProgress = item && formalizationProgress(item, props.solve?.process);
+  const backgroundReview = item?.backgroundReview ?? item?.report?.backgroundReview;
   const failed = run ? isFaultedRun(run) || isRejectedRun(run) : !!item && (['error', 'exhausted'].includes(item.status) || !!item.researchError);
   const phaseNames: Record<string, string> = {
     queued: t("等待开始"), preparing: t("准备证明环境"),
@@ -77,22 +87,21 @@ function TaskMessage(props: ChatThreadProps) {
   const title = run ? accepted ? acceptedTitle(run) : active ? runProgress(run).phaseLabel
     : run.status === 'cancelled' ? t('已取消') : failed ? t('运行失败') : stoppedLabel(run)
     : failed ? t("形式化未完成") : item?.status === 'cancelled' ? t('已取消')
-      : active ? phaseNames[item?.progress?.phase ?? 'queued']
-        : item?.status === 'review' ? t("陈述待核对")
-          : item?.status === 'confirmed' ? t("陈述已确认") : props.missingTask ? t('关联任务记录已删除') : t("正在读取任务");
-  const description = props.missingTask ? t('原题和对话仍保留，可以修改题目后重新发送。') : run ? accepted && natural ? t('冻结的 Lean 陈述已通过独立验收；原文与陈述的对应关系见形式化审核。') : resultDescription(run) : failed
+      : active ? formalProgress?.revising ? t('根据 Lean 报错修改陈述') : phaseNames[item?.progress?.phase ?? 'queued']
+        : item?.status === 'review' ? direct ? t('Lean 代码已就绪') : t("陈述待核对")
+          : item?.status === 'confirmed' ? direct ? t('Lean 代码已就绪') : t("陈述已确认") : props.missingTask ? t('关联任务记录已删除') : t("正在读取任务");
+  const description = props.missingTask ? t('原题和对话仍保留，可以修改题目后重新发送。') : run ? accepted && natural ? acceptedDescription(run) : resultDescription(run) : failed
     ? item?.researchError ? t("Lean 陈述已生成，但证明研究未能启动。")
       : t("本次未能完成原题形式化，可查看详情后修改题目重试。")
     : item?.status === 'cancelled' ? t("任务已停止，已保存的消息仍可查看。")
-      : active ? t("先把原题转成 Lean，核对一致性后继续证明。")
-        : t("陈述检查不代表证明通过，最终结果以 Lean 独立验收为准。");
+      : formalProgress?.description ?? t("陈述检查不代表证明通过，最终结果以 Lean 独立验收为准。");
   const proof = run?.result?.proof || run?.artifact?.source;
   const solve = props.solve, wide = solve?.wide && solve.process.active;
   return <div class="chat-task">
     {props.sample && <p class="sample-note" data-chat-sample-note>{t('这是只读示例：Agent 由离线脚本代替模型，Lean 检查与独立验收来自真实执行。浏览示例不调用模型，也不消耗你的额度。')}</p>}
     <div class="research-conversation-status" data-active={active} data-accepted={accepted} data-failed={failed}>
       <p class="research-conversation-state" role="status" aria-atomic="true">
-        <Icon name={accepted ? 'circle-check' : failed ? 'circle-alert' : active ? 'clock-3' : 'square'} /><strong>{title}</strong></p>
+        <Icon name={accepted ? 'circle-check' : failed ? 'circle-alert' : active ? 'clock-3' : !run && formalProgress?.ready ? 'file-code-2' : 'square'} /><strong>{title}</strong></p>
       {solve && <p class="research-conversation-meta">
         {solve.process.startedAt && <Elapsed from={solve.process.startedAt} to={solve.process.endedAt} />}
         {solve.process.tokens !== undefined && <span>{t('Token {0}', formatTokens(solve.process.tokens))}</span>}
@@ -101,13 +110,17 @@ function TaskMessage(props: ChatThreadProps) {
         {active && props.onCancelTask && <button type="button" class="text-button" data-research-stop onClick={props.onCancelTask}>{t("停止解题")}</button>}
       </p>}
       <p class="research-conversation-description">{description}</p>
+      {item && <FormalizationProgress item={item} process={solve?.process} wide={solve?.wide}
+        onCode={() => props.onArtifact('live')} />}
       {natural && (item?.report || run?.formalization) && <p class="chat-statement-verdict" data-statement-verdict>
-        {statementConfirmation(confirmation)}
+        {direct ? t('Lean 编译通过') : statementConfirmation(confirmation, false, reviewMode)}
         {' '}{t('Lean 验收证明的是这份陈述，不能替代对自然语言原意的核对。')}
       </p>}
     </div>
+    {solve && <ThinkingProcess process={solve.process} time={solve.time} onCheck={solve.onCheck} onQuestion={props.onQuestion} />}
+    {backgroundReview && <BackgroundReview review={backgroundReview} compact />}
     {solve && <SolveProcessView process={solve.process} wide={solve.wide} time={solve.time} onCheck={solve.onCheck}
-      loading={solve.loading} failed={solve.failed} onRetry={solve.onRetry} />}
+      loading={solve.loading} failed={solve.failed} onRetry={solve.onRetry} defaultOpen={false} />}
     {!run && failed && item && (item.reason || item.researchError) && <FormalizationFailure item={item} />}
     {(run || item?.report) && <div class="research-conversation-artifacts" role="group" aria-label={t('结果')}>
       {run && <button type="button" data-research-artifact="roadmap" onClick={() => props.onArtifact('roadmap')}><Icon name="network" /><span>{t('路线图')}</span><Icon name="arrow-up-right" /></button>}
@@ -220,16 +233,19 @@ export type ChatComposerProps = {
   keyManagement?: { busy: boolean; ending?: string; notice?: string; onSave(): void; onDelete(): void };
   onGuidance?(): void;
   guidance?: { target: string; targets: { id: string; label: string }[]; onTarget(id: string): void; onCancel(): void; onConfirmTarget?(): void };
+  quote?: { count: number; onUndo(): void };
 };
 
 function ChatComposer(props: ChatComposerProps) {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const composing = useRef(false);
   const provider = props.providers.find(item => item.id === props.providerId);
-  const validLimit = (value: number, maximum: number) => Number.isInteger(value) && value > 0 && value <= maximum;
+  const validLimit = (value: number, maximum: number) => Number.isInteger(value) && value >= 0 && value <= maximum;
   const validBudget = validLimit(props.budgets.maxRunSeconds, props.budgetLimits.maxRunSeconds) && props.budgets.maxRunSeconds % 60 === 0
     && validLimit(props.budgets.maxTotalTokens, props.budgetLimits.maxTotalTokens)
+    && (props.budgets.maxTotalTokens === 0 || props.budgets.maxTotalTokens >= 10_000)
     && props.budgets.research.maxRunSeconds % 60 === 0
+    && (props.budgets.research.maxTotalTokens === 0 || props.budgets.research.maxTotalTokens >= 10_000)
     && Object.entries(props.budgets.research).every(([key, value]) => validLimit(value, props.budgetLimits.research[key as keyof ChatBudgets['research']]));
   const canSend = !!props.input.trim() && !!props.model.trim() && (props.hasConversation || validBudget)
     && !props.pending && !props.submitting && !props.disabled && (!props.keyRequired || !!props.apiKey.trim());
@@ -247,6 +263,10 @@ function ChatComposer(props: ChatComposerProps) {
         </select></label>
         {props.guidance.onConfirmTarget && <button type="button" class="text-button" onClick={props.guidance.onConfirmTarget}>{t('确认当前任务版本')}</button>}
         <button type="button" class="text-button" data-chat-guidance-cancel disabled={props.submitting} onClick={props.guidance.onCancel}>{t('返回讨论')}</button>
+      </div>}
+      {props.quote && <div class="chat-quote-notice" data-chat-quote>
+        <span role="status" data-chat-quote-count={props.quote.count}>{t('已引用 {0} 条记录', props.quote.count)}</span>
+        <button type="button" class="text-button" data-chat-quote-undo disabled={props.submitting} onClick={props.quote.onUndo}>{t('撤回上次引用')}</button>
       </div>}
       <label class="sr-only" for="formalize-original">{props.hasConversation ? t("继续对话") : t("自然语言或 TeX 原题")}</label>
       <textarea ref={textarea} id="formalize-original" rows={3} value={props.input} spellcheck={false}
@@ -297,18 +317,23 @@ function ChatComposer(props: ChatComposerProps) {
             {props.connection && <p class="field-note" id="chat-connection-result" role="status" data-status={props.connection.status}>{props.connection.message}</p>}
             {!props.hasConversation && <>
               <fieldset class="chat-budget-fields"><legend>{t('形式化预算')}</legend><div class="chat-settings-options">
-                <label for="formalize-minutes">{t('最多分钟')}<input id="formalize-minutes" type="number" min={1} max={props.budgetLimits.maxRunSeconds / 60} step={1}
-                  value={props.budgets.maxRunSeconds / 60} onInput={event => props.onBudget('formalization', 'maxRunSeconds', Number(event.currentTarget.value) * 60)} /></label>
-                <label for="formalize-tokens">{t('最多 Token')}<input id="formalize-tokens" type="number" min={1} max={props.budgetLimits.maxTotalTokens} step={1}
-                  value={props.budgets.maxTotalTokens} onInput={event => props.onBudget('formalization', 'maxTotalTokens', Number(event.currentTarget.value))} /></label>
+                <label for="formalize-minutes">{t('最多分钟')}<input id="formalize-minutes" type="number" min={0} max={props.budgetLimits.maxRunSeconds / 60} step={1}
+                  value={props.budgets.maxRunSeconds ? props.budgets.maxRunSeconds / 60 : ''} placeholder={t('不限')}
+                  onInput={event => props.onBudget('formalization', 'maxRunSeconds', Number(event.currentTarget.value) * 60)} /></label>
+                <label for="formalize-tokens">{t('最多 Token')}<input id="formalize-tokens" type="number" min={0} max={props.budgetLimits.maxTotalTokens} step={1}
+                  value={props.budgets.maxTotalTokens || ''} placeholder={t('不限')}
+                  onInput={event => props.onBudget('formalization', 'maxTotalTokens', Number(event.currentTarget.value))} /></label>
               </div></fieldset>
               <fieldset class="chat-budget-fields"><legend>{t('随后证明的预算')}</legend><div class="chat-settings-options">
-                <label for="research-minutes">{t('最多分钟')}<input id="research-minutes" type="number" min={1} max={props.budgetLimits.research.maxRunSeconds / 60} step={1}
-                  value={props.budgets.research.maxRunSeconds / 60} onInput={event => props.onBudget('research', 'maxRunSeconds', Number(event.currentTarget.value) * 60)} /></label>
-                <label for="research-tokens">{t('最多 Token')}<input id="research-tokens" type="number" min={1} max={props.budgetLimits.research.maxTotalTokens} step={1}
-                  value={props.budgets.research.maxTotalTokens} onInput={event => props.onBudget('research', 'maxTotalTokens', Number(event.currentTarget.value))} /></label>
-                <label for="research-turns">{t('最多研究轮次')}<input id="research-turns" type="number" min={1} max={props.budgetLimits.research.maxTurns} step={1}
-                  value={props.budgets.research.maxTurns} onInput={event => props.onBudget('research', 'maxTurns', Number(event.currentTarget.value))} /></label>
+                <label for="research-minutes">{t('最多分钟')}<input id="research-minutes" type="number" min={0} max={props.budgetLimits.research.maxRunSeconds / 60} step={1}
+                  value={props.budgets.research.maxRunSeconds ? props.budgets.research.maxRunSeconds / 60 : ''} placeholder={t('不限')}
+                  onInput={event => props.onBudget('research', 'maxRunSeconds', Number(event.currentTarget.value) * 60)} /></label>
+                <label for="research-tokens">{t('最多 Token')}<input id="research-tokens" type="number" min={0} max={props.budgetLimits.research.maxTotalTokens} step={1}
+                  value={props.budgets.research.maxTotalTokens || ''} placeholder={t('不限')}
+                  onInput={event => props.onBudget('research', 'maxTotalTokens', Number(event.currentTarget.value))} /></label>
+                <label for="research-turns">{t('最多研究轮次')}<input id="research-turns" type="number" min={0} max={props.budgetLimits.research.maxTurns} step={1}
+                  value={props.budgets.research.maxTurns || ''} placeholder={t('不限')}
+                  onInput={event => props.onBudget('research', 'maxTurns', Number(event.currentTarget.value))} /></label>
               </div></fieldset>
             </>}
           </div>
@@ -319,10 +344,11 @@ function ChatComposer(props: ChatComposerProps) {
           : <button id="formalize-start" type="submit" class="chat-send" disabled={!canSend} aria-label={props.guidance ? t('发送证明要求') : t("发送")} title={props.guidance ? t('发送证明要求') : t("发送")}>{props.submitting ? <span class="spinner" /> : <Icon name="arrow-up" />}</button>}</div>
       </div>
     </form>
-    {!props.hasConversation && <p class="chat-budget-summary" data-chat-budget>{t('形式化最多 {0} 分钟 / {1} Token；随后证明最多 {2} 分钟 / {3} Token。',
-      props.budgets.maxRunSeconds / 60, formatTokens(props.budgets.maxTotalTokens), props.budgets.research.maxRunSeconds / 60, formatTokens(props.budgets.research.maxTotalTokens))}
-      {' '}{t('费用由模型服务商收取。按已报告用量停止，进行中的请求可能超出 Token 上限；这不是金额上限。')}</p>}
-    {!props.hasConversation && !validBudget && <p class="chat-send-status" role="alert">{t('请把两阶段预算设为允许范围内的正整数。')}</p>}
+    {!props.hasConversation && <p class="chat-budget-summary" data-chat-budget>{t('形式化时间：{0}；Token：{1}。随后证明时间：{2}；Token：{3}。',
+      props.budgets.maxRunSeconds ? t('{0} 分钟', props.budgets.maxRunSeconds / 60) : t('不限'), props.budgets.maxTotalTokens ? formatTokens(props.budgets.maxTotalTokens) : t('不限'),
+      props.budgets.research.maxRunSeconds ? t('{0} 分钟', props.budgets.research.maxRunSeconds / 60) : t('不限'), props.budgets.research.maxTotalTokens ? formatTokens(props.budgets.research.maxTotalTokens) : t('不限'))}
+      {' '}{t('预算留空表示不限。费用由模型服务商收取。')}</p>}
+    {!props.hasConversation && !validBudget && <p class="chat-send-status" role="alert">{t('预算可留空，填写时须为允许范围内的正整数。')}</p>}
     {(props.sendStatus || (props.keyRequired && !props.apiKey.trim())) && <p id="formalize-send-status" class="chat-send-status" role="status">{props.sendStatus || t("请在设置中填写 API Key 后发送。")}</p>}
     {!props.hasConversation && <details class="chat-examples"><summary>{t("试试例题")}</summary><label class="sr-only" for="formalize-example">{t("选择自然语言例题")}</label><select id="formalize-example" value="" onChange={event => { props.onExample(event.currentTarget.value); event.currentTarget.value = ''; textarea.current?.focus(); }}><option value="">{t("选择一个题目")}</option>{researchExamples.map(example => <option key={example.id} value={example.id}>{locale === 'en' ? example.nameEn : example.name}</option>)}</select></details>}
   </div>;
@@ -396,33 +422,37 @@ export function renderChatHistory(root: HTMLElement, props: ChatHistoryProps) { 
 export type ChatOriginalProps = { formalization?: WebFormalization; run?: WebRun };
 function ChatOriginal({ formalization, run }: ChatOriginalProps) {
   const report = formalization?.report;
+  const reviewMode = formalization?.reviewMode ?? run?.formalization?.reviewMode;
+  const direct = reviewMode === 'direct' || report?.semanticReview === 'not-performed';
   const original = report?.original ?? formalization?.original ?? run?.formalization?.original;
   const source = report?.statement ?? run?.source;
   const formalizationId = formalization?.id ?? run?.formalizationId;
+  const backgroundReview = formalization?.backgroundReview ?? report?.backgroundReview;
   const relations: Record<string, string> = { direct: t("直接对应"), equivalent: t("等价表达"), unresolved: t("待核对"), mismatch: t("不一致") };
   const aspects: Record<string, string> = { domains: t("对象与类型"), assumptions: t("假设"), conclusions: t("结论"), definitions: t("定义"), quantifierScope: t("量词范围"), instanceCoherence: t("结构与实例") };
   return <div class="chat-original-content">
     <header class="chat-original-header"><h2>{t("原题与 Lean")}</h2>
-      {formalizationId && <a class="text-button" href={`formalize.html?id=${encodeURIComponent(formalizationId)}`} target="_blank" rel="noreferrer">{t("完整审核")}<Icon name="arrow-up-right" /></a>}
+      {formalizationId && <a class="text-button" href={`formalize.html?id=${encodeURIComponent(formalizationId)}`} target="_blank" rel="noreferrer">{direct ? t('形式化详情') : t("完整审核")}<Icon name="arrow-up-right" /></a>}
     </header>
-    {(report || run?.formalization) && <p class="chat-statement-verdict">{statementConfirmation(formalization?.confirmation ?? run?.formalization?.confirmation)}
+    {(report || run?.formalization) && <p class="chat-statement-verdict">{direct ? t('Lean 编译通过') : statementConfirmation(formalization?.confirmation ?? run?.formalization?.confirmation, false)}
       {' '}{t('Lean 验收证明的是这份陈述，不能替代对自然语言原意的核对。')}</p>}
+    {backgroundReview && <BackgroundReview review={backgroundReview} />}
     <div class="chat-original-columns">
       <section><h3>{t("自然语言原题")}</h3><div class="chat-message-text" translate={false}>{original ?? t("此题直接从 Lean 陈述开始。")}</div></section>
-      <section><h3>{t("Lean 陈述")}</h3>{source ? <pre tabIndex={0} translate={false}><code>{source}</code></pre> : <p>{t("陈述尚未生成。")}</p>}</section>
+      <section><div class="chat-original-header"><h3>{t("Lean 陈述")}</h3>{source && <button type="button" class="text-button" data-download-statement onClick={() => downloadLean(source)}><Icon name="download" />{t('下载 Lean')}</button>}</div>{source ? <pre tabIndex={0} translate={false}><code>{source}</code></pre> : <p>{t("陈述尚未生成。")}</p>}</section>
     </div>
     {report && <>
-      <section class="chat-backtranslation"><h3>{t("独立回译")}</h3><p class="chat-message-text" translate={false}>{report.backtranslation.mathematics}</p>
+      {report.backtranslation && <section class="chat-backtranslation"><h3>{t("独立回译")}</h3><p class="chat-message-text" translate={false}>{report.backtranslation.mathematics}</p>
         {!!report.backtranslation.assumptions.length && <><h4>{t("假设")}</h4><ul>{report.backtranslation.assumptions.map((value, index) => <li key={index} translate={false}>{value}</li>)}</ul></>}
         {!!report.backtranslation.definitions.length && <><h4>{t("定义")}</h4><ul>{report.backtranslation.definitions.map((value, index) => <li key={index} translate={false}>{value}</li>)}</ul></>}
-      </section>
-      <section class="chat-correspondences"><h3>{t("具体对应关系")}</h3>
+      </section>}
+      {(!direct || report.correspondences.length > 0) && <section class="chat-correspondences"><h3>{t("具体对应关系")}</h3>
         {report.correspondences.length ? report.correspondences.map((item, index) => <article key={index} data-relation={item.relation}>
           <header><strong>{aspects[item.aspect]}</strong><span>{relations[item.relation]}</span></header>
           <div class="chat-original-columns"><blockquote translate={false}>{item.original}</blockquote><pre tabIndex={0} translate={false}><code>{item.leanText}</code></pre></div>
           {item.explanations.map((explanation, n) => <p key={n} translate={false}>{explanation}</p>)}
         </article>) : <p>{t("本次报告未记录逐项对应关系。")}</p>}
-      </section>
+      </section>}
     </>}
   </div>;
 }

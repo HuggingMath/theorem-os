@@ -678,10 +678,10 @@ function renderPreparation(issues?: SubmissionIssue[]) {
 /** Time and turns are hard stops; tokens are estimated from this account's finished runs on the same model. */
 function renderBudgetEstimate() {
   const turns = Number(field('max-turns').value), seconds = Number(field('max-seconds').value), model = field('model').value.trim();
-  if (!Number.isSafeInteger(turns) || turns < 1 || !Number.isSafeInteger(seconds) || seconds < 30) { patchText(element('#budget-estimate'), ''); return; }
+  if (!Number.isSafeInteger(turns) || turns < 0 || !Number.isSafeInteger(seconds) || seconds < 0) { patchText(element('#budget-estimate'), ''); return; }
   const cap = state.session ? tokenCap(field('max-tokens').value, state.session.limits.maxTotalTokens) : undefined;
-  const estimate = usageEstimate(state.runs, model, turns);
-  const limits = t('最长约 {0} 分钟，全部 Agent 合计最多 {1} 轮模型调用。', Math.ceil(seconds / 60), turns);
+  const estimate = turns ? usageEstimate(state.runs, model, turns) : undefined;
+  const limits = t('解题时间：{0}；研究轮次：{1}。', seconds ? t('{0} 分钟', Math.ceil(seconds / 60)) : t('不限'), turns || t('不限'));
   const usage = estimate ? t('按你最近 {0} 次 {1} 运行的平均每轮 {2} Token，本次约 {3} Token 以内。', estimate.samples, model, formatTokens(estimate.perTurn), formatTokens(estimate.ceiling))
     : t('还没有这个模型的用量记录，费用按服务商实际计费。');
   patchText(element('#budget-estimate'), sentences(limits, usage, cap ? t('达到 {0} Token 后停止新的调用。', formatTokens(cap)) : ''));
@@ -1021,8 +1021,8 @@ async function importTaskFile(file: File) {
       t('启用 {0} / {1} 条自定义规则', plan?.custom.filter(rule => rule.enabled).length ?? 0, plan?.custom.length ?? 0)].join(' · ');
     renderFacts(element('#import-facts'), [[t('证明环境'), environmentName(draft.environment)],
       [t('服务商'), provider?.name ?? t('{0} · 当前不可用', draft.providerId || t('未选择'))], [t('模型'), draft.model || t('未填写'), true],
-      [t('推理强度'), effortLabels[draft.effort] ?? draft.effort], [t('轮次上限'), draft.maxTurns || t('未填写')],
-      [t('解题预算 / 秒'), draft.maxRunSeconds || t('未填写')], [t('Agent 数量'), draft.workers || t('未填写')],
+      [t('推理强度'), effortLabels[draft.effort] ?? draft.effort], [t('轮次上限'), Number(draft.maxTurns) ? draft.maxTurns : t('不限')],
+      [t('解题预算 / 秒'), Number(draft.maxRunSeconds) ? draft.maxRunSeconds : t('不限')], [t('Agent 数量'), draft.workers || t('未填写')],
       [t('用量上限 / 万 Token'), draft.maxTotalTokens || t('不限')], [t('模块方案'), planSummary],
       [t('协作模式'), draft.coordination === 'cooperative' ? t('任务协作') : t('独立并行')],
       ...(draft.planApproval ? [[t('先审计划'), t('开启')] as [string, string]] : [])]);
@@ -1060,7 +1060,7 @@ function resetForm() {
     element<HTMLInputElement>('#api-key').type = 'password';
     updateKeyToggle();
     for (const [id, value] of Object.entries({ model: session.defaults.model, effort: session.defaults.effort,
-      'max-turns': session.defaults.maxTurns, 'max-seconds': session.defaults.maxRunSeconds, workers: session.defaults.workers, 'max-tokens': '' })) field(id).value = String(value);
+      'max-turns': session.defaults.maxTurns || '', 'max-seconds': session.defaults.maxRunSeconds || '', workers: session.defaults.workers, 'max-tokens': '' })) field(id).value = String(value);
     element<HTMLInputElement>(`input[name="coordination"][value="${session.defaults.coordination}"]`).checked = true;
     field('provider').value = session.providers[0]?.id ?? '';
     field('environment').value = session.defaults.environment;
@@ -1422,7 +1422,7 @@ function resultProps(run: WebRun): ResultPanelProps {
   return {
     // The plan waiting on its owner has nothing running: no spinner, unless the Lead is revising it from their note.
     verdict: { run: run.id, tone: value.tone, symbol: value.symbol, title: resultTitle(run), description: passed(run) && !guide ? acceptedDescription(run) : resultDescription(run),
-      ...(run.formalization ? { meaning: statementConfirmation(run.formalization.confirmation) } : {}),
+      ...(run.formalization ? { meaning: statementConfirmation(run.formalization.confirmation, false, run.formalization.reviewMode) } : {}),
       active: working && (!approval || approval.leadRevising), candidate: Boolean(run.artifact && working),
       ...(latest ? { latest: { at: latest.at, time: timestamp(latest.at, true), message: readableMessage(latest, workerNames(run.observation?.inspection.workers)) } } : {}),
       ...(run.status === 'running' && !planGated(run) && !isSample(run) ? { away: awayNote() } : {}) },
@@ -1444,7 +1444,7 @@ function resultProps(run: WebRun): ResultPanelProps {
     config: [item(t('服务商'), provider?.name ?? (isSample(run) ? t('离线示例') : run.providerId)), item(t('推理强度'), effortLabels[run.effort] ?? run.effort),
       item(t('协作模式'), run.coordination === 'cooperative' ? t('任务协作') : t('独立并行')), item(t('Agent 数量'), run.workers),
       ...(run.planApproval ? [item(t('先审计划'), t('开启'))] : []),
-      item(t('轮次上限'), run.maxTurns), item(t('解题预算'), readableDuration(run.maxRunSeconds * 1000)),
+      item(t('轮次上限'), run.maxTurns || t('不限')), item(t('解题预算'), run.maxRunSeconds ? readableDuration(run.maxRunSeconds * 1000) : t('不限')),
       item(t('用量上限'), run.maxTotalTokens ? `${formatTokens(run.maxTotalTokens)} Token` : t('不限')),
       ...(!working && progress.solvingElapsed !== null ? [item(t('研究用时'), readableDuration(progress.solvingElapsed))] : []),
       ...(run.finishedAt ? [item(t('创建时间'), timestamp(run.createdAt))] : []),
@@ -2743,7 +2743,7 @@ function reuseRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 'report'>
     field('environment').value = run.environment;
     renderTemplates();
     for (const [id, value] of Object.entries({ ...connection, source: run.source, task: run.task,
-      'max-turns': run.maxTurns, 'max-seconds': run.maxRunSeconds, workers: run.workers,
+      'max-turns': run.maxTurns || '', 'max-seconds': run.maxRunSeconds || '', workers: run.workers,
       'max-tokens': run.maxTotalTokens ? run.maxTotalTokens / 10_000 : '' })) field(id).value = String(value);
     // 提高解题预算 / 提高轮次上限 open with the limit already doubled (up to the highest allowed); the field stays open to change it.
     const limit = recovery === 'budget' ? { id: 'max-seconds', value: run.maxRunSeconds, highest: session.limits.maxRunSeconds, say: (value: number) => readableDuration(value * 1000) }

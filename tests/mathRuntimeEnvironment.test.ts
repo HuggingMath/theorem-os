@@ -94,6 +94,21 @@ describe('resolved mathematics environment', () => {
     expect(projectMathematicsRuntimeEnvironment(env).DEEPSCIENTIST_MATH_VERIFIER_CONCURRENCY).toBe('1');
   });
 
+  it.each(['DEEPSCIENTIST_MATH_PROOF_ENVIRONMENT_SEED', 'DEEPSCIENTIST_MATH_PROOF_ENVIRONMENT_SOURCE_SEED'])(
+    'freezes the host %s path and does not inherit it into older projections', key => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'math-env-')); roots.push(root);
+    const file = path.join(root, 'math.json');
+    const seed = '/opt/theoremos-proof-environment-seed/manifest.json';
+    fs.writeFileSync(file, JSON.stringify(projectMathematicsRuntimeEnvironment({
+      DEEPSCIENTIST_MATH_ENV_FILE: file, [key]: seed,
+    })));
+    expect(resolveMathematicsRuntimeEnvironment({ DEEPSCIENTIST_MATH_ENV_FILE: file,
+      [key]: '/changed' })[key]).toBe(seed);
+    fs.writeFileSync(file, JSON.stringify(projectMathematicsRuntimeEnvironment({ DEEPSCIENTIST_MATH_ENV_FILE: file })));
+    expect(resolveMathematicsRuntimeEnvironment({ DEEPSCIENTIST_MATH_ENV_FILE: file,
+      [key]: seed })[key]).toBeUndefined();
+  });
+
   it.each(['.env', '.json'])('keeps a host snapshot after its %s defaults change', extension => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'math-env-')); roots.push(root);
     const file = path.join(root, `math${extension}`);

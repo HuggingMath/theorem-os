@@ -19,7 +19,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
 const configurationFlags = ['problem', 'task-file', 'first-proof-problem', 'source-root', 'build-manifest',
   'environment', 'model', 'effort', 'profile', 'codex', 'max-rounds', 'max-run-seconds', 'max-turn-seconds',
-  'max-compile-seconds', 'max-total-tokens', 'review-config', 'max-planning-rounds',
+  'max-compile-seconds', 'max-total-tokens', 'review-mode', 'review-config', 'max-planning-rounds',
   'reference-file', 'reference-pairs', 'reference-provenance', 'max-reference-seconds',
   'retrieval-workspace', 'retrieval-corpus', 'retrieval-symbols', 'retrieval-queries',
   'exemplar-corpus', 'exemplar-count', 'exemplar-exclude', 'context-protocol',
@@ -56,6 +56,7 @@ function requestSummary(request: FormalizationRequest) {
     maxRounds: request.maxRounds, maxRunSeconds: request.maxRunSeconds, maxTurnSeconds: request.maxTurnSeconds,
     maxCompileSeconds: request.maxCompileSeconds, maxTotalTokens: request.maxTotalTokens,
     ...(request.contextProtocol ? { contextProtocol: request.contextProtocol } : {}),
+    ...(request.reviewMode ? { reviewMode: request.reviewMode } : {}),
     ...(request.fidelityPolicy ? { fidelityPolicy: request.fidelityPolicy } : {}),
     ...(request.retrieval ? { retrieval: request.retrieval } : {}),
     ...(request.exemplars ? { exemplars: { algorithm: request.exemplars.algorithm, corpusSha256: request.exemplars.corpusSha256,
@@ -122,6 +123,11 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
     profile: path.resolve(flags.has('profile') ? required(flags, 'profile') :
       process.env.CODEX_HOME || path.join(os.homedir(), '.config/deepscientist/math-sol-codex')),
     executable: flags.has('codex') ? required(flags, 'codex') : process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex' };
+  const reviewOptions = ['review-config', 'max-planning-rounds', 'reference-file', 'retrieval-workspace', 'exemplar-corpus', 'first-proof-problem'];
+  const reviewMode = flags.get('review-mode') ?? (reviewOptions.some(name => flags.has(name)) ? 'independent' : 'direct');
+  if (reviewMode !== 'direct' && reviewMode !== 'independent') throw new Error('--review-mode must be direct or independent');
+  if (reviewMode === 'direct' && reviewOptions.some(name => flags.has(name)))
+    throw new Error('Planning, review, retrieval and First Proof options require --review-mode independent');
   const workflow = defaultFormalizationWorkflow(author);
   workflow.reviewScheduling = 'parallel';
   workflow.maxPlanningRounds = integerFlag(flags, 'max-planning-rounds', 0);
@@ -144,8 +150,8 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
     if (flags.has('max-reference-seconds')) throw new Error('--max-reference-seconds requires --reference-file');
     if (flags.has('reference-provenance')) throw new Error('--reference-provenance requires --reference-file');
   }
-  const request = prepareFormalization(directory, { problemId, statement, environment, execution: 'model', ...author, workflow,
-    fidelityPolicy: 'task-preserving-v2',
+  const request = prepareFormalization(directory, { problemId, statement, environment, execution: 'model', ...author,
+    ...(reviewMode === 'direct' ? { reviewMode: 'direct' as const } : { workflow, fidelityPolicy: 'task-preserving-v2' as const }),
     ...(retrieval ? { retrieval } : {}),
     ...(exemplars ? { exemplars } : {}),
     ...(contextProtocol ? { contextProtocol } : {}),
@@ -230,7 +236,8 @@ export async function formalize(argv: string[]): Promise<number> {
       + '  or --first-proof-problem first_proof_batch3_01 [--source-root DIR] --build-manifest FILE\n'
       + '  [--environment mathlib|standard] [--model deepseek-flash] [--effort max] [--profile DIR] [--codex FILE]\n'
       + '  [--max-rounds 0] [--max-run-seconds 0] [--max-turn-seconds 0] [--max-compile-seconds 0] [--max-total-tokens 0]\n'
-      + '  [--review-config FILE] [--max-planning-rounds 0] (default: planner, blind backtranslator and two fresh reviewer threads)\n'
+      + '  [--review-mode direct|independent] (default: direct generation and Lean compilation, without model review)\n'
+      + '  [--review-config FILE] [--max-planning-rounds 0] (opt in to independent planning, backtranslation and review)\n'
       + '  [--retrieval-workspace DIR --retrieval-corpus FILE] (offline opt-in: frozen matching Mathlib declarations for generation)\n'
       + '  [--retrieval-symbols lean-exact-names-v1] (with retrieval: query exact Lean types and direct structure fields)\n'
       + '  [--retrieval-queries lean-resolved-objects-v1] (with symbols: search resolved object names and all explicit plan mappings)\n'
@@ -239,16 +246,16 @@ export async function formalize(argv: string[]): Promise<number> {
       + '  [--compatibility-names FILE --compatibility-provenance TEXT] (frozen declaration list of an older evaluation library; written names it lacks are compile feedback)\n'
       + '  Execution limits default to 0 (unlimited); a positive safe integer sets an explicit limit.\n'
       + '  [--reference-file FILE --reference-pairs FILE --reference-provenance TEXT] [--max-reference-seconds 0]\n'
-      + 'run: use the frozen request; starts or resumes model generation, Lean elaboration and independent statement review.\n'
+      + 'run: use the frozen request; starts or resumes generation and Lean elaboration, plus review only when configured.\n'
       + 'inspect (offline): read a bounded summary and validate the approved artifact; never starts or resumes a run.\n'
       + 'replay (no model): --build-manifest FILE; new directory only, preset tutorial candidate checked by real Lean.\n'
       + 'report (offline): --output FILE.html; the approved statement beside the original problem and what its reviewers matched,\n'
       + '  as one self-contained page (needs bun run build:web).\n'
       + 'All directories must be outside the source repository. Existing requests are never overwritten.\n'
-      + 'New v3 requests plan definitions/dependencies and require every reviewer to approve six evidence-backed checks. Legacy v1/v2 requests remain readable.\n'
-      + 'New requests freeze kernel-v2 raw types, kernel expressions, local definitions and structure fields; saved requests retain their context protocol.\n'
-      + 'New requests require task-preserving-v1 fidelity evidence and host correspondence checks, with independent reviewers scheduled in parallel.\n'
-      + 'A model-approved statement is distinct from a human review and from a proved theorem. See docs/formalization.md.');
+      + 'Direct requests produce compiler-checked v4 artifacts marked semanticReview=not-performed. Legacy reviewed requests remain readable.\n'
+      + 'New requests freeze kernel-v3 complete local semantics with bounded imported-library expansion; saved requests retain their context protocol.\n'
+      + 'Independent mode retains task-preserving fidelity checks and parallel reviewers; review/retrieval/First Proof options select it explicitly.\n'
+      + 'Statement compilation is distinct from semantic review and proof acceptance. See docs/formalization.md.');
     return 0;
   }
   const phase = required(flags, 'phase');

@@ -49,9 +49,9 @@ const inputSchema = z.object({
   environment: z.enum(['standard', 'mathlib']).default('standard'),
   source: z.string().min(1).refine(value => value.trim().length > 0 && Buffer.byteLength(value) <= webLimits.maxSourceBytes),
   task: z.string().trim().min(1).refine(value => Buffer.byteLength(value) <= webLimits.maxTaskBytes),
-  maxTurns: z.number().int().min(1).max(webLimits.maxTurns),
-  maxRunSeconds: z.number().int().min(30).max(webLimits.maxRunSeconds),
-  maxTotalTokens: z.number().int().min(10_000).max(webLimits.maxTotalTokens).optional(),
+  maxTurns: z.union([z.literal(0), z.number().int().min(1).max(webLimits.maxTurns)]).default(0),
+  maxRunSeconds: z.union([z.literal(0), z.number().int().min(30).max(webLimits.maxRunSeconds)]).default(0),
+  maxTotalTokens: z.union([z.literal(0), z.number().int().min(10_000).max(webLimits.maxTotalTokens)]).default(0),
   workers: z.number().int().min(1).max(webLimits.maxWorkers),
   coordination: z.enum(['cooperative', 'independent']),
   planApproval: z.boolean().optional(),
@@ -88,10 +88,10 @@ const formalizationSchema = z.object({
   apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default(''),
   solve: z.boolean().optional(),
   providerId: inputSchema.shape.providerId.optional(), model: inputSchema.shape.model.optional(),
-  maxRunSeconds: z.number().int().min(30).max(webFormalizationLimits.maxRunSeconds).optional(),
-  maxTotalTokens: z.number().int().min(10_000).max(webFormalizationLimits.maxTotalTokens).optional(),
+  maxRunSeconds: z.union([z.literal(0), z.number().int().min(30).max(webFormalizationLimits.maxRunSeconds)]).optional(),
+  maxTotalTokens: z.union([z.literal(0), z.number().int().min(10_000).max(webFormalizationLimits.maxTotalTokens)]).optional(),
   research: z.object({ maxRunSeconds: inputSchema.shape.maxRunSeconds, maxTurns: inputSchema.shape.maxTurns,
-    maxTotalTokens: z.number().int().min(10_000).max(webLimits.maxTotalTokens) }).strict().optional(),
+    maxTotalTokens: inputSchema.shape.maxTotalTokens }).strict().optional(),
 }).strict();
 const conversationSchema = z.object({ formalizationId: z.string().uuid().optional(), runId: z.string().uuid().optional() })
   .strict().refine(value => Boolean(value.formalizationId || value.runId));
@@ -252,9 +252,10 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     const run = jobs.create(owner, { ...webDefaults, ...webFormalizationDefaults.research, ...formalization.research,
       providerId: input.provider.id, apiKey: input.apiKey,
       model: input.model, effort: input.effort, source: evidence.candidate.source, environment: evidence.request.environment,
-      task: '依据自然语言原题及其已审核的 Lean 陈述，证明全部目标，保留所有定义、假设与声明。', formalizationId: formalization.id }, input.provider, undefined, undefined,
+      task: '依据自然语言原题及其 Lean 陈述，证明全部目标，保留所有定义、假设与声明。', formalizationId: formalization.id }, input.provider, undefined, undefined,
     { evidence, provenance: { id: formalization.id, evidenceSha256: formalizationDigest(evidence), original: formalization.original,
-      confirmedAt: formalization.confirmedAt!, confirmation: formalization.confirmation ?? 'automatic' } });
+      confirmedAt: formalization.confirmedAt!, confirmation: formalization.confirmation ?? 'automatic',
+      ...(formalization.reviewMode ? { reviewMode: formalization.reviewMode } : {}) } });
     milestone(owner, 'firstRunAt');
     return run.id;
   });

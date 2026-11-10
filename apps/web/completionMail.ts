@@ -59,10 +59,12 @@ export function completionMail(run: WebRun, publicUrl: string): { subject: strin
   const result = outcome(run), took = minutes(run);
   const meaning = run.formalization && {
     zh: run.formalization.confirmation === 'manual' ? '原题含义：你已确认 Lean 陈述。'
-      : run.formalization.confirmation === 'automatic' ? '原题含义：模型审核通过，未经人工确认。'
+      : run.formalization.reviewMode === 'direct' ? 'Lean 陈述编译通过；原题含义及审核结论请查看形式化记录。'
+        : run.formalization.confirmation === 'automatic' ? '原题含义：模型审核通过，未经人工确认。'
         : '原题含义：未记录确认方式，请核对 Lean 陈述。',
     en: run.formalization.confirmation === 'manual' ? 'Problem meaning: you confirmed the Lean statement.'
-      : run.formalization.confirmation === 'automatic' ? 'Problem meaning: model review passed; not confirmed by a person.'
+      : run.formalization.reviewMode === 'direct' ? 'The Lean statement compiled; see the formalization record for its meaning and review results.'
+        : run.formalization.confirmation === 'automatic' ? 'Problem meaning: model review passed; not confirmed by a person.'
         : 'Problem meaning: the confirmation method was not recorded; please check the Lean statement.',
   };
   const title = run.title.replace(/\s+/gu, ' ').trim().slice(0, 80) || 'TheoremOS';

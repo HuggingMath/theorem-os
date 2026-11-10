@@ -81,6 +81,15 @@ describe('web share snapshots', () => {
       expect(JSON.stringify(snapshot)).not.toContain(secret);
   });
 
+  it('shares direct compilation provenance without inventing a statement review', () => {
+    const report = { ...formalizationReport(), semanticReview: 'not-performed' as const,
+      backtranslation: null, correspondences: [], reviews: [] };
+    const snapshot = shareSnapshot(run({ formalization: { ...formalization, confirmation: 'automatic', reviewMode: 'direct' } }),
+      undefined, report)!;
+    expect(snapshot.formalization).toMatchObject({ original: formalization.original, reviewMode: 'direct', confirmation: 'automatic' });
+    expect(snapshot.formalization).not.toHaveProperty('review');
+  });
+
   it('omits a review of other evidence and never attaches it to a direct Lean task', () => {
     const snapshot = shareSnapshot(run({ formalization }), undefined, formalizationReport('a'.repeat(64)))!;
     expect(snapshot.formalization).toMatchObject({ original: formalization.original, evidenceSha256: formalization.evidenceSha256 });

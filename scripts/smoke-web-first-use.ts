@@ -8,9 +8,9 @@ import { parseArgs } from 'node:util';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import { parse } from 'smol-toml';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
-import { webFormalizationDefaults, webFormalizationLimits, type WebFormalization, type WebFormalizationActivity } from '../apps/web/formalizationTypes';
+import { webFormalizationLimits, type WebFormalization, type WebFormalizationActivity } from '../apps/web/formalizationTypes';
 import type { WebConversation } from '../apps/web/conversationTypes';
-import { webLimits, type WebRun, type WebSession } from '../apps/web/shared';
+import { webLimits, type WebEnvironment, type WebRun, type WebSession } from '../apps/web/shared';
 
 /** Opt-in paid acceptance through the real browser composer. Never part of the offline test suite. */
 const problems = {
@@ -19,38 +19,46 @@ const problems = {
   'add-comm': '对任意自然数 a 和 b（包括 0），证明 a + b = b + a。',
 } as const;
 const { values } = parseArgs({ options: { 'base-url': { type: 'string' }, 'credential-profile': { type: 'string' },
-  output: { type: 'string', default: 'out/web-first-use-model' }, problem: { type: 'string', default: 'add-zero' },
+  output: { type: 'string', default: 'out/web-first-use-model' }, problem: { type: 'string' }, 'problem-file': { type: 'string' },
+  environment: { type: 'string', default: 'standard' },
   'formalization-minutes': { type: 'string' }, 'formalization-tokens': { type: 'string' },
   'proof-minutes': { type: 'string' }, 'proof-tokens': { type: 'string' }, 'proof-turns': { type: 'string' },
   'allow-model': { type: 'boolean' }, help: { type: 'boolean' } } });
 if (values.help) {
   console.log('bun scripts/smoke-web-first-use.ts --allow-model --base-url http://127.0.0.1:8797 --output DIR\n'
-    + '  [--problem add-zero|even-sum|add-comm] [--credential-profile DIR]\n'
-    + '  [--formalization-minutes 10] [--formalization-tokens 400000]\n'
-    + '  [--proof-minutes 5] [--proof-tokens 200000] [--proof-turns 5]\n'
+    + '  [--problem add-zero|even-sum|add-comm | --problem-file FILE] [--environment standard|mathlib] [--credential-profile DIR]\n'
+    + '  [--formalization-minutes N] [--formalization-tokens N]\n'
+    + '  [--proof-minutes N] [--proof-tokens N] [--proof-turns N]\n'
     + 'Uses SUB2API_WESTLAKE_API_KEY or the existing profile auth command. One problem; no automatic retry.\n'
+    + 'All budgets are unlimited by default; omitted, blank or 0 disables a limit.\n'
     + 'Provider-reported token limits stop subsequent requests; in-flight requests may exceed them.\n'
     + 'Saves browser evidence, public host usage, phase timings and the downloaded verification kit.');
   process.exit(0);
 }
-assert.ok(values['allow-model'], 'Pass --allow-model to authorize the bounded real-model acceptance.');
-assert.ok(Object.hasOwn(problems, values.problem!), 'Choose --problem add-zero, even-sum or add-comm.');
-const original = problems[values.problem as keyof typeof problems];
+assert.ok(values['allow-model'], 'Pass --allow-model to authorize the real-model acceptance.');
+assert.ok(!(values.problem && values['problem-file']), 'Choose either --problem or --problem-file.');
+const problem = values['problem-file'] ? path.basename(values['problem-file']) : values.problem ?? 'add-zero';
+assert.ok(values['problem-file'] || Object.hasOwn(problems, problem), 'Choose --problem add-zero, even-sum or add-comm, or supply --problem-file.');
+const original = values['problem-file'] ? fs.readFileSync(path.resolve(values['problem-file']), 'utf8') : problems[problem as keyof typeof problems];
+assert.ok(original.trim(), 'The problem must contain text.');
+assert.ok(['standard', 'mathlib'].includes(values.environment!), 'Choose --environment standard or mathlib.');
+const environment = values.environment as WebEnvironment;
 const base = new URL(values['base-url'] ?? 'http://127.0.0.1:8797');
 assert.ok(base.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(base.hostname)
   && !base.username && !base.password && base.pathname === '/' && !base.search && !base.hash, 'Use a disposable loopback instance.');
-function positive(value: string | undefined, fallback: number, maximum: number, minimum = 1) {
-  const number = value === undefined ? fallback : Number(value);
-  assert.ok(Number.isSafeInteger(number) && number >= minimum && number <= maximum, `Budget must be an integer from ${minimum} to ${maximum}.`);
+function limit(value: string | undefined, maximum: number, minimum = 1) {
+  const number = Number(value ?? 0);
+  assert.ok(Number.isSafeInteger(number) && (number === 0 || number >= minimum && number <= maximum),
+    `Budget must be 0 (unlimited) or an integer from ${minimum} to ${maximum}.`);
   return number;
 }
 const budget = {
-  maxRunSeconds: positive(values['formalization-minutes'], webFormalizationDefaults.maxRunSeconds / 60, webFormalizationLimits.maxRunSeconds / 60) * 60,
-  maxTotalTokens: positive(values['formalization-tokens'], webFormalizationDefaults.maxTotalTokens, webFormalizationLimits.maxTotalTokens, 10000),
+  maxRunSeconds: limit(values['formalization-minutes'], webFormalizationLimits.maxRunSeconds / 60) * 60,
+  maxTotalTokens: limit(values['formalization-tokens'], webFormalizationLimits.maxTotalTokens, 10000),
   research: {
-    maxRunSeconds: positive(values['proof-minutes'], webFormalizationDefaults.research.maxRunSeconds / 60, webLimits.maxRunSeconds / 60) * 60,
-    maxTotalTokens: positive(values['proof-tokens'], webFormalizationDefaults.research.maxTotalTokens, webLimits.maxTotalTokens, 10000),
-    maxTurns: positive(values['proof-turns'], webFormalizationDefaults.research.maxTurns, webLimits.maxTurns),
+    maxRunSeconds: limit(values['proof-minutes'], webLimits.maxRunSeconds / 60) * 60,
+    maxTotalTokens: limit(values['proof-tokens'], webLimits.maxTotalTokens, 10000),
+    maxTurns: limit(values['proof-turns'], webLimits.maxTurns),
   },
 };
 const output = path.resolve(values.output!);
@@ -168,13 +176,13 @@ function checkKit(filename: string) {
   const files = JSON.parse(execFileSync('/usr/bin/python3', ['-c',
     'import json,sys,zipfile\nwith zipfile.ZipFile(sys.argv[1]) as z:\n assert z.testzip() is None, "ZIP CRC failure"\n names=z.namelist()\n assert len(names)==len(set(names)), "duplicate ZIP entries"\n print(json.dumps({n:z.read(n).decode("utf-8") for n in names}))', filename],
   { encoding: 'utf8', timeout: 20000, maxBuffer: 8 * 1024 * 1024 })) as Record<string, string>;
-  const prefix = `theoremos-${runId.slice(0, 8)}/`, environment = getLeanTaskEnvironment('standard');
-  const expected = [...Object.keys(environment.files), 'Submission.lean', 'Original.lean', 'Check.lean', 'README.txt', 'report.json'];
+  const prefix = `theoremos-${runId.slice(0, 8)}/`, trustedEnvironment = getLeanTaskEnvironment(environment);
+  const expected = [...Object.keys(trustedEnvironment.files), 'Submission.lean', 'Original.lean', 'Check.lean', 'README.txt', 'report.json'];
   assert.deepEqual(Object.keys(files).sort(), expected.map(name => prefix + name).sort());
   assert.equal(files[prefix + 'Submission.lean'], run!.result!.proof);
   assert.equal(files[prefix + 'Original.lean'], run!.source);
   assert.deepEqual(JSON.parse(files[prefix + 'report.json']), run!.result!.report);
-  for (const [name, content] of Object.entries(environment.files)) assert.equal(files[prefix + name], content);
+  for (const [name, content] of Object.entries(trustedEnvironment.files)) assert.equal(files[prefix + name], content);
   assert.match(files[prefix + 'Check.lean'], /^import Submission\n/mu);
   const identifier = (name: string) => name.split('.').map(part => /^[\p{L}_][\p{L}\p{N}_'!?]*$/u.test(part) ? part : `«${part}»`).join('.');
   assert.deepEqual(files[prefix + 'Check.lean'].split('\n').filter(line => line.startsWith('#print axioms ')),
@@ -206,7 +214,7 @@ try {
       let allowed = url.origin === base.origin && method === 'POST';
       if (url.pathname === '/api/formalizations') {
         const body = request.postDataJSON();
-        allowed &&= ++formalizationPosts === 1 && body.original === original && body.solve === true && body.environment === 'standard'
+        allowed &&= ++formalizationPosts === 1 && body.original === original && body.solve === true && body.environment === environment
           && body.maxRunSeconds === budget.maxRunSeconds && body.maxTotalTokens === budget.maxTotalTokens
           && Object.entries(budget.research).every(([name, value]) => body.research?.[name] === value);
       } else if (url.pathname === '/api/conversations') allowed &&= ++conversationPosts === 1;
@@ -219,11 +227,11 @@ try {
   assert.equal(await page.locator('body').getAttribute('data-entry'), 'natural');
   await page.locator('#formalize-original').fill(original); await page.locator('#formalize-settings > summary').click();
   await page.locator('#formalize-provider').selectOption('sub2api'); await page.locator('#formalize-model').fill('deepseek-flash');
-  await page.locator('#formalize-environment').selectOption('standard'); await page.locator('#formalize-effort').selectOption('max');
+  await page.locator('#formalize-environment').selectOption(environment); await page.locator('#formalize-effort').selectOption('max');
   await page.locator('#formalize-key').fill(key);
   for (const [selector, value] of Object.entries({ '#formalize-minutes': budget.maxRunSeconds / 60, '#formalize-tokens': budget.maxTotalTokens,
     '#research-minutes': budget.research.maxRunSeconds / 60, '#research-tokens': budget.research.maxTotalTokens, '#research-turns': budget.research.maxTurns }))
-    await page.locator(selector).fill(String(value));
+    await page.locator(selector).fill(value === 0 ? '' : String(value));
   const check = page.waitForResponse(response => new URL(response.url()).pathname === '/api/providers/sub2api/check');
   await page.locator('#check-model-connection').click(); write('connection.json', await (await check).json());
   await page.locator('#chat-connection-result').waitFor(); await page.locator('#formalize-settings > summary').click();
@@ -234,8 +242,9 @@ try {
   const response = await created; assert.ok(response.ok(), `Natural-language submission returned HTTP ${response.status()}.`);
   formalization = (await response.json()).formalization; formalizationId = formalization!.id;
   await page.waitForURL(url => url.searchParams.has('chat')); conversationId = new URL(page.url()).searchParams.get('chat')!;
-  write('attempt.json', { problem: values.problem, original, submittedAt: new Date(submittedAt).toISOString(), formalizationId, conversationId, budget });
-  const deadline = submittedAt + (budget.maxRunSeconds + budget.research.maxRunSeconds + 180) * 1000;
+  write('attempt.json', { problem, original, submittedAt: new Date(submittedAt).toISOString(), formalizationId, conversationId, budget });
+  const deadline = budget.maxRunSeconds && budget.research.maxRunSeconds
+    ? submittedAt + (budget.maxRunSeconds + budget.research.maxRunSeconds + 180) * 1000 : Infinity;
   let last = '';
   while (!interrupted && Date.now() < deadline) {
     await readRecords();
@@ -305,12 +314,12 @@ try {
   write('usage.json', usage);
   write('report.json', { passed: passed && cleanupErrors.length === 0, checkedAt: new Date().toISOString(), health,
     entry: 'Browser natural-language composer → conversation → automatic model review → independent Lean acceptance → browser ZIP download',
-    problem: values.problem, original, provider: 'sub2api', model: 'deepseek-flash', environment: 'standard', budgets: budget,
+    problem, original, provider: 'sub2api', model: 'deepseek-flash', environment, budgets: budget,
     submitted: submittedAt !== undefined, elapsedSeconds: (Date.now() - started) / 1000,
     submittedToEvidenceSeconds: submittedAt === undefined ? null : (Date.now() - submittedAt) / 1000,
     formalizationId, runId, conversationId, stages, timings: phaseTimings(), usage, download,
     browser: { pageErrors, resourceErrors, writes }, cleanupErrors, failure,
-    note: 'One bounded first-use problem; not a benchmark or an OpenAI compatibility result.' });
+    note: 'One first-use problem; unlimited budgets by default. Not a benchmark or an OpenAI compatibility result.' });
   await browser?.close(); process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); key = '';
   if (cleanupErrors.length) process.exitCode = 1;
   console.log(JSON.stringify({ passed: passed && cleanupErrors.length === 0, formalizationId, runId, failure, report: path.join(output, 'report.json') }));

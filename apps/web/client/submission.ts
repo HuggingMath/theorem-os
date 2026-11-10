@@ -11,7 +11,7 @@ export type SubmissionIssue = { field: SubmissionField; message: string; check?:
 /** The field is in units of 10,000 tokens (万), the unit providers bill in Chinese consoles. */
 export function tokenCap(raw: string, maximum: number): number | undefined {
   const value = Number(raw.trim());
-  return raw.trim() && Number.isSafeInteger(value) && value >= 1 && value * 10_000 <= maximum ? value * 10_000 : undefined;
+  return raw.trim() && Number.isSafeInteger(value) && value >= 0 && value * 10_000 <= maximum ? value * 10_000 : undefined;
 }
 
 // This checks input only. Provider authentication happens when a run is submitted.
@@ -46,6 +46,7 @@ export function submissionIssues(draft: TaskDraft, apiKey: string, session: WebS
     ['workers', draft.workers, t('Agent 数量'), 1, session.limits.maxWorkers],
   ] as const) {
     const value = Number(raw);
+    if (field !== 'workers' && value === 0) continue;
     if (!raw.trim() || !Number.isSafeInteger(value) || value < min || value > max) add(field, t('{0}须为 {1}–{2} 的整数', label, min, max));
   }
   const tokens = draft.maxTotalTokens?.trim() ?? '';

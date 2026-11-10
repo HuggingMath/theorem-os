@@ -3856,9 +3856,10 @@ describe('isolated solver and host acceptance', () => {
     expect(host.officialGate).toHaveBeenCalledOnce();
   });
 
-  it('keeps cooperative proof checks bounded independently of an unlimited solving budget', async () => {
+  it.each([0, 1800])('honors default unlimited or explicit proof-check time %s with an unlimited solving budget', async seconds => {
     configureCooperation();
-    const exitCode = await runSolver([...args, '--workers', '4', '--max-turns', '0', '--max-run-seconds', '0'], directory);
+    const exitCode = await runSolver([...args, '--workers', '4', '--max-turns', '0', '--max-run-seconds', '0',
+      ...(seconds ? ['--proof-timeout-seconds', String(seconds)] : [])], directory);
     const state = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
     expect(exitCode, JSON.stringify({ result: JSON.parse(fs.readFileSync(output, 'utf8')),
       tasks: state.cooperation.tasks.map((node: any) => ({ id: node.task.id, status: node.status, feedback: node.feedback })),
@@ -3867,7 +3868,8 @@ describe('isolated solver and host acceptance', () => {
         .filter(event => /error|failed|blocked|idle/u.test(event.event)) }, null, 2)).toBe(0);
     const partialChecks = host.verify.mock.calls.filter(([request]) => request.items.length === 1);
     expect(partialChecks).toHaveLength(6);
-    for (const [request] of partialChecks) expect(request).toMatchObject({ timeoutMs: 1_800_000, batchTimeoutMs: 1_800_000 });
+    for (const [request] of partialChecks) expect(request).toMatchObject({ timeoutMs: seconds ? seconds * 1000 : Infinity,
+      batchTimeoutMs: seconds ? seconds * 1000 : Infinity });
   });
 
   const routeGroups = (): RouteGroup[] => [
@@ -6540,7 +6542,7 @@ describe('isolated solver and host acceptance', () => {
       return { exitCode: 0, timedOut: false, phases: [] };
     });
     expect(await runSolver([...args, '--max-run-seconds', '1'], directory)).toBe(0);
-    expect(host.createSession.mock.calls[0][0].turnTimeoutMs).toBe(180000);
+    expect(host.createSession.mock.calls[0][0].turnTimeoutMs).toBeUndefined();
     const rejected = path.join(directory, 'rejected.json');
     host.prepare.mockResolvedValueOnce({ exitCode: 1, timedOut: false, phases: [], stderr: 'error: unknown module prefix Mathlib' });
     expect(await runSolver([...args, '--output', rejected], directory)).toBe(1);

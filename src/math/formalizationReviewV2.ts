@@ -3,7 +3,8 @@ import { formalizationEvaluationInputDigest, formalizationEvaluationLeanSource, 
 import { formalizationTranslationSchema, type FormalizationTranslation } from './formalization';
 import { getStructuredFormalizationReviewOutputSchema } from './formalizationRoleContract';
 import { parseLeanStatementContexts } from './leanStatementContext';
-import { hasStructureContext, leanStatementContextProtocolSchema, type LeanStatementContextProtocol } from './leanStatementSemantic';
+import { allowsOmittedLibraryContext, hasStructureContext, leanStatementContextProtocolSchema,
+  type LeanStatementContextProtocol } from './leanStatementSemantic';
 import { canonicalMathJson, mathDigest } from './mathRuntimeIo';
 import { eraseFormalizationProofs } from './formalizationSource';
 import { fidelityPolicySchema } from './formalizationFidelity';
@@ -54,7 +55,8 @@ export function assertReviewStatementObservation(input: FormalizationEvaluationR
   if (new Set(names).size !== names.length || snapshot.targets.some(target => !hash.safeParse(target.declarationHash).success))
     throw new Error('formalization_review_observation_invalid');
   const contexts = parseLeanStatementContexts(JSON.stringify(snapshot.targets.map(target =>
-    ({ id: target.name, context: target.context }))), names);
+    ({ id: target.name, context: target.context }))), names,
+    { boundedLibraryContext: allowsOmittedLibraryContext(contextProtocol) });
   if ([...contexts.values()].some(context => !context.bindings))
     throw new Error('formalization_review_observation_missing_bindings');
   if (contextProtocol && [...contexts.values()].some(context => !context.semantic))

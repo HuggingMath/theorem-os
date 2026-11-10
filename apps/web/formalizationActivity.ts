@@ -2,10 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { MathAgentOptions, MathAgentSession } from '../../src/runtime/codexSession';
 import type { elaborateFormalization } from '../../src/solver/formalizationElaboration';
-import { createAgentPathMask, isWebAgentActionBody, sanitizeAgentItem } from './agentActions';
+import { createAgentActionStream, createAgentPathMask, isWebAgentActionBody, sanitizeAgentItem, sanitizeAgentLeanCheck } from './agentActions';
 import { webFormalizationActivityLimits as limits, webFormalizationRoles, type WebFormalizationActivityBody, type WebFormalizationRole,
   type WebFormalizationRoleSummary, type WebFormalizationStep } from './formalizationTypes';
-import type { WebAgentActionBody, WebAgentLeanCheck } from './shared';
+import { webAgentActionLimits, type WebAgentActionBody, type WebAgentLeanCheck } from './shared';
 
 type Item = Record<string, unknown>;
 type Elaborate = typeof elaborateFormalization;
@@ -42,7 +42,7 @@ export function formalizationLeanFailure(message: string): WebAgentLeanCheck | u
   const match = /^([^\n:]+):(\d+):(\d+): (error|warning|info)(?:\([^)\n]*\))?: ([\s\S]+)$/u.exec(detail);
   if (!match || path.basename(match[1]!) !== 'Formalization.lean') return;
   return { passed: false, messages: [{ severity: match[4] as 'error' | 'warning' | 'info', line: Number(match[2]),
-    column: Math.max(0, Number(match[3]) - 1), text: clip(match[5]!.trim(), 600).text }] };
+    column: Math.max(0, Number(match[3]) - 1), text: clip(match[5]!.trim(), webAgentActionLimits.leanMessage).text }] };
 }
 
 /** What a role's OUTPUT.json says, cut to what its reader checks; undefined when it wrote nothing readable. */
@@ -53,7 +53,7 @@ export function formalizationRoleSummary(role: WebFormalizationRole, output: unk
   const shown = (text: unknown, limit: number = limits.summaryItem) => typeof text === 'string' && text.trim() ? clip(mask(text).trim(), limit).text : undefined;
   const sections: WebFormalizationRoleSummary['sections'] = [];
   const section = (kind: WebFormalizationRoleSummary['sections'][number]['kind'], entries: unknown, read: (entry: unknown) => string | undefined) => {
-    const all = (Array.isArray(entries) ? entries : []).map(read).filter((entry): entry is string => !!entry);
+    const all = (Array.isArray(entries) ? entries : []).map(entry => read(entry)).filter((entry): entry is string => !!entry);
     if (all.length) sections.push({ kind, items: all.slice(0, limits.summaryItems),
       ...(all.length > limits.summaryItems ? { omitted: all.length - limits.summaryItems } : {}) });
   };
@@ -129,7 +129,7 @@ function withoutProtocol(action: WebAgentActionBody, lines: readonly string[]): 
 const readText = (file: string, limit: number) => {
   try { const stat = fs.statSync(file); return stat.isFile() && stat.size <= limit ? fs.readFileSync(file, 'utf8') : undefined; } catch { return; }
 };
-const readJson = (file: string) => { try { return JSON.parse(readText(file, 2_000_000) ?? '') as unknown; } catch { return; } };
+const readJson = (file: string, limit = 2_000_000) => { try { return JSON.parse(readText(file, limit) ?? '') as unknown; } catch { return; } };
 
 /**
  * What a web formalization did, step by step, for its owner: each role's session actions and what it handed in, each
@@ -169,24 +169,35 @@ export function createFormalizationActivity(context: { scratch: string; director
     }
     const lines = protocolLines(options.instructions, readText(path.join(options.workspace, 'OUTPUT.schema.json'), 1_000_000));
     const lane = { round: slot.round, step: 'role' as const, workerId: slot.workerId, role: slot.role, slot: slot.slot };
+    const stream = createAgentActionStream(action => context.send({ type: 'action', action }));
+    options.signal?.addEventListener('abort', stream.stop, { once: true });
+    if (options.signal?.aborted) stream.stop();
     let settled = false;
     const finish = (state: 'finished' | 'failed', extra: { summary?: WebFormalizationRoleSummary; reason?: string } = {}) => {
       if (settled) return;
-      settled = true; emit({ ...lane, state, ...extra });
+      settled = true; stream.stop(); options.signal?.removeEventListener('abort', stream.stop); emit({ ...lane, state, ...extra });
     };
     emit({ ...lane, state: 'started' });
-    const onItem = (phase: 'started' | 'completed', item: Item) => {
-      options.onItem?.(phase, item);
-      const action = sanitizeAgentItem(phase, deep({ ...item, id: typeof item.id === 'string' ? `${session}:${item.id}` : item.id }),
+    const show = (phase: 'started' | 'completed', item: Item, incremental = false) => {
+      const id = typeof item.id === 'string' ? `${session}:${item.id}` : item.id;
+      const action = sanitizeAgentItem(phase, deep({ ...item, id }),
         { workerId: slot.workerId, worktree: '/workspace', hidden: sandboxHidden });
       const shown = action && withoutProtocol(action, lines);
-      if (shown && isWebAgentActionBody(shown)) try { context.send({ type: 'action', action: shown }); } catch { /* As above. */ }
+      if (typeof id === 'string') stream.write(phase, id, shown && isWebAgentActionBody(shown) ? shown : undefined, incremental);
+    };
+    const onItem: NonNullable<MathAgentOptions['onItem']> = (phase, item, context) => {
+      options.onItem?.(phase, item, context); show(phase, item);
+    };
+    const onItemUpdate: NonNullable<MathAgentOptions['onItemUpdate']> = (item, context) => {
+      options.onItemUpdate?.(item, context); show('started', item, true);
     };
     let opened: MathAgentSession;
-    try { opened = await inner({ ...options, onItem }); }
+    try { opened = await inner({ ...options, onItem, onItemUpdate }); }
     catch (cause) { finish('failed', { reason: code(cause instanceof Error ? cause.message : undefined) ?? 'formalization_failed' }); throw cause; }
     const run = opened.run;
     opened.run = async (...args) => {
+      stream.reset();
+      if (options.signal?.aborted) stream.stop();
       try {
         const status = await run(...args);
         if (status === 'completed' || status === 'submitted') {
@@ -196,8 +207,10 @@ export function createFormalizationActivity(context: { scratch: string; director
         return status;
       } catch (cause) { finish('failed', { reason: code(cause instanceof Error ? cause.message : undefined) ?? 'formalization_failed' }); throw cause; }
     };
+    const interrupt = opened.interrupt;
+    opened.interrupt = async () => { stream.stop(); await interrupt(); };
     const close = opened.close;
-    opened.close = async () => { try { await close(); } finally { finish('failed', { reason: 'formalization_role_interrupted' }); } };
+    opened.close = async () => { stream.stop(); try { await close(); } finally { finish('failed', { reason: 'formalization_role_interrupted' }); } };
     return opened;
   };
 
@@ -206,15 +219,20 @@ export function createFormalizationActivity(context: { scratch: string; director
     emit({ round: at, step: 'compile', state: 'started', source: shown.text, ...(shown.clipped ? { sourceClipped: true } : {}) });
     try {
       const result = await inner(directory, source, environment, options);
-      emit({ round: at, step: 'compile', state: 'passed', targets: result.targets.slice(0, limits.targets).map(target => clip(target.name, 200).text) });
+      const diagnostics = object(result.compilation?.diagnostics), lean = diagnostics && sanitizeAgentLeanCheck(diagnostics, masked);
+      emit({ round: at, step: 'compile', state: 'passed', targets: result.targets.slice(0, limits.targets).map(target => clip(target.name, 200).text),
+        ...(lean ? { lean } : {}) });
       return result;
     } catch (cause) {
       if (!options.signal?.aborted) {
         const message = cause instanceof Error ? cause.message : String(cause);
-        const lean = formalizationLeanFailure(message);
+        // Read only the compilation directory we passed in; error text never chooses a file to read.
+        const diagnostics = object(readJson(path.join(directory, 'diagnostics.json'), 8_000_000));
+        const lean = (diagnostics && sanitizeAgentLeanCheck(diagnostics, masked)) ?? formalizationLeanFailure(masked(message));
         emit({ round: at, step: 'compile', state: 'failed', ...(lean ? { lean } :
           /timeout/u.test(code(message) ?? '') ? { lean: { passed: false, timedOut: true, messages: [] } } :
-            { text: clip(masked(message.replace(/\nElaboration diagnostics:[\s\S]*$/u, '')), limits.summaryText).text }) });
+            { text: clip(masked(message.replace(/\nElaboration diagnostics:[\s\S]*$/u, '')), limits.summaryText).text }),
+          ...(lean?.passed ? { text: clip(masked(message.replace(/\nElaboration diagnostics:[\s\S]*$/u, '')), limits.summaryText).text } : {}) });
       }
       throw cause;
     }

@@ -237,8 +237,8 @@ type Context = {
   refresh: () => void; select: (lane: Lane, index: number, options?: { toggle?: boolean }) => void; close: () => void; focus?: string;
 };
 
-export function ItemRow({ item, ctx }: { item: RouteItem; ctx: ItemContext }) {
-  const key = itemKey(item), open = ctx.memory.open.has(key), body = hasBody(item), at = itemAt(item);
+export function ItemRow({ item, ctx, detailId }: { item: RouteItem; ctx: ItemContext; detailId?: string }) {
+  const key = detailId ?? itemKey(item), open = ctx.memory.open.has(key), body = hasBody(item), at = itemAt(item);
   let head;
   if (item.type === 'event') {
     const outcome = eventOutcome(item.event);
@@ -255,7 +255,7 @@ export function ItemRow({ item, ctx }: { item: RouteItem; ctx: ItemContext }) {
   const kind = item.type === 'event' ? 'event' : item.action.kind;
   if (!body) return <li class="route-item" data-kind={kind}><div class="route-item-head">{head}</div></li>;
   return <li class="route-item" data-kind={kind}>
-    <details open={open} onToggle={event => {
+    <details open={open} data-thinking-detail={detailId} onToggle={event => {
       const now = (event.currentTarget as HTMLDetailsElement).open;
       if (now === ctx.memory.open.has(key)) return;
       if (now) ctx.memory.open.add(key); else ctx.memory.open.delete(key);

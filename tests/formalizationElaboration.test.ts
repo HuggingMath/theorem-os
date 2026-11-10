@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import { elaborateFormalization } from '../src/solver/formalizationElaboration';
+import { DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT } from '../src/math/mathProofEnvironmentCache';
 import { semanticContextFixture, structureContextFixture } from './helpers/formalizationFixture';
 
 const { diagnostics, packages, prepare, dispose, readiness } = vi.hoisted(() => ({
@@ -194,7 +195,17 @@ describe('formalization declaration elaboration', () => {
     const cache = path.join(directory, 'packages'); fs.mkdirSync(cache); packages.mockReturnValue(cache);
     await elaborateFormalization(path.join(directory, 'unlimited'), source, 'mathlib', { env: {}, timeoutMs: 0 });
     expect(prepare.mock.calls[0][2].deadlineAt).toBeUndefined();
+    expect(prepare.mock.calls[0][2].cacheRoot).toBe(DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT);
     expect(diagnostics.mock.calls[0][0].timeoutMs).toBe(Infinity);
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('honors a caller-selected private dependency cache', async () => {
+    const packagesRoot = path.join(directory, 'packages'); fs.mkdirSync(packagesRoot); packages.mockReturnValue(packagesRoot);
+    const proofEnvironmentCacheRoot = path.join(directory, 'private-cache');
+    await elaborateFormalization(path.join(directory, 'custom-cache'), source, 'mathlib',
+      { env: {}, timeoutMs: 30_000, proofEnvironmentCacheRoot });
+    expect(prepare.mock.calls[0][2].cacheRoot).toBe(proofEnvironmentCacheRoot);
     expect(dispose).toHaveBeenCalledOnce();
   });
 

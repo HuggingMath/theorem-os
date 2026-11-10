@@ -67,7 +67,7 @@ export const release: Record<string, string> = {
   '最多 Token': 'Maximum tokens',
   '随后证明的预算': 'Proof budget',
   '最多研究轮次': 'Maximum research turns',
-  '形式化最多 {0} 分钟 / {1} Token；随后证明最多 {2} 分钟 / {3} Token。': 'Formalization: up to {0} minutes / {1} tokens. Proof: up to {2} minutes / {3} tokens.',
-  '费用由模型服务商收取。按已报告用量停止，进行中的请求可能超出 Token 上限；这不是金额上限。': 'Your model provider bills the calls. Work stops based on reported usage; requests in progress may exceed the token cap. This is not a monetary cap.',
-  '请把两阶段预算设为允许范围内的正整数。': 'Set both budgets to positive integers within the allowed ranges.',
+  '形式化时间：{0}；Token：{1}。随后证明时间：{2}；Token：{3}。': 'Formalization time: {0}; tokens: {1}. Proof time: {2}; tokens: {3}.',
+  '预算留空表示不限。费用由模型服务商收取。': 'Leave budgets blank for no limit. Your model provider bills the calls.',
+  '预算可留空，填写时须为允许范围内的正整数。': 'Leave budgets blank, or enter positive integers within the allowed ranges.',
 };
