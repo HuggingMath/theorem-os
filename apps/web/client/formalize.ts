@@ -1,5 +1,5 @@
 import type { WebSession, WebFormalizationReport } from '../shared';
-import type { WebFormalization, WebFormalizationCapabilities, WebFormalizationRequest } from '../formalizationTypes';
+import type { WebFormalization, WebFormalizationCapabilities, WebFormalizationRequest, WebResearchBudget } from '../formalizationTypes';
 import type { WebConversation } from '../conversationTypes';
 import { locale, localeTag, localizeDocument, localizeMessage, mountLocaleSwitch, sentences, t } from '../i18n';
 import { researchExamples } from '../problemExamples';
@@ -151,12 +151,12 @@ function drawCapabilities() {
     : caps.key === 'server' ? t('留空使用服务器 Key；填写则仅用于这次生成。') : t('填写当前服务商的 Key，仅用于这次生成。');
   key.required = !embedded && caps.key === 'required';
   const budget = caps.defaults ?? caps.limits;
-  $('#formalize-budget').textContent = t('模型 {0} · 最多 {1} 分钟 / {2} Token · {3} 轮写作 · {4} 位审核模型', caps.model,
-    Math.ceil(budget.maxRunSeconds / 60), budget.maxTotalTokens ? budget.maxTotalTokens.toLocaleString(localeTag) : t('不限'), caps.limits.maxRounds, caps.limits.reviewers);
+  $('#formalize-budget').textContent = t('模型 {0} · 时间：{1} · Token：{2} · 写作轮次不限', caps.model,
+    budget.maxRunSeconds ? t('{0} 分钟', Math.ceil(budget.maxRunSeconds / 60)) : t('不限'), budget.maxTotalTokens ? budget.maxTotalTokens.toLocaleString(localeTag) : t('不限'));
   if (embedded) {
-    const research = caps.defaults?.research ?? { maxRunSeconds: 300, maxTurns: 5, maxTotalTokens: 200_000 };
-    $('#formalize-budget').append(document.createTextNode(' ' + t('随后证明研究最多 {0} 分钟、{1} 轮研究、{2} Token，共用本次 Key。',
-      Math.ceil(research.maxRunSeconds / 60), research.maxTurns, research.maxTotalTokens.toLocaleString(localeTag))));
+    const research: WebResearchBudget = caps.defaults?.research ?? { maxRunSeconds: 0, maxTurns: 0, maxTotalTokens: 0 };
+    $('#formalize-budget').append(document.createTextNode(' ' + t('随后证明：时间 {0}、轮次 {1}、Token {2}，共用本次 Key。',
+      research.maxRunSeconds ? t('{0} 分钟', Math.ceil(research.maxRunSeconds / 60)) : t('不限'), research.maxTurns || t('不限'), research.maxTotalTokens ? research.maxTotalTokens.toLocaleString(localeTag) : t('不限'))));
   }
   const note = $('#formalize-unavailable'); note.hidden = caps.available;
   note.textContent = caps.reason === 'provider' ? t('当前未配置支持形式化的服务商，请联系管理员配置。') : t('当前运行环境尚未支持在线形式化。已有结果仍可查看。');

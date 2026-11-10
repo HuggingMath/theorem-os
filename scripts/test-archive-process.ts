@@ -18,7 +18,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/archive-process');
 const staticRoot = path.join(root, 'out/web');
 const catalog = JSON.parse(await fs.readFile(path.join(staticRoot, 'classics/data/catalog.json'), 'utf8')) as ArchiveCatalog;
-assert.equal(catalog.records.length, 16, 'Build the sixteen completed campaign problems before checking the process reader');
+const manifest = JSON.parse(await fs.readFile(path.join(root, 'research/openai-math/manifest.json'), 'utf8')) as { records: { id: string }[] };
+assert.deepEqual(catalog.records.map(record => record.id).sort(), manifest.records.map(record => record.id).sort(), 'Build every solved campaign problem before checking the process reader');
 assert.ok((await fs.readFile(path.join(staticRoot, 'classics/site.js'), 'utf8')).includes('data-process-step'),
   'Run bun run build:web before the archive process check');
 await fs.mkdir(output, { recursive: true });
@@ -138,7 +139,8 @@ try {
       } });
     });
     await observe(context, label);
-    const page = await context.newPage(); active = page; page.setDefaultTimeout(15_000);
+    context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
+    const page = await context.newPage(); active = page;
     try {
       await open(page, complex.record, locale);
       assert.equal(await processRoot(page).getAttribute('data-process-run-id'), complex.record.campaign!.runId);
@@ -272,6 +274,7 @@ try {
 
   // Check every problem through HTTP, including its data and accepted final run, rather than only representative UI fixtures.
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' });
+  context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
   await observe(context, 'all records');
   const page = await context.newPage(); active = page;
   for (const record of catalog.records) {

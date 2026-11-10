@@ -49,7 +49,6 @@ export const release: Record<string, string> = {
   '已保存 Key · 末四位 {0}': 'Saved key · ending in {0}',
   '保存后加密存入你的账号，可随时删除。': 'Saved keys are encrypted in your account. You can delete them at any time.',
   '通过模型列表检查连接': 'Check the connection using the model list',
-  '形式化 {0} 分钟 / {1} Token；证明 {2} 分钟 / {3} Token。': 'Formalization: {0} min / {1} tokens. Proof: {2} min / {3} tokens.',
   '按已报告用量停止，在途请求可能超额；Token 上限不代表金额封顶。': 'Work stops at reported usage. Requests in progress may exceed the token cap; it is not a spending limit.',
   '留空使用管理员 Key。': 'Leave blank to use the admin key.',
   '关闭标签页后清除，限当前服务商使用。': 'Cleared when this tab closes. Used for this provider only.',
@@ -117,5 +116,4 @@ export const release: Record<string, string> = {
   '最多 Token': 'Maximum tokens',
   '随后证明的预算': 'Proof budget',
   '最多研究轮次': 'Maximum research turns',
-  '请把两阶段预算设为允许范围内的正整数。': 'Set both budgets to positive integers within the allowed ranges.',
 };

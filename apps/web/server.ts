@@ -54,9 +54,9 @@ const inputSchema = z.object({
   environment: z.enum(['standard', 'mathlib']).default('standard'),
   source: z.string().min(1).refine(value => value.trim().length > 0 && Buffer.byteLength(value) <= webLimits.maxSourceBytes),
   task: z.string().trim().min(1).refine(value => Buffer.byteLength(value) <= webLimits.maxTaskBytes),
-  maxTurns: z.number().int().min(1).max(webLimits.maxTurns),
-  maxRunSeconds: z.number().int().min(30).max(webLimits.maxRunSeconds),
-  maxTotalTokens: z.number().int().min(10_000).max(webLimits.maxTotalTokens).optional(),
+  maxTurns: z.number().int().nonnegative().max(webLimits.maxTurns).default(0),
+  maxRunSeconds: z.union([z.literal(0), z.number().int().min(30).max(webLimits.maxRunSeconds)]).default(0),
+  maxTotalTokens: z.union([z.literal(0), z.number().int().min(10_000).max(webLimits.maxTotalTokens)]).default(0),
   workers: z.number().int().min(1).max(webLimits.maxWorkers),
   coordination: z.enum(['cooperative', 'independent']),
   planApproval: z.boolean().optional(),
@@ -96,10 +96,10 @@ const formalizationSchema = z.object({
   apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default(''),
   solve: z.boolean().optional(), humanReview: z.boolean().optional(),
   providerId: inputSchema.shape.providerId.optional(), model: inputSchema.shape.model.optional(),
-  maxRunSeconds: z.number().int().min(30).max(webFormalizationLimits.maxRunSeconds).optional(),
-  maxTotalTokens: z.number().int().min(10_000).max(webFormalizationLimits.maxTotalTokens).optional(),
+  maxRunSeconds: z.union([z.literal(0), z.number().int().min(30).max(webFormalizationLimits.maxRunSeconds)]).default(0),
+  maxTotalTokens: z.union([z.literal(0), z.number().int().min(10_000).max(webFormalizationLimits.maxTotalTokens)]).default(0),
   research: z.object({ maxRunSeconds: inputSchema.shape.maxRunSeconds, maxTurns: inputSchema.shape.maxTurns,
-    maxTotalTokens: z.number().int().min(10_000).max(webLimits.maxTotalTokens) }).strict().optional(),
+    maxTotalTokens: inputSchema.shape.maxTotalTokens }).strict().optional(),
 }).strict();
 const conversationSchema = z.object({ formalizationId: z.string().uuid().optional(), runId: z.string().uuid().optional() })
   .strict().refine(value => Boolean(value.formalizationId || value.runId));

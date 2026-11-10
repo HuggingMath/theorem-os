@@ -1,9 +1,9 @@
-import type { WebFormalizationRequest } from '../formalizationTypes';
+import type { WebFormalizationRequest, WebResearchBudget } from '../formalizationTypes';
 
 const schema = 'theorem-os.chat-draft.v1';
 export type ChatDraftSettings = Required<Pick<WebFormalizationRequest,
   'providerId' | 'model' | 'environment' | 'effort' | 'maxRunSeconds' | 'maxTotalTokens' | 'research'>> & {
-    participation: 'guided' | 'automatic';
+    participation: 'guided' | 'automatic'; research: WebResearchBudget;
   };
 export type ChatDraft = { text: string; settings?: ChatDraftSettings };
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);

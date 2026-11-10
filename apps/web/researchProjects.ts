@@ -9,7 +9,7 @@ import type {
   ResearchActivity, ResearchAuthor, ResearchCommand, ResearchContribution, ResearchFeedback, ResearchFeedbackDecisionInput,
   ResearchFeedbackInput, ResearchFeedbackTarget, ResearchHumanAssignment, ResearchMemberRole, ResearchMutation, ResearchNotification, ResearchPage,
   ResearchProfileInput, ResearchProjectDetail, ResearchProjectInput, ResearchProjectSummary, ResearchProjectUpdate,
-  ResearchQuery, ResearcherProfile, ResearchRunBinding, ResearchRunBindingInput, ResearchRunGrants, ResearchRunPermission,
+  ResearchQuery, ResearcherDirectory, ResearcherProfile, ResearchRunBinding, ResearchRunBindingInput, ResearchRunGrants, ResearchRunPermission,
   ResearchStatementInput, ResearchStatementVersion, ResearchProofResult,
 } from './researchProjectTypes';
 
@@ -215,14 +215,29 @@ export class WebResearchProjects {
       projects: projects.map(project => this.summary(viewer, project)),
       contributions: [...contributions, ...assets.map(asset => asset.contribution)] };
   }
-  directory(viewer: string, query: ResearchQuery = {}): ResearchPage<ResearcherProfile> {
-    const self = this.identity(viewer), q = query.q?.toLocaleLowerCase() ?? '';
+  directory(viewer: string, query: ResearchQuery = {}): ResearcherDirectory {
+    const self = this.identity(viewer), q = query.q?.trim().toLocaleLowerCase() ?? '', field = query.field?.trim().toLocaleLowerCase() ?? '';
     const profiles = this.storage.listRecords(['research', 'people']).flatMap(file => {
       const profile = this.storage.getRecord<OwnerState>(['research', 'people', file])?.profile;
       return profile && (profile.visibility === 'public' || profile.id === self) ? [profile] : [];
-    }).filter(profile => (!query.field || profile.fields.includes(query.field)) &&
+    });
+    const availableFields = new Map<string, string>();
+    for (const value of profiles.flatMap(profile => profile.fields)) {
+      const label = value.trim(), normalized = label.toLocaleLowerCase();
+      if (label && !availableFields.has(normalized)) availableFields.set(normalized, label);
+    }
+    const matching = profiles.filter(profile => (!field || profile.fields.some(value => value.trim().toLocaleLowerCase() === field)) &&
       (!q || `${profile.displayName} ${profile.bio} ${profile.fields.join(' ')}`.toLocaleLowerCase().includes(q)));
-    return this.page(profiles.sort((a, b) => a.displayName.localeCompare(b.displayName)), query);
+    const page = this.page(matching.sort((a, b) => a.displayName.localeCompare(b.displayName)), query);
+    return { ...page, fields: [...availableFields.values()].sort((left, right) => left.localeCompare(right)), items: page.items.map(person => {
+      const visible = this.profile(viewer, person.id);
+      const project = [...visible.projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+      const contribution = [...visible.contributions].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+      return { ...person, research: { projectCount: visible.projects.length, contributionCount: visible.contributions.length,
+        ...(project ? { latestProject: { id: project.id, title: project.title, updatedAt: project.updatedAt } } : {}),
+        ...(contribution ? { latestContribution: { summary: contribution.summary, createdAt: contribution.createdAt,
+          projectId: contribution.projectId, assetId: contribution.assetId, assetVersion: contribution.assetVersion, runId: contribution.runId } } : {}) } };
+    }) };
   }
   saveProfile(viewer: string, value: unknown): ResearcherProfile {
     const self = this.authenticated(viewer), input = parse(profileSchema, value) as ResearchProfileInput, state = this.ownerState(viewer);

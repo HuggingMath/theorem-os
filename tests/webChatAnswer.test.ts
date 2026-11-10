@@ -1,0 +1,139 @@
+import { describe, expect, it, vi } from 'vitest';
+import { ChatAnswers } from '../apps/web/client/chatAnswer';
+import type { WebExplanation, WebExplanationDocument, WebExplanationOverview, WebRun } from '../apps/web/shared';
+
+const at = '2026-11-10T07:00:00.000Z';
+const run = (changes: Partial<WebRun> = {}): WebRun => ({ id: 'accepted-run', title: 'Recorded accepted proof',
+  status: 'completed', phase: 'finished', createdAt: at, updatedAt: at, providerId: 'offline', model: 'fixture', effort: 'high',
+  environment: 'standard', source: 'theorem first : True := by sorry', task: 'Read existing evidence only',
+  maxTurns: 0, maxRunSeconds: 0, maxTotalTokens: 0, workers: 1, coordination: 'cooperative', events: [],
+  result: { status: 'evaluated_passed', proof: 'theorem first : True := True.intro', report: {} }, ...changes });
+function document(target: string, text = target): WebExplanationDocument {
+  return { schema: 'theorem-os.web-explanation.v1', target, language: 'zh', toolchain: 'synthetic', mathlibRevision: null,
+    overview: `Overview ${text}`, axioms: [], sections: [], model: 'fixture', effort: 'high', auditors: 2, rounds: 1, tokens: null,
+    metrics: { declarations: 1, steps: 0, citations: 0, excerptCoverage: 1, proofLines: 1, explainedLines: 1, ambiguousExcerpts: 0 } };
+}
+function explanation(target: string, overrides: Partial<WebExplanation> = {}): WebExplanation {
+  return { id: `explanation-${target}`, runId: 'accepted-run', target, language: 'zh', status: 'approved', createdAt: at, updatedAt: at,
+    model: 'fixture', effort: 'high', maxRunSeconds: 0, maxTotalTokens: 0, document: document(target), ...overrides };
+}
+function overview(value = run(), entries = [explanation('first'), explanation('second')]): WebExplanationOverview {
+  return { run: { id: value.id, title: value.title, environment: 'standard', providerId: value.providerId, model: value.model,
+    effort: value.effort, proof: value.result!.proof }, targets: [{ name: 'first', declarations: 1 }, { name: 'second', declarations: 1 }],
+    explanations: entries.map(({ document: _, ...entry }) => entry), generation: { available: false, reason: 'runtime' } };
+}
+function deferred<T>() {
+  let resolve!: (value: T) => void, reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+const settle = () => new Promise<void>(resolve => setImmediate(resolve));
+function fixture(read: (url: string) => unknown | Promise<unknown>) {
+  const request = vi.fn(async <T>(url: string): Promise<T> => await read(url) as T), changed = vi.fn();
+  return { answers: new ChatAnswers(request, 'zh', changed), request, changed };
+}
+
+describe('chat reads existing approved explanations without model or generation requests', () => {
+  it('only reads when the whole run is accepted and has its accepted proof', () => {
+    const { answers, request } = fixture(() => { throw new Error('No request is allowed'); });
+    for (const value of [undefined, run({ status: 'running' }), run({ status: 'cancelled' }), run({ status: 'error' }),
+      run({ result: { status: 'incomplete', proof: 'an unchecked candidate', report: {} } }),
+      run({ result: { status: 'evaluated_failed', proof: 'rejected proof', report: {} } }),
+      run({ result: { status: 'evaluated_passed', proof: '', report: {} } })]) {
+      expect(answers.sync(value)).toBeUndefined(); answers.refresh(value);
+    }
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('prefers an approved target in the current language and only reads its saved document', async () => {
+    const entries = [explanation('first', { language: 'en' }), explanation('second')];
+    const { answers, request } = fixture(url => url.endsWith('/explanations') ? overview(run(), entries) : { explanation: explanation('second') });
+    const value = answers.sync(run())!; expect(value.loading).toBe(true); await settle();
+    expect(value).toMatchObject({ target: 'second', loading: false, document: document('second') });
+    expect(request.mock.calls).toEqual([['/api/runs/accepted-run/explanations'],
+      ['/api/runs/accepted-run/explanations/item?target=second&language=zh']]);
+    answers.sync(run()); answers.select('accepted-run', 'missing'); answers.select('accepted-run', 'second');
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['queued', 'running', 'exhausted', 'cancelled', 'error'] as const)('shows no document and never starts generation for an existing %s explanation', async status => {
+    const { answers, request } = fixture(() => overview(run(), [explanation('first', { status })]));
+    const value = answers.sync(run())!; await settle();
+    expect(value).toMatchObject({ target: 'first', loading: false }); expect(value.document).toBeUndefined();
+    expect(request.mock.calls).toEqual([['/api/runs/accepted-run/explanations']]);
+  });
+
+  it('keeps missing explanations empty and reuses an unchanged approved document on refresh', async () => {
+    let available = false;
+    const { answers, request } = fixture(url => url.endsWith('/explanations') ? overview(run(), available ? [explanation('first')] : [])
+      : { explanation: explanation('first') });
+    const value = answers.sync(run())!; await settle(); expect(value.document).toBeUndefined();
+    available = true; answers.refresh(run()); await settle(); expect(value.document).toEqual(document('first'));
+    answers.refresh(run()); await settle();
+    expect(request.mock.calls.filter(([url]) => url.includes('/item?'))).toHaveLength(1);
+    expect(request.mock.calls.every(call => call.length === 1)).toBe(true);
+  });
+
+  it('switches targets and drops a previous target response that arrives after the selected target', async () => {
+    const old = deferred<{ explanation: WebExplanation }>();
+    const { answers, request, changed } = fixture(url => url.endsWith('/explanations') ? overview()
+      : url.includes('target=first') ? old.promise : { explanation: explanation('second') });
+    const value = answers.sync(run())!; await settle();
+    answers.select(value.runId, 'second'); await settle(); expect(value.document).toEqual(document('second'));
+    const updates = changed.mock.calls.length;
+    old.resolve({ explanation: explanation('first') }); await settle();
+    expect(value).toMatchObject({ target: 'second', document: document('second'), loading: false });
+    expect(changed).toHaveBeenCalledTimes(updates);
+    expect(request.mock.calls.filter(([url]) => url.includes('/item?'))).toHaveLength(2);
+  });
+
+  it('drops an overview or document belonging to the old proof after the accepted proof changes', async () => {
+    const old = deferred<WebExplanationOverview>(), updated = run({ result: { status: 'evaluated_passed', proof: 'a newly accepted proof', report: {} } });
+    let reads = 0;
+    const { answers } = fixture(url => url.endsWith('/explanations') ? ++reads === 1 ? old.promise : overview(updated)
+      : { explanation: explanation('first', { document: document('first', 'new proof') }) });
+    const previous = answers.sync(run())!, current = answers.sync(updated)!; await settle();
+    expect(current.document?.overview).toBe('Overview new proof'); expect(current).not.toBe(previous);
+    old.resolve(overview()); await settle();
+    expect(answers.sync(updated)).toBe(current); expect(current.document?.overview).toBe('Overview new proof');
+    expect(previous.document).toBeUndefined();
+  });
+
+  it('drops an old owner response after clearing and reopening the same run', async () => {
+    const old = deferred<{ explanation: WebExplanation }>(); let itemReads = 0;
+    const { answers, changed } = fixture(url => url.endsWith('/explanations') ? overview()
+      : ++itemReads === 1 ? old.promise : { explanation: explanation('first', { document: document('first', 'current owner') }) });
+    answers.sync(run()); await settle(); answers.clear();
+    const current = answers.sync(run())!; await settle(); const updates = changed.mock.calls.length;
+    old.resolve({ explanation: explanation('first', { document: document('first', 'former owner') }) }); await settle();
+    expect(current.document?.overview).toBe('Overview current owner'); expect(changed).toHaveBeenCalledTimes(updates);
+  });
+
+  it('makes a failed read retryable and does not duplicate a refresh already in flight', async () => {
+    let overviewReads = 0;
+    const pending = deferred<WebExplanationOverview>();
+    const { answers, request } = fixture(url => {
+      if (!url.endsWith('/explanations')) return { explanation: explanation('first') };
+      if (++overviewReads === 1) throw new Error('Saved explanation could not be read');
+      return pending.promise;
+    });
+    const value = answers.sync(run())!; await settle();
+    expect(value).toMatchObject({ loading: false, error: 'Saved explanation could not be read' });
+    answers.refresh(run()); answers.refresh(run()); expect(request).toHaveBeenCalledTimes(2);
+    pending.resolve(overview()); await settle();
+    expect(value).toMatchObject({ loading: false, document: document('first') }); expect(value.error).toBeUndefined();
+  });
+
+  it.each(['id', 'proof'] as const)('rejects an overview bound to the wrong %s', async field => {
+    const result = overview(); result.run[field] = 'another';
+    const { answers, request } = fixture(() => result), value = answers.sync(run())!; await settle();
+    expect(value.error).toBeTruthy(); expect(value.document).toBeUndefined(); expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['runId', 'id', 'status', 'target', 'language', 'document'] as const)('rejects an item whose %s does not match its approved target', async field => {
+    const item = explanation('first');
+    const invalid = { ...item, [field]: field === 'document' ? document('second') : field === 'status' ? 'running' : 'another' };
+    const { answers } = fixture(url => url.endsWith('/explanations') ? overview() : { explanation: invalid });
+    const value = answers.sync(run())!; await settle(); expect(value.error).toBeTruthy(); expect(value.document).toBeUndefined();
+  });
+});

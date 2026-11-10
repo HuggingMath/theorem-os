@@ -124,7 +124,7 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     const alice = await session();
     const provider = alice.session.providers[0];
     expect(provider).toMatchObject({ id: 'sub2api', baseUrl: 'http://host.docker.internal:8080/v1' });
-    expect(alice.session.defaults).toMatchObject({ model: 'deepseek-flash', effort: 'max' });
+    expect(alice.session.defaults).toMatchObject({ model: 'deepseek-flash', effort: 'max', maxTurns: 0, maxRunSeconds: 0, maxTotalTokens: 0 });
 
     const submitted = { ...input(), ...alice.session.defaults, providerId: provider.id };
     const created = await request('/api/runs', alice, { body: submitted });
@@ -136,6 +136,20 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     expect(runner.calls[0].value).toMatchObject({ provider,
       input: { providerId: provider.id, model: 'deepseek-flash', effort: 'max' } });
     runner.calls[0].finish();
+  });
+
+  it.each([undefined, 0])('normalizes omitted or zero research budgets to unlimited (%s)', async budget => {
+    const alice = await session(), submitted = { ...input(), requestId: 'unlimited-budget',
+      maxTurns: budget, maxRunSeconds: budget, maxTotalTokens: budget };
+    const response = await request('/api/runs', alice, { body: submitted });
+    expect(response.status).toBe(201); await tick();
+    const { run } = await response.json();
+    expect(run).toMatchObject({ maxTurns: 0, maxRunSeconds: 0 });
+    expect(runner.calls[0].value.input).toMatchObject({ maxTurns: 0, maxRunSeconds: 0, maxTotalTokens: 0 });
+    const replay = await request('/api/runs', alice, { body: { ...submitted, maxTurns: 0, maxRunSeconds: 0, maxTotalTokens: 0 } });
+    expect(replay.status).toBe(200);
+    expect((await replay.json()).run.id).toBe(run.id);
+    expect(runner.calls).toHaveLength(1);
   });
 
   it('compresses JSON bodies for clients that accept it and leaves small ones and other clients plain', async () => {
@@ -341,12 +355,12 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     const alice = await session();
     const invalid = [
       { providerId: 'unconfigured' }, { baseUrl: 'https://attacker.example/v1' }, { extra: true },
-      { maxTurns: 21 }, { maxTurns: 0 }, { maxRunSeconds: 901 }, { maxRunSeconds: 29 }, { workers: 5 },
+      { maxTurns: 21 }, { maxTurns: -1 }, { maxRunSeconds: -1 }, { maxRunSeconds: 901 }, { maxRunSeconds: 29 }, { workers: 5 },
       { workers: 0 }, { maxTurns: 1.5 }, { source: '数'.repeat(11_000) }, { task: '数'.repeat(2_800) },
       { effort: 'unlimited' }, { coordination: 'unknown' }, { model: '--model-flag' }, { apiKey: 'short' },
       { environment: 'custom' }, { environment: 'https://attacker.example/mathlib' }, { environment: null },
       { environment: { id: 'mathlib', url: 'https://attacker.example' } }, { mathlibRevision: 'attacker-revision' },
-      { maxTotalTokens: 9_999 }, { maxTotalTokens: 100_000_001 }, { maxTotalTokens: 1.5e5 + 0.5 }, { maxTotalTokens: '500000' },
+      { maxTotalTokens: -1 }, { maxTotalTokens: 9_999 }, { maxTotalTokens: 100_000_001 }, { maxTotalTokens: 1.5e5 + 0.5 }, { maxTotalTokens: '500000' },
     ];
     for (const override of invalid) {
       const response = await request('/api/runs', alice, { body: { ...input(), ...override } });

@@ -26,10 +26,10 @@ export const formalizationWorkerInputSchema = z.object({
   environment: z.enum(['standard', 'mathlib']), model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u),
   effort: z.enum(['low', 'high', 'max']), apiKey: z.string().regex(/^[\x21-\x7e]{8,4096}$/u),
   provider: z.object({ id: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/u), name: z.string().max(200), baseUrl: z.string().url().max(512) }).strict(),
-  maxRunSeconds: z.number().int().positive().max(webFormalizationLimits.maxRunSeconds),
-  maxTotalTokens: z.number().int().min(10_000).max(webFormalizationLimits.maxTotalTokens),
-  maxRounds: z.number().int().positive().max(webFormalizationLimits.maxRounds),
-  maxPlanningRounds: z.number().int().positive().max(webFormalizationLimits.maxPlanningRounds),
+  maxRunSeconds: z.number().int().nonnegative().max(webFormalizationLimits.maxRunSeconds).default(0),
+  maxTotalTokens: z.union([z.literal(0), z.number().int().min(10_000).max(webFormalizationLimits.maxTotalTokens)]).default(0),
+  maxRounds: z.number().int().nonnegative().max(webFormalizationLimits.maxRounds).default(0),
+  maxPlanningRounds: z.number().int().nonnegative().max(webFormalizationLimits.maxPlanningRounds).default(0),
   reviewers: z.literal(webFormalizationLimits.reviewers),
 }).strict().superRefine((input, context) => {
   let url: URL;
@@ -136,7 +136,8 @@ async function main() {
     if (result.status === 'approved')
       await send({ type: 'result', status: 'approved', evidence: readFormalizationArtifact(path.join(directory, 'artifact')) });
     else {
-      const stop = formalizationStopReason(result.status, result.error, Date.now() - startedAt >= input.maxRunSeconds * 1_000);
+      const stop = formalizationStopReason(result.status, result.error,
+        input.maxRunSeconds > 0 && Date.now() - startedAt >= input.maxRunSeconds * 1_000);
       activity.stopped(stop.reason, result.error);
       await send({ type: 'result', ...stop });
     }

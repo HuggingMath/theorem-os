@@ -2,6 +2,7 @@ import { render } from 'preact';
 import { Icon } from './Icon';
 import { otherLocale, t } from '../../i18n';
 import { classicLibraryUrl } from '../classicLibrary';
+import { researchNavigation } from '../../shared';
 
 export type TopbarLive = { label: string; detail: string; tone: string; count: number };
 export type TopbarProps = {
@@ -9,11 +10,22 @@ export type TopbarProps = {
   /** Desktop docks the history beside the run; narrow screens open it as a dialog. */ history: { docked: boolean; expanded: boolean };
   connection: { tone: 'ready' | 'offline'; label: string }; settingsDisabled: boolean;
   live?: TopbarLive; mac: boolean; account?: string;
+  libraryHref?: string;
   onHistory(): void; onHome(): void; onDraft(): void; onSettings(): void; onPalette(): void; onLive(): void; onAccount(): void; onGlossary(): void; onLocale(): void;
 };
 
 function Topbar(props: TopbarProps) {
   const { live } = props;
+  const parameters = new URLSearchParams(location.search);
+  const linkedChat = new URL(props.libraryHref ?? 'library.html', location.href).searchParams.get('workbenchChat');
+  if (linkedChat) parameters.set('workbenchChat', linkedChat);
+  const navigation = researchNavigation(parameters.toString());
+  const links = [
+    { href: navigation.workbench, label: t('工作台'), current: true },
+    { href: navigation.theorems, label: t('定理') },
+    { href: navigation.people, label: t('数学家') },
+    { href: navigation.library, label: 'Library', library: true },
+  ];
   return <>
     {props.history.docked
       ? <button type="button" id="open-history" class="icon-button" aria-controls="history-sidebar" aria-expanded={props.history.expanded}
@@ -29,7 +41,13 @@ function Topbar(props: TopbarProps) {
       <span class="live-pill-detail mono">{live.detail}</span>
     </button>}
     <div class="topbar-actions">
-      <nav class="research-space-links" aria-label={t('研究空间')}><a href="people.html">{t('数学家')}</a><a href="theorems.html">{t('定理')}</a><a href="library.html">Library</a></nav>
+      <nav class="research-space-links" aria-label={t('研究空间')}>{links.map(link => <a key={link.href} href={link.href}
+        aria-current={link.current ? 'page' : undefined} data-workbench-library={link.library || undefined}>{link.label}</a>)}</nav>
+      <details class="research-mobile-navigation" data-research-mobile-navigation>
+        <summary class="research-mobile-navigation-toggle" aria-label={t('研究空间')} title={t('研究空间')}><Icon name="list" /><span class="sr-only">{t('研究空间')}</span></summary>
+        <nav class="research-mobile-links" aria-label={t('研究空间')}>{links.map(link => <a key={link.href} href={link.href}
+          aria-current={link.current ? 'page' : undefined} data-research-mobile-link={link.library ? 'library' : link.current ? 'workbench' : link.href.startsWith('theorems') ? 'theorems' : 'people'}>{link.label}</a>)}</nav>
+      </details>
       <a id="open-classics" class="classics-link" href={classicLibraryUrl} target="_blank" rel="noopener" title={t('经典题库')} aria-label={t('经典题库')}><Icon name="book-open" /><span>{t('经典题库')}</span></a>
       <button type="button" class="palette-trigger icon-button" onClick={props.onPalette} aria-label={t('打开命令面板')} title={`${t('打开命令面板')} (${props.mac ? '⌘K' : 'Ctrl K'})`}
         aria-haspopup="dialog" aria-keyshortcuts={props.mac ? 'Meta+K' : 'Control+K'}><Icon name="search" /></button>

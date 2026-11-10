@@ -440,12 +440,37 @@ describe('online formalization ownership and evidence handoff', () => {
     next.resolve(); await settle();
     expect((await (await request(alice, `/api/formalizations/${other.id}`)).json()).formalization)
       .toMatchObject({ status: 'error', reason: 'formalization_binding_mismatch' });
-    const { maxRunSeconds: _seconds, maxTotalTokens: _tokens, ...legacy } = current;
+    const { maxRunSeconds: _seconds, maxTotalTokens: _tokens, maxRounds: _rounds, maxPlanningRounds: _planning, ...legacy } = current;
     for (const maxTotalTokens of [0, 200_000]) {
-      const evidence = webFormalizationEvidence({ ...pending.input, maxRunSeconds: 1800, maxTotalTokens });
+      const evidence = webFormalizationEvidence({ ...pending.input, maxRunSeconds: 1800, maxTotalTokens,
+        maxRounds: webFormalizationLimits.maxRounds, maxPlanningRounds: webFormalizationLimits.maxPlanningRounds });
       expect(() => verifyWebFormalizationEvidence(evidence, legacy)).not.toThrow();
       expect(() => verifyWebFormalizationEvidence(evidence, current)).toThrow('formalization_binding_mismatch');
     }
+    for (const override of [{ maxRounds: 1 }, { maxPlanningRounds: 1 }, { maxRunSeconds: 30 }])
+      expect(() => verifyWebFormalizationEvidence(webFormalizationEvidence({ ...pending.input, ...override }), current))
+        .toThrow('formalization_binding_mismatch');
+  });
+
+  it.each([
+    {},
+    { maxRunSeconds: 0, maxTotalTokens: 0, research: { maxRunSeconds: 0, maxTurns: 0, maxTotalTokens: 0 } },
+    { research: { maxTotalTokens: 0 } },
+  ])('defaults omitted and partial formalization/research budgets to unlimited: %j', async budgets => {
+    const alice = await client();
+    const response = await request(alice, '/api/formalizations', { ...body, solve: true, requestId: 'unlimited', ...budgets });
+    expect(response.status).toBe(201); await settle();
+    const value = (await response.json()).formalization as WebFormalization, pending = runner.pending.at(-1)!;
+    const unlimited = { maxRunSeconds: 0, maxTurns: 0, maxTotalTokens: 0 };
+    expect(value).toMatchObject({ maxRunSeconds: 0, maxTotalTokens: 0, maxRounds: 0, maxPlanningRounds: 0, research: unlimited });
+    expect(pending.input).toMatchObject({ maxRunSeconds: 0, maxTotalTokens: 0, maxRounds: 0, maxPlanningRounds: 0 });
+    const replay = await request(alice, '/api/formalizations', { ...body, solve: true, requestId: 'unlimited',
+      maxRunSeconds: 0, maxTotalTokens: 0, research: unlimited });
+    expect(replay.status).toBe(200); expect((await replay.json()).formalization.id).toBe(value.id);
+    pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve(); await settle();
+    const completed = (await (await request(alice, `/api/formalizations/${value.id}`)).json()).formalization;
+    expect(completed.status).toBe('confirmed'); expect(completed.runId).toBeTruthy();
+    expect(runner.runs[0].input).toMatchObject(unlimited);
   });
 
   it('preserves provider, model and the two submitted budgets through the proof handoff', async () => {
@@ -463,7 +488,7 @@ describe('online formalization ownership and evidence handoff', () => {
     const completed = (await (await request(alice, `/api/formalizations/${value.id}`)).json()).formalization;
     expect(completed.runId).toBeTruthy();
     expect(runner.runs[0].input).toMatchObject({ providerId: 'openai', model: 'gpt-6.1-sol', ...research });
-    expect((await request(alice, '/api/formalizations', { ...body, maxTotalTokens: 0 })).status).toBe(400);
+    expect((await request(alice, '/api/formalizations', { ...body, maxTotalTokens: 9_999 })).status).toBe(400);
     expect((await request(alice, '/api/formalizations', { ...body, providerId: 'sub2api', model: 'other' })).status).toBe(400);
   });
 

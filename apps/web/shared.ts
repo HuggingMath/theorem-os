@@ -38,8 +38,9 @@ export type WebEnvironmentOption = { id: WebEnvironment; name: string; descripti
   toolchain: string; mathlibRevision?: string };
 export type WebTemplate = { id: string; name: string; environment: WebEnvironment; source: string; task: string };
 export type WebSavedKey = { providerId: string; ending: string };
-/** What the browser posts: `saveKey` asks the server to keep the typed key for this account; it never reaches the run. */
-export type WebRunRequest = WebRunInput & { saveKey?: boolean; requestId?: string };
+/** Omitted budgets normalize to 0 (unlimited); `saveKey` stays with this account and never reaches the run. */
+export type WebRunRequest = Omit<WebRunInput, 'maxTurns' | 'maxRunSeconds'> & {
+  maxTurns?: number; maxRunSeconds?: number; saveKey?: boolean; requestId?: string };
 export type WebRunInput = {
   providerId: string;
   apiKey: string;
@@ -50,7 +51,7 @@ export type WebRunInput = {
   task: string;
   maxTurns: number;
   maxRunSeconds: number;
-  /** Provider-reported token cap for the whole run; absent means unlimited. */
+  /** Provider-reported token cap for the whole run; absent or 0 means unlimited, as for the time and turn caps. */
   maxTotalTokens?: number;
   workers: number;
   coordination: WebCoordination;
@@ -424,4 +425,34 @@ export function workbenchReturn(search: string): string {
   if (run && /^[a-f0-9-]{1,36}$/u.test(run)) return `?run=${run}`;
   if (chat && /^[a-f0-9-]{36}$/u.test(chat)) return `?chat=${chat}`;
   return '';
+}
+
+const appReturnPaths = new Set(['/', '/index.html', '/people.html', '/theorems.html', '/library.html', '/formalization.html', '/explain.html']);
+/** Only app page paths may receive a login return; query strings and fragments remain exactly as supplied. */
+export function safeAppReturn(value: string | null | undefined): string | undefined {
+  if (!value || /[\p{Cc}\\]/u.test(value)) return;
+  const target = value.startsWith('./') ? value.slice(1) : value.startsWith('/') ? value : `/${value}`;
+  const pathname = target.split(/[?#]/u, 1)[0]!;
+  if (!appReturnPaths.has(pathname)) return;
+  return target;
+}
+/** A link to login retains intent in the address, without carrying out any action after authentication. */
+export function loginHref(returnTo: string): string {
+  const target = safeAppReturn(returnTo);
+  return target ? `/login.html?${new URLSearchParams({ returnTo: target })}` : '/login.html';
+}
+/** New app-page returns take precedence; existing run/chat mail links continue to open the same workbench record. */
+export function loginReturn(search: string): string {
+  return safeAppReturn(new URLSearchParams(search).get('returnTo')) ?? `./${workbenchReturn(search)}`;
+}
+/** Carry the open conversation or run through every research-space page, then back to the same workbench. */
+export function researchNavigation(search: string): { workbench: string; theorems: string; people: string; library: string } {
+  const params = new URLSearchParams(search), context = new URLSearchParams();
+  const chat = params.get('workbenchChat') ?? params.get('chat'), run = params.get('workbenchRun') ?? params.get('run');
+  if (chat && /^[a-f0-9-]{36}$/u.test(chat)) context.set('workbenchChat', chat);
+  if (run && /^[a-f0-9-]{1,36}$/u.test(run)) context.set('workbenchRun', run);
+  const suffix = context.size ? `?${context}` : '';
+  const back = context.has('workbenchChat') ? `?${new URLSearchParams({ chat: context.get('workbenchChat')! })}`
+    : context.has('workbenchRun') ? `?${new URLSearchParams({ run: context.get('workbenchRun')! })}` : '';
+  return { workbench: `./${back}`, theorems: `theorems.html${suffix}`, people: `people.html${suffix}`, library: `library.html${suffix}` };
 }

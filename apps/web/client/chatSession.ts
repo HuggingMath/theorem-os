@@ -17,6 +17,8 @@ import type { PlanApprovalProps } from './ui/RunHeader';
 import { decodeChatDraft, encodeChatDraft, type ChatDraft, type ChatDraftSettings } from './chatDraft';
 import { SubmissionIdentity } from './submissionIdentity';
 import { retainLatestRun } from './runSnapshot';
+import { ChatAnswers } from './chatAnswer';
+import { chatMathematics } from './chatMathematics';
 
 const running = (item?: { status: string }) => item?.status === 'queued' || item?.status === 'running';
 const reason = (error: unknown) => localizeMessage(error instanceof Error ? error.message : String(error));
@@ -26,6 +28,7 @@ type Options = {
   draftScope: string;
   keyRequired(providerId: string): boolean;
   session(): WebSession | undefined;
+  runs?(): readonly WebRun[];
   connected(): boolean;
   onSelection(run?: WebRun): void;
   /** A conversation was opened or replaced; one without a run still names the page. */
@@ -104,7 +107,7 @@ export class ChatSession {
   private readonly originalPanel = document.querySelector<HTMLElement>('#chat-original-panel')!;
   private readonly livePanel = document.querySelector<HTMLElement>('#chat-live-panel')!;
   private readonly reading: ChatReadingPosition;
-  /** A wide screen has room for the live workspace beside the conversation; a phone shows the checklist only. */
+  /** A wide screen can open the workspace automatically beside the conversation. */
   private readonly wide = matchMedia('(min-width: 1101px)');
   /** The tasks whose live workspace opened by itself, so a redraw does not reopen one the reader closed. */
   private readonly liveShown = new Set<string>();
@@ -113,8 +116,11 @@ export class ChatSession {
   private solveCache?: { key: string; process: SolveProcess };
   private liveFrame = false;
   private lastActionPoll = 0;
+  private readonly answers: ChatAnswers;
+  private lastAnswerRefresh = 0;
 
   constructor(private readonly options: Options) {
+    this.answers = new ChatAnswers(options.request, locale, () => this.redraw());
     this.submissionIdentity = new SubmissionIdentity({
       getItem: key => options.draftScope ? sessionStorage.getItem(`${key}.${options.draftScope}`) : null,
       setItem: (key, value) => { if (options.draftScope) sessionStorage.setItem(`${key}.${options.draftScope}`, value); },
@@ -141,6 +147,7 @@ export class ChatSession {
     if (scope === this.options.draftScope) return;
     const previous = this.options.draftScope;
     this.ownerRevision++; this.readRevision++; this.historyRevision++; this.capabilitiesRevision++;
+    this.answers.clear(); this.lastAnswerRefresh = 0;
     clearTimeout(this.timer); this.refreshing = false;
     this.home(true);
     this.drafts.clear(); this.options.draftScope = scope; this.reading.bind(scope);
@@ -208,7 +215,7 @@ export class ChatSession {
     if (draft?.settings) {
       const { providerId, model, environment, effort, participation, maxRunSeconds, maxTotalTokens, research } = draft.settings;
       Object.assign(this, { providerId, model, environment, effort, participation });
-      this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...research } }; this.hasDraftSettings = true;
+      this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...webFormalizationDefaults.research, ...research } }; this.hasDraftSettings = true;
     }
     return draft?.text ?? '';
   }
@@ -301,6 +308,18 @@ export class ChatSession {
     this.draw(); this.options.onConversation();
   }
   fillOriginal(original: string) { this.draft = original; this.rememberDraft(); this.draw(); this.focus(); }
+  includeLibraryReference(text: string) {
+    if (!this.options.draftScope || this.loading || this.submitting || this.currentId && !this.conversation) return false;
+    if (!this.draft.includes(text)) this.draft += `${this.draft ? '\n\n' : ''}${text}`;
+    this.rememberDraft(); this.draw(); this.focus();
+    return true;
+  }
+  includeProblemDraft(text: string, environment: 'standard' | 'mathlib') {
+    if (!this.options.draftScope || this.loading || this.submitting || this.currentId || this.run || this.seed) return false;
+    this.environment = environment;
+    return this.includeLibraryReference(text);
+  }
+  libraryReferenceFailed(message: string) { this.error = message; this.draw(); }
   useRunKey(id: string, key: string) { if (this.runId === id) { this.apiKey = key; this.clearConnection(); this.draw(); } }
   focus() { this.composer.querySelector<HTMLTextAreaElement>('textarea')?.focus({ preventScroll: true }); }
   private setConversation(conversation: WebConversation) {
@@ -415,6 +434,9 @@ export class ChatSession {
         if (runChanged || Date.now() - this.lastTaskRefresh >= 1500) await this.loadTask(generation);
       }
       if (generation !== this.generation) return;
+      if (Date.now() - this.lastAnswerRefresh >= 30_000) {
+        this.lastAnswerRefresh = Date.now(); this.answers.refresh(this.run);
+      }
       if (Date.now() - this.lastListRefresh >= 6000) {
         this.lastListRefresh = Date.now();
         await this.loadCapabilities();
@@ -550,7 +572,9 @@ export class ChatSession {
     renderChatHistory(this.list, { items: this.summaries, selectedId: this.currentId, onOpen: id => void this.open(id),
       failed: this.historyFailed, onRetry: () => void this.refreshHistory(),
       onRename: (id, title) => this.renameConversation(id, title), onDelete: id => this.deleteConversation(id),
-      records: this.formalizations, recordLimit: this.capabilities?.limits.recordsPerOwner ?? webFormalizationLimits.recordsPerOwner,
+      records: this.formalization && !this.formalizations.some(item => item.id === this.formalization!.id) ? [...this.formalizations, this.formalization] : this.formalizations,
+      runs: this.run ? [...(this.options.runs?.() ?? []).filter(run => run.id !== this.run!.id), this.run] : this.options.runs?.(),
+      recordLimit: this.capabilities?.limits.recordsPerOwner ?? webFormalizationLimits.recordsPerOwner,
       onRefreshRecords: () => void this.loadCapabilities(), onDeleteRecord: id => this.deleteRecord(id) });
   }
   private async renameConversation(id: string, title: string) {
@@ -649,7 +673,7 @@ export class ChatSession {
     return { process, wide: this.wide.matches, time: clockTime, onRetry,
       ...(state?.loading || (run && !sample && agents.state(run.id).loading) ? { loading: true } : {}),
       ...(state?.failed || (run && !sample && agents.state(run.id).failed) ? { failed: true } : {}),
-      ...(this.wide.matches ? { onCheck: (id: string) => this.openCheck(process, id) } : {}) };
+      onCheck: (id: string) => this.openCheck(process, id) };
   }
   private draw() {
     const pending = Boolean(this.conversation?.messages.some(message => message.kind === 'text' && message.status === 'pending'));
@@ -665,6 +689,9 @@ export class ChatSession {
     const busyFormalization = newProblem && !this.seed && !pendingSubmission && this.formalizations.some(item => running(item));
     document.body.dataset.chatEmpty = String(!this.conversation && !this.run && !this.loading && !this.seed);
     const solve = this.solve();
+    const formalization = this.formalization ?? this.seed;
+    const mathematics = solve ? chatMathematics(this.run, formalization ? this.options.formalizationActivity.activity(formalization.id) : []) : undefined;
+    const answer = this.answers.sync(this.run);
     // A task that just started opens its workspace once; one the reader closed stays closed until they open it again.
     // A task still waiting for its place only has the checklist: its result panel stays the reader's. The reader's own
     // results panel is never replaced behind their back, so the workspace only opens while the conversation is shown.
@@ -679,6 +706,8 @@ export class ChatSession {
       sample: !!this.run && this.options.isSample(this.run),
       missingTask: !!this.conversation && !this.loading && !this.submitting && !this.readError && !this.formalization && !this.run,
       loading: this.loading, error: this.error || this.readError, ...(solve ? { solve } : {}),
+      mathematics, answer, onAnswerRetry: () => this.answers.refresh(this.run),
+      onAnswerTarget: target => { if (this.run) this.answers.select(this.run.id, target); },
       onConfigure: () => {
         const settings = this.composer.querySelector<HTMLDetailsElement>('#formalize-settings');
         if (settings) settings.open = true;

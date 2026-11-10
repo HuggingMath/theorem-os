@@ -17,11 +17,17 @@ const input = (): WorkerFormalizationInput => ({ id: crypto.randomUUID(), origin
   maxPlanningRounds: webFormalizationLimits.maxPlanningRounds, reviewers: webFormalizationLimits.reviewers });
 
 describe('formalization worker input and protocol', () => {
-  it('preserves the original and requires bounded production budgets and supported credentials', () => {
+  it('preserves the original, accepts unlimited budgets and validates explicit limits and credentials', () => {
     const request = input();
     expect(formalizationWorkerInputSchema.parse(request)).toEqual(request);
+    const unlimited = { maxRunSeconds: 0, maxTotalTokens: 0, maxRounds: 0, maxPlanningRounds: 0 };
+    expect(formalizationWorkerInputSchema.parse({ ...request, ...unlimited })).toEqual({ ...request, ...unlimited });
+    const { maxRunSeconds: _seconds, maxTotalTokens: _tokens, maxRounds: _rounds, maxPlanningRounds: _planning, ...withoutBudgets } = request;
+    expect(formalizationWorkerInputSchema.parse(withoutBudgets)).toEqual({ ...request, ...unlimited });
     for (const override of [{ original: ' ' }, { original: '原'.repeat(11_000) }, { apiKey: 'bad\nkey' },
-      { model: 'other' }, { reviewers: 1 }, { maxRounds: 0 }, { maxPlanningRounds: 0 }, { maxTotalTokens: 9_999 },
+      { model: 'other' }, { reviewers: 1 }, { maxRounds: -1 }, { maxPlanningRounds: -1 }, { maxTotalTokens: 9_999 },
+      { maxRunSeconds: -1 }, { maxTotalTokens: -1 }, { maxRounds: 1.5 }, { maxPlanningRounds: 1.5 },
+      { maxRounds: webFormalizationLimits.maxRounds + 1 }, { maxPlanningRounds: webFormalizationLimits.maxPlanningRounds + 1 },
       { maxTotalTokens: webFormalizationLimits.maxTotalTokens + 1 },
       { maxRunSeconds: webFormalizationLimits.maxRunSeconds + 1 }, { profile: '/private/profile' }])
       expect(formalizationWorkerInputSchema.safeParse({ ...request, ...override }).success).toBe(false);
@@ -65,6 +71,13 @@ describe('formalization worker input and protocol', () => {
     expect(JSON.stringify(prepared)).not.toContain(request.apiKey);
   });
 
+  it('passes unlimited execution, generation and planning budgets to the core formalizer', () => {
+    const prepared = webFormalizationPreparation({ ...input(), maxRunSeconds: 0, maxTotalTokens: 0,
+      maxRounds: 0, maxPlanningRounds: 0 }, '/private/profile', '/private/manifest.json');
+    expect(prepared).toMatchObject({ maxRunSeconds: 0, maxTotalTokens: 0, maxRounds: 0,
+      maxTurnSeconds: 0, maxCompileSeconds: 0, workflow: { maxPlanningRounds: 0 } });
+  });
+
   it('accepts phase updates and evidence objects while excluding private diagnostics', () => {
     const message = { type: 'progress', progress: { phase: 'reviewing', round: 2, tokens: 123 } };
     expect(parseFormalizationMessage(JSON.stringify(message))).toEqual(message);
@@ -92,6 +105,43 @@ describe('formalization worker input and protocol', () => {
 });
 
 describe('formalization container boundary', () => {
+  it.each([0, 1])('honors an unlimited or finite host watchdog and remains cancellable (seconds=%s)', async maxRunSeconds => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'formalization-watchdog-test-'));
+    fs.writeFileSync(path.join(directory, 'docker'), `#!${process.execPath}
+const args = process.argv.slice(2);
+async function main() {
+  if (args[0] !== 'start') return;
+  for await (const _chunk of process.stdin) {}
+  process.stdout.write(JSON.stringify({ type: 'progress', progress: { phase: 'generating' } }) + '\\n');
+  setInterval(() => {}, 1000);
+}
+main().catch(() => process.exit(1));
+`, { mode: 0o700 });
+    vi.stubEnv('PATH', directory);
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const controller = new AbortController();
+    let operation: Promise<void> | undefined;
+    try {
+      let generating!: () => void, ended = false;
+      const ready = new Promise<void>(resolve => { generating = resolve; });
+      operation = new DockerWebRunner(readWebConfig({})).formalize({ ...input(), maxRunSeconds }, message => {
+        if (message.type === 'progress') generating();
+      }, controller.signal);
+      const result = operation.then(() => { ended = true; return ''; }, error => { ended = true; return error.message; });
+      await Promise.race([ready, result.then(reason => { throw new Error(reason || 'fixture_stopped_before_generation'); })]);
+      await vi.advanceTimersByTimeAsync(3_600_000);
+      if (maxRunSeconds === 0) {
+        expect(ended).toBe(false);
+        controller.abort();
+        expect(await result).toBe('formalization_cancelled');
+      } else expect(await result).toBe('formalization_timeout');
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      controller.abort(); await operation?.catch(() => {});
+      vi.useRealTimers(); vi.unstubAllEnvs(); fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it.each(['complete', 'https-complete', 'cancel', 'missing-result'] as const)('uses private stdin and removes the container (%s)', async mode => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'formalization-docker-test-'));
     fs.writeFileSync(path.join(directory, 'docker'), `#!${process.execPath}

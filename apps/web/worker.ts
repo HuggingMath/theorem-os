@@ -117,9 +117,9 @@ export function readWebResultProof(options: {
  */
 export function webIncompleteReason(raw: Record<string, unknown>, input: Pick<WorkerInput['input'], 'maxTurns' | 'maxRunSeconds'>) {
   if (raw.status !== 'incomplete' || raw.reason) return;
-  if (typeof raw.turns === 'number' && raw.turns >= input.maxTurns) return 'math_turn_limit_reached';
+  if (input.maxTurns > 0 && typeof raw.turns === 'number' && raw.turns >= input.maxTurns) return 'math_turn_limit_reached';
   const elapsed = raw.solveExecutionMs ?? raw.solveWallMs;
-  if (typeof elapsed === 'number' && elapsed >= input.maxRunSeconds * 1_000) return 'math_run_stopped';
+  if (input.maxRunSeconds > 0 && typeof elapsed === 'number' && elapsed >= input.maxRunSeconds * 1_000) return 'math_run_stopped';
   return 'math_research_routes_exhausted';
 }
 
@@ -299,10 +299,12 @@ async function main() {
       ...(knowledgeFile ? ['--knowledge-base', knowledgeFile] : []),
       ...(round.continuationFile ? ['--continuation-manifest', round.continuationFile] : []),
       ...(round.libraryCatalog ? ['--library-catalog', round.libraryCatalog.file, '--library-catalog-sha256', round.libraryCatalog.digest] : []),
-      '--max-run-seconds', String(round.limits.maxRunSeconds), '--max-turn-seconds', '120',
+      '--max-run-seconds', String(round.limits.maxRunSeconds), '--max-turn-seconds', round.limits.maxRunSeconds > 0 ? '120' : '0',
       ...(round.limits.maxTotalTokens ? ['--max-total-tokens', String(round.limits.maxTotalTokens)] : []),
-      '--prepare-timeout-seconds', String(webPreparationSeconds[environment.id === 'mathlib' ? 'mathlib' : 'standard']),
-      '--evaluator-timeout-seconds', '120'], root, modules);
+      '--prepare-timeout-seconds', round.limits.maxRunSeconds > 0
+        ? String(webPreparationSeconds[environment.id === 'mathlib' ? 'mathlib' : 'standard']) : '0',
+      ...(round.limits.maxRunSeconds > 0 ? [] : ['--proof-timeout-seconds', '0']),
+      '--evaluator-timeout-seconds', round.limits.maxRunSeconds > 0 ? '120' : '0'], root, modules);
       sampleArtifact();
       await capturePending;
       await capture(true);

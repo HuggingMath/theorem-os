@@ -15,6 +15,9 @@ import { ChatMessageContent } from './ChatMessageContent';
 import { Elapsed, SolveProcessView } from './SolveProcess';
 import type { PlanApprovalProps } from './RunHeader';
 import type { ChatArtifactKind } from '../chatArtifactNavigation';
+import type { ChatAnswer } from '../chatAnswer';
+import type { ChatMathematics } from '../chatMathematics';
+import { ChatMathematicalAnswer, ChatMathematicalProgress } from './ChatMathematicalWork';
 
 
 export type ChatThreadProps = {
@@ -27,6 +30,10 @@ export type ChatThreadProps = {
   error?: string;
   /** The solving process of the task this thread shows, when it has one. */
   solve?: { process: SolveProcess; loading?: boolean; failed?: boolean; wide: boolean; time: (at: string) => string; onRetry?(): void; onCheck?(id: string): void };
+  mathematics?: ChatMathematics;
+  answer?: ChatAnswer;
+  onAnswerRetry?(): void;
+  onAnswerTarget?(target: string): void;
   onArtifact(kind: ChatArtifactKind, target?: { taskId?: string; messageId?: string }, auto?: boolean): void;
   onShare?(): void;
   recovery?: { steps: NextStep[]; onAction(id: string, button: HTMLButtonElement): void };
@@ -138,7 +145,9 @@ function TaskMessage(props: ChatThreadProps) {
       : active ? t("先把原题转成 Lean，核对一致性后继续证明。")
         : t("陈述检查不代表证明通过，最终结果以 Lean 独立验收为准。");
   const proof = run?.result?.proof || run?.artifact?.source;
-  const solve = props.solve, wide = solve?.wide && solve.process.active;
+  const solve = props.solve;
+  const hasSource = solve?.process.current !== undefined || solve?.process.checks.some(check => check.source !== undefined);
+  const liveAvailable = Boolean(solve && (solve.process.active || hasSource));
   return <div class="chat-task">
     {props.sample && <p class="sample-note" data-chat-sample-note>{t('预设示例 · 附 Lean 验收记录')}</p>}
     <div class="research-conversation-status" data-active={active} data-accepted={accepted} data-failed={failed}>
@@ -147,20 +156,27 @@ function TaskMessage(props: ChatThreadProps) {
       {solve && <p class="research-conversation-meta">
         {solve.process.startedAt && <Elapsed from={solve.process.startedAt} to={solve.process.endedAt} />}
         {solve.process.tokens !== undefined && <span>{t('Token {0}', formatTokens(solve.process.tokens))}</span>}
-        {wide && <button type="button" class="text-button" data-research-artifact="live" onClick={() => props.onArtifact('live')}>
-          <Icon name="panel-right" />{t('实时工作区')}</button>}
+        {liveAvailable && <button type="button" class="text-button" data-research-artifact="live" onClick={() => props.onArtifact('live')}>
+          <Icon name="file-code-2" />{hasSource ? t('查看当前代码') : t('实时工作区')}</button>}
         {active && props.onCancelTask && <button type="button" class="text-button" data-research-stop onClick={props.onCancelTask}>{t("停止解题")}</button>}
       </p>}
-      {(!statementDecision || failed) && <p class="research-conversation-description">{description}</p>}
+      {((!solve && !statementDecision) || failed) && <p class="research-conversation-description">{description}</p>}
+      {solve && <div class="chat-outcome-summary" data-chat-outcomes>
+        <p><span>{t('已有成果')}</span><strong>{solve.process.current?.kind === 'proof' ? t('已验收证明') : solve.process.current?.kind === 'candidate' ? t('证明候选，可查看和下载') : hasSource ? t('Lean 陈述，可查看和下载') : t('正在准备，尚无代码')}</strong></p>
+        <p><span>{t('当前进展')}</span><strong>{title}</strong></p>
+        <p><span>{t('需要你做')}</span><strong>{statementDecision ? item?.status === 'review' ? t('核对题意并确认继续') : t('继续拟定研究计划') : props.planDecision?.approval && !props.planDecision.approval.busy && !props.planDecision.approval.revising ? t('查看并确认研究计划') : failed ? t('查看失败原因后选择继续方式') : active ? t('无需操作，可以继续浏览已有成果') : t('可阅读结果或继续提问')}</strong></p>
+      </div>}
       {!statementDecision && natural && (item?.report || run?.formalization) && <p class="chat-statement-verdict" data-statement-verdict>
         {statementConfirmation(confirmation)}
         {' '}{t('Lean 验收证明的是这份陈述，不能替代对自然语言原意的核对。')}
       </p>}
     </div>
-    {solve && <SolveProcessView process={solve.process} wide={solve.wide} time={solve.time} onCheck={solve.onCheck}
-      loading={solve.loading} failed={solve.failed} onRetry={solve.onRetry} />}
     <StatementDecision {...props} />
     <PlanDecision {...props} />
+    {accepted && run && <ChatMathematicalAnswer runId={run.id} answer={props.answer} onRetry={() => props.onAnswerRetry?.()} onTarget={target => props.onAnswerTarget?.(target)} />}
+    {!accepted && props.mathematics && <ChatMathematicalProgress work={props.mathematics} onTask={taskId => props.onArtifact('roadmap', { taskId })} />}
+    {solve && <SolveProcessView process={solve.process} wide={solve.wide} time={solve.time} onCheck={solve.onCheck}
+      loading={solve.loading} failed={solve.failed} onRetry={solve.onRetry} />}
     {!run && failed && item && (item.reason || item.researchError) && <FormalizationFailure item={item} />}
     {!statementDecision && (run || item?.report) && <div class="research-conversation-artifacts" role="group" aria-label={t('结果')}>
       {run && <button type="button" data-research-artifact="roadmap" onClick={() => props.onArtifact('roadmap')}><Icon name="network" /><span>{t('路线图')}</span><Icon name="arrow-up-right" /></button>}
@@ -172,7 +188,6 @@ function TaskMessage(props: ChatThreadProps) {
         <button type="button" class="button" data-research-artifact="result" onClick={() => props.onArtifact('result')}>
           <Icon name="shield-check" />{accepted ? t('查看验收报告') : t('查看原因与报告')}</button>
         {accepted && <>
-          <a class="button" data-chat-explain href={`explain.html?${new URLSearchParams({ run: run.id })}`} target="_blank" rel="noopener">{t('Lean → 自然语言')}</a>
           <a class="button" data-chat-download-kit href={`/api/runs/${encodeURIComponent(run.id)}/verification-kit`} download>{t('下载本地复核包')}</a>
           {props.onShare && <button type="button" class="button" data-chat-share onClick={props.onShare}><Icon name="share-2" />{t('分享研究成果')}</button>}
         </>}
@@ -280,7 +295,7 @@ function ChatComposer(props: ChatComposerProps) {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const composing = useRef(false);
   const provider = props.providers.find(item => item.id === props.providerId);
-  const validLimit = (value: number, maximum: number) => Number.isInteger(value) && value > 0 && value <= maximum;
+  const validLimit = (value: number, maximum: number) => Number.isSafeInteger(value) && value >= 0 && (value === 0 || maximum === 0 || value <= maximum);
   const validBudget = validLimit(props.budgets.maxRunSeconds, props.budgetLimits.maxRunSeconds) && props.budgets.maxRunSeconds % 60 === 0
     && validLimit(props.budgets.maxTotalTokens, props.budgetLimits.maxTotalTokens)
     && props.budgets.research.maxRunSeconds % 60 === 0
@@ -295,13 +310,6 @@ function ChatComposer(props: ChatComposerProps) {
   }, [props.input]);
   return <div class="chat-composer">
     <form id="formalize-form" onSubmit={event => { event.preventDefault(); if (canSend) props.onSubmit(); }}>
-      {!props.hasConversation && <fieldset class="chat-participation" data-chat-participation disabled={props.submitting || props.participationLocked}>
-        <legend>{t('研究方式')}</legend>
-        <label><input type="radio" name="chat-participation" value="guided" checked={props.participation === 'guided'} onChange={() => props.onParticipation('guided')} />
-          <span><strong>{t('共同推进')}</strong><span>{t('题意和初始计划由你确认 · 2 个 Agent')}</span></span></label>
-        <label><input type="radio" name="chat-participation" value="automatic" checked={props.participation === 'automatic'} onChange={() => props.onParticipation('automatic')} />
-          <span><strong>{t('自动推进')}</strong><span>{t('自动核对并开始证明 · 1 个 Agent')}</span></span></label>
-      </fieldset>}
       {props.hasConversation && props.onGuidance && <div class="chat-message-destination" role="group" aria-label={t('消息用途')}>
         <button type="button" data-chat-discussion-mode aria-pressed={!props.guidance} disabled={props.submitting} onClick={() => props.guidance?.onCancel()}>{t('讨论思路')}</button>
         <button type="button" data-chat-guidance-mode-open aria-pressed={Boolean(props.guidance)} disabled={props.submitting} onClick={props.onGuidance}>{t('指导研究')}</button>
@@ -323,9 +331,22 @@ function ChatComposer(props: ChatComposerProps) {
           event.preventDefault(); if (canSend) props.onSubmit();
         }} />
       <div class="chat-composer-toolbar">
+        {!props.hasConversation && <details class="chat-participation-control" data-chat-participation-control onToggle={event => {
+          if (event.currentTarget.open) { const settings = event.currentTarget.parentElement?.querySelector<HTMLDetailsElement>('#formalize-settings'); if (settings) settings.open = false; }
+        }}>
+          <summary><span>{props.participation === 'guided' ? t('共同推进') : t('自动推进')}</span><Icon name="chevron-down" /></summary>
+          <fieldset class="chat-participation" data-chat-participation disabled={props.submitting || props.participationLocked}>
+            <legend>{t('研究方式')}</legend>
+            <label><input type="radio" name="chat-participation" value="guided" checked={props.participation === 'guided'} onChange={event => { props.onParticipation('guided'); event.currentTarget.closest('details')!.open = false; }} />
+              <span><strong>{t('共同推进')}</strong><span>{t('题意和初始计划由你确认 · 2 个 Agent')}</span></span></label>
+            <label><input type="radio" name="chat-participation" value="automatic" checked={props.participation === 'automatic'} onChange={event => { props.onParticipation('automatic'); event.currentTarget.closest('details')!.open = false; }} />
+              <span><strong>{t('自动推进')}</strong><span>{t('自动核对并开始证明 · 1 个 Agent')}</span></span></label>
+          </fieldset>
+        </details>}
         <details id="formalize-settings" class="chat-composer-settings" onToggle={event => {
           // On the empty home the fields open below the composer; a short screen scrolls them into view.
           const details = event.currentTarget;
+          if (details.open) { const participation = details.parentElement?.querySelector<HTMLDetailsElement>('[data-chat-participation-control]'); if (participation) participation.open = false; }
           if (details.open && document.body.dataset.chatEmpty === 'true') details.querySelector('.chat-settings-fields')?.scrollIntoView({ block: 'nearest' });
         }}><summary title={t("模型设置")}><Icon name="sliders-horizontal" /><span>{t("设置")}</span></summary>
           <div class="chat-settings-fields">
@@ -360,18 +381,18 @@ function ChatComposer(props: ChatComposerProps) {
             {props.connection && <p class="field-note" id="chat-connection-result" role="status" data-status={props.connection.status}>{props.connection.message}</p>}
             {!props.hasConversation && <>
               <fieldset class="chat-budget-fields"><legend>{t('形式化预算')}</legend><div class="chat-settings-options">
-                <label for="formalize-minutes">{t('最多分钟')}<input id="formalize-minutes" type="number" min={1} max={props.budgetLimits.maxRunSeconds / 60} step={1}
-                  value={props.budgets.maxRunSeconds / 60} onInput={event => props.onBudget('formalization', 'maxRunSeconds', Number(event.currentTarget.value) * 60)} /></label>
-                <label for="formalize-tokens">{t('最多 Token')}<input id="formalize-tokens" type="number" min={1} max={props.budgetLimits.maxTotalTokens} step={1}
-                  value={props.budgets.maxTotalTokens} onInput={event => props.onBudget('formalization', 'maxTotalTokens', Number(event.currentTarget.value))} /></label>
+                <label for="formalize-minutes">{t('最多分钟')}<input id="formalize-minutes" type="number" min={1} max={props.budgetLimits.maxRunSeconds > 0 ? props.budgetLimits.maxRunSeconds / 60 : undefined} step={1}
+                  value={props.budgets.maxRunSeconds ? props.budgets.maxRunSeconds / 60 : ''} placeholder={t('不限')} onInput={event => props.onBudget('formalization', 'maxRunSeconds', Number(event.currentTarget.value) * 60)} /></label>
+                <label for="formalize-tokens">{t('最多 Token')}<input id="formalize-tokens" type="number" min={1} max={props.budgetLimits.maxTotalTokens || undefined} step={1}
+                  value={props.budgets.maxTotalTokens || ''} placeholder={t('不限')} onInput={event => props.onBudget('formalization', 'maxTotalTokens', Number(event.currentTarget.value))} /></label>
               </div></fieldset>
               <fieldset class="chat-budget-fields"><legend>{t('随后证明的预算')}</legend><div class="chat-settings-options">
-                <label for="research-minutes">{t('最多分钟')}<input id="research-minutes" type="number" min={1} max={props.budgetLimits.research.maxRunSeconds / 60} step={1}
-                  value={props.budgets.research.maxRunSeconds / 60} onInput={event => props.onBudget('research', 'maxRunSeconds', Number(event.currentTarget.value) * 60)} /></label>
-                <label for="research-tokens">{t('最多 Token')}<input id="research-tokens" type="number" min={1} max={props.budgetLimits.research.maxTotalTokens} step={1}
-                  value={props.budgets.research.maxTotalTokens} onInput={event => props.onBudget('research', 'maxTotalTokens', Number(event.currentTarget.value))} /></label>
-                <label for="research-turns">{t('最多研究轮次')}<input id="research-turns" type="number" min={1} max={props.budgetLimits.research.maxTurns} step={1}
-                  value={props.budgets.research.maxTurns} onInput={event => props.onBudget('research', 'maxTurns', Number(event.currentTarget.value))} /></label>
+                <label for="research-minutes">{t('最多分钟')}<input id="research-minutes" type="number" min={1} max={props.budgetLimits.research.maxRunSeconds > 0 ? props.budgetLimits.research.maxRunSeconds / 60 : undefined} step={1}
+                  value={props.budgets.research.maxRunSeconds ? props.budgets.research.maxRunSeconds / 60 : ''} placeholder={t('不限')} onInput={event => props.onBudget('research', 'maxRunSeconds', Number(event.currentTarget.value) * 60)} /></label>
+                <label for="research-tokens">{t('最多 Token')}<input id="research-tokens" type="number" min={1} max={props.budgetLimits.research.maxTotalTokens || undefined} step={1}
+                  value={props.budgets.research.maxTotalTokens || ''} placeholder={t('不限')} onInput={event => props.onBudget('research', 'maxTotalTokens', Number(event.currentTarget.value))} /></label>
+                <label for="research-turns">{t('最多研究轮次')}<input id="research-turns" type="number" min={1} max={props.budgetLimits.research.maxTurns || undefined} step={1}
+                  value={props.budgets.research.maxTurns || ''} placeholder={t('不限')} onInput={event => props.onBudget('research', 'maxTurns', Number(event.currentTarget.value))} /></label>
               </div></fieldset>
               <p class="field-note">{t('按已报告用量停止，在途请求可能超额；Token 上限不代表金额封顶。')}</p>
             </>}
@@ -390,10 +411,11 @@ function ChatComposer(props: ChatComposerProps) {
         onClick={props.submissionRecovery.onPrepareEdited}>{t('保留修改，另起新题')}</button>
       <p>{t('另起新题会先恢复原任务记录，再准备修改后的题目；再次发送才会启动。')}</p>
     </div>}
-    {!props.hasConversation && <p class="chat-budget-summary" data-chat-budget>{t('形式化 {0} 分钟 / {1} Token；证明 {2} 分钟 / {3} Token。',
-      props.budgets.maxRunSeconds / 60, formatTokens(props.budgets.maxTotalTokens), props.budgets.research.maxRunSeconds / 60, formatTokens(props.budgets.research.maxTotalTokens))}
+    {!props.hasConversation && <p class="chat-budget-summary" data-chat-budget>{t('预算留空即不限。形式化：{0}；证明：{1}。',
+      `${props.budgets.maxRunSeconds ? t('{0} 分钟', props.budgets.maxRunSeconds / 60) : t('时间不限')} / ${props.budgets.maxTotalTokens ? `${formatTokens(props.budgets.maxTotalTokens)} Token` : t('Token 不限')}`,
+      `${props.budgets.research.maxRunSeconds ? t('{0} 分钟', props.budgets.research.maxRunSeconds / 60) : t('时间不限')} / ${props.budgets.research.maxTotalTokens ? `${formatTokens(props.budgets.research.maxTotalTokens)} Token` : t('Token 不限')} / ${props.budgets.research.maxTurns ? t('{0} 轮', props.budgets.research.maxTurns) : t('轮次不限')}`)}
       {' '}{t('模型费用由所选服务商收取。')}</p>}
-    {!props.hasConversation && !validBudget && <p class="chat-send-status" role="alert">{t('请把两阶段预算设为允许范围内的正整数。')}</p>}
+    {!props.hasConversation && !validBudget && <p class="chat-send-status" role="alert">{t('预算可留空；填写时请使用允许范围内的正整数。')}</p>}
     {(props.sendStatus || (props.input.trim() && props.keyRequired && !props.apiKey.trim())) && <p id="formalize-send-status" class="chat-send-status" role="status">{props.sendStatus || t("请在设置中填写 API Key 后发送。")}</p>}
     {!props.hasConversation && <details class="chat-examples"><summary>{t("试试例题")}</summary><label class="sr-only" for="formalize-example">{t("选择自然语言例题")}</label><select id="formalize-example" value="" onChange={event => { props.onExample(event.currentTarget.value); event.currentTarget.value = ''; textarea.current?.focus(); }}><option value="">{t("选择一个题目")}</option>{researchExamples.map(example => <option key={example.id} value={example.id}>{locale === 'en' ? example.nameEn : example.name}</option>)}</select></details>}
   </div>;
@@ -401,6 +423,7 @@ function ChatComposer(props: ChatComposerProps) {
 
 export type ChatHistoryProps = {
   items: WebConversationSummary[]; selectedId?: string; onOpen(id: string): void; failed?: boolean; onRetry?(): void;
+  runs?: readonly WebRun[];
   onRename(id: string, title: string): Promise<void>; onDelete(id: string): Promise<void>;
   records: WebFormalization[]; recordLimit: number; onDeleteRecord(id: string): Promise<void>; onRefreshRecords(): void;
 };
@@ -444,7 +467,12 @@ function ChatHistory(props: ChatHistoryProps) {
   const rows = (entries: WebConversationSummary[]) => entries.map(item => <div key={item.id} class="chat-history-row" data-chat-row={item.id}>
     <div class="chat-history-line"><a href={`?chat=${encodeURIComponent(item.id)}`} class="chat-history-item" aria-current={item.id === selectedId ? 'page' : undefined}
       onClick={event => { if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); onOpen(item.id); }}>
-      <span class="chat-history-copy"><span translate={false}>{item.title}</span>{decisions.has(item.id) && <span class="chat-history-decision" data-chat-awaiting>{decisions.get(item.id)}</span>}</span>
+      <span class="chat-history-copy"><span translate={false}>{item.title}</span>{decisions.has(item.id) ? <span class="chat-history-decision" data-chat-awaiting>{decisions.get(item.id)}</span> : <span class="chat-history-status" data-chat-history-status>{(() => {
+        const run = props.runs?.find(run => run.id === item.runId), record = props.records.find(record => record.id === item.formalizationId);
+        if (run) return isAcceptedRun(run) ? t('证明已验收') : isFaultedRun(run) || isRejectedRun(run) ? t('研究未完成，查看原因') : ['queued', 'running'].includes(run.status) ? runProgress(run).phaseLabel : stoppedLabel(run);
+        if (record) return record.status === 'error' || record.status === 'exhausted' ? t('形式化未完成') : record.status === 'cancelled' ? t('已停止') : record.status === 'confirmed' ? t('陈述已确认') : record.status === 'review' ? t('陈述待核对') : t('形式化进行中');
+        return item.answering ? t('正在回答') : item.runId || item.formalizationId ? t('查看题目进展') : t('讨论');
+      })()}</span>}<time class="chat-history-time" dateTime={item.updatedAt}>{new Date(item.updatedAt).toLocaleString(locale === 'en' ? 'en-US' : 'zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</time></span>
       {item.answering && <span class="spinner" aria-label={t("正在回答")} />}</a>
       <button type="button" class="icon-button" data-chat-rename disabled={busy} aria-label={t('重命名对话')} title={t('重命名对话')} onClick={() => edit(item.id, 'rename', item.title)}><Icon name="square-pen" /></button>
       <button type="button" class="icon-button" data-chat-delete disabled={busy} aria-label={t('删除对话')} title={t('删除对话')} onClick={() => edit(item.id, 'delete', item.title)}><Icon name="trash-2" /></button></div>

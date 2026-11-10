@@ -27,6 +27,8 @@ const descriptions: Record<string, [string, string, string, string, string]> = {
   FiniteCongruenceGraph: ['A colored-graph criterion for congruence lattices', '有限同余格的彩色图判据', '泛代数与格论', '证明有限格可表示为非空有限代数的完整同余格，当且仅当它具有满足给定条件的有限非空彩色图见证。', 'A finite lattice is the full congruence lattice of a nonempty finite algebra exactly when it admits the specified finite colored-graph witness.'],
   HadamardCubeFiber: ['Hadamard cube-fiber cancellation', '六阶 Hadamard 行比值的立方纤维消去', '线性代数', '对矩阵及其逐项平方均为复 Hadamard 的六阶情形，证明题设指定立方纤维上的行比值之和为零。', 'For an order-six complex Hadamard matrix whose entrywise square is also Hadamard, proves cancellation on the cube fiber specified by the statement.'],
   SurfaceConeCandidateSupport: ['A three-dimensional complete local candidate ring', '三维完备局部候选环', '交换代数', '构造 Krull 维数为 3、剩余域为复数域的完备诺特正规局部复代数。', 'A complete Noetherian normal local complex algebra of Krull dimension three with residue field equal to the complex numbers.'],
+  ThreeStateTreeClauses: ['Supercritical reconstruction for three-state tree channels', '三状态树信道的超临界重构', '概率论', '证明三状态信道与泊松分支分布的概率性质，并在 Kesten–Stigum 超临界条件下证明规则树和泊松树上的重构。', 'Proves the channel and Poisson offspring probability properties, and reconstruction on regular and Poisson trees above the Kesten–Stigum threshold.'],
+  CharacterVarietiesAllSeamsSupport: ['Marked trace values across all surface seams', '曲面全部接缝上的标记迹值', '代数几何', '对题设曲面表示的全部接缝，证明产生的标记迹值满足指定的接缝等式。', 'For every seam in the stated surface presentation, proves the specified seam equations for the produced marked trace values.'],
 };
 const areas: Record<string, string> = { '代数几何': 'Algebraic geometry', '组合博弈': 'Combinatorial games', '数论': 'Number theory',
   '概率论': 'Probability', '概率与统计物理': 'Probability and statistical physics', '离散几何': 'Discrete geometry', '线性代数': 'Linear algebra',
@@ -120,15 +122,38 @@ export function importMathCampaign(campaign: string, destination = path.join(roo
   fs.mkdirSync(destination, { recursive: true });
   const state = read(path.join(campaign, 'campaign-state.json'));
   const index = read(path.join(campaign, 'trajectories/index.json'));
+  const previous = fs.existsSync(path.join(destination, 'manifest.json')) ? read(path.join(destination, 'manifest.json')).records : [];
+  const snapshot = (reference: { object: string; sha256: string }) => {
+    const bytes = gunzipSync(fs.readFileSync(path.join(campaign, 'trajectories', reference.object)));
+    if (hash(bytes) !== reference.sha256) throw new Error(`Checkpoint hash mismatch: ${reference.object}`);
+    return JSON.parse(bytes.toString());
+  };
+  const passed = (result: any) => result.status === 'evaluated_passed' && result.evaluator?.status === 'passed'
+    && result.evaluator?.result?.exitCode === 0 && /^[a-f0-9]{40}$/u.test(result.solution_commit ?? '');
   const records: any[] = [];
-  for (const job of state.jobs.filter((entry: any) => entry.status === 'accepted')) {
-    const result = read(job.result);
-    if (result.status !== 'evaluated_passed' || result.evaluator?.status !== 'passed' || result.evaluator?.result?.exitCode !== 0 ||
+  for (const activeJob of state.jobs) {
+    const archivedFile = path.join(campaign, 'trajectories/problems', activeJob.id, 'index.json');
+    if (activeJob.status !== 'accepted' && !fs.existsSync(archivedFile)) continue;
+    const archived = read(archivedFile), historical = activeJob.status !== 'accepted';
+    // A later unsuccessful attempt must not erase an independently accepted, frozen original proof.
+    const saved = historical ? archived.runs.flatMap((run: any) => {
+      const resultPath = run.state.replace(/\.runtime\/state\.json$/u, ''), reference = index.files[resultPath]?.versions?.at(-1);
+      if (!reference) return [];
+      const result = snapshot(reference);
+      if (result.runId !== run.runId || !passed(result)) return [];
+      const native = snapshot(run.stateSnapshot);
+      return [{ run, resultPath, result, native }];
+    }).sort((a: any, b: any) => (b.native.solveFinishedAt ?? 0) - (a.native.solveFinishedAt ?? 0))[0] : undefined;
+    if (historical && !saved) continue;
+    const job = saved ? { ...activeJob, result: saved.resultPath, runId: saved.result.runId,
+      solutionCommit: saved.result.solution_commit, nativeAcceptanceAudit: undefined, autoLibraryUsage: undefined,
+      externalMathematicalAssistance: undefined } : activeJob;
+    const result = saved?.result ?? read(job.result);
+    if (!passed(result) ||
       result.solution_commit !== job.solutionCommit || result.runId !== job.runId) throw new Error(`Inconsistent accepted result: ${job.id}`);
-    const archived = read(path.join(campaign, 'trajectories/problems', job.id, 'index.json'));
-    const current = archived.runs.find((run: any) => run.runId === job.runId && run.state === job.result + '.runtime/state.json');
+    const current = saved?.run ?? archived.runs.find((run: any) => run.runId === job.runId && run.state === job.result + '.runtime/state.json');
     if (!current) throw new Error(`No archived native run: ${job.id}`);
-    const native = read(current.state);
+    const native = saved?.native ?? read(current.state);
     if (native.runId !== job.runId || native.check?.verification?.status !== 'kernel_verified') throw new Error(`No kernel receipt: ${job.id}`);
     const repositories = Object.values(archived.repositories) as { archive: string }[];
     const repository = repositories.find(repo => {
@@ -150,6 +175,8 @@ export function importMathCampaign(campaign: string, destination = path.join(roo
     };
     for (const file of proofFiles) write(file.slice(project.length + 1), git('show', `${job.solutionCommit}:${file}`));
     if (!files['Submission.lean'] || !files['Challenge.lean']) throw new Error(`Missing proof or statement: ${job.id}`);
+    if (native.check.commit !== job.solutionCommit || !native.check.verification.results?.some((receipt: any) =>
+      receipt.status === 'kernel_verified' && receipt.proofHash === files['Submission.lean'])) throw new Error(`Unbound kernel source: ${job.id}`);
     const audit = job.nativeAcceptanceAudit ? read(job.nativeAcceptanceAudit) : undefined;
     if (audit?.submissionSha256 && audit.submissionSha256 !== files['Submission.lean']) throw new Error(`Receipt hash mismatch: ${job.id}`);
     const runs = new Map<string, ArchiveProcess['runs'][number]>();
@@ -162,12 +189,10 @@ export function importMathCampaign(campaign: string, destination = path.join(roo
     };
     for (const run of archived.runs) {
       if (runs.has(run.runId)) continue;
-      const bytes = gunzipSync(fs.readFileSync(path.join(campaign, 'trajectories', run.stateSnapshot.object)));
-      if (hash(bytes) !== run.stateSnapshot.sha256) throw new Error(`Checkpoint hash mismatch: ${run.runId}`);
-      const sourceState = JSON.parse(bytes.toString());
+      const sourceState = snapshot(run.stateSnapshot);
       const sourceResultPath = run.state.replace(/\.runtime\/state\.json$/u, '');
       const resultFile = index.files[sourceResultPath]?.versions?.at(-1);
-      const sourceResult = resultFile ? JSON.parse(gunzipSync(fs.readFileSync(path.join(campaign, 'trajectories', resultFile.object))).toString()) : undefined;
+      const sourceResult = resultFile ? snapshot(resultFile) : undefined;
       runs.set(run.runId, recordedRun(sourceState, sourceResult));
     }
     // The current accepted run may have advanced since the last incremental archive cycle.
@@ -178,7 +203,9 @@ export function importMathCampaign(campaign: string, destination = path.join(roo
       ...(Object.keys(sources).length ? { sources } : {}) };
     write('process.json', JSON.stringify(process, null, 2) + '\n');
     const assisted = job.externalMathematicalAssistance || (native.cooperation?.edits ?? []).some((edit: any) => /candidate|independent|reference/u.test(edit.id));
-    const attribution = assisted
+    const attribution = historical && (native.cooperation?.edits ?? []).length
+      ? 'TheoremOS 历史原生运行；保留保存候选的接续及数学编辑记录。'
+      : assisted
       ? 'TheoremOS 原生运行；记录包含外部代理提供的独立数学辅助、已保存候选的交接或续跑。'
       : 'TheoremOS 原生运行；当前接受运行未见外部数学编辑记录，保留已记录的历史续跑。';
     const evidence: ArchiveRecord['campaign'] = { target: job.id, runId: job.runId,
@@ -186,14 +213,18 @@ export function importMathCampaign(campaign: string, destination = path.join(roo
       proofCommit: job.solutionCommit, proofSha256: files['Submission.lean'],
       kernelReceiptIds: audit?.kernelReceiptIds ?? receiptIds(native.check.verification),
       comparatorExitCode: result.evaluator.result.exitCode, reviewStatus: native.cooperation?.review?.status,
-      attribution: publicText(attribution), attributionEn: assisted
+      attribution: publicText(attribution), attributionEn: historical && (native.cooperation?.edits ?? []).length
+        ? 'Historical TheoremOS native run with saved-candidate continuation and recorded mathematical edits.'
+        : assisted
         ? 'TheoremOS native run with recorded independent mathematical assistance from external agents, saved-candidate handoff or continuation.'
         : 'TheoremOS native run. No external mathematical edit was found in the accepted run; recorded continuation is retained.',
       evidenceUrl: `data/proofs/${id}/verification.json` };
     write('verification.json', JSON.stringify({ ...evidence, recordedAttribution: publicText(audit?.attribution ?? ''), status: result.status,
       kernelStatus: native.check.verification.status, comparatorOutput: publicText(result.evaluator.result.stdout) }, null, 2) + '\n');
-    const d = descriptions[job.id] ?? [job.id, job.id, '数学', '原题的 Lean 证明与验收记录。', 'The Lean proof and recorded acceptance of the frozen statement.'];
-    records.push({ id, title: d[0], subtitle: d[1], area: d[2], summary: d[3], en: { subtitle: d[0], area: areas[d[2]] ?? 'Mathematics', summary: d[4] },
+    const prior = previous.find((entry: any) => entry.directory === job.id);
+    const d = descriptions[job.id] ?? (prior ? [prior.title, prior.subtitle, prior.area, prior.summary, prior.en.summary]
+      : [job.id, job.id, '数学', '原题的 Lean 证明与验收记录。', 'The Lean proof and recorded acceptance of the frozen statement.']);
+    records.push({ id, title: d[0], subtitle: d[1], area: d[2], summary: d[3], en: { subtitle: d[0], area: areas[d[2]] ?? prior?.en.area ?? 'Mathematics', summary: d[4] },
       status: 'locally_verified', model: `TheoremOS · ${native.model}`, updatedAt: iso(native.solveFinishedAt) ?? job.finishedAt,
       directory: job.id, files, declaration: `theorem ${evidence.targets[0]?.split('.').at(-1)}`,
       campaign: evidence, processSummary: { runs: process.runs.length, tasks: process.runs.reduce((sum, run) => sum + run.tasks.length, 0) } });

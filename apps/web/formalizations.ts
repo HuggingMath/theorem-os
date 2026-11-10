@@ -33,10 +33,10 @@ export function verifyWebFormalizationEvidence(value: unknown, formalization: We
     request.environmentDigest !== getLeanTaskEnvironment(formalization.environment).dependencyDigest ||
     request.model !== formalization.model || request.effort !== formalization.effort ||
     request.execution !== 'model' || evidence.execution !== 'model' || !evidence.modelInvoked ||
-    request.maxRounds !== webFormalizationLimits.maxRounds || request.maxRunSeconds !== (formalization.maxRunSeconds ?? 1800) ||
+    request.maxRounds !== (formalization.maxRounds ?? webFormalizationLimits.maxRounds) || request.maxRunSeconds !== (formalization.maxRunSeconds ?? 1800) ||
     (formalization.maxTotalTokens === undefined ? !webFormalizationTokenBudgets.includes(request.maxTotalTokens)
       : request.maxTotalTokens !== formalization.maxTotalTokens) || !workflow ||
-    workflow.maxPlanningRounds !== webFormalizationLimits.maxPlanningRounds || workflow.reviewers.length !== webFormalizationLimits.reviewers ||
+    workflow.maxPlanningRounds !== (formalization.maxPlanningRounds ?? webFormalizationLimits.maxPlanningRounds) || workflow.reviewers.length !== webFormalizationLimits.reviewers ||
     [workflow.planner, workflow.backtranslator, ...workflow.reviewers].some(role => role.model !== request.model ||
       role.effort !== request.effort || role.profile !== request.profile || role.executable !== request.executable))
     throw new Error('formalization_binding_mismatch');
@@ -135,7 +135,8 @@ export class WebFormalizations {
     const input: WorkerFormalizationInput = { id, original: item.original, environment: item.environment, model: item.model,
       effort: item.effort, apiKey, provider, maxRunSeconds: item.maxRunSeconds ?? 1800,
       maxTotalTokens: item.maxTotalTokens ?? evidence.request.maxTotalTokens,
-      maxRounds: webFormalizationLimits.maxRounds, maxPlanningRounds: webFormalizationLimits.maxPlanningRounds, reviewers: webFormalizationLimits.reviewers };
+      maxRounds: item.maxRounds ?? webFormalizationLimits.maxRounds, maxPlanningRounds: item.maxPlanningRounds ?? webFormalizationLimits.maxPlanningRounds,
+      reviewers: webFormalizationLimits.reviewers };
     try {
       item.runId = this.startResearch(owner, item, evidence, input);
       delete item.researchError; item.updatedAt = new Date().toISOString(); this.save(record);
@@ -182,13 +183,14 @@ export class WebFormalizations {
     const formalization: WebFormalization = { id, original: request.original, environment: request.environment, model, providerId: provider.id,
       maxRunSeconds: request.maxRunSeconds ?? webFormalizationDefaults.maxRunSeconds,
       maxTotalTokens: request.maxTotalTokens ?? webFormalizationDefaults.maxTotalTokens,
+      maxRounds: 0, maxPlanningRounds: 0,
       research: { ...webFormalizationDefaults.research, ...request.research },
       effort: request.effort, status: 'queued', createdAt: now, updatedAt: now, progress: { phase: 'queued', updatedAt: now },
       ...(request.solve ? { workflow: 'solve' } : {}), ...(request.humanReview ? { humanReview: true } : {}) };
     const input: WorkerFormalizationInput = { original: request.original, environment: request.environment, effort: request.effort,
       apiKey: request.apiKey, id, model, provider, maxRunSeconds: formalization.maxRunSeconds!,
-      maxTotalTokens: formalization.maxTotalTokens!, maxRounds: webFormalizationLimits.maxRounds,
-      maxPlanningRounds: webFormalizationLimits.maxPlanningRounds, reviewers: webFormalizationLimits.reviewers };
+      maxTotalTokens: formalization.maxTotalTokens!, maxRounds: formalization.maxRounds!,
+      maxPlanningRounds: formalization.maxPlanningRounds!, reviewers: webFormalizationLimits.reviewers };
     const creation = this.creation(request, provider, model);
     const job: Job = { record: { owner, formalization, provider: { ...provider }, ...(creation ? { creation } : {}) }, input, controller: new AbortController(), persistedAt: 0 };
     this.jobs.set(this.key(owner, id), job);

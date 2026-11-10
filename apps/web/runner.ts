@@ -312,7 +312,8 @@ export class DockerWebRunner implements WebRunner {
         });
       })();
       const abort = () => { void stop(); };
-      const watchdog = new ExecutionDeadline((input.input.maxRunSeconds + (mathlib ? 600 : 0) + 240) * 1_000, abort);
+      const watchdog = new ExecutionDeadline(input.input.maxRunSeconds > 0
+        ? (input.input.maxRunSeconds + (mathlib ? 600 : 0) + 240) * 1_000 : Infinity, abort);
       signal.addEventListener('abort', abort, { once: true });
       const finish = async (error?: Error) => {
         if (finished) return;
@@ -435,7 +436,8 @@ export class DockerWebRunner implements WebRunner {
           if (error) { child.kill('SIGKILL'); reject(error); } else resolve();
         };
         const abort = () => finish(new Error('formalization_cancelled'));
-        const timer = setTimeout(() => finish(new Error('formalization_timeout')), (input.maxRunSeconds + (mathlib ? 1_200 : 600)) * 1_000);
+        const timer = input.maxRunSeconds > 0
+          ? setTimeout(() => finish(new Error('formalization_timeout')), (input.maxRunSeconds + (mathlib ? 1_200 : 600)) * 1_000) : undefined;
         signal.addEventListener('abort', abort, { once: true });
         child.stdout.setEncoding('utf8');
         child.stdout.on('data', chunk => {

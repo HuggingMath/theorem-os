@@ -130,7 +130,7 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
 export { webLimits };
 // The first provider is the host's deployed sub2api gateway, reached from isolated Docker workers.
 export const webDefaults = Object.freeze({ model: 'deepseek-flash', effort: 'max' as const,
-  environment: 'mathlib' as const, maxTurns: 5, maxRunSeconds: 300, workers: 1, coordination: 'cooperative' as const });
+  environment: 'mathlib' as const, maxTurns: 0, maxRunSeconds: 0, maxTotalTokens: 0, workers: 1, coordination: 'cooperative' as const });
 /**
  * Proof explanations (docs/informalization.md) run one at a time on the sub2api gateway. The reference is the measured
  * Mathlib smoke run of 2026-10-29: 14 declarations, about 4.5 hours and 10.75 million provider tokens.

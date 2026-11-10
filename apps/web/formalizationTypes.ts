@@ -2,10 +2,10 @@ import type { WebAgentActionBody, WebAgentLeanCheck, WebEnvironment, WebFormaliz
 
 export const webFormalizationLimits = Object.freeze({ maxOriginalBytes: 32_768, maxRunSeconds: 1800, maxTotalTokens: 2_000_000,
   maxRounds: 3, maxPlanningRounds: 2, reviewers: 2, concurrency: 1, queueLimit: 8, perOwner: 1, recordsPerOwner: 20 });
-/** Execution time includes planning/revisions; idle time waiting for human plan approval is excluded. */
+/** Each 0 means unlimited. Execution time includes planning/revisions and excludes human approval waits. */
 export type WebResearchBudget = { maxRunSeconds: number; maxTurns: number; maxTotalTokens: number };
-export const webFormalizationDefaults = Object.freeze({ maxRunSeconds: 600, maxTotalTokens: 400_000,
-  research: Object.freeze({ maxRunSeconds: 300, maxTurns: 5, maxTotalTokens: 200_000 }) });
+export const webFormalizationDefaults = Object.freeze({ maxRunSeconds: 0, maxTotalTokens: 0,
+  research: Object.freeze({ maxRunSeconds: 0, maxTurns: 0, maxTotalTokens: 0 }) });
 export const webFormalizationPhases = ['queued', 'preparing', 'planning', 'generating', 'compiling', 'translating', 'reviewing', 'finishing'] as const;
 export type WebFormalizationProgress = { phase: typeof webFormalizationPhases[number]; round?: number; tokens?: number; updatedAt?: string };
 export type WebFormalization = {
@@ -18,14 +18,14 @@ export type WebFormalization = {
   /** Authorizes proof research after formalization, with an optional manual statement and plan review. */
   workflow?: 'solve'; humanReview?: boolean; confirmation?: 'automatic' | 'manual'; runId?: string; researchError?: string;
   /** Absent on older records; new generations bind the exact submitted budgets and provider. */
-  providerId?: string; maxRunSeconds?: number; maxTotalTokens?: number; research?: WebResearchBudget;
+  providerId?: string; maxRunSeconds?: number; maxTotalTokens?: number; maxRounds?: number; maxPlanningRounds?: number; research?: WebResearchBudget;
 };
 export type WebFormalizationCapabilities = { available: boolean; reason?: 'provider' | 'runtime'; providerId?: string;
   model: string; key: 'required' | 'saved' | 'server'; limits: typeof webFormalizationLimits;
   providers?: (WebProvider & { defaultModel: string; key: 'required' | 'saved' | 'server'; keyUrl?: string })[];
   defaults?: typeof webFormalizationDefaults };
 export type WebFormalizationRequest = { original: string; environment: WebEnvironment; apiKey: string; effort: 'low' | 'high' | 'max'; solve?: boolean; humanReview?: boolean;
-  requestId?: string; providerId?: string; model?: string; maxRunSeconds?: number; maxTotalTokens?: number; research?: WebResearchBudget };
+  requestId?: string; providerId?: string; model?: string; maxRunSeconds?: number; maxTotalTokens?: number; research?: Partial<WebResearchBudget> };
 export type WorkerFormalizationInput = Omit<WebFormalizationRequest, 'solve' | 'humanReview' | 'requestId' | 'providerId' | 'research'> & { id: string; model: string; provider: WebProvider;
   maxRunSeconds: number; maxTotalTokens: number; maxRounds: number; maxPlanningRounds: number; reviewers: number };
 /**

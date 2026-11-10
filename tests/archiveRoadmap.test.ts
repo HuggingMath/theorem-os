@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { buildArchiveRoadmap } from '../docs/web/processRoadmap';
+import { emptyProcessSelection, renderArchiveProcess } from '../docs/web/process';
 import type { ArchiveIndexRecord, ArchiveProcess } from '../docs/web/types';
 
 type Run = ArchiveProcess['runs'][number];
@@ -37,6 +38,18 @@ const dependencyPairs = (model: ReturnType<typeof buildArchiveRoadmap>) => model
   .map(edge => `${edge.from}->${edge.to}`).sort();
 
 describe('the archived research roadmap', () => {
+  it('keeps node controls bound to existing detail panels in global and run views', () => {
+    const { record, run } = fixture();
+    for (const locale of ['zh', 'en'] as const) for (const view of ['global', 'roadmap'] as const) {
+      const output = renderArchiveProcess(record, { runs: [run] }, { ...emptyProcessSelection(), view }, locale);
+      expect(output).toContain('class="process-map-node ');
+      const ids = new Set([...output.matchAll(/\sid="([^"]+)"/gu)].map(match => match[1]));
+      const controls = [...output.matchAll(/\baria-controls="([^"]+)"/gu)].flatMap(match => match[1].split(/\s+/u));
+      expect(controls.filter(id => !ids.has(id))).toEqual([]);
+      if (view === 'roadmap') expect(controls).toContain('process-map-inspector');
+    }
+  });
+
   it('preserves a diamond and an abandoned branch without turning chronology or worker order into dependencies', () => {
     const { record, run } = fixture();
     const model = buildArchiveRoadmap(record, run, 'zh');
@@ -100,11 +113,13 @@ describe('the archived research roadmap', () => {
     expect(JSON.stringify({ record, run })).toBe(before);
   });
 
-  it('renders every real archived task dependency and keeps final acceptance bound across all sixteen problems', () => {
+  it('renders every real archived task dependency and keeps final acceptance bound across all solved problems', () => {
     const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
     const manifest = JSON.parse(fs.readFileSync(path.join(root, 'research/openai-math/manifest.json'), 'utf8')) as {
       records: (ArchiveIndexRecord & { directory: string })[] };
-    expect(manifest.records).toHaveLength(16);
+    expect(new Set(manifest.records.map(record => record.id)).size).toBe(manifest.records.length);
+    expect(manifest.records.some(record => record.campaign?.target === 'ThreeStateTreeClauses')).toBe(true);
+    expect(manifest.records.some(record => record.campaign?.target === 'CharacterVarietiesAllSeamsSupport')).toBe(true);
     let runs = 0, taskCount = 0, dependencies = 0;
     for (const record of manifest.records) {
       const process = JSON.parse(fs.readFileSync(path.join(root, 'research/openai-math', record.directory, 'process.json'), 'utf8')) as ArchiveProcess;
@@ -123,6 +138,6 @@ describe('the archived research roadmap', () => {
         runs++; taskCount += ids.size; dependencies += expected.length;
       }
     }
-    expect(runs).toBeGreaterThan(16); expect(taskCount).toBeGreaterThan(100); expect(dependencies).toBeGreaterThan(100);
+    expect(runs).toBeGreaterThan(manifest.records.length); expect(taskCount).toBeGreaterThan(100); expect(dependencies).toBeGreaterThan(100);
   });
 });

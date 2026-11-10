@@ -46,10 +46,11 @@ export function submissionIssues(draft: TaskDraft, apiKey: string, session: WebS
     ['workers', draft.workers, t('Agent 数量'), 1, session.limits.maxWorkers],
   ] as const) {
     const value = Number(raw);
+    if (field !== 'workers' && (!raw.trim() || value === 0)) continue;
     if (!raw.trim() || !Number.isSafeInteger(value) || value < min || value > max) add(field, t('{0}须为 {1}–{2} 的整数', label, min, max));
   }
   const tokens = draft.maxTotalTokens?.trim() ?? '';
-  if (tokens && tokenCap(tokens, session.limits.maxTotalTokens) === undefined)
+  if (tokens && tokens !== '0' && tokenCap(tokens, session.limits.maxTotalTokens) === undefined)
     add('max-tokens', t('用量上限须为 1–{0} 万 Token 的整数，留空表示不限', session.limits.maxTotalTokens / 10_000));
   if (draft.modulePlan) {
     const plan = researchModulePlanSchema.safeParse(draft.modulePlan);

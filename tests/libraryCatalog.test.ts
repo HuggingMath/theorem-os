@@ -40,6 +40,11 @@ describe('versioned library catalog consumption', () => {
     expect(f.catalog.declarationCount).toBe(3);
     fs.rmSync(path.join(path.dirname(f.built.file), 'objects'), { recursive: true });
     const reopened = readLibraryCatalog(f.built.file, f.built.digest);
+    const metadata = reopened.moduleMetadata(arithmetic);
+    expect(metadata.entries.some(entry => entry.name === 'Demo.commute')).toBe(true);
+    expect('source' in metadata).toBe(false);
+    metadata.entries.length = 0;
+    expect(reopened.moduleMetadata(arithmetic).entries).not.toHaveLength(0);
     expect(reopened.search([{ query: 'Demo.commute' }])[0].hits[0]?.name).toBe('Demo.commute');
     expect(reopened.search([{ query: 'Demo.secret' }])[0].hits.some(hit => hit.name === 'Demo.secret')).toBe(false);
     expect(reopened.identity).toMatchObject({ id: 'example/arithmetic', revision: 'v1', catalogDigest: f.built.digest });

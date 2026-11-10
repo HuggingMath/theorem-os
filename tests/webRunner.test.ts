@@ -44,7 +44,11 @@ main().catch(error => { if (error?.fixtureExit) process.exitCode = error.code; e
 }
 
 describe('Docker web runner', () => {
-  it.each(['approve', 'cancel'] as const)('keeps the same container beyond the outer deadline while awaiting a person, then handles %s', async decision => {
+  it.each([
+    { decision: 'approve', maxRunSeconds: 1, planApproval: true },
+    { decision: 'cancel', maxRunSeconds: 1, planApproval: true },
+    { decision: 'cancel', maxRunSeconds: 0, planApproval: false },
+  ] as const)('keeps its container during human waits or unlimited execution ($maxRunSeconds seconds, $decision)', async ({ decision, maxRunSeconds, planApproval }) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-docker-approval-'));
     fs.writeFileSync(path.join(root, 'docker'), `#!${process.execPath}
 const fs = require('node:fs'), path = require('node:path');
@@ -71,7 +75,7 @@ main().catch(() => process.exit(1));
       const config = readWebConfig({}), request: WorkerInput = {
         id: 'approval-wait-fixture', provider: config.providers[0], input: { ...webDefaults,
           providerId: config.providers[0].id, apiKey: 'sk-offline-fixture', source: 'theorem goal : True := by sorry',
-          task: 'Offline human review fixture', maxRunSeconds: 1, workers: 2, planApproval: true },
+          task: 'Offline human review fixture', maxRunSeconds, workers: 2, planApproval },
       };
       let waiting!: () => void;
       const ready = new Promise<void>(resolve => { waiting = resolve; }), messages: WorkerMessage[] = [];

@@ -106,7 +106,8 @@ try {
         context.on('page', page => page.on('pageerror', error => errors.push(error.message)));
       }
       const collaborator = await others[0].newPage(), visitor = await others[1].newPage();
-      await page.goto(`${origin}/people.html`); await page.getByText('编辑我的资料', { exact: true }).click();
+      await page.goto(`${origin}/people.html`); await page.getByRole('link', { name: '我的主页', exact: true }).click();
+      await page.getByText('编辑我的资料', { exact: true }).click();
       await page.getByLabel('显示名', { exact: true }).fill('Fixture Mathematician A'); await page.getByLabel('研究领域，用逗号分隔').fill('logic, algebra');
       await page.getByLabel('简介', { exact: true }).fill('Collaborative mathematics browser fixture.'); await page.getByLabel('资料可见范围').selectOption('public');
       await request(page, 'PUT', '/api/research/profile', () => page.getByRole('button', { name: '保存资料', exact: true }).click());
@@ -119,7 +120,8 @@ try {
       await http(visitor, 'PUT', '/api/research/profile', { requestId: crypto.randomUUID(), expectedRevision: c.profile.revision, displayName: 'Fixture Mathematician C', visibility: 'public' });
       assert.equal(new Set([a.researcherId, b.researcherId, c.researcherId]).size, 3, 'independent browser sessions');
 
-      await page.goto(`${origin}/theorems.html`); await page.getByLabel('定理名称', { exact: true }).fill('Collaborative True');
+      await page.goto(`${origin}/theorems.html`); await page.getByRole('button', { name: '新建定理', exact: true }).click();
+      await page.getByLabel('定理名称', { exact: true }).fill('Collaborative True');
       await page.getByLabel('研究描述', { exact: true }).fill('A fixed statement shared across three sessions.'); await page.getByLabel('领域，用逗号分隔').fill('logic');
       await page.getByRole('combobox', { name: /可见范围/u }).selectOption('public');
       await request(page, 'POST', '/api/research/theorems', () => page.getByRole('button', { name: '创建定理', exact: true }).click(), false);
