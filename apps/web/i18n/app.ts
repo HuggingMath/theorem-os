@@ -822,6 +822,7 @@ export const app: Record<string, string> = {
   "结构与实例": "Instances",
   "原题与 Lean": "Original problem and Lean",
   "完整审核": "Full review",
+  "查看最新审核": "View latest review",
   "此题直接从 Lean 陈述开始。": "This problem started from a Lean statement.",
   "陈述尚未生成。": "The statement is not ready yet.",
   "具体对应关系": "Statement correspondence",

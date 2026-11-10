@@ -85,9 +85,9 @@ export class WebConversations {
   }
   private resourceState(owner: string, conversation: WebConversation) {
     const formalization = conversation.formalizationId ? this.resources.formalization(owner, conversation.formalizationId) : undefined;
-    const runId = conversation.runId ?? formalization?.runId;
+    const runId = conversation.followFormalization ? formalization?.runId ?? conversation.runId : conversation.runId ?? formalization?.runId;
     const run = runId ? this.resources.run(owner, runId) : undefined;
-    return { formalization, run };
+    return { formalization: conversation.followFormalization || !runId || formalization?.runId === runId ? formalization : undefined, run };
   }
   read(owner: string, id: string): WebConversation {
     if (!/^[a-f0-9-]{36}$/u.test(id)) throw new WebStorageError(404, '对话不存在。');
@@ -134,12 +134,22 @@ export class WebConversations {
     if (run && formalization && run.formalizationId !== formalization.id)
       throw new WebStorageError(400, '题目与研究不属于同一任务。');
     const runId = run?.id ?? formalization?.runId;
-    const existing = this.list(owner).find(item => runId ? item.runId === runId : formalizationId && item.formalizationId === formalizationId);
+    // The main problem conversation follows revised candidates. An explicitly opened older run needs its own
+    // run-only conversation so reads, discussion and guidance keep using that candidate's saved evidence.
+    const historical = Boolean(run && formalization && formalization.runId !== run.id);
+    const linkedFormalizationId = historical ? undefined : formalizationId;
+    const conversations = this.list(owner);
+    const fixed = () => conversations.find(item => !item.followFormalization && item.runId === runId);
+    const existing = linkedFormalizationId
+      ? conversations.find(item => item.followFormalization && item.formalizationId === linkedFormalizationId)
+        ?? (association.runId ? fixed() : undefined)
+      : fixed();
     if (existing) return this.read(owner, existing.id);
-    const natural = formalization?.original ?? run?.formalization?.original, at = now();
+    const natural = historical ? run?.formalization?.original : formalization?.original ?? run?.formalization?.original;
+    const at = now();
     const { text: original, title } = natural === undefined ? leanOpening(run!) : { text: natural, title: titled(natural) };
     const conversation: WebConversation = { id: crypto.randomUUID(), title,
-      createdAt: at, updatedAt: at, ...(formalizationId ? { formalizationId } : {}), ...(runId ? { runId } : {}), messages: [
+      createdAt: at, updatedAt: at, ...(linkedFormalizationId ? { formalizationId: linkedFormalizationId, followFormalization: true as const } : {}), ...(runId ? { runId } : {}), messages: [
         { id: crypto.randomUUID(), role: 'user', kind: 'text', text: original, createdAt: at, status: 'complete' },
         { id: crypto.randomUUID(), role: 'assistant', kind: 'task', text: '', createdAt: at, status: 'complete' },
       ] };

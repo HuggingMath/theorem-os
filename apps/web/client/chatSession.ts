@@ -551,6 +551,8 @@ export class ChatSession {
       && !(result.reason && typeof result.reason === 'object' && result.reason.status === 404));
     if (failed?.status === 'rejected') throw failed.reason;
     this.formalization = formal.status === 'fulfilled' ? formal.value?.formalization : undefined;
+    if (!conversation.followFormalization && conversation.runId && this.formalization?.runId !== conversation.runId)
+      this.formalization = undefined;
     if (this.formalization) this.formalizations = [this.formalization, ...this.formalizations.filter(item => item.id !== this.formalization!.id)];
     let received = run.status === 'fulfilled' ? run.value?.run : undefined;
     // A compiled revision can be published while the conversation response still names the previous candidate.

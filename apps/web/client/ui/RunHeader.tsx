@@ -18,7 +18,6 @@ export type RunHeaderProps = {
   /** The recorded version this run started from; `runId` is set while that run is still in the list. */
   continuation?: { label: string; runId?: string };
   formalizationId?: string;
-  automaticFormalization?: boolean;
   /** Set while the run's first plan waits for its owner (先审计划); no Agent works on it until they approve it. */
   approval?: PlanApprovalProps;
 };
@@ -182,7 +181,7 @@ function RunHeader(props: RunHeaderProps) {
       <Actions {...props} />
     </header>
     {props.sample && <p class="sample-note" data-sample-note>{t('这是一次录制好的运行：Agent 由离线脚本代替模型，环境、任务协作、Lean 检查和独立验收都是真实执行的。可以浏览每个标签页；点「用这道题开始研究」会把题目和配置填进新草稿，填入自己的 API Key 即可提交。')}</p>}
-    {props.formalizationId && <p class="run-continuation" data-run-formalization><Icon name="languages" /><a class="text-button" href={`formalize.html?id=${encodeURIComponent(props.formalizationId)}`}>{props.automaticFormalization ? t('系统已形式化 · 查看原题与 Lean 对照') : t('原题已确认 · 查看原意与 Lean 对照')}</a></p>}
+    {props.formalizationId && <p class="run-continuation" data-run-formalization><Icon name="languages" /><a class="text-button" href={`formalize.html?id=${encodeURIComponent(props.formalizationId)}`}>{t('查看最新审核')}</a></p>}
     {props.continuation && <p class="run-continuation" data-run-continuation><Icon name="git-branch" />
       <span>{t('从「{0}」继续：这一版的代码交给了每个 Agent 参考，仍要重新通过 Lean 检查。', props.continuation.label)}</span>
       {props.continuation.runId && <button type="button" class="text-button" data-action="open-continued" data-run-id={props.continuation.runId}>{t('看原运行')}</button>}</p>}

@@ -688,7 +688,7 @@ function ChatOriginal({ formalization, run }: ChatOriginalProps) {
   const aspects: Record<string, string> = { domains: t("对象与类型"), assumptions: t("假设"), conclusions: t("结论"), definitions: t("定义"), quantifierScope: t("量词范围"), instanceCoherence: t("结构与实例") };
   return <div class="chat-original-content">
     <header class="chat-original-header"><h2>{t("原题与 Lean")}</h2>
-      {formalizationId && <a class="text-button" href={`formalize.html?id=${encodeURIComponent(formalizationId)}`} target="_blank" rel="noreferrer">{direct ? t('形式化详情') : t("完整审核")}<Icon name="arrow-up-right" /></a>}
+      {formalizationId && <a class="text-button" href={`formalize.html?id=${encodeURIComponent(formalizationId)}`} target="_blank" rel="noreferrer">{formalization ? direct ? t('形式化详情') : t("完整审核") : t("查看最新审核")}<Icon name="arrow-up-right" /></a>}
     </header>
     {(report || formalization?.compiled || run?.formalization) && <p class="chat-statement-verdict">{direct && (!confirmation || ['automatic', 'manual'].includes(confirmation)) ? t('Lean 编译通过') : statementConfirmation(confirmation, false, formalization?.reviewMode ?? run?.formalization?.reviewMode)}
       {' '}{t('Lean 验收证明的是这份陈述，不能替代对自然语言原意的核对。')}</p>}

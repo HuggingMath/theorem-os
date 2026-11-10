@@ -2007,7 +2007,6 @@ function renderRunHeader(run: WebRun) {
     download: run.result || !activeRun(run) ? downloadUrl(run.id) : undefined, shareable: !isSample(run) && isAcceptedRun(run) && isStatementReviewed(run) && Boolean(run.result?.proof),
     sample: isSample(run), ...(stalledMinutes(run) !== undefined ? { stalled: stalledMinutes(run)! } : {}),
     ...(run.formalizationId ? { formalizationId: run.formalizationId } : {}),
-    automaticFormalization: run.formalization?.confirmation === 'automatic',
     // The sample's Agents were offline scripts; its recorded token counts would read as a real cost.
     ...(!isSample(run) && runTokens(run) ? { tokens: { used: formatTokens(runTokens(run)!), ...(run.maxTotalTokens ? { cap: formatTokens(run.maxTotalTokens) } : {}) } } : {}),
     ...(approvalProps(run) ? { approval: approvalProps(run)! } : {}),

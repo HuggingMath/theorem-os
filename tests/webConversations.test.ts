@@ -536,13 +536,15 @@ describe('persistent conversations use saved owned task context', () => {
     run.formalizationId = formalization.id; run.status = 'cancelled';
     formalization.runId = run.id; formalization.status = 'confirmed';
     const next: WebRun = { ...run, id: crypto.randomUUID(), status: 'running', task: `Prove using ${kind}`,
+      formalization: { id: formalization.id, original: formalization.original, confirmation: 'pending' },
       ...(kind === 'continuation' ? { continueFrom: { runId: run.id, taskId: 'goal', commit: 'a'.repeat(40), label: 'Recorded proof' } } : {}) };
     const runs = new Map([[run.id, run], [next.id, next]]);
     resources.run = (owner, id) => owner === 'alice' ? runs.get(id) : undefined;
     const created = service.create('alice', { runId: next.id,
       ...(kind === 'continuation' ? { formalizationId: formalization.id } : {}) });
     expect(created.id).not.toBe(primary.id);
-    expect(created).toMatchObject({ runId: next.id, formalizationId: formalization.id });
+    expect(created.runId).toBe(next.id);
+    expect(created.formalizationId).toBeUndefined();
     expect(created.messages[0]?.text).toBe(formalization.original);
     expect(service.create('alice', { runId: next.id }).id).toBe(created.id);
     expect(service.create('alice', { formalizationId: formalization.id }).id).toBe(primary.id);
@@ -564,6 +566,9 @@ describe('persistent conversations use saved owned task context', () => {
     const { service, run, formalization, resources, storage } = fixture();
     run.formalizationId = formalization.id;
     const created = service.create('alice', { runId: run.id });
+    // Reproduce a saved association from before explicit primary/fixed conversation identities.
+    created.formalizationId = formalization.id; delete created.followFormalization;
+    storage.saveRecord(['owners', mathDigest('alice'), 'conversations', created.id + '.json'], created);
     const primary: WebRun = { ...run, id: crypto.randomUUID(), status: 'cancelled' };
     formalization.runId = primary.id;
     resources.run = (owner, id) => owner === 'alice' ? id === run.id ? run : id === primary.id ? primary : undefined : undefined;
@@ -581,6 +586,87 @@ describe('persistent conversations use saved owned task context', () => {
     expect(restarted.create('alice', { formalizationId: formalization.id })).toMatchObject({ runId: primary.id, formalizationId: formalization.id });
     expect(resources.run('alice', primary.id)).toBe(primary);
     expect(resources.formalization('alice', formalization.id)).toBe(formalization);
+  });
+
+  it('reopens a historical candidate independently while the original conversation follows later candidates across restart', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'web-conversation-candidates-'));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const { service, run, formalization, resources } = fixture(new WebStorage(root));
+    run.formalizationId = formalization.id; formalization.runId = run.id;
+    run.formalization = { id: formalization.id, original: 'Original saved with the first candidate.', confirmation: 'superseded' };
+    const live = service.create('alice', { formalizationId: formalization.id });
+    const next = { ...run, id: crypto.randomUUID(), source: 'theorem revised : 1 = 1 := by sorry' };
+    const last = { ...next, id: crypto.randomUUID(), source: 'theorem latest : 2 = 2 := by sorry' };
+    const runs = new Map([run, next, last].map(item => [item.id, item]));
+    resources.run = (owner, id) => owner === 'alice' ? runs.get(id) : undefined;
+    formalization.runId = next.id;
+    expect(service.read('alice', live.id).runId).toBe(next.id);
+    const historical = service.create('alice', { runId: run.id });
+    expect(historical.id).not.toBe(live.id);
+    expect(historical).toMatchObject({ runId: run.id });
+    expect(historical.formalizationId).toBeUndefined();
+    expect(historical.messages[0]?.text).toBe(run.formalization.original);
+    expect(service.create('alice', { runId: run.id, formalizationId: formalization.id }).id).toBe(historical.id);
+    expect(service.create('alice', { runId: next.id }).id).toBe(live.id);
+    expect(() => service.create('bob', { runId: run.id })).toThrow('不存在');
+    expect(() => service.read('bob', historical.id)).toThrow('不存在');
+    expect(() => service.create('alice', { runId: run.id, formalizationId: crypto.randomUUID() })).toThrow('不存在');
+
+    formalization.runId = last.id;
+    const restarted = new WebConversations(new WebStorage(root), resources, async () => ({ answer: 'unused' }));
+    expect(restarted.read('alice', historical.id)).toMatchObject({ runId: run.id, messages: historical.messages });
+    expect(restarted.read('alice', live.id).runId).toBe(last.id);
+    expect(restarted.create('alice', { runId: run.id }).id).toBe(historical.id);
+    expect(restarted.list('alice')).toHaveLength(2);
+    // A later revision can reuse a previously compiled candidate. Recreating its live conversation must
+    // preserve the separately saved historical discussion even when both currently show the same run.
+    restarted.delete('alice', live.id);
+    formalization.runId = run.id;
+    const recreated = restarted.create('alice', { formalizationId: formalization.id });
+    expect(recreated.id).not.toBe(historical.id);
+    expect(recreated.formalizationId).toBe(formalization.id);
+    expect(restarted.create('alice', { runId: run.id }).id).toBe(recreated.id);
+    expect(restarted.read('alice', historical.id).formalizationId).toBeUndefined();
+  });
+
+  it('keeps historical discussion and guidance bound to the saved candidate instead of the latest statement', async () => {
+    const { service, run, formalization, resources, calls } = fixture();
+    cleanups.push(() => service.close());
+    run.formalizationId = formalization.id;
+    run.formalization = { id: formalization.id, original: 'Historical original.', confirmation: 'superseded' };
+    run.status = 'completed';
+    run.result = { status: 'evaluated_passed', proof: 'theorem example : True := by trivial', report: {} };
+    const next = { ...run, id: crypto.randomUUID(), source: 'theorem latest : 3 = 3 := by sorry', result: undefined };
+    resources.run = (owner, id) => owner === 'alice' ? [run, next].find(item => item.id === id) : undefined;
+    formalization.runId = next.id; formalization.original = 'Latest original, never a historical source.';
+    service.create('alice', { formalizationId: formalization.id });
+    const historical = service.create('alice', { runId: run.id });
+    service.send('alice', historical.id, '解释这份旧证明', call); await tick();
+    const context = JSON.parse((calls[0]!.input[0] as any).content[0].text.split('Recorded task context:\n')[1].split('\n\nQuestion:')[0]);
+    expect(context.original).toBe(run.formalization.original);
+    expect(context.formalization).toBeUndefined();
+    expect(context.run).toMatchObject({ source: run.source, proof: run.result.proof, accepted: true, statementReview: 'superseded' });
+    expect(JSON.stringify(calls[0]!.input)).not.toContain(next.source);
+    expect(JSON.stringify(calls[0]!.input)).not.toContain(formalization.original);
+    const delivered: string[] = [];
+    await service.guide('alice', historical.id, guidanceInput(), async (id, input) => {
+      delivered.push(id); return { id: input.id, status: 'rejected', reason: 'Historical task is complete.' };
+    });
+    expect(delivered).toEqual([run.id]);
+    expect(service.read('alice', historical.id).messages.at(-1)?.guidance?.runId).toBe(run.id);
+  });
+
+  it('does not attach an older run to a formalization waiting to link its replacement', () => {
+    const { service, run, formalization } = fixture();
+    run.formalizationId = formalization.id; formalization.runId = run.id;
+    const live = service.create('alice', { formalizationId: formalization.id });
+    delete formalization.runId;
+    const historical = service.create('alice', { runId: run.id });
+    expect(historical.id).not.toBe(live.id);
+    expect(historical.formalizationId).toBeUndefined();
+    expect(historical.runId).toBe(run.id);
+    expect(historical.messages[0]?.text).toContain(run.source);
+    expect(historical.messages[0]?.text).not.toContain(formalization.original);
   });
 
   it('opens a Lean run with its request and its source as a Lean block, titled like the run', () => {

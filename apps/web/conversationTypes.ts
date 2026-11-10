@@ -11,6 +11,8 @@ export type WebConversationMessage = {
 export type WebConversation = {
   id: string; title: string; createdAt: string; updatedAt: string;
   formalizationId?: string; runId?: string; messages: WebConversationMessage[];
+  /** New primary conversations follow candidate revisions; older saved run associations stay fixed. */
+  followFormalization?: true;
 };
 export type WebConversationSummary = Omit<WebConversation, 'messages'> & { answering: boolean };
 export type WebConversationRequest = { text: string; apiKey: string; requestId?: string };
