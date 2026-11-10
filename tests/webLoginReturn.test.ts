@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loginHref, loginReturn, researchNavigation, safeAppReturn, workbenchReturn } from '../apps/web/shared';
+import { loginHref, loginReturn, researchContextHref, researchNavigation, safeAppReturn, workbenchReturn } from '../apps/web/shared';
 
 const chat = '0123abcd-0123-4abc-8def-0123456789ab', run = 'abcdef01-0123-4abc-8def-0123456789ab';
 describe('same-site app login returns', () => {
@@ -47,23 +47,50 @@ describe('same-site app login returns', () => {
 });
 
 describe('navigation retaining the current workbench', () => {
-  it.each([`?chat=${chat}`, `?workbenchChat=${chat}&q=algebra&field=groups`])('propagates conversations on all research pages: %s', search => {
-    const links = researchNavigation(search);
+  it.each([{ search: `?chat=${chat}`, origin: 'workbench' as const }, { search: `?workbenchChat=${chat}&q=algebra&field=groups`, origin: 'research' as const }])('propagates conversations on all research pages: %s', ({ search, origin }) => {
+    const links = researchNavigation(search, origin);
     expect(links.workbench).toBe('./?chat=' + chat);
     for (const page of ['workspace', 'people', 'theorems', 'library'] as const) expect(links[page]).toBe(`${page}.html?workbenchChat=${chat}`);
   });
-  it.each([`?run=${run}`, `?workbenchRun=${run}`])('propagates runs on all research pages: %s', search => {
-    const links = researchNavigation(search);
+  it.each([{ search: `?run=${run}`, origin: 'workbench' as const }, { search: `?workbenchRun=${run}`, origin: 'research' as const }])('propagates runs on all research pages: %s', ({ search, origin }) => {
+    const links = researchNavigation(search, origin);
     expect(links.workbench).toBe('./?run=' + run);
     for (const page of ['workspace', 'people', 'theorems', 'library'] as const) expect(links[page]).toBe(`${page}.html?workbenchRun=${run}`);
   });
   it('keeps both contexts and returns to the conversation when both are provided', () => {
-    const links = researchNavigation(`?chat=${chat}&run=${run}`);
+    const links = researchNavigation(`?chat=${chat}&run=${run}`, 'workbench');
     expect(links.workbench).toBe('./?chat=' + chat);
     expect(links.people).toBe(`people.html?workbenchChat=${chat}&workbenchRun=${run}`);
   });
   it('drops malformed contexts instead of treating them as destinations', () => {
     expect(researchNavigation('?workbenchChat=//evil.test&workbenchRun=../private'))
       .toEqual({ workbench: './', workspace: 'workspace.html', people: 'people.html', theorems: 'theorems.html', library: 'library.html' });
+  });
+  it('does not use a research target run or incidental chat parameter as the workbench source', () => {
+    expect(researchNavigation(`?id=project&run=${run}&chat=${chat}`).workbench).toBe('./');
+    expect(researchNavigation(`?id=project&run=another&workbenchChat=${chat}&workbenchRun=${run}`).workbench).toBe('./?chat=' + chat);
+  });
+});
+
+describe('research links carry explicit workbench context', () => {
+  it('retains target identities, filters, versions and fragments through the project, person and login path', () => {
+    const source = `?workbenchChat=${chat}&workbenchRun=${run}&q=old`;
+    const profile = researchContextHref('people.html?id=person&q=Galois&field=Algebra&offset=12#research-contributions', source);
+    const profileUrl = new URL(profile, 'https://app.example.test');
+    expect(Object.fromEntries(profileUrl.searchParams)).toEqual({ id: 'person', q: 'Galois', field: 'Algebra', offset: '12', workbenchChat: chat, workbenchRun: run });
+    expect(profileUrl.hash).toBe('#research-contributions');
+    const project = researchContextHref('theorems.html?id=project&run=related-run&version=v2&task=helper#feedback-1', profileUrl.search);
+    const login = new URL(loginHref(project), 'https://app.example.test');
+    const returned = new URL(loginReturn(login.search), 'https://app.example.test');
+    expect(returned.searchParams.get('run')).toBe('related-run');
+    expect(returned.searchParams.get('version')).toBe('v2'); expect(returned.hash).toBe('#feedback-1');
+    expect(researchNavigation(returned.search).workbench).toBe('./?chat=' + chat);
+  });
+
+  it('keeps a target run local and does not append context to external or non-app destinations', () => {
+    expect(researchContextHref('theorems.html?id=project&run=' + run, '?run=' + run)).toBe('theorems.html?id=project&run=' + run);
+    for (const href of ['https://other.test/people.html', '/api/research/theorems', '#research-members'])
+      expect(researchContextHref(href, '?workbenchChat=' + chat)).toBe(href);
+    expect(researchContextHref('people.html?q=Galois', '?workbenchChat=invalid&workbenchRun=../bad')).toBe('people.html?q=Galois');
   });
 });

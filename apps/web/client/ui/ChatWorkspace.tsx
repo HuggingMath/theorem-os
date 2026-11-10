@@ -168,6 +168,18 @@ function TaskMessage(props: ChatThreadProps) {
   const solve = props.solve;
   const hasSource = solve?.process.current !== undefined || solve?.process.checks.some(check => check.source !== undefined);
   const liveAvailable = Boolean(solve && (solve.process.active || hasSource));
+  const resultActions = run && !active && <>
+    {accepted && <button type="button" class="text-button" data-research-artifact="roadmap" onClick={() => props.onArtifact('roadmap')}><Icon name="network" />{t('路线图')}</button>}
+    <button type="button" class="button" data-research-artifact="result" onClick={() => props.onArtifact('result')}>
+      <Icon name="shield-check" />{accepted ? t('查看验收报告') : t('查看原因与报告')}</button>
+    {accepted && <>
+      <a class="button" data-chat-download-kit href={`/api/runs/${encodeURIComponent(run.id)}/verification-kit`} download>{t('下载本地复核包')}</a>
+      {props.onShare && <button type="button" class="button" data-chat-share onClick={props.onShare}><Icon name="share-2" />{t('分享研究成果')}</button>}
+      {!props.sample && <a class="button" data-save-library href={`library.html?${new URLSearchParams({ create: '1', fromRun: run.id })}`}>{t('保存到我的 Library')}</a>}
+    </>}
+    <a class="text-button" href={`/api/runs/${encodeURIComponent(run.id)}/download`} download>{t('下载完整研究归档')}</a>
+    {accepted && props.onEditProblem && <button type="button" class="text-button" onClick={props.onEditProblem}>{t('修改题目')}</button>}
+  </>;
   return <div class="chat-task">
     {props.sample && <p class="sample-note" data-chat-sample-note>{t('预设示例 · 附 Lean 验收记录')}</p>}
     <div class="research-conversation-status" data-active={active} data-accepted={accepted} data-failed={failed}>
@@ -203,25 +215,17 @@ function TaskMessage(props: ChatThreadProps) {
       loading={solve.loading} failed={solve.failed} onRetry={solve.onRetry} />}
     {!run && failed && item && (item.reason || item.researchError) && <FormalizationFailure item={item} />}
     {!statementDecision && (run || item?.report) && <div class="research-conversation-artifacts" role="group" aria-label={t('结果')}>
-      {run && <button type="button" data-research-artifact="roadmap" onClick={() => props.onArtifact('roadmap')}><Icon name="network" /><span>{t('路线图')}</span><Icon name="arrow-up-right" /></button>}
+      {accepted && <button type="button" class="chat-result-primary" data-research-artifact="source" disabled={!proof} onClick={() => props.onArtifact('source')}><Icon name="file-code-2" /><span>{t('查看验收证明')}</span><Icon name="arrow-up-right" /></button>}
+      {run && !accepted && <button type="button" data-research-artifact="roadmap" onClick={() => props.onArtifact('roadmap')}><Icon name="network" /><span>{t('路线图')}</span><Icon name="arrow-up-right" /></button>}
       <button type="button" data-research-artifact="original" onClick={() => props.onArtifact('original')}><Icon name="languages" /><span>{t('原题')} / Lean</span><Icon name="arrow-up-right" /></button>
-      {run && <button type="button" data-research-artifact="source" disabled={!proof} onClick={() => props.onArtifact('source')}><Icon name="file-code-2" /><span>{accepted ? t('验收证明') : t('候选源码')}</span><Icon name="arrow-up-right" /></button>}
+      {run && !accepted && <button type="button" data-research-artifact="source" disabled={!proof} onClick={() => props.onArtifact('source')}><Icon name="file-code-2" /><span>{t('候选源码')}</span><Icon name="arrow-up-right" /></button>}
     </div>}
     <div class="chat-task-actions">
-      {run && !active && <>
-        <button type="button" class="button" data-research-artifact="result" onClick={() => props.onArtifact('result')}>
-          <Icon name="shield-check" />{accepted ? t('查看验收报告') : t('查看原因与报告')}</button>
-        {accepted && <>
-          <a class="button" data-chat-download-kit href={`/api/runs/${encodeURIComponent(run.id)}/verification-kit`} download>{t('下载本地复核包')}</a>
-          {props.onShare && <button type="button" class="button" data-chat-share onClick={props.onShare}><Icon name="share-2" />{t('分享研究成果')}</button>}
-          {!props.sample && <a class="button" data-save-library href={`library.html?${new URLSearchParams({ create: '1', fromRun: run.id })}`}>{t('保存到我的 Library')}</a>}
-        </>}
-        <a class="text-button" href={`/api/runs/${encodeURIComponent(run.id)}/download`} download>{t('下载完整研究归档')}</a>
-      </>}
+      {accepted ? <details class="chat-result-more" data-chat-result-more><summary>{t('更多结果操作')}</summary><div class="chat-result-more-actions">{resultActions}</div></details> : resultActions}
       {props.onStartResearch && !item?.humanReview && <button type="button" class="button button-primary" data-research-continue disabled={props.startingResearch} onClick={props.onStartResearch}>
         {props.startingResearch ? t('正在进入证明队列…') : t('继续证明')}</button>}
       {active && run && props.onGuidance && !props.planDecision && <button type="button" class="text-button" data-research-guidance onClick={() => props.onGuidance?.()}>{t('调整研究方向')}</button>}
-      {!active && !statementDecision && props.onEditProblem && <button type="button" class="text-button" onClick={props.onEditProblem}>{t("修改题目")}</button>}
+      {!accepted && !active && !statementDecision && props.onEditProblem && <button type="button" class="text-button" onClick={props.onEditProblem}>{t("修改题目")}</button>}
     </div>
     {run && props.recovery && <RecoveryChoices run={run} {...props.recovery} />}
   </div>;
@@ -331,7 +335,15 @@ export type ChatComposerProps = {
 function ChatComposer(props: ChatComposerProps) {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [setupStep, setSetupStep] = useState(1);
+  const settings = useRef<HTMLDetailsElement>(null);
+  const keyInput = useRef<HTMLInputElement>(null);
   const composing = useRef(false);
+  const missingKey = props.keyRequired && !props.apiKey.trim();
+  const configureKey = () => {
+    setSetupStep(2);
+    if (settings.current) settings.current.open = true;
+    keyInput.current?.focus();
+  };
   const provider = props.providers.find(item => item.id === props.providerId);
   const tx = (zh: string, en: string) => locale === 'en' ? en : zh;
   const configure = (step: number, selector: string) => {
@@ -382,7 +394,7 @@ function ChatComposer(props: ChatComposerProps) {
         onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
         onKeyDown={event => {
           if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || event.isComposing || composing.current || event.keyCode === 229 || matchMedia('(pointer: coarse)').matches) return;
-          event.preventDefault(); if (canSend) props.onSubmit();
+          event.preventDefault(); if (canSend) props.onSubmit(); else if (missingKey && props.input.trim() && !props.disabled && !props.submitting) configureKey();
         }} />
       {props.newProblem && <FirstResearchStart participation={props.participation} budgets={props.budgets} limits={props.budgetLimits}
         locked={props.submitting || props.participationLocked} quota={props.quota} onBudget={value => {
@@ -407,7 +419,7 @@ function ChatComposer(props: ChatComposerProps) {
               <span><strong>{t('自动推进')}</strong><span>{t('自动核对并开始证明 · 1 个 Agent')}</span></span></label>
           </fieldset>
         </details>}
-        <details id="formalize-settings" class="chat-composer-settings" onToggle={event => {
+        <details ref={settings} id="formalize-settings" class="chat-composer-settings" onToggle={event => {
           // On the empty home the fields open below the composer; a short screen scrolls them into view.
           const details = event.currentTarget;
           if (details.open) { const participation = details.parentElement?.querySelector<HTMLDetailsElement>('[data-chat-participation-control]'); if (participation) participation.open = false; }
@@ -432,7 +444,7 @@ function ChatComposer(props: ChatComposerProps) {
               list="chat-model-options" /></label>
             <datalist id="chat-model-options">{provider?.defaultModel && <option value={provider.defaultModel} />}</datalist>
             <label for="formalize-key">API Key {props.keyRequired && <span>{t("（必填）")}</span>}</label>
-            <input id="formalize-key" type="password" autocomplete="off" spellcheck={false} value={props.apiKey} onInput={event => props.onKey(event.currentTarget.value)} placeholder={t('临时使用的 API Key')} aria-describedby="chat-key-help" />
+            <input ref={keyInput} id="formalize-key" type="password" autocomplete="off" spellcheck={false} value={props.apiKey} onInput={event => props.onKey(event.currentTarget.value)} placeholder={t('临时使用的 API Key')} aria-describedby="chat-key-help" />
             <p id="chat-key-help" class="field-note">{provider?.keyUrl ? <a href={provider.keyUrl} target="_blank" rel="noopener noreferrer">{t('创建 API Key')}</a>
               : t('网关 Key 请向管理员获取。')}
               {' '}{provider?.key === 'saved' ? t('留空使用账号中已保存的 Key。') : provider?.key === 'server' ? t('留空使用管理员已配置的 Key。') : ''}</p>
@@ -498,7 +510,11 @@ function ChatComposer(props: ChatComposerProps) {
       <p>{t('另起新题会先恢复原任务记录，再准备修改后的题目；再次发送才会启动。')}</p>
     </div>}
     {!props.hasConversation && !validBudget && <p class="chat-send-status" role="alert">{t('预算可留空，填写时须为允许范围内的正整数。')}</p>}
-    {(props.sendStatus || (props.input.trim() && props.keyRequired && !props.apiKey.trim())) && <p id="formalize-send-status" class="chat-send-status" role="status">{props.sendStatus || t("请在设置中填写 API Key 后发送。")}</p>}
+    {props.sendStatus && <p id="formalize-send-status" class="chat-send-status" role="status">{props.sendStatus}</p>}
+    {props.input.trim() && missingKey && <div class="chat-key-next-step" role="status" data-chat-key-required>
+      <p>{t('题目已保留，填写 API Key 后即可发送。')}</p>
+      <button type="button" class="button" data-chat-configure-key onClick={configureKey}>{t('配置 Key 后开始')}</button>
+    </div>}
     {props.newProblem && <details class="chat-examples"><summary>{t("试试例题")}</summary><label class="sr-only" for="formalize-example">{t("选择自然语言例题")}</label><select id="formalize-example" value="" onChange={event => { props.onExample(event.currentTarget.value); event.currentTarget.value = ''; textarea.current?.focus(); }}><option value="">{t("选择一个题目")}</option>{researchExamples.map(example => <option key={example.id} value={example.id}>{locale === 'en' ? example.nameEn : example.name}</option>)}</select></details>}
   </div>;
 }

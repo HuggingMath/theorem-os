@@ -105,11 +105,57 @@ async function expandModuleTools(target: Locator) {
 }
 async function copyImport(page: Page, target: Locator, name: string, value: string, en: boolean) {
   await expandModuleTools(target);
+  const moduleImport = target.locator('details.research-installed-module-import');
+  if (await moduleImport.count() && !await moduleImport.evaluate(element => (element as HTMLDetailsElement).open)) await moduleImport.locator('summary').click({ timeout: 0 });
   const button = target.getByRole('button', { name: en ? `Copy import: ${name}` : `复制导入语句：${name}`, exact: true });
   await button.focus(); assert(await button.evaluate(element => element === document.activeElement), 'copy import receives keyboard focus');
   await page.keyboard.press('Enter');
   await visible(page.getByText(en ? 'Import copied.' : '导入语句已复制。', { exact: true }));
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), value, 'keyboard copy writes the exact real import statement to Chromium clipboard');
+}
+async function firstConclusion(page: Page, check: typeof checks[number]) {
+  await page.evaluate(() => scrollTo(0, 0)); await settled(page);
+  const geometry = await detail(page).locator('[data-installed-library-conclusion]').first().evaluate(element => {
+    const box = element.getBoundingClientRect(); return { top: box.top, bottom: box.bottom, viewport: innerHeight };
+  });
+  assert(geometry.top >= 0 && geometry.bottom <= geometry.viewport, `the first mathematical conclusion is visible when a phone opens a module: ${JSON.stringify(geometry)}`);
+  assert.equal(await detail(page).locator('details.research-installed-module-import').evaluate(element => (element as HTMLDetailsElement).open), false);
+  await screenshot(page, check, 'module-entry');
+  check.assertions.push('A phone module entry shows its first mathematical conclusion before scrolling; module import remains folded and available.');
+}
+async function definitionProjection(page: Page, check: typeof checks[number], digest: string, en: boolean) {
+  const previous = page.url(), file = 'Submission/Library/TheoremOS/Analysis/AsymptoticModuli.lean';
+  const loaded = responseFor(page, '/api/research/library/installed/module', { file, catalogDigest: digest });
+  await page.goto(`${origin}/library.html?${new URLSearchParams({ source: 'installed', module: file, catalogDigest: digest, interfaceKind: 'definition' })}`, { waitUntil: 'domcontentloaded', timeout: 0 });
+  const metadata = (await received<{ item: InstalledLibraryDetail }>(loaded)).item;
+  const entries = metadata.module.entries.filter(entry => entry.kind === 'definition'); assert.equal(entries.length, 8);
+  await visible(detail(page).locator('[data-installed-library-declaration]').first());
+  assert.equal(await detail(page).locator('[data-installed-library-declaration]').count(), entries.length);
+  for (const entry of entries) {
+    const definition = metadata.definitions[entry.name], article = detail(page).locator(`[data-installed-library-declaration="${entry.name}"]`);
+    assert(definition.documentation.length > 0 && definition.body.length > 0);
+    assert.equal(await article.locator('[data-installed-library-conclusion]').textContent(), definition.body);
+    const summary = installedLibraryMathematics(entry, metadata.module.import, definition).summary[en ? 'en' : 'zh'];
+    assert.equal((await article.locator('.research-installed-math-summary').innerText()).replace(/\s+/gu, ' ').trim(), summary.replaceAll('`', '').replace(/\s+/gu, ' ').trim(), 'the original documentation supplies the uncurated mathematical description');
+    assert.equal(await article.locator('details.research-installed-definition-source').evaluate(element => (element as HTMLDetailsElement).open), false);
+  }
+  const name = 'TheoremOS.Analysis.IsCofinite', article = detail(page).locator(`[data-installed-library-declaration="${name}"]`);
+  assert.equal(await article.locator('[data-installed-library-conclusion]').textContent(), 'IsClosed (F : Set X) ∧ FiniteDimensional ℝ (X ⧸ F)');
+  assert((await article.innerText()).includes('NormedSpace ℝ X'), 'module input structures are visible alongside declaration inputs');
+  const before = requests.length, source = article.locator('details.research-installed-definition-source');
+  await source.locator('summary').click({ timeout: 0 });
+  assert.equal(await article.locator('[data-installed-definition-source]').textContent(), [...metadata.definitions[name].context, metadata.definitions[name].source].join('\n\n'));
+  assert.equal(requests.length, before, 'opening one exact definition snippet makes no full-module source request');
+  await screenshot(page, check, 'definition-source', article);
+  await source.locator('summary').click({ timeout: 0 });
+  const search = detail(page).getByRole('searchbox', { name: en ? 'Search module interfaces' : '搜索模块接口', exact: true });
+  await search.fill('closed linear subspace', { timeout: 0 });
+  await page.waitForFunction(name => document.querySelectorAll('[data-installed-library-declaration]').length === 1
+    && document.querySelector('[data-installed-library-declaration]')?.getAttribute('data-installed-library-declaration') === name, name, { timeout: 0 });
+  await screenshot(page, check, 'definition-mathematics', article);
+  assert.equal(requests.length, before, 'the source documentation is searchable locally');
+  check.assertions.push('Uncurated definitions display exact pinned bodies and original mathematical documentation, declaration and module parameters; original source folds locally and documentation search needs no request.');
+  await page.goto(previous, { waitUntil: 'domcontentloaded', timeout: 0 }); await visible(directory(page));
 }
 async function copyDeclaration(page: Page, target: Locator, name: string, kind: 'name' | 'link', en: boolean) {
   const label = kind === 'name' ? (en ? `Copy Lean name: ${name}` : `复制 Lean 名称：${name}`)
@@ -373,10 +419,12 @@ try {
     await fieldPicker(page, check, initial, en, scenario.width <= 740);
     await copyImport(page, cards(page).first(), initial.items[0].name, initial.items[0].import, en);
     check.assertions.push('Directory copying uses the real module import through the keyboard and Chromium clipboard.');
+    await definitionProjection(page, check, initial.library.catalogDigest, en);
     if (scenario.narrow) {
       const narrowModule = initial.items[0], moduleLoaded = responseFor(page, '/api/research/library/installed/module', { file: narrowModule.file, catalogDigest: initial.library.catalogDigest });
       await openModule(page, narrowModule.name).click({ timeout: 0 });
       await received<{ item: InstalledLibraryDetail }>(moduleLoaded); await visible(detail(page).locator('[data-installed-library-declaration]').first());
+      await firstConclusion(page, check);
       await stickyInterfaceSearch(page);
       await screenshot(page, check, 'interface-navigation', detail(page).locator('[data-installed-interface-toolbar]'));
       await healthy(page); check.assertions.push('At 320px the real first module title is readable, and the module search remains usable at the end of the interface list without horizontal page overflow.');
@@ -441,6 +489,11 @@ try {
     assert.equal(metadata.module.file, picked.file); assert.equal(metadata.library.catalogDigest, initial.library.catalogDigest);
     assert.equal(await detail(page).locator('.research-installed-detail-heading > div > code').textContent(), metadata.module.name);
     assert.equal(await detail(page).locator('.research-installed-detail-heading h2').innerText(), mathematicalQuery);
+    if (scenario.width <= 740) {
+      const overview = new URL(page.url()); overview.hash = '';
+      await page.goto(overview.href, { waitUntil: 'domcontentloaded', timeout: 0 });
+      await firstConclusion(page, check);
+    }
     await declarationAtAnchor(page, theoremName);
     await detail(page).locator('.research-installed-detail-heading h2').evaluate(element => element.scrollIntoView());
     assert.equal(await detail(page).locator('.research-installed-detail-import pre').textContent(), metadata.module.import);
@@ -593,6 +646,19 @@ try {
     assert.equal(await interfaceSearch.inputValue(), localQuery); assert.equal(await interfaceKind.inputValue(), entry.kind);
     urlFilters(page, { ...preserved, interfaceQuery: localQuery, interfaceKind: entry.kind });
     await screenshot(page, check, 'interface-filters', detail(page).locator('[data-installed-interface-toolbar]'));
+    const filteredArticle = detail(page).locator(`[data-installed-library-declaration="${entry.name}"]`);
+    const filteredPermalink = await copyDeclaration(page, filteredArticle, entry.name, 'link', en), filteredAddress = new URL(filteredPermalink);
+    assert.equal(filteredAddress.searchParams.get('interfaceQuery'), localQuery); assert.equal(filteredAddress.searchParams.get('interfaceKind'), entry.kind);
+    const beforeTitle = requests.length;
+    await filteredArticle.getByRole('link', { name: entry.name, exact: true }).click({ timeout: 0 });
+    await declarationAtAnchor(page, entry.name); await waitDeclarations(persistedEntries);
+    urlFilters(page, { ...preserved, interfaceQuery: localQuery, interfaceKind: entry.kind });
+    assert.equal(requests.length, beforeTitle, 'clicking a filtered declaration title is a same-document jump');
+    const copiedReload = responseFor(page, '/api/research/library/installed/module', { file: picked.file, catalogDigest: initial.library.catalogDigest });
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 0 }); await received<{ item: InstalledLibraryDetail }>(copiedReload);
+    await declarationAtAnchor(page, entry.name); await waitDeclarations(persistedEntries);
+    urlFilters(page, { ...preserved, interfaceQuery: localQuery, interfaceKind: entry.kind });
+    check.assertions.push('A filtered declaration title and copied permalink retain interfaceQuery/interfaceKind, and a title jump is local while reloading the copied address restores the filtered declarations.');
     const beforeFilterClear = requests.length;
     await clearInterfaces.focus(); await page.keyboard.press('Enter'); await waitDeclarations(metadata.module.entries.map(item => item.name)); await settled(page);
     urlFilters(page, preserved, ['interfaceQuery', 'interfaceKind']);

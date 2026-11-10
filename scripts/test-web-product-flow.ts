@@ -338,6 +338,7 @@ try {
       phase = `library-final-proof/${locale}/${width}`;
       const initialAssets = (await libraryList(page)).length;
       await visitRun(page, accepted.id);
+      await page.locator('[data-chat-result-more] > summary').click();
       const savedLink = page.locator(`#research-chat-thread [data-save-library][href="library.html?create=1&fromRun=${accepted.id}"]`);
       assert.equal(await savedLink.getAttribute('href'), `library.html?create=1&fromRun=${accepted.id}`);
       await page.route('**/api/research/library/from-run?*', route => route.fulfill({ status: 503, json: { error: 'Fixture source read temporarily unavailable' } }));

@@ -10,6 +10,7 @@ import { installedLibraryDetail, installedLibraryDirectory, installedLibrarySour
 import { installedLibraryLabels } from '../apps/web/installedLibraryLabels';
 import { installedLibraryQuerySuggestions, matchesInstalledLibraryModuleAlias } from '../apps/web/installedLibrarySearch';
 import { installedLibraryMathematics } from '../apps/web/installedLibraryMathematics';
+import { installedLibraryDefinitions } from '../apps/web/installedLibraryDefinitions';
 import { matchesInstalledLibraryInterface } from '../apps/web/installedLibraryInterfaceSearch';
 import { WebStorageError } from '../apps/web/storage';
 import type { WebRunner } from '../apps/web/runner';
@@ -248,6 +249,87 @@ describe('browsing the installed Lean release without publishing research assets
     for (const query of ['独立 随机子集', 'Hoeffding upper-tail', '非严格界', '0 ≤ p', 'sum_biasedMass_hoeffding biasedMass'])
       expect(matchesInstalledLibraryInterface(hoeffding, concentration.import, query), query).toBe(true);
     expect(matchesInstalledLibraryInterface(hoeffding, concentration.import, '独立 DefinitelyMissingToken')).toBe(false);
+  });
+
+  it('projects every definition body and source note from the digest-checked release without changing the catalog', () => {
+    const catalog = webLibraryCatalog(), before = { ...catalog.identity };
+    let count = 0;
+    for (const file of catalog.moduleFiles) {
+      const detail = installedLibraryDetail(file, catalog.identity.catalogDigest), source = catalog.readModule(file).source;
+      expect(detail.module.entries).toEqual(catalog.moduleMetadata(file).entries);
+      expect(Object.keys(detail.definitions)).toEqual(detail.module.entries.filter(entry => entry.kind === 'definition').map(entry => entry.name));
+      for (const entry of detail.module.entries.filter(entry => entry.kind === 'definition')) {
+        const definition = detail.definitions[entry.name], mathematics = installedLibraryMathematics(entry, detail.module.import, definition);
+        expect(source, entry.name).toContain(definition.source);
+        expect(source.slice(source.indexOf(definition.source)).split('\n')[0], entry.name).toContain(entry.type.split(' ')[0]);
+        expect(source.split('\n').slice(definition.line - 1).join('\n').startsWith(definition.source), entry.name).toBe(true);
+        expect(definition.source, entry.name).toContain(definition.body);
+        expect(definition.documentation.trim(), entry.name).not.toBe('');
+        expect(['Prop', 'ℝ', 'ℕ'], entry.name).not.toContain(mathematics.expression);
+        expect(mathematics.expression, entry.name).toBe(definition.body);
+        expect(mathematics.summary.en, entry.name).not.toMatch(/^Defines a (?:proposition|real number|natural number)\.$/u);
+        for (const command of definition.context) expect(source, entry.name).toContain(command);
+        count++;
+      }
+    }
+    expect(count).toBe(195); expect(catalog.identity).toEqual(before);
+    const module = installedLibraryDetail('Submission/Library/TheoremOS/Analysis/AsymptoticModuli.lean', catalog.identity.catalogDigest);
+    const entry = module.module.entries.find(entry => entry.name === 'TheoremOS.Analysis.IsCofinite')!, definition = module.definitions[entry.name];
+    const mathematics = installedLibraryMathematics(entry, module.module.import, definition);
+    expect(mathematics.expression).toBe('IsClosed (F : Set X) ∧ FiniteDimensional ℝ (X ⧸ F)');
+    expect(mathematics.conditions.some(item => item.meaning.en === 'linear subspace')).toBe(true);
+    expect(mathematics.scopeConditions.map(item => item.expression)).toEqual(['Type*', 'NormedAddCommGroup X', 'NormedSpace ℝ X']);
+    expect(matchesInstalledLibraryInterface(entry, module.module.import, 'closed linear subspace', definition)).toBe(true);
+    expect(matchesInstalledLibraryInterface(entry, module.module.import, 'FiniteDimensional', definition)).toBe(true);
+  });
+
+  it('keeps scoped variable commands and exact equation/record definitions without borrowing later declarations', () => {
+    const source = `namespace Demo
+section Outer
+variable {A : Type*}
+    [Fintype A]
+    [DecidableEq A]
+/-- First-line documentation.
+Second line with a formula: ∑ i, f i. -/
+def value (a : A) : Nat := 0
+section Inner
+variable (n : Nat)
+/-- A definition by equations. -/
+def repeated : Nat → Nat
+  | 0 => n
+  | k + 1 => repeated k
+end Inner
+/-- A record definition. -/
+def pair (a : A) : A × A where
+  fst := a
+  snd := a
+end Outer
+end Demo
+`;
+    const definitions = installedLibraryDefinitions(source, [
+      { name: 'Demo.value', kind: 'definition', type: 'value (a : A) : Nat', description: '' },
+      { name: 'Demo.repeated', kind: 'definition', type: 'repeated : Nat → Nat', description: '' },
+      { name: 'Demo.pair', kind: 'definition', type: 'pair (a : A) : A × A where fst', description: '' },
+    ]);
+    expect(definitions['Demo.value'].documentation).toBe('First-line documentation.\nSecond line with a formula: ∑ i, f i.');
+    expect(definitions['Demo.value'].body).toBe('0');
+    expect(definitions['Demo.value'].context).toEqual(['variable {A : Type*}\n    [Fintype A]\n    [DecidableEq A]']);
+    expect(definitions['Demo.repeated'].body).toBe('| 0 => n\n  | k + 1 => repeated k');
+    expect(definitions['Demo.repeated'].context.at(-1)).toBe('variable (n : Nat)');
+    expect(definitions['Demo.pair'].body).toBe('where\n  fst := a\n  snd := a');
+    expect(definitions['Demo.pair'].context).not.toContain('variable (n : Nat)');
+  });
+
+  it('rejects a changed definition source object before returning a definition snippet', () => {
+    const file = 'Submission/Library/Demo/Identity.lean', source = 'namespace Demo\n/-- Zero. -/\ndef zero : Nat := 0\nend Demo\n';
+    const built = writeLibraryCatalog(path.join(root, 'definitions'), { id: 'example/definitions', revision: 'v1', environment: 'mathlib',
+      packs: [{ schema: LIBRARY_PACK_SCHEMA, modules: [{ file, source,
+        origin: { kind: 'upstream', repository: 'offline-fixture', commit: 'a'.repeat(40), file: 'Identity.lean' } }] }] });
+    vi.stubEnv('THEOREMOS_LIBRARY_CATALOG', built.file); vi.stubEnv('THEOREMOS_LIBRARY_CATALOG_SHA256', built.digest);
+    expect(installedLibraryDetail(file, built.digest).definitions['Demo.zero'].body).toBe('0');
+    const object = path.join(root, 'definitions', 'objects', mathDigest(source) + '.lean');
+    fs.chmodSync(object, 0o600); fs.writeFileSync(object, source.replace(':= 0', ':= 1'));
+    expect(() => installedLibraryDetail(file, built.digest)).toThrow('定义源码读取失败');
   });
 
   it('rejects changed or missing identities and invalid requests instead of silently displaying an empty library', async () => {

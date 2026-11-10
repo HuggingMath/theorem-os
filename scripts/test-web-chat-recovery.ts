@@ -63,10 +63,11 @@ try {
   await page.locator('#send-code').click(); await page.locator('#code-step:not([hidden])').waitFor();
   await page.locator('#login-code').fill(mail.at(-1)!.text.match(/\b\d{6}\b/u)![0]);
   await page.locator('#verify-code').click(); await page.waitForURL(origin + '/'); await initialized();
+  await page.locator('[data-chat-participation-control] > summary').click();
+  await page.locator('input[name="chat-participation"][value="automatic"]').check();
   await page.locator('#open-settings').click();
   for (const id of ['formalize-provider', 'formalize-environment', 'formalize-effort'] as const) await page.locator(`#${id}`).selectOption(selected[id]);
   for (const id of ['formalize-model', 'formalize-minutes', 'formalize-tokens', 'research-minutes', 'research-tokens', 'research-turns'] as const) await page.locator(`#${id}`).fill(selected[id]);
-  await page.locator('input[name="chat-participation"][value="automatic"]').check();
   await page.locator('#formalize-original').fill(original); await page.locator('#formalize-key').fill(credential);
   await assertNoStoredKey();
   await page.locator('#chat-save-key').click(); await page.locator('#chat-key-notice').filter({ hasText: 'Key 已保存' }).waitFor();
@@ -96,6 +97,7 @@ try {
   checks.push('G02: actual refreshed request retains 120s/20k formalization and 60s/15k/2-turn proof limits');
 
   await page.locator('#topbar-draft').click(); await page.locator('#formalize-original').fill(webFormalizationStatement);
+  await page.locator('[data-chat-participation-control] > summary').click();
   await page.locator('input[name="chat-participation"][value="guided"]').check();
   let receiptStatus = 0, droppedFormalization = false, droppedConversation = false;
   await page.route('**/api/formalizations', async route => {
@@ -193,12 +195,14 @@ try {
     await samplePage.locator('[data-chat-sample-note]').waitFor();
     assert.ok(await samplePage.locator('#research-chat-thread').evaluate(node => node.clientHeight) >= Math.min(100, height * .25));
     await samplePage.screenshot({ path: path.join(output, `conversation-${width}x${height}.png`), fullPage: true });
+    await samplePage.locator('[data-chat-result-more] > summary').click();
     await samplePage.locator('[data-research-artifact="roadmap"]').click();
     await samplePage.locator('.solution-route-view-controls [data-solution-view="read"]').click();
     await samplePage.locator('[data-solution-reader-select]').waitFor();
     await samplePage.screenshot({ path: path.join(output, `roadmap-${width}x${height}.png`), fullPage: true });
     for (const artifact of ['result', 'source']) {
       await samplePage.goto(origin + '/?sample');
+      if (artifact === 'result') await samplePage.locator('[data-chat-result-more] > summary').click();
       await samplePage.locator(`[data-research-artifact="${artifact}"]`).click();
       await samplePage.locator(`#detail-tab-${artifact}[aria-selected="true"]`).waitFor();
     }

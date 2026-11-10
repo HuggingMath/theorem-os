@@ -1,6 +1,7 @@
 import type { InstalledLibraryDetail } from '../installedLibraryTypes';
 import { installedLibraryLabels } from '../installedLibraryLabels';
 import { locale, t } from '../i18n';
+import { researchNavigation } from '../shared';
 
 export type InstalledLibraryReference = { file: string; catalogDigest: string; declaration: string; chat: string };
 export const libraryReferenceKeys = ['libraryModule', 'libraryCatalog', 'libraryDeclaration'] as const;
@@ -22,8 +23,9 @@ export function libraryReferenceText(detail: InstalledLibraryDetail, declaration
   const entry = detail.module.entries.find(item => item.name === declaration);
   if (!entry) throw new Error(t('该版本中没有此接口，请返回数学库重新选择。'));
   const labels = installedLibraryLabels(detail.module.name), title = labels?.[locale].title ?? detail.module.name;
-  const source = new URL('library.html', location.href);
-  source.search = new URLSearchParams({ source: 'installed', module: detail.module.file, catalogDigest: detail.library.catalogDigest }).toString();
+  const source = new URL(researchNavigation(location.search, 'workbench').library, location.href);
+  source.searchParams.set('source', 'installed'); source.searchParams.set('module', detail.module.file);
+  source.searchParams.set('catalogDigest', detail.library.catalogDigest);
   source.hash = `declaration-${encodeURIComponent(entry.name)}`;
   return [t('引用数学库：{0}', title), '', '```lean', detail.module.import, `#check ${entry.name}`, '```', '',
     t('接口类型：'), '```lean', entry.type, '```', '', `${t('来源：')}${source.href}`].join('\n');

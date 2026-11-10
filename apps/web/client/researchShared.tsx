@@ -1,6 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { useCallback, useEffect, useId, useRef, useState } from 'preact/hooks';
-import type { WebSession } from '../shared';
+import { researchContextHref, type WebSession } from '../shared';
 import type { ResearcherProfile } from '../researchProjectTypes';
 import { locale, localeTag, localizeMessage } from '../i18n';
 import { webDraftOwner } from './ownedDrafts';
@@ -185,10 +185,12 @@ export function Field({ label, value, onInput, multiline, code, rows, required, 
 export function Check({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
   return <label class="research-check"><input type="checkbox" checked={checked} onChange={event => onChange(event.currentTarget.checked)} />{label}</label>;
 }
-export function Search({ label, initial = '', onSearch }: { label: string; initial?: string; onSearch: (value: string) => void }) {
-  const [query, setQuery] = useState(initial), id = useId();
+export function Search({ label, initial = '', value, onInput, onSearch }: {
+  label: string; initial?: string; value?: string; onInput?: (value: string) => void; onSearch: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(initial), id = useId(), query = value ?? draft;
   return <div class="research-search" role="search"><label class="sr-only" htmlFor={id}>{label}</label><input id={id} type="search" value={query}
-      placeholder={label} onInput={event => setQuery(event.currentTarget.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); onSearch(query.trim()); } }} maxLength={128} />
+      placeholder={label} onInput={event => { setDraft(event.currentTarget.value); onInput?.(event.currentTarget.value); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); onSearch(query.trim()); } }} maxLength={128} />
     <button class="button" type="button" onClick={() => onSearch(query.trim())}>{tx('搜索', 'Search')}</button></div>;
 }
 const statusNames: Record<string, [string, string]> = {
@@ -210,10 +212,10 @@ export const lines = (value: string) => value.split(/\r?\n/u).map(item => item.t
 export function State({ value }: { value: string }) { return <span class="research-state" data-state={value}>{nameOf(value)}</span>; }
 export function Tags({ values }: { values: string[] }) { return <div class="research-chips">{values.map(value => <span class="research-chip" key={value}>{value}</span>)}</div>; }
 export const theoremHref = (id: string, runId?: string, target?: { statementVersionId?: string; taskRef?: { id: string; version: string }; feedbackId?: string }) =>
-  `theorems.html?id=${enc(id)}${runId ? `&run=${enc(runId)}` : ''}${target?.statementVersionId ? `&version=${enc(target.statementVersionId)}` : ''}`
-  + `${target?.taskRef ? `&task=${enc(target.taskRef.id)}&taskVersion=${enc(target.taskRef.version)}` : ''}${target?.feedbackId ? `#feedback-${enc(target.feedbackId)}` : ''}`;
-export const personHref = (id: string) => `people.html?id=${enc(id)}`;
-export const libraryHref = (id: string, version?: string) => `library.html?entry=${enc(id)}${version ? `&version=${enc(version)}` : ''}`;
+  researchContextHref(`theorems.html?id=${enc(id)}${runId ? `&run=${enc(runId)}` : ''}${target?.statementVersionId ? `&version=${enc(target.statementVersionId)}` : ''}`
+  + `${target?.taskRef ? `&task=${enc(target.taskRef.id)}&taskVersion=${enc(target.taskRef.version)}` : ''}${target?.feedbackId ? `#feedback-${enc(target.feedbackId)}` : ''}`, location.search);
+export const personHref = (id: string) => researchContextHref(`people.html?id=${enc(id)}`, location.search);
+export const libraryHref = (id: string, version?: string) => researchContextHref(`library.html?entry=${enc(id)}${version ? `&version=${enc(version)}` : ''}`, location.search);
 export function FollowButton({ kind, id, initial = false }: { kind: 'person' | 'theorem'; id: string; initial?: boolean }) {
   const [followed, setFollowed] = useState(initial), action = useMutation();
   useEffect(() => setFollowed(initial), [id, initial]);

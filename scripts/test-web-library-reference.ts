@@ -139,6 +139,7 @@ async function addReference(page: Page, metadata: InstalledLibraryDetail, entry:
   const source = new URL(sourceLine.match(/https?:\/\/\S+/u)![0]);
   assert.equal(source.searchParams.get('module'), metadata.module.file);
   assert.equal(source.searchParams.get('catalogDigest'), metadata.library.catalogDigest);
+  assert.equal(source.searchParams.get('workbenchChat') ?? '', chat, 'the citation source retains its originating conversation');
   assert.equal(source.hash, `#declaration-${encodeURIComponent(entry.name)}`);
   assert.equal(new URL(page.url()).searchParams.get('chat') ?? '', chat);
   assert.equal(await page.locator('#formalize-error:visible').count(), 0, 'successful reference shows no error');
@@ -233,10 +234,23 @@ try {
     const chatWithReference = await addReference(page, chatMetadata, entry, chatDraft, fixture.id, en);
     assert(!chatWithReference.includes(homeDraft), 'conversation references never import the home draft');
     await screenshot(page, check, 'conversation-reference-restored', composer(page));
+    const sourceLine = chatWithReference.split('\n').find(line => line.includes(`${origin}/library.html?`)); assert(sourceLine);
+    const sourceAddress = new URL(sourceLine.match(/https?:\/\/\S+/u)![0]);
+    const sourceLoaded = responseFor(page, '/api/research/library/installed/module', { file: picked.file, catalogDigest: metadata.library.catalogDigest });
+    await page.goto(sourceAddress.href, { waitUntil: 'domcontentloaded', timeout: 0 }); await received<{ item: InstalledLibraryDetail }>(sourceLoaded); await visible(detail(page));
+    assert.equal(new URL(page.url()).searchParams.get('workbenchChat'), fixture.id);
+    const referenceAgain = detail(page).locator(`[data-installed-library-reference="${entry.name}"]`);
+    assert.equal(new URL(await referenceAgain.getAttribute('href') ?? '', page.url()).searchParams.get('chat'), fixture.id);
+    await referenceAgain.click({ timeout: 0 }); await visible(composer(page));
+    await page.waitForFunction(keys => keys.every(key => !new URL(location.href).searchParams.has(key)), libraryKeys, { timeout: 0 });
+    await draftEquals(page, chatWithReference);
+    assert.equal(new URL(page.url()).searchParams.get('chat'), fixture.id, 'following a citation source and referencing it again returns to the same conversation without duplicate content');
+    await screenshot(page, check, 'conversation-source-roundtrip', composer(page));
     assert.deepEqual(service.storage.getRecord<WebConversation>(fixtureKey), fixture, 'reference and refresh never send a message or change the recorded conversation');
     await page.goto(origin, { waitUntil: 'domcontentloaded', timeout: 0 }); await visible(composer(page)); await draftEquals(page, homeWithReference);
     assert(!(await composer(page).inputValue()).includes(chatDraft), 'home and conversation drafts remain isolated');
     check.assertions.push('A disposable real conversation is read over HTTP; workbench→Library→detail→directory→detail→reference retains its chat identity and draft, refresh is idempotent, the home draft stays separate, and the server conversation receives no messages.');
+    check.assertions.push('The source link embedded in the citation retains the originating chat; reopening it and referencing the same declaration again preserves that conversation and exact unsent draft without duplicates.');
     await healthy(page); checks.push(check); console.log(`PASS ${scenario.name}: home/chat reference, exact pinned metadata, refresh and stale-digest failure`);
     await context.close(); active = undefined;
   }

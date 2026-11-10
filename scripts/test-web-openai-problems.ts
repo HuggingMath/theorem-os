@@ -144,29 +144,89 @@ async function firstReadingStep(page: Page, check: typeof checks[number]) {
   assert(await first.locator('.proof-walkthrough-claim').evaluate(element => {
     const bounds = element.getBoundingClientRect(); return bounds.top >= 0 && bounds.top + 32 <= innerHeight;
   }), `${check.scenario}: the first mathematical claim starts in the initial viewport`);
+  const introduction = page.locator('.proof-reading-intro');
+  await introduction.locator(':scope > summary').click({ timeout: 0 });
+  assert(await introduction.locator('.proof-walkthrough-goal').isVisible(), 'one disclosure reveals the complete problem');
+  assert(await introduction.locator('.proof-walkthrough-notation').isVisible(), 'the same disclosure reveals notation');
+  assert.equal(await introduction.locator('details.proof-walkthrough-problem').count(), 0, 'problem and notation need no second disclosure');
+  await introduction.locator(':scope > summary').click({ timeout: 0 });
   check.assertions.push('Accepted mathematical reading shows the actual first-step premises and claim in the initial viewport; full strategy, problem and notation remain available in a disclosure.');
+}
+async function checkReadingLocation(page: Page, check: typeof checks[number], anchor: string) {
+  const section = page.locator(`#${anchor}`);
+  await page.waitForFunction(anchor => new URLSearchParams(location.hash.slice(1)).get('reading') === anchor, anchor, { timeout: 0 });
+  const proofSha = await page.locator('[data-proof-solution]').getAttribute('data-proof-solution-sha');
+  const original = new URLSearchParams(new URL(page.url()).hash.slice(1));
+  assert.equal(original.get('readingSha'), proofSha);
+  await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+    writeText: async (text: string) => { (window as unknown as { copiedReading: string }).copiedReading = text; },
+  } }));
+  await section.locator(`[data-proof-copy-reading="${anchor}"]`).click({ timeout: 0 });
+  const copied = await page.evaluate(() => (window as unknown as { copiedReading: string }).copiedReading);
+  const copiedParameters = new URLSearchParams(new URL(copied).hash.slice(1));
+  assert.equal(copiedParameters.get('reading'), anchor); assert.equal(copiedParameters.get('readingSha'), proofSha);
+  assert.equal(copiedParameters.get('return'), original.get('return'), 'copy preserves the original filtered directory');
+  const restored = async () => {
+    await visible(section);
+    await page.waitForFunction(anchor => {
+      const section = document.getElementById(anchor), heading = section?.querySelector('h5, summary');
+      if (!section || !heading || document.activeElement !== heading) return false;
+      const bounds = heading.getBoundingClientRect(); return bounds.top >= 0 && bounds.top < innerHeight;
+    }, anchor, { timeout: 0 });
+    const parameters = new URLSearchParams(new URL(page.url()).hash.slice(1));
+    assert.equal(parameters.get('reading'), anchor); assert.equal(parameters.get('readingSha'), proofSha);
+    assert.equal(parameters.get('return'), original.get('return'));
+  };
+  await page.goto(copied, { waitUntil: 'domcontentloaded', timeout: 0 }); await restored();
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: 0 }); await restored();
+  await page.locator('a.lang-link').click({ timeout: 0 }); await restored();
+  await page.locator('a.lang-link').click({ timeout: 0 }); await restored();
+  await page.locator('#tab-overview').click({ timeout: 0 }); await visible(page.locator('#detail-panel'));
+  await page.locator('#tab-reading').click({ timeout: 0 }); await restored();
+  if (anchor.startsWith('proof-source-helper-')) {
+    assert.equal(await section.getAttribute('open'), '', 'shared helper location opens its declaration');
+    assert.equal(await section.locator('xpath=..').getAttribute('open'), '', 'shared helper location opens its definitions group');
+  }
+  await screenshot(page, check, anchor.startsWith('proof-source-') ? 'reading-position-source' : 'reading-position-step', section.locator('h5, summary').first());
+  check.assertions.push('An exact accepted step or supporting declaration is written to the URL with its proof digest. Its copied link, reload, both language changes and tab return restore the same focused reading location and retain the original directory.');
 }
 async function researchDraftFlow(page: Page, check: typeof checks[number], record: AcceptedRecord, en: boolean) {
   const readingUrl = page.url(), composer = page.locator('#formalize-original');
+  const readingParameters = new URLSearchParams(new URL(readingUrl).hash.slice(1)), position = readingParameters.get('reading');
+  const start = () => position ? page.locator(`[data-proof-position-research="${position}"]`) : page.locator('[data-proof-start-research]');
   const previous = en ? '  Keep this unsent research question.\n\nPreserve its spaces.  ' : '  保留这道尚未发送的研究题目。\n\n保留原有空格。  ';
   await page.goto(origin, { waitUntil: 'domcontentloaded', timeout: 0 }); await visible(composer);
   await composer.fill(previous, { timeout: 0 });
   await page.goto(readingUrl, { waitUntil: 'domcontentloaded', timeout: 0 });
   await visible(page.locator(`[data-proof-solution="${record.id}"]`));
-  await page.locator('[data-proof-start-research]').click({ timeout: 0 });
+  await start().click({ timeout: 0 });
   const candidate = page.locator('[data-problem-draft-candidate]'); await visible(candidate); await visible(composer);
   assert.equal(await composer.inputValue(), previous, 'opening a problem candidate preserves the exact unsent home draft');
   const originalSource = await fs.readFile(path.join(root, 'research/openai-math', record.directory, 'Challenge.lean'), 'utf8');
   assert((await candidate.innerText()).includes(en ? record.en?.subtitle ?? record.title : record.subtitle ?? record.title));
   assert((await candidate.locator('[data-problem-draft-source]').textContent())!.includes(originalSource), 'the candidate retains the complete original statement source');
   assert.equal(new URL(page.url()).searchParams.get('archiveProblem'), record.id, 'identity remains pending until the user chooses');
+  const sourceHref = await candidate.getByRole('link', { name: en ? 'View the problem source' : '查看题目来源', exact: true }).getAttribute('href'); assert(sourceHref);
+  const sourceParameters = new URLSearchParams(new URL(sourceHref).hash.slice(1));
+  assert.equal(sourceParameters.get('proof'), record.id); assert.equal(sourceParameters.get('reading'), position);
+  assert.equal(sourceParameters.get('return'), readingParameters.get('return'), 'research source retains the original directory return');
+  if (position) {
+    assert.equal(sourceParameters.get('readingSha'), record.campaign.proofSha256);
+    const popupEvent = page.waitForEvent('popup', { timeout: 0 });
+    await candidate.getByRole('link', { name: en ? 'View the problem source' : '查看题目来源', exact: true }).click({ timeout: 0 });
+    const popup = await popupEvent; popup.setDefaultTimeout(0); popup.setDefaultNavigationTimeout(0);
+    await visible(popup.locator(`#${position}`));
+    await popup.waitForFunction(anchor => document.activeElement === document.getElementById(anchor)?.querySelector('h5, summary'), position, { timeout: 0 });
+    assert.equal(new URLSearchParams(new URL(popup.url()).hash.slice(1)).get('return'), readingParameters.get('return'));
+    await healthy(popup); await popup.close();
+  }
   await screenshot(page, check, 'research-draft-choice', candidate);
   await candidate.locator('[data-problem-draft-dismiss]').click({ timeout: 0 });
   await candidate.waitFor({ state: 'hidden', timeout: 0 });
   assert.equal(await composer.inputValue(), previous, 'dismissing the candidate preserves the original input');
   assert.equal(new URL(page.url()).searchParams.has('archiveProblem'), false, 'dismiss clears the pending handoff');
   await page.goto(readingUrl, { waitUntil: 'domcontentloaded', timeout: 0 });
-  await visible(page.locator(`[data-proof-solution="${record.id}"]`)); await page.locator('[data-proof-start-research]').click({ timeout: 0 });
+  await visible(page.locator(`[data-proof-solution="${record.id}"]`)); await start().click({ timeout: 0 });
   await visible(candidate); assert.equal(await composer.inputValue(), previous);
   await candidate.locator('[data-problem-draft-include]').click({ timeout: 0 });
   await candidate.waitFor({ state: 'hidden', timeout: 0 });
@@ -174,9 +234,10 @@ async function researchDraftFlow(page: Page, check: typeof checks[number], recor
   assert(added.startsWith(`${previous}\n\n`), 'explicit inclusion appends after the exact prior draft');
   assert(added.includes(originalSource), 'this small original statement is included in full after confirmation');
   assert(added.includes(record.files['Challenge.lean']), 'the new editable question retains its original source digest');
+  assert(added.includes(sourceHref), 'the included draft retains the precise reading-source URL');
   assert(added.includes(`/classics/data/proofs/${record.id}/Challenge.lean`), 'the draft links to the original statement, separately from accepted proof reading');
   for (const target of record.campaign.targets) assert(added.includes(target), 'every accepted problem target remains part of the new question context');
-  for (const key of ['archiveProblem', 'archiveSource']) assert.equal(new URL(page.url()).searchParams.has(key), false, `including clears ${key}`);
+  for (const key of ['archiveProblem', 'archiveSource', 'archiveReading']) assert.equal(new URL(page.url()).searchParams.has(key), false, `including clears ${key}`);
   assert.equal(new URL(page.url()).searchParams.has('run'), false, 'the new draft does not resume the archived accepted run');
   await screenshot(page, check, 'research-draft-included', composer);
   await page.reload({ waitUntil: 'domcontentloaded', timeout: 0 }); await visible(composer);
@@ -342,6 +403,9 @@ try {
       await page.goto(new URL(explainedHref, page.url()).href, { waitUntil: 'domcontentloaded', timeout: 0 });
       await visible(page.locator(`[data-proof-solution="${explained.id}"]`)); await firstReadingStep(page, check);
       await screenshot(page, check, 'reading-derivation');
+      const nextStep = page.locator('[data-proof-derivation]').first().locator('.proof-walkthrough-next > button');
+      const nextAnchor = await nextStep.getAttribute('data-global-scroll'); assert(nextAnchor);
+      await nextStep.click({ timeout: 0 }); await checkReadingLocation(page, check, nextAnchor);
       phase = `${scenario.name}: narrow reading starts a draft only after explicit inclusion`;
       await researchDraftFlow(page, check, explained, en);
       await healthy(page); check.assertions.push('At 320px the title remains readable, the page has no horizontal overflow and primary archive actions are keyboard reachable.');
@@ -542,6 +606,11 @@ try {
     check.assertions.push('Browser Back keeps the originating filters; explicit Back to theorems restores collection/query/field/sort/nonzero offset and focuses the exact card. Refresh, language switches and archive tabs retain the safe same-site return.');
     await card(page, newest.id).locator('[data-openai-problem-link="reading"]').click({ timeout: 0 }); await visible(reading);
     phase = `${scenario.name}: accepted problem opens a draft candidate and preserves prior input until the user includes it`;
+    const sourcePositionIndex = reading.locator('.proof-source-index');
+    await sourcePositionIndex.locator(':scope > summary').click({ timeout: 0 });
+    const sourcePositionJump = sourcePositionIndex.locator('[data-global-scroll^="proof-source-helper-"]').first();
+    const sourceAnchor = await sourcePositionJump.getAttribute('data-global-scroll'); assert(sourceAnchor);
+    await sourcePositionJump.click({ timeout: 0 }); await checkReadingLocation(page, check, sourceAnchor);
     await researchDraftFlow(page, check, newest, en);
     await page.getByRole('button', { name: text('历史轮次与路线图', 'Recorded runs and route maps'), exact: true }).click({ timeout: 0 });
     await visible(page.locator('.global-workflow'));
@@ -574,6 +643,7 @@ try {
         const nextTarget = await next.getAttribute('data-global-scroll'); assert(nextTarget);
         await next.click({ timeout: 0 });
         assert(await page.locator(`#${nextTarget} h5`).evaluate(element => document.activeElement === element), 'Continue follows the existing linear proof steps');
+        await checkReadingLocation(page, check, nextTarget);
       } else {
         assert.equal(await solution.getAttribute('data-proof-solution-mode'), 'source');
         assert.deepEqual(await solution.locator('[data-proof-source-declaration]').evaluateAll(elements => elements.map(element => element.getAttribute('data-proof-source-declaration'))), record.campaign.targets);
