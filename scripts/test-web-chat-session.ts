@@ -348,6 +348,7 @@ try {
       const split = richAnswer.indexOf('```lean');
       reply.delta(richAnswer.slice(0, split));
       await message.locator('[data-chat-markdown]').getByRole('heading', { name: '证明思路', exact: true }).waitFor();
+      await message.locator('.katex').nth(1).waitFor({ state: 'attached' });
       assert.equal(await message.getAttribute('data-message-status'), 'pending', 'Partial mathematical text is visible before completion');
       assert.ok(await message.locator('.katex').count() >= 2, 'Inline and block mathematics are typeset while the answer is pending');
       reply.delta(richAnswer.slice(split)); reply.complete(); await waitForAnswerStatus(page, 'complete');

@@ -158,7 +158,7 @@ try {
       const afterSwitch = h.requests.length;
       await page.evaluate(() => (window as any).__releasePrivatePlan()); await settled(page);
       assert.equal(await page.locator('#collab-plan-json').inputValue(), bobJson);
-      assert.equal(await page.locator('[data-plan-receipt]').innerText(), '', 'Alice receipt/error cannot enter Bob editor');
+      assert.equal(await page.locator('[data-plan-receipt] > :not([data-decision-summary])').count(), 0, 'Alice receipt/error cannot enter Bob editor beside his own plan summary');
       assert.deepEqual(h.requests.slice(afterSwitch).filter(request => request.pathname.startsWith(`/api/runs/${id}/commands/`)
         || request.method === 'POST' && request.pathname === editPath), [],
         'a revoked command cannot read or retry its receipt under the new owner');

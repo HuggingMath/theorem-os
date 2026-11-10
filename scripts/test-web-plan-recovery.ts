@@ -303,7 +303,8 @@ try {
         run.observation?.inspection.edits.some(edit => edit.id === originalA.id && edit.status === 'applied'));
     });
     hostReceipt(runA.id, originalA, 'applied'); await updated; await settled(page);
-    assert.equal(await json(page), textB); assert.equal(await page.locator(receipt).innerText(), '');
+    assert.equal(await json(page), textB);
+    assert.equal(await page.locator(`${receipt} > :not([data-decision-summary])`).count(), 0, 'only B’s own plan summary may appear; A’s receipt must stay with A');
     await closePlan(page); await select(h, runA.id); await openPlan(page); await applied(page, originalA.id);
     assert.equal(await json(page), textA); assert.equal(await page.locator(refresh).isHidden(), true);
     assert.equal(reads(h, runA.id).length, beforeReads, 'reopening uses the latest saved observation');
@@ -386,7 +387,7 @@ try {
       const beforeB = await json(page); release.resolve(); await completed.promise; await settled(page);
       assert.equal(await json(page), beforeB, 'late A response must not replace B full JSON');
       assert.equal(await page.locator('[data-plan-objective]').isDisabled(), false);
-      assert.equal(await page.locator(receipt).textContent(), '', 'A receipt must not appear in B');
+      assert.equal(await page.locator(`${receipt} > :not([data-decision-summary])`).count(), 0, 'A receipt must not appear beside B’s own plan summary');
       assert.equal(await page.locator('[data-plan-comparison]').textContent(), '', 'A comparison must not appear in B');
       await page.locator('[data-plan-type]').fill('True ∧ True'); const editedB = await json(page);
       await closePlan(page); await select(h, runA.id); await openPlan(page);

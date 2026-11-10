@@ -146,7 +146,7 @@ try {
     await submit(h, 'Please reject', { key: credential, remember: true });
     // The recovery actions sit in the run's result, opened from the chat.
     await showArtifacts(page);
-    await page.locator('[data-recovery="key"]').click();
+    await page.locator('#detail-panel[data-tab="result"] [data-recovery="key"]').click();
     await page.locator('#run-settings[open]').waitFor(); await settled(page);
     assert.equal(await keyField(page), ''); assert.equal((await storage(page)).tab, null);
     assert.equal(await page.locator('#remember-key').isChecked(), false);
