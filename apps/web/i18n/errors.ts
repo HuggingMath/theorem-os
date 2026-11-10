@@ -456,6 +456,7 @@ export const errors: Record<string, string> = {
   "评审草稿需要保留原反馈与补充类型。": "A review draft must retain its feedback and response type.",
   "你已没有这份评审草稿的编辑权限。": "You no longer have permission to edit this review draft.",
   "评审草稿与反馈任务范围不一致。": "The review draft does not match the feedback task.",
+  "评审决定尚未保存。": "The review decision has not been saved.",
   "这类草稿需要绑定精确运行。": "This kind of draft needs an exact run.",
   "草稿对应的运行不可用。": "The run for this draft is unavailable.",
   "草稿对应的项目范围不可用。": "The project scope for this draft is unavailable.",
