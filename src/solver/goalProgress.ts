@@ -1,7 +1,8 @@
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import type { ObligationSnapshot } from './obligationProgress';
-import type { ProofRoute } from './proofRoutes';
-import { isAdvisoryTask, taskGroup, taskProofContractVersion, taskVersion,
+import { routeEvidence, type ProofRoute } from './proofRoutes';
+import { buildProofContinuation } from './progress';
+import { hasTaskAcceptance, isAdvisoryTask, taskGroup, taskProofContractVersion, taskVersion,
   type CooperativeTask, type RouteGroup, type RouteRecord, type TaskRecord } from './tasks';
 import { nextCheckSchema, type NextCheck } from './mathematicalGapContract';
 import { nextCheckExecutionMatchesTask } from './mathematicalGaps';
@@ -41,6 +42,22 @@ const hash = (value: unknown) => mathDigest(canonicalMathJson(value));
 const contract = (task: CooperativeTask | undefined) => task && ({ proofPath: task.proofPath,
   type: task.type?.trim(), premises: task.premises,
   declaration: task.declaration, conditional: task.conditional, family: task.family });
+
+/** Compact checks may omit reference metadata. Only this process's exact acceptance fills that gap. */
+function freshlyCheckedWithoutReferences(node: TaskRecord, environmentDigest: string | undefined,
+  problemReceiptDigest: string) {
+  const proof = node.integratedCheck, digest = taskVersion(node.task);
+  if (node.pendingValidation || node.status !== 'integrated' || !proof?.passed || proof.references ||
+      proof.taskDigest !== digest || proof.conditions?.length || !hasTaskAcceptance(proof)) return false;
+  if (proof.projection && (proof.projection.problemReceiptDigest !== problemReceiptDigest ||
+      environmentDigest && proof.projection.environmentDigest !== environmentDigest)) return false;
+  const verification = proof.verification;
+  return verification.status === 'kernel_verified' && Boolean(verification.targetCommit) &&
+    verification.results.length === 1 && verification.results.every(receipt => receipt.status === 'kernel_verified' &&
+      receipt.targetCommit === verification.targetCommit && Boolean(receipt.receiptId) &&
+      receipt.proofPath === node.task.proofPath && receipt.theoremName === node.task.theoremName &&
+      receipt.statementHash === digest && receipt.leanStatementHash === digest && receipt.claim === 'statement');
+}
 
 function goalPath(id: string, tasks: ReadonlyMap<string, CooperativeTask>, routes: readonly ProofRoute[] = []) {
   const path = new Set<string>();
@@ -85,18 +102,48 @@ export function observeGoalProgress(previous: GoalProgressState | undefined, inp
     schema: 'theoremos.goal-progress.v1', problemReceiptDigest: input.problemReceiptDigest, sequence: 0, goals: [] };
   const nodes = new Map(input.tasks.filter(node => !node.capacityExploration).map(node => [node.task.id, node]));
   const tasks = new Map([...nodes].map(([id, node]) => [id, node.task]));
-  const obligations = new Map(input.snapshot.obligations.map(item => [item.taskId, item]));
+  const records = [...nodes.values()], routes = input.proofRoutes ?? records.flatMap(node => node.alternativeRoutes ?? []);
+  // Re-read current task receipts instead of replaying a saved goalProgress/frontier label.
+  const recorded = routeEvidence(records, input.snapshot.environmentDigest);
+  const fresh = new Set(records.filter(node => freshlyCheckedWithoutReferences(node,
+    input.snapshot.environmentDigest, input.problemReceiptDigest)).map(node => node.task.id));
+  const proofStatus = (id: string) => {
+    if (fresh.has(id)) return 'checked';
+    const status = recorded.status(id), node = nodes.get(id);
+    // Old checkpoints may also omit the environment. That cannot make a restored compact receipt fresh.
+    return status === 'checked' && !(node?.integratedCheck ?? node?.proof)?.references ? 'unverified' : status;
+  };
+  const settlements = new Map<string, boolean>();
+  const settled = (id: string): boolean => {
+    if (settlements.has(id)) return settlements.get(id)!;
+    settlements.set(id, false);
+    const node = nodes.get(id);
+    const result = Boolean(node && !node.pendingValidation && proofStatus(id) === 'checked' &&
+      (fresh.has(id) || recorded.settled(id, false) &&
+        (node.integratedCheck?.references?.tasks ?? []).every(input => settled(input.taskId))));
+    settlements.set(id, result); return result;
+  };
+  const closed = new Set(records.filter(node => settled(node.task.id)).map(node => node.task.id));
+  const continuation = buildProofContinuation(records.map(node => ({ ...node,
+    task: node.task.kind === 'goal' ? { ...node.task, status: 'active' as const } : node.task,
+    status: node.status === 'integrated' && !closed.has(node.task.id) ? 'pending' as const : node.status,
+  })), { environmentDigest: input.snapshot.environmentDigest, proofRoutes: routes });
+  const parents = new Map<string, Set<string>>();
+  for (const node of records) for (const id of [...node.task.dependsOn, ...routes.filter(route => route.targetTaskId === node.task.id)
+    .flatMap(route => [route.closingTaskId, ...route.prerequisiteTaskIds])]) {
+    const owners = parents.get(id) ?? new Set<string>(); owners.add(node.task.id); parents.set(id, owners);
+  }
   const resumed: string[] = [];
   const goals = input.targets.map(target => {
     const key = hash(target), old = state.goals.find(goal => goal.key === key);
     const node = input.tasks.find(node => node.task.kind === 'goal' && node.task.proofPath === target.proofPath &&
       node.task.theoremName === target.theoremName);
-    const path = node ? goalPath(node.task.id, tasks, input.proofRoutes) : new Set<string>();
+    const path = node ? goalPath(node.task.id, tasks, routes) : new Set<string>();
     const evidence = [...path].flatMap(id => {
-      const obligation = obligations.get(id), proofNode = nodes.get(id), proof = proofNode?.integratedCheck ?? proofNode?.proof;
-      if (!proofNode || !proof || !['checked', 'conditional'].includes(obligation?.recordedProof ?? '')) return [];
+      const proofNode = nodes.get(id), proof = proofNode?.integratedCheck ?? proofNode?.proof;
+      if (!proofNode || !proof || !['checked', 'conditional'].includes(proofStatus(id))) return [];
       // Task IDs, objectives and revision counters can change while the same mathematics is replayed.
-      return [hash({ contract: contract(proofNode.task), checked: obligation!.recordedProof,
+      return [hash({ contract: contract(proofNode.task), checked: proofStatus(id),
         conditions: (proof.conditions ?? []).map(item => contract(nodes.get(item.taskId)?.task) ?? item.taskDigest)
           .map(value => canonicalMathJson(value)).sort(),
         ...(proof.references ? { scope: proof.references.scope,
@@ -121,8 +168,8 @@ export function observeGoalProgress(previous: GoalProgressState | undefined, inp
     // New wrappers and conditional connections remain useful inputs, but cannot settle the old frontier.
     // Match the prior obligation's contract before crediting closure: a weakened or removed task is not progress.
     const coreEvidence = (goal.coreFrontier ?? []).flatMap(previous => {
-      const current = nodes.get(previous.taskId), obligation = obligations.get(previous.taskId);
-      if (!current || !path.has(previous.taskId) || !obligation?.closed || obligation.recordedProof !== 'checked' ||
+      const current = nodes.get(previous.taskId);
+      if (!current || !path.has(previous.taskId) || !closed.has(previous.taskId) || proofStatus(previous.taskId) !== 'checked' ||
           taskProofContractVersion(current.task) !== previous.contractDigest) return [];
       return [hash({ contract: contract(current.task), environmentDigest: input.snapshot.environmentDigest })];
     });
@@ -131,15 +178,24 @@ export function observeGoalProgress(previous: GoalProgressState | undefined, inp
       goal.coreActiveMs = 0; goal.lastReviewedCoreMs = 0; goal.lastCoreProgressAt = now;
     }
     goal.coreSeenEvidence = [...new Set([...goal.coreSeenEvidence, ...coreEvidence])];
-    const frontier = input.snapshot.goals.find(item => item.taskId === node?.task.id);
+    const frontier = continuation.goals.find(item => item.taskId === node?.task.id);
     const frontierIds = new Set([...(frontier?.frontier ?? []), ...(frontier?.alternatives ?? []).flatMap(route => route.frontier)]
-      .map(item => item.taskId));
-    goal.coreFrontier = [...frontierIds].sort().flatMap(id => {
-      const current = nodes.get(id), obligation = obligations.get(id);
-      return current && obligation && !obligation.closed ? [{ taskId: id, taskDigest: obligation.taskDigest,
+      .filter(id => !closed.has(id)));
+    // An advisory investigation cannot hide the nearest unresolved mathematical consumer.
+    const mathematical = new Set<string>(), seen = new Set<string>();
+    const visit = (id: string) => {
+      if (seen.has(id) || !path.has(id) || closed.has(id)) return; seen.add(id);
+      const current = nodes.get(id);
+      if (current && !isAdvisoryTask(current.task)) mathematical.add(id);
+      else for (const parent of parents.get(id) ?? []) visit(parent);
+    };
+    frontierIds.forEach(visit);
+    goal.coreFrontier = [...mathematical].sort().flatMap(id => {
+      const current = nodes.get(id);
+      return current ? [{ taskId: id, taskDigest: taskVersion(current.task),
         contractDigest: taskProofContractVersion(current.task) }] : [];
     });
-    goal.closed = Boolean(node && obligations.get(node.task.id)?.closed);
+    goal.closed = Boolean(node && closed.has(node.task.id));
     goal.taskId = node?.task.id;
     goal.active = !goal.closed && Boolean(node && (node.task.status ?? 'active') === 'active' &&
       (input.groups?.find(group => group.group.id === taskGroup(node.task))?.group.status ?? 'active') === 'active') &&

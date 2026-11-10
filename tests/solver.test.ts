@@ -33,7 +33,7 @@ import { applyTaskChanges, checkTaskProof, checkTaskProofs, createTaskSourceProj
 import { readContinuationPage, readContinuationSnapshot } from '../src/solver/continuationInput';
 import { inspectLeanDeclarationRegions, inspectScopedLeanDeclarations, leanDeclarationContextCommands } from '../src/math/leanSource';
 import { recordRouteBlockers, refreshRouteBlockers } from '../src/solver/routeControl';
-import type { TaskRecord } from '../src/solver/tasks';
+import { freshlyAccepted, type TaskRecord } from '../src/solver/tasks';
 import { buildTheoremKnowledge, writeTheoremKnowledge } from '../src/solver/theoremKnowledge';
 import { readKnowledgeCatalog, writePackedKnowledge } from '../src/solver/theoremKnowledgeStore';
 import { buildRunInspection } from '../src/solver/inspection';
@@ -2320,7 +2320,7 @@ describe('isolated solver and host acceptance', () => {
     expect(attempts).toBe(2);
     // Tracked deletions are checkpointed; both missing-file cases submit no current findings.
     expect(cooperationState().tasks[0]).toMatchObject({ status: 'blocked', attempts: 2,
-      feedback: expect.stringContaining(mode === 'deleted' ? 'Replace inherited RESEARCH.md' : 'Write RESEARCH.md') });
+      feedback: expect.stringContaining('Write RESEARCH.md') });
     expect(cooperationState().deliveryReceipts).toEqual(expect.arrayContaining([expect.objectContaining({ taskId: 'question',
       code: 'math_research_delivery_unchanged', submissionDigest: mathDigest('') })]));
     expect(host.verify).not.toHaveBeenCalled();
@@ -2350,8 +2350,10 @@ describe('isolated solver and host acceptance', () => {
         } else {
           expect(action.assignment.seedCommit).toBe(seed);
           expect(options.workspace).toBe(researchWorkspace);
-          expect(message).toContain('math_research_delivery_unchanged: Replace inherited RESEARCH.md');
+          expect(message).toContain('math_research_delivery_unchanged: Write RESEARCH.md');
           expect(cooperationState().deliveries ?? []).toEqual([]);
+          expect(cooperationState().deliveryReceipts).toContainEqual(expect.objectContaining({ taskId: 'question',
+            code: 'math_research_delivery_unchanged', submissionDigest: mathDigest('') }));
           fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), finding);
         }
       } else if (action.kind === 'task') {
@@ -2368,6 +2370,46 @@ describe('isolated solver and host acceptance', () => {
       .toMatchObject([{ taskId: 'question', summary: finding }]);
     expect(host.verify).toHaveBeenCalled();
     expect(host.officialGate).toHaveBeenCalledOnce();
+  });
+
+  it('accepts rewritten research notes after recovering a committed deletion', async () => {
+    const tasks: CooperativeTask[] = [
+      { id: 'question', kind: 'research', objective: 'Find a current proof route', dependsOn: [], revision: 0 },
+      ...planTasks().slice(2).map(task => ({ ...task, status: 'paused' as const,
+        dependsOn: task.id === 'first' ? ['question'] : ['first'] })),
+    ];
+    const finding = 'The current route uses True.intro; both original targets still require independent proofs.';
+    let attempts = 0, plans = 0;
+    configureCooperation(async (action, options, message) => {
+      if (action.kind === 'lead') {
+        writePlan(options.workspace, tasks);
+        if (++plans === 1) for (const worker of JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8')).workers.slice(1)) {
+          fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), 'An old route that has not been checked.');
+          commitSolverSources(problem, worker.worktree);
+        }
+      } else if (action.kind === 'task' && action.task.id === 'question') {
+        if (++attempts === 1) fs.rmSync(path.join(options.workspace, 'RESEARCH.md'));
+        else {
+          expect(attempts).toBe(2);
+          expect(message).toContain('Write RESEARCH.md');
+          expect(cooperationState().deliveryReceipts).toContainEqual(expect.objectContaining({ taskId: 'question',
+            code: 'math_research_delivery_unchanged', submissionDigest: mathDigest('') }));
+          expect(cooperationState().tasks.filter((node: TaskRecord) => node.task.kind === 'goal')
+            .every((node: TaskRecord) => node.attempts === 0)).toBe(true);
+          fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), finding);
+        }
+      } else if (action.kind === 'task') {
+        const file = path.join(options.workspace, 'generated/p/Submission.lean');
+        fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(`${action.task.id} : True := by sorry`, `${action.task.id} : True := by trivial`));
+      } else finishAssignment(action, options);
+      return 'completed';
+    });
+    const exitCode = await runSolver([...args, '--workers', '2', '--max-turns', '6'], directory);
+    expect(exitCode, fs.readFileSync(output, 'utf8')).toBe(4);
+    expect(cooperationState().tasks[0]).toMatchObject({ status: 'completed', attempts: 2 });
+    expect(cooperationState().deliveries.filter((record: any) => record.kind === 'research'))
+      .toMatchObject([{ taskId: 'question', summary: finding }]);
+    expect(host.officialGate).not.toHaveBeenCalled();
   });
 
   it('resumes a proof review checkpoint without accepting its saved verdict prematurely', async () => {
@@ -4067,6 +4109,17 @@ describe('isolated solver and host acceptance', () => {
   });
 
   it('invalidates a revised route and cross-route consumers while preserving the other route\'s verified lemma', async () => {
+    const reviewAcceptances: { accepted: boolean; receiptIds: string[]; assignmentId?: string }[] = [];
+    const modules = { ...directSolverModules, M4: { ...directSolverModules.M4,
+      build: (...inputs: Parameters<typeof directSolverModules.M4.build>) => {
+        const second = inputs[1].cooperation?.tasks.find(node => node.task.id === 'second');
+        if (inputs[2].assignment?.kind === 'review' && second) reviewAcceptances.push({
+          accepted: freshlyAccepted(second, taskVersion(second.task)),
+          receiptIds: second.integratedCheck!.verification.results.map(receipt => receipt.receiptId),
+          assignmentId: second.assignment?.assignmentId,
+        });
+        return directSolverModules.M4.build(...inputs);
+      } } };
     configureCooperation(async (action, options) => {
       if (action.kind === 'lead') writePlan(options.workspace, groupedTasks(), routeGroups());
       else finishAssignment(action, options);
@@ -4079,15 +4132,23 @@ describe('isolated solver and host acceptance', () => {
     const groups = routeGroups();
     groups[1] = { ...groups[1], revision: 1 };
     writePlan(state.worktree, groupedTasks(), groups);
-    expect(await runSolver([...parallelArgs, '--resume', '--max-turns', '9'], directory)).toBe(0);
+    expect(await runSolver([...parallelArgs, '--resume', '--max-turns', '9'], directory, modules)).toBe(0);
     const resumed = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
-    expect(resumed.cooperation.tasks.map(node => node.attempts)).toEqual([1, 1, 2, 2]);
+    expect(resumed.cooperation.tasks.map(node => node.attempts)).toEqual([1, 1, 2, 1]);
     expect(resumed.cooperation.history.map(node => node.task.id)).toEqual(['b', 'first', 'second']);
     expect(resumed.cooperation.groups[1]).toMatchObject({ group: { revision: 1 }, turns: 1 });
     const bridge = resumed.cooperation.tasks[1];
     expect(bridge).toMatchObject({ status: 'integrated', proof: { passed: true },
       integratedCheck: { passed: true, taskDigest: taskVersion(bridge.task) } });
     expect(bridge.assignment.assignmentId).not.toBe(state.cooperation.tasks[1].assignment.assignmentId);
+    const second = resumed.cooperation.tasks[3];
+    expect(second.assignment.assignmentId).not.toBe(state.cooperation.tasks[3].assignment.assignmentId);
+    const probe = vi.mocked(console.log).mock.calls.map(([event]) => JSON.parse(event))
+      .findLast(event => event.event === 'task_canonical_probe' && event.taskId === 'second');
+    expect(probe).toMatchObject({ passed: true, status: 'kernel_verified', taskDigest: taskVersion(second.task),
+      seedCommit: second.assignment.seedCommit, receiptIds: second.proof.verification.results.map(receipt => receipt.receiptId) });
+    expect(reviewAcceptances.at(-1)).toEqual({ accepted: true, assignmentId: second.assignment.assignmentId,
+      receiptIds: second.integratedCheck.verification.results.map(receipt => receipt.receiptId) });
   });
 
   it.each(['unknown', 'private-dependency', 'concurrency', 'duplicate', 'budget'] as const)('rejects an invalid route plan (%s)', flaw => {
@@ -5339,6 +5400,17 @@ describe('isolated solver and host acceptance', () => {
 
   it.each(['actual', 'missing', 'whole-module'] as const)('invalidates dependent proofs and archives their old deliveries after a live revision (%s references)', async trace => {
     const tasks = planTasks(), reviewStopped = deferred();
+    const reviewAcceptances: { accepted: boolean; receiptIds: string[]; assignmentId?: string }[] = [];
+    const modules = { ...directSolverModules, M4: { ...directSolverModules.M4,
+      build: (...inputs: Parameters<typeof directSolverModules.M4.build>) => {
+        const second = inputs[1].cooperation?.tasks.find(node => node.task.id === 'second');
+        if (inputs[2].assignment?.kind === 'review' && second) reviewAcceptances.push({
+          accepted: freshlyAccepted(second, taskVersion(second.task)),
+          receiptIds: second.integratedCheck!.verification.results.map(receipt => receipt.receiptId),
+          assignmentId: second.assignment?.assignmentId,
+        });
+        return directSolverModules.M4.build(...inputs);
+      } } };
     let reviews = 0, reviewerWorkspace = '';
     configureCooperation(async (action, options) => {
       if (action.kind === 'lead') writePlan(options.workspace, tasks);
@@ -5356,10 +5428,10 @@ describe('isolated solver and host acceptance', () => {
     const create = host.createSession.getMockImplementation()!;
     host.createSession.mockImplementation(async (options: MathAgentOptions) => ({ ...await create(options),
       interrupt: vi.fn(async () => { if (options.workspace === reviewerWorkspace) reviewStopped.resolve(); }) }));
-    expect(await runSolver([...args, '--workers', '2', '--max-turns', '12'], directory)).toBe(0);
+    expect(await runSolver([...args, '--workers', '2', '--max-turns', '12'], directory, modules)).toBe(0);
     const state = cooperationState();
     expect(state.history.map((node: any) => node.task.id)).toEqual(['a', 'first', 'second']);
-    expect(state.tasks.map((node: any) => node.attempts)).toEqual([1, 1, 2, 2]);
+    expect(state.tasks.map((node: any) => node.attempts)).toEqual([1, 1, 2, 1]);
     for (const id of ['a', 'first', 'second']) {
       const statuses = state.deliveries.filter((record: any) => record.taskId === id && record.kind === 'proof')
         .map((record: any) => record.status);
@@ -5378,6 +5450,15 @@ describe('isolated solver and host acceptance', () => {
     const events = vi.mocked(console.log).mock.calls.map(([event]) => JSON.parse(event));
     expect(events.findIndex(event => event.event === 'edit_received')).toBeLessThan(events.findIndex(event => event.event === 'edit_applied'));
     expect(events.find(event => event.event === 'edit_applied').recheck.status).toBe('pending');
+    const second = state.tasks[3], probeIndex = events.findLastIndex(event =>
+      event.event === 'task_canonical_probe' && event.taskId === 'second');
+    expect(probeIndex).toBeGreaterThan(events.findIndex(event => event.event === 'edit_applied'));
+    expect(events[probeIndex]).toMatchObject({ passed: true, status: 'kernel_verified', taskDigest: taskVersion(second.task),
+      seedCommit: second.assignment.seedCommit, receiptIds: second.proof.verification.results.map(receipt => receipt.receiptId) });
+    expect(reviewAcceptances.length).toBeGreaterThanOrEqual(2);
+    expect(second.assignment.assignmentId).not.toBe(reviewAcceptances[0].assignmentId);
+    expect(reviewAcceptances.at(-1)).toEqual({ accepted: true, assignmentId: second.assignment.assignmentId,
+      receiptIds: second.integratedCheck.verification.results.map(receipt => receipt.receiptId) });
     if (trace === 'actual') expect(state.tasks[2].integratedCheck.references.tasks).toContainEqual({ taskId: 'a', taskDigest: taskVersion(tasks[0]) });
     expect(reviews).toBe(2); expect(host.officialGate).toHaveBeenCalledOnce();
   }, 20_000);
@@ -6868,6 +6949,21 @@ describe('isolated solver and host acceptance', () => {
     expect(await runSolver(args, directory)).toBe(1);
     expect(host.verify).not.toHaveBeenCalled();
     expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ status: 'runtime_error', reason: 'unexpected failure' });
+  });
+
+  it('logs the source commit, file and exit status when a worker cannot read Git source', async () => {
+    host.createSession.mockImplementationOnce(async () => {
+      committedSource(workspace, problem.baseCommit, 'generated/p/missing.lean');
+      throw new Error('fixture_expected_missing_source');
+    });
+    expect(await runSolver(args, directory)).toBe(1);
+    expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ status: 'runtime_error', reason: 'math_task_source_unavailable' });
+    const events = vi.mocked(console.log).mock.calls.map(([line]) => JSON.parse(line));
+    const diagnostic = { command: 'show', commit: problem.baseCommit, file: 'generated/p/missing.lean',
+      exitCode: 128, signal: null, stderr: expect.stringContaining('missing.lean') };
+    expect(events.find(event => event.event === 'worker_failed')).toMatchObject({ reason: 'math_task_source_unavailable', git: diagnostic });
+    expect(events.find(event => event.event === 'finished')).toMatchObject({ status: 'runtime_error', git: diagnostic });
+    expect(host.verify).not.toHaveBeenCalled();
   });
 
   it('keeps repeated unchanged rejections incomplete without recompiling the same commit', async () => {

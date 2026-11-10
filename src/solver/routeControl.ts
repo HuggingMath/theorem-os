@@ -1,5 +1,5 @@
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
-import { freshlyAccepted, hasTaskAcceptance, taskGroup, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
+import { freshlyAccepted, hasTaskAcceptance, isAdvisoryTask, taskGroup, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
 
 export type ReopenCondition = { kind: 'contract-changed' } | { kind: 'environment-changed' } |
   { kind: 'dependency-checked'; taskId: string };
@@ -13,10 +13,12 @@ export type RouteBlocker = { id: string; taskId: string; groupId: string; taskDi
   status: 'open' | 'parked' | 'reopened' | 'superseded'; createdAt: number; updatedAt: number; reopenedReason?: string };
 
 const hash = (value: unknown) => mathDigest(canonicalMathJson(value));
-// Operational revision numbers and prose changes are not new mathematical inputs.
-const contract = (task: CooperativeTask) => hash({ kind: task.kind, proofPath: task.proofPath,
-  theoremName: task.theoremName, type: task.type, premises: task.premises ?? [] });
 const normalize = (value: string) => value.trim().replace(/\s+/gu, ' ');
+// A research question lives in its objective; typed obligations have an exact Lean contract.
+// Operational revisions, ownership and whitespace still supply no new mathematical input.
+const contract = (task: CooperativeTask) => hash({ kind: task.kind, proofPath: task.proofPath,
+  theoremName: task.theoremName, type: task.type, premises: task.premises ?? [],
+  ...(isAdvisoryTask(task) ? { objective: normalize(task.objective) } : {}) });
 
 /** Only evidence local to the declared dependency cone can reopen this inference. */
 export function routeBlockerBasis(task: CooperativeTask, tasks: readonly TaskRecord[], environmentDigest: string,

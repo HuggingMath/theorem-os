@@ -49,8 +49,130 @@ const libraryPack = (modules: Record<string, string> = { [libraryModule]: librar
 function saveReceipt(receipt: ReturnType<typeof bootstrapLeanTask>, changes: Record<string, unknown>) {
   fs.writeFileSync(receipt.activeProblemPath, JSON.stringify({ ...receipt, ...changes }));
 }
+function legacyDefaultWhereFixture() {
+  const input = [
+    'namespace User', 'class Witness where', '  marker : Nat := 7',
+    'instance defaulted : Witness where', 'def helper : Nat := 7',
+    'theorem goal : helper = 7 := by sorry', 'end User', '',
+  ].join('\n');
+  const receipt = bootstrapLeanTask(path.join(rootDirectory(), 'workspace'), { source: input, task });
+  const problem = readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath);
+  // The old lexer swallowed this complete def as part of the preceding instance.
+  const header = 'defaulted : Witness where def helper : Nat';
+  const legacyReceipt = { ...receipt, declarations: [
+    { name: 'User.defaulted', kind: 'instance' as const, declarationHash: mathDigest(header) },
+    receipt.declarations.find(item => item.name === 'User.goal')!,
+  ] };
+  const context = [
+    'namespace User', 'class Witness where', 'marker : Nat := 7',
+    header, 'goal : helper = 7', 'end User',
+  ].join('\n');
+  const legacyProblem = { ...problem, receiptDigest: mathDigest(canonicalMathJson(legacyReceipt)),
+    declarations: { 'Submission.lean': [
+      { name: 'defaulted', header, body: mathDigest('7') },
+      { name: 'goal', header: 'goal : helper = 7' },
+    ] }, sourceContexts: { 'Submission.lean': context }, sourceStructure: { 'Submission.lean': mathDigest(context) } };
+  return { input, receipt, legacyReceipt, legacyProblem, submission: path.join(receipt.projectRoot, 'Submission.lean') };
+}
 
 describe('user-provided Lean task bootstrap', () => {
+  it('bootstraps and rereads the target after a named where instance with default fields', () => {
+    const input = [
+      'namespace User',
+      'class Witness where',
+      '  marker : Nat := 7',
+      'instance defaulted : Witness where',
+      'theorem goal : True := by sorry',
+      'end User', '',
+    ].join('\n');
+    const receipt = bootstrapLeanTask(path.join(rootDirectory(), 'workspace'), { source: input, task });
+    expect(receipt.publicObligations.map(item => item.name)).toEqual(['User.goal']);
+    expect(receipt.declarations.map(item => [item.name, item.kind]))
+      .toEqual([['User.defaulted', 'instance'], ['User.goal', 'theorem']]);
+    expect(readLeanTaskReceipt(receipt.activeProblemPath)).toEqual(receipt);
+    const problem = readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath);
+    expect(problem.targets.map(item => item.theoremName)).toEqual(['User.goal']);
+    const submission = path.join(receipt.projectRoot, 'Submission.lean');
+    fs.writeFileSync(submission, input.replace('by sorry', 'by have _ : Witness := inferInstance; trivial'));
+    expect(() => assertSolverSources(problem, receipt.workspaceRoot)).not.toThrow();
+    expect(() => readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath)).not.toThrow();
+  });
+
+  it.skipIf(!newestLeanBinary())('compiles a named instance using its default where fields without axioms', () => {
+    const input = [
+      'namespace User',
+      'class Witness where',
+      '  marker : Nat := 7',
+      'instance defaulted : Witness where',
+      'theorem goal : True := by have _ : Witness := inferInstance; trivial',
+      'end User',
+      '#print axioms User.goal', '',
+    ].join('\n');
+    const file = path.join(rootDirectory(), 'DefaultWhere.lean');
+    fs.writeFileSync(file, input);
+    const checked = spawnSync(newestLeanBinary()!, [file], { encoding: 'utf8', timeout: 20_000 });
+    expect(checked.error).toBeUndefined();
+    expect(checked.status, `${checked.stdout}${checked.stderr}`).toBe(0);
+    expect(`${checked.stdout}${checked.stderr}`).not.toContain('sorryAx');
+    expect(checked.stdout).toContain("'User.goal' does not depend on any axioms");
+  });
+
+  it('retains legacy nonempty where receipt hashes and frozen declaration bodies', () => {
+    const input = [
+      'namespace User',
+      'class Witness where',
+      '  marker : Nat := 7',
+      'instance populated : Witness where',
+      '  marker := 9',
+      'theorem goal : True := by sorry',
+      'end User', '',
+    ].join('\n');
+    const receipt = bootstrapLeanTask(path.join(rootDirectory(), 'workspace'), { source: input, task });
+    const legacyHeader = 'populated : Witness where marker';
+    const legacyHash = mathDigest(legacyHeader);
+    expect(receipt.declarations.find(item => item.name === 'User.populated')?.declarationHash).toBe(legacyHash);
+    // Reread the stored receipt with its historical hash rather than accepting a newly derived identity.
+    saveReceipt(receipt, { declarations: receipt.declarations.map(item => item.name === 'User.populated'
+      ? { ...item, declarationHash: legacyHash } : item) });
+    expect(readLeanTaskReceipt(receipt.activeProblemPath)).toEqual(receipt);
+    const problem = readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath);
+    expect(problem.declarations['Submission.lean']).toContainEqual({
+      name: 'populated', header: legacyHeader, body: mathDigest('9'),
+    });
+    const submission = path.join(receipt.projectRoot, 'Submission.lean');
+    fs.writeFileSync(submission, input.replace('by sorry', 'by trivial'));
+    expect(() => assertSolverSources(problem, receipt.workspaceRoot)).not.toThrow();
+    fs.writeFileSync(submission, input.replace('marker := 9', 'marker := 10'));
+    expect(() => assertSolverSources(problem, receipt.workspaceRoot)).toThrow('math_original_declaration_changed');
+  });
+
+  it('rereads an exact legacy receipt whose empty where instance swallowed a complete definition', () => {
+    const { receipt, legacyReceipt, legacyProblem } = legacyDefaultWhereFixture();
+    expect(receipt.declarations.map(item => item.name)).toEqual(['User.defaulted', 'User.helper', 'User.goal']);
+    saveReceipt(legacyReceipt, {});
+    expect(readLeanTaskReceipt(receipt.activeProblemPath)).toEqual(legacyReceipt);
+    const reread = readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath);
+    expect(reread.targets.map(item => item.theoremName)).toEqual(['User.goal']);
+    expect(reread).toMatchObject({ receiptDigest: legacyProblem.receiptDigest, declarations: legacyProblem.declarations,
+      sourceContexts: legacyProblem.sourceContexts, sourceStructure: legacyProblem.sourceStructure });
+    saveReceipt(legacyReceipt, { declarations: legacyReceipt.declarations.map(item => item.name === 'User.defaulted'
+      ? { ...item, declarationHash: mathDigest('defaulted : Witness where def helper : Bool') } : item) });
+    expect(() => readLeanTaskReceipt(receipt.activeProblemPath)).toThrow('lean_task_identity_changed');
+  });
+
+  it('keeps an exact legacy empty where checkpoint frozen across a proof repair', () => {
+    const { input, receipt, legacyProblem, submission } = legacyDefaultWhereFixture();
+    expect(() => assertSolverSources(legacyProblem, receipt.workspaceRoot)).not.toThrow();
+    fs.writeFileSync(submission, input.replace('by sorry', 'by rfl'));
+    expect(() => assertSolverSources(legacyProblem, receipt.workspaceRoot)).not.toThrow();
+    fs.writeFileSync(submission, input.replace('def helper : Nat := 7', 'def helper : Nat := 8'));
+    expect(() => assertSolverSources(legacyProblem, receipt.workspaceRoot)).toThrow('math_original_declaration_changed');
+    fs.writeFileSync(submission, input);
+    const forged = { ...legacyProblem, declarations: { 'Submission.lean': legacyProblem.declarations['Submission.lean']
+      .map(item => item.name === 'defaulted' ? { ...item, header: 'defaulted : Witness where def helper : Bool' } : item) } };
+    expect(() => assertSolverSources(forged, receipt.workspaceRoot)).toThrow('math_original_declaration_changed');
+  });
+
   it('freezes punctuation variants without mistaking keyword-shaped names for commands', () => {
     const input = `namespace User
 def lemma? : True := True.intro

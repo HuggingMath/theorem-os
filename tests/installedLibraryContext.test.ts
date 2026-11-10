@@ -148,6 +148,23 @@ describe('installed library retrieval in actual task context', () => {
     }
   });
 
+  it('keeps an exact application handoff when named requests rewrite the retrieval section identity', () => {
+    const f = fixture(), id = f.library.base.entries.find(entry => entry.name === 'Frozen.Lists.reverse_reverse')!.id;
+    const task = { ...f.record.task, type: 'WantedResult' };
+    const action: CooperativeAction = { ...f.action, task };
+    const retrieval = { sectionId: 'knowledge-application-hints:exact-scope', catalogDigest: f.library.digest,
+      searchInputDigest: mathDigest('exact-application-handoff'), consumer: {},
+      searchCandidateIds: [], candidateIds: [id], routeFindingIds: [] };
+    vi.spyOn(knowledgeContext, 'knowledgeContextSections').mockReturnValue([
+      { id: retrieval.sectionId, kind: 'sources', text: '', knowledge: retrieval },
+    ]);
+    const application = installedLibraryRetrievals({ problem: f.problem, action, library: f.library,
+      environmentDigest, forApplication: true, taskText: 'Use Frozen.Arithmetic.add_comm.' })[0]!;
+    expect(application.searchCandidateIds).toEqual([
+      f.library.base.entries.find(entry => entry.name === 'Frozen.Arithmetic.add_comm')!.id, id,
+    ]);
+  });
+
   it('shares the twelve-candidate and three-display budgets between named and goal candidates', () => {
     const f = fixture(), library = structuredClone(f.library);
     const template = library.base.entries.find(entry => entry.name === 'Frozen.Lists.reverse_reverse')!;

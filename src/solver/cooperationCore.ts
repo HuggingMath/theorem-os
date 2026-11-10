@@ -71,7 +71,7 @@ export abstract class CooperationCore {
   protected readonly familyAssemblyAttempts = new Set<string>();
   protected invalidTaskTypes = new Map<TaskRecord, { canonical: string; environment: string; taskDigest: string;
     dependencies: string; project: string; workerId: string; environmentIdentity?: string }>();
-  protected preparedSources?: { identity: string; project: ReturnType<typeof createTaskSourceProjector> };
+  protected readonly preparedSources = new Map<boolean, { identity: string; project: ReturnType<typeof createTaskSourceProjector> }>();
   protected checkedStatementReferences = new WeakSet<ProofReferences>();
   protected fixedReviewScope?: { review: ReviewRecord; commit: string; sourceDigest: string; environmentDigest: string;
     tasksDigest: string; required: ReadonlyMap<string, string> };

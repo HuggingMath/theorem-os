@@ -93,6 +93,43 @@ describe('shared frozen Lean library compilation', () => {
     expect(run).toHaveBeenCalledTimes(4);
   });
 
+  it.each(['changed-source', 'unfrozen', 'request-order'])('reuses independent frozen modules despite an unrelated %s', async reason => {
+    const unrelated = 'Submission/Library/Unrelated.lean';
+    const first = project('first'), second = project('second');
+    for (const directory of [first, second]) fs.writeFileSync(path.join(directory, unrelated), 'def unrelated : Nat := 1\n');
+    if (reason === 'changed-source') fs.writeFileSync(path.join(second, unrelated), 'def unrelated : Nat := 2\n');
+    const a = input(first), b = input(second);
+    for (const value of [a, b]) {
+      value.files.unshift(unrelated);
+      if (reason !== 'unfrozen') value.sharedLibraryCache.files[unrelated] = mathDigest(fs.readFileSync(path.join(value.projectRoot, unrelated)));
+    }
+    await runLeanDiagnostics(a);
+    expect(run).toHaveBeenCalledTimes(3);
+    if (reason === 'request-order') b.files = [base, consumer, unrelated];
+    const result = await runLeanDiagnostics(b);
+    expect(run).toHaveBeenCalledTimes(reason === 'request-order' ? 3 : 4);
+    expect(result.phases.filter(phase => phase.cacheSource === 'shared').map(phase => phase.file))
+      .toEqual(reason === 'request-order' ? [base, consumer, unrelated] : [base, consumer]);
+  });
+
+  it('invalidates the full import chain when an ancestor changes even if its compiler artifacts stay identical', async () => {
+    const middle = 'Submission/Library/Middle.lean';
+    const first = project('first'), second = project('second');
+    for (const directory of [first, second]) {
+      fs.writeFileSync(path.join(directory, middle), 'import Submission.Library.Base\ndef middle : Nat := base\n');
+      fs.writeFileSync(path.join(directory, consumer), 'import Submission.Library.Middle\ndef consumer : Nat := middle\n');
+    }
+    const a = input(first), b = input(second);
+    a.sharedLibraryCache.files[middle] = mathDigest(fs.readFileSync(path.join(first, middle)));
+    await runLeanDiagnostics(a);
+    fs.appendFileSync(path.join(second, base), '\n-- ancestor changed\n');
+    b.sharedLibraryCache.files[base] = mathDigest(fs.readFileSync(path.join(second, base)));
+    b.sharedLibraryCache.files[middle] = mathDigest(fs.readFileSync(path.join(second, middle)));
+    const result = await runLeanDiagnostics(b);
+    expect(run).toHaveBeenCalledTimes(6);
+    expect(result.phases.every(phase => !phase.cached)).toBe(true);
+  });
+
   it.each(['signature', 'companion'])('recompiles a corrupt shared %s instead of importing it', async corrupt => {
     await runLeanDiagnostics(input(project('first')));
     const cache = path.join(root, 'cache');

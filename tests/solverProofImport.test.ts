@@ -131,6 +131,29 @@ describe('deterministic host proof imports', () => {
       proofPath: 'Submission.lean', theoremName: 'Tutorial.helper' })).toThrow('math_proof_import_declaration_conflict');
   });
 
+  it('places a helper before its earlier consumer and preserves the consumer doc comment', () => {
+    const f = fixture();
+    const source = f.original.replace('theorem add_zero', '/-- The original consumer. -/\ntheorem add_zero');
+    const prepared = proofFragmentChanges(source, { fragment: 'lemma helper : True := by trivial\n',
+      proofPath: 'Submission.lean', theoremName: 'Tutorial.helper', beforeTheorem: 'Tutorial.add_zero' });
+    expect(prepared.source).toContain('lemma helper : True := by trivial\n/-- The original consumer. -/\ntheorem add_zero');
+    expect(prepared.source.indexOf('lemma helper')).toBeLessThan(prepared.source.indexOf('theorem add_zero'));
+    fs.writeFileSync(f.sourceFile, source);
+    applyTaskChanges(f.problem, f.writer.worktree, prepared.changes);
+    expect(fs.readFileSync(f.sourceFile, 'utf8')).toBe(prepared.source);
+    expect(prepared.source.replace('lemma helper : True := by trivial\n', '')).toBe(source);
+  });
+
+  it('rejects a missing or differently scoped insertion anchor before creating an import log', async () => {
+    const f = fixture();
+    await expect(f.queue({ beforeTheorem: 'Tutorial.absent' })).rejects.toThrow('math_proof_import_invalid_anchor');
+    expect(fs.existsSync(path.join(f.directory, 'proof-imports.jsonl'))).toBe(false);
+    const source = 'namespace Tutorial\nnamespace Nested\ntheorem consumer : True := by trivial\nend Nested\nend Tutorial\n';
+    expect(() => proofFragmentChanges(source, { fragment: 'lemma helper : True := by trivial\n',
+      proofPath: 'Submission.lean', theoremName: 'Tutorial.helper', beforeTheorem: 'Tutorial.Nested.consumer' }))
+      .toThrow('math_proof_import_invalid_anchor');
+  });
+
   it.each([
     'import Mathlib\nlemma helper : True := by trivial\n',
     'namespace Tutorial\nlemma helper : True := by trivial\nend Tutorial\n',
@@ -145,15 +168,17 @@ describe('deterministic host proof imports', () => {
     expect(fs.readFileSync(f.sourceFile, 'utf8')).toBe(f.original);
   });
 
-  it('checks captured bytes independently and merges only the helper into canonical source without model turns', async () => {
-    const f = fixture(); await f.queue(); fs.rmSync(f.fragmentFile); const action = await f.assign();
+  it.each([undefined, 'Tutorial.add_zero'])('checks and merges captured bytes without model turns (anchor: %s)', async beforeTheorem => {
+    const f = fixture(); await f.queue({ beforeTheorem }); fs.rmSync(f.fragmentFile); const action = await f.assign();
     expect(await f.consume(action)).toBe(true);
     const record = f.state.cooperation!.proofImports![0], node = f.state.cooperation!.tasks.find(node => node.task.id === 'helper')!;
     expect(record).toMatchObject({ status: 'checked', snapshotCommit: expect.any(String), readyId: expect.any(String) });
     expect(node).toMatchObject({ status: 'integrated', attempts: 0, proof: { passed: true }, integratedCheck: { passed: true } });
     expect(f.state.cooperation!.proofReadyRecords![0]).toMatchObject({ status: 'checked', receiptIds: [expect.any(String)] });
     expect(host.verify.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(committedSource(f.workspace, f.state.cooperation!.canonicalCommit!, `${f.problem.projectRelative}/Submission.lean`)).toContain('lemma helper');
+    const source = committedSource(f.workspace, f.state.cooperation!.canonicalCommit!, `${f.problem.projectRelative}/Submission.lean`);
+    expect(source).toContain('lemma helper');
+    if (beforeTheorem) expect(source.indexOf('lemma helper')).toBeLessThan(source.indexOf('theorem add_zero'));
     expect(f.state.check).toBeUndefined(); expect(f.state.cooperation!.tasks[0].integratedCheck).toBeUndefined();
     expect(f.state.turns).toBe(0); expect(f.state.workers!.every(worker => worker.turns === 0)).toBe(true);
   });

@@ -1,9 +1,16 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
+import { mathDigest } from '../src/math/mathRuntimeIo';
+import { newestLeanBinary } from './helpers/lean';
 import {
   declarationHashes,
   hashMathFormalSourceDeclaration,
   inspectLeanDeclarationRegions,
   inspectLeanDeclarations,
+  inspectLeanProjectionDeclarations,
   inspectScopedLeanDeclarations,
   leanDeclarationContextCommands,
   leanDeclarationKeys,
@@ -188,6 +195,118 @@ def matched : match true with
 });
 
 describe('instance attributes and derive handlers', () => {
+  it('finds a target after a named where instance using only default fields', () => {
+    const source = [
+      'namespace Fixture',
+      'class Witness where',
+      '  marker : Nat := 7',
+      'instance before : Witness where',
+      '  marker := 1',
+      'instance defaulted : Witness where',
+      'theorem goal : True := by sorry',
+      'instance after : Witness where',
+      '  marker := 2',
+      'end Fixture', '',
+    ].join('\n');
+    const regions = inspectLeanDeclarationRegions(source);
+    expect(regions.map(region => region.name)).toEqual(['before', 'defaulted', 'goal', 'after']);
+    const defaulted = regions.find(region => region.name === 'defaulted')!;
+    expect(source.slice(defaulted.startOffset, defaulted.endOffset).trim())
+      .toBe('instance defaulted : Witness where');
+    expect(inspectScopedLeanDeclarations(source).map(item => item.qualifiedName))
+      .toEqual(['Fixture.before', 'Fixture.defaulted', 'Fixture.goal', 'Fixture.after']);
+    expect(hashMathFormalSourceDeclaration(source, 'Fixture.goal'))
+      .toBe(hashMathFormalSourceDeclaration('theorem goal : True := by sorry\n', 'goal'));
+  });
+
+  it('preserves legacy hashes and frozen body boundaries for nonempty named where instances', () => {
+    const source = [
+      'instance before : Witness where',
+      '  marker := 1',
+      'theorem goal : True := by sorry',
+      'instance after : Witness where',
+      '  marker := 2', '',
+    ].join('\n');
+    // Existing task receipts include the first where-field name in the protected header.
+    for (const [name, body] of [['before', '1'], ['after', '2']]) {
+      const region = inspectLeanDeclarationRegions(source).find(item => item.name === name)!;
+      const legacyHeader = `${name} : Witness where marker`;
+      expect(region.declarationType).toBe(legacyHeader);
+      expect(declarationHashes(source).get(name)).toBe(mathDigest(legacyHeader));
+      expect(hashMathFormalSourceDeclaration(source, name)).toBe(mathDigest(legacyHeader));
+      expect(source.slice(region.bodyOffset, region.endOffset).trim()).toBe(body);
+    }
+  });
+
+  it.each([
+    ['same-column field', 'marker := 9'],
+    ['field after a block comment', '/- field -/ marker := 9'],
+    ['field after a closing block comment', '/- field\n-/ marker := 9'],
+  ])('retains the legacy header and complete projection for a %s', (_kind, field) => {
+    const instance = `instance populated : Witness where\n${field}`;
+    const source = [
+      'class Witness where', '  marker : Nat := 7', instance,
+      'theorem goal : populated.marker = 9 := rfl', '',
+    ].join('\n');
+    const region = inspectLeanDeclarationRegions(source).find(item => item.name === 'populated')!;
+    const legacyHeader = 'populated : Witness where marker';
+    expect(region.declarationType).toBe(legacyHeader);
+    expect(source.slice(region.bodyOffset, region.endOffset).trim()).toBe('9');
+    expect(declarationHashes(source).get('populated')).toBe(mathDigest(legacyHeader));
+    expect(hashMathFormalSourceDeclaration(source, 'populated')).toBe(mathDigest(legacyHeader));
+    const projected = inspectLeanProjectionDeclarations(source).find(item => item.name === 'populated')!;
+    expect(source.slice(projected.startOffset, projected.endOffset).trim()).toBe(instance);
+    expect(source.slice(projected.bodyOffset, projected.endOffset)).toContain('marker := 9');
+  });
+
+  it('ends an empty where instance before a commented following target', () => {
+    const source = [
+      'class Witness where', '  marker : Nat := 7',
+      'instance defaulted : Witness where',
+      '/- Keep the default marker.\n   This comment belongs before the next command. -/',
+      'theorem goal : defaulted.marker = 7 := rfl', '',
+    ].join('\n');
+    expect(inspectLeanDeclarationRegions(source).map(item => item.name)).toEqual(['defaulted', 'goal']);
+    expect(inspectLeanProjectionDeclarations(source).map(item => item.name)).toEqual(['defaulted', 'goal']);
+    expect(hashMathFormalSourceDeclaration(source, 'goal'))
+      .toBe(mathDigest('goal : defaulted.marker = 7'));
+    for (const regions of [inspectLeanDeclarationRegions(source), inspectLeanProjectionDeclarations(source)]) {
+      const instance = regions.find(item => item.name === 'defaulted')!;
+      expect(source.slice(instance.startOffset, instance.endOffset)).not.toContain('theorem goal');
+    }
+  });
+
+  it('recognizes an empty where instance at EOF without a trailing newline', () => {
+    const source = 'class Witness where\n  marker : Nat := 7\ninstance defaulted : Witness where';
+    for (const regions of [inspectLeanDeclarationRegions(source), inspectLeanProjectionDeclarations(source)]) {
+      expect(regions.map(item => item.name)).toEqual(['defaulted']);
+      expect(regions[0].declarationType).toBe('defaulted : Witness');
+      expect(regions[0].bodyOffset).toBe(source.length);
+      expect(regions[0].endOffset).toBe(source.length);
+    }
+  });
+
+  it.skipIf(!newestLeanBinary())('projects every field of a native-checked same-column where instance', () => {
+    const instance = 'instance populated : Witness where\nmarker := 9\nother := 13';
+    const source = [
+      'class Witness where', '  marker : Nat := 7', '  other : Nat := 11', instance,
+      'theorem goal : populated.marker = 9 ∧ populated.other = 13 := ⟨rfl, rfl⟩',
+      '#print axioms goal', '',
+    ].join('\n');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-where-projection-'));
+    try {
+      const file = path.join(root, 'SameColumn.lean');
+      fs.writeFileSync(file, source);
+      const checked = spawnSync(newestLeanBinary()!, [file], { encoding: 'utf8', timeout: 20_000 });
+      expect(checked.error).toBeUndefined();
+      expect(checked.status, `${checked.stdout}${checked.stderr}`).toBe(0);
+      expect(checked.stdout).toContain("'goal' does not depend on any axioms");
+      const region = inspectLeanProjectionDeclarations(source).find(item => item.name === 'populated')!;
+      expect(source.slice(region.startOffset, region.endOffset).trim()).toBe(instance);
+      expect(source.slice(region.bodyOffset, region.endOffset)).toContain('marker := 9\nother := 13');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('does not read attribute instance names or deriving clauses as declarations', () => {
     // 2026-10-30: `attribute [local instance 2000] inst` was read as `instance 2000`, swallowing the next def up to its `:=`.
     const source = [
@@ -208,6 +327,39 @@ describe('instance attributes and derive handlers', () => {
       .toEqual(['frequencyLattice', 'flattenVector', 'bundled', 'ampleIsometry', 'real']);
     expect(inspectLeanDeclarations(source).map(item => item.kind))
       .toEqual(['definition', 'definition', 'definition', 'definition', 'instance']);
+  });
+
+  it('keeps anonymous projection regions out of frozen named declaration identities', () => {
+    const source = [
+      'namespace Fixture',
+      'theorem original (n : Nat) : n = n := by rfl',
+      'instance (n : Nat) : Inhabited (Fin (n + 1)) := ⟨⟨0, Nat.zero_lt_succ n⟩⟩',
+      'instance named : Inhabited Nat := ⟨0⟩',
+      'instance : Inhabited Bool := ⟨true⟩',
+      'theorem goal : True := by trivial',
+      'end Fixture', '',
+    ].join('\n');
+    const names = ['original', 'named', 'goal'];
+    const hashes = declarationHashes(source);
+    const scoped = inspectScopedLeanDeclarations(source);
+    expect([...hashes.keys()]).toEqual(names);
+    expect([...leanDeclarationKeys(source).values()]).toEqual(names);
+    const projected = inspectLeanProjectionDeclarations(source);
+    expect(projected.map(item => item.qualifiedName))
+      .toEqual(['Fixture.original', undefined, 'Fixture.named', undefined, 'Fixture.goal']);
+    expect(projected.filter(item => item.name === undefined).map(item =>
+      source.slice(item.startOffset, item.endOffset).trim())).toEqual([
+      'instance (n : Nat) : Inhabited (Fin (n + 1)) := ⟨⟨0, Nat.zero_lt_succ n⟩⟩',
+      'instance : Inhabited Bool := ⟨true⟩',
+    ]);
+    // The two cached views must not change frozen task identities or type lookup.
+    expect(declarationHashes(source)).toEqual(hashes);
+    expect(inspectScopedLeanDeclarations(source)).toEqual(scoped);
+    expect(inspectLeanDeclarationRegions(source).map(item => item.name)).toEqual(names);
+    expect(hashMathFormalSourceDeclaration(source, 'Fixture.goal'))
+      .toBe(hashMathFormalSourceDeclaration('theorem goal : True := by trivial\n', 'goal'));
+    expect(leanDeclarationContextCommands(source, 'Fixture.goal'))
+      .toEqual({ before: ['namespace Fixture'], after: ['end Fixture'] });
   });
 });
 

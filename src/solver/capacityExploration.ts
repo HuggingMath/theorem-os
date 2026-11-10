@@ -9,7 +9,7 @@ export const TIMED_EXPLORATION_IDLE_MS = 30 * 60_000;
 /** ...and the Lead has been woken for idle peers this many times without a deciding turn. */
 export const TIMED_EXPLORATION_UNANSWERED_WAKES = 2;
 /** ...and at least this much solving time remains. */
-export const TIMED_EXPLORATION_MIN_REMAINING_MS = 30 * 60_000;
+export const TIMED_EXPLORATION_MIN_REMAINING_MS = 10 * 60_000;
 export const TIMED_EXPLORATION_FOCUSES = ['decomposition', 'construction'] as const satisfies readonly CapacityExplorationFocus[];
 export type CapacityExploration = Readonly<{
   schema: 'theorem-os.capacity-exploration.v1';

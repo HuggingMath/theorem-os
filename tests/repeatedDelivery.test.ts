@@ -77,6 +77,23 @@ describe('persistent typed delivery failure guards', () => {
     expect(candidate.status).toBe('blocked');
     return repair;
   };
+  const resumeTask = async (instance = cooperative) => {
+    const next = await instance.next(researcher, budget);
+    if (next?.kind !== 'task') throw new Error('expected_resumed_assignment');
+    expect(instance.started(researcher, next)).toBe(true);
+    return next;
+  };
+  const recoverUntouched = async () => {
+    let work = action;
+    for (let turn = 0; turn < 3; turn++) {
+      await cooperative.deliver(researcher, work, seed, true, 'request-failure');
+      expect(candidate.status).toBe('pending');
+      expect(state.cooperation!.failedTaskInputs ?? []).toEqual([]);
+      expect(checker).not.toHaveBeenCalled();
+      work = await resumeTask();
+    }
+    return work;
+  };
   beforeEach(() => {
     directory = temporaryDirectory('repeated-delivery-');
     fs.mkdirSync(path.join(directory, 'generated/p'), { recursive: true });
@@ -128,6 +145,83 @@ describe('persistent typed delivery failure guards', () => {
     expect(checker).toHaveBeenCalledOnce();
   });
 
+  it.each(['compile', 'missing', 'source-contract'] as const)(
+    'keeps the first local %s repair after transport-only recoveries, then blocks another completed failure', async kind => {
+      const work = await recoverUntouched();
+      expect(candidate.attempts).toBe(4);
+      const reject = async (current: typeof work) => {
+        if (kind === 'source-contract') cooperative.rejected(current, 'math_original_context_changed');
+        else await cooperative.deliver(researcher, current, version);
+      };
+      fs.writeFileSync(sourceFile(), kind === 'missing' ? '' : 'lemma candidate : True := by exact FIRST_REAL_FAILURE\n');
+      const version = commit('The first completed proof after transport recovery.');
+      if (kind === 'missing') checker.mockRejectedValue(new Error(missing));
+      await reject(work);
+      expect(candidate.status).toBe('pending');
+      if (kind === 'source-contract') expect(candidate.sourceRepair?.pending).toBe(true);
+      else expect(state.cooperation!.failedTaskInputs![0].repair?.pending).toBe(true);
+      const repair = await resumeTask();
+      expect(repair.assignment).toBe(work.assignment);
+      await reject(repair);
+      expect(candidate.status).toBe('blocked');
+      expect(emit.mock.calls.filter(([event]) => event === 'task_repair_requested')).toHaveLength(1);
+      expect(checker).toHaveBeenCalledTimes(kind === 'source-contract' ? 0 : 1);
+      expect(candidate.integratedCheck).toBeUndefined();
+    });
+
+  it.each(['source-then-compile', 'compile-then-source'].flatMap(order =>
+    [false, true].map(restart => ({ order, restart }))))(
+    'shares one local repair between source-contract and typed failure ($order, restart: $restart)', async ({ order, restart }) => {
+      const sourceFirst = order === 'source-then-compile';
+      if (sourceFirst) cooperative.rejected(action, 'math_original_context_changed');
+      else await cooperative.deliver(researcher, action, seed);
+      expect(candidate.status).toBe('pending');
+      if (restart) {
+        state = JSON.parse(JSON.stringify(state)) as SolverRunState;
+        candidate = state.cooperation!.tasks[0]; cooperative = create();
+        await cooperative.restore();
+      }
+      const repair = await resumeTask();
+      if (sourceFirst) await cooperative.deliver(researcher, repair, seed);
+      else cooperative.rejected(repair, 'math_original_context_changed');
+      expect(candidate.status).toBe('blocked');
+      expect(emit.mock.calls.filter(([event]) => event === 'task_repair_requested')).toHaveLength(1);
+      expect(checker).toHaveBeenCalledOnce();
+      if (sourceFirst) expect(state.cooperation!.failedTaskInputs![0].repair).toBeUndefined();
+      else expect(candidate.sourceRepair).toBeUndefined();
+    });
+
+  it('does not grant a second completed repair for changed proof bytes', async () => {
+    await cooperative.deliver(researcher, action, seed);
+    const repair = await resumeTask();
+    fs.writeFileSync(sourceFile(), 'lemma candidate : True := by exact DIFFERENT_FAILURE\n');
+    await cooperative.deliver(researcher, repair, commit());
+    expect(candidate.status).toBe('blocked');
+    expect(state.cooperation!.failedTaskInputs).toHaveLength(2);
+    expect(state.cooperation!.failedTaskInputs![1].repair).toBeUndefined();
+    expect(emit.mock.calls.filter(([event]) => event === 'task_repair_requested')).toHaveLength(1);
+    expect(checker).toHaveBeenCalledTimes(2);
+  });
+
+  it('restores the first saved failure repair after transport-only turns without granting another completed retry', async () => {
+    await recoverUntouched();
+    // The host can stop after persisting a check failure but before delivering its pending repair.
+    await check();
+    const restored = JSON.parse(JSON.stringify(state)) as SolverRunState;
+    delete restored.cooperation!.failedTaskInputs![0].repair;
+    const resumed = create(restored);
+    await resumed.restore();
+    expect(restored.cooperation!.failedTaskInputs![0].repair?.pending).toBe(true);
+    const repair = await resumeTask(resumed);
+    await resumed.deliver(researcher, repair, seed);
+    expect(restored.cooperation!.tasks[0].status).toBe('blocked');
+    expect(restored.cooperation!.failedTaskInputs![0].repair).toMatchObject({ pending: false });
+    expect(checker).toHaveBeenCalledOnce();
+    await resumed.restore();
+    expect(restored.cooperation!.tasks[0].status).toBe('blocked');
+    expect(restored.cooperation!.failedTaskInputs![0].repair?.pending).toBe(false);
+  });
+
   it('retains the repair grant through next and release, and consumes it only at started', async () => {
     checker.mockRejectedValue(new Error(missing));
     await cooperative.deliver(researcher, action, seed);
@@ -165,6 +259,20 @@ describe('persistent typed delivery failure guards', () => {
       declarationHash: hashMathFormalSourceDeclaration(source, 'goal')! }] };
     checker.mockRejectedValue(new Error(missing));
   };
+
+  it('keeps a current mathematical gap blocked after transport-only recoveries', async () => {
+    missingCandidate();
+    const work = await recoverUntouched();
+    await publishGap();
+    await cooperative.deliver(researcher, work, seed);
+    expect(candidate.status).toBe('blocked');
+    expect(state.cooperation!.failedTaskInputs![0].repair).toBeUndefined();
+    expect(emit.mock.calls.some(([event]) => event === 'task_repair_requested')).toBe(false);
+    const restored = JSON.parse(JSON.stringify(state)) as SolverRunState, resumed = create(restored);
+    await resumed.restore();
+    expect(restored.cooperation!.tasks[0].status).toBe('blocked');
+    expect(restored.cooperation!.failedTaskInputs![0].repair).toBeUndefined();
+  });
 
   it('blocks an unchanged absent theorem with a current mathematical gap instead of granting local repair', async () => {
     missingCandidate(); await publishGap();
@@ -430,6 +538,83 @@ describe('persistent typed delivery failure guards', () => {
     candidate.assignment!.taskDigest = taskVersion(candidate.task);
     return dependency;
   };
+
+  it.each(['environment', 'environment-variable', 'build', 'evaluator'] as const)(
+    'keeps an absent mathematical declaration blocked after only %s changes', async change => {
+      missingCandidate(); await publishGap(); await cooperative.deliver(researcher, action, seed);
+      (cooperative as any).refreshFailedTaskInputs(); emit.mockClear();
+      if (change === 'environment') state.environmentDigest = 'new-environment';
+      else if (change === 'environment-variable') (cooperative as any).input.access.get(lead.id).environment.LEAN_PATH = '/new/path';
+      else if (change === 'build') state.buildDigest = 'new-build';
+      else state.evaluatorDigest = 'new-evaluator';
+      (cooperative as any).refreshFailedTaskInputs();
+      expect(candidate.status).toBe('blocked');
+      await expect(check()).rejects.toThrow('math_task_repeated_failed_input');
+      expect(checker).toHaveBeenCalledTimes(1); expect(state.cooperation!.failedTaskInputs).toHaveLength(1);
+      expect(emit.mock.calls.some(([event]) => event === 'task_failed_input_reopened')).toBe(false);
+    });
+
+  it('keeps an absent declaration blocked across environment changes and loss of dependency acceptance on restart', async () => {
+    missingCandidate(); checkedDependency(); action = { kind: 'task', task: candidate.task, assignment: candidate.assignment! };
+    await publishGap(); await cooperative.deliver(researcher, action, seed);
+    (cooperative as any).refreshFailedTaskInputs();
+    const restored = JSON.parse(JSON.stringify(state)) as SolverRunState;
+    restored.environmentDigest = 'new-environment'; const resumed = create(restored);
+    (resumed as any).refreshFailedTaskInputs();
+    expect(restored.cooperation!.tasks[0].status).toBe('blocked');
+    await expect(check(seed, undefined, resumed)).rejects.toThrow('math_task_repeated_failed_input');
+    expect(checker).toHaveBeenCalledTimes(1); expect(restored.cooperation!.failedTaskInputs).toHaveLength(1);
+  });
+
+  it('reopens an absent declaration for a changed checked dependency even across environment changes', async () => {
+    missingCandidate(); const dependency = checkedDependency();
+    action = { kind: 'task', task: candidate.task, assignment: candidate.assignment! };
+    await publishGap(); await cooperative.deliver(researcher, action, seed);
+    (cooperative as any).refreshFailedTaskInputs();
+    state.environmentDigest = 'new-environment';
+    dependency.integratedCheck!.changes[0].after = 'lemma dependency : True := by exact True.intro\n';
+    markTaskAcceptance(dependency.integratedCheck!);
+    (cooperative as any).refreshFailedTaskInputs();
+    expect(candidate.status).toBe('pending');
+    await expect(check()).rejects.toThrow('math_task_missing_declaration');
+    expect(checker).toHaveBeenCalledTimes(2); expect(state.cooperation!.failedTaskInputs).toHaveLength(2);
+  });
+
+  it.each(['support', 'target'] as const)('reopens an absent declaration after changed %s source', async change => {
+    missingCandidate(); await publishGap(); await cooperative.deliver(researcher, action, seed);
+    (cooperative as any).refreshFailedTaskInputs(); state.environmentDigest = 'new-environment';
+    fs.appendFileSync(sourceFile(), `lemma ${change === 'target' ? 'candidate' : 'supporting'} : True := by trivial\n`);
+    const version = commit();
+    (cooperative as any).refreshFailedTaskInputs(); expect(candidate.status).toBe('pending');
+    await expect(check(version)).rejects.toThrow('math_task_missing_declaration');
+    expect(checker).toHaveBeenCalledTimes(2); expect(state.cooperation!.failedTaskInputs).toHaveLength(2);
+  });
+
+  it('does not suppress an environment repair for a missing-declaration rejection with a present source target', async () => {
+    checker.mockRejectedValue(new Error(missing));
+    await expect(check()).rejects.toThrow('math_task_missing_declaration');
+    state.environmentDigest = 'new-environment';
+    await expect(check()).rejects.toThrow('math_task_missing_declaration');
+    expect(checker).toHaveBeenCalledTimes(2);
+  });
+
+  it('allows a different checked route to reopen an absent declaration after an environment change', async () => {
+    missingCandidate(); candidate.task = task('candidate', 'goal'); candidate.assignment!.taskDigest = taskVersion(candidate.task);
+    action = { kind: 'task', task: candidate.task, assignment: candidate.assignment! };
+    const branches = ['left', 'right'].map(id =>
+      accepted({ task: task(id), status: 'integrated', attempts: 1 }, `lemma ${id} : True := by trivial\n`, id));
+    state.cooperation!.tasks.push(...branches);
+    state.cooperation!.proofRoutes = branches.map(record => ({ id: `via_${record.task.id}`, targetTaskId: candidate.task.id,
+      prerequisiteTaskIds: [], closingTaskId: record.task.id }));
+    (cooperative as any).syncProofRoutes(); candidate.assignment!.routeId = 'via_left';
+    await exhaustRepair(); state.environmentDigest = 'new-environment';
+    (cooperative as any).refreshFailedTaskInputs(); expect(candidate.status).toBe('blocked');
+    candidate.assignment!.routeId = 'via_right';
+    (cooperative as any).refreshFailedTaskInputs(); expect(candidate.status).toBe('pending');
+    await expect(check()).rejects.toThrow('math_task_missing_declaration');
+    expect(checker).toHaveBeenCalledTimes(2);
+  });
+
   it('ignores dependency receipt replay and whole-file metadata but allows new checked declaration evidence', async () => {
     const dependency = checkedDependency(); await check();
     dependency.integratedCheck!.sourceDigest = 'unrelated-whole-file-change';
