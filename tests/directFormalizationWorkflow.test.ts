@@ -101,6 +101,7 @@ describe('direct formalization workflow', () => {
     expect(f.seen[0].instructions).toContain('Structure and inductive declarations, custom notation and metaprogramming are unsupported');
     expect(f.seen[0].instructions).toContain('necessity and sufficiency belong to one iff target');
     expect(f.seen[0].instructions).toContain('they do not require additional formalization targets');
+    expect(f.seen[0].instructions).toContain('/usr/bin/python3 /opt/formalization/library-api.py');
     const evidence = readFormalizationArtifact(path.join(f.directory, 'artifact'));
     expect(evidence).toMatchObject({ authority: 'compiler', semanticReview: 'not-performed', proofVerified: false });
     expect(evidence.sessions.map(session => session.role)).toEqual(['generate']);

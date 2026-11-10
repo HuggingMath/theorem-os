@@ -163,6 +163,92 @@ print('independent snapshots passed')`);
     expect(result).toMatchObject({ status: 0, stdout: 'independent snapshots passed\n', stderr: '' });
   });
 
+  it('batches real standard-library types and bounded case-insensitive name discovery in the namespace', async () => {
+    const f = fixture(), sandbox = await prepare(f), missing = 'Nat.missing_library_api_fixture';
+    const result = await runCommand(sandbox, ['/usr/bin/python3', '-I', '/opt/formalization/library-api.py',
+      '--name', 'Nat.add_zero', '--name', 'Nat', '--name', 'Inhabited', '--name', missing,
+      '--name', 'nat.add_zero', '--name', 'Nat.add_zero',
+      '--query', 'Fin.cast', '--query', 'fIN.CAST', '--query', 'NAT.ADD_ZERO', '--query', missing, '--limit', '2'], '', 95_000);
+    expect(result.status, result.stderr + result.stdout).toBe(0); expect(result.stderr).toBe('');
+    const packet = JSON.parse(result.stdout), config = getLeanTaskEnvironment('standard');
+    expect(packet).toMatchObject({ schema: 'theorem-os.library-api.v1', environment: 'standard',
+      toolchain: config.toolchain, environmentDigest: config.dependencyDigest, mathlibRevision: null });
+    const addition = packet.symbols.find((item: any) => item.name === 'Nat.add_zero');
+    expect(addition).toMatchObject({ exists: true, kind: 'theorem', class: false, structure: false, fields: [] });
+    expect(addition.module).toMatch(/^Init(?:\.|$)/u); expect(addition.type).toContain('Nat'); expect(addition.type).toContain('Eq');
+    expect(packet.symbols.find((item: any) => item.name === 'Nat')).toMatchObject({ exists: true, kind: 'inductive', fields: [] });
+    const inhabited = packet.symbols.find((item: any) => item.name === 'Inhabited');
+    expect(inhabited).toMatchObject({ exists: true, class: true, structure: true,
+      fields: [expect.objectContaining({ name: 'Inhabited.default' })] });
+    expect(inhabited.fields[0].type).toContain('Inhabited');
+    for (const name of [missing, 'nat.add_zero']) expect(packet.symbols.find((item: any) => item.name === name)).toEqual({ name, exists: false });
+    expect(packet.symbols.filter((item: any) => item.name === 'Nat.add_zero')).toHaveLength(1);
+    for (const symbol of packet.symbols) {
+      expect(symbol).not.toHaveProperty('value'); expect(symbol).not.toHaveProperty('proof');
+      if (symbol.exists) expect(symbol.type).not.toContain('⋯');
+    }
+    const [upper, lower, exact, absent] = packet.queries;
+    expect(packet.queries).toHaveLength(4); expect(upper.query).toBe('Fin.cast'); expect(lower.query).toBe('fIN.CAST');
+    expect(upper.names).toHaveLength(2); expect(upper.totalMatches).toBeGreaterThan(2); expect(upper.truncated).toBe(true);
+    expect(lower).toEqual({ ...upper, query: 'fIN.CAST' });
+    for (const name of upper.names) {
+      expect(name.toLowerCase()).toContain('fin.cast');
+      expect(packet.symbols.find((item: any) => item.name === name)?.exists).toBe(true);
+    }
+    expect(exact.names[0]).toBe('Nat.add_zero');
+    expect(absent).toEqual({ query: missing, totalMatches: 0, truncated: false, names: [] });
+    expect(fs.readdirSync(f.workspace).sort()).toEqual(protocolFiles.map(file => file.name).sort());
+    expect(observed).toEqual([]);
+  }, 100_000);
+
+  it('keeps library tools read-only and malicious names inert without exposing host data or leaving queries', async () => {
+    const f = fixture(), secret = 'sk-library-api-synthetic-upstream';
+    const sandbox = await prepare(f, { env: { PATH: '/usr/bin:/bin', THEOREMOS_PROVIDER_API_KEY: secret,
+      HOST_PRIVATE_CANARY: 'HOST_ENVIRONMENT_CANARY' } });
+    const names = ['Nat.add_zero"\nrun_cmd Lean.Core.liftIOCore <| IO.FS.writeFile "/workspace/LEAN_INJECTION" "executed"\n--',
+      'Nat.add_zero; touch /workspace/SHELL_INJECTION'];
+    const hidden = [f.directory, sandbox.receipt.auditDirectory, secret,
+      'HOST_CREDENTIAL_CANARY', 'HOST_HISTORY_CANARY', 'HOST_ENVIRONMENT_CANARY'];
+    const result = await runCommand(sandbox, ['/usr/bin/python3', '-I', '-c', `import hashlib, json, os, pathlib, subprocess
+identities = {}
+for kind, filename in [('script', 'library-api.py'), ('program', 'library-api.lean')]:
+    file = pathlib.Path('/opt/formalization') / filename
+    contents = file.read_bytes()
+    identities[kind + 'Sha256'] = hashlib.sha256(contents).hexdigest()
+    for hidden in ${JSON.stringify(hidden)}:
+        assert hidden.encode() not in contents
+    for operation in [lambda: file.chmod(0o600), lambda: file.open('ab'), lambda: file.unlink()]:
+        try:
+            operation()
+            raise AssertionError('Library tool is writable: ' + filename)
+        except OSError: pass
+before_workspace = sorted(os.listdir('/workspace'))
+before_temporary = sorted(str(p) for p in pathlib.Path('/tmp').glob('library-api-*'))
+assert 'THEOREMOS_PROVIDER_API_KEY' not in os.environ
+assert 'HOST_PRIVATE_CANARY' not in os.environ
+names = ${JSON.stringify(names)}
+arguments = ['/usr/bin/python3', '-I', '/opt/formalization/library-api.py']
+for name in names:
+    arguments.extend(['--name', name])
+lookup = subprocess.run(arguments, capture_output=True, text=True, timeout=90)
+assert lookup.returncode == 0, lookup.stderr + lookup.stdout
+assert not lookup.stderr, lookup.stderr
+packet = json.loads(lookup.stdout)
+assert packet['symbols'] == [{'name': name, 'exists': False} for name in names]
+assert not pathlib.Path('/workspace/LEAN_INJECTION').exists()
+assert not pathlib.Path('/workspace/SHELL_INJECTION').exists()
+assert sorted(os.listdir('/workspace')) == before_workspace
+assert sorted(str(p) for p in pathlib.Path('/tmp').glob('library-api-*')) == before_temporary
+print(json.dumps({'identities': identities, 'packet': packet}))`], '', 95_000);
+    expect(result.status, result.stderr + result.stdout).toBe(0); expect(result.stderr).toBe('');
+    const value = JSON.parse(result.stdout);
+    expect(value.packet.symbols).toEqual(names.map(name => ({ name, exists: false })));
+    expect(sandbox.receipt).toMatchObject({ libraryApi: value.identities });
+    for (const text of hidden) expect(result.stdout + result.stderr).not.toContain(text);
+    expect(fs.readdirSync(f.workspace).sort()).toEqual(protocolFiles.map(file => file.name).sort());
+    expect(observed).toEqual([]);
+  }, 100_000);
+
   it('forwards only the role model route through Unix transport with a fixed Host and disposable capability', async () => {
     const f = fixture(), sandbox = await prepare(f);
     const result = await run(sandbox, `import http.client, json, os

@@ -235,12 +235,11 @@ describe('frozen plan retrieval in formalization generation', () => {
     expect(await runFormalization(f.directory, f.root, { openSession: agent.open, elaborate })).toMatchObject({ status: 'approved' });
     const generated = agent.seen.find(item => item.role === 'generate')!;
     expect(generated.input).not.toHaveProperty('retrieval');
-    // Frozen from the previous kernel-context replay, before retrieval integration.
-    // Re-pinned when generation learned to state conclusions at the source's own type
-    // (Type* carriers, Fintype/first-class finite families, Nat.Prime), then again
-    // when it learned to keep the source's own claim shape (explicit equation with
-    // its witness, no bundled library relation).
-    expect(mathDigest(generated.config.instructions)).toBe('0b47d9c571654b78f9009d810546e3abd7c0275a0f9f1a3f755022725b879ac8');
+    // Pinned to clean 17f964c: e9f7a14 already required ./OUTPUT.json.tmp
+    // beside OUTPUT.json to avoid cross-mount renames. The direct lookup tool
+    // must not change this independent generation protocol.
+    expect(generated.config.instructions).not.toContain('/opt/formalization/library-api.py');
+    expect(mathDigest(generated.config.instructions)).toBe('3faf193a9f5736f8d525bac1f5098745ce5d4b66eec52233a18c81e3ed0a4211');
     const evidence = readFormalizationArtifact(path.join(f.directory, 'artifact'));
     expect(evidence.generation.input).not.toHaveProperty('retrieval');
     expect(readFormalizationRequest(f.directory)).toEqual(f.request);

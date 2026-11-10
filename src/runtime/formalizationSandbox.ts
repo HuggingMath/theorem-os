@@ -6,6 +6,8 @@ import { stringify as stringifyToml } from 'smol-toml';
 import { assertMathCanonicalPath } from '../math/paths';
 import { canonicalMathJson, mathDigest, readMathFile } from '../math/mathRuntimeIo';
 import { getLeanTaskEnvironment, type LeanTaskEnvironment } from '../math/leanTaskEnvironment';
+import { leanLibraryApiProgram } from '../math/leanLibrarySymbolsProgram';
+import libraryApiScript from './formalizationLibraryApi.py?raw';
 import { acquireMathProofEnvironmentLease, MATH_PROOF_ENVIRONMENT_ENV, prepareMathProofEnvironment,
   resolveMathProofEnvironment } from '../math/mathProofEnvironment';
 import { DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT } from '../math/mathProofEnvironmentCache';
@@ -93,6 +95,7 @@ export type FormalizationSandboxReceipt = Readonly<{
   toolchain: string; environmentDigest: string; executableSha256: string; profileDigest: string; inputSha256: string;
   roleInstructionsSha256: string; outputSchemaSha256: string;
   packages: Readonly<{ kind: 'none' | 'sealed'; root?: '/opt/lean-packages'; identity?: string; contents?: 'sources' }>;
+  libraryApi?: Readonly<{ scriptSha256: string; programSha256: string }>;
   auditDirectory: string; canary: 'passed';
 }>;
 export type FormalizationSandbox = Readonly<{
@@ -233,6 +236,9 @@ export async function prepareFormalizationSandbox(input: Input): Promise<Formali
   try {
     const profile = path.join(temporary, 'profile'), probe = path.join(temporary, 'probe');
     fs.mkdirSync(profile, { mode: 0o700 }); fs.mkdirSync(probe, { mode: 0o700 });
+    const apiProgram = leanLibraryApiProgram(input.environment);
+    fs.writeFileSync(path.join(temporary, 'library-api.py'), libraryApiScript, { mode: 0o400, flag: 'wx' });
+    fs.writeFileSync(path.join(temporary, 'library-api.lean'), apiProgram, { mode: 0o400, flag: 'wx' });
     for (const [name, text] of Object.entries(config.files)) {
       fs.mkdirSync(path.dirname(path.join(probe, name)), { recursive: true }); fs.writeFileSync(path.join(probe, name), text);
     }
@@ -290,6 +296,8 @@ export async function prepareFormalizationSandbox(input: Input): Promise<Formali
       '--bind', profile, '/profile', '--ro-bind', path.join(profile, 'config.toml'), '/profile/config.toml',
       '--ro-bind', path.join(profile, 'models.json'), '/profile/models.json',
       '--ro-bind', relay.socketPath!, SOCKET, '--ro-bind', path.join(temporary, 'launch.py'), HELPER,
+      '--ro-bind', path.join(temporary, 'library-api.py'), '/opt/formalization/library-api.py',
+      '--ro-bind', path.join(temporary, 'library-api.lean'), '/opt/formalization/library-api.lean',
       '--ro-bind', toolchain, '/opt/lean'];
     if (executable.vendor) args.push('--ro-bind', executable.vendor, '/opt/codex');
     // Also support a directly supplied native executable without exposing its host parent.
@@ -326,6 +334,7 @@ assert 'Lean (version ${expectedVersion},' in result.stdout
       profileDigest: mathDigest(canonicalMathJson({ config: profileConfig, catalog })),
       inputSha256: mathDigest(protocol[0].bytes), roleInstructionsSha256: mathDigest(protocol[1].bytes),
       outputSchemaSha256: mathDigest(protocol[2].bytes),
+      libraryApi: { scriptSha256: mathDigest(libraryApiScript), programSha256: mathDigest(apiProgram) },
       packages, auditDirectory: profile, canary: 'passed' };
     fs.writeFileSync(path.join(temporary, 'receipt.json'), canonicalMathJson(receipt), { mode: 0o400, flag: 'wx' });
     audit = true;
