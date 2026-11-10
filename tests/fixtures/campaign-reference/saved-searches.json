@@ -1,0 +1,234 @@
+[
+  {
+    "request": {
+      "query": "PSD rank perfect matching polytope superpolynomial lower bound odd cut slack matrix",
+      "limit": 6,
+      "target": null,
+      "artifact": null,
+      "proof": null,
+      "provider": "auto"
+    },
+    "results": [
+      {
+        "title": "在线打开 PSD 文件 | products.aspose.com",
+        "url": "https://products.aspose.com/psd/zh/open-psd-online/",
+        "snippet": "免费的在线应用程序，可以在线打开PSD文件 此服务有助于在没有 Photoshop 的情况下在线打开 PSD 文件。 只需上传你的 PSD 文件，几秒钟后，你就会看到这个文件的像素完美视图。 你可以从任何设备打开 PSD。",
+        "engine": "bing-rss",
+        "source_type": "web"
+      },
+      {
+        "title": "在线打开 PSD 免费编辑器 — 图图修图 (TutuEdit)",
+        "url": "https://tutuedit.com/tools/psd-editor",
+        "snippet": "免费在线 PSD 编辑器,浏览器直接打开、编辑、导出 PSD 文件,保留图层与图层组。 无需安装 Photoshop,支持文字、蒙版、混合模式,PSD 在线编辑即开即用。",
+        "engine": "bing-rss",
+        "source_type": "web"
+      },
+      {
+        "title": "免费 PSD 模板 - 下载次数最多的文件 | Magnific（前身为 ...",
+        "url": "https://www.magnific.com/cn/psd",
+        "snippet": "在 Magnific 上查找并下载最热门的免费 PSD 文件 可用于商业用途 高质量图片 专为创意项目打造 无需署名",
+        "engine": "bing-rss",
+        "source_type": "web"
+      },
+      {
+        "title": "什么是PSD格式？用什么软件打开psd - 知乎",
+        "url": "https://zhuanlan.zhihu.com/p/489260289",
+        "snippet": "使用 谷歌云 硬盘 预览PSD格式而不需要安装额外的应用程序的一个简单而有效的方法是将其保存到你的Google Drive中。 一旦它被上传，你可以使用Google Drive的内置预览功能来查看PSD格式，尽管你不能编辑它。 只要在Google Drive网络应用中双击PSD格式就会出现图像预览。",
+        "engine": "bing-rss",
+        "source_type": "web"
+      },
+      {
+        "title": "psd图片-psd素材-psd设计模板高清免费下载-千图网",
+        "url": "https://www.58pic.com/tupian/psd.html",
+        "snippet": "千图为您找到2575133张psd素材，提供psd图片素材、psd高清背景图片、 psd设计模板、 psd矢量图素材、psdPPT模板、psd音视频模板等源文件免费下载服务，包含PSD、AI、CDR、JPG、PNG等多种格式，更多psd相关素材、海报、图片、设计元素、插画、PSD素材、字体、音视频 ...",
+        "engine": "bing-rss",
+        "source_type": "web"
+      },
+      {
+        "title": "PSD 查看器 | 在线文件查看器 | Elysia Tools",
+        "url": "https://elysiatools.com/zh/viewers/psd",
+        "snippet": "概览 这个 PSD 查看器在你的浏览器中直接渲染 Photoshop 文档。PSD（.psd，Photoshop Document）是 Adobe Photoshop 的原生格式，存储分图层图像、效果、蒙版、文字和调整图层。上传你自己的 .psd 文件，立即预览图层和内容，无需上传到服务器。",
+        "engine": "bing-rss",
+        "source_type": "web"
+      }
+    ],
+    "provider_results": [
+      {
+        "provider": "anysearch",
+        "request": {
+          "query": "PSD rank perfect matching polytope superpolynomial lower bound odd cut slack matrix",
+          "max_results": 6
+        },
+        "status": "error",
+        "error": "AnySearch returned no parseable search cards",
+        "completed_at": "2026-11-10T17:22:06.023335+00:00"
+      },
+      {
+        "provider": "duckduckgo",
+        "request": {
+          "query": "PSD rank perfect matching polytope superpolynomial lower bound odd cut slack matrix",
+          "limit": 8
+        },
+        "status": "error",
+        "error": "ReadTimeout: HTTPSConnectionPool(host='html.duckduckgo.com', port=443): Read timed out. (read timeout=15)",
+        "completed_at": "2026-11-10T17:22:21.067586+00:00"
+      },
+      {
+        "provider": "bing",
+        "request": {
+          "query": "PSD rank perfect matching polytope superpolynomial lower bound odd cut slack matrix",
+          "limit": 8
+        },
+        "status": "ok",
+        "completed_at": "2026-11-10T17:22:21.679715+00:00"
+      },
+      {
+        "provider": "arxiv",
+        "request": {
+          "query": "PSD rank perfect matching polytope superpolynomial lower bound odd cut slack matrix",
+          "limit": 2
+        },
+        "status": "empty",
+        "completed_at": "2026-11-10T17:22:22.329334+00:00"
+      },
+      {
+        "provider": "openalex",
+        "request": {
+          "query": "PSD rank perfect matching polytope superpolynomial lower bound odd cut slack matrix",
+          "limit": 2
+        },
+        "status": "empty",
+        "completed_at": "2026-11-10T17:22:23.123483+00:00"
+      }
+    ],
+    "status": "partial",
+    "recall_checks": {
+      "initial_gaps": [
+        "too_few_distinct_documents",
+        "need_terms_missing_from_results"
+      ],
+      "remaining_gaps": [
+        "need_terms_missing_from_results"
+      ],
+      "note": "Query overlap and duplicate checks guide discovery only; read sources to assess evidence."
+    }
+  },
+  {
+    "request": {
+      "query": "semidefinite extension complexity perfect matching polytope lower bound spectrahedron",
+      "limit": 8,
+      "target": null,
+      "artifact": null,
+      "proof": null,
+      "provider": "direct"
+    },
+    "results": [
+      {
+        "title": "On the existence of 0/1 polytopes with high semidefinite extension complexity",
+        "url": "https://doi.org/10.48550/arxiv.1305.3268",
+        "snippet": "Jop Briët, Daniel Dadush, Sebastian Pokutta | cited by 21",
+        "engine": "openalex",
+        "openalex_id": "https://openalex.org/W2949885909",
+        "source_type": "primary_or_academic"
+      },
+      {
+        "title": "On the existence of 0/1 polytopes with high semidefinite extension complexity",
+        "url": "https://doi.org/10.1007/s10107-014-0785-x",
+        "snippet": "Jop Briët, Daniel Dadush, Sebastian Pokutta | cited by 19",
+        "engine": "openalex",
+        "openalex_id": "https://openalex.org/W1858857015",
+        "source_type": "primary_or_academic"
+      },
+      {
+        "title": "semidefinite - 搜索 词典",
+        "url": "https://global.bing.com/dict/search?q=semidefinite&FORM=BDVSP6&cc=cn",
+        "snippet": "Semidefinite programming (SDP) ha a wide range of applications, such as system theory, control theory, mode recognition, etc.",
+        "engine": "bing-rss",
+        "source_type": "web"
+      },
+      {
+        "title": "Semidefinite是什么意思_Semidefinite的翻译_音标_读音_用法 ...",
+        "url": "https://www.iciba.com/word?w=Semidefinite",
+        "snippet": "爱词霸权威在线词典,为您提供Semidefinite的中文意思,Semidefinite的用法讲解,Semidefinite的读音,Semidefinite的同义词,Semidefinite的反义词,Semidefinite的例句等英语服务。",
+        "engine": "bing-rss",
+        "source_type": "web"
+      },
+      {
+        "title": "经典的SDR算法： 用半正定松弛法 ( Semidefinite Relaxation ...",
+        "url": "https://blog.csdn.net/weixin_39274659/article/details/117627627",
+        "snippet": "前言 本文是博主对于 Zhi-quan Luo 老师的经典著作 《Semidefinite Relaxation of Quadratic Optimization Problems》 的读书笔记，希望可作为对全文以中文形式的核心梳理。 单刀直入 首先， Semidefinite Relaxation (SDR) 适用的问题可以写为如下形式：",
+        "engine": "bing-rss",
+        "source_type": "web"
+      },
+      {
+        "title": "SDP (半正定规划) 有什么形象的实例？怎么理解？ - 知乎",
+        "url": "https://www.zhihu.com/question/51263551",
+        "snippet": "不像LP，一个实数域上finite dimensional的polyhedron我们是知道一定由有限个extreme points和extreme rays生成的（这也是著名的Minkowski Resolution Theorem）， 但对semidefinite cone我们就没有这样一般化的结构性定理。",
+        "engine": "bing-rss",
+        "source_type": "web"
+      },
+      {
+        "title": "浅谈「正定矩阵」和「半正定矩阵」 - 知乎",
+        "url": "https://zhuanlan.zhihu.com/p/44860862",
+        "snippet": "在众多机器学习和统计学习模型中，线性代数的身影无处不在，当然，我们也会时常碰到 线性代数 中的一些基本概念，例如，正定矩阵和半正定矩阵。实际上，正定矩阵和半正定矩阵贯穿在很多知识中，举一个简单的例子： 多元正态分布 的协方差矩阵要求是半正定的。今天，我们将简单讨论正定 ...",
+        "engine": "bing-rss",
+        "source_type": "web"
+      },
+      {
+        "title": "正定 (positive definite)与半正定 (semi-positive definite) - 知乎",
+        "url": "https://zhuanlan.zhihu.com/p/62589178",
+        "snippet": "在众多的机器学习模型中，线性代数的身影无处不在，当然，我们也会时常碰到线性代数中的正定矩阵和半正定矩阵。例如， 多元正态分布 的协方差矩阵要求是半正定的。 --------------×--------------×-------------- 1. 基本的定义 正定和半正定这两个词的英文分别是positive definite和 positive semi-definite，其中 ...",
+        "engine": "bing-rss",
+        "source_type": "web"
+      }
+    ],
+    "provider_results": [
+      {
+        "provider": "duckduckgo",
+        "request": {
+          "query": "semidefinite extension complexity perfect matching polytope lower bound spectrahedron",
+          "limit": 8
+        },
+        "status": "error",
+        "error": "ReadTimeout: HTTPSConnectionPool(host='html.duckduckgo.com', port=443): Read timed out. (read timeout=15)",
+        "completed_at": "2026-11-10T17:25:44.455713+00:00"
+      },
+      {
+        "provider": "bing",
+        "request": {
+          "query": "semidefinite extension complexity perfect matching polytope lower bound spectrahedron",
+          "limit": 8
+        },
+        "status": "ok",
+        "completed_at": "2026-11-10T17:25:45.281528+00:00"
+      },
+      {
+        "provider": "arxiv",
+        "request": {
+          "query": "semidefinite extension complexity perfect matching polytope lower bound spectrahedron",
+          "limit": 2
+        },
+        "status": "empty",
+        "completed_at": "2026-11-10T17:25:46.099867+00:00"
+      },
+      {
+        "provider": "openalex",
+        "request": {
+          "query": "semidefinite extension complexity perfect matching polytope lower bound spectrahedron",
+          "limit": 2
+        },
+        "status": "ok",
+        "completed_at": "2026-11-10T17:25:47.130068+00:00"
+      }
+    ],
+    "status": "partial",
+    "recall_checks": {
+      "initial_gaps": [],
+      "remaining_gaps": [
+        "similar_titles_require_read",
+        "need_terms_missing_from_results"
+      ],
+      "note": "Query overlap and duplicate checks guide discovery only; read sources to assess evidence."
+    }
+  }
+]

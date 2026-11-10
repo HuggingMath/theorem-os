@@ -1,0 +1,373 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+  <id>https://arxiv.org/api/nyq5T4m/QPVvvgmAVEy6fIxHzAw</id>
+  <title>arXiv Query: search_query=all:"PSD rank"&amp;id_list=&amp;start=0&amp;max_results=40</title>
+  <updated>2026-11-10T17:27:07Z</updated>
+  <link href="https://arxiv.org/api/query?search_query=all:%22PSD+rank%22&amp;start=0&amp;max_results=40&amp;id_list=" type="application/atom+xml"/>
+  <opensearch:itemsPerPage>40</opensearch:itemsPerPage>
+  <opensearch:totalResults>16</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+  <entry>
+    <id>http://arxiv.org/abs/2410.18891v2</id>
+    <title>Uniqueness of size-2 positive semidefinite matrix factorizations</title>
+    <updated>2026-08-31T02:49:40Z</updated>
+    <link href="https://arxiv.org/abs/2410.18891v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2410.18891v2" rel="related" type="application/pdf" title="pdf"/>
+    <summary>We characterize when a size-2 positive semidefinite (psd) factorization of a positive matrix of rank 3 and psd rank 2 is unique. The characterization is obtained using tools from rigidity theory. In the first step, we define s-infinitesimally rigid psd factorizations and characterize 1- and 2-infinitesimally rigid size-2 psd factorizations. In the second step, we connect 1- and 2-infinitesimal rigidity of size-2 psd factorizations to uniqueness via global rigidity. We also prove necessary conditions on a positive matrix of rank 3 and psd rank 2 to be on the topological boundary of all nonnegative matrices with the same rank conditions.</summary>
+    <category term="math.MG" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="math.OC" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2024-10-24T16:28:56Z</published>
+    <arxiv:comment>Final accepted version to appear in Fields Communications Volume Geometric Constraints and Rigidity: Problems, Progress, Connections. Considerable revisions made to the first version</arxiv:comment>
+    <arxiv:primary_category term="math.MG"/>
+    <author>
+      <name>Kristen Dawson</name>
+    </author>
+    <author>
+      <name>Serkan Hoşten</name>
+    </author>
+    <author>
+      <name>Kaie Kubjas</name>
+    </author>
+    <author>
+      <name>Lilja Metsälampi</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2011.08132v2</id>
+    <title>Separability of Hermitian Tensors and PSD Decompositions</title>
+    <updated>2021-08-09T19:48:21Z</updated>
+    <link href="https://arxiv.org/abs/2011.08132v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2011.08132v2" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Hermitian tensors are natural generalizations of Hermitian matrices, while possessing rather different properties. A Hermitian tensor is separable if it has a Hermitian decomposition with only positive coefficients, i.e., it is a sum of rank-1 psd Hermitian tensors. This paper studies how to detect separability of Hermitian tensors. It is equivalent to the long-standing quantum separability problem in quantum physics, which asks to tell if a given quantum state is entangled or not. We formulate this as a truncated moment problem and then provide a semidefinite relaxation algorithm to solve it. Moreover, we study psd decompositions of separable Hermitian tensors. When the psd rank is low, we first flatten them into cubic order tensors and then apply tensor decomposition methods to compute psd decompositions. We prove that this method works well if the psd rank is low. In computation, this flattening approach can detect separability for much larger sized Hermitian tensors. This method is a good start on determining psd ranks of separable Hermitian tensors.</summary>
+    <category term="math.OC" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2020-11-16T17:54:52Z</published>
+    <arxiv:comment>26 pages</arxiv:comment>
+    <arxiv:primary_category term="math.OC"/>
+    <author>
+      <name>Mareike Dressler</name>
+    </author>
+    <author>
+      <name>Jiawang Nie</name>
+    </author>
+    <author>
+      <name>Zi Yang</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1704.06507v1</id>
+    <title>Exploring the bounds on the positive semidefinite rank</title>
+    <updated>2017-04-21T12:35:58Z</updated>
+    <link href="https://arxiv.org/abs/1704.06507v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1704.06507v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>The nonnegative and positive semidefinite (PSD-) ranks are closely connected to the nonnegative and positive semidefinite extension complexities of a polytope, which are the minimal dimensions of linear and SDP programs which represent this polytope. Though some exponential lower bounds on the nonnegative and PSD- ranks has recently been proved for the slack matrices of some particular polytopes, there are still no tight bounds for these quantities. We explore some existing bounds on the PSD-rank and prove that they cannot give exponential lower bounds on the extension complexity. Our approach consists in proving that the existing bounds are upper bounded by the polynomials of the regular rank of the matrix, which is equal to the dimension of the polytope (up to an additive constant). As one of the implications, we also retrieve an upper bound on the mutual information of an arbitrary matrix of a joint distribution, based on its regular rank.</summary>
+    <category term="cs.CC" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="math.CO" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="math.OC" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2017-04-21T12:35:58Z</published>
+    <arxiv:comment>11 pages</arxiv:comment>
+    <arxiv:primary_category term="cs.CC"/>
+    <author>
+      <name>Andrii Riazanov</name>
+    </author>
+    <author>
+      <name>Mikhail Vyalyiy</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1606.09065v1</id>
+    <title>The complexity of positive semidefinite matrix factorization</title>
+    <updated>2016-06-29T12:16:05Z</updated>
+    <link href="https://arxiv.org/abs/1606.09065v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1606.09065v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Let $A$ be a matrix with nonnegative real entries. The PSD rank of $A$ is the smallest integer $k$ for which there exist $k\times k$ real PSD matrices $B_1,\ldots,B_m$, $C_1,\ldots,C_n$ satisfying $A(i|j)=\operatorname{tr}(B_iC_j)$ for all $i,j$. This paper determines the computational complexity status of the PSD rank. Namely, we show that the problem of computing this function is polynomial-time equivalent to the existential theory of the reals.</summary>
+    <category term="math.CO" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.CC" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2016-06-29T12:16:05Z</published>
+    <arxiv:comment>11 pages</arxiv:comment>
+    <arxiv:primary_category term="math.CO"/>
+    <author>
+      <name>Yaroslav Shitov</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1602.07351v1</id>
+    <title>Computing approximate PSD factorizations</title>
+    <updated>2016-02-23T23:09:36Z</updated>
+    <link href="https://arxiv.org/abs/1602.07351v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1602.07351v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>We give an algorithm for computing approximate PSD factorizations of nonnegative matrices. The running time of the algorithm is polynomial in the dimensions of the input matrix, but exponential in the PSD rank and the approximation error. The main ingredient is an exact factorization algorithm when the rows and columns of the factors are constrained to lie in a general polyhedron. This strictly generalizes nonnegative matrix factorizations which can be captured by letting this polyhedron to be the nonnegative orthant.</summary>
+    <category term="cs.DS" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="math.OC" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2016-02-23T23:09:36Z</published>
+    <arxiv:comment>10 pages</arxiv:comment>
+    <arxiv:primary_category term="cs.DS"/>
+    <author>
+      <name>Amitabh Basu</name>
+    </author>
+    <author>
+      <name>Michael Dinitz</name>
+    </author>
+    <author>
+      <name>Xin Li</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1506.00187v3</id>
+    <title>Four Dimensional Polytopes of Minimum Positive Semidefinite Rank</title>
+    <updated>2016-07-25T19:47:51Z</updated>
+    <link href="https://arxiv.org/abs/1506.00187v3" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1506.00187v3" rel="related" type="application/pdf" title="pdf"/>
+    <summary>The positive semidefinite (psd) rank of a polytope is the size of the smallest psd cone that admits an affine slice that projects linearly onto the polytope. The psd rank of a d-polytope is at least d+1, and when equality holds we say that the polytope is psd-minimal. In this paper we develop new tools for the study of psd-minimality and use them to give a complete classification of psd-minimal 4-polytopes. The main tools introduced are trinomial obstructions, a new algebraic obstruction for psd-minimality, and the slack ideal of a polytope, which encodes the space of realizations of a polytope up to projective equivalence.
+  Our central result is that there are 31 combinatorial classes of psd-minimal 4-polytopes. We provide combinatorial information and an explicit psd-minimal realization in each class. For 11 of these classes, every polytope in them is psd-minimal, and these are precisely the combinatorial classes of the known projectively unique 4-polytopes. We give a complete characterization of psd-minimality in the remaining classes, encountering in the process counterexamples to some open conjectures.</summary>
+    <category term="math.CO" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="math.AG" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="math.OC" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2015-05-31T02:55:13Z</published>
+    <arxiv:primary_category term="math.CO"/>
+    <author>
+      <name>João Gouveia</name>
+    </author>
+    <author>
+      <name>Kanstanstin Pashkovich</name>
+    </author>
+    <author>
+      <name>Richard Z. Robinson</name>
+    </author>
+    <author>
+      <name>Rekha R. Thomas</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1411.7280v1</id>
+    <title>Query complexity in expectation</title>
+    <updated>2014-11-26T16:12:07Z</updated>
+    <link href="https://arxiv.org/abs/1411.7280v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1411.7280v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>We study the query complexity of computing a function f:{0,1}^n--&gt;R_+ in expectation. This requires the algorithm on input x to output a nonnegative random variable whose expectation equals f(x), using as few queries to the input x as possible. We exactly characterize both the randomized and the quantum query complexity by two polynomial degrees, the nonnegative literal degree and the sum-of-squares degree, respectively. We observe that the quantum complexity can be unboundedly smaller than the classical complexity for some functions, but can be at most polynomially smaller for functions with range {0,1}.
+  These query complexities relate to (and are motivated by) the extension complexity of polytopes. The linear extension complexity of a polytope is characterized by the randomized communication complexity of computing its slack matrix in expectation, and the semidefinite (psd) extension complexity is characterized by the analogous quantum model. Since query complexity can be used to upper bound communication complexity of related functions, we can derive some upper bounds on psd extension complexity by constructing efficient quantum query algorithms. As an example we give an exponentially-close entrywise approximation of the slack matrix of the perfect matching polytope with psd-rank only 2^{n^{1/2+epsilon}}. Finally, we show there is a precise sense in which randomized/quantum query complexity in expectation corresponds to the Sherali-Adams and Lasserre hierarchies, respectively.</summary>
+    <category term="quant-ph" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.CC" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2014-11-26T16:12:07Z</published>
+    <arxiv:comment>16 pages LaTeX</arxiv:comment>
+    <arxiv:primary_category term="quant-ph"/>
+    <author>
+      <name>Jedrzej Kaniewski</name>
+      <arxiv:affiliation>CQT, Singapore, and QuTech, Delft</arxiv:affiliation>
+    </author>
+    <author>
+      <name>Troy Lee</name>
+      <arxiv:affiliation>Nanyang Technological University and CQT, Singapore</arxiv:affiliation>
+    </author>
+    <author>
+      <name>Ronald de Wolf</name>
+      <arxiv:affiliation>CWI and University of Amsterdam</arxiv:affiliation>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1408.1262v3</id>
+    <title>Theta rank, levelness, and matroid minors</title>
+    <updated>2016-11-03T07:50:18Z</updated>
+    <link href="https://arxiv.org/abs/1408.1262v3" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1408.1262v3" rel="related" type="application/pdf" title="pdf"/>
+    <summary>The Theta rank of a finite point configuration $V$ is the maximal degree necessary for a sum-of-squares representation of a non-negative linear function on $V$. This is an important invariant for polynomial optimization that is in general hard to determine. We study the Theta rank and levelness, a related discrete-geometric invariant, for matroid base configurations. It is shown that the class of matroids with bounded Theta rank or levelness is closed under taking minors. This allows for a characterization of matroids with bounded Theta rank or levelness in terms of forbidden minors. We give the complete (finite) list of excluded minors for Theta-$1$ matroids which generalizes the well-known series-parallel graphs. Moreover, the class of Theta-$1$ matroids can be characterized in terms of the degree of generation of the vanishing ideal and in terms of the psd rank for the associated matroid base polytope. We further give a finite list of excluded minors for $k$-level graphs and matroids and we investigate the graphs of Theta rank $2$.</summary>
+    <category term="math.CO" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="math.OC" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2014-08-06T12:38:16Z</published>
+    <arxiv:comment>22 pages, 11 figures, minor changes, accepted for publication in JCTB</arxiv:comment>
+    <arxiv:primary_category term="math.CO"/>
+    <author>
+      <name>Francesco Grande</name>
+    </author>
+    <author>
+      <name>Raman Sanyal</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1407.4308v1</id>
+    <title>Some upper and lower bounds on PSD-rank</title>
+    <updated>2014-07-16T13:49:17Z</updated>
+    <link href="https://arxiv.org/abs/1407.4308v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1407.4308v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Positive semidefinite rank (PSD-rank) is a relatively new quantity with applications to combinatorial optimization and communication complexity. We first study several basic properties of PSD-rank, and then develop new techniques for showing lower bounds on the PSD-rank. All of these bounds are based on viewing a positive semidefinite factorization of a matrix $M$ as a quantum communication protocol. These lower bounds depend on the entries of the matrix and not only on its support (the zero/nonzero pattern), overcoming a limitation of some previous techniques. We compare these new lower bounds with known bounds, and give examples where the new ones are better. As an application we determine the PSD-rank of (approximations of) some common matrices.</summary>
+    <category term="cs.CC" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="math.CO" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="quant-ph" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2014-07-16T13:49:17Z</published>
+    <arxiv:comment>21 pages</arxiv:comment>
+    <arxiv:primary_category term="cs.CC"/>
+    <author>
+      <name>Troy Lee</name>
+    </author>
+    <author>
+      <name>Zhaohui Wei</name>
+    </author>
+    <author>
+      <name>Ronald de Wolf</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1407.4095v1</id>
+    <title>Positive semidefinite rank</title>
+    <updated>2014-07-15T18:56:01Z</updated>
+    <link href="https://arxiv.org/abs/1407.4095v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1407.4095v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Let M be a p-by-q matrix with nonnegative entries. The positive semidefinite rank (psd rank) of M is the smallest integer k for which there exist positive semidefinite matrices $A_i, B_j$ of size $k \times k$ such that $M_{ij} = \text{trace}(A_i B_j)$. The psd rank has many appealing geometric interpretations, including semidefinite representations of polyhedra and information-theoretic applications. In this paper we develop and survey the main mathematical properties of psd rank, including its geometry, relationships with other rank notions, and computational and algorithmic aspects.</summary>
+    <category term="math.OC" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.DM" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="math.CO" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2014-07-15T18:56:01Z</published>
+    <arxiv:comment>35 pages</arxiv:comment>
+    <arxiv:primary_category term="math.OC"/>
+    <arxiv:journal_ref>Mathematical Programming 153(1) 133-177, 2015</arxiv:journal_ref>
+    <author>
+      <name>Hamza Fawzi</name>
+    </author>
+    <author>
+      <name>João Gouveia</name>
+    </author>
+    <author>
+      <name>Pablo A. Parrilo</name>
+    </author>
+    <author>
+      <name>Richard Z. Robinson</name>
+    </author>
+    <author>
+      <name>Rekha R. Thomas</name>
+    </author>
+    <arxiv:doi>10.1007/s10107-015-0922-1</arxiv:doi>
+    <link rel="related" href="https://doi.org/10.1007/s10107-015-0922-1" title="doi"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1405.6015v3</id>
+    <title>Multipartite Quantum Correlation and Communication Complexities</title>
+    <updated>2014-07-18T01:08:43Z</updated>
+    <link href="https://arxiv.org/abs/1405.6015v3" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1405.6015v3" rel="related" type="application/pdf" title="pdf"/>
+    <summary>The concepts of quantum correlation complexity and quantum communication complexity were recently proposed to quantify the minimum amount of resources needed in generating bipartite classical or quantum states in the single-shot setting. The former is the minimum size of the initially shared state $σ$ on which local operations by the two parties (without communication) can generate the target state $ρ$, and the latter is the minimum amount of communication needed when initially sharing nothing. In this paper, we generalize these two concepts to multipartite cases, for both exact and approximate state generation. Our results are summarized as follows. (1) For multipartite pure states, the correlation complexity can be completely characterized by local ranks of sybsystems. (2) We extend the notion of PSD-rank of matrices to that of tensors, and use it to bound the quantum correlation complexity for generating multipartite classical distributions. (3) For generating multipartite mixed quantum states, communication complexity is not always equal to correlation complexity (as opposed to bipartite case). But they differ by at most a factor of 2. Generating a multipartite mixed quantum state has the same communication complexity as generating its optimal purification. But for correlation complexity of these two tasks can be different (though still related by less than a factor of 2). (4) To generate a bipartite classical distribution $P(x,y)$ approximately, the quantum communication complexity is completely characterized by the approximate PSD-rank of $P$. The quantum correlation complexity of approximately generating multipartite pure states is bounded by approximate local ranks.</summary>
+    <category term="quant-ph" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.CC" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2014-05-23T10:36:48Z</published>
+    <arxiv:comment>19 pages; some typos are corrected</arxiv:comment>
+    <arxiv:primary_category term="quant-ph"/>
+    <author>
+      <name>Rahul Jain</name>
+    </author>
+    <author>
+      <name>Zhaohui Wei</name>
+    </author>
+    <author>
+      <name>Penghui Yao</name>
+    </author>
+    <author>
+      <name>Shengyu Zhang</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1404.4864v1</id>
+    <title>Rational and real positive semidefinite rank can be different</title>
+    <updated>2014-04-18T19:33:19Z</updated>
+    <link href="https://arxiv.org/abs/1404.4864v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1404.4864v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>Given a nonnegative matrix M with rational entries, we consider two quantities: the usual positive semidefinite (psd) rank, where the matrix is factored through the cone of real symmetric psd matrices, and the rational-restricted psd rank, where the matrix factors are required to be rational symmetric psd matrices. It is clear that the rational-restricted psd rank is always an upper bound to the usual psd rank. We show that this inequality may be strict by exhibiting a matrix with psd rank four whose rational-restricted psd rank is strictly greater than four.</summary>
+    <category term="math.OC" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2014-04-18T19:33:19Z</published>
+    <arxiv:comment>3 pages</arxiv:comment>
+    <arxiv:primary_category term="math.OC"/>
+    <author>
+      <name>João Gouveia</name>
+    </author>
+    <author>
+      <name>Hamza Fawzi</name>
+    </author>
+    <author>
+      <name>Richard Z. Robinson</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1311.2571v1</id>
+    <title>Exponential lower bounds on fixed-size psd rank and semidefinite extension complexity</title>
+    <updated>2013-11-11T20:37:32Z</updated>
+    <link href="https://arxiv.org/abs/1311.2571v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1311.2571v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>There has been a lot of interest recently in proving lower bounds on the size of linear programs needed to represent a given polytope P. In a breakthrough paper Fiorini et al. [Proceedings of 44th ACM Symposium on Theory of Computing 2012, pages 95-106] showed that any linear programming formulation of maximum-cut must have exponential size. A natural question to ask is whether one can prove such strong lower bounds for semidefinite programming formulations. In this paper we take a step towards this goal and we prove strong lower bounds for a certain class of SDP formulations, namely SDPs over the Cartesian product of fixed-size positive semidefinite cones. In practice this corresponds to semidefinite programs with a block-diagonal structure and where blocks have constant size d. We show that any such extended formulation of the cut polytope must have exponential size (when d is fixed). The result of Fiorini et al. for LP formulations is obtained as a special case when d=1. For blocks of size d=2 the result rules out any small formulations using second-order cone programming. Our study of SDP lifts over Cartesian product of fixed-size positive semidefinite cones is motivated mainly from practical considerations where it is well known that such SDPs can be solved more efficiently than general SDPs. The proof of our lower bound relies on new results about the sparsity pattern of certain matrices with small psd rank, combined with an induction argument inspired from the recent paper by Kaibel and Weltge [arXiv:1307.3543] on the LP extension complexity of the correlation polytope.</summary>
+    <category term="math.OC" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.CC" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="math.CO" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2013-11-11T20:37:32Z</published>
+    <arxiv:comment>14 pages</arxiv:comment>
+    <arxiv:primary_category term="math.OC"/>
+    <author>
+      <name>Hamza Fawzi</name>
+    </author>
+    <author>
+      <name>Pablo A. Parrilo</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1305.4600v2</id>
+    <title>Worst-Case Results For Positive Semidefinite Rank</title>
+    <updated>2014-05-30T21:34:21Z</updated>
+    <link href="https://arxiv.org/abs/1305.4600v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1305.4600v2" rel="related" type="application/pdf" title="pdf"/>
+    <summary>This paper presents various worst-case results on the positive semidefinite (psd) rank of a nonnegative matrix, primarily in the context of polytopes. We prove that the psd rank of a generic n-dimensional polytope with v vertices is at least (nv)^(1/4) improving on previous lower bounds. For polygons with v vertices, we show that psd rank cannot exceed 4ceil(v/6) which in turn shows that the psd rank of a p by q matrix of rank three is at most 4ceil(min{p,q}/6). In general, a nonnegative matrix of rank (k+1 choose 2) has psd rank at least k and we pose the problem of deciding whether the psd rank is exactly k. Using geometry and bounds on quantifier elimination, we show that this decision can be made in polynomial time when k is fixed.</summary>
+    <category term="math.OC" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="math.CO" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2013-05-20T18:27:51Z</published>
+    <arxiv:comment>11 pages</arxiv:comment>
+    <arxiv:primary_category term="math.OC"/>
+    <author>
+      <name>João Gouveia</name>
+    </author>
+    <author>
+      <name>Richard Z. Robinson</name>
+    </author>
+    <author>
+      <name>Rekha R. Thomas</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1205.5306v3</id>
+    <title>Polytopes of Minimum Positive Semidefinite Rank</title>
+    <updated>2013-07-31T18:09:13Z</updated>
+    <link href="https://arxiv.org/abs/1205.5306v3" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1205.5306v3" rel="related" type="application/pdf" title="pdf"/>
+    <summary>The positive semidefinite (psd) rank of a polytope is the smallest $k$ for which the cone of $k \times k$ real symmetric psd matrices admits an affine slice that projects onto the polytope. In this paper we show that the psd rank of a polytope is at least the dimension of the polytope plus one, and we characterize those polytopes whose psd rank equals this lower bound. We give several classes of polytopes that achieve the minimum possible psd rank including a complete characterization in dimensions two and three.</summary>
+    <category term="math.OC" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2012-05-23T22:55:18Z</published>
+    <arxiv:primary_category term="math.OC"/>
+    <author>
+      <name>João Gouveia</name>
+    </author>
+    <author>
+      <name>Richard Z. Robinson</name>
+    </author>
+    <author>
+      <name>Rekha R. Thomas</name>
+    </author>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1203.1153v1</id>
+    <title>Correlation/Communication complexity of generating bipartite states</title>
+    <updated>2012-03-06T10:09:37Z</updated>
+    <link href="https://arxiv.org/abs/1203.1153v1" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/1203.1153v1" rel="related" type="application/pdf" title="pdf"/>
+    <summary>We study the correlation complexity (or equivalently, the communication complexity) of generating a bipartite quantum state $ρ$. When $ρ$ is a pure state, we completely characterize the complexity for approximately generating $ρ$ by a corresponding approximate rank, closing a gap left in Ambainis, Schulman, Ta-Shma, Vazirani and Wigderson (SIAM Journal on Computing, 32(6):1570-1585, 2003). When $ρ$ is a classical distribution $P(x,y)$, we tightly characterize the complexity of generating $P$ by the psd-rank, a measure recently proposed by Fiorini, Massar, Pokutta, Tiwary and de Wolf (STOC 2012). We also present a characterization of the complexity of generating a general quantum state $ρ$.</summary>
+    <category term="cs.CC" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="quant-ph" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2012-03-06T10:09:37Z</published>
+    <arxiv:comment>12 pages, no figure</arxiv:comment>
+    <arxiv:primary_category term="cs.CC"/>
+    <author>
+      <name>Rahul Jain</name>
+    </author>
+    <author>
+      <name>Yaoyun Shi</name>
+    </author>
+    <author>
+      <name>Zhaohui Wei</name>
+    </author>
+    <author>
+      <name>Shengyu Zhang</name>
+    </author>
+  </entry>
+</feed>

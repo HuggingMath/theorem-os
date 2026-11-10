@@ -3,7 +3,7 @@ import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import type { TheoremKnowledgeBase } from './theoremKnowledge';
 import { mathematicalGapSchema } from './mathematicalGapContract';
 import { largestFittingPage, splitsSurrogate } from './textPage';
-import { knowledgeRequestBatch } from './theoremKnowledgeSearch';
+import { knowledgeRelevanceGroups, knowledgeRelevanceTerms, knowledgeRequestBatch } from './theoremKnowledgeSearch';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const text = z.string().min(1).max(1_000_000);
@@ -86,9 +86,11 @@ export function validateKnowledgeRouteFindings(entries: readonly KnowledgeRouteF
 type SearchBase = Pick<TheoremKnowledgeBase, 'routeFindings'>;
 export type KnowledgeRouteFindingSearchOptions = {
   goal?: string; limit?: number; problemId?: string; environmentDigest?: string; problemReceiptDigest?: string;
+  /** Automatic context admission only; manual searches retain their broad lexical recall. */
+  requireMathematicalRelevance?: boolean;
 };
 export type KnowledgeRouteFindingSearchRequest = { query: string; goal?: string };
-const terms = (value: string) => [...new Set(value.toLowerCase().match(/[\p{L}\p{N}_']{2,}/gu) ?? [])];
+const lexicalTerms = (value: string) => [...new Set(value.toLowerCase().match(/[\p{L}\p{N}_']{2,}/gu) ?? [])];
 const preview = (value: string, max: number) => value.length <= max ? value : value.slice(0, max - 1).replace(/[\uD800-\uDBFF]$/u, '') + '…';
 
 function validateFindingQuery(query: string, options: KnowledgeRouteFindingSearchOptions) {
@@ -102,11 +104,18 @@ function validateFindingQuery(query: string, options: KnowledgeRouteFindingSearc
 }
 
 function prepareFindingSearch(base: SearchBase, options: Omit<KnowledgeRouteFindingSearchOptions, 'goal'>) {
-  return (base.routeFindings ?? []).filter(item => !options.problemId || item.scope.problemId === options.problemId)
+  const documents = (base.routeFindings ?? []).filter(item => !options.problemId || item.scope.problemId === options.problemId)
     .map(item => {
-      const statements = [item.scope.source.statement, ...item.scope.dependencies.map(value => value.statement)];
-      return { item, statements, haystack: new Set(terms([...statements, item.summary].join('\n'))) };
+      const statements = [item.scope.source.statement, ...item.scope.dependencies.map(value => value.statement),
+        ...(item.scope.originalConsumer ? [item.scope.originalConsumer.statement] : [])];
+      const scope = new Set(knowledgeRelevanceTerms(statements.join('\n'), true)), summary = item.summary;
+      return { item, statements, scope, summary: new Set(knowledgeRelevanceTerms(summary)),
+        lexical: new Set(lexicalTerms([...statements, summary].join('\n'))) };
     });
+  const frequencies = new Map<string, number>();
+  for (const document of documents) for (const term of new Set([...document.scope, ...document.summary]))
+    frequencies.set(term, (frequencies.get(term) ?? 0) + 1);
+  return { documents, frequencies };
 }
 
 /** Retrieval can recall a renamed task, but text matches never establish equivalent hypotheses or invalidate a route. */
@@ -127,11 +136,23 @@ export function searchKnowledgeRouteFindingRequests(base: SearchBase, requests: 
 function searchPreparedFindings(prepared: ReturnType<typeof prepareFindingSearch>, query: string,
   options: KnowledgeRouteFindingSearchOptions) {
   const limit = options.limit ?? 10;
-  const inputs = terms(query + '\n' + (options.goal ?? ''));
-  const hits = prepared.flatMap(({ item, statements, haystack }) => {
-    const matched = inputs.filter(value => haystack.has(value));
+  const text = query + '\n' + (options.goal ?? '');
+  const inputs = options.requireMathematicalRelevance ? knowledgeRelevanceTerms(text, !query.trim()) : lexicalTerms(text);
+  const groups = options.requireMathematicalRelevance ? knowledgeRelevanceGroups(text, !query.trim()) : [];
+  const weight = (term: string) => 1 + Math.log((prepared.documents.length + 1) / (1 + (prepared.frequencies.get(term) ?? 0)));
+  const inputWeight = inputs.reduce((sum, term) => sum + weight(term), 0);
+  const coverage = (matches: readonly string[]) => inputWeight ? matches.reduce((sum, term) => sum + weight(term), 0) / inputWeight : 0;
+  const hits = prepared.documents.flatMap(({ item, statements, scope, summary, lexical }) => {
+    const scoped = inputs.filter(value => scope.has(value));
+    const matched = inputs.filter(value => options.requireMathematicalRelevance ? scope.has(value) || summary.has(value) : lexical.has(value));
     const exactStatement = Boolean(options.goal && statements.includes(options.goal));
-    if (!matched.length && !exactStatement) return [];
+    // Long notes must not enter a bounded packet merely because they share work instructions
+    // or a carrier type. Exact historical contracts and focused one-word searches remain available.
+    const minimum = Math.min(groups.length, query.trim() && groups.length >= 8 ? 3 : 2),
+      scopedGroups = groups.filter(group => group.every(term => scope.has(term))),
+      matchedGroups = groups.filter(group => group.every(term => scope.has(term) || summary.has(term)));
+    if (!exactStatement && (options.requireMathematicalRelevance ? !minimum || scopedGroups.length < minimum &&
+        (matchedGroups.length < minimum || coverage(matched) < 0.5) : !matched.length)) return [];
     const environmentMatch = options.environmentDigest === undefined ? 'unknown' :
       item.scope.environmentDigest === options.environmentDigest ? 'match' : 'different';
     const problemReceiptMatch = options.problemReceiptDigest === undefined ? 'unknown' :
@@ -141,7 +162,9 @@ function searchPreparedFindings(prepared: ReturnType<typeof prepareFindingSearch
       statementMatch: exactStatement ? 'exact-recorded-text' as const : 'lexical-only' as const,
       scopeMatch: exactStatement && environmentMatch === 'match' && problemReceiptMatch === 'match'
         ? 'statement-and-recorded-environment' as const : 'not-established' as const,
-      evidence: item.evidence, acceptance: item.acceptance, score: matched.length + (exactStatement ? 1000 : 0),
+      evidence: item.evidence, acceptance: item.acceptance,
+      score: (options.requireMathematicalRelevance ? 80 * coverage(scoped) ** 2 + 20 * coverage(matched) ** 2 : matched.length) +
+        (exactStatement ? 1000 : 0),
       matched, requiresScopeReview: true as const,
       readWith: { command: 'knowledge finding', id: item.id } }];
   }).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));

@@ -65,6 +65,7 @@ export function installedLibraryRetrievals(input: InstalledLibraryRetrievalInput
     const searchInputDigest = mathDigest(canonicalMathJson({ searchInputDigest: retrieval.searchInputDigest, namedIds }));
     return { ...retrieval, sectionId: `installed-library:${searchInputDigest}`, searchInputDigest,
       searchCandidateIds: [...new Set([...namedIds, ...(retrieval.searchCandidateIds ?? []), ...retrieval.candidateIds])].slice(0, 12),
+      ...(retrieval.relevantCandidateIds ? { relevantCandidateIds: [...new Set([...namedIds, ...retrieval.relevantCandidateIds])].slice(0, 12) } : {}),
       candidateIds: [...new Set([...namedIds, ...retrieval.candidateIds])].slice(0, 3) };
   });
   const target = input.forApplication && input.action?.kind === 'task'
@@ -73,16 +74,17 @@ export function installedLibraryRetrievals(input: InstalledLibraryRetrievalInput
   const entries = new Map(library.base.entries.map(entry => [entry.id, entry]));
   retrievals = retrievals.map(retrieval => {
     // Explicit requests and exact saved application handoffs remain usable without lexical overlap.
-    const pool = [...new Set([...(retrieval.searchCandidateIds ?? []), ...retrieval.candidateIds])];
+    const pool = [...new Set([...(retrieval.relevantCandidateIds ?? retrieval.searchCandidateIds ?? []), ...retrieval.candidateIds])];
     const selected = pool.filter(id => {
       const entry = entries.get(id);
       return entry && (namedIds.includes(id) || handoffIds.has(id) || knowledgeApplicationRelevant(entry, target));
     });
-    if (selected.length === pool.length) return retrieval;
+    if (selected.length === pool.length && retrieval.relevantCandidateIds === undefined) return retrieval;
     const searchInputDigest = mathDigest(canonicalMathJson({ searchInputDigest: retrieval.searchInputDigest,
       applicationCandidates: selected }));
     return { ...retrieval, sectionId: `installed-library:${searchInputDigest}`, searchInputDigest,
-      searchCandidateIds: selected, candidateIds: selected.slice(0, 3) };
+      ...(retrieval.relevantCandidateIds !== undefined ? { relevantCandidateIds: selected } : { searchCandidateIds: selected }),
+      candidateIds: selected.slice(0, 3) };
   });
   const targetShape = splitStatement(target);
   const localPremises = new Set(targetShape?.parts.filter(part => !part.binder).map(part => part.key));
@@ -99,7 +101,7 @@ export function installedLibraryRetrievals(input: InstalledLibraryRetrievalInput
   const localConclusionPairs = new Set(targetShape && [...localPremises].map(premise =>
     conclusionKey(`${targetShape.conclusion}\n${premise}`)));
   return retrievals.map(retrieval => {
-    const primary = [...new Set([...(retrieval.searchCandidateIds ?? []), ...retrieval.candidateIds])].slice(0, 12);
+    const primary = [...new Set([...(retrieval.relevantCandidateIds ?? retrieval.searchCandidateIds ?? []), ...retrieval.candidateIds])].slice(0, 12);
     const capacity = Math.min(3, 12 - Math.max(3, namedIds.length));
     if (capacity <= 0) return retrieval;
     const seeds = primary.flatMap(id => {
@@ -134,7 +136,7 @@ export function installedLibraryRetrievals(input: InstalledLibraryRetrievalInput
     const requests = [...byGoal.keys()].map(goal => ({ query: '', goal }));
     const searches = searchKnowledgeContextSnapshot(library, requests, { limit: 3,
       environmentDigest: input.environmentDigest, problemReceiptDigest: problem.receiptDigest });
-    const available = searches.map((search, index) => search.hits.map(hit => hit.id).filter(id => {
+    const available = searches.map((search, index) => search.hits.filter(hit => !hit.lowInformationMatch).map(hit => hit.id).filter(id => {
       const entry = entries.get(id);
       return !primary.includes(id) && entry && problem.frozenFiles?.[entry.file] &&
         problem.frozenFiles[entry.file] === library.base.contexts[entry.contextDigest]?.[entry.file] &&
@@ -158,7 +160,8 @@ export function installedLibraryRetrievals(input: InstalledLibraryRetrievalInput
     const pool = [...new Set([...selected, ...primary])].slice(0, 12);
     const searchInputDigest = mathDigest(canonicalMathJson({ searchInputDigest: retrieval.searchInputDigest, requests, pool }));
     return { ...retrieval, sectionId: `installed-library:${searchInputDigest}`, searchInputDigest,
-      searchCandidateIds: pool, candidateIds: pool.slice(0, 3) };
+      ...(retrieval.relevantCandidateIds !== undefined ? { relevantCandidateIds: pool } : { searchCandidateIds: pool }),
+      candidateIds: pool.slice(0, 3) };
   });
 }
 

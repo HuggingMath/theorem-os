@@ -70,8 +70,9 @@ export async function prepareLibraryApplication(input: {
     action: { kind: 'task', task, assignment: { taskId: task.id, taskDigest: taskVersion(task), workerId: 'host', seedCommit: input.seedCommit } },
     environmentDigest: input.environmentDigest });
   const candidates: LibraryApplicationCandidate[] = [], selected = new Set<string>();
-  // Presentation has only three rows. Apply the full bounded search pool and retain exact application handoffs.
-  for (const id of retrievals.flatMap(retrieval => [...(retrieval.searchCandidateIds ?? []), ...retrieval.candidateIds])) {
+  // Presentation has only three rows. Try the full relevance-selected pool; raw hits
+  // remain diagnostics. Older retrievals retain their existing bounded fallback.
+  for (const id of retrievals.flatMap(retrieval => [...(retrieval.relevantCandidateIds ?? retrieval.searchCandidateIds ?? []), ...retrieval.candidateIds])) {
     const entry = entries.get(id), pinned = entry && problem.frozenFiles?.[entry.file];
     if (entry?.kind !== 'lemma' || !pinned || pinned !== library.base.contexts[entry.contextDigest]?.[entry.file]) continue;
     const key = `${entry.file}:${entry.name}`;

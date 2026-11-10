@@ -92,6 +92,33 @@ describe('conservative theorem knowledge goal surfaces', () => {
 });
 
 describe('closed theorem knowledge statement reading', () => {
+  it('keeps an eventually scoped lower bound opaque instead of inventing a forall binder', () => {
+    const type = '∀ C : ℝ, 0 < C → ∀ᶠ n : ℕ in Filter.atTop, Even n → ∀ r : ℕ, 0 < r → ' +
+      'OAI.PerfectMatchingPSD.HasFactorization n r → (n : ℝ) ^ C < (r : ℝ)';
+    expect(splitStatement(type)).toBeUndefined();
+    expect(shape(type)).toBeUndefined();
+    expect(withStatementConclusion(type, 'Replacement n r')).toBeUndefined();
+  });
+
+  it.each([
+    '∀ᶠ n in Filter.atTop, P n → Q n',
+    '∃ᶠ n in Filter.atTop, P n → Q n',
+    '∀ (μ : Measure α), ∀ᵐ x ∂μ, P x → Q x',
+    '∀ (s : Set ℕ), (∀ᶠ n in Filter.atTop, n ∈ s) → Result s',
+  ])('declines unsupported scoped quantifier notation without deriving local premises: %s', type => {
+    expect(splitStatement(type)).toBeUndefined();
+    expect(shape(type)).toBeUndefined();
+    expect(withStatementConclusion(type, 'Replacement')).toBeUndefined();
+  });
+
+  it('retains ordinary forall binders, including names separated from the quantifier', () => {
+    expect(splitStatement('∀n : Nat, P n')).toEqual(splitStatement('forall n : Nat, P n'));
+    expect(splitStatement('∀ ᶠ : Nat, P ᶠ')).toMatchObject({
+      parts: [{ key: 'Nat', binder: true }], conclusion: 'P _b0',
+    });
+    same('∀ (x : Nat), /- ∀ᶠ and ∀ᵐ -/ P x', '∀ (n : Nat), P n');
+  });
+
   it('reads ASCII forall like its Unicode form, including nested quantifiers and arrow premises', () => {
     const unicode = splitStatement('∀ {n : Nat} (p : Fin n → Prop), ∀ (x : Fin n), p x → Result n x');
     expect(unicode).toBeDefined();

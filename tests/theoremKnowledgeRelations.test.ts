@@ -25,7 +25,7 @@ const goal = 'Wanted';
 function retrievalFixture() {
   const bridge = entry('Hidden.bridge'), seed = entry('Visible.seed', { type: goal,
     dependencies: { statement: [], proof: [reference(bridge)], tasks: [], coverage: 'unavailable' } });
-  const alternatives = Array.from({ length: 6 }, (_, index) => entry(`Visible.choice${index}`, { type: `Wanted → Premise${index}` }));
+  const alternatives = Array.from({ length: 6 }, (_, index) => entry(`Visible.choice${index}`, { type: `Premise${index} → Wanted` }));
   return { seed, bridge, base: catalog([seed, bridge, ...alternatives]) };
 }
 const options = { goal, limit: 12, displayGrouping: 'exact-interface' as const, environmentDigest: environment };

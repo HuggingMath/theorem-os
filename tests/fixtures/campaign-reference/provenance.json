@@ -1,0 +1,10 @@
+{
+  "source": "/home/lzh/workspace/outputs/theoremos-solver-process-audit-20261111-13/reference-review.json",
+  "sourceSha256": "68b4304b64044c20122168b8b3001ad87e49532e355b40d8551dbde823453bee",
+  "fixtures": {
+    "psdrank1.xml": "87417d4a67d5e43a95e293d71bf7312c60fe208a5c1cc4451a86b5cd9b3e1456",
+    "saved-searches.json": "a4bf6d297cf20863123b7f9dfa7f5e823852bc643c8f71855ba9837c3d240df1",
+    "sdpext.xml": "56428d565dda26e960fef9a5df9a5f29fe18c295b6584a19c16f00f5204002d2"
+  },
+  "scope": "Saved public search cards and public arXiv Atom feeds only; no benchmark answer sources."
+}

@@ -14,16 +14,16 @@ const custom: CustomResearchModule[] = [
 
 describe('one frozen identity for executable research modules and the optional web registry', () => {
   it('pins the remediation behavior digests for both executable modules and shared identity functions', () => {
-    // Freeze connection checkpoint scheduling and knowledge packet candidate refill
-    // with the inherited feedback, continuation and host authorization behavior
-    // in the repaired runtime (2026-11-11).
+    // Freeze mathematical knowledge ranking, scoped findings, conservative quantifier
+    // reading, bounded academic reference recall and fresh conditional continuation
+    // reuse with the inherited repaired runtime (2026-11-11).
     const original: [ResearchModulePlan['scheduler'], ResearchModulePlan['context'], string][] = [
-      ['plan', 'full', 'a54904fa4727d0ecc40fa4dc3888a5d7f96f85442990fdfeff0a1410eecfe56f'],
-      ['plan', 'essential', '639245051c544df3640830cec74828984c672c2be49fa1a5c3cab4a3cfe4fc57'],
-      ['critical-path', 'full', '2cd536c9eae3663fc037c9377bf75c293f2b017c9ce382f52da80b7ea04b9150'],
-      ['critical-path', 'essential', 'e7354db751ec21170c11e935754e98615d16a954b6536015f60e1118b473f1eb'],
-      ['continuation', 'full', '1ce601ec173d4ee341644183d3fae1aaecd9f0d2641134b1b21584ec8d4a35b7'],
-      ['continuation', 'essential', '918b13c23767f9b6bb561fb4ccbf018afb60192452a3420b1c646ad20b703488'],
+      ['plan', 'full', '76c27331296579387232021bb8dea9cdce1ac2df3365fa556f8156e602c1f3bf'],
+      ['plan', 'essential', '717f4188908d18e89ea9ee3f6d2f45e1783db383aa837ec2a97221664d9769e0'],
+      ['critical-path', 'full', '5468fafd3a2638e9c7a136aba2fcb88ed45ca50900ecda6fccf19972cd94e7fa'],
+      ['critical-path', 'essential', '9c031f6c6b9ba60f85403ff511f6a63a84b6d12125f1c4ba072118e8094dc81c'],
+      ['continuation', 'full', 'f25d2e16dad7312f19a3f69e69e59e305c15403b46c0ed00d373cf2620348cf8'],
+      ['continuation', 'essential', '3a47676e63fb62f257848aea1030966eb256f2b2b3ee547f92f7465ff4d5e612'],
     ];
     for (const [scheduler, context, digest] of original) {
       const plan = { scheduler, context, custom: [] };
@@ -31,10 +31,10 @@ describe('one frozen identity for executable research modules and the optional w
       expect(solverIdentityMethodDigest(configuredResearchModuleIdentity(plan).identity, 'cooperative')).toBe(digest);
     }
     const advised: ['cooperative' | 'independent', number, string][] = [
-      ['cooperative', 1, '5293dc576a1ec101ebdd6f6ab6d9d1ce2eaf8095d124b685a17a00de0eba2184'],
-      ['cooperative', 4, 'a817718214caf4342cfbb04cbcf857ae839f02b1b4f06c1cf73c94a4bb31f9e2'],
-      ['independent', 1, '47c7fee07335333877760cbae0dca6329afa54a74c6eeeb92695c73526c78a45'],
-      ['independent', 4, '47c7fee07335333877760cbae0dca6329afa54a74c6eeeb92695c73526c78a45'],
+      ['cooperative', 1, '87bbf4c6ba3fac2a373d67be9368830d2f61acf717685c2fc783f679ffeba985'],
+      ['cooperative', 4, '626229e3d947baf3b392736ede4673928ecbef6e369496c0b679931b3b885da0'],
+      ['independent', 1, '76b64496327851b864dec27ebdc169c6c25bb5f5b36ee61b5abd8295d147df18'],
+      ['independent', 4, '76b64496327851b864dec27ebdc169c6c25bb5f5b36ee61b5abd8295d147df18'],
     ];
     for (const [coordination, workers, digest] of advised) {
       const plan: ResearchModulePlan = { scheduler: 'continuation', context: 'essential', custom };

@@ -33,6 +33,7 @@ import { taskDependencyRecords } from './modules/search';
 import { hasDeterministicLeanFailure } from './proofReuse';
 import { VerificationCheckpointError, withVerificationCheckpoints } from './verificationCheckpoint';
 import { captureDeliveryArtifacts } from './deliveryArtifacts';
+import { rememberFreshConditionalCheck } from './freshContinuationChecks';
 import { feasibilityReviewInputDigest, researchCheckpointInputDigest, researchCheckpointLocalInputDigest, researchCheckpointOutputDigest,
   UNCHANGED_RESEARCH_CHECKPOINT, type ResearchCheckpoint } from './researchCheckpoints';
 import { recordRouteBlockers, validateBlockerProposals } from './routeControl';
@@ -1217,14 +1218,16 @@ export async function seedSolverContinuation(options: {
             node.proof = proof;
             node.assignment = fresh ? assignment : undefined;
             setTaskStatus(node, fresh ? 'conditional' : 'blocked', 'reconstructed');
+            if (fresh && options.preparedEnvironment) rememberFreshConditionalCheck(proof, { ...candidate.request,
+              environmentDigest: state.environmentDigest, problemReceiptDigest: state.problem.receiptDigest, environment: env });
           } else {
             node.integratedCheck = proof;
             setTaskStatus(node, fresh ? 'integrated' : 'blocked', 'reconstructed');
             if (fresh) {
-              freshChecks.push(proof);
               if (node.task.kind === 'goal') freshGoals.set(node.task.id, taskVersion(node.task));
             } else if (hasDeterministicLeanFailure(proof.verification)) retryable.set(node.task.id, candidate);
           }
+          if (fresh) freshChecks.push(proof);
           node.feedback = fresh ? undefined : 'math_continuation_seed_helper_not_verified';
         } catch (error) {
           blockCandidate(node, error);

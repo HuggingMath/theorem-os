@@ -8,6 +8,9 @@ const unsupported = new Set(['∃', 'exists', '∫', 'Σ', 'Π', '⨆', '⨅', '
   'match', 'by', 'where', 'do', 'if', 'then', 'else', '↦', '=>', ':=', '//', '|', '?', '_', '⊢', "'", '«', '»', '`', '$']);
 const aliases = new Map([['ℕ', 'Nat'], ['ℤ', 'Int'], ['ℚ', 'Rat'], ['ℝ', 'Real'], ['ℂ', 'Complex'],
   ['→', '->'], ['↔', '<->']]);
+// Filter/measure notations such as ∀ᶠ and ∀ᵐ are scoped macros, not a forall
+// followed by a local named ᶠ/ᵐ. Preserve their original text until supported.
+const decoratedQuantifier = /[∀∃][\p{Lm}\p{M}\p{No}]/u;
 const ambiguousSumTail = new Set(['=', '≠', '<', '>', '≤', '≥', '∧', '∨', '→', '->', '↔', '<->',
   '∈', '∉', '⊆', '⊂', '⊇', '⊃', ',', ';', ':']);
 
@@ -56,7 +59,9 @@ export function knowledgeResidualViews(value: string): KnowledgeResidualView[] {
 /** A conservative ranking surface, never evidence of Lean equivalence or applicability. */
 export function knowledgeGoalSurfaceShape(value: string): string | undefined {
   if (maskLeanComments(value).includes('"')) return undefined;
-  const tokens = [...maskLeanCommentsAndStrings(value).matchAll(
+  const source = maskLeanCommentsAndStrings(value);
+  if (decoratedQuantifier.test(source)) return undefined;
+  const tokens = [...source.matchAll(
     /[\p{L}_][\p{L}\p{M}\p{N}_']*(?:\.[\p{L}_][\p{L}\p{M}\p{N}_']*)*|[0-9]+|<->|->|=>|:=|\/\/|[^\s]/gu
   )].map(match => match[0]);
   if (!tokens.length || tokens.length > 8192 || tokens.some(token => unsupported.has(token))) return undefined;
@@ -197,7 +202,7 @@ function unwrap(text: string) {
 }
 
 function parseStatement(type: string): { shape: StatementShape; prefix: string } | undefined {
-  if (type.length > maxStatementLength) return;
+  if (type.length > maxStatementLength || decoratedQuantifier.test(maskLeanCommentsAndStrings(type))) return;
   const parts: StatementShape['parts'] = [], names = new Map<string, string>();
   const reference = (name: string) => new RegExp(`(?<![${ID}.])${name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?![${ID}])`, 'gu');
   const rename = (text: string) => squash([...names].reduce((value, [from, to]) => value.replace(reference(from), to), unwrap(text)));

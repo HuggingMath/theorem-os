@@ -128,7 +128,7 @@ export abstract class CooperationCore {
   abstract contextState(action?: CooperativeAction, worker?: ResearchWorker, versions?: TaskVersions): CooperationState;
   constructor(protected readonly input: { state: SolverRunState; workers: readonly ResearchWorker[];
     access: ReadonlyMap<string, WorkerAccess>; signal: AbortSignal; timeoutMs?: number; taskText?: string;
-    /** Fresh, unconditional continuation checks already verified in this process. */
+    /** Exact continuation checks verified in this process; conditional receipts keep their frozen inputs. */
     freshContinuationChecks?: readonly TaskProof[];
     continuousResearch?: boolean;
     modelDispatchAllowed?: () => boolean;
@@ -150,7 +150,8 @@ export abstract class CooperationCore {
       this.archive.leadSeedCommit ??= this.archive.canonicalCommit;
     }
     // Continuation seeding and this cooperation instance share the proof objects.
-    // Record only those exact objects that are attached to an integrated task; this
+    // Register unconditional acceptance only for exact objects on integrated tasks;
+    // conditional receipts go through the ordinary check identity path on restore. This
     // keeps the restore path able to reuse a fresh receipt without trusting a
     // deserialized or otherwise unrelated proof value.
     for (const proof of input.freshContinuationChecks ?? []) {

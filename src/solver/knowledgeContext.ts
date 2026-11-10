@@ -35,6 +35,8 @@ export type KnowledgeRetrieval = Readonly<{
   sectionId: string; catalogDigest: string; searchInputDigest: string; consumer: SearchTarget['consumer'];
   candidateIds: readonly string[]; routeFindingIds: readonly string[];
   searchCandidateIds?: readonly string[];
+  /** Bounded automatic relevance selection, never evidence that a theorem applies or a proof is accepted. */
+  relevantCandidateIds?: readonly string[];
   searchSource?: SearchTarget['source']; diagnostic?: SearchTarget['diagnostic'];
   residualSearches?: readonly { inputDigest: string; diagnostic: NonNullable<SearchTarget['diagnostic']>;
     caseLabel?: string; localContext: KnowledgeResidualView['localContext']; fallbackReason?: string;
@@ -155,7 +157,7 @@ export function knowledgeContextSections(input: {
   const searchOptions = { limit: poolLimit, environmentDigest: input.environmentDigest, problemReceiptDigest: problem.receiptDigest };
   const searches = requests.length ? searchKnowledgeContextSnapshot(knowledge, requests, searchOptions) : [];
   const findingSearches = requests.length ? searchKnowledgeRouteFindingRequests(knowledge.base, requests, { limit: 2,
-    environmentDigest: input.environmentDigest, problemReceiptDigest: problem.receiptDigest }) : [];
+    environmentDigest: input.environmentDigest, problemReceiptDigest: problem.receiptDigest, requireMathematicalRelevance: true }) : [];
   return targets.flatMap(({ items, omissions, inputDigest }) => {
     const { target, bounded } = items[0]!;
     const results = items.flatMap(item => item.requestIndex !== undefined ? [searches[item.requestIndex]!] : []);
@@ -167,9 +169,9 @@ export function knowledgeContextSections(input: {
       if (!hit) continue;
       const previous = byId.get(hit.id);
       byId.set(hit.id, previous ? { ...hit, exactMatch: previous.exactMatch ?? hit.exactMatch,
-        relation: previous.relation ?? hit.relation } : hit);
+        relation: previous.relation ?? hit.relation, lowInformationMatch: previous.lowInformationMatch && hit.lowInformationMatch } : hit);
     }
-    const diverse = [...byId.values()];
+    const diverse = [...byId.values()].filter(hit => !hit.lowInformationMatch);
     let selected = diverse.slice(0, displayLimit);
     if (hits.some(hit => hit.relation)) {
       const firstIds = new Set(results.flatMap(result => result.hits[0] ? [result.hits[0].id] : []));
@@ -219,7 +221,8 @@ export function knowledgeContextSections(input: {
       variantCountEvidence: 'distinct-recorded-declarations-not-interchangeable',
       totalMatches: results.length === 1 ? results[0]!.total : new Set(hits.map(hit => hit.id)).size,
       totalInterfaces: results.length === 1 ? results[0]!.totalInterfaces : undefined,
-      candidateLimit: displayLimit, poolLimit, omittedForBytes: 0, candidates,
+      candidateLimit: displayLimit, poolLimit, omittedForBytes: 0,
+      ...(byId.size > diverse.length ? { omittedForLowInformation: byId.size - diverse.length } : {}), candidates,
       ...(residualCoverage ? { residualCoverage, residualSearches: residualDetails } : {}),
       routeFindings };
     const rankedCandidates = [...candidates];
@@ -254,6 +257,7 @@ export function knowledgeContextSections(input: {
         ...(residualSearches.length ? { residualSearches } : {}),
         ...(omissions.length ? { residualOmissions: omissions } : {}),
         searchCandidateIds: [...new Set(hits.map(hit => hit.id))],
+        ...(byId.size > diverse.length ? { relevantCandidateIds: diverse.map(hit => hit.id) } : {}),
         candidateIds: candidates.map(item => item.id), routeFindingIds: routeFindings.map(item => item.id) } }] : [];
     // A known application for this exact original target can be useful even without lexical overlap,
     // or after the ordinary candidate packet loses it to the findings/context byte budget.

@@ -32,6 +32,20 @@ describe('research completion archive schema', () => {
     const file = path.join(root, 'state.json'); writeSolverRunState(file, state); return readSolverRunState(file);
   };
 
+  it.each([undefined, [], ['relevant-candidate']])('preserves the automatic candidate filter independently of the raw pool: %j', relevant => {
+    state.knowledgeRetrievals = { dropped: 0, observations: [{
+      sectionId: 'knowledge:route', catalogDigest: 'fixture-catalog', searchInputDigest: 'fixture-search',
+      consumer: { taskId: task.id, taskDigest: taskVersion(task) }, candidateIds: [], routeFindingIds: [],
+      searchCandidateIds: ['weak-candidate', 'relevant-candidate'],
+      ...(relevant === undefined ? {} : { relevantCandidateIds: relevant }),
+      included: true, workerId: 'researcher', workerTurn: 1, runTurn: 1, contextDigest: 'fixture-context', at: 1,
+    }] };
+    const restored = read();
+    expect(restored.knowledgeRetrievals).toEqual(state.knowledgeRetrievals);
+    expect(restored.knowledgeRetrievals!.observations[0]!.relevantCandidateIds).toEqual(relevant);
+    expect(restored.cooperation!.tasks[0]!.proof).toBeUndefined();
+  });
+
   it('preserves the same immutable record in the node, delivery and history without creating proof evidence', () => {
     const restored = read(), node = restored.cooperation!.tasks[0]!;
     expect(node.assignment?.researchBasis).toEqual(state.cooperation!.tasks[0]!.assignment?.researchBasis);

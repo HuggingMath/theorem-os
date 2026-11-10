@@ -192,14 +192,16 @@ describe('installed library retrieval in actual task context', () => {
     const entry = new Map(f.library.base.entries.map(entry => [entry.id, entry]));
     const normal = installedLibraryRetrievals(input);
     expect(normal[0].searchCandidateIds).toHaveLength(12);
-    expect(normal[0].searchCandidateIds!.every(id => entry.get(id)?.kind === 'definition')).toBe(true);
+    if (named) expect(normal[0].searchCandidateIds!.every(id => entry.get(id)?.kind === 'definition')).toBe(true);
+    else expect(normal[0].searchCandidateIds![0]).toBe(f.library.base.entries.find(entry => entry.name === 'Frozen.usable')!.id);
     const application = installedLibraryRetrievals({ ...input, forApplication: true });
     expect(application[0].searchCandidateIds!.map(id => entry.get(id)?.name)).toEqual(['Frozen.usable']);
     expect(application[0].catalogDigest).toBe(f.library.digest);
     const context = installedLibraryContextSections(input);
     expect(context).toHaveLength(1);
     const packet = JSON.parse(context[0].text.slice(context[0].text.indexOf('\n') + 1));
-    expect(packet.candidates.every(candidate => candidate.kind === 'definition')).toBe(true);
+    if (named) expect(packet.candidates.every(candidate => candidate.kind === 'definition')).toBe(true);
+    else expect(packet.candidates[0].name).toBe('Frozen.usable');
     expect(installedLibraryRetrievals(input)).toEqual(normal);
   });
 
@@ -513,7 +515,8 @@ describe('installed library retrieval in actual task context', () => {
   it('bounds local candidate packets even for very large source headers', () => {
     const f = fixture(), library = structuredClone(f.library);
     for (const entry of library.base.entries) entry.type += ' ' + 'ℝ'.repeat(10000);
-    const sections = installedLibraryContextSections({ problem: f.problem, action: f.action, library, environmentDigest });
+    const sections = installedLibraryContextSections({ problem: f.problem, action: f.action, library, environmentDigest,
+      taskText: 'Use Frozen.Arithmetic.add_comm.' });
     expect(sections.length).toBeGreaterThan(0);
     for (const section of sections) {
       expect(Buffer.byteLength(section.text)).toBeLessThanOrEqual(4096);

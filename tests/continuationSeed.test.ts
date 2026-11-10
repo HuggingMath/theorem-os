@@ -17,7 +17,7 @@ import { acceptContextCheckpoint } from '../src/solver/contextCheckpoint';
 import { MAX_CONTINUATION_ATTACHMENT_BYTES, readContinuationPage, readContinuationSnapshot } from '../src/solver/continuationInput';
 import { committedSource, commitSolverSources, git, readSolverProblem } from '../src/solver/problem';
 import { theoryModuleSource } from '../src/math/theoryModules';
-import { taskVersion, type CooperativeTask } from '../src/solver/tasks';
+import { freshlyAccepted, taskVersion, type CooperativeTask } from '../src/solver/tasks';
 import { setTaskStatus } from '../src/solver/taskLifecycle';
 import { expandTaskFamilies } from '../src/solver/taskFamilies';
 import type { TaskProof } from '../src/solver/cooperativeProof';
@@ -312,13 +312,33 @@ function replaceHelperCandidates(f: ReturnType<typeof fixture>, count: number) {
 }
 
 function cooperationFor(f: ReturnType<typeof fixture>, state: SolverRunState, freshContinuationChecks: readonly TaskProof[] = [],
-  options: { timeoutMs?: number; save?: () => void } = {}) {
+  options: { timeoutMs?: number; save?: () => void; environment?: NodeJS.ProcessEnv;
+    emit?: (event: string, details?: Record<string, unknown>) => void } = {}) {
   const workers = state.workers!.map(worker => ({ id: worker.id, role: worker.role, worktree: worker.worktree,
     ownedFiles: state.problem.ownedFiles }));
-  const environment = { PATH: '/usr/bin:/bin', DEEPSCIENTIST_MATH_TRUSTED_CACHE_ROOTS: host.packages,
-    [MATH_PROOF_ENVIRONMENT_ENV]: 'live-host-proof-environment' };
+  const { environment = { PATH: '/usr/bin:/bin', DEEPSCIENTIST_MATH_TRUSTED_CACHE_ROOTS: host.packages,
+    [MATH_PROOF_ENVIRONMENT_ENV]: 'live-host-proof-environment' }, ...runtimeOptions } = options;
   return cooperativeResearch({ state, workers, retrievalRoot: f.root, signal: f.controller.signal,
-    freshContinuationChecks, access: new Map(workers.map(worker => [worker.id, { environment, retrievalRoot: f.root }])), ...options });
+    freshContinuationChecks, access: new Map(workers.map(worker => [worker.id, { environment, retrievalRoot: f.root }])), ...runtimeOptions });
+}
+
+async function freshConditionalFixture(explicit = true, prepared = true) {
+  const f = conditionalFixture(), input = f.oldState.cooperation!.tasks.find(node => node.task.id === 'second')!;
+  if (explicit) {
+    f.task.conditional = true;
+    const bridge = f.oldState.cooperation!.tasks.find(node => node.task.id === 'bridge')!;
+    bridge.proof!.taskDigest = bridge.assignment!.taskDigest = taskVersion(f.task);
+  }
+  // Its input stays unresolved, so receipt reuse cannot turn into normal integration.
+  setTaskStatus(input, 'pending', 'reconstructed'); input.integratedCheck = undefined;
+  writeSolverRunState(f.sourceStateFile, f.oldState);
+  const environment: NodeJS.ProcessEnv = { PATH: '/usr/bin:/bin', DEEPSCIENTIST_MATH_TRUSTED_CACHE_ROOTS: host.packages,
+    [MATH_PROOF_ENVIRONMENT_ENV]: 'live-host-proof-environment' };
+  let state!: SolverRunState, proofs!: TaskProof[];
+  await seedSolverContinuation({ ...f.options, ...(prepared ? { preparedEnvironment: environment } : {}),
+    onSeeded: (next, checked) => { state = next; proofs = checked; } });
+  const bridge = state.cooperation!.tasks.find(node => node.task.id === 'bridge')!;
+  return { ...f, state, proofs, bridge, environment };
 }
 
 async function suspendedTaskDraftFixture(kind: 'research' | 'sketch' | 'goal' | 'lemma' | 'feasibility' = 'research',
@@ -1341,7 +1361,7 @@ describe('explicit prepared-run continuation initialization', () => {
     expect(draft.sources['Submission/Helpers.lean']).toContain('bridge_helper');
   });
 
-  it('reuses a held lease and proof environment and hands off only fresh unconditional receipts', async () => {
+  it('reuses a held lease and proof environment and hands off fresh receipts without integrating conditional tasks', async () => {
     const f = conditionalFixture(), seeded = vi.fn();
     const environment = { PATH: '/usr/bin:/bin', DEEPSCIENTIST_MATH_TRUSTED_CACHE_ROOTS: host.packages,
       [MATH_PROOF_ENVIRONMENT_ENV]: 'live-host-proof-environment' };
@@ -1355,10 +1375,122 @@ describe('explicit prepared-run continuation initialization', () => {
     expect(host.verify.mock.calls.every(([, options]) => options.env[MATH_PROOF_ENVIRONMENT_ENV] === 'live-host-proof-environment')).toBe(true);
     expect(seeded).toHaveBeenCalledOnce();
     const [state, proofs] = seeded.mock.calls[0]!;
-    expect(proofs).toHaveLength(2);
+    expect(proofs).toHaveLength(3);
     expect(proofs).toContain(state.cooperation.tasks[0].integratedCheck);
     expect(proofs).toContain(state.cooperation.tasks[1].integratedCheck);
-    expect(proofs).not.toContain(state.cooperation.tasks[3].proof);
+    expect(proofs).toContain(state.cooperation.tasks[3].proof);
+    expect(state.cooperation.tasks[3].status).toBe('conditional');
+  });
+
+  it.each([false, true])('restores an unchanged fresh conditional receipt once and keeps its input unresolved (explicit=%s)', async explicit => {
+    const f = await freshConditionalFixture(explicit), events: string[] = [];
+    const saved = f.bridge.proof, cooperative = cooperationFor(f, f.state, f.proofs,
+      { environment: f.environment, emit: event => events.push(event) });
+    const checks = () => host.verify.mock.calls.filter(([request]) => request.items.some(item => item.theoremName === f.task.theoremName));
+    expect(checks()).toHaveLength(1);
+    expect(f.proofs).toContain(saved);
+    try {
+      await cooperative.restore();
+      expect(checks()).toHaveLength(1);
+      expect(events).toContain('task_conditional_check_reused');
+      expect(f.bridge).toMatchObject({ status: 'conditional', proof: { passed: true, conditions: [f.condition] } });
+      expect(f.bridge.proof).toBe(saved); expect(f.bridge.integratedCheck).toBeUndefined();
+      expect(freshlyAccepted(f.bridge, taskVersion(f.bridge.task))).toBe(false);
+      expect(f.state.cooperation!.tasks.find(node => node.task.id === 'second')!.status).toBe('pending');
+      expect(f.state.cooperation!.tasks.find(node => node.task.id === 'goal')!.status).toBe('pending');
+    } finally { f.controller.abort(); await cooperative.stop(); }
+  });
+
+  it('matches the effective prepared environment after copying its settings into a frozen solver projection', async () => {
+    const f = await freshConditionalFixture(), file = path.join(f.directory, 'environment-restored.json');
+    fs.writeFileSync(file, canonicalMathJson(projectMathematicsRuntimeEnvironment({
+      ...resolveMathematicsRuntimeEnvironment(f.environment), DEEPSCIENTIST_MATH_ENV_FILE: file })), { mode: 0o400 });
+    const environment = resolveMathematicsRuntimeEnvironment({ DEEPSCIENTIST_MATH_ENV_FILE: file });
+    const cooperative = cooperationFor(f, f.state, f.proofs, { environment });
+    try {
+      await cooperative.restore();
+      expect(host.verify.mock.calls.filter(([request]) => request.items.some(item => item.theoremName === f.task.theoremName))).toHaveLength(1);
+      expect(f.bridge.status).toBe('conditional');
+    } finally { f.controller.abort(); await cooperative.stop(); }
+  });
+
+  it.each([false, true])('reuses a conditional original context only while its retained goals are unchanged (changed=%s)', async changed => {
+    const f = conditionalOriginalContextFixture(), input = f.oldState.cooperation!.tasks.find(node => node.task.id === 'second')!;
+    setTaskStatus(input, 'pending', 'reconstructed'); input.integratedCheck = undefined;
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    const environment = { PATH: '/usr/bin:/bin', DEEPSCIENTIST_MATH_TRUSTED_CACHE_ROOTS: host.packages,
+      [MATH_PROOF_ENVIRONMENT_ENV]: 'live-host-proof-environment' };
+    let state!: SolverRunState, proofs!: TaskProof[];
+    host.verify.mockImplementation(freshReceipts);
+    await seedSolverContinuation({ ...f.options, preparedEnvironment: environment,
+      onSeeded: (next, checked) => { state = next; proofs = checked; } });
+    const bridge = state.cooperation!.tasks.find(node => node.task.id === 'bridge')!, saved = bridge.proof;
+    if (changed) setTaskStatus(state.cooperation!.tasks.find(node => node.task.id === 'premise')!, 'pending', 'reconstructed');
+    const events: string[] = [], cooperative = cooperationFor(f, state, proofs,
+      { environment, emit: event => events.push(event) });
+    host.verify.mockClear();
+    try {
+      await (cooperative as any).recheckConditional();
+      expect(host.verify).toHaveBeenCalledTimes(changed ? 1 : 0);
+      expect(events.includes('task_conditional_check_reused')).toBe(!changed);
+      expect(bridge.status).toBe('conditional'); expect(bridge.proof === saved).toBe(!changed);
+      expect(bridge.integratedCheck).toBeUndefined();
+    } finally { f.controller.abort(); await cooperative.stop(); }
+  });
+
+  it.each(['proof-content', 'source', 'projection', 'assignment', 'environment', 'runtime-environment', 'problem',
+    'deserialized-proof', 'deserialized-state', 'no-handoff', 'standalone-seed', 'checker'] as const)
+  ('rechecks conditional proof after %s instead of trusting its seed receipt', async change => {
+    const f = await freshConditionalFixture(true, change !== 'standalone-seed');
+    let state = f.state, proofs = f.proofs;
+    if (change === 'proof-content') f.bridge.proof!.verification.results[0]!.receiptId += '-edited';
+    if (change === 'projection') f.bridge.proof!.verification.targetCommit = f.base;
+    if (change === 'source') {
+      const worker = state.workers![1]!.worktree;
+      git(worker, ['reset', '--hard', f.bridge.proof!.commit]);
+      fs.appendFileSync(path.join(worker, f.projectRelative, 'Submission/Helpers.lean'), '\n-- A changed source snapshot.\n');
+      f.bridge.proof!.commit = commit(worker, 'Changed conditional source');
+    }
+    if (change === 'assignment') f.bridge.assignment!.assignmentId = 'changed-live-assignment';
+    if (change === 'environment') state.environmentDigest = mathDigest('changed-environment');
+    if (change === 'runtime-environment') f.environment[MATH_PROOF_ENVIRONMENT_ENV] = 'changed-proof-environment';
+    if (change === 'problem') state.problem.receiptDigest = mathDigest('changed-problem-receipt');
+    if (change === 'deserialized-proof') {
+      f.bridge.proof = JSON.parse(JSON.stringify(f.bridge.proof)); proofs = [f.bridge.proof!];
+    }
+    if (change === 'deserialized-state') state = JSON.parse(JSON.stringify(state));
+    if (change === 'no-handoff') proofs = [];
+    const events: string[] = [], cooperative = cooperationFor(f, state, proofs,
+      { environment: f.environment, emit: event => events.push(event) });
+    if (change === 'checker') {
+      const input = (cooperative as any).input;
+      input.modules = { ...input.modules, M2: { ...input.modules.M2,
+        checkTask: vi.fn((...args: Parameters<typeof taskProofs.checkTaskProof>) => taskProofs.checkTaskProof(...args)) } };
+    }
+    host.verify.mockClear();
+    try {
+      await (cooperative as any).recheckConditional();
+      expect(host.verify).toHaveBeenCalledOnce();
+      expect(host.verify.mock.calls[0][0].items.map(item => item.theoremName)).toEqual([f.task.theoremName]);
+      expect(events).not.toContain('task_conditional_check_reused');
+      const bridge = state.cooperation!.tasks.find(node => node.task.id === 'bridge')!;
+      expect(bridge.status).toBe('conditional'); expect(bridge.integratedCheck).toBeUndefined();
+      expect(freshlyAccepted(bridge, taskVersion(bridge.task))).toBe(false);
+    } finally { f.controller.abort(); await cooperative.stop(); }
+  });
+
+  it.each(['task', 'condition'] as const)('invalidates a changed %s contract without reusing conditional acceptance', async change => {
+    const f = await freshConditionalFixture();
+    const node = change === 'task' ? f.bridge : f.state.cooperation!.tasks.find(node => node.task.id === 'second')!;
+    node.task.revision++;
+    const events: string[] = [], cooperative = cooperationFor(f, f.state, f.proofs,
+      { environment: f.environment, emit: event => events.push(event) });
+    try {
+      await (cooperative as any).recheckConditional();
+      expect(events).not.toContain('task_conditional_check_reused');
+      expect(f.bridge).toMatchObject({ status: 'blocked', feedback: 'math_task_condition_version_invalid' });
+      expect(f.bridge.integratedCheck).toBeUndefined();
+    } finally { f.controller.abort(); await cooperative.stop(); }
   });
 
   it('reuses fresh seed receipts through cooperation restore in the same process', async () => {
@@ -2121,7 +2253,7 @@ describe('bounded continuation verification batches', () => {
     expect(report.failed).toEqual([]);
     expect(bridge).toMatchObject({ status: 'conditional', proof: { passed: true, conditions: [f.condition] } });
     expect(bridge.integratedCheck).toBeUndefined();
-    expect(fresh.map(proof => proof.taskDigest)).not.toContain(taskVersion(f.task));
+    expect(fresh.map(proof => proof.taskDigest)).toContain(taskVersion(f.task));
     expect(state.cooperation!.tasks.find(node => node.task.id === 'goal')?.status).toBe('pending');
   });
 

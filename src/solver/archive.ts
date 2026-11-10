@@ -310,6 +310,7 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
       theoremName: z.string().optional(), proofPath: z.string().optional() }),
     candidateIds: z.array(z.string()), routeFindingIds: z.array(z.string()), included: z.boolean(), omissionReason: z.string().optional(),
     searchCandidateIds: z.array(z.string()).optional(),
+    relevantCandidateIds: z.array(z.string()).optional(),
     residualSearches: z.array(z.object({ inputDigest: z.string(), diagnostic: knowledgeDiagnostic,
       caseLabel: z.string().optional(), localContext: z.enum(['closed-for-retrieval', 'target-only', 'no-locals']), fallbackReason: z.string().optional(),
       searched: z.boolean(), candidateIds: z.array(z.string()) })).optional(),

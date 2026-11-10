@@ -11,6 +11,7 @@ import { hasTaskConnectionCheck } from './taskConnections';
 import { assignmentDeliveryFile, assumableLemma, taskGroup, taskReferenceDependencies, hasTaskAcceptance, type CooperativeTask, type TaskAssignment, type TaskRecord } from './tasks';
 import { digest, taskSourceRejections, integrationRejections, rejectionCode, bounded } from './cooperationShared';
 import { CooperationTaskProofs, type ProofDeliveryAnnotation, type ProofDeliveryState } from './cooperationTaskProofs';
+import { reusableFreshConditionalCheck } from './freshContinuationChecks';
 import type { ResearchWorker } from './modules/organization';
 
 const recheckBatchFallbacks = new Set([...taskSourceRejections, 'math_task_batch_projection_mismatch', 'math_task_missing_declaration',
@@ -393,8 +394,18 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
             throw new Error('math_task_condition_version_invalid');
           return input.task;
         });
-        const proof = await withSolverWorktree(this.lead.worktree, saved.commit, checkout =>
-          this.check(node.task, node.assignment!, checkout, saved.commit, conditions));
+        const proof = await withSolverWorktree(this.lead.worktree, saved.commit, async checkout => {
+          const checked = (this.input.modules.M2.checkTask ?? checkTaskProof) === checkTaskProof &&
+            this.input.freshContinuationChecks?.includes(saved) && reusableFreshConditionalCheck(saved, {
+            task: node.task, assignment: node.assignment!, conditions,
+            retainedGoals: this.retainedTaskGoals(node.task, this.archive.tasks, checkout, saved.commit, conditions),
+            environmentDigest: this.input.state.environmentDigest, problemReceiptDigest: this.input.state.problem.receiptDigest,
+            environment: this.input.access.get(this.lead.id)!.environment,
+          }) ? saved : undefined;
+          const proof = await this.check(node.task, node.assignment!, checkout, saved.commit, conditions, checked);
+          if (checked) this.input.emit('task_conditional_check_reused', { taskId: node.task.id, commit: proof.commit });
+          return proof;
+        });
         if (['unavailable', 'blocked'].includes(proof.verification.status)) throw new Error('math_verifier_unavailable');
         node.proof = proof;
         if (proof.passed) node.feedback = undefined;
