@@ -22,7 +22,11 @@ type StartResearch = (owner: string, formalization: WebFormalization, evidence: 
 const active = (value: WebFormalization) => value.status === 'queued' || value.status === 'running';
 const reviewing = (value: WebFormalization) => value.backgroundReview?.status === 'queued' || value.backgroundReview?.status === 'running';
 const readableContextProtocols: readonly string[] = ['kernel-v2', LEAN_STATEMENT_CONTEXT_PROTOCOL];
-const reasonOf = (error: unknown) => error instanceof Error && webFormalizationReason.test(error.message) ? error.message : 'formalization_failed';
+const reasonOf = (error: unknown) => {
+  if (!(error instanceof Error)) return 'formalization_failed';
+  if (error.message.startsWith('formalization_coverage_invalid:')) return 'formalization_coverage_invalid';
+  return webFormalizationReason.test(error.message) ? error.message : 'formalization_failed';
+};
 const directory = (owner: string) => ['owners', mathDigest(owner), 'formalizations'];
 const recordPath = (owner: string, id: string) => {
   if (!/^[a-f0-9-]{36}$/u.test(id)) throw new WebStorageError(404, '形式化任务不存在。');

@@ -176,14 +176,82 @@ export function formalizationReviewInput(request: FormalizationRequest, candidat
     translation, ...reviewer, ...(request.fidelityPolicy ? { fidelityPolicy: request.fidelityPolicy } : {}) };
 }
 
+// Diagnostics are bounded independently of the candidate limits. Offsets use JavaScript
+// UTF-16 code units, and excerpts always come from the unchanged input strings.
+function coverageExcerpt(value: string, focus = 0, limit = 160) {
+  let start = Math.max(0, focus - Math.floor(limit / 2)), end = Math.min(value.length, start + limit);
+  if (start > 0 && /[\uDC00-\uDFFF]/u.test(value[start] ?? '')) start--;
+  if (end < value.length && /[\uDC00-\uDFFF]/u.test(value[end] ?? '')) end--;
+  return { text: value.slice(start, end), start, end, truncated: start > 0 || end < value.length };
+}
+
+function coverageSourceHints(statement: string, quote: string) {
+  const characters = Array.from(quote), hints: {
+    statementStart: number; statementEnd: number;
+    quotedExcerpt: ReturnType<typeof coverageExcerpt>; sourceExcerpt: ReturnType<typeof coverageExcerpt>;
+    difference: { quoteOffset: number; statementOffset: number; submitted: string; original: string };
+  }[] = [];
+  if (characters.length < 8) return hints;
+  const width = Math.min(24, Math.floor(characters.length / 2)), starts = new Set<number>();
+  const prefix = characters.slice(0, width).join(''), suffix = characters.slice(-width).join('');
+  // A single character edit leaves one end anchor intact. Bound repeated-anchor
+  // searches; this is a repair hint, never fuzzy admission or an exhaustive search.
+  for (const [anchor, fromEnd] of [[prefix, false], [suffix, true]] as const) {
+    let cursor = 0;
+    for (let count = 0; count < 16; count++) {
+      const found = statement.indexOf(anchor, cursor);
+      if (found < 0) break;
+      if (fromEnd) for (let shift = -2; shift <= 2; shift++) starts.add(found - (quote.length - suffix.length) + shift);
+      else starts.add(found);
+      cursor = found + 1;
+    }
+  }
+  for (const start of starts) {
+    if (start < 0 || start >= statement.length || /[\uDC00-\uDFFF]/u.test(statement[start])) continue;
+    let offset = 0;
+    while (offset < quote.length && quote[offset] === statement[start + offset]) offset++;
+    if (offset === quote.length) continue;
+    if (offset > 0 && /[\uDC00-\uDFFF]/u.test(quote[offset])) offset--;
+    const submitted = String.fromCodePoint(quote.codePointAt(offset)!);
+    const originalPoint = statement.codePointAt(start + offset), original = originalPoint === undefined ? '' : String.fromCodePoint(originalPoint);
+    for (const [removed, added] of [[submitted, original], [submitted, ''], ['', original]]) {
+      if ((!removed && !added) || (removed === added)) continue;
+      const rest = quote.slice(offset + removed.length), end = start + offset + added.length + rest.length;
+      if (!statement.startsWith(added + rest, start + offset) ||
+          /[\uDC00-\uDFFF]/u.test(statement[end] ?? '') || hints.some(item => item.statementStart === start && item.statementEnd === end)) continue;
+      hints.push({ statementStart: start, statementEnd: end,
+        quotedExcerpt: coverageExcerpt(quote, offset), sourceExcerpt: coverageExcerpt(statement.slice(start, end), offset),
+        difference: { quoteOffset: offset, statementOffset: start + offset, submitted: removed, original: added } });
+      if (hints.length === 2) return hints;
+    }
+  }
+  return hints;
+}
+
+function invalidCoverage(detail: Record<string, unknown>): never {
+  throw new Error('formalization_coverage_invalid: ' + JSON.stringify(detail));
+}
+
+const coverageTargetSummary = (names: string[]) => ({ names: names.slice(0, 8).map(name => coverageExcerpt(name, 0, 80)),
+  total: names.length, truncated: names.length > 8 });
+
 export function assertFormalizationCandidate(request: FormalizationRequest, candidate: FormalizationCandidate): { name: string; declarationHash: string }[] {
   const targets = formalizationTargets(candidate.source), names = new Set(targets.map(item => item.name)), covered = new Set<string>();
-  for (const item of candidate.coverage) {
-    if (!request.statement.includes(item.originalText) || item.targetNames.some(name => !names.has(name)))
-      throw new Error('formalization_coverage_invalid');
+  for (const [index, item] of candidate.coverage.entries()) {
+    if (!request.statement.includes(item.originalText)) invalidCoverage({ field: `coverage[${index}].originalText`,
+      reason: 'not_exact_source_substring',
+      instruction: 'Copy an exact substring from INPUT.statement. Possible source matches are location hints only; verify against the original.',
+      quotedText: coverageExcerpt(item.originalText), offsetUnit: 'UTF-16 code units; end offsets are exclusive',
+      possibleSourceMatches: coverageSourceHints(request.statement, item.originalText) });
+    const unknown = item.targetNames.findIndex(name => !names.has(name));
+    if (unknown >= 0) invalidCoverage({ field: `coverage[${index}].targetNames[${unknown}]`, reason: 'unknown_target',
+      instruction: 'Use the exact name of a theorem or lemma declared in candidate.source.',
+      submitted: coverageExcerpt(item.targetNames[unknown]), validTargets: coverageTargetSummary([...names]) });
     item.targetNames.forEach(name => covered.add(name));
   }
-  if (covered.size !== names.size) throw new Error('formalization_coverage_invalid');
+  if (covered.size !== names.size) invalidCoverage({ field: 'coverage', reason: 'uncovered_targets',
+    instruction: 'Include every declared theorem or lemma in at least one coverage entry using an exact original-text quote.',
+    uncoveredTargets: coverageTargetSummary([...names].filter(name => !covered.has(name))) });
   return targets;
 }
 

@@ -59,7 +59,7 @@ jobs:
       - name: Verify research recovery, participation and shared run snapshots
         run: bunx vitest run --maxWorkers=4 tests/webRunSnapshot.test.ts tests/webResearchProjects.test.ts tests/webResearchApi.test.ts tests/webResearchAssets.test.ts tests/webResearchMathematics.test.ts tests/libraryPacks.test.ts tests/leanSource.test.ts
       - name: Verify direct formalization and independent background review without models
-        run: bunx vitest run --maxWorkers=4 tests/directFormalizationEvidence.test.ts tests/directFormalizationWorkflow.test.ts tests/formalizationAudit.test.ts tests/formalizationContext.test.ts tests/formalizationPackagesWarmup.test.ts tests/mathProofEnvironmentSeed.test.ts tests/webFormalizationAuditWorker.test.ts tests/webFormalizationBackgroundReview.test.ts tests/webBackgroundReview.test.ts tests/webFormalizationProgress.test.ts tests/webThinkingProcess.test.ts tests/codexSessionInstructions.test.ts
+        run: bunx vitest run --maxWorkers=4 tests/directFormalizationEvidence.test.ts tests/directFormalizationWorkflow.test.ts tests/formalizationCoverage.test.ts tests/formalizationAudit.test.ts tests/formalizationContext.test.ts tests/formalizationPackagesWarmup.test.ts tests/mathProofEnvironmentSeed.test.ts tests/webFormalizationAuditWorker.test.ts tests/webFormalizationBackgroundReview.test.ts tests/webBackgroundReview.test.ts tests/webFormalizationProgress.test.ts tests/webThinkingProcess.test.ts tests/codexSessionInstructions.test.ts
       - run: bun run build && bun run build:web
       - run: bunx playwright install --with-deps chromium
       - name: Verify the browser's login and research flows with local fixtures

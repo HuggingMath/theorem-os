@@ -489,6 +489,36 @@ describe('online formalization ownership and evidence handoff', () => {
     expect((await (await request(alice, `/api/formalizations/${two.id}`)).json()).formalization.status).toBe('error');
   });
 
+  it('preserves the coverage reason when evidence validation rejects an original-text mismatch', async () => {
+    const alice = await client(), value = await create(alice), pending = runner.pending.at(-1)!;
+    const evidence = webFormalizationEvidence(pending.input), privateExcerpt = 'Private unmatched coverage excerpt.';
+    evidence.candidate.coverage[0]!.originalText = privateExcerpt;
+    evidence.inputDigest = formalizationInputDigest(evidence.request, evidence.candidate);
+    expect(() => verifyWebFormalizationEvidence(evidence, value)).toThrow('formalization_coverage_invalid');
+    pending.send({ type: 'result', status: 'approved', evidence }); pending.resolve(); await settle();
+    const response = await request(alice, `/api/formalizations/${value.id}`), result = await response.json();
+    expect(response.status).toBe(200);
+    expect(result.formalization).toMatchObject({ status: 'error', reason: 'formalization_coverage_invalid' });
+    expect(JSON.stringify(result)).not.toContain(privateExcerpt);
+    expect(result.formalization.report).toBeUndefined();
+    expect(runner.runs).toHaveLength(0);
+  });
+
+  it.each([
+    ['formalization_coverage_invalid', 'formalization_coverage_invalid'],
+    ['formalization_coverage_invalid_extra', 'formalization_failed'],
+    ['formalization_binding_mismatch', 'formalization_failed'],
+  ])('keeps diagnostic payloads private when a runner throws %s', async (code, reason) => {
+    const detail = JSON.stringify({ originalText: 'Private diagnostic excerpt.', token: KEY });
+    runner.formalize = async () => { throw new Error(`${code}: ${detail}`); };
+    const alice = await client(), value = await create(alice);
+    const response = await request(alice, `/api/formalizations/${value.id}`), result = await response.json();
+    expect(response.status).toBe(200);
+    expect(result.formalization).toMatchObject({ status: 'error', reason });
+    for (const hidden of [detail, 'Private diagnostic excerpt.', KEY]) expect(JSON.stringify(result)).not.toContain(hidden);
+    expect(runner.runs).toHaveLength(0);
+  });
+
   it('binds new evidence to the chosen token budget while accepting persisted legacy budgets', async () => {
     const alice = await client(), current = await create(alice), pending = runner.pending.at(-1)!;
     expect(pending.input.maxTotalTokens).toBe(webFormalizationDefaults.maxTotalTokens);

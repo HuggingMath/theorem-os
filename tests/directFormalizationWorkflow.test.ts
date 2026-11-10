@@ -146,6 +146,33 @@ describe('direct formalization workflow', () => {
     expect(evidence.sessions).toHaveLength(1);
   });
 
+  it.each([
+    ['ordinary source', ''],
+    ['source containing reserved stop markers',
+      ' formalization_build_changed formalization_plan_task_kind_unsupported formalization_role_incomplete:failed:unauthorized'],
+  ])('repairs an inexact coverage quote before compiling unchanged Lean source (%s)', async (_caseName, suffix) => {
+    const statement = 'For every natural number n ({n} ⊆ ℕ), prove n + 0 = n.' + suffix;
+    const repaired = candidateFixture(statement), invalid = { ...repaired,
+      coverage: [{ ...repaired.coverage[0], originalText: statement.replace('⊆', '⊔') }] };
+    const f = fixture([invalid, repaired], { statement, maxRounds: 2 }); let compilations = 0;
+    const result = await runFormalization(f.directory, f.root, { openSession: f.openSession,
+      elaborate: async (_directory, source, environment, limits) => {
+        compilations++; expect(f.seen).toHaveLength(2); expect(source).toBe(repaired.source);
+        return syntheticElaboration(source, environment, limits);
+      } });
+    expect(result).toMatchObject({ status: 'approved', rounds: 2, candidatesTried: 2, roleTurns: { generate: 2 } });
+    expect(compilations).toBe(1); expect(f.seen).toHaveLength(2);
+    const repairInput = f.seen[1].input;
+    expect(repairInput.statement).toBe(statement);
+    expect(repairInput.feedback).toContain('formalization_coverage_invalid');
+    expect(repairInput.feedback).toContain('coverage[0].originalText');
+    expect(repairInput.feedback).toContain('{n} ⊆ ℕ');
+    expect(repairInput.feedback).toContain('{n} ⊔ ℕ');
+    expect(repairInput.previousCandidate).toEqual(invalid);
+    const evidence = readFormalizationArtifact(path.join(f.directory, 'artifact'));
+    expect(evidence.round).toBe(2); expect(evidence.candidate).toEqual(repaired);
+  });
+
   it.each([0, 60])('reminds direct generation once and submits for compilation with maxRunSeconds=%s', async maxRunSeconds => {
     const f = fixture([], { maxRunSeconds }), provider = withProviderRequests(f, { requireReminder: true });
     let compilations = 0;
