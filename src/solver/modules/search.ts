@@ -327,8 +327,15 @@ function collectOriginalGoalTaskFocus(tasks: readonly TaskRecord[], groups?: rea
     return Boolean(node && active(node) && !(!isAdvisoryTask(node.task) && settled(node)) &&
       inputs(node).some(dependency => reachesFrontier(dependency, visited)));
   };
+  // Advisory attribution is not a proof prerequisite. It can still identify research for an
+  // active unfinished original goal, including when that research has no typed inputs yet.
+  const servesGoal = (node: TaskRecord) => node.task.consumerGoalIds?.some(id => {
+    const goal = nodes.get(id);
+    return Boolean(goal && goal.task.kind === 'goal' && proofPath.has(id) && !settled(goal) &&
+      (taskGroup(node.task) === taskGroup(goal.task) || goal.task.sharing !== 'group'));
+  });
   const targetedResearch = new Set(tasks.filter(node => isAdvisoryTask(node.task) && active(node) &&
-    inputs(node).some(id => reachesFrontier(id))).map(node => node.task.id));
+    (servesGoal(node) || inputs(node).some(id => reachesFrontier(id)))).map(node => node.task.id));
   const support = new Set(proofPath);
   const visitSupport = (id: string) => {
     if (support.has(id)) return;

@@ -3,12 +3,15 @@ import type { DeliveryRecord } from './deliveries';
 import { mathematicalGaps, mathematicalGapVisible, nextCheckExecutionMatchesTask } from './mathematicalGaps';
 import type { NextCheck } from './mathematicalGapContract';
 import { nextCheckDecisionSchema, type CheckOutcome, type NextCheckDecision, type NextCheckRecord } from './nextCheckContract';
-import { isAdvisoryTask, taskGroup, taskVersion, type CooperativeTask, type TaskAssignment, type TaskRecord, type RouteGroup } from './tasks';
+import { isAdvisoryTask, isFeasibilityReview, taskGroup, taskVersion, type CooperativeTask, type TaskAssignment, type TaskRecord, type RouteGroup, type RouteRecord } from './tasks';
+import { independentFeasibilityWorker } from './modules/organization';
+import { currentDefinitionContractCheck } from './definitionContractChecks';
 import type { ProofRoute } from './proofRoutes';
 import type { ProofSearchRecord } from './proofSearchRecords';
 
 type Identity = { problemReceiptDigest: string; environmentDigest: string };
 type State = { tasks: readonly TaskRecord[]; deliveries?: readonly DeliveryRecord[]; nextChecks?: readonly NextCheckRecord[];
+  groups?: readonly RouteRecord[]; proofRoutes?: readonly ProofRoute[];
   proofSearchRecords?: Readonly<Record<string, ProofSearchRecord>> };
 type Gap = ReturnType<typeof mathematicalGaps>[number];
 const hash = (value: unknown) => mathDigest(canonicalMathJson(value));
@@ -101,6 +104,7 @@ export function proposedNextChecks(state: State, identity: Identity, now: number
 
 /** Contract matching never upgrades an advisory result to a proved premise. */
 export function currentNextCheck(record: NextCheckRecord, state: State, identity: Identity): boolean {
+  if (record.origin === 'definition-contract') return currentDefinitionContractCheck(record, state, identity);
   if (record.status === 'stale' || record.scope.problemReceiptDigest !== identity.problemReceiptDigest ||
       record.scope.environmentDigest !== identity.environmentDigest) return false;
   const nodes = new Map(state.tasks.map(node => [node.task.id, node]));
@@ -137,7 +141,7 @@ export function bindCheckOutcome(outcome: CheckOutcome, source: CooperativeTask,
 export function visibleNextChecks(state: State, viewer?: CooperativeTask) {
   return (state.nextChecks ?? []).filter(record => {
     const gap = state.deliveries?.find(item => item.id === record.gapDeliveryId);
-    if (!gap || !mathematicalGapVisible(gap, state, viewer)) return false;
+    if (record.origin !== 'definition-contract' && (!gap || !mathematicalGapVisible(gap, state, viewer))) return false;
     const tasks = [record.scope.parent, record.scope.target, record.scope.consumer].map(ref =>
       state.tasks.find(node => node.task.id === ref.taskId)?.task);
     return !viewer || tasks.every(task => task && (taskGroup(task) === taskGroup(viewer) || task.sharing !== 'group'));
@@ -162,6 +166,45 @@ const argument = (task?: CooperativeTask) => task && ({ kind: task.kind, proofPa
   theoremName: task.theoremName, type: task.type, dependsOn: [...task.dependsOn].sort(), premises: task.premises,
   conditional: task.conditional, declaration: task.declaration });
 
+/** Rebuttal evidence must come from another current host-bound check of the same mathematical target. */
+function hasCurrentCounterEvidence(record: NextCheckRecord, deliveryId: string | undefined, state: State, identity: Identity): boolean {
+  if (!deliveryId || deliveryId === record.outcome?.deliveryId) return false;
+  const original = state.deliveries?.find(delivery => delivery.id === record.outcome?.deliveryId);
+  const delivery = state.deliveries?.find(item => item.id === deliveryId);
+  const other = state.nextChecks?.find(item => item.id !== record.id && item.outcome?.deliveryId === deliveryId);
+  return Boolean(original && delivery && other && ['awaiting-decision', 'decided'].includes(other.status) &&
+    currentNextCheck(other, state, identity) && canonicalMathJson(other.scope.target) === canonicalMathJson(record.scope.target) &&
+    canonicalMathJson(other.scope.consumer) === canonicalMathJson(record.scope.consumer) &&
+    other.outcome?.conclusion === 'supporting' && delivery.kind === 'research' && delivery.status === 'advisory' &&
+    delivery.taskId === other.taskId && delivery.taskDigest === other.taskDigest && delivery.createdAt >= original.createdAt &&
+    delivery.checkOutcome?.checkId === other.id && delivery.checkOutcome.conclusion === 'supporting' &&
+    delivery.checkOutcome.evidenceRefs.some(reference => reference.trim()) &&
+    canonicalMathJson(delivery.checkOutcomeScope) === canonicalMathJson(other.scope) &&
+    canonicalMathJson({ ...other.outcome, deliveryId: undefined, commit: undefined }) === canonicalMathJson(delivery.checkOutcome));
+}
+
+/** A concrete new independent check can reconsider the inference without pretending to repair its proof. */
+function hasFreshFeasibilityRevision(record: NextCheckRecord, state: State,
+  plan: { tasks: readonly CooperativeTask[]; groups: readonly RouteGroup[] }): boolean {
+  const previous = new Map(state.tasks.map(node => [node.task.id, node]));
+  const proposed = plan.tasks.map(task => ({ ...(previous.get(task.id) ?? { status: 'pending' as const, attempts: 0 }), task }));
+  const groups = plan.groups.map(group => ({ group, turns: 0 }));
+  const eligible = (task: CooperativeTask, tasks: readonly TaskRecord[], candidateGroups: typeof groups) => {
+    const existing = previous.get(task.id);
+    if (task.id === record.taskId || existing?.nextCheckId || existing?.capacityExploration || !isFeasibilityReview(task) ||
+        (task.status ?? 'active') !== 'active' || !task.dependsOn.includes(record.scope.target.taskId) ||
+        !candidateGroups.some(route => route.group.id === taskGroup(task) && (route.group.status ?? 'active') === 'active')) return false;
+    return !task.ownerId || independentFeasibilityWorker({ task, status: 'pending', attempts: 0 },
+      { id: task.ownerId, role: 'researcher' }, tasks, candidateGroups);
+  };
+  return plan.tasks.some(task => {
+    if (!eligible(task, proposed, groups)) return false;
+    const old = previous.get(task.id)?.task;
+    // The scope or activation changes; relabeling an existing check cannot answer the same outcome twice.
+    return !old || !eligible(old, state.tasks, groups) || canonicalMathJson(argument(task)) !== canonicalMathJson(argument(old));
+  });
+}
+
 /** Validate before any archive mutation. A route decision consumes one exact scoped outcome. */
 export function prepareNextCheckDecisions(state: State & { proofRoutes?: readonly ProofRoute[] }, identity: Identity,
   plan: { tasks: CooperativeTask[]; groups: readonly RouteGroup[]; proofRoutes?: readonly ProofRoute[] },
@@ -177,6 +220,10 @@ export function prepareNextCheckDecisions(state: State & { proofRoutes?: readonl
       return { record, decision, repeated: true };
     if (!record || !pending.includes(record) || record.outcome?.deliveryId !== decision.outcomeDeliveryId)
       throw new Error('math_plan_next_check_outcome_stale: ' + decision.checkId);
+    if (decision.action === 'continue' && (record.outcome.conclusion === 'refuted' || decision.counterEvidenceDeliveryId !== undefined) &&
+        !hasCurrentCounterEvidence(record, decision.counterEvidenceDeliveryId, state, identity))
+      throw new Error('math_plan_next_check_counter_evidence_required: a refuted inference needs another current supporting check ' +
+        'of this exact target with retained evidence, or revise the argument, assign a new independent feasibility check, or stop.');
     if (decision.action === 'revise') {
       const ids = new Set([record.scope.target.taskId, record.scope.consumer.taskId]);
       const changed = [...ids].some(id => canonicalMathJson(argument(state.tasks.find(node => node.task.id === id)?.task)) !==
@@ -184,8 +231,10 @@ export function prepareNextCheckDecisions(state: State & { proofRoutes?: readonl
       const routes = (items: readonly ProofRoute[] = []) => items.filter(route => ids.has(route.targetTaskId))
         .map(({ targetTaskId, closingTaskId, prerequisiteTaskIds }) => ({ targetTaskId, closingTaskId,
           prerequisiteTaskIds: [...prerequisiteTaskIds].sort() })).sort((a, b) => canonicalMathJson(a).localeCompare(canonicalMathJson(b)));
-      if (!changed && canonicalMathJson(routes(state.proofRoutes)) === canonicalMathJson(routes(plan.proofRoutes)))
-        throw new Error('math_plan_next_check_revision_required: change the target argument, dependencies or route.');
+      if (!changed && canonicalMathJson(routes(state.proofRoutes)) === canonicalMathJson(routes(plan.proofRoutes)) &&
+          !hasFreshFeasibilityRevision(record, state, plan))
+        throw new Error('math_plan_next_check_revision_required: change the target argument, dependencies or route, ' +
+          'or assign a new active independent feasibility check of the target.');
     }
     if (decision.action === 'stop') {
       const index = plan.tasks.findIndex(task => task.id === record.scope.target.taskId);
@@ -201,7 +250,8 @@ export function nextCheckContextText(records: readonly NextCheckRecord[], taskId
   const selected = records.filter(record => taskId ? record.taskId === taskId || record.scope.target.taskId === taskId ||
     record.scope.consumer.taskId === taskId : record.status === 'awaiting-decision').slice(-8);
   return selected.length ? 'Scoped next checks (advisory, never proof acceptance). Read complete records in COOPERATION.json.nextChecks:\n' +
-    JSON.stringify(selected.map(record => ({ id: record.id, gapDeliveryId: record.gapDeliveryId, taskId: record.taskId,
+    JSON.stringify(selected.map(record => ({ id: record.id, origin: record.origin,
+      gapDeliveryId: record.gapDeliveryId, taskId: record.taskId,
       target: record.scope.target, consumer: record.scope.consumer, status: record.status,
       executionContext: record.scope.executionContext, executionBasisDigest: record.scope.executionBasisDigest,
       check: { ...record.check, objective: record.check.objective.slice(0, 800), expectedEvidence: record.check.expectedEvidence.slice(0, 800),

@@ -30,6 +30,7 @@ import { assertStatementSnapshot, captureStatementContexts, isStatementAction, r
 import { parseLeanStatementContexts } from '../src/math/leanStatementContext';
 import { captureProofReferences, proofReferencesUnchanged } from '../src/solver/proofReferences';
 import { applyTaskChanges, checkTaskProof, checkTaskProofs, createTaskSourceProjector, taskChanges } from '../src/solver/cooperativeProof';
+import { conditionalExpectedType } from '../src/solver/conditionalProjection';
 import { readContinuationPage, readContinuationSnapshot } from '../src/solver/continuationInput';
 import { inspectLeanDeclarationRegions, inspectScopedLeanDeclarations, leanDeclarationContextCommands } from '../src/math/leanSource';
 import { recordRouteBlockers, refreshRouteBlockers } from '../src/solver/routeControl';
@@ -1102,8 +1103,8 @@ describe('isolated solver and host acceptance', () => {
     const commit = commitSolverSources(problem, workspace);
     host.verify.mockImplementation(async request => {
       const projected = fs.readFileSync(path.join(request.projectRoot, 'Submission.lean'), 'utf8');
-      expect(projected).toContain('noncomputable def C (helper : True) : Nat := by');
-      expect(projected).toContain('have h : True := helper');
+      expect(projected).toContain('noncomputable def C : theorem_os_conditional_type%');
+      expect(projected).toContain('have h : True := _root_.Submission.helper');
       expect(projected).not.toContain('sorry'); return verified(request);
     });
     const proof = await checkTaskProof(problem, workspace, commit, task, dispatched,
@@ -3551,8 +3552,8 @@ describe('isolated solver and host acceptance', () => {
     expect(unconditional).toContain('lemma dependency₂ : True');
     expect(unconditional).toContain('lemma dependency_wrapper : True');
     const projected = createTaskSourceProjector(problem, workspace, commit)(task, [], [dependency]).get('Submission.lean')!;
-    expect(projected).toContain('lemma parent (dependency₂ : True) : True := dependency₂');
-    expect(projected).not.toContain('Submission.dependency₂');
+    expect(projected).toContain('lemma parent : theorem_os_conditional_type%');
+    expect(projected).toContain('_root_.Submission.dependency₂');
     for (const name of ['dependency₂', 'dependency_wrapper', 'wrapper_chain', 'parent_wrapper'])
       expect(projected).not.toMatch(new RegExp(`lemma ${name} :`));
     expect(fs.readFileSync(file, 'utf8')).toBe(source);
@@ -3596,7 +3597,7 @@ describe('isolated solver and host acceptance', () => {
       expect(projected).not.toContain('def wrapper');
       expect(projected).not.toContain('noncomputable');
       expect(projected).toContain('\ntheorem helper : True := by trivial\n');
-      expect(projected).toContain('theorem consumer (premise : True) : True := helper');
+      expect(projected).toContain('theorem consumer : theorem_os_conditional_type%');
       expect(projected).not.toContain('lemma premise');
       expect(fs.readFileSync(file, 'utf8')).toBe(source);
     });
@@ -3960,9 +3961,12 @@ describe('isolated solver and host acceptance', () => {
       workers: state.workers.map((worker: any) => ({ id: worker.id, error: worker.error })),
       events: vi.mocked(console.log).mock.calls.map(([event]) => JSON.parse(event))
         .filter(event => /error|failed|blocked|idle/u.test(event.event)) }, null, 2)).toBe(0);
-    const partialChecks = host.verify.mock.calls.filter(([request]) => request.items.length === 1);
-    expect(partialChecks).toHaveLength(6);
-    for (const [request] of partialChecks) expect(request).toMatchObject({ timeoutMs: seconds ? seconds * 1000 : Infinity,
+    // Task checks can share a batch or reuse an identical checked projection; the timeout applies to every actual request.
+    const taskChecks = host.verify.mock.calls.filter(([request]) => request.items.every(item =>
+      state.cooperation.tasks.some((node: TaskRecord) => item.theoremName === node.task.theoremName && item.statementHash === taskVersion(node.task))));
+    for (const node of state.cooperation.tasks) expect(taskChecks.some(([request]) =>
+      request.targetCommit === node.integratedCheck.verification.targetCommit && request.items.some(item => item.theoremName === node.task.theoremName))).toBe(true);
+    for (const [request] of taskChecks) expect(request).toMatchObject({ timeoutMs: seconds ? seconds * 1000 : Infinity,
       batchTimeoutMs: seconds ? seconds * 1000 : Infinity });
   });
 
@@ -5373,7 +5377,17 @@ describe('isolated solver and host acceptance', () => {
     expect(resumed.tasks.map((node: any) => node.attempts)).toEqual([1, 1, 1, 1]);
     expect(resumed.tasks[0].status).toBe('pending');
     expect(resumed.edits[0].recheck.status).toBe('pending');
-    expect(resumed.deliveries.find((record: any) => record.id === delivery.id).commit).toBe(delivery.commit);
+    const refreshedDelivery = resumed.deliveries.find((record: any) => record.id === delivery.id);
+    const refreshedProof = resumed.tasks[2].integratedCheck;
+    expect(resumed.deliveries.filter((record: any) => record.taskId === 'first' && record.status === 'verified')).toEqual([refreshedDelivery]);
+    expect(refreshedDelivery).toMatchObject({ commit: refreshedProof.commit, sourceDigest: refreshedProof.sourceDigest,
+      actualReferences: refreshedProof.references, createdAt: delivery.createdAt, assignmentKey: delivery.assignmentKey,
+      evidence: { passed: true, verification: { status: 'kernel_verified', targetCommit: refreshedProof.verification.targetCommit,
+        results: refreshedProof.verification.results.map(({ receiptId }: { receiptId: string }) => ({ receiptId })) } } });
+    expect(refreshedProof.conditions ?? []).toEqual([]);
+    expect(refreshedDelivery.artifacts).toEqual(delivery.artifacts);
+    expect(resumed.deliveries.find((record: any) => record.submissionId === 'first-ready'))
+      .toEqual(before.deliveries.find((record: any) => record.submissionId === 'first-ready'));
     for (const name of ['b', 'first', 'second']) expect(host.verify.mock.calls.some(([request]) =>
       request.items.length === 1 && request.items[0].theoremName === `Submission.${name}`)).toBe(true);
     expect(host.officialGate).toHaveBeenCalledOnce();
@@ -5687,9 +5701,9 @@ describe('isolated solver and host acceptance', () => {
     const verify = host.verify.getMockImplementation()!;
     host.verify.mockImplementation(async (request, options) => {
       const source = fs.readFileSync(path.join(request.projectRoot, 'Submission.lean'), 'utf8');
-      if (source.includes('theorem first (a : True) (b : True)')) {
+      if (source.includes('theorem first : theorem_os_conditional_type%')) {
         conditionalChecks++;
-        expect(source).toContain('exact And.left (And.intro a b)');
+        expect(source).toContain('exact And.left (And.intro _root_.Submission.a _root_.Submission.b)');
         expect(source).not.toContain('-- Submission.a remains a reference in this comment.');
         expect(source).not.toMatch(/lemma [ab]/u);
         expect(source).not.toContain('sorry');
@@ -5731,7 +5745,8 @@ describe('isolated solver and host acceptance', () => {
     host.verify.mockImplementation(async (request, options) => {
       const result = await verify(request, options);
       const source = fs.readFileSync(path.join(request.projectRoot, 'Submission.lean'), 'utf8');
-      return failure === 'failed-combination' && request.items[0].theoremName === 'Submission.first' && !source.includes('(a : True)')
+      return failure === 'failed-combination' && request.items[0].theoremName === 'Submission.first' &&
+        !source.includes('theorem first : theorem_os_conditional_type%')
         ? failed(result, { error: 'Lean exited with status 1.', stdoutPreview: 'Submission.lean:1:0: error: fixture combined proof does not close the target' })
         : result;
     });
@@ -5772,7 +5787,8 @@ describe('isolated solver and host acceptance', () => {
     });
     expect(await runSolver([...args, '--workers', '4', '--max-turns', '6'], directory)).toBe(0);
     expect(calls.filter(id => id === 'b')).toHaveLength(1); expect(calls.filter(id => id === 'first')).toHaveLength(1);
-    expect(checkedTypes).toContain('∀ (a : True), True'); expect(checkedTypes).toContain('True');
+    expect(checkedTypes).toContain(conditionalExpectedType('Submission.b', 'True', [{ theoremName: 'Submission.a', type: 'True' }]));
+    expect(checkedTypes).toContain('True');
     expect(cooperationState().deliveries.filter((record: any) => record.status === 'verified').map((record: any) => record.taskId))
       .toEqual(['a', 'b', 'first', 'second']);
     expect(host.officialGate).toHaveBeenCalledOnce();
@@ -5829,6 +5845,9 @@ describe('isolated solver and host acceptance', () => {
     const before = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
     expect(before.cooperation.tasks[2]).toMatchObject({ status: 'conditional', attempts: 1 });
     const projection = before.cooperation.tasks[2].proof.projection;
+    const conditionalSourceHash = before.cooperation.tasks[2].proof.verification.results
+      .find((result: any) => result.theoremName === 'Submission.first').sourceDeclarationHash;
+    expect(conditionalSourceHash).toEqual(expect.any(String));
     expect(projection).toMatchObject({ environmentDigest: before.environmentDigest,
       problemReceiptDigest: expect.any(String), sourceDigest: expect.any(String) });
     host.createSession.mockClear(); host.verify.mockClear();
@@ -5852,7 +5871,7 @@ describe('isolated solver and host acceptance', () => {
     expect(cooperationState().tasks[2]).toMatchObject({ status: 'integrated', attempts: 1 });
     expect(host.verify.mock.calls.filter(([request]) => {
       const source = request.items[0].theoremName === 'Submission.first' && request.items[0].expectedSourceDeclarationHash;
-      return source === hashMathFormalSourceDeclaration('namespace Submission\ntheorem first (a : True) (b : True) : True := by exact a\nend Submission\n', 'Submission.first');
+      return source === conditionalSourceHash;
     })).toHaveLength(1);
     expect(host.officialGate).toHaveBeenCalledOnce();
   }, 20_000);
@@ -5912,14 +5931,19 @@ describe('isolated solver and host acceptance', () => {
         results: result.results.map(receipt => ({ ...receipt, stdoutPreview: 'FULL_CHECK_OUTPUT' })) };
     });
     expect(await runSolver([...args, '--workers', '4', '--max-turns', '6'], directory)).toBe(0);
-    expect(cooperationState().deliveries.find((record: any) => record.submissionId === 'early-a')).toMatchObject({
-      kind: 'proof', status: 'verified', producer: 'researcher-1', commit: deliveredCommit,
+    const state = cooperationState(), proof = state.tasks[0].proof, integrated = state.tasks[0].integratedCheck;
+    const delivery = state.deliveries.find((record: any) => record.submissionId === 'early-a');
+    expect(delivery).toMatchObject({
+      kind: 'proof', status: 'verified', producer: 'researcher-1', commit: integrated.commit,
+      sourceDigest: integrated.sourceDigest,
       statement: 'True', remainingObligations: [], evidence: { passed: true } });
-    const delivery = cooperationState().deliveries.find((record: any) => record.submissionId === 'early-a');
-    const proof = cooperationState().tasks[0].proof;
-    expect(delivery.evidence.verification).toMatchObject({ status: 'kernel_verified', targetCommit: proof.verification.targetCommit,
+    expect(delivery.actualReferences).toEqual(integrated.references);
+    expect(proof.commit).toBe(deliveredCommit);
+    expect(delivery.artifacts.commit).toBe(deliveredCommit);
+    expect(integrated.conditions ?? []).toEqual([]);
+    expect(delivery.evidence.verification).toMatchObject({ status: 'kernel_verified', targetCommit: integrated.verification.targetCommit,
       results: expect.arrayContaining([expect.objectContaining({ receiptId: expect.any(String) })]) });
-    expect(delivery.evidence.verification.results).toEqual(proof.verification.results.map((receipt: any) => ({ receiptId: receipt.receiptId })));
+    expect(delivery.evidence.verification.results).toEqual(integrated.verification.results.map((receipt: any) => ({ receiptId: receipt.receiptId })));
     expect(delivery.evidence.verification).not.toHaveProperty('events');
     expect(delivery.evidence.verification.results[0]).not.toHaveProperty('stdoutPreview');
     expect(proof.verification.events[0].details.message).toBe('FULL_CHECK_TRACE');

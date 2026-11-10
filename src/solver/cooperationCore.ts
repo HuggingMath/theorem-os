@@ -31,6 +31,7 @@ import { reviewProjectionDependencies } from './projectionDependencyReview';
 import type { GoalPathDecisions } from './goalPathDecisions';
 import { bindMathematicalGap, mathematicalGapVisible } from './mathematicalGaps';
 import { currentNextCheck, proposedNextChecks } from './nextChecks';
+import { proposedDefinitionContractChecks } from './definitionContractChecks';
 import { taskConnectionCheckCurrent } from './taskConnections';
 import { TaskTypePreflightCache } from './taskTypePreflight';
 import { currentCapacityExploration, plannedTaskRecords } from './capacityExploration';
@@ -365,13 +366,29 @@ export abstract class CooperationCore {
   protected refreshNextChecks() {
     const identity = { problemReceiptDigest: this.input.state.problem.receiptDigest, environmentDigest: this.input.state.environmentDigest };
     const now = Date.now();
-    for (const proposed of proposedNextChecks(this.archive, identity, now)) {
-      if (this.archive.nextChecks?.some(record => record.id === proposed.record.id)) continue;
+    for (const proposed of [...proposedNextChecks(this.archive, identity, now),
+      ...proposedDefinitionContractChecks(this.archive, identity, now)]) {
+      const previous = this.archive.nextChecks?.find(record => record.id === proposed.record.id);
+      if (previous) {
+        // A pause or removed downstream path can expire an unfinished definition check.
+        // When that exact question becomes relevant again, resume its one existing record.
+        if (previous.origin === 'definition-contract' && previous.status === 'stale' && !previous.outcome) {
+          const node = this.archive.tasks.find(item => item.nextCheckId === previous.id);
+          if (currentNextCheck({ ...previous, status: 'pending' }, this.archive, identity)) {
+            previous.status = 'pending';
+            if (node) { node.task = { ...node.task, status: 'active' }; this.moveTask(node, 'pending', 'reopened'); }
+            else this.archive.tasks.push(proposed.node);
+            this.input.emit('next_check_resumed', { checkId: previous.id, taskId: previous.taskId });
+          }
+        }
+        continue;
+      }
       // A model task cannot take ownership of the host's deterministic check id.
       if (this.archive.tasks.some(node => node.task.id === proposed.node.task.id)) continue;
       (this.archive.nextChecks ??= []).push(proposed.record); this.archive.tasks.push(proposed.node);
       this.input.emit('next_check_scheduled', { checkId: proposed.record.id, taskId: proposed.node.task.id,
-        target: proposed.record.scope.target, consumer: proposed.record.scope.consumer });
+        target: proposed.record.scope.target, consumer: proposed.record.scope.consumer,
+        ...(proposed.record.origin ? { origin: proposed.record.origin } : {}) });
     }
     for (const record of this.archive.nextChecks ?? []) {
       const node = this.archive.tasks.find(item => item.nextCheckId === record.id);
@@ -410,12 +427,17 @@ export abstract class CooperationCore {
         throw new Error('math_plan_host_next_check_dependency: adopt a separate typed lemma; advisory checks are not proof inputs.');
     }
     plan.tasks = plan.tasks.filter(task => !hostIds.has(task.id));
-    const proposed = { ...this.archive, tasks: plan.tasks.map(task => ({ task, status: 'pending' as const, attempts: 0 })) };
+    const proposed = this.nextCheckPlanView(plan);
     for (const node of hostNodes) {
       const record = this.archive.nextChecks?.find(item => item.id === node.nextCheckId);
       if (record && currentNextCheck(record, proposed, this.explorationIdentity) && plan.groups.some(group => group.id === taskGroup(node.task)))
         plan.tasks.push(node.task);
     }
+  }
+  protected nextCheckPlanView(plan: ReturnType<typeof parseCooperationPlan>) {
+    const previousGroups = new Map(this.archive.groups?.map(record => [record.group.id, record]));
+    return { ...this.archive, tasks: this.capacityPlanView(plan), proofRoutes: plan.proofRoutes,
+      groups: plan.groups.map(group => ({ group, turns: previousGroups.get(group.id)?.turns ?? 0 })) };
   }
   protected refreshCapacityExplorations() {
     let changed = false;
@@ -579,7 +601,7 @@ export abstract class CooperationCore {
       const visible = new Set(scoped.tasks.map(node => node.task.id));
       const requiredCheckDeliveries = new Set((scoped.nextChecks ?? []).filter(record =>
         record.status === 'pending' || record.status === 'awaiting-decision').flatMap(record =>
-        [record.gapDeliveryId, ...(record.outcome ? [record.outcome.deliveryId] : [])]));
+        [...(record.gapDeliveryId ? [record.gapDeliveryId] : []), ...(record.outcome ? [record.outcome.deliveryId] : [])]));
       const recentDeliveries = new Set((scoped.deliveries ?? []).slice(-16).map(record => record.id));
       const deliveries = (scoped.deliveries ?? []).filter(record => recentDeliveries.has(record.id) || requiredCheckDeliveries.has(record.id));
       writeMathJsonDurable(path.join(worker.worktree, 'COOPERATION.json'), {

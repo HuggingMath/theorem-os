@@ -145,7 +145,9 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   unchangedResearch?: Record<string, { taskDigest: string; notesBlob: string; count: number }>;
   researchCheckpoints?: Record<string, ResearchCheckpoint>;
   researchDrafts?: Record<string, { taskDigest: string; workerId: string; assignmentId?: string; seedCommit: string; canonicalCommit?: string;
-    commit: string; outputDigest: string; artifacts: DeliveryArtifactManifest; suspended?: boolean }>;
+    commit: string; outputDigest: string; artifacts: DeliveryArtifactManifest; suspended?: boolean;
+    /** Exact saved notes already attributed to this task; retaining inherited bytes cannot create this marker. */
+    handoffNotesDigest?: string }>;
   recheck?: { canonicalCommit: string; total: number; completed: number; taskId?: string };
   initialPlanFallback?: { at: number; reason: string };
   /** What the last started Lead turn saw; the next Lead context reports changes since then. */

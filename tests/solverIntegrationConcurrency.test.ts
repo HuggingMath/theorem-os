@@ -194,7 +194,7 @@ describe('task integration with concurrent host control', () => {
     expect(node().proof).toBe(accepted);
     expect(node()).toMatchObject({ status: 'integrated', proof: { passed: true, commit: firstCommit }, integratedCheck: { passed: true } });
     expect(canonicalSource()).toContain('lemma integration_lemma : True := by trivial');
-    expect(records().filter(record => record.kind === 'proof')).toMatchObject([{ status: 'verified', commit: firstCommit }]);
+    expect(records().filter(record => record.kind === 'proof')).toMatchObject([{ status: 'verified', commit: node().integratedCheck!.commit }]);
     expect(records().some(record => record.commit === laterCommit)).toBe(false);
     expectNoMathematicalFailure();
   });
@@ -405,7 +405,9 @@ describe('task integration with concurrent host control', () => {
     expect(node().proof).toBe(checked);
     expect(canonicalSource()).toContain('lemma integration_lemma : True := by trivial');
     expect(host.verify).toHaveBeenCalledTimes(3);
-    expect(records().filter(record => record.kind === 'proof')).toMatchObject([{ taskId: action.task.id, status: 'verified', commit }]);
+    expect(records().filter(record => record.kind === 'proof')).toMatchObject([
+      { taskId: action.task.id, status: 'verified', commit: node().integratedCheck!.commit },
+    ]);
     expect(events.filter(item => item.event === 'task_integrated')).toHaveLength(1);
     expect(events.find(item => item.event === 'task_integrated')?.details).toMatchObject({
       taskId: action.task.id, taskDigest: action.assignment.taskDigest, workerId: action.assignment.workerId,
@@ -438,7 +440,9 @@ describe('task integration with concurrent host control', () => {
     expect(canonicalSource()).toContain('lemma independent_lemma : True := by trivial');
     expect(host.verify).toHaveBeenCalledTimes(3);
     expect(host.verify.mock.calls[2][0].targetCommit).not.toBe(originalMerged.targetCommit);
-    expect(records().filter(record => record.kind === 'proof')).toMatchObject([{ taskId: action.task.id, status: 'verified', commit }]);
+    expect(records().filter(record => record.kind === 'proof')).toMatchObject([
+      { taskId: action.task.id, status: 'verified', commit: node().integratedCheck!.commit },
+    ]);
     expectNoMathematicalFailure();
   });
 
@@ -455,7 +459,9 @@ describe('task integration with concurrent host control', () => {
 
     expect(node()).toMatchObject({ status: 'integrated', proof: { passed: true, commit }, integratedCheck: { passed: true } });
     expect(host.verify).toHaveBeenCalledTimes(2);
-    expect(records().filter(record => record.kind === 'proof')).toMatchObject([{ taskId: action.task.id, status: 'verified', commit }]);
+    expect(records().filter(record => record.kind === 'proof')).toMatchObject([
+      { taskId: action.task.id, status: 'verified', commit: node().integratedCheck!.commit },
+    ]);
     expect(events.filter(item => item.event === 'task_integrated')).toHaveLength(1);
     expectNoMathematicalFailure();
   });
@@ -504,7 +510,7 @@ describe('task integration with concurrent host control', () => {
     expect(node()).toMatchObject({ status: 'integrated', integratedCheck: { passed: true } });
     expect(node().proof).toBe(checked);
     expect(host.verify).toHaveBeenCalledTimes(3);
-    expect(records().filter(record => record.kind === 'proof')).toMatchObject([{ status: 'verified', commit }]);
+    expect(records().filter(record => record.kind === 'proof')).toMatchObject([{ status: 'verified', commit: node().integratedCheck!.commit }]);
     expectNoMathematicalFailure();
   });
 });

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import { isSimpleLeanName, maskLeanComments, maskLeanCommentsAndStrings } from '../math/leanSyntax';
-import { mathConstructionImports } from '../math/mathConstructionSources';
+import { mathConstructionImports, mathConstructionImportSpans } from '../math/mathConstructionSources';
 import { hashMathFormalSourceDeclaration, inspectLeanDeclarationRegions, inspectLeanProjectionDeclarations, inspectScopedLeanDeclarations,
   leanDeclarationContextCommands, leanDeclarationKeys, repeatedLeanLocalNames } from '../math/leanSource';
 import { assertSolverSources, committedSource, commitSolverProjection, git, originalDeclarationRegions, solverProofImports,
@@ -18,11 +18,12 @@ import { compactTaskSources } from './taskProjection';
 import { projectionDependencyHintId, type ProjectionDeclaration, type ProjectionDependencyHint } from './projectionDependencyHints';
 import { assertTaskTypeContract } from './taskTypeContract';
 import { inspectProjectionNotations, type ProjectionNotation } from './projectionNotation';
+import { conditionalExpectedType, conditionalProjection } from './conditionalProjection';
 
 export { TaskProofCache } from './taskProofCache';
 
 /** Source observations only order/recover checks; callers must separately establish fresh acceptance.
- * Possible notation context is not a plan edge or an unambiguous dependency hint. */
+ * Possible source context is not a plan edge or an unambiguous dependency hint. */
 export function projectedGoalInputs(project: ReturnType<typeof createTaskSourceProjector>, task: CooperativeTask,
   tasks: readonly TaskRecord[], conditions: readonly CooperativeTask[] = []): TaskRecord[] {
   const found = new Set<TaskRecord>(), visited = new Set<string>(), pending = [task];
@@ -321,11 +322,16 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     .map(item => [item.qualifiedName, item.file.slice(0, -'.lean'.length).replaceAll('/', '.')]));
   const notationGroupsCache = new Map<typeof declarations[number], string[][]>();
   const originals = new Map<string, string>();
+  const conditionalInputs = (conditions: readonly CooperativeTask[]) => conditions.map(dependency => ({
+    theoremName: (declarations.find(item => item.file === dependency.proofPath &&
+      (item.qualifiedName === dependency.theoremName || !dependency.theoremName!.includes('.') && item.name === dependency.theoremName))
+      ?.qualifiedName ?? dependency.theoremName!).replace(/^_root_\./u, ''), type: dependency.type!,
+  }));
   const project = (task: CooperativeTask, retainedGoals: readonly string[], conditions: readonly CooperativeTask[] = [],
     observe?: (hints: readonly ProjectionDependencyHint[], context: readonly ProjectionDeclaration[]) => void): Map<string, string> => {
     assertTaskTypeContract(task);
     conditions.forEach(assertTaskTypeContract);
-    const binders = conditions.map(dependency => `(${local(dependency.theoremName!)} : ${dependency.type})`).join(' ');
+    const inputs = conditionalInputs(conditions);
     // These binders are host-generated: an older candidate may not import the frozen modules
     // named by their closed types. Resolve only pinned declarations; mutable helpers remain
     // explicit inputs, and the candidate's original source identity stays unchanged.
@@ -554,9 +560,16 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     const requiredNotations = new Set<string>(), syntaxConsumers = declarations.filter(item => keep.has(item.id));
     const visitedSyntax = new Set(syntaxConsumers.map(item => item.id));
     const syntaxDependencies = observe ? new Map<string, Set<string>>() : undefined;
+    const conditionalContext = observe ? new Set<string>() : undefined;
     for (const consumer of syntaxConsumers) {
       const conditionTypes = consumer.id === target ? conditions.map(input => input.type ?? '').join('\n') : '';
-      const references = conditionTypes ? [...consumer.references, ...sourceReferences(conditionTypes, consumer.bodyOffset)] : consumer.references;
+      // Host assumptions precede the original parameters. A same-named parameter
+      // therefore cannot shadow a source constant in an injected assumption's type.
+      const conditionReferences = conditionTypes ? sourceReferences(conditionTypes)
+        .map(reference => ({ ...reference, offset: consumer.parametersOffset })) : [];
+      const references = conditionReferences.length ? [...consumer.references, ...conditionReferences] : consumer.references;
+      if (conditionalContext) for (const reference of conditionReferences)
+        for (const group of referenceGroups(consumer, reference)) for (const id of group) conditionalContext.add(id);
       const dependencies = new Set<string>();
       for (const reference of references) for (const group of referenceGroups(consumer, reference))
         for (const id of group) {
@@ -657,9 +670,9 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
           }
         }
       }
-      // Required syntax can have several viable parser branches. Its quotation context
-      // must still compile; keep these possible roots separate from dependency evidence.
-      const context: ProjectionDeclaration[] = [], pendingContext = [...requiredNotations], visitedContext = new Set<string>();
+      // Required syntax and injected assumption types need their source context even
+      // when source lookup cannot establish an unambiguous dependency.
+      const context: ProjectionDeclaration[] = [], pendingContext = [...requiredNotations, ...conditionalContext!], visitedContext = new Set<string>();
       for (const id of pendingContext) {
         if (visitedContext.has(id)) continue;
         visitedContext.add(id);
@@ -680,6 +693,7 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     for (const file of problem.ownedFiles) {
       let source = sources.get(file)!;
       if (!file.endsWith('.lean')) continue;
+      let conditionalPrelude: string | undefined;
       // Doc comments require a following declaration, which this projection may remove.
       source = masked.get(file)!.text;
       // A notation quotation is checked even when no retained theorem uses it. Drop the
@@ -720,15 +734,19 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
           const name = (originalDefinition ? /^def\s+[^\s(\[{:]+/u : /^(?:theorem|lemma)\s+[^\s(\[{:]+/u).exec(header);
           if (!name || source.slice(region.bodyOffset - 2, region.bodyOffset) !== ':=') throw new Error('math_task_conditional_header_unsupported');
           let body = source.slice(region.bodyOffset, region.endOffset);
-          // Qualified references must also refer to the explicit assumptions in this projection.
+          // Keep original lookup identities while the helper elaborates polymorphic dependencies.
           for (const reference of sourceReferences(body, region.bodyOffset).reverse()) {
             if (reference.receiverField) continue;
             const dependency = conditions.find(item => item.theoremName === reference.name) ??
               assumptions.get(referenceKey(declaration, reference.name, reference.offset) ?? '');
             const index = reference.offset - region.bodyOffset;
-            if (dependency) body = body.slice(0, index) + local(dependency.theoremName!) + body.slice(index + reference.name.length);
+            if (dependency) body = body.slice(0, index) + '_root_.' + inputs[conditions.indexOf(dependency)]!.theoremName +
+              body.slice(index + reference.name.length);
           }
-          source = source.slice(0, region.startOffset) + name[0] + ' ' + binders + header.slice(name[0].length) + ':=' + body + source.slice(region.endOffset);
+          const projected = conditionalProjection({ theoremName: declaration.qualifiedName, writtenName: region.name,
+            declaration: header + ':=' + body, dependencies: inputs });
+          conditionalPrelude = projected.prelude;
+          source = source.slice(0, region.startOffset) + projected.source + source.slice(region.endOffset);
         } else if (removed.has(declaration.id)) {
           // A prefix left behind would bind to the following command, often the closing `end`.
           const start = declarationStartWithDoc(source, region.startOffset, index ? fileRegions[index - 1]!.endOffset : 0);
@@ -740,6 +758,13 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
         const modules = solverProofImports(problem, [...conditionModules].sort().map(module => `import ${module}\n`).join(''))
           .filter(module => !existing.has(module));
         source = modules.map(module => `import ${module}\n`).join('') + source;
+      }
+      if (conditionalPrelude) {
+        const imports = mathConstructionImportSpans(source);
+        const headerEnd = imports.at(-1)?.end ??
+          /^(?:\s*(?:module|prelude)\b)*\s*/u.exec(maskLeanCommentsAndStrings(source))![0].length;
+        const lean = imports.some(item => item.name === 'Lean') ? '' : 'import Lean\n';
+        source = source.slice(0, headerEnd) + '\n' + lean + conditionalPrelude + '\n' + source.slice(headerEnd);
       }
       sources.set(file, source);
     }
@@ -765,6 +790,10 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     /** Possible source context only. The host must freshly accept each input before retaining it. */
     possibleContextGoals(task: CooperativeTask, retainedGoals: readonly string[], conditions: readonly CooperativeTask[] = []): readonly ProjectionDeclaration[] {
       return structuredClone(observe(task, retainedGoals, conditions).context);
+    },
+    expectedType(task: CooperativeTask, conditions: readonly CooperativeTask[]): string | undefined {
+      return task.kind === 'lemma' ? conditions.length
+        ? conditionalExpectedType(task.theoremName!, task.type!, conditionalInputs(conditions)) : task.type : undefined;
     },
   });
 }
@@ -822,7 +851,6 @@ async function checkTaskProofsWithProjection(problem: SolverProblem, worktree: s
             input.taskDigest === taskVersion(dependency))) ||
           !assignment.dependencies?.some(version => version.taskId === dependency.id && version.taskDigest === taskVersion(dependency))))
         throw new Error('math_task_condition_version_invalid');
-      const binders = conditions.map(dependency => `(${local(dependency.theoremName!)} : ${dependency.type})`).join(' ');
       const changes = taskChanges(problem, checkout, sourceCommit, task, assignment);
       // Assumed children are supplied by their own checked deliveries, never by this parent's draft.
       const assumed = new Set(conditions.flatMap(dependency => inspectScopedLeanDeclarations(
@@ -838,7 +866,7 @@ async function checkTaskProofsWithProjection(problem: SolverProblem, worktree: s
       });
       return { task, assignment, retainedGoals, conditions, imports, changes: changes.filter(change => !assumed.has(`${change.file}\0${change.name}`)),
         taskDigest: taskVersion(task), sources,
-        expectedType: task.kind === 'lemma' ? conditions.length ? `∀ ${binders}, ${task.type}` : task.type : undefined };
+        expectedType: projectSources.expectedType(task, conditions) };
     });
     const fullSources = prepared[0]!.sources;
     if (prepared.some(item => canonicalMathJson([...item.sources]) !== canonicalMathJson([...fullSources])))

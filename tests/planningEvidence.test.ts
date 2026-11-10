@@ -151,3 +151,62 @@ it('bounds the goal path of many stalled goals and frontier inputs', () => {
   expect(evidence.goalPath.goals.every(goal => goal.frontier.length <= 6 && goal.candidates.length <= 8)).toBe(true);
   expect(Buffer.byteLength(leadPlanningEvidenceText(evidence))).toBeLessThan(16 * 1024);
 });
+
+it('shows unproved disconnected work before a checked local package exists without inferring links from prose', () => {
+  const goal = node('main', [], 'goal'), helper = node('helper'), research = node('research', [], 'research');
+  helper.task = { ...helper.task, objective: 'Consumer: main. This helper supplies the first step.' };
+  research.task = { ...research.task, objective: 'Investigate the main goal.' };
+  const tasks = [goal, helper, research], before = structuredClone(tasks);
+  const evidence = leadPlanningEvidence({ tasks });
+  expect(evidence.localPackages).toEqual([]);
+  expect(evidence.connectionGaps).toMatchObject({ unconnectedProofTasks: [{ taskId: 'helper', status: 'pending' }],
+    unattributedResearchTasks: [{ taskId: 'research', status: 'pending' }],
+    omittedUnconnectedProofTasks: 0, omittedUnattributedResearchTasks: 0 });
+  expect(leadPlanningEvidenceText(evidence)).toContain('Independent exploration may remain unconnected when intentional');
+  expect(tasks).toEqual(before);
+
+  goal.task = { ...goal.task, dependsOn: [helper.task.id] };
+  research.task = { ...research.task, consumerGoalIds: [goal.task.id] };
+  const connected = leadPlanningEvidence({ tasks });
+  expect(connected.connectionGaps.unconnectedProofTasks).toEqual([]);
+  expect(connected.connectionGaps.unattributedResearchTasks).toEqual([]);
+  expect(connected.goals[0].frontier.map(item => item.taskId)).toEqual(['helper']);
+});
+
+it('recognizes explicit alternative routes and transitive research support without requiring proof premises', () => {
+  const goal = node('main', [], 'goal'), core = node('core'), closing = node('closing', ['core']);
+  const research = node('research', ['core', 'probe_input'], 'research'), helper = node('probe_input');
+  const evidence = leadPlanningEvidence({ tasks: [goal, core, closing, research, helper],
+    proofRoutes: [{ id: 'route', targetTaskId: 'main', prerequisiteTaskIds: ['core'], closingTaskId: 'closing' }] });
+  expect(evidence.connectionGaps.unconnectedProofTasks).toEqual([]);
+  expect(evidence.connectionGaps.unattributedResearchTasks).toEqual([]);
+  expect(goal.task.dependsOn).toEqual([]);
+});
+
+it('does not label paused, completed, parked, final-review, host-check or closed-group work as missing connections', () => {
+  const goal = node('main', [], 'goal'), paused = node('paused'), completed = node('completed', [], 'research');
+  paused.task = { ...paused.task, status: 'paused' };
+  const parked = { ...node('parked'), routeParking: ['blocked'] };
+  const hostCheck = { ...node('check', [], 'research'), nextCheckId: 'a'.repeat(64) };
+  const review = node('review', [], 'research'); review.task = { ...review.task, reviewScope: 'final-candidate' };
+  const closed = node('closed'); closed.task = { ...closed.task, groupId: 'other' };
+  const tasks = [goal, paused, { ...completed, status: 'completed' as const }, parked, hostCheck, review, closed];
+  const evidence = leadPlanningEvidence({ tasks, groups: [
+    { group: { id: 'main', objective: 'main', status: 'active', revision: 0 }, turns: 0 },
+    { group: { id: 'other', objective: 'other', status: 'paused', revision: 0 }, turns: 0 },
+  ] });
+  expect(evidence.connectionGaps.unconnectedProofTasks).toEqual([]);
+  expect(evidence.connectionGaps.unattributedResearchTasks).toEqual([]);
+});
+
+it('bounds early connection gaps and keeps large interfaces in the archive', () => {
+  const helpers = Array.from({ length: 20 }, (_, i) => node('helper_' + i));
+  const investigations = Array.from({ length: 20 }, (_, i) => node('research_' + i, [], 'research'));
+  for (const helper of helpers) helper.task = { ...helper.task, type: 'True ∧ '.repeat(10000) + 'True' };
+  const evidence = leadPlanningEvidence({ tasks: [node('main', [], 'goal'), ...helpers, ...investigations] });
+  expect(evidence.connectionGaps.unconnectedProofTasks).toHaveLength(8);
+  expect(evidence.connectionGaps.unattributedResearchTasks).toHaveLength(8);
+  expect(evidence.connectionGaps).toMatchObject({ omittedUnconnectedProofTasks: 12, omittedUnattributedResearchTasks: 12 });
+  expect(evidence.connectionGaps.unconnectedProofTasks[0]).not.toHaveProperty('type');
+  expect(Buffer.byteLength(leadPlanningEvidenceText(evidence))).toBeLessThan(8 * 1024);
+});

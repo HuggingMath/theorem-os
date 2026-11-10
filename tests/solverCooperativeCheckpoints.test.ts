@@ -374,8 +374,8 @@ describe('cooperative advisory scheduling checkpoints', () => {
       expect(vi.getTimerCount()).toBe(0);
     });
 
-  it('lets an advisory research slice that ends mid-request wait for that request before its checkpoint', async () => {
-    const { state, events, controller, run } = fixture();
+  it('lets an advisory research slice that ends mid-request save its handoff before its checkpoint', async () => {
+    const { state, workers, events, controller, run } = fixture();
     const held = heldAdvisoryTurns(2), completion = run(held.open, Infinity); void completion.catch(() => {});
     await held.wait(0, completion);
     const activity = held.open.mock.calls[0][0].onActivity!;
@@ -389,11 +389,21 @@ describe('cooperative advisory scheduling checkpoints', () => {
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     activity({ event: 'item_started', itemType: 'commandExecution' });
     activity({ event: 'item_completed', itemType: 'commandExecution' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(held.interrupt).not.toHaveBeenCalled();
+    expect(events).toContainEqual({ event: 'research_handoff_requested', details: expect.objectContaining({
+      workerId: 'researcher', taskId: 'investigate', remainingMs: 5 * 60_000 }) });
+    await vi.advanceTimersByTimeAsync(30_000);
+    activity({ event: 'item_started', itemType: 'commandExecution' });
+    const notes = 'The search leaves a precisely identified missing estimate; the attempted reduction is saved here.\n';
+    fs.writeFileSync(path.join(workers[1].worktree, 'RESEARCH.md'), notes);
+    activity({ event: 'item_completed', itemType: 'commandExecution' });
     await held.wait(1, completion);
     expect(held.interrupt).toHaveBeenCalledOnce();
     expect(events).toContainEqual({ event: 'cooperative_checkpoint_request_settled', details: expect.objectContaining({
-      workerId: 'researcher', boundary: 'request-returned', waitedMs: 5 * 60_000 }) });
+      workerId: 'researcher', boundary: 'request-returned', waitedMs: 5 * 60_000 + 30_000 }) });
     expect(state.cooperation!.researchCheckpoints?.investigate).toMatchObject({ count: 1, paused: false });
+    expect(committedSource(workers[1].worktree, state.cooperation!.researchDrafts!.investigate.commit, 'RESEARCH.md')).toBe(notes);
     controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
     expect(vi.getTimerCount()).toBe(0);
   });
