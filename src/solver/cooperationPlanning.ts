@@ -109,7 +109,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       this.archive.lastLeadInputDigest = this.leadEvidence.get(action) === this.planningEvidenceDigest()
         ? this.planningInputDigest() : action.planningInputDigest;
       this.archive.lastLeadPauseInputDigest = undefined;
-      // Idle peers this deciding turn was shown are answered; only one Lead turn runs at a time.
+      // Diagnostic only: an accepted plan does not answer a peer still in the same no-work episode.
       this.archive.leadDecisionBasisAt = this.archive.leadInboxBasis?.at ?? Date.now();
       this.answerGoalProgressReview(action);
       const pending = leadResearchInputs(this.archive.deliveries ?? [],

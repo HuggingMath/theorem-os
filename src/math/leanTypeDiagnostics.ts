@@ -66,9 +66,11 @@ export function leanTypeDiagnosticProjection(input: {
   return { files, query, output, commands, digest };
 }
 
-/** Explicit advisory preflight in a fixed, proof-erased local snapshot. It cannot grant proof acceptance. */
-export async function checkLeanType(input: { projectRoot: string; file: string; context: string; type: string; expression?: string;
-  env?: NodeJS.ProcessEnv; signal?: AbortSignal; timeoutMs: number; onProgress?: (file: string) => void }) {
+export type LeanTypeDiagnosticInput = { projectRoot: string; file: string; context: string; type: string; expression?: string;
+  env?: NodeJS.ProcessEnv; signal?: AbortSignal; timeoutMs: number; onProgress?: (file: string) => void };
+
+/** The host's advisory consumers and the executed clone must describe the same complete input. */
+export function prepareLeanTypeDiagnostic(input: LeanTypeDiagnosticInput) {
   if (!input.type.trim() || Buffer.byteLength(input.type) > 12000 || !input.context.trim() || input.context.length > 1000 ||
       input.expression !== undefined && (!input.expression.trim() || Buffer.byteLength(input.expression) > 12000))
     throw new Error('math_type_diagnostics_input_invalid');
@@ -87,6 +89,30 @@ export async function checkLeanType(input: { projectRoot: string; file: string; 
   const sourceDigest = mathDigest(canonicalMathJson(snapshot.map(({ file, digest }) => ({ file, digest }))));
   const projection = leanTypeDiagnosticProjection({ files: snapshot, modules,
     file: input.file, context: input.context, type: input.type, expression: input.expression });
+  const assertSources = () => {
+    for (const file of snapshot) {
+      const current = readMathFile(path.join(project, file.file), 4_000_000);
+      if (current.identity !== file.identity || mathDigest(current.bytes) !== file.digest) throw new Error('math_type_diagnostics_source_changed');
+    }
+  };
+  const assertCurrent = () => {
+    assertSources();
+    if (fs.realpathSync(input.projectRoot) !== project ||
+        canonicalMathJson(mathLocalModuleBuildOrder(project, input.file)) !== canonicalMathJson(modules) ||
+        canonicalMathJson(configs.filter(file => fs.existsSync(path.join(project, file)))) !==
+          canonicalMathJson(files.filter(file => configs.includes(file))) ||
+        canonicalMathJson(leanDiagnosticEnvironmentIdentity(project, env)) !== canonicalMathJson(environment))
+      throw new Error('math_type_diagnostics_environment_or_sources_changed');
+    sealed?.verify();
+  };
+  return { project, env, sealed, environment, modules, snapshot, sourceDigest, projection, assertSources, assertCurrent,
+    current: () => { try { assertCurrent(); return !input.signal?.aborted; } catch { return false; } } };
+}
+
+/** Explicit advisory preflight in a fixed, proof-erased local snapshot. It cannot grant proof acceptance. */
+export async function checkLeanType(input: LeanTypeDiagnosticInput) {
+  const prepared = prepareLeanTypeDiagnostic(input);
+  const { project, env, sealed, environment, snapshot, sourceDigest, projection } = prepared;
   const directory = path.join(project, '.lake', 'type-diagnostics', crypto.randomUUID()), clone = path.join(directory, 'project');
   assertMathCanonicalPath(clone); fs.mkdirSync(clone, { recursive: true, mode: 0o700 });
   for (const file of projection.files) {
@@ -94,10 +120,7 @@ export async function checkLeanType(input: { projectRoot: string; file: string; 
     fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 }); fs.writeFileSync(target, file.source, { mode: 0o600 });
   }
   // Recheck the entire original input window after copying; the clone remains fixed during Lean execution.
-  for (const file of snapshot) {
-    const current = readMathFile(path.join(project, file.file), 4_000_000);
-    if (current.identity !== file.identity || mathDigest(current.bytes) !== file.digest) throw new Error('math_type_diagnostics_source_changed');
-  }
+  prepared.assertSources();
   const packages = sealed?.packagesRoot ?? path.join(project, '.lake', 'packages');
   if (fs.existsSync(packages)) bindLeanPackages(clone, packages);
   prepareLeanDiagnosticOverrides(clone);
@@ -111,16 +134,7 @@ export async function checkLeanType(input: { projectRoot: string; file: string; 
     signal: input.signal, timeoutMs: input.timeoutMs, onProgress: input.onProgress });
   const diagnostics = { ...checked, aborted: Boolean(input.signal?.aborted || 'aborted' in checked && checked.aborted) };
   // A snapshot can finish after its live consumer or package/tool binding has changed.
-  for (const file of snapshot) {
-    const current = readMathFile(path.join(project, file.file), 4_000_000);
-    if (current.identity !== file.identity || mathDigest(current.bytes) !== file.digest) throw new Error('math_type_diagnostics_source_changed');
-  }
-  if (canonicalMathJson(mathLocalModuleBuildOrder(project, input.file)) !== canonicalMathJson(modules) ||
-      canonicalMathJson(configs.filter(file => fs.existsSync(path.join(project, file)))) !==
-        canonicalMathJson(files.filter(file => configs.includes(file))) ||
-      canonicalMathJson(leanDiagnosticEnvironmentIdentity(project, env)) !== canonicalMathJson(environment))
-    throw new Error('math_type_diagnostics_environment_or_sources_changed');
-  sealed?.verify();
+  prepared.assertCurrent();
   let elaboratedType: string | undefined, constants: string[] | undefined;
   if (diagnostics.exitCode === 0 && !diagnostics.timedOut && !diagnostics.aborted) {
     const value = readMathJson(path.join(clone, projection.output)) as Record<string, unknown>;

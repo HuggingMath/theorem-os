@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { queueResearchObservation } from '../src/solver/researchObservation';
 import { researchPublicationNotes } from '../src/solver/researchPublication';
@@ -7,12 +9,15 @@ import { parseMathResponse } from '../src/solver/deliveries';
 import { assignmentDeliveryFile, parseCooperationPlan } from '../src/solver/tasks';
 import { committedSource } from '../src/solver/problem';
 import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
+import { buildResearchContext } from '../src/solver/modules/context';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 
 const host = vi.hoisted(() => ({ createSession: vi.fn() }));
 vi.mock('../src/runtime/codexSession', () => ({ createCodexMathSession: host.createSession }));
 const instances: { stop: () => Promise<void>; directory: string }[] = [];
+const root = fileURLToPath(new URL('..', import.meta.url));
+const cli = path.join(root, 'bin/math.ts');
 afterEach(async () => {
   for (const item of instances.splice(0)) { await item.stop(); fs.rmSync(item.directory, { recursive: true, force: true }); }
   expect(host.createSession).not.toHaveBeenCalled();
@@ -40,6 +45,72 @@ async function fixture() {
 }
 
 describe('immediate advisory observation publication', () => {
+  it('executes the complete help and generated-context file example through the real CLI', async () => {
+    const f = await fixture();
+    const helpResult = spawnSync('bun', [cli, 'research-observe', '--help'],
+      { cwd: f.peer.worktree, encoding: 'utf8', timeout: 10_000 });
+    expect(helpResult.status, helpResult.stderr).toBe(0);
+    const help = JSON.parse(helpResult.stdout);
+    expect(help.usage).toContain('--finding FILE');
+    const context = buildResearchContext(f.problem, f.state, { root, worktree: f.peer.worktree,
+      environment: {}, taskText: 'Investigate the synthetic construction.', retrievalRoot: f.directory, assignment: f.action });
+    expect(context.instructions).toContain('--finding FILE');
+    expect(context.instructions).not.toContain('FINDING_JSON');
+    expect(context.instructions).toContain('```sh\n' + help.example + '\n```');
+
+    const commands = path.join(f.directory, 'commands');
+    fs.mkdirSync(commands);
+    fs.writeFileSync(path.join(commands, 'theorem-os'),
+      "#!/bin/sh\nexec bun '" + cli.replace(/'/gu, "'\\''") + "' \"$@\"\n", { mode: 0o700 });
+    const probe = path.join(f.peer.worktree, '.scratch', 'probe.lean');
+    fs.mkdirSync(path.dirname(probe), { recursive: true });
+    const code = 'lemma cli_probe : True := by trivial';
+    fs.writeFileSync(probe, code);
+    const published = spawnSync('sh', ['-c', help.example + ' --probe .scratch/probe.lean --snapshot-sources'],
+      { cwd: f.peer.worktree, env: { ...process.env, PATH: commands + path.delimiter + process.env.PATH },
+        encoding: 'utf8', timeout: 10_000 });
+    expect(published.status, published.stderr).toBe(0);
+    const result = JSON.parse(published.stdout);
+    expect(result).toMatchObject({ status: 'queued', authority: 'advisory-unverified', retainedProbes: 1, snapshotSources: true });
+    expect(result.receipt).toContain('queued is not host acceptance');
+    const event = JSON.parse(fs.readFileSync(f.log, 'utf8').trim());
+    expect(event.finding).toMatchObject({ conclusion: 'inconclusive', remainingObligations: ['Establish the missing bound.'] });
+    expect(event.probes).toEqual([{ source: '.scratch/probe.lean', code }]);
+    expect(Object.keys(event.sources)).toEqual(f.problem.ownedFiles);
+    fs.rmSync(probe);
+    await f.cooperative.pulse(f.peer.id);
+    expect(f.state.cooperation!.deliveries!.filter(record => record.submissionId === result.submissionId))
+      .toEqual([expect.objectContaining({ kind: 'research', status: 'conditional', artifacts: expect.objectContaining({ scope: 'advisory-unverified' }) })]);
+    expect(f.state.cooperation!.tasks.some(node => node.proof || node.integratedCheck)).toBe(false);
+  });
+
+  it('returns actionable CLI diagnostics without appending for inline JSON, bad paths or invalid files', async () => {
+    const f = await fixture(), before = fs.existsSync(f.log) ? fs.readFileSync(f.log, 'utf8') : '';
+    fs.writeFileSync(path.join(f.peer.worktree, 'invalid.json'), '```json\n{}\n```');
+    fs.writeFileSync(path.join(f.peer.worktree, 'wrong-field.json'), JSON.stringify({ summary: 'A missing bound.', remainingObligations: 'bound' }));
+    const cases = [
+      ['{"summary":"Inline JSON is not a file."}', 'math_observation_finding_file_required', '--finding', 'Save the finding'],
+      ['absent.json', 'math_observation_finding_file_unreadable', '--finding', 'existing regular file'],
+      ['invalid.json', 'math_observation_finding_json_invalid', '--finding', 'without Markdown fences'],
+      ['wrong-field.json', 'math_delivery_invalid', 'remainingObligations', 'array'],
+    ];
+    for (const [file, code, field, message] of cases) {
+      const result = spawnSync('bun', [cli, 'research-observe', '--worktree', f.peer.worktree, '--finding', file!],
+        { cwd: f.peer.worktree, encoding: 'utf8', timeout: 10_000 });
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(JSON.parse(result.stderr)).toMatchObject({ status: 'rejected', code, recovery: 'correct-and-resubmit',
+        issues: [expect.objectContaining({ path: field, message: expect.stringContaining(message!) })] });
+      expect(fs.existsSync(f.log) ? fs.readFileSync(f.log, 'utf8') : '').toBe(before);
+    }
+    fs.writeFileSync(path.join(f.peer.worktree, 'wrong-field.json'), JSON.stringify({ summary: 'A missing bound.', remainingObligations: ['bound'] }));
+    const corrected = spawnSync('bun', [cli, 'research-observe', '--worktree', f.peer.worktree, '--finding', 'wrong-field.json'],
+      { cwd: f.peer.worktree, encoding: 'utf8', timeout: 10_000 });
+    expect(corrected.status, corrected.stderr).toBe(0);
+    expect(JSON.parse(corrected.stdout).status).toBe('queued');
+    expect(fs.readFileSync(f.log, 'utf8').trim().split('\n')).toHaveLength(1);
+  });
+
   it('retains a deleted scratch probe through actual host intake and checkpoint reload without accepting a proof', async () => {
     const f = await fixture(), probe = path.join(f.peer.worktree, '.scratch', 'probe.lean');
     fs.mkdirSync(path.dirname(probe), { recursive: true });

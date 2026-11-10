@@ -21,9 +21,9 @@ describe('explicit initial Lead plan publication', () => {
     id: `goal_${index + 1}${suffix}`, kind: 'goal', objective: `Prove ${target.theoremName}.`,
     theoremName: target.theoremName, proofPath: target.proofPath,
   })) });
-  const create = () => {
+  const create = (additionalPeers: ResearchWorker[] = []) => {
     const controller = new AbortController();
-    const cooperative = cooperativeResearch({ state, workers: [lead, peer], retrievalRoot: directory,
+    const cooperative = cooperativeResearch({ state, workers: [lead, peer, ...additionalPeers], retrievalRoot: directory,
       signal: controller.signal, emit: (event, details) => events.push({ event, details }) });
     instances.push({ cooperative, controller });
     return cooperative;
@@ -101,6 +101,27 @@ describe('explicit initial Lead plan publication', () => {
     fs.appendFileSync(file(action), '\n');
     await cooperative.pulse();
     expect(state.cooperation!.tasks.map(node => node.task.id)).toEqual(['goal_1', 'goal_2']);
+  });
+
+  it('starts distinct goal and open-inference work from a small first graph before the Lead returns', async () => {
+    const researcher: ResearchWorker = { id: 'researcher', role: 'researcher',
+      worktree: path.join(directory, 'researcher'), ownedFiles: problem.ownedFiles };
+    git(lead.worktree, ['worktree', 'add', '--quiet', '--detach', researcher.worktree, problem.baseCommit]);
+    const cooperative = create([researcher]), action = await startLead(cooperative);
+    const directGoals = plan().tasks.map(task => ({ ...task, ownerId: peer.id }));
+    const research = { id: 'open_inference', kind: 'research', ownerId: researcher.id,
+      objective: 'Determine the existing addition lemma and its exact hypotheses for the original goal.',
+      dependsOn: [directGoals[0].id], consumerGoalIds: [directGoals[0].id] };
+    const goalWaiting = cooperative.next(peer, budget), researchWaiting = cooperative.next(researcher, budget);
+    void goalWaiting.catch(() => {}); void researchWaiting.catch(() => {});
+    await publish(cooperative, action, JSON.stringify({ kind: 'plan', baseVersion: action.planVersion,
+      tasks: [...directGoals, research] }));
+    expect(await goalWaiting).toMatchObject({ kind: 'task', task: { id: 'goal_1', kind: 'goal', dependsOn: [] } });
+    expect(await researchWaiting).toMatchObject({ kind: 'task', task: { id: 'open_inference', kind: 'research' } });
+    expect(cooperative.current(action)).toBe(true);
+    expect(interrupt).not.toHaveBeenCalled();
+    expect(state.cooperation!.tasks.filter(node => node.status === 'running')).toHaveLength(2);
+    expect(state.cooperation!.tasks.every(node => !node.proof && !node.integratedCheck)).toBe(true);
   });
 
   it('ignores an older dispatch log and rejects malformed or stale events before accepting a valid one', async () => {

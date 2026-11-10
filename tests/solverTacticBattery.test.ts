@@ -141,6 +141,17 @@ describe('host tactic battery before model dispatch', () => {
     expect(host.lean).toHaveBeenCalledOnce(); expect(events()).toHaveLength(1);
   });
 
+  it('reports a host failure-cache hit without creating proof evidence or reusing an old artifact', async () => {
+    vi.spyOn(directSolverModules.M2, 'closeTask').mockResolvedValue({ status: 'failed', reason: 'battery-did-not-close-reused',
+      evidence: 'advisory-tactic-battery', proofAcceptance: 'not-accepted', cacheHit: true, cacheKey: 'a'.repeat(64),
+      originDiagnosticDigest: 'b'.repeat(64) });
+    expect(await next()).toMatchObject({ kind: 'task', task: { id: 'helper' } });
+    expect(events()).toEqual([expect.objectContaining({ status: 'failed', cacheHit: true, cacheKey: 'a'.repeat(64),
+      originDiagnosticDigest: 'b'.repeat(64) })]);
+    expect(events()[0]).not.toHaveProperty('artifact'); expect(host.lean).not.toHaveBeenCalled();
+    expect(host.verify).not.toHaveBeenCalled(); noDelivery();
+  });
+
   it('returns model work without failure memory when the kernel rejects the battery candidate', async () => {
     host.verify.mockImplementationOnce(async request => failedBatch(verified(request),
       { stdoutPreview: () => 'Submission.lean:3:1: error: unsolved goals' }));

@@ -12,14 +12,14 @@ import { independentFeasibilityWorker, type ResearchWorker } from './modules/org
 import { proofReceiptsMatch, type ProofCheck } from './modules/evidence';
 import { routeAllowsTask, taskCanStart, selectedTaskRoute } from './modules/search';
 import { deliveryDetails, deliveryFinding, MAX_RESEARCH_NOTES_BYTES, parseMathResponse, type DeliveryRecord } from './deliveries';
-import { checkTaskProof, createTaskSourceProjector, isAttributedTaskProof, ownedSourceDigest, projectedGoalInputs, trustedTaskProjectionReuse, type TaskProof } from './cooperativeProof';
+import { checkTaskProof, createTaskSourceProjector, isAttributedTaskProof, ownedSourceDigest, projectedGoalInputs, taskChanges, trustedTaskProjectionReuse, type TaskProof } from './cooperativeProof';
 import { proofReferencesUnchanged, type ProofReferences } from './proofReferences';
 import { captureDeliveryArtifacts, diagnoseUnbackedLeanClaims, validateDeliveryArtifactClaims, type DeliveryArtifactManifest } from './deliveryArtifacts';
 import { validateLemmaRequests } from './taskProposals';
 import { routeBlockerBasis, type BlockerBasis } from './routeControl';
 import { attributeTaskReferences } from './taskReferenceAttribution';
 import { checkpointCandidate } from './researchEvidence';
-import { researchCheckpointInputDigest, researchCheckpointLocalInputDigest, researchCheckpointOutputDigest, type ResearchCheckpoint } from './researchCheckpoints';
+import { researchCheckpointInputDigest, researchCheckpointLocalInputDigest, researchCheckpointOutputDigest, UNCHANGED_RESEARCH_CHECKPOINT, type ResearchCheckpoint } from './researchCheckpoints';
 import { inspectKnowledgeUses, type KnowledgeUse } from './knowledgeUsage';
 import { checkKnowledgeApplications } from './knowledgeApplications';
 import { bindMathematicalGap, mathematicalGaps } from './mathematicalGaps';
@@ -289,9 +289,10 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       const inputChanged = checkpoint.localInputDigest
         ? this.checkpointLocalInputDigest(node.task, worker.id) !== checkpoint.localInputDigest
         : this.checkpointInputDigest(node.task, worker.id) !== checkpoint.inputDigest;
-      // Another responsibility can reuse this worktree without advancing the paused task.
+      // Seeding another responsibility suspends its old draft before the new model session exists.
+      // That host-written output cannot advance the paused task, even while its session id is stale.
       const session = this.input.state.workers?.find(record => record.id === worker.id), active = this.active.get(worker.id)?.action;
-      const ownsOutput = (!session || session.sessionTaskId === taskId &&
+      const ownsOutput = !this.archive.researchDrafts?.[taskId]?.suspended && (!session || session.sessionTaskId === taskId &&
         (!session.sessionTaskVersion || session.sessionTaskVersion === checkpoint.taskDigest)) &&
         (!active || active.kind === 'task' && active.task.id === taskId && active.assignment.taskDigest === checkpoint.taskDigest) &&
         !this.archive.tasks.some(other => other.task.id !== taskId && other.status === 'running' && other.assignment?.workerId === worker.id);
@@ -323,8 +324,9 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       commit, outputDigest: this.checkpointOutputDigest(worker.worktree, commit), artifacts };
     this.pin(commit);
   }
-  /** A context handoff retains candidate code without submitting an unfinished assigned declaration. */
-  retainContextDraft(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>, commit: string) {
+  /** A scheduling handoff retains code without submitting an unfinished assigned declaration. */
+  retainContextDraft(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>, commit: string,
+    reason: 'context' | 'connection' = 'context') {
     if (!this.current(action)) return;
     const artifacts = captureDeliveryArtifacts({ problem: this.input.state.problem,
       worktree: worker.worktree, commit, assignment: action.assignment });
@@ -332,7 +334,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     if (!artifacts.artifacts.length || this.archive.deliveries?.some(record => record.producer === worker.id &&
         record.taskId === action.task.id && record.taskDigest === action.assignment.taskDigest && record.commit === commit)) return;
     this.record(worker, action.task, 'progress', 'advisory',
-      'Supporting code saved at a context checkpoint. Inspect the retained commit and exact declarations before adopting typed work; the assigned proof remains unfinished.',
+      `Supporting code saved at a ${reason} checkpoint. Inspect the retained commit and exact declarations before adopting typed work; the assigned proof remains unfinished.`,
       { commit, artifacts, remainingObligations: [action.task.id] });
   }
   protected suspendResearchDrafts(worker: ResearchWorker, taskId?: string) {
@@ -419,13 +421,14 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       return false;
     }
   }
-  protected researchCheckpoint(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>, commit: string) {
+  protected async researchCheckpoint(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>, commit: string) {
     const node = this.node(action.task.id), taskDigest = digest(node.task);
     const inputDigest = this.checkpointInputDigest(node.task, worker.id), outputDigest = this.checkpointOutputDigest(worker.worktree, commit);
     const localInputDigest = this.checkpointLocalInputDigest(node.task, worker.id);
     const notesBlob = git(worker.worktree, ['ls-tree', '--format=%(objectname)', commit, '--', 'RESEARCH.md']);
-    const candidate = checkpointCandidate(notesBlob ? committedSource(worker.worktree, commit, 'RESEARCH.md') : '',
-      this.archive.researchDrafts?.[node.task.id]?.artifacts);
+    const notes = notesBlob ? committedSource(worker.worktree, commit, 'RESEARCH.md') : '';
+    const artifacts = this.archive.researchDrafts?.[node.task.id]?.artifacts;
+    const candidate = checkpointCandidate(notes, artifacts);
     const previous = this.archive.researchCheckpoints?.[node.task.id];
     const sameInput = previous?.taskDigest === taskDigest && (previous.localInputDigest
       ? previous.localInputDigest === localInputDigest : previous.inputDigest === inputDigest);
@@ -443,15 +446,32 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       localInputDigest, candidateOutputDigest: candidate.digest, candidateStatus: candidate.status, unchangedEvidenceCount, count, paused,
       ...(advisoryCheckpoint?.scope === checkpointScope ? { advisoryCheckpoint: { ...advisoryCheckpoint } } : {}) };
     this.input.emit('research_checkpoint_recorded', { taskId: node.task.id, ...checkpoint });
+    // A checkpoint is a partial publication, not a completed investigation. Only
+    // explicit control JSON is eligible; ordinary prose and unfinished JSON remain drafts.
+    let finding: any;
+    try { finding = parseMathResponse(notes, 'math-result'); }
+    catch (error) {
+      if (!(error instanceof SyntaxError) && !(error instanceof Error &&
+          ['math_math-result_requires_one_block', 'math_response_invalid'].includes(error.message))) throw error;
+    }
+    const inherited = git(worker.worktree, ['ls-tree', '--format=%(objectname)', action.assignment.seedCommit, '--', 'RESEARCH.md']);
+    // Scoped checkOutcome has a separate completion protocol; never settle it merely
+    // because the scheduler yielded its writer.
+    if (finding && finding.checkOutcome === undefined && notesBlob !== inherited) {
+      taskChanges(this.input.state.problem, worker.worktree, commit, node.task, action.assignment);
+      await this.publishResearchFinding(worker, action, commit, { kind: 'notes', text: notes }, { artifacts, checkpoint: true });
+      if (!this.current(action)) return;
+    }
     if (checkpoint.paused) {
       const scope = `assigned-local-inference/checkpoint:${mathDigest(canonicalMathJson({ inputDigest, outputDigest }))}`;
       this.reportBlockers(node.task, [{ mechanism: 'unchanged-research-checkpoint', scope }]);
       Object.assign(checkpoint, { blockerId: this.archive.blockers?.find(record => record.taskId === node.task.id && record.scope === scope)?.id });
-      this.rejected(action, 'math_research_checkpoint_unchanged: The same checkpoint has no new saved notes, draft, or task input across repeated recoveries. Wait for new input or revise the investigation.', commit);
+      this.rejected(action, UNCHANGED_RESEARCH_CHECKPOINT, commit);
     } else this.interrupted(worker, action);
   }
   protected async publishResearchFinding(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>, commit: string,
-    submission: ResearchSubmission, options: Partial<DeliveryRecord> = {}, sources?: unknown, probes?: unknown) {
+    submission: ResearchSubmission, options: Partial<DeliveryRecord> & { checkpoint?: boolean } = {}, sources?: unknown, probes?: unknown) {
+    const { checkpoint = false, ...deliveryOptions } = options;
     // A publication belongs to the inputs dispatched to this writer, even if its live
     // assignment gains a newer context while the asynchronous checks are running.
     const assignment = structuredClone(action.assignment), basis = assignment.researchBasis;
@@ -474,13 +494,14 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       if (sourceSnapshot.reduce((bytes, [, source]) => bytes + Buffer.byteLength(source), 0) > MAX_RESEARCH_NOTES_BYTES)
         throw invalid('The combined owned Lean source snapshot must not exceed ' + MAX_RESEARCH_NOTES_BYTES + ' UTF-8 bytes.');
     }
-    const admission = prepareResearchDelivery(submission, { source: action.task,
+    const admission = prepareResearchDelivery(checkpoint && submission.kind === 'notes'
+      ? { kind: 'event', value: { ...parseMathResponse(submission.text, 'math-result'), needsDecision: true } } : submission, { source: action.task,
       assignment, tasks: this.archive.tasks, deliveries: this.archive.deliveries,
       nextChecks: this.archive.nextChecks, proofSearchRecords: this.archive.proofSearchRecords,
       identity: { problemReceiptDigest, environmentDigest } });
     if (admission.status === 'rejected') throw new ResearchAdmissionError(admission);
     const finding = structuredClone(admission.finding), text = JSON.stringify(finding);
-    const complete = submission.kind === 'notes' || finding.checkOutcome !== undefined;
+    const complete = !checkpoint && (submission.kind === 'notes' || finding.checkOutcome !== undefined);
     const node = this.node(action.task.id), details = deliveryDetails(finding);
     const lemmaRequests = validateLemmaRequests(this.input.state.problem, this.archive.tasks.map(node => node.task),
       this.archive.groups?.map(route => route.group) ?? [], node.task, finding.lemmaRequests,
@@ -491,15 +512,33 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       throw new Error('math_research_lemma_requests_invalid: advisory exploration IDs are provenance, not typed proof inputs.');
     const publish = async (fixedWorker: ResearchWorker, fixedCommit: string) => {
       if (!this.current(action)) return;
-      let artifacts = options.artifacts ?? captureDeliveryArtifacts({ problem: this.input.state.problem,
+      let artifacts = deliveryOptions.artifacts ?? captureDeliveryArtifacts({ problem: this.input.state.problem,
         worktree: fixedWorker.worktree, commit: fixedCommit, assignment });
       artifacts = { ...artifacts, reportedChecks: validateDeliveryArtifactClaims(finding, artifacts) };
+      const sourceDigest = ownedSourceDigest(this.input.state.problem, fixedWorker.worktree, fixedCommit);
+      const findingKey = checkpoint ? canonicalMathJson(finding) : '';
+      const artifactKey = checkpoint ? checkpointCandidate('', artifacts).digest : '';
+      const basisKey = checkpoint ? canonicalMathJson(basis ?? assignmentKey) : '';
+      // Compare immutable content and dispatch inputs, not Git metadata or note offsets.
+      // The existing deliveries persist this identity across task switches and restarts.
+      const alreadyPublished = () => checkpoint && (this.archive.deliveries ?? []).some(record => {
+        if (record.kind !== 'research' || record.status === 'superseded' || record.producer !== worker.id ||
+            record.taskId !== action.task.id || record.taskDigest !== assignment.taskDigest || record.sourceDigest !== sourceDigest ||
+            record.artifacts?.problemReceiptDigest !== problemReceiptDigest ||
+            canonicalMathJson(record.researchRecord?.basis ?? record.assignmentKey ?? null) !== basisKey ||
+            checkpointCandidate('', record.artifacts).digest !== artifactKey) return false;
+        const previous = deliveryFinding(record);
+        try { return previous !== undefined && canonicalMathJson(JSON.parse(previous)) === findingKey; }
+        catch { return false; }
+      });
+      if (alreadyPublished()) return;
       const artifactWarning = diagnoseUnbackedLeanClaims(finding, artifacts);
       const knowledge = this.captureKnowledgeUseCheck(fixedWorker, node.task, fixedCommit);
       const knowledgeUses = await checkKnowledgeApplications(knowledge.uses, knowledge.input);
       if (!this.current(action) || this.node(action.task.id) !== node || worker.id !== assignment.workerId ||
           assignmentDeliveryFile(action.assignment) !== assignmentKey || environmentDigest !== this.input.state.environmentDigest ||
           problemReceiptDigest !== this.input.state.problem.receiptDigest) return;
+      if (alreadyPublished()) return;
       if (details.mathematicalGap) bindMathematicalGap(details.mathematicalGap, node.task, this.archive,
         { problemReceiptDigest, environmentDigest });
       const checkOutcomeScope = details.checkOutcome && bindCheckOutcome(details.checkOutcome, node.task, assignment,
@@ -510,8 +549,8 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       // observable. The delivery and its completion record publish together below.
       const record = this.createDeliveryRecord(worker, node.task, 'research',
         !remaining.length && node.task.kind !== 'sketch' ? 'advisory' : 'conditional', details.summary,
-        { ...details, ...options, assignmentKey, remainingObligations: remaining, commit: fixedCommit, artifacts,
-          sourceDigest: ownedSourceDigest(this.input.state.problem, fixedWorker.worktree, fixedCommit),
+        { ...details, ...deliveryOptions, assignmentKey, remainingObligations: remaining, commit: fixedCommit, artifacts,
+          sourceDigest,
           lemmaRequests, finding: text, findingDigest: mathDigest(text), knowledgeUses,
           ...(checkOutcomeScope ? { checkOutcomeScope } : {}),
           ...(artifactWarning ? { artifactWarning } : {}) });

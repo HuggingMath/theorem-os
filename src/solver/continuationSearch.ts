@@ -145,14 +145,17 @@ function selectedKinds(kinds: readonly string[] | undefined): ContinuationAttach
 
 export type ContinuationSearchOptions = { limit?: number; kinds?: readonly string[]; maxBytes?: number };
 
-/** `continuation search`: verifies the frozen snapshot, then ranks passages of the selected kinds. */
-export function searchContinuation(file: string, expectedDigest: string, query: string, options: ContinuationSearchOptions = {}) {
+function validateSearch(queries: readonly string[], options: ContinuationSearchOptions) {
   const { limit = 8, maxBytes = 16000 } = options;
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20 || !Number.isSafeInteger(maxBytes) || maxBytes < 1024 || maxBytes > 16000 ||
-      typeof query !== 'string' || !query.trim() || Buffer.byteLength(query) > maxQueryBytes)
+  if (!Array.isArray(queries) || queries.length < 1 || queries.length > 8 ||
+      !Number.isSafeInteger(limit) || limit < 1 || limit > 20 || !Number.isSafeInteger(maxBytes) || maxBytes < 1024 || maxBytes > 16000 ||
+      queries.some(query => typeof query !== 'string' || !query.trim() || Buffer.byteLength(query) > maxQueryBytes))
     throw new Error('math_continuation_search_options_invalid');
-  const kinds = selectedKinds(options.kinds), snapshot = readContinuationSnapshot(file, expectedDigest);
-  const index = referenceIndex(snapshot, kinds), parsed = queryTerms(query);
+  return { limit, maxBytes, kinds: selectedKinds(options.kinds) };
+}
+
+function searchPacket(snapshot: ContinuationSnapshot, index: ReferenceIndex, kinds: ContinuationAttachmentKind[], query: string, limit: number) {
+  const parsed = queryTerms(query);
   const hits = rank(index, parsed.terms, limit).map(({ passage, score, terms }) => ({ id: passage.id, kind: passage.kind,
     evidence: passage.evidence, startOffset: passage.start, endOffset: passage.end, score, matchedTerms: terms,
     snippet: snippet(index, passage, terms) }));
@@ -162,11 +165,34 @@ export function searchContinuation(file: string, expectedDigest: string, query: 
     ranking: 'bm25-lexical' as const, offsetEncoding: 'utf16-code-unit' as const, endOffsetExclusive: true as const,
     kinds, passages: index.passages.length, queryTerms: parsed.terms, ...(parsed.truncated ? { queryTruncated: true } : {}),
     hits: hits.slice(0, count), ...(count < hits.length ? { omittedHits: hits.length - count } : {}) });
-  for (let count = hits.length; count >= 0; count--) {
-    const value = packet(count);
+  return { count: hits.length, packet };
+}
+
+/** `continuation search`: verifies the frozen snapshot, then ranks passages of the selected kinds. */
+export function searchContinuation(file: string, expectedDigest: string, query: string, options: ContinuationSearchOptions = {}) {
+  const { limit, maxBytes, kinds } = validateSearch([query], options), snapshot = readContinuationSnapshot(file, expectedDigest);
+  const search = searchPacket(snapshot, referenceIndex(snapshot, kinds), kinds, query, limit);
+  for (let count = search.count; count >= 0; count--) {
+    const value = search.packet(count);
     if (Buffer.byteLength(JSON.stringify(value)) + 1 <= maxBytes) return value;
   }
   throw new Error('math_continuation_search_budget_too_small');
+}
+
+/** Keep every query's independent ranking while sharing one index and bounding the entire output line. */
+export function searchContinuationBatch(file: string, expectedDigest: string, queries: readonly string[], options: ContinuationSearchOptions = {}) {
+  const { limit, maxBytes, kinds } = validateSearch(queries, options), snapshot = readContinuationSnapshot(file, expectedDigest);
+  const index = referenceIndex(snapshot, kinds), searches = queries.map(query => searchPacket(snapshot, index, kinds, query, limit));
+  const counts = searches.map(search => search.count);
+  for (;;) {
+    const values = searches.map((search, position) => ({ query: queries[position]!, ...search.packet(counts[position]!) }));
+    if (Buffer.byteLength(JSON.stringify(values)) + 1 <= maxBytes) return values;
+    // Remove lower-ranked hits from the largest result set; even an empty result still represents its query.
+    const largest = Math.max(...counts);
+    if (!largest) throw new Error('math_continuation_search_budget_too_small');
+    const position = counts.lastIndexOf(largest);
+    counts[position]!--;
+  }
 }
 
 const shellArgument = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";

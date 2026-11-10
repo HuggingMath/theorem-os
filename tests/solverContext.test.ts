@@ -117,8 +117,22 @@ it.each([false, true])('keeps the Lead on read-only planning and prompt delivery
     expect(dispatched.manifest!.usedBytes).toBeLessThanOrEqual(dispatched.manifest!.maxBytes);
   }
   // Only an accepted graph can be revised; initial planning still writes a complete plan.
-  for (const message of [context.instructions, context.continuationMessage])
+  for (const message of [context.instructions, context.continuationMessage]) {
     expect(message?.includes('Revise the accepted graph instead of retyping it.')).toBe(existing);
+    expect(message?.includes('it does not need a complete proof decomposition')).toBe(!existing);
+    if (!existing) {
+      expect(message).toContain('Keep original goals independent of advisory research in proof dependencies');
+      expect(message).toContain('never invent a proposition to fill the graph');
+      expect(message).toContain('before further literature searches or proof exploration');
+      expect(message).not.toContain('before choosing a task graph');
+    }
+  }
+  expect(context.continuationMessage?.includes('revise the accepted graph or return it unchanged')).toBe(existing);
+  expect(context.continuationMessage?.includes('No task graph has been accepted')).toBe(!existing);
+  if (!existing) {
+    expect(context.continuationMessage).toContain('"baseVersion":"current-plan"');
+    expect(context.continuationMessage).toContain('Inline the complete valid graph covering every original target exactly once');
+  }
 });
 
 it.each(['append', 'replace'] as const)('retains custom Lead strategies and installed mathematics tools (%s)', mode => {

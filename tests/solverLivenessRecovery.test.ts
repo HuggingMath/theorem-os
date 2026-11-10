@@ -284,7 +284,10 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     const reviews = run.expectScheduledLeadTurns(answeredTurns);
     expect(reviews.length).toBeGreaterThan(0);
     expect(reviews.every(turn => turn.progressReview)).toBe(true);
-    expect(run.events.filter(item => item.event === 'lead_woken_for_idle_peers')).toHaveLength(idleWakes.length);
+    const laterWakes = run.events.filter(item => item.event === 'lead_woken_for_idle_peers');
+    // This plan answered the research input, but gave the prover no executable work.
+    expect(laterWakes.length).toBeGreaterThan(idleWakes.length);
+    expect(laterWakes.at(-1)!.at - laterWakes.at(-2)!.at).toBeGreaterThanOrEqual(8 * IDLE_PEER_WAKE_MS);
     expect(fixtureState.state.tokenBudget).toMatchObject({ maxTotalTokens: 0, status: 'unlimited' });
     expect(run.open.mock.calls.every(([options]) => options.turnTimeoutMs === undefined)).toBe(true);
     expect(fixtureState.check).not.toHaveBeenCalled(); expect(fixtureState.state.check).toBeUndefined();
@@ -292,7 +295,7 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     await run.stop();
   }, 30_000); // Four virtual hours include enough isolated Git snapshots to exceed 15 s under load.
 
-  it('re-owes a paused Lead idle peers on its backoff schedule until a deciding turn answers them', async () => {
+  it('wakes as soon as a long Lead turn settles and preserves unresolved peer episodes across unchanged accepted plans', async () => {
     const fixtureState = fixture(), run = fixtureState.start({ saveResearchProgress: true }); await run.ready();
     const cooperation = () => fixtureState.state.cooperation!;
     const idleWakes = () => run.events.filter(item => item.event === 'lead_woken_for_idle_peers');
@@ -322,15 +325,16 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     expect(cooperation().idlePeerWake).toMatchObject({ workerIds: ['idle-prover'], count: 3,
       episodes: { 'idle-prover': { since: idleSince, at: at[2], count: 3 } } });
     expect(run.current(run.latestLead().assignment)).toBe(true);
-    // A deciding turn answers the peer it was shown: no further wakes while its idle episode lasts.
+    // Accepting the unchanged graph answers its research input but leaves the peer without work.
     await run.answer();
     expect(cooperation().leadDecisionBasisAt).toBeGreaterThanOrEqual(at[2]);
+    expect(cooperation().idlePeerWake?.episodes?.['idle-prover']).toMatchObject({ since: prover.scheduling!.since, count: 3 });
     const answeredTurns = run.leads().length;
     await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
     const reviews = run.expectScheduledLeadTurns(answeredTurns);
     expect(reviews.length).toBeGreaterThan(0);
-    expect(reviews.every(turn => turn.progressReview)).toBe(true);
-    expect(idleWakes()).toHaveLength(3);
+    expect(idleWakes().length).toBeGreaterThan(3);
+    expect(idleWakes()[3].at - at[2]).toBeGreaterThanOrEqual(8 * IDLE_PEER_WAKE_MS);
     expect(fixtureState.check).not.toHaveBeenCalled(); await run.stop();
   }, 30_000); // Several simulated hours still perform real disposable Git work at each checkpoint.
 

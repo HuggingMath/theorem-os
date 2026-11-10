@@ -129,6 +129,34 @@ export function taskDependenciesReady(task: TaskRecord['task'], tasks: readonly 
   return taskReadiness(tasks).dependenciesReady(task);
 }
 
+/** A dependency wait is productive only when every missing premise reaches a current host-owned activity. */
+export function runningTaskDependencies(node: TaskRecord, tasks: readonly TaskRecord[], activeTaskIds: ReadonlySet<string>): string[] | undefined {
+  const nodes = new Map(tasks.map(item => [item.task.id, item]));
+  const running = new Set<string>(), visiting = new Set<string>();
+  const visit = (current: TaskRecord): boolean => {
+    if (visiting.has(current.task.id)) return false;
+    if (['integrated', 'completed'].includes(current.status) && taskDependenciesReady(current.task, tasks)) return true;
+    if (activeTaskIds.has(current.task.id)) { running.add(current.task.id); return true; }
+    visiting.add(current.task.id);
+    const references = taskReferenceDependencies(current);
+    const ids = references?.map(ref => ref.taskId) ?? plannedTaskDependencyIds(current, tasks);
+    const valid = ids.length > 0 && ids.every(id => {
+      const dependency = nodes.get(id), reference = references?.find(ref => ref.taskId === id);
+      return Boolean(dependency && (!reference || reference.taskDigest === taskVersion(dependency.task)) && visit(dependency));
+    });
+    visiting.delete(current.task.id);
+    return valid;
+  };
+  // The waiting task itself is not a dependency, even if stale restored state labels it running.
+  const references = taskReferenceDependencies(node);
+  const ids = references?.map(ref => ref.taskId) ?? plannedTaskDependencyIds(node, tasks);
+  if (!ids.length || !ids.every(id => {
+    const dependency = nodes.get(id), reference = references?.find(ref => ref.taskId === id);
+    return Boolean(dependency && (!reference || reference.taskDigest === taskVersion(dependency.task)) && visit(dependency));
+  }) || !running.size) return;
+  return [...running];
+}
+
 /** Fixed lemma statements can be assumed while constructing a conditional parent. */
 export function taskCanStart(task: TaskRecord['task'], tasks: readonly TaskRecord[], groups?: readonly RouteRecord[]): boolean {
   return taskReadiness(tasks, groups).canStart(task);

@@ -369,7 +369,7 @@ async function suspendedTaskDraftFixture(kind: 'research' | 'sketch' | 'goal' | 
     if (notes === null) fs.rmSync(path.join(peer.worktree, 'RESEARCH.md'), { force: true });
     else fs.writeFileSync(path.join(peer.worktree, 'RESEARCH.md'), notes);
     const draftCommit = commitSolverSources(state.problem, peer.worktree), draftSource = fs.readFileSync(file, 'utf8');
-    cooperative.retainContextDraft(descriptor, action, draftCommit);
+    cooperative.retainContextDraft(descriptor, action, draftCommit, kind === 'goal' || kind === 'lemma' ? 'connection' : 'context');
     cooperative.interrupted(descriptor, action);
     const node = tasks.find(node => node.task.id === task.id)!;
     node.task = { ...node.task, status: 'paused' }; otherNode.task = { ...other, status: 'active' };

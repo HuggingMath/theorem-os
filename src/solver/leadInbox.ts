@@ -2,6 +2,18 @@ import type { SolverWorkerState } from './archive';
 import { deliveryFinding, type DeliveryRecord } from './deliveries';
 import type { TaskRecord } from './tasks';
 
+export type IdlePeerEpisode = { since: number; at: number; count: number };
+export type IdlePeerWake = { at: number; workerIds: string[]; count?: number;
+  episodes?: Record<string, IdlePeerEpisode> };
+
+/** Legacy wakes only named peers; new wakes bind retries to each continuous idle episode. */
+export function idlePeerEpisode(wake: IdlePeerWake | undefined, workerId: string, since: number): IdlePeerEpisode | undefined {
+  const episode = wake?.episodes?.[workerId];
+  if (episode) return episode.since === since ? episode : undefined;
+  if (!wake?.episodes && wake?.workerIds.includes(workerId) && since <= wake.at)
+    return { since, at: wake.at, count: wake.count ?? 1 };
+}
+
 /** What the previous Lead turn saw when it started; a continuation reports changes since then. */
 export type LeadInboxBasis = { at: number; planVersion?: string; statuses: Record<string, TaskRecord['status']> };
 export type LeadInbox = {
@@ -23,8 +35,6 @@ const MAX_DELIVERIES = 16, MAX_STATUS_CHANGES = 32, SUMMARY_BYTES = 600;
 export const IDLE_PEER_WAKE_MS = 10 * 60_000;
 // Wait stages meaning the accepted plan has nothing this peer can start; host gates and budgets are excluded.
 export const NO_WORK_STAGES: ReadonlySet<string> = new Set(['m3-no-ready', 'dependency-blocked', 'm5-no-selection']);
-export type IdlePeerWake = { at: number; workerIds: string[]; count?: number;
-  episodes?: Record<string, { since: number; at: number; count: number }> };
 
 /** Wakes from another peer or an earlier idle episode cannot authorize this peer's exploration. */
 export function idlePeerWakeEpisode(wake: IdlePeerWake | undefined, workerId: string, since: number, seenAt: number) {
@@ -38,23 +48,22 @@ export function idlePeerWakeEpisode(wake: IdlePeerWake | undefined, workerId: st
 }
 
 /**
- * Peers that went idle after `seenAt` (the basis of the last deciding Lead turn) and have had no
- * startable work for IDLE_PEER_WAKE_MS, counted from their own idle start. Each already-woken peer also waits for
- * its episode's backoff; legacy retry records apply their aggregate notBefore to peers idle since retry.at.
+ * A continuous no-work episode is owed a decision after IDLE_PEER_WAKE_MS. A Lead turn, a notes save or an
+ * accepted plan does not end it: dispatch or a concrete live dependency does. Only that same peer episode's
+ * previous wake can back it off; a newly idle peer gets its own first deadline.
  * `dueAt` is the earliest time a not-yet-due peer qualifies.
  */
-export function idlePeersAwaitingLead(workers: readonly SolverWorkerState[], leadId: string, seenAt: number, now = Date.now(),
-  retry?: { at: number; notBefore: number; byWorker?: Record<string, { since: number; notBefore: number }> }) {
+export function idlePeersAwaitingLead(workers: readonly SolverWorkerState[], leadId: string, now = Date.now(),
+  retries?: ReadonlyMap<string, { since: number; notBefore: number }>) {
   const due: string[] = [];
   let dueAt: number | undefined;
   for (const worker of workers) {
     const scheduling = worker.scheduling, wait = scheduling?.wait;
-    if (worker.id === leadId || scheduling?.status !== 'idle' || scheduling.since <= seenAt ||
+    if (worker.id === leadId || scheduling?.status !== 'idle' ||
         !wait || wait.endedAt !== undefined || !NO_WORK_STAGES.has(wait.stage)) continue;
-    const episode = retry?.byWorker?.[worker.id];
-    const notBefore = retry?.byWorker ? episode?.since === scheduling.since ? episode.notBefore : 0 :
-      retry && scheduling.since <= retry.at ? retry.notBefore : 0;
-    const at = Math.max(scheduling.since + IDLE_PEER_WAKE_MS, notBefore);
+    const retry = retries?.get(worker.id);
+    const at = Math.max(scheduling.since + IDLE_PEER_WAKE_MS,
+      retry?.since === scheduling.since ? retry.notBefore : 0);
     if (at <= now) due.push(worker.id);
     else dueAt = Math.min(dueAt ?? at, at);
   }
