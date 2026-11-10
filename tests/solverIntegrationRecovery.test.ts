@@ -124,6 +124,117 @@ describe('checked task integration recovery', () => {
     vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true });
   });
 
+  it.each([false, true])('clears an earlier proof failure after a corrected delivery (conditional=%s)', async conditional => {
+    let child: TaskAction | undefined;
+    if (conditional) {
+      const task: CooperativeTask = { id: 'child', kind: 'lemma', objective: 'Prove the child.',
+        theoremName: 'Tutorial.recovery_child', proofPath: 'Submission.lean', type: 'True', dependsOn: [], revision: 0 };
+      child = assign(task, workers[2]);
+      const parent = { ...action.task, dependsOn: ['child'], conditional: true };
+      action = assign(parent, workers[1], [{ taskId: task.id, taskDigest: taskVersion(task) }]);
+      Object.assign(node(), { task: parent, assignment: action.assignment });
+      state.cooperation!.tasks.push({ task, assignment: child.assignment, status: 'running', attempts: 1 });
+    }
+    const badDeclaration = 'lemma recovery_lemma : True := by exact missing_recovery_proof';
+    const failedCommit = writeLemma(workers[1], badDeclaration);
+    host.verify.mockImplementation(async request => failedBatch(verified(request), {
+      stdoutPreview: () => 'Submission.lean:3:1: error: unknown identifier missing_recovery_proof',
+    }));
+
+    await cooperative.deliver(workers[1], action, failedCommit);
+
+    const failure = records().find(record => record.kind === 'proof' && record.status === 'failed')!;
+    const failedInput = state.cooperation!.failedTaskInputs![0];
+    expect(node().feedback).toContain('missing_recovery_proof');
+    expect(failure.summary).toContain('missing_recovery_proof');
+    expect(failedInput.repair).toMatchObject({ pending: true });
+    node().status = 'running'; // The same worker has claimed its pending local repair.
+    expect(cooperative.started(workers[1], action)).toBe(true);
+    expect(failedInput.repair).toMatchObject({ pending: false, startedAttempt: node().attempts });
+    const file = path.join(workers[1].worktree, problem.projectRelative, 'Submission.lean');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(badDeclaration,
+      `lemma recovery_lemma : True := by ${conditional ? 'exact recovery_child' : 'trivial'}`));
+    const correctedCommit = commitSolverSources(problem, workers[1].worktree);
+    host.verify.mockImplementation(async request => verified(request));
+    if (!conditional) {
+      const error = failMergedOnce('unavailable');
+      await expect(cooperative.deliver(workers[1], action, correctedCommit)).rejects.toMatchObject({ name: error.name, message: error.message });
+      expect(node()).toMatchObject({ status: 'delivered', proof: { passed: true, commit: correctedCommit } });
+      expect(node().feedback).toBeUndefined();
+      host.verify.mockImplementation(async request => verified(request));
+    }
+
+    await cooperative.deliver(workers[1], action, correctedCommit);
+
+    expect(node().status).toBe(conditional ? 'conditional' : 'integrated');
+    expect(node().feedback).toBeUndefined();
+    expect(failedInput.repair?.startedAttempt).toBeUndefined();
+    const accepted = records().find(record => record.kind === 'proof' && record.status === (conditional ? 'conditional' : 'verified'))!;
+    expect(accepted.summary).toBe('Fixed declaration checked; unresolved lemma assumptions remain obligations.');
+    if (child) {
+      const commit = writeLemma(workers[2], 'lemma recovery_child : True := by trivial');
+      await cooperative.deliver(workers[2], child, commit);
+      expect(node().status).toBe('integrated'); expect(node().feedback).toBeUndefined();
+      const integrated = records().find(record => record.taskId === 'recovery' && record.status === 'verified')!;
+      expect(integrated.summary).not.toContain('missing_recovery_proof');
+    }
+    expect(records()).toContain(failure);
+    expect(failure.summary).toContain('missing_recovery_proof');
+    expect(state.cooperation!.failedTaskInputs).toEqual([failedInput]);
+    expect(failedInput.feedback).toContain('missing_recovery_proof');
+  });
+
+  it('clears obsolete feedback after restoring a conditional proof with a fresh successful check', async () => {
+    await conditionalParent(false);
+    node().feedback = 'Old proof failure before the successful conditional check.';
+    node().proof = JSON.parse(JSON.stringify(node().proof));
+    const restored = node().proof;
+
+    await (cooperative as any).recheckConditional();
+
+    expect(node()).toMatchObject({ status: 'conditional', proof: { passed: true } });
+    expect(node().proof).not.toBe(restored);
+    expect(node().feedback).toBeUndefined();
+    expect(host.verify).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['conditional', 'verified'] as const)('publishes a %s proof without using inherited failed feedback as its summary', async status => {
+    if (status === 'conditional') await conditionalParent(false);
+    else {
+      const commit = writeLemma(workers[1], 'lemma recovery_lemma : True := by trivial');
+      proofLog(commit); await poll();
+    }
+    // A recovered accepted proof can still owe publication after an interrupted save.
+    state.cooperation!.deliveries = records().filter(record => record.kind !== 'proof');
+    node().feedback = 'Obsolete failure: unknown identifier missing_recovery_proof';
+    const checks = host.verify.mock.calls.length;
+
+    await (cooperative as any).publishProofDelivery(node());
+
+    const published = records().find(record => record.kind === 'proof')!;
+    expect(published.status).toBe(status);
+    expect(published.summary).not.toContain('missing_recovery_proof');
+    expect(host.verify).toHaveBeenCalledTimes(checks);
+  });
+
+  it('clears obsolete feedback when a current integrated receipt is reused during recheck', async () => {
+    host.verify.mockImplementation(async request => {
+      const batch = verified(request);
+      return { ...batch, results: batch.results.map(item => ({ ...item, declarationReferences: { statement: [], proof: [] } })) };
+    });
+    const commit = writeLemma(workers[1], 'lemma recovery_lemma : True := by trivial');
+    proofLog(commit); await poll();
+    node().feedback = 'Old proof failure before canonical acceptance.';
+    const receipt = node().integratedCheck, checks = host.verify.mock.calls.length;
+
+    await (cooperative as any).recheckIntegrated(state.cooperation!.canonicalCommit, true);
+
+    expect(node().status).toBe('integrated'); expect(node().integratedCheck).toBe(receipt);
+    expect(events.some(item => item.event === 'task_check_reused')).toBe(true);
+    expect(host.verify).toHaveBeenCalledTimes(checks);
+    expect(node().feedback).toBeUndefined();
+  });
+
   it.each(['abort', 'storage', 'unavailable'] as const)
   ('retains a checked proof and the reader prefix after a merged %s failure, then retries only integration', async failure => {
     const commit = writeLemma(workers[1], 'lemma recovery_lemma : True := by trivial');

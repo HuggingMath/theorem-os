@@ -10,7 +10,8 @@ export type ProjectionDependencyHint = Readonly<{
   sourceCommit: string;
   sourceDigest: string;
   consumer: Readonly<{ taskId: string; taskDigest: string; declaration: ProjectionDeclaration }>;
-  /** The exact owned declarations from the consumer to a root removed by this projection. */
+  /** Named owned declarations from consumer to removed root; intervening syntax commands
+   * are bound by sourceDigest and have no invented Lean declaration names. */
   path: readonly ProjectionDeclaration[];
   root: ProjectionDeclaration & Readonly<{ removedBecause: 'excluded-original-target' | 'assumed-input' | 'draft-declaration' }>;
 }>;

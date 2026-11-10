@@ -10,7 +10,7 @@ import { captureDeliveryArtifacts } from '../src/solver/deliveryArtifacts';
 import type { KnowledgeContextSnapshot } from '../src/solver/knowledgeContext';
 import { directSolverModules } from '../src/solver/modules';
 import type { ResearchWorker } from '../src/solver/modules/organization';
-import { committedSource, commitSolverSources, type SolverProblem } from '../src/solver/problem';
+import { committedSource, commitSolverSources, git, type SolverProblem } from '../src/solver/problem';
 import { assignmentDeliveryFile, taskVersion, type CooperativeAction, type CooperativeTask, type TaskAssignment, type TaskRecord } from '../src/solver/tasks';
 import { deferred } from './helpers/async';
 import { cooperativeResearch, workerAccess } from './helpers/cooperation';
@@ -192,6 +192,91 @@ describe('same-layer checked task integration batches', () => {
           commit: delivery.commit, sourceDigest: delivery.sourceDigest,
           receiptIds: delivery.evidence!.verification.results.map(result => result.receiptId) });
     expect(events.filter(item => item.event === 'task_integrated')).toHaveLength(2);
+    expectNoFailure();
+  });
+
+  it('clears stale feedback for every successfully integrated batch member before publishing', async () => {
+    await preparePair();
+    for (const id of ['first', 'second']) node(id).feedback = `Old ${id} proof failure: unknown identifier stale_proof`;
+
+    await integrate();
+
+    expect(calls()).toHaveLength(1);
+    for (const id of ['first', 'second']) {
+      expect(node(id).status).toBe('integrated');
+      expect(node(id).feedback).toBeUndefined();
+    }
+    await drain();
+    const accepted = state.cooperation!.deliveries!.filter(record => record.kind === 'proof' && record.status === 'verified');
+    expect(accepted).toHaveLength(2);
+    expect(accepted.every(record => !record.summary.includes('stale_proof'))).toBe(true);
+    expectNoFailure();
+  });
+
+  it('retains fresh original inputs through definition chains when batching newly delivered helpers', async () => {
+    const file = path.join(workspace, problem.projectRelative, 'Submission.lean');
+    const chains = ['first', 'second'].map(id =>
+      `def ${id}_witness (n : Nat) : n + 0 = n := add_zero n\n` +
+      `def ${id}_chain (n : Nat) : n + 0 = n := ${id}_witness n\n`).join('\n');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('by sorry', 'by rfl')
+      .replace('end Tutorial', chains + '\nend Tutorial'));
+    const canonical = commitSolverSources(problem, workspace);
+    state.cooperation!.canonicalCommit = canonical;
+    const missingContexts: { targets: string[]; originalPresent: boolean; missingDefinitions: string[] }[] = [];
+    host.verify.mockImplementation((request: MathematicsVerifierBatchRequest) => {
+      const projected = committedSource(workspace, request.targetCommit!, `${problem.projectRelative}/Submission.lean`);
+      const helpers = request.items.filter(item => ['Tutorial.batch_first', 'Tutorial.batch_second'].includes(item.theoremName!));
+      const required = helpers.flatMap(item => {
+        const id = item.theoremName!.endsWith('first') ? 'first' : 'second';
+        return [`def ${id}_witness`, `def ${id}_chain`];
+      });
+      const originalPresent = projected.includes('theorem add_zero (n : Nat) : n + 0 = n := by rfl');
+      const missingDefinitions = required.filter(declaration => !projected.includes(declaration));
+      const result = verified(request);
+      if (helpers.length && (!originalPresent || missingDefinitions.length)) {
+        missingContexts.push({ targets: helpers.map(item => item.theoremName!), originalPresent, missingDefinitions });
+        result.status = 'failed';
+        result.results = result.results.map(item => ({ ...item, status: 'failed', error: 'Lean exited with status 1.',
+          stdoutPreview: 'Submission.lean:3:1: error: unknown identifier ' + (missingDefinitions[0]?.slice(4) ?? 'add_zero') }));
+      }
+      return result;
+    });
+    // Establish fresh host acceptance of the original before either new helper exists in canonical.
+    const original = node('goal_0');
+    const originalAssignment: TaskAssignment = { taskId: original.task.id, taskDigest: taskVersion(original.task),
+      workerId: workers[0]!.id, seedCommit: canonical, dependencies: [] };
+    const accepted = await (cooperative as any).check(original.task, originalAssignment, workspace, canonical);
+    expect(accepted.passed).toBe(true);
+    Object.assign(original, { status: 'integrated', integratedCheck: accepted });
+    const proofs = [];
+    for (const id of ['first', 'second']) {
+      const record = node(id), worker = workers.find(item => item.id === id)!;
+      git(worker.worktree, ['reset', '--hard', canonical]);
+      record.assignment = { ...record.assignment!, seedCommit: canonical };
+      expect(record.task.dependsOn).toEqual([]);
+      const target = path.join(worker.worktree, problem.projectRelative, 'Submission.lean');
+      fs.writeFileSync(target, fs.readFileSync(target, 'utf8').replace('end Tutorial',
+        `lemma batch_${id} : True := by\n  have h : 1 + 0 = 1 := ${id}_chain 1\n  trivial\nend Tutorial`));
+      const commit = commitSolverSources(problem, worker.worktree);
+      const proof = await (cooperative as any).check(record.task, record.assignment, worker.worktree, commit);
+      expect(proof.passed).toBe(true);
+      proofs.push(proof); Object.assign(record, { status: 'delivered', proof });
+    }
+    expect(canonicalSource()).not.toContain('lemma batch_');
+    expect(missingContexts).toEqual([]);
+    host.verify.mockClear(); receipts = [];
+
+    await integrate();
+
+    expect(missingContexts).toEqual([]);
+    expect(calls()).toHaveLength(1);
+    expect(calls()[0]!.items.map(item => item.theoremName).sort()).toEqual(['Tutorial.batch_first', 'Tutorial.batch_second']);
+    expect(node().status).toBe('integrated'); expect(node('second').status).toBe('integrated');
+    expect(node().proof).toBe(proofs[0]); expect(node('second').proof).toBe(proofs[1]);
+    expect(events.filter(item => item.event === 'task_integration_batch_started')).toHaveLength(1);
+    expect(events.some(item => item.event === 'task_integration_batch_fallback')).toBe(false);
+    expect(canonicalSource()).toContain('lemma batch_first'); expect(canonicalSource()).toContain('lemma batch_second');
+    expect(canonicalSource()).toContain(chains);
     expectNoFailure();
   });
 

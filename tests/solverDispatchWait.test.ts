@@ -91,6 +91,38 @@ describe('recorded dispatch waits', () => {
     controller.abort(); await Promise.allSettled([next]);
   });
 
+  it('waits on concrete live producers and resumes an unresolved episode immediately when they stop without delivery', async () => {
+    const helper = node(), producer = node('ongoing');
+    helper.task = { ...helper.task, ownerId: 'idle', dependsOn: ['ongoing'] };
+    const action = { kind: 'task', task: producer.task, assignment: producer.assignment! } as const;
+    const active = (cooperative as any).active as Map<string, unknown>;
+    active.set('busy', { action, interrupt: async () => {}, notify: async () => {} }); refresh();
+    track(cooperative.next(workers[2], budget));
+    await vi.waitFor(() => expect(wait()).toMatchObject({ stage: 'dependency-running',
+      candidates: [{ taskId: 'ongoing', taskDigest: taskVersion(producer.task), reason: 'dependency' }] }));
+    const scheduling = state.workers!.find(worker => worker.id === 'idle')!.scheduling!;
+    const since = scheduling.since;
+    active.delete('busy'); producer.status = 'pending'; refresh();
+    await vi.waitFor(() => expect(wait()?.stage).toBe('dependency-blocked'));
+    expect(state.workers!.find(worker => worker.id === 'idle')!.scheduling!.since).toBe(since);
+  });
+
+  it('does not treat a saved old assignment as live while its worker checks a different task', async () => {
+    const helper = node(), producer = node('ongoing');
+    const old = { ...helper, task: { ...helper.task, id: 'old', ownerId: 'busy' }, status: 'blocked' as const,
+      assignment: { taskId: 'old', workerId: 'busy', taskDigest: '', seedCommit: state.problem.baseCommit } };
+    old.assignment.taskDigest = taskVersion(old.task);
+    state.cooperation!.tasks.push(old);
+    helper.task = { ...helper.task, ownerId: 'idle', dependsOn: ['old'] };
+    const action = { kind: 'task', task: producer.task, assignment: producer.assignment! } as const;
+    (cooperative as any).active.set('busy', { action, interrupt: async () => {}, notify: async () => {} });
+    (cooperative as any).deliveryChecks.set('busy', Promise.resolve()); refresh();
+    track(cooperative.next(workers[2], budget));
+    await vi.waitFor(() => expect(wait()?.stage).toBe('dependency-blocked'));
+    expect(wait()?.candidates).toEqual([{ taskId: 'helper', taskDigest: taskVersion(helper.task), reason: 'dependency' }]);
+    (cooperative as any).deliveryChecks.delete('busy');
+  });
+
   it('retains a saved assignment when ownerId is removed and records its actual reservation', async () => {
     const helper = node(); helper.task = { ...helper.task, ownerId: undefined };
     helper.assignment = { taskId: helper.task.id, taskDigest: taskVersion(helper.task), workerId: 'busy',
@@ -101,10 +133,10 @@ describe('recorded dispatch waits', () => {
     expect(helper.assignment).toBe(assignment); expect(helper.status).toBe('pending');
   });
 
-  it('reports no M3 candidates without inventing a dependency or Lead cause', async () => {
+  it('records an explicit route pause without inventing a dependency or an unanswered planning demand', async () => {
     node().task = { ...node().task, status: 'paused' };
     track(cooperative.next(workers[2], budget)); await tick();
-    expect(wait()).toMatchObject({ stage: 'm3-no-ready', candidateCount: 0, candidates: [], omittedCandidates: 0 });
+    expect(wait()).toMatchObject({ stage: 'route-paused', candidateCount: 0, candidates: [], omittedCandidates: 0 });
     expect(node().assignment).toBeUndefined();
   });
 

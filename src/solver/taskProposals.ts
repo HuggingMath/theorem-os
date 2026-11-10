@@ -1,5 +1,6 @@
 import type { SolverProblem } from './problem';
 import { parseCooperationPlan, taskGroup, taskVersion, taskProofContractVersion, type CooperativeTask, type RouteGroup } from './tasks';
+import { assertPlanTaskTypeContracts } from './taskTypeContract';
 
 /** Research can propose exact proof work; adopting it remains a Lead decision. */
 export function validateLemmaRequests(problem: SolverProblem, tasks: readonly CooperativeTask[], groups: readonly RouteGroup[],
@@ -14,6 +15,7 @@ export function validateLemmaRequests(problem: SolverProblem, tasks: readonly Co
     const ids = new Set(proposed.map(proposal => proposal.id));
     const plan = parseCooperationPlan(problem, { tasks: [...tasks.filter(task => !ids.has(task.id)), ...proposed], groups });
     const requests = plan.tasks.filter(task => ids.has(task.id));
+    assertPlanTaskTypeContracts(requests, previousProposals);
     for (const request of requests) {
       const existing = tasks.find(task => task.id === request.id);
       if (existing && (!previousProposals.some(proposal => proposal.id === request.id && taskVersion(proposal) === taskVersion(request)) ||

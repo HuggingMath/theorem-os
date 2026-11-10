@@ -508,6 +508,33 @@ describe('online formalization ownership and evidence handoff', () => {
       expect(() => verifyWebFormalizationEvidence(evidence, legacy)).not.toThrow();
       expect(() => verifyWebFormalizationEvidence(evidence, current)).toThrow('formalization_binding_mismatch');
     }
+    for (const override of [{ maxRounds: 1 }, { maxRunSeconds: 30 }])
+      expect(() => verifyWebFormalizationEvidence(webFormalizationEvidence({ ...pending.input, ...override }), current))
+        .toThrow('formalization_binding_mismatch');
+    expect(() => verifyWebFormalizationEvidence(webReviewedFormalizationEvidence({ ...pending.input,
+      reviewMode: undefined, contextProtocol: 'kernel-v2', maxRunSeconds: 1800, maxTotalTokens: 0,
+      maxRounds: 3, maxPlanningRounds: 1 }), legacy)).toThrow('formalization_binding_mismatch');
+  });
+
+  it.each([
+    {},
+    { maxRunSeconds: 0, maxTotalTokens: 0, research: { maxRunSeconds: 0, maxTurns: 0, maxTotalTokens: 0 } },
+    { research: { maxTotalTokens: 0 } },
+  ])('defaults omitted and partial formalization/research budgets to unlimited: %j', async budgets => {
+    const alice = await client();
+    const response = await request(alice, '/api/formalizations', { ...body, solve: true, requestId: 'unlimited', ...budgets });
+    expect(response.status).toBe(201); await settle();
+    const value = (await response.json()).formalization as WebFormalization, pending = runner.pending.at(-1)!;
+    const unlimited = { maxRunSeconds: 0, maxTurns: 0, maxTotalTokens: 0 };
+    expect(value).toMatchObject({ maxRunSeconds: 0, maxTotalTokens: 0, maxRounds: 0, maxPlanningRounds: 0, research: unlimited });
+    expect(pending.input).toMatchObject({ maxRunSeconds: 0, maxTotalTokens: 0, maxRounds: 0, maxPlanningRounds: 0 });
+    const replay = await request(alice, '/api/formalizations', { ...body, solve: true, requestId: 'unlimited',
+      maxRunSeconds: 0, maxTotalTokens: 0, research: unlimited });
+    expect(replay.status).toBe(200); expect((await replay.json()).formalization.id).toBe(value.id);
+    pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve(); await settle();
+    const completed = (await (await request(alice, `/api/formalizations/${value.id}`)).json()).formalization;
+    expect(completed.status).toBe('confirmed'); expect(completed.runId).toBeTruthy();
+    expect(runner.runs[0].input).toMatchObject(unlimited);
   });
 
   it('freezes the shared context protocol for new records and reads legacy kernel-v2 evidence exactly', async () => {
@@ -554,6 +581,7 @@ describe('online formalization ownership and evidence handoff', () => {
     expect(completed.runId).toBeTruthy();
     expect(runner.runs[0].input).toMatchObject({ providerId: 'openai', model: 'gpt-6.1-sol', ...research });
     expect((await request(alice, '/api/formalizations', { ...body, maxTotalTokens: 0 })).status).toBe(201);
+    expect((await request(alice, '/api/formalizations', { ...body, maxTotalTokens: 9_999 })).status).toBe(400);
     expect((await request(alice, '/api/formalizations', { ...body, providerId: 'sub2api', model: 'other' })).status).toBe(400);
   });
 

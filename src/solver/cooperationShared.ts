@@ -1,4 +1,5 @@
 import { parseCooperationPlan } from './tasks';
+import { assertPlanTaskTypeContracts } from './taskTypeContract';
 import { limitMathOutput } from '../math/mathProcess';
 import { type SolverProblem } from './problem';
 import { type ProofCheck } from './modules/evidence';
@@ -10,7 +11,6 @@ import { type BlockerBasis, type RouteBlocker } from './routeControl';
 import { type ProofRoute } from './proofRoutes';
 import { type ObligationSnapshot, type ObligationProgressReceipt } from './obligationProgress';
 import { type TaskConsumerProjection } from './taskConsumers';
-import { type CheckpointCandidate } from './researchEvidence';
 import { type ParallelQuestion } from './taskQuestions';
 import { mathematicalGaps } from './mathematicalGaps';
 import type { NextCheckRecord, NextCheckDecision } from './nextCheckContract';
@@ -20,6 +20,7 @@ import type { ProofReadyRecord } from './proofReady';
 import type { ProofImportRecord } from './proofImportRecord';
 import type { ProofSearchRecord } from './proofSearchRecords';
 import type { ResearchRecord } from './researchRecords';
+import type { ResearchCheckpoint } from './researchCheckpoints';
 import type { ResearchDecision } from './researchDecisions';
 import type { ContextCheckpointRejection } from './contextCheckpoint';
 import type { HumanGuidanceRecord } from './humanGuidance';
@@ -38,10 +39,12 @@ export const taskSourceRejections = new Set(['math_task_source_outside_scope', '
   'math_original_declaration_changed', 'math_original_context_changed', 'math_local_module_import_cycle',
   'math_trusted_source_changed', 'math_source_outside_ownership']);
 export const integrationRejections = new Set([...taskSourceRejections, 'math_task_condition_version_invalid',
+  'math_task_type_invalid',
   'math_task_delivery_no_longer_checks', 'math_task_dependency_invalidated', 'math_task_merged_proof_failed',
   'math_task_integration_conflict', 'math_task_integration_missing_context', 'math_task_integration_missing_declaration',
   'math_task_missing_declaration', 'math_task_check_identity_changed']);
 export const directDeliveryRejections = new Set([...taskSourceRejections, 'math_task_missing_declaration', 'math_task_repeated_failed_input',
+  'math_task_type_invalid',
   'math_task_check_identity_changed',
   'math_research_delivery_invalid', 'math_research_delivery_unchanged', 'math_research_lemma_requests_invalid',
   'math_delivery_invalid', 'math_response_invalid', 'math_math-result_missing_or_too_large', 'math_math-result_requires_one_block',
@@ -114,10 +117,10 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   /** Human approval of the first accepted plan, when the run requires it (state.planApproval). */
   planApproval?: import('./planApproval').PlanApprovalRecord;
   /**
-   * Last wake for peers left without work while others run; a peer idle since then can wake the Lead again. `count`
-   * counts consecutive wakes no deciding Lead turn answered; it sets the backoff before the same peers are re-owed.
+   * Last wake for peers left without work while others run. Per-peer episodes retain unanswered counts and retry
+   * times for each continuous idle wait; aggregate count/workerIds also support older saved states.
    */
-  idlePeerWake?: { at: number; workerIds: string[]; count?: number };
+  idlePeerWake?: import('./leadInbox').IdlePeerWake;
   /** Inbox basis time of the last Lead turn that decided (accepted or published a plan); undecided turns leave it. */
   leadDecisionBasisAt?: number;
   /**
@@ -140,9 +143,7 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   progressSnapshot?: ObligationSnapshot;
   progressReceipts?: ObligationProgressReceipt[];
   unchangedResearch?: Record<string, { taskDigest: string; notesBlob: string; count: number }>;
-  researchCheckpoints?: Record<string, { taskDigest: string; inputDigest: string; outputDigest: string; count: number;
-    localInputDigest?: string; candidateOutputDigest?: string; unchangedEvidenceCount?: number; candidateStatus?: CheckpointCandidate['status'];
-    paused?: boolean; blockerId?: string }>;
+  researchCheckpoints?: Record<string, ResearchCheckpoint>;
   researchDrafts?: Record<string, { taskDigest: string; workerId: string; assignmentId?: string; seedCommit: string; canonicalCommit?: string;
     commit: string; outputDigest: string; artifacts: DeliveryArtifactManifest; suspended?: boolean }>;
   recheck?: { canonicalCommit: string; total: number; completed: number; taskId?: string };
@@ -165,10 +166,10 @@ export function leadPlanPublicationFeedback(action: CooperativeAction | undefine
   if (action?.kind !== 'lead' || !file || !rejection || rejection.baseVersion !== state.planVersion) return;
   return 'Host rejected a Lead publication before accepting it:\n' + JSON.stringify(rejection) + '\n' +
     'Correct the reported error and append a new complete JSON event using the current publication target: ' +
-    JSON.stringify({ file, nonce: action.initialPlanNonce ?? action.planNonce, baseVersion: action.planVersion,
-      ...(action.planNonce ? { dispatchNonce: action.planNonce } : {}) }) + '. ' +
+    JSON.stringify({ file, kind: 'plan', dispatchNonce: action.initialPlanNonce ?? action.planNonce, baseVersion: action.planVersion }) + '. ' +
     'Preserve the log and use the current assignment protocol; a saved rejection may come from an earlier dispatch. ' +
-    'Only the first valid publication in a dispatch is accepted. This intake feedback grants no proof acceptance.';
+    'Keep kind:"plan", baseVersion and any dispatchNonce at the top level of the same event as tasks or upsert/remove; ' +
+    'a bare plan patch is not a publication event. Only the first valid publication in a dispatch is accepted. This intake feedback grants no proof acceptance.';
 }
 export const deliveryInputFields = (record: DeliveryRecord) => ({
   taskId: record.taskId, taskDigest: record.taskDigest, kind: record.kind, status: record.status,
@@ -195,8 +196,10 @@ export function parseLeadPlan(problem: SolverProblem, value: unknown, base?: Pla
     ...(value && typeof value === 'object' && 'researchDecisions' in value
       ? { researchDecisions: (value as { researchDecisions: unknown }).researchDecisions } : {}),
     ...(nextCheckDecisions ? { nextCheckDecisions } : {}) };
-  if (!isPlanPatch(answered.value)) return { ...parseCooperationPlan(problem, answered.value), ...decisions };
-  return { ...parseCooperationPlan(problem, expandPlanPatch(answered.value, base, patchOptions)), fromPatch: true, ...decisions };
+  const patched = isPlanPatch(answered.value);
+  const plan = parseCooperationPlan(problem, isPlanPatch(answered.value) ? expandPlanPatch(answered.value, base, patchOptions) : answered.value);
+  assertPlanTaskTypeContracts(plan.tasks, base?.tasks);
+  return { ...plan, ...(patched ? { fromPatch: true } : {}), ...decisions };
 }
 export function readCooperationPlan(problem: SolverProblem, worktree: string, base?: PlanPatchBase, options?: LeadPlanOptions): LeadPlan {
   return parseLeadPlan(problem, block(worktree, 'math-plan'), base, options);

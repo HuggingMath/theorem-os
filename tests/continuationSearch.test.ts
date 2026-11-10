@@ -9,7 +9,7 @@ import type { SolverRunState } from '../src/solver/archive';
 import { frozenSourceContext } from '../src/solver/contextCompiler';
 import { freezeContinuationInput, readContinuationInput, readContinuationPage,
   type ContinuationIdentity, type ContinuationSnapshot } from '../src/solver/continuationInput';
-import { referencePassages, referenceTerms, searchContinuation } from '../src/solver/continuationSearch';
+import { referencePassages, referenceTerms, searchContinuation, searchContinuationBatch } from '../src/solver/continuationSearch';
 import { buildResearchContext, type ContextBundle } from '../src/solver/modules/context';
 import { readSolverProblem, type SolverProblem } from '../src/solver/problem';
 import { taskVersion, type CooperativeAction, type CooperativeTask } from '../src/solver/tasks';
@@ -149,6 +149,45 @@ describe('frozen continuation passage search', () => {
       const failed = cli(bad); expect(failed.status).toBe(1); expect(failed.stdout).toBe('');
     }
     expect(cli(['--help']).stdout).toContain('continuation search');
+  });
+
+  it('keeps both CLI queries and their distinct ranked results within one byte budget', () => {
+    const snapshot = reference();
+    const cli = (...queries: string[]) => spawnSync('bun', ['scripts/mathematics/readContinuation.ts', 'search',
+      '--snapshot', snapshot.file, '--sha256', snapshot.digest, ...queries.flatMap(query => ['--query', query]),
+      '--kind', 'reference', '--max-bytes', '4096'], { encoding: 'utf8', timeout: 10_000 });
+    const result = cli('Sylow subgroup', 'Lebesgue integral');
+    expect(result.status, result.stderr).toBe(0);
+    expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(4096);
+    const [first, second] = JSON.parse(result.stdout);
+    expect(first).toMatchObject({ query: 'Sylow subgroup', queryTerms: ['sylow', 'subgroup'],
+      hits: [{ id: 'book', startOffset: book.indexOf('Theorem 2.1') }] });
+    expect(second).toMatchObject({ query: 'Lebesgue integral', queryTerms: ['lebesgue', 'integral'],
+      hits: [{ id: 'book', startOffset: book.indexOf('Chapter 3') }] });
+    for (const queries of [Array(9).fill('Sylow'), ['Sylow', '   ']]) {
+      const invalid = cli(...queries);
+      expect(invalid.status).toBe(1); expect(invalid.stdout).toBe('');
+    }
+  });
+
+  it('trims lower-ranked hits across a batch without dropping any query', () => {
+    const snapshot = freezeAttachments(root, identity, Array.from({ length: 12 }, (_, index) => ({
+      id: `ref-${index}`, kind: 'reference', text: 'Sylow subgroups and Lebesgue integrals. ' + filler('field'),
+    })));
+    const queries = ['Sylow', 'Lebesgue', 'unrelated'];
+    const result = searchContinuationBatch(snapshot.file, snapshot.digest, queries, { limit: 12, maxBytes: 4096 });
+    expect(Buffer.byteLength(JSON.stringify(result)) + 1).toBeLessThanOrEqual(4096);
+    expect(result.map(item => item.query)).toEqual(queries);
+    for (const item of result.slice(0, 2)) {
+      expect(item.hits.length).toBeGreaterThan(0);
+      expect(item.hits).toEqual(searchContinuation(snapshot.file, snapshot.digest, item.query, { limit: 12 }).hits.slice(0, item.hits.length));
+      expect(item.omittedHits).toBe(12 - item.hits.length);
+    }
+    expect(result[2]!.hits).toEqual([]);
+    expect(() => searchContinuationBatch('missing', 'missing', Array(9).fill('x'))).toThrow('math_continuation_search_options_invalid');
+    expect(() => searchContinuationBatch(snapshot.file, snapshot.digest, Array(8).fill('Sylow'), { maxBytes: 1024 }))
+      .toThrow('math_continuation_search_budget_too_small');
+    expect(() => searchContinuationBatch(snapshot.file, mathDigest('other'), queries)).toThrow('math_continuation_identity_changed');
   });
 });
 

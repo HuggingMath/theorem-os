@@ -22,6 +22,8 @@ import { statementTemplate } from './productFlow';
 import { loadRunGuidanceFeedback } from './runGuidanceFeedback';
 import type { ResearchFeedback } from '../researchProjectTypes';
 import { backgroundReviewPending } from './backgroundReview';
+import { ChatAnswers } from './chatAnswer';
+import { chatMathematics } from './chatMathematics';
 
 const running = (item?: { status: string }) => item?.status === 'queued' || item?.status === 'running';
 const reason = (error: unknown) => localizeMessage(error instanceof Error ? error.message : String(error));
@@ -118,7 +120,7 @@ export class ChatSession {
   private readonly originalPanel = document.querySelector<HTMLElement>('#chat-original-panel')!;
   private readonly livePanel = document.querySelector<HTMLElement>('#chat-live-panel')!;
   private readonly reading: ChatReadingPosition;
-  /** A wide screen has room for the live workspace beside the conversation; a phone shows the checklist only. */
+  /** A wide screen can open the workspace automatically beside the conversation. */
   private readonly wide = matchMedia('(min-width: 1101px)');
   /** The tasks whose live workspace opened by itself, so a redraw does not reopen one the reader closed. */
   private readonly liveShown = new Set<string>();
@@ -128,8 +130,11 @@ export class ChatSession {
   private liveFrame = false;
   private lastActionPoll = 0;
   private guidanceFeedback = { runId: '', records: [] as ResearchFeedback[], loading: false, error: '', readAt: 0 };
+  private readonly answers: ChatAnswers;
+  private lastAnswerRefresh = 0;
 
   constructor(private readonly options: Options) {
+    this.answers = new ChatAnswers(options.request, locale, () => { this.redraw(); this.schedule(); });
     this.submissionIdentity = new SubmissionIdentity({
       getItem: key => options.draftScope ? sessionStorage.getItem(`${key}.${options.draftScope}`) : null,
       setItem: (key, value) => { if (options.draftScope) sessionStorage.setItem(`${key}.${options.draftScope}`, value); },
@@ -157,6 +162,7 @@ export class ChatSession {
     if (scope === this.options.draftScope) return;
     const previous = this.options.draftScope;
     this.ownerRevision++; this.readRevision++; this.historyRevision++; this.capabilitiesRevision++;
+    this.answers.clear(); this.lastAnswerRefresh = 0;
     clearTimeout(this.timer); this.refreshing = false;
     this.home(true);
     this.drafts.clear(); this.quotedDrafts.clear(); this.draftPositions.clear(); this.renderedDraftId = undefined; this.options.draftScope = scope; this.reading.bind(scope);
@@ -251,7 +257,7 @@ export class ChatSession {
     if (draft?.settings) {
       const { providerId, model, environment, effort, participation, maxRunSeconds, maxTotalTokens, research } = draft.settings;
       Object.assign(this, { providerId, model, environment, effort, participation });
-      this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...research } }; this.hasDraftSettings = true;
+      this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...webFormalizationDefaults.research, ...research } }; this.hasDraftSettings = true;
     }
     this.guidanceMode = Boolean(draft?.guidance);
     this.guidanceRunId = draft?.guidance?.runId ?? '';
@@ -381,6 +387,30 @@ export class ChatSession {
     this.draw(); this.options.onConversation();
   }
   fillOriginal(original: string) { this.quotedDrafts.delete(this.currentId || 'home'); this.draft = original; this.rememberDraft(); this.draw(); this.focus(); }
+  prepareOriginal(original: string, environment: 'standard' | 'mathlib') {
+    this.home(false); this.environment = environment; this.fillOriginal(original);
+    requestAnimationFrame(() => this.composer.querySelector<HTMLTextAreaElement>('textarea')?.scrollIntoView({ block: 'center', behavior: 'instant' }));
+  }
+  revealMessage(id: string) {
+    const message = this.thread.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`);
+    if (!message) return false;
+    this.thread.querySelectorAll('.chat-search-target').forEach(element => element.classList.remove('chat-search-target'));
+    message.classList.add('chat-search-target'); message.tabIndex = -1;
+    message.scrollIntoView({ block: 'center', behavior: 'instant' }); message.focus({ preventScroll: true });
+    this.reading.capture(); return true;
+  }
+  includeLibraryReference(text: string) {
+    if (!this.options.draftScope || this.loading || this.submitting || this.currentId && !this.conversation) return false;
+    if (!this.draft.includes(text)) this.draft += `${this.draft ? '\n\n' : ''}${text}`;
+    this.rememberDraft(); this.draw(); this.focus();
+    return true;
+  }
+  includeProblemDraft(text: string, environment: 'standard' | 'mathlib') {
+    if (!this.options.draftScope || this.loading || this.submitting || this.currentId || this.run || this.seed) return false;
+    this.environment = environment;
+    return this.includeLibraryReference(text);
+  }
+  libraryReferenceFailed(message: string) { this.error = message; this.draw(); }
   useRunKey(id: string, key: string) { if (this.runId === id) { this.apiKey = key; this.clearConnection(); this.draw(); } }
   focus() { this.composer.querySelector<HTMLTextAreaElement>('textarea')?.focus({ preventScroll: true }); }
   private setConversation(conversation: WebConversation) {
@@ -491,7 +521,8 @@ export class ChatSession {
     // Nothing in progress: a slow check, since returning to the tab refreshes at once. A fast idle poll on every open tab
     // reached the site's per-address request limit.
     this.timer = setTimeout(() => void this.refresh(), document.hidden && reviewing ? 15_000
-      : pending ? 500 : running(this.run) || running(this.formalization) || unlinkedRun || reviewing ? 1500 : 30_000);
+      : pending ? 500 : running(this.run) || running(this.formalization) || unlinkedRun || reviewing ? 1500
+        : this.answers.generating(this.run?.id) ? 5000 : 30_000);
   }
   async refresh() {
     if (!this.options.draftScope) return;
@@ -507,6 +538,9 @@ export class ChatSession {
         if (runChanged || Date.now() - this.lastTaskRefresh >= 1500) await this.loadTask(generation);
       }
       if (generation !== this.generation) return;
+      if (Date.now() - this.lastAnswerRefresh >= (this.answers.generating(this.run?.id) ? 5000 : 30_000)) {
+        this.lastAnswerRefresh = Date.now(); this.answers.refresh(this.run);
+      }
       if (Date.now() - this.lastListRefresh >= 6000) {
         this.lastListRefresh = Date.now();
         await this.loadCapabilities();
@@ -684,7 +718,9 @@ export class ChatSession {
     renderChatHistory(this.list, { items: this.summaries, selectedId: this.currentId, onOpen: id => void this.open(id),
       failed: this.historyFailed, onRetry: () => void this.refreshHistory(),
       onRename: (id, title) => this.renameConversation(id, title), onDelete: id => this.deleteConversation(id),
-      records: this.formalizations, recordLimit: this.capabilities?.limits.recordsPerOwner ?? webFormalizationLimits.recordsPerOwner,
+      records: this.formalization && !this.formalizations.some(item => item.id === this.formalization!.id) ? [...this.formalizations, this.formalization] : this.formalizations,
+      runs: this.run ? [...(this.options.runs?.() ?? []).filter(run => run.id !== this.run!.id), this.run] : this.options.runs?.(),
+      recordLimit: this.capabilities?.limits.recordsPerOwner ?? webFormalizationLimits.recordsPerOwner,
       onRefreshRecords: () => void this.loadCapabilities(), onDeleteRecord: id => this.deleteRecord(id) });
   }
   private async renameConversation(id: string, title: string) {
@@ -804,7 +840,7 @@ export class ChatSession {
     return { process, wide: this.wide.matches, time: clockTime, onRetry,
       ...(state?.loading || (run && !sample && agents.state(run.id).loading) ? { loading: true } : {}),
       ...(state?.failed || (run && !sample && agents.state(run.id).failed) ? { failed: true } : {}),
-      ...(this.wide.matches ? { onCheck: (id: string) => this.openCheck(process, id) } : {}) };
+      onCheck: (id: string) => this.openCheck(process, id) };
   }
   private draw() {
     this.refreshGuidanceFeedback();
@@ -824,6 +860,9 @@ export class ChatSession {
     const unavailable = newProblem && !pendingSubmission && this.capabilities?.available === false;
     document.body.dataset.chatEmpty = String(!this.conversation && !this.run && !this.loading && !this.seed);
     const solve = this.solve();
+    const formalization = this.formalization ?? this.seed;
+    const mathematics = solve ? chatMathematics(this.run, formalization ? this.options.formalizationActivity.activity(formalization.id) : []) : undefined;
+    const answer = this.answers.sync(this.run);
     // A task that just started opens its workspace once; one the reader closed stays closed until they open it again.
     // A task still waiting for its place only has the checklist: its result panel stays the reader's. The reader's own
     // results panel is never replaced behind their back, so the workspace only opens while the conversation is shown.
@@ -838,10 +877,12 @@ export class ChatSession {
       sample: !!this.run && this.options.isSample(this.run),
       missingTask: !!this.conversation && !this.loading && !this.submitting && !this.readError && !this.formalization && !this.run,
       loading: this.loading, error: this.error || this.readError, ...(solve ? { solve } : {}),
+      mathematics, answer, onAnswerRetry: () => this.answers.refresh(this.run),
+      onAnswerTarget: target => { if (this.run) this.answers.select(this.run.id, target); },
       onConfigure: () => {
         const settings = this.composer.querySelector<HTMLDetailsElement>('#formalize-settings');
         if (settings) settings.open = true;
-        this.composer.querySelector<HTMLInputElement>(this.options.keyRequired(this.activeProviderId()) ? '#formalize-key' : '#formalize-model')?.focus();
+        this.composer.querySelector<HTMLSelectElement>('#formalize-provider')?.focus();
       },
       onFirstExample: () => this.useExample('add-zero'),
       startGuide: { onTemplate: () => this.fillOriginal(this.draft.trim() ? this.draft : statementTemplate()), onLean: this.options.onLean,
@@ -898,7 +939,7 @@ export class ChatSession {
         || !this.guidanceMode && !pendingSubmission && !this.pendingMessage && Boolean(this.options.session()?.maintenance)
         || newProblem && ((!this.capabilities?.available && !pendingSubmission) || busyFormalization)
         || this.guidanceMode && (!canGuide || !this.run?.observation || guidanceRunChanged || staleTarget || !!unresolvedGuidance),
-      hasConversation: Boolean(this.conversation), environment: this.environment, effort: this.effort, apiKey: this.apiKey,
+      hasConversation: Boolean(this.conversation), newProblem, environment: this.environment, effort: this.effort, apiKey: this.apiKey,
       ...(editedSubmission ? { submissionRecovery: { busy: this.submitting,
         onRecover: () => void this.submit(this.seed!.original),
         onPrepareEdited: () => void this.submit(this.seed!.original, true) } } : {}),
@@ -908,6 +949,7 @@ export class ChatSession {
       providers: this.providers(), providerId: this.activeProviderId(), model: this.activeModel(),
       onProvider: value => { this.providerId = value; this.model = this.providers().find(item => item.id === value)?.defaultModel ?? ''; this.apiKey = ''; this.keyNotice = ''; this.clearConnection(); this.rememberDraft(); this.draw(); },
       onModel: value => { this.model = value; this.clearConnection(); this.rememberDraft(); this.draw(); },
+      quota: this.options.session()?.quota,
       budgets: this.budgets, budgetLimits: { maxRunSeconds: this.capabilities?.limits.maxRunSeconds ?? 1800,
         maxTotalTokens: this.capabilities?.limits.maxTotalTokens || 2_000_000,
         research: { maxRunSeconds: this.options.session()?.limits.maxRunSeconds ?? 900, maxTurns: this.options.session()?.limits.maxTurns ?? 20,

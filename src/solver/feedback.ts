@@ -80,8 +80,16 @@ export function solverProofFeedback(check: ProofCheck, previous?: ProofCheck, hi
       for (const block of errors.length ? errors : [output]) file.output.add(block.trim());
     }
   }
+  const checkedCommit = check.verification.targetCommit;
+  const firstFile = files.keys().next().value;
+  const checkedFile = checkedCommit && firstFile
+    ? `git show '${`${checkedCommit}:./${firstFile}`.replaceAll("'", "'\\''")}'` : undefined;
   const sections = [
     'Continue the original proof. The frozen commit failed host acceptance.',
+    ...(checkedCommit ? [checkedCommit === check.commit
+      ? `Candidate and checked commit: ${checkedCommit}\nLean diagnostic locations refer to this frozen commit; current working-file positions may have changed.`
+      : `${check.commit ? `Candidate commit: ${check.commit}\n` : ''}Checked commit: ${checkedCommit}\nLean diagnostic locations refer to the checked source (including any projection), and may differ from the candidate/current working files.`] : []),
+    ...(checkedFile ? [`From the Lean project directory, inspect the checked file with: ${checkedFile}`] : []),
     'Repair the earliest blocking error and check the relevant lemma in Lean before expanding the proof. Preserve already checked lemmas and all original statements.',
   ];
   const firstBlocking = check.verification.results.flatMap(result => [result.stdoutPreview, result.stderrPreview]

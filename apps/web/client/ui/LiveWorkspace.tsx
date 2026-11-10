@@ -1,5 +1,5 @@
 import { render, type ComponentChildren } from 'preact';
-import { useLayoutEffect, useMemo, useRef } from 'preact/hooks';
+import { useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { WebAgentLeanCheck } from '../../shared';
 import { t } from '../../i18n';
 import { checkOutcome, type LiveCheck, type ProcessTone, type SolveProcess, type SolveState } from '../solveProcess';
@@ -54,6 +54,44 @@ function fileView(process: SolveProcess, check: LiveCheck | undefined, time: (at
   return { file: current.file, source: current.source, ...(current.clipped ? { clipped: true } : {}), inline: false,
     caption: current.at ? `${own} · ${time(current.at)}` : own,
     ...(check ? { note: t('这次检查的文件没有单独保存，下面是任务当前的文件。') } : {}) };
+}
+
+function FileActions({ view }: { view: FileView }) {
+  const [feedback, setFeedback] = useState<{ view: FileView; kind: 'copied' | 'copy-failed' | 'download-failed' }>();
+  // A copy can finish after a stream update or a history selection; its feedback belongs to the file it copied.
+  const kind = feedback?.view.source === view.source && feedback.view.file === view.file
+    && feedback.view.caption === view.caption && feedback.view.clipped === view.clipped ? feedback.kind : undefined;
+  const copyLabel = view.clipped ? t('复制片段') : t('复制代码');
+  const downloadLabel = view.clipped ? t('下载片段') : t('下载 Lean');
+  async function copy() {
+    setFeedback(undefined);
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(view.source);
+      setFeedback({ view, kind: 'copied' });
+    } catch { setFeedback({ view, kind: 'copy-failed' }); }
+  }
+  function download() {
+    setFeedback(undefined);
+    try {
+      // Use the saved source, not the line-numbered display, which normalizes line endings for Lean's messages.
+      const url = URL.createObjectURL(new Blob([view.source], { type: 'text/plain;charset=utf-8' }));
+      const link = document.createElement('a');
+      link.href = url; link.download = view.clipped ? `${base(view.file)}.partial.txt` : base(view.file);
+      document.body.append(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch { setFeedback({ view, kind: 'download-failed' }); }
+  }
+  return <>
+    <div class="live-file-actions">
+      <button type="button" class="text-button" data-live-copy onClick={() => void copy()} title={`${copyLabel} · ${view.caption}`}>
+        <Icon name={kind === 'copied' ? 'check' : 'copy'} />{kind === 'copied' ? t('代码已复制') : copyLabel}</button>
+      <button type="button" class="text-button" data-live-download onClick={download} title={`${downloadLabel} · ${view.caption}`}>
+        <Icon name="download" />{downloadLabel}</button>
+    </div>
+    {kind && <p class="live-file-feedback" role="status" data-error={kind !== 'copied' || undefined}>
+      {kind === 'copied' ? t('Lean 源码已复制') : kind === 'copy-failed' ? t('复制失败，请选择代码复制。') : t('下载失败，请重试。')}</p>}
+  </>;
 }
 
 function Code({ view, lean }: { view: FileView; lean?: WebAgentLeanCheck }) {
@@ -116,7 +154,11 @@ function LiveWorkspace(props: LiveWorkspaceProps) {
       {props.onRoadmap && <button type="button" class="text-button" data-live-roadmap onClick={props.onRoadmap}><Icon name="network" />{t('完整记录')}</button>}
     </header>
     <section class="live-file" aria-labelledby="chat-live-file">
-      {view ? <p class="live-file-head" id="chat-live-file"><Icon name="file-code-2" /><code translate={false}>{view.file}</code><span>{view.caption}</span></p>
+      {view ? <div class="live-file-toolbar">
+        <p class="live-file-head" id="chat-live-file"><Icon name="file-code-2" /><code translate={false}>{view.file}</code><span>{view.caption}</span>
+          {view.clipped && <span class="live-excerpt">{t('源码片段')}</span>}</p>
+        <FileActions key={`${process.key}\u0000${check?.id ?? 'current'}`} view={view} />
+      </div>
         : <p class="live-file-head" id="chat-live-file">{check ? check.label : t('还没有 Lean 文件。')}</p>}
       {view?.note && <p class="route-item-note live-note">{view.note}</p>}
       {listed}

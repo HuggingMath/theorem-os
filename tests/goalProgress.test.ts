@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { answerGoalProgress, observeGoalProgress, parseGoalProgressDecision, resetGoalProgressClock,
   type GoalProgressState } from '../src/solver/goalProgress';
 import { captureObligationSnapshot } from '../src/solver/obligationProgress';
-import { taskVersion, type TaskRecord } from '../src/solver/tasks';
+import { markTaskAcceptance, taskVersion, type TaskRecord } from '../src/solver/tasks';
 import { integratedProof } from './helpers/taskProof';
 
 const node = (id: string, kind: 'goal' | 'lemma' = 'lemma', dependsOn: string[] = []): TaskRecord => ({
@@ -10,6 +10,13 @@ const node = (id: string, kind: 'goal' | 'lemma' = 'lemma', dependsOn: string[] 
     type: '∀ n : Nat, n + 0 = n' }, status: 'pending', attempts: 0 });
 const nextCheck = (targetTaskId: string) => ({ action: 'construction-check' as const, targetTaskId,
   objective: 'Check the base case and induction step.', expectedEvidence: 'A checked proof or an exact failed induction goal.' });
+const compactProof = (item: TaskRecord) => {
+  const digest = taskVersion(item.task), proof = integratedProof(item, { result: {
+    proofPath: item.task.proofPath, theoremName: item.task.theoremName,
+    statementHash: digest, leanStatementHash: digest, claim: 'statement' } });
+  delete proof.references;
+  return proof;
+};
 function fixture() {
   const helper = node('helper'), goal = node('original', 'goal', ['helper']);
   const tasks = [goal, helper], targets = [{ proofPath: 'Main.lean', theoremName: 'original' }];
@@ -95,6 +102,63 @@ describe('goal progress observation', () => {
     expect(f.observe(90).resumed).toEqual(['original']);
     expect(f.state().goals[0]).toMatchObject({ activeMs: 0, closed: false });
     expect(f.observe(190).requested).toBe(true);
+  });
+
+  it.each(['environment', undefined])('closes fresh compact goals but reopens restored receipts (environment: %s)', environmentDigest => {
+    const f = fixture(); f.observe(0); f.observe(100);
+    compactProof(f.helper); compactProof(f.goal);
+    expect(captureObligationSnapshot(f.tasks, { environmentDigest: 'environment' }).goals[0].closed).toBe(false);
+    f.observe(110);
+    expect(f.state().goals[0]).toMatchObject({ closed: true, active: false, coreFrontier: [], coreActiveMs: 0 });
+    expect(f.state().pending).toBeUndefined();
+    // JSON cannot retain the current process's acceptance of a metadata-free check.
+    const restored = JSON.parse(JSON.stringify({ state: f.state(), tasks: f.tasks }));
+    const observe = () => observeGoalProgress(restored.state, { problemReceiptDigest: 'frozen',
+      targets: [{ proofPath: 'Main.lean', theoremName: 'original' }], tasks: restored.tasks,
+      snapshot: captureObligationSnapshot(restored.tasks, { environmentDigest }),
+      activeTaskIds: new Set<string>(), now: 120, intervalMs: 100 });
+    expect(observe().state.goals[0]).toMatchObject({ closed: false, coreFrontier: [{ taskId: 'helper' }] });
+    integratedProof(restored.tasks[0], { uses: [restored.tasks[1]], accept: false });
+    expect(observe().state.goals[0].closed).toBe(false);
+    restored.tasks.forEach(compactProof);
+    expect(observe().state.goals[0]).toMatchObject({ closed: true, coreFrontier: [] });
+  });
+
+  it.each(['task-version', 'theorem-target', 'receipt-commit', 'known-environment', 'problem-identity', 'pending-validation'])(
+    'does not promote a compact acceptance with a changed %s', change => {
+      const f = fixture(); f.goal.task = { ...f.goal.task, dependsOn: [] };
+      const proof = compactProof(f.goal);
+      if (change === 'task-version') f.goal.task = { ...f.goal.task, revision: 2 };
+      if (change === 'theorem-target') proof.verification.results[0].theoremName = 'another_theorem';
+      if (change === 'receipt-commit') proof.verification.results[0].targetCommit = 'another-projection';
+      if (change === 'known-environment' || change === 'problem-identity') {
+        proof.projection = { sourceDigest: 'source', environmentDigest: change === 'known-environment' ? 'other' : 'environment',
+          problemReceiptDigest: change === 'problem-identity' ? 'another-problem' : 'frozen' };
+        markTaskAcceptance(proof);
+      }
+      if (change === 'pending-validation') f.goal.pendingValidation = { id: 'recheck', taskDigest: taskVersion(f.goal.task),
+        canonicalCommit: 'canonical', environmentDigest: 'environment', problemReceiptDigest: 'frozen' };
+      expect(f.observe(0).state.goals[0]).toMatchObject({ closed: false, coreFrontier: [{ taskId: 'original' }] });
+    });
+
+  it('advances beyond fresh compact coordinates while keeping both conditional branches open', () => {
+    const f = fixture(), forest = node('forest', 'lemma', ['helper']), infinite = node('infinite', 'lemma', ['helper']);
+    f.tasks.push(forest, infinite);
+    f.goal.task = { ...f.goal.task, dependsOn: ['forest', 'infinite'], conditional: true };
+    f.observe(0);
+    expect(f.state().goals[0].coreFrontier).toMatchObject([{ taskId: 'helper' }]);
+    compactProof(f.helper);
+    const wrapper = compactProof(f.goal);
+    wrapper.conditions = [forest, infinite].map(item => ({ taskId: item.task.id, taskDigest: taskVersion(item.task) }));
+    wrapper.projection = { environmentDigest: 'environment', problemReceiptDigest: 'frozen', sourceDigest: 'source' };
+    markTaskAcceptance(wrapper);
+    f.observe(50);
+    expect(f.state().goals[0]).toMatchObject({ closed: false, coreFrontier: [{ taskId: 'forest' }, { taskId: 'infinite' }] });
+    // Discharging the premises still requires an unconditional check of the original goal.
+    compactProof(forest); compactProof(infinite); f.observe(60);
+    expect(f.state().goals[0]).toMatchObject({ closed: false, coreFrontier: [{ taskId: 'original' }] });
+    compactProof(f.goal); f.observe(70);
+    expect(f.state().goals[0]).toMatchObject({ closed: true, coreFrontier: [] });
   });
 
   it('keeps clocks per frozen goal and one coalesced pending review', () => {

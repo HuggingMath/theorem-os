@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { canonicalMathJson, readMathText, withMathRuntimeLease } from '../math/mathRuntimeIo';
 import { parseCooperationPlan } from './tasks';
+import { assertPlanTaskTypeContracts } from './taskTypeContract';
 import { readRunInspection } from './inspection';
 import { researchWorkerCanNode } from './modules/organization';
 import { planApprovalInputSchema, planApprovalLog, planApprovalStatus } from './planApproval';
@@ -32,6 +33,7 @@ export async function queueRunEdit(run: string, proposal: unknown, dryRun = fals
     const { state } = readRunInspection(run);
     if (!state.cooperation?.planVersion) throw new Error('math_edit_plan_unavailable');
     const plan = parseCooperationPlan(state.problem, value);
+    assertPlanTaskTypeContracts(plan.tasks, state.cooperation.tasks.map(node => node.task));
     const workers = state.workers ?? [];
     for (const task of plan.tasks) if (task.ownerId) {
       const previous = state.cooperation.tasks.find(node => node.task.id === task.id);

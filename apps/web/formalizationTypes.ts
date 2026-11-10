@@ -4,7 +4,7 @@ import type { FormalizationAuditResult } from '../../src/math/formalizationAudit
 
 export const webFormalizationLimits = Object.freeze({ maxOriginalBytes: 32_768, maxRunSeconds: 1800, maxTotalTokens: 2_000_000,
   maxRounds: 3, maxPlanningRounds: 2, reviewers: 2, concurrency: 1, queueLimit: 8, perOwner: 2, recordsPerOwner: 20 });
-/** Execution time includes planning/revisions; idle time waiting for human plan approval is excluded. */
+/** Each 0 means unlimited. Execution time includes planning/revisions and excludes human approval waits. */
 export type WebResearchBudget = { maxRunSeconds: number; maxTurns: number; maxTotalTokens: number };
 export const webFormalizationDefaults = Object.freeze({ maxRunSeconds: 0, maxTotalTokens: 0,
   research: Object.freeze({ maxRunSeconds: 0, maxTurns: 0, maxTotalTokens: 0 }) });
@@ -40,7 +40,7 @@ export type WebFormalizationCapabilities = { available: boolean; reason?: 'provi
   providers?: (WebProvider & { defaultModel: string; key: 'required' | 'saved' | 'server'; keyUrl?: string })[];
   defaults?: typeof webFormalizationDefaults };
 export type WebFormalizationRequest = { original: string; environment: WebEnvironment; apiKey: string; effort: 'low' | 'high' | 'max'; solve?: boolean; humanReview?: boolean;
-  requestId?: string; providerId?: string; model?: string; maxRunSeconds?: number; maxTotalTokens?: number; research?: WebResearchBudget };
+  requestId?: string; providerId?: string; model?: string; maxRunSeconds?: number; maxTotalTokens?: number; research?: Partial<WebResearchBudget> };
 export type WorkerFormalizationInput = Omit<WebFormalizationRequest, 'solve' | 'humanReview' | 'requestId' | 'providerId' | 'research'> & { id: string; model: string; provider: WebProvider;
   maxRunSeconds: number; maxTotalTokens: number; maxRounds: number; maxPlanningRounds: number; reviewers: number;
   contextProtocol?: LeanStatementContextProtocol; reviewMode?: 'direct' };

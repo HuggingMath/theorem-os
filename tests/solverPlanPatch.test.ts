@@ -85,6 +85,36 @@ describe('Lead plan revisions in a cooperative run', () => {
     expect(state.cooperation!.planPublicationRejection).toBeUndefined();
   });
 
+  it('publishes new pending helpers as unproved work without confusing their host and plan statuses', async () => {
+    // BoundedRecovery, 2026-11-09: four new helper definitions carried status: pending.
+    const action = await start(), goals = ids();
+    await publish(action, { upsert: ['spectral', 'monotone', 'subsequence', 'limit'].map(id => ({
+      ...helper(id), status: 'pending',
+    })) });
+    expect(ids()).toEqual([...goals, 'spectral', 'monotone', 'subsequence', 'limit']);
+    expect(state.cooperation!.tasks.slice(-4).map(node => ({ status: node.status, taskStatus: node.task.status,
+      proof: node.proof, integratedCheck: node.integratedCheck }))).toEqual(Array.from({ length: 4 }, () => ({
+      status: 'pending', taskStatus: undefined, proof: undefined, integratedCheck: undefined,
+    })));
+    expect(events.filter(event => event.event === 'plan_published')).toHaveLength(1);
+    expect(state.cooperation!.planPublicationRejection).toBeUndefined();
+  });
+
+  it('accepts a corrected changed plan saved at a scheduling checkpoint after rejecting its live event', async () => {
+    const action = await start();
+    await publish(action, { upsert: [{ ...helper('repaired_bridge'), status: 'integrated' }] });
+    expect(state.cooperation!.planPublicationRejection?.reason).toContain('field":"status');
+    expect(ids()).not.toContain('repaired_bridge');
+    fs.writeFileSync(notes(), patchFence({ baseVersion: action.planVersion,
+      upsert: [{ ...helper('repaired_bridge'), status: 'pending' }] }));
+    cooperative.deactivate(workers[0]);
+    await cooperative.deliver(workers[0], action, commitSolverSources(problem, workers[0].worktree), true, 'scheduling-checkpoint');
+    expect(ids()).toContain('repaired_bridge');
+    expect(state.cooperation!.tasks.find(node => node.task.id === 'repaired_bridge')).toMatchObject({ status: 'pending', attempts: 0 });
+    expect(state.cooperation!.planPublicationRejection).toBeUndefined();
+    expect(events.some(event => event.event === 'plan_rejected')).toBe(false);
+  });
+
   it('rejects a live revision against a stale base without changing the graph', async () => {
     const action = await start(), before = ids();
     await publish(action, { baseVersion: 'stale-version', upsert: [helper('stale_bridge')] });
@@ -119,6 +149,25 @@ describe('Lead plan revisions in a cooperative run', () => {
     expect(ids().filter(id => id === 'published_bridge')).toHaveLength(1);
     expect(state.cooperation!.planVersion).toBe(version);
   });
+
+  it.each(['final', 'scheduling-checkpoint'] as const)
+    ('keeps a new pending task publication when the same revision is repeated at %s', async mode => {
+      const action = await start(), revision = { upsert: [{ ...helper('pending_bridge'), status: 'pending' }] };
+      await publish(action, revision);
+      const version = state.cooperation!.planVersion;
+      fs.writeFileSync(notes(), patchFence({ baseVersion: action.planVersion, ...revision }));
+      cooperative.deactivate(workers[0]);
+      await cooperative.deliver(workers[0], action, commitSolverSources(problem, workers[0].worktree),
+        mode !== 'final', mode === 'final' ? 'checkpoint' : mode);
+      expect(events.some(event => event.event === 'plan_rejected')).toBe(false);
+      expect(ids().filter(id => id === 'pending_bridge')).toHaveLength(1);
+      expect(state.cooperation!.planVersion).toBe(version);
+      const node = state.cooperation!.tasks.find(node => node.task.id === 'pending_bridge')!;
+      expect(node.status).toBe('pending');
+      expect(node.task.status).toBeUndefined();
+      expect(node.proof).toBeUndefined();
+      expect(node.integratedCheck).toBeUndefined();
+    });
 
   it('rejects a final revision written against an older plan', async () => {
     const action = await start(), before = ids();

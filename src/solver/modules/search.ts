@@ -129,6 +129,34 @@ export function taskDependenciesReady(task: TaskRecord['task'], tasks: readonly 
   return taskReadiness(tasks).dependenciesReady(task);
 }
 
+/** A dependency wait is productive only when every missing premise reaches a current host-owned activity. */
+export function runningTaskDependencies(node: TaskRecord, tasks: readonly TaskRecord[], activeTaskIds: ReadonlySet<string>): string[] | undefined {
+  const nodes = new Map(tasks.map(item => [item.task.id, item]));
+  const running = new Set<string>(), visiting = new Set<string>();
+  const visit = (current: TaskRecord): boolean => {
+    if (visiting.has(current.task.id)) return false;
+    if (['integrated', 'completed'].includes(current.status) && taskDependenciesReady(current.task, tasks)) return true;
+    if (activeTaskIds.has(current.task.id)) { running.add(current.task.id); return true; }
+    visiting.add(current.task.id);
+    const references = taskReferenceDependencies(current);
+    const ids = references?.map(ref => ref.taskId) ?? plannedTaskDependencyIds(current, tasks);
+    const valid = ids.length > 0 && ids.every(id => {
+      const dependency = nodes.get(id), reference = references?.find(ref => ref.taskId === id);
+      return Boolean(dependency && (!reference || reference.taskDigest === taskVersion(dependency.task)) && visit(dependency));
+    });
+    visiting.delete(current.task.id);
+    return valid;
+  };
+  // The waiting task itself is not a dependency, even if stale restored state labels it running.
+  const references = taskReferenceDependencies(node);
+  const ids = references?.map(ref => ref.taskId) ?? plannedTaskDependencyIds(node, tasks);
+  if (!ids.length || !ids.every(id => {
+    const dependency = nodes.get(id), reference = references?.find(ref => ref.taskId === id);
+    return Boolean(dependency && (!reference || reference.taskDigest === taskVersion(dependency.task)) && visit(dependency));
+  }) || !running.size) return;
+  return [...running];
+}
+
 /** Fixed lemma statements can be assumed while constructing a conditional parent. */
 export function taskCanStart(task: TaskRecord['task'], tasks: readonly TaskRecord[], groups?: readonly RouteRecord[]): boolean {
   return taskReadiness(tasks, groups).canStart(task);
@@ -150,8 +178,8 @@ export function readyResearchTasks(tasks: readonly TaskRecord[], groups?: readon
   const compare = (a: TaskRecord, b: TaskRecord) => rank(b) - rank(a) || priority.compareTasks(a, b);
   const ranked = ready.toSorted(compare);
   // A yielded investigation must not repeatedly hide equally ranked, untried work.
-  // Reorder only advisory slots within one priority tier, retaining every proof slot.
-  // A pairwise advisory-only tie-break would be non-transitive across proof tasks.
+  // Reorder advisory slots within one priority tier first. A pairwise advisory-only
+  // tie-break would be non-transitive across proof tasks.
   for (let start = 0; start < ranked.length;) {
     let end = start + 1;
     while (end < ranked.length && compare(ranked[start], ranked[end]) === 0) end++;
@@ -160,6 +188,15 @@ export function readyResearchTasks(tasks: readonly TaskRecord[], groups?: readon
     let next = 0;
     for (let index = start; index < end; index++)
       if (isAdvisoryTask(ranked[index].task)) ranked[index] = advisory[next++];
+    // A resumed investigation also yields to executable inputs of planned proofs.
+    // Keep fresh investigations and conditional drafts in their existing slots.
+    const sharesProofSlot = (node: TaskRecord) => isAdvisoryTask(node.task) ? node.attempts > 0 :
+      Boolean(node.task.type?.trim() && consumed.has(node.task.id) && readiness.dependenciesReady(node.task));
+    const proofWork = ranked.slice(start, end).filter(sharesProofSlot).toSorted((a, b) =>
+      Number(isAdvisoryTask(a.task)) - Number(isAdvisoryTask(b.task)));
+    let nextProof = 0;
+    for (let index = start; index < end; index++)
+      if (sharesProofSlot(ranked[index])) ranked[index] = proofWork[nextProof++];
     start = end;
   }
   return prioritizeEarlyRouteChecks(ranked, tasks, groups);

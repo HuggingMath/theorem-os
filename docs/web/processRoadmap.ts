@@ -103,7 +103,7 @@ function arrange(model: ArchiveRoadmap) {
   });
   return { positions, paths, width: right + card.width + card.margin, height };
 }
-export function renderArchiveRoadmap(model: ArchiveRoadmap, run: Run, selected: string, locale: Locale): string {
+export function renderArchiveRoadmap(model: ArchiveRoadmap, run: Run, selected: string, locale: Locale, inspectorId: string | null = 'process-map-inspector'): string {
   const layout = arrange(model);
   const related = new Set<string>();
   if (selected && selected !== 'problem') {
@@ -138,7 +138,7 @@ export function renderArchiveRoadmap(model: ArchiveRoadmap, run: Run, selected: 
                 : node.kind === 'check' ? text(locale, `${node.checkIds.length} 次原题检查`, `${node.checkIds.length} original checks`)
                   : node.kind === 'review' ? text(locale, `${node.deliveryIds.length} 条审阅记录`, `${node.deliveryIds.length} saved reviews`)
                     : node.kind === 'acceptance' ? text(locale, '完整证明与验收回执', 'Final proof and acceptance receipt') : text(locale, '查看本轮结果', 'Inspect this run’s outcome');
-          return `<button type="button" class="process-map-node ${related.size && !related.has(node.id) ? 'is-muted' : ''}" data-process-node="${html(node.id)}" data-node-kind="${node.kind}" data-tone="${roadmapTone(node.status)}" data-map-x="${point.x}" data-map-y="${point.y}" title="${html(node.title)}" aria-pressed="${node.id === selected}" aria-controls="process-map-inspector"><span class="process-map-node-kind">${glyph(iconNames[node.kind])}${names[node.kind]}${node.status ? `<em>${status(node)}</em>` : ''}</span><strong>${html(node.title)}</strong><span class="process-map-node-note">${failed || returned ? `<b>${text(locale, failed ? `${failed} 次检查未通过` : `${returned} 次退回修改`, failed ? `${failed} failed checks` : `${returned} changes requested`)}</b>` : html(detail)}</span></button>`;
+          return `<button type="button" class="process-map-node ${related.size && !related.has(node.id) ? 'is-muted' : ''}" data-process-node="${html(node.id)}" data-node-kind="${node.kind}" data-tone="${roadmapTone(node.status)}" data-map-x="${point.x}" data-map-y="${point.y}" title="${html(node.title)}" aria-pressed="${node.id === selected}"${inspectorId ? ` aria-controls="${html(inspectorId)}"` : ''}><span class="process-map-node-kind">${glyph(iconNames[node.kind])}${names[node.kind]}${node.status ? `<em>${status(node)}</em>` : ''}</span><strong>${html(node.title)}</strong><span class="process-map-node-note">${failed || returned ? `<b>${text(locale, failed ? `${failed} 次检查未通过` : `${returned} 次退回修改`, failed ? `${failed} failed checks` : `${returned} changes requested`)}</b>` : html(detail)}</span></button>`;
         }).join('')}
       </div></div>
     </div><div class="process-map-controls" role="group" aria-label="${text(locale, '路线图缩放', 'Roadmap zoom')}"><button data-map-zoom="out" aria-label="${text(locale, '缩小路线图', 'Zoom out')}">−</button><output class="process-map-scale">100%</output><button data-map-zoom="in" aria-label="${text(locale, '放大路线图', 'Zoom in')}">+</button><span></span><button data-map-zoom="fit">${text(locale, '全图', 'Fit')}</button><button data-map-zoom="actual">100%</button></div></div>

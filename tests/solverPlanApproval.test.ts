@@ -44,11 +44,11 @@ describe('plan approval before dispatch (--plan-approval)', () => {
     cooperative.activate(lead, action, async () => {}, async () => {});
     return action;
   };
-  const publish = async (cooperative: CooperativeResearch, action: CooperativeAction, suffix = '') => {
+  const publish = async (cooperative: CooperativeResearch, action: CooperativeAction, suffix = '', response: Record<string, unknown> = {}) => {
     if (action.kind !== 'lead') throw new Error('fixture_expected_lead');
     fs.appendFileSync(path.join(lead.worktree, leadPlanDeliveryFile(action)!), JSON.stringify({ kind: 'plan',
       baseVersion: action.planVersion, ...(action.planNonce ? { dispatchNonce: action.planNonce } : {}),
-      summary: 'One task per original goal.', ...plan(suffix) }) + '\n');
+      summary: 'One task per original goal.', ...plan(suffix), ...response }) + '\n');
     await cooperative.pulse();
   };
   const approve = async (cooperative: CooperativeResearch, id: string, planVersion = state.cooperation!.planVersion!) => {
@@ -173,7 +173,8 @@ describe('plan approval before dispatch (--plan-approval)', () => {
     await cooperative.pulse();
     expect(guidance('note-1')).toMatchObject({ status: 'delivered', deliveredTo: [lead.id] });
 
-    await publish(cooperative, revision!, '_revised');
+    await publish(cooperative, revision!, '_revised', { guidanceDecisions: [{ guidanceId: 'note-1', status: 'accepted',
+      reason: 'The revised tasks reflect this direction.', evidenceRefs: [] }] });
     const revised = state.cooperation!.planVersion!;
     expect(revised).not.toBe(first);
     expect(state.cooperation!.tasks.map(node => node.task.id)).toEqual(['goal_1_revised', 'goal_2_revised']);
@@ -186,6 +187,63 @@ describe('plan approval before dispatch (--plan-approval)', () => {
     expect(named('plan_approval_revision')).toHaveLength(1);
     await approve(cooperative, 'owner');
     expect(await waiting).toMatchObject({ kind: 'task', task: { id: 'goal_1_revised' } });
+  });
+
+  it.each(['checkpoint', 'scheduling-checkpoint', 'request-failure'] as const)(
+    'resumes delivered undecided guidance after a %s and restart without claiming adoption', async recoveryKind => {
+      const cooperative = create(), initial = await startLead(cooperative);
+      await publish(cooperative, initial);
+      cooperative.deactivate(lead);
+      await cooperative.deliver(lead, initial, commitSolverSources(problem, lead.worktree));
+      const version = state.cooperation!.planVersion!;
+      guideLead('unfinished-note'); await cooperative.pulse();
+      const revision = await cooperative.next(lead, budget);
+      if (revision?.kind !== 'lead') throw new Error('fixture_expected_guidance_revision');
+      expect(cooperative.started(lead, revision)).toBe(true);
+      const notify = vi.fn(async () => {});
+      cooperative.activate(lead, revision, async () => {}, notify); await cooperative.pulse();
+      expect(notify).toHaveBeenCalledOnce();
+      cooperative.deactivate(lead);
+      await cooperative.deliver(lead, revision, commitSolverSources(problem, lead.worktree), true, recoveryKind);
+      expect(state.cooperation!.planVersion).toBe(version);
+      expect(guidance('unfinished-note')).toMatchObject({ status: 'delivered', deliveredTo: [lead.id] });
+      expect(guidance('unfinished-note').decision).toBeUndefined();
+
+      const stateFile = path.join(directory, 'state.json');
+      writeSolverRunState(stateFile, state); state = readSolverRunState(stateFile);
+      const restored = create(); await restored.restore();
+      const retry = await restored.next(lead, budget);
+      if (retry?.kind !== 'lead') throw new Error('fixture_expected_unanswered_revision_retry');
+      expect(retry.planVersion).toBe(version);
+      expect(restored.contextState(retry, lead).humanGuidance).toEqual([expect.objectContaining({ id: 'unfinished-note', status: 'delivered' })]);
+      expect(state.cooperation!.planApproval!.guidanceIds).toEqual(['unfinished-note']);
+      expect(restored.started(lead, retry)).toBe(true);
+      restored.activate(lead, retry, async () => {}, notify); await restored.pulse();
+      expect(notify).toHaveBeenCalledOnce();
+      fs.writeFileSync(path.join(lead.worktree, 'RESEARCH.md'), '```math-plan\n' + JSON.stringify({
+        baseVersion: version, upsert: [], guidanceDecisions: [{ guidanceId: 'unfinished-note', status: 'needs-info',
+          reason: 'Which exact helper statement should the plan use?', evidenceRefs: [] }],
+      }) + '\n```\n');
+      restored.deactivate(lead);
+      await restored.deliver(lead, retry, commitSolverSources(problem, lead.worktree));
+      expect(guidance('unfinished-note').decision).toMatchObject({ status: 'needs-info', workerId: lead.id, sourcePlanVersion: version });
+      expect(state.cooperation!.tasks.every(node => node.status === 'pending' && !node.proof)).toBe(true);
+      expect(planApprovalInspection(state).status).toBe('pending');
+      expect(await settled(track(restored.next(lead, budget)))).toBe(false);
+    });
+
+  it('keeps an unanswered revision within the shared dispatch budget', async () => {
+    const cooperative = create(), initial = await startLead(cooperative);
+    await publish(cooperative, initial); cooperative.deactivate(lead);
+    guideLead('budgeted-note'); await cooperative.pulse();
+    const revision = await cooperative.next(lead, budget);
+    if (revision?.kind !== 'lead') throw new Error('fixture_expected_guidance_revision');
+    cooperative.activate(lead, revision, async () => {}, async () => {}); await cooperative.pulse();
+    cooperative.deactivate(lead);
+    await cooperative.deliver(lead, revision, commitSolverSources(problem, lead.worktree), true, 'scheduling-checkpoint');
+    expect(guidance('budgeted-note').decision).toBeUndefined();
+    expect(await cooperative.next(lead, { maxTurns: state.turns, remainingMs: Infinity })).toBeUndefined();
+    expect(await cooperative.next(lead, { maxTurns: Infinity, remainingMs: 0 })).toBeUndefined();
   });
 
   it('keeps approvals and rejections across a restart without rereading the log', async () => {

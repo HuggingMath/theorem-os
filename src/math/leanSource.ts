@@ -25,6 +25,8 @@ type MathematicsLeanSourceDeclarationKind = 'theorem' | 'definition' | 'instance
 type LeanSourceDeclaration = Readonly<{
   startOffset: number;
   bodyOffset: number;
+  parametersOffset: number;
+  whereBody?: boolean;
   name: string;
   canonicalHeader: string;
   kind: MathematicsLeanSourceDeclarationKind;
@@ -40,6 +42,10 @@ export type MathematicsLeanSourceDeclaration = Readonly<{
 const isLeanNameCharacter = (value: string | undefined): boolean =>
   Boolean(value && /[\p{L}\p{M}\p{N}_'.?!]/u.test(value));
 
+// A structure initializer may place fields in the declaration's column.
+// Command tokens, rather than indentation alone, delimit an empty field list.
+const leanWhereCommand = /^(?:@\[|#|(?:theorem|lemma|def|abbrev|opaque|instance|example|class|structure|inductive|coinductive|axiom|constant|constants|variable|variables|universe|universes|namespace|section|end|mutual|open|export|include|omit|set_option|attribute|local|scoped|noncomputable|private|protected|public|unsafe|partial|nonrec|meta|syntax|macro|elab|notation|infix|infixl|infixr|prefix|postfix|initialize|builtin_initialize|import)(?![\p{L}\p{M}\p{N}_'.?!]))/u;
+
 /** `instance` inside `@[…]` or `attribute […]`, or after `deriving`, names an attribute or a derive handler.
  * Read as a declaration, `attribute [instance 1001] a` swallowed the next command up to its `:=`. */
 function isInstanceAttributeOrDeriving(source: string, offset: number): boolean {
@@ -51,10 +57,10 @@ function isInstanceAttributeOrDeriving(source: string, offset: number): boolean 
     /^\[(?:[^[\]"]*,)?\s*(?:(?:local|scoped)\s+|-\s*)?$/u.test(before.slice(open));
 }
 
-export function inspectScopedLeanDeclarations(source: string) {
+function scopedLeanDeclarations(source: string, declarations: readonly MathematicsLeanSourceDeclaration[]) {
   const scopes: LeanScope[] = [], commands = leanScopeCommands(maskLeanCommentsAndStrings(source));
   let command = commands.next();
-  return inspectLeanDeclarations(source).map(declaration => {
+  return declarations.map(declaration => {
     while (!command.done && command.value.index < declaration.startOffset) {
       updateLeanScopes(scopes, command.value[1], command.value[2]?.trim());
       command = commands.next();
@@ -64,6 +70,10 @@ export function inspectScopedLeanDeclarations(source: string) {
       [namespace, declaration.name].filter(Boolean).join('.');
     return { ...declaration, namespace, qualifiedName };
   });
+}
+
+export function inspectScopedLeanDeclarations(source: string) {
+  return scopedLeanDeclarations(source, inspectLeanDeclarations(source));
 }
 
 /** Statements may repeat a final name component in different namespaces (`Literal.eval`, `Clause.eval`). Such
@@ -118,7 +128,10 @@ export function leanDeclarationContextCommands(source: string, theoremName: stri
  * `:=` or a line-leading equation clause `|`. Lean permits Unicode,
  * apostrophes, `?` and `!` in identifiers; a single quote is not a string delimiter here.
  */
-function* leanSourceDeclarations(source: string): Generator<LeanSourceDeclaration, void, void> {
+type LeanDeclarationIndex = 'named' | 'projection' | 'legacy-where';
+
+function* leanSourceDeclarations(source: string, mode: LeanDeclarationIndex = 'named'): Generator<LeanSourceDeclaration, void, void> {
+  const includeAnonymousInstances = mode === 'projection';
   const declarationKeywords: Readonly<Record<string, string>> = {
     t: 'theorem', l: 'lemma', d: 'def', i: 'instance', o: 'opaque', a: 'abbrev',
   };
@@ -168,6 +181,14 @@ function* leanSourceDeclarations(source: string): Generator<LeanSourceDeclaratio
       break;
     }
     return cursor;
+  };
+
+  const isEmptyInstanceWhere = (whereStart: number): boolean => {
+    const nextToken = skipTrivia(whereStart + 5);
+    if (nextToken === source.length) return true;
+    const nextLine = source.lastIndexOf('\n', nextToken - 1) + 1;
+    if (nextLine <= whereStart) return false;
+    return leanWhereCommand.test(source.slice(nextToken));
   };
 
   const hasEquationArrow = (start: number): boolean => {
@@ -326,12 +347,32 @@ function* leanSourceDeclarations(source: string): Generator<LeanSourceDeclaratio
       index += 1;
       continue;
     }
-    const nameStart = skipTrivia(index + keyword.length);
+    let nameStart = skipTrivia(index + keyword.length);
+    const priorityStart = includeAnonymousInstances && keyword === 'instance' && source[nameStart] === '('
+      ? skipTrivia(nameStart + 1) : undefined;
+    if (priorityStart !== undefined && source.startsWith('priority', priorityStart) &&
+        source.startsWith(':=', skipTrivia(priorityStart + 'priority'.length))) {
+      let cursor = nameStart, depth = 0;
+      do {
+        cursor = skipTrivia(cursor);
+        if (source[cursor] === '"') {
+          for (cursor++; cursor < source.length; cursor++) {
+            if (source[cursor] === '\\') cursor++;
+            else if (source[cursor] === '"') { cursor++; break; }
+          }
+          continue;
+        }
+        if (source[cursor] === '(') depth++;
+        else if (source[cursor] === ')') depth--;
+        cursor++;
+      } while (cursor < source.length && depth > 0);
+      nameStart = skipTrivia(cursor);
+    }
     // A dot qualifies another name component; the dot in `name.{u, v}`
     // introduces universe parameters and is not part of the declaration name.
     const name = /^[\p{L}\p{M}\p{N}_'][\p{L}\p{M}\p{N}_'?!]*(?:\.[\p{L}\p{M}\p{N}_'][\p{L}\p{M}\p{N}_'?!]*)*/u.exec(source.slice(nameStart))?.[0] ?? '';
     const nameEnd = nameStart + name.length;
-    if (!name) {
+    if (!name && !(includeAnonymousInstances && keyword === 'instance')) {
       index += keyword.length;
       continue;
     }
@@ -345,6 +386,7 @@ function* leanSourceDeclarations(source: string): Generator<LeanSourceDeclaratio
     let localEscaped = false;
     let proofStart = -1;
     let bodyOffset = -1;
+    let whereBody = false;
     let hasTopLevelMatchType = false;
     let pendingLocalBindings = 0;
     while (cursor < source.length) {
@@ -416,6 +458,16 @@ function* leanSourceDeclarations(source: string): Generator<LeanSourceDeclaratio
         proofStart = cursor;
         bodyOffset = cursor + 2;
         break;
+      } else if (keyword === 'instance' &&
+        parenDepth === 0 && bracketDepth === 0 && braceDepth === 0 && source.startsWith('where', cursor) &&
+        !isLeanNameCharacter(codePointBefore(cursor)) && !isLeanNameCharacter(codePointAt(cursor + 5)) &&
+        (includeAnonymousInstances || mode !== 'legacy-where' && isEmptyInstanceWhere(cursor))) {
+        // A default-only instance ends here. Keep populated named instances on
+        // their historical first-field := boundary so frozen hashes stay valid.
+        proofStart = cursor;
+        bodyOffset = cursor + 5;
+        whereBody = true;
+        break;
       } else if (
         value === '|' &&
         !hasTopLevelMatchType &&
@@ -444,6 +496,8 @@ function* leanSourceDeclarations(source: string): Generator<LeanSourceDeclaratio
       yield Object.freeze({
         startOffset,
         bodyOffset,
+        parametersOffset: nameEnd,
+        whereBody,
         name,
         kind:
           keyword === 'theorem' || keyword === 'lemma' ? 'theorem' : keyword === 'instance' ? 'instance' : 'definition',
@@ -458,15 +512,15 @@ function* leanSourceDeclarations(source: string): Generator<LeanSourceDeclaratio
 const leanSourceDeclarationCache = new Map<string, readonly LeanSourceDeclaration[]>();
 const LEAN_SOURCE_DECLARATION_CACHE_MAX_ENTRIES = 128;
 
-const cachedLeanSourceDeclarations = (source: string): readonly LeanSourceDeclaration[] => {
-  const key = mathDigest(source);
+const cachedLeanSourceDeclarations = (source: string, mode: LeanDeclarationIndex = 'named'): readonly LeanSourceDeclaration[] => {
+  const key = `${mode}:` + mathDigest(source);
   const cached = leanSourceDeclarationCache.get(key);
   if (cached) {
     leanSourceDeclarationCache.delete(key);
     leanSourceDeclarationCache.set(key, cached);
     return cached;
   }
-  const declarations = Object.freeze([...leanSourceDeclarations(source)]);
+  const declarations = Object.freeze([...leanSourceDeclarations(source, mode)]);
   leanSourceDeclarationCache.set(key, declarations);
   while (leanSourceDeclarationCache.size > LEAN_SOURCE_DECLARATION_CACHE_MAX_ENTRIES) {
     const oldest = leanSourceDeclarationCache.keys().next().value;
@@ -514,27 +568,82 @@ export const inspectLeanDeclarations = (source: string): readonly MathematicsLea
   );
 
 /** Conservative source regions for construction edits; kernel verification remains independent. */
-export const inspectLeanDeclarationRegions = (source: string) =>
-  [...cachedLeanSourceDeclarations(source)].map((declaration) => {
-    const lineStart = source.lastIndexOf('\n', declaration.startOffset - 1) + 1;
-    const indentation = source.slice(lineStart, declaration.startOffset).match(/^\s*/u)?.[0].length ?? 0;
-    let endOffset = source.length;
-    let cursor = source.indexOf('\n', declaration.bodyOffset);
-    while (cursor >= 0 && cursor + 1 < source.length) {
-      const start = cursor + 1;
-      const end = source.indexOf('\n', start);
-      const line = source.slice(start, end < 0 ? undefined : end);
-      if (line.trim() && !line.trimStart().startsWith('--') && (line.match(/^\s*/u)?.[0].length ?? 0) <= indentation) {
-        endOffset = start;
-        break;
-      }
-      cursor = end;
+export const inspectLeanDeclarationRegions = (source: string) => {
+  let cleaned: string | undefined;
+  return cachedLeanSourceDeclarations(source).map(declaration => leanSourceDeclarationRegion(source, declaration,
+    declaration.whereBody ? cleaned ??= maskLeanCommentsAndStrings(source) : undefined));
+};
+
+/** Read existing frozen records with their exact pre-fix boundaries; never used to prepare a new task. */
+export function inspectLegacyLeanWhereSource(source: string) {
+  const declarations = cachedLeanSourceDeclarations(source, 'legacy-where');
+  return {
+    declarations: scopedLeanDeclarations(source, declarations.map(({ startOffset, name, kind, canonicalHeader }) =>
+      ({ startOffset, name, kind, declarationType: canonicalHeader }))),
+    regions: declarations.map(declaration => leanSourceDeclarationRegion(source, declaration)),
+  };
+}
+
+function leanSourceDeclarationRegion(source: string, declaration: LeanSourceDeclaration, cleanedSource?: string) {
+  const lineStart = source.lastIndexOf('\n', declaration.startOffset - 1) + 1;
+  const indentation = source.slice(lineStart, declaration.startOffset).match(/^\s*/u)?.[0].length ?? 0;
+  let endOffset = source.length;
+  let cursor = source.indexOf('\n', declaration.bodyOffset);
+  while (cursor >= 0 && cursor + 1 < source.length) {
+    const start = cursor + 1;
+    const end = source.indexOf('\n', start);
+    const line = source.slice(start, end < 0 ? undefined : end);
+    const boundaryLine = declaration.whereBody ? cleanedSource!.slice(start, end < 0 ? undefined : end) : line;
+    if (boundaryLine.trim() && !boundaryLine.trimStart().startsWith('--') &&
+        (line.match(/^\s*/u)?.[0].length ?? 0) <= indentation &&
+        (!declaration.whereBody || leanWhereCommand.test(boundaryLine.trimStart()))) {
+      endOffset = start;
+      break;
     }
-    return {
-      name: declaration.name,
-      startOffset: declaration.startOffset,
-      declarationType: declaration.canonicalHeader,
-      bodyOffset: declaration.bodyOffset,
-      endOffset,
-    };
+    cursor = end;
+  }
+  return {
+    name: declaration.name,
+    startOffset: declaration.startOffset,
+    declarationType: declaration.canonicalHeader,
+    bodyOffset: declaration.bodyOffset,
+    endOffset,
+  };
+}
+
+/** Projection also tracks anonymous instances by source position, without inventing Lean names.
+ * Named declaration, hash and construction-edit indexes retain their existing contract. */
+export function inspectLeanProjectionDeclarations(source: string) {
+  const cleaned = maskLeanCommentsAndStrings(source);
+  const scopes: LeanScope[] = [], commands = leanScopeCommands(cleaned);
+  const indexed = cachedLeanSourceDeclarations(source, 'projection').map(declaration => ({ declaration,
+    region: leanSourceDeclarationRegion(source, declaration, cleaned) }));
+  const openFrames: { namespace: string; command: string; startOffset: number; endOffset: number; local: boolean }[][] = [[]];
+  let localOpens: typeof openFrames[number] = [], commandRegion = 0;
+  let command = commands.next();
+  return indexed.map(({ declaration, region }) => {
+    while (!command.done && command.value.index < declaration.startOffset) {
+      const current = command.value, kind = current[1]!, argument = current[2]?.trim() ?? '';
+      command = commands.next();
+      while (indexed[commandRegion] && indexed[commandRegion]!.region.endOffset <= current.index) commandRegion++;
+      // `open ... in` inside a proof is local to its expression, never a later declaration's scope.
+      if (indexed[commandRegion] && current.index >= indexed[commandRegion]!.region.startOffset) continue;
+      if (kind === 'namespace' || kind === 'section' || kind === 'mutual') openFrames.push([]);
+      else if (kind === 'end' && openFrames.length > 1) openFrames.pop();
+      else if (kind === 'open' && !/^scoped\b/u.test(argument)) {
+        const local = /\s+in\s*$/u.test(argument);
+        const entry = { namespace: leanScopeNamespace(scopes), command: local ? argument.replace(/\s+in\s*$/u, '') : argument,
+          startOffset: current.index, endOffset: current.index + current[0].length, local };
+        if (local) localOpens.push(entry);
+        else openFrames.at(-1)!.push(entry);
+      }
+      updateLeanScopes(scopes, kind, argument);
+    }
+    const namespace = leanScopeNamespace(scopes), name = declaration.name || undefined;
+    const qualifiedName = name === undefined ? undefined : name.startsWith('_root_.') ? name.slice(7) :
+      [namespace, name].filter(Boolean).join('.');
+    const opens = [...openFrames.flat(), ...localOpens];
+    localOpens = [];
+    return { ...region, name, namespace, qualifiedName, opens, parametersOffset: declaration.parametersOffset };
   });
+}

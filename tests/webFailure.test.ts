@@ -60,6 +60,13 @@ describe('web failure classification from solver results', () => {
       { status: 'evaluated_failed', turns: 5 }, { status: 'evaluated_passed', turns: 1 }, { status: 'runtime_error' }])
       expect(webIncompleteReason(raw, input)).toBeUndefined();
   });
+
+  it('does not report a zero time or turn allowance as exhausted', () => {
+    const raw = { status: 'incomplete', turns: 1_000, solveExecutionMs: 86_400_000 };
+    expect(webIncompleteReason(raw, { maxTurns: 0, maxRunSeconds: 0 })).toBe('math_research_routes_exhausted');
+    expect(webIncompleteReason(raw, { maxTurns: 0, maxRunSeconds: 30 })).toBe('math_run_stopped');
+    expect(webIncompleteReason(raw, { maxTurns: 5, maxRunSeconds: 0 })).toBe('math_turn_limit_reached');
+  });
 });
 
 describe('web failure and queue presentation', () => {

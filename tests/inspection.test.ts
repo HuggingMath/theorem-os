@@ -473,6 +473,23 @@ describe('human plan edits', () => {
     expect(fs.existsSync(path.join(path.dirname(f.stateFile), 'edits.jsonl'))).toBe(false);
   });
 
+  it('rejects malformed new helper types before writing an edit and permits a legacy contract repair', async () => {
+    const f = fixture(), plan = exportRunPlan(f.state), before = fs.readFileSync(f.stateFile);
+    const helper = { id: 'bridge', kind: 'lemma' as const, objective: 'Prove a reusable bridge.',
+      theoremName: 'Original.bridge', proofPath: 'Submission.lean', dependsOn: [], revision: 0,
+      type: 'theorem Original.bridge : True' };
+    await expect(queueRunEdit(f.run, { ...plan, tasks: [...plan.tasks, helper] }))
+      .rejects.toThrow('math_plan_invalid_helper_type');
+    expect(fs.existsSync(path.join(path.dirname(f.stateFile), 'edits.jsonl'))).toBe(false);
+    expect(fs.readFileSync(f.stateFile)).toEqual(before);
+    f.state.cooperation!.tasks.push({ task: helper, status: 'pending', attempts: 0 });
+    writeSolverRunState(f.stateFile, f.state);
+    const repair = exportRunPlan(f.state);
+    repair.tasks[1] = { ...repair.tasks[1], type: 'True' };
+    expect(await queueRunEdit(f.run, repair, true)).toMatchObject({ status: 'validated' });
+    expect(readSolverRunState(f.stateFile).cooperation!.tasks[1].task.type).toBe(helper.type);
+  });
+
   it('rejects linked or partially written logs instead of appending to them', async () => {
     const f = fixture(), log = path.join(path.dirname(f.stateFile), 'edits.jsonl');
     const other = path.join(f.root, 'other'); fs.writeFileSync(other, 'outside'); fs.symlinkSync(other, log);

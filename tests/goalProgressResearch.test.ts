@@ -10,7 +10,7 @@ import { answerGoalProgress, GOAL_PROGRESS_REVIEW_MS as interval, goalProgressFo
 import { buildResearchContext } from '../src/solver/modules/context';
 import type { NextCheckRecord } from '../src/solver/nextCheckContract';
 import { captureObligationSnapshot } from '../src/solver/obligationProgress';
-import { leadPlanDeliveryFile, parseCooperationPlan, taskVersion, type CooperativeTask, type TaskRecord } from '../src/solver/tasks';
+import { leadPlanDeliveryFile, markTaskAcceptance, parseCooperationPlan, taskVersion, type CooperativeTask, type TaskRecord } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 import { receiptBatch } from './helpers/verifier';
@@ -36,11 +36,13 @@ const check = (task: CooperativeTask) => ({ action: 'construction-check' as cons
   objective: 'Test the finite construction at the recorded boundary case.', expectedEvidence: 'A concrete witness or an exact failed equality.' });
 const proof = (task: CooperativeTask, conditions: NonNullable<TaskProof['conditions']> = []): TaskProof => {
   const digest = taskVersion(task), commit = 'f'.repeat(40);
-  return { taskDigest: digest, seedCommit: commit, commit, sourceDigest: 'fixture-source', passed: true, conditions,
+  const checked: TaskProof = { taskDigest: digest, seedCommit: commit, commit, sourceDigest: 'fixture-source', passed: true, conditions,
     changes: [{ file: task.proofPath!, name: task.theoremName!, after: `lemma ${task.theoremName} : ${task.type} := by trivial\n` }],
     verification: receiptBatch({ projectRoot: '/unused-fixture', targetCommit: commit, items: [{
       proofPath: task.proofPath!, theoremName: task.theoremName, statementHash: digest, leanStatementHash: digest,
     }] }, { sessionId: 'progress-verifier', receiptId: () => `progress-${task.id}` }) };
+  markTaskAcceptance(checked);
+  return checked;
 };
 function observer(initial: TaskRecord[], active = ['research']) {
   let state: GoalProgressState | undefined;

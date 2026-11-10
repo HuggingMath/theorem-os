@@ -5,13 +5,16 @@ import { webGuidanceSchema, webPlanApprovalSchema, webPlanProposalSchema } from 
 import type { WebCommandResult, WebGuidanceRecord, WebObservation } from './collaboration';
 import { webLimits } from './shared';
 import { WebStorage, WebStorageError } from './storage';
+import type { ResearchCollaborationInbox, ResearchCollaborationState, ResearchCollaborationView, ResearchHandoff,
+  ResearchInboxItem, ResearchInvitation, ResearchIssue } from './researchCollaborationTypes';
 import type {
   ResearchActivity, ResearchAuthor, ResearchCommand, ResearchContribution, ResearchFeedback, ResearchFeedbackDecisionInput,
   ResearchFeedbackInput, ResearchFeedbackTarget, ResearchHumanAssignment, ResearchMemberRole, ResearchMutation, ResearchNotification, ResearchPage,
   ResearchProfileInput, ResearchProjectDetail, ResearchProjectInput, ResearchProjectSummary, ResearchProjectUpdate,
-  ResearchQuery, ResearcherProfile, ResearchRunBinding, ResearchRunBindingInput, ResearchRunGrants, ResearchRunPermission,
-  ResearchStatementInput, ResearchStatementVersion, ResearchProofResult,
+  ResearchQuery, ResearcherDirectory, ResearcherProfile, ResearchRunBinding, ResearchRunBindingInput, ResearchRunGrants, ResearchRunPermission,
+  ResearchStatementInput, ResearchStatementVersion, ResearchProofResult, ResearchWorkImpact, ResearchWorkImpactItem, ResearchWorkContinuation,
 } from './researchProjectTypes';
+import type { ResearchLibraryCandidateAttachment } from './researchLibraryTrialTypes';
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u);
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -24,10 +27,10 @@ const visibility = z.enum(['private', 'members', 'public']);
 const profileSchema = z.object({ ...mutation, displayName: nonempty(100), fields: fields.optional(), bio: text(4000).optional(),
   links: z.array(z.string().url().max(2048).refine(value => /^https?:\/\//u.test(value))).max(10).optional(),
   visibility: z.enum(['private', 'public']).optional() }).strict();
-const projectFields = { title: nonempty(200), description: text(8000).optional(), fields: fields.optional(), visibility: visibility.optional() };
+const projectFields = { title: nonempty(200), description: text(8000).optional(), fields: fields.optional(), visibility: visibility.optional(), candidateDeliveryPolicy: z.enum(['direct', 'reviewed']).optional() };
 const createSchema = z.object({ ...mutation, ...projectFields }).strict();
 const updateSchema = z.object({ ...mutation, title: projectFields.title.optional(), description: projectFields.description,
-  fields: projectFields.fields, visibility: projectFields.visibility }).strict();
+  fields: projectFields.fields, visibility: projectFields.visibility, candidateDeliveryPolicy: projectFields.candidateDeliveryPolicy }).strict();
 const source = nonempty(webLimits.maxSourceBytes).refine(value => Buffer.byteLength(value) <= webLimits.maxSourceBytes);
 const versionSchema = z.object({ ...mutation, statement: nonempty(8000), source, environment: z.enum(['standard', 'mathlib']),
   assumptions: z.array(nonempty(4000)).max(100).optional(),
@@ -42,9 +45,11 @@ const taskRefSchema = z.object({ id, version: nonempty(128) }).strict();
 const observationRefSchema = z.object({ sequence: z.number().int().positive(), stateDigest: hash }).strict();
 const targetSchema = z.object({ runId: id, statementVersionId: id, observationRef: observationRefSchema,
   taskRef: taskRefSchema.optional() }).strict();
-const feedbackFields = { ...mutation, text: nonempty(4000), visibility: z.enum(['members', 'public']).optional(), sourceFeedbackId: id.optional() };
+const issueSourceSchema = z.object({ issueId: id, issueRevision: revision, resolutionAt: nonempty(64), proposalId: id.optional(), reviewedTaskRef: taskRefSchema.optional() }).strict();
+const feedbackFields = { ...mutation, text: nonempty(4000), visibility: z.enum(['members', 'public']).optional(), sourceFeedbackId: id.optional(), issueSource: issueSourceSchema.optional() };
 const recipientSchema = z.discriminatedUnion('kind', [z.object({ kind: z.literal('lead'), id: id.optional() }).strict(),
   z.object({ kind: z.literal('task'), id }).strict(), z.object({ kind: z.literal('worker'), id }).strict()]);
+const revisionResponsesSchema = z.array(z.object({ commentId: id, text: nonempty(4000) }).strict()).max(100);
 const feedbackSchema = z.discriminatedUnion('kind', [
   z.object({ ...feedbackFields, kind: z.literal('discussion'), statementVersionId: id.optional() }).strict(),
   z.object({ ...feedbackFields, kind: z.literal('guidance'), target: targetSchema, recipient: recipientSchema }).strict(),
@@ -52,7 +57,9 @@ const feedbackSchema = z.discriminatedUnion('kind', [
   z.object({ ...feedbackFields, kind: z.literal('route-control'), target: targetSchema, proposal: z.unknown() }).strict(),
   z.object({ ...feedbackFields, kind: z.literal('plan-approval'), target: targetSchema, planVersion: nonempty(128) }).strict(),
   z.object({ ...feedbackFields, kind: z.literal('proof-submission'), target: targetSchema, source,
-    base: z.object({ commit: nonempty(128), sourceDigest: hash, environmentDigest: hash, file: nonempty(512) }).strict() }).strict(),
+    base: z.object({ commit: nonempty(128), sourceDigest: hash, environmentDigest: hash, file: nonempty(512) }).strict(),
+    revisionOf: z.object({ feedbackId: id, expectedRevision: revision, responses: revisionResponsesSchema }).strict().optional(),
+    libraryTrialId: id.optional(), libraryTrialDigest: hash.optional(), shareLibraryTrial: z.boolean().optional() }).strict(),
 ]);
 const decisionSchema = z.object({ ...mutation, status: z.enum(['accepted', 'declined', 'needs-info']), reason: nonempty(4000),
   evidenceRefs: z.array(nonempty(512)).max(100).optional(), planVersion: nonempty(128).optional(),
@@ -73,12 +80,14 @@ type StoredProject = {
   schema: 'theoremos.research-project.v1'; owner: string;
   project: Omit<ResearchProjectSummary, 'permissions'>;
   versions: ResearchStatementVersion[]; bindings: StoredBinding[]; feedback: ResearchFeedback[];
-  activity: ResearchActivity[]; contributions: ResearchContribution[]; assignments?: ResearchHumanAssignment[]; requests: Requests;
+  activity: ResearchActivity[]; contributions: ResearchContribution[]; assignments?: ResearchHumanAssignment[];
+  collaboration?: ResearchCollaborationState; requests: Requests;
 };
 type AssetContribution = { assetId: string; version: string; visibility: 'private' | 'public';
   contribution: ResearchContribution; activity: ResearchActivity };
 type OwnerState = { owner: string; profile?: ResearcherProfile; follows: { kind: 'person' | 'theorem'; id: string }[];
-  notificationThrough?: string; assetContributions?: AssetContribution[]; requests: Requests };
+  notificationThrough?: string; inbox?: Record<string, { read?: boolean; processed?: boolean }>;
+  assetContributions?: AssetContribution[]; requests: Requests };
 
 /** Owns collaboration facts and permissions. Runtime control remains behind the existing host command protocol. */
 export class WebResearchProjects {
@@ -184,7 +193,8 @@ export class WebResearchProjects {
     return stored.activity.filter(event => (!event.feedbackId || visibleIds.has(event.feedbackId)) &&
       (!event.runId || stored.bindings.some(binding => binding.runId === event.runId && (member || binding.exposure === 'public'))));
   }
-  private bindingView(viewer: string, stored: StoredProject, binding: StoredBinding): ResearchRunBinding | undefined {
+  private bindingView(viewer: string, stored: StoredProject, binding: StoredBinding | undefined): ResearchRunBinding | undefined {
+    if (!binding) return;
     const run = this.storage.getRun(binding.runOwner, binding.runId);
     if (!run) return;
     const { runOwner, ...view } = binding, own = viewer === runOwner;
@@ -215,14 +225,29 @@ export class WebResearchProjects {
       projects: projects.map(project => this.summary(viewer, project)),
       contributions: [...contributions, ...assets.map(asset => asset.contribution)] };
   }
-  directory(viewer: string, query: ResearchQuery = {}): ResearchPage<ResearcherProfile> {
-    const self = this.identity(viewer), q = query.q?.toLocaleLowerCase() ?? '';
+  directory(viewer: string, query: ResearchQuery = {}): ResearcherDirectory {
+    const self = this.identity(viewer), q = query.q?.trim().toLocaleLowerCase() ?? '', field = query.field?.trim().toLocaleLowerCase() ?? '';
     const profiles = this.storage.listRecords(['research', 'people']).flatMap(file => {
       const profile = this.storage.getRecord<OwnerState>(['research', 'people', file])?.profile;
       return profile && (profile.visibility === 'public' || profile.id === self) ? [profile] : [];
-    }).filter(profile => (!query.field || profile.fields.includes(query.field)) &&
+    });
+    const availableFields = new Map<string, string>();
+    for (const value of profiles.flatMap(profile => profile.fields)) {
+      const label = value.trim(), normalized = label.toLocaleLowerCase();
+      if (label && !availableFields.has(normalized)) availableFields.set(normalized, label);
+    }
+    const matching = profiles.filter(profile => (!field || profile.fields.some(value => value.trim().toLocaleLowerCase() === field)) &&
       (!q || `${profile.displayName} ${profile.bio} ${profile.fields.join(' ')}`.toLocaleLowerCase().includes(q)));
-    return this.page(profiles.sort((a, b) => a.displayName.localeCompare(b.displayName)), query);
+    const page = this.page(matching.sort((a, b) => a.displayName.localeCompare(b.displayName)), query);
+    return { ...page, fields: [...availableFields.values()].sort((left, right) => left.localeCompare(right)), items: page.items.map(person => {
+      const visible = this.profile(viewer, person.id);
+      const project = [...visible.projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+      const contribution = [...visible.contributions].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+      return { ...person, research: { projectCount: visible.projects.length, contributionCount: visible.contributions.length,
+        ...(project ? { latestProject: { id: project.id, title: project.title, updatedAt: project.updatedAt } } : {}),
+        ...(contribution ? { latestContribution: { summary: contribution.summary, createdAt: contribution.createdAt,
+          projectId: contribution.projectId, assetId: contribution.assetId, assetVersion: contribution.assetVersion, runId: contribution.runId } } : {}) } };
+    }) };
   }
   saveProfile(viewer: string, value: unknown): ResearcherProfile {
     const self = this.authenticated(viewer), input = parse(profileSchema, value) as ResearchProfileInput, state = this.ownerState(viewer);
@@ -252,7 +277,7 @@ export class WebResearchProjects {
     if (existing) { this.request(existing, viewer, 'create', input); return this.detail(viewer, projectId); }
     const at = now(), stored: StoredProject = { schema: 'theoremos.research-project.v1', owner: viewer,
       project: { id: projectId, title: input.title, description: input.description ?? '', fields: input.fields ?? [],
-        visibility: input.visibility ?? 'private', owner: this.author(viewer), members: [], revision: 0, createdAt: at, updatedAt: at },
+        visibility: input.visibility ?? 'private', candidateDeliveryPolicy: input.candidateDeliveryPolicy ?? 'direct', owner: this.author(viewer), members: [], revision: 0, createdAt: at, updatedAt: at },
       versions: [], bindings: [], feedback: [], activity: [], contributions: [], requests: {} };
     this.event(stored, viewer, 'project-created', '提出研究问题'); this.contribute(stored, viewer, 'problem', '提出研究问题');
     this.remember(stored, viewer, 'create', input, projectId); this.save(stored);
@@ -276,9 +301,10 @@ export class WebResearchProjects {
   update(viewer: string, projectId: string, value: unknown): ResearchProjectDetail {
     const stored = this.writable(viewer, projectId), input = parse(updateSchema, value) as ResearchProjectUpdate;
     if (input.visibility !== undefined && viewer !== stored.owner) throw new WebStorageError(403, '只有发起者可改变公开范围。');
+    if (input.candidateDeliveryPolicy !== undefined && viewer !== stored.owner) throw new WebStorageError(403, '只有项目发起者能改变候选投递策略。');
     if (this.request(stored, viewer, 'update', input)) return this.detail(viewer, projectId);
     this.compare(stored.project.revision, input.expectedRevision);
-    for (const key of ['title', 'description', 'fields', 'visibility'] as const) if (input[key] !== undefined)
+    for (const key of ['title', 'description', 'fields', 'visibility', 'candidateDeliveryPolicy'] as const) if (input[key] !== undefined)
       Object.assign(stored.project, { [key]: input[key] });
     this.event(stored, viewer, 'project-updated', '更新研究资料'); this.remember(stored, viewer, 'update', input); this.save(stored);
     return this.detail(viewer, projectId);
@@ -341,7 +367,7 @@ export class WebResearchProjects {
     if (permission !== 'read' && !view.permissions[permission]) throw new WebStorageError(403, '没有这项运行操作权限。');
     return { runOwner: binding.runOwner, binding: view, run: this.storage.getRun(binding.runOwner, binding.runId)! };
   }
-  private validateTarget(viewer: string, stored: StoredProject, target: ResearchFeedbackTarget, permission: ResearchRunPermission) {
+  private validateTarget(viewer: string, stored: StoredProject, target: ResearchFeedbackTarget, permission: ResearchRunPermission, allowFinishedCandidate = false) {
     const resolved = this.resolveBinding(viewer, stored.project.id, target.runId, permission);
     if (resolved.binding.statementVersionId !== target.statementVersionId) throw new WebStorageError(409, '陈述版本与运行不一致。');
     const observation = this.storage.getObservation(resolved.runOwner, target.runId, target.observationRef.sequence);
@@ -350,13 +376,14 @@ export class WebResearchProjects {
     if (target.taskRef && !resolved.run.observation?.inspection.tasks.some(task =>
       task.id === target.taskRef!.id && task.version === target.taskRef!.version))
       throw new WebStorageError(409, '任务版本已改变，请重新核对。');
-    if (permission !== 'read' && resolved.run.status !== 'running') throw new WebStorageError(409, '只能干预运行中的研究。');
+    if (permission !== 'read' && resolved.run.status !== 'running' && !(allowFinishedCandidate && ['completed', 'cancelled', 'error'].includes(resolved.run.status)))
+      throw new WebStorageError(409, '只能干预运行中的研究。');
     return resolved;
   }
   private feedbackPermission(kind: ResearchFeedback['kind']): ResearchRunPermission {
     return kind === 'guidance' ? 'guidance' : kind === 'plan-approval' ? 'approve' : kind === 'proof-submission' ? 'proof' : 'edit';
   }
-  submitFeedback(viewer: string, projectId: string, value: unknown): ResearchFeedback {
+  submitFeedback(viewer: string, projectId: string, value: unknown, trusted?: { libraryTrial?: ResearchLibraryCandidateAttachment }): ResearchFeedback {
     this.authenticated(viewer);
     const stored = this.readable(viewer, projectId), input = parse(feedbackSchema, value) as ResearchFeedbackInput;
     const previous = this.request(stored, viewer, 'feedback', input);
@@ -369,13 +396,34 @@ export class WebResearchProjects {
         throw new WebStorageError(403, '不能将成员讨论作为公开反馈发布。');
       sourceMembersOnly = sourceFeedback.visibility === 'members';
     }
+    let issueSource: ResearchFeedback['issueSource'];
+    if (input.issueSource) {
+      if (!this.access(viewer, stored).member || input.visibility === 'public') throw new WebStorageError(403, '议题与执行记录仅向项目成员开放。');
+      if (input.kind !== 'guidance' && input.kind !== 'plan-edit') throw new WebStorageError(400, '议题决议可转为运行指导或计划调整。');
+      const issue = this.collaborationState(stored).issues.find(item => item.id === input.issueSource!.issueId);
+      if (!issue) throw new WebStorageError(404, '议题不存在。');
+      if (issue.status !== 'resolved' || issue.revision !== input.issueSource.issueRevision || issue.resolution?.createdAt !== input.issueSource.resolutionAt
+        || issue.resolution.proposalId !== input.issueSource.proposalId) throw new WebStorageError(409, '议题决议已改变，请重新核对后准备执行。');
+      const originalTask = issue.target?.taskRef, executionTask = input.target.taskRef;
+      const taskMatches = !originalTask || originalTask.id === executionTask?.id && (originalTask.version === executionTask.version ||
+        canonicalMathJson(input.issueSource.reviewedTaskRef ?? null) === canonicalMathJson(executionTask));
+      if (issue.statementVersionId && issue.statementVersionId !== input.target.statementVersionId || issue.target && issue.target.runId !== input.target.runId || !taskMatches)
+        throw new WebStorageError(409, '执行目标必须与议题对应的运行和任务版本一致。');
+      const proposal = issue.replies.find(item => item.id === issue.resolution!.proposalId);
+      issueSource = { ...input.issueSource, title: issue.title, resolution: { text: issue.resolution.text, author: clone(issue.resolution.author) },
+        ...(proposal ? { proposal: { id: proposal.id, text: proposal.text, author: clone(proposal.author) } } : {}), ...(issue.target ? { originalTarget: clone(issue.target) } : {}) };
+      sourceMembersOnly = true;
+    }
     const feedbackId = `feedback-${mathDigest(`${this.identity(viewer)}:${input.requestId}`).slice(0, 32)}`;
-    let payload: ResearchFeedback['payload'];
+    let payload: ResearchFeedback['payload'], parent: ResearchFeedback | undefined, candidateRevision: ResearchFeedback['candidateRevision'];
     if (input.kind === 'discussion') {
       if (input.statementVersionId && !stored.versions.some(version => version.id === input.statementVersionId))
         throw new WebStorageError(404, '陈述版本不存在。');
     } else {
-      const resolved = this.validateTarget(viewer, stored, input.target, this.feedbackPermission(input.kind));
+      const revisionParent = input.kind === 'proof-submission' && input.revisionOf ? stored.feedback.find(item => item.id === input.revisionOf!.feedbackId) : undefined;
+      const inheritedTrial = revisionParent?.payload && 'libraryTrial' in revisionParent.payload ? revisionParent.payload.libraryTrial : undefined;
+      const resolved = this.validateTarget(viewer, stored, input.target, this.feedbackPermission(input.kind),
+        input.kind === 'proof-submission' && Boolean((trusted?.libraryTrial ?? inheritedTrial)?.requiresNewAttempt));
       if (input.visibility === 'public' && (stored.project.visibility !== 'public' || resolved.binding.exposure !== 'public'))
         throw new WebStorageError(403, '此运行尚未允许公开反馈内容。');
       if (input.kind === 'guidance') {
@@ -405,7 +453,34 @@ export class WebResearchProjects {
           taskRef: task, observationRef: input.target.observationRef, candidate: { source: input.source, file: input.base.file,
             sourceDigest: mathDigest(input.source), baseCommit: input.base.commit, baseSourceDigest: input.base.sourceDigest,
             environmentDigest: input.base.environmentDigest, taskRef: task } });
-        payload = { source: input.source, base: input.base };
+        if (input.revisionOf) {
+          parent = stored.feedback.find(item => item.id === input.revisionOf!.feedbackId);
+          if (!parent || parent.kind !== 'proof-submission' || !parent.target || !parent.payload || !('source' in parent.payload)) throw new WebStorageError(404, '原候选证明不存在。');
+          if (parent.author.id !== this.identity(viewer)) throw new WebStorageError(403, '只有原提交人能创建候选的新修订。');
+          this.compare(parent.revision, input.revisionOf.expectedRevision);
+          if (parent.supersededBy || parent.continuation?.action === 'end') throw new WebStorageError(409, '原候选已有后续修订或已结束，请打开最新候选。');
+          if (parent.target.runId !== input.target.runId || parent.target.statementVersionId !== input.target.statementVersionId || parent.target.taskRef?.id !== task.id)
+            throw new WebStorageError(409, '新修订必须属于同一运行、陈述和任务。');
+          if (parent.visibility === 'members' && input.visibility === 'public') throw new WebStorageError(403, '成员候选的新修订不能直接公开。');
+          const comments = parent.reviewComments ?? [], responses = input.revisionOf.responses;
+          if (new Set(responses.map(item => item.commentId)).size !== responses.length || responses.some(item => !comments.some(comment => comment.id === item.commentId))
+            || comments.some(comment => !responses.some(item => item.commentId === comment.id))) throw new WebStorageError(400, '请逐条回应上一版的评审意见。');
+          candidateRevision = { parentFeedbackId: parent.id, parentRevision: parent.revision, rootFeedbackId: parent.candidateRevision?.rootFeedbackId ?? parent.id,
+            number: (parent.candidateRevision?.number ?? 1) + 1, responses: clone(responses), parentSnapshot: { source: parent.payload.source, base: clone(parent.payload.base),
+              target: clone(parent.target), ...(parent.proofCheck ? { proofCheck: clone(parent.proofCheck) } : {}), decision: clone(parent.decision), comments: clone(comments) } };
+        }
+        const inheritedAttachment = parent?.payload && 'libraryTrial' in parent.payload ? parent.payload.libraryTrial : undefined;
+        const attachment = trusted?.libraryTrial ?? inheritedAttachment;
+        if (input.libraryTrialId || input.libraryTrialDigest || input.shareLibraryTrial || attachment) {
+          if (!attachment || !inheritedAttachment && (input.shareLibraryTrial !== true || input.libraryTrialId !== attachment.trial.id || input.libraryTrialDigest !== attachment.trial.digest))
+            throw new WebStorageError(403, '请明确确认向项目成员共享这份固定试用证据。');
+          const trialTarget = attachment.trial.target.ref;
+          if (attachment.projectId !== projectId || !inheritedAttachment && (input.source !== attachment.trial.source || input.target.runId !== trialTarget.runId || task.id !== trialTarget.taskId
+            || task.version !== trialTarget.taskVersion || canonicalMathJson(input.base) !== canonicalMathJson({ commit: trialTarget.commit, sourceDigest: trialTarget.sourceDigest,
+              environmentDigest: trialTarget.environmentDigest, file: trialTarget.file }))) throw new WebStorageError(409, '候选与固定试用的源码、基准或目标不一致。');
+          if (input.visibility === 'public') throw new WebStorageError(403, '试用证据候选仅向项目成员开放。');
+        }
+        payload = { source: input.source, base: input.base, ...(attachment ? { libraryTrial: clone(attachment) } : {}) };
       }
     }
     const at = now(), record: ResearchFeedback = { id: feedbackId, requestId: input.requestId, projectId,
@@ -413,11 +488,27 @@ export class WebResearchProjects {
       visibility: input.visibility ?? (!sourceMembersOnly && input.kind === 'discussion' && stored.project.visibility === 'public' ? 'public' : 'members'),
       ...(input.kind === 'discussion' && !this.access(viewer, stored).member ? { authorReadable: true } : {}),
       ...(input.sourceFeedbackId ? { sourceFeedbackId: input.sourceFeedbackId } : {}),
+      ...(issueSource ? { issueSource } : {}),
+      ...(input.kind === 'proof-submission' ? { candidateDelivery: { policy: payload && 'libraryTrial' in payload && payload.libraryTrial ? 'reviewed' : stored.project.candidateDeliveryPolicy ?? 'direct', status: 'checking' },
+        ...(candidateRevision ? { candidateRevision } : {}), ...(parent?.review ? { review: clone(parent.review) } : {}) } : {}),
       ...(input.kind === 'discussion' ? { statementVersionId: input.statementVersionId } : { target: input.target, payload }),
       delivery: { status: 'not-sent', ...(input.kind === 'discussion' ? {} : { commandId: feedbackId }) },
       decision: { status: 'pending', evidenceRefs: [] },
       execution: { status: 'not-started', taskRefs: [], resultRefs: [] }, revision: 1, createdAt: at, updatedAt: at };
     stored.feedback.push(record);
+    if (parent) {
+      parent.supersededBy = record.id;
+      if (parent.candidateDelivery && parent.candidateDelivery.status !== 'dispatched') parent.candidateDelivery.status = 'withdrawn';
+      parent.continuation = { action: 'continue', actor: this.author(viewer), text: input.text, createdAt: at, target: clone(record.target!), feedbackId: record.id };
+      if (parent.review && !parent.reviewContinuation) parent.reviewContinuation = clone(parent.continuation);
+      parent.revision++; parent.updatedAt = at;
+    }
+    if (input.kind === 'proof-submission') {
+      const claim = stored.assignments?.find(item => item.author.id === record.author.id && item.status === 'claimed'
+        && item.target.runId === input.target.runId && item.target.statementVersionId === input.target.statementVersionId
+        && canonicalMathJson(item.target.taskRef) === canonicalMathJson(input.target.taskRef));
+      if (claim) { claim.status = 'submitted'; claim.feedbackId = record.id; claim.updatedAt = at; }
+    }
     this.event(stored, viewer, 'feedback-created', input.kind === 'discussion' ? '提出讨论建议' : '提交研究反馈',
       { feedbackId, ...(input.kind === 'discussion' && input.statementVersionId ? { statementVersionId: input.statementVersionId } : {}) });
     this.contribute(stored, viewer, input.kind, '提出研究建议或候选成果', { feedbackId });
@@ -428,6 +519,57 @@ export class WebResearchProjects {
     if (!feedback) throw new WebStorageError(404, '反馈不存在。');
     return clone(feedback);
   }
+  addReviewComment(viewer: string, projectId: string, feedbackId: string, value: unknown): ResearchFeedback {
+    const stored = this.writable(viewer, projectId), input = parse(z.object({ ...mutation, text: nonempty(4000) }).strict(), value) as ResearchMutation & { text: string };
+    const record = stored.feedback.find(item => item.id === feedbackId);
+    if (!record || record.kind !== 'proof-submission') throw new WebStorageError(404, '候选证明不存在。');
+    const operation = `review-comment:${feedbackId}`;
+    if (this.request(stored, viewer, operation, input)) return clone(record);
+    this.compare(record.revision, input.expectedRevision);
+    if (record.review && record.review.reviewer.id !== this.identity(viewer) && !this.access(viewer, stored).manage)
+      throw new WebStorageError(403, '此反馈由指定评审负责，请先办理评审移交。');
+    if (record.target) this.resolveBinding(viewer, projectId, record.target.runId, 'proof');
+    if (record.author.id === this.identity(viewer)) throw new WebStorageError(403, '请交由另一位成员评审自己的提交。');
+    if (record.supersededBy) throw new WebStorageError(409, '请在最新候选上添加评审意见。');
+    (record.reviewComments ??= []).push({ id: crypto.randomUUID(), author: this.author(viewer), text: input.text, createdAt: now() });
+    record.revision++; record.updatedAt = now();
+    this.event(stored, viewer, 'candidate-review-comment', '补充候选评审意见', { feedbackId });
+    this.remember(stored, viewer, operation, input, feedbackId); this.save(stored); return clone(record);
+  }
+  candidateDelivery(viewer: string, projectId: string, feedbackId: string, value: unknown): ResearchFeedback {
+    const stored = this.writable(viewer, projectId), input = parse(z.object({ ...mutation, action: z.enum(['approve', 'withdraw']) }).strict(), value) as ResearchMutation & { action: 'approve' | 'withdraw' };
+    const record = stored.feedback.find(item => item.id === feedbackId);
+    if (!record || record.kind !== 'proof-submission' || !record.target) throw new WebStorageError(404, '候选证明不存在。');
+    const operation = `candidate-delivery:${feedbackId}`;
+    if (this.request(stored, viewer, operation, input)) return clone(record);
+    this.compare(record.revision, input.expectedRevision);
+    const self = this.identity(viewer), manage = this.access(viewer, stored).manage;
+    if (input.action === 'withdraw') {
+      if (!manage && self !== record.author.id) throw new WebStorageError(403, '只有提交人或项目发起者能撤回候选投递。');
+      if (record.candidateDelivery?.status === 'dispatched' || !['not-sent', 'failed'].includes(record.delivery.status)) throw new WebStorageError(409, '候选已经投递，无法撤回已执行的操作。');
+      record.candidateDelivery ??= { policy: 'direct', status: 'checking' }; record.candidateDelivery.status = 'withdrawn';
+    } else {
+      if (self === record.author.id || record.review && record.review.reviewer.id !== self && !manage) throw new WebStorageError(403, '请由指定评审或另一位有权限的项目发起者批准投递。');
+      if (record.proofCheck?.status !== 'checked' || record.candidateDelivery?.status !== 'awaiting-review' || record.supersededBy || record.continuation?.action === 'end'
+        || ['needs-info', 'declined'].includes(record.decision.status))
+        throw new WebStorageError(409, '只有当前已检查且等待评审的候选可以批准投递。');
+      this.validateCandidateBaseline(viewer, stored, record);
+      record.candidateDelivery = { ...record.candidateDelivery, status: 'approved', approvedBy: this.author(viewer), approvedAt: now() };
+      if (!record.review) record.review = { reviewer: this.author(viewer), assignedBy: this.author(viewer), assignedAt: now() };
+    }
+    record.revision++; record.updatedAt = now();
+    this.event(stored, viewer, input.action === 'approve' ? 'candidate-approved' : 'candidate-withdrawn', input.action === 'approve' ? '批准候选进入运行' : '撤回候选投递', { feedbackId });
+    this.remember(stored, viewer, operation, input, feedbackId); this.save(stored); return clone(record);
+  }
+  private validateCandidateBaseline(viewer: string, stored: StoredProject, record: ResearchFeedback) {
+    const payload = record.payload;
+    if (!payload || !('source' in payload)) throw new WebStorageError(404, '候选证明不存在。');
+    const resolved = this.validateTarget(viewer, stored, record.target!, 'proof', Boolean(payload.libraryTrial?.requiresNewAttempt));
+    const current = resolved.run.observation?.sources.some(item => item.taskId === record.target?.taskRef?.id && item.taskVersion === record.target.taskRef.version
+      && item.commit === payload.base.commit && item.sourceDigest === payload.base.sourceDigest && item.environmentDigest === payload.base.environmentDigest && item.file === payload.base.file);
+    if (!current) throw new WebStorageError(409, '候选源码基准已变化，请先接续新版并重新检查。');
+    return resolved;
+  }
   decideFeedback(viewer: string, projectId: string, feedbackId: string, value: unknown): ResearchFeedback {
     const stored = this.writable(viewer, projectId), input = parse(decisionSchema, value) as ResearchFeedbackDecisionInput;
     const record = stored.feedback.find(item => item.id === feedbackId);
@@ -435,6 +577,14 @@ export class WebResearchProjects {
     const operation = `decision:${feedbackId}`;
     if (this.request(stored, viewer, operation, input)) return clone(record);
     this.compare(record.revision, input.expectedRevision);
+    if (record.review && record.review.reviewer.id !== this.identity(viewer) && !this.access(viewer, stored).manage)
+      throw new WebStorageError(403, '此反馈由指定评审负责，请先办理评审移交。');
+    if (input.status === 'accepted' && record.kind === 'proof-submission' && record.candidateDelivery?.policy === 'reviewed') {
+      if (record.author.id === this.identity(viewer)) throw new WebStorageError(403, '请交由另一位成员评审自己的提交。');
+      if (record.proofCheck?.status !== 'checked' || record.candidateDelivery.status === 'withdrawn' || record.supersededBy || record.continuation?.action === 'end'
+        || ['needs-info', 'declined'].includes(record.decision.status)) throw new WebStorageError(409, '只有当前已检查且等待评审的候选可以批准投递。');
+      if (record.candidateDelivery.status !== 'dispatched') this.validateCandidateBaseline(viewer, stored, record);
+    }
     const resolved = record.target ? this.resolveBinding(viewer, projectId, record.target.runId, this.feedbackPermission(record.kind)) : undefined;
     const observation = resolved?.run.observation;
     const observations = resolved ? [...this.storage.listObservations(resolved.runOwner, resolved.run.id),
@@ -453,12 +603,56 @@ export class WebResearchProjects {
         throw new WebStorageError(409, '引用的任务版本尚无运行证据。');
     }
     const original = record.target && this.storage.getObservation(resolved!.runOwner, resolved!.run.id, record.target.observationRef.sequence);
+    if (record.decision.status !== 'pending' && record.decision.status !== 'not-recorded') (record.decisionHistory ??= []).push(clone(record.decision));
     record.decision = { status: input.status, actor: { ...this.author(viewer), kind: 'human' }, reason: input.reason,
       evidenceRefs, decidedAt: now(), ...(record.target?.taskRef ? { sourceTaskRef: record.target.taskRef } : {}),
       ...(original?.inspection.planVersion ? { sourcePlanVersion: original.inspection.planVersion } : {}) };
+    if (input.status === 'accepted' && record.candidateDelivery && record.payload && 'libraryTrial' in record.payload && record.payload.libraryTrial?.requiresNewAttempt)
+      record.candidateDelivery = { ...record.candidateDelivery, status: 'approved', approvedBy: this.author(viewer), approvedAt: now() };
+    if (input.status !== 'accepted' && record.candidateDelivery?.policy === 'reviewed' && record.candidateDelivery.status === 'approved')
+      record.candidateDelivery = { policy: 'reviewed', status: 'awaiting-review' };
     this.observeExecution(record, observation);
     record.revision++; record.updatedAt = now();
     this.event(stored, viewer, 'feedback-decided', '记录研究反馈处理决定', { feedbackId });
+    this.remember(stored, viewer, operation, input, feedbackId); this.save(stored); return clone(record);
+  }
+  reviewFeedback(viewer: string, projectId: string, feedbackId: string, value: unknown): ResearchFeedback {
+    const self = this.authenticated(viewer), stored = this.readable(viewer, projectId);
+    const input = parse(z.object({ ...mutation, action: z.enum(['claim', 'assign', 'resubmit']), reviewerId: id.optional(), text: nonempty(4000).optional() }).strict(), value) as
+      ResearchMutation & { action: 'claim' | 'assign' | 'resubmit'; reviewerId?: string; text?: string };
+    const record = this.visibleFeedback(viewer, stored).find(item => item.id === feedbackId);
+    if (!record) throw new WebStorageError(404, '反馈不存在。');
+    const operation = `review:${feedbackId}`;
+    if (this.request(stored, viewer, operation, input)) return clone(record);
+    this.compare(record.revision, input.expectedRevision);
+    const access = this.access(viewer, stored), at = now();
+    if (input.action === 'resubmit') {
+      if (record.author.id !== self) throw new WebStorageError(403, '只有提交人能补充后重新送审。');
+      if (record.decision.status !== 'needs-info' || !input.text) throw new WebStorageError(409, '请在待补充状态填写补充内容后送审。');
+      (record.decisionHistory ??= []).push(clone(record.decision));
+      if (!record.review && record.decision.actor?.kind === 'human') {
+        const actor = record.decision.actor;
+        try { this.memberAuthor(stored, actor.id); record.review = { reviewer: { id: actor.id, displayName: actor.displayName }, assignedBy: this.author(viewer), assignedAt: at }; } catch { /* The former reviewer may have left the project. */ }
+      }
+      record.decision = { status: 'pending', evidenceRefs: [] };
+    } else {
+      if (!access.edit) throw new WebStorageError(403, '没有评审分配权限。');
+      if (record.target) this.resolveBinding(viewer, projectId, record.target.runId, this.feedbackPermission(record.kind));
+      if (input.action === 'claim' && record.review && record.review.reviewer.id !== self
+        || input.action === 'assign' && !access.manage && record.review?.reviewer.id !== self)
+        throw new WebStorageError(403, '只有项目发起者或当前评审可以移交评审。');
+      const reviewerId = input.action === 'claim' ? self : input.reviewerId;
+      if (!reviewerId) throw new WebStorageError(400, '请选择评审人。');
+      if (reviewerId === record.author.id) throw new WebStorageError(403, '请交由另一位成员评审自己的提交。');
+      const reviewer = this.memberAuthor(stored, reviewerId);
+      const reviewerOwner = reviewerId === stored.project.owner.id ? stored.owner : this.person(reviewerId)?.owner;
+      if (!reviewerOwner) throw new WebStorageError(403, '无法确认评审人的操作权限。');
+      if (record.target) this.resolveBinding(reviewerOwner, projectId, record.target.runId, this.feedbackPermission(record.kind));
+      record.review = { reviewer, assignedBy: this.author(viewer), assignedAt: at };
+    }
+    (record.reviewHistory ??= []).push({ action: input.action, actor: this.author(viewer), reviewer: clone(record.review?.reviewer), text: input.text, createdAt: at });
+    record.revision++; record.updatedAt = at;
+    this.event(stored, viewer, input.action === 'resubmit' ? 'feedback-resubmitted' : 'review-assigned', input.action === 'resubmit' ? '补充材料并重新送审' : '指定反馈评审人', { feedbackId });
     this.remember(stored, viewer, operation, input, feedbackId); this.save(stored); return clone(record);
   }
   commandForFeedback(viewer: string, projectId: string, feedbackId: string):
@@ -466,6 +660,10 @@ export class WebResearchProjects {
     const feedback = this.feedback(viewer, projectId, feedbackId);
     if (feedback.kind === 'discussion' || !feedback.target ||
       feedback.kind === 'proof-submission' && feedback.proofCheck?.status !== 'checked') return;
+    if (feedback.kind === 'proof-submission' && (feedback.supersededBy || feedback.continuation?.action === 'end' ||
+      ['needs-info', 'declined'].includes(feedback.decision.status) ||
+      feedback.candidateDelivery && ['checking', 'awaiting-review', 'withdrawn'].includes(feedback.candidateDelivery.status)
+      || feedback.payload && 'libraryTrial' in feedback.payload && feedback.payload.libraryTrial?.requiresNewAttempt)) return;
     const stored = this.readable(viewer, projectId);
     const permission = this.feedbackPermission(feedback.kind);
     const resolved = this.resolveBinding(viewer, projectId, feedback.target.runId, permission);
@@ -474,7 +672,8 @@ export class WebResearchProjects {
     if (this.storage.getCommand(resolved.runOwner, feedback.target.runId, feedback.id)) {
       if (resolved.binding.statementVersionId !== feedback.target.statementVersionId)
         throw new WebStorageError(409, '陈述版本与运行不一致。');
-    } else this.validateTarget(viewer, stored, feedback.target, permission);
+    } else if (feedback.kind === 'proof-submission' && feedback.candidateDelivery?.policy === 'reviewed') this.validateCandidateBaseline(viewer, stored, feedback);
+    else this.validateTarget(viewer, stored, feedback.target, permission);
     const payload = feedback.payload;
     let command: ResearchCommand;
     if (feedback.kind === 'guidance' && payload && 'recipient' in payload) command = { type: 'guidance', guidance: {
@@ -507,6 +706,7 @@ export class WebResearchProjects {
       else if (delivery === 'rejected') record.delivery = { status: 'failed', commandId: receipt.id, reason: receipt.reason };
       else record.delivery = { status: 'delivered', commandId: receipt.id, reason: receipt.reason };
     }
+    if (record.candidateDelivery && ['queued', 'delivered', 'deferred'].includes(record.delivery.status)) record.candidateDelivery.status = 'dispatched';
     const observed = receipt.observation ?? resolved.run.observation;
     this.observeDecision(record, receipt.guidance ?? observed?.guidance.find(item => item.id === record.id));
     this.observeExecution(record, observed);
@@ -519,7 +719,7 @@ export class WebResearchProjects {
   private observeDecision(record: ResearchFeedback, guidance?: WebGuidanceRecord) {
     const decision = guidance?.decision;
     if (!decision || decision.guidanceId !== record.id || !['guidance', 'proof-submission'].includes(record.kind) ||
-      record.decision.actor?.kind === 'human') return;
+      record.decision.actor?.kind === 'human' || record.decision.status === 'pending' && record.reviewHistory?.some(item => item.action === 'resubmit')) return;
     record.decision = { status: decision.status, actor: { kind: 'agent', id: decision.workerId, displayName: decision.workerId },
       reason: decision.reason, decidedAt: decision.decidedAt, sourceTaskRef: decision.sourceTaskRef,
       sourcePlanVersion: decision.sourcePlanVersion,
@@ -641,9 +841,9 @@ export class WebResearchProjects {
     const record = this.feedback(viewer, projectId, feedbackId), payload = record.payload;
     if (record.kind !== 'proof-submission' || !record.target || !payload || !('source' in payload))
       throw new WebStorageError(400, '此反馈不是候选证明。');
-    const resolved = this.validateTarget(viewer, this.readable(viewer, projectId), record.target, 'proof');
+    const resolved = this.validateTarget(viewer, this.readable(viewer, projectId), record.target, 'proof', Boolean(payload.libraryTrial?.requiresNewAttempt));
     return { runOwner: resolved.runOwner, runId: record.target.runId, source: payload.source,
-      base: clone(payload.base), target: clone(record.target) };
+      base: clone(payload.base), target: clone(record.target), ...('libraryTrial' in payload && payload.libraryTrial ? { libraryTrial: clone(payload.libraryTrial) } : {}) };
   }
   /** Records a trusted independent candidate check, never integration or S3 acceptance. */
   recordProofResult(viewer: string, projectId: string, feedbackId: string, value: unknown): ResearchFeedback {
@@ -665,6 +865,8 @@ export class WebResearchProjects {
       result.status = 'superseded'; result.reason = '候选检查期间任务版本已改变。';
     }
     record.proofCheck = result;
+    if (record.candidateDelivery && record.candidateDelivery.status !== 'withdrawn') record.candidateDelivery.status = result.status === 'checked'
+      ? record.candidateDelivery.policy === 'reviewed' ? 'awaiting-review' : 'approved' : 'checking';
     record.delivery = result.status === 'checked' ? { status: 'not-sent', commandId: record.id }
       : { status: 'failed', commandId: record.id, reason: result.reason };
     record.execution = { status: result.status === 'checked' ? 'not-started' : result.status,
@@ -702,6 +904,343 @@ export class WebResearchProjects {
     if (previous) assignments[assignments.indexOf(previous)] = record; else assignments.push(record);
     this.event(stored, viewer, 'assignment-updated', '更新人类参与者的任务认领', { runId: input.target.runId });
     this.remember(stored, viewer, operation, input, record.id); this.save(stored); return this.detail(viewer, projectId);
+  }
+  private collaborationState(stored: StoredProject): ResearchCollaborationState {
+    return stored.collaboration ??= { invitations: [], handoffs: [], issues: [] };
+  }
+  workImpact(viewer: string, projectId: string, runId: string, plannedTaskIds: string[] = []): ResearchWorkImpact {
+    const stored = this.readable(viewer, projectId), access = this.access(viewer, stored), self = this.identity(viewer);
+    if (!access.member) throw new WebStorageError(403, '人工工作的变更影响仅向项目成员开放。');
+    const resolved = this.resolveBinding(viewer, projectId, runId), observation = resolved.run.observation, items: ResearchWorkImpactItem[] = [];
+    if (!observation) return { projectId, runId, items };
+    const add = (kind: ResearchWorkImpactItem['kind'], record: { id: string; author: ResearchAuthor; target: ResearchFeedbackTarget; revision?: number; continuation?: ResearchWorkContinuation }, source?: string,
+      base?: { commit: string; sourceDigest: string; environmentDigest: string; file: string }, comments?: ResearchFeedback['reviewComments'], reviewer?: ResearchAuthor, allowFinishedCandidate = false) => {
+      if (record.target.runId !== runId || record.target.statementVersionId !== resolved.binding.statementVersionId || !record.target.taskRef) return;
+      const task = observation.inspection.tasks.find(item => item.id === record.target.taskRef!.id);
+      const sources = task ? observation.sources.filter(item => item.taskId === task.id && item.taskVersion === task.version) : [];
+      const currentSource = sources.find(item => item.file === base?.file) ?? sources[0];
+      const reason: ResearchWorkImpactItem['reason'] | undefined = !task ? 'task-removed' : task.version !== record.target.taskRef.version ? 'task-changed'
+        : base && (!currentSource || currentSource.commit !== base.commit || currentSource.sourceDigest !== base.sourceDigest
+          || currentSource.environmentDigest !== base.environmentDigest || currentSource.file !== base.file) ? 'source-changed' : plannedTaskIds.includes(task.id) ? 'planned-change' : undefined;
+      if (!reason) return;
+      const responsible = kind === 'review' ? reviewer?.id === self : kind === 'handoff'
+        ? this.collaborationState(stored).handoffs.find(item => item.id === record.id)?.recipient.id === self || record.author.id === self : record.author.id === self;
+      const currentTarget: ResearchFeedbackTarget | undefined = task ? { runId, statementVersionId: resolved.binding.statementVersionId,
+        observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest }, taskRef: { id: task.id, version: task.version } } : undefined;
+      items.push({ id: `${kind}:${record.id}`, kind, recordId: record.id, revision: record.revision ?? stored.project.revision, author: reviewer ?? record.author,
+        target: clone(record.target), ...(currentTarget ? { currentTarget } : {}), reason, canContinue: Boolean(access.edit && (responsible || access.manage) && currentTarget && reason !== 'planned-change'
+          && (resolved.run.status === 'running' || allowFinishedCandidate && ['completed', 'cancelled', 'error'].includes(resolved.run.status))
+          && !record.continuation && (kind !== 'candidate' || record.author.id === self && currentSource && resolved.binding.permissions.proof)
+          && (kind !== 'review' || resolved.binding.permissions.proof) && (kind !== 'handoff' || record.author.id === self || access.manage)),
+        canEnd: Boolean(access.edit && (responsible || access.manage) && !record.continuation), ...(record.continuation ? { continuation: clone(record.continuation) } : {}),
+        ...(source !== undefined ? { source } : {}), ...(currentSource ? { currentSource: clone(currentSource) } : {}), ...(comments ? { comments: clone(comments) } : {}) });
+    };
+    for (const claim of stored.assignments ?? []) if (claim.status !== 'released' || claim.continuation) add('claim', claim);
+    for (const candidate of stored.feedback) if (candidate.kind === 'proof-submission' && candidate.target && candidate.payload && 'source' in candidate.payload && (!candidate.supersededBy || candidate.continuation)) {
+      add('candidate', { ...candidate, target: candidate.target }, candidate.payload.source, candidate.payload.base, candidate.reviewComments, undefined, candidate.payload.libraryTrial?.requiresNewAttempt);
+      if (candidate.review && (['pending', 'not-recorded', 'needs-info'].includes(candidate.decision.status) || candidate.reviewContinuation))
+        add('review', { ...candidate, target: candidate.target, continuation: candidate.reviewContinuation }, undefined, candidate.payload.base, candidate.reviewComments, candidate.review.reviewer, candidate.payload.libraryTrial?.requiresNewAttempt);
+    }
+    for (const handoff of this.collaborationState(stored).handoffs) if (handoff.status === 'pending' || handoff.continuation) add('handoff', handoff);
+    return { projectId, runId, planVersion: observation.inspection.planVersion, items };
+  }
+  continueWork(viewer: string, projectId: string, value: unknown): { impact: ResearchWorkImpact; feedback?: ResearchFeedback } {
+    const stored = this.writable(viewer, projectId), input = parse(z.object({ ...mutation, kind: z.enum(['claim', 'candidate', 'review', 'handoff']), recordId: id,
+      action: z.enum(['continue', 'end']), target: targetSchema.optional(), source: source.optional(), text: nonempty(4000), responses: revisionResponsesSchema.optional() }).strict(), value) as ResearchMutation & {
+        kind: ResearchWorkImpactItem['kind']; recordId: string; action: 'continue' | 'end'; target?: ResearchFeedbackTarget; source?: string; text: string; responses?: { commentId: string; text: string }[] };
+    const operation = `continue-work:${input.kind}:${input.recordId}`, previous = this.request(stored, viewer, operation, input);
+    const state = this.collaborationState(stored);
+    const record = input.kind === 'claim' ? stored.assignments?.find(item => item.id === input.recordId) : input.kind === 'handoff'
+      ? state.handoffs.find(item => item.id === input.recordId) : stored.feedback.find(item => item.id === input.recordId);
+    if (!record?.target) throw new WebStorageError(404, '原人工工作不存在。');
+    if (previous) return { impact: this.workImpact(viewer, projectId, record.target.runId), ...(previous.resultId ? { feedback: this.feedback(viewer, projectId, previous.resultId) } : {}) };
+    const item = this.workImpact(viewer, projectId, record.target.runId).items.find(item => item.id === `${input.kind}:${input.recordId}`);
+    if (!item || (input.action === 'continue' ? !item.canContinue : !item.canEnd)) throw new WebStorageError(403, '这项工作当前不能由你接续或结束。');
+    this.compare(item.revision, input.expectedRevision);
+    if (input.action === 'continue') {
+      if (!input.target || canonicalMathJson(input.target) !== canonicalMathJson(item.currentTarget)) throw new WebStorageError(409, '当前任务又有变化，请重新核对后接续。');
+      const candidate = input.kind === 'candidate' || input.kind === 'review' ? record as ResearchFeedback : undefined;
+      const attachment = candidate?.payload && 'libraryTrial' in candidate.payload ? candidate.payload.libraryTrial : undefined;
+      this.validateTarget(viewer, stored, input.target, candidate ? 'proof' : 'read', Boolean(attachment?.requiresNewAttempt));
+    }
+    const continuation: ResearchWorkContinuation = { action: input.action, actor: this.author(viewer), text: input.text, createdAt: now(), ...(input.target ? { target: clone(input.target) } : {}) };
+    if (input.kind === 'candidate' && input.action === 'continue') {
+      const candidate = record as ResearchFeedback, currentSource = item.currentSource;
+      if (!currentSource || !input.source) throw new WebStorageError(400, '请核对当前基准并填写接续的候选源码。');
+      const feedback = this.submitFeedback(viewer, projectId, { requestId: `continuation-${mathDigest(input.requestId).slice(0, 40)}`, kind: 'proof-submission', text: input.text, visibility: candidate.visibility,
+        target: input.target, source: input.source, base: { commit: currentSource.commit, sourceDigest: currentSource.sourceDigest, environmentDigest: currentSource.environmentDigest, file: currentSource.file },
+        revisionOf: { feedbackId: candidate.id, expectedRevision: candidate.revision, responses: input.responses ?? [] } });
+      const latest = this.raw(projectId); this.remember(latest, viewer, operation, input, feedback.id); this.save(latest);
+      return { impact: this.workImpact(viewer, projectId, record.target.runId), feedback };
+    }
+    if (input.kind === 'claim') {
+      const claim = record as ResearchHumanAssignment; claim.status = 'released'; claim.updatedAt = now();
+      if (input.action === 'continue') {
+        const duplicate = stored.assignments?.find(item => item.id !== claim.id && item.author.id === claim.author.id && item.status === 'claimed' && canonicalMathJson(item.target.taskRef) === canonicalMathJson(input.target!.taskRef) && item.target.runId === input.target!.runId);
+        const next: ResearchHumanAssignment = duplicate ?? { id: crypto.randomUUID(), author: clone(claim.author), target: clone(input.target!), status: 'claimed', createdAt: now(), updatedAt: now() };
+        if (!duplicate) stored.assignments!.push(next); continuation.recordId = next.id;
+      }
+    } else if (input.kind === 'handoff') {
+      const handoff = record as ResearchHandoff; handoff.status = 'cancelled'; handoff.revision++; handoff.updatedAt = now();
+      if (input.action === 'continue') {
+        this.memberAuthor(stored, handoff.recipient.id);
+        if (state.handoffs.some(item => item.id !== handoff.id && item.status === 'pending' && item.target.runId === input.target!.runId
+          && canonicalMathJson(item.target.taskRef) === canonicalMathJson(input.target!.taskRef))) throw new WebStorageError(409, '资料已经更新，请重新核对当前版本。');
+        const next: ResearchHandoff = { ...clone(handoff), id: crypto.randomUUID(), target: clone(input.target!), note: input.text, feedbackIds: [], status: 'pending', revision: 0, createdAt: now(), updatedAt: now() };
+        delete next.continuation; state.handoffs.push(next); continuation.recordId = next.id;
+      }
+    } else {
+      const feedback = record as ResearchFeedback;
+      if (input.kind === 'candidate' && feedback.candidateDelivery && feedback.candidateDelivery.status !== 'dispatched') feedback.candidateDelivery.status = 'withdrawn';
+      if (input.kind === 'review' && input.action === 'continue') {
+        if (!['pending', 'not-recorded'].includes(feedback.decision.status)) (feedback.decisionHistory ??= []).push(clone(feedback.decision));
+        feedback.decision = { status: 'needs-info', actor: { ...this.author(viewer), kind: 'human' }, reason: input.text, evidenceRefs: [], decidedAt: now(), sourceTaskRef: clone(feedback.target!.taskRef) };
+        if (feedback.candidateDelivery?.status === 'approved') feedback.candidateDelivery = { policy: feedback.candidateDelivery.policy, status: 'awaiting-review' };
+      }
+      feedback.revision++; feedback.updatedAt = now();
+    }
+    if (input.kind === 'review') (record as ResearchFeedback).reviewContinuation = continuation;
+    else record.continuation = continuation;
+    this.event(stored, viewer, 'work-continued', input.action === 'end' ? '结束旧版本人工工作' : input.kind === 'review' ? '请求作者为当前任务提交新候选' : '接续当前任务版本的人工工作',
+      { runId: record.target.runId, ...(['candidate', 'review'].includes(input.kind) ? { feedbackId: input.recordId } : {}) });
+    this.remember(stored, viewer, operation, input); this.save(stored);
+    return { impact: this.workImpact(viewer, projectId, record.target.runId) };
+  }
+  private memberAuthor(stored: StoredProject, researcherId: string): ResearchAuthor {
+    if (stored.project.owner.id !== researcherId && !stored.project.members.some(member => member.researcherId === researcherId && member.role === 'collaborator'))
+      throw new WebStorageError(403, '没有修改权限。');
+    const person = this.person(researcherId);
+    return person?.profile ? { id: researcherId, displayName: person.profile.displayName } : { id: researcherId, displayName: 'Researcher' };
+  }
+  private collaborationFeedback(viewer: string, stored: StoredProject, ids: string[], target?: ResearchFeedbackTarget, exactTask = false) {
+    const visible = this.visibleFeedback(viewer, stored);
+    for (const feedbackId of ids) {
+      const feedback = visible.find(item => item.id === feedbackId);
+      if (!feedback || target && (feedback.target?.runId !== target.runId || feedback.target.statementVersionId !== target.statementVersionId
+        || exactTask && target.taskRef && canonicalMathJson(feedback.target.taskRef) !== canonicalMathJson(target.taskRef)))
+        throw new WebStorageError(400, '提交物与认领任务不一致。');
+    }
+  }
+  private validateIssueTarget(viewer: string, stored: StoredProject, target: ResearchFeedbackTarget) {
+    const resolved = this.resolveBinding(viewer, stored.project.id, target.runId, 'read');
+    if (resolved.binding.statementVersionId !== target.statementVersionId) throw new WebStorageError(409, '陈述版本与运行不一致。');
+    const observation = this.storage.getObservation(resolved.runOwner, target.runId, target.observationRef.sequence);
+    if (!observation || observation.snapshot.stateDigest !== target.observationRef.stateDigest)
+      throw new WebStorageError(409, '原观测已不存在或不匹配，请重新核对。');
+    if (target.taskRef && ![...observation.inspection.tasks, ...(observation.history ?? [])].some(task =>
+      task.id === target.taskRef!.id && task.version === target.taskRef!.version)) throw new WebStorageError(409, '任务版本已改变，请重新核对。');
+  }
+  collaboration(viewer: string, projectId: string): ResearchCollaborationView {
+    const stored = this.readable(viewer, projectId), access = this.access(viewer, stored), self = this.identity(viewer), state = this.collaborationState(stored);
+    return clone({ projectId, revision: stored.project.revision,
+      invitations: state.invitations.filter(item => access.manage || item.author.id === self || item.recipient.id === self),
+      handoffs: access.member ? state.handoffs.filter(item => this.bindingView(viewer, stored, stored.bindings.find(binding => binding.runId === item.target.runId)!)) : [],
+      issues: access.member ? state.issues : [] });
+  }
+  invite(viewer: string, projectId: string, value: unknown): ResearchInvitation {
+    const stored = this.writable(viewer, projectId, true), input = parse(z.object({ ...mutation, recipientId: id,
+      role: z.enum(['reader', 'collaborator']), note: nonempty(4000) }).strict(), value) as ResearchMutation & { recipientId: string; role: ResearchMemberRole; note: string };
+    const previous = this.request(stored, viewer, 'invite', input), state = this.collaborationState(stored);
+    if (previous) return clone(state.invitations.find(item => item.id === previous.resultId)!);
+    this.compare(stored.project.revision, input.expectedRevision);
+    const person = this.person(input.recipientId);
+    if (!person?.profile || person.profile.visibility !== 'public') throw new WebStorageError(404, '数学家资料不存在。');
+    if (input.recipientId === stored.project.owner.id || stored.project.members.some(member => member.researcherId === input.recipientId)
+      || state.invitations.some(item => item.recipient.id === input.recipientId && item.status === 'pending')) throw new WebStorageError(409, '资料已经更新，请重新核对当前版本。');
+    const at = now(), invitation: ResearchInvitation = { id: crypto.randomUUID(), projectId, kind: 'invitation', author: this.author(viewer),
+      recipient: { id: person.profile.id, displayName: person.profile.displayName }, role: input.role, note: input.note,
+      status: 'pending', revision: 0, createdAt: at, updatedAt: at };
+    state.invitations.push(invitation); this.remember(stored, viewer, 'invite', input, invitation.id); this.save(stored); return clone(invitation);
+  }
+  requestJoin(viewer: string, projectId: string, value: unknown): ResearchInvitation {
+    const self = this.authenticated(viewer), stored = this.readable(viewer, projectId), input = parse(z.object({ ...mutation,
+      role: z.enum(['reader', 'collaborator']), note: nonempty(4000) }).strict(), value) as ResearchMutation & { role: ResearchMemberRole; note: string };
+    const state = this.collaborationState(stored), previous = this.request(stored, viewer, 'join', input);
+    if (previous) return clone(state.invitations.find(item => item.id === previous.resultId)!);
+    if (stored.project.visibility !== 'public' || this.access(viewer, stored).member) throw new WebStorageError(403, '没有修改权限。');
+    if (state.invitations.some(item => item.status === 'pending' && (item.author.id === self && item.kind === 'application' || item.recipient.id === self)))
+      throw new WebStorageError(409, '资料已经更新，请重新核对当前版本。');
+    const at = now(), application: ResearchInvitation = { id: crypto.randomUUID(), projectId, kind: 'application', author: this.author(viewer),
+      recipient: stored.project.owner, role: input.role, note: input.note, status: 'pending', revision: 0, createdAt: at, updatedAt: at };
+    state.invitations.push(application); this.remember(stored, viewer, 'join', input, application.id); this.save(stored); return clone(application);
+  }
+  respondInvitation(viewer: string, projectId: string, invitationId: string, value: unknown): ResearchInvitation {
+    const self = this.authenticated(viewer), stored = this.raw(projectId), input = parse(z.object({ ...mutation,
+      action: z.enum(['accept', 'decline', 'cancel']) }).strict(), value) as ResearchMutation & { action: 'accept' | 'decline' | 'cancel' }, state = this.collaborationState(stored);
+    const record = state.invitations.find(item => item.id === invitationId);
+    if (!record || record.author.id !== self && record.recipient.id !== self) throw new WebStorageError(404, '研究不存在。');
+    const operation = `invitation:${invitationId}`, previous = this.request(stored, viewer, operation, input);
+    if (previous) return clone(record);
+    this.compare(record.revision, input.expectedRevision);
+    if (record.status !== 'pending') throw new WebStorageError(409, '资料已经更新，请重新核对当前版本。');
+    if (input.action === 'cancel' ? record.author.id !== self : record.recipient.id !== self) throw new WebStorageError(403, '没有修改权限。');
+    if (record.kind === 'application' && input.action !== 'cancel' && !this.access(viewer, stored).manage) throw new WebStorageError(403, '没有修改权限。');
+    const memberId = record.kind === 'application' ? record.author.id : record.recipient.id;
+    if (input.action === 'accept') {
+      if (stored.project.members.some(member => member.researcherId === memberId)) throw new WebStorageError(409, '资料已经更新，请重新核对当前版本。');
+      stored.project.members.push({ researcherId: memberId, role: record.role });
+      // An owner-created invitation makes a private project visible to its accepted members only.
+      if (stored.project.visibility === 'private') stored.project.visibility = 'members';
+      this.event(stored, viewer, 'membership-updated', '更新研究成员');
+    }
+    record.status = input.action === 'accept' ? 'accepted' : input.action === 'decline' ? 'declined' : 'cancelled';
+    record.revision++; record.updatedAt = now(); this.remember(stored, viewer, operation, input, record.id); this.save(stored); return clone(record);
+  }
+  createHandoff(viewer: string, projectId: string, value: unknown): ResearchHandoff {
+    const stored = this.writable(viewer, projectId), input = parse(z.object({ ...mutation, recipientId: id, target: targetSchema,
+      note: nonempty(4000), feedbackIds: z.array(id).max(20).default([]) }).strict(), value) as ResearchMutation & { recipientId: string; target: ResearchFeedbackTarget; note: string; feedbackIds: string[] };
+    const state = this.collaborationState(stored), previous = this.request(stored, viewer, 'handoff', input);
+    if (previous) return clone(state.handoffs.find(item => item.id === previous.resultId)!);
+    this.compare(stored.project.revision, input.expectedRevision);
+    if (!input.target.taskRef || input.recipientId === this.identity(viewer)) throw new WebStorageError(400, '认领必须绑定精确任务版本。');
+    this.validateTarget(viewer, stored, input.target, 'read');
+    const recipient = this.memberAuthor(stored, input.recipientId);
+    if (!this.access(viewer, stored).manage && !(stored.assignments ?? []).some(item => item.author.id === this.identity(viewer)
+      && item.status === 'claimed' && item.target.runId === input.target.runId && canonicalMathJson(item.target.taskRef) === canonicalMathJson(input.target.taskRef)))
+      throw new WebStorageError(403, '没有修改权限。');
+    if (state.handoffs.some(item => item.status === 'pending' && item.target.runId === input.target.runId
+      && canonicalMathJson(item.target.taskRef) === canonicalMathJson(input.target.taskRef))) throw new WebStorageError(409, '资料已经更新，请重新核对当前版本。');
+    this.collaborationFeedback(viewer, stored, input.feedbackIds, input.target, true);
+    const at = now(), handoff: ResearchHandoff = { id: crypto.randomUUID(), projectId, author: this.author(viewer), recipient,
+      target: input.target, note: input.note, feedbackIds: input.feedbackIds, status: 'pending', revision: 0, createdAt: at, updatedAt: at };
+    state.handoffs.push(handoff); this.remember(stored, viewer, 'handoff', input, handoff.id); this.save(stored); return clone(handoff);
+  }
+  respondHandoff(viewer: string, projectId: string, handoffId: string, value: unknown): ResearchHandoff {
+    const stored = this.writable(viewer, projectId), input = parse(z.object({ ...mutation, action: z.enum(['accept', 'decline', 'cancel']) }).strict(), value) as ResearchMutation & { action: 'accept' | 'decline' | 'cancel' };
+    const record = this.collaborationState(stored).handoffs.find(item => item.id === handoffId), self = this.identity(viewer);
+    if (!record) throw new WebStorageError(404, '研究不存在。');
+    if (input.action === 'cancel' ? record.author.id !== self : record.recipient.id !== self) throw new WebStorageError(403, '没有修改权限。');
+    const operation = `handoff:${handoffId}`;
+    if (this.request(stored, viewer, operation, input)) return clone(record);
+    this.compare(record.revision, input.expectedRevision);
+    if (record.status !== 'pending') throw new WebStorageError(409, '资料已经更新，请重新核对当前版本。');
+    if (input.action === 'accept') {
+      this.validateTarget(viewer, stored, record.target, 'read');
+      const assignments = stored.assignments ??= [], same = (item: ResearchHumanAssignment) => item.target.runId === record.target.runId
+        && canonicalMathJson(item.target.taskRef) === canonicalMathJson(record.target.taskRef);
+      const original = assignments.find(item => item.author.id === record.author.id && same(item) && item.status === 'claimed');
+      if (original) { original.status = 'released'; original.updatedAt = now(); }
+      const claimed = assignments.find(item => item.author.id === self && same(item));
+      if (claimed) { claimed.status = 'claimed'; claimed.updatedAt = now(); }
+      else assignments.push({ id: crypto.randomUUID(), author: this.author(viewer), target: record.target, status: 'claimed', createdAt: now(), updatedAt: now() });
+      this.event(stored, viewer, 'assignment-updated', '更新人类参与者的任务认领', { runId: record.target.runId });
+    }
+    record.status = input.action === 'accept' ? 'accepted' : input.action === 'decline' ? 'declined' : 'cancelled';
+    record.revision++; record.updatedAt = now(); this.remember(stored, viewer, operation, input, record.id); this.save(stored); return clone(record);
+  }
+  createIssue(viewer: string, projectId: string, value: unknown): ResearchIssue {
+    const stored = this.writable(viewer, projectId), input = parse(z.object({ ...mutation, title: nonempty(200), text: nonempty(4000),
+      target: targetSchema.optional(), statementVersionId: id.optional(), sourceFeedbackId: id.optional() }).strict(), value) as ResearchMutation & { title: string; text: string; target?: ResearchFeedbackTarget; statementVersionId?: string; sourceFeedbackId?: string };
+    const state = this.collaborationState(stored), previous = this.request(stored, viewer, 'issue', input);
+    if (previous) return clone(state.issues.find(item => item.id === previous.resultId)!);
+    this.compare(stored.project.revision, input.expectedRevision);
+    if (input.target) this.validateIssueTarget(viewer, stored, input.target);
+    if (input.statementVersionId && !stored.versions.some(item => item.id === input.statementVersionId)) throw new WebStorageError(404, '研究不存在。');
+    if (input.target && input.statementVersionId && input.target.statementVersionId !== input.statementVersionId) throw new WebStorageError(409, '陈述版本与运行不一致。');
+    if (input.sourceFeedbackId) {
+      this.collaborationFeedback(viewer, stored, [input.sourceFeedbackId], input.target, true);
+      const source = this.visibleFeedback(viewer, stored).find(item => item.id === input.sourceFeedbackId)!;
+      const statement = input.target?.statementVersionId ?? input.statementVersionId;
+      if (statement && (source.target?.statementVersionId ?? source.statementVersionId) && statement !== (source.target?.statementVersionId ?? source.statementVersionId))
+        throw new WebStorageError(409, '陈述版本与运行不一致。');
+    }
+    const at = now(), issue: ResearchIssue = { id: crypto.randomUUID(), projectId, author: this.author(viewer), title: input.title, text: input.text,
+      target: input.target, statementVersionId: input.statementVersionId ?? input.target?.statementVersionId, sourceFeedbackId: input.sourceFeedbackId,
+      status: 'open', replies: [], revision: 0, createdAt: at, updatedAt: at };
+    state.issues.push(issue); this.remember(stored, viewer, 'issue', input, issue.id); this.save(stored); return clone(issue);
+  }
+  replyIssue(viewer: string, projectId: string, issueId: string, value: unknown): ResearchIssue {
+    const stored = this.readable(viewer, projectId), input = parse(z.object({ ...mutation, text: nonempty(4000),
+      kind: z.enum(['comment', 'proposal']), replyTo: id.optional(), feedbackIds: z.array(id).max(20).default([]) }).strict(), value) as ResearchMutation & { text: string; kind: 'comment' | 'proposal'; replyTo?: string; feedbackIds: string[] };
+    this.authenticated(viewer); if (!this.access(viewer, stored).member) throw new WebStorageError(403, '没有修改权限。');
+    const issue = this.collaborationState(stored).issues.find(item => item.id === issueId);
+    if (!issue) throw new WebStorageError(404, '研究不存在。');
+    const operation = `issue-reply:${issueId}`;
+    if (this.request(stored, viewer, operation, input)) return clone(issue);
+    this.compare(issue.revision, input.expectedRevision);
+    if (issue.status !== 'open' || input.replyTo && !issue.replies.some(item => item.id === input.replyTo)) throw new WebStorageError(409, '资料已经更新，请重新核对当前版本。');
+    this.collaborationFeedback(viewer, stored, input.feedbackIds, issue.target);
+    issue.replies.push({ id: crypto.randomUUID(), author: this.author(viewer), kind: input.kind, text: input.text,
+      replyTo: input.replyTo, feedbackIds: input.feedbackIds, createdAt: now() });
+    issue.revision++; issue.updatedAt = now(); this.remember(stored, viewer, operation, input, issue.id); this.save(stored); return clone(issue);
+  }
+  resolveIssue(viewer: string, projectId: string, issueId: string, value: unknown): ResearchIssue {
+    const stored = this.writable(viewer, projectId), input = parse(z.object({ ...mutation, action: z.enum(['resolve', 'reopen']),
+      text: nonempty(4000), proposalId: id.optional(), feedbackIds: z.array(id).max(20).default([]) }).strict(), value) as ResearchMutation & { action: 'resolve' | 'reopen'; text: string; proposalId?: string; feedbackIds: string[] };
+    const issue = this.collaborationState(stored).issues.find(item => item.id === issueId);
+    if (!issue) throw new WebStorageError(404, '研究不存在。');
+    const operation = `issue-resolve:${issueId}`;
+    if (this.request(stored, viewer, operation, input)) return clone(issue);
+    this.compare(issue.revision, input.expectedRevision);
+    if (input.proposalId && !issue.replies.some(item => item.id === input.proposalId && item.kind === 'proposal')) throw new WebStorageError(400, '研究资料格式无效。');
+    this.collaborationFeedback(viewer, stored, input.feedbackIds, issue.target);
+    issue.status = input.action === 'resolve' ? 'resolved' : 'open';
+    if (issue.resolution) (issue.resolutionHistory ??= []).push(issue.resolution);
+    issue.resolution = { author: this.author(viewer), text: input.text, proposalId: input.proposalId, feedbackIds: input.feedbackIds, createdAt: now(), action: input.action };
+    issue.revision++; issue.updatedAt = now(); this.remember(stored, viewer, operation, input, issue.id); this.save(stored); return clone(issue);
+  }
+  collaborationInbox(viewer: string): ResearchCollaborationInbox {
+    const self = this.authenticated(viewer), owner = this.ownerState(viewer), items: ResearchInboxItem[] = [], projects = this.all();
+    const add = (stored: StoredProject, item: Omit<ResearchInboxItem, 'projectId' | 'projectTitle' | 'read' | 'processed'>) => {
+      const mark = owner.inbox?.[item.id];
+      items.push({ ...item, projectId: stored.project.id, projectTitle: stored.project.title, read: mark?.read ?? false, processed: mark?.processed ?? false });
+    };
+    const href = (stored: StoredProject, target?: ResearchFeedbackTarget, anchor = '', statementVersionId?: string) => `theorems.html?${new URLSearchParams({ id: stored.project.id,
+      ...(target ? { run: target.runId, version: target.statementVersionId, ...(target.taskRef ? { task: target.taskRef.id, taskVersion: target.taskRef.version } : {}) } : statementVersionId ? { version: statementVersionId } : {}) })}${anchor}`;
+    for (const stored of projects) {
+      const access = this.access(viewer, stored), state = this.collaborationState(stored);
+      for (const invitation of state.invitations) if (invitation.recipient.id === self || invitation.author.id === self) {
+        // Pending invitees see only the title, sender and invitation, never private project data or task identities.
+        add(stored, { id: `invitation:${invitation.id}`, kind: invitation.kind, title: invitation.note, createdAt: invitation.updatedAt,
+          resolved: invitation.status !== 'pending', invitation: clone(invitation), href: invitation.status === 'accepted' || access.visible ? href(stored, undefined, '#collaboration-members') : '' });
+      }
+      if (!access.visible) continue;
+      for (const handoff of state.handoffs) if (access.member && (handoff.recipient.id === self || handoff.author.id === self)
+        && this.bindingView(viewer, stored, stored.bindings.find(binding => binding.runId === handoff.target.runId)))
+        add(stored, { id: `handoff:${handoff.id}`, kind: 'handoff', title: handoff.note, createdAt: handoff.updatedAt,
+          handoff: clone(handoff), resolved: handoff.status !== 'pending', href: href(stored, handoff.target, '#collaboration-task-workspace') });
+      for (const claim of stored.assignments ?? []) if (access.member && claim.author.id === self && claim.status !== 'released'
+        && this.bindingView(viewer, stored, stored.bindings.find(binding => binding.runId === claim.target.runId)))
+        add(stored, { id: `claim:${claim.id}`, kind: 'claim', title: claim.target.taskRef?.id ?? '', text: claim.status,
+          createdAt: claim.updatedAt, resolved: claim.status === 'submitted', href: href(stored, claim.target, '#collaboration-task-workspace') });
+      for (const feedback of this.visibleFeedback(viewer, stored)) {
+        const needsInfo = !feedback.supersededBy && feedback.continuation?.action !== 'end' && feedback.candidateDelivery?.status !== 'withdrawn'
+          && feedback.author.id === self && feedback.decision.status === 'needs-info';
+        const review = access.edit && !feedback.supersededBy && !feedback.continuation && !feedback.reviewContinuation && feedback.candidateDelivery?.status !== 'withdrawn' && feedback.author.id !== self && (feedback.review ? feedback.review.reviewer.id === self : access.manage) && ['pending', 'not-recorded'].includes(feedback.decision.status)
+          && (!feedback.target || Boolean(this.bindingView(viewer, stored, stored.bindings.find(item => item.runId === feedback.target!.runId)!)?.permissions[this.feedbackPermission(feedback.kind)]));
+        if (needsInfo || review) add(stored, { id: `${needsInfo ? 'needs-info' : 'review'}:${feedback.id}:${feedback.reviewHistory?.length ?? 0}${needsInfo ? `:${feedback.decision.decidedAt ?? ''}` : ''}`, kind: needsInfo ? 'needs-info' : 'review',
+          title: feedback.text, text: feedback.decision.reason, createdAt: feedback.updatedAt, resolved: false, href: href(stored, feedback.target, `#feedback-${feedback.id}`, feedback.statementVersionId) });
+      }
+      if (!access.member) continue;
+      for (const issue of state.issues) {
+        const last = issue.replies.at(-1);
+        if (last && last.author.id !== self && (issue.author.id === self || issue.replies.some(reply => reply.author.id === self)))
+          add(stored, { id: `reply:${last.id}`, kind: 'reply', title: issue.title, text: last.text, createdAt: last.createdAt,
+            resolved: issue.status === 'resolved', href: href(stored, issue.target, `#issue-${issue.id}`) });
+      }
+    }
+    for (const notification of this.notifications(viewer, { limit: 100 }).items) {
+      const stored = projects.find(item => item.project.id === notification.projectId); if (!stored) continue;
+      const feedback = stored.feedback.find(item => item.id === notification.feedbackId);
+      const linked = new URL(href(stored, feedback?.target, notification.feedbackId ? `#feedback-${notification.feedbackId}` : ''), 'http://localhost');
+      if (!feedback?.target && (feedback?.statementVersionId ?? notification.statementVersionId)) linked.searchParams.set('version', (feedback?.statementVersionId ?? notification.statementVersionId)!);
+      add(stored, { id: `update:${notification.id}`, kind: 'update', title: notification.summary, createdAt: notification.createdAt, resolved: false,
+        href: `theorems.html${linked.search}${linked.hash}` });
+    }
+    items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return { items, unread: items.filter(item => !item.read).length, pending: items.filter(item => !item.processed && !item.resolved).length };
+  }
+  markCollaborationItem(viewer: string, itemId: string, value: unknown): ResearchCollaborationInbox {
+    const input = parse(z.object({ requestId: id, action: z.enum(['read', 'unread', 'done', 'reopen']) }).strict(), value) as { requestId: string; action: 'read' | 'unread' | 'done' | 'reopen' }, state = this.ownerState(viewer);
+    this.authenticated(viewer);
+    const operation = `inbox:${itemId}`;
+    if (this.request(state, viewer, operation, input)) return this.collaborationInbox(viewer);
+    if (!this.collaborationInbox(viewer).items.some(item => item.id === itemId)) throw new WebStorageError(404, '研究不存在。');
+    const mark = (state.inbox ??= {})[itemId] ??= {};
+    if (input.action === 'read' || input.action === 'unread') mark.read = input.action === 'read';
+    else mark.processed = input.action === 'done';
+    this.remember(state, viewer, operation, input); this.storage.saveRecord(this.ownerPath(viewer), state);
+    return this.collaborationInbox(viewer);
   }
   recordAssetContribution(viewer: string, value: unknown) {
     this.authenticated(viewer);
@@ -788,8 +1327,15 @@ export class WebResearchProjects {
       if (stored.owner === owner) { this.storage.deleteRecord(this.projectPath(stored.project.id)); continue; }
       const affected = stored.project.members.some(member => member.researcherId === researcher) ||
         stored.bindings.some(binding => binding.runOwner === owner) ||
-        stored.feedback.some(feedback => feedback.author.id === researcher || feedback.decision.actor?.id === researcher) ||
-        (stored.assignments ?? []).some(assignment => assignment.author.id === researcher) ||
+        stored.feedback.some(feedback => feedback.author.id === researcher || feedback.decision.actor?.id === researcher || feedback.review?.reviewer.id === researcher || feedback.review?.assignedBy.id === researcher
+          || feedback.reviewHistory?.some(item => item.actor.id === researcher || item.reviewer?.id === researcher) || feedback.issueSource?.resolution.author.id === researcher || feedback.issueSource?.proposal?.author.id === researcher
+          || feedback.reviewComments?.some(item => item.author.id === researcher) || feedback.candidateDelivery?.approvedBy?.id === researcher
+          || feedback.continuation?.actor.id === researcher || feedback.reviewContinuation?.actor.id === researcher
+          || feedback.candidateRevision?.parentSnapshot.decision.actor?.id === researcher || feedback.candidateRevision?.parentSnapshot.comments.some(item => item.author.id === researcher)) ||
+        (stored.assignments ?? []).some(assignment => assignment.author.id === researcher || assignment.continuation?.actor.id === researcher) ||
+        stored.collaboration?.invitations.some(item => item.author.id === researcher || item.recipient.id === researcher) ||
+        stored.collaboration?.handoffs.some(item => item.author.id === researcher || item.recipient.id === researcher || item.continuation?.actor.id === researcher) ||
+        stored.collaboration?.issues.some(item => item.author.id === researcher || item.replies.some(reply => reply.author.id === researcher) || item.resolution?.author.id === researcher || item.resolutionHistory?.some(record => record.author.id === researcher)) ||
         stored.versions.some(version => version.author.id === researcher) ||
         stored.contributions.some(item => item.author.id === researcher) || stored.activity.some(item => item.actor.id === researcher);
       if (!affected) continue;
@@ -798,8 +1344,52 @@ export class WebResearchProjects {
       stored.bindings = stored.bindings.filter(binding => binding.runOwner !== owner);
       stored.feedback = stored.feedback.filter(feedback => feedback.author.id !== researcher && !removedRuns.has(feedback.target?.runId ?? ''));
       stored.assignments = (stored.assignments ?? []).filter(assignment => assignment.author.id !== researcher && !removedRuns.has(assignment.target.runId));
+      const deleted = { id: 'deleted-researcher', displayName: 'Deleted researcher' };
+      const forgetContinuation = (continuation: ResearchWorkContinuation | undefined) => {
+        if (continuation?.actor.id === researcher) { continuation.actor = deleted; continuation.text = ''; }
+      };
+      for (const assignment of stored.assignments) forgetContinuation(assignment.continuation);
+      if (stored.collaboration) {
+        const state = stored.collaboration, retainedFeedback = new Set(stored.feedback.map(item => item.id));
+        state.invitations = state.invitations.filter(item => item.author.id !== researcher && item.recipient.id !== researcher);
+        state.handoffs = state.handoffs.filter(item => item.author.id !== researcher && item.recipient.id !== researcher && !removedRuns.has(item.target.runId));
+        state.issues = state.issues.filter(item => item.author.id !== researcher && !removedRuns.has(item.target?.runId ?? ''));
+        for (const handoff of state.handoffs) {
+          handoff.feedbackIds = handoff.feedbackIds.filter(id => retainedFeedback.has(id)); forgetContinuation(handoff.continuation);
+        }
+        for (const issue of state.issues) {
+          if (issue.sourceFeedbackId && !retainedFeedback.has(issue.sourceFeedbackId)) issue.sourceFeedbackId = undefined;
+          issue.replies = issue.replies.filter(reply => reply.author.id !== researcher);
+          for (const reply of issue.replies) {
+            reply.feedbackIds = reply.feedbackIds.filter(id => retainedFeedback.has(id));
+            if (reply.replyTo && !issue.replies.some(item => item.id === reply.replyTo)) reply.replyTo = undefined;
+          }
+          for (const resolution of [...(issue.resolutionHistory ?? []), ...(issue.resolution ? [issue.resolution] : [])]) {
+            if (resolution.author.id === researcher) resolution.author = { id: 'deleted-researcher', displayName: 'Deleted researcher' };
+            resolution.feedbackIds = resolution.feedbackIds.filter(id => retainedFeedback.has(id));
+            if (!issue.replies.some(item => item.id === resolution.proposalId)) resolution.proposalId = undefined;
+          }
+        }
+      }
       for (const feedback of stored.feedback) if (feedback.decision.actor?.id === researcher)
         feedback.decision.actor = { kind: 'human', id: 'deleted-researcher', displayName: 'Deleted researcher' };
+      for (const feedback of stored.feedback) {
+        if (feedback.review?.reviewer.id === researcher) feedback.review = undefined;
+        else if (feedback.review?.assignedBy.id === researcher) feedback.review.assignedBy = deleted;
+        feedback.reviewHistory = feedback.reviewHistory?.filter(item => item.actor.id !== researcher && item.reviewer?.id !== researcher);
+        for (const decision of feedback.decisionHistory ?? []) if (decision.actor?.id === researcher) decision.actor = { ...deleted, kind: 'human' };
+        if (feedback.issueSource?.resolution.author.id === researcher) feedback.issueSource.resolution.author = deleted;
+        if (feedback.issueSource?.proposal?.author.id === researcher) feedback.issueSource.proposal.author = deleted;
+        feedback.reviewComments = feedback.reviewComments?.filter(item => item.author.id !== researcher);
+        if (feedback.candidateDelivery?.approvedBy?.id === researcher) feedback.candidateDelivery.approvedBy = deleted;
+        forgetContinuation(feedback.continuation); forgetContinuation(feedback.reviewContinuation);
+        if (feedback.candidateRevision) {
+          const snapshot = feedback.candidateRevision.parentSnapshot;
+          if (snapshot.decision.actor?.id === researcher) snapshot.decision.actor = { ...deleted, kind: 'human' };
+          snapshot.comments = snapshot.comments.filter(item => item.author.id !== researcher);
+          feedback.candidateRevision.responses = feedback.candidateRevision.responses.filter(item => snapshot.comments.some(comment => comment.id === item.commentId));
+        }
+      }
       stored.contributions = stored.contributions.filter(item => item.author.id !== researcher && !removedRuns.has(item.runId ?? ''));
       stored.activity = stored.activity.filter(item => item.actor.id !== researcher && !removedRuns.has(item.runId ?? ''));
       for (const version of stored.versions) if (version.author.id === researcher)

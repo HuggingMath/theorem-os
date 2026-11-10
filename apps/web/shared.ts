@@ -39,8 +39,9 @@ export type WebEnvironmentOption = { id: WebEnvironment; name: string; descripti
   toolchain: string; mathlibRevision?: string };
 export type WebTemplate = { id: string; name: string; environment: WebEnvironment; source: string; task: string };
 export type WebSavedKey = { providerId: string; ending: string };
-/** What the browser posts: `saveKey` asks the server to keep the typed key for this account; it never reaches the run. */
-export type WebRunRequest = WebRunInput & { saveKey?: boolean; requestId?: string };
+/** Omitted budgets normalize to 0 (unlimited); `saveKey` stays with this account and never reaches the run. */
+export type WebRunRequest = Omit<WebRunInput, 'maxTurns' | 'maxRunSeconds'> & {
+  maxTurns?: number; maxRunSeconds?: number; saveKey?: boolean; requestId?: string };
 export type WebRunInput = {
   providerId: string;
   apiKey: string;
@@ -51,7 +52,7 @@ export type WebRunInput = {
   task: string;
   maxTurns: number;
   maxRunSeconds: number;
-  /** Provider-reported token cap for the whole run; absent means unlimited. */
+  /** Provider-reported token cap for the whole run; absent or 0 means unlimited, as for the time and turn caps. */
   maxTotalTokens?: number;
   workers: number;
   coordination: WebCoordination;
@@ -427,8 +428,100 @@ export type WebAdminOverview = {
 /** The run or conversation a workbench address names (`?run=<id>` or `?chat=<id>`), kept through the login page so signing
  * in returns to it. Anything else, or a malformed id, returns to the plain workbench. */
 export function workbenchReturn(search: string): string {
-  const params = new URLSearchParams(search), run = params.get('run'), chat = params.get('chat');
-  if (run && /^[a-f0-9-]{1,36}$/u.test(run)) return `?run=${run}`;
-  if (chat && /^[a-f0-9-]{36}$/u.test(chat)) return `?chat=${chat}`;
-  return '';
+  const params = new URLSearchParams(search), kept = new URLSearchParams(), run = params.get('run'), chat = params.get('chat');
+  const destination = params.get('returnTo');
+  if (destination === 'problem' || destination === 'library' || destination === 'workspace') {
+    kept.set('returnTo', destination);
+    const retain = (key: string, pattern: RegExp) => { const value = params.get(key); if (value && pattern.test(value)) kept.set(key, value); };
+    const identity = /^[A-Za-z0-9_.:-]{1,200}$/u, recordId = /^[A-Za-z0-9_-]{1,128}$/u;
+    retain('run', /^[a-f0-9-]{1,36}$/u); retain('project', recordId);
+    retain('task', identity); retain('taskVersion', identity); retain('commit', /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u);
+    if (destination === 'problem') {
+      retain('tab', /^(?:overview|route|compare|discussion|outcomes|stages|brief)$/u);
+      retain('compare', /^[a-f0-9-]{1,36}$/u);
+      retain('decision', identity);
+    } else if (destination === 'library') {
+      retain('entry', recordId); retain('version', identity); retain('trial', recordId);
+    } else retain('tab', /^(?:inbox|search|usage|brief|collections)$/u);
+    const language = params.get('lang'); if (language === 'zh' || language === 'en') kept.set('lang', language);
+    return `?${kept}`;
+  }
+  if (run && /^[a-f0-9-]{1,36}$/u.test(run)) {
+    kept.set('run', run);
+    const view = params.get('view'); if (view === 'route' || view === 'source') kept.set('view', view);
+    const task = params.get('task'), version = params.get('taskVersion'), commit = params.get('commit');
+    if (task && /^[A-Za-z0-9_.:-]{1,200}$/u.test(task)) kept.set('task', task);
+    if (version && /^[A-Za-z0-9_.:-]{1,200}$/u.test(version)) kept.set('taskVersion', version);
+    if (commit && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(commit)) kept.set('commit', commit);
+  } else if (chat && /^[a-f0-9-]{36}$/u.test(chat)) {
+    kept.set('chat', chat);
+    const message = params.get('message'); if (message && /^[a-f0-9-]{36}$/u.test(message)) kept.set('message', message);
+  } else if (params.has('libraryProposal') && params.has('project')) {
+    const proposal = params.get('libraryProposal')!, project = params.get('project')!;
+    if (/^[A-Za-z0-9_-]{1,128}$/u.test(proposal) && /^[A-Za-z0-9_-]{1,128}$/u.test(project)) {
+      kept.set('libraryProposal', proposal); kept.set('project', project);
+    }
+  } else if (params.get('entry') === 'statement' || params.get('entry') === 'lean') {
+    const entry = params.get('entry')!, template = entry === 'statement' ? 'add-zero' : 'polynomial', environment = entry === 'statement' ? 'standard' : 'mathlib';
+    if ((!params.has('template') || params.get('template') === template) && (!params.has('environment') || params.get('environment') === environment)) {
+      kept.set('entry', entry); kept.set('template', template); kept.set('environment', environment);
+    }
+  } else {
+    const formalization = params.get('formalization'); if (formalization && /^[a-f0-9-]{36}$/u.test(formalization)) kept.set('formalization', formalization);
+  }
+  const lang = params.get('lang'); if (lang === 'zh' || lang === 'en') kept.set('lang', lang);
+  return kept.size ? `?${kept}` : '';
+}
+/** The login return target is an internal allowlisted page, never a supplied URL. */
+export function workbenchDestination(search: string): string {
+  const safe = workbenchReturn(search), params = new URLSearchParams(safe);
+  const target = params.get('returnTo');
+  if (!target || !['workspace', 'problem', 'library'].includes(target)) return `./${safe}`;
+  params.delete('returnTo'); return `${target}.html${params.size ? `?${params}` : ''}`;
+}
+
+const appReturnPaths = new Set(['/', '/index.html', '/people.html', '/theorems.html', '/library.html', '/formalize.html', '/formalization.html', '/explain.html', '/workspace.html', '/problem.html', '/practice.html']);
+/** Only app page paths may receive a login return; query strings and fragments remain exactly as supplied. */
+export function safeAppReturn(value: string | null | undefined): string | undefined {
+  if (!value || /[\p{Cc}\\]/u.test(value)) return;
+  const target = value.startsWith('./') ? value.slice(1) : value.startsWith('/') ? value : `/${value}`;
+  const pathname = target.split(/[?#]/u, 1)[0]!;
+  if (!appReturnPaths.has(pathname)) return;
+  return target;
+}
+/** A link to login retains intent in the address, without carrying out any action after authentication. */
+export function loginHref(returnTo: string): string {
+  const target = safeAppReturn(returnTo);
+  return target ? `/login.html?${new URLSearchParams({ returnTo: target })}` : '/login.html';
+}
+/** New app-page returns take precedence; existing run/chat mail links continue to open the same workbench record. */
+export function loginReturn(search: string): string {
+  return safeAppReturn(new URLSearchParams(search).get('returnTo')) ?? workbenchDestination(search);
+}
+function researchContext(search: string, origin: 'research' | 'workbench' = 'research'): URLSearchParams {
+  const params = new URLSearchParams(search), context = new URLSearchParams();
+  const chat = params.get('workbenchChat') ?? (origin === 'workbench' ? params.get('chat') : null);
+  const run = params.get('workbenchRun') ?? (origin === 'workbench' ? params.get('run') : null);
+  if (chat && /^[a-f0-9-]{36}$/u.test(chat)) context.set('workbenchChat', chat);
+  if (run && /^[a-f0-9-]{1,36}$/u.test(run)) context.set('workbenchRun', run);
+  return context;
+}
+/** Add only the explicit workbench source to an app link, keeping its own target, filters and fragment. */
+export function researchContextHref(href: string, search: string): string {
+  if (href.startsWith('#') || !safeAppReturn(href)) return href;
+  const context = researchContext(search);
+  if (!context.size) return href;
+  const hashAt = href.indexOf('#'), fragment = hashAt < 0 ? '' : href.slice(hashAt), address = hashAt < 0 ? href : href.slice(0, hashAt);
+  const queryAt = address.indexOf('?'), pathname = queryAt < 0 ? address : address.slice(0, queryAt);
+  const parameters = new URLSearchParams(queryAt < 0 ? '' : address.slice(queryAt + 1));
+  for (const [key, value] of context) parameters.set(key, value);
+  return `${pathname}?${parameters}${fragment}`;
+}
+/** Research pages have target run ids of their own; only a workbench converts its chat/run into a return source. */
+export function researchNavigation(search: string, origin: 'research' | 'workbench' = 'research'): { workbench: string; workspace: string; theorems: string; people: string; library: string } {
+  const context = researchContext(search, origin);
+  const suffix = context.size ? `?${context}` : '';
+  const back = context.has('workbenchChat') ? `?${new URLSearchParams({ chat: context.get('workbenchChat')! })}`
+    : context.has('workbenchRun') ? `?${new URLSearchParams({ run: context.get('workbenchRun')! })}` : '';
+  return { workbench: `./${back}`, workspace: `workspace.html${suffix}`, theorems: `theorems.html${suffix}`, people: `people.html${suffix}`, library: `library.html${suffix}` };
 }

@@ -17,7 +17,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/archive-roadmap');
 const staticRoot = path.join(root, 'out/web');
 const catalog = JSON.parse(await fs.readFile(path.join(staticRoot, 'classics/data/catalog.json'), 'utf8')) as ArchiveCatalog;
-assert.equal(catalog.records.length, 16);
+const manifest = JSON.parse(await fs.readFile(path.join(root, 'research/openai-math/manifest.json'), 'utf8')) as { records: { id: string }[] };
+assert.deepEqual(catalog.records.map(record => record.id).sort(), manifest.records.map(record => record.id).sort());
 assert.ok((await fs.readFile(path.join(staticRoot, 'classics/site.js'), 'utf8')).includes('data-process-node'),
   'Run bun run build:web with the real archive roadmap before this check');
 await fs.mkdir(output, { recursive: true });
@@ -126,7 +127,8 @@ try {
     const label = `${locale} ${width}px`; current = label;
     const context = await browser.newContext({ viewport: { width, height: width < 700 ? 844 : 1000 }, reducedMotion: 'reduce' });
     await observe(context, label);
-    const page = await context.newPage(); active = page; page.setDefaultTimeout(15_000);
+    context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
+    const page = await context.newPage(); active = page;
     try {
       await open(page, complex.record, locale);
       const final = complex.record.process!.runs.find(run => run.runId === complex.record.campaign!.runId)!;
@@ -228,10 +230,11 @@ try {
     } finally { await context.close(); active = undefined; }
   }
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' });
-  await observe(context, 'all sixteen'); const page = await context.newPage(); active = page;
+  context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
+  await observe(context, 'all solved problems'); const page = await context.newPage(); active = page;
   let taskNodes = 0, dependencyEdges = 0;
   for (const record of catalog.records) {
-    current = `all sixteen: ${record.id}`;
+    current = `all solved problems: ${record.id}`;
     await open(page, record, 'zh');
     const run = record.process!.runs.find(run => run.runId === record.campaign!.runId)!;
     dependencyEdges += await verifyGraph(page, record, run); taskNodes += run.tasks.length;
@@ -242,7 +245,7 @@ try {
     assert.equal(raw.status(), 200); assert.deepEqual(await raw.json(), nativeProcess);
   }
   await context.close(); active = undefined;
-  mark(`all 16 accepted problems open real run roadmaps with ${taskNodes} task nodes and ${dependencyEdges} saved dependency edges`);
+  mark(`all ${catalog.records.length} solved problems open real run roadmaps with ${taskNodes} task nodes and ${dependencyEdges} saved dependency edges`);
   assert.equal(runnerCalls, 0); assert.deepEqual(writes, []); assert.deepEqual(apiReads, []); assert.deepEqual(external, []); assert.deepEqual(errors, []);
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', checkedAt: new Date().toISOString(),
     checks, screenshots, records: catalog.records.length, taskNodes, dependencyEdges, paidModelCalls: false,

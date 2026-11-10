@@ -13,7 +13,9 @@ import { keepHashOnLanguageSwitch, localeOf, localizeRecord, rootOf } from './si
 import { initializeReplay } from './replay';
 import { emptyProcessSelection, renderArchiveProcess, selectedProcessRun } from './process';
 import { buildArchiveRoadmap, mountArchiveRoadmap } from './processRoadmap';
-import { mountProofReading } from './proofReading';
+import { mountProofReading, proofReadingLink, revealProofReadingLocation } from './proofReading';
+import { readProofReadingPosition } from './proofReadingLocation';
+import { proofSolutionTitle, renderProofSolution, theoremDirectoryReturn } from './proofSolution';
 import { mountProofFigures } from './proofFigures';
 import { mountArchiveSolutionRoutes, typesetArchiveProse } from './solutionRouteClient';
 import { readSourceLocation, verifiedSourceLocation, writeSourceLocation, type SourceLocation } from './sourceLocation';
@@ -61,7 +63,8 @@ const strings = {
     empty: '没有可显示的记录', details: '档案详情', backList: '返回题目列表',
     accessPrompt: '想用 TheoremOS 研究自己的题目？', requestAccess: '申请内测',
     copyLink: '复制题目链接', downloadRecord: '下载此题档案 JSON',
-    detailTabs: '档案详情视图', tabs: { overview: '概览', source: 'Lean 源码', evidence: '验证证据', process: '路线与轨迹' },
+    detailTabs: '档案详情视图', tabs: { reading: '阅读证明', overview: '概览', source: 'Lean 源码', evidence: '验证证据', process: '路线与轨迹' },
+    loadingReading: '正在载入接受证明…', readingUnavailable: '证明阅读内容载入失败，请重新打开此视图重试。',
     copied: '已复制', copyFailed: '复制失败，请检查浏览器剪贴板权限',
     loadingSource: '正在载入 Lean 源码…', sourceUnavailable: '源码载入失败。可以通过原文件链接查看。',
     row: (title: string, accepted: boolean) => `${title}，${accepted ? '官方已验收' : '尚未官方验收'}`,
@@ -98,7 +101,8 @@ const strings = {
     empty: 'No records to show', details: 'Record details', backList: 'Back to results',
     accessPrompt: 'Have a problem to research with TheoremOS?', requestAccess: 'Request access',
     copyLink: 'Copy link to this proof', downloadRecord: 'Download this record as JSON',
-    detailTabs: 'Record detail views', tabs: { overview: 'Overview', source: 'Lean source', evidence: 'Evidence', process: 'Routes and trajectory' },
+    detailTabs: 'Record detail views', tabs: { reading: 'Read proof', overview: 'Overview', source: 'Lean source', evidence: 'Evidence', process: 'Routes and trajectory' },
+    loadingReading: 'Loading the accepted proof…', readingUnavailable: 'The proof reading could not be loaded. Reopen this view to retry.',
     copied: 'Copied', copyFailed: 'Copy failed. Check the clipboard permission of your browser.',
     loadingSource: 'Loading the Lean source…', sourceUnavailable: 'The source could not be loaded. You can use the original file link.',
     row: (title: string, accepted: boolean) => `${title}, ${accepted ? 'officially accepted' : 'not yet officially accepted'}`,
@@ -140,9 +144,9 @@ function loadProcess(record: ArchiveRecord): Promise<ArchiveProcess | undefined>
   return request;
 }
 const icons = () => {
-  createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } }); mountArchiveRoadmap(); mountProofReading();
+  createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } }); mountArchiveRoadmap();
   const inspector = document.querySelector<HTMLElement>('#inspector');
-  if (inspector) void typesetArchiveProse(inspector, locale);
+  mountProofReading(inspector ? typesetArchiveProse(inspector, locale) : Promise.resolve());
   const record = selectedRecord(), process = record && window.theoremosProcesses?.[record.id];
   if (record && process) void mountArchiveSolutionRoutes(record, process, locale).then(() => {
     const toolbar = document.querySelector<HTMLElement>('.process-view-toolbar');
@@ -174,11 +178,11 @@ const iconButton = (action: string, label: string, name: string, value?: string)
 
 type Filter = 'all' | 'accepted' | 'verified' | 'progress';
 type Sort = 'verified' | 'recent' | 'title';
-type Tab = 'overview' | 'source' | 'evidence' | 'process';
+type Tab = 'reading' | 'overview' | 'source' | 'evidence' | 'process';
 const state = {
   view: 'archive', filter: 'all' as Filter, query: '', sort: 'verified' as Sort,
   selected: records.find(accepted)?.id ?? records[0]?.id ?? '',
-  tab: 'overview' as Tab, sourceName: '',
+  tab: 'overview' as Tab, sourceName: '', returnTo: undefined as string | undefined,
 };
 const selectedRecord = () => records.find(record => record.id === state.selected);
 let processSelection = emptyProcessSelection();
@@ -191,7 +195,8 @@ function readLocation() {
   state.filter = ['accepted', 'verified', 'progress'].includes(params.get('status') ?? '') ? params.get('status') as Filter : 'all';
   state.query = params.get('q') ?? '';
   state.sort = ['title', 'recent'].includes(params.get('sort') ?? '') ? params.get('sort') as Sort : 'verified';
-  state.tab = ['overview', 'source', 'evidence', 'process'].includes(params.get('tab') ?? '') ? params.get('tab') as Tab : 'overview';
+  state.tab = ['reading', 'overview', 'source', 'evidence', 'process'].includes(params.get('tab') ?? '') ? params.get('tab') as Tab : 'overview';
+  state.returnTo = theoremDirectoryReturn(params.get('return'), location.href);
   const id = params.get('proof');
   state.selected = records.find(record => record.id === id)?.id ?? records.find(accepted)?.id ?? '';
   if (id && !params.has('tab') && selectedRecord()?.processSummary) state.tab = 'process';
@@ -210,6 +215,7 @@ function readLocation() {
 
 function writeLocation(push = false) {
   const params = new URLSearchParams();
+  if (state.returnTo) params.set('return', state.returnTo);
   if (state.view === 'quickstart') params.set('view', 'quickstart');
   else {
     if (state.selected) params.set('proof', state.selected);
@@ -217,6 +223,10 @@ function writeLocation(push = false) {
     if (state.filter !== 'all') params.set('status', state.filter);
     if (state.query) params.set('q', state.query);
     if (state.sort !== 'verified') params.set('sort', state.sort);
+    const previous = new URLSearchParams(location.hash.slice(1)), reading = readProofReadingPosition(previous);
+    if (previous.get('proof') === state.selected && reading) {
+      params.set('reading', reading.anchor); params.set('readingSha', reading.proofSha);
+    }
     if (state.tab === 'process') {
       params.set('mode', processSelection.view);
       if (processSelection.run) params.set('run', processSelection.run);
@@ -389,6 +399,19 @@ function processEvidenceView(run: ArchiveProcess['runs'][number]): string {
     </ul>` : `<p>${strings.unknownEvidence}</p>`}</details>`;
 }
 
+function readingView(record: ArchiveRecord): string {
+  const process = window.theoremosProcesses?.[record.id];
+  if (process) return renderProofSolution(record, process, locale, document.body.classList.contains('shared-classics')
+    ? { workbenchHref: locale === 'en' ? '../../' : '../' } : {});
+  const refresh = (failed: boolean) => {
+    if (state.tab !== 'reading' || selectedRecord() !== record) return;
+    element('#detail-panel').innerHTML = failed ? `<p role="status">${strings.readingUnavailable}</p>` : readingView(record);
+    icons();
+  };
+  void loadProcess(record).then(() => refresh(false), () => refresh(true));
+  return `<p class="source-loading" role="status">${strings.loadingReading}</p>`;
+}
+
 function processView(record: ArchiveRecord): string {
   if (processRecordId !== record.id) { processRecordId = record.id; processSelection = emptyProcessSelection(); }
   const process = window.theoremosProcesses?.[record.id];
@@ -415,7 +438,8 @@ function refreshProcess(record: ArchiveRecord, target?: HTMLElement) {
   const scroll = document.querySelector('#process-step-list')?.scrollTop ?? 0;
   const attribute = target?.getAttributeNames().find(name => name.startsWith('data-process-'));
   const value = attribute && target?.getAttribute(attribute);
-  element('#detail-panel').innerHTML = processView(record);
+  if (state.tab !== 'process') { state.tab = 'process'; renderInspector(record); }
+  else element('#detail-panel').innerHTML = processView(record);
   icons(); writeLocation();
   const list = document.querySelector('#process-step-list');
   if (list) list.scrollTop = scroll;
@@ -444,20 +468,26 @@ function revealProcessStep() {
 function renderInspector(record?: ArchiveRecord) {
   if (!record) {
     element('#archive-view').classList.remove('reading-process');
+    document.documentElement.classList.remove('reading-proof');
     element('#inspector').innerHTML = `<div class="inspector-empty">${icon('files')}<span>${strings.empty}</span></div>`;
     return;
   }
-  if (state.tab === 'process' && !record.processSummary) state.tab = 'overview';
-  element('#archive-view').classList.toggle('reading-process', state.tab === 'process');
-  const backToList = `<button type="button" class="back-to-results" data-action="back-list">${icon('list-start')}${strings.backList}</button>`;
+  if (state.tab === 'process' && !record.processSummary || state.tab === 'reading' && !record.campaign) state.tab = 'overview';
+  element('#archive-view').classList.toggle('reading-process', state.tab === 'process' || state.tab === 'reading');
+  document.documentElement.classList.toggle('reading-proof', state.view === 'archive' && state.tab === 'reading');
+  const backToList = state.returnTo
+    ? `<a class="back-to-results" data-theorem-directory-return href="${html(state.returnTo)}">${icon('list-start')}${locale === 'en' ? 'Back to theorems' : '返回定理目录'}</a>`
+    : `<button type="button" class="back-to-results" data-action="back-list">${icon('list-start')}${strings.backList}</button>`;
+  const title = proofSolutionTitle(record, locale), subtitle = record.campaign ? title !== record.title ? record.title : '' : record.subtitle;
   element('#inspector').innerHTML = `<div class="detail-topline"><span class="detail-topline-label">${icon('files')}${strings.details}</span>${backToList}<div class="detail-actions">${iconButton('copy-link', strings.copyLink, 'link-2')}${iconButton('download-record', strings.downloadRecord, 'download')}</div></div>
-    <h2 class="detail-title">${html(record.title)}</h2><p class="detail-subtitle">${html(record.subtitle)}</p><p class="detail-id">${record.id}</p>
+    <h2 class="detail-title">${html(title)}</h2>${subtitle ? `<p class="detail-subtitle">${html(subtitle)}</p>` : ''}<p class="detail-id">${record.id}</p>
     <div class="detail-statusline">${statusBadge(record)}<span>${record.campaign ? 'OpenAI Math' : 'Lean-Eval'} · ${html(record.area)}</span></div>
     <div class="detail-tabs" role="tablist" aria-label="${strings.detailTabs}">${([
+      ...(record.campaign ? [['reading', strings.tabs.reading] as const] : []),
       ['overview', strings.tabs.overview], ['source', strings.tabs.source], ['evidence', strings.tabs.evidence],
       ...(record.processSummary ? [['process', strings.tabs.process] as const] : []),
     ] as const).map(([tab, label]) => `<button type="button" role="tab" id="tab-${tab}" aria-controls="detail-panel" aria-selected="${state.tab === tab}" tabindex="${state.tab === tab ? 0 : -1}" data-tab="${tab}">${label}</button>`).join('')}</div>
-    <div class="detail-panel" id="detail-panel" role="tabpanel" tabindex="0" aria-labelledby="tab-${state.tab}">${state.tab === 'overview' ? overview(record) : state.tab === 'source' ? sourceView(record) : state.tab === 'process' ? processView(record) : evidence(record)}</div>
+    <div class="detail-panel" id="detail-panel" role="tabpanel" tabindex="0" aria-labelledby="tab-${state.tab}">${state.tab === 'reading' ? readingView(record) : state.tab === 'overview' ? overview(record) : state.tab === 'source' ? sourceView(record) : state.tab === 'process' ? processView(record) : evidence(record)}</div>
     <div class="archive-access"><p>${strings.accessPrompt}</p><div class="archive-access-actions"><a class="inline-link" href="index.html#start">${strings.requestAccess}${icon('arrow-up-right')}</a>${backToList}</div></div>`;
   if (state.tab === 'source' && loadedSources(record.id)) requestAnimationFrame(() => revealSource(record));
   if (state.tab === 'process') { revealProcessStep(); revealCheckedSource(record); }
@@ -559,10 +589,10 @@ function restoreLocation() {
   if (requested) {
     const record = selectedRecord();
     // processView renders the loaded process or its failure message before revealing it.
-    const ready = state.tab === 'process' && record ? loadProcess(record).catch(() => undefined) : Promise.resolve();
+    const ready = (state.tab === 'process' || state.tab === 'reading') && record ? loadProcess(record).catch(() => undefined) : Promise.resolve();
     void ready.then(() => document.fonts.ready).then(() => {
       if (state.selected === requested) {
-        revealRecord();
+        if (!revealProofReadingLocation()) revealRecord();
         if (record) revealCheckedSource(record, true);
       }
     });
@@ -650,7 +680,7 @@ document.addEventListener('click', event => {
   if (target.dataset.viewLink) {
     event.preventDefault();
     state.view = target.dataset.viewLink;
-    if (state.view === 'archive' && state.tab === 'process') state.tab = 'overview';
+    if (state.view === 'archive' && (state.tab === 'process' || state.tab === 'reading')) state.tab = 'overview';
     writeLocation(true);
     render();
     return;
@@ -679,8 +709,9 @@ document.addEventListener('click', event => {
   const record = selectedRecord();
   if (target.dataset.globalScroll) {
     const section = document.getElementById(target.dataset.globalScroll);
+    for (let parent = section; parent; parent = parent.parentElement) if (parent instanceof HTMLDetailsElement) parent.open = true;
     section?.scrollIntoView({ block: 'start' });
-    section?.querySelector<HTMLElement>('h5')?.focus({ preventScroll: true });
+    section?.querySelector<HTMLElement>('h5, summary')?.focus({ preventScroll: true });
     return;
   }
   if (record && target.dataset.globalSelect) {
@@ -741,7 +772,7 @@ document.addEventListener('click', event => {
   }
   switch (target.dataset.action) {
     case 'back-list': {
-      if (state.tab === 'process') { state.tab = 'overview'; renderInspector(record); icons(); writeLocation(); }
+      if (state.tab === 'process' || state.tab === 'reading') { state.tab = 'overview'; renderInspector(record); icons(); writeLocation(); }
       const row = element(`[data-proof-id="${state.selected}"]`);
       row.focus({ preventScroll: true });
       row.scrollIntoView({ block: 'center' });
@@ -749,7 +780,7 @@ document.addEventListener('click', event => {
     }
     case 'quickstart': state.view = 'quickstart'; writeLocation(true); render(); break;
     case 'reset': state.query = ''; state.filter = 'all'; render(); element('#search').focus(); break;
-    case 'copy-link': void copy(location.href); break;
+    case 'copy-link': void copy(proofReadingLink(target.dataset.proofCopyReading)); break;
     case 'copy-hash': void copy(target.dataset.value ?? ''); break;
     case 'jump-declaration': if (record) jumpToDeclaration(record); break;
     case 'copy-source': if (record) void copy(currentSource(record).code); break;

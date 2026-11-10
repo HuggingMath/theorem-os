@@ -412,8 +412,9 @@ describe('library module guidance in research prompts', () => {
 
   it('omits frozen libraries from editable files, proof paths and source bindings and references them once', () => {
     const lead = build();
-    expect(lead.instructions).toContain('Leave Lean sources, frozen problem inputs, packages and the pinned toolchain unchanged.');
-    expect(lead.instructions).toContain('Save route notes in /proof/RESEARCH.md and publish plans');
+    expect(lead.instructions).toContain('Leave all Lean source files, imports and environment configuration unchanged.');
+    expect(lead.instructions).toMatch(/^Edit only \/proof\/RESEARCH\.md\.$/mu);
+    expect(lead.instructions).toContain('Save RESEARCH.md and delivery logs at these exact worktree-root paths');
     expect(lead.instructions).toContain('Choose proofPath from ["Submission.lean"]; goals infer');
     const prover = build(lemma);
     expect(prover.instructions).toContain('Edit only /proof/Submission.lean, /proof/RESEARCH.md,');

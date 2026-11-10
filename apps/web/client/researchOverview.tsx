@@ -10,6 +10,7 @@ import type { WebApi } from './collaborationUi';
 import { locale } from '../i18n';
 import { Rich, RichProse } from './richText';
 import { buildResearchOverview, overviewProjectHref, type ResearchOverviewAction } from './researchOverviewModel';
+import { problemEntryHref } from './researchProblemNavigation';
 
 export type ResearchOverviewProps = {
   owner: string; runs: readonly WebRun[]; conversations: readonly WebConversationSummary[]; formalizations: readonly WebFormalization[];
@@ -61,7 +62,8 @@ export function ResearchOverview(props: ResearchOverviewProps) {
       <a href="theorems.html" class="text-button">{tx('定理与协作者', 'Theorems and collaborators')} ↗</a></header>
     {model.actions.length > 0 && <section class="research-overview-inbox" data-overview-inbox aria-label={tx('待我处理', 'Needs your attention')}>
       <h3>{tx('待我处理', 'Needs your attention')} <span>{model.actions.length}</span></h3><ul>{model.actions.map(action => <li key={action.id}>
-        <a href={action.href} data-overview-action={action.id} onClick={event => open(event, action)}><span>{actionLabel(action.kind)}</span><strong><Rich text={action.title} /></strong><span aria-hidden="true">→</span></a>
+        <a href={action.runId ? problemEntryHref({ runId: action.runId, href: action.href, tab: action.kind === 'feedback' ? 'discussion' : action.kind === 'plan' ? 'route' : undefined }) : action.href}
+          data-overview-action={action.id} onClick={event => { if (!action.runId) open(event, action); }}><span>{actionLabel(action.kind)}</span><strong><Rich text={action.title} /></strong><span aria-hidden="true">→</span></a>
       </li>)}</ul></section>}
     {model.cards.length > 0 && <div class="research-overview-tools"><label><span class="sr-only">{tx('搜索我的研究', 'Search my research')}</span><input type="search" data-overview-search value={query}
       placeholder={tx('搜索题目、定理或对话', 'Find a problem, theorem or conversation')} onInput={event => setQuery(event.currentTarget.value)} /></label>
@@ -73,6 +75,9 @@ export function ResearchOverview(props: ResearchOverviewProps) {
       const latest = card.runs[0], conversation = card.conversations[0];
       const projectRun = card.project?.runs[0];
       const action = card.actions[0];
+      const workspaceRun = action?.runId ?? latest?.id ?? projectRun?.runId;
+      const workspaceHref = workspaceRun ? problemEntryHref({ runId: workspaceRun, projectId: card.project?.id,
+        href: action?.runId ? action.href : undefined, tab: action?.runId ? action.kind === 'feedback' ? 'discussion' : action.kind === 'plan' ? 'route' : 'overview' : 'overview' }) : undefined;
       const target = action ?? (latest ? { runId: latest.id } : conversation ? { conversationId: conversation.id } : {});
       const href = action?.href ?? (latest ? `?run=${encodeURIComponent(latest.id)}` : conversation ? `?chat=${encodeURIComponent(conversation.id)}`
         : card.project ? overviewProjectHref(card.project.id, projectRun?.runId, projectRun?.statementVersionId) : card.formalizations[0] ? `formalize.html?id=${encodeURIComponent(card.formalizations[0].id)}` : './');
@@ -80,16 +85,17 @@ export function ResearchOverview(props: ResearchOverviewProps) {
       const statement = naturalStatement ?? latest?.source;
       return <article class="research-overview-card" key={card.id} data-overview-card={card.id}>
         <div class="research-overview-meta"><span>{card.project ? tx('定理项目', 'Theorem project') : card.runs.length ? tx('研究题目', 'Research problem') : tx('对话与题意', 'Conversation and statement')}</span><time dateTime={card.updatedAt}>{date(card.updatedAt)}</time></div>
-        <h3><a href={href} title={card.title} onClick={event => open(event, target)}><Rich text={card.title} /></a></h3>
+        <h3><a href={workspaceHref ?? href} data-overview-primary={card.id} title={card.title} onClick={event => { if (!workspaceHref) open(event, target); }}><Rich text={card.title} /></a></h3>
         <p class="research-overview-summary">{card.project ? `${card.project.versions.length} ${tx('个陈述版本', 'statement versions')} · ${card.project.runs.length} ${tx('次研究', 'research runs')}`
           : `${card.runs.length} ${tx('次研究', 'research runs')} · ${card.conversations.length} ${tx('段对话', 'conversations')}`}</p>
         {latest && <p class="research-overview-progress" data-overview-progress={latest.id}>{progress(latest)}</p>}
-        <div class="research-overview-card-actions"><a class="button" href={href} onClick={event => open(event, target)}>{card.actions.length ? tx('继续处理', 'Continue') : tx('打开研究', 'Open research')} →</a>
+        <div class="research-overview-card-actions"><a class="button" data-overview-open={card.id} href={workspaceHref ?? href} onClick={event => { if (!workspaceHref) open(event, target); }}>{card.actions.length ? tx('继续处理', 'Continue') : tx('打开研究', 'Open research')} →</a>
+          {workspaceHref && <a class="text-button" href={href} onClick={event => open(event, target)}>{action ? actionLabel(action.kind) : tx('研究操作', 'Research controls')}</a>}
           {latest && <span data-overview-run-status={latest.id}>{runLabel(latest)}</span>}
           {card.project && latest && <a class="text-button" href={overviewProjectHref(card.project.id)}>{tx('协作与版本', 'Collaboration and versions')}</a>}</div>
         {(card.runs.length > 0 || card.conversations.length > 0 || Boolean(card.project?.runs.length)) && <details><summary>{tx('历次研究与对话', 'Runs and conversations')}</summary><ul class="research-overview-records">
-          {card.project?.runs.map(binding => <li key={`bound:${binding.runId}`}><a href={overviewProjectHref(card.project!.id, binding.runId, binding.statementVersionId)}><Rich text={binding.title} /></a><span>{`v${card.project!.versions.findIndex(version => version.id === binding.statementVersionId) + 1}`}</span></li>)}
-          {card.runs.filter(run => !card.project?.runs.some(binding => binding.runId === run.id)).map(run => <li key={run.id}><a href={`?run=${encodeURIComponent(run.id)}`} onClick={event => open(event, { runId: run.id })}><Rich text={run.title} /></a><span>{runLabel(run)}</span></li>)}
+          {card.project?.runs.map(binding => <li key={`bound:${binding.runId}`}><a href={problemEntryHref({ runId: binding.runId, projectId: card.project!.id, href: overviewProjectHref(card.project!.id, binding.runId, binding.statementVersionId) })}><Rich text={binding.title} /></a><span>{`v${card.project!.versions.findIndex(version => version.id === binding.statementVersionId) + 1}`}</span></li>)}
+          {card.runs.filter(run => !card.project?.runs.some(binding => binding.runId === run.id)).map(run => <li key={run.id}><a href={problemEntryHref({ runId: run.id })}><Rich text={run.title} /></a><a href={`?run=${encodeURIComponent(run.id)}`} onClick={event => open(event, { runId: run.id })}>{tx('研究操作', 'Controls')}</a><span>{runLabel(run)}</span></li>)}
           {card.conversations.map(item => <li key={item.id}><a href={`?chat=${encodeURIComponent(item.id)}`} onClick={event => open(event, { conversationId: item.id })}><Rich text={item.title} /></a><span>{tx('对话', 'Conversation')}</span></li>)}</ul></details>}
         {statement && <details class="research-overview-statement"><summary>{tx('查看原题', 'Read the original statement')}</summary>{naturalStatement ? <RichProse text={statement} /> : <pre>{statement}</pre>}</details>}
       </article>;

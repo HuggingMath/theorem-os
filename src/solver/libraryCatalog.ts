@@ -278,6 +278,12 @@ export function readLibraryCatalog(file: string, expectedDigest?: string) {
   return { identity: Object.freeze(identity), environment: manifest.environment, toolchain: manifest.toolchain,
     moduleCount: manifest.modules.length, declarationCount: entries.length,
     moduleFiles: Object.freeze(manifest.modules.map(module => module.file)), readModule, select, materialize,
+    /** Browsing interfaces must not open source objects or expose mutable catalog state. */
+    moduleMetadata(file: string) {
+      const module = modules.get(file);
+      if (!module) throw new Error(`math_library_catalog_module_missing: ${file}`);
+      return structuredClone(module);
+    },
     declaration(name: string) {
       const normalized = name.replace(/^_root_\./u, ''), file = declarations.get(normalized)?.[0];
       if (!file) throw new Error(`math_library_catalog_declaration_missing: ${normalized}`);

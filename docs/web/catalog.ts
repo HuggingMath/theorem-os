@@ -6,6 +6,7 @@ import type { ArchiveCatalog, ArchiveIndex, ArchiveRecord, ArchiveSource } from 
 import { siteRepository } from './site';
 import { campaignRecords } from './campaignCatalog';
 import { withArchiveSourceRoute } from './archiveSourceRoute';
+import { proofSolutionMode } from './proofSolution';
 
 const identifier = z.string().regex(/^[a-z0-9_]+$/);
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -344,7 +345,8 @@ export function archiveIndex(catalog: ArchiveCatalog): ArchiveIndex {
     const lines = main.code.split('\n');
     const start = Math.max(0, lines.findIndex(line => record.declaration && line.startsWith(record.declaration)));
     const { process: _process, ...summary } = record;
-    return { ...summary, ...(record.process && record.processSummary ? { processSummary: { ...record.processSummary,
+    return { ...summary, ...(record.campaign && record.process ? { readingMode: proofSolutionMode(record, record.process) } : {}),
+      ...(record.process && record.processSummary ? { processSummary: { ...record.processSummary,
       version: crypto.createHash('sha256').update(archiveProcessScript(record)).digest('hex').slice(0, 16) } } : {}),
       excerpt: lines.slice(start, start + 7).join('\n'), sources: record.sources.map(({ code: _code, ...source }) => source) };
   }) };

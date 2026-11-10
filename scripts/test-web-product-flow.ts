@@ -256,6 +256,10 @@ try {
       await page.locator('[data-overview-search]').fill('');
       await shot(page, `returning-home-${locale}-${width}`);
       await page.locator(`[data-overview-action="plan:${plan.id}"]`).click();
+      await page.locator('[data-problem-page]').waitFor();
+      assert.equal(new URL(page.url()).pathname, '/problem.html');
+      await page.locator('.problem-tabs a[href*="tab=overview"]').click();
+      await page.locator('[data-problem-attention-item="plan-approval"] a.button').click();
       await page.locator('[data-chat-approve-plan]').waitFor();
       mark({ groupedRunIds: [partial.id, accepted.id, unknown.id], separateStatementRun: mismatch.id, actionablePendingPlan: plan.id });
 
@@ -334,6 +338,7 @@ try {
       phase = `library-final-proof/${locale}/${width}`;
       const initialAssets = (await libraryList(page)).length;
       await visitRun(page, accepted.id);
+      await page.locator('[data-chat-result-more] > summary').click();
       const savedLink = page.locator(`#research-chat-thread [data-save-library][href="library.html?create=1&fromRun=${accepted.id}"]`);
       assert.equal(await savedLink.getAttribute('href'), `library.html?create=1&fromRun=${accepted.id}`);
       await page.route('**/api/research/library/from-run?*', route => route.fulfill({ status: 503, json: { error: 'Fixture source read temporarily unavailable' } }));

@@ -151,6 +151,9 @@ const savedResearchCheckpoint = z.object({ taskId: id, workerId: id,
     count: z.number().int().positive(), localInputDigest: hash.optional(), candidateOutputDigest: hash.optional(),
     unchangedEvidenceCount: z.number().int().positive().optional(),
     candidateStatus: z.enum(['structured-candidate', 'unclassified-draft']).optional(), paused: z.boolean().optional(),
+    advisoryCheckpoint: z.object({ scope: hash, noProgressStreak: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      contentDigest: hash.optional(), inputDigest: hash.optional() }).strict().transform(value => ({ ...value,
+        scope: value.scope, noProgressStreak: value.noProgressStreak })).optional(),
   }).strict().transform((value): ResearchCheckpoint => ({ ...value, taskDigest: value.taskDigest,
     inputDigest: value.inputDigest, outputDigest: value.outputDigest, count: value.count })),
   source: savedTaskDraft.shape.source,
@@ -1085,20 +1088,10 @@ export async function seedSolverContinuation(options: {
         }
         return project;
       };
-      const sourceDependencies = new Map<string, string[]>();
-      for (const taskId of candidateIds) {
-        const node = tasks.find(item => item.task.id === taskId)!;
-        const inputs = taskDependencyRecords(node.task, tasks).map(item => item.task.id);
-        if (!conditional.some(item => item.taskId === taskId)) {
-          try {
-            inputs.push(...projectedGoalInputs(projector(canonical), node.task, tasks).map(item => item.task.id));
-          } catch { /* Candidate preparation publishes its exact projection error below. */ }
-        }
-        sourceDependencies.set(taskId, [...new Set(inputs)]);
-      }
-      type Candidate = { node: TaskRecord; sourceCommit: string; request: TaskProofRequest;
-        availableGoals: string[]; savedConditional?: (typeof conditional)[number] };
-      const prepareCandidate = async (node: TaskRecord, restoreContext = false): Promise<Candidate> => {
+      type CandidateSource = { sourceCommit: string; assignment: NonNullable<TaskRecord['assignment']>;
+        conditions: CooperativeTask[]; savedConditional?: (typeof conditional)[number] };
+      const candidateSources = new Map<string, Promise<CandidateSource>>();
+      const materializeCandidate = async (node: TaskRecord): Promise<CandidateSource> => {
         const taskId = node.task.id, savedConditional = conditional.find(candidate => candidate.taskId === taskId);
         let sourceCommit = canonical, assignment = { taskId, taskDigest: taskVersion(node.task),
           workerId: 'continuation', seedCommit: canonical } as NonNullable<TaskRecord['assignment']>;
@@ -1138,10 +1131,37 @@ export async function seedSolverContinuation(options: {
           sourceCommit = frozen.proofCommit;
           git(state.worktree, ['update-ref', `refs/math/${state.runId}/continuation/conditional/${taskId}`, sourceCommit]);
         }
+        return { sourceCommit, assignment, conditions, savedConditional };
+      };
+      const candidateSource = (node: TaskRecord) => {
+        let candidate = candidateSources.get(node.task.id);
+        if (!candidate) {
+          candidate = materializeCandidate(node);
+          candidateSources.set(node.task.id, candidate);
+        }
+        return candidate;
+      };
+      const sourceDependencies = new Map<string, string[]>();
+      for (const taskId of candidateIds) {
+        lease.signal.throwIfAborted(); lease.assertHeld();
+        const node = tasks.find(item => item.task.id === taskId)!;
+        const inputs = taskDependencyRecords(node.task, tasks).map(item => item.task.id);
+        try {
+          // Conditional declarations may exist only in their frozen delivery.
+          // Discover their original inputs from that same source identity.
+          const { sourceCommit, conditions } = await candidateSource(node);
+          inputs.push(...projectedGoalInputs(projector(sourceCommit), node.task, tasks, conditions).map(item => item.task.id));
+        } catch { /* Candidate preparation publishes its exact projection error below. */ }
+        sourceDependencies.set(taskId, [...new Set(inputs)]);
+      }
+      type Candidate = { node: TaskRecord; sourceCommit: string; request: TaskProofRequest;
+        availableGoals: string[]; savedConditional?: (typeof conditional)[number] };
+      const prepareCandidate = async (node: TaskRecord, restoreContext = false): Promise<Candidate> => {
+        const taskId = node.task.id;
+        const { sourceCommit, assignment, conditions, savedConditional } = await candidateSource(node);
         const availableGoals = tasks.filter(item => item.task.id !== taskId && item.task.kind === 'goal' &&
           freshGoals.get(item.task.id) === taskVersion(item.task)).map(item => item.task.id);
-        // Historical conditional sources have their own frozen context and binders.
-        const retainedGoals = savedConditional ? [] : availableGoals.filter(id => restoreContext ||
+        const retainedGoals = availableGoals.filter(id => restoreContext ||
           sourceDependencies.get(taskId)!.includes(id)).map(id => tasks.find(item => item.task.id === id)!.task.theoremName!);
         return { node, savedConditional, sourceCommit, availableGoals, request: { task: node.task, retainedGoals, assignment,
           ...(conditions.length ? { conditions } : {}) } };

@@ -10,7 +10,7 @@ import { LIBRARY_REQUEST_FILE, writeLibraryAccess } from '../src/solver/libraryA
 import { writeLibraryCatalog } from '../src/solver/libraryCatalog';
 import { readSolverProblem } from '../src/solver/problem';
 
-const commands = ['check-finite', 'check-lean', 'continuation', 'kernel-certificate', 'knowledge', 'library',
+const commands = ['check-finite', 'check-lean', 'continuation', 'declarations', 'kernel-certificate', 'knowledge', 'library',
   'proof-search', 'research-observe', 'search-lean'];
 const fixture = path.resolve('examples/finite/old-b1-nine-constraints.json');
 let directory = '';
@@ -106,5 +106,15 @@ describe('bundled Agent commands', () => {
     expect(fs.readFileSync(catalog.file)).toEqual(sourceBytes);
     expect(fs.readFileSync(object, 'utf8')).toBe(source);
     expect(fs.existsSync(path.join(worktree, problem.projectRelative, file))).toBe(false);
+  });
+
+  it('searches a saved declaration index without source-tree access', () => {
+    const index = path.join(directory, 'DECLARATIONS.jsonl');
+    fs.writeFileSync(index, JSON.stringify({ name: 'Sample.owned', kind: 'theorem', file: 'Submission.lean', line: 3,
+      sorry: false, type: 'owned : True' }) + '\n');
+    const result = run('declarations', 'search', '--index', index, '--query', 'owned');
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ authority: 'lexical-source-index',
+      hits: [{ name: 'Sample.owned', file: 'Submission.lean', line: 3 }] });
   });
 });

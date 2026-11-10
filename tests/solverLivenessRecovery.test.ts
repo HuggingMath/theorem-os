@@ -10,7 +10,7 @@ import { directSolverModules, type SolverModules } from '../src/solver/modules';
 import { runResearchWorkers } from '../src/solver/research';
 import { assignmentDeliveryFile, leadPlanDeliveryFile, parseCooperationPlan, taskVersion, type CooperativeAction } from '../src/solver/tasks';
 import { deferred } from './helpers/async';
-import { workerAccess } from './helpers/cooperation';
+import { cooperativeResearch, workerAccess } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 
 vi.mock('../src/math/mathBuildManifest', () => ({ readMathBuildManifest: vi.fn() }));
@@ -284,31 +284,37 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     const reviews = run.expectScheduledLeadTurns(answeredTurns);
     expect(reviews.length).toBeGreaterThan(0);
     expect(reviews.every(turn => turn.progressReview)).toBe(true);
-    expect(run.events.filter(item => item.event === 'lead_woken_for_idle_peers')).toHaveLength(idleWakes.length);
+    const laterWakes = run.events.filter(item => item.event === 'lead_woken_for_idle_peers');
+    // This plan answered the research input, but gave the prover no executable work.
+    expect(laterWakes.length).toBeGreaterThan(idleWakes.length);
+    expect(laterWakes.at(-1)!.at - laterWakes.at(-2)!.at).toBeGreaterThanOrEqual(8 * IDLE_PEER_WAKE_MS);
     expect(fixtureState.state.tokenBudget).toMatchObject({ maxTotalTokens: 0, status: 'unlimited' });
     expect(run.open.mock.calls.every(([options]) => options.turnTimeoutMs === undefined)).toBe(true);
     expect(fixtureState.check).not.toHaveBeenCalled(); expect(fixtureState.state.check).toBeUndefined();
     expect(fixtureState.state.cooperation!.tasks.every(node => !['integrated', 'conditional'].includes(node.status))).toBe(true);
     await run.stop();
-  });
+  }, 30_000); // Four virtual hours include enough isolated Git snapshots to exceed 15 s under load.
 
-  it('re-owes a paused Lead idle peers on its backoff schedule until a deciding turn answers them', async () => {
+  it('wakes as soon as a long Lead turn settles and preserves unresolved peer episodes across unchanged accepted plans', async () => {
     const fixtureState = fixture(), run = fixtureState.start({ saveResearchProgress: true }); await run.ready();
-    const lead = fixtureState.state.workers![0], cooperation = () => fixtureState.state.cooperation!;
+    const cooperation = () => fixtureState.state.cooperation!;
     const idleWakes = () => run.events.filter(item => item.event === 'lead_woken_for_idle_peers');
-    // Let the unchanged Lead slices settle into a pause while the researcher keeps working.
-    for (let minute = 0; minute < 60 && !(lead.scheduling?.status === 'idle' && cooperation().lastLeadPauseInputDigest); minute++)
+    const oldNonce = run.latestLead().assignment.planNonce;
+    const prover = fixtureState.state.workers!.find(worker => worker.id === 'idle-prover')!;
+    for (let tick = 0; tick < 20 && prover.scheduling?.wait?.stage !== 'm3-no-ready'; tick++)
+      await vi.advanceTimersByTimeAsync(1_000);
+    expect(prover.scheduling).toMatchObject({ status: 'idle', wait: { stage: 'm3-no-ready' } });
+    const idleSince = prover.scheduling!.since;
+    // The peer's own idle clock keeps running while an undecided Lead uses its slice. Once that
+    // slice pauses, an already-mature peer is due immediately; pausing does not restart its clock.
+    for (let minute = 0; minute < 60 && !idleWakes().length; minute++)
       await vi.advanceTimersByTimeAsync(60_000);
     expect(cooperation().lastLeadPauseInputDigest).toBeTruthy();
     // The prover has had nothing ready since before the Lead's first turn, but that turn was cut without a decision,
     // so it has not answered the idle peer: the paused Lead is owed one turn once the peer has waited.
-    const prover = fixtureState.state.workers!.find(worker => worker.id === 'idle-prover')!;
-    expect(prover.scheduling).toMatchObject({ status: 'idle', wait: { stage: 'm3-no-ready' } });
     expect(cooperation().leadDecisionBasisAt).toBeUndefined();
-    expect(idleWakes()).toHaveLength(0);
-    const oldNonce = run.latestLead().assignment.planNonce;
-    await vi.advanceTimersByTimeAsync(IDLE_PEER_WAKE_MS + 60_000);
     expect(idleWakes().map(item => item.details?.workerIds)).toEqual([['idle-prover']]);
+    expect(idleWakes()[0].at).toBeGreaterThanOrEqual(idleSince + IDLE_PEER_WAKE_MS);
     expect(run.latestLead().assignment.planNonce).not.toBe(oldNonce);
     // Each woken turn is cut unchanged again; the same peer is re-owed after a doubling delay, never sooner.
     for (let minute = 0; minute < 120 && idleWakes().length < 3; minute++) await vi.advanceTimersByTimeAsync(60_000);
@@ -316,17 +322,19 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     expect(at).toHaveLength(3);
     expect(at[1] - at[0]).toBeGreaterThanOrEqual(2 * IDLE_PEER_WAKE_MS);
     expect(at[2] - at[1]).toBeGreaterThanOrEqual(4 * IDLE_PEER_WAKE_MS);
-    expect(cooperation().idlePeerWake).toMatchObject({ workerIds: ['idle-prover'], count: 3 });
+    expect(cooperation().idlePeerWake).toMatchObject({ workerIds: ['idle-prover'], count: 3,
+      episodes: { 'idle-prover': { since: idleSince, at: at[2], count: 3 } } });
     expect(run.current(run.latestLead().assignment)).toBe(true);
-    // A deciding turn answers the peer it was shown: no further wakes while its idle episode lasts.
+    // Accepting the unchanged graph answers its research input but leaves the peer without work.
     await run.answer();
     expect(cooperation().leadDecisionBasisAt).toBeGreaterThanOrEqual(at[2]);
+    expect(cooperation().idlePeerWake?.episodes?.['idle-prover']).toMatchObject({ since: prover.scheduling!.since, count: 3 });
     const answeredTurns = run.leads().length;
     await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
     const reviews = run.expectScheduledLeadTurns(answeredTurns);
     expect(reviews.length).toBeGreaterThan(0);
-    expect(reviews.every(turn => turn.progressReview)).toBe(true);
-    expect(idleWakes()).toHaveLength(3);
+    expect(idleWakes().length).toBeGreaterThan(3);
+    expect(idleWakes()[3].at - at[2]).toBeGreaterThanOrEqual(8 * IDLE_PEER_WAKE_MS);
     expect(fixtureState.check).not.toHaveBeenCalled(); await run.stop();
   }, 30_000); // Several simulated hours still perform real disposable Git work at each checkpoint.
 
@@ -373,5 +381,90 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     expect(fixtureState.state.tokenBudget).toMatchObject({ maxTotalTokens: 0, status: 'unlimited' });
     expect(fixtureState.check).not.toHaveBeenCalled(); expect(fixtureState.state.check).toBeUndefined();
     await resumed.stop();
+  });
+});
+
+describe('Lead dispatch responsiveness while peers are working', () => {
+  let directory: string;
+  let controller: AbortController;
+  let cooperation: CooperativeResearch;
+
+  afterEach(async () => {
+    controller?.abort(new Error('fixture_finished'));
+    await cooperation?.stop();
+    vi.restoreAllMocks();
+    if (directory) fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  function waitingLead() {
+    const example = localExample('solver-dispatch-responsiveness-', 'lead');
+    directory = example.directory;
+    const lead = leadWorker(example.problem, example.workspace), peer = peerWorker(example, 'researcher');
+    const plan = parseCooperationPlan(example.problem, { tasks: [
+      { id: 'investigate', kind: 'research', objective: 'Construct the exact missing input.' },
+      ...example.problem.targets.map((target, index) => ({ id: `goal_${index}`, kind: 'goal',
+        objective: `Prove ${target.theoremName}`, ...target, dependsOn: ['investigate'] })),
+    ] });
+    const state = solverState(example.problem, example.workspace, {
+      runId: 'responsive-dispatch-fixture', phase: 'running',
+      workers: [lead, peer].map(worker => ({ ...worker, phase: 'running', turns: 1 })),
+      cooperation: { canonicalCommit: example.problem.baseCommit,
+        tasks: plan.tasks.map(task => ({ task, status: 'pending', attempts: 0 })),
+        groups: plan.groups.map(group => ({ group, turns: 0 })) },
+    });
+    const investigating = state.cooperation!.tasks.find(node => node.task.id === 'investigate')!;
+    investigating.status = 'running'; investigating.attempts = 1;
+    investigating.assignment = { taskId: investigating.task.id, taskDigest: taskVersion(investigating.task),
+      workerId: peer.id, seedCommit: example.problem.baseCommit, assignmentId: 'in-flight-research' };
+    controller = new AbortController();
+    cooperation = cooperativeResearch({ state, workers: [lead, peer], retrievalRoot: directory, signal: controller.signal });
+    const scheduler = cooperation as any;
+    scheduler.changed();
+    // A previous deciding turn answered this graph; a later cut saved a pause baseline before
+    // the Lead's notes changed. These existing durable identities can coexist across checkpoints.
+    state.cooperation!.lastLeadInputDigest = scheduler.planningInputDigest();
+    state.cooperation!.lastLeadPauseInputDigest = scheduler.leadPauseInputDigest();
+    fs.appendFileSync(path.join(lead.worktree, 'RESEARCH.md'), 'A later saved Lead draft still needs the working peer.\n');
+    expect(scheduler.planningInputDigest()).toBe(state.cooperation!.lastLeadInputDigest);
+    expect(scheduler.leadPauseInputDigest()).not.toBe(state.cooperation!.lastLeadPauseInputDigest);
+    // Bound a broken immediate-retry loop so the regression itself cannot starve the test runner.
+    // Eligibility, digest computation and the dispatch method remain the real implementation.
+    const nextLead = scheduler.nextLead.bind(cooperation);
+    const dispatches = vi.spyOn(scheduler, 'nextLead').mockImplementation(async (...args: unknown[]) => {
+      if (dispatches.mock.calls.length > 4) throw new Error('fixture_dispatch_spun_without_waiting');
+      return nextLead(...args);
+    });
+    return { lead, peer, state, investigating, scheduler, dispatches,
+      budget: { maxTurns: Infinity, remainingMs: 60_000 } };
+  }
+
+  it('lets a timer abort a Lead waiting on unchanged planning input and a changed pause draft', async () => {
+    const { lead, budget, dispatches } = waitingLead();
+    let timerHandled = false;
+    const stop = setTimeout(() => { timerHandled = true; controller.abort(new Error('fixture_stop_requested')); }, 0);
+    try {
+      await expect(cooperation.next(lead, budget)).rejects.toThrow('fixture_stop_requested');
+      expect(timerHandled).toBe(true);
+      expect(dispatches).toHaveBeenCalledTimes(1);
+    } finally { clearTimeout(stop); }
+  });
+
+  it('reconsiders a real peer completion delivered by the event loop instead of spinning on old input', async () => {
+    const { lead, budget, state, investigating, scheduler, dispatches } = waitingLead();
+    let peerHandled = false;
+    const complete = setTimeout(() => {
+      peerHandled = true;
+      investigating.status = 'completed';
+      investigating.finding = 'The exact construction is now saved; the original proof can use it.';
+      scheduler.changed();
+    }, 0);
+    try {
+      const action = await cooperation.next(lead, budget);
+      expect(peerHandled).toBe(true);
+      expect(action).toMatchObject({ kind: 'lead' });
+      expect(dispatches).toHaveBeenCalledTimes(2);
+      expect(state.cooperation!.lastLeadInputDigest).not.toBe(scheduler.planningInputDigest());
+      expect(state.cooperation!.tasks.every(node => !['integrated', 'conditional'].includes(node.status))).toBe(true);
+    } finally { clearTimeout(complete); }
   });
 });

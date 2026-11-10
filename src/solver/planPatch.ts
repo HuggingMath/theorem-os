@@ -1,5 +1,6 @@
 import type { CooperativeTask, RouteGroup } from './tasks';
 import type { ProofRoute } from './proofRoutes';
+import { canonicalMathJson } from '../math/mathRuntimeIo';
 
 /** The accepted Lead graph a revision is written against. */
 export type PlanPatchBase = { version: string; tasks: readonly CooperativeTask[]; groups: readonly RouteGroup[];
@@ -61,6 +62,16 @@ export function expandPlanPatch(value: Record<string, unknown>, base: PlanPatchB
     const merged: Record<string, unknown> = previous && (patch.kind === undefined || patch.kind === previous.kind)
       ? { ...previous, ...patch } : { ...patch };
     for (const [key, entry] of Object.entries(merged)) if (entry === null) delete merged[key];
+    // Leads sometimes copy the host's initial scheduling status into a new task.
+    // It means the same as an omitted policy. This dispatch may repeat its
+    // already-published patch in final notes, where the task now exists; permit
+    // that exact no-op only when the host explicitly rebases the old dispatch.
+    // Existing task changes still require active/paused/stopped, never host states.
+    if (merged.status === 'pending') {
+      const normalized = { ...merged }; delete normalized.status;
+      if (!previous || options.rebased && value.baseVersion !== base.version &&
+          canonicalMathJson(normalized) === canonicalMathJson(previous)) delete merged.status;
+    }
     return [patch.id as string, merged];
   }));
   const tasks: unknown[] = [...base.tasks.filter(task => !removed.has(task.id)).map(task => changed.get(task.id) ?? task),

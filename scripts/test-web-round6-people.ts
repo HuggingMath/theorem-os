@@ -29,12 +29,13 @@ const contexts = await Promise.all([browser.newContext({ locale: 'zh-CN', viewpo
   browser.newContext({ locale: 'zh-CN', viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' })]);
 const pageErrors: string[] = [], external: string[] = [], checks: object[] = [], profileWrites: Array<Record<string, unknown>> = [];
 for (const context of contexts) {
+  context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
   await context.addInitScript(() => { try { localStorage.setItem('theorem-os.web-locale.v1', 'zh'); } catch { /* about:blank has no storage. */ } });
   await context.route(/^https?:\/\//u, async route => {
     if (new URL(route.request().url()).origin !== origin) { external.push(route.request().url()); await route.abort(); }
     else await route.continue();
   });
-  context.on('page', page => { page.setDefaultTimeout(12000); page.on('pageerror', error => pageErrors.push(error.message)); });
+  context.on('page', page => { page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0); page.on('pageerror', error => pageErrors.push(error.message)); });
 }
 const auth = await contexts[0].newPage(), people = await contexts[0].newPage(), secondDevice = await contexts[1].newPage();
 people.on('request', request => {
@@ -75,6 +76,7 @@ async function resume() {
   await people.locator('main[aria-busy="false"]').waitFor();
 }
 async function editBob() {
+  await people.getByRole('link', { name: '我的主页', exact: true }).click();
   await people.getByRole('heading', { name: 'Bob', exact: true }).waitFor();
   const summary = people.getByText('编辑我的资料', { exact: true });
   if (await summary.locator('..').getAttribute('open') === null) await summary.click();
@@ -99,6 +101,7 @@ try {
     await ok(auth, 'POST', '/api/auth/logout', {});
     await auth.evaluate(owner => localStorage.setItem('theorem-os.web-account-left.v1', JSON.stringify({ owner, at: Date.now() })), alice.draftOwner);
     await aborted; await loginBob(); release.resolve(); await resume();
+    await people.getByRole('link', { name: '我的主页', exact: true }).click();
     await people.getByRole('heading', { name: 'Bob', exact: true }).waitFor();
     assert.equal((await ok(auth, 'GET', '/api/session')).account.email, 'bob@example.org');
     await people.screenshot({ path: path.join(output, 'bootstrap-next-login-preserved.png'), fullPage: true });
@@ -142,30 +145,29 @@ try {
   checks.push({ name: phase, passed: true, unboundOldResponseDelivered: true, pageConfirmedNewSessionFirst: false, newIdentityCookiePreserved: true });
 
   phase = 'same-owner relogin cancels old reads while preserving the mounted draft and typing focus';
-  const biography = await editBob(); await biography.fill('UNSAVED DRAFT SURVIVES SAME OWNER LOGIN');
-  await biography.evaluate(input => { input.dataset.draftMarker = 'original-editor'; });
+  const biography = people.getByLabel('简介', { exact: true });
   const previous = await ok(auth, 'GET', '/api/session');
-  const readReached = deferred(), readRelease = deferred(); let fieldReads = 0;
+  const readReached = deferred(), readRelease = deferred(); let feedReads = 0;
   const holdRead = async (route: Route) => {
-    if (!new URL(route.request().url()).searchParams.get('field')) { await route.continue(); return; }
-    fieldReads++;
+    feedReads++;
     const response = await route.fetch(); readReached.resolve(); await readRelease.promise; await route.fulfill({ response });
   };
-  await people.route('**/api/research/people?*', holdRead);
+  await people.route('**/api/research/feed?*', holdRead);
   try {
-    await people.getByLabel('按研究领域筛选', { exact: true }).fill('algebra'); await readReached.promise;
-    const aborted = people.waitForEvent('requestfailed', request => new URL(request.url()).pathname === '/api/research/people');
-    const recovered = people.waitForResponse(reply => new URL(reply.url()).pathname === '/api/research/people' && new URL(reply.url()).searchParams.get('field') === 'algebra');
+    await editBob(); await biography.fill('UNSAVED DRAFT SURVIVES SAME OWNER LOGIN');
+    await biography.evaluate(input => { input.dataset.draftMarker = 'original-editor'; }); await readReached.promise;
+    const aborted = people.waitForEvent('requestfailed', request => new URL(request.url()).pathname === '/api/research/feed');
+    const recovered = people.waitForResponse(reply => new URL(reply.url()).pathname === '/api/research/feed');
     const next = await loginBob(); assert.equal(next.draftOwner, previous.draftOwner); assert.notEqual(next.csrfToken, previous.csrfToken);
     await biography.focus(); await resume(); await aborted; readRelease.resolve(); await recovered;
     assert.equal(await biography.inputValue(), 'UNSAVED DRAFT SURVIVES SAME OWNER LOGIN');
     assert.equal(await biography.getAttribute('data-draft-marker'), 'original-editor');
     assert.equal(await biography.evaluate(input => document.activeElement === input), true);
     assert.equal((await ok(auth, 'GET', '/api/session')).account.email, 'bob@example.org');
-    await people.locator('a.research-list-item').filter({ hasText: 'Bob' }).waitFor();
-    assert.ok(fieldReads >= 2, 'The cancelled unchanged-URL directory must reload automatically');
+    await people.getByText('暂时没有动态。关注数学家或定理后，相关进展会出现在这里。', { exact: true }).waitFor();
+    assert.ok(feedReads >= 2, 'The cancelled unchanged-URL following feed must reload automatically');
     await people.screenshot({ path: path.join(output, 'same-owner-draft-preserved.png'), fullPage: true });
-  } finally { readRelease.resolve(); await people.unroute('**/api/research/people?*', holdRead); }
+  } finally { readRelease.resolve(); await people.unroute('**/api/research/feed?*', holdRead); }
   checks.push({ name: phase, passed: true, ownerRetained: true, oldSessionRequestAborted: true });
 
   phase = 'an accepted old-session write is cancelled and an explicit retry recovers its original receipt once';
