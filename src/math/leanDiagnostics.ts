@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { limitMathOutput, runLeanProcess } from './mathProcess';
-import { assertMathConstructionSources, LAKE_CONFIGURATION_FILES as configurationFiles, mathLocalModuleBuildOrder } from './mathConstructionSources';
+import { assertMathConstructionSources, LAKE_CONFIGURATION_FILES as configurationFiles, mathLocalModuleGraph } from './mathConstructionSources';
 import { assertMathCanonicalPath } from './paths';
 import { canonicalMathJson, mathDigest, writeMathJsonDurable } from './mathRuntimeIo';
 import { runMathematicsSandboxedCommand } from './verifier';
@@ -72,7 +72,7 @@ export async function runLeanDiagnostics(input: {
   const toolchainFile = path.join(project, 'lean-toolchain'), legacy = getLeanTaskEnvironment('mathlib-4.8');
   const libraryDirectory = fs.existsSync(toolchainFile) && fs.readFileSync(toolchainFile, 'utf8').trim() === legacy.toolchain
     ? legacy.packageLibraryDirectory! : '.lake/build/lib/lean';
-  const modules = mathLocalModuleBuildOrder(project, input.files);
+  const modules = mathLocalModuleGraph(project, input.files);
   const excluded = new Set(input.excludedFiles ?? []);
   const cacheFile = path.join(project, '.lake', 'lean-diagnostics.json');
   assertMathCanonicalPath(cacheFile);
@@ -98,7 +98,7 @@ export async function runLeanDiagnostics(input: {
   const initialSources = sourceFiles();
   const sourceIdentity = () => mathDigest(JSON.stringify([configuration(), sourceFiles()]));
   const sourceDigest = sourceIdentity();
-  const sources: string[] = [];
+  const builtModules = new Map<string, { digest: string; shareable: boolean }>();
   const deadline = Date.now() + input.timeoutMs;
   const phases: { file: string; cached: boolean; durationMs: number; exitCode: number | null; cacheSource?: 'shared' }[] = [];
   const cap = (text: string) => {
@@ -178,18 +178,27 @@ export async function runLeanDiagnostics(input: {
     return { reference, observed };
   };
   const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
-  let sharedPrefix = true;
   try {
   for (const module of modules) {
     input.signal?.throwIfAborted();
     const moduleDigest = mathDigest(fs.readFileSync(path.join(project, module.file)));
-    sources.push(moduleDigest);
-    sharedPrefix &&= input.sharedLibraryCache?.files[module.file] === moduleDigest;
-    if (input.dependenciesOnly && (input.files.includes(module.file) || excluded.has(module.file))) continue;
+    // Bind only the import closure, not unrelated modules visited earlier in this batch.
+    // Each imported fingerprint includes its source, transitive inputs and actual compiler artifacts.
+    const sources = [moduleDigest, module.imports.map(file => [file, builtModules.get(file)!.digest])];
+    const sharedInputs = input.sharedLibraryCache?.files[module.file] === moduleDigest &&
+      module.imports.every(file => builtModules.get(file)!.shareable);
     const output = `${libraryDirectory}/${path.posix.relative(module.sourceRoot, module.file).replace(/\.lean$/u, '.olean')}`;
     const absoluteOutput = path.join(project, output);
     assertMathCanonicalPath(absoluteOutput);
-    const digest = mathDigest(JSON.stringify([environmentIdentity, config, sources]));
+    const remember = (artifact: string | null, shareable: boolean) => builtModules.set(module.file, {
+      digest: mathDigest(canonicalMathJson([module.file, module.sourceRoot, sources, artifact])), shareable,
+    });
+    if (input.dependenciesOnly && (input.files.includes(module.file) || excluded.has(module.file))) {
+      remember(fs.existsSync(absoluteOutput) ? artifactDigest(absoluteOutput) : null, false);
+      continue;
+    }
+    const digest = mathDigest(canonicalMathJson(['lean-diagnostics-module.v2', environmentIdentity, config,
+      libraryDirectory, module.file, module.sourceRoot, sources]));
     const saved = cache[module.file];
     if (saved?.source === digest && fs.existsSync(absoluteOutput) && saved.output === artifactDigest(absoluteOutput) &&
         saved.diagnosticArtifact && captured(saved.diagnosticArtifact)) {
@@ -197,9 +206,8 @@ export async function runLeanDiagnostics(input: {
       stdout = appendOutput(stdout, cap(typeof saved.stdout === 'string' ? saved.stdout : ''));
       stderr = appendOutput(stderr, cap(typeof saved.stderr === 'string' ? saved.stderr : ''));
       diagnosticArtifacts.push(saved.diagnosticArtifact); messages.push(...(saved.messages ?? []));
-      sources.push(saved.output);
-      if (saved.diagnosticArtifact.captureComplete !== true ||
-          /declaration uses '?sorry'?/u.test((saved.stdout ?? '') + '\n' + (saved.stderr ?? ''))) sharedPrefix = false;
+      remember(saved.output, sharedInputs && saved.diagnosticArtifact.captureComplete === true &&
+        !/declaration uses '?sorry'?/u.test((saved.stdout ?? '') + '\n' + (saved.stderr ?? '')));
       continue;
     }
     const remainingMs = deadline - Date.now();
@@ -212,8 +220,8 @@ export async function runLeanDiagnostics(input: {
       args: ['env', '/bin/sh', '-ceu', `mkdir -p ${quote(path.posix.dirname(output))}\nexec lean --json -j1 -R ${quote(module.sourceRoot)} -o ${quote(output)} ${quote(module.file)}`],
       env, signal: input.signal, timeoutMs: Math.max(1, deadline - Date.now()), outputCapture: 'head', outputLimit: DIAGNOSTIC_CAPTURE_LIMIT });
     };
-    const shared = sharedCache && sharedPrefix ? await sharedCache.use({
-      key: mathDigest(canonicalMathJson(['lean-library-module.v1', environmentIdentity, toolIdentity, sharedConfiguration,
+    const shared = sharedCache && sharedInputs ? await sharedCache.use({
+      key: mathDigest(canonicalMathJson(['lean-library-module.v2', environmentIdentity, toolIdentity, sharedConfiguration,
         libraryDirectory, module.file, module.sourceRoot, sources])), output: absoluteOutput, deadline, signal: input.signal,
       // Sorry-bearing libraries are rejected by preparation and must not be published for another task.
       current: result => sourceIdentity() === sourceDigest && !/declaration uses '?sorry'?/u.test(result.stdout + '\n' + result.stderr),
@@ -221,9 +229,7 @@ export async function runLeanDiagnostics(input: {
       onPublishError: () => input.onSharedCache?.('unavailable', module.file),
     }) : { hit: false, result: await compile() };
     const result = shared.result;
-    if (sharedCache && sharedPrefix) input.onSharedCache?.(shared.hit ? 'hit' : 'miss', module.file);
-    if (!completeLeanCompilationOutput(result) || /declaration uses '?sorry'?/u.test(result.stdout + '\n' + result.stderr))
-      sharedPrefix = false;
+    if (sharedCache && sharedInputs) input.onSharedCache?.(shared.hit ? 'hit' : 'miss', module.file);
     phases.push({ file: module.file, cached: shared.hit, durationMs: result.durationMs, exitCode: result.exitCode,
       ...(shared.hit ? { cacheSource: 'shared' as const } : {}) });
     const retained = retain(module.file, result);
@@ -240,10 +246,11 @@ export async function runLeanDiagnostics(input: {
       cache[module.file] = { source: digest, output: artifact,
         stdout: renderLeanDiagnosticOutput(result.stdout), stderr: renderLeanDiagnosticOutput(result.stderr),
         diagnosticArtifact: retained.reference, messages: retained.observed };
-      sources.push(artifact);
+      remember(artifact, sharedInputs && completeLeanCompilationOutput(result) &&
+        !/declaration uses '?sorry'?/u.test(result.stdout + '\n' + result.stderr));
       fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
       fs.writeFileSync(cacheFile, JSON.stringify(cache) + '\n', { mode: 0o600 });
-    }
+    } else remember(null, false);
   }
   if (sourceIdentity() !== sourceDigest) return finish({ exitCode: 1, timedOut: false, stdout,
     stderr: 'math_diagnostics_source_changed: saved sources changed during diagnostics', phases, ...summary() });

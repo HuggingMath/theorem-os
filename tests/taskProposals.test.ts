@@ -31,6 +31,7 @@ describe('research to typed proof proposals', () => {
     { ...request, theoremName: 'Submission.goal' },
     { ...request, proofPath: '../Solution.lean' },
     { ...request, type: 'FULL_CLOSED_LEAN_TYPE' },
+    { ...request, type: 'theorem Submission.bridge : True' },
     { ...request, groupId: 'other' },
     { ...request, dependsOn: ['missing'] },
     { ...request, dependsOn: ['bridge'] },

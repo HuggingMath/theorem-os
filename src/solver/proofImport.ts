@@ -5,7 +5,7 @@ import { inspectLeanDeclarationRegions, inspectLeanSource, inspectScopedLeanDecl
 import { leanScopeCommands, leanScopeNamespace, maskLeanCommentsAndStrings, updateLeanScopes, type LeanScope } from '../math/leanSyntax';
 import type { SolverRunState } from './archive';
 import type { CooperativeResearch } from './cooperation';
-import { applyTaskChanges, type DeclarationChange } from './cooperativeProof';
+import { applyTaskChanges, declarationStartWithDoc, type DeclarationChange } from './cooperativeProof';
 import { readRunInspection } from './inspection';
 import type { ResearchWorker } from './modules/organization';
 import { committedSource, commitSolverSources } from './problem';
@@ -50,7 +50,7 @@ function requests(directory: string): ProofImportRequest[] {
 
 /** Capture fragment bytes under the same CAS/append lease as human edits; never write the run checkpoint. */
 export async function queueProofImport(run: string, input: {
-  taskId: string; fragmentFile: string; sha256: string; baseVersion: string; id?: string;
+  taskId: string; fragmentFile: string; sha256: string; baseVersion: string; id?: string; beforeTheorem?: string;
 }, dryRun = false) {
   const fragment = readMathText(input.fragmentFile, fragmentLimit);
   if (!/^[a-f0-9]{64}$/u.test(input.sha256) || mathDigest(fragment) !== input.sha256)
@@ -63,13 +63,17 @@ export async function queueProofImport(run: string, input: {
     if (!archive?.planVersion || !archive.canonicalCommit) throw new Error('math_proof_import_plan_unavailable');
     if (!node || node.task.kind !== 'lemma' || !node.task.proofPath || !node.task.theoremName ||
         (node.task.status ?? 'active') !== 'active') throw new Error('math_proof_import_task_invalid');
+    if (input.beforeTheorem !== undefined) insertionOffset(committedSource(state.worktree, archive.canonicalCommit,
+      `${state.problem.projectRelative}/${node.task.proofPath}`), node.task.theoremName, input.beforeTheorem);
     const value = { schema: 'theorem-os.proof-fragment.v1' as const, runId: state.runId,
       baseVersion: input.baseVersion, taskId: node.task.id, taskDigest: taskVersion(node.task),
       proofPath: node.task.proofPath, theoremName: node.task.theoremName, seedCommit: archive.canonicalCommit,
+      ...(input.beforeTheorem !== undefined ? { beforeTheorem: input.beforeTheorem } : {}),
       problemReceiptDigest: state.problem.receiptDigest, environmentDigest: state.environmentDigest,
       fragment, fragmentSha256: input.sha256 };
     const id = input.id ?? mathDigest(canonicalMathJson({ runId: state.runId, baseVersion: input.baseVersion,
-      taskId: input.taskId, fragmentSha256: input.sha256 }));
+      taskId: input.taskId, fragmentSha256: input.sha256,
+      ...(input.beforeTheorem !== undefined ? { beforeTheorem: input.beforeTheorem } : {}) }));
     const parsed = proofImportRequestSchema.safeParse({ ...value, id });
     if (!parsed.success) throw new Error('math_proof_import_invalid');
     const request = parsed.data, queued = requests(directory), previous = queued.find(item => item.id === id);
@@ -104,9 +108,14 @@ export async function queueProofImport(run: string, input: {
 }
 
 /** Choose an existing namespace boundary; importing does not add or alter source context. */
-function insertionOffset(source: string, theoremName: string): number {
+function insertionOffset(source: string, theoremName: string, beforeTheorem?: string): number {
   const namespace = theoremName.includes('.') ? theoremName.slice(0, theoremName.lastIndexOf('.')) : '';
   const declarations = inspectScopedLeanDeclarations(source), regions = inspectLeanDeclarationRegions(source);
+  if (beforeTheorem !== undefined) {
+    const anchor = declarations.find(declaration => declaration.qualifiedName === beforeTheorem);
+    if (!anchor || anchor.namespace !== namespace) throw new Error('math_proof_import_invalid_anchor');
+    return declarationStartWithDoc(source, anchor.startOffset);
+  }
   const previous = declarations.findLast(declaration => declaration.namespace === namespace);
   if (previous) return regions.find(region => region.startOffset === previous.startOffset)!.endOffset;
   const scopes: LeanScope[] = [];
@@ -120,11 +129,12 @@ function insertionOffset(source: string, theoremName: string): number {
   return offset;
 }
 
-export function proofFragmentChanges(source: string, request: Pick<ProofImportRequest, 'fragment' | 'proofPath' | 'theoremName'>): {
+export function proofFragmentChanges(source: string,
+  request: Pick<ProofImportRequest, 'fragment' | 'proofPath' | 'theoremName' | 'beforeTheorem'>): {
   changes: DeclarationChange[]; source: string;
 } {
   const regions = fragmentDeclarations(request.fragment), existing = inspectLeanDeclarationRegions(source);
-  const offset = insertionOffset(source, request.theoremName), tail = source.slice(offset);
+  const offset = insertionOffset(source, request.theoremName, request.beforeTheorem), tail = source.slice(offset);
   const text = (value: string, region: typeof regions[number]) => value.slice(
     value.lastIndexOf('\n', region.startOffset - 1) + 1, region.endOffset).trimEnd() + '\n';
   const additions = regions.filter(region => {

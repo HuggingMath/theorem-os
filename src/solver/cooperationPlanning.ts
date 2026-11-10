@@ -1,4 +1,5 @@
 import { parseCooperationPlan, isAdvisoryTask as advisory } from './tasks';
+import { assertPlanTaskTypeContracts } from './taskTypeContract';
 import fs from 'node:fs';
 import path from 'node:path';
 import { canonicalMathJson, mathDigest, readMathText } from '../math/mathRuntimeIo';
@@ -268,6 +269,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     this.includeCapacityExplorations(plan);
     this.includeNextCheckTasks(plan);
     const { tasks, groups, proofRoutes } = plan;
+    assertPlanTaskTypeContracts(tasks, this.archive.tasks.map(node => node.task));
     const restoringPlan = !decidingAction && !edit && this.archive.tasks.length > 0;
     const shown = decidingAction?.kind === 'lead' ? this.presentedResearchInputs.get(decidingAction)?.shown ?? [] :
       restoringPlan ? leadResearchInputs(this.archive.deliveries ?? [],

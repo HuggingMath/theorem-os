@@ -6,6 +6,7 @@ import { VerificationCheckpointError } from './verificationCheckpoint';
 import type { MathAgentActivity, MathAgentFailureDiagnostic, MathAgentSession } from '../runtime/codexSession';
 import { safeFailureDiagnostic } from '../runtime/failureDiagnostic';
 import { readMathBuildManifest } from '../math/mathBuildManifest';
+import { MathGitError } from '../math/mathGit';
 import { canonicalMathJson, mathDigest, writeMathJsonDurable } from '../math/mathRuntimeIo';
 import type { SolverRunState, SolverWorkerState } from './archive';
 import { commitSolverSources, git, solverScratchDigest } from './problem';
@@ -264,7 +265,6 @@ export async function runResearchWorkers(input: {
       let contextSchedulingCheckpoint = false;
       let compactionRestart = false;
       let turnActivity: ((activity: MathAgentActivity) => void) | undefined;
-      let turnAssignment: CooperativeAction | undefined;
       let advisoryTurn: { scope: string; contentDigest?: string } | undefined;
       let turnContext: { digest: string; fresh: boolean } | undefined;
       let dispatchedContext: { threadId: string; responsibility: string; researchInputDigest?: string } | undefined;
@@ -288,18 +288,38 @@ export async function runResearchWorkers(input: {
       };
       const checkpointNotesDigest = () => readCheckpointNotesDigest(worker.worktree);
       const currentCheckpointNotesDigest = () => savedContextCheckpoint(research, worker.worktree);
+      const researchFindingInstruction = (assignment?: CooperativeAction) => {
+        if (assignment?.kind !== 'task' || !['research', 'sketch'].includes(assignment.task.kind)) return '';
+        return 'If an established finding is useful to another task or a scoped gap requires a route decision, save the exact argument, ' +
+          'assumptions, evidence and unresolved inference in worktree-root RESEARCH.md and publish it now. ' +
+          'Append one complete JSON line to ' + JSON.stringify(path.join(worker.worktree, assignmentDeliveryFile(assignment.assignment))) +
+          ': ' + JSON.stringify({ kind: 'research', finding: { summary: 'REPLACE_WITH_THE_SAVED_ARGUMENT_AND_EVIDENCE',
+            conclusion: 'inconclusive', remainingObligations: ['REPLACE_WITH_THE_PRECISE_UNRESOLVED_INFERENCE'] } }) + '. ' +
+          'Replace the example fields with the actual saved finding; use supporting or refuted only when the evidence supports that conclusion. ' +
+          'Add needsDecision:true inside finding only when Lead must choose a route or resolve a blocker; ordinary progress does not need a decision. ' +
+          'Do not invent a finding to satisfy this reminder. Publication remains advisory and does not accept a proof. ';
+      };
       const contextCheckpointInstruction = (assignment?: CooperativeAction) => {
         const file = assignment?.kind === 'task' ? assignmentDeliveryFile(assignment.assignment) :
           assignment && leadPlanDeliveryFile(assignment);
         const request = research.contextCheckpoint;
         const lead = assignment?.kind === 'lead';
+        const proof = assignment?.kind === 'task' && !['research', 'sketch'].includes(assignment.task.kind);
         return 'Before further searches or experiments, save the exact current argument, ' +
-        'attempted methods and negative search scope, useful declaration/file references, and the precise unresolved inference in RESEARCH.md. ' +
+        'attempted methods and negative search scope, useful declaration/file references, and any precise unresolved inference in RESEARCH.md. ' +
         (lead ? 'Save or publish any planning decision as the math-plan revision your instructions describe; a Lead publishes no findings. '
-          : 'Use the current assignment delivery protocol to publish an honest needsDecision finding and a mathematicalGap when blocked. ') +
+          : proof ? 'If blocked on a mathematical inference, use the current assignment protocol to publish a source-bound finding and the exact gap; request a Lead decision only when one is needed. '
+          : researchFindingInstruction(assignment)) +
         'Propose independently checkable, strictly smaller typed obligations when possible; do not rename the original hard theorem or ' +
         'assume it in a wrapper. Scratch experiments and an activity report alone are not a durable handoff or an accepted proof. ' +
-        (file && request?.requestId ? 'After saving all notes and source drafts and publishing any findings or planning decisions, ' +
+        (proof && file ? 'If the assigned declaration is complete, save its proof and append one complete JSON line to ' +
+          JSON.stringify(path.join(worker.worktree, file)) + ': ' + JSON.stringify({ kind: 'ready', summary: 'saved proof' }) +
+          '. Use ready instead of checkpoint, then stop editing and return. Omit commit and targets. ' +
+          'The host confirms the writer stopped, freezes the saved sources and checks the assigned declaration independently before integration. ' +
+          'Preserve other original goals, including their existing sorry bodies; they do not prevent this declaration check. ' +
+          'A local check or a DONE note is not host acceptance. For an unfinished declaration, use the checkpoint acknowledgment below. ' : '') +
+        (file && request?.requestId ? (proof ? 'Only if the assigned declaration remains unfinished, after saving all notes and source drafts, ' :
+          'After saving all notes and source drafts and publishing any findings or planning decisions, ') +
           'finish this checkpoint by appending one complete JSON line to ' + JSON.stringify(path.join(worker.worktree, file)) +
           ': ' + JSON.stringify({ kind: 'checkpoint', requestId: request.requestId, notesDigest: 'SHA256_OF_SAVED_RESEARCH_MD' }) +
           '. notesDigest is the lowercase hex SHA-256 of the exact saved RESEARCH.md bytes, as printed by sha256sum RESEARCH.md. ' +
@@ -348,6 +368,7 @@ export async function runResearchWorkers(input: {
         const activeSession = session!;
         const advisoryScope = advisoryCheckpointScope(assignment);
         let finished = false, armed = false, checkpointRequested = false, checkpointClosing = false, readyRequested = false;
+        let stopRequested = false;
         let noticeTimer: ReturnType<typeof setTimeout> | undefined;
         let checkpointTimer: ReturnType<typeof setTimeout> | undefined;
         let interruptTimer: ReturnType<typeof setTimeout> | undefined;
@@ -363,9 +384,17 @@ export async function runResearchWorkers(input: {
         let lastModelOutputAt: number | undefined, toolsRunning = 0, requestWaited = false;
         let requestWaitTimer: ReturnType<typeof setTimeout> | undefined;
         let cutAtRequestBoundary: (() => void) | undefined;
-        turnAssignment = assignment;
+        let noticeDelivery: 'unavailable' | 'pending' | 'delivered' | 'failed' = 'unavailable';
+        let afterNotice: ((delivered: boolean) => void) | undefined;
         const live = () => !finished && !signal.aborted && session === activeSession;
         const current = () => live() && Boolean(assignment && cooperation?.current(assignment));
+        const noticeFailureReason = (error: unknown) => {
+          // interrupt() deliberately cancels queued notices, including context-save reminders.
+          if ((checkpointRequested || readyRequested || checkpointClosing || stopRequested) &&
+              error instanceof Error && error.message === 'math_codex_notification_turn_settled') return;
+          return (error instanceof Error ? error.message :
+            typeof error === 'string' ? error : 'math_codex_notification_failed').slice(0, 1000);
+        };
         const closeStalledTurn = () => {
           // A superseded assignment still owns a live writer until it actually stops.
           if (!live() || checkpointClosing) return;
@@ -417,27 +446,34 @@ export async function runResearchWorkers(input: {
               if (!toolsRunning) cutAtRequestBoundary?.();
             }
           }
-          if (!current() || activity.itemType !== 'contextCompaction') return;
-          if (activity.event === 'item_started') {
-            if (compactionStartedAt !== undefined) return;
-            compactionStartedAt = Date.now();
-            if (sliceStartedAt !== undefined) activeSliceMs += Date.now() - sliceStartedAt;
-            sliceStartedAt = undefined;
-            clearTimeout(noticeTimer); clearTimeout(checkpointTimer); clearTimeout(firstActivityTimer);
-            firstActivityTimer = undefined;
-            emit('context_compaction_started', { threadId: research.threadId });
-            watchCompaction();
-          } else if (activity.event === 'item_completed' && compactionStartedAt !== undefined) {
-            const maintenanceMs = Date.now() - compactionStartedAt;
-            compactionStartedAt = undefined;
-            clearTimeout(compactionTimer); compactionTimer = undefined;
-            emit('context_compaction_completed', { threadId: research.threadId, maintenanceMs });
-            scheduleSlice?.();
+          if (current() && activity.itemType === 'contextCompaction') {
+            if (activity.event === 'item_started' && compactionStartedAt === undefined) {
+              compactionStartedAt = Date.now();
+              if (sliceStartedAt !== undefined) activeSliceMs += Date.now() - sliceStartedAt;
+              sliceStartedAt = undefined;
+              clearTimeout(noticeTimer); clearTimeout(checkpointTimer); clearTimeout(firstActivityTimer);
+              firstActivityTimer = undefined;
+              emit('context_compaction_started', { threadId: research.threadId });
+              watchCompaction();
+            } else if (activity.event === 'item_completed' && compactionStartedAt !== undefined) {
+              const maintenanceMs = Date.now() - compactionStartedAt;
+              compactionStartedAt = undefined;
+              clearTimeout(compactionTimer); compactionTimer = undefined;
+              emit('context_compaction_completed', { threadId: research.threadId, maintenanceMs });
+              scheduleSlice?.();
+            }
           }
+          const lastInputTokens = Math.max(activeSession.lastInputTokens ?? 0, research.lastInputTokens ?? 0);
+          if (current() && assignment && !isStatementAction(assignment) && lastInputTokens >= 90_000 && requestContextCheckpoint(lastInputTokens))
+            void activeSession.notify?.(contextCheckpointInstruction(assignment)).catch(error => {
+              const reason = noticeFailureReason(error);
+              if (reason !== undefined && current()) emit('context_checkpoint_notice_failed', { reason });
+            });
         };
         if (assignment) cooperation!.activate(worker, assignment,
           async () => {
             if (!live()) return;
+            stopRequested = true;
             interruptTimer ??= setTimeout(closeStalledTurn, advisoryInterruptGraceMs);
             interruptTimer.unref();
             try { await activeSession.interrupt(); } catch { closeStalledTurn(); }
@@ -487,7 +523,14 @@ export async function runResearchWorkers(input: {
             watchCompaction();
             return;
           }
-          const contentDigest = advisoryContentDigest(), previous = research.advisoryCheckpoint;
+          const contentDigest = advisoryContentDigest();
+          const taskCheckpoint = assignment?.kind === 'task' ?
+            state.cooperation?.researchCheckpoints?.[assignment.task.id] : undefined;
+          // A worker has one current slot, but can alternate between several investigations.
+          // Restore the task's saved backoff instead of restarting its two-minute slice on every switch.
+          const previous = research.advisoryCheckpoint?.scope === advisoryScope ? research.advisoryCheckpoint :
+            assignment?.kind === 'task' && taskCheckpoint?.taskDigest === assignment.assignment.taskDigest
+              ? taskCheckpoint.advisoryCheckpoint : undefined;
           const noticeOnly = advisoryCheckpointNoticeOnly(assignment);
           const noProgressStreak = noticeOnly ? 0 : previous?.scope === advisoryScope &&
             (contentDigest === undefined || contentDigest === previous.contentDigest) ? previous.noProgressStreak : 0;
@@ -512,6 +555,7 @@ export async function runResearchWorkers(input: {
           const sendNotice = () => {
             if (!current() || noticeSent) return;
             noticeSent = true;
+            noticeDelivery = activeSession.notify ? 'pending' : 'unavailable';
             emit('cooperative_checkpoint_requested', { turnId, checkpointAfterMs, noProgressStreak, protected: false });
             void Promise.resolve().then(() => {
               if (!current()) return;
@@ -532,10 +576,21 @@ export async function runResearchWorkers(input: {
                   'running it in this turn. This turn yields a scheduling checkpoint at ' + Math.round(checkpointAfterMs / 60_000) +
                   ' minutes; the same thread and saved work remain available.'
                 : 'Save the current mathematical argument, exact unresolved step and useful references in RESEARCH.md now. ' +
-                  'For planning, save or publish the smallest valid complete task graph using this assignment\'s delivery protocol. ' +
+                  researchFindingInstruction(assignment) +
                   'This advisory turn will yield a scheduling checkpoint shortly, including when no new notes are saved. ' +
                   'The same thread and saved work will remain available for continuation; this does not end the solving budget.');
-            }).catch(() => { if (current()) emit('cooperative_checkpoint_notice_failed'); });
+            }).then(() => {
+              if (!current()) return;
+              const delivered = noticeDelivery === 'pending';
+              noticeDelivery = delivered ? 'delivered' : 'unavailable';
+              afterNotice?.(delivered);
+            }, error => {
+              const reason = noticeFailureReason(error);
+              noticeDelivery = reason === undefined ? 'unavailable' : 'failed';
+              if (reason === undefined || !current()) return;
+              emit('cooperative_checkpoint_notice_failed', { reason });
+              afterNotice?.(false);
+            });
           };
           const checkpoint = (yieldForProof = false) => {
             if (compactionStartedAt !== undefined) return;
@@ -546,25 +601,50 @@ export async function runResearchWorkers(input: {
           // Interrupting a streaming request discards its unfinished reasoning and tool call, and research whose every
           // cut lands mid-request saves nothing and is parked as unchanged. A slice cut (initial plan, revision or
           // research) lets that one request return (its tool results recorded) first, bounded by advisoryRequestWaitMs.
-          const endSlice = () => {
-            if (compactionStartedAt !== undefined || cutAtRequestBoundary) return;
-            // One wait per turn: a slice re-armed after compaction or the wait limit cuts at once.
-            if (requestWaited || toolsRunning || lastModelOutputAt === undefined ||
-                Date.now() - lastModelOutputAt > advisoryModelStreamingMs) { checkpoint(); return; }
+          let waitStartedAt: number;
+          const cut = (boundary: 'request-returned' | 'wait-limit' | 'notice-failed') => {
+            cutAtRequestBoundary = undefined; afterNotice = undefined; clearTimeout(requestWaitTimer);
+            if (!current() || checkpointRequested || readyRequested) return;
+            emit('cooperative_checkpoint_request_settled', { turnId, boundary, waitedMs: Date.now() - waitStartedAt });
+            checkpoint();
+          };
+          const startWait = (noticePending = false) => {
             requestWaited = true;
-            const waitStartedAt = Date.now();
-            const cut = (boundary: 'request-returned' | 'wait-limit') => {
-              if (!cutAtRequestBoundary) return;
-              cutAtRequestBoundary = undefined; clearTimeout(requestWaitTimer);
-              if (!current() || checkpointRequested || readyRequested) return;
-              emit('cooperative_checkpoint_request_settled', { turnId, boundary, waitedMs: Date.now() - waitStartedAt });
-              checkpoint();
-            };
-            cutAtRequestBoundary = () => cut('request-returned');
+            waitStartedAt = Date.now();
             requestWaitTimer = setTimeout(() => cut('wait-limit'), advisoryRequestWaitMs);
             requestWaitTimer.unref();
             emit('cooperative_checkpoint_awaiting_request', { turnId, checkpointAfterMs,
-              maxWaitMs: advisoryRequestWaitMs, outputAgeMs: Date.now() - lastModelOutputAt });
+              maxWaitMs: advisoryRequestWaitMs, ...(noticePending ? { noticePending: true } : {}),
+              ...(lastModelOutputAt !== undefined ? { outputAgeMs: Date.now() - lastModelOutputAt } : {}) });
+          };
+          const awaitRequest = (handoff = false) => {
+            if (!current() || checkpointRequested || readyRequested) return;
+            // One fixed wait window per turn, also covering a queued save notice and its response.
+            if ((requestWaited && !handoff) || toolsRunning || lastModelOutputAt === undefined ||
+                Date.now() - lastModelOutputAt > advisoryModelStreamingMs) {
+              clearTimeout(requestWaitTimer); checkpoint(); return;
+            }
+            if (!requestWaited) startWait();
+            cutAtRequestBoundary = () => cut('request-returned');
+          };
+          const endSlice = () => {
+            if (compactionStartedAt !== undefined || cutAtRequestBoundary || afterNotice) return;
+            if (noticeDelivery === 'pending' && !requestWaited) {
+              // The provider can take longer than the slice. Let the queued save instruction reach
+              // the model before cutting its first tool result, then give it the ordinary save gap.
+              // The same fixed request-wait deadline bounds both notification and handoff; a missing
+              // or failed notification can never extend the turn indefinitely.
+              startWait(true);
+              afterNotice = delivered => {
+                afterNotice = undefined;
+                if (!current() || checkpointRequested || readyRequested) return;
+                if (!delivered) { cut('notice-failed'); return; }
+                checkpointTimer = setTimeout(() => awaitRequest(true), advisoryCheckpointMs - advisoryCheckpointNoticeMs);
+                checkpointTimer.unref();
+              };
+              return;
+            }
+            awaitRequest();
           };
           scheduleSlice = () => {
             if (!current() || compactionStartedAt !== undefined || checkpointRequested || readyRequested) return;
@@ -624,7 +704,8 @@ export async function runResearchWorkers(input: {
           finished = true;
           clearTimeout(noticeTimer); clearTimeout(checkpointTimer); clearTimeout(interruptTimer); clearTimeout(requestWaitTimer);
           cutAtRequestBoundary = undefined;
-          clearTimeout(compactionTimer); clearTimeout(firstActivityTimer); turnActivity = undefined; turnAssignment = undefined;
+          afterNotice = undefined;
+          clearTimeout(compactionTimer); clearTimeout(firstActivityTimer); turnActivity = undefined;
           clearInterval(capacityTimer); clearInterval(contextTimer);
           // A transport failure may settle run() before process-group teardown finishes.
           // Do not freeze sources or reopen this thread until the writer is fully closed.
@@ -734,9 +815,6 @@ export async function runResearchWorkers(input: {
                   research.lastActivity = { ...activity, at: Date.now() };
                   emit('worker_activity', { activity: activity.event, itemType: activity.itemType }); save();
                   turnActivity?.(activity);
-                  const lastInputTokens = Math.max(session?.lastInputTokens ?? 0, research.lastInputTokens ?? 0);
-                  if (cooperation && turnAssignment && !statement && session && lastInputTokens >= 90_000 && requestContextCheckpoint(lastInputTokens))
-                    void session.notify?.(contextCheckpointInstruction(turnAssignment)).catch(() => emit('context_checkpoint_notice_failed'));
                 }, ...usageCallbacks });
               usage.sessionOpened(session);
             } catch (error) {
@@ -1218,7 +1296,7 @@ export async function runResearchWorkers(input: {
           else if (error instanceof LibraryInstallationRequested) emit('worker_checkpoint', { reason: error.message });
           else {
             research.error = error instanceof Error ? error.message : 'math_worker_failed';
-            emit('worker_failed', { reason: research.error });
+            emit('worker_failed', { reason: research.error, ...(error instanceof MathGitError ? { git: error.diagnostic } : {}) });
           }
           if (error instanceof LibraryInstallationRequested || !parallel || (cooperation && worker.id === input.workers[0].id && research.error !== 'math_model_context_capacity_blocked') ||
               (error instanceof VerificationCheckpointError || error instanceof Error && error.message === 'math_verifier_unavailable')) abort();

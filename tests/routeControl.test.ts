@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 import { recordRouteBlockers, refreshRouteBlockers, routeBlockerBasis, validateBlockerProposals,
   type BlockerProposal, type RouteBlocker } from '../src/solver/routeControl';
 import { readyResearchTasks, researchCanAdvance, routeAllowsTask } from '../src/solver/modules/search';
@@ -282,6 +283,33 @@ describe('local recurrence and parking', () => {
 });
 
 describe('blocker reopening', () => {
+  it.each(['research', 'sketch'] as const)('reopens a revised %s question while preserving parking for revision-only edits', kind => {
+    const target = node('target', [], kind), tasks = [target];
+    const records = parked(target, tasks);
+    target.task = { ...target.task, revision: 1, ownerId: 'another-worker', objective: '  Prove\n target  ' };
+    expect(refreshRouteBlockers(records, tasks, environment, problem)).toEqual([]);
+    expect(target.routeParking).toEqual([records[0].id]);
+
+    target.task = { ...target.task, revision: 2, objective: 'Determine whether the averaging operator preserves the bounded recovery hypothesis.' };
+    expect(refreshRouteBlockers(records, tasks, environment, problem)).toEqual([records[0]]);
+    expect(records[0]).toMatchObject({ status: 'reopened', reopenedReason: 'contract-changed' });
+    expect(target.routeParking).toEqual([]);
+    expect(readyResearchTasks(tasks)).toEqual([target]);
+  });
+
+  it('reopens legacy advisory blockers once when upgrading to a question-bound contract', () => {
+    const target = node('target', [], 'research'), tasks = [target], records = parked(target, tasks);
+    // Previous builds omitted the research question and gave all empty research contracts this basis.
+    const legacyContract = mathDigest(canonicalMathJson({ kind: 'research', premises: [] }));
+    records[0].basis.contractDigest = mathDigest(canonicalMathJson({ problemReceiptDigest: problem,
+      contract: legacyContract, dependencies: [] }));
+    expect(refreshRouteBlockers(records, tasks, environment, problem)).toEqual([records[0]]);
+    expect(records[0]).toMatchObject({ count: 2, status: 'reopened', reopenedReason: 'contract-changed' });
+    expect(target.routeParking).toEqual([]);
+    expect(refreshRouteBlockers(JSON.parse(JSON.stringify(records)), tasks, environment, problem)).toEqual([]);
+    expect(target.routeParking).toEqual([]);
+  });
+
   it('requires fresh checked local dependency evidence and rejects restored JSON receipts', () => {
     const input = node('input'), target = node('target', ['input']), tasks = [input, target];
     const records = parked(target, tasks, { ...proposal, reopenOn: [{ kind: 'dependency-checked', taskId: input.task.id }] });

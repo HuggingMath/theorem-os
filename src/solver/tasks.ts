@@ -258,7 +258,8 @@ export function parseCooperationPlan(problem: SolverProblem, value: any): { task
         task.premises.some((premise: unknown) => typeof premise !== 'string')) ? 'premises' :
       task.declaration !== undefined && (task.declaration !== 'definition' || task.kind !== 'lemma' ||
         task.conditional === true || task.statementReview === true) ? 'declaration' : undefined;
-    if (field) throw planError('math_plan_invalid_task', { taskId, field });
+    if (field) throw planError('math_plan_invalid_task', { taskId, field }, field === 'status'
+      ? 'Task policy status must be active, paused or stopped, or omitted. Host scheduling and proof-acceptance states are not plan fields.' : '');
     if (!groups.some(group => group.id === (task.groupId ?? 'main')) ||
         (task.sharing !== undefined && !['group', 'problem'].includes(task.sharing)))
       throw planError('math_plan_invalid_task_group', { taskId, groupId: task.groupId ?? 'main', sharing: task.sharing },

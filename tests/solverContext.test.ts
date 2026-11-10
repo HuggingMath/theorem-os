@@ -78,6 +78,8 @@ it.each([false, true])('asks the Lead to return executable work promptly on ever
     expect(message).toContain('ready tasks reserved by ownerId to a busy worker');
     expect(message).toContain('Explicitly reassign an unstarted, unassigned task through the plan');
     expect(message).toContain('Preserve route gates, group scope, independent reviewer eligibility and running assignments');
+    expect(message).toContain('A goal/lemma objective may guide the argument, but cannot replace its frozen proof deliverable');
+    expect(message).toContain('Create a separate untyped research/sketch task for those checks');
   }
   expect(context.instructions).toContain('Return the plan without running Lean diagnostics');
   // Only an accepted graph can be revised; initial planning still writes a complete plan.
@@ -85,14 +87,14 @@ it.each([false, true])('asks the Lead to return executable work promptly on ever
     expect(message?.includes('Revise the accepted graph instead of retyping it.')).toBe(existing);
 });
 
-const gapContext = (kind: 'research' | 'lemma' | 'goal' | 'lead' | 'review') => {
+const gapContext = (kind: 'research' | 'lemma' | 'goal' | 'lead' | 'review', objective = 'Resolve the precise missing classification input.') => {
   const formal = 'theorem target : True := by sorry';
   const problem = { projectRelative: '.', ownedFiles: ['Submission.lean'],
     declarations: { 'Submission.lean': [{ name: 'target', header: 'target : True' }] }, targets: [],
     receiptDigest: 'problem', baseCommit: 'fixed-commit',
     contract: { formalStatement: formal, assumptions: [] } } as unknown as SolverProblem;
   const task: CooperativeTask = { id: 'frontier', kind: kind === 'lead' || kind === 'review' ? 'research' : kind,
-    objective: 'Resolve the precise missing classification input.', dependsOn: [], revision: 0,
+    objective, dependsOn: [], revision: 0,
     ...(['lemma', 'goal'].includes(kind) ? { theoremName: 'target', proofPath: 'Submission.lean', type: 'True' } : {}) };
   const state = { cooperation: { tasks: [{ task, status: 'pending', attempts: 0 }] } } as unknown as SolverRunState;
   const action: CooperativeAction = kind === 'lead' ? { kind, seedCommit: 'fixed-commit' } :
@@ -102,6 +104,19 @@ const gapContext = (kind: 'research' | 'lemma' | 'goal' | 'lead' | 'review') => 
     taskText: 'Prove the target', retrievalRoot: '/library', maxOptionalContextBytes: 0,
     frozenContexts: { 'Submission.lean': formal }, assignment: action });
 };
+
+it.each(['lemma', 'goal'] as const)('preserves the %s proof deliverable when its objective requests a read-only audit', kind => {
+  const objective = 'Read-only audit: run diagnostics once and report the result without editing Lean sources.';
+  const context = gapContext(kind, objective);
+  expect(context.assignment).toMatchObject({ kind: 'task', task: { kind, objective, theoremName: 'target', type: 'True' } });
+  for (const message of [context.instructions, context.continuationMessage]) {
+    expect(message).toContain('Audit objectives cannot change this exact proof deliverable');
+    expect(message).toContain('Save diagnostics in RESEARCH.md; publish a needsDecision:true research finding to Lead');
+    expect(message).toContain('do not resubmit unchanged proofs');
+  }
+  expect(context.instructions).not.toContain('You are a Mathematical Researcher');
+  expect(context.instructions).toContain('Prove the assigned Lean declaration with its exact requested type');
+});
 
 it('asks researchers to save scoped negative evidence and publish a schema-valid gap decision promptly', () => {
   const context = gapContext('research');
@@ -132,7 +147,8 @@ it.each(['research', 'lemma', 'goal'] as const)('keeps scoped no-rescan and dura
   expect(context.instructions).toContain('precise unresolved next inference');
   expect(context.instructions).toContain('Distinguish checked unconditional facts from conditional sufficiency and unverified drafts');
   expect(context.instructions).toContain('actual consumer with explicit dependsOn or proofRoutes');
-  expect(context.instructions).toContain('Renaming the whole theorem, assuming the core result or proving a conditional wrapper is not a reduction');
+  expect(context.instructions).toContain('First check the key mathematical premise and structural bridge against the exact definitions');
+  expect(context.instructions).toContain('A checked conditional wrapper establishes sufficiency under its explicit conditions; keep its unproved conditions on the frontier');
   expect(context.manifest!.optionalBytes).toBe(0);
   for (const message of [context.instructions, context.continuationMessage]) {
     if (kind === 'research') expect(message).not.toContain('add a top-level sources object');

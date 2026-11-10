@@ -107,6 +107,46 @@ describe('content-bound typed helper preflight', () => {
     expect(check).not.toHaveBeenCalled();
   });
 
+  it.each(['variable (P : Prop)', 'universe u'])('rejects a declaration type before deferring an active scope: %s', async scope => {
+    fs.writeFileSync(path.join(root, 'Submission.lean'), source.replace('theorem original', scope + '\ntheorem original'));
+    const malformed = { ...task, type: 'theorem Geometry.helper (n : Nat) : n = n' };
+    const first = await cache.check(request({ task: malformed }));
+    expect(first.result).toMatchObject({ status: 'invalid', proofAcceptance: 'not-assessed',
+      reason: expect.stringContaining('Task helper: helper type starts with a Lean declaration command') });
+    expect(first.result.reason).toContain('explicitly quantify every parameter and instance');
+    expect(first.result.artifact).toBeUndefined(); expect(check).not.toHaveBeenCalled();
+    expect(first.current()).toBe(true);
+    malformed.type = '∀ (n : Nat), n = n';
+    expect(first.current()).toBe(false);
+    expect((await cache.check(request({ task: malformed }))).result.status).toBe('deferred');
+  });
+
+  it('rejects a declaration type before deferring an unavailable future dependency', async () => {
+    const dependencies = [{ ...task, id: 'future', theoremName: 'Geometry.future' }];
+    const result = await cache.check(request({ task: { ...task, type: 'theorem Geometry.helper : True' }, dependencies }));
+    expect(result.result).toMatchObject({ status: 'invalid', reason: expect.stringContaining('Task helper') });
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed dependency before it can become a conditional binder, then observes its explicit revision', async () => {
+    const dependency = { ...task, id: 'future', theoremName: 'Geometry.future', type: 'theorem Geometry.future : True' };
+    const input = request({ dependencies: [dependency] });
+    const first = await cache.check(input);
+    expect(first.result).toMatchObject({ status: 'invalid', reason: expect.stringContaining('Task future') });
+    expect(first.current()).toBe(true); expect(check).not.toHaveBeenCalled();
+    dependency.type = 'True'; dependency.revision++;
+    expect(first.current()).toBe(false);
+    expect((await cache.check(input)).result).toMatchObject({ status: 'deferred', reason: 'future-dependency-unavailable' });
+  });
+
+  it('continues to elaborate a legal explicit forall type without rewriting its contract', async () => {
+    const closed = { ...task, type: '∀ (n : Nat), n = n' };
+    const result = await cache.check(request({ task: closed }));
+    expect(result.result.status).toBe('elaborated');
+    expect(check.mock.calls[0][0].type).toBe(closed.type);
+    expect(closed.type).toBe('∀ (n : Nat), n = n');
+  });
+
   it('reuses a successful identical proof-erased query while preserving raw input and origin evidence', async () => {
     const first = await cache.check(request()), originSourceDigest = snapshot();
     fs.writeFileSync(path.join(root, 'Submission.lean'), source.replace('by sorry', 'by\n  -- proof-only revision\n  trivial'));

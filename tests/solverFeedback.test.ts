@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync, execSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import type { ProofCheck } from '../src/solver/modules/evidence';
 import { solverProofFeedback } from '../src/solver/feedback';
@@ -10,6 +14,57 @@ function failed(sourceDigest: string, line = 10, goal = '⊢ x > 0'): ProofCheck
 }
 
 describe('proof progress feedback', () => {
+  it('identifies candidate and checked projection before diagnostics, including in short feedback previews', () => {
+    const current = { ...failed('source', 229), commit: 'a'.repeat(40) };
+    current.verification.targetCommit = 'b'.repeat(40);
+    const feedback = solverProofFeedback(current);
+    const preview = Buffer.from(feedback).subarray(0, 2000).toString('utf8');
+    expect(preview).toContain(`Candidate commit: ${current.commit}`);
+    expect(preview).toContain(`Checked commit: ${current.verification.targetCommit}`);
+    expect(preview).toContain('diagnostic locations refer to the checked source (including any projection)');
+    expect(preview).toContain('may differ from the candidate/current working files');
+    expect(preview).toContain(`From the Lean project directory, inspect the checked file with: git show '${current.verification.targetCommit}:./Submission.lean'`);
+    expect(feedback.indexOf('Checked commit:')).toBeLessThan(feedback.indexOf('First blocking Lean message:'));
+    expect(feedback).toContain('Submission.lean:229:2: error: unsolved goals');
+  });
+
+  it('identifies an unprojected frozen check without claiming its line numbers differ from the candidate', () => {
+    const current = { ...failed('source'), commit: 'a'.repeat(40) };
+    current.verification.targetCommit = current.commit;
+    const feedback = solverProofFeedback(current);
+    expect(feedback).toContain(`Candidate and checked commit: ${current.commit}`);
+    expect(feedback).toContain('diagnostic locations refer to this frozen commit');
+    expect(feedback).toContain(`git show '${current.commit}:./Submission.lean'`);
+    expect(feedback).not.toContain('including any projection');
+    expect(feedback).not.toContain('may differ from the candidate/');
+  });
+
+  it('reads the exact checked file from a nested project directory despite shell characters in its path', () => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'solver-feedback-'));
+    try {
+      const project = path.join(workspace, 'generated', 'problem');
+      const proofPath = "User's proofs/$(probe).lean";
+      const file = path.join(project, proofPath);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, 'theorem checked : True := by trivial\n');
+      const git = (args: string[]) => execFileSync('git', args, { cwd: workspace, encoding: 'utf8' }).trim();
+      git(['init', '--quiet']);
+      git(['add', '.']);
+      git(['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'checked source']);
+      const checkedCommit = git(['rev-parse', 'HEAD']);
+      fs.writeFileSync(file, 'theorem candidate : True := by trivial\n');
+      git(['add', '.']);
+      git(['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'candidate source']);
+      const current = { ...failed('source'), commit: git(['rev-parse', 'HEAD']) };
+      current.verification.targetCommit = checkedCommit;
+      current.verification.results.forEach(result => { result.proofPath = proofPath; });
+      const feedback = solverProofFeedback(current);
+      const readCommand = feedback.split('\n').find(line => line.startsWith('From the Lean project directory,'))!.split('with: ')[1]!;
+      expect(execSync(readCommand, { cwd: project, encoding: 'utf8' })).toBe('theorem checked : True := by trivial\n');
+      expect(fs.readFileSync(file, 'utf8')).toBe('theorem candidate : True := by trivial\n');
+    } finally { fs.rmSync(workspace, { recursive: true, force: true }); }
+  });
+
   it('reads Lean JSON messages, retains goal text and stable failure identity as locations move', () => {
     const previous = failed('old-source'), current = failed('new-source');
     for (const [check, line] of [[previous, 10], [current, 30]] as const) {

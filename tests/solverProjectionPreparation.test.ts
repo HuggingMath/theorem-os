@@ -86,14 +86,15 @@ describe('integrated task projection preparation', () => {
     workspace = path.join(directory, 'workspace');
     preparations = []; events = []; controller = new AbortController(); cooperative = undefined;
     const original = proofApi.createTaskSourceProjector;
-    vi.spyOn(proofApi, 'createTaskSourceProjector').mockImplementation((problem, worktree, commit) => {
-      const project = original(problem, worktree, commit), targets: string[] = [];
+    vi.spyOn(proofApi, 'createTaskSourceProjector').mockImplementation((problem, worktree, commit, options) => {
+      const project = original(problem, worktree, commit, options), targets: string[] = [];
       const wrapped: Projector = (task, retainedGoals, conditions) => {
         targets.push(task.id);
         return project(task, retainedGoals, conditions);
       };
-      preparations.push({ commit, worktree, targets, project: wrapped });
-      return wrapped;
+      const complete = Object.assign(wrapped, { dependencyHints: project.dependencyHints });
+      preparations.push({ commit, worktree, targets, project: complete });
+      return complete;
     });
   });
   afterEach(async () => {
@@ -101,6 +102,42 @@ describe('integrated task projection preparation', () => {
     expect(host.createSession).not.toHaveBeenCalled();
     vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true });
   });
+
+  it('reuses both projection modes across normal and compact checks without rebuilding either snapshot', () => {
+    const canonical = prepare(2), task = helpers()[0]!.task;
+    const project = (compact: boolean): Projector => (cooperative as any).sourceProjector(workspace, canonical, compact);
+    const normal = project(false), normalSources = normal(task, []);
+    expect(project(false)).toBe(normal);
+    const compact = project(true), compactSources = compact(task, []);
+    expect(compact).not.toBe(normal);
+    expect(project(true)).toBe(compact);
+    expect(project(false)).toBe(normal);
+    expect(project(false)(task, [])).toEqual(normalSources);
+    expect(project(true)(task, [])).toEqual(compactSources);
+    expect(proofApi.createTaskSourceProjector).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['commit', 'worktree', 'problem', 'preserved'] as const)(
+    'refreshes each projection mode after its %s identity changes', changed => {
+      let canonical = prepare(1), checkout = workspace;
+      let preserved: { file: string; name: string }[] = [];
+      const project = (compact: boolean): Projector => (cooperative as any).sourceProjector(checkout, canonical, compact, preserved);
+      const initial = [project(false), project(true)];
+      if (changed === 'commit') {
+        fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('helper_0 : True := by trivial',
+          'helper_0 : True := by exact True.intro'));
+        canonical = commitSolverSources(problem, workspace);
+      } else if (changed === 'worktree') checkout = `${workspace}/`;
+      else if (changed === 'problem') state.problem.receiptDigest += '-updated';
+      else preserved = [{ file: 'Submission.lean', name: 'Tutorial.helper_0' }];
+
+      const refreshed = [project(false), project(true)];
+      expect(refreshed[0]).not.toBe(initial[0]);
+      expect(refreshed[1]).not.toBe(initial[1]);
+      expect(project(false)).toBe(refreshed[0]);
+      expect(project(true)).toBe(refreshed[1]);
+      expect(proofApi.createTaskSourceProjector).toHaveBeenCalledTimes(4);
+    });
 
   it.each([{ count: 64, oldGroupingCalls: 96 }, { count: 128, oldGroupingCalls: 320 }])
   ('prepares $count helper grouping and host checks once per snapshot', async ({ count, oldGroupingCalls }) => {

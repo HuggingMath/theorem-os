@@ -10,6 +10,7 @@ import { renderLeanDiagnosticMessage } from '../math/leanDiagnosticMessages';
 import { proofReuseEnvironment } from './proofReuse';
 import type { SolverProblem } from './problem';
 import { taskVersion, type CooperativeTask } from './tasks';
+import { taskTypeContractError } from './taskTypeContract';
 
 export type TaskTypePreflight = {
   status: 'elaborated' | 'invalid' | 'deferred' | 'unavailable'; inputDigest: string; reason: string;
@@ -198,6 +199,14 @@ export class TaskTypePreflightCache {
   async check(input: Input): Promise<{ result: TaskTypePreflight; current: () => boolean }> {
     const base = { taskDigest: taskVersion(input.task), evidence: 'advisory-type-elaboration' as const,
       proofAcceptance: 'not-assessed' as const };
+    const dependencies = input.dependencies.map(task => [task.id, taskVersion(task)]);
+    const contractError = taskTypeContractError(input.task) ?? input.dependencies.map(taskTypeContractError).find(Boolean);
+    if (contractError) return {
+      result: { ...base, inputDigest: mathDigest(canonicalMathJson([base.taskDigest, dependencies, input.environmentDigest])),
+        status: 'invalid', reason: contractError },
+      current: () => !input.signal?.aborted && taskVersion(input.task) === base.taskDigest &&
+        canonicalMathJson(input.dependencies.map(task => [task.id, taskVersion(task)])) === canonicalMathJson(dependencies),
+    };
     let snapshot: ReturnType<typeof prepare>;
     try { snapshot = prepare(input); }
     catch {

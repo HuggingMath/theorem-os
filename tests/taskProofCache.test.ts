@@ -81,6 +81,24 @@ describe('run-local task proof projection cache', () => {
   });
   afterEach(() => { vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true }); });
 
+  it('rejects a restored declaration-header type before generating a host query or invoking Lean', async () => {
+    const malformed = { ...tasks[0]!, type: 'theorem Tutorial.first : True' };
+    await expect(check({ requests: [request(malformed)] })).rejects.toThrow('math_task_type_invalid\nTask first');
+    expect(host.verify).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed conditional dependency types at both projection and proof-check boundaries', async () => {
+    const task = { ...tasks[0]!, conditional: true, dependsOn: ['second'] };
+    const dependency = { ...tasks[1]!, type: 'theorem Tutorial.second : True' };
+    const projector = createTaskSourceProjector(problem, workspace, commit);
+    expect(() => projector(task, [], [dependency])).toThrow('math_task_type_invalid\nTask second');
+    const conditional = { ...request(task), conditions: [dependency], assignment: {
+      ...request(task).assignment, dependencies: [{ taskId: dependency.id, taskDigest: taskVersion(dependency) }] } };
+    await expect(check({ requests: [conditional] })).rejects.toThrow('math_task_type_invalid\nTask second');
+    expect(host.verify).not.toHaveBeenCalled();
+    expect(fs.readFileSync(path.join(project, 'Submission.lean'), 'utf8')).not.toContain(': theorem');
+  });
+
   it('resumes an expired projected check with the same candidate and fresh receipts', async () => {
     const checkpoints: VerificationCheckpoint[] = [];
     const context = { environmentDigest: 'fixture-environment', problemReceiptDigest: problem.receiptDigest,
@@ -218,6 +236,18 @@ describe('run-local task proof projection cache', () => {
     expect(next!.imports).toBeUndefined();
     expect(next!.verification).toEqual(first!.verification);
     expect(host.verify).toHaveBeenCalledOnce();
+  });
+
+  it.each(['missing source', 'changed statement'] as const)('rejects %s when the seed and candidate commit match', async invalid => {
+    const file = path.join(project, 'Submission.lean');
+    if (invalid === 'missing source') fs.rmSync(file);
+    else fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('theorem add_zero', 'theorem altered_add_zero'));
+    git(workspace, ['add', '--', `${problem.projectRelative}/Submission.lean`]);
+    const invalidCommit = recommit();
+    const sameInput = requests.map(request => ({ ...request, assignment: { ...request.assignment, seedCommit: invalidCommit } }));
+    await expect(check({ sourceCommit: invalidCommit, requests: sameInput })).rejects.toThrow(
+      invalid === 'missing source' ? /ENOENT/u : 'math_original_declaration_changed');
+    expect(host.verify).not.toHaveBeenCalled();
   });
 
   it('reuses a delivery when integration changes worktree, seed and worker and omits empty dependencies', async () => {
@@ -537,16 +567,14 @@ describe('run-local task proof projection cache', () => {
 
   it('shares snapshot source reads and declaration indexes across target projections', () => {
     const sources = vi.spyOn(problemApi, 'committedSource');
-    const regions = vi.spyOn(leanSource, 'inspectLeanDeclarationRegions');
-    const scoped = vi.spyOn(leanSource, 'inspectScopedLeanDeclarations');
+    const declarations = vi.spyOn(leanSource, 'inspectLeanProjectionDeclarations');
     const projectSources = createTaskSourceProjector(problem, workspace, commit);
-    const baseline = { sources: sources.mock.calls.length, regions: regions.mock.calls.length, scoped: scoped.mock.calls.length };
+    const baseline = { sources: sources.mock.calls.length, declarations: declarations.mock.calls.length };
     expect(baseline.sources).toBe(problem.ownedFiles.length);
-    expect(baseline.regions).toBeGreaterThan(0);
-    expect(baseline.scoped).toBeGreaterThan(0);
+    expect(baseline.declarations).toBeGreaterThan(0);
     projectSources(tasks[0]!, []);
     projectSources(tasks[1]!, []);
-    expect({ sources: sources.mock.calls.length, regions: regions.mock.calls.length, scoped: scoped.mock.calls.length }).toEqual(baseline);
+    expect({ sources: sources.mock.calls.length, declarations: declarations.mock.calls.length }).toEqual(baseline);
   });
 
   it('returns independent maps and freezes problem/source inputs for the projector lifetime', () => {

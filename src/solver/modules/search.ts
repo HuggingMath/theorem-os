@@ -150,8 +150,8 @@ export function readyResearchTasks(tasks: readonly TaskRecord[], groups?: readon
   const compare = (a: TaskRecord, b: TaskRecord) => rank(b) - rank(a) || priority.compareTasks(a, b);
   const ranked = ready.toSorted(compare);
   // A yielded investigation must not repeatedly hide equally ranked, untried work.
-  // Reorder only advisory slots within one priority tier, retaining every proof slot.
-  // A pairwise advisory-only tie-break would be non-transitive across proof tasks.
+  // Reorder advisory slots within one priority tier first. A pairwise advisory-only
+  // tie-break would be non-transitive across proof tasks.
   for (let start = 0; start < ranked.length;) {
     let end = start + 1;
     while (end < ranked.length && compare(ranked[start], ranked[end]) === 0) end++;
@@ -160,6 +160,15 @@ export function readyResearchTasks(tasks: readonly TaskRecord[], groups?: readon
     let next = 0;
     for (let index = start; index < end; index++)
       if (isAdvisoryTask(ranked[index].task)) ranked[index] = advisory[next++];
+    // A resumed investigation also yields to executable inputs of planned proofs.
+    // Keep fresh investigations and conditional drafts in their existing slots.
+    const sharesProofSlot = (node: TaskRecord) => isAdvisoryTask(node.task) ? node.attempts > 0 :
+      Boolean(node.task.type?.trim() && consumed.has(node.task.id) && readiness.dependenciesReady(node.task));
+    const proofWork = ranked.slice(start, end).filter(sharesProofSlot).toSorted((a, b) =>
+      Number(isAdvisoryTask(a.task)) - Number(isAdvisoryTask(b.task)));
+    let nextProof = 0;
+    for (let index = start; index < end; index++)
+      if (sharesProofSlot(ranked[index])) ranked[index] = proofWork[nextProof++];
     start = end;
   }
   return prioritizeEarlyRouteChecks(ranked, tasks, groups);

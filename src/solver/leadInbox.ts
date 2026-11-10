@@ -23,25 +23,38 @@ const MAX_DELIVERIES = 16, MAX_STATUS_CHANGES = 32, SUMMARY_BYTES = 600;
 export const IDLE_PEER_WAKE_MS = 10 * 60_000;
 // Wait stages meaning the accepted plan has nothing this peer can start; host gates and budgets are excluded.
 export const NO_WORK_STAGES: ReadonlySet<string> = new Set(['m3-no-ready', 'dependency-blocked', 'm5-no-selection']);
+export type IdlePeerWake = { at: number; workerIds: string[]; count?: number;
+  episodes?: Record<string, { since: number; at: number; count: number }> };
+
+/** Wakes from another peer or an earlier idle episode cannot authorize this peer's exploration. */
+export function idlePeerWakeEpisode(wake: IdlePeerWake | undefined, workerId: string, since: number, seenAt: number) {
+  if (!wake || wake.at <= seenAt) return;
+  if (wake.episodes) {
+    const episode = wake.episodes[workerId];
+    return episode?.since === since && episode.at > seenAt ? episode : undefined;
+  }
+  // Archived pre-episode records name only the peers actually shown on their last wake.
+  if (wake.workerIds.includes(workerId) && since <= wake.at) return { since, at: wake.at, count: wake.count ?? 1 };
+}
 
 /**
- * Peers that went idle after `seenAt` (the basis of the last deciding Lead turn, or an idle wake) and have had no
- * startable work for IDLE_PEER_WAKE_MS, counted from the later of their idle start and the Lead's own. A peer an
- * unanswered earlier wake already named (idle since `retry.at` or before) is due no earlier than `retry.notBefore`.
+ * Peers that went idle after `seenAt` (the basis of the last deciding Lead turn) and have had no
+ * startable work for IDLE_PEER_WAKE_MS, counted from their own idle start. Each already-woken peer also waits for
+ * its episode's backoff; legacy retry records apply their aggregate notBefore to peers idle since retry.at.
  * `dueAt` is the earliest time a not-yet-due peer qualifies.
  */
 export function idlePeersAwaitingLead(workers: readonly SolverWorkerState[], leadId: string, seenAt: number, now = Date.now(),
-  retry?: { at: number; notBefore: number }) {
-  const lead = workers.find(worker => worker.id === leadId)?.scheduling;
-  const leadIdleSince = lead?.status === 'idle' ? lead.since : now;
+  retry?: { at: number; notBefore: number; byWorker?: Record<string, { since: number; notBefore: number }> }) {
   const due: string[] = [];
   let dueAt: number | undefined;
   for (const worker of workers) {
     const scheduling = worker.scheduling, wait = scheduling?.wait;
     if (worker.id === leadId || scheduling?.status !== 'idle' || scheduling.since <= seenAt ||
         !wait || wait.endedAt !== undefined || !NO_WORK_STAGES.has(wait.stage)) continue;
-    const at = Math.max(Math.max(scheduling.since, leadIdleSince) + IDLE_PEER_WAKE_MS,
-      retry && scheduling.since <= retry.at ? retry.notBefore : 0);
+    const episode = retry?.byWorker?.[worker.id];
+    const notBefore = retry?.byWorker ? episode?.since === scheduling.since ? episode.notBefore : 0 :
+      retry && scheduling.since <= retry.at ? retry.notBefore : 0;
+    const at = Math.max(scheduling.since + IDLE_PEER_WAKE_MS, notBefore);
     if (at <= now) due.push(worker.id);
     else dueAt = Math.min(dueAt ?? at, at);
   }

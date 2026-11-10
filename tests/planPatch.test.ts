@@ -50,6 +50,27 @@ describe('Lead plan revisions', () => {
     expect(cleared.tasks[1].ownerId).toBeUndefined();
   });
 
+  it('rejects a declaration in a new helper type before accepting either plan form', () => {
+    const invalid = { ...lemma('bridge'), type: 'theorem Submission.bridge : True' };
+    expect(() => parseLeadPlan(problem, { tasks: [...base.tasks, invalid] }, base))
+      .toThrow('math_plan_invalid_helper_type');
+    expect(() => parseLeadPlan(problem, { baseVersion: 'v1', upsert: [invalid] }, base))
+      .toThrow('math_plan_invalid_helper_type');
+    expect(base.tasks.some(task => task.id === 'bridge')).toBe(false);
+  });
+
+  it('keeps a legacy graph readable while requiring repaired helper types to be terms', () => {
+    const legacy = { ...base, tasks: base.tasks.map(task => task.id === 'core'
+      ? { ...task, type: 'theorem Submission.core : True' } : task) };
+    expect(parseCooperationPlan(problem, legacy).tasks[0].type).toBe('theorem Submission.core : True');
+    expect(parseLeadPlan(problem, { baseVersion: 'v1', upsert: [{ id: 'side', status: 'paused' }] }, legacy).tasks[0])
+      .toEqual(legacy.tasks[0]);
+    expect(() => parseLeadPlan(problem, { baseVersion: 'v1', upsert: [{ id: 'core', type: 'lemma Submission.core : True' }] }, legacy))
+      .toThrow('math_plan_invalid_helper_type');
+    const repaired = parseLeadPlan(problem, { baseVersion: 'v1', upsert: [{ id: 'core', type: '∀ (P : Prop), P → P' }] }, legacy);
+    expect(repaired.tasks[0].type).toBe('∀ (P : Prop), P → P');
+  });
+
   it('reads a null field of a complete plan as unset, as a revision does', () => {
     const goal = { id: 'goal', kind: 'goal', objective: 'Prove the frozen target.', theoremName: 'Submission.main', dependsOn: ['core'] };
     const plan = parseLeadPlan(problem, { tasks: [{ ...lemma('core'), ownerId: null, status: null, family: null }, { ...goal, ownerId: null }],
@@ -61,6 +82,41 @@ describe('Lead plan revisions', () => {
     expect(() => parseCooperationPlan(problem, { tasks: [null, goal] })).toThrow('math_plan_invalid_task: {"field":"task"}');
     expect(() => parseCooperationPlan(problem, { tasks: [{ ...lemma('core'), ownerId: 7 }, goal] }))
       .toThrow('math_plan_invalid_task: {"taskId":"core","field":"ownerId"}');
+  });
+
+  it('normalizes only a new task\'s pending scheduling default and preserves the proposed inputs', () => {
+    const patch = { baseVersion: 'v1', upsert: [{ ...lemma('bridge'), status: 'pending' }] };
+    const plan = parseLeadPlan(problem, patch, base);
+    expect(plan.tasks.find(task => task.id === 'bridge')).toEqual({ ...lemma('bridge'), proofPath: 'Submission.lean', revision: 0 });
+    expect(plan.tasks.find(task => task.id === 'bridge')).not.toHaveProperty('status');
+    expect(patch.upsert[0].status).toBe('pending');
+    expect(plan.tasks.slice(0, 3)).toEqual(base.tasks);
+  });
+
+  it('requires an explicit policy for existing tasks and rejects fabricated host acceptance', () => {
+    const pausedBase = { ...base, tasks: base.tasks.map(task => task.id === 'side' ? { ...task, status: 'paused' as const } : task) };
+    expect(() => parseLeadPlan(problem, { baseVersion: 'v1', upsert: [{ id: 'side', status: 'pending' }] }, pausedBase))
+      .toThrow('Task policy status must be active, paused or stopped');
+    expect(pausedBase.tasks.find(task => task.id === 'side')?.status).toBe('paused');
+    for (const status of ['running', 'integrated', 'checked', 'completed', 'delivered'])
+      expect(() => parseLeadPlan(problem, { baseVersion: 'v1', upsert: [{ ...lemma('bridge'), status }] }, base))
+        .toThrow('math_plan_invalid_task: {"taskId":"bridge","field":"status"}');
+    expect(() => parseCooperationPlan(problem, { tasks: [{ ...lemma('bridge'), status: 'pending' }, ...base.tasks] }))
+      .toThrow('Task policy status must be active, paused or stopped');
+  });
+
+  it('allows only an unchanged pending default replay when the host rebases the same published dispatch', () => {
+    const patch = { baseVersion: 'v1', upsert: [{ ...lemma('bridge'), status: 'pending' }] };
+    const published = parseLeadPlan(problem, patch, base);
+    const current = { ...base, version: 'v2', tasks: published.tasks };
+    const options = { acceptedBaseVersions: ['v1', 'v2'], rebased: true };
+    expect(parseLeadPlan(problem, patch, current, options).tasks).toEqual(published.tasks);
+    expect(() => parseLeadPlan(problem, { ...patch, baseVersion: 'v2' }, current, options))
+      .toThrow('field":"status');
+    expect(() => parseLeadPlan(problem, { ...patch, upsert: [{ ...patch.upsert[0], objective: 'Changed mathematics.' }] }, current, options))
+      .toThrow('field":"status');
+    const paused = { ...current, tasks: current.tasks.map(task => task.id === 'bridge' ? { ...task, status: 'paused' as const } : task) };
+    expect(() => parseLeadPlan(problem, patch, paused, options)).toThrow('field":"status');
   });
 
   it('replaces a task whose kind changes instead of keeping stale typed fields', () => {

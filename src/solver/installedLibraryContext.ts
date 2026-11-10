@@ -8,7 +8,7 @@ import { indexKnowledgeContextSnapshot, knowledgeContextSections, searchKnowledg
 import { committedSource, type SolverProblem } from './problem';
 import { buildTheoremKnowledge } from './theoremKnowledge';
 import { libraryKnowledgeCandidates } from './theoremKnowledgeLibrary';
-import { knowledgeTypeExpression } from './theoremKnowledgeSearch';
+import { knowledgeApplicationRelevant, knowledgeTypeExpression } from './theoremKnowledgeSearch';
 import { splitIffConclusion, splitStatement, withStatementConclusion } from './theoremKnowledgeGoal';
 
 /** Prepared once after startup library checks, using only this problem's pinned frozen modules. */
@@ -53,6 +53,8 @@ export function installedLibraryRetrievals(input: InstalledLibraryRetrievalInput
   const { problem } = input, library = input.forApplication ? applicationSnapshot(input.library) : input.library;
   let retrievals = knowledgeContextSections({ ...input, knowledge: library }).map(section => section.knowledge);
   if (!retrievals.length) return [];
+  const handoffIds = new Set(retrievals.filter(retrieval => retrieval.sectionId.startsWith('knowledge-application-hints:'))
+    .flatMap(retrieval => retrieval.candidateIds));
   const text = [input.action?.kind === 'task' ? input.action.task.objective : '', input.taskText ?? '',
     problem.contract.informalStatement].join('\n');
   const names = qualifiedLeanReferences(text), requested = new Set(names);
@@ -69,6 +71,19 @@ export function installedLibraryRetrievals(input: InstalledLibraryRetrievalInput
     ? taskKnowledgeSearchTarget(problem, input.action.task)?.goal : undefined;
   if (!target) return retrievals;
   const entries = new Map(library.base.entries.map(entry => [entry.id, entry]));
+  retrievals = retrievals.map(retrieval => {
+    // Explicit requests and exact saved application handoffs remain usable without lexical overlap.
+    const pool = [...new Set([...(retrieval.searchCandidateIds ?? []), ...retrieval.candidateIds])];
+    const selected = pool.filter(id => {
+      const entry = entries.get(id);
+      return entry && (namedIds.includes(id) || handoffIds.has(id) || knowledgeApplicationRelevant(entry, target));
+    });
+    if (selected.length === pool.length) return retrieval;
+    const searchInputDigest = mathDigest(canonicalMathJson({ searchInputDigest: retrieval.searchInputDigest,
+      applicationCandidates: selected }));
+    return { ...retrieval, sectionId: `installed-library:${searchInputDigest}`, searchInputDigest,
+      searchCandidateIds: selected, candidateIds: selected.slice(0, 3) };
+  });
   const targetShape = splitStatement(target);
   const localPremises = new Set(targetShape?.parts.filter(part => !part.binder).map(part => part.key));
   // Source headers can omit section parameters. Number only the binders used in the conclusion.
@@ -119,10 +134,11 @@ export function installedLibraryRetrievals(input: InstalledLibraryRetrievalInput
     const requests = [...byGoal.keys()].map(goal => ({ query: '', goal }));
     const searches = searchKnowledgeContextSnapshot(library, requests, { limit: 3,
       environmentDigest: input.environmentDigest, problemReceiptDigest: problem.receiptDigest });
-    const available = searches.map(search => search.hits.map(hit => hit.id).filter(id => {
+    const available = searches.map((search, index) => search.hits.map(hit => hit.id).filter(id => {
       const entry = entries.get(id);
       return !primary.includes(id) && entry && problem.frozenFiles?.[entry.file] &&
-        problem.frozenFiles[entry.file] === library.base.contexts[entry.contextDigest]?.[entry.file];
+        problem.frozenFiles[entry.file] === library.base.contexts[entry.contextDigest]?.[entry.file] &&
+        knowledgeApplicationRelevant(entry, requests[index]!.goal);
     }));
     const selected = new Set([...namedIds, ...primary.slice(0, 3)]), auxiliary: string[] = [];
     // Keep matching conclusions (including an iff applied to a local premise) and a local-premise alternative.

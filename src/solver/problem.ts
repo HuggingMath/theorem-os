@@ -7,7 +7,8 @@ import { readLeanEvalBootstrapReceipt } from '../math/leanEvalBootstrap';
 import { resolveLeanEvalSubmissionName } from '../math/leanEvalSubmission';
 import { canonicalMathJson, mathDigest, readMathJson } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath, isMathPathWithin } from '../math/paths';
-import { hashMathFormalSourceDeclaration, inspectLeanDeclarationRegions, inspectLeanDeclarations, inspectScopedLeanDeclarations } from '../math/leanSource';
+import { hashMathFormalSourceDeclaration, inspectLeanDeclarationRegions, inspectLeanDeclarations, inspectLegacyLeanWhereSource,
+  inspectScopedLeanDeclarations } from '../math/leanSource';
 import { mathConstructionImports, mathLocalModuleBuildOrder } from '../math/mathConstructionSources';
 import { isAllowedMathProofSource } from '../math/mathProofSourcePolicy';
 import type { MathProblemContract } from '../math/contracts';
@@ -135,10 +136,10 @@ function isInstanceQuery(line: string): boolean {
 }
 
 function sourceContext(source: string, originals: readonly Pick<OriginalDeclaration, 'name' | 'qualifiedName'>[],
-  originalImports?: readonly string[], allowedImports = solverMathlibImports(source)): string {
+  originalImports?: readonly string[], allowedImports = solverMathlibImports(source), regions = inspectLeanDeclarationRegions(source)): string {
   const addedImports = new Set(originalImports === undefined ? [] :
     allowedImports.filter(module => !originalImports.includes(module)));
-  const regions = inspectLeanDeclarationRegions(source), matching = originalDeclarationRegions(source, regions);
+  const matching = originalDeclarationRegions(source, regions);
   const original = new Set(originals.flatMap(item => matching(item)).map(region => region.startOffset));
   let frozen = '';
   let cursor = 0;
@@ -160,6 +161,13 @@ function contextWithoutComments(context: string): string {
   return maskLeanComments(context).split('\n').map(line => line.trim()
     .replace(/"(?:\\.|[^"\\])*"|[ \t]+/gu, token => token.startsWith('"') ? token : ' '))
     .filter(Boolean).join('\n');
+}
+
+function sourceDeclarationHashMatches(source: string, name: string, expected: string): boolean {
+  if (hashMathFormalSourceDeclaration(source, name) === expected) return true;
+  return inspectLegacyLeanWhereSource(source).declarations.some(item =>
+    (item.name === name || item.name.split('.').at(-1) === name.split('.').at(-1)) &&
+    mathDigest(item.declarationType) === expected);
 }
 
 export function readSolverProblem(workspacePath: string, receiptFile: string): SolverProblem {
@@ -187,6 +195,11 @@ export function readSolverProblem(workspacePath: string, receiptFile: string): S
     return [relative, mathDigest(fs.readFileSync(target))];
   }));
   const publicObligations = 'publicObligations' in receipt ? receipt.publicObligations : undefined;
+  const legacyWhere = receipt.schema === 'theorem-os.lean-task.v1' &&
+    canonicalMathJson(receipt.declarations) === canonicalMathJson(inspectLegacyLeanWhereSource(receipt.contract.formalStatement)
+      .declarations.map(item => ({ name: item.qualifiedName, kind: item.kind, declarationHash: mathDigest(item.declarationType) })));
+  const sourceRegions = (source: string) => legacyWhere ? inspectLegacyLeanWhereSource(source).regions
+    : inspectLeanDeclarationRegions(source);
   const names = publicObligations?.map(item => item.name) || theoremQualifiedNamesFromSource(receipt.contract.formalStatement);
   if (!names.length) throw new Error('math_problem_targets_missing');
   const targets = names.map(theoremName => {
@@ -194,7 +207,7 @@ export function readSolverProblem(workspacePath: string, receiptFile: string): S
       hashMathFormalSourceDeclaration(receipt.contract.formalStatement, theoremName);
     if (!declarationHash) throw new Error('math_problem_declaration_missing');
     const files = receipt.solverOwnedFiles.filter(relative => relative.endsWith('.lean') &&
-      hashMathFormalSourceDeclaration(fs.readFileSync(path.join(receipt.projectRoot, relative), 'utf8'), theoremName) === declarationHash);
+      sourceDeclarationHashMatches(fs.readFileSync(path.join(receipt.projectRoot, relative), 'utf8'), theoremName, declarationHash));
     if (files.length !== 1) throw new Error('math_problem_target_file_ambiguous');
     const candidateName = publicObligations && receipt.schema !== 'theorem-os.local-example.v1' && receipt.schema !== 'theorem-os.lean-task.v1' ? resolveLeanEvalSubmissionName(theoremName,
       fs.readFileSync(path.join(receipt.projectRoot, files[0]!), 'utf8')) : theoremName;
@@ -207,8 +220,9 @@ export function readSolverProblem(workspacePath: string, receiptFile: string): S
   // Library-pack modules keep the exact bytes the bootstrap recorded.
   const libraryPack = 'libraryPack' in receipt ? receipt.libraryPack : undefined;
   const declarations = Object.fromEntries(receipt.solverOwnedFiles.filter(file => file.endsWith('.lean')).map(file => {
-    const source = originalSource(file), regions = inspectLeanDeclarationRegions(source);
-    const kinds = new Map(inspectLeanDeclarations(source).map(item => [item.startOffset, item.kind]));
+    const source = originalSource(file), regions = sourceRegions(source);
+    const kinds = new Map((legacyWhere ? inspectLegacyLeanWhereSource(source).declarations : inspectLeanDeclarations(source))
+      .map(item => [item.startOffset, item.kind]));
     // Frozen library modules are compared as whole files, never by declaration.
     const written = new Map<string, number>();
     if (!libraryPack || !Object.hasOwn(libraryPack.files, file))
@@ -221,8 +235,10 @@ export function readSolverProblem(workspacePath: string, receiptFile: string): S
       ...(kinds.get(item.startOffset) !== 'theorem' && !targetNames.has(item.name.split('.').at(-1))
         ? { body: mathDigest(source.slice(item.bodyOffset, item.endOffset).trim()) } : {}) }))];
   }));
-  const contexts = Object.fromEntries(Object.entries(declarations).map(([file, originals]) =>
-    [file, sourceContext(originalSource(file), originals)]));
+  const contexts = Object.fromEntries(Object.entries(declarations).map(([file, originals]) => {
+    const source = originalSource(file);
+    return [file, sourceContext(source, originals, undefined, undefined, sourceRegions(source))];
+  }));
   const structures = Object.fromEntries(Object.entries(contexts).map(([file, context]) => [file, mathDigest(context)]));
   const sourceImports = Object.fromEntries(Object.keys(declarations).map(file =>
     [file, mathConstructionImports(originalSource(file))]));
@@ -266,25 +282,36 @@ export function assertSolverProjectSources(problem: SolverSourceConstraints, pro
     assertMathCanonicalPath(file);
     const source = fs.readFileSync(file, 'utf8');
     ownedSources[relative] = source;
-    const matching = originalDeclarationRegions(source);
-    for (const original of originals) {
-      const matches = matching(original);
-      const current = matches[0];
-      if (matches.length !== 1 || current.declarationType !== original.header ||
-          (original.body && mathDigest(source.slice(current.bodyOffset, current.endOffset).trim()) !== original.body))
-        throw new SolverSourceError(relative, 'math_original_declaration_changed', original.qualifiedName ?? original.name);
-    }
     const allowedImports = solverProofImports(problem, source);
     if (allowedImports.some(module => !module.startsWith('Mathlib.') && !problem.sourceImports?.[relative]?.includes(module)))
       addedLocalImportFile = relative;
-    const currentContext = sourceContext(source, originals, problem.sourceImports?.[relative], allowedImports);
-    if (mathDigest(currentContext) !== problem.sourceStructure[relative]) {
+    const changedDeclaration = (regions: ReturnType<typeof inspectLeanDeclarationRegions>) => {
+      const matching = originalDeclarationRegions(source, regions);
+      return originals.find(original => {
+        const matches = matching(original), current = matches[0];
+        return matches.length !== 1 || current.declarationType !== original.header ||
+          Boolean(original.body && mathDigest(source.slice(current.bodyOffset, current.endOffset).trim()) !== original.body);
+      });
+    };
+    const contextMatches = (regions: ReturnType<typeof inspectLeanDeclarationRegions>) => {
+      const currentContext = sourceContext(source, originals, problem.sourceImports?.[relative], allowedImports, regions);
+      if (mathDigest(currentContext) === problem.sourceStructure[relative]) return true;
       const originalContext = problem.sourceContexts?.[relative];
       // Old checkpoints keep their exact digest. Only a preimage of that frozen digest can authorize
       // comment-insensitive comparison; an arbitrary replacement context cannot weaken the guard.
-      if (originalContext === undefined || mathDigest(originalContext) !== problem.sourceStructure[relative] ||
-          contextWithoutComments(currentContext) !== contextWithoutComments(originalContext))
-        throw new SolverSourceError(relative, 'math_original_context_changed');
+      return originalContext !== undefined && mathDigest(originalContext) === problem.sourceStructure[relative] &&
+        contextWithoutComments(currentContext) === contextWithoutComments(originalContext);
+    };
+    const regions = inspectLeanDeclarationRegions(source), changed = changedDeclaration(regions);
+    if (changed || !contextMatches(regions)) {
+      // An existing checkpoint can bind pre-fix where boundaries. Its complete
+      // declarations, bodies and frozen context must all agree with that view.
+      const legacyRegions = inspectLegacyLeanWhereSource(source).regions;
+      const legacyChanged = changedDeclaration(legacyRegions);
+      if (!legacyChanged && contextMatches(legacyRegions)) continue;
+      if (changed && legacyChanged)
+        throw new SolverSourceError(relative, 'math_original_declaration_changed', changed.qualifiedName ?? changed.name);
+      throw new SolverSourceError(relative, 'math_original_context_changed');
     }
   }
   const conflict = Object.keys(frozenSources).length ? libraryDeclarationConflict(frozenSources, ownedSources) : undefined;
@@ -401,7 +428,7 @@ export function assertSolverSources(problem: SolverProblem, worktree: string): v
   if (solverPathsOutsideOwnership(problem, worktree).outside.length) throw new Error('math_source_outside_ownership');
   for (const target of problem.targets) {
     const file = path.join(project, target.proofPath);
-    if (hashMathFormalSourceDeclaration(fs.readFileSync(file, 'utf8'), target.theoremName) !== target.declarationHash)
+    if (!sourceDeclarationHashMatches(fs.readFileSync(file, 'utf8'), target.theoremName, target.declarationHash))
       throw new SolverSourceError(target.proofPath, 'math_original_declaration_changed');
   }
 }

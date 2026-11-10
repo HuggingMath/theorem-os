@@ -71,6 +71,19 @@ describe('bounded local Lean diagnostics', () => {
     expect(run).toHaveBeenCalledTimes(6);
   });
 
+  it('keeps cached imports and proofs when an unrelated requested module changes', async () => {
+    fs.writeFileSync(path.join(root, 'Independent.lean'), 'def independent : Nat := 1\n');
+    const input = { projectRoot: root, files: ['Independent.lean', 'Submission.lean'], timeoutMs: 1000 };
+    await runLeanDiagnostics(input);
+    expect(run).toHaveBeenCalledTimes(3);
+    fs.writeFileSync(path.join(root, 'Independent.lean'), 'def independent : Nat := 2\n');
+    const result = await runLeanDiagnostics(input);
+    expect(result.phases.map(phase => [phase.file, phase.cached])).toEqual([
+      ['Independent.lean', false], ['ChallengeDeps.lean', true], ['Submission.lean', true],
+    ]);
+    expect(run).toHaveBeenCalledTimes(4);
+  });
+
   it('builds and reuses source-era library outputs for the pinned Lean 4.8 toolchain', async () => {
     fs.writeFileSync(path.join(root, 'lean-toolchain'), 'leanprover/lean4:v4.8.0\n');
     const input = { projectRoot: root, files: ['Submission.lean'], timeoutMs: 1000 };

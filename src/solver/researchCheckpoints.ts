@@ -14,6 +14,8 @@ export type ResearchCheckpoint = {
   taskDigest: string; inputDigest: string; outputDigest: string; count: number;
   localInputDigest?: string; candidateOutputDigest?: string; unchangedEvidenceCount?: number;
   candidateStatus?: CheckpointCandidate['status']; paused?: boolean; blockerId?: string;
+  /** Scheduling backoff follows this task's saved work, even when its worker changes responsibilities. */
+  advisoryCheckpoint?: { scope: string; noProgressStreak: number; contentDigest?: string };
 };
 
 export const UNCHANGED_RESEARCH_CHECKPOINT = 'math_research_checkpoint_unchanged: The same checkpoint has no new saved notes, draft, or task input across repeated recoveries. Wait for new input or revise the investigation.';

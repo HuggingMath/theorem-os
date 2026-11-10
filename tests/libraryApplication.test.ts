@@ -97,6 +97,63 @@ describe('host applications of installed theorems', () => {
     expect(host.verify).not.toHaveBeenCalled();
   });
 
+  it('keeps weight-only hints for the model without trying twelve unrelated theorem applications', async () => {
+    const original = 'namespace Current\ndef idealWeight (n : Nat) := n\n' +
+      'theorem weight_idempotent (n : Nat) : idealWeight (idealWeight n) = idealWeight n := by sorry\nend Current\n';
+    const f = fixture({ challenge: original, source: 'namespace Probability\n' +
+      Array.from({ length: 12 }, (_, i) =>
+        `theorem sum_biasedWeight_${i} (n : Nat) : n + 0 = n := Nat.add_zero n\n`).join('') + 'end Probability\n' });
+    const action = { kind: 'task' as const, task: f.task, assignment: { taskId: f.task.id,
+      taskDigest: taskVersion(f.task), workerId: 'host', seedCommit: f.seedCommit } };
+    const displayed = installedLibraryContext.installedLibraryRetrievals({ ...f, action });
+    expect(displayed[0].searchCandidateIds).toHaveLength(12);
+    expect(await prepareLibraryApplication(f)).toMatchObject({ status: 'skipped',
+      reason: 'no-matching-installed-theorem', candidates: [] });
+    expect(read(f)).toBe(original);
+    expect(host.verify).not.toHaveBeenCalled();
+    // An explicit request still permits adaptation attempts even without matching conclusion words.
+    expect(await prepareLibraryApplication({ ...f, taskText: 'Use Probability.sum_biasedWeight_0.' }))
+      .toMatchObject({ status: 'candidate', candidates: [{ file, name: 'Probability.sum_biasedWeight_0' }] });
+  });
+
+  it.skipIf(!lean)('reuses the odd-sum theorem with a real Lean check and no model', async () => {
+    const original = 'import Submission.Library.Fixture.Arithmetic\nnamespace Consumer\n' +
+      'theorem target (n : Nat) : AcceptanceOddSum.oddSum n = n ^ 2 := by sorry\nend Consumer\n';
+    const f = fixture({ challenge: original, source: 'import Std\nnamespace AcceptanceOddSum\n' +
+      'def oddSum : Nat → Nat\n  | 0 => 0\n  | n + 1 => oddSum n + (2 * n + 1)\n' +
+      'theorem odd_square_step (n : Nat) : n ^ 2 + (2 * n + 1) = (n + 1) ^ 2 := by\n' +
+      '  simp only [Nat.pow_succ, Nat.pow_zero, Nat.mul_add, Nat.add_mul, Nat.mul_one, Nat.one_mul]\n  omega\n' +
+      'theorem odd_sum (n : Nat) : oddSum n = n ^ 2 := by\n' +
+      '  induction n with\n  | zero => rfl\n  | succ n ih =>\n' +
+      '    change oddSum n + (2 * n + 1) = (n + 1) ^ 2\n    rw [ih, odd_square_step]\nend AcceptanceOddSum\n' });
+    const application = await prepareLibraryApplication(f);
+    expect(application.status).toBe('candidate');
+    expect(application.candidates).toContainEqual({ file, name: 'AcceptanceOddSum.odd_sum' });
+    await withSolverWorktree(f.worktree, application.commit!, async checkout => {
+      const project = path.join(checkout, f.problem.projectRelative), build = path.join(project, '.lake/build/lib/lean');
+      const run = (name: string, output?: string) => {
+        if (output) fs.mkdirSync(path.dirname(output), { recursive: true });
+        return spawnSync(lean!, ['-j', '2', ...(output ? ['-R', project, '-o', output] : []), name],
+          { cwd: project, env: { ...process.env, LEAN_PATH: build, LEAN_NUM_THREADS: '2' }, encoding: 'utf8', timeout: 30_000 });
+      };
+      const module = run(file, path.join(build, file.replace(/\.lean$/u, '.olean')));
+      expect(module.status, module.stdout + module.stderr).toBe(0);
+      const consumer = run('Submission.lean', path.join(build, 'Submission.olean'));
+      expect(consumer.status, consumer.stdout + consumer.stderr).toBe(0);
+      const modules = [{ module: file.replace(/\.lean$/u, '').replaceAll('/', '.'), file }];
+      const options = { expectedTheoremName: 'Consumer.target', expectedModules: modules }, marker = 'ODD_SUM_REUSE:';
+      fs.writeFileSync(path.join(project, 'Probe.lean'), ['import Lean', 'import Submission',
+        ...leanReferenceCommands('Consumer.target', modules, marker, options), '#print axioms Consumer.target'].join('\n') + '\n');
+      const probe = run('Probe.lean');
+      expect(probe.status, probe.stdout + probe.stderr).toBe(0);
+      expect(probe.stdout).not.toContain('sorryAx');
+      expect(parseLeanReferenceReport(probe.stdout, marker, [file], options)).toMatchObject({ status: 'complete',
+        references: { proof: expect.arrayContaining([{ file, name: 'AcceptanceOddSum.odd_sum' }]) } });
+    });
+    expect(read(f)).toBe(original);
+    expect(host.model).not.toHaveBeenCalled();
+  });
+
   it('retrieves the usable theorem before a matching definition pool fills all application slots', async () => {
     const f = fixture({ source: 'namespace Frozen\n' + Array.from({ length: 12 }, (_, index) =>
       `def Nat_0_predicate_${index + 1} (n : Nat) : Prop := n + 0 = n\n`).join('') +
@@ -544,6 +601,40 @@ describe('host applications of installed theorems', () => {
     expect(read(f)).toBe(challenge);
     expect(emit).toHaveBeenCalledWith('task_library_application', expect.objectContaining({
       ...(outcome === 'rejected' ? { passed: false, usedDeclarations: [] } : { checkError: expect.any(String) }) }));
+  });
+
+  it('keeps a rejected library probe diagnostic out of the original task feedback', async () => {
+    const f = fixture(), peer = path.join(f.root, 'proof');
+    git(f.worktree, ['worktree', 'add', '--quiet', '--detach', peer, f.seedCommit]);
+    const workers = [leadWorker(f.problem, f.worktree), { ...leadWorker(f.problem, peer, 'proof'), role: 'researcher' as const }];
+    const plan = parseCooperationPlan(f.problem, { tasks: [{ ...f.task, ownerId: 'proof' }],
+      groups: [{ id: 'main', objective: 'Prove the goal', status: 'active', maxConcurrent: 1 }] });
+    const originalFeedback = 'Original target diagnostic: preserve the closed-ideal hypotheses.';
+    const state = solverState(f.problem, f.worktree, { runId: 'library-probe-rejected', phase: 'running', environmentDigest,
+      cooperation: { canonicalCommit: f.seedCommit, tasks: plan.tasks.map(task =>
+        ({ task, status: 'pending', attempts: 0, feedback: originalFeedback })),
+      groups: plan.groups.map(group => ({ group, turns: 0 })) } });
+    const access = workerAccess(workers, f.root);
+    for (const worker of access.values()) worker.installedLibrary = f.library;
+    const probeDiagnostic = 'Type mismatch: Probability.sum_biasedWeight does not prove the closed-ideal goal.';
+    host.verify.mockImplementation(async (request: MathematicsVerifierBatchRequest) =>
+      failedBatch(verifiedBatch(request, { sessionId: 'library-probe-rejected', checks: true }), {
+        stdoutPreview: () => probeDiagnostic,
+      }));
+    const emit = vi.fn(), cooperative = cooperativeResearch({ state, workers, access, retrievalRoot: f.root, emit,
+      modules: { ...directSolverModules, M1: { ...directSolverModules.M1, open: host.model, execute: host.model } } });
+    try {
+      expect(await cooperative.next(workers[1], { maxTurns: Infinity, remainingMs: Infinity }))
+        .toMatchObject({ kind: 'task', task: { id: f.task.id } });
+      const node = state.cooperation!.tasks.find(node => node.task.id === f.task.id)!;
+      expect(node.feedback).toContain(originalFeedback);
+      expect(node.feedback).toContain('Host library application attempt (advisory)');
+      expect(node.feedback).not.toContain(probeDiagnostic);
+      expect(node.feedback).not.toContain('Type mismatch');
+      expect(emit).toHaveBeenCalledWith('task_library_application', expect.objectContaining({ passed: false,
+        diagnostic: expect.stringContaining(probeDiagnostic), receiptIds: expect.any(Array) }));
+      expect(host.model).not.toHaveBeenCalled();
+    } finally { await cooperative.stop(); }
   });
 
   it.each(['goal', 'lemma'] as const)('integrates a library-closed %s through normal cooperative acceptance without a model', async kind => {

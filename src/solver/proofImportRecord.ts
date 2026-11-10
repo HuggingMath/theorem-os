@@ -7,6 +7,7 @@ export const proofImportRequestSchema = z.object({
   id: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/u), runId: z.string(),
   baseVersion: z.string().min(1), taskId: z.string(), taskDigest: hash,
   proofPath: z.string(), theoremName: z.string(), seedCommit: commit,
+  beforeTheorem: z.string().min(1).optional(),
   problemReceiptDigest: z.string(), environmentDigest: z.string(),
   fragment: z.string().min(1), fragmentSha256: hash,
 }).strict();
