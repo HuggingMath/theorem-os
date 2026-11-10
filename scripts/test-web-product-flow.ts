@@ -103,6 +103,7 @@ const port = await freePort(), origin = `http://127.0.0.1:${port}`;
 const config = readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin,
   THEOREMOS_WEB_STATIC_ROOT: staticRoot, THEOREMOS_WEB_DATA_ROOT: dataRoot, THEOREMOS_WEB_AUTH: 'none', THEOREMOS_WEB_CONCURRENCY: '4' });
 config.providers = [{ id: 'fixture', name: 'Disposable fixture', baseUrl: `${origin}/unused-model-provider` }];
+config.clientIpHeader = 'x-fixture-scenario';
 const service = createWebService(config, runner, { sample: null, mailer: async () => { mailCalls++; throw new Error('No mail from product-flow fixtures'); } });
 
 async function http<T = any>(page: Page, method: string, pathname: string, input?: unknown): Promise<T> {
@@ -116,7 +117,8 @@ async function http<T = any>(page: Page, method: string, pathname: string, input
   }, { method, pathname, input }) as Promise<T>;
 }
 async function open(width: number, locale: 'zh' | 'en') {
-  const context = await browser!.newContext({ viewport: { width, height: width < 850 ? 844 : 1000 }, reducedMotion: 'reduce', locale: locale === 'zh' ? 'zh-CN' : 'en-US' });
+  const context = await browser!.newContext({ viewport: { width, height: width < 850 ? 844 : 1000 }, reducedMotion: 'reduce', locale: locale === 'zh' ? 'zh-CN' : 'en-US',
+    extraHTTPHeaders: { 'x-fixture-scenario': `${locale}-${width}` } });
   await context.addInitScript(({ key, locale }) => localStorage.setItem(key, locale), { key: localeStorageKey, locale });
   await preferFullCollaboration(context);
   await context.route(/^https?:\/\//u, async route => {

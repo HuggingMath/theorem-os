@@ -12,6 +12,7 @@ import type { WebConversation } from './conversationTypes';
 import type { WebFormalization } from './formalizationTypes';
 import type { WebRun } from './shared';
 import { researchBriefDecisions, researchBriefTask } from './researchProblemEvidence';
+import { researchHistoryRecords } from './researchHistory';
 import type { ResearchBrief, ResearchSearchHit, ResearchSearchKind, ResearchSearchResult, ResearchTokenRate,
   ResearchUsageEntry, ResearchUsageLedger } from './researchWorkspaceTypes';
 
@@ -97,9 +98,16 @@ export class WebResearchWorkspace {
       declaration: finding.notes, premises: finding.scope.source.premises, environmentDigest: finding.scope.environmentDigest };
     throw new WebStorageError(404, '研究记录不存在或不属于当前会话。');
   }
+  historyRecord(viewer: string, id: string) {
+    const data = this.records(viewer);
+    const record = researchHistoryRecords(viewer, { storage: this.storage, projects: this.projects, runs: data.runs, projectViews: data.projects })
+      .find(item => item.id === id);
+    if (!record) throw new WebStorageError(404, '研究记录不存在或不属于当前会话。');
+    return record;
+  }
   search(viewer: string, query: string, kind?: ResearchSearchKind, offset = 0, limit = 40): ResearchSearchResult {
     const data = this.records(viewer), terms = query.trim().toLocaleLowerCase().split(/\s+/u).filter(Boolean);
-    const counts: ResearchSearchResult['counts'] = { problem: 0, conversation: 0, lemma: 0, route: 0, library: 0 };
+    const counts: ResearchSearchResult['counts'] = { problem: 0, conversation: 0, lemma: 0, route: 0, library: 0, history: 0, decision: 0, stage: 0 };
     if (!terms.length) return { query, items: [], counts, total: 0 };
     const matches: { hit: ResearchSearchHit; score: number }[] = [];
     const add = (hit: Omit<ResearchSearchHit, 'excerpt'>, text: string) => {
@@ -164,6 +172,9 @@ export class WebResearchWorkspace {
         href: view ? `${runHref(view)}${view.owned ? '&view=route' : ''}` : `workspace.html?tab=search&q=${enc(query)}&record=${enc(finding.id)}`,
         updatedAt: view?.run.updatedAt ?? '', version: finding.id }, `${finding.finding}\n${finding.notes}\n${finding.remainingObligations.join('\n')}`);
     }
+    for (const record of researchHistoryRecords(viewer, { storage: this.storage, projects: this.projects, runs: data.runs, projectViews: data.projects }))
+      add({ id: record.id, kind: record.kind, title: record.title, context: record.context, href: record.href,
+        updatedAt: record.updatedAt, version: record.version }, record.text);
     const sorted = matches.filter(item => !kind || item.hit.kind === kind)
       .sort((a, b) => b.score - a.score || b.hit.updatedAt.localeCompare(a.hit.updatedAt) || a.hit.id.localeCompare(b.hit.id));
     return { query, counts, total: sorted.length, items: sorted.slice(offset, offset + limit).map(item => item.hit),

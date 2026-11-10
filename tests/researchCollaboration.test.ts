@@ -8,6 +8,7 @@ import { WebResearchProjects } from '../apps/web/researchProjects';
 import type { WebObservation } from '../apps/web/collaboration';
 import type { WebRun } from '../apps/web/shared';
 import type { ResearchFeedback, ResearchFeedbackTarget } from '../apps/web/researchProjectTypes';
+import { handleResearchAnnotations } from '../apps/web/researchAnnotationsApi';
 
 const alice = 'account:alice-private-account', bob = 'account:bob-private-account', carol = 'account:carol-private-account';
 const original = 'theorem target : True := by sorry\n';
@@ -502,5 +503,124 @@ describe('candidate review gates and continuing human work', () => {
     const persisted = JSON.stringify(projects.detail(alice, project.id));
     expect(persisted).not.toContain(projects.identity(bob)); expect(persisted).not.toContain('PRIVATE_REVIEW_COMMENT'); expect(persisted).not.toContain('PRIVATE_RESPONSE_TO_COMMENT'); expect(persisted).not.toContain('PRIVATE_REVIEW_END');
     expect(projects.feedback(alice, project.id, child.id).candidateDelivery).toMatchObject({ status: 'approved', approvedBy: { id: 'deleted-researcher' } });
+  });
+});
+
+describe('frozen passage annotations', () => {
+  const selection = { taskId: 'target', taskVersion: 'task-v1' };
+  function sourceInput(context: ReturnType<typeof fixture>, requestId = 'source-annotation') {
+    return { requestId, target: { observationRef: context.target.observationRef, taskRef: context.target.taskRef },
+      anchor: { kind: 'source', file: 'Main.lean', sourceDigest: mathDigest(original), startLine: 1, endLine: 1, quote: original.trimEnd() }, text: 'Why is the original goal left open?' };
+  }
+  it('validates the exact file, digest, line range and quoted text, then persists one immutable anchor', () => {
+    const context = fixture(true), { projects, project, directory } = context, input = sourceInput(context);
+    for (const anchor of [{ ...input.anchor, file: 'Other.lean' }, { ...input.anchor, sourceDigest: 'f'.repeat(64) },
+      { ...input.anchor, startLine: 2, endLine: 2 }, { ...input.anchor, quote: 'A quote from another source' }])
+      errorStatus(() => projects.createAnnotation(bob, project.id, 'run-a', { ...input, anchor }), 409);
+    const annotation = projects.createAnnotation(bob, project.id, 'run-a', input);
+    expect(projects.createAnnotation(bob, project.id, 'run-a', input)).toEqual(annotation);
+    const page = new WebResearchProjects(new WebStorage(directory)).annotations(alice, project.id, 'run-a', selection);
+    expect(page.items).toHaveLength(1); expect(page.items[0]).toMatchObject({ anchor: input.anchor, stale: false, status: 'open' });
+    errorStatus(() => projects.createAnnotation(bob, project.id, 'run-a', { ...input, text: 'Different request content' }), 409);
+  });
+  it('anchors mathematics comments to verified field text and exact selection offsets', () => {
+    const context = fixture(), { projects, project } = context, page = projects.annotations(alice, project.id, 'run-a', selection), field = page.context.fields[0];
+    const input = { requestId: 'math-annotation', target: { observationRef: page.context.target.observationRef, taskRef: page.context.target.taskRef },
+      anchor: { kind: 'mathematics', field: field.field, fieldDigest: field.digest, startOffset: 6, endOffset: 10, quote: 'True' }, text: 'Use the introduction rule for this proposition.' };
+    for (const anchor of [{ ...input.anchor, fieldDigest: 'f'.repeat(64) }, { ...input.anchor, endOffset: 9 }, { ...input.anchor, quote: 'False' }])
+      errorStatus(() => projects.createAnnotation(alice, project.id, 'run-a', { ...input, anchor }), 409);
+    expect(projects.createAnnotation(alice, project.id, 'run-a', input).anchor).toEqual(input.anchor);
+  });
+  it('keeps mathematics anchors on their original text when a later observation rewrites the same task version', () => {
+    const context = fixture(), { projects, project, storage } = context, page = projects.annotations(alice, project.id, 'run-a', selection), field = page.context.fields[0];
+    const annotation = projects.createAnnotation(bob, project.id, 'run-a', { requestId: 'math-before-rewrite', target: { observationRef: page.context.target.observationRef, taskRef: page.context.target.taskRef },
+      anchor: { kind: 'mathematics', field: field.field, fieldDigest: field.digest, startOffset: 0, endOffset: field.text.length, quote: field.text }, text: 'Review this exact objective.' });
+    const observed = observation(); observed.sequence = 2; observed.snapshot.stateDigest = 'c'.repeat(64); observed.inspection.tasks[0].objective = 'Prove True with an explicit constructor'; storage.saveRun(alice, run('run-a', observed));
+    expect(projects.annotations(alice, project.id, 'run-a', selection).items[0]).toMatchObject({ stale: true, staleReason: 'field-changed', anchor: annotation.anchor });
+  });
+  it('keeps personal annotations private and rejects outsiders even when the run id is known', () => {
+    const context = fixture(), { projects, project } = context;
+    projects.createAnnotation(alice, undefined, 'run-a', sourceInput(context));
+    expect(projects.annotations(alice, undefined, 'run-a', selection).items).toHaveLength(1);
+    errorStatus(() => projects.annotations(bob, undefined, 'run-a', selection), 404);
+    errorStatus(() => projects.annotations('public', undefined, 'run-a', selection), 401);
+    errorStatus(() => projects.createAnnotation(carol, project.id, 'run-a', sourceInput(context)), 404);
+    projects.update(alice, project.id, { requestId: 'public-annotation-project', visibility: 'public', expectedRevision: projects.detail(alice, project.id).revision });
+    errorStatus(() => projects.annotations(carol, project.id, 'run-a', selection), 403);
+    expect(projects.annotations(alice, project.id, 'run-a', selection).items).toHaveLength(0);
+  });
+  it('supports replies, controlled resolution and exact revision checks without altering the anchor', () => {
+    const context = fixture(), { projects, project } = context, annotation = projects.createAnnotation(bob, project.id, 'run-a', sourceInput(context));
+    projects.setMember(alice, project.id, projects.identity(carol), { requestId: 'annotation-reader', role: 'reader', expectedRevision: projects.detail(alice, project.id).revision });
+    const replyInput = { requestId: 'annotation-reply', action: 'reply', text: 'The next candidate closes it with True.intro.', expectedRevision: annotation.revision };
+    let record = projects.updateAnnotation(carol, project.id, 'run-a', annotation.id, replyInput);
+    expect(projects.updateAnnotation(carol, project.id, 'run-a', annotation.id, replyInput)).toEqual(record);
+    errorStatus(() => projects.updateAnnotation(carol, project.id, 'run-a', annotation.id, { requestId: 'reader-resolve', action: 'resolve', expectedRevision: record.revision }), 403);
+    errorStatus(() => projects.updateAnnotation(bob, project.id, 'run-a', annotation.id, { requestId: 'stale-resolve', action: 'resolve', expectedRevision: annotation.revision }), 409);
+    record = projects.updateAnnotation(bob, project.id, 'run-a', annotation.id, { requestId: 'author-resolve', action: 'resolve', expectedRevision: record.revision });
+    expect(record.status).toBe('resolved'); expect(record.anchor).toEqual(annotation.anchor); expect(record.replies).toHaveLength(1);
+    record = projects.updateAnnotation(alice, project.id, 'run-a', annotation.id, { requestId: 'manager-reopen', action: 'reopen', expectedRevision: record.revision });
+    expect(record.status).toBe('open'); expect(record.resolution).toBeUndefined();
+  });
+  it('marks changed source and task contracts as outdated while retaining the old quotation', () => {
+    const context = fixture(), { projects, project, storage } = context, annotation = projects.createAnnotation(bob, project.id, 'run-a', sourceInput(context));
+    const observed = observation(); observed.sequence = 2; observed.snapshot.stateDigest = 'c'.repeat(64);
+    observed.sources[0].source = candidate; observed.sources[0].sourceDigest = mathDigest(candidate); storage.saveRun(alice, run('run-a', observed));
+    let page = projects.annotations(alice, project.id, 'run-a', selection);
+    expect(page.items[0]).toMatchObject({ stale: true, staleReason: 'source-changed', anchor: annotation.anchor });
+    const changed = observation(); changed.sequence = 3; changed.snapshot.stateDigest = 'd'.repeat(64);
+    changed.inspection.tasks[0].version = 'task-v2'; changed.sources[0].taskVersion = 'task-v2'; storage.saveRun(alice, run('run-a', changed));
+    page = projects.annotations(alice, project.id, 'run-a', { ...selection, taskVersion: 'task-v2' });
+    expect(page.items[0]).toMatchObject({ stale: true, staleReason: 'task-changed', anchor: annotation.anchor });
+    expect(page.context.target.taskRef?.version).toBe('task-v2');
+    expect(projects.annotations(alice, project.id, 'run-a', selection).context.target.taskRef?.version).toBe('task-v1');
+  });
+  it('uses the actual candidate source for anchored reviews and requires the author’s response in its next revision', () => {
+    const context = fixture(), { projects, project } = context;
+    let parent = checkedCandidate(context);
+    const page = projects.annotations(bob, project.id, 'run-a', { ...selection, feedbackId: parent.id });
+    expect(page.context.source?.source).toBe(candidate);
+    const originalInput = sourceInput(context), input = { ...originalInput, feedbackId: parent.id,
+      anchor: { ...originalInput.anchor, quote: candidate.trimEnd(), sourceDigest: mathDigest(candidate) } };
+    const annotation = projects.createAnnotation(bob, project.id, 'run-a', input);
+    parent = projects.feedback(alice, project.id, parent.id);
+    expect(parent.reviewComments?.[0]).toMatchObject({ id: annotation.id, anchor: annotation.anchor });
+    errorStatus(() => projects.submitFeedback(alice, project.id, revisionInput(context, parent)), 400);
+    const child = projects.submitFeedback(alice, project.id, revisionInput(context, parent, [{ commentId: annotation.id, text: 'True.intro is the constructor of True.' }]));
+    expect(child.candidateRevision?.parentSnapshot.comments[0].anchor).toEqual(annotation.anchor);
+    expect(projects.annotations(bob, project.id, 'run-a', { ...selection, feedbackId: parent.id }).items[0]).toMatchObject({ stale: true, staleReason: 'candidate-revised' });
+    const revisedObservation = observation(); revisedObservation.sequence = 2; revisedObservation.snapshot.stateDigest = 'e'.repeat(64); context.storage.saveRun(alice, run('run-a', revisedObservation));
+    errorStatus(() => projects.createAnnotation(alice, project.id, 'run-a', { ...input, requestId: 'wrong-candidate-observation', target: {
+      ...input.target, observationRef: { sequence: 2, stateDigest: revisedObservation.snapshot.stateDigest } } }), 409);
+  });
+  it('enforces candidate reviewer assignment and current proof grants for anchored review comments', () => {
+    const context = fixture(), { projects, project, target } = context;
+    projects.setMember(alice, project.id, projects.identity(carol), { requestId: 'annotation-collaborator', role: 'collaborator', expectedRevision: project.revision });
+    let parent = checkedCandidate(context);
+    parent = projects.reviewFeedback(alice, project.id, parent.id, { requestId: 'annotation-reviewer', action: 'assign', reviewerId: projects.identity(bob), expectedRevision: parent.revision });
+    const originalInput = sourceInput(context), input = { ...originalInput, feedbackId: parent.id, anchor: { ...originalInput.anchor, quote: candidate.trimEnd(), sourceDigest: mathDigest(candidate) } };
+    errorStatus(() => projects.createAnnotation(carol, project.id, 'run-a', input), 403);
+    expect(projects.annotations(carol, project.id, 'run-a', { ...selection, feedbackId: parent.id }).permissions.create).toBe(false);
+    projects.bindRun(alice, project.id, { requestId: 'annotation-revoke-grant', runId: target.runId, statementVersionId: target.statementVersionId, grants: { proof: false }, expectedRevision: projects.detail(alice, project.id).revision });
+    errorStatus(() => projects.createAnnotation(bob, project.id, 'run-a', input), 403);
+  });
+  it('routes personal and project annotations through the same session-bound handler', async () => {
+    const context = fixture(), { projects, project } = context;
+    const personal = new URL('http://localhost/api/research/runs/run-a/annotations');
+    const created = await handleResearchAnnotations(personal, 'POST', alice, async () => sourceInput(context), projects);
+    expect(created?.status).toBe(201);
+    personal.search = '?task=target&taskVersion=task-v1';
+    expect((await handleResearchAnnotations(personal, 'GET', alice, async () => undefined, projects))?.body).toMatchObject({ items: [{ anchor: sourceInput(context).anchor }] });
+    const shared = new URL(`http://localhost/api/research/theorems/${project.id}/runs/run-a/annotations?task=target&taskVersion=task-v1`);
+    expect((await handleResearchAnnotations(shared, 'GET', bob, async () => undefined, projects))?.body).toMatchObject({ items: [] });
+  });
+  it('removes deleted annotators and private replies from shared threads', () => {
+    const context = fixture(), { projects, project } = context;
+    const ownerThread = projects.createAnnotation(alice, project.id, 'run-a', sourceInput(context));
+    projects.updateAnnotation(bob, project.id, 'run-a', ownerThread.id, { requestId: 'private-annotation-response', action: 'reply', text: 'PRIVATE_ANNOTATION_REPLY', expectedRevision: ownerThread.revision });
+    projects.createAnnotation(bob, project.id, 'run-a', { ...sourceInput(context), text: 'PRIVATE_ANNOTATION_TEXT' });
+    projects.forgetOwner(bob);
+    const content = JSON.stringify(projects.annotations(alice, project.id, 'run-a', selection));
+    expect(content).not.toContain(projects.identity(bob)); expect(content).not.toContain('PRIVATE_ANNOTATION_REPLY'); expect(content).not.toContain('PRIVATE_ANNOTATION_TEXT');
   });
 });

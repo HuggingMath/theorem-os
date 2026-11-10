@@ -1,0 +1,97 @@
+import { useEffect, useRef, useState } from 'preact/hooks';
+import type { ResearchPersonalProblem, ResearchPersonalTarget, ResearchAccountDraft } from '../researchPersonalTypes';
+import type { ResearchProblem } from '../researchProblemTypes';
+import type { WebApi } from './collaborationUi';
+import { api, base, ErrorBox, errorText, Field, stamp, tx, type Item, type ResearchContext } from './researchShared';
+import { RichProse } from './richText';
+
+export const personalProblemUrl = (target: ResearchPersonalTarget) => `${base}/personal/problems?${new URLSearchParams({
+  ...(target.runId ? { runId: target.runId } : {}), ...(target.projectId ? { projectId: target.projectId } : {}),
+})}`;
+const stateLabel = (value: ResearchPersonalProblem['status']) => value === 'active' ? tx('持续研究', 'Active research') : value === 'parked' ? tx('暂放', 'Parked') : tx('已归档', 'Archived');
+
+export function PersonalProblemControl({ target, item, onSaved, compact = false, request = api }: {
+  target: ResearchPersonalTarget; item?: ResearchPersonalProblem; onSaved?(value: ResearchPersonalProblem): void; compact?: boolean; request?: WebApi;
+}) {
+  const [record, setRecord] = useState<ResearchPersonalProblem>(item ?? { key: '', target, revision: 0, pinned: false, status: 'active', tags: [], nextNote: '' });
+  const [pinned, setPinned] = useState(item?.pinned ?? false), [status, setStatus] = useState(item?.status ?? 'active'), [tags, setTags] = useState(item?.tags.join(', ') ?? ''), [note, setNote] = useState(item?.nextNote ?? '');
+  const [error, setError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState(false), [ready, setReady] = useState(Boolean(item));
+  const lock = useRef(false), pending = useRef<{ signature: string; input: object }>();
+  const url = personalProblemUrl(target);
+  const load = async (keepEdits = false) => {
+    try {
+      const { item: latest } = await request<Item<ResearchPersonalProblem>>(url); setRecord(latest); setReady(true); setError('');
+      if (!keepEdits) { setPinned(latest.pinned); setStatus(latest.status); setTags(latest.tags.join(', ')); setNote(latest.nextNote); }
+    } catch (cause) { setError(errorText(cause)); }
+  };
+  useEffect(() => { let live = true; setReady(Boolean(item)); if (item) setRecord(item);
+    else request<Item<ResearchPersonalProblem>>(url).then(({ item: next }) => { if (live) { setRecord(next); setReady(true); setPinned(next.pinned); setStatus(next.status); setTags(next.tags.join(', ')); setNote(next.nextNote); } }).catch(cause => { if (live) setError(errorText(cause)); });
+    return () => { live = false; };
+  }, [url, request]);
+  const save = async () => {
+    if (lock.current || !ready) return; lock.current = true; setBusy(true); setError(''); setNotice('');
+    const value = { pinned, status, tags: tags.split(/[,，\n]/u).map(tag => tag.trim()).filter(Boolean), nextNote: note };
+    const signature = JSON.stringify([url, record.revision, value]);
+    if (pending.current?.signature !== signature) pending.current = { signature, input: { requestId: crypto.randomUUID(), expectedRevision: record.revision, ...value } };
+    try {
+      const { item: saved } = await request<Item<ResearchPersonalProblem>>(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pending.current.input) });
+      pending.current = undefined; setRecord(saved); setNotice(tx('个人整理已保存。', 'Your organization is saved.')); onSaved?.(saved);
+      window.dispatchEvent(new CustomEvent('theoremos-personal-problem-updated', { detail: saved }));
+    } catch (cause) { setError(errorText(cause)); }
+    finally { lock.current = false; setBusy(false); }
+  };
+  return <details class={`research-personal-problem${compact ? ' research-personal-problem-compact' : ''}`} data-personal-problem={record.key}>
+    <summary>{tx('个人整理', 'Organize for myself')}<span>{record.pinned ? `${tx('已置顶', 'Pinned')} · ` : ''}{stateLabel(record.status)}{record.tags.length ? ` · ${record.tags.join(' / ')}` : ''}</span></summary>
+    <p class="research-field-note">{tx('只保存在你的研究空间，独立于运行状态与证明验收。', 'Private to your research space, separate from run status and proof acceptance.')}</p>
+    <form class="research-form" onSubmit={event => { event.preventDefault(); void save(); }}>
+      <label class="research-check"><input type="checkbox" data-personal-pinned checked={pinned} onChange={event => setPinned(event.currentTarget.checked)} />{tx('置顶这道题', 'Pin this problem')}</label>
+      <label>{tx('整理状态', 'Organization status')}<select value={status} data-personal-status onChange={event => setStatus(event.currentTarget.value as ResearchPersonalProblem['status'])}>
+        <option value="active">{stateLabel('active')}</option><option value="parked">{stateLabel('parked')}</option><option value="archived">{stateLabel('archived')}</option></select></label>
+      <Field label={tx('标签', 'Tags')} value={tags} onInput={setTags} maxLength={500} placeholder={tx('例如：数论、待补引理；用逗号分隔', 'For example: number theory, missing lemma; separate with commas')} />
+      <Field label={tx('下次从这里继续', 'Next time, start here')} value={note} onInput={setNote} multiline rows={3} maxLength={4000} />
+      <button class="button" type="submit" data-save-personal-problem disabled={busy || !ready}>{busy ? tx('正在保存…', 'Saving…') : tx('保存个人整理', 'Save organization')}</button>
+    </form>
+    <ErrorBox message={error} />{error && <button type="button" class="text-button" onClick={() => void load(true)}>{tx('读取最新整理，保留当前输入', 'Load the latest organization and keep my edits')}</button>}
+    {notice && <p role="status" data-personal-notice>{notice}</p>}
+  </details>;
+}
+
+export function ProblemOrganization({ problem, context }: { problem: Pick<ResearchProblem, 'key' | 'brief' | 'project'>; context?: ResearchContext }) {
+  if (context && !context.session.authenticated) return null;
+  return <PersonalProblemControl key={problem.key} target={{ runId: problem.brief.selectedRunId, ...(problem.project ? { projectId: problem.project.id } : {}) }} />;
+}
+
+export function accountDraftHref(draft: ResearchAccountDraft, versionId?: string) {
+  const scope = draft.scope, parameters = new URLSearchParams({ id: scope.projectId, accountDraft: draft.id });
+  if (versionId) parameters.set('draftVersion', versionId);
+  if (scope.statementVersionId) parameters.set('version', scope.statementVersionId);
+  if (scope.runId) parameters.set('run', scope.runId);
+  if (scope.taskId) parameters.set('task', scope.taskId);
+  if (scope.taskVersion) parameters.set('taskVersion', scope.taskVersion);
+  if (scope.kind === 'candidate' && scope.sourceFeedbackId) parameters.set('revise', scope.sourceFeedbackId);
+  return `theorems.html?${parameters}#${scope.kind === 'candidate' ? 'candidate-composer' : scope.issueId ? `issue-${scope.issueId}` : scope.kind === 'issue' ? 'collaboration-issues' : 'project-feedback'}`;
+}
+
+export function PersonalDraftsPanel({ context, projectId }: { context?: ResearchContext; projectId?: string }) {
+  const [items, setItems] = useState<ResearchAccountDraft[]>([]), [account, setAccount] = useState(true), [error, setError] = useState(''), [loading, setLoading] = useState(false);
+  const reload = async () => {
+    setLoading(true);
+    try { const result = await api<{ account: boolean; items: ResearchAccountDraft[] }>(`${base}/personal/drafts${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`);
+      setItems(result.items); setAccount(result.account); setError(''); } catch (cause) { setError(errorText(cause)); } finally { setLoading(false); }
+  };
+  useEffect(() => { void reload(); }, [context?.session.researcherId, projectId]);
+  return <section class="research-personal-drafts" data-personal-drafts-panel><div class="research-section-head"><h3>{tx('账号草稿', 'Account drafts')}</h3>
+    <button class="text-button" type="button" disabled={loading} onClick={() => void reload()}>{tx('刷新版本', 'Refresh versions')}</button></div>
+    <ErrorBox message={error} />{loading && <p role="status">{tx('正在读取账号草稿…', 'Loading account drafts…')}</p>}
+    {!account && <p>{tx('登录账号后，可以把编辑中的内容保存到账号，在其他设备继续。', 'Sign in to save work in progress to your account and continue on another device.')}</p>}
+    {items.map(item => <details key={item.id} data-personal-draft={item.id}><summary>{item.versions[0]?.summary}</summary>
+      {item.versions.map(version => <article class="collaboration-draft" key={version.id}><p>{version.deviceName} · {stamp(version.savedAt)} · {tx('版本', 'Version')} {version.revision}</p>
+        {version.conflict && <p>{tx('与另一台设备的编辑同时保存，两份内容均保留。', 'Saved alongside another device’s work. Both versions are preserved.')}</p>}
+        <a class="button" href={accountDraftHref(item, version.id)}>{tx('回到编辑器恢复', 'Open the editor to restore')}</a></article>)}</details>)}
+    {account && !items.length && !loading && !error && <p>{tx('还没有保存到账号的草稿。候选、讨论和议题编辑器中都可选择保存。', 'No account drafts yet. Save one from a candidate, discussion or issue editor.')}</p>}
+  </section>;
+}
+
+export function PersonalNextNote({ item }: { item?: ResearchPersonalProblem }) {
+  return item?.nextNote ? <div class="research-personal-next-note"><span>{tx('下次继续', 'Continue next time')}</span><RichProse text={item.nextNote} /></div> : null;
+}

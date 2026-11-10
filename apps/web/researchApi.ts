@@ -10,6 +10,10 @@ import { WebResearchProblems } from './researchProblems';
 import { handleResearchCollaboration } from './researchCollaborationApi';
 import { createResearchCollectionsHandler } from './researchCollections';
 import { createResearchLibraryTrialsHandler } from './researchLibraryTrials';
+import { createResearchBudgetsHandler } from './researchBudgets';
+import { createResearchPersonalHandler } from './researchPersonal';
+import { createResearchJourneyHandler } from './researchJourney';
+import { handleResearchAnnotations } from './researchAnnotationsApi';
 import { researchMathematics } from './researchMathematics';
 import { researchMathExampleValidator } from './researchMathExamples';
 import { researchAssetFromRun } from './researchAssetPrefill';
@@ -59,6 +63,9 @@ export class WebResearchApi {
   readonly problems: WebResearchProblems;
   private collections: ReturnType<typeof createResearchCollectionsHandler>;
   private libraryTrials: ReturnType<typeof createResearchLibraryTrialsHandler>;
+  private budgets: ReturnType<typeof createResearchBudgetsHandler>;
+  private personal: ReturnType<typeof createResearchPersonalHandler>;
+  private journey: ReturnType<typeof createResearchJourneyHandler>;
   private pendingProofs = new Map<string, Promise<ResearchFeedback>>();
   private controller = new AbortController();
   constructor(private storage: WebStorage, private jobs: WebJobs, knowledge: WebKnowledgeService, private runner: WebRunner) {
@@ -70,6 +77,9 @@ export class WebResearchApi {
     this.problems = new WebResearchProblems(storage, jobs, this.projects, this.workspace);
     this.collections = createResearchCollectionsHandler({ storage, projects: this.projects, assets: this.assets });
     this.libraryTrials = createResearchLibraryTrialsHandler({ storage, projects: this.projects, assets: this.assets, jobs, runner });
+    this.budgets = createResearchBudgetsHandler({ storage, problems: this.problems, workspace: this.workspace });
+    this.personal = createResearchPersonalHandler({ storage, jobs, projects: this.projects, problems: this.problems });
+    this.journey = createResearchJourneyHandler({ storage, jobs, projects: this.projects, problems: this.problems, workspace: this.workspace });
   }
   private aliases(viewer: string, projectId: string) {
     const author = this.projects.identity(viewer);
@@ -245,6 +255,14 @@ export class WebResearchApi {
     const item = (body: unknown, status = 200): Reply => ({ status, body: { item: body } });
     if (method !== 'GET') { writable(); if (!owner) fail(401, '请先登录。'); }
     const body = async () => { const value = await readBody(); writable(); return value; };
+    const journey = await this.journey(url, method, viewer, body);
+    if (journey) return journey;
+    const annotations = await handleResearchAnnotations(url, method, viewer, body, this.projects);
+    if (annotations) return annotations;
+    const budget = await this.budgets.handle(url, method, viewer, body);
+    if (budget) return budget;
+    const personal = await this.personal.handle(url, method, viewer, body);
+    if (personal) return personal;
     const collaboration = await handleResearchCollaboration(url, method, viewer, body, this.projects);
     if (collaboration) return collaboration;
     const collections = await this.collections(url, method, viewer, body);
@@ -254,7 +272,7 @@ export class WebResearchApi {
     if (section === 'workspace' && method === 'GET') {
       if (id === 'search') {
         const parameters = parse(z.object({ q: z.string().trim().max(128),
-          kind: z.enum(['problem', 'conversation', 'lemma', 'route', 'library']).optional(),
+          kind: z.enum(['problem', 'conversation', 'lemma', 'route', 'library', 'history', 'decision', 'stage']).optional(),
           offset: z.coerce.number().int().min(0).max(100_000).default(0) }), {
           q: url.searchParams.get('q') ?? '', kind: url.searchParams.get('kind') || undefined,
           offset: url.searchParams.get('offset') ?? 0 });
@@ -262,6 +280,7 @@ export class WebResearchApi {
       }
       if (id === 'usage') return { status: 200, body: this.workspace.ledger(viewer) };
       if (id === 'knowledge' && action) return item(this.workspace.knowledgeRecord(viewer, action));
+      if (id === 'history' && action) return item(this.workspace.historyRecord(viewer, action));
       if (id === 'brief' && action) return item(this.workspace.brief(viewer, action, url.searchParams.get('project') ?? undefined));
       if (id === 'problem' && action) return item(this.problems.detail(viewer, action, url.searchParams.get('project') ?? undefined));
     }

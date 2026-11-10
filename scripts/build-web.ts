@@ -28,12 +28,14 @@ for (const [source, destination] of [['index.html', 'index.html'], ['login.html'
     + '\n' + fs.readFileSync(path.join(root, 'apps/web/client/productFlow.css'), 'utf8')
     + '\n' + fs.readFileSync(path.join(root, 'apps/web/client/research-overview.css'), 'utf8')
     + '\n' + fs.readFileSync(path.join(root, 'apps/web/client/decisionFlow.css'), 'utf8')
+    + '\n' + fs.readFileSync(path.join(root, 'apps/web/client/researchBudget.css'), 'utf8')
+    + '\n' + fs.readFileSync(path.join(root, 'apps/web/client/researchPersonal.css'), 'utf8')
     + '\n' + fs.readFileSync(path.join(root, 'apps/web/math.css'), 'utf8'));
   else fs.copyFileSync(path.join(root, 'apps/web/client', source), path.join(output, destination));
 fs.mkdirSync(path.join(output, 'assets/fonts'), { recursive: true });
 for (const file of ['people.html', 'theorems.html', 'library.html', 'workspace.html', 'problem.html', 'practice.html', 'researchPractice.css'])
   fs.copyFileSync(path.join(root, 'apps/web/client', file), path.join(output, file));
-fs.writeFileSync(path.join(output, 'research.css'), ['research.css', 'collaborationFlow.css', 'researchCollections.css', 'researchWorkspace.css', 'researchProblem.css', 'researchLibraryTrials.css', 'researchCandidateContinuity.css']
+fs.writeFileSync(path.join(output, 'research.css'), ['research.css', 'collaborationFlow.css', 'researchCollections.css', 'researchWorkspace.css', 'researchProblem.css', 'researchLibraryTrials.css', 'researchCandidateContinuity.css', 'researchJourney.css', 'researchInlineActions.css', 'researchPersonal.css', 'researchBudget.css']
   .map(file => fs.readFileSync(path.join(root, 'apps/web/client', file), 'utf8')).join('\n'));
 const fonts = ['InterVariable-latin.woff2', 'Inter-LICENSE.txt', 'TheoremOSSerif-latin.woff2', 'Lora-OFL.txt', 'JetBrainsMono.woff2', 'JetBrainsMono-OFL.txt',
   'NotoSerifSC-ui.woff2', 'NotoSerifSC-ui-extra.woff2', 'NotoSerifSC-common.woff2', 'NotoSerifSC-OFL.txt', 'NotoSansSC-ui.woff2', 'NotoSansSC-ui-extra.woff2', 'NotoSansSC-common.woff2', 'NotoSansSC-OFL.txt'];

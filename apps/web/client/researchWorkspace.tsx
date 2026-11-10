@@ -10,12 +10,15 @@ import { BookmarkControl, CollectionsPanel } from './researchCollections';
 import { AssetUpdatesPanel } from './researchReleaseComparison';
 import { downloadResearchFile, researchBriefMarkdown } from './researchBriefExport';
 import { loadMath } from './mathAssets';
+import { ResearchHistoryReader } from './researchHistory';
+import { PersonalDraftsPanel } from './researchPersonal';
 import { base, enc, Empty, ErrorBox, MutationState, nameOf, Panel, State, stamp, tx, useMutation, useResource,
   type Item, type ResearchContext } from './researchShared';
 
 const tabs = {
   inbox: tx('我的待办', 'My inbox'), search: tx('全局搜索', 'Search'), usage: tx('用量账本', 'Usage'),
   brief: tx('研究简报', 'Research briefs'), collections: tx('专题资料夹', 'Collections'),
+  drafts: tx('账号草稿', 'Account drafts'),
 } as const;
 type Tab = keyof typeof tabs;
 const readTab = (): Tab => {
@@ -25,6 +28,7 @@ const readTab = (): Tab => {
 const kinds: Record<ResearchSearchKind, string> = {
   problem: tx('题目', 'Problems'), conversation: tx('对话', 'Conversations'), lemma: tx('定理与引理', 'Theorems and lemmas'),
   route: tx('研究路线', 'Routes'), library: 'Library',
+  history: tx('历史推导与检查', 'Historical reasoning and checks'), decision: tx('讨论与评审', 'Discussions and reviews'), stage: tx('阶段结论', 'Stage conclusions'),
 };
 export function WorkspacePage({ context }: { context: ResearchContext }) {
   const [tab, setTab] = useState<Tab>(readTab);
@@ -51,8 +55,8 @@ export function WorkspacePage({ context }: { context: ResearchContext }) {
       <div class="research-actions"><a class="button button-primary" href={`login.html?returnTo=workspace&tab=${tab}&lang=${locale}`}>{tx('登录', 'Sign in')}</a>
         <a href={`practice.html?lang=${locale}`}>{tx('先体验一次完整参与流程', 'Try the participation flow first')}</a></div></Panel>
       : <div class="workspace-content" key={tab}>{tab === 'inbox' ? <><CollaborationInbox context={context} /><AssetUpdatesPanel context={context} /></>
-        : tab === 'search' ? <WorkspaceSearch /> : tab === 'usage' ? <WorkspaceUsage context={context} />
-          : tab === 'brief' ? <WorkspaceBrief context={context} /> : <><SaveIncomingTarget context={context} /><CollectionsPanel context={context} /></>}</div>}
+        : tab === 'search' ? <WorkspaceSearch context={context} /> : tab === 'usage' ? <WorkspaceUsage context={context} />
+          : tab === 'brief' ? <WorkspaceBrief context={context} /> : tab === 'drafts' ? <PersonalDraftsPanel context={context} /> : <><SaveIncomingTarget context={context} /><CollectionsPanel context={context} /></>}</div>}
   </div>;
 }
 function SaveIncomingTarget({ context }: { context: ResearchContext }) {
@@ -65,28 +69,35 @@ function SaveIncomingTarget({ context }: { context: ResearchContext }) {
   return <Panel title={tx('保存这份研究材料', 'Save this research material')}><p>{taskId ?? runId}</p><BookmarkControl context={context} target={target} /></Panel>;
 }
 
-function WorkspaceSearch() {
+function WorkspaceSearch({ context }: { context: ResearchContext }) {
   const parameters = new URLSearchParams(location.search);
   const [draft, setDraft] = useState(parameters.get('q') ?? ''), [query, setQuery] = useState(draft);
-  const [kind, setKind] = useState<ResearchSearchKind | ''>(''), [offset, setOffset] = useState(0);
+  const initialKind = parameters.get('kind') ?? '';
+  const [kind, setKind] = useState<ResearchSearchKind | ''>(initialKind in kinds ? initialKind as ResearchSearchKind : ''), [offset, setOffset] = useState(0);
   const data = useResource<ResearchSearchResult>(query ? `${base}/workspace/search?${new URLSearchParams({ q: query, kind, offset: String(offset) })}` : undefined);
   const record = parameters.get('record');
+  const historyId = parameters.get('history');
   const saved = useResource<Item<{ name: string; type: string; description: string; declaration: string; premises: string[] }>>(record ? `${base}/workspace/knowledge/${enc(record)}` : undefined);
   const submit = () => {
     const value = draft.trim(); setOffset(0); setQuery(value);
     const url = new URL(location.href); if (value) url.searchParams.set('q', value); else url.searchParams.delete('q');
-    url.searchParams.delete('record'); history.replaceState(null, '', url); data.refresh();
+    url.searchParams.delete('record'); url.searchParams.delete('history'); history.replaceState(null, '', url); data.refresh();
   };
-  return <Panel title={tx('搜索研究记录', 'Search your research')} note={tx('查找题目、对话正文、引理、研究路线和 Library。', 'Find problems, conversation text, lemmas, research routes and Library releases.')}>
+  const chooseKind = (next: ResearchSearchKind | '') => {
+    setKind(next); setOffset(0); const url = new URL(location.href);
+    if (next) url.searchParams.set('kind', next); else url.searchParams.delete('kind');
+    history.replaceState(null, '', url);
+  };
+  return <>{historyId && <ResearchHistoryReader id={historyId} context={context} />}<Panel title={tx('搜索研究记录', 'Search your research')} note={tx('查找题目、对话、历史推导、评审意见、阶段结论和 Library。', 'Find problems, conversations, historical reasoning, reviews, stage conclusions and Library releases.')}>
     <form class="workspace-search" role="search" onSubmit={event => { event.preventDefault(); submit(); }}>
       <label class="sr-only" htmlFor="workspace-query">{tx('关键词', 'Keywords')}</label><input id="workspace-query" type="search" value={draft} maxLength={128}
         placeholder={tx('输入定理名、推导中的一句话或一个数学概念', 'A theorem name, a phrase from a derivation, or a mathematical concept')}
         onInput={event => setDraft(event.currentTarget.value)} /><button class="button button-primary" type="submit">{tx('搜索', 'Search')}</button>
     </form>
     <div class="workspace-filters" role="group" aria-label={tx('结果类型', 'Result type')}>
-      <button type="button" class="text-button" aria-pressed={!kind} onClick={() => { setKind(''); setOffset(0); }}>{tx('全部', 'All')}</button>
+      <button type="button" class="text-button" aria-pressed={!kind} onClick={() => chooseKind('')}>{tx('全部', 'All')}</button>
       {Object.entries(kinds).map(([id, label]) => <button type="button" key={id} class="text-button" aria-pressed={kind === id}
-        onClick={() => { setKind(id as ResearchSearchKind); setOffset(0); }}>{label}{data.data ? ` (${data.data.counts[id as ResearchSearchKind]})` : ''}</button>)}
+        onClick={() => chooseKind(id as ResearchSearchKind)}>{label}{data.data ? ` (${data.data.counts[id as ResearchSearchKind]})` : ''}</button>)}
     </div>
     <ErrorBox message={data.error} />{data.error && <button type="button" class="button" onClick={data.refresh}>{tx('重新读取', 'Try again')}</button>}
     {data.loading && <p role="status">{tx('正在查找…', 'Searching…')}</p>}
@@ -103,7 +114,7 @@ function WorkspaceSearch() {
     {!query && <Empty>{tx('输入关键词，从你有权查看的记录中查找。', 'Enter a query to search the records you can access.')}</Empty>}
     <ErrorBox message={saved.error} />{saved.data && <section class="workspace-saved-lemma"><h3>{saved.data.item.name}</h3><RichProse text={saved.data.item.description} />
       <RichProse text={saved.data.item.type} /><pre><code>{saved.data.item.declaration}</code></pre></section>}
-  </Panel>;
+  </Panel></>;
 }
 
 const stages = { formalization: tx('形式化', 'Formalization'), proof: tx('证明研究', 'Proof research'), explanation: tx('证明讲解', 'Proof explanation') } as const;

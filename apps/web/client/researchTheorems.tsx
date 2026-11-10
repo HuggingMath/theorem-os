@@ -17,6 +17,7 @@ import { RichProse } from './richText';
 import { ResearchDraftPicker, useResearchDrafts } from './researchDrafts';
 import { discussionDraftMatches, type DiscussionDraft } from './researchDiscussionDraft';
 import { ResearchWorkImpactView } from './researchWorkImpact';
+import { AnnotationAnchorSummary } from './researchAnnotations';
 import { api, base, Check, enc, Empty, ErrorBox, Field, FollowButton, lines, MutationState, nameOf, Panel, personHref, Search,
   stamp, State, Tags, theoremHref, tx, useMutation, useResource, words, type Item, type Items, type ResearchContext } from './researchShared';
 
@@ -303,6 +304,7 @@ function RunResearch({ project, selfId, binding, refreshProject, task, requested
 }) {
   const projectId = project.id;
   const pinnedCommit = new URLSearchParams(location.search).get('commit') ?? undefined;
+  const restoringAccountDraft = new URLSearchParams(location.search).has('accountDraft');
   const root = useRef<HTMLDivElement>(null), view = useRef<CollaborationView>(), taskShown = useRef('');
   const [observed, setObserved] = useState<WebObservation>();
   const [candidateRequest, setCandidateRequest] = useState<{ target: ResearchFeedbackTarget; serial: number }>();
@@ -344,7 +346,7 @@ function RunResearch({ project, selfId, binding, refreshProject, task, requested
       <CollaborationTaskWorkspace project={project} selfId={selfId} binding={binding} observation={latest} selectedTask={task} pinnedCommit={pinnedCommit} context={context} refresh={refreshProject} onSubmitCandidate={target => setCandidateRequest(previous => ({ target, serial: (previous?.serial ?? 0) + 1 }))} onSelectTask={(taskId, version) => { view.current?.showTask(binding.runId, taskId, version, pinnedCommit, false); }} onOpenIssue={onOpenIssue} onRevealFeedback={onRevealFeedback} />
       {!pinnedCommit && <HumanParticipation project={project} selfId={selfId} binding={binding} observation={latest} refresh={refreshProject} />}
       {!pinnedCommit && <ResearchWorkImpactView project={project} binding={binding} refresh={refreshProject} onRevealFeedback={onRevealFeedback} />}
-      {!pinnedCommit && binding.permissions.proof && <ProofSubmission project={project} projectId={projectId} selfId={selfId} binding={binding} observation={latest} refresh={refreshProject} requested={candidateRequest} onSaved={onRevealFeedback} />}</>}
+      {(!pinnedCommit || restoringAccountDraft) && binding.permissions.proof && <ProofSubmission project={project} projectId={projectId} selfId={selfId} binding={binding} observation={latest} refresh={refreshProject} requested={candidateRequest} onSaved={onRevealFeedback} />}</>}
     {binding.permissions.manage && project.permissions.edit && <RunSharing project={project} binding={binding} refresh={refreshProject} />}
   </>;
 }
@@ -402,7 +404,7 @@ function PublicProof({ share }: { share: WebShareSnapshot }) {
 
 type CandidateDraft = { source: string; text: string; edited: boolean; needsReview: boolean; baseSource: WebObservation['sources'][number]; baseObservation: { sequence: number; stateDigest: string };
   revisionOf?: { feedbackId: string; expectedRevision: number; responses: { commentId: string; text: string }[] } };
-function ProofSubmission({ project, projectId, selfId, binding, observation, refresh, requested, onSaved }: { project: ResearchProjectDetail; projectId: string; selfId: string; binding: ResearchRunBinding; observation: WebObservation; refresh: () => void;
+export function ProofSubmission({ project, projectId, selfId, binding, observation, refresh, requested, onSaved }: { project: ResearchProjectDetail; projectId: string; selfId: string; binding: ResearchRunBinding; observation: WebObservation; refresh: () => void;
   requested?: { target: ResearchFeedbackTarget; serial: number }; onSaved(id: string): void }) {
   const [source, setSource] = useState(''), [text, setText] = useState(''), [edited, setEdited] = useState(false), action = useMutation();
   const [baseSource, setBaseSource] = useState<WebObservation['sources'][number]>(), [baseObservation, setBaseObservation] = useState<{ sequence: number; stateDigest: string }>();
@@ -466,7 +468,7 @@ function ProofSubmission({ project, projectId, selfId, binding, observation, ref
     <Field label={tx('修改后的候选源码', 'Edited candidate source')} value={source} onInput={value => { setEdited(true); setSource(value); saveDraft({ source: value, edited: true }); }} multiline code rows={10} required />
     {edited && <p class="research-field-note">{t('切换基准会保留你编辑的源码，请核对其是否适用于所选任务版本。')}</p>}
     <Field label={tx('修改说明', 'Change description')} value={text} onInput={value => { setText(value); saveDraft({ text: value }); }} multiline rows={2} required />
-    {parent && revisionOf && <div data-candidate-revision-responses><p>{tx('逐条回应上一版评审意见', 'Respond to each review comment on the previous version')}</p>{parent.reviewComments?.map(comment => <label key={comment.id}><RichProse text={comment.text} /><textarea data-revision-response={comment.id} value={revisionOf.responses.find(item => item.commentId === comment.id)?.text ?? ''} required rows={2} maxLength={4000} onInput={event => {
+    {parent && revisionOf && <div data-candidate-revision-responses><p>{tx('逐条回应上一版评审意见', 'Respond to each review comment on the previous version')}</p>{parent.reviewComments?.map(comment => <label key={comment.id}><AnnotationAnchorSummary anchor={comment.anchor} /><RichProse text={comment.text} /><textarea data-revision-response={comment.id} value={revisionOf.responses.find(item => item.commentId === comment.id)?.text ?? ''} required rows={2} maxLength={4000} onInput={event => {
       const next = { ...revisionOf, responses: [...revisionOf.responses.filter(item => item.commentId !== comment.id), { commentId: comment.id, text: event.currentTarget.value }] }; setRevisionOf(next); saveDraft({ revisionOf: next });
     }} /></label>)}</div>}
     {revisionStale && <p role="status">{tx('原候选或评审已有更新，请查看新意见后继续。', 'The previous candidate or review changed. Read the new comments before continuing.')} <button class="button" type="button" onClick={() => { if (parent && revisionOf) { const next = { ...revisionOf, expectedRevision: parent.revision }; setRevisionOf(next); saveDraft({ revisionOf: next }); } }}>{tx('已核对最新评审意见', 'I reviewed the latest comments')}</button></p>}

@@ -838,4 +838,10 @@ export const app: Record<string, string> = {
   "来源：": "Source: ",
   "现有 Lean 库仅支持读取。": "The installed Lean library is read-only.",
   "现有 Lean 库读取地址不存在。": "The installed Lean library address does not exist.",
+  '重新准备预算草稿': 'Prepare the budget draft again',
+  '正在读取原题与预算…': 'Loading the original problem and budget…',
+  '规划的 Token 超过本次运行上限，请返回题目页调整。': 'The planned token limit exceeds the limit for one run. Adjust it on the problem page.',
+  '草稿已变化，未载入预算规划。请核对后重新准备。': 'The draft changed, so the budget plan was not loaded. Review your edits and prepare it again.',
+  '已准备原题、执行配置与本次预算。核对后即可发送研究任务。': 'The original problem, execution settings and token budget are ready. Review them before submitting.',
+  '已将项目原题准备为个人尝试。核对模型、Library 和预算后可开始，随后可将新运行关联到项目。': 'The project problem is ready as a personal attempt. Review the model, Library and budget before starting, then link the new run to the project.',
 };

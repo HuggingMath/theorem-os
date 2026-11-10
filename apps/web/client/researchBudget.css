@@ -1,0 +1,5 @@
+.problem-budget-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem;margin:1rem 0}.problem-budget-facts>div{border-top:1px solid var(--line,#ddd9cd);padding-top:.8rem;min-width:0}.problem-budget-facts dt{font-size:.8rem;color:var(--muted,#767468)}.problem-budget-facts dd{margin:.4rem 0;font-size:1.15rem}.draft-problem-budget{margin:1rem 0;padding:1rem;border:1px solid var(--line,#ddd9cd);border-radius:10px}.draft-problem-budget h3{margin-top:0}.draft-problem-budget p{font-size:.85rem;line-height:1.65}@media(max-width:560px){.problem-budget-facts{grid-template-columns:1fr}}
+.research-budget-draft { margin-block: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; }
+.research-budget-draft h4 { margin: 0 0 12px; font-size: 14px; }
+.research-budget-draft p { font-size: 12px; line-height: 1.7; }
+.research-budget-draft > a { font-size: 12px; }

@@ -9,6 +9,7 @@ import { ResearchSelection } from './researchSelection';
 import type { ResearchLibraryAttemptPreparation } from '../researchLibraryTrialTypes';
 import { consumeResearchEntry, readResearchEntry } from './researchEntry';
 import { openFrozenTask } from './frozenTaskView';
+import { renderResearchBudgetDraft } from './researchBudgetDraft';
 import type { WebExplainAnswer } from '../explain';
 import type { WebFormalization } from '../formalizationTypes';
 import type { WebShareLink } from '../shareTypes';
@@ -137,6 +138,7 @@ const productEntrySearch = location.search, productEntry = readResearchEntry(pro
 const productTarget = new URLSearchParams(productEntrySearch);
 let productEntryHandled = false;
 let libraryProposalHandled = false;
+let budgetDraftHandled = false;
 function withAddressLanguage(search: string) {
   const language = new URLSearchParams(location.search).get('lang');
   if (language !== 'zh' && language !== 'en') return search;
@@ -414,6 +416,8 @@ const ownerOfSession = webDraftOwner;
 function clearOwnedDrafts() {
   document.querySelector('[data-library-proposal-start]')?.remove(); libraryProposalHandled = false;
   problemDraftRevision++; renderResearchProblemDraft(element('#research-problem-draft'));
+  document.querySelector('[data-budget-attempt-start]')?.remove(); budgetDraftHandled = false;
+  budgetDraftOrigin = undefined;
   chatWorkspace?.bindOwner('');
   researchSelection.reset();
   collaborationView.clearPlanDrafts();
@@ -446,6 +450,7 @@ let draftSourceExpanded = false;
 /** The recorded version the next run starts from (「从这一版继续」); one submission uses it. */
 let draftContinuation: WebContinuation | undefined;
 let continuationPreview: ContinuationPreview | undefined;
+let budgetDraftOrigin: { runId: string; projectId?: string; source: string; environment: WebEnvironment } | undefined;
 let draftFormalization: (NonNullable<TaskDraft['formalization']> & { source: string; environment: WebEnvironment; original?: string }) | undefined;
 let moduleSettingsPolicy: string | undefined;
 let settingsWorkspaceReturn: { focus?: HTMLElement; preview?: boolean } | undefined;
@@ -851,6 +856,10 @@ function renderComposerSummary() {
   const context: ContinuationPreview | undefined = continuationPreview ? { ...continuationPreview, from: draftContinuation }
     : origin ? { title: origin.title, runId: origin.id, from: draftContinuation, originalSeconds: origin.maxRunSeconds, originalTurns: origin.maxTurns, originalTokens: origin.maxTotalTokens } : undefined;
   renderContinuationPreview(element('#research-continuation-preview'), context, { seconds: Number(field('max-seconds').value), turns: Number(field('max-turns').value), tokens: Number(field('max-tokens').value) * 10_000 || undefined });
+  const budgetOrigin = budgetDraftOrigin ?? (origin ? { runId: origin.id, source: origin.source, environment: origin.environment } : undefined);
+  const budgetTokens = state.session ? tokenCap(field('max-tokens').value, state.session.limits.maxTotalTokens) : undefined;
+  renderResearchBudgetDraft(element('#research-budget-draft'), budgetOrigin && budgetOrigin.source === field('source').value && budgetOrigin.environment === field('environment').value
+    ? { runId: budgetOrigin.runId, projectId: budgetOrigin.projectId, tokens: budgetTokens ?? 0, providerId: field('provider').value, model: field('model').value.trim() } : undefined, api);
   element('#draft-formalization').hidden = !draftFormalization;
   element('#confirmed-original').hidden = !draftFormalization;
   element('#creation-mode').textContent = draftFormalization ? t('已确认的自然语言原题') : t('已有 Lean 原题');
@@ -1013,6 +1022,8 @@ function captureDraft(): TaskDraft {
     ...(knowledgeDigest !== undefined ? { knowledgeDigest } : {}),
     ...(modulePlan.custom.length || modulePlan.scheduler !== 'plan' || modulePlan.context !== 'full' ? { modulePlan } : {}),
     ...(draftContinuation ? { continueFrom: draftContinuation } : {}),
+    ...(budgetDraftOrigin && budgetDraftOrigin.source === field('source').value && budgetDraftOrigin.environment === field('environment').value
+      ? { problemBudget: { runId: budgetDraftOrigin.runId, ...(budgetDraftOrigin.projectId ? { projectId: budgetDraftOrigin.projectId } : {}) } } : {}),
     ...(draftFormalization ? { formalization: { id: draftFormalization.id, evidenceSha256: draftFormalization.evidenceSha256 } } : {}) };
 }
 function setDraftStatus(text: string, warning = false) {
@@ -1041,6 +1052,7 @@ function replaceDraft(reason: ReplacementReason, change: () => void) {
   // Another problem or a fresh draft no longer continues the version; editing the statement or reusing a run keeps its own.
   if (reason !== 'edit' && reason !== 'reuse') draftContinuation = undefined;
   if (reason !== 'edit' && reason !== 'reuse') continuationPreview = undefined;
+  if (reason !== 'edit' && reason !== 'reuse') budgetDraftOrigin = undefined;
   if (reason !== 'edit') draftFormalization = undefined;
   try { change(); } finally { replacingDraft = nested; }
   if (track) {
@@ -1096,6 +1108,7 @@ function saveDraft() {
 }
 function applyTaskDraft(draft: TaskDraft) {
   continuationPreview = undefined;
+  budgetDraftOrigin = draft.problemBudget ? { ...draft.problemBudget, source: draft.source, environment: draft.environment } : undefined;
   modulePlanLibrary.resetSelection();
   clearValidation();
   draftSourceExpanded = false;
@@ -2105,6 +2118,50 @@ async function openLibraryProposalDraft() {
   retry.addEventListener('click', () => void prepare());
   await prepare();
 }
+async function openBudgetAttemptDraft() {
+  const runId = productTarget.get('budgetRun'), projectId = productTarget.get('project') ?? undefined, tokens = Number(productTarget.get('budgetTokens'));
+  if (budgetDraftHandled || !runId || !runIdPattern.test(runId) || !Number.isSafeInteger(tokens) || tokens < 10_000 || tokens > 1e12) return;
+  budgetDraftHandled = true;
+  const panel = document.createElement('aside'); panel.className = 'composer-research-selection'; panel.dataset.budgetAttemptStart = '';
+  const notice = document.createElement('p'); notice.setAttribute('role', 'status');
+  const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'button'; retry.hidden = true;
+  retry.textContent = t('重新准备预算草稿'); panel.append(notice, retry); element('#run-form').prepend(panel);
+  const prepare = async () => {
+    if (!state.session || state.submitting) return;
+    const owner = ownerOfSession(state.session), revision = draftRevision;
+    retry.disabled = true; retry.hidden = true; notice.textContent = t('正在读取原题与预算…');
+    try {
+      if (tokens > state.session.limits.maxTotalTokens) throw new Error(t('规划的 Token 超过本次运行上限，请返回题目页调整。'));
+      await api(`/api/research/workspace/problem/${encodeURIComponent(runId)}/budget${projectId ? `?project=${encodeURIComponent(projectId)}` : ''}`);
+      let run: WebRun, own = true;
+      try { run = (await api<{ run: WebRun }>(`/api/runs/${encodeURIComponent(runId)}`)).run; }
+      catch (error) {
+        if (!projectId || !(error instanceof ApiError) || ![403, 404].includes(error.status)) throw error;
+        own = false;
+        const result = await api<{ run?: WebRun }>(`/api/research/theorems/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}`);
+        if (!result.run) throw new Error(t('研究记录不存在或不属于当前会话。'));
+        run = { ...result.run, formalization: undefined, formalizationId: undefined };
+      }
+      const configuration = own ? run.researchConfiguration : undefined;
+      const refs = configuration ? [configuration.agent?.ref, ...configuration.skills.map(item => item.ref), ...configuration.libraries.map(item => item.ref)].filter(item => item !== undefined) : [];
+      const selected = refs.length ? await researchSelection.prepare(refs, run.environment) : undefined;
+      if (!state.session || ownerOfSession(state.session) !== owner || draftRevision !== revision || state.submitting)
+        throw new Error(t('草稿已变化，未载入预算规划。请核对后重新准备。'));
+      const issue = submissionIssues({ ...captureDraft(), source: run.source, task: run.task }, '', state.session).find(issue => issue.field === 'source' || issue.field === 'task');
+      if (issue) throw new Error(issue.message);
+      reuseRun(run);
+      if (selected) researchSelection.adopt(selected); else researchSelection.clear();
+      budgetDraftOrigin = { runId, projectId, source: run.source, environment: run.environment };
+      field('max-tokens').value = String(tokens / 10_000);
+      draftChanged(); saveDraft(); renderDraftRecovery();
+      notice.textContent = own ? t('已准备原题、执行配置与本次预算。核对后即可发送研究任务。')
+        : t('已将项目原题准备为个人尝试。核对模型、Library 和预算后可开始，随后可将新运行关联到项目。');
+      panel.dataset.budgetAttemptReady = 'true';
+    } catch (error) { notice.textContent = message(error); retry.hidden = false; }
+    finally { retry.disabled = false; }
+  };
+  retry.addEventListener('click', () => void prepare()); await prepare();
+}
 const currentConnection = (epoch: number) => pageActive && epoch === state.connectionEpoch;
 const sessionFailure = (error: unknown) => error instanceof ApiError
   && (error.status === 401 || error.status === 403 && error.reason.includes('会话校验'));
@@ -2316,6 +2373,7 @@ function initialize(): Promise<void> {
         chooseEntry('lean'); startDraft(false, 'replace');
       });
       await openLibraryProposalDraft();
+      await openBudgetAttemptDraft();
       if (!productEntryHandled) {
         productEntryHandled = true;
         if (productEntry) {
@@ -2339,6 +2397,11 @@ function initialize(): Promise<void> {
             else openChatArtifact(productTarget.get('view') === 'source' ? 'source' : 'roadmap');
           }
         }
+      }
+      if (firstLoad && budgetDraftOrigin && state.composing && !productEntry && !productTarget.has('chat') && !linkedRun) {
+        await naturalPage;
+        if (!currentConnection(epoch)) return;
+        chooseEntry('lean');
       }
       setGlobalNotice(session.runtime.ready && session.providers.length ? '' : localizeText(session.runtime.message) || t('运行环境未就绪'));
     } catch (error) {
@@ -2988,6 +3051,7 @@ function reuseRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 'report'>
   chooseEntry('lean');
   if (recovery === 'key') forgetRememberedKey();
   replaceDraft('reuse', () => {
+    budgetDraftOrigin = { runId: run.id, source: run.source, environment: run.environment };
     draftContinuation = from;
     continuationPreview = { title: run.title, runId: run.id, from, originalSeconds: run.maxRunSeconds, originalTurns: run.maxTurns, originalTokens: run.maxTotalTokens };
     draftFormalization = run.formalization ? { id: run.formalization.id, evidenceSha256: run.formalization.evidenceSha256,

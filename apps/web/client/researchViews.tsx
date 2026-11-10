@@ -26,6 +26,9 @@ export function ResearchApp() {
   const [context, setContext] = useState<ResearchContext>(), [error, setError] = useState(''), [attempt, setAttempt] = useState(0);
   const [checking, setChecking] = useState(true), [verifyingOwner, setVerifyingOwner] = useState(false), current = useRef<ResearchContext>();
   const confirmation = useRef<AbortController>();
+  const loginParameters = new URLSearchParams(location.search);
+  loginParameters.set('lang', locale);
+  const loginAddress = loginHref(`${location.pathname}?${loginParameters}${location.hash}`);
   current.current = context;
   const changed = useCallback(() => {
     confirmation.current?.abort(); clearResearchSession(); current.current = undefined;
@@ -94,13 +97,15 @@ export function ResearchApp() {
       window.removeEventListener('pageshow', restore); window.removeEventListener('storage', accountLeft);
     };
   }, [attempt, changed]);
-  const unavailable = Boolean(error) || !context || verifyingOwner;
+  const draftNeedsLogin = page === 'theorems' && loginParameters.has('accountDraft') && Boolean(context && !context.session.authenticated);
+  const unavailable = Boolean(error) || !context || verifyingOwner || draftNeedsLogin;
   return <><Header /><main id="main" class={context ? 'research-shell' : 'research-loading'} tabIndex={-1} aria-busy={checking}>
-    {context && <div class={unavailable ? 'research-session-pending' : undefined} aria-hidden={unavailable} inert={unavailable} key={webDraftOwner(context.web)}>
+    {context && !draftNeedsLogin && <div class={unavailable ? 'research-session-pending' : undefined} aria-hidden={unavailable} inert={unavailable} key={webDraftOwner(context.web)}>
       {page === 'problem' ? <ProblemPage context={context} /> : page === 'workspace' ? <WorkspacePage context={context} /> : page === 'theorems' ? <TheoremsPage context={context} /> : page === 'library' ? <LibraryPage context={context} /> : <PeoplePage context={context} />}
     </div>}
     {unavailable && <div class="research-session-notice">{error ? <><ErrorBox message={error} /><div class="research-actions">
     <button class="button" type="button" onClick={() => setAttempt(value => value + 1)}>{tx('重新连接', 'Reconnect')}</button>
-    <a class="button" href={loginHref(location.pathname + location.search + location.hash)}>{tx('登录', 'Sign in')}</a></div></> : <p role="status">{tx('正在读取研究空间…', 'Loading the research space…')}</p>}</div>}
+    <a class="button" href={loginAddress}>{tx('登录', 'Sign in')}</a></div></> : draftNeedsLogin ? <><p>{tx('登录后恢复这份账号草稿。', 'Sign in to restore this account draft.')}</p>
+      <a class="button" href={loginAddress} data-account-draft-login>{tx('登录', 'Sign in')}</a></> : <p role="status">{tx('正在读取研究空间…', 'Loading the research space…')}</p>}</div>}
   </main></>;
 }

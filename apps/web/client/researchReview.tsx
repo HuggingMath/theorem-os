@@ -1,6 +1,7 @@
 import { useState } from 'preact/hooks';
 import type { ResearchFeedback, ResearchProjectDetail, ResearcherProfile } from '../researchProjectTypes';
 import { RichProse } from './richText';
+import { ResearchAnnotations } from './researchAnnotations';
 import { base, enc, ErrorBox, Field, MutationState, stamp, tx, useMutation, useResource, type Items } from './researchShared';
 
 export function ResearchReview({ feedback, project, selfId, canReview, refresh }: {
@@ -8,6 +9,7 @@ export function ResearchReview({ feedback, project, selfId, canReview, refresh }
 }) {
   const action = useMutation(), [reviewer, setReviewer] = useState(''), [text, setText] = useState('');
   const commentAction = useMutation(), [commentText, setCommentText] = useState('');
+  const [annotationsOpened, setAnnotationsOpened] = useState(false);
   const path = `${base}/theorems/${enc(project.id)}/feedback/${enc(feedback.id)}/review`;
   const assigned = feedback.review?.reviewer, canAssign = canReview && (project.permissions.manage || assigned?.id === selfId);
   const canJudge = canReview && feedback.author.id !== selfId && (!assigned || assigned.id === selfId || project.permissions.manage);
@@ -43,7 +45,9 @@ export function ResearchReview({ feedback, project, selfId, canReview, refresh }
       void action.run('POST', path, { action: 'resubmit', text, expectedRevision: feedback.revision }, () => { setText(current => current === submitted ? '' : current); refresh(); }); }}>
       <Field label={tx('补充推导、说明或证据', 'Additional reasoning, explanation or evidence')} value={text} onInput={setText} multiline required maxLength={4000} />
       <button class="button" type="submit" disabled={action.busy}>{tx('补充并重新送审', 'Add information and resubmit')}</button></form>}
-    {feedback.reviewComments?.map(comment => <div class="candidate-review-comment" key={comment.id} data-candidate-review-comment={comment.id}><p>{comment.author.displayName} · {stamp(comment.createdAt)}</p><RichProse text={comment.text} /></div>)}
+    {feedback.reviewComments?.filter(comment => !comment.anchor).map(comment => <div class="candidate-review-comment" key={comment.id} data-candidate-review-comment={comment.id}><p>{comment.author.displayName} · {stamp(comment.createdAt)}</p><RichProse text={comment.text} /></div>)}
+    {project.permissions.member && feedback.kind === 'proof-submission' && feedback.target?.taskRef && <details onToggle={event => { if (event.currentTarget.open) setAnnotationsOpened(true); }}><summary>{tx('对公式或源码作精确评审', 'Review a formula or exact source passage')}</summary>
+      {annotationsOpened && <ResearchAnnotations projectId={project.id} runId={feedback.target.runId} task={feedback.target.taskRef} feedbackId={feedback.id} selfId={selfId} refresh={refresh} />}</details>}
     {feedback.kind === 'proof-submission' && canJudge && !feedback.supersededBy && <form class="research-form" onSubmit={event => { event.preventDefault(); const submitted = commentText; void commentAction.run('POST', `${base}/theorems/${enc(project.id)}/feedback/${enc(feedback.id)}/review-comments`, { text: commentText, expectedRevision: feedback.revision }, () => { setCommentText(value => value === submitted ? '' : value); refresh(); }); }}>
       <label>{tx('需要修改或解释的具体一步', 'The specific step to revise or explain')}<textarea data-review-comment value={commentText} required rows={2} maxLength={4000} onInput={event => setCommentText(event.currentTarget.value)} /></label>
       <button class="button" type="submit" data-save-review-comment disabled={commentAction.busy}>{tx('添加评审意见', 'Add a review comment')}</button><MutationState action={commentAction} /></form>}

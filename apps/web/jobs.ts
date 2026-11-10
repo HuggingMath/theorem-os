@@ -102,7 +102,7 @@ export class WebJobs {
     if (!run) throw new WebStorageError(410, '这次提交对应的运行已删除，请发起新研究。');
     return run;
   }
-  /** `continuation` is the saved file `input.continueFrom` names; it goes to the worker and is not kept with the run. */
+  /** The source goes only to the worker; its exact host-resolved identity stays with the visible run. */
   create(owner: string, input: WebRunInput, provider: WebProvider, continuation?: WorkerInput['continuation'], requestId?: string,
     formalization?: { evidence: unknown; provenance: NonNullable<WebRun['formalization']> },
     researchConfiguration?: WorkerInput['researchConfiguration']): WebRun {
@@ -131,6 +131,10 @@ export class WebJobs {
       environment, id: crypto.randomUUID(),
       title: '', status: 'queued',
       phase: 'queued', createdAt: now, updatedAt: now, timings: {}, events: [], modules: {} };
+    if (input.continueFrom && continuation) run.continueFrom = clean({ ...input.continueFrom,
+      ...(continuation.taskVersion ? { taskVersion: continuation.taskVersion } : {}),
+      ...(continuation.sourceDigest ? { sourceDigest: continuation.sourceDigest } : {}),
+      ...(continuation.environmentDigest ? { environmentDigest: continuation.environmentDigest } : {}), file: continuation.file }, apiKey);
     if (formalization) run.formalization = formalization.provenance;
     if (researchConfiguration) run.researchConfiguration = structuredClone(researchConfiguration);
     run.title = (formalization?.provenance.original.trim() || run.task).split('\n')[0].slice(0, 60) || 'Lean 研究';

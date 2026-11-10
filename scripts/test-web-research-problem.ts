@@ -55,6 +55,7 @@ const runner: WebRunner = {
   async formalize() { prohibited++; throw new Error('No models in the problem UI check'); },
 };
 const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin,
+  THEOREMOS_WEB_CLIENT_IP_HEADER: 'x-fixture-scenario',
   THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web'), THEOREMOS_WEB_DATA_ROOT: dataRoot }), runner,
 { mailer: async () => { prohibited++; throw new Error('No mail in the problem UI check'); } });
 const browser = await startBrowser(service.server, port), errors: string[] = [], external: string[] = [], checks: object[] = [];
@@ -65,7 +66,8 @@ const read = (page: Page, pathname: string) => page.evaluate(async pathname => {
 try {
   for (const language of ['zh', 'en'] as const) for (const width of [1440, 390]) {
     phase = `${language}-${width}`;
-    const context = await browser.newContext({ viewport: { width, height: 1000 }, locale: language === 'zh' ? 'zh-CN' : 'en-US', reducedMotion: 'reduce' });
+    // Each independent browser scenario represents a separate visitor, including its request allowance.
+    const context = await browser.newContext({ viewport: { width, height: 1000 }, locale: language === 'zh' ? 'zh-CN' : 'en-US', reducedMotion: 'reduce', extraHTTPHeaders: { 'x-fixture-scenario': `${language}-${width}` } });
     await context.addInitScript(({ key, language }) => localStorage.setItem(key, language), { key: localeStorageKey, language });
     await context.route(/^https?:\/\//u, async route => { if (new URL(route.request().url()).origin !== origin) { external.push(route.request().url()); await route.abort(); } else await route.continue(); });
     const page = await context.newPage(); active = page; page.setDefaultTimeout(15_000); page.on('pageerror', error => errors.push(error.message));
@@ -83,14 +85,14 @@ try {
         text: 'Why does $n+0$ reduce to $n$?', status: 'complete', createdAt: selected.createdAt }] };
     service.storage.saveRecord(['owners', mathDigest(owner), 'conversations', `${conversation.id}.json`], conversation);
     await page.goto(`${origin}/problem.html?${new URLSearchParams({ run: selected.id, tab: 'route', task: task.id, taskVersion: task.version, commit: task.proof.commit! })}`);
-    await page.locator('.solution-route-detail h4').filter({ hasText: task.theorem! }).waitFor();
-    assert.match(await page.locator('.solution-route-detail').innerText(), /preceding reduction/);
+    await page.locator('[data-problem-route-decision] .solution-route-detail h4').filter({ hasText: task.theorem! }).waitFor();
+    assert.match(await page.locator('[data-problem-route-decision] .solution-route-detail').innerText(), /preceding reduction/);
     await page.waitForFunction(() => document.querySelectorAll('.katex').length > 0);
     const clickTab = async (tab: string) => { await page.locator(`.problem-tabs a[href*="tab=${tab}"]`).click(); await settled(page); };
     await clickTab('outcomes'); assert.equal(new URL(page.url()).searchParams.get('task'), task.id);
     await page.reload(); await page.locator('.problem-table').waitFor();
     assert.equal(new URL(page.url()).searchParams.get('commit'), task.proof.commit);
-    await clickTab('route'); await page.locator('.solution-route-detail h4').filter({ hasText: task.theorem! }).waitFor();
+    await clickTab('route'); await page.locator('[data-problem-route-decision] .solution-route-detail h4').filter({ hasText: task.theorem! }).waitFor();
     const exactSource = page.locator('.problem-context a');
     assert.equal(new URL(await exactSource.getAttribute('href') ?? '', origin).searchParams.get('commit'), task.proof.commit);
     await page.screenshot({ path: path.join(output, `route-${language}-${width}.png`), fullPage: true });

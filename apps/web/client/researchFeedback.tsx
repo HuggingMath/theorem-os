@@ -35,14 +35,15 @@ export function TaskFeedbackContext({ project, runId, task, onBrowse }: {
   </div>;
 }
 
-export function FeedbackWorkspace({ project, selfId, runId, task, refresh, onOpenTask, onOpenStatement, focus, browseTask, onRevealFeedback, onOpenIssue, children }: {
+export function FeedbackWorkspace({ project, selfId, runId, task, refresh, onOpenTask, onOpenStatement, focus, browseTask, onRevealFeedback, onOpenIssue, children, initialScope = 'all' }: {
   selfId: string;
   project: ResearchProjectDetail; runId?: string; task?: FeedbackTask; refresh: () => void; onOpenTask: OpenFeedbackTask;
   onOpenStatement: (versionId: string) => void;
   focus?: FeedbackFocus; browseTask: number; onRevealFeedback: (id: string) => void; children?: ComponentChildren;
   onOpenIssue?: (feedback: ResearchFeedback) => void;
+  initialScope?: FeedbackScope;
 }) {
-  const [scope, setScope] = useState<FeedbackScope>('all'), [status, setStatus] = useState<FeedbackStatus>('all'), [query, setQuery] = useState('');
+  const [scope, setScope] = useState<FeedbackScope>(initialScope), [status, setStatus] = useState<FeedbackStatus>('all'), [query, setQuery] = useState('');
   const root = useRef<HTMLDivElement>(null), focused = useRef(''), browsed = useRef(browseTask);
   const currentTask = task?.runId === runId ? task : undefined;
   const scoped = project.feedback.filter(item => matchesFeedbackScope(item, scope, runId, currentTask));

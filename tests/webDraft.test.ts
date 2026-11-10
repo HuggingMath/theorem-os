@@ -32,6 +32,19 @@ describe('task draft codecs without credentials or run-result state', () => {
     const original = draft({ knowledgeDigest: null });
     expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(original)))).toEqual(original);
   });
+  it('keeps the problem budget reference through reload without importing an archived account reference', () => {
+    const problemBudget = { runId: 'a'.repeat(36), projectId: 'project-one' };
+    const original = draft({ problemBudget, maxTotalTokens: '15' });
+    expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(original)))).toEqual(original);
+    expect(decodeTaskDraft({ ...archive(), run: { ...archive().run, problemBudget } })).not.toHaveProperty('problemBudget');
+    expect(() => decodeTaskDraft(envelope(draft({ problemBudget: { runId: '../../private' } })))).toThrow('任务草稿格式无效');
+  });
+  it('retains exact continuation identities in a locally restored draft', () => {
+    const continueFrom = { runId: 'a'.repeat(36), taskId: 'goal', commit: 'b'.repeat(40), label: 'Saved source',
+      taskVersion: 'v1', sourceDigest: 'c'.repeat(64), environmentDigest: 'd'.repeat(64), file: 'Main.lean' };
+    expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(draft({ continueFrom }))))).toEqual(draft({ continueFrom }));
+    expect(() => decodeTaskDraft(envelope(draft({ continueFrom: { ...continueFrom, sourceDigest: 'not-a-digest' } })))).toThrow('任务草稿格式无效');
+  });
 
   it('converts only archived execution configuration into an editable draft', () => {
     expect(decodeTaskDraft(archive())).toEqual(draft({ templateId: '' }));

@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import { canonicalMathJson, mathDigest } from '../../src/math/mathRuntimeIo';
 import { webGuidanceSchema, webPlanApprovalSchema, webPlanProposalSchema } from './collaborationValidation';
-import type { WebCommandResult, WebGuidanceRecord, WebObservation } from './collaboration';
+import type { WebCommandResult, WebGuidanceRecord, WebInspectedTask, WebObservation } from './collaboration';
 import { webLimits } from './shared';
 import { WebStorage, WebStorageError } from './storage';
 import type { ResearchCollaborationInbox, ResearchCollaborationState, ResearchCollaborationView, ResearchHandoff,
@@ -13,6 +13,7 @@ import type {
   ResearchProfileInput, ResearchProjectDetail, ResearchProjectInput, ResearchProjectSummary, ResearchProjectUpdate,
   ResearchQuery, ResearcherDirectory, ResearcherProfile, ResearchRunBinding, ResearchRunBindingInput, ResearchRunGrants, ResearchRunPermission,
   ResearchStatementInput, ResearchStatementVersion, ResearchProofResult, ResearchWorkImpact, ResearchWorkImpactItem, ResearchWorkContinuation,
+  ResearchAnnotation, ResearchAnnotationAnchor, ResearchAnnotationContext, ResearchAnnotationPage,
 } from './researchProjectTypes';
 import type { ResearchLibraryCandidateAttachment } from './researchLibraryTrialTypes';
 
@@ -50,6 +51,16 @@ const feedbackFields = { ...mutation, text: nonempty(4000), visibility: z.enum([
 const recipientSchema = z.discriminatedUnion('kind', [z.object({ kind: z.literal('lead'), id: id.optional() }).strict(),
   z.object({ kind: z.literal('task'), id }).strict(), z.object({ kind: z.literal('worker'), id }).strict()]);
 const revisionResponsesSchema = z.array(z.object({ commentId: id, text: nonempty(4000) }).strict()).max(100);
+const annotationAnchorSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('source'), sourceDigest: hash, file: nonempty(512), startLine: z.number().int().positive(), endLine: z.number().int().positive(), quote: nonempty(32000) }).strict(),
+  z.object({ kind: z.literal('mathematics'), field: z.enum(['objective', 'statement', 'premises', 'derivation', 'finding', 'feedback']), fieldDigest: hash,
+    startOffset: z.number().int().nonnegative(), endOffset: z.number().int().positive(), quote: nonempty(32000) }).strict(),
+]);
+const annotationTargetSchema = z.object({ observationRef: observationRefSchema, taskRef: taskRefSchema }).strict();
+const annotationFields = (task: WebInspectedTask): ResearchAnnotationContext['fields'] => ([
+  ['objective', task.objective], ['statement', task.informalStatement ?? task.type], ['premises', task.premises.join('\n')],
+  ['derivation', task.informalProof], ['finding', task.finding], ['feedback', task.feedback],
+] as const).flatMap(([field, value]) => value ? [{ field, text: value, digest: mathDigest(value) }] : []);
 const feedbackSchema = z.discriminatedUnion('kind', [
   z.object({ ...feedbackFields, kind: z.literal('discussion'), statementVersionId: id.optional() }).strict(),
   z.object({ ...feedbackFields, kind: z.literal('guidance'), target: targetSchema, recipient: recipientSchema }).strict(),
@@ -82,12 +93,13 @@ type StoredProject = {
   versions: ResearchStatementVersion[]; bindings: StoredBinding[]; feedback: ResearchFeedback[];
   activity: ResearchActivity[]; contributions: ResearchContribution[]; assignments?: ResearchHumanAssignment[];
   collaboration?: ResearchCollaborationState; requests: Requests;
+  annotations?: ResearchAnnotation[];
 };
 type AssetContribution = { assetId: string; version: string; visibility: 'private' | 'public';
   contribution: ResearchContribution; activity: ResearchActivity };
 type OwnerState = { owner: string; profile?: ResearcherProfile; follows: { kind: 'person' | 'theorem'; id: string }[];
   notificationThrough?: string; inbox?: Record<string, { read?: boolean; processed?: boolean }>;
-  assetContributions?: AssetContribution[]; requests: Requests };
+  assetContributions?: AssetContribution[]; annotations?: ResearchAnnotation[]; requests: Requests };
 
 /** Owns collaboration facts and permissions. Runtime control remains behind the existing host command protocol. */
 export class WebResearchProjects {
@@ -518,6 +530,133 @@ export class WebResearchProjects {
     const stored = this.readable(viewer, projectId), feedback = this.visibleFeedback(viewer, stored).find(item => item.id === feedbackId);
     if (!feedback) throw new WebStorageError(404, '反馈不存在。');
     return clone(feedback);
+  }
+  private annotationScope(viewer: string, projectId: string | undefined, runId: string) {
+    this.authenticated(viewer); parse(id, runId);
+    if (projectId) {
+      const stored = this.readable(viewer, projectId), access = this.access(viewer, stored);
+      if (!access.member) throw new WebStorageError(403, '批注与引用片段仅向项目成员开放。');
+      const resolved = this.resolveBinding(viewer, projectId, runId, 'read');
+      return { stored, state: stored as StoredProject | OwnerState, runOwner: resolved.runOwner, run: resolved.run,
+        statementVersionId: resolved.binding.statementVersionId, manage: access.manage, create: access.discuss,
+        review: access.edit && resolved.binding.permissions.proof, save: () => this.save(stored) };
+    }
+    const run = this.storage.getRun(viewer, runId);
+    if (!run) throw new WebStorageError(404, '运行不存在。');
+    const state = this.ownerState(viewer);
+    return { stored: undefined, state: state as StoredProject | OwnerState, runOwner: viewer, run, statementVersionId: undefined,
+      manage: true, create: true, review: false, save: () => this.storage.saveRecord(this.ownerPath(viewer), state) };
+  }
+  private annotationContextAt(scope: ReturnType<WebResearchProjects['annotationScope']>, selection: { taskId: string; taskVersion: string; feedbackId?: string; commit?: string; sourceDigest?: string },
+    at?: ResearchAnnotation['target']['observationRef']): ResearchAnnotationContext {
+    const selected = parse(z.object({ taskId: id, taskVersion: nonempty(128), feedbackId: id.optional(), commit: nonempty(128).optional(), sourceDigest: hash.optional() }).strict(), selection);
+    const feedback = selected.feedbackId ? scope.stored?.feedback.find(item => item.id === selected.feedbackId) : undefined;
+    if (selected.feedbackId && (!feedback || feedback.kind !== 'proof-submission' || feedback.target?.runId !== scope.run.id
+      || feedback.target.taskRef?.id !== selected.taskId || feedback.target.taskRef.version !== selected.taskVersion)) throw new WebStorageError(404, '候选证明不存在。');
+    if (feedback && at && canonicalMathJson(at) !== canonicalMathJson(feedback.target!.observationRef))
+      throw new WebStorageError(409, '批注对应的任务快照不可用，请重新打开所选版本。');
+    const observations = [...this.storage.listObservations(scope.runOwner, scope.run.id), ...(scope.run.observation ? [scope.run.observation] : [])]
+      .filter((item, index, values) => values.findIndex(value => value.sequence === item.sequence && value.snapshot.stateDigest === item.snapshot.stateDigest) === index)
+      .sort((a, b) => b.sequence - a.sequence);
+    const observation = at ? observations.find(item => item.sequence === at.sequence && item.snapshot.stateDigest === at.stateDigest)
+      : feedback ? observations.find(item => item.sequence === feedback.target!.observationRef.sequence && item.snapshot.stateDigest === feedback.target!.observationRef.stateDigest)
+        : observations.find(item => [...item.inspection.tasks, ...(item.history ?? [])].some(task => task.id === selected.taskId && task.version === selected.taskVersion)
+          && (!selected.commit || item.sources.some(source => source.taskId === selected.taskId && source.taskVersion === selected.taskVersion && source.commit === selected.commit)));
+    const task = observation && [...observation.inspection.tasks, ...(observation.history ?? [])].find(item => item.id === selected.taskId && item.version === selected.taskVersion);
+    if (!observation || !task) throw new WebStorageError(409, '批注对应的任务快照不可用，请重新打开所选版本。');
+    const payload = feedback?.payload && 'source' in feedback.payload ? feedback.payload : undefined;
+    const source = payload ? { taskId: selected.taskId, taskVersion: selected.taskVersion, commit: payload.base.commit,
+      sourceDigest: mathDigest(payload.source), environmentDigest: payload.base.environmentDigest, file: payload.base.file, source: payload.source, scope: 'owned-file' as const }
+      : observation.sources.find(item => item.taskId === selected.taskId && item.taskVersion === selected.taskVersion && (!selected.commit || item.commit === selected.commit)
+        && (!selected.sourceDigest || item.sourceDigest === selected.sourceDigest));
+    return { target: { runId: scope.run.id, ...(scope.statementVersionId ? { statementVersionId: scope.statementVersionId } : {}),
+      observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest }, taskRef: { id: selected.taskId, version: selected.taskVersion } },
+      ...(source ? { source: clone(source) } : {}), fields: annotationFields(task), ...(feedback ? { feedbackId: feedback.id } : {}) };
+  }
+  annotations(viewer: string, projectId: string | undefined, runId: string, selection: { taskId: string; taskVersion: string; feedbackId?: string; commit?: string }): ResearchAnnotationPage {
+    const scope = this.annotationScope(viewer, projectId, runId), context = this.annotationContextAt(scope, selection), self = this.identity(viewer);
+    const candidate = selection.feedbackId ? scope.stored?.feedback.find(item => item.id === selection.feedbackId) : undefined;
+    const items = (scope.state.annotations ?? []).filter(item => item.target.runId === runId && item.target.taskRef?.id === selection.taskId
+      && (selection.feedbackId ? item.feedbackId === selection.feedbackId : !item.feedbackId)).map(item => {
+      const task = scope.run.observation?.inspection.tasks.find(task => task.id === item.target.taskRef?.id);
+      const feedback = item.feedbackId ? scope.stored?.feedback.find(feedback => feedback.id === item.feedbackId) : undefined;
+      let staleReason: ResearchAnnotationPage['items'][number]['staleReason'] = feedback?.supersededBy ? 'candidate-revised'
+        : !task || task.version !== item.target.taskRef?.version ? 'task-changed' : undefined;
+      if (!staleReason && item.anchor.kind === 'source') {
+        const payload = feedback?.payload && 'source' in feedback.payload ? feedback.payload : undefined;
+        const current = payload ? mathDigest(payload.source) === item.anchor.sourceDigest && payload.base.file === item.anchor.file
+          : scope.run.observation?.sources.some(source => source.taskId === task!.id && source.taskVersion === task!.version
+            && source.file === (item.anchor as Extract<ResearchAnnotationAnchor, { kind: 'source' }>).file && source.sourceDigest === (item.anchor as Extract<ResearchAnnotationAnchor, { kind: 'source' }>).sourceDigest);
+        if (!current) staleReason = 'source-changed';
+      } else if (!staleReason && item.anchor.kind === 'mathematics') {
+        if (!annotationFields(task!).some(field => field.field === (item.anchor as Extract<ResearchAnnotationAnchor, { kind: 'mathematics' }>).field && field.digest === (item.anchor as Extract<ResearchAnnotationAnchor, { kind: 'mathematics' }>).fieldDigest)) staleReason = 'field-changed';
+      }
+      return { ...clone(item), stale: Boolean(staleReason), ...(staleReason ? { staleReason } : {}), canReply: scope.create,
+        canResolve: scope.manage || item.author.id === self || feedback?.author.id === self || Boolean(scope.review && feedback?.review?.reviewer.id === self) };
+    });
+    return { items, context, permissions: { create: Boolean(scope.create && (!candidate || candidate.author.id === self || scope.review
+      && (!candidate.review || candidate.review.reviewer.id === self || scope.manage) && !candidate.supersededBy && candidate.continuation?.action !== 'end')), review: scope.review } };
+  }
+  createAnnotation(viewer: string, projectId: string | undefined, runId: string, value: unknown): ResearchAnnotation {
+    const scope = this.annotationScope(viewer, projectId, runId), input = parse(z.object({ requestId: id, target: annotationTargetSchema,
+      anchor: annotationAnchorSchema, text: nonempty(4000), feedbackId: id.optional() }).strict(), value) as { requestId: string;
+        target: { observationRef: ResearchFeedbackTarget['observationRef']; taskRef: { id: string; version: string } }; anchor: ResearchAnnotationAnchor; text: string; feedbackId?: string };
+    const previous = this.request(scope.state, viewer, `annotation:${runId}`, input);
+    if (previous) return clone(scope.state.annotations!.find(item => item.id === previous.resultId)!);
+    if (!scope.create) throw new WebStorageError(403, '没有添加批注的权限。');
+    const context = this.annotationContextAt(scope, { taskId: input.target.taskRef.id, taskVersion: input.target.taskRef.version,
+      ...(input.feedbackId ? { feedbackId: input.feedbackId } : {}), ...(input.anchor.kind === 'source' ? { sourceDigest: input.anchor.sourceDigest } : {}) }, input.target.observationRef), anchor = input.anchor;
+    if (anchor.kind === 'source') {
+      const source = context.source, lines = source?.source.split('\n');
+      if (!source || mathDigest(source.source) !== source.sourceDigest || source.sourceDigest !== anchor.sourceDigest || source.file !== anchor.file
+        || anchor.endLine < anchor.startLine || anchor.endLine - anchor.startLine >= 200 || anchor.endLine > lines!.length
+        || lines!.slice(anchor.startLine - 1, anchor.endLine).join('\n') !== anchor.quote) throw new WebStorageError(409, '源码批注与所选文件、行范围或冻结源码不一致。');
+    } else {
+      const field = context.fields.find(field => field.field === anchor.field && field.digest === anchor.fieldDigest);
+      if (!field || anchor.startOffset >= anchor.endOffset || field.text.slice(anchor.startOffset, anchor.endOffset) !== anchor.quote)
+        throw new WebStorageError(409, '数学批注与所选字段或原文片段不一致。');
+    }
+    const at = now(), record: ResearchAnnotation = { id: `annotation-${mathDigest(`${this.identity(viewer)}:${input.requestId}`).slice(0, 32)}`,
+      author: this.author(viewer), target: context.target, ...(input.feedbackId ? { feedbackId: input.feedbackId } : {}), anchor: clone(anchor), text: input.text,
+      status: 'open', replies: [], revision: 1, createdAt: at, updatedAt: at };
+    if (scope.stored && input.feedbackId) {
+      const feedback = scope.stored.feedback.find(item => item.id === input.feedbackId)!;
+      if (feedback.author.id !== this.identity(viewer)) {
+        if (!scope.review || feedback.review && feedback.review.reviewer.id !== this.identity(viewer) && !scope.manage)
+          throw new WebStorageError(403, '此候选的评审批注需要当前负责评审的操作权限。');
+        if (feedback.supersededBy || feedback.continuation?.action === 'end') throw new WebStorageError(409, '请在最新候选上添加评审意见。');
+        record.reviewCommentId = record.id;
+        (feedback.reviewComments ??= []).push({ id: record.id, author: clone(record.author), text: record.text, createdAt: at, anchor: clone(record.anchor) });
+        feedback.revision++; feedback.updatedAt = at;
+      }
+    }
+    (scope.state.annotations ??= []).push(record);
+    if (scope.stored) this.event(scope.stored, viewer, 'annotation-created', '标注具体推导或源码片段', { runId, ...(input.feedbackId ? { feedbackId: input.feedbackId } : {}) });
+    this.remember(scope.state, viewer, `annotation:${runId}`, input, record.id); scope.save(); return clone(record);
+  }
+  updateAnnotation(viewer: string, projectId: string | undefined, runId: string, annotationId: string, value: unknown): ResearchAnnotation {
+    const scope = this.annotationScope(viewer, projectId, runId), input = parse(z.object({ requestId: id, expectedRevision: revision,
+      action: z.enum(['reply', 'resolve', 'reopen']), text: nonempty(4000).optional() }).strict(), value) as {
+        requestId: string; expectedRevision: number; action: 'reply' | 'resolve' | 'reopen'; text?: string };
+    const record = scope.state.annotations?.find(item => item.id === annotationId && item.target.runId === runId);
+    if (!record) throw new WebStorageError(404, '批注不存在。');
+    const operation = `annotation-update:${annotationId}`;
+    if (this.request(scope.state, viewer, operation, input)) return clone(record);
+    this.compare(record.revision, input.expectedRevision);
+    const feedback = record.feedbackId ? scope.stored?.feedback.find(item => item.id === record.feedbackId) : undefined, self = this.identity(viewer);
+    const canResolve = scope.manage || record.author.id === self || feedback?.author.id === self || Boolean(scope.review && feedback?.review?.reviewer.id === self);
+    if (!scope.create || input.action !== 'reply' && !canResolve) throw new WebStorageError(403, '没有处理这条批注的权限。');
+    const at = now();
+    if (input.action === 'reply') {
+      if (!input.text) throw new WebStorageError(400, '请填写批注回应。');
+      record.replies.push({ id: crypto.randomUUID(), author: this.author(viewer), text: input.text, createdAt: at });
+    } else {
+      record.status = input.action === 'resolve' ? 'resolved' : 'open';
+      if (input.action === 'resolve') record.resolution = { actor: this.author(viewer), ...(input.text ? { text: input.text } : {}), createdAt: at };
+      else record.resolution = undefined;
+    }
+    record.revision++; record.updatedAt = at;
+    this.remember(scope.state, viewer, operation, input, record.id); scope.save(); return clone(record);
   }
   addReviewComment(viewer: string, projectId: string, feedbackId: string, value: unknown): ResearchFeedback {
     const stored = this.writable(viewer, projectId), input = parse(z.object({ ...mutation, text: nonempty(4000) }).strict(), value) as ResearchMutation & { text: string };
@@ -1332,6 +1471,7 @@ export class WebResearchProjects {
           || feedback.reviewComments?.some(item => item.author.id === researcher) || feedback.candidateDelivery?.approvedBy?.id === researcher
           || feedback.continuation?.actor.id === researcher || feedback.reviewContinuation?.actor.id === researcher
           || feedback.candidateRevision?.parentSnapshot.decision.actor?.id === researcher || feedback.candidateRevision?.parentSnapshot.comments.some(item => item.author.id === researcher)) ||
+        stored.annotations?.some(item => item.author.id === researcher || item.replies.some(reply => reply.author.id === researcher) || item.resolution?.actor.id === researcher) ||
         (stored.assignments ?? []).some(assignment => assignment.author.id === researcher || assignment.continuation?.actor.id === researcher) ||
         stored.collaboration?.invitations.some(item => item.author.id === researcher || item.recipient.id === researcher) ||
         stored.collaboration?.handoffs.some(item => item.author.id === researcher || item.recipient.id === researcher || item.continuation?.actor.id === researcher) ||
@@ -1345,6 +1485,12 @@ export class WebResearchProjects {
       stored.feedback = stored.feedback.filter(feedback => feedback.author.id !== researcher && !removedRuns.has(feedback.target?.runId ?? ''));
       stored.assignments = (stored.assignments ?? []).filter(assignment => assignment.author.id !== researcher && !removedRuns.has(assignment.target.runId));
       const deleted = { id: 'deleted-researcher', displayName: 'Deleted researcher' };
+      stored.annotations = stored.annotations?.filter(item => item.author.id !== researcher && !removedRuns.has(item.target.runId)
+        && (!item.feedbackId || stored.feedback.some(feedback => feedback.id === item.feedbackId)));
+      for (const annotation of stored.annotations ?? []) {
+        annotation.replies = annotation.replies.filter(reply => reply.author.id !== researcher);
+        if (annotation.resolution?.actor.id === researcher) annotation.resolution = { ...annotation.resolution, actor: deleted, text: undefined };
+      }
       const forgetContinuation = (continuation: ResearchWorkContinuation | undefined) => {
         if (continuation?.actor.id === researcher) { continuation.actor = deleted; continuation.text = ''; }
       };

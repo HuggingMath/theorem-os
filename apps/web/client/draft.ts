@@ -26,6 +26,7 @@ export type TaskDraft = {
   /** A version of one of this account's runs to start from; archives never carry one, it names a run of their owner. */
   continueFrom?: WebContinuation;
   formalization?: { id: string; evidenceSha256: string };
+  problemBudget?: { runId: string; projectId?: string };
 };
 
 const archiveSchemas = ['theorem-os.web-export.v1', 'theorem-os.web-archive.v1'];
@@ -79,17 +80,31 @@ function flag<K extends string>(record: Record<string, unknown>, key: K): Partia
 
 function continuation(value: unknown): WebContinuation {
   const record = object(value);
-  if (Object.keys(record).some(key => !['runId', 'taskId', 'commit', 'label'].includes(key))) invalid();
+  if (Object.keys(record).some(key => !['runId', 'taskId', 'commit', 'label', 'taskVersion', 'sourceDigest', 'environmentDigest', 'file'].includes(key))) invalid();
   const result = { runId: text(record, 'runId', 36), taskId: text(record, 'taskId', 200), commit: text(record, 'commit', 128),
     label: text(record, 'label', 200) };
   if (!/^[a-f0-9-]{36}$/u.test(result.runId) || !result.taskId || !/^[A-Za-z0-9]{1,128}$/u.test(result.commit)
     || !result.label.trim() || /\p{Cc}/u.test(result.label)) invalid();
-  return result;
+  const taskVersion = Object.hasOwn(record, 'taskVersion') ? text(record, 'taskVersion', 200) : undefined;
+  const sourceDigest = Object.hasOwn(record, 'sourceDigest') ? text(record, 'sourceDigest', 64) : undefined;
+  const environmentDigest = Object.hasOwn(record, 'environmentDigest') ? text(record, 'environmentDigest', 64) : undefined;
+  const sourceFile = Object.hasOwn(record, 'file') ? text(record, 'file', 500) : undefined;
+  if (sourceDigest !== undefined && !/^[a-f0-9]{64}$/u.test(sourceDigest) || environmentDigest !== undefined && !/^[a-f0-9]{64}$/u.test(environmentDigest)
+    || taskVersion !== undefined && !/^[A-Za-z0-9_.:-]{1,200}$/u.test(taskVersion) || sourceFile !== undefined && (!sourceFile || /[\p{Cc}]/u.test(sourceFile))) invalid();
+  return { ...result, ...(taskVersion ? { taskVersion } : {}), ...(sourceDigest ? { sourceDigest } : {}),
+    ...(environmentDigest ? { environmentDigest } : {}), ...(sourceFile ? { file: sourceFile } : {}) };
 }
 
 function validatedDraft(value: unknown): TaskDraft {
   const draft = object(value);
   let formalization: TaskDraft['formalization'];
+  let problemBudget: TaskDraft['problemBudget'];
+  if (Object.hasOwn(draft, 'problemBudget')) {
+    const ref = object(draft.problemBudget), runId = text(ref, 'runId', 36);
+    const projectId = Object.hasOwn(ref, 'projectId') ? text(ref, 'projectId', 128) : undefined;
+    if (!/^[a-f0-9-]{1,36}$/u.test(runId) || projectId !== undefined && !/^[A-Za-z0-9_-]{1,128}$/u.test(projectId)) invalid();
+    problemBudget = { runId, ...(projectId ? { projectId } : {}) };
+  }
   if (Object.hasOwn(draft, 'formalization')) {
     const ref = object(draft.formalization);
     const id = text(ref, 'id', 36), evidenceSha256 = text(ref, 'evidenceSha256', 64);
@@ -110,6 +125,7 @@ function validatedDraft(value: unknown): TaskDraft {
     ...(Object.hasOwn(draft, 'modulePlan') ? { modulePlan: researchModulePlanDraftSchema.parse(draft.modulePlan) as ResearchModulePlan } : {}),
     ...(Object.hasOwn(draft, 'continueFrom') ? { continueFrom: continuation(draft.continueFrom) } : {}),
     ...(formalization ? { formalization } : {}),
+    ...(problemBudget ? { problemBudget } : {}),
   };
 }
 

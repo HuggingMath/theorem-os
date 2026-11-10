@@ -67,6 +67,8 @@ const inputSchema = z.object({
   // Names a version of one of the account's runs; its saved file is looked up here, never taken from the request.
   continueFrom: z.object({ runId: z.string().regex(/^[a-f0-9-]{36}$/u), taskId: z.string().min(1).max(200),
     commit: z.string().regex(/^[A-Za-z0-9]{1,128}$/u),
+    taskVersion: z.string().min(1).max(200).optional(), sourceDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+    environmentDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(), file: z.string().min(1).max(1000).regex(/^[^\p{Cc}]*$/u).optional(),
     label: z.string().trim().min(1).max(webContinuationLabelMax).regex(/^[^\p{Cc}]*$/u) }).strict().optional(),
 }).strict();
 // A question about one recorded version; its code and Lean's output are read here, never taken from the request.
@@ -915,6 +917,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const from = input.continueFrom as WebContinuation | undefined;
           const saved = from && jobs.get(owner, from.runId) ? trajectories.version(owner, from.runId, from.taskId, from.commit)?.source : undefined;
           if (from && !saved) throw new HttpError(404, '这个版本的代码没有记录或已超出保留范围。');
+          if (from && saved && (['taskVersion', 'sourceDigest', 'environmentDigest', 'file'] as const).some(field => from[field] !== undefined && from[field] !== saved[field]))
+            throw new HttpError(409, '续跑来源的固定版本与保存记录不一致，请重新选择。');
           const approved = input.formalizationId ? formalizations.confirmed(owner, input.formalizationId) : undefined;
           if (approved && (input.source !== approved.evidence.candidate.source || input.environment !== approved.evidence.request.environment))
             throw new HttpError(409, 'Lean 原题或环境已改变，请重新形式化确认，或作为普通 Lean 题目创建。');
@@ -925,7 +929,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const refund = spend(session, 'runs');
           let run: WebRun;
           try {
-            run = jobs.create(owner, input as WebRunInput, provider, from && saved ? { ...from, file: saved.file, source: saved.source } : undefined, requestId,
+            run = jobs.create(owner, input as WebRunInput, provider, from && saved ? { ...from, taskVersion: saved.taskVersion,
+              sourceDigest: saved.sourceDigest, environmentDigest: saved.environmentDigest, file: saved.file, source: saved.source } : undefined, requestId,
               approved ? { evidence: approved.evidence, provenance: { id: approved.formalization.id,
                 evidenceSha256: approved.formalization.report!.evidenceSha256, original: approved.formalization.original,
                 confirmedAt: approved.formalization.confirmedAt!, confirmation: approved.formalization.confirmation ?? 'manual' } } : undefined,

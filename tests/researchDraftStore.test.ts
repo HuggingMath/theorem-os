@@ -60,4 +60,17 @@ describe('owner-isolated human drafts', () => {
     const reviewed = { ...draft, baseline: { statementVersionId: 'v2', sourceDigest: 'source-2' } };
     expect(discussionDraftMatches(reviewed, { statementVersionId: 'v2', sourceDigest: 'source-2' })).toBe(true); expect(reviewed.text).toBe(draft.text);
   });
+  it('keeps a different local version when restoring account content and tracks the cloud base for later conflicts', () => {
+    const { store } = fixture(), local = store.save(scope, { source: 'unsaved local reasoning' }, 'Local', 1);
+    const recovered = store.restore({ schema: 'theorem-os.human-draft.v1', scope, value: { source: 'phone account reasoning' },
+      summary: 'Phone', updatedAt: '2026-11-10T00:00:00.000Z', accountRevision: 3 });
+    const versions = store.list<{ source: string }>('alice', 'project-a', 'candidate');
+    expect(versions).toHaveLength(2); expect(versions.map(item => item.value.source)).toContain('unsaved local reasoning');
+    expect(recovered.accountRevision).toBe(3); expect(versions.find(item => item.scope.localRevision)?.accountRevision).toBe(1);
+    const next = store.markAccountRevision(recovered, 4); expect(next?.accountRevision).toBe(4);
+    expect(store.markAccountRevision(local, 5)).toBeUndefined();
+    store.save(scope, { source: 'new edits during save' }, 'New', 4);
+    expect(store.markAccountRevision(next!, 5)).toBeUndefined();
+    expect(store.list<{ source: string }>('alice', 'project-a', 'candidate').some(item => item.value.source === 'new edits during save')).toBe(true);
+  });
 });

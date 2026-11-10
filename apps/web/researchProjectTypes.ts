@@ -49,7 +49,24 @@ export type ResearchFeedbackTarget = {
   observationRef: { sequence: number; stateDigest: string }; taskRef?: { id: string; version: string };
 };
 export type ResearchIssueSource = { issueId: string; issueRevision: number; resolutionAt: string; proposalId?: string; reviewedTaskRef?: { id: string; version: string } };
-export type ResearchReviewComment = { id: string; author: ResearchAuthor; text: string; createdAt: string };
+export type ResearchAnnotationAnchor =
+  | { kind: 'source'; sourceDigest: string; file: string; startLine: number; endLine: number; quote: string }
+  | { kind: 'mathematics'; field: 'objective' | 'statement' | 'premises' | 'derivation' | 'finding' | 'feedback'; fieldDigest: string; startOffset: number; endOffset: number; quote: string };
+export type ResearchAnnotation = {
+  id: string; author: ResearchAuthor; target: Omit<ResearchFeedbackTarget, 'statementVersionId'> & { statementVersionId?: string };
+  feedbackId?: string; reviewCommentId?: string; anchor: ResearchAnnotationAnchor; text: string; status: 'open' | 'resolved';
+  replies: { id: string; author: ResearchAuthor; text: string; createdAt: string }[];
+  resolution?: { actor: ResearchAuthor; text?: string; createdAt: string };
+  revision: number; createdAt: string; updatedAt: string;
+};
+export type ResearchAnnotationView = ResearchAnnotation & { stale: boolean; staleReason?: 'task-changed' | 'source-changed' | 'field-changed' | 'candidate-revised'; canReply: boolean; canResolve: boolean };
+export type ResearchAnnotationContext = {
+  target: ResearchAnnotation['target']; source?: WebTaskSource;
+  fields: { field: Extract<ResearchAnnotationAnchor, { kind: 'mathematics' }>['field']; text: string; digest: string }[];
+  feedbackId?: string;
+};
+export type ResearchAnnotationPage = { items: ResearchAnnotationView[]; context: ResearchAnnotationContext; permissions: { create: boolean; review: boolean } };
+export type ResearchReviewComment = { id: string; author: ResearchAuthor; text: string; createdAt: string; anchor?: ResearchAnnotationAnchor };
 export type ResearchCandidateRevisionInput = { feedbackId: string; expectedRevision: number; responses: { commentId: string; text: string }[] };
 type FeedbackBase = ResearchMutation & { text: string; visibility?: 'members' | 'public'; sourceFeedbackId?: string; issueSource?: ResearchIssueSource };
 export type ResearchFeedbackInput = FeedbackBase & (

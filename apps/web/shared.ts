@@ -71,7 +71,11 @@ export type WebRunInput = {
  * A version recorded in one of the account's runs that a new run starts from: its code reaches every Agent as an
  * advisory attachment, never as the problem or as evidence. `label` names it for people (「zero_add · 第 2 次」).
  */
-export type WebContinuation = { runId: string; taskId: string; commit: string; label: string };
+export type WebContinuation = {
+  runId: string; taskId: string; commit: string; label: string;
+  /** Frozen by the web host from the source actually selected for this continuation. Legacy runs may lack them. */
+  taskVersion?: string; sourceDigest?: string; environmentDigest?: string; file?: string;
+};
 export const webContinuationLabelMax = 200;
 export type WebModuleId = 'M1' | 'M2' | 'M3' | 'M4' | 'M5' | 'S3';
 export type WebEventDetails = {
@@ -430,19 +434,28 @@ export type WebAdminOverview = {
 export function workbenchReturn(search: string): string {
   const params = new URLSearchParams(search), kept = new URLSearchParams(), run = params.get('run'), chat = params.get('chat');
   const destination = params.get('returnTo');
-  if (destination === 'problem' || destination === 'library' || destination === 'workspace') {
+  if (destination === 'problem' || destination === 'library' || destination === 'workspace' || destination === 'theorems') {
     kept.set('returnTo', destination);
     const retain = (key: string, pattern: RegExp) => { const value = params.get(key); if (value && pattern.test(value)) kept.set(key, value); };
     const identity = /^[A-Za-z0-9_.:-]{1,200}$/u, recordId = /^[A-Za-z0-9_-]{1,128}$/u;
     retain('run', /^[a-f0-9-]{1,36}$/u); retain('project', recordId);
     retain('task', identity); retain('taskVersion', identity); retain('commit', /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u);
+    retain('accountDraft', recordId); retain('draftVersion', recordId);
     if (destination === 'problem') {
       retain('tab', /^(?:overview|route|compare|discussion|outcomes|stages|brief)$/u);
       retain('compare', /^[a-f0-9-]{1,36}$/u);
       retain('decision', identity);
+      retain('snapshot', /^[a-f0-9]{64}$/u); retain('changeRecord', identity);
     } else if (destination === 'library') {
       retain('entry', recordId); retain('version', identity); retain('trial', recordId);
-    } else retain('tab', /^(?:inbox|search|usage|brief|collections)$/u);
+    } else if (destination === 'theorems') {
+      retain('id', recordId); retain('version', recordId); retain('revise', recordId);
+    } else {
+      retain('tab', /^(?:inbox|search|usage|brief|collections|drafts)$/u);
+      retain('history', /^[a-f0-9]{64}$/u);
+      retain('kind', /^(?:problem|conversation|lemma|route|library|history|decision|stage)$/u);
+      const searchQuery = params.get('q'); if (searchQuery && searchQuery.length <= 128) kept.set('q', searchQuery);
+    }
     const language = params.get('lang'); if (language === 'zh' || language === 'en') kept.set('lang', language);
     return `?${kept}`;
   }
@@ -456,6 +469,12 @@ export function workbenchReturn(search: string): string {
   } else if (chat && /^[a-f0-9-]{36}$/u.test(chat)) {
     kept.set('chat', chat);
     const message = params.get('message'); if (message && /^[a-f0-9-]{36}$/u.test(message)) kept.set('message', message);
+  } else if (params.has('budgetRun')) {
+    const budgetRun = params.get('budgetRun')!, tokens = params.get('budgetTokens') ?? '', project = params.get('project');
+    if (/^[a-f0-9-]{1,36}$/u.test(budgetRun) && /^\d{1,13}$/u.test(tokens) && Number(tokens) > 0 && Number(tokens) <= 1e12) {
+      kept.set('budgetRun', budgetRun); kept.set('budgetTokens', tokens);
+      if (project && /^[A-Za-z0-9_-]{1,128}$/u.test(project)) kept.set('project', project);
+    }
   } else if (params.has('libraryProposal') && params.has('project')) {
     const proposal = params.get('libraryProposal')!, project = params.get('project')!;
     if (/^[A-Za-z0-9_-]{1,128}$/u.test(proposal) && /^[A-Za-z0-9_-]{1,128}$/u.test(project)) {
@@ -476,7 +495,7 @@ export function workbenchReturn(search: string): string {
 export function workbenchDestination(search: string): string {
   const safe = workbenchReturn(search), params = new URLSearchParams(safe);
   const target = params.get('returnTo');
-  if (!target || !['workspace', 'problem', 'library'].includes(target)) return `./${safe}`;
+  if (!target || !['workspace', 'problem', 'library', 'theorems'].includes(target)) return `./${safe}`;
   params.delete('returnTo'); return `${target}.html${params.size ? `?${params}` : ''}`;
 }
 

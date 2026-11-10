@@ -405,13 +405,14 @@ describe('real collaboration HTTP and job boundaries without model calls', () =>
     const response = await alice('/api/runs', { ...input(), continueFrom: from });
     expect(response.status).toBe(201);
     const next = (await response.json()).run;
-    expect(next.continueFrom).toEqual(from);
+    const frozen = { ...from, taskVersion: 'version-1', sourceDigest: 'b'.repeat(64), environmentDigest: 'env', file: 'Submission.lean' };
+    expect(next.continueFrom).toEqual(frozen);
     expect(JSON.stringify(next)).not.toContain('-- fixture source');
     for (let wait = 0; runner.calls.length < 2 && wait < 100; wait++) await new Promise(resolve => setTimeout(resolve, 10));
-    expect(runner.calls[1]!.value.continuation).toEqual({ ...from, file: 'Submission.lean', source: '-- fixture source' });
+    expect(runner.calls[1]!.value.continuation).toEqual({ ...frozen, source: '-- fixture source' });
     expect(runner.calls[1]!.value.input.continueFrom).toEqual(from);
     runner.calls[1]!.finish(); await tick();
-    expect(service.storage.getRun(owner, next.id)?.continueFrom).toEqual(from);
+    expect(service.storage.getRun(owner, next.id)?.continueFrom).toEqual(frozen);
     expect(JSON.stringify(service.storage.getRun(owner, next.id))).not.toContain('-- fixture source');
   });
 

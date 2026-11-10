@@ -1,5 +1,13 @@
 /** Personal research tools use the same visibility rules as their source records. */
-export type ResearchSearchKind = 'problem' | 'conversation' | 'lemma' | 'route' | 'library';
+export type ResearchSearchKind = 'problem' | 'conversation' | 'lemma' | 'route' | 'library' | 'history' | 'decision' | 'stage';
+export type ResearchHistoryRecord = {
+  id: string; kind: 'history' | 'decision' | 'stage'; title: string; context: string; text: string;
+  updatedAt: string; href: string; originHref?: string; version?: string;
+  observationRef?: { sequence: number; stateDigest: string };
+  task?: ResearchBriefTask; source?: { file: string; text: string; digest: string; commit: string };
+  check?: import('./collaboration').WebCheckReceipt;
+  snapshot?: ResearchBrief;
+};
 export type ResearchSearchHit = {
   id: string; kind: ResearchSearchKind; title: string; excerpt: string; href: string;
   context: string; updatedAt: string; version?: string;
