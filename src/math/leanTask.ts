@@ -3,7 +3,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { canonicalMathProblemStatementPayloads, type MathProblemContract } from './contracts';
 import { canonicalMathJson, mathDigest, readMathJson, writeMathJsonDurable } from './mathRuntimeIo';
-import { inspectScopedLeanDeclarations } from './leanSource';
+import { inspectLegacyLeanWhereSource, inspectScopedLeanDeclarations } from './leanSource';
 import { maskLeanCommentsAndStrings } from './leanSyntax';
 import { getLeanTaskEnvironment, type LeanTaskEnvironment } from './leanTaskEnvironment';
 import { installLibraryPack, isLibraryPackFile, libraryDeclarationConflict, libraryPackDigest, MAX_LIBRARY_MODULE_BYTES,
@@ -58,13 +58,14 @@ export type LeanTaskInput = { source: string; task: string; environment?: LeanTa
   /** Frozen Submission/Library modules (see libraryPacks.ts) installed beside Submission.lean. */
   libraryPack?: LibraryPack };
 
-function inspectInput(input: LeanTaskInput) {
+function inspectInput(input: LeanTaskInput, legacyWhere = false) {
   const parsed = inputSchema.parse(input);
   if (Buffer.byteLength(parsed.source, 'utf8') > LEAN_TASK_SOURCE_MAX_BYTES ||
       Buffer.from(parsed.source + parsed.task, 'utf8').toString('utf8') !== parsed.source + parsed.task ||
       /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(parsed.source + parsed.task))
     throw new Error('lean_task_input_invalid');
-  const declarations = inspectScopedLeanDeclarations(parsed.source);
+  const declarations = legacyWhere ? inspectLegacyLeanWhereSource(parsed.source).declarations
+    : inspectScopedLeanDeclarations(parsed.source);
   if (declarations.length > LEAN_TASK_DECLARATIONS_MAX) throw new Error('lean_task_declarations_limit');
   // Declarations repeating a final name component are identified by qualified name (leanDeclarationKeys);
   // targets are still found by their final component, which must therefore be unique.
@@ -247,7 +248,14 @@ export function readLeanTaskReceipt(file: string): LeanTaskReceipt {
   const blob = (relative: string) => blobBytes(relative).toString('utf8');
   const source = blob('Challenge.lean');
   if (mathDigest(source) !== seed.sourceHash) throw new Error('lean_task_seed_invalid');
-  const inspected = inspectInput({ source, task: seed.task, environment: environment.id, definitionTargets: seed.definitionTargets });
+  // Old receipts may have frozen a default-only instance together with the
+  // following definition. Select that parser only by an exact stored index;
+  // the seed and all receipt identities are still checked below.
+  const legacyDeclarations = inspectLegacyLeanWhereSource(source).declarations.map(item => ({
+    name: item.qualifiedName, kind: item.kind, declarationHash: mathDigest(item.declarationType),
+  }));
+  const legacyWhere = canonicalMathJson(parsed.declarations) === canonicalMathJson(legacyDeclarations);
+  const inspected = inspectInput({ source, task: seed.task, environment: environment.id, definitionTargets: seed.definitionTargets }, legacyWhere);
   const sources = trustedSources(source, environment.id);
   if (canonicalMathJson(parsed.contract) !== canonicalMathJson(contractFor(source, inspected.task)) ||
       canonicalMathJson(parsed.publicObligations) !== canonicalMathJson(inspected.publicObligations) ||

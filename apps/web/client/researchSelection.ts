@@ -4,6 +4,7 @@ import { researchEnvironmentStorageKey, researchSelectionStorageKey, type OwnedD
 import { localizeMessage, t } from '../i18n';
 
 type Api = <T>(url: string, init?: RequestInit) => Promise<T>;
+type PreparedSelection = { refs: ResearchReleaseRef[]; releases: ResearchAssetRelease[]; configuration: FrozenResearchConfiguration; imports: string[] };
 const validRef = (value: unknown): value is ResearchReleaseRef => Boolean(value && typeof value === 'object'
   && 'assetId' in value && typeof value.assetId === 'string' && /^[A-Za-z0-9_-]{1,128}$/u.test(value.assetId)
   && 'version' in value && typeof value.version === 'string' && /^[A-Za-z0-9._-]{1,64}$/u.test(value.version));
@@ -18,6 +19,31 @@ export class ResearchSelection {
     this.panel.className = 'composer-research-selection'; this.panel.hidden = true;
     this.panel.setAttribute('aria-label', t('Library 研究配置'));
     document.getElementById('run-form')!.prepend(this.panel);
+  }
+  /** Validate a proposal before replacing the current draft or its Library choices. */
+  async prepare(refs: ResearchReleaseRef[], environment: WebEnvironment): Promise<PreparedSelection> {
+    if (!refs.length || refs.length > 32 || refs.some(ref => !validRef(ref))) throw new Error(t('所选 Library 版本不可用，请重新选择。'));
+    const releases = await Promise.all(refs.map(async ref => {
+      const release = (await this.api<{ item: ResearchAssetRelease }>(`/api/research/library/${encodeURIComponent(ref.assetId)}/releases/${encodeURIComponent(ref.version)}`)).item;
+      if (ref.digest && ref.digest !== release.digest) throw new Error(t('所选 Library 版本不可用，请重新选择。'));
+      return release;
+    }));
+    if (releases.filter(release => release.type === 'agent').length > 1) throw new Error(t('每次研究只能选择一个 Agent，请在 Library 调整选择。'));
+    const fixed = releases.map(release => ({ assetId: release.assetId, version: release.version, digest: release.digest }));
+    const selection: ResearchConfigurationSelection = {
+      agent: fixed.find((_, index) => releases[index].type === 'agent'),
+      skills: fixed.filter((_, index) => releases[index].type === 'skill'),
+      libraries: fixed.filter((_, index) => releases[index].type === 'mathematics'),
+    };
+    const { item: configuration } = await this.api<{ item: FrozenResearchConfiguration }>('/api/research/configuration', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ environment, selection }) });
+    return { refs: fixed, releases, configuration, imports: configuration.libraries.flatMap(library => library.mathematics.pack.modules.map(module => module.file.slice(0, -5).replaceAll('/', '.'))) };
+  }
+  adopt(prepared: PreparedSelection) {
+    this.refs = prepared.refs; this.releases = prepared.releases; this.loaded = true;
+    try { this.drafts.setItem(researchSelectionStorageKey, JSON.stringify(this.refs)); this.drafts.setItem(researchEnvironmentStorageKey, prepared.configuration.environment); }
+    catch { /* The explicit selection remains available in this page without browser storage. */ }
+    this.panel.hidden = false; this.render(); this.changed();
   }
   async load(apply: (configuration: FrozenResearchConfiguration, imports: string[]) => void, environment: WebEnvironment, onSelected?: () => void) {
     if (this.loaded) return;

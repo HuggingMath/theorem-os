@@ -200,6 +200,9 @@ describe('background review browser workflow', () => {
       await page.goto(`${origin}/chat-fixture.html?chat=chat-fixture`);
       const thinking = page.locator('[data-thinking-process]');
       await thinking.waitFor();
+      const diagnostics = page.locator('[data-solve-process]');
+      await diagnostics.locator(':scope > summary').click();
+      expect(await diagnostics.getAttribute('open')).toBeNull();
       await send('核对证明中使用的域与群的定义。');
       await thinking.locator('[data-thinking-kind="summary"]').filter({ hasText: '核对证明中使用的域与群的定义。' }).waitFor();
       expect(await thinking.locator('[data-thinking-kind="summary"]').count()).toBe(1);

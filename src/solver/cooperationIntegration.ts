@@ -10,7 +10,7 @@ import { attributeTaskReferences } from './taskReferenceAttribution';
 import { hasTaskConnectionCheck } from './taskConnections';
 import { assignmentDeliveryFile, assumableLemma, taskGroup, taskReferenceDependencies, hasTaskAcceptance, type CooperativeTask, type TaskAssignment, type TaskRecord } from './tasks';
 import { digest, taskSourceRejections, integrationRejections, rejectionCode, bounded } from './cooperationShared';
-import { CooperationTaskProofs, type ProofDeliveryAnnotation } from './cooperationTaskProofs';
+import { CooperationTaskProofs, type ProofDeliveryAnnotation, type ProofDeliveryState } from './cooperationTaskProofs';
 import type { ResearchWorker } from './modules/organization';
 
 const recheckBatchFallbacks = new Set([...taskSourceRejections, 'math_task_batch_projection_mismatch', 'math_task_missing_declaration',
@@ -56,10 +56,11 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
           !this.pendingProofDeliveryRecords.has(record)));
       if (unpublished) {
         const receipt = unpublished.integratedCheck, version = digest(unpublished.task);
+        const publication = this.proofDeliveryState(unpublished);
         await this.syncPreparedStatements();
         if (this.archive.tasks.includes(unpublished) && unpublished.status === 'integrated' &&
             unpublished.integratedCheck === receipt && digest(unpublished.task) === version) {
-          const annotate = await this.publishProofDelivery(unpublished);
+          const annotate = await this.publishProofDelivery(unpublished, undefined, publication);
           if (annotate) annotations.push(annotate);
         }
         continue;
@@ -67,10 +68,9 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
       const node = this.archive.tasks.find(item => ['delivered', 'conditional'].includes(item.status) && this.integrationAllowed(item) &&
         taskDependenciesReady(item.task, this.archive.tasks));
       if (!node) return;
-      const proof = node.proof;
-      await this.integrateNow(node);
-      if (this.archive.tasks.includes(node) && node.proof === proof && ['integrated', 'blocked'].includes(node.status)) {
-        const annotate = await this.publishProofDelivery(node);
+      const publication = await this.integrateNow(node);
+      if (publication) {
+        const annotate = await this.publishProofDelivery(node, undefined, publication);
         if (annotate) annotations.push(annotate);
       }
     }
@@ -203,9 +203,12 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
     const availableGoals = (node: TaskRecord) => tasks.filter(item => item.task.kind === 'goal' &&
       item.task.id !== node.task.id && item.status === 'integrated' &&
       freshGoals.get(item.task.id) === digest(item.task));
-    const extraGoals = (node: TaskRecord) => availableGoals(node).filter(item => retried.has(node) ||
-      this.sourceGoalInputs(node.task, tasks, this.lead.worktree, canonical)
-        .some(input => input.task.id === item.task.id)).map(item => item.task.theoremName!);
+    const extraGoals = (node: TaskRecord) => {
+      const available = availableGoals(node);
+      if (retried.has(node) || !available.length) return available.map(item => item.task.theoremName!);
+      const inputs = new Set(this.sourceGoalInputs(node.task, tasks, this.lead.worktree, canonical).map(input => input.task.id));
+      return available.filter(item => inputs.has(item.task.id)).map(item => item.task.theoremName!);
+    };
     const request = (node: TaskRecord) => ({ task: node.task,
       assignment: { taskId: node.task.id, taskDigest: digest(node.task), workerId: this.lead.id, seedCommit: canonical },
       retainedGoals: [...new Set([...this.retainedTaskGoals(node.task, tasks, this.lead.worktree, canonical), ...extraGoals(node)])] });
@@ -293,6 +296,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
       const assignment = { taskId: node.task.id, taskDigest: digest(node.task), workerId: this.lead.id, seedCommit: canonical };
       try {
         if (reusable(node)) {
+          node.feedback = undefined;
           this.input.emit('task_check_reused', { taskId: node.task.id, commit: node.integratedCheck!.commit, canonicalCommit: canonical });
           await finish(node); continue;
         }
@@ -389,7 +393,8 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
           this.check(node.task, node.assignment!, checkout, saved.commit, conditions));
         if (['unavailable', 'blocked'].includes(proof.verification.status)) throw new Error('math_verifier_unavailable');
         node.proof = proof;
-        if (!proof.passed) {
+        if (proof.passed) node.feedback = undefined;
+        else {
           this.moveTask(node, 'blocked', 'invalidated'); node.feedback = solverProofFeedback(proof); this.wakeLead('conditional-recheck-failed');
         }
       } catch (error) {
@@ -419,8 +424,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
       problemReceiptDigest: this.input.state.problem.receiptDigest, groupDigest: canonicalMathJson(group?.group ?? null),
       routesDigest: canonicalMathJson({ alternatives: node.alternativeRoutes ?? [], routes: this.archive.proofRoutes ?? [] }), tasks,
       dependencies: dependencies.map(item => ({ id: item.task.id, taskDigest: digest(item.task), status: item.status,
-        proof: item.proof, integratedCheck: item.integratedCheck })),
-      retainedGoals: this.retainedTaskGoals(node.task, tasks, this.lead.worktree, this.archive.canonicalCommit!) };
+        proof: item.proof, integratedCheck: item.integratedCheck })) };
   }
   private integrationTaskCurrent(snapshot: NonNullable<ReturnType<CooperationIntegration['integrationSnapshot']>>) {
     const { node } = snapshot;
@@ -441,7 +445,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
     });
   }
   /** Batch only work that is ready now; every target must check the same complete union projection. */
-  private async integrateBatch(node: TaskRecord): Promise<'fallback' | 'retry' | 'integrated'> {
+  private async integrateBatch(node: TaskRecord): Promise<'fallback' | 'retry' | ProofDeliveryState> {
     if ((this.input.modules.M2.checkTask ?? checkTaskProof) !== checkTaskProof) return 'fallback';
     const batch = await this.input.exclusiveCheck(async () => {
       const eligible = (item: TaskRecord) => item.task.kind === 'lemma' && item.proof?.passed &&
@@ -477,14 +481,16 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
       await withSolverWorktree(this.lead.worktree, first.canonical, async checkout => {
         for (const snapshot of snapshots) applyTaskChanges(problem, checkout, snapshot.proof.changes, snapshot.proof.imports);
         merged = commitSolverSources(problem, checkout);
+        // New declarations can expose source dependencies absent from the old canonical.
+        const requests = snapshots.map(snapshot => ({ task: snapshot.task,
+          retainedGoals: this.retainedTaskGoals(snapshot.task, snapshot.tasks, checkout, merged!),
+          assignment: { taskId: snapshot.task.id, taskDigest: snapshot.taskDigest, workerId: this.lead.id, seedCommit: merged! } }));
         const projector = createTaskSourceProjector(problem, checkout, merged);
-        const projections = snapshots.map(snapshot => canonicalMathJson([...projector(snapshot.task, snapshot.retainedGoals)]));
+        const projections = requests.map(request => canonicalMathJson([...projector(request.task, request.retainedGoals)]));
         if (projections.some(projection => projection !== projections[0])) {
           fallback = 'math_task_batch_projection_mismatch'; return;
         }
         this.input.emit('task_integration_batch_started', { taskIds: snapshots.map(snapshot => snapshot.task.id), commit: merged });
-        const requests = snapshots.map(snapshot => ({ task: snapshot.task, retainedGoals: snapshot.retainedGoals,
-          assignment: { taskId: snapshot.task.id, taskDigest: snapshot.taskDigest, workerId: this.lead.id, seedCommit: merged! } }));
         const proofs = await checkTaskProofs(problem, checkout, merged, requests, environment, this.input.signal,
           this.input.timeoutMs, first.environmentDigest, this.taskProofCache);
         this.input.signal.throwIfAborted();
@@ -527,37 +533,36 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
       if (receipts.some(receipt => receipt.references && canonicalMathJson(receipt.references.tasks) !==
           canonicalMathJson(attributeTaskReferences(receipt.references, this.archive.tasks)))) return 'retry' as const;
       this.archive.canonicalCommit = merged;
-      snapshots.forEach((snapshot, index) => { snapshot.node.integratedCheck = receipts[index]; this.moveTask(snapshot.node, 'integrated', 'integrated'); });
+      snapshots.forEach((snapshot, index) => {
+        snapshot.node.integratedCheck = receipts[index]; snapshot.node.feedback = undefined;
+        this.moveTask(snapshot.node, 'integrated', 'integrated');
+      });
       snapshots.forEach((snapshot, index) => this.input.emit('task_integrated', { taskId: snapshot.task.id,
         taskDigest: snapshot.taskDigest, assignmentKey: assignmentDeliveryFile(snapshot.assignment),
         workerId: snapshot.assignment.workerId, seedCommit: snapshot.assignment.seedCommit,
         sourceDigest: receipts[index].sourceDigest, receiptIds: receipts[index].verification.results.map(result => result.receiptId),
         groupId: taskGroup(snapshot.task), sharing: snapshot.task.sharing ?? 'problem', commit: merged, batchSize: snapshots.length }));
       this.changed();
-      return 'integrated' as const;
+      return this.proofDeliveryState(node);
     });
-    if (result === 'integrated') await this.syncPreparedStatements();
+    if (typeof result !== 'string') await this.syncPreparedStatements();
     return result;
   }
   protected async integrateNow(node: TaskRecord) {
     const problem = this.input.state.problem;
     for (;;) {
       const batch = await this.integrateBatch(node);
-      if (batch === 'integrated') return;
       if (batch === 'retry') continue;
+      if (batch !== 'fallback') return batch;
       const snapshot = await this.input.exclusiveCheck(async () => this.integrationSnapshot(node));
       if (!snapshot) return;
       let submitted = snapshot.proof, receipt: TaskProof | undefined, merged: string | undefined, failure: unknown;
       try {
         await withSolverWorktree(this.lead.worktree, snapshot.canonical, async checkout => {
-          const checker = this.input.modules.M2.checkTask ?? checkTaskProof;
           const environment = this.input.access.get(this.lead.id)!.environment;
-          const check = async (commit: string, assignment: TaskAssignment, conditions: readonly CooperativeTask[], checkedWorktree = checkout) => {
-            const raw = await checker(problem, checkedWorktree, commit, snapshot.task, assignment, snapshot.retainedGoals,
-              environment, this.input.signal, this.input.timeoutMs, conditions, snapshot.environmentDigest,
-              ...(checker === checkTaskProof ? [this.taskProofCache] : []));
-            return this.check(snapshot.task, assignment, checkedWorktree, commit, conditions, raw, false, false, snapshot.tasks);
-          };
+          const check = (commit: string, assignment: TaskAssignment, conditions: readonly CooperativeTask[], checkedWorktree = checkout) =>
+            this.check(snapshot.task, assignment, checkedWorktree, commit, conditions, undefined, false, false, snapshot.tasks,
+              { environment, digest: snapshot.environmentDigest });
           // Restored JSON needs fresh delivery evidence before its changes can enter a merge.
           if (!this.checkedDeliveries.has(submitted)) {
             const conditions = (submitted.conditions ?? []).map(condition => {
@@ -625,7 +630,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
         if (failure) {
           this.changed();
           node.feedback = `${expectedRejection(failure, integrationRejections).message}\n${node.feedback ?? ''}`; this.moveTask(node, 'blocked', 'integrated');
-          this.wakeLead('integration-blocked'); this.changed(); return 'blocked';
+          this.wakeLead('integration-blocked'); this.changed(); return this.proofDeliveryState(node);
         }
         if (!receipt || !merged) throw new Error('math_task_integration_missing_receipt');
         if (receipt.references?.tasks?.some(reference => {
@@ -635,17 +640,19 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
           this.input.emit('task_integration_superseded', { taskId: snapshot.task.id, reason: 'actual-reference-changed' });
           this.changed(); return 'superseded';
         }
-        node.integratedCheck = receipt; this.archive.canonicalCommit = merged; this.moveTask(node, 'integrated', 'integrated');
+        node.integratedCheck = receipt; node.feedback = undefined;
+        this.archive.canonicalCommit = merged; this.moveTask(node, 'integrated', 'integrated');
         this.input.emit('task_integrated', { taskId: node.task.id, taskDigest: snapshot.taskDigest,
           assignmentKey: assignmentDeliveryFile(snapshot.assignment), workerId: snapshot.assignment.workerId,
           seedCommit: snapshot.assignment.seedCommit, sourceDigest: receipt.sourceDigest,
           receiptIds: receipt.verification.results.map(result => result.receiptId),
           groupId: taskGroup(node.task), sharing: node.task.sharing ?? 'problem', commit: merged });
-        this.changed(); return 'integrated';
+        this.changed(); return this.proofDeliveryState(node);
       });
       if (result === 'retry') continue;
-      if (result === 'integrated') await this.syncPreparedStatements();
-      return;
+      if (typeof result === 'string') return;
+      if (result.status === 'integrated') await this.syncPreparedStatements();
+      return result;
     }
   }
 }

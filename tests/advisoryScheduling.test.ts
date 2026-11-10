@@ -50,6 +50,65 @@ describe('advisory work at an equal scheduling priority', () => {
     expect(ids(readyResearchTasks([resumed, helper, fresh, goal]))).toEqual(['goal', 'fresh', 'helper', 'resumed']);
   });
 
+  it.each(['research', 'sketch'] as const)('dispatches an untried ready proof before repeatedly resumed %s on the same goal', kind => {
+    const peer = workers.find(worker => worker.id === 'researcher-2')!;
+    const running = [assign(task('working-left', 'lemma'), 'researcher-1'),
+      assign(task('working-right', 'lemma'), engineer.id)];
+    running.forEach(node => { node.status = 'running'; });
+    const helper = task('ready-input', 'lemma'), second = task('other-ready-input', 'lemma');
+    const goal = task('original', 'goal', { dependsOn: [...running.map(node => node.task.id), helper.task.id, second.task.id],
+      conditional: false });
+    const resumed = assign(task('resumed', kind, { ownerId: peer.id, dependsOn: [goal.task.id] }), peer.id);
+    resumed.attempts = 12;
+    const nodes = [resumed, helper, second, ...running, goal];
+    const groups: RouteRecord[] = [{ group: { id: 'main', objective: 'Prove the goal', status: 'active', revision: 0 },
+      turns: 24, busy: 2 }];
+    const before = structuredClone(nodes);
+    const ready = readyResearchTasks(nodes, groups);
+    expect(ids(ready)).toEqual([helper.task.id, second.task.id, resumed.task.id]);
+    expect(assignSharedResearchTask(ready, peer, workers, groups, nodes)).toBe(helper);
+    expect(nodes).toEqual(before);
+  });
+
+  it('preserves the first investigation and only yields repeated research to an executable consumed proof', () => {
+    const investigation = task('investigation');
+    const helper = task('ready-input', 'lemma');
+    const waiting = task('waiting-input', 'lemma', { dependsOn: [helper.task.id], conditional: false });
+    const disconnected = task('disconnected', 'lemma');
+    const goal = task('original', 'goal', { dependsOn: [waiting.task.id], conditional: false });
+    const nodes = [investigation, disconnected, waiting, helper, goal];
+    expect(ids(readyResearchTasks(nodes))).toEqual(['investigation', 'disconnected', helper.task.id]);
+    investigation.attempts = 1;
+    expect(ids(readyResearchTasks(nodes))).toEqual([helper.task.id, 'disconnected', 'investigation']);
+    helper.task = { ...helper.task, ownerId: 'other' };
+    expect(assignSharedResearchTask(readyResearchTasks(nodes), engineer, workers, undefined, nodes)).toBe(disconnected);
+    helper.status = 'blocked';
+    expect(ids(readyResearchTasks(nodes))).toEqual(['investigation', 'disconnected']);
+  });
+
+  it('keeps the last independent slot after a resumed investigation yields M3 priority', () => {
+    const running = [assign(task('working-left', 'lemma'), 'researcher-1'),
+      assign(task('working-right', 'lemma'), 'researcher-2')];
+    running.forEach(node => { node.status = 'running'; });
+    const resumed = task('independent'); resumed.attempts = 12;
+    const helper = task('ready-input', 'lemma');
+    const goal = task('original', 'goal', { dependsOn: [...running.map(node => node.task.id), helper.task.id], conditional: false });
+    const nodes = [resumed, helper, ...running, goal];
+    const groups: RouteRecord[] = [{ group: { id: 'main', objective: 'Prove the goal', status: 'active', revision: 0 },
+      turns: 24, busy: 2 }];
+    const ready = readyResearchTasks(nodes, groups);
+    expect(ids(ready)).toEqual([helper.task.id, resumed.task.id]);
+    expect(assignSharedResearchTask(ready, engineer, workers, groups, nodes)).toBe(resumed);
+  });
+
+  it('keeps a fresh feasibility review before a ready proof and resumed research', () => {
+    const resumed = task('resumed'); resumed.attempts = 12;
+    const helper = task('ready-input', 'lemma');
+    const goal = task('original', 'goal', { dependsOn: [helper.task.id], conditional: false });
+    const review = task('review', 'research', { reviewScope: 'feasibility', dependsOn: [goal.task.id] });
+    expect(ids(readyResearchTasks([resumed, helper, review, goal]))).toEqual(['review', helper.task.id, resumed.task.id]);
+  });
+
   it('keeps a fresh feasibility review ahead of ordinary investigations', () => {
     const resumed = task('resumed'); resumed.attempts = 4;
     const review = task('review', 'research', { reviewScope: 'feasibility' });

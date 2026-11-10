@@ -94,7 +94,10 @@ describe('the complete archived research workflow', () => {
   });
 
   it('preserves all recorded bodies, objectives, chronological entries and exact evidence destinations in all saved runs', () => {
-    expect(archived).toHaveLength(16);
+    expect(archived).toHaveLength(18);
+    expect(archived.map(({ record }) => record.id)).toEqual(expect.arrayContaining([
+      'openai_three_state_tree_clauses', 'openai_character_varieties_all_seams_support',
+    ]));
     let runs = 0, deliveryRows = 0, checkRows = 0, retainedRows = 0, notes = 0;
     for (const { record, process } of archived) {
       const original = JSON.stringify(process);
@@ -148,7 +151,7 @@ describe('the complete archived research workflow', () => {
       }
       expect(JSON.stringify(process)).toBe(original);
     }
-    expect(runs).toBe(45); expect(deliveryRows).toBeGreaterThan(400); expect(checkRows).toBeGreaterThan(300);
+    expect(runs).toBe(61); expect(deliveryRows).toBeGreaterThan(400); expect(checkRows).toBeGreaterThan(300);
     expect(retainedRows).toBeGreaterThan(0); expect(notes).toBeGreaterThan(0);
   });
 });

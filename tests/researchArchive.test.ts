@@ -58,6 +58,36 @@ describe('research completion archive schema', () => {
     expect(restored.cooperation!.history![0]!.finding).toBe(finding);
   });
 
+  it('reads an aggregate idle-peer wake without inventing per-peer history', () => {
+    state.cooperation!.idlePeerWake = { at: 2000, workerIds: ['researcher'], count: 2 };
+    const restored = read();
+
+    expect(restored.cooperation!.idlePeerWake).toEqual(state.cooperation!.idlePeerWake);
+    expect(restored.cooperation!.idlePeerWake!.episodes).toBeUndefined();
+  });
+
+  it('preserves saved per-peer idle episodes when reading a continuation source', () => {
+    state.cooperation!.idlePeerWake = { at: 2000, workerIds: ['researcher'], count: 2,
+      episodes: { researcher: { since: 1000, at: 2000, count: 2 },
+        engineer: { since: 500, at: 1500, count: 1 } } };
+
+    const restored = read();
+
+    expect(restored.cooperation!.idlePeerWake).toEqual(state.cooperation!.idlePeerWake);
+    expect(restored.cooperation!.tasks).toEqual(state.cooperation!.tasks);
+    expect(restored.cooperation!.deliveries).toEqual(state.cooperation!.deliveries);
+  });
+
+  it.each([
+    { since: -1 }, { at: 'not-a-timestamp' }, { count: 1.5 }, { unexpected: true },
+  ])('rejects an invalid saved idle episode %j', invalid => {
+    state.cooperation!.idlePeerWake = { at: 2000, workerIds: ['researcher'], count: 2,
+      episodes: { researcher: { since: 1000, at: 2000, count: 2 } } };
+    Object.assign(state.cooperation!.idlePeerWake.episodes!.researcher, invalid);
+
+    expect(read).toThrow('math_resume_state_invalid:cooperation.idlePeerWake.episodes.researcher');
+  });
+
   it('rejects a malformed assignment basis instead of treating it as a legacy checkpoint', () => {
     state = structuredClone(state);
     Object.assign(state.cooperation!.tasks[0]!.assignment!.researchBasis!, { schema: 'unknown-research-basis' });

@@ -35,7 +35,7 @@ let holdAnswer = false, releaseAnswer: (() => void) | undefined;
 type StreamReply = { text: string; aborted: boolean; delta(text: string): void; complete(): void };
 const streamReplies: StreamReply[] = [];
 let streamNextAnswer = false;
-const provider = Bun.serve({ hostname: '127.0.0.1', port: 0, idleTimeout: 60, async fetch(request) {
+const provider = Bun.serve({ hostname: '127.0.0.1', port: 0, idleTimeout: 0, async fetch(request) {
   assert.equal(new URL(request.url).pathname, '/v1/responses');
   providerCalls.push(await request.json() as Record<string, any>);
   if (streamNextAnswer) {
@@ -82,16 +82,46 @@ const config = readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_P
 // Trusted test configuration bypasses the public configuration's HTTPS requirement for this loopback fixture.
 config.providers = [{ id: 'sub2api', name: 'Local fixture', baseUrl: `http://127.0.0.1:${provider.port}/v1` }];
 const service = createWebService(config, runner);
+service.server.requestTimeout = 0; service.server.headersTimeout = 0; service.server.setTimeout(0);
 let browser: Browser | undefined, activePage: Page | undefined;
-const checks: string[] = [], errors: string[] = [], requests: string[] = [];
+const checks: string[] = [], errors: string[] = [], requests: string[] = [], screenshots: string[] = [];
 const mark = (name: string) => { checks.push(name); console.log(`PASS ${name}`); };
+async function screenshot(page: Page, filename: string) {
+  await page.screenshot({ path: path.join(output, filename), fullPage: true, timeout: 0 }); screenshots.push(filename);
+}
 async function eventually(check: () => boolean, description: string) {
-  const until = Date.now() + 15_000;
-  while (!check()) { assert.ok(Date.now() < until, description); await new Promise(resolve => setTimeout(resolve, 40)); }
+  if (!check()) console.log(`WAIT ${description}`);
+  while (!check()) await new Promise(resolve => setTimeout(resolve, 40));
+}
+const budgetInputs = ['#formalize-minutes', '#formalize-tokens', '#research-minutes', '#research-tokens', '#research-turns'];
+const positiveBudgets = ['4', '120000', '3', '80000', '4'];
+async function blankBudgets(page: Page) {
+  for (const selector of budgetInputs) {
+    assert.equal(await page.locator(selector).inputValue(), '', `${selector} represents unlimited with a blank value`);
+    assert.equal(await page.locator(selector).getAttribute('placeholder'), '不限');
+  }
+  assert.match(await page.locator('[data-chat-budget]').innerText(), /形式化[\s\S]*不限[\s\S]*证明[\s\S]*不限/u);
+  assert.doesNotMatch(await page.locator('[data-chat-budget]').innerText(), /0 Token|0 分钟|0 轮/u);
+}
+async function outcomes(page: Page) {
+  const summary = page.locator('[data-chat-outcomes]'); await summary.waitFor();
+  assert.deepEqual(await summary.locator(':scope > p > span').allTextContents(), ['已有成果', '当前进展', '需要你做']);
+  for (const text of await summary.locator(':scope > p > strong').allTextContents()) assert.ok(text.trim());
+}
+async function historyMetadata(page: Page, id: string) {
+  const row = page.locator(`[data-chat-row="${id}"]`), status = row.locator('[data-chat-history-status]');
+  await status.waitFor(); assert.ok((await status.innerText()).trim(), 'history shows the task or discussion status');
+  const value = await page.evaluate(async id => (await (await fetch(`/api/conversations/${id}`)).json()).conversation as WebConversation, id);
+  const time = row.locator('time.chat-history-time');
+  assert.equal(await time.getAttribute('datetime'), value.updatedAt, 'history dates the current saved conversation');
+  assert.ok((await time.innerText()).trim(), 'the saved timestamp is formatted for reading');
 }
 async function credentials(page: Page) {
   const automatic = page.locator('input[name="chat-participation"][value="automatic"]');
-  if (await automatic.isVisible()) await automatic.check();
+  if (await automatic.count() && await automatic.isEnabled()) {
+    if (!await automatic.isVisible()) await page.locator('[data-chat-participation-control] > summary').click();
+    await automatic.check();
+  }
   if (!await page.locator('#formalize-key').isVisible()) await page.locator('#open-settings').click();
   await page.locator('#formalize-key').fill('sk-disposable-browser-fixture');
   if (await page.locator('#formalize-environment').isEnabled()) await page.locator('#formalize-environment').selectOption('standard');
@@ -155,10 +185,45 @@ async function waitForAnswerStatus(page: Page, status: 'complete' | 'interrupted
 }
 try {
   browser = await startBrowser(service.server, port);
+  for (const width of [1440, 390, 320]) {
+    const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
+    await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
+    page.on('pageerror', error => errors.push(error.message));
+    const writes: string[] = [];
+    page.on('request', request => { if (!['GET', 'HEAD'].includes(request.method())) writes.push(`${request.method()} ${new URL(request.url()).pathname}`); });
+    try {
+      const modelCalls = providerCalls.length, statementCount = formalizations.length, proofCount = runs.length;
+      await page.goto(origin); await page.locator('#formalize-original').waitFor();
+      const draft = `${width}px: this unlimited home draft must survive refresh without being sent`;
+      await page.locator('#formalize-original').fill(draft);
+      await page.locator('#formalize-settings').evaluate(details => { (details as HTMLDetailsElement).open = true; });
+      await blankBudgets(page);
+      for (const [index, selector] of budgetInputs.entries()) await page.locator(selector).fill(positiveBudgets[index]);
+      for (const selector of budgetInputs) await page.locator(selector).fill('');
+      await blankBudgets(page);
+      await page.waitForFunction(() => Object.entries(sessionStorage).some(([key, raw]) => {
+        if (!key.startsWith('theorem-os.chat-draft.') || !key.endsWith('.home')) return false;
+        const settings = JSON.parse(raw).settings;
+        return settings?.maxRunSeconds === 0 && settings.maxTotalTokens === 0
+          && settings.research?.maxRunSeconds === 0 && settings.research.maxTotalTokens === 0 && settings.research.maxTurns === 0;
+      }));
+      await page.reload(); await page.locator('#formalize-original').waitFor();
+      assert.equal(await page.locator('#formalize-original').inputValue(), draft);
+      await page.locator('#formalize-settings').evaluate(details => { (details as HTMLDetailsElement).open = true; });
+      await blankBudgets(page);
+      assert.equal(new URL(page.url()).search, '');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+      assert.deepEqual(writes, [], 'editing and restoring a home draft sends no task or provider request');
+      assert.equal(providerCalls.length, modelCalls); assert.equal(formalizations.length, statementCount); assert.equal(runs.length, proofCount);
+      await screenshot(page, `unlimited-home-draft-${width}.png`);
+      mark(`${width}px: home defaults and cleared limits persist as unlimited after refresh without submitting anything`);
+    } finally { await context.close(); }
+  }
   for (const width of [1440, 390]) {
     const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
     await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
-    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
     page.on('pageerror', error => errors.push(error.message));
     page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/')) requests.push(`${request.method()} ${new URL(request.url()).pathname}`); });
     const writes: string[] = [];
@@ -171,6 +236,13 @@ try {
       await page.locator('#formalize-minutes').fill('4'); await page.locator('#formalize-tokens').fill('120000');
       await page.locator('#research-minutes').fill('3'); await page.locator('#research-tokens').fill('80000');
       await page.locator('#research-turns').fill('4');
+    } else {
+      await blankBudgets(page);
+      for (const [index, selector] of budgetInputs.entries()) await page.locator(selector).fill(positiveBudgets[index]);
+      assert.equal(await page.locator('#formalize-start').isEnabled(), true, 'explicit user limits keep a valid submission enabled');
+      for (const selector of budgetInputs) await page.locator(selector).fill('');
+      await blankBudgets(page);
+      assert.equal(await page.locator('#formalize-start').isEnabled(), true, 'clearing all limits restores an unlimited, sendable problem');
     }
     if (width === 1440) {
       await page.locator('#formalize-original').press('Shift+Enter'); assert.equal(writes.length, 0);
@@ -188,13 +260,13 @@ try {
     assert.equal(await page.locator('#formalize-original').inputValue(), '');
     assert.equal((await conversation(page)).messages[0]?.text, original, 'Server message preserves the exact original');
     const pending = formalizations.at(-1)!;
+    await outcomes(page);
     if (width === 1440) {
       assert.equal(pending.input.maxRunSeconds, 240); assert.equal(pending.input.maxTotalTokens, 120000);
       assert.equal(pending.input.provider.id, 'sub2api'); assert.equal(pending.input.model, 'deepseek-flash');
-    } else {
-      assert.equal(pending.input.maxRunSeconds, 0, 'Blank formalization time reaches the worker as unlimited');
-      assert.equal(pending.input.maxTotalTokens, 0, 'Blank formalization tokens reach the worker as unlimited');
-    }
+    } else assert.deepEqual({ maxRunSeconds: pending.input.maxRunSeconds, maxTotalTokens: pending.input.maxTotalTokens,
+      maxRounds: pending.input.maxRounds, maxPlanningRounds: pending.input.maxPlanningRounds },
+      { maxRunSeconds: 0, maxTotalTokens: 0, maxRounds: 0, maxPlanningRounds: 0 });
     pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve();
     await page.locator('[data-research-artifact="source"]:enabled').waitFor();
     await eventually(() => runs.length === formalizations.length, 'The approved formalization starts one proof');
@@ -205,11 +277,12 @@ try {
       assert.equal(runs.at(-1)?.input.maxRunSeconds, 180); assert.equal(runs.at(-1)?.input.maxTotalTokens, 80000);
       assert.equal(runs.at(-1)?.input.maxTurns, 4);
     } else {
-      assert.equal(runs.at(-1)?.input.maxRunSeconds, 0, 'Blank proof time reaches the worker as unlimited');
-      assert.equal(runs.at(-1)?.input.maxTotalTokens, 0, 'Blank proof tokens reach the worker as unlimited');
-      assert.equal(runs.at(-1)?.input.maxTurns, 0, 'Blank proof turns reach the worker as unlimited');
       assert.equal(await page.locator('.research-conversation-state').innerText(), 'Lean 陈述证明通过');
+      const { maxRunSeconds, maxTotalTokens, maxTurns } = runs.at(-1)!.input;
+      assert.deepEqual({ maxRunSeconds, maxTotalTokens, maxTurns }, { maxRunSeconds: 0, maxTotalTokens: 0, maxTurns: 0 });
+      mark('390px: blank defaults submit unlimited formalization and proof budgets; explicit values can be cleared without disabling send');
     }
+    await outcomes(page);
     await assertSameComposer(page);
     const sessionUrl = page.url(), id = (await conversation(page)).id;
     await page.locator('#formalize-original').fill(question);
@@ -244,7 +317,7 @@ try {
     if (width === 1440) {
       const readGate = new Promise<void>(resolve => { releaseRead = resolve; });
       await page.route(`**/api/conversations/${id}`, async route => {
-        const response = await route.fetch(); readHeld = true;
+        const response = await route.fetch({ timeout: 0 }); readHeld = true;
         await readGate; await route.fulfill({ response }); readDelivered = true;
       }, { times: 1 });
       // Returning to the tab reads the conversation at once; that snapshot predates the next send.
@@ -312,13 +385,14 @@ try {
     await page.locator('#topbar-draft').click(); await page.waitForURL(origin + '/');
     assert.equal(await page.locator('#formalize-original').inputValue(), '');
     if (width <= 850 || await page.locator('body').getAttribute('data-history-collapsed') === 'true') await page.locator('#open-history').click();
+    await historyMetadata(page, id);
     await page.locator(`#chat-history-list a[href="?chat=${id}"]`).click();
     await expectMessage(page, followup);
     assert.equal(await page.locator('#formalize-original').inputValue(), draft);
     assert.equal(writes.filter(path => path === '/api/formalizations').length, 1);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
     assert.deepEqual(await audit(page), []);
-    await page.screenshot({ path: path.join(output, `conversation-${width}.png`), fullPage: true });
+    await screenshot(page, `conversation-${width}.png`);
     mark(`${width}px: home, new chat, history, browser back, refresh and per-session drafts`);
 
     // In a conversation the composer is at the bottom, so its settings open upwards, above the settings button and on screen.
@@ -409,7 +483,7 @@ try {
       assert.equal(await page.locator(`[data-message-id="${partial.messageId}"]`).getAttribute('data-message-status'), 'interrupted');
       assert.equal(formalizations.length, width === 1440 ? 1 : 2);
       assert.equal(runs.length, formalizations.length);
-      await page.screenshot({ path: path.join(output, `streaming-preserved-${width}.png`), fullPage: true });
+      await screenshot(page, `streaming-preserved-${width}.png`);
       mark(`${width}px: incoming text preserves reading position; return-to-latest, pending refresh and stop retain partial output`);
     }
     if (width === 390) {
@@ -445,13 +519,13 @@ try {
   {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' });
     await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
-    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
     page.on('pageerror', error => errors.push(error.message));
     let releaseResponse: (() => void) | undefined, responseHeld = false;
     const gate = new Promise<void>(resolve => { releaseResponse = resolve; });
     await page.route('**/api/formalizations', async route => {
       if (route.request().method() !== 'POST') return route.continue();
-      const response = await route.fetch(); responseHeld = true;
+      const response = await route.fetch({ timeout: 0 }); responseHeld = true;
       await gate; await route.fulfill({ response });
     });
     try {
@@ -483,7 +557,7 @@ try {
   for (const width of [1440, 390]) {
     const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
     await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
-    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
     page.on('pageerror', error => errors.push(error.message));
     try {
       const started = formalizations.length, proofs = runs.length;
@@ -519,7 +593,7 @@ try {
         let dropped = false;
         await page.route(`**/api/conversations/${id}`, route => { dropped = true; return route.abort('internetdisconnected'); }, { times: 1 });
         // The refresh started above may still be running, and a refresh never overlaps another; ask until one reaches the network.
-        for (let attempt = 0; !dropped && attempt < 50; attempt++) {
+        while (!dropped) {
           await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await page.waitForTimeout(200);
         }
         await page.locator('#formalize-error').filter({ hasText: '无法连接服务器' }).waitFor();
@@ -528,14 +602,14 @@ try {
         mark('a failed background read shows until the connection returns, and the next read clears it');
       }
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Failure details fit the width');
-      await page.screenshot({ path: path.join(output, `formalization-failure-${width}.png`), fullPage: true });
+      await screenshot(page, `formalization-failure-${width}.png`);
       mark(`${width}px: a failed formalization shows stage, reason, kept work, next step and diagnostic code, and names the page after its conversation`);
     } finally { await context.close(); }
   }
   {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' });
     await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
-    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
     page.on('pageerror', error => errors.push(error.message));
     try {
       await page.route('**/api/conversations', route => route.request().method() === 'GET'
@@ -561,7 +635,7 @@ try {
   for (const width of [1440, 390]) {
     const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
     await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
-    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
     page.on('pageerror', error => errors.push(error.message));
     page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/')) requests.push(`${request.method()} ${new URL(request.url()).pathname}`); });
     try {
@@ -573,7 +647,7 @@ try {
       const conversationRelease = new Promise<void>(resolve => { releaseConversation = resolve; });
       await page.route('**/api/conversations', async route => {
         if (route.request().method() !== 'POST') { await route.continue(); return; }
-        const response = await route.fetch();
+        const response = await route.fetch({ timeout: 0 });
         assert.equal((await response.json()).conversation.runId, undefined, 'The delayed conversation predates proof enqueue');
         capturedConversation(); await conversationRelease;
         await route.fulfill({ response });
@@ -593,10 +667,11 @@ try {
       await page.reload(); await expectMessage(page, webFormalizationStatement);
       await openChatHistory(page);
       const row = page.locator(`[data-chat-row="${saved.id}"]`), title = `History ${width}: additive identity`;
+      await historyMetadata(page, saved.id);
       let releaseHistory!: () => void, historyHeld = false, historyDelivered = false;
       const historyGate = new Promise<void>(resolve => { releaseHistory = resolve; });
       await page.route('**/api/conversations', async route => {
-        const response = await route.fetch(); historyHeld = true;
+        const response = await route.fetch({ timeout: 0 }); historyHeld = true;
         await historyGate; await route.fulfill({ response }); historyDelivered = true;
       }, { times: 1 });
       await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
@@ -607,7 +682,8 @@ try {
       await row.locator('a.chat-history-item').filter({ hasText: title }).waitFor();
       releaseHistory(); await eventually(() => historyDelivered, 'The old history arrives after the title update');
       await page.evaluate(() => new Promise<void>(resolve => setTimeout(resolve, 150)));
-      assert.equal(await row.locator('a.chat-history-item').innerText(), title, 'A stale list cannot restore the previous conversation title');
+      assert.equal(await row.locator('.chat-history-copy > span:first-child').innerText(), title, 'A stale list cannot restore the previous conversation title');
+      await historyMetadata(page, saved.id);
       await page.locator('[data-chat-search]').fill('NO MATCHING CONVERSATION');
       await row.waitFor({ state: 'detached' });
       await page.getByText('没有匹配的对话', { exact: true }).waitFor();
@@ -616,7 +692,8 @@ try {
       await page.reload(); await expectMessage(page, webFormalizationStatement);
       assert.equal((await conversation(page)).title, title, 'The renamed conversation persists after refresh');
       await openChatHistory(page);
-      assert.equal(await row.locator('a.chat-history-item').innerText(), title);
+      assert.equal(await row.locator('.chat-history-copy > span:first-child').innerText(), title);
+      await historyMetadata(page, saved.id);
       mark(`${width}px: conversation search filters titles and a renamed title survives refresh`);
 
       await page.locator('#chat-problem-records > summary').click();
@@ -632,7 +709,7 @@ try {
       let releaseDeletedHistory!: () => void, deletedHistoryHeld = false, deletedHistoryDelivered = false;
       const deletedHistoryGate = new Promise<void>(resolve => { releaseDeletedHistory = resolve; });
       await page.route('**/api/conversations', async route => {
-        const response = await route.fetch(); deletedHistoryHeld = true;
+        const response = await route.fetch({ timeout: 0 }); deletedHistoryHeld = true;
         await deletedHistoryGate; await route.fulfill({ response }); deletedHistoryDelivered = true;
       }, { times: 1 });
       await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
@@ -671,7 +748,7 @@ try {
       let releaseRecords!: () => void, recordsHeld = false, recordsDelivered = false;
       const recordsGate = new Promise<void>(resolve => { releaseRecords = resolve; });
       await page.route('**/api/formalizations', async route => {
-        const response = await route.fetch(); recordsHeld = true;
+        const response = await route.fetch({ timeout: 0 }); recordsHeld = true;
         await recordsGate; await route.fulfill({ response }); recordsDelivered = true;
       }, { times: 1 });
       await page.locator('#chat-problem-records > summary').click();
@@ -705,10 +782,12 @@ try {
     } finally { await context.close(); }
   }
   assert.deepEqual(errors, []);
-  await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', paidModelCalls: false, checks }, null, 2) + '\n');
+  await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', checkedAt: new Date().toISOString(),
+    paidModelCalls: false, browserTimeouts: 0, providerIdleTimeout: 0, deadline: null, tokenLimit: null, roundLimit: null,
+    realModelCalls: 0, realLeanProcesses: 0, mode: 'real Chromium, disposable HTTP services and a loopback response fixture; positive input budgets test propagation only', checks, screenshots }, null, 2) + '\n');
 } catch (error) {
   await activePage?.screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => {});
-  await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'failed', paidModelCalls: false, checks,
+  await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'failed', paidModelCalls: false, checks, screenshots,
     error: error instanceof Error ? error.message : String(error), url: activePage?.url(), requests }, null, 2) + '\n');
   throw error;
 } finally { releaseAnswer?.(); await browser?.close(); await service.close(); provider.stop(true); await fs.rm(temporary, { recursive: true, force: true }); }

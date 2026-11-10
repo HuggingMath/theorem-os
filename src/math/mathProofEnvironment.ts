@@ -46,6 +46,14 @@ const descriptorSchema = z
     leaseToken: z.string().min(16),
   })
   .strict();
+
+export class MathProofEnvironmentLeaseTimeoutError extends Error {
+  constructor(readonly kind: 'handshake' | 'operation-deadline', message: string) {
+    super(message);
+    this.name = 'MathProofEnvironmentLeaseTimeoutError';
+  }
+}
+
 const sandboxMappingSchema = z
   .object({
     schema: z.literal('deepscientist.math.proof-environment-sandbox.v1'),
@@ -220,14 +228,17 @@ export async function acquireMathProofEnvironmentLease(
   if (!environment) return undefined;
   signal?.throwIfAborted();
   if (deadlineAt !== undefined && Date.now() >= deadlineAt)
-    throw new DOMException('Proof environment lease deadline exceeded.', 'TimeoutError');
+    throw new MathProofEnvironmentLeaseTimeoutError('operation-deadline', 'Proof environment lease deadline exceeded.');
   const descriptor = descriptorSchema.parse(JSON.parse(env[MATH_PROOF_ENVIRONMENT_ENV]!));
   const socket = net.createConnection(readSandboxMapping(descriptor, env)?.leaseSocket ?? descriptor.leaseSocket);
+  const remainingMs = deadlineAt === undefined ? Infinity : deadlineAt - Date.now();
+  const operationDeadlineIsFirst = remainingMs <= 5000;
   try {
     socket.once('connect', () => socket.write(`${JSON.stringify({ token: descriptor.leaseToken })}\n`));
     await readJsonLine({ data: socket, owner: socket, end: 'close', limit: 1024, signal,
-      timeoutMs: Math.max(1, Math.min(5000, deadlineAt === undefined ? 5000 : deadlineAt - Date.now())),
-      timedOut: () => new DOMException('Proof environment lease handshake timed out.', 'TimeoutError'),
+      timeoutMs: Math.max(1, Math.min(5000, remainingMs)),
+      timedOut: () => new MathProofEnvironmentLeaseTimeoutError(operationDeadlineIsFirst ? 'operation-deadline' : 'handshake',
+        operationDeadlineIsFirst ? 'Proof environment lease deadline exceeded.' : 'Proof environment lease handshake timed out.'),
       aborted: () => new DOMException('Proof environment lease cancelled.', 'AbortError'),
       ended: 'Proof environment lease closed before acknowledgement.', invalid: 'Invalid proof environment lease acknowledgement.',
       accept: value => { if (value?.ok !== true) throw new Error('Proof environment lease was rejected.'); } });

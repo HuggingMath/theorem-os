@@ -35,6 +35,12 @@ function fixture() {
 const selectedRecord = (html: string) => [...html.matchAll(/data-process-step="([^"]+)" aria-pressed="true"/gu)].map(match => match[1]);
 const globalEntries = (html: string) => [...html.matchAll(/data-workflow-entry="([^"]+)"[^>]*>([\s\S]*?)<\/li>/gu)]
   .map(match => ({ id: match[1], node: /data-global-node="([^"]+)"/u.exec(match[2])?.[1] }));
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const manifest = JSON.parse(fs.readFileSync(path.join(root, 'research/openai-math/manifest.json'), 'utf8')) as {
+  records: (ArchiveIndexRecord & { directory: string })[] };
+const archived = manifest.records.map(native => ({ record: { ...native, sources: [], excerpt: '' },
+  process: JSON.parse(fs.readFileSync(path.join(root, 'research/openai-math', native.directory, 'process.json'), 'utf8')) as ArchiveProcess }));
+const savedRuns = archived.flatMap(({ record, process }) => process.runs.map(run => ({ record, process, run })));
 
 describe('exact archived record navigation', () => {
   it('keeps unassigned and removed-task evidence on the original problem without changing current tasks or review and acceptance', () => {
@@ -89,25 +95,30 @@ describe('exact archived record navigation', () => {
     expect(acceptance.node).toBe('acceptance');
   });
 
-  it('opens every real global delivery and check from its own saved run across all sixteen archived problems', () => {
-    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-    const manifest = JSON.parse(fs.readFileSync(path.join(root, 'research/openai-math/manifest.json'), 'utf8')) as {
-      records: (ArchiveIndexRecord & { directory: string })[] };
-    let records = 0, previouslyUnassigned = 0;
-    for (const native of manifest.records) {
-      const record = { ...native, sources: [], excerpt: '' };
-      const process = JSON.parse(fs.readFileSync(path.join(root, 'research/openai-math', native.directory, 'process.json'), 'utf8')) as ArchiveProcess;
-      for (const run of process.runs) {
-        const entries = globalEntries(renderGlobalTrajectory(record, process, 'en', status => status ?? '', { run: run.runId }));
-        for (const entry of entries) {
-          if (!entry.id.startsWith('delivery:') && !entry.id.startsWith('check:')) continue;
-          const selection = { ...emptyProcessSelection(), view: 'roadmap' as const, run: run.runId, node: entry.node!, step: entry.id };
-          expect(selectedRecord(renderArchiveProcess(record, process, selection, 'en')), `${record.id}/${run.runId}/${entry.id}`).toEqual([entry.id]);
-          if (entry.node === 'problem') previouslyUnassigned++;
-          records++;
-        }
-      }
+  it('covers all eighteen archived problems and their saved delivery and check records', () => {
+    expect(archived).toHaveLength(18);
+    expect(archived.map(({ record }) => record.id)).toEqual(expect.arrayContaining([
+      'openai_three_state_tree_clauses', 'openai_character_varieties_all_seams_support',
+    ]));
+    expect(savedRuns).toHaveLength(61);
+    const entries = archived.flatMap(({ record, process }) => process.runs.flatMap(run =>
+      globalEntries(renderGlobalTrajectory(record, process, 'en', status => status ?? '', { run: run.runId }))
+        .filter(entry => entry.id.startsWith('delivery:') || entry.id.startsWith('check:'))));
+    expect(entries).toHaveLength(1055);
+    expect(entries.filter(entry => entry.node === 'problem').length).toBeGreaterThan(40);
+  });
+
+  // Every saved run keeps the normal per-test deadline while all of its evidence
+  // destinations are exercised; the growing archive no longer shares one timer.
+  it.each(savedRuns)('opens every real global delivery and check in $record.id / $run.runId', ({ record, process, run }) => {
+    const entries = globalEntries(renderGlobalTrajectory(record, process, 'en', status => status ?? '', { run: run.runId }))
+      .filter(entry => entry.id.startsWith('delivery:') || entry.id.startsWith('check:'));
+    expect(entries.map(entry => entry.id).sort(), `${record.id}/${run.runId}: complete evidence`)
+      .toEqual([...(run.deliveries ?? []).map(delivery => 'delivery:' + delivery.id),
+        ...(run.checks ?? []).map(check => 'check:' + check.id)].sort());
+    for (const entry of entries) {
+      const selection = { ...emptyProcessSelection(), view: 'roadmap' as const, run: run.runId, node: entry.node!, step: entry.id };
+      expect(selectedRecord(renderArchiveProcess(record, process, selection, 'en')), `${record.id}/${run.runId}/${entry.id}`).toEqual([entry.id]);
     }
-    expect(records).toBeGreaterThan(500); expect(previouslyUnassigned).toBeGreaterThan(40);
   });
 });

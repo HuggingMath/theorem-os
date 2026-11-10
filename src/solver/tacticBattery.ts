@@ -3,11 +3,13 @@ import path from 'node:path';
 import { mathConstructionImports, mathLocalModuleBuildOrder } from '../math/mathConstructionSources';
 import { inspectLeanDeclarationRegions, inspectLeanSource, inspectScopedLeanDeclarations } from '../math/leanSource';
 import { maskLeanCommentsAndStrings } from '../math/leanSyntax';
-import { checkLeanType } from '../math/leanTypeDiagnostics';
+import { checkLeanType, prepareLeanTypeDiagnostic } from '../math/leanTypeDiagnostics';
 import { declarationStartWithDoc } from './cooperativeProof';
 import { commitSolverSources, committedSource, withSolverWorktree, type SolverProblem } from './problem';
 import { isDefinitionTask, type CooperativeTask } from './tasks';
 import { familyAssemblyProof } from './taskFamilies';
+import { DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT, openTacticBatteryFailureCache,
+  tacticBatteryFailureDiagnostic, tacticBatteryFailureIdentity } from './tacticBatteryFailureCache';
 
 /** Bounds the advisory stage, including environment import; the ordinary task check keeps its own timeout. */
 export const TACTIC_BATTERY_TIMEOUT_MS = 120_000;
@@ -82,6 +84,7 @@ export function tacticBatterySource(problem: SolverProblem, source: string, task
 
 export type TacticBatteryResult = { status: 'closed' | 'failed' | 'skipped' | 'unavailable'; reason: string; commit?: string;
   artifact?: { path: string; digest: string }; evidence: 'advisory-tactic-battery'; proofAcceptance: 'not-accepted';
+  cacheHit?: true; cacheKey?: string; originDiagnosticDigest?: string;
   /** Set on a closed result whose hypotheses alone derive `False`; absent when the probe did not run or was inconclusive. */
   vacuous?: true };
 
@@ -105,14 +108,41 @@ export async function closeTaskByTactics(input: { problem: SolverProblem; task: 
       `${problem.projectRelative}/${task.proofPath}`), task, input.context, proof);
   } catch { /* An unreadable seed source has no placement. */ }
   if (!edited) return { ...base, status: 'skipped', reason: 'placement-unavailable' };
-  let checked;
+  let prepared: ReturnType<typeof prepareLeanTypeDiagnostic>;
+  try {
+    prepared = prepareLeanTypeDiagnostic({ projectRoot: project, file: task.proofPath, context: input.context,
+      type: task.type, expression: proof, env: input.env, signal: input.signal, timeoutMs: input.timeoutMs });
+  } catch {
+    return { ...base, status: 'unavailable', reason: input.signal?.aborted ? 'aborted' : 'check-unavailable' };
+  }
+  const identity = tacticBatteryFailureIdentity(prepared, { theoremName: task.theoremName, candidate: edited,
+    timeoutMs: input.timeoutMs });
+  let failureCache: ReturnType<typeof openTacticBatteryFailureCache> | undefined;
+  if (identity) {
+    try { failureCache = openTacticBatteryFailureCache(DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT); }
+    catch { /* Cache failure is advisory; the battery remains authoritative for its own result. */ }
+    const cached = failureCache?.read(identity.key);
+    if (cached && identity.current()) {
+      return { ...base, status: 'failed', reason: 'battery-did-not-close-reused', cacheHit: true,
+        cacheKey: identity.key, originDiagnosticDigest: cached.diagnosticDigest };
+    }
+  }
+  let checked: Awaited<ReturnType<typeof checkLeanType>>;
   try {
     checked = await checkLeanType({ projectRoot: project, file: task.proofPath, context: input.context, type: task.type,
       expression: proof, env: input.env, signal: input.signal, timeoutMs: input.timeoutMs });
   } catch { return { ...base, status: 'unavailable', reason: input.signal?.aborted ? 'aborted' : 'check-unavailable' }; }
-  if (checked.status !== 'elaborated' || checked.constants?.includes('sorryAx'))
-    return { ...base, status: checked.timedOut ? 'unavailable' : 'failed', reason: checked.timedOut ? 'timed-out' : 'battery-did-not-close',
-      artifact: checked.artifact };
+  const aborted = 'aborted' in checked && checked.aborted;
+  if (checked.status !== 'elaborated' || checked.constants?.includes('sorryAx')) {
+    if (identity && failureCache && identity.current()) {
+      const diagnosticDigest = tacticBatteryFailureDiagnostic(prepared, checked);
+      if (diagnosticDigest && identity.current()) {
+        try { failureCache.remember(identity.key, diagnosticDigest); } catch { /* Advisory cache failures do not affect dispatch. */ }
+      }
+    }
+    return { ...base, status: checked.timedOut || aborted ? 'unavailable' : 'failed',
+      reason: checked.timedOut ? 'timed-out' : aborted ? 'aborted' : 'battery-did-not-close', artifact: checked.artifact };
+  }
   let commit: string;
   try {
     // A disposable checkout keeps the idle worker worktree at its seed; worktrees share the object store.

@@ -81,7 +81,7 @@ try {
         const facts = await page.locator('#import-facts').innerText();
         if (cap === 10_003) await page.screenshot({ path: path.join(output, `${locale}-fractional-import-${width}.png`) });
         await confirmImport(page);
-        const units = String((cap ?? 0) / 10_000);
+        const units = cap === undefined ? '' : String(cap / 10_000);
         assert.equal(await page.locator('#max-tokens').inputValue(), units);
         assert.equal(await page.locator('#max-tokens').evaluate(input => (input as HTMLInputElement).validity.stepMismatch), false);
         assert.equal(await page.locator('#source').inputValue(), archive.run.source);
@@ -92,7 +92,7 @@ try {
         await page.locator('#export-draft').click();
         const ordinary = JSON.parse(await fs.readFile((await (await downloading).path())!, 'utf8'));
         assert.equal(ordinary.schema, 'theorem-os.web-draft.v1');
-        assert.equal(ordinary.draft.maxTotalTokens, units);
+        assert.equal(ordinary.draft.maxTotalTokens, cap === undefined ? undefined : units);
         await importJson(page, ordinary, 'ordinary-draft-roundtrip.json'); await confirmImport(page);
         assert.equal(await page.locator('#max-tokens').inputValue(), units);
         await page.locator('#api-key').fill(credential);

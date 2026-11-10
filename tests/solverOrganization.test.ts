@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import { markTaskAcceptance, taskVersion, type RouteRecord, type TaskRecord } from '../src/solver/tasks';
 import { configuredSolverModules } from '../src/solver/modules';
+import { createTaskConnectionCheck } from '../src/solver/taskConnections';
 
 it('keeps M3 priority for both proof roles under every configured scheduler', () => {
   const researcher: ResearchWorker = { id: 'researcher', role: 'researcher', worktree: '/researcher', ownedFiles: [] };
@@ -51,7 +52,61 @@ function capacityFixture(slots = 3, occupied = slots - 1) {
   return { workers, running, core, independent, goal, tasks: [...running, core, independent, goal] };
 }
 
+function connectionCapacityFixture() {
+  const workers = [capacityWorker('connecting'), capacityWorker('screening')];
+  const input = capacityNode('input'), first = capacityNode('application', 'lemma', ['input']);
+  const goal = capacityNode('original', 'goal', [first.task.id]);
+  goal.task = { ...goal.task, conditional: true };
+  const research = capacityNode('construction', 'research');
+  research.task = { ...research.task, consumerGoalIds: [goal.task.id] };
+  const tasks = [input, first, goal, research];
+  occupy(goal, workers[0].id);
+  goal.assignment!.dependencies = [{ taskId: first.task.id, taskDigest: taskVersion(first.task) }];
+  goal.assignment!.connectionCheck = createTaskConnectionCheck(goal.task, goal.assignment!, tasks,
+    { environmentDigest: 'fixture-env', problemReceiptDigest: 'fixture-problem' });
+  return { workers, input, first, goal, research, tasks, groups: [capacityGroup(3)] };
+}
+
 describe.each(['plan', 'critical-path', 'continuation'])('%s shared proof capacity', scheduler => {
+  it('screens related untried research before filling the last slot with another conditional application', () => {
+    const { workers, first, research, tasks, groups } = connectionCapacityFixture();
+    const modules = configuredSolverModules('direct', scheduler);
+    expect(modules.M5.assign([first, research], workers[1], workers, groups, tasks)).toBe(research);
+  });
+
+  it('lets a yielded conditional goal screen its untried research before resuming the saved application', () => {
+    const { workers, first, goal, research, tasks, groups } = connectionCapacityFixture();
+    goal.status = 'pending'; goal.attempts = 1; goal.assignment!.workerId = workers[1].id;
+    goal.assignment!.connectionCheck = createTaskConnectionCheck(goal.task, goal.assignment!, tasks,
+      { environmentDigest: 'fixture-env', problemReceiptDigest: 'fixture-problem' });
+    occupy(first, workers[0].id);
+    const modules = configuredSolverModules('direct', scheduler);
+    expect(modules.M5.assign([goal, research], workers[1], workers, groups, tasks)).toBe(research);
+  });
+
+  it.each(['attempted', 'owner', 'assignment', 'other-goal', 'other-group', 'stale-connection',
+    'changed-connection-input', 'spare-slot', 'already-researching', 'unconditional-goal'] as const)(
+    'preserves eligibility and proof priority when %s', control => {
+      const { workers, first, goal, research, tasks, groups } = connectionCapacityFixture();
+      if (control === 'attempted') research.attempts = 1;
+      if (control === 'owner') research.task = { ...research.task, ownerId: 'other' };
+      if (control === 'assignment') research.assignment = { taskId: research.task.id,
+        taskDigest: taskVersion(research.task), workerId: 'other', seedCommit: 'fixture' };
+      if (control === 'other-goal') research.task = { ...research.task, consumerGoalIds: ['other'] };
+      if (control === 'other-group') research.task = { ...research.task, groupId: 'other' };
+      if (control === 'stale-connection') goal.assignment!.connectionCheck!.basisDigest = 'stale';
+      if (control === 'changed-connection-input') first.task = { ...first.task, revision: first.task.revision + 1 };
+      if (control === 'spare-slot') workers.push(capacityWorker('spare'));
+      if (control === 'already-researching') {
+        const active = capacityNode('active-research', 'research');
+        active.task = { ...active.task, consumerGoalIds: [goal.task.id] };
+        const peer = capacityWorker('peer'); workers.push(peer); occupy(active, peer.id); tasks.push(active);
+      }
+      if (control === 'unconditional-goal') first.task = { ...first.task, kind: 'goal', conditional: false };
+      const modules = configuredSolverModules('direct', scheduler);
+      expect(modules.M5.assign([first, research], workers[1], workers, groups, tasks)).toBe(first);
+    });
+
   it.each([2, 3, 4])('reserves the last of %i actual proof slots for an independent question', slots => {
     const workers = Array.from({ length: slots }, (_, index) => capacityWorker(`worker-${index}`));
     const support = Array.from({ length: slots + 1 }, (_, index) => capacityNode(`support-${index}`));

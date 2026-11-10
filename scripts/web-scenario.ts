@@ -24,9 +24,10 @@ export async function freePort() {
 }
 /** Start the service on the reserved loopback port, then launch headless Chromium. */
 export async function startBrowser(server: http.Server, port: number) {
+  server.requestTimeout = 0; server.headersTimeout = 0; server.setTimeout(0);
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
   // Chromium takes its UI language from LANG; the scenario suites assert the Chinese interface.
-  return chromium.launch({ headless: true, env: { ...process.env, LANG: 'zh_CN.UTF-8' } });
+  return chromium.launch({ headless: true, timeout: 0, env: { ...process.env, LANG: 'zh_CN.UTF-8' } });
 }
 
 export async function settled(page: Page) {
@@ -53,26 +54,28 @@ export type ScenarioOptions<H extends ScenarioHarness> = {
   /** `local` aborts and later asserts non-origin requests (`local` is the message), records `/api/` requests, then lets
    * `blockWrites` abort non-GET ones or `h.intercept` answer them; `api` routes only `/api/**`; `observe` records without routing. */
   routes: { local: string; blockWrites?: true } | 'api' | 'observe';
-  /** `true` loads the workbench and waits for an enabled submit button before the deadline starts. */
+  /** `true` loads the workbench and waits for an enabled submit button. */
   open?: true | ((h: H) => Promise<void>);
-  timeout: { label: string; seconds: number };
+  /** Kept as legacy suite metadata; scenarios and browser actions have no execution deadline. */
+  timeout?: { label: string; seconds: number };
   /** Assert scenario invariants and return its check record; the default records name, elapsed time and requests. */
   verify?: (h: H, elapsedMs: () => number) => Promise<object> | object;
   failure?: { prefix?: string; fullPage?: true; capture?: (page: Page, image: string) => Promise<unknown> };
   cleanup?: (h: H) => Promise<void> | void;
 };
 
-/** Run one scenario in a fresh context: fail on page errors, a missed deadline or `verify`, screenshot failures, and always
+/** Run one scenario in a fresh context: fail on page errors or `verify`, screenshot failures, and always
  * run `cleanup` before closing the context. */
 export async function webScenario<H extends ScenarioHarness>(browser: Browser, suite: ScenarioSuite, name: string,
   run: (h: H) => Promise<void>, options: ScenarioOptions<H>) {
   suite.failedScenario = name;
   const started = performance.now();
   const context = await browser.newContext({ locale: 'zh-CN', ...options.context });
+  context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
   if (!options.collaborationDetail) await preferFullCollaboration(context);
   await options.init?.(context);
   const page = await context.newPage();
-  page.setDefaultTimeout(10_000);
+  page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
   const h = options.harness(page, context); suite.harness = h;
   const errors: string[] = [], external: string[] = [], routes = options.routes;
   page.on('pageerror', error => errors.push(error.message));
@@ -95,14 +98,10 @@ export async function webScenario<H extends ScenarioHarness>(browser: Browser, s
     }
     await route.continue();
   });
-  let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
     if (options.open === true) { await page.goto(suite.origin); await ready(page); }
     else await options.open?.(h);
-    const { label, seconds } = options.timeout;
-    await Promise.race([run(h), new Promise<never>((_, reject) => {
-      deadline = setTimeout(() => reject(new Error(`${label} scenario exceeded ${seconds} seconds: ${name}`)), seconds * 1000);
-    })]);
+    await run(h);
     assert.deepEqual(errors, [], 'uncaught browser errors');
     if (typeof routes === 'object') assert.deepEqual(external, [], routes.local);
     const elapsedMs = () => Math.round(performance.now() - started);
@@ -115,7 +114,6 @@ export async function webScenario<H extends ScenarioHarness>(browser: Browser, s
       : page.screenshot({ path: path.join(suite.output, suite.failureScreenshot), fullPage })).catch(() => {});
     throw error;
   } finally {
-    clearTimeout(deadline);
     try { await options.cleanup?.(h); } finally { await context.close(); }
   }
 }

@@ -416,8 +416,10 @@ describe('Agent actions as the run owner sees them', () => {
     const builds = '/opt/runtime-state';
     const modules = webSolverModules(request, { sink: action => sent.push(action), hidden: [app, run] }, { tools, hiddenRoots: [app, builds] });
     opened.length = 0;
-    void modules.M1.open({ workspace: own, environment: { DEEPSCIENTIST_MATH_WORKER_ID: 'engineer' } } as unknown as MathAgentOptions);
-    expect(opened[0]!.hiddenRoots).toEqual([app, builds]);
+    const hostCache = '/var/tmp/fixture-host-tactic-cache';
+    void modules.M1.open({ workspace: own, hiddenRoots: [hostCache],
+      environment: { DEEPSCIENTIST_MATH_WORKER_ID: 'engineer' } } as unknown as MathAgentOptions);
+    expect(opened[0]!.hiddenRoots).toEqual([hostCache, app, builds]);
     opened[0]!.onItem!('completed', { id: 'c', type: 'commandExecution', exitCode: 0, command: `bun ${tools} check-finite --json '{}'`, aggregatedOutput: '{}' });
     expect(sent[0]!.command).toBe("math check-finite --json '{}'");
     const problem = { projectRelative: '.', ownedFiles: ['Submission.lean'], declarations: {}, targets: [], receiptDigest: 'problem',

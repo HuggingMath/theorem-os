@@ -89,6 +89,22 @@ function goalShape(value: string) {
   return views.length === 1 ? knowledgeGoalSurfaceShape(views[0]!.goal) : undefined;
 }
 
+/** A retrieval hint may be useful to a model without warranting an automatic theorem application. */
+export function knowledgeApplicationRelevant(item: TheoremKnowledgeEntry, goal: string): boolean {
+  const type = knowledgeTypeExpression(item), normalizedGoal = canonical(goalTarget(goal)), normalizedType = canonical(type);
+  if (normalizedGoal && (normalizedGoal === normalizedType ||
+      normalizedGoal.length >= 8 && normalizedType.endsWith(normalizedGoal))) return true;
+  const surface = goalShape(goal);
+  if (surface !== undefined && surface === knowledgeGoalSurfaceShape(type)) return true;
+  // Reuse the ranker's conclusion terms and name/type fields. Built-in arithmetic normal forms can
+  // differ definitionally (`n = n` versus `n + 0 = n`, or `n + 1` versus `Nat.succ n`).
+  const arithmetic = new Set(['nat', 'int', 'rat', 'real', 'complex', 'ennreal', 'nnreal', 'succ', 'pred']);
+  const required = terms(conclusion(goalTarget(goal)), true)
+    .filter(term => !/^\p{N}+$/u.test(term) && !arithmetic.has(term));
+  const available = new Set([...terms(item.name), ...terms(conclusion(type), true)]);
+  return required.every(term => available.has(term));
+}
+
 export function knowledgeSearchGroup(item: TheoremKnowledgeEntry): string {
   return mathDigest(canonicalMathJson({ name: item.name, type: item.type, typeKind: item.typeKind, declaration: item.declaration }));
 }

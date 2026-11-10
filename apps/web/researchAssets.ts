@@ -6,7 +6,8 @@ import { defaultResearchModulePlan, researchModulePlanSchema, type ResearchModul
 import { WebStorage, WebStorageError } from './storage';
 import type { FrozenResearchConfiguration, ResearchAgentDraft, ResearchAsset, ResearchAssetContent, ResearchAssetKind, ResearchAssetPreview,
   ResearchAssetRelease, ResearchConfigurationSelection, ResearchMathDeclaration, ResearchMathDraft, ResearchMathSource, ResearchPublication,
-  ResearchLibraryPack, ResearchReleaseRef, ResearchSkillDraft, ResearchVerifiedMathematics } from './researchAssetTypes';
+  ResearchLibraryPack, ResearchReleaseRef, ResearchSkillDraft, ResearchVerifiedMathematics, ResearchMathExample, ResearchCheckedMathExample } from './researchAssetTypes';
+import { researchMathExampleSource } from './researchMathExamples';
 
 export type ResolvedResearchMathematics = {
   pack: LibraryPack;
@@ -21,6 +22,7 @@ export type ResearchAssetOptions = {
   validateMathematics?: (material: ResolvedResearchMathematics, signal: AbortSignal) => Promise<{
     passed: boolean; receiptRefs: string[]; reason?: string;
   }>;
+  validateMathematicsExample?: (material: ResolvedResearchMathematics, example: ResearchMathExample, signal: AbortSignal) => Promise<ResearchCheckedMathExample>;
 };
 
 const key = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u);
@@ -50,7 +52,10 @@ const agentSchema = z.object({ environment: environment.optional(), providerId: 
   coordination: z.enum(['cooperative', 'independent']).optional(), modulePlan: researchModulePlanSchema.default(defaultResearchModulePlan()),
   skills: refs.default([]), libraries: refs.default([]),
 }).strict();
-const mathSchema = z.object({ source: sourceSchema }).strict();
+const exampleSchema = z.object({ id: key, title: z.string().trim().min(1).max(160), declaration: z.string().trim().min(1).max(1000),
+  type: z.string().trim().min(1).max(4000), proof: z.string().trim().min(1).max(12000), argumentNotes: z.string().max(4000).default('') }).strict();
+const mathSchema = z.object({ source: sourceSchema, usage: z.object({ conditions: z.string().max(4000).default(''),
+  result: z.string().max(4000).default(''), examples: z.array(exampleSchema).max(6).default([]) }).strict().optional() }).strict();
 const createSchema = z.object({ requestId: key, type: z.enum(['mathematics', 'agent', 'skill']), name: short,
   description: z.string().max(4000).default(''), area: z.string().trim().max(120).default(''),
   visibility: z.enum(['private', 'public']).default('private'), content: z.unknown() }).strict();
@@ -58,7 +63,8 @@ const updateSchema = z.object({ requestId: key, expectedRevision: z.number().int
   description: z.string().max(4000).optional(), area: z.string().trim().max(120).optional(),
   visibility: z.enum(['private', 'public']).optional(), content: z.unknown().optional() }).strict();
 const publishSchema = z.object({ requestId: key, expectedRevision: z.number().int().positive(), version: version.optional(),
-  license: z.string().trim().min(1).max(120), visibility: z.enum(['private', 'public']), previewDigest: digest.optional() }).strict();
+  license: z.string().trim().min(1).max(120), visibility: z.enum(['private', 'public']), previewDigest: digest.optional(),
+  releaseNotes: z.string().trim().max(4000).optional() }).strict();
 const forkSchema = z.object({ requestId: key, version, name: short.optional() }).strict();
 const withdrawSchema = z.object({ requestId: key, expectedRevision: z.number().int().positive(), version: version.optional() }).strict();
 const selectionSchema = z.object({ agent: refSchema.optional(), skills: refs.optional(), libraries: refs.optional() }).strict();
@@ -86,7 +92,7 @@ type StoredAsset = {
   createdAt: string; updatedAt: string; operations: Record<string, Operation>;
 };
 type StoredPublication = { owner: string; view: ResearchPublication; snapshot: StoredAsset; license: string;
-  visibility: 'private' | 'public'; requestId: string; operationDigest: string; mathematics?: ResolvedResearchMathematics };
+  visibility: 'private' | 'public'; releaseNotes?: string; requestId: string; operationDigest: string; mathematics?: ResolvedResearchMathematics };
 type PendingPublication = { controller: AbortController; promise: Promise<void>; resolve: () => void; running: boolean };
 
 /** Asset drafts, immutable releases and frozen research inputs, independent of account-wide run access. */
@@ -213,6 +219,7 @@ export class WebResearchAssets {
   private async draftPreview(owner: string, asset: StoredAsset): Promise<ResearchAssetPreview> {
     const mathematics = asset.type === 'mathematics' ? await this.draftMathematics(owner, asset) : undefined;
     const preview = { type: asset.type, name: asset.name, description: asset.description, revision: asset.revision,
+      ...(asset.type === 'mathematics' && 'source' in asset.draft && asset.draft.usage ? { mathematicsUsage: copy(asset.draft.usage) } : {}),
       ...(mathematics ? { mathematics } : { content: copy(asset.draft) }), validation: 'not-run' as const };
     return { ...preview, previewDigest: mathDigest(canonicalMathJson({ assetId: asset.id, area: asset.area,
       draft: asset.draft, ...preview })) };
@@ -262,7 +269,7 @@ export class WebResearchAssets {
       status: 'queued', createdAt: time, updatedAt: time };
     if (Object.keys(asset.operations).length >= 1024) fail(409, '此资产的修改记录已达上限，请派生新资产。');
     const record: StoredPublication = { owner, view: publication, snapshot: copy(asset), license: value.license,
-      visibility: value.visibility, requestId: value.requestId, operationDigest, ...(mathematics ? { mathematics } : {}) };
+      visibility: value.visibility, ...(value.releaseNotes ? { releaseNotes: value.releaseNotes } : {}), requestId: value.requestId, operationDigest, ...(mathematics ? { mathematics } : {}) };
     // The durable queue entry is also the publication intent if the following asset write is interrupted.
     this.storage.saveRecord(publicationPath(publicationId), record, true);
     this.rememberPublication(record);
@@ -345,6 +352,29 @@ export class WebResearchAssets {
         mathematics = { environment: env, environmentDigest: resolved.environmentDigest, pack,
           packDigest: libraryPackDigest(pack), declarations, receiptRefs: [...checked.receiptRefs], source: draft.source,
           ...(resolved.sourceReceiptRefs?.length ? { sourceReceiptRefs: [...resolved.sourceReceiptRefs] } : {}) };
+        if (draft.usage) {
+          const ids = new Set<string>(), examples: ResearchCheckedMathExample[] = [];
+          for (const example of draft.usage.examples) {
+            if (ids.has(example.id)) fail(400, '数学调用示例的编号不能重复。');
+            ids.add(example.id);
+            if (!this.options.validateMathematicsExample) fail(503, '当前服务暂不提供数学调用示例的独立检查。');
+            const { source, name } = researchMathExampleSource(resolved, example);
+            const result = await this.options.validateMathematicsExample(resolved, example, signal);
+            signal.throwIfAborted();
+            if (!result.check?.receipt.passed || result.source !== source || result.sourceDigest !== mathDigest(source)
+              || result.check.receipt.sourceDigest !== result.sourceDigest || result.check.receipt.libraryPackDigest !== libraryPackDigest(pack)
+              || result.check.receipt.environmentDigest !== resolved.environmentDigest || result.check.receipt.environment !== env
+              || result.check.receipt.schema !== 'theorem-os.research-library-example-check.v1'
+              || result.check.receipt.exampleId !== example.id || result.check.receipt.declaration !== example.declaration
+              || result.check.receipt.checkedDeclaration !== name || result.check.receipt.exitCode !== 0 || result.check.receipt.timedOut
+              || result.check.receipt.diagnostics.some(item => item.severity === 'error')
+              || Object.entries(example).some(([field, value]) => result[field as keyof ResearchMathExample] !== value)
+              || result.check.receiptId !== mathDigest(canonicalMathJson(result.check.receipt)))
+              fail(409, '数学调用示例与独立检查回执不一致，尚未发布。');
+            examples.push(copy(result));
+          }
+          mathematics.usage = { conditions: draft.usage.conditions, result: draft.usage.result, examples };
+        }
       } else if (asset.type === 'agent') {
         const draft = parsed(agentSchema, asset.draft) as ResearchAgentDraft;
         const agentSkills = draft.skills.map(ref => this.reference(record.owner, ref, 'skill'));
@@ -372,6 +402,7 @@ export class WebResearchAssets {
         assetId: asset.id, type: asset.type, authorId: asset.authorId, version: record.view.version,
         name: asset.name, description: asset.description, area: asset.area, license: record.license,
         visibility: record.visibility, content: finalContent, dependencies,
+        ...(record.releaseNotes ? { releaseNotes: record.releaseNotes } : {}),
         ...(mathematics ? { mathematics } : {}), ...(asset.derivedFrom ? { derivedFrom: asset.derivedFrom } : {}), createdAt: record.view.createdAt };
       const release: ResearchAssetRelease = { ...releaseContent, digest: mathDigest(canonicalMathJson(releaseContent)) };
       this.storage.saveRecord(releasePath(asset.id, release.version), release, true);

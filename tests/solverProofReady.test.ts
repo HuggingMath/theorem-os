@@ -64,6 +64,7 @@ describe('runner proof readiness freeze barrier', () => {
     const events: { event: string; details?: Record<string, unknown> }[] = [];
     const eventWaiters = new Map<string, ReturnType<typeof deferred>>();
     const interrupt = vi.fn(async () => {});
+    const notify = vi.fn(async (_message: string) => {});
     const closed = vi.fn();
     const stopForFreeze = vi.fn(async () => {
       stopping.resolve();
@@ -73,7 +74,7 @@ describe('runner proof readiness freeze barrier', () => {
     const open = vi.fn(async (access: MathAgentOptions): Promise<MathAgentSession> => {
       if (access.environment.DEEPSCIENTIST_MATH_WORKER_ID !== writer.id) throw new Error('fixture_unexpected_lead_dispatch');
       let active: ReturnType<typeof deferred<string>> | undefined;
-      return { threadId: access.threadId ?? 'proof-ready-thread', interrupt, notify: async () => {},
+      return { threadId: access.threadId ?? 'proof-ready-thread', interrupt, notify,
         close: async () => { closed(); active?.resolve('interrupted'); if (options.closeRejects) throw new Error('fixture_close_failed'); },
         ...(options.stop === 'missing' ? {} : { stopForFreeze }),
         run: async (message, _id, _workspace, onStarted) => {
@@ -111,7 +112,7 @@ describe('runner proof readiness freeze barrier', () => {
     const writeProof = () => fs.writeFileSync(sourceFile, fs.readFileSync(sourceFile, 'utf8').replace('by sorry', 'by rfl'));
     const appendReady = () => fs.appendFileSync(path.join(writer.worktree, assignmentDeliveryFile(action().assignment)),
       JSON.stringify({ kind: 'ready', id: 'ready-runner-submission' }) + '\n');
-    const current = { directory, problem, state, workers, modules, writer, controller, stopResult, turns, events, interrupt, stopForFreeze,
+    const current = { directory, problem, state, workers, modules, writer, controller, stopResult, turns, events, interrupt, notify, stopForFreeze,
       open, closed, completion, action, writeProof, appendReady, waitEvent, wait, started, stopping,
       pulse: () => cooperation.pulse(writer.id), head: () => git(writer.worktree, ['rev-parse', 'HEAD']),
     };
@@ -155,6 +156,43 @@ describe('runner proof readiness freeze barrier', () => {
       commit: ready.snapshotCommit, sourceDigest: ready.sourceDigest });
     expect(current.state.tokenBudget).toMatchObject({ maxTotalTokens: 0, status: 'unlimited' });
     expect(current.open.mock.calls.every(([access]) => access.turnTimeoutMs === undefined)).toBe(true);
+  });
+
+  it('hands a completed declaration to the existing ready flow during a pending context checkpoint', async () => {
+    const current = fixture(); await current.wait(current.started.promise);
+    current.writeProof();
+    fs.writeFileSync(path.join(current.writer.worktree, 'RESEARCH.md'), 'DONE locally; independent host checking is still required.\n');
+    current.state.workers![1].lastInputTokens = 100_000;
+    current.open.mock.calls[0][0].onActivity!({ event: 'reasoning' });
+    const request = current.state.workers![1].contextCheckpoint!;
+    expect(request.requestId).toBeDefined();
+    const instruction = current.notify.mock.calls.map(([message]) => message).find(message => message.includes(request.requestId!))!;
+    const ready = instruction.match(/Append one complete JSON line to ("(?:\\.|[^"])*"): (\{"kind":"ready".*?\})\./iu);
+    expect(ready).not.toBeNull();
+    expect(instruction).toContain('Use ready instead of checkpoint');
+    expect(instruction).toContain('including their existing sorry bodies');
+    await current.pulse();
+    expect(current.state.cooperation!.proofReadyRecords ?? []).toEqual([]);
+    expect(host.verify).not.toHaveBeenCalled();
+    expect(current.interrupt).not.toHaveBeenCalled();
+
+    const log = JSON.parse(ready![1]) as string;
+    expect(log).toBe(path.join(current.writer.worktree, assignmentDeliveryFile(current.action().assignment)));
+    fs.appendFileSync(log, JSON.stringify(JSON.parse(ready![2])) + '\n'); await current.pulse();
+    expect(current.interrupt).toHaveBeenCalledOnce();
+    expect(host.verify).not.toHaveBeenCalled();
+    current.turns[0].done.resolve('interrupted'); await current.wait(current.stopping.promise);
+    expect(host.verify).not.toHaveBeenCalled();
+    current.stopResult.resolve({ status: 'stopped' }); await current.waitEvent('proof_ready_checked');
+
+    const receipt = current.state.cooperation!.proofReadyRecords![0];
+    expect(receipt).toMatchObject({ status: 'checked', evidence: 'unconditional' });
+    expect(current.state.cooperation!.tasks[0].integratedCheck?.passed).toBe(true);
+    expect(committedSource(current.writer.worktree, receipt.snapshotCommit!, current.problem.projectRelative + '/Submission.lean'))
+      .toContain('theorem zero_add (n : Nat) : 0 + n = n := by sorry');
+    expect(host.verify.mock.calls[0][0].items).toEqual([expect.objectContaining({ theoremName: current.action().task.theoremName })]);
+    expect(current.events.some(item => item.event === 'context_checkpoint_saved')).toBe(false);
+    expect(current.state.check).toBeUndefined();
   });
 
   it.each(['missing', 'unconfirmed', 'throw'] as const)('quarantines the writer without freezing, checking or reopening when process stop is %s', async stop => {

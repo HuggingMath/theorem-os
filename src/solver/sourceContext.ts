@@ -34,10 +34,10 @@ function isInstanceQuery(line: string): boolean {
   return depth === 0 && validBare();
 }
 export function solverSourceContext(source: string, originals: readonly { name: string; qualifiedName?: string }[],
-  originalImports?: readonly string[], allowedImports = solverMathlibImports(source)): string {
+  originalImports?: readonly string[], allowedImports = solverMathlibImports(source), regions = inspectLeanDeclarationRegions(source)): string {
   const addedImports = new Set(originalImports === undefined ? [] :
     allowedImports.filter(module => !originalImports.includes(module)));
-  const regions = inspectLeanDeclarationRegions(source), matching = originalDeclarationRegions(source, regions);
+  const matching = originalDeclarationRegions(source, regions);
   const original = new Set(originals.flatMap(item => matching(item)).map(region => region.startOffset));
   let frozen = '';
   let cursor = 0;

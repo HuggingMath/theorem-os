@@ -4,7 +4,7 @@ import { declarationHashes, inspectLeanSource } from './leanSource';
 export { hashMathFormalSourceDeclaration, inspectLeanDeclarationRegions, inspectLeanDeclarations, inspectLeanSource } from './leanSource';
 export type { MathematicsLeanSourceDeclaration } from './leanSource';
 
-import { resolveMathProofEnvironment, acquireMathProofEnvironmentLease } from "./mathProofEnvironment";
+import { resolveMathProofEnvironment, acquireMathProofEnvironmentLease, MathProofEnvironmentLeaseTimeoutError } from "./mathProofEnvironment";
 /**
  * @license
  * Copyright 2026 DeepScientist contributors
@@ -1235,8 +1235,11 @@ const runLeanSandboxed = async (input: {
   } catch (error) {
     if (input.signal?.aborted || (error instanceof Error && error.name === 'AbortError'))
       return { ...unavailableProcessResult('Lean environment lease was cancelled.'), aborted: true };
-    if (error instanceof Error && error.name === 'TimeoutError')
-      return { ...unavailableProcessResult('Lean environment lease exceeded the operation deadline.'), timedOut: true };
+    if (error instanceof MathProofEnvironmentLeaseTimeoutError) {
+      if (error.kind === 'operation-deadline')
+        return { ...unavailableProcessResult(error.message), timedOut: true };
+      return unavailableProcessResult(error.message);
+    }
     throw error;
   }
   let sealedRootFd: number | undefined;

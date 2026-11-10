@@ -120,8 +120,9 @@ describe('unchanged research delivery recovery and budget wakeup', () => {
   const budget = { maxTurns: Infinity, remainingMs: 60_000 };
   const resume = (state: SolverRunState, input: Partial<ConstructorParameters<typeof CooperativeResearch>[0]> = {}) =>
     cooperativeResearch({ state, workers: [lead, researcher], retrievalRoot: '', access: new Map(), ...input });
-  const checkpoint = (notes: string) => {
-    fs.writeFileSync(path.join(directory, 'RESEARCH.md'), notes);
+  const checkpoint = (notes: string | undefined) => {
+    if (notes === undefined) fs.rmSync(path.join(directory, 'RESEARCH.md'), { force: true });
+    else fs.writeFileSync(path.join(directory, 'RESEARCH.md'), notes);
     git(directory, ['add', '--', 'RESEARCH.md']);
     git(directory, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@localhost', 'commit', '--no-gpg-sign', '--quiet', '--allow-empty', '-m', 'Research checkpoint']);
     return git(directory, ['rev-parse', 'HEAD']);
@@ -835,6 +836,98 @@ describe('unchanged research delivery recovery and budget wakeup', () => {
     expect(record.feedback).toContain('math_research_checkpoint_unchanged');
     expect(state.cooperation!.tasks.find(node => node.task.kind === 'goal')!.status).toBe('pending');
     expect(state.cooperation!.tasks[0].integratedCheck).toBeUndefined();
+  });
+
+  const pauseCheckpoint = async (commit = seed) => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      record.status = 'running';
+      await cooperative.deliver(researcher, action, commit, true);
+    }
+    expect(record.status).toBe('blocked');
+    return structuredClone(state.cooperation!.researchCheckpoints!.question);
+  };
+
+  it.each(['', ' \n\t', undefined])('keeps the unchanged research pause when saved notes become %j', async notes => {
+    const paused = await pauseCheckpoint();
+    const emit = vi.fn(); (cooperative as any).input.emit = emit;
+    checkpoint(notes);
+    for (let refresh = 0; refresh < 3; refresh++) (cooperative as any).changed();
+    expect(record.status).toBe('blocked');
+    expect(state.cooperation!.researchCheckpoints!.question).toEqual(paused);
+    expect(emit).not.toHaveBeenCalledWith('research_checkpoint_reopened', expect.anything());
+    checkpoint('A new saved calculation after the lost notes is available.');
+    (cooperative as any).changed();
+    expect(record.status).toBe('pending');
+    expect(emit).toHaveBeenCalledWith('research_checkpoint_reopened', { taskId: record.task.id, reason: 'new-output' });
+  });
+
+  it('does not treat a host source reset and cleared notes as new checkpoint output', async () => {
+    addSource('\nlemma retained_candidate : True := by trivial\n');
+    const paused = await pauseCheckpoint(checkpoint('A retained supporting calculation.'));
+    fs.writeFileSync(path.join(directory, 'generated/p/Submission.lean'),
+      'theorem goal : True := by sorry\n');
+    git(directory, ['add', '--', 'generated']); checkpoint('');
+    (cooperative as any).changed();
+    expect(record.status).toBe('blocked');
+    expect(state.cooperation!.researchCheckpoints!.question).toEqual(paused);
+    addSource('\nlemma genuinely_new_candidate : True := by trivial\n'); checkpoint('');
+    (cooperative as any).changed();
+    expect(record.status).toBe('pending');
+  });
+
+  it('keeps a checkpoint paused when HEAD returns to an older nonempty draft', async () => {
+    const paused = await pauseCheckpoint(checkpoint('The saved argument and exact remaining step.'));
+    git(directory, ['reset', '--hard', seed]);
+    (cooperative as any).changed();
+    expect(record.status).toBe('blocked');
+    expect(state.cooperation!.researchCheckpoints!.question).toEqual(paused);
+  });
+
+  it('does not attribute output from a suspended worktree to its previous task session', async () => {
+    const paused = await pauseCheckpoint();
+    state.workers = [{ id: researcher.id, sessionTaskId: record.task.id,
+      sessionTaskVersion: taskVersion(record.task) }] as SolverRunState['workers'];
+    state.cooperation!.researchDrafts!.question.suspended = true;
+    addSource('\nlemma another_responsibility : True := by trivial\n');
+    checkpoint('Nonempty notes saved after the old task released its worktree.');
+    (cooperative as any).changed();
+    expect(record.status).toBe('blocked');
+    expect(state.cooperation!.researchCheckpoints!.question).toEqual(paused);
+    state.environmentDigest = 'new-environment';
+    (cooperative as any).changed();
+    expect(record.status).toBe('pending');
+  });
+
+  it.each(['', undefined])('reopens for genuinely new owned Lean even with %j notes', async notes => {
+    await pauseCheckpoint();
+    addSource('\nlemma new_construction : True := by trivial\n'); checkpoint(notes);
+    (cooperative as any).changed();
+    expect(record.status).toBe('pending');
+    expect(state.cooperation!.researchCheckpoints!.question).toBeUndefined();
+  });
+
+  it('restores a legacy checkpoint pause despite cleared notes in the live worktree', async () => {
+    const paused = await pauseCheckpoint();
+    checkpoint('');
+    const restoredState = JSON.parse(JSON.stringify(state));
+    const resumed = resume(restoredState);
+    try {
+      await resumed.restore();
+      expect(restoredState.cooperation.tasks[0].status).toBe('blocked');
+      expect(restoredState.cooperation.researchCheckpoints.question).toEqual(paused);
+    } finally { await resumed.stop(); }
+  });
+
+  it('requires fresh input when a legacy checkpoint has no matching saved output baseline', async () => {
+    const paused = await pauseCheckpoint();
+    delete state.cooperation!.researchDrafts!.question;
+    checkpoint('Unattributed nonempty output in an old worktree.');
+    (cooperative as any).changed();
+    expect(record.status).toBe('blocked');
+    expect(state.cooperation!.researchCheckpoints!.question).toEqual(paused);
+    state.environmentDigest = 'new-environment';
+    (cooperative as any).changed();
+    expect(record.status).toBe('pending');
   });
 
   it('continues indefinitely while advisory checkpoints save different notes or drafts', async () => {

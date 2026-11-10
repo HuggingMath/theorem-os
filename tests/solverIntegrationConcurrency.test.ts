@@ -23,13 +23,14 @@ vi.mock('../src/runtime/codexSession', () => ({ createCodexMathSession: host.cre
 
 const verified = (request: MathematicsVerifierBatchRequest) =>
   verifiedBatch(request, { sessionId: 'integration-concurrency-fixture', checks: true });
-const settled = (request: MathematicsVerifierBatchRequest, status: 'failed' | 'unavailable'): MathematicsVerifierBatchResult => {
+const settled = (request: MathematicsVerifierBatchRequest, status: 'failed' | 'unavailable' | 'blocked'): MathematicsVerifierBatchResult => {
   const batch = verified(request);
   return status === 'failed' ? failedBatch(batch, { stdoutPreview: () => 'Submission.lean:3:1: error: Fixture merged proof failure.' })
     : { ...batch, status, results: batch.results.map(item => ({ ...item, status, error: 'Fixture merged check failure.' })) };
 };
 type TaskAction = Extract<CooperativeAction, { kind: 'task' }>;
 type Failure = 'abort' | 'storage' | 'unavailable';
+type EarlierTurn = 'transport-only' | 'consumed-repair';
 
 describe('task integration with concurrent host control', () => {
   let directory: string, workspace: string, problem: SolverProblem, state: SolverRunState;
@@ -75,6 +76,61 @@ describe('task integration with concurrent host control', () => {
     expect(state.cooperation!.blockers ?? []).toEqual([]);
     expect(events.filter(item => item.event === 'delivery_rejected')).toEqual([]);
   };
+  const startNextAuthorTurn = async () => {
+    const next = await cooperative.next(workers[1], { maxTurns: Infinity, remainingMs: Infinity });
+    if (next?.kind !== 'task') throw new Error('fixture_expected_resumed_task');
+    expect(next.assignment).toBe(action.assignment);
+    expect(cooperative.started(workers[1], next)).toBe(true);
+    action = next;
+  };
+  const startSecondTurn = async (earlier: EarlierTurn) => {
+    if (earlier === 'transport-only') {
+      await cooperative.deliver(workers[1], action, problem.baseCommit, true, 'request-failure');
+      expect(node().sourceRepair).toBeUndefined();
+      expect(records()).toEqual([]);
+    } else {
+      cooperative.rejected(action, 'math_original_context_changed');
+      expect(node().sourceRepair?.pending).toBe(true);
+    }
+    expect(node().status).toBe('pending');
+    expect(state.cooperation!.failedTaskInputs ?? []).toEqual([]);
+    await startNextAuthorTurn();
+    expect(node()).toMatchObject({ status: 'running', attempts: 2 });
+    if (earlier === 'consumed-repair') expect(node().sourceRepair?.pending).toBe(false);
+    expect(host.verify).not.toHaveBeenCalled();
+  };
+  const expectUnacceptedSourceRejection = (commit: string) => {
+    const rejected = records().filter(record => record.commit === commit);
+    expect(rejected.length).toBeGreaterThan(0);
+    for (const record of rejected) {
+      expect(record).toMatchObject({ kind: 'failure', status: 'failed' });
+      expect(record.evidence).toBeUndefined();
+      expect(record.actualReferences).toBeUndefined();
+    }
+    for (const event of events.filter(item => item.event === 'delivery_published' && item.details?.commit === commit)) {
+      expect(event.details).toMatchObject({ kind: 'failure', status: 'failed' });
+      expect(event.details?.receiptIds).toBeUndefined();
+    }
+  };
+  const finishRepairBudget = async (earlier: EarlierTurn, commit: string) => {
+    expect(state.cooperation!.failedTaskInputs).toHaveLength(1);
+    const failure = state.cooperation!.failedTaskInputs![0];
+    if (earlier === 'transport-only') {
+      expect(failure.repair?.pending).toBe(true);
+      const checked = host.verify.mock.calls.length;
+      await startNextAuthorTurn();
+      expect(failure.repair?.pending).toBe(false);
+      await (cooperative as any).receive(workers[1], action,
+        { id: 'same-input-after-local-repair', kind: 'proof', commit, summary: 'The target is still missing.' }, true);
+      expect(host.verify).toHaveBeenCalledTimes(checked);
+    } else {
+      expect(node().sourceRepair?.pending).toBe(false);
+      expect(failure.repair).toBeUndefined();
+    }
+    expect(node().status).toBe('blocked');
+    expect(events.filter(item => item.event === 'task_repair_requested')).toHaveLength(1);
+    expectUnacceptedSourceRejection(commit);
+  };
 
   beforeEach(() => {
     host.verify.mockReset().mockImplementation(async request => verified(request));
@@ -112,6 +168,177 @@ describe('task integration with concurrent host control', () => {
     controller.abort(); await Promise.allSettled(pending); await cooperative.stop();
     expect(host.createSession).not.toHaveBeenCalled();
     vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  it.each(['unavailable', 'blocked'] as const)
+  ('keeps an earlier passing delivery when a later candidate returns %s', async outcome => {
+    const firstCommit = writeLemma(workers[1], 'lemma integration_lemma : True := by trivial');
+    const gate = gateCheck(2), first = track(cooperative.deliver(workers[1], action, firstCommit));
+    await gate.entered;
+    const accepted = node().proof;
+    expect(node()).toMatchObject({ status: 'delivered', proof: { passed: true, commit: firstCommit } });
+    const file = path.join(workers[1].worktree, problem.projectRelative, 'Submission.lean');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(
+      'lemma integration_lemma : True := by trivial', 'lemma integration_lemma : True := by exact True.intro'));
+    const laterCommit = commitSolverSources(problem, workers[1].worktree);
+    host.verify.mockImplementation(async request => settled(request, outcome));
+
+    await expect(track(cooperative.deliver(workers[1], action, laterCommit))).rejects.toThrow('math_verifier_unavailable');
+
+    expect(node().proof).toBe(accepted);
+    expect(node()).toMatchObject({ status: 'delivered', proof: { passed: true, commit: firstCommit } });
+    expectNoMathematicalFailure();
+    host.verify.mockImplementation(async request => verified(request));
+    gate.release(); await first;
+
+    expect(node().proof).toBe(accepted);
+    expect(node()).toMatchObject({ status: 'integrated', proof: { passed: true, commit: firstCommit }, integratedCheck: { passed: true } });
+    expect(canonicalSource()).toContain('lemma integration_lemma : True := by trivial');
+    expect(records().filter(record => record.kind === 'proof')).toMatchObject([{ status: 'verified', commit: firstCommit }]);
+    expect(records().some(record => record.commit === laterCommit)).toBe(false);
+    expectNoMathematicalFailure();
+  });
+
+  it.each(['transport-only', 'consumed-repair'] as const)
+  ('does not publish an obsolete successful proof as failed after another submission is rejected (earlier: %s)', async earlier => {
+    await startSecondTurn(earlier);
+    const declaration = 'lemma integration_lemma : True := by trivial';
+    const firstCommit = writeLemma(workers[1], declaration);
+    const gate = gateCheck(2), first = track(cooperative.deliver(workers[1], action, firstCommit));
+    await gate.entered;
+    const accepted = node().proof;
+    expect(accepted?.passed).toBe(true);
+    const file = path.join(workers[1].worktree, problem.projectRelative, 'Submission.lean');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(declaration + '\n', ''));
+    const laterCommit = commitSolverSources(problem, workers[1].worktree);
+
+    await (cooperative as any).receive(workers[1], action,
+      { id: 'later-missing-target', kind: 'proof', commit: laterCommit, summary: 'The new candidate is ready.' }, true);
+
+    expect(node().status).toBe(earlier === 'consumed-repair' ? 'blocked' : 'pending');
+    expect(node().proof).toBe(accepted);
+    expect(state.cooperation!.failedTaskInputs).toEqual([expect.objectContaining({
+      taskId: action.task.id, targetDigest: 'declaration-count:0', feedback: expect.stringContaining('math_task_missing_declaration'),
+    })]);
+    const failure = records().find(record => record.kind === 'failure' && record.commit === laterCommit);
+    expect(failure).toMatchObject({ status: 'failed', summary: expect.stringContaining('math_task_missing_declaration') });
+    expectUnacceptedSourceRejection(laterCommit);
+    gate.release(); await first;
+
+    expect(node().proof).toBe(accepted);
+    expect(node().integratedCheck).toBeUndefined();
+    expect(state.cooperation!.canonicalCommit).toBe(problem.baseCommit);
+    expect(records().filter(record => record.kind === 'proof')).toEqual([]);
+    expect(events.filter(item => item.event === 'task_integrated')).toEqual([]);
+    expect(records()).toContain(failure);
+    expect(state.cooperation!.failedTaskInputs).toHaveLength(1);
+    await (cooperative as any).publishProofDelivery(node());
+    expect(records().filter(record => record.kind === 'proof')).toEqual([]);
+    await finishRepairBudget(earlier, laterCommit);
+    expect(node().integratedCheck).toBeUndefined();
+    expect(records().filter(record => record.kind === 'proof')).toEqual([]);
+  });
+
+  it.each(['transport-only', 'consumed-repair'] as const)
+  ('does not reuse a later rejection when publication waits after a successful integration (earlier: %s)', async earlier => {
+    await startSecondTurn(earlier);
+    const declaration = 'lemma integration_lemma : True := by trivial';
+    const firstCommit = writeLemma(workers[1], declaration);
+    const entered = deferred(), released = deferred();
+    releases.push(() => released.resolve());
+    const publish = (cooperative as any).publishProofDelivery.bind(cooperative);
+    vi.spyOn(cooperative as any, 'publishProofDelivery').mockImplementationOnce(async (...args: unknown[]) => {
+      entered.resolve(); await released.promise;
+      return publish(...args);
+    });
+    const first = track(cooperative.deliver(workers[1], action, firstCommit));
+    await entered.promise;
+    expect(node()).toMatchObject({ status: 'integrated', proof: { passed: true, commit: firstCommit }, integratedCheck: { passed: true } });
+    const accepted = node().proof, integrated = node().integratedCheck, canonical = state.cooperation!.canonicalCommit;
+    const file = path.join(workers[1].worktree, problem.projectRelative, 'Submission.lean');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(declaration + '\n', ''));
+    const laterCommit = commitSolverSources(problem, workers[1].worktree);
+
+    await (cooperative as any).receive(workers[1], action,
+      { id: 'missing-target-before-publication', kind: 'proof', commit: laterCommit, summary: 'The new candidate is ready.' }, true);
+
+    expect(node().status).toBe(earlier === 'consumed-repair' ? 'blocked' : 'pending');
+    expect(node().proof).toBe(accepted);
+    expectUnacceptedSourceRejection(laterCommit);
+    released.resolve(); await first;
+
+    expect(state.cooperation!.canonicalCommit).toBe(canonical);
+    expect(node().integratedCheck).toBe(integrated);
+    expect(canonicalSource()).toContain(declaration);
+    expect(records().filter(record => record.kind === 'proof' && record.commit === firstCommit)).toEqual([]);
+    expect(records().filter(record => record.kind === 'failure' && record.commit === laterCommit)).toMatchObject([
+      { status: 'failed', commit: laterCommit, summary: expect.stringContaining('math_task_missing_declaration') },
+    ]);
+    await finishRepairBudget(earlier, laterCommit);
+    expect(state.cooperation!.canonicalCommit).toBe(canonical);
+    expect(node().integratedCheck).toBe(integrated);
+    expect(records().filter(record => record.kind === 'proof')).toEqual([]);
+    expect(events.filter(item => item.event === 'task_integrated')).toHaveLength(1);
+  });
+
+  it.each(['transport-only', 'consumed-repair'] as const)
+  ('keeps a merged failure distinct from a later source rejection during publication (earlier: %s)', async earlier => {
+    await startSecondTurn(earlier);
+    const declaration = 'lemma integration_lemma : True := by trivial';
+    const firstCommit = writeLemma(workers[1], declaration);
+    const gate = gateCheck(2), first = track(cooperative.deliver(workers[1], action, firstCommit));
+    await gate.entered;
+    const entered = deferred(), released = deferred();
+    releases.push(() => released.resolve());
+    const publish = (cooperative as any).publishProofDelivery.bind(cooperative);
+    vi.spyOn(cooperative as any, 'publishProofDelivery').mockImplementationOnce(async (...args: unknown[]) => {
+      entered.resolve(); await released.promise;
+      return publish(...args);
+    });
+    gate.finish('failed'); await entered.promise;
+    const accepted = node().proof, mergedFailure = node().integratedCheck;
+    expect(node()).toMatchObject({ status: 'blocked', proof: { passed: true, commit: firstCommit },
+      integratedCheck: { passed: false }, feedback: expect.stringContaining('math_task_merged_proof_failed') });
+    const file = path.join(workers[1].worktree, problem.projectRelative, 'Submission.lean');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(declaration + '\n', ''));
+    const laterCommit = commitSolverSources(problem, workers[1].worktree);
+
+    await (cooperative as any).receive(workers[1], action,
+      { id: 'missing-target-after-merged-failure', kind: 'proof', commit: laterCommit, summary: 'The new candidate is ready.' }, true);
+
+    expect(node().feedback).toContain('math_task_missing_declaration');
+    expect(node().status).toBe(earlier === 'consumed-repair' ? 'blocked' : 'pending');
+    expect(node().proof).toBe(accepted);
+    expect(node().integratedCheck).toBe(mergedFailure);
+    expectUnacceptedSourceRejection(laterCommit);
+    released.resolve(); await first;
+
+    const proofFailures = () => records().filter(record => record.kind === 'proof' && record.commit === firstCommit);
+    if (earlier === 'consumed-repair') {
+      expect(proofFailures()).toMatchObject([{ status: 'failed', summary: expect.stringContaining('math_task_merged_proof_failed') }]);
+      expect(proofFailures()[0].summary).toContain('Fixture merged proof failure.');
+      expect(proofFailures()[0].summary).not.toContain('math_task_missing_declaration');
+      expect(proofFailures()[0].evidence?.verification.targetCommit).toBe(accepted!.verification.targetCommit);
+      expect(proofFailures()[0].evidence?.verification.results).toEqual(
+        accepted!.verification.results.map(({ receiptId }) => ({ receiptId })));
+    } else expect(proofFailures()).toEqual([]);
+    const failures = [...proofFailures()];
+    expect(records().filter(record => record.kind === 'failure' && record.commit === laterCommit)).toMatchObject([
+      { status: 'failed', commit: laterCommit, summary: expect.stringContaining('math_task_missing_declaration') },
+    ]);
+    expect(state.cooperation!.failedTaskInputs).toHaveLength(1);
+    expect(state.cooperation!.canonicalCommit).toBe(problem.baseCommit);
+
+    await (cooperative as any).publishProofDelivery(node());
+    expect(proofFailures()).toEqual(failures);
+    await finishRepairBudget(earlier, laterCommit);
+    await (cooperative as any).publishProofDelivery(node());
+    expect(proofFailures()).toEqual(failures);
+    expect(node().proof).toBe(accepted);
+    expect(node().integratedCheck).toBe(mergedFailure);
+    expect(records().some(record => record.kind === 'proof' && record.status === 'verified')).toBe(false);
+    expect(events.filter(item => item.event === 'task_integrated')).toEqual([]);
+    expect(state.cooperation!.canonicalCommit).toBe(problem.baseCommit);
   });
 
   it.each([

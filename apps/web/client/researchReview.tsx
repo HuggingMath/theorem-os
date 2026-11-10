@@ -1,0 +1,55 @@
+import { useState } from 'preact/hooks';
+import type { ResearchFeedback, ResearchProjectDetail, ResearcherProfile } from '../researchProjectTypes';
+import { RichProse } from './richText';
+import { base, enc, ErrorBox, Field, MutationState, stamp, tx, useMutation, useResource, type Items } from './researchShared';
+
+export function ResearchReview({ feedback, project, selfId, canReview, refresh }: {
+  feedback: ResearchFeedback; project: ResearchProjectDetail; selfId: string; canReview: boolean; refresh(): void;
+}) {
+  const action = useMutation(), [reviewer, setReviewer] = useState(''), [text, setText] = useState('');
+  const commentAction = useMutation(), [commentText, setCommentText] = useState('');
+  const path = `${base}/theorems/${enc(project.id)}/feedback/${enc(feedback.id)}/review`;
+  const assigned = feedback.review?.reviewer, canAssign = canReview && (project.permissions.manage || assigned?.id === selfId);
+  const canJudge = canReview && feedback.author.id !== selfId && (!assigned || assigned.id === selfId || project.permissions.manage);
+  const newAttempt = feedback.payload && 'libraryTrial' in feedback.payload && feedback.payload.libraryTrial?.requiresNewAttempt;
+  const canPrepareAttempt = newAttempt && canReview && feedback.proofCheck?.status === 'checked' && !feedback.supersededBy && feedback.continuation?.action !== 'end'
+    && !['declined', 'needs-info'].includes(feedback.decision.status) && feedback.candidateDelivery?.status !== 'withdrawn'
+    && (feedback.candidateDelivery?.approvedAt && feedback.candidateDelivery.approvedBy && ['approved', 'dispatched'].includes(feedback.candidateDelivery.status)
+      || feedback.decision.status === 'accepted' && feedback.decision.actor?.kind === 'human');
+  const directory = useResource<Items<ResearcherProfile>>(canAssign ? `${base}/people?limit=100` : undefined);
+  const people = [project.owner, ...project.members.filter(member => member.role === 'collaborator').map(member => ({
+    id: member.researcherId, displayName: directory.data?.items.find(item => item.id === member.researcherId)?.displayName ?? project.feedback.find(item => item.author.id === member.researcherId)?.author.displayName
+      ?? project.assignments.find(item => item.author.id === member.researcherId)?.author.displayName ?? member.researcherId,
+  }))].filter(person => person.id !== feedback.author.id && person.id !== assigned?.id);
+  return <section class="collaboration-review" data-feedback-review>
+    {feedback.candidateDelivery && <div class="candidate-delivery-status" data-candidate-delivery-status={feedback.candidateDelivery.status}>
+      <p>{feedback.candidateDelivery.status === 'awaiting-review' ? tx('候选检查已通过，等待人工批准。', 'The candidate passed its check and is waiting for human approval.')
+        : feedback.candidateDelivery.status === 'approved' && newAttempt ? tx('已评审通过，请在带入固定库的新尝试中使用。', 'Review approved. Use this candidate in a new attempt with the fixed library.')
+        : feedback.candidateDelivery.status === 'approved' ? tx('候选已批准，投递回执待确认。', 'The candidate is approved; delivery is awaiting confirmation.')
+        : feedback.candidateDelivery.status === 'dispatched' ? tx('候选已投递，可继续跟踪采纳和执行。', 'The candidate was sent. Follow its adoption and execution below.')
+        : feedback.candidateDelivery.status === 'withdrawn' ? tx('此候选已撤回或由新修订接续。', 'This candidate was withdrawn or continued in a newer revision.')
+        : feedback.proofCheck?.status === 'failed' ? tx('候选未通过检查，可修改后提交新修订。', 'The candidate check failed. Revise it and submit a new version.') : tx('候选检查中。', 'Checking the candidate.')}</p>
+      {newAttempt && <p>{tx('这份候选将在新尝试中使用，评审批准后可准备完整源码与固定库。', 'This candidate will be used in a new attempt. After review, prepare its complete source and fixed library.')}</p>}
+      {feedback.candidateDelivery.status === 'awaiting-review' && canJudge && !feedback.supersededBy && !['needs-info', 'declined'].includes(feedback.decision.status) && <button class="button" type="button" data-candidate-approve disabled={action.busy} onClick={() => void action.run('POST', `${base}/theorems/${enc(project.id)}/feedback/${enc(feedback.id)}/candidate-delivery`, { action: 'approve', expectedRevision: feedback.revision }, refresh)}>{newAttempt ? tx('批准在新尝试中使用', 'Approve use in a new attempt') : tx('批准并投递此候选', 'Approve and send this candidate')}</button>}
+      {['checking', 'awaiting-review', 'approved'].includes(feedback.candidateDelivery.status) && (feedback.author.id === selfId || project.permissions.manage) && <button class="text-button" type="button" data-candidate-withdraw disabled={action.busy} onClick={() => void action.run('POST', `${base}/theorems/${enc(project.id)}/feedback/${enc(feedback.id)}/candidate-delivery`, { action: 'withdraw', expectedRevision: feedback.revision }, refresh)}>{tx('撤回投递', 'Withdraw delivery')}</button>}
+      {canPrepareAttempt && <a class="button" data-prepare-library-attempt href={`./?libraryProposal=${enc(feedback.id)}&project=${enc(project.id)}`}>{tx('带入完整源码与固定库，准备新尝试', 'Prepare a new attempt with the complete source and fixed library')}</a>}
+    </div>}
+    <p>{assigned ? <>{tx('负责评审：', 'Responsible reviewer: ')}<strong>{assigned.displayName}</strong></> : tx('尚未指定评审人', 'No reviewer assigned')}
+      {!assigned && canReview && feedback.author.id !== selfId && <button type="button" class="button" data-claim-review disabled={action.busy} onClick={() => void action.run('POST', path, { action: 'claim', expectedRevision: feedback.revision }, refresh)}>{tx('由我评审', 'Review this myself')}</button>}</p>
+    {canAssign && <form class="research-form" onSubmit={event => { event.preventDefault(); void action.run('POST', path, { action: 'assign', reviewerId: reviewer, expectedRevision: feedback.revision }, refresh); }}>
+      <label>{assigned ? tx('移交评审', 'Transfer review') : tx('指定评审人', 'Assign a reviewer')}<select data-reviewer-select value={reviewer} required onChange={event => setReviewer(event.currentTarget.value)}><option value="">{tx('选择有权限的协作者', 'Choose an authorized collaborator')}</option>{people.map(person => <option key={person.id} value={person.id}>{person.displayName}</option>)}</select></label>
+      <button class="button" type="submit" disabled={action.busy || !reviewer}>{assigned ? tx('确认移交', 'Confirm transfer') : tx('确认分配', 'Confirm assignment')}</button></form>}
+    {feedback.author.id === selfId && feedback.decision.status === 'needs-info' && <form class="research-form" data-resubmit-review onSubmit={event => { event.preventDefault(); const submitted = text;
+      void action.run('POST', path, { action: 'resubmit', text, expectedRevision: feedback.revision }, () => { setText(current => current === submitted ? '' : current); refresh(); }); }}>
+      <Field label={tx('补充推导、说明或证据', 'Additional reasoning, explanation or evidence')} value={text} onInput={setText} multiline required maxLength={4000} />
+      <button class="button" type="submit" disabled={action.busy}>{tx('补充并重新送审', 'Add information and resubmit')}</button></form>}
+    {feedback.reviewComments?.map(comment => <div class="candidate-review-comment" key={comment.id} data-candidate-review-comment={comment.id}><p>{comment.author.displayName} · {stamp(comment.createdAt)}</p><RichProse text={comment.text} /></div>)}
+    {feedback.kind === 'proof-submission' && canJudge && !feedback.supersededBy && <form class="research-form" onSubmit={event => { event.preventDefault(); const submitted = commentText; void commentAction.run('POST', `${base}/theorems/${enc(project.id)}/feedback/${enc(feedback.id)}/review-comments`, { text: commentText, expectedRevision: feedback.revision }, () => { setCommentText(value => value === submitted ? '' : value); refresh(); }); }}>
+      <label>{tx('需要修改或解释的具体一步', 'The specific step to revise or explain')}<textarea data-review-comment value={commentText} required rows={2} maxLength={4000} onInput={event => setCommentText(event.currentTarget.value)} /></label>
+      <button class="button" type="submit" data-save-review-comment disabled={commentAction.busy}>{tx('添加评审意见', 'Add a review comment')}</button><MutationState action={commentAction} /></form>}
+    {Boolean(feedback.reviewHistory?.length || feedback.decisionHistory?.length) && <details data-review-history><summary>{tx('评审流转与补充记录', 'Review history and additional information')}</summary>
+      {feedback.reviewHistory?.map((item, i) => <div class="collaboration-resolution" key={i}><p>{item.actor.displayName} · {item.action === 'resubmit' ? tx('补充后重新送审', 'Resubmitted with more information') : item.action === 'claim' ? tx('接下评审', 'Claimed review') : tx('分配评审', 'Assigned review')}{item.reviewer && <> → {item.reviewer.displayName}</>} · {stamp(item.createdAt)}</p>{item.text && <RichProse text={item.text} />}</div>)}
+      {feedback.decisionHistory?.map((item, i) => <div class="collaboration-resolution" key={`decision-${i}`}><p>{item.actor?.displayName} · {stamp(item.decidedAt ?? '')}</p>{item.reason && <RichProse text={item.reason} />}</div>)}</details>}
+    <ErrorBox message={directory.error} /><MutationState action={action} />
+  </section>;
+}

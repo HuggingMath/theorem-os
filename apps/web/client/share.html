@@ -26,10 +26,11 @@
       <header class="share-card share-heading">
         <span class="badge passed"><i data-lucide="shield-check"></i><span id="share-verdict">Lean 陈述证明通过</span></span>
         <h1 id="share-title" translate="no"></h1>
-        <dl id="share-facts" class="facts share-facts"></dl>
+        <nav class="share-reading-nav" aria-label="阅读内容"><button type="button" data-share-jump="share-task-heading">原题</button><button type="button" data-share-jump="share-reading-heading">证明思路</button><button type="button" data-share-jump="share-source-heading">Lean 源码</button><button type="button" data-share-jump="share-checks-heading">验收记录</button></nav>
+        <details class="share-research-info"><summary>研究配置与用量</summary><dl id="share-facts" class="facts share-facts"></dl></details>
       </header>
       <section class="share-card" aria-labelledby="share-task-heading">
-        <h2 id="share-task-heading">研究任务</h2>
+        <h2 id="share-task-heading" tabindex="-1">研究任务</h2>
         <p id="share-task" class="task-content" translate="no"></p>
         <p id="share-confirmation" class="chat-statement-verdict"></p>
         <p class="field-note">Lean 验收证明的是这份陈述，不能替代对自然语言原意的核对。</p>
@@ -38,9 +39,10 @@
           <h3>具体对应关系</h3><div id="share-correspondences" class="chat-correspondences"></div>
         </details>
       </section>
+      <div id="share-reading-host" class="share-card share-reading-container"></div>
       <section class="share-card" aria-labelledby="share-source-heading">
         <div class="share-source-top">
-          <h2 id="share-source-heading">Lean 源码</h2>
+          <h2 id="share-source-heading" tabindex="-1">Lean 源码</h2>
           <div class="source-switch" role="group" aria-label="源码版本">
             <button type="button" data-share-view="proof" aria-pressed="true">验收证明</button>
             <button type="button" data-share-view="source" aria-pressed="false">原始题目</button>
@@ -53,7 +55,7 @@
         <div class="code-scroll result-proof-code share-code lean-wrap" role="region" tabindex="0" aria-labelledby="share-source-heading"><pre class="source-line-numbers" id="share-line-numbers" aria-hidden="true"></pre><pre class="result-proof-text" translate="no"><code id="share-code"></code></pre></div>
       </section>
       <section class="share-card" aria-labelledby="share-checks-heading">
-        <h2 id="share-checks-heading">验收记录</h2>
+        <h2 id="share-checks-heading" tabindex="-1">验收记录</h2>
         <ul id="share-checks" class="share-checks"></ul>
         <details id="share-credentials" class="share-credentials"><summary>验收凭据</summary><dl id="share-identity" class="facts share-identity"></dl></details>
       </section>

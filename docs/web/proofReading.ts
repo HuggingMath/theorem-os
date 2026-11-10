@@ -1,13 +1,111 @@
+import { archiveReadingReturn, readProofReadingPosition } from './proofReadingLocation';
+
 type ReadingView = { root: HTMLElement; dispose: () => void };
 let current: ReadingView | undefined;
+let locationView: (ReadingView & { reveal: () => boolean; href: (anchor: string) => string }) | undefined;
+
+/** Restore a shared position only within the same accepted proof. */
+export function revealProofReadingLocation(): boolean { return locationView?.reveal() ?? false; }
+export function proofReadingLink(anchor?: string): string { return anchor && locationView ? locationView.href(anchor) : location.href; }
+
+function mountReadingLocation(ready: Promise<void>) {
+  const root = document.querySelector<HTMLElement>('[data-proof-solution]');
+  if (locationView?.root === root) return;
+  locationView?.dispose(); locationView = undefined;
+  if (!root) return;
+  const sections = [...root.querySelectorAll<HTMLElement>('[data-proof-derivation], [data-proof-source-declaration], [id^="proof-source-helper-"]')];
+  const byId = new Map(sections.map(section => [section.id, section]));
+  const proofId = root.dataset.proofSolution!, proofSha = root.dataset.proofSolutionSha!;
+  const parameters = new URLSearchParams(location.hash.slice(1));
+  const position = parameters.get('proof') === proofId ? readProofReadingPosition(parameters) : undefined;
+  const requested = position?.proofSha === proofSha ? byId.get(position.anchor) : undefined;
+  const abort = new AbortController(), options = { signal: abort.signal };
+  let restoring = Boolean(requested), selected = '', frame = 0;
+
+  function updateResearchLink() {
+    const reading = new URL(location.href), parameters = new URLSearchParams(reading.hash.slice(1));
+    parameters.set('proof', proofId); parameters.set('tab', 'reading'); reading.hash = parameters.toString();
+    for (const link of root!.querySelectorAll<HTMLAnchorElement>('[data-proof-start-research], [data-proof-position-research]')) {
+      const sourceLocation = new URL(reading.href), parameters = new URLSearchParams(sourceLocation.hash.slice(1));
+      if (link.dataset.proofPositionResearch) {
+        parameters.set('reading', link.dataset.proofPositionResearch); parameters.set('readingSha', proofSha);
+        sourceLocation.hash = parameters.toString();
+      }
+      const source = archiveReadingReturn(sourceLocation.href, proofId, location.href, proofSha);
+      const destination = new URL(link.href);
+      if (source) destination.searchParams.set('archiveReading', source);
+      else destination.searchParams.delete('archiveReading');
+      link.href = destination.href;
+    }
+  }
+
+  function remember(section: HTMLElement) {
+    if (restoring || selected === section.id || !root!.isConnected) return;
+    const url = new URL(location.href), parameters = new URLSearchParams(url.hash.slice(1));
+    if (parameters.get('proof') !== proofId || parameters.get('tab') !== 'reading') return;
+    selected = section.id;
+    parameters.set('reading', section.id); parameters.set('readingSha', proofSha);
+    url.hash = parameters.toString(); history.replaceState(null, '', url);
+    updateResearchLink();
+  }
+
+  function update() {
+    frame = 0;
+    if (restoring || !root!.isConnected) return;
+    let active: HTMLElement | undefined;
+    for (const section of sections) {
+      if (!section.getClientRects().length) continue;
+      const threshold = (parseFloat(getComputedStyle(section).scrollMarginTop) || 0) + 6;
+      if (section.getBoundingClientRect().top <= threshold) active = section;
+      else break;
+    }
+    if (active) remember(active);
+  }
+  function schedule() { if (!frame) frame = requestAnimationFrame(update); }
+
+  function reveal() {
+    if (!requested || !root!.isConnected) return false;
+    for (let parent: HTMLElement | null = requested; parent && parent !== root; parent = parent.parentElement)
+      if (parent instanceof HTMLDetailsElement) parent.open = true;
+    requested.scrollIntoView({ block: 'start' });
+    requested.querySelector<HTMLElement>('h5, summary')?.focus({ preventScroll: true });
+    restoring = false; remember(requested); schedule();
+    return true;
+  }
+
+  if (!requested && parameters.get('proof') === proofId && (parameters.has('reading') || parameters.has('readingSha'))) {
+    parameters.delete('reading'); parameters.delete('readingSha');
+    const url = new URL(location.href); url.hash = parameters.toString(); history.replaceState(null, '', url);
+  }
+  root.addEventListener('click', event => {
+    const target = (event.target as Element).closest<HTMLElement>('[data-global-scroll]');
+    const section = target?.dataset.globalScroll && byId.get(target.dataset.globalScroll);
+    if (section) { restoring = false; remember(section); }
+  }, options);
+  window.addEventListener('scroll', schedule, { ...options, passive: true });
+  window.addEventListener('resize', schedule, options);
+  const resize = new ResizeObserver(schedule); sections.forEach(section => resize.observe(section));
+  updateResearchLink();
+  void Promise.all([ready, document.fonts.ready]).then(() => {
+    if (!abort.signal.aborted) requestAnimationFrame(() => { if (!abort.signal.aborted && !reveal()) schedule(); });
+  });
+  locationView = { root, reveal, href: anchor => {
+    if (!byId.has(anchor)) return location.href;
+    const url = new URL(location.href), parameters = new URLSearchParams(url.hash.slice(1));
+    parameters.set('reading', anchor); parameters.set('readingSha', proofSha); url.hash = parameters.toString();
+    return url.href;
+  }, dispose: () => { abort.abort(); resize.disconnect(); cancelAnimationFrame(frame); } };
+}
 
 /** Keep the proof outline and its real dependencies in sync with ordinary page reading. */
-export function mountProofReading(): void {
+export function mountProofReading(ready = Promise.resolve()): void {
+  mountReadingLocation(ready);
   const found = document.querySelector<HTMLElement>('[data-proof-walkthrough]');
   if (current?.root === found) return;
   current?.dispose(); current = undefined;
   if (!found) return;
   const root: HTMLElement = found;
+  const linear = root.dataset.proofReading === 'linear';
 
   const panel = root.querySelector<HTMLDetailsElement>('.proof-route-panel')!;
   const summary = panel.querySelector<HTMLElement>('summary')!;
@@ -81,8 +179,8 @@ export function mountProofReading(): void {
   function update() {
     frame = 0;
     if (!root!.isConnected) return;
-    const stages = root!.closest('.global-workflow')!.querySelector<HTMLElement>('.global-workflow-stages')!;
-    const top = parseFloat(getComputedStyle(stages).top) + stages.getBoundingClientRect().height + 1;
+    const stages = root!.closest('.global-workflow')?.querySelector<HTMLElement>('.global-workflow-stages');
+    const top = stages ? parseFloat(getComputedStyle(stages).top) + stages.getBoundingClientRect().height + 1 : 0;
     const reader = narrow.matches ? summary : root!.querySelector<HTMLElement>('.proof-reading-bar')!;
     root!.style.setProperty('--proof-reader-top', top + 'px');
     root!.style.setProperty('--proof-heading-clearance', (top + reader.getBoundingClientRect().height + 20) + 'px');
@@ -94,7 +192,7 @@ export function mountProofReading(): void {
     select(index); draw();
   }
   function schedule() { if (!frame) frame = requestAnimationFrame(update); }
-  function size() { panel.open = !narrow.matches; summary.setAttribute('aria-expanded', String(panel.open)); schedule(); }
+  function size() { panel.open = !linear && !narrow.matches; summary.setAttribute('aria-expanded', String(panel.open)); schedule(); }
 
   root.addEventListener('click', event => {
     const target = (event.target as Element).closest<HTMLElement>('[data-global-scroll]');

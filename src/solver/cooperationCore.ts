@@ -54,6 +54,7 @@ export abstract class CooperationCore {
   protected pendingSourceResearchDecisions = new WeakMap<CooperativeAction, ResearchDecision[]>();
   protected presentedNextCheckOutcomes = new WeakMap<CooperativeAction, { checkId: string; outcomeDeliveryId: string }[]>();
   protected lastAssembly?: string;
+  private assemblyYieldedLeads = new WeakSet<CooperativeAction>();
   private waiters = new Set<() => void>();
   protected reservedTurns = new Set<string>();
   protected liveWorkers: Set<string>;
@@ -71,7 +72,7 @@ export abstract class CooperationCore {
   protected readonly familyAssemblyAttempts = new Set<string>();
   protected invalidTaskTypes = new Map<TaskRecord, { canonical: string; environment: string; taskDigest: string;
     dependencies: string; project: string; workerId: string; environmentIdentity?: string }>();
-  protected preparedSources?: { identity: string; project: ReturnType<typeof createTaskSourceProjector> };
+  protected readonly preparedSources = new Map<boolean, { identity: string; project: ReturnType<typeof createTaskSourceProjector> }>();
   protected checkedStatementReferences = new WeakSet<ProofReferences>();
   protected fixedReviewScope?: { review: ReviewRecord; commit: string; sourceDigest: string; environmentDigest: string;
     tasksDigest: string; required: ReadonlyMap<string, string> };
@@ -122,6 +123,7 @@ export abstract class CooperationCore {
   protected abstract suspendResearchDrafts(worker: ResearchWorker, taskId?: string): void;
   protected abstract planVersion(): string;
   protected abstract canAssemble(commit: string): boolean;
+  protected abstract synchronizationPending(): boolean;
   abstract contextState(action?: CooperativeAction, worker?: ResearchWorker, versions?: TaskVersions): CooperationState;
   constructor(protected readonly input: { state: SolverRunState; workers: readonly ResearchWorker[];
     access: ReadonlyMap<string, WorkerAccess>; signal: AbortSignal; timeoutMs?: number; taskText?: string;
@@ -663,6 +665,17 @@ export abstract class CooperationCore {
   protected wake() {
     this.cancelStaleTaskTypes();
     this.refreshPlanApproval();
+    const lead = this.active.get(this.lead.id), canonical = this.archive.canonicalCommit;
+    if (lead?.action.kind === 'lead' && !lead.cancelled && canonical && !this.stopping && !this.failure &&
+        !this.input.signal.aborted && !this.planApprovalPending() && !this.synchronizationPending() &&
+        this.lastAssembly !== canonical && this.canAssemble(canonical)) {
+      // Synchronization can settle with only a wake. Yield this dispatch permanently before
+      // stopping its writer, so late plans and source drafts cannot replace the candidate.
+      this.assemblyYieldedLeads.add(lead.action);
+      lead.cancelled = true;
+      this.input.emit('lead_yielded_for_assembly', { workerId: this.lead.id, seedCommit: lead.action.seedCommit, commit: canonical });
+      void lead.interrupt().catch(() => {});
+    }
     for (const wake of this.waiters) wake();
     this.waiters.clear();
   }
@@ -817,6 +830,7 @@ export abstract class CooperationCore {
   deactivate(worker: ResearchWorker) { this.active.delete(worker.id); this.changed(); }
   current(action: CooperativeAction) {
     if (action.kind === 'assemble') return !this.failure && !this.stopping && this.liveWorkers.has(this.lead.id) && this.canAssemble(action.seedCommit);
+    if (action.kind === 'lead' && this.assemblyYieldedLeads.has(action)) return false;
     if (action.kind === 'lead' && (action.planNonce || action.initialPlanNonce) && !this.leadEvidence.has(action)) return false;
     if (isStatementAction(action)) {
       const review = this.archive.statementReviews?.find(item => item.id === action.reviewId);

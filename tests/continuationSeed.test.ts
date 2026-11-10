@@ -249,6 +249,49 @@ function originalDependencyFixture(declared = false, hidden = false) {
   return f;
 }
 
+function conditionalOriginalContextFixture(canonicalBridge = false) {
+  const statement = 'import Submission.Helpers\nnamespace Submission\n' +
+    'theorem premise : True := by sorry\ntheorem extra : True := by sorry\n' +
+    'theorem unused : True := by sorry\ndef witness : True := premise\n' +
+    'def nestedWitness : True := witness\ndef combinedWitness : True := by\n' +
+    '  have h : True := extra\n  exact nestedWitness\n' +
+    'theorem original : True := by sorry\nend Submission\n';
+  const f = fixture(statement, ['Submission.original', 'Submission.premise', 'Submission.extra', 'Submission.unused']);
+  const source = statement.replaceAll(': True := by sorry', ': True := by trivial');
+  const canonicalSource = canonicalBridge ? source.replace('end Submission',
+    'lemma bridge : True := by exact unused\nend Submission') : source;
+  fs.writeFileSync(path.join(f.sourceWorktree, f.projectRelative, 'Submission.lean'), canonicalSource);
+  const canonical = commit(f.sourceWorktree, 'Historical original context');
+  const previous = f.oldState.cooperation!.tasks, historical = previous[0]!.integratedCheck!;
+  const originals = ['premise', 'extra', 'unused'].map(id => {
+    const task = { ...f.tasks[2]!, id, objective: `Prove ${id}`, theoremName: `Submission.${id}`, dependsOn: [] };
+    return { task, status: 'integrated' as const, attempts: 1,
+      integratedCheck: { ...historical, commit: canonical, taskDigest: taskVersion(task) } };
+  });
+  const worker = f.oldState.workers![1]!.worktree;
+  git(worker, ['reset', '--hard', canonical]);
+  const bridgeDeclaration = 'lemma bridge : True := by\n' +
+    '  have h : True := Submission.Helpers.second_helper\n  exact combinedWitness\n';
+  fs.writeFileSync(path.join(worker, f.projectRelative, 'Submission.lean'), canonicalBridge ?
+    canonicalSource.replace('lemma bridge : True := by exact unused\n', bridgeDeclaration) :
+    source.replace('end Submission', bridgeDeclaration + 'end Submission'));
+  const proofCommit = commit(worker, 'Conditional bridge using original definitions');
+  const task: CooperativeTask = { id: 'bridge', kind: 'lemma', objective: 'Apply the typed input with original context',
+    dependsOn: ['second'], revision: 0, ownerId: 'prover-1', proofPath: 'Submission.lean',
+    theoremName: 'Submission.bridge', type: 'True' };
+  const condition = { taskId: 'second', taskDigest: taskVersion(f.tasks[1]!) };
+  const bridge = { task, status: 'conditional' as const, attempts: 1,
+    assignment: { taskId: task.id, taskDigest: taskVersion(task), workerId: 'prover-1', seedCommit: canonical,
+      dependencies: [condition] },
+    proof: { ...historical, commit: proofCommit, seedCommit: canonical, taskDigest: taskVersion(task), conditions: [condition] } };
+  f.oldState.cooperation!.canonicalCommit = canonical;
+  f.oldState.cooperation!.tasks = [bridge, ...originals, ...previous.slice(0, 2),
+    { task: { ...f.tasks[2]!, dependsOn: ['bridge'] }, status: 'pending', attempts: 0 }];
+  f.oldState.workers![1]!.sessionTaskId = task.id;
+  writeSolverRunState(f.sourceStateFile, f.oldState);
+  return { ...f, task, condition, proofCommit, bridge, canonicalSource };
+}
+
 function replaceHelperCandidates(f: ReturnType<typeof fixture>, count: number) {
   const tasks: CooperativeTask[] = Array.from({ length: count }, (_, index) => ({ ...f.tasks[0]!,
     id: `helper_${index}`, objective: `Prove helper ${index}`, theoremName: `Submission.Helpers.helper_${index}` }));
@@ -326,7 +369,7 @@ async function suspendedTaskDraftFixture(kind: 'research' | 'sketch' | 'goal' | 
     if (notes === null) fs.rmSync(path.join(peer.worktree, 'RESEARCH.md'), { force: true });
     else fs.writeFileSync(path.join(peer.worktree, 'RESEARCH.md'), notes);
     const draftCommit = commitSolverSources(state.problem, peer.worktree), draftSource = fs.readFileSync(file, 'utf8');
-    cooperative.retainContextDraft(descriptor, action, draftCommit);
+    cooperative.retainContextDraft(descriptor, action, draftCommit, kind === 'goal' || kind === 'lemma' ? 'connection' : 'context');
     cooperative.interrupted(descriptor, action);
     const node = tasks.find(node => node.task.id === task.id)!;
     node.task = { ...node.task, status: 'paused' }; otherNode.task = { ...other, status: 'active' };
@@ -483,6 +526,22 @@ beforeEach(() => {
     { sessionId: 'fresh-seed', receipt: 'fresh-seed', checks: true }));
 });
 describe('continuation of ordinary research no-progress checkpoints', () => {
+  it('retains task scheduling backoff through cold continuation when the worker slot is reset', async () => {
+    const f = await researchCheckpointFixture('research', 2);
+    const advisoryCheckpoint = { scope: mathDigest(canonicalMathJson({ kind: 'task', taskDigest: taskVersion(f.task) })),
+      noProgressStreak: 2, contentDigest: mathDigest('saved-source-notes-and-scratch') };
+    f.oldState.cooperation!.researchCheckpoints![f.task.id].advisoryCheckpoint = advisoryCheckpoint;
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    await f.seed(); await f.seed();
+    const second = nextContinuation(f, f.stateFile, 'task-backoff-second'); await second.seed();
+    for (const stateFile of [f.stateFile, second.stateFile]) {
+      const state = readSolverRunState(stateFile);
+      expect(state.cooperation!.researchCheckpoints![f.task.id].advisoryCheckpoint).toEqual(advisoryCheckpoint);
+      expect(state.workers![1]!.advisoryCheckpoint).toBeUndefined();
+      expect(state.cooperation!.tasks.find(node => node.task.id === f.task.id)!.proof).toBeUndefined();
+    }
+  });
+
   it.each(['research', 'sketch'] as const)('keeps a paused %s parked through repeated seeding and two more generations', async kind => {
     const f = await researchCheckpointFixture(kind), historical = fs.readFileSync(f.sourceStateFile);
     expect(f.checkpoint).toMatchObject({ count: 3, unchangedEvidenceCount: 3, paused: true });
@@ -1934,6 +1993,131 @@ describe('bounded continuation verification batches', () => {
       await cooperative.restore();
       expect(state.cooperation!.tasks.every(node => node.status === 'integrated')).toBe(true);
     } finally { f.controller.abort(); await cooperative.stop(); }
+  });
+
+  it.each([false, true])('restores conditional original inputs from the frozen candidate through definitions (canonical bridge=%s)', async canonicalBridge => {
+    const f = conditionalOriginalContextFixture(canonicalBridge), check = vi.spyOn(taskProofs, 'checkTaskProofs');
+    let fresh: TaskProof[] = [];
+    host.verify.mockImplementation((request: MathematicsVerifierBatchRequest) => {
+      if (request.items.some(item => item.theoremName === 'Submission.bridge')) {
+        const source = committedSource(f.worktree, request.targetCommit!, `${f.projectRelative}/Submission.lean`);
+        expect(source).toContain('theorem premise : True := by trivial');
+        expect(source).toContain('theorem extra : True := by trivial');
+        expect(source).toContain('def witness'); expect(source).toContain('def nestedWitness');
+        expect(source).toContain('def combinedWitness');
+        expect(source).not.toContain('theorem unused');
+        expect(source).toContain('lemma bridge (second_helper : True)');
+      }
+      return freshReceipts(request);
+    });
+    const report = await seedSolverContinuation({ ...f.options, onSeeded: (_state, proofs) => { fresh = proofs; } });
+    const requests = check.mock.calls.flatMap(call => call[3]), bridgeRequest = requests.find(request => request.task.id === 'bridge')!;
+    expect(bridgeRequest.retainedGoals).toEqual(['Submission.premise', 'Submission.extra']);
+    expect(bridgeRequest.conditions).toEqual([f.tasks[1]]);
+    expect(check.mock.calls.findIndex(call => call[3].some(request => request.task.id === 'bridge')))
+      .toBeGreaterThan(check.mock.calls.findIndex(call => call[3].some(request => request.task.id === 'premise')));
+    const state = readSolverRunState(f.stateFile), bridge = state.cooperation!.tasks.find(node => node.task.id === 'bridge')!;
+    expect(report.failed).toEqual([]);
+    expect(bridge).toMatchObject({ status: 'conditional', proof: { passed: true, conditions: [f.condition] } });
+    expect(bridge.integratedCheck).toBeUndefined();
+    expect(fresh.map(proof => proof.taskDigest)).not.toContain(taskVersion(f.task));
+    expect(state.cooperation!.tasks.find(node => node.task.id === 'goal')?.status).toBe('pending');
+  });
+
+  it('keeps an unverified original out of a frozen conditional context', async () => {
+    const f = conditionalOriginalContextFixture(), check = vi.spyOn(taskProofs, 'checkTaskProofs');
+    host.verify.mockImplementation((request: MathematicsVerifierBatchRequest) => {
+      if (request.items.some(item => ['Submission.premise', 'Submission.bridge'].includes(item.theoremName!))) {
+        if (request.items.some(item => item.theoremName === 'Submission.bridge')) {
+          const source = committedSource(f.worktree, request.targetCommit!, `${f.projectRelative}/Submission.lean`);
+          expect(source).not.toContain('theorem premise'); expect(source).not.toContain('def combinedWitness');
+        }
+        return failedBatch(freshReceipts(request), { stdoutPreview: file => `${file}:3:1: error: unsolved goals` });
+      }
+      return freshReceipts(request);
+    });
+    const report = await f.seed(), state = readSolverRunState(f.stateFile);
+    expect(report.failed.toSorted()).toEqual(['bridge', 'premise']);
+    const bridgeRequests = check.mock.calls.flatMap(call => call[3]).filter(request => request.task.id === 'bridge');
+    expect(bridgeRequests).toHaveLength(1);
+    expect(bridgeRequests[0].retainedGoals).toEqual(['Submission.extra']);
+    expect(state.cooperation!.tasks.find(node => node.task.id === 'bridge')).toMatchObject({
+      status: 'blocked', proof: { passed: false, conditions: [f.condition] } });
+    expect(state.cooperation!.tasks.find(node => node.task.id === 'bridge')!.integratedCheck).toBeUndefined();
+  });
+
+  it('rejects a frozen conditional dependency after its original task version changes', async () => {
+    const f = conditionalOriginalContextFixture(), premise = f.oldState.cooperation!.tasks.find(node => node.task.id === 'premise')!;
+    f.bridge.assignment.dependencies.push({ taskId: premise.task.id, taskDigest: taskVersion(premise.task) });
+    premise.task = { ...premise.task, revision: premise.task.revision + 1 };
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    const check = vi.spyOn(taskProofs, 'checkTaskProofs'); host.verify.mockImplementation(freshReceipts);
+    const report = await f.seed(), state = readSolverRunState(f.stateFile);
+    expect(report.failed).toEqual(['bridge']);
+    expect(check.mock.calls.flatMap(call => call[3]).some(request => request.task.id === 'bridge')).toBe(false);
+    expect(state.cooperation!.tasks.find(node => node.task.id === 'bridge')).toMatchObject({
+      status: 'blocked', feedback: 'math_task_condition_version_invalid' });
+    expect(state.cooperation!.tasks.find(node => node.task.id === 'bridge')!.proof).toBeUndefined();
+    expect(state.cooperation!.tasks.find(node => node.task.id === 'premise')!.status).toBe('integrated');
+  });
+
+  it('does not restore a conditional candidate through a cycle of original inputs', async () => {
+    const f = conditionalOriginalContextFixture();
+    fs.writeFileSync(path.join(f.sourceWorktree, f.projectRelative, 'Submission.lean'), f.canonicalSource
+      .replace('premise : True := by trivial', 'premise : True := by exact extra')
+      .replace('extra : True := by trivial', 'extra : True := by exact premise'));
+    f.oldState.cooperation!.canonicalCommit = commit(f.sourceWorktree, 'Cyclic historical originals');
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    const check = vi.spyOn(taskProofs, 'checkTaskProofs'); host.verify.mockImplementation(freshReceipts);
+    const report = await f.seed(), state = readSolverRunState(f.stateFile);
+    expect(report.failed.toSorted()).toEqual(['bridge', 'extra', 'premise']);
+    expect(check.mock.calls.flatMap(call => call[3]).every(request => !['bridge', 'extra', 'premise'].includes(request.task.id))).toBe(true);
+    for (const id of ['bridge', 'extra', 'premise']) {
+      const node = state.cooperation!.tasks.find(node => node.task.id === id)!;
+      expect(node.status).toBe('blocked'); expect(node.feedback).toContain('dependency_cycle');
+      expect(node.proof).toBeUndefined(); expect(node.integratedCheck).toBeUndefined();
+    }
+  });
+
+  it('restores original context referenced only by a conditional input type', async () => {
+    const f = conditionalOriginalContextFixture(), worker = f.oldState.workers![1]!.worktree;
+    const source = f.canonicalSource.replace('end Submission', 'def conditionType : Prop := by\n' +
+      '  have h : True := premise\n  exact True\nlemma missing : conditionType := by sorry\nend Submission');
+    fs.writeFileSync(path.join(f.sourceWorktree, f.projectRelative, 'Submission.lean'), source);
+    const canonical = commit(f.sourceWorktree, 'Conditional type context');
+    git(worker, ['reset', '--hard', canonical]);
+    fs.writeFileSync(path.join(worker, f.projectRelative, 'Submission.lean'), source.replace('end Submission',
+      'lemma bridge : True := by exact missing\nend Submission'));
+    const proofCommit = commit(worker, 'Conditional type-only original input');
+    const missing: CooperativeTask = { id: 'missing', kind: 'lemma', objective: 'Prove the typed input',
+      dependsOn: [], revision: 0, ownerId: 'prover-1', proofPath: 'Submission.lean',
+      theoremName: 'Submission.missing', type: 'Submission.conditionType' };
+    const condition = { taskId: missing.id, taskDigest: taskVersion(missing) };
+    f.bridge.task = { ...f.task, dependsOn: ['missing'] };
+    f.bridge.assignment = { ...f.bridge.assignment, taskDigest: taskVersion(f.bridge.task), seedCommit: canonical, dependencies: [condition] };
+    f.bridge.proof = { ...f.bridge.proof, taskDigest: taskVersion(f.bridge.task), commit: proofCommit, seedCommit: canonical, conditions: [condition] };
+    f.oldState.cooperation!.canonicalCommit = canonical;
+    f.oldState.cooperation!.tasks.splice(1, 0, { task: missing, status: 'pending', attempts: 0 });
+    writeSolverRunState(f.sourceStateFile, f.oldState);
+    const check = vi.spyOn(taskProofs, 'checkTaskProofs');
+    host.verify.mockImplementation((request: MathematicsVerifierBatchRequest) => {
+      if (request.items.some(item => item.theoremName === 'Submission.bridge')) {
+        const projected = committedSource(f.worktree, request.targetCommit!, `${f.projectRelative}/Submission.lean`);
+        expect(projected).toContain('theorem premise : True := by trivial');
+        expect(projected).toContain('def conditionType');
+        expect(projected).toContain('lemma bridge (missing : Submission.conditionType)');
+        expect(projected).not.toContain('lemma missing');
+      }
+      return freshReceipts(request);
+    });
+    const report = await f.seed(), state = readSolverRunState(f.stateFile);
+    const request = check.mock.calls.flatMap(call => call[3]).find(request => request.task.id === 'bridge')!;
+    expect(request.retainedGoals).toEqual(['Submission.premise']);
+    expect(request.conditions).toEqual([missing]);
+    expect(report.failed).toEqual([]);
+    expect(state.cooperation!.tasks.find(node => node.task.id === 'bridge')).toMatchObject({
+      status: 'conditional', proof: { passed: true, conditions: [condition] } });
+    expect(state.cooperation!.tasks.find(node => node.task.id === 'bridge')!.integratedCheck).toBeUndefined();
   });
 
   it('recovers an unknown source dependency once only after a new original receipt', async () => {

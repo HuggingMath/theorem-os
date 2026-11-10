@@ -11,6 +11,8 @@ import { taskVersion } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 
+const actualPreflight = TaskTypePreflightCache.prototype.check;
+
 describe('typed helper dispatch admission', () => {
   let directory: string, state: SolverRunState, workers: ResearchWorker[], cooperative: CooperativeResearch;
   let controller: AbortController, emit: ReturnType<typeof vi.fn>, allowed: boolean;
@@ -84,6 +86,19 @@ describe('typed helper dispatch admission', () => {
     expect(node.assignment).toBeUndefined(); expect(state.lastFailure).toBeUndefined();
     expect((cooperative as any).refreshInvalidTaskTypes()).toBe(false);
     expect(vi.mocked(TaskTypePreflightCache.prototype.check)).toHaveBeenCalledOnce();
+  });
+
+  it('blocks a restored declaration-header contract before assigning a prover even when its source scope cannot be restored', async () => {
+    const node = state.cooperation!.tasks[0];
+    node.task = { ...node.task, type: 'theorem Tutorial.helper (n : Nat) : n = n' };
+    const file = path.join(workers[1].worktree, state.problem.projectRelative, 'Submission.lean');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('namespace Tutorial', 'namespace Tutorial\nvariable (P : Prop)'));
+    vi.mocked(TaskTypePreflightCache.prototype.check).mockImplementation(function(input) { return actualPreflight.call(this, input); });
+    expect(typeof await peer()).toBe('symbol');
+    expect(node).toMatchObject({ status: 'blocked', attempts: 0,
+      feedback: expect.stringContaining('Supply a closed type term') });
+    expect(node.assignment).toBeUndefined(); expect(state.lastFailure).toBeUndefined();
+    expect(emit.mock.calls.some(([event]) => event === 'task_assigned')).toBe(false);
   });
 
   it.each(['deferred', 'unavailable'] as const)('allows work to continue with %s and records no mathematical failure', async status => {

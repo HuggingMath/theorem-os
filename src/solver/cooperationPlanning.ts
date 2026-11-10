@@ -1,4 +1,5 @@
 import { parseCooperationPlan, isAdvisoryTask as advisory } from './tasks';
+import { assertPlanTaskTypeContracts } from './taskTypeContract';
 import fs from 'node:fs';
 import path from 'node:path';
 import { canonicalMathJson, mathDigest, readMathText } from '../math/mathRuntimeIo';
@@ -108,7 +109,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       this.archive.lastLeadInputDigest = this.leadEvidence.get(action) === this.planningEvidenceDigest()
         ? this.planningInputDigest() : action.planningInputDigest;
       this.archive.lastLeadPauseInputDigest = undefined;
-      // Idle peers this deciding turn was shown are answered; only one Lead turn runs at a time.
+      // Diagnostic only: an accepted plan does not answer a peer still in the same no-work episode.
       this.archive.leadDecisionBasisAt = this.archive.leadInboxBasis?.at ?? Date.now();
       this.answerGoalProgressReview(action);
       const pending = leadResearchInputs(this.archive.deliveries ?? [],
@@ -268,6 +269,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     this.includeCapacityExplorations(plan);
     this.includeNextCheckTasks(plan);
     const { tasks, groups, proofRoutes } = plan;
+    assertPlanTaskTypeContracts(tasks, this.archive.tasks.map(node => node.task));
     const restoringPlan = !decidingAction && !edit && this.archive.tasks.length > 0;
     const shown = decidingAction?.kind === 'lead' ? this.presentedResearchInputs.get(decidingAction)?.shown ?? [] :
       restoringPlan ? leadResearchInputs(this.archive.deliveries ?? [],

@@ -200,5 +200,35 @@ describe('process archive enrichment', () => {
       expect(process.sources[checked.sourceDigest]?.sha256).toBe(checked.sourceDigest);
     const manifest = JSON.parse(fs.readFileSync(path.join(destination, 'manifest.json'), 'utf8'));
     expect(manifest.records[0].files['process.json']).toBe(hash(fs.readFileSync(path.join(destination, 'Example/process.json'))));
+
+    // A new unsuccessful run must not hide the earlier hash-bound acceptance or regress its edited presentation.
+    manifest.records[0].title = 'Edited problem title';
+    manifest.records[0].en.area = 'Edited research field';
+    fs.writeFileSync(path.join(destination, 'manifest.json'), JSON.stringify(manifest));
+    const archiveObject = (name: string, value: unknown) => {
+      const bytes = Buffer.from(JSON.stringify(value)), object = `objects/${name}.gz`;
+      fs.writeFileSync(path.join(campaign, 'trajectories', object), gzipSync(bytes));
+      return { object, sha256: hash(bytes) };
+    };
+    const acceptedResult = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+    runs[1].stateSnapshot = archiveObject('final-accepted-state', liveAccepted);
+    const resultReference = archiveObject('accepted-result', acceptedResult);
+    fs.writeFileSync(path.join(campaign, 'trajectories/index.json'), JSON.stringify({ files: { [resultPath]: { versions: [resultReference] } } }));
+    fs.writeFileSync(path.join(campaign, 'trajectories/problems/Example/index.json'), JSON.stringify({
+      runs, repositories: { proof: { archive: path.join(repository, '.git') } },
+    }));
+    fs.writeFileSync(path.join(campaign, 'campaign-state.json'), JSON.stringify({ jobs: [{ id: 'Example', status: 'unsolved',
+      result: path.join(campaign, 'later-failed-result.json'), runId: 'later-failed-run', solutionCommit: null }] }));
+    fs.writeFileSync(resultPath, JSON.stringify({ runId: 'accepted-run', status: 'evaluated_failed' }));
+    fs.writeFileSync(resultPath + '.runtime/state.json', JSON.stringify({ runId: 'accepted-run', check: { passed: false } }));
+    importMathCampaign(campaign, destination);
+    const historical = JSON.parse(fs.readFileSync(path.join(destination, 'manifest.json'), 'utf8'));
+    expect(historical.records).toHaveLength(1);
+    expect(historical.records[0]).toMatchObject({ title: 'Edited problem title', en: { area: 'Edited research field' },
+      campaign: { runId: 'accepted-run', proofCommit: revisions[2], proofSha256: hash(sources[2]) } });
+    const historicalProcess = JSON.parse(fs.readFileSync(path.join(destination, 'Example/process.json'), 'utf8'));
+    expect(historicalProcess.runs.find((run: any) => run.runId === 'accepted-run').resultStatus).toBe('evaluated_passed');
+    fs.writeFileSync(path.join(campaign, 'trajectories', resultReference.object), gzipSync(Buffer.from('{}')));
+    expect(() => importMathCampaign(campaign, destination)).toThrow('Checkpoint hash mismatch');
   });
 });

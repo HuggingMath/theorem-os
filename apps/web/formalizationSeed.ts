@@ -48,6 +48,7 @@ export function prepareWebProblem(directory: string, request: Pick<WorkerInput, 
   const receipt = bootstrapLeanTask(path.join(directory, 'workspace'), {
     source: input.source, task: input.task, environment: input.environment ?? 'standard',
     libraryPack });
-  fs.writeFileSync(taskFile, input.task + '\nPreserve all original declarations. Prove every target in generated/problem/Submission.lean.\n', { mode: 0o600 });
+  fs.writeFileSync(taskFile, input.task + '\nOverall run objective: prove every original target in generated/problem/Submission.lean, preserving all original declarations. ' +
+    'In cooperative mode, complete only your current assignment and preserve other original goal proofs, including existing sorry placeholders; the host integrates checked tasks and verifies all targets.\n', { mode: 0o600 });
   return { workspaceRoot: receipt.workspaceRoot, activeProblemPath: receipt.activeProblemPath, taskFile };
 }

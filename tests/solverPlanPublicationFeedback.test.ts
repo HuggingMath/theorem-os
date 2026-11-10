@@ -64,6 +64,9 @@ describe('live Lead publication correction feedback', () => {
   };
   const expectCorrection = (message: string, action: Lead, reason: string) => {
     for (const detail of [reason, log(action), action.planVersion!, nonce(action)]) expect(message).toContain(detail);
+    expect(message).toContain('"kind":"plan"');
+    const target = JSON.parse(message.split('current publication target: ')[1].split('. Preserve the log')[0]);
+    expect(target).toEqual({ file: log(action), kind: 'plan', dispatchNonce: nonce(action), baseVersion: action.planVersion });
     expect(message).toMatch(/append/iu);
     expect(message).toMatch(/complete/iu);
   };
@@ -146,6 +149,33 @@ describe('live Lead publication correction feedback', () => {
       expect(state.cooperation!.planPublicationRejection).toBeUndefined();
       expect(json().planPublicationRejection).toBeUndefined();
       expect(state.cooperation!.planPublication).toMatchObject({ nonce: nonce(action) });
+      expect(state.check).toBeUndefined();
+      expect(state.cooperation!.tasks.every(node => !node.proof && !node.integratedCheck)).toBe(true);
+    });
+
+  it.each(['initial', 'replacement'] as const)(
+    'supplies the missing event envelope for a bare %s graph or patch', async kind => {
+      prepare(kind);
+      const action = await start(), before = structuredClone(state.cooperation);
+      const graph = kind === 'initial' ? { tasks: completePlan.tasks, groups: completePlan.groups } : { upsert: [helper] };
+      await publish(action, graph);
+      expect(rejected()).toHaveLength(1);
+      expect(rejected()[0].details!.reason).toBe(kind === 'initial' ? 'math_initial_plan_invalid' : 'math_plan_publication_invalid');
+      expect(state.cooperation!.tasks).toEqual(before!.tasks);
+      expect(state.cooperation!.planPublication).toBeUndefined();
+      const message = notify.mock.calls[0][0];
+      const target = JSON.parse(message.match(/current publication target: (\{[^\n]+?\})\. /u)![1]);
+      const { file, ...envelope } = target;
+      expect(file).toBe(log(action));
+      expect(envelope.kind).toBe('plan');
+      expect(envelope.dispatchNonce).toBe(nonce(action));
+      expect(message).toContain('top level of the same event');
+      await publish(action, { ...envelope, ...graph });
+      expect(rejected()).toHaveLength(1);
+      expect(state.cooperation!.planPublicationRejection).toBeUndefined();
+      expect(state.cooperation!.planPublication).toMatchObject({ nonce: nonce(action) });
+      expect(state.cooperation!.tasks.map(node => node.task.id)).toEqual(
+        [...completePlan.tasks, ...(kind === 'replacement' ? [helper] : [])].map(task => task.id));
       expect(state.check).toBeUndefined();
       expect(state.cooperation!.tasks.every(node => !node.proof && !node.integratedCheck)).toBe(true);
     });

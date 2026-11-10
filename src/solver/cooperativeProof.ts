@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
-import { maskLeanComments, maskLeanCommentsAndStrings } from '../math/leanSyntax';
+import { isSimpleLeanName, maskLeanComments, maskLeanCommentsAndStrings } from '../math/leanSyntax';
 import { mathConstructionImports } from '../math/mathConstructionSources';
-import { hashMathFormalSourceDeclaration, inspectLeanDeclarationRegions, inspectScopedLeanDeclarations,
+import { hashMathFormalSourceDeclaration, inspectLeanDeclarationRegions, inspectLeanProjectionDeclarations, inspectScopedLeanDeclarations,
   leanDeclarationContextCommands, leanDeclarationKeys, repeatedLeanLocalNames } from '../math/leanSource';
 import { assertSolverSources, committedSource, commitSolverProjection, git, originalDeclarationRegions, solverProofImports,
   withSolverWorktree, type SolverProblem } from './problem';
@@ -16,18 +16,29 @@ import { formalVerificationToolIdentity, type MathematicsVerifierBatchItem } fro
 import { hasTaskConnectionCheck } from './taskConnections';
 import { compactTaskSources } from './taskProjection';
 import { projectionDependencyHintId, type ProjectionDeclaration, type ProjectionDependencyHint } from './projectionDependencyHints';
+import { assertTaskTypeContract } from './taskTypeContract';
+import { inspectProjectionNotations, type ProjectionNotation } from './projectionNotation';
 
 export { TaskProofCache } from './taskProofCache';
 
-/** Source hints only order/recover checks; callers must separately establish fresh acceptance. */
+/** Source observations only order/recover checks; callers must separately establish fresh acceptance.
+ * Possible notation context is not a plan edge or an unambiguous dependency hint. */
 export function projectedGoalInputs(project: ReturnType<typeof createTaskSourceProjector>, task: CooperativeTask,
-  tasks: readonly TaskRecord[]): TaskRecord[] {
-  const found = new Set<TaskRecord>();
-  for (const hint of project.dependencyHints(task, [])) {
-    if (hint.root.removedBecause !== 'excluded-original-target') continue;
-    const matches = tasks.filter(node => node.task.kind === 'goal' && node.task.id !== task.id &&
-      node.task.proofPath === hint.root.file && node.task.theoremName?.replace(/^_root_\./u, '') === hint.root.name);
-    if (matches.length === 1) found.add(matches[0]);
+  tasks: readonly TaskRecord[], conditions: readonly CooperativeTask[] = []): TaskRecord[] {
+  const found = new Set<TaskRecord>(), visited = new Set<string>(), pending = [task];
+  for (const current of pending) {
+    if (visited.has(current.id)) continue;
+    visited.add(current.id);
+    const inputs = current === task ? conditions : [];
+    const roots = [...project.dependencyHints(current, [], inputs)
+      .filter(hint => hint.root.removedBecause === 'excluded-original-target').map(hint => hint.root),
+      ...project.possibleContextGoals(current, [], inputs)];
+    for (const root of roots) {
+      const matches = tasks.filter(node => node.task.kind === 'goal' && node.task.id !== task.id &&
+        node.task.proofPath === root.file && node.task.theoremName?.replace(/^_root_\./u, '') === root.name);
+      if (matches.length !== 1 || found.has(matches[0])) continue;
+      found.add(matches[0]); pending.push(matches[0].task);
+    }
   }
   return [...found];
 }
@@ -92,6 +103,8 @@ export function omitTaskHelpers(problem: SolverProblem, file: string, source: st
 /** Freeze edits while preserving original goals, helper statements, and definition bodies. */
 export function taskChanges(problem: SolverProblem, worktree: string, sourceCommit: string,
   task: CooperativeTask | undefined, assignment: Pick<TaskAssignment, 'seedCommit'>): DeclarationChange[] {
+  // This only computes edits; callers still validate source availability and the frozen statement.
+  if (sourceCommit === assignment.seedCommit && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(sourceCommit)) return [];
   const changes: DeclarationChange[] = [];
   for (const file of problem.ownedFiles) {
     const read = (commit: string) => committedSource(worktree, commit, `${problem.projectRelative}/${file}`);
@@ -166,21 +179,24 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
   const sourceSnapshot = new Map(problem.ownedFiles.map(file => [file,
     committedSource(worktree, sourceCommit, `${problem.projectRelative}/${file}`)]));
   const regions = new Map([...sourceSnapshot].filter(([file]) => file.endsWith('.lean'))
-    .map(([file, source]) => [file, inspectLeanDeclarationRegions(source)]));
+    .map(([file, source]) => [file, inspectLeanProjectionDeclarations(source)]));
   const key = (file: string, name: string) => `${file}\0${name}`;
-  const identifiers = (source: string) => [...maskLeanCommentsAndStrings(source)
-    .matchAll(/[\p{L}_][\p{L}\p{M}\p{N}_'?!]*(?:\.[\p{L}_][\p{L}\p{M}\p{N}_'?!]*)*/gu)].map(match => match[0]);
+  const sourceReferences = (source: string, baseOffset = 0) => {
+    const clean = maskLeanCommentsAndStrings(source);
+    return [...clean.matchAll(/[\p{L}_][\p{L}\p{M}\p{N}_'?!]*(?:\.[\p{L}_][\p{L}\p{M}\p{N}_'?!]*)*/gu)]
+      .map(match => ({ name: match[0], offset: baseOffset + match.index, receiverField: clean[match.index - 1] === '.' }));
+  };
+  const identifiers = (source: string) => sourceReferences(source).map(reference => reference.name);
   const declarations = [...sourceSnapshot].filter(([file]) => file.endsWith('.lean')).flatMap(([file, source]) => {
-    const scoped = inspectScopedLeanDeclarations(source);
     return regions.get(file)!.map(region => {
-      const declaration = scoped.find(item => item.startOffset === region.startOffset)!;
+      const declaration = region;
       const header = source.slice(region.startOffset, region.bodyOffset);
       // Only declaration parameters bind throughout the remaining declaration.
       // A parameter is not in scope in its own type, and `(value : Type)` in
       // the result is a type ascription rather than another parameter.
       const clean = maskLeanCommentsAndStrings(header);
       const bound: { name: string; offset: number; scope: number }[] = [];
-      let cursor = /^\S+\s+/u.exec(clean)![0].length + declaration.name.length;
+      let cursor = declaration.parametersOffset - region.startOffset;
       while (cursor < clean.length) {
         if (/\s/u.test(clean[cursor]!)) { cursor++; continue; }
         if (clean[cursor] === ':') break;
@@ -209,17 +225,33 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
           scope: region.startOffset + cursor,
         });
       }
-      return { ...declaration, bodyOffset: region.bodyOffset, endOffset: region.endOffset, file, id: key(file, declaration.qualifiedName),
-        theorem: /^(?:theorem|lemma)\s/u.test(header), bound,
-        references: [...maskLeanCommentsAndStrings(source.slice(region.startOffset, region.endOffset))
-          .matchAll(/[\p{L}_][\p{L}\p{M}\p{N}_'?!]*(?:\.[\p{L}_][\p{L}\p{M}\p{N}_'?!]*)*/gu)]
-          .map(match => ({ name: match[0], offset: region.startOffset + match.index })) };
+      return { ...declaration, name: declaration.name ?? '', qualifiedName: declaration.qualifiedName ?? '',
+        bodyOffset: region.bodyOffset, endOffset: region.endOffset, file,
+        id: key(file, declaration.qualifiedName ?? `@${region.startOffset}`),
+        theorem: /^(?:theorem|lemma)\s/u.test(header), instance: /^instance\b/u.test(header),
+        resultOffset: region.startOffset + cursor + 1, parameters: clean.slice(declaration.parametersOffset - region.startOffset, cursor),
+        resultType: clean.slice(cursor + 1).replace(/(?::=|\bwhere)\s*$/u, ''),
+        bound, notation: undefined as ProjectionNotation | undefined,
+        references: sourceReferences(source.slice(region.startOffset, region.endOffset), region.startOffset) };
     });
   });
+  const notations = new Map([...sourceSnapshot].filter(([file]) => file.endsWith('.lean'))
+    .map(([file, source]) => [file, inspectProjectionNotations(source, regions.get(file)!)]));
+  for (const [file, entries] of notations)
+    for (const notation of entries) declarations.push({
+      ...notation, name: '', qualifiedName: '', declarationType: '', file, parametersOffset: notation.bodyOffset,
+      id: key(file, `@notation:${notation.startOffset}`), theorem: false, notation,
+      instance: false, resultOffset: notation.bodyOffset, parameters: '', resultType: '',
+      bound: notation.bound.map(name => ({ name, offset: notation.startOffset, scope: notation.bodyOffset })),
+      references: sourceReferences(sourceSnapshot.get(file)!.slice(notation.bodyOffset, notation.endOffset), notation.bodyOffset),
+    });
   const byOffset = new Map(declarations.map(item => [`${item.file}\0${item.startOffset}`, item]));
+  const byId = new Map(declarations.map(item => [item.id, item]));
+  const notationDeclarations = declarations.filter(item => item.notation);
+  const notationById = new Map(notationDeclarations.map(item => [item.id, item.notation!]));
   const masked = new Map([...sourceSnapshot].filter(([file]) => file.endsWith('.lean')).map(([file, source]) => {
     const text = maskLeanComments(source);
-    return [file, { text, regions: inspectLeanDeclarationRegions(text) }] as const;
+    return [file, { text, regions: inspectLeanProjectionDeclarations(text) }] as const;
   }));
   const visible = new Map([...sourceSnapshot.keys()].map(file => {
     const files = new Set([file]);
@@ -229,12 +261,84 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     }
     return [file, files] as const;
   }));
+  // Resolve an `open` where it occurs, rather than reinterpreting a parent's open in a child namespace.
+  // This index concerns owned dependencies only; imported constants still undergo the normal Lean check.
+  const namespaces = new Map([...visible].map(([file, files]) => [file, new Set(declarations
+    .filter(item => files.has(item.file)).flatMap(item => {
+      const parts = (item.qualifiedName || item.namespace).split('.');
+      return parts.slice(1).map((_, index) => parts.slice(0, index + 1).join('.'));
+    }))]));
+  type OpenBinding = { namespace: string; excluded?: string[]; aliases?: { from: string; to: string }[] };
+  const restrictedOpens = new Map<string, Map<number, {
+    startOffset: number; endOffset: number; local: boolean; name: string; mode: string;
+    namespaces: string[]; excluded?: string[]; aliases?: { from: string; to: string }[];
+  }>>();
+  const openedNames = (open: OpenBinding, name: string): string[] => open.aliases
+    ? open.aliases.filter(alias => name === alias.to || name.startsWith(alias.to + '.'))
+      .map(alias => `${open.namespace}.${alias.from}${name.slice(alias.to.length)}`)
+    : open.excluded?.includes(name) ? [] : [`${open.namespace}.${name}`];
+  const openedBindings = new Map(declarations.map(declaration => {
+    const resolved: OpenBinding[] = [], known = namespaces.get(declaration.file)!;
+    for (const open of declaration.opens) {
+      const selected = /^(\S+)\s*\(([^()]*)\)\s*$/u.exec(open.command);
+      const restricted = /^(\S+)\s+(hiding|renaming)\s+(.+)$/u.exec(open.command);
+      const names = selected || restricted ? [(selected ?? restricted)![1]!] : open.command.split(/\s+/u);
+      if (!names.every(isSimpleLeanName)) continue;
+      let excluded: string[] | undefined, aliases: OpenBinding['aliases'];
+      if (selected) {
+        const members = selected[2]!.trim().split(/\s+/u);
+        if (!members.every(isSimpleLeanName)) continue;
+        aliases = members.map(name => ({ from: name, to: name }));
+      } else if (restricted?.[2] === 'hiding') {
+        excluded = restricted[3]!.trim().split(/\s+/u);
+        if (!excluded.every(isSimpleLeanName)) continue;
+      } else if (restricted) {
+        const renamed = restricted[3]!.split(',').map(pair => pair.trim().split(/\s*(?:→|->)\s*/u));
+        if (!renamed.every(pair => pair.length === 2 && pair.every(isSimpleLeanName))) continue;
+        aliases = renamed.map(([from, to]) => ({ from: from!, to: to! }));
+      }
+      const start = resolved.length;
+      for (const name of names) {
+        const parts = open.namespace.split('.').filter(Boolean);
+        const scoped = name.startsWith('_root_.') ? [name.slice(7)] : Array.from({ length: parts.length + 1 },
+          (_, index) => [...parts.slice(0, parts.length - index), name].join('.'));
+        const nearest = scoped.find(candidate => known.has(candidate));
+        const opened = name.startsWith('_root_.') ? [] : resolved.filter(item => !item.aliases)
+          .flatMap(item => openedNames(item, name)).filter(candidate => known.has(candidate));
+        for (const namespace of new Set([...(nearest ? [nearest] : []), ...opened]))
+          resolved.push({ namespace, excluded, aliases });
+      }
+      if (selected || restricted) {
+        if (!restrictedOpens.has(declaration.file)) restrictedOpens.set(declaration.file, new Map());
+        restrictedOpens.get(declaration.file)!.set(open.startOffset, { ...open, name: names[0]!,
+          mode: selected ? 'selected' : restricted![2]!, namespaces: resolved.slice(start).map(item => item.namespace),
+          excluded, aliases });
+      }
+    }
+    return [declaration, resolved] as const;
+  }));
+  const frozenModules = new Map(declarations.filter(item => item.name && Object.hasOwn(problem.frozenFiles ?? {}, item.file))
+    .map(item => [item.qualifiedName, item.file.slice(0, -'.lean'.length).replaceAll('/', '.')]));
+  const notationGroupsCache = new Map<typeof declarations[number], string[][]>();
   const originals = new Map<string, string>();
   const project = (task: CooperativeTask, retainedGoals: readonly string[], conditions: readonly CooperativeTask[] = [],
-    observe?: (hints: readonly ProjectionDependencyHint[]) => void): Map<string, string> => {
+    observe?: (hints: readonly ProjectionDependencyHint[], context: readonly ProjectionDeclaration[]) => void): Map<string, string> => {
+    assertTaskTypeContract(task);
+    conditions.forEach(assertTaskTypeContract);
     const binders = conditions.map(dependency => `(${local(dependency.theoremName!)} : ${dependency.type})`).join(' ');
+    // These binders are host-generated: an older candidate may not import the frozen modules
+    // named by their closed types. Resolve only pinned declarations; mutable helpers remain
+    // explicit inputs, and the candidate's original source identity stays unchanged.
+    const conditionModules = new Set<string>();
+    for (const dependency of conditions) for (const reference of identifiers(dependency.type!)) {
+      const parts = reference.replace(/^_root_\./u, '').split('.');
+      for (let length = parts.length; length > 1; length--) {
+        const module = frozenModules.get(parts.slice(0, length).join('.'));
+        if (module) { conditionModules.add(module); break; }
+      }
+    }
     const declaration = sourceSnapshot.get(task.proofPath!) ?? '';
-    const matches = (regions.get(task.proofPath!) ?? []).filter(region => local(region.name) === local(task.theoremName!));
+    const matches = (regions.get(task.proofPath!) ?? []).filter(region => region.name && local(region.name) === local(task.theoremName!));
     const location = `\nFile: ${problem.projectRelative}/${task.proofPath}\nTarget: ${task.theoremName}\n`;
     if (!matches.length) throw new Error('math_task_missing_declaration' + location +
       'The assigned theorem is absent. Save it with the requested name and type, or report supporting results and the remaining gap as progress. No Lean proof check has started.');
@@ -273,26 +377,37 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     const removalRoots = observe ? new Map<string, ProjectionDependencyHint['root']['removedBecause']>([...removed].map(id => [id,
       assumptions.has(id) ? 'assumed-input' as const : 'excluded-original-target' as const])) : undefined;
     const bindings = new Map<string, { file: string; id: string }[]>();
-    for (const binding of [...declarations.map(item => ({ file: item.file, name: item.qualifiedName, id: item.id })),
+    for (const binding of [...declarations.filter(item => item.name).map(item => ({ file: item.file,
+      name: item.qualifiedName, id: item.id })),
       ...[...assumptions].map(([id, dependency]) => ({ id, file: dependency.proofPath!, name: id.slice(id.indexOf('\0') + 1) }))]) {
       bindings.set(binding.name, [...(bindings.get(binding.name) ?? []), binding]);
     }
     const visibleBindings = (declaration: typeof declarations[number], candidates: readonly { file: string; id: string }[]) => {
-      const visibleCandidates = candidates.filter(item => visible.get(declaration.file)!.has(item.file));
+      const visibleCandidates = candidates.filter(item => {
+        if (!visible.get(declaration.file)!.has(item.file)) return false;
+        const notation = notationById.get(item.id);
+        return !notation || (item.file === declaration.file
+          ? notation.startOffset < declaration.startOffset && declaration.startOffset < notation.scopeEnd
+          : !notation.local && !notation.scoped);
+      });
       const own = visibleCandidates.filter(item => item.file === declaration.file);
       return [...new Set((own.length ? own : visibleCandidates).map(item => item.id))];
     };
     const scopedReferences = (declaration: typeof declarations[number], name: string) => {
-      // Lean tries enclosing namespaces before opened ones, so `open` leaves these candidates unchanged.
-      // Only a root-level helper could be shadowed by an opened name, and owned sources rarely have one.
+      if (name.startsWith('_root_.')) return visibleBindings(declaration, bindings.get(name.slice(7)) ?? []);
+      // Enclosing namespaces shadow opened names. An exact qualified root name wins too;
+      // an atomic root name may instead be ambiguous with constants introduced by `open`.
       const namespace = declaration.namespace.split('.').filter(Boolean);
-      const names = name.startsWith('_root_.') ? [name.slice(7)] :
-        Array.from({ length: namespace.length + 1 }, (_, index) => [...namespace.slice(0, namespace.length - index), name].join('.'));
+      const names = Array.from({ length: namespace.length },
+        (_, index) => [...namespace.slice(0, namespace.length - index), name].join('.'));
       for (const qualified of names) {
         const candidates = visibleBindings(declaration, bindings.get(qualified) ?? []);
         if (candidates.length) return candidates;
       }
-      return [];
+      const exact = visibleBindings(declaration, bindings.get(name) ?? []);
+      if (name.includes('.') && exact.length) return exact;
+      return [...new Set([...exact, ...openedBindings.get(declaration)!.flatMap(open =>
+        openedNames(open, name).flatMap(qualified => visibleBindings(declaration, bindings.get(qualified) ?? [])))])];
     };
     const fields = new Map<string, { file: string; id: string }[]>();
     for (const [name, candidates] of bindings) fields.set(local(name), [...(fields.get(local(name)) ?? []), ...candidates]);
@@ -301,23 +416,125 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     // Candidate groups are conservative for removal; only a unique group may become an advisory hint.
     const isBound = (declaration: typeof declarations[number], name: string, offset: number) =>
       declaration.bound.some(binding => binding.name === name && (binding.offset === offset || binding.scope <= offset));
-    const referenceGroups = (declaration: typeof declarations[number], { name, offset }: { name: string; offset: number }): string[][] => {
-      if (!name.includes('.') && isBound(declaration, name, offset)) return [];
+    const resolveReferenceGroups = (declaration: typeof declarations[number],
+      { name, offset, receiverField }: ReturnType<typeof sourceReferences>[number]): string[][] => {
+      if (!receiverField && !name.includes('.') && isBound(declaration, name, offset)) return [];
       const parts = name.split('.'), groups: string[][] = [];
       let prefixLength = 0;
-      for (let length = parts.length; length > 0; length--) {
+      for (let length = receiverField ? 0 : parts.length; length > 0; length--) {
         const prefix = parts.slice(0, length).join('.');
         if (length === 1 && isBound(declaration, prefix, offset)) continue;
         const candidates = scopedReferences(declaration, prefix);
         if (candidates.length) { groups.push(candidates); prefixLength = length; break; }
       }
-      if (!name.startsWith('_root_.')) for (const field of parts.slice(prefixLength || 1)) {
+      // A compound receiver such as `(f i).method` leaves `method` as a separate token.
+      // It is still a field selected by the receiver type, even if a local has the same name.
+      if (!name.startsWith('_root_.')) for (const field of parts.slice(receiverField ? 0 : prefixLength || 1)) {
         // The receiver's type, rather than this declaration's namespace or file, selects a method.
         // Without elaboration, every visible owned method sharing the field is a possible dependency.
         const candidates = [...new Set((fields.get(field) ?? [])
           .filter(item => visible.get(declaration.file)!.has(item.file)).map(item => item.id))];
         if (candidates.length) groups.push(candidates);
       }
+      return groups;
+    };
+    // Removal propagation revisits these same immutable references on each pass. Resolve once
+    // within this projection; assumptions and retained inputs may differ on the next request.
+    const referenceGroupsCache = new Map<typeof declarations[number], Map<ReturnType<typeof sourceReferences>[number], string[][]>>();
+    const referenceGroups = (declaration: typeof declarations[number], reference: ReturnType<typeof sourceReferences>[number]) => {
+      let cache = referenceGroupsCache.get(declaration);
+      if (!cache) { cache = new Map(); referenceGroupsCache.set(declaration, cache); }
+      let groups = cache.get(reference);
+      if (!groups) { groups = resolveReferenceGroups(declaration, reference); cache.set(reference, groups); }
+      return groups;
+    };
+    // Notation literals are parser tokens, not namespace-qualified constants. Resolve them
+    // separately so global aliases and symbolic notation carry the same source dependencies.
+    const notationGroups = (declaration: typeof declarations[number]) => {
+      if (!notationDeclarations.length) return [];
+      let groups = notationGroupsCache.get(declaration);
+      if (groups) return groups;
+      const text = maskLeanCommentsAndStrings(sourceSnapshot.get(declaration.file)!
+        .slice(declaration.notation ? declaration.bodyOffset : declaration.startOffset, declaration.endOffset));
+      // Match whole symbol runs: a `+` notation is not a reference in `++`.
+      const symbols = new Set([...text.matchAll(/[^\s\p{L}\p{M}\p{N}_'".?!()[\]{},;⟨⟩⦃⦄]+/gu)].map(match => match[0]));
+      const byToken = new Map<string, string[]>();
+      for (const candidate of notationDeclarations) {
+        if (!visibleBindings(declaration, [candidate]).length) continue;
+        for (const token of candidate.notation!.tokens) {
+          const used = isSimpleLeanName(token) ? declaration.references.some(reference =>
+            reference.name === token && !reference.receiverField) : symbols.has(token);
+          if (used) byToken.set(token, [...(byToken.get(token) ?? []), candidate.id]);
+        }
+      }
+      groups = [...byToken.values()].map(ids => [...new Set(ids)]);
+      notationGroupsCache.set(declaration, groups);
+      return groups;
+    };
+    // Instance synthesis can depend on a provider without spelling its declaration name.
+    // These conservative provider groups only remove orphan wrappers; they never become
+    // unambiguous hints or authorize retaining an unchecked original goal.
+    const instances = declarations.filter(item => item.instance).map(item => {
+      const head = /^\s*([\p{L}_][\p{L}\p{M}\p{N}_'?!]*(?:\.[\p{L}_][\p{L}\p{M}\p{N}_'?!]*)*)/u.exec(item.resultType)?.[1];
+      const resultReferences = sourceReferences(item.resultType, item.resultOffset);
+      const contextNames = resultReferences.filter(reference => !isBound(item, reference.name.split('.')[0]!, reference.offset))
+        .map(reference => local(reference.name));
+      const subjects = new Set(resultReferences
+        .flatMap(reference => referenceGroups(item, reference)).flat().filter(id => {
+          const subject = byId.get(id); return subject && !subject.theorem && !subject.instance && !subject.notation;
+        }));
+      return { item, head, subjects, contextNames };
+    }).filter(provider => provider.head);
+    const implicitGroupsCache = new Map<typeof declarations[number], string[][]>();
+    const implicitGroups = (item: typeof declarations[number]) => {
+      let groups = implicitGroupsCache.get(item);
+      if (groups) return groups;
+      groups = [];
+      if (item.instance && item.references.some(reference => ['inferInstance', 'infer_instance'].includes(reference.name)) &&
+          !item.references.some(reference => ['letI', 'haveI'].includes(reference.name))) {
+        const providers = instances.filter(provider => provider.item.file === item.file &&
+          provider.item.namespace === item.namespace && provider.item.startOffset < item.startOffset);
+        const inputs = [item], seen = new Set([item.id]), names = new Set<string>();
+        for (const input of inputs) for (const reference of input.references) {
+          if (isBound(input, reference.name.split('.')[0]!, reference.offset)) continue;
+          names.add(reference.name);
+          for (const id of referenceGroups(input, reference).flat()) {
+            const dependency = byId.get(id);
+            if (dependency && !dependency.theorem && !dependency.instance && !dependency.notation && !seen.has(id)) {
+              seen.add(id); inputs.push(dependency);
+            }
+          }
+        }
+        // Generic instances expose prerequisite classes in their binders, e.g.
+        // pointwise probability supplies CountableProbability from FirstProbability.
+        const expanded = new Set<string>();
+        for (;;) {
+          const next = providers.filter(provider => names.has(provider.head!) && !expanded.has(provider.item.id));
+          if (!next.length) break;
+          for (const provider of next) {
+            expanded.add(provider.item.id);
+            for (const name of identifiers(provider.item.parameters)) names.add(name);
+          }
+        }
+        const signature = (head: string, subjects: ReadonlySet<string>) => canonicalMathJson([head, [...subjects].sort()]);
+        const supplied = new Set<string>();
+        for (const match of item.parameters.matchAll(/\[([^\]]*)\]/gu)) {
+          const references = sourceReferences(match[1]!, item.parametersOffset + match.index + 1);
+          const subjects = new Set(references.flatMap(reference => referenceGroups(item, reference)).flat().filter(id => {
+            const subject = byId.get(id); return subject && !subject.theorem && !subject.instance && !subject.notation;
+          }));
+          for (const provider of providers) if (references.some(reference => reference.name === provider.head))
+            supplied.add(signature(provider.head!, subjects));
+        }
+        const bySubject = new Map<string, string[]>();
+        for (const provider of providers) if (names.has(provider.head!) && !supplied.has(signature(provider.head!, provider.subjects)) &&
+            [...provider.subjects].every(id => seen.has(id))) {
+          const key = signature(provider.head!, provider.subjects);
+          bySubject.set(key, [...(bySubject.get(key) ?? []), provider.item.id]);
+        }
+        groups = [...bySubject.values()];
+      }
+      implicitGroupsCache.set(item, groups);
       return groups;
     };
     // Body substitution must match an actual name, not replace `receiver.field` with a bare assumption:
@@ -332,18 +549,56 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
       removed.add(item.id);
       if (removalRoots && !removalRoots.has(item.id)) removalRoots.set(item.id, 'draft-declaration');
     }
+    // Keep the syntax used by a retained target even if its input was excluded. Removing
+    // it could turn an identifier in the target's type into a new autoImplicit parameter.
+    const requiredNotations = new Set<string>(), syntaxConsumers = declarations.filter(item => keep.has(item.id));
+    const visitedSyntax = new Set(syntaxConsumers.map(item => item.id));
+    const syntaxDependencies = observe ? new Map<string, Set<string>>() : undefined;
+    for (const consumer of syntaxConsumers) {
+      const conditionTypes = consumer.id === target ? conditions.map(input => input.type ?? '').join('\n') : '';
+      const references = conditionTypes ? [...consumer.references, ...sourceReferences(conditionTypes, consumer.bodyOffset)] : consumer.references;
+      const dependencies = new Set<string>();
+      for (const reference of references) for (const group of referenceGroups(consumer, reference))
+        for (const id of group) {
+          dependencies.add(id);
+          if (!visitedSyntax.has(id)) {
+            const dependency = byId.get(id);
+            if (dependency) { visitedSyntax.add(id); syntaxConsumers.push(dependency); }
+          }
+        }
+      const text = maskLeanCommentsAndStrings(sourceSnapshot.get(consumer.file)!
+        .slice(consumer.notation ? consumer.bodyOffset : consumer.startOffset, consumer.endOffset) + '\n' + conditionTypes);
+      for (const candidate of notationDeclarations) if (
+          visibleBindings(consumer, [candidate]).length && candidate.notation.tokens.some(token =>
+            isSimpleLeanName(token) ? references.some(reference => reference.name === token) : text.includes(token))) {
+        dependencies.add(candidate.id);
+        requiredNotations.add(candidate.id);
+        if (!visitedSyntax.has(candidate.id)) { visitedSyntax.add(candidate.id); syntaxConsumers.push(candidate); }
+      }
+      syntaxDependencies?.set(consumer.id, dependencies);
+    }
+    // Source lookup cannot rule out imported providers or tactic-local synthesis.
+    // Only prune implicit wrappers outside the retained target's possible class context.
+    const requiredInstanceHeads = new Set(syntaxConsumers.flatMap(item => item.references.map(reference => local(reference.name))));
     // Removing or parameterizing a theorem also invalidates unrelated saved wrappers that call it.
     const changed = new Set([...removed, ...(conditions.length ? [target] : [])]);
     for (;;) {
+      const changedInstance = instances.some(provider => changed.has(provider.item.id));
       const affected = declarations.filter(item => !keep.has(item.id) && !removed.has(item.id) &&
-        item.references.some(reference => referenceGroups(item, reference).some(candidates => candidates.some(reference => changed.has(reference)))));
+        (item.references.some(reference => referenceGroups(item, reference).some(candidates => item.notation
+          ? candidates.every(reference => changed.has(reference)) : candidates.some(reference => changed.has(reference)))) ||
+          notationGroups(item).some(candidates => item.notation
+            ? candidates.every(reference => changed.has(reference)) : candidates.some(reference => changed.has(reference))) ||
+          changedInstance && !visitedSyntax.has(item.id) &&
+            !instances.some(provider => provider.item === item && provider.contextNames.some(name => requiredInstanceHeads.has(name))) &&
+            implicitGroups(item).some(candidates => candidates.every(reference => changed.has(reference)))));
       if (!affected.length) break;
       for (const item of affected) { removed.add(item.id); changed.add(item.id); }
     }
     if (observe) {
       const counts = new Map<string, number>();
       for (const item of declarations) counts.set(item.id, (counts.get(item.id) ?? 0) + 1);
-      const unique = new Map(declarations.filter(item => counts.get(item.id) === 1)
+      const unique = new Map(declarations.filter(item => (item.name || item.notation) && counts.get(item.id) === 1)
         .map(item => [item.id, item]));
       const consumer = unique.get(target), requested = task.theoremName?.replace(/^_root_\./u, '');
       const describe = (item: typeof declarations[number]): ProjectionDeclaration => ({ file: item.file,
@@ -369,36 +624,94 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
               problemReceiptDigest: problem.receiptDigest, sourceCommit,
               sourceDigest: mathDigest(canonicalMathJson([...sourceSnapshot].map(([file, source]) => [file, mathDigest(source)]))),
               consumer: { taskId: task.id, taskDigest: taskVersion(task), declaration: describe(consumer) },
-              path: route.map(id => describe(unique.get(id)!)), root };
+              path: route.map(id => unique.get(id)!).filter(item => item.name).map(describe), root };
             hints.push({ id: projectionDependencyHintId(content), ...content });
             continue;
           }
-          // A closed task type supplies qualified references even when the written source header uses
-          // a short name that the projector deliberately treats as possibly bound.
+          // Closed task and condition types supply qualified references even when the source
+          // header uses a short name that the projector treats as possibly bound.
           const names = current === consumer ? [...current.references,
-            ...identifiers(task.type ?? '').filter(name => name.includes('.')).map(name => ({ name, offset: current.bodyOffset }))] : current.references;
+            ...[task, ...conditions].flatMap(input => identifiers(input.type ?? '').filter(name => name.includes('.')))
+              .map(name => ({ name, offset: current.bodyOffset, receiverField: false }))] : current.references;
           const bound = localBindings(current), seen = new Set<string>();
           for (const reference of names) {
-            const { name } = reference;
-            const lookup = `${name}\0${isBound(current, name.split('.')[0]!, reference.offset)}`;
+            const { name, receiverField } = reference;
+            const lookup = `${name}\0${receiverField}\0${isBound(current, name.split('.')[0]!, reference.offset)}`;
             if (seen.has(lookup)) continue;
             seen.add(lookup);
-            if (!name.includes('.') && bound.has(name)) continue;
+            if (!receiverField && !name.includes('.') && bound.has(name)) continue;
             for (const candidates of referenceGroups(current, reference)) {
               const reference = candidates.length === 1 ? candidates[0] : undefined;
               if (reference && reference !== target && removed.has(reference) && unique.has(reference) && !route.includes(reference))
                 pending.push([...route, reference]);
             }
           }
+          for (const candidates of notationGroups(current)) {
+            const id = candidates.length === 1 ? candidates[0] : undefined;
+            const notation = id && notationById.get(id);
+            // Multi-token and externally activated scoped syntax remain conservative.
+            // Source hints cannot establish which overloaded parser branch Lean selected.
+            if (id && notation?.tokens.length === 1 && (!notation.scoped ||
+                current.namespace === notation.namespace || current.namespace.startsWith(notation.namespace + '.')) &&
+                removed.has(id) && unique.has(id) && !route.includes(id)) pending.push([...route, id]);
+          }
         }
       }
-      observe(hints);
+      // Required syntax can have several viable parser branches. Its quotation context
+      // must still compile; keep these possible roots separate from dependency evidence.
+      const context: ProjectionDeclaration[] = [], pendingContext = [...requiredNotations], visitedContext = new Set<string>();
+      for (const id of pendingContext) {
+        if (visitedContext.has(id)) continue;
+        visitedContext.add(id);
+        const item = unique.get(id);
+        if (!item) continue;
+        const reason = removalRoots!.get(id);
+        if (reason) {
+          if (reason === 'excluded-original-target' && item.name) context.push(describe(item));
+          continue;
+        }
+        pendingContext.push(...syntaxDependencies!.get(id) ?? []);
+      }
+      observe(hints, context);
+      // Hint callers consume only observations. Building and compacting acceptance sources here
+      // repeats every owned-file edit for each transitive original input, then discards the result.
+      return sources;
     }
     for (const file of problem.ownedFiles) {
       let source = sources.get(file)!;
       if (!file.endsWith('.lean')) continue;
       // Doc comments require a following declaration, which this projection may remove.
       source = masked.get(file)!.text;
+      // A notation quotation is checked even when no retained theorem uses it. Drop the
+      // complete command when its owned inputs were excluded, keeping edit offsets stable.
+      for (const notation of notations.get(file) ?? []) if (removed.has(key(file, `@notation:${notation.startOffset}`)) &&
+          !requiredNotations.has(key(file, `@notation:${notation.startOffset}`))) {
+        const { startOffset, endOffset } = notation;
+        source = source.slice(0, startOffset) + source.slice(startOffset, endOffset).replace(/[^\r\n]/gu, ' ') + source.slice(endOffset);
+      }
+      // Restricted opens require their named members to exist. Remove references to declarations
+      // actually excluded by this projection, while keeping offsets stable for declaration edits below.
+      for (const open of restrictedOpens.get(file)?.values() ?? []) {
+        const excluded = (member: string) => {
+          const candidates = open.namespaces.flatMap(namespace => bindings.get(`${namespace}.${member}`) ?? [])
+            .filter(item => visible.get(file)!.has(item.file));
+          return candidates.length > 0 && candidates.every(item => removed.has(item.id));
+        };
+        let replacement: string;
+        if (open.mode === 'hiding') {
+          const members = open.excluded!.filter(member => !excluded(member));
+          if (members.length === open.excluded!.length) continue;
+          replacement = `open ${open.name}${members.length ? ' hiding ' + members.join(' ') : ''}`;
+        } else {
+          const aliases = open.aliases!.filter(alias => !excluded(alias.from));
+          if (aliases.length === open.aliases!.length) continue;
+          replacement = !aliases.length ? '' : open.mode === 'selected'
+            ? `open ${open.name} (${aliases.map(alias => alias.from).join(' ')})`
+            : `open ${open.name} renaming ${aliases.map(alias => `${alias.from}→${alias.to}`).join(',')}`;
+        }
+        if (replacement && open.local) replacement += ' in';
+        source = source.slice(0, open.startOffset) + replacement.padEnd(open.endOffset - open.startOffset) + source.slice(open.endOffset);
+      }
       const fileRegions = masked.get(file)!.regions;
       for (const [index, region] of [...fileRegions.entries()].reverse()) {
         const declaration = byOffset.get(`${file}\0${region.startOffset}`)!;
@@ -408,11 +721,12 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
           if (!name || source.slice(region.bodyOffset - 2, region.bodyOffset) !== ':=') throw new Error('math_task_conditional_header_unsupported');
           let body = source.slice(region.bodyOffset, region.endOffset);
           // Qualified references must also refer to the explicit assumptions in this projection.
-          const references = [...maskLeanCommentsAndStrings(body).matchAll(/[\p{L}_][\p{L}\p{M}\p{N}_'?!]*(?:\.[\p{L}_][\p{L}\p{M}\p{N}_'?!]*)*/gu)];
-          for (const reference of references.reverse()) {
-            const dependency = conditions.find(item => item.theoremName === reference[0]) ??
-              assumptions.get(referenceKey(declaration, reference[0], region.bodyOffset + reference.index) ?? '');
-            if (dependency) body = body.slice(0, reference.index) + local(dependency.theoremName!) + body.slice(reference.index + reference[0].length);
+          for (const reference of sourceReferences(body, region.bodyOffset).reverse()) {
+            if (reference.receiverField) continue;
+            const dependency = conditions.find(item => item.theoremName === reference.name) ??
+              assumptions.get(referenceKey(declaration, reference.name, reference.offset) ?? '');
+            const index = reference.offset - region.bodyOffset;
+            if (dependency) body = body.slice(0, index) + local(dependency.theoremName!) + body.slice(index + reference.name.length);
           }
           source = source.slice(0, region.startOffset) + name[0] + ' ' + binders + header.slice(name[0].length) + ':=' + body + source.slice(region.endOffset);
         } else if (removed.has(declaration.id)) {
@@ -421,17 +735,36 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
           source = source.slice(0, start) + source.slice(region.endOffset);
         }
       }
+      if (file === task.proofPath && conditionModules.size) {
+        const existing = new Set(mathConstructionImports(source));
+        const modules = solverProofImports(problem, [...conditionModules].sort().map(module => `import ${module}\n`).join(''))
+          .filter(module => !existing.has(module));
+        source = modules.map(module => `import ${module}\n`).join('') + source;
+      }
       sources.set(file, source);
     }
     return options.compact ? compactTaskSources(problem, sources, task, retainedGoals, options.preserved) : sources;
   };
+  const observations = new Map<string, { hints: readonly ProjectionDependencyHint[]; context: readonly ProjectionDeclaration[] }>();
+  const observe = (task: CooperativeTask, retainedGoals: readonly string[], conditions: readonly CooperativeTask[]) => {
+    const key = canonicalMathJson({ task, retainedGoals, conditions });
+    let value = observations.get(key);
+    if (!value) {
+      project(task, retainedGoals, conditions, (hints, context) => { value = { hints, context }; });
+      observations.set(key, value!);
+    }
+    return value!;
+  };
   return Object.assign((task: CooperativeTask, retainedGoals: readonly string[], conditions: readonly CooperativeTask[] = []) =>
     project(task, retainedGoals, conditions), {
-    /** Recompute only from this immutable snapshot; this observation never changes projection or proof acceptance. */
+    /** Cache source observations for this immutable snapshot, never proof acceptance. */
     dependencyHints(task: CooperativeTask, retainedGoals: readonly string[], conditions: readonly CooperativeTask[] = []): readonly ProjectionDependencyHint[] {
-      let hints: readonly ProjectionDependencyHint[] = [];
-      project(task, retainedGoals, conditions, value => { hints = value; });
-      return hints;
+      // Failed-proof metadata and other consumers may edit their copy of a hint.
+      return structuredClone(observe(task, retainedGoals, conditions).hints);
+    },
+    /** Possible source context only. The host must freshly accept each input before retaining it. */
+    possibleContextGoals(task: CooperativeTask, retainedGoals: readonly string[], conditions: readonly CooperativeTask[] = []): readonly ProjectionDeclaration[] {
+      return structuredClone(observe(task, retainedGoals, conditions).context);
     },
   });
 }
@@ -469,6 +802,10 @@ async function checkTaskProofsWithProjection(problem: SolverProblem, worktree: s
   environmentDigest: string, cache: TaskProofCache | undefined, compact: boolean): Promise<TaskProof[]> {
   signal.throwIfAborted();
   if (!requests.length) return [];
+  for (const { task, conditions = [] } of requests) {
+    assertTaskTypeContract(task);
+    conditions.forEach(assertTaskTypeContract);
+  }
   problem = structuredClone(problem);
   requests = structuredClone(requests);
   sourceCommit = git(worktree, ['rev-parse', `${sourceCommit}^{commit}`]);
@@ -486,11 +823,6 @@ async function checkTaskProofsWithProjection(problem: SolverProblem, worktree: s
           !assignment.dependencies?.some(version => version.taskId === dependency.id && version.taskDigest === taskVersion(dependency))))
         throw new Error('math_task_condition_version_invalid');
       const binders = conditions.map(dependency => `(${local(dependency.theoremName!)} : ${dependency.type})`).join(' ');
-      const imports = problem.ownedFiles.filter(file => file.endsWith('.lean')).flatMap(file => {
-        const before = solverProofImports(problem, committedSource(worktree, assignment.seedCommit, `${problem.projectRelative}/${file}`));
-        return solverProofImports(problem, committedSource(worktree, sourceCommit, `${problem.projectRelative}/${file}`))
-          .filter(module => !before.includes(module)).map(module => ({ file, module }));
-      });
       const changes = taskChanges(problem, checkout, sourceCommit, task, assignment);
       // Assumed children are supplied by their own checked deliveries, never by this parent's draft.
       const assumed = new Set(conditions.flatMap(dependency => inspectScopedLeanDeclarations(
@@ -498,8 +830,14 @@ async function checkTaskProofsWithProjection(problem: SolverProblem, worktree: s
         .filter(declaration => declaration.qualifiedName === dependency.theoremName ||
           !dependency.theoremName!.includes('.') && declaration.name === dependency.theoremName)
         .map(declaration => `${dependency.proofPath}\0${declaration.name}`)));
+      const sources = projectSources(task, retainedGoals, conditions);
+      const imports = problem.ownedFiles.filter(file => file.endsWith('.lean')).flatMap(file => {
+        const before = solverProofImports(problem, committedSource(worktree, assignment.seedCommit, `${problem.projectRelative}/${file}`));
+        return solverProofImports(problem, sources.get(file)!)
+          .filter(module => !before.includes(module)).map(module => ({ file, module }));
+      });
       return { task, assignment, retainedGoals, conditions, imports, changes: changes.filter(change => !assumed.has(`${change.file}\0${change.name}`)),
-        taskDigest: taskVersion(task), sources: projectSources(task, retainedGoals, conditions),
+        taskDigest: taskVersion(task), sources,
         expectedType: task.kind === 'lemma' ? conditions.length ? `∀ ${binders}, ${task.type}` : task.type : undefined };
     });
     const fullSources = prepared[0]!.sources;

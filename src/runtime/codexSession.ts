@@ -29,6 +29,12 @@ const isTurnOutputItem = (value: unknown): boolean => {
   return item.type === 'agentMessage' ? typeof item.text === 'string' && Boolean(item.text.trim()) :
     typeof item.type === 'string' && outputToolItems.has(item.type);
 };
+const completedAssistantText = (value: unknown): string | undefined => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+  const item = value as Json;
+  if (item.type === 'agentMessage' && typeof item.text === 'string' && item.text.trim() &&
+      (item.phase === undefined || item.phase === null || item.phase === 'final_answer')) return item.text;
+};
 const RELAY_CAPABILITY_ENV = 'THEOREM_OS_MODEL_RELAY_CAPABILITY';
 // Responses may remain silent between completed reasoning and their next tool/output event.
 // Restore Codex's default idle tolerance per session, preserving frozen provider profiles.
@@ -122,6 +128,8 @@ export type MathAgentSession = {
   readonly lastError?: string;
   readonly lastFailureDiagnostic?: MathAgentFailureDiagnostic;
   readonly lastInputTokens?: number;
+  /** Final assistant text from the last successful run only, bound to its exact remote turn. */
+  readonly lastCompletedResponse?: Readonly<{ turnId: string; text: string }>;
   readonly usageSource?: 'upstream-requests' | 'native-thread-totals';
   readonly isolationReceipt?: Record<string, unknown>;
   run: (message: string, messageId: string, workspace: string, onStarted: (turnId: string) => void) => Promise<string>;
@@ -419,6 +427,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   const earlyOutputTurns = new Set<string>();
   let completion: { resolve: (turn: Json) => void; reject: (error: Error) => void } | undefined;
   const earlyCompletions = new Map<string, Json>();
+  const completedMessages = new Map<string, string>();
+  let lastCompletedResponse: Readonly<{ turnId: string; text: string }> | undefined;
   let lastError: string | undefined;
   let lastFailureDiagnostic: MathAgentFailureDiagnostic | undefined;
   let lastInputTokens = 0;
@@ -560,6 +570,14 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       const item = object(params.item);
       if (isTurnOutputItem(item)) recordTurnOutput(params.turnId);
       observePublicItem(method, params, item);
+      if (method === 'item/completed' && completion && typeof params.turnId === 'string' &&
+          (!activeTurn || params.turnId === activeTurn)) {
+        const text = completedAssistantText(item);
+        if (text !== undefined) {
+          if (completedMessages.size >= 32) completedMessages.delete(completedMessages.keys().next().value!);
+          completedMessages.set(params.turnId, text);
+        }
+      }
       activity(method === 'item/started' ? 'item_started' : 'item_completed', typeof item.type === 'string' ? item.type : undefined);
       if (method === 'item/completed' && typeof item.id === 'string') outputTails.delete(item.id);
       if (options.onItem && threadId !== undefined) {
@@ -660,14 +678,16 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       get lastError() { return lastError; },
       get lastFailureDiagnostic() { return lastFailureDiagnostic; },
       get lastInputTokens() { return lastInputTokens; },
+      get lastCompletedResponse() { return lastCompletedResponse; },
       run: async (message, messageId, workspace, onStarted) => {
+        lastCompletedResponse = undefined;
         options.signal?.throwIfAborted();
         if (transportFailure) throw transportFailure;
         if (completion) throw new Error('math_codex_turn_already_running');
         if (temporaryDirectory) prepareWorkerTemporaryDirectory(options.workspace);
         lastError = undefined;
         lastFailureDiagnostic = undefined;
-        turnHasOutput = false; earlyOutputTurns.clear();
+        turnHasOutput = false; earlyOutputTurns.clear(); completedMessages.clear();
         let resolve!: (turn: Json) => void;
         let reject!: (error: Error) => void;
         const done = new Promise<Json>((yes, no) => { resolve = yes; reject = no; });
@@ -796,6 +816,11 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
             lastFailureDiagnostic = failureDiagnostic(error);
             if (typeof error.message === 'string') lastError = error.message;
           }
+          if (finished.status === 'completed') {
+            const finalItem = Array.isArray(finished.items) ? finished.items.findLast(item => completedAssistantText(item) !== undefined) : undefined;
+            const text = completedAssistantText(finalItem) ?? completedMessages.get(turnId);
+            if (text !== undefined) lastCompletedResponse = { turnId, text };
+          }
           return submitted && finished.status === 'interrupted' ? 'submitted' :
             checkpoint && finished.status === 'interrupted' ? 'checkpoint' : finished.status;
         } catch (error) {
@@ -812,7 +837,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           activeTurn = undefined; completion = undefined;
           earlyCompletions.clear();
           earlyOutputTurns.clear();
-          outputTails.clear(); publicItems.clear();
+          outputTails.clear(); publicItems.clear(); completedMessages.clear();
         }
       },
       interrupt: async () => {

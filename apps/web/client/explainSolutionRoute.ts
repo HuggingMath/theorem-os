@@ -3,7 +3,8 @@ import type { WebExplanationDocument, WebExplanationLines } from '../shared';
 import type { SolutionRoute, SolutionRouteEdge, SolutionRouteNode, SolutionRouteSection } from '../solutionRoute';
 
 /** The explanation must already be approved and bound to `proof` by the reader. No text is generated here. */
-export function explanationSolutionRoute(document: WebExplanationDocument, proof: string, id = `explanation:${document.target}`): SolutionRoute {
+export function explanationSolutionRoute(document: Pick<WebExplanationDocument, 'target' | 'language' | 'overview' | 'sections' | 'metrics'> & {
+  problem?: Pick<NonNullable<WebExplanationDocument['problem']>, 'original'> }, proof: string, id = `explanation:${document.target}`): SolutionRoute {
   const t = translator(document.language);
   const code = proof.replace(/\r\n?/gu, '\n').split('\n');
   const excerpt = (lines: readonly WebExplanationLines[]) => lines.map(range => code.slice(range.start - 1, range.end).join('\n')).filter(Boolean).join('\n\n');

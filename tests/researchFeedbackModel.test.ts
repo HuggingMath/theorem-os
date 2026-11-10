@@ -57,4 +57,11 @@ describe('research feedback scope and route annotations', () => {
     expect(matchesFeedbackQuery(advice, 'missing evidence')).toBe(false);
     expect(matchesFeedbackScope(advice, 'task', 'run-a', { runId: 'run-a', taskId: 'goal', taskVersion: 'v3' })).toBe(false);
   });
+  it('retains obsolete candidate history without counting it as a pending action', () => {
+    for (const obsolete of [feedback({ supersededBy: 'candidate-v2' }), feedback({ candidateDelivery: { policy: 'reviewed', status: 'withdrawn' } }),
+      feedback({ continuation: { action: 'end', actor: { id: 'author', displayName: 'Author' }, text: 'The contract changed', createdAt: '2026-11-09' } })]) {
+      expect(feedbackNeedsAttention(obsolete)).toBe(false); expect(matchesFeedbackStatus(obsolete, 'pending')).toBe(false);
+      expect(matchesFeedbackStatus(obsolete, 'all')).toBe(true);
+    }
+  });
 });

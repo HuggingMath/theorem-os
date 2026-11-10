@@ -1,503 +1,7 @@
 {
   "schema": "theoremos.campaign-archive.v1",
-  "capturedAt": "2026-11-07T16:32:08.577Z",
+  "capturedAt": "2026-11-09T17:33:43.001Z",
   "records": [
-    {
-      "id": "openai_cartier_chart_compactness_support",
-      "title": "Normalized Cartier chart retractions",
-      "subtitle": "归一化 Cartier 坐标回缩的紧致性",
-      "area": "代数几何与拓扑",
-      "summary": "在题设代数条件下，证明由归一化权重参数化的闭坐标图域回缩族构成紧集。",
-      "en": {
-        "subtitle": "Normalized Cartier chart retractions",
-        "area": "Algebraic geometry and topology",
-        "summary": "Under the stated algebraic hypotheses, the closed-chart field retractions parametrized by normalized weights form a compact set."
-      },
-      "status": "locally_verified",
-      "model": "TheoremOS · deepseek-flash",
-      "updatedAt": "2026-11-02T07:23:54.735Z",
-      "directory": "CartierChartCompactnessSupport",
-      "files": {
-        "Challenge.lean": "05de6915fb577137d01be2fcaab5ebcc252d80f628ffb913bea4bef87b54ea64",
-        "OAI/AlgebraicGeometry/CartierSections/ChartCompletion.lean": "cd5ab4b977be67e7f6726b14c7c63a2adaa5c12c80636b86d026905494d324ce",
-        "OAI/AlgebraicGeometry/CartierSections/ChartRetraction.lean": "341066936c7dbb1fb1a85d285039db24de1c1380ff6cd71533c2159c45f9ebfa",
-        "OAI/AlgebraicGeometry/CartierSections/ClosedCharts.lean": "f77c79ba517df2051cde521b4a873128c0e5cde7d93d66cd81d3f6507c2e7d28",
-        "OAI/AlgebraicGeometry/CartierSections/ConeTopology.lean": "ad2fe07a0c6b698be1ed1050cdac914eb1d289af807cf6ef011187def9abdc43",
-        "OAI/AlgebraicGeometry/CartierSections/ExpansionValuation.lean": "70341cf246a0491148fb2c6f25f300eaaff27656cb89e44af674b21b07c89a43",
-        "OAI/AlgebraicGeometry/CartierSections/FieldRetraction.lean": "f5876a3015bd47a08735dcc50d8f4219c88706303bfca0c244cb12a14fad3b31",
-        "OAI/AlgebraicGeometry/CartierSections/FieldTopology.lean": "3a7efb432aa2da78ae19ec3cc2153399080b2e7a93643174d9128c62e5a33a85",
-        "OAI/AlgebraicGeometry/CartierSections/FormalValuation.lean": "1a1cfacb8e9fa2e60321d9303252f79f4d900a3954d4ac91db572d84e9cf619d",
-        "OAI/AlgebraicGeometry/CartierSections/FractionValuation.lean": "6185d5645073eabbe99a48577f700bb1a4b57dc5e36510f854cfe2d0edeff551",
-        "OAI/AlgebraicGeometry/CartierSections/InfinitesimalCharts.lean": "4db085e588fc29325562ef44b8aff172ff18ae641c62c9be7861ce140d77c8ac",
-        "OAI/AlgebraicGeometry/CartierSections/PolynomialValuation.lean": "0277ef0b5444948e581ae8605c11214e1f9204f0bda3c28b3e58d9043592e33b",
-        "OAI/AlgebraicGeometry/CartierSections/Weights.lean": "8bb6abc631899789bb0b8af044752653e7c240fa1f000f7db242e2684f089bb3",
-        "Submission.lean": "3f4987016064040ed126b75de0aea0dfa6b2bf74b7dd22dfa1722b7fcc525963",
-        "process.json": "d4bce754903ca5ebfecf0935c2f6d7f078b91cfa636dc8b5e0e289bf0cbebc25",
-        "verification.json": "28a08f113613aa55190a834dbbb68bda971ddbf2a651e401116a98ed499c0103"
-      },
-      "declaration": "theorem isCompact_closedChartFieldRetraction_cone",
-      "campaign": {
-        "target": "CartierChartCompactnessSupport",
-        "runId": "25c5cc6c-ec05-439c-bb42-7dd1ebeea45f",
-        "targets": [
-          "OAI.CartierSections.isCompact_closedChartFieldRetraction_cone"
-        ],
-        "proofCommit": "5e16b35636c3fbb0aa5cdf79434569e21d87253a",
-        "proofSha256": "3f4987016064040ed126b75de0aea0dfa6b2bf74b7dd22dfa1722b7fcc525963",
-        "kernelReceiptIds": [
-          "lean-3b7553e3de12231da641a1e5"
-        ],
-        "comparatorExitCode": 0,
-        "reviewStatus": "accepted",
-        "attribution": "TheoremOS 原生运行；记录包含外部代理提供的独立数学辅助、已保存候选的交接或续跑。",
-        "attributionEn": "TheoremOS native run with recorded independent mathematical assistance from external agents, saved-candidate handoff or continuation.",
-        "evidenceUrl": "data/proofs/openai_cartier_chart_compactness_support/verification.json"
-      },
-      "processSummary": {
-        "runs": 2,
-        "tasks": 2
-      }
-    },
-    {
-      "id": "openai_snaky_certificate",
-      "title": "The 35-move Snaky certificate",
-      "subtitle": "Snaky 的 35 步证书核验",
-      "area": "组合博弈",
-      "summary": "验证 Snaky 证书的 610 条表项、1,837 个放置项，以及关键重建局面和递归深度界。",
-      "en": {
-        "subtitle": "The 35-move Snaky certificate",
-        "area": "Combinatorial games",
-        "summary": "Verifies the 610-entry Snaky certificate, its 1,837 placements, reconstructed positions and depth bounds."
-      },
-      "status": "locally_verified",
-      "model": "TheoremOS · deepseek-flash",
-      "updatedAt": "2026-10-23T20:05:01.292Z",
-      "directory": "SnakyCertificate",
-      "files": {
-        "Challenge.lean": "591087a6b083d2b610bd863e0b5e7424f83d8ca8c3587cf77785570d06e8bedf",
-        "Submission.lean": "b7dc0b2898b8d4ee8ed4a3b10394429f939ff9e4d73761dcd6968e46a4579751",
-        "process.json": "d7dd68e0db902bc357e5166bd192c6b3286282d27a53ec29bb721cc17b05e77c",
-        "verification.json": "a7630c50d866bd6f7c631c127bfc52fb6bccad34da3c00366cdcf9e3ba5d2f2f"
-      },
-      "declaration": "theorem certificate_correct",
-      "campaign": {
-        "target": "SnakyCertificate",
-        "runId": "6d22ec7c-5c2b-41a4-911d-dcf3f0b7ddf0",
-        "targets": [
-          "OAI.SnakyCertificate.certificate_correct"
-        ],
-        "proofCommit": "ed230f9c5d4458f2e4fb5c4f27a04614d62fbb49",
-        "proofSha256": "b7dc0b2898b8d4ee8ed4a3b10394429f939ff9e4d73761dcd6968e46a4579751",
-        "kernelReceiptIds": [
-          "lean-933f3569c486571cc5563b6c"
-        ],
-        "comparatorExitCode": 0,
-        "reviewStatus": "accepted",
-        "attribution": "TheoremOS 原生运行；记录包含外部代理提供的独立数学辅助、已保存候选的交接或续跑。",
-        "attributionEn": "TheoremOS native run with recorded independent mathematical assistance from external agents, saved-candidate handoff or continuation.",
-        "evidenceUrl": "data/proofs/openai_snaky_certificate/verification.json"
-      },
-      "processSummary": {
-        "runs": 1,
-        "tasks": 1
-      }
-    },
-    {
-      "id": "openai_totient_companion_zero",
-      "title": "Totient companion: zero case",
-      "subtitle": "欧拉函数伴随定理的零值情形",
-      "area": "数论",
-      "summary": "不存在满足指定倍数条件的种子时，证明加权计数与极限系数均为零。",
-      "en": {
-        "subtitle": "Totient companion: zero case",
-        "area": "Number theory",
-        "summary": "In the no-seed case, the weighted count and its limiting coefficient both vanish."
-      },
-      "status": "locally_verified",
-      "model": "TheoremOS · deepseek-flash",
-      "updatedAt": "2026-11-02T08:05:56.071Z",
-      "directory": "TotientCompanionZero",
-      "files": {
-        "Challenge.lean": "6e6e993b423efc7a30384d656956721918f9c484fca64036169715106799c878",
-        "Submission.lean": "7d3509714928edd3f6b6a634c42d9dbeefd01c17a65d0e152fc09d97e6568a20",
-        "Submission/Library/TheoremOS/Analysis/AsymptoticModuli.lean": "14c8c655a1521ffdd91bed3b4afd7d15092bee9a2feba77d6279fc70ff023f7e",
-        "Submission/Library/TheoremOS/Analysis/Daugavet.lean": "5ee31788907ce7b812c786c35cb2ccb5b300d60f843b9d18dd2645d16324271c",
-        "Submission/Library/TheoremOS/Analysis/LittlewoodPolynomial.lean": "b6848444e02449f5585d89b75fcaa351d7f57c1384bd57792a6b8b747ed86870",
-        "Submission/Library/TheoremOS/Analysis/MetricDistortion.lean": "15c5ebcc9242df00be1df9b967439f748b85879a5bb5a4060002ab96427503f5",
-        "Submission/Library/TheoremOS/BooleanCube/Fourier.lean": "f0a09eb8c04aca84e36c01734425cd07319a122ae516b2da471bcac6c47a6260",
-        "Submission/Library/TheoremOS/BooleanCube/Hypercontractivity.lean": "07cbd5eef79ee9febf6864dea2e2435f24144c2f6856ca07242768968c776997",
-        "Submission/Library/TheoremOS/BooleanCube/Influence.lean": "948c2b58a58dbdb44609c0f924fa76e87c2307f9407b0162b68847201d91f015",
-        "Submission/Library/TheoremOS/BooleanCube/LevelOne.lean": "c55d83aea93df19b8b242ee95734a6a86135e1ddbfa9dc6d90b24825ea1bc7a2",
-        "Submission/Library/TheoremOS/BooleanCube/Polynomial.lean": "ddf9fa8a20af3cca00c9fb40095d3791dcc3a72067f1bf0c92775e34f68ad970",
-        "Submission/Library/TheoremOS/BooleanCube/Product.lean": "142e451051fe7cf9ed644efabe8040bd44b7ed461575245ceefb3e6eb4c31ad6",
-        "Submission/Library/TheoremOS/BooleanCube/Relabel.lean": "ae5bba44af2f246084cfdafd70cb0d53110c3a8559783c384c20f33bb44e43ff",
-        "Submission/Library/TheoremOS/BooleanCube/Sensitivity.lean": "3d9eb595c51e9576bd7f0498ef3e3e8e2669090c0bcaa4e8fc1778635d495454",
-        "Submission/Library/TheoremOS/Combinatorics/BinomialEntropy.lean": "c546fd714c5453bf84350a57b70a4e9edca7ecfe46775334c4fc4d8d9f05924e",
-        "Submission/Library/TheoremOS/Combinatorics/EditDistance.lean": "4a6c2af4d563d6adb5e87f5805286d29e52b0be11ea55acaac4b7fe3a12daa0e",
-        "Submission/Library/TheoremOS/Combinatorics/GraphIndependence.lean": "8fe8bb8b33dd9da1441c8aa2b7eb6b414295f3aff14b0777b6e0ce06ab7bcad7",
-        "Submission/Library/TheoremOS/Combinatorics/PerfectMatching.lean": "2c2b235dc645d6e9e7cecb03a70fa955d4932c214e3772a2749f76dde4b5cfa1",
-        "Submission/Library/TheoremOS/Combinatorics/Ramsey.lean": "f4074b6622c28fd6146e4a8f8337811ab4544003064c86a0fff7c4d7a415fe47",
-        "Submission/Library/TheoremOS/Combinatorics/RamseyLower.lean": "33e40b8f4fc1220369dc0082e90a02a27e13b56459044a13fd10f636e6756321",
-        "Submission/Library/TheoremOS/Geometry/EuclideanCoordinates.lean": "c952ba750cd589d52b0127557fa81f9b6f904ac4cb56f983685e716188b0a248",
-        "Submission/Library/TheoremOS/Geometry/EuclideanRamsey.lean": "0dd86e82f255fa60d7612736135cbfc69111f776bff5c93ea949d3194bd2d3d6",
-        "Submission/Library/TheoremOS/Geometry/TranslativeCovering.lean": "4933683c1669980bd906d1ed2edc6238b733f1dcf5aba56a14d4b0bcffc0ef09",
-        "Submission/Library/TheoremOS/InformationTheory/Divergence.lean": "8e5eb6a47f74d0e1aa5e1e41cc6ecc61e5affe8aee75661c5c8d6b88fd9ff36c",
-        "Submission/Library/TheoremOS/InformationTheory/Entropy.lean": "cdf2132bbaf741c0317d68dffba14a23bdcc6dd5ac363de905960b1230742f5f",
-        "Submission/Library/TheoremOS/InformationTheory/Shearer.lean": "6a0a84121b0623fc6763a40f3fc3fa4c3a0633571a52f1f27f8f032d1b6ec1b2",
-        "Submission/Library/TheoremOS/LinearAlgebra/DensityMatrix.lean": "41142f65813bb7e375d2df4d03517395a340cfe2a080dbbd65ad37c2f135ea4b",
-        "Submission/Library/TheoremOS/LinearAlgebra/NumericalRange.lean": "b8ec1a3f74d2d6602c8800b85dcdbba64816597bbc50e6f12417b3fd0c123f9a",
-        "Submission/Library/TheoremOS/LinearAlgebra/Pauli.lean": "e074d65184d8bf4e6795d88f986c85dc45fdf9ba44013b3f766e9190bf740f84",
-        "Submission/Library/TheoremOS/LinearAlgebra/PiTensor.lean": "507c05b5a2ad7bf864948001dffa47a1f4a88683a6373b0982a4c0be0d512e62",
-        "Submission/Library/TheoremOS/LinearAlgebra/VonNeumannEntropy.lean": "c67cd4d888ca9d6e5e65541824ded0f75094eff904a12c535fa35926a8cd7439",
-        "Submission/Library/TheoremOS/Probability/BiasedProduct.lean": "3aba352332d21d1e23cd5129c31c5e2324001b565e172d08e61052e3aaf9e86a",
-        "Submission/Library/TheoremOS/Probability/Concentration.lean": "7f4b81c456990832101e726c12a45c08688f8d075000327d147caeed75c56c23",
-        "Submission/Library/TheoremOS/Probability/Coupling.lean": "10de7c80bb5f163ed6035c1ab44c670affab89ae66e1f3f01ea6644cc91cea23",
-        "Submission/Library/TheoremOS/Probability/Dobrushin.lean": "1f2fb5d31e153c880e3e9dfeb76e1ab46dd2501010520d17cb511ba4f2594450",
-        "Submission/Library/TheoremOS/Probability/FiniteProbability.lean": "92b0f51cf0d792ded51aad74d7f7c263edd78604f84cdc9ff62acdf631cbb996",
-        "Submission/Library/TheoremOS/Probability/GaussianIBP.lean": "819c32889631651e2301ce86f1b1edb90681da9500ebb8cf3bb8eee253c05e47",
-        "Submission/Library/TheoremOS/Probability/LocalLemma.lean": "50c6809fcf8d04d37f724b2880ff81a6deef29fbb4773489c9581c711d39e28a",
-        "Submission/Library/TheoremOS/Probability/MixingLowerBound.lean": "5542c32827d6ace88a20086974a6b00647e197f9544babfbfb9f8f7bf7835f4d",
-        "Submission/Library/TheoremOS/Probability/RandomKSAT.lean": "537759213f92186ddb2f8421c004248f1b743f6a7ccb0e62396bfb015ae98b98",
-        "Submission/Library/TheoremOS/Probability/RandomKSATThreshold.lean": "4b4ca067b54b97c4dc1de10f6188e6ed341bf47c1e4810e3d90a87e7ad551685",
-        "Submission/Library/TheoremOS/Probability/SpectralGap.lean": "3902b6999f3f6a115feaed05e0b2034e948892c233b410e913ae1b3ba3490eb4",
-        "Submission/Library/TheoremOS/Probability/SphereLaw.lean": "8da2473c0e75d137696cdff9115e38b658402ba3bd7ba03d5521d1344e86cc0c",
-        "Submission/Library/TheoremOS/Probability/TreeReconstruction.lean": "cf91591ad7ab77463ba4c64dee04529a87e730716380bc87a569359d2485f54e",
-        "Submission/Library/TheoremOS/RepresentationTheory/GroupFourier.lean": "1c7941dad0d9e6c4a998b9bca99057d78a18a2b093364df4c401f1656e6a1ea7",
-        "Submission/Library/TheoremOS/RepresentationTheory/Plancherel.lean": "8bc8e66a977c0163e4dbec79746e899738537415d10558008654ceb30266a06e",
-        "process.json": "34e83972af1c4254714ae84fa4f984b59b6f0c8a46c5e8edd8ea8967cfbf56b7",
-        "verification.json": "71a4845c20f1ce0a8dc17f9ff58e968f11b9c0f1853a0b73b4aa8380a92974d3"
-      },
-      "declaration": "theorem companion_zero_case",
-      "campaign": {
-        "target": "TotientCompanionZero",
-        "runId": "41f80030-d1b0-4b66-acb6-3f0ddc1f26de",
-        "targets": [
-          "OAI.TotientAsymptotic.companion_zero_case"
-        ],
-        "proofCommit": "aa806af94c74165066e97791ffc34e05eaa416a3",
-        "proofSha256": "7d3509714928edd3f6b6a634c42d9dbeefd01c17a65d0e152fc09d97e6568a20",
-        "kernelReceiptIds": [
-          "lean-8ecef6aef371642566c229e1"
-        ],
-        "comparatorExitCode": 0,
-        "reviewStatus": "accepted",
-        "attribution": "TheoremOS 原生运行；记录包含外部代理提供的独立数学辅助、已保存候选的交接或续跑。",
-        "attributionEn": "TheoremOS native run with recorded independent mathematical assistance from external agents, saved-candidate handoff or continuation.",
-        "evidenceUrl": "data/proofs/openai_totient_companion_zero/verification.json"
-      },
-      "processSummary": {
-        "runs": 1,
-        "tasks": 1
-      }
-    },
-    {
-      "id": "openai_truffet_counterexample",
-      "title": "A finite counterexample to Truffet’s procedure",
-      "subtitle": "Truffet 优化程序的有限反例",
-      "area": "热带优化",
-      "summary": "构造两步均具有唯一选择且正常终止的执行，所得可行解目标值为 1，而另一可行解目标值为 0。",
-      "en": {
-        "subtitle": "A finite counterexample to Truffet’s procedure",
-        "area": "Tropical optimization",
-        "summary": "A forced two-step execution terminates with objective value 1 despite a feasible alternative of value 0."
-      },
-      "status": "locally_verified",
-      "model": "TheoremOS · deepseek-flash",
-      "updatedAt": "2026-10-22T18:43:27.138Z",
-      "directory": "TruffetCounterexample",
-      "files": {
-        "Challenge.lean": "03fe8de8feab6eeb5144931898f079a0f900e695bf3f8c5d3de3dbc177e21169",
-        "Submission.lean": "442334bfd22cf81c9582b071cd6b370f2b6969d961418e6b084a25cc87ae4a91",
-        "process.json": "d2590763d3049d243e08311144717a6a37879f3249a8f0ef0e66255dbee9bf4c",
-        "verification.json": "053c1d2513dd063d7e3717001755ad44db07c0ba9bdca205a21928940a93ac25"
-      },
-      "declaration": "theorem finite_execution_not_optimal",
-      "campaign": {
-        "target": "TruffetCounterexample",
-        "runId": "de7a57e9-becf-4f94-9276-2090ab3f2738",
-        "targets": [
-          "OAI.TruffetV4Counterexample.finite_execution_not_optimal"
-        ],
-        "proofCommit": "df3f7cd329218f4eaca2d1b1020b2887a2e2018d",
-        "proofSha256": "442334bfd22cf81c9582b071cd6b370f2b6969d961418e6b084a25cc87ae4a91",
-        "kernelReceiptIds": [
-          "lean-d0437fcbebf92fbd081ff7e8"
-        ],
-        "comparatorExitCode": 0,
-        "reviewStatus": "accepted",
-        "attribution": "TheoremOS 原生运行；当前接受运行未见外部数学编辑记录，保留已记录的历史续跑。",
-        "attributionEn": "TheoremOS native run. No external mathematical edit was found in the accepted run; recorded continuation is retained.",
-        "evidenceUrl": "data/proofs/openai_truffet_counterexample/verification.json"
-      },
-      "processSummary": {
-        "runs": 3,
-        "tasks": 5
-      }
-    },
-    {
-      "id": "openai_snaky_conditional",
-      "title": "A 35-move winning strategy for Snaky",
-      "subtitle": "Snaky 的 35 步获胜策略",
-      "area": "组合博弈",
-      "summary": "构造面对合法应手时能在 35 步内完成 Snaky 的合法策略，并证明题设棋盘不变量。",
-      "en": {
-        "subtitle": "A 35-move winning strategy for Snaky",
-        "area": "Combinatorial games",
-        "summary": "Constructs a legal strategy completing a Snaky within 35 moves against legal replies while preserving the stated board invariants."
-      },
-      "status": "locally_verified",
-      "model": "TheoremOS · deepseek-flash",
-      "updatedAt": "2026-10-24T13:50:29.323Z",
-      "directory": "SnakyConditional",
-      "files": {
-        "Challenge.lean": "3ab27d66779b557d0efcc3cfcf8317c40511e3cc655da29e61e95ba3f34d45ea",
-        "Submission.lean": "dc40df160330f9058ff0af4e85adac6ed1be8be0b2d54c7fba5f10f71450eaae",
-        "process.json": "684a5ee34421c9a48d1db28fec36e4cb33363da7ac835ae13bf74b93f381d542",
-        "verification.json": "c070e5bc6b5e8a6b2f657792657e34ffa1f78514095468403604733a59058620"
-      },
-      "declaration": "theorem snaky_winning_strategy_with_legal_states",
-      "campaign": {
-        "target": "SnakyConditional",
-        "runId": "e2b78e94-e26d-4b02-a8e5-53375547ef4d",
-        "targets": [
-          "OAI.SnakyConditional.snaky_winning_strategy_with_legal_states"
-        ],
-        "proofCommit": "14d49c0f2bb94a8973471120f675554798126117",
-        "proofSha256": "dc40df160330f9058ff0af4e85adac6ed1be8be0b2d54c7fba5f10f71450eaae",
-        "kernelReceiptIds": [
-          "lean-63766151ffe8a0523a860487"
-        ],
-        "comparatorExitCode": 0,
-        "reviewStatus": "accepted",
-        "attribution": "TheoremOS 原生运行；记录包含外部代理提供的独立数学辅助、已保存候选的交接或续跑。",
-        "attributionEn": "TheoremOS native run with recorded independent mathematical assistance from external agents, saved-candidate handoff or continuation.",
-        "evidenceUrl": "data/proofs/openai_snaky_conditional/verification.json"
-      },
-      "processSummary": {
-        "runs": 2,
-        "tasks": 2
-      }
-    },
-    {
-      "id": "openai_honeycomb_free_energy",
-      "title": "The honeycomb free-energy limit",
-      "subtitle": "蜂窝格自由能极限的存在性",
-      "area": "概率与统计物理",
-      "summary": "证明蜂窝格自避游走的单位长度对数配分函数在给定外力参数下收敛。",
-      "en": {
-        "subtitle": "The honeycomb free-energy limit",
-        "area": "Probability and statistical physics",
-        "summary": "Convergence of the normalized logarithmic partition function for honeycomb self-avoiding walks under the specified force parameters."
-      },
-      "status": "locally_verified",
-      "model": "TheoremOS · deepseek-flash",
-      "updatedAt": "2026-10-28T14:45:48.559Z",
-      "directory": "HoneycombFreeEnergy",
-      "files": {
-        "Challenge.lean": "30d5989a93216f9aea4f6bb23846090e24bd87b797ea1620d661de2bd9f99f81",
-        "Submission.lean": "1472d78c68ac552b7ec3ff4c3d307035cb30aa08c734c95eae7f66e6b4b3601c",
-        "process.json": "7c0a0bb024aa3007320a407c28cd9cac2c0cfe8836a0543849f1d1d2a3bcd6fe",
-        "verification.json": "e36a23c663eb8f7d1fd73fce2416b6d7741cee201f40758c79ff2065e95e5786"
-      },
-      "declaration": "theorem logPartition_tendsto",
-      "campaign": {
-        "target": "HoneycombFreeEnergy",
-        "runId": "42061240-6393-47da-b4bf-a58bef9080ea",
-        "targets": [
-          "OAI.HoneycombForce.logPartition_tendsto"
-        ],
-        "proofCommit": "7d45dd3e782398f02a4f953671e055f2e7ff54db",
-        "proofSha256": "1472d78c68ac552b7ec3ff4c3d307035cb30aa08c734c95eae7f66e6b4b3601c",
-        "kernelReceiptIds": [
-          "lean-83aa30ee1bd32191189113c6"
-        ],
-        "comparatorExitCode": 0,
-        "reviewStatus": "accepted",
-        "attribution": "TheoremOS 原生运行；当前接受运行未见外部数学编辑记录，保留已记录的历史续跑。",
-        "attributionEn": "TheoremOS native run. No external mathematical edit was found in the accepted run; recorded continuation is retained.",
-        "evidenceUrl": "data/proofs/openai_honeycomb_free_energy/verification.json"
-      },
-      "processSummary": {
-        "runs": 5,
-        "tasks": 55
-      }
-    },
-    {
-      "id": "openai_plane_coloring",
-      "title": "A seven-coloring of the Euclidean plane",
-      "subtitle": "欧氏平面的七色着色",
-      "area": "离散几何",
-      "summary": "证明欧氏平面存在七色着色，使任意距离恰为 1 的两点颜色不同。",
-      "en": {
-        "subtitle": "A seven-coloring of the Euclidean plane",
-        "area": "Discrete geometry",
-        "summary": "The Euclidean plane admits a seven-coloring in which points at unit distance have different colors."
-      },
-      "status": "locally_verified",
-      "model": "TheoremOS · deepseek-flash",
-      "updatedAt": "2026-10-28T13:26:18.865Z",
-      "directory": "PlaneColoring",
-      "files": {
-        "Challenge.lean": "868e71b127ba5bc82474130618483289ac29cc58c45898eb0216199080c9dc37",
-        "Submission.lean": "3e842122e50547b602873e71db599cc6782414fec9c60a08c664d43586341d12",
-        "process.json": "4004d85dcae4dfb73ccb0f1f21bc1e8b7ae176d9b11f036286c47713b1c54a70",
-        "verification.json": "07fc2e40e574af14e84bde2dc8c7c96b428e1970de32bec68e4a4866eee07570"
-      },
-      "declaration": "theorem properColoring_seven",
-      "campaign": {
-        "target": "PlaneColoring",
-        "runId": "58e5a793-5940-4b38-aa6a-2a71ae0cac3f",
-        "targets": [
-          "OAI.Problem160.properColoring_seven"
-        ],
-        "proofCommit": "0571db4c10de8a17ba937c853f480284cbbb9642",
-        "proofSha256": "3e842122e50547b602873e71db599cc6782414fec9c60a08c664d43586341d12",
-        "kernelReceiptIds": [
-          "lean-a9016accc1b094f81c9dc7bd"
-        ],
-        "comparatorExitCode": 0,
-        "reviewStatus": "accepted",
-        "attribution": "TheoremOS 原生运行；当前接受运行未见外部数学编辑记录，保留已记录的历史续跑。",
-        "attributionEn": "TheoremOS native run. No external mathematical edit was found in the accepted run; recorded continuation is retained.",
-        "evidenceUrl": "data/proofs/openai_plane_coloring/verification.json"
-      },
-      "processSummary": {
-        "runs": 3,
-        "tasks": 24
-      }
-    },
-    {
-      "id": "openai_finite_congruence_graph",
-      "title": "A colored-graph criterion for congruence lattices",
-      "subtitle": "有限同余格的彩色图判据",
-      "area": "泛代数与格论",
-      "summary": "证明有限格可表示为非空有限代数的完整同余格，当且仅当它具有满足给定条件的有限非空彩色图见证。",
-      "en": {
-        "subtitle": "A colored-graph criterion for congruence lattices",
-        "area": "Universal algebra and lattice theory",
-        "summary": "A finite lattice is the full congruence lattice of a nonempty finite algebra exactly when it admits the specified finite colored-graph witness."
-      },
-      "status": "locally_verified",
-      "model": "TheoremOS · deepseek-flash",
-      "updatedAt": "2026-10-28T15:52:23.095Z",
-      "directory": "FiniteCongruenceGraph",
-      "files": {
-        "Challenge.lean": "2ee495def2e1228bf13df520f6c66699ec22b2cd3bc1ae7383a30957aae9f967",
-        "Submission.lean": "6b32441db35b95aed73a9f7acdb44c57bc0f5c3e1556113478e96f921b022a3f",
-        "process.json": "945abf8cbb56c9bca65dbcad14c44a8c7bb103f7d577f9915f946c7fc9b3ed42",
-        "verification.json": "62c70ee83974aa282ca8be91418ee74e7584bc15776557d4212481671516472e"
-      },
-      "declaration": "theorem graph_criterion",
-      "campaign": {
-        "target": "FiniteCongruenceGraph",
-        "runId": "24910705-72c7-4d57-9d54-d8c3d6cb4e2e",
-        "targets": [
-          "OAI.FiniteCongruence.graph_criterion"
-        ],
-        "proofCommit": "01ed741391d019c9dc0029aecb7caa618152a0e8",
-        "proofSha256": "6b32441db35b95aed73a9f7acdb44c57bc0f5c3e1556113478e96f921b022a3f",
-        "kernelReceiptIds": [
-          "lean-62d0a01bd5f9297b85941d84"
-        ],
-        "comparatorExitCode": 0,
-        "reviewStatus": "accepted",
-        "attribution": "TheoremOS 原生运行；当前接受运行未见外部数学编辑记录，保留已记录的历史续跑。",
-        "attributionEn": "TheoremOS native run. No external mathematical edit was found in the accepted run; recorded continuation is retained.",
-        "evidenceUrl": "data/proofs/openai_finite_congruence_graph/verification.json"
-      },
-      "processSummary": {
-        "runs": 3,
-        "tasks": 11
-      }
-    },
-    {
-      "id": "openai_hadamard_cube_fiber",
-      "title": "Hadamard cube-fiber cancellation",
-      "subtitle": "六阶 Hadamard 行比值的立方纤维消去",
-      "area": "线性代数",
-      "summary": "对矩阵及其逐项平方均为复 Hadamard 的六阶情形，证明题设指定立方纤维上的行比值之和为零。",
-      "en": {
-        "subtitle": "Hadamard cube-fiber cancellation",
-        "area": "Linear algebra",
-        "summary": "For an order-six complex Hadamard matrix whose entrywise square is also Hadamard, proves cancellation on the cube fiber specified by the statement."
-      },
-      "status": "locally_verified",
-      "model": "TheoremOS · deepseek-flash",
-      "updatedAt": "2026-10-22T19:37:43.061Z",
-      "directory": "HadamardCubeFiber",
-      "files": {
-        "Challenge.lean": "9f412781be8b38c88a6efb3a4528d4c990071a233cd931612d4710213d6366a1",
-        "Submission.lean": "d818e4c8217e53057b254f92285bb22930f2b47504ed68d7e8def9d2547fa3a1",
-        "process.json": "0db5002a66395d1de8add7c7e86042e769e4cc3cc4857196a79feed823ab0369",
-        "verification.json": "50edea09a1ab435df33ef1d7acffbc18234c0bef38b22728bdba747018b9bc37"
-      },
-      "declaration": "theorem rowRatio_cubeFiber_sum_zero",
-      "campaign": {
-        "target": "HadamardCubeFiber",
-        "runId": "3f2c13eb-fbf3-47d4-bff5-aed2489d23aa",
-        "targets": [
-          "OAI.HadamardSix.rowRatio_cubeFiber_sum_zero"
-        ],
-        "proofCommit": "be3ac1e85859e7f88229dd3eab02a492b9ca2d5a",
-        "proofSha256": "d818e4c8217e53057b254f92285bb22930f2b47504ed68d7e8def9d2547fa3a1",
-        "kernelReceiptIds": [
-          "lean-56712d405ce90b7537a528c4"
-        ],
-        "comparatorExitCode": 0,
-        "reviewStatus": "accepted",
-        "attribution": "TheoremOS 原生运行；记录包含外部代理提供的独立数学辅助、已保存候选的交接或续跑。",
-        "attributionEn": "TheoremOS native run with recorded independent mathematical assistance from external agents, saved-candidate handoff or continuation.",
-        "evidenceUrl": "data/proofs/openai_hadamard_cube_fiber/verification.json"
-      },
-      "processSummary": {
-        "runs": 1,
-        "tasks": 1
-      }
-    },
-    {
-      "id": "openai_surface_cone_candidate_support",
-      "title": "A three-dimensional complete local candidate ring",
-      "subtitle": "三维完备局部候选环",
-      "area": "交换代数",
-      "summary": "构造 Krull 维数为 3、剩余域为复数域的完备诺特正规局部复代数。",
-      "en": {
-        "subtitle": "A three-dimensional complete local candidate ring",
-        "area": "Commutative algebra",
-        "summary": "A complete Noetherian normal local complex algebra of Krull dimension three with residue field equal to the complex numbers."
-      },
-      "status": "locally_verified",
-      "model": "TheoremOS · deepseek-flash",
-      "updatedAt": "2026-10-22T19:19:24.949Z",
-      "directory": "SurfaceConeCandidateSupport",
-      "files": {
-        "Challenge.lean": "c75e9be97bcb12a6c289b6652337fc32398064fe8bef7cd910110a9d96fae56e",
-        "Submission.lean": "bc4a1cec74196b46dd726a46dc467c40b8657527dbd235a49a3cf0b5e4355ac9",
-        "process.json": "593c382d0e4ac9a30ff9e745def70a10190ac32837cc89626461124ac11715ac",
-        "verification.json": "4ae49258691771d60927a99c786e7d26b9fe5a69fef2009f89630509bf2f807b"
-      },
-      "declaration": "theorem candidate_ring_properties",
-      "campaign": {
-        "target": "SurfaceConeCandidateSupport",
-        "runId": "cbfa1f3c-2760-4d7e-987a-97b48698fd49",
-        "targets": [
-          "OAI.SmallCM.candidate_ring_properties"
-        ],
-        "proofCommit": "2ef811423f23eea4d7bea4bc2b74b49f436a706e",
-        "proofSha256": "bc4a1cec74196b46dd726a46dc467c40b8657527dbd235a49a3cf0b5e4355ac9",
-        "kernelReceiptIds": [
-          "lean-19a2a6295419e03112cc5e18"
-        ],
-        "comparatorExitCode": 0,
-        "reviewStatus": "accepted",
-        "attribution": "TheoremOS 原生运行；记录包含外部代理提供的独立数学辅助、已保存候选的交接或续跑。",
-        "attributionEn": "TheoremOS native run with recorded independent mathematical assistance from external agents, saved-candidate handoff or continuation.",
-        "evidenceUrl": "data/proofs/openai_surface_cone_candidate_support/verification.json"
-      },
-      "processSummary": {
-        "runs": 2,
-        "tasks": 4
-      }
-    },
     {
       "id": "openai_three_state_supercritical",
       "title": "Supercritical reconstruction on regular and Poisson trees",
@@ -594,6 +98,105 @@
       }
     },
     {
+      "id": "openai_three_state_tree_clauses",
+      "title": "Supercritical reconstruction for three-state tree channels",
+      "subtitle": "三状态树信道的超临界重构",
+      "area": "概率论",
+      "summary": "证明三状态信道与泊松分支分布的概率性质，并在 Kesten–Stigum 超临界条件下证明规则树和泊松树上的重构。",
+      "en": {
+        "subtitle": "Supercritical reconstruction for three-state tree channels",
+        "area": "Probability",
+        "summary": "Proves the channel and Poisson offspring probability properties, and reconstruction on regular and Poisson trees above the Kesten–Stigum threshold."
+      },
+      "status": "locally_verified",
+      "model": "TheoremOS · deepseek-flash",
+      "updatedAt": "2026-11-08T06:53:05.494Z",
+      "directory": "ThreeStateTreeClauses",
+      "files": {
+        "Challenge.lean": "70eabccad9babe51e425cbdceef6be93c00b12771ea6eb6102296c15a64353f5",
+        "Submission.lean": "06189f1bd81a78cf11435926017ecbb07bb62a135d5275b68da0026dc97d2d8a",
+        "Submission/Library/Auto/ThreeStateChannelSpectrum.lean": "91d863d881f984ba04fd45d4ae46aef58f7aa5aee3eb929c14d9865ece4c1b80",
+        "Submission/Library/TheoremOS/Analysis/AsymptoticModuli.lean": "14c8c655a1521ffdd91bed3b4afd7d15092bee9a2feba77d6279fc70ff023f7e",
+        "Submission/Library/TheoremOS/Analysis/Daugavet.lean": "5ee31788907ce7b812c786c35cb2ccb5b300d60f843b9d18dd2645d16324271c",
+        "Submission/Library/TheoremOS/Analysis/LittlewoodPolynomial.lean": "b6848444e02449f5585d89b75fcaa351d7f57c1384bd57792a6b8b747ed86870",
+        "Submission/Library/TheoremOS/Analysis/MetricDistortion.lean": "15c5ebcc9242df00be1df9b967439f748b85879a5bb5a4060002ab96427503f5",
+        "Submission/Library/TheoremOS/BooleanCube/Fourier.lean": "f0a09eb8c04aca84e36c01734425cd07319a122ae516b2da471bcac6c47a6260",
+        "Submission/Library/TheoremOS/BooleanCube/Hypercontractivity.lean": "07cbd5eef79ee9febf6864dea2e2435f24144c2f6856ca07242768968c776997",
+        "Submission/Library/TheoremOS/BooleanCube/Influence.lean": "948c2b58a58dbdb44609c0f924fa76e87c2307f9407b0162b68847201d91f015",
+        "Submission/Library/TheoremOS/BooleanCube/LevelOne.lean": "c55d83aea93df19b8b242ee95734a6a86135e1ddbfa9dc6d90b24825ea1bc7a2",
+        "Submission/Library/TheoremOS/BooleanCube/Polynomial.lean": "ddf9fa8a20af3cca00c9fb40095d3791dcc3a72067f1bf0c92775e34f68ad970",
+        "Submission/Library/TheoremOS/BooleanCube/Product.lean": "142e451051fe7cf9ed644efabe8040bd44b7ed461575245ceefb3e6eb4c31ad6",
+        "Submission/Library/TheoremOS/BooleanCube/Relabel.lean": "ae5bba44af2f246084cfdafd70cb0d53110c3a8559783c384c20f33bb44e43ff",
+        "Submission/Library/TheoremOS/BooleanCube/Sensitivity.lean": "3d9eb595c51e9576bd7f0498ef3e3e8e2669090c0bcaa4e8fc1778635d495454",
+        "Submission/Library/TheoremOS/Combinatorics/BinomialEntropy.lean": "c546fd714c5453bf84350a57b70a4e9edca7ecfe46775334c4fc4d8d9f05924e",
+        "Submission/Library/TheoremOS/Combinatorics/EditDistance.lean": "4a6c2af4d563d6adb5e87f5805286d29e52b0be11ea55acaac4b7fe3a12daa0e",
+        "Submission/Library/TheoremOS/Combinatorics/GraphIndependence.lean": "8fe8bb8b33dd9da1441c8aa2b7eb6b414295f3aff14b0777b6e0ce06ab7bcad7",
+        "Submission/Library/TheoremOS/Combinatorics/PerfectMatching.lean": "2c2b235dc645d6e9e7cecb03a70fa955d4932c214e3772a2749f76dde4b5cfa1",
+        "Submission/Library/TheoremOS/Combinatorics/Ramsey.lean": "f4074b6622c28fd6146e4a8f8337811ab4544003064c86a0fff7c4d7a415fe47",
+        "Submission/Library/TheoremOS/Combinatorics/RamseyLower.lean": "33e40b8f4fc1220369dc0082e90a02a27e13b56459044a13fd10f636e6756321",
+        "Submission/Library/TheoremOS/Geometry/EuclideanCoordinates.lean": "c952ba750cd589d52b0127557fa81f9b6f904ac4cb56f983685e716188b0a248",
+        "Submission/Library/TheoremOS/Geometry/EuclideanRamsey.lean": "0dd86e82f255fa60d7612736135cbfc69111f776bff5c93ea949d3194bd2d3d6",
+        "Submission/Library/TheoremOS/Geometry/TranslativeCovering.lean": "4933683c1669980bd906d1ed2edc6238b733f1dcf5aba56a14d4b0bcffc0ef09",
+        "Submission/Library/TheoremOS/InformationTheory/Divergence.lean": "8e5eb6a47f74d0e1aa5e1e41cc6ecc61e5affe8aee75661c5c8d6b88fd9ff36c",
+        "Submission/Library/TheoremOS/InformationTheory/Entropy.lean": "cdf2132bbaf741c0317d68dffba14a23bdcc6dd5ac363de905960b1230742f5f",
+        "Submission/Library/TheoremOS/InformationTheory/Shearer.lean": "6a0a84121b0623fc6763a40f3fc3fa4c3a0633571a52f1f27f8f032d1b6ec1b2",
+        "Submission/Library/TheoremOS/LinearAlgebra/DensityMatrix.lean": "41142f65813bb7e375d2df4d03517395a340cfe2a080dbbd65ad37c2f135ea4b",
+        "Submission/Library/TheoremOS/LinearAlgebra/NumericalRange.lean": "b8ec1a3f74d2d6602c8800b85dcdbba64816597bbc50e6f12417b3fd0c123f9a",
+        "Submission/Library/TheoremOS/LinearAlgebra/Pauli.lean": "e074d65184d8bf4e6795d88f986c85dc45fdf9ba44013b3f766e9190bf740f84",
+        "Submission/Library/TheoremOS/LinearAlgebra/PiTensor.lean": "507c05b5a2ad7bf864948001dffa47a1f4a88683a6373b0982a4c0be0d512e62",
+        "Submission/Library/TheoremOS/LinearAlgebra/VonNeumannEntropy.lean": "c67cd4d888ca9d6e5e65541824ded0f75094eff904a12c535fa35926a8cd7439",
+        "Submission/Library/TheoremOS/Probability/BiasedProduct.lean": "3aba352332d21d1e23cd5129c31c5e2324001b565e172d08e61052e3aaf9e86a",
+        "Submission/Library/TheoremOS/Probability/Concentration.lean": "7f4b81c456990832101e726c12a45c08688f8d075000327d147caeed75c56c23",
+        "Submission/Library/TheoremOS/Probability/Coupling.lean": "10de7c80bb5f163ed6035c1ab44c670affab89ae66e1f3f01ea6644cc91cea23",
+        "Submission/Library/TheoremOS/Probability/Dobrushin.lean": "1f2fb5d31e153c880e3e9dfeb76e1ab46dd2501010520d17cb511ba4f2594450",
+        "Submission/Library/TheoremOS/Probability/FiniteProbability.lean": "92b0f51cf0d792ded51aad74d7f7c263edd78604f84cdc9ff62acdf631cbb996",
+        "Submission/Library/TheoremOS/Probability/GaussianIBP.lean": "819c32889631651e2301ce86f1b1edb90681da9500ebb8cf3bb8eee253c05e47",
+        "Submission/Library/TheoremOS/Probability/LocalLemma.lean": "50c6809fcf8d04d37f724b2880ff81a6deef29fbb4773489c9581c711d39e28a",
+        "Submission/Library/TheoremOS/Probability/MixingLowerBound.lean": "5542c32827d6ace88a20086974a6b00647e197f9544babfbfb9f8f7bf7835f4d",
+        "Submission/Library/TheoremOS/Probability/RandomKSAT.lean": "537759213f92186ddb2f8421c004248f1b743f6a7ccb0e62396bfb015ae98b98",
+        "Submission/Library/TheoremOS/Probability/RandomKSATThreshold.lean": "4b4ca067b54b97c4dc1de10f6188e6ed341bf47c1e4810e3d90a87e7ad551685",
+        "Submission/Library/TheoremOS/Probability/SpectralGap.lean": "3902b6999f3f6a115feaed05e0b2034e948892c233b410e913ae1b3ba3490eb4",
+        "Submission/Library/TheoremOS/Probability/SphereLaw.lean": "8da2473c0e75d137696cdff9115e38b658402ba3bd7ba03d5521d1344e86cc0c",
+        "Submission/Library/TheoremOS/Probability/TreeReconstruction.lean": "cf91591ad7ab77463ba4c64dee04529a87e730716380bc87a569359d2485f54e",
+        "Submission/Library/TheoremOS/RepresentationTheory/GroupFourier.lean": "1c7941dad0d9e6c4a998b9bca99057d78a18a2b093364df4c401f1656e6a1ea7",
+        "Submission/Library/TheoremOS/RepresentationTheory/Plancherel.lean": "8bc8e66a977c0163e4dbec79746e899738537415d10558008654ceb30266a06e",
+        "process.json": "d0f8386e858c584044864bbb9b5aa845cf483b089e3f2da0ab675f8cafd61ae3",
+        "verification.json": "4ae290ee5dfa3089fcf0d5b1df014096f5325b0f479c79596fb1d10cefacb1d8"
+      },
+      "declaration": "theorem channelWeight_nonneg",
+      "campaign": {
+        "target": "ThreeStateTreeClauses",
+        "runId": "cea8d7e2-84e6-4591-af14-2c9a82d37eef",
+        "targets": [
+          "OAI.ThreeState.TreeClauses.channelWeight_nonneg",
+          "OAI.ThreeState.TreeClauses.channelWeight_sum",
+          "OAI.ThreeState.TreeClauses.Probability.poissonWeight_nonneg",
+          "OAI.ThreeState.TreeClauses.Probability.poissonWeight_mass",
+          "OAI.ThreeState.TreeClauses.Tree.regular_reconstructs_above_KS",
+          "OAI.ThreeState.TreeClauses.Tree.poisson_reconstructs_above_KS"
+        ],
+        "proofCommit": "dd91a86ad10e090bf296f1978b3b02e97da7314d",
+        "proofSha256": "06189f1bd81a78cf11435926017ecbb07bb62a135d5275b68da0026dc97d2d8a",
+        "kernelReceiptIds": [
+          "lean-c81fa38a6d740b74028fb0ba",
+          "lean-0b3b738c86b00b24f37eef52",
+          "lean-f37c633dbbd7978bbf4fc7d0",
+          "lean-a3fd66816b750759a9e14da8",
+          "lean-44ca4dc945d5c8e77370290d",
+          "lean-536041ff4566e782760991aa"
+        ],
+        "comparatorExitCode": 0,
+        "reviewStatus": "accepted",
+        "attribution": "TheoremOS 原生运行；当前接受运行未见外部数学编辑记录，保留已记录的历史续跑。",
+        "attributionEn": "TheoremOS native run. No external mathematical edit was found in the accepted run; recorded continuation is retained.",
+        "evidenceUrl": "data/proofs/openai_three_state_tree_clauses/verification.json"
+      },
+      "processSummary": {
+        "runs": 4,
+        "tasks": 105
+      }
+    },
+    {
       "id": "openai_triangle_face",
       "title": "Face correspondence under triangle expansion",
       "subtitle": "三角展开下匹配多面体的面对应",
@@ -680,6 +283,339 @@
       "processSummary": {
         "runs": 5,
         "tasks": 36
+      }
+    },
+    {
+      "id": "openai_character_varieties_all_seams_support",
+      "title": "Marked trace values across all surface seams",
+      "subtitle": "曲面全部接缝上的标记迹值",
+      "area": "代数几何",
+      "summary": "对题设曲面表示的全部接缝，证明产生的标记迹值满足指定的接缝等式。",
+      "en": {
+        "subtitle": "Marked trace values across all surface seams",
+        "area": "Algebraic geometry",
+        "summary": "For every seam in the stated surface presentation, proves the specified seam equations for the produced marked trace values."
+      },
+      "status": "locally_verified",
+      "model": "TheoremOS · deepseek-flash",
+      "updatedAt": "2026-10-24T11:09:53.598Z",
+      "directory": "CharacterVarietiesAllSeamsSupport",
+      "files": {
+        "Challenge.lean": "ebc3129bfb5ef4a47e0de1d89f0f406ef6603df32355bdfbb9ce278627c1a1f1",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Cutting/AtomicFrames.lean": "c18e42ad63992b03784a72eb5d116891f91c20a9e6cd83e16bd727d38dec6b17",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Cutting/AtomicGallery.lean": "83b06889c39882e36f9f2bba052ab4fc5e6417122d483b9a1ac9c187ae8c7437",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Cutting/BoundaryEnumeration.lean": "6c8de419da0e3eb6a5c55f89628d081b80cb989bff2225c20d72ed25785b749f",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Cutting/BoundarySurgery.lean": "cacb010e82dd811b216bb72aaaf76ebd4efe2b0a1cb30a151a1eda66fee2d17d",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Cutting/DoubledStrips.lean": "02b2a07bf24fa256f8de4e4c2d5017a6af04b10b391669e741a8d3e339f48b39",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Cutting/FreshGallery.lean": "03bc6dc8412236efb81ab1fb7555f3ff4e2a2b02c9904b256a12b4328b48d02d",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Cutting/GraftCircuits.lean": "b257bf1fc75bf0d4c42624391d4b9dc8ec54016b0f108d9d8490cef61d3c530f",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Cutting/GraftValues.lean": "0f423745f885d9665ff35d8d4b66951369d69b6f470cd347219a53e21165391e",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Cutting/Grafting.lean": "50d3fdaa1ffb7fddc4220578ea2644eb220d9166ee449e8171ae82b9411d20a8",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Cutting/MarkedDiagram.lean": "3191c4bbd5348c802eabe3c3c7b3ca01c7c3926d80aae5af85dcf45b7109b843",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Cutting/PortSurgery.lean": "f8457fca8ea3fe538b37ee8193385b729a75e5243454d7d65751f34d5ec71bed",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Cutting/RefinedDiagram.lean": "968d5a68cf0487fd29a48b074a4ba8b3fd9a0a3feab0b8f277cafba844907006",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Cutting/StripFacets.lean": "83ff80de6bf61e89abfd8ffc618e7227b9d10eb4d707a225cf59a33029c0ecc9",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Cutting/StripForest.lean": "97ff940793081084281700fbea546e6d749c7b95b488b0b9527e8ec490a82178",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/BandCut.lean": "ebe9d957cc8a91f223a3fe09b66cff4aa6df869e7424fbee6aa366dbc2ce8618",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/BandCutTopology.lean": "be87cf0c88a2c31353d0caff8654294451d8d8d29ae78d1422b63f470d3bffca",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/BandCycles.lean": "398444074f4e7593382eb8a36840f450ab5294a9c4e439b51fda29d22b0c8cde",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/BandIncidence.lean": "dd7d2c5925d600305a367ee020f08708322c25fd2f0e283a6a7a2896c4f04203",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/BoundaryBands.lean": "695a05daf5bd698f836d8cae8cc056f7624df70a8d9863e33adb08df05106ad2",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/BoundaryCycles.lean": "c7dc483155d5f61ca1c7bab6c6e4997e2ec90f080d6ec40e4df030e3126f0bf4",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/BoundaryFrames.lean": "7e2548494bc5cc1e3a93ea90abe2c456c81175eeb6abcaa286a7b0376e0deb77",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/BoundaryReordering.lean": "0890150d3f08276bd70dd81559fe7cabd22c982e1b1dc9efcebb5979c2f76f87",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/ComplementaryPatches.lean": "9a4296f8f0da290eeb43e492c3a09572a5932ee8f093f2804e9d144f3ed1daf9",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/CornerGauge.lean": "0c18bfd3693e4b2c5fb40f2b542a1de619de808252c2f0dbe2c3f527cc28ec0c",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/CutCircleIndex.lean": "fd1bba37345bcc08c5d42c412604c656a134c6a89194be77eabb9cb8480d0c37",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/DiskGauge.lean": "df63a0038156c23043007bdd52691214122a063909e6ac6ebf3ed8ca311e10e0",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/FlagGalleries.lean": "074f36a1e6824e12ac4eb5899c29a37bdb56a1b94ffdaf886edf7a895645efc7",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/Flags.lean": "0a5412a7d8bf468799a766580cd66647e299bb94b0f8ffc62ed15db3d0542fcb",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/GeneratorGauge.lean": "bd702283534cde3f405705e7767cfa767c040c9a12692a685226d8e4a0ed4d8a",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/Incidence.lean": "2fffa90d905943cea29115230b87fcdd93b2aaac3a33137265ad192e03a3a48a",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/MatrixExpressions.lean": "ca37156a02617cfb605ca20f2743adb40dc5a094fef4a1d9890e87ccf7eb7d3f",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/MatrixPresentation.lean": "d108c8d57e24295c8000ba6162e762a94ba86725b9a005d9058e4586505c2081",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/PatchCycles.lean": "9d1fe36c82a24db570b509412a6fb925c96cf38f61a290cad0e573266de00255",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/PortPatches.lean": "7fc965a6b2cd6ee4202f888980c28570fa34aea1e429438efd7042e549270295",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/RoutedFamilies.lean": "14cd1bab885fc0d6863b342445170b6d08ca9472697f7aaef39463bb2c2d6e5f",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/SplitFlags.lean": "e850306aae38bb29a2b5b894c2114f23b065eb80982f59a7f4294e8e0cf6d4f2",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/SurfacePresentation.lean": "1030f673451af317691dec29b2ae4a8eb9e6c242e8723966dfccd5124497c5db",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/SurfaceSurgery.lean": "3b73867f4099c938af3970ad6048c1d75a7c43ba59d84c33cca70bcb840c4b22",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/VertexFrames.lean": "c7815746c9b3e76ccbaab66c637ad58619f848131339c2f913ef17448dda2ae4",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Foundation/VertexGauge.lean": "d8841ea315aa4ac972f7fea8f22cf9ca8c3c18a6d57ffea2e037544135025971",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Frames/AtomicFlags.lean": "0ffacc11715e24abff00fe2e27b40aacb0b1c6ca10620ea96025271093fe30de",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Frames/BandBases.lean": "b0acd4e240c053747a46a1967b453db85eb96d38dadd847c19d1053307f6c684",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Frames/BandGauges.lean": "a459e8469de543859fd373fed747cad0ec2d63117cbe3187cada9f9893e4b40c",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Frames/CutFrames.lean": "6b23f5a126a70c69c61ab57ee205d963d2b95a7bea50a5df485b65b01b77e463",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Frames/Endpoints.lean": "b101181228f53dfeb10fba4c1308c0760ee5d27eff90612487f76b7f83fc3f3b",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Frames/GradeMaps.lean": "ae2e9a8e490bc740d0e2907ff8be7cce1a6a6a02b356aafe3cae0562edecc4df",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Frames/Graded.lean": "5a6a4b4913f7fdc5147d8eaf6e7dd53bfeeac313425fcb5ad78bf423ac12211c",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Frames/MarkedFrames.lean": "fdd053185deaac30577ce93f4b4a47e90775bd6351b571bcb13708807f6c6df7",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Frames/Mirror.lean": "ce08de497540c1b014334b01a74a1cb50666e0383ce13f5c7bf8e36b4e274a25",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Frames/NamedSeams.lean": "2c14619c012b0164533e13b64ca39c3beaa1e5fb0e487519553cd0b91320283f",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Seams/BoundaryWords.lean": "b78b5c5ca2aa12591c2d0d1ca83b16a27fe33c991da8eb1767cc1b571a5662c1",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Seams/CutWords.lean": "a231f656d6958d2a0c658acfdf8454fda45b7d2569cd58c7362dc66f4d75a47c",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Seams/Handles.lean": "24bcebe3c1e5173e9f4d47e47991bf65805affb10abdebd8c3f0034aea5647ed",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Seams/InverseSolution.lean": "43e3d88790df824f986f23cdbd3efd858b1c490f1ad8bec440374b6d69dd96de",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Seams/MarkedSurface.lean": "daee1598370ce162cbb52ed6bf8184592f9dc0accd1016e0bca56e4ae33a5c79",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Seams/ProducedDiagram.lean": "5eac5b9103bec2d0f642d5bf56817afcab427bae742ef9b05962fae6a4c8329b",
+        "OAI/AlgebraicGeometry/CharacterVarieties/Seams/ProducedEquations.lean": "2812714a68c122afd3cb5055bf256a61c797ebcfa90e9f211dd2e020604eb418",
+        "Submission.lean": "5c0cbc35bd6335ab7c6d8d57bdece22a3065c6fdc7dee871d2577826b50396d3",
+        "process.json": "9010fa7779505c6226075f031853ea1a2fa76c7c2cc485e08875ac64b8d2e93b",
+        "verification.json": "c49f9452bae645be3fc955cc634aeb3c5d9079a60abf289b3409c9835ad9dec7"
+      },
+      "declaration": "theorem producedMarkedValues_allSeams",
+      "campaign": {
+        "target": "CharacterVarietiesAllSeamsSupport",
+        "runId": "1f3bb9c1-c99f-4fad-b656-8010a82c265b",
+        "targets": [
+          "OAI.IntegralCharacterVarieties.SurfacePresentation.Diagram.producedMarkedValues_allSeams"
+        ],
+        "proofCommit": "df8db6c4f2f872ff9c5d4a79a5c874d4707b48c0",
+        "proofSha256": "5c0cbc35bd6335ab7c6d8d57bdece22a3065c6fdc7dee871d2577826b50396d3",
+        "kernelReceiptIds": [
+          "lean-7af748514c728f28377b0d13"
+        ],
+        "comparatorExitCode": 0,
+        "reviewStatus": "accepted",
+        "attribution": "TheoremOS 历史原生运行；保留保存候选的接续及数学编辑记录。",
+        "attributionEn": "Historical TheoremOS native run with saved-candidate continuation and recorded mathematical edits.",
+        "evidenceUrl": "data/proofs/openai_character_varieties_all_seams_support/verification.json"
+      },
+      "processSummary": {
+        "runs": 12,
+        "tasks": 9
+      }
+    },
+    {
+      "id": "openai_cartier_chart_compactness_support",
+      "title": "Normalized Cartier chart retractions",
+      "subtitle": "归一化 Cartier 坐标回缩的紧致性",
+      "area": "代数几何与拓扑",
+      "summary": "在题设代数条件下，证明由归一化权重参数化的闭坐标图域回缩族构成紧集。",
+      "en": {
+        "subtitle": "Normalized Cartier chart retractions",
+        "area": "Algebraic geometry and topology",
+        "summary": "Under the stated algebraic hypotheses, the closed-chart field retractions parametrized by normalized weights form a compact set."
+      },
+      "status": "locally_verified",
+      "model": "TheoremOS · deepseek-flash",
+      "updatedAt": "2026-11-02T07:23:54.735Z",
+      "directory": "CartierChartCompactnessSupport",
+      "files": {
+        "Challenge.lean": "05de6915fb577137d01be2fcaab5ebcc252d80f628ffb913bea4bef87b54ea64",
+        "OAI/AlgebraicGeometry/CartierSections/ChartCompletion.lean": "cd5ab4b977be67e7f6726b14c7c63a2adaa5c12c80636b86d026905494d324ce",
+        "OAI/AlgebraicGeometry/CartierSections/ChartRetraction.lean": "341066936c7dbb1fb1a85d285039db24de1c1380ff6cd71533c2159c45f9ebfa",
+        "OAI/AlgebraicGeometry/CartierSections/ClosedCharts.lean": "f77c79ba517df2051cde521b4a873128c0e5cde7d93d66cd81d3f6507c2e7d28",
+        "OAI/AlgebraicGeometry/CartierSections/ConeTopology.lean": "ad2fe07a0c6b698be1ed1050cdac914eb1d289af807cf6ef011187def9abdc43",
+        "OAI/AlgebraicGeometry/CartierSections/ExpansionValuation.lean": "70341cf246a0491148fb2c6f25f300eaaff27656cb89e44af674b21b07c89a43",
+        "OAI/AlgebraicGeometry/CartierSections/FieldRetraction.lean": "f5876a3015bd47a08735dcc50d8f4219c88706303bfca0c244cb12a14fad3b31",
+        "OAI/AlgebraicGeometry/CartierSections/FieldTopology.lean": "3a7efb432aa2da78ae19ec3cc2153399080b2e7a93643174d9128c62e5a33a85",
+        "OAI/AlgebraicGeometry/CartierSections/FormalValuation.lean": "1a1cfacb8e9fa2e60321d9303252f79f4d900a3954d4ac91db572d84e9cf619d",
+        "OAI/AlgebraicGeometry/CartierSections/FractionValuation.lean": "6185d5645073eabbe99a48577f700bb1a4b57dc5e36510f854cfe2d0edeff551",
+        "OAI/AlgebraicGeometry/CartierSections/InfinitesimalCharts.lean": "4db085e588fc29325562ef44b8aff172ff18ae641c62c9be7861ce140d77c8ac",
+        "OAI/AlgebraicGeometry/CartierSections/PolynomialValuation.lean": "0277ef0b5444948e581ae8605c11214e1f9204f0bda3c28b3e58d9043592e33b",
+        "OAI/AlgebraicGeometry/CartierSections/Weights.lean": "8bb6abc631899789bb0b8af044752653e7c240fa1f000f7db242e2684f089bb3",
+        "Submission.lean": "3f4987016064040ed126b75de0aea0dfa6b2bf74b7dd22dfa1722b7fcc525963",
+        "process.json": "eae474cee5d40b495b3c2d2ff70b9861e877d3d7b12495a436dafc16cbaa6355",
+        "verification.json": "28a08f113613aa55190a834dbbb68bda971ddbf2a651e401116a98ed499c0103"
+      },
+      "declaration": "theorem isCompact_closedChartFieldRetraction_cone",
+      "campaign": {
+        "target": "CartierChartCompactnessSupport",
+        "runId": "25c5cc6c-ec05-439c-bb42-7dd1ebeea45f",
+        "targets": [
+          "OAI.CartierSections.isCompact_closedChartFieldRetraction_cone"
+        ],
+        "proofCommit": "5e16b35636c3fbb0aa5cdf79434569e21d87253a",
+        "proofSha256": "3f4987016064040ed126b75de0aea0dfa6b2bf74b7dd22dfa1722b7fcc525963",
+        "kernelReceiptIds": [
+          "lean-3b7553e3de12231da641a1e5"
+        ],
+        "comparatorExitCode": 0,
+        "reviewStatus": "accepted",
+        "attribution": "TheoremOS 原生运行；记录包含外部代理提供的独立数学辅助、已保存候选的交接或续跑。",
+        "attributionEn": "TheoremOS native run with recorded independent mathematical assistance from external agents, saved-candidate handoff or continuation.",
+        "evidenceUrl": "data/proofs/openai_cartier_chart_compactness_support/verification.json"
+      },
+      "processSummary": {
+        "runs": 2,
+        "tasks": 2
+      }
+    },
+    {
+      "id": "openai_snaky_certificate",
+      "title": "The 35-move Snaky certificate",
+      "subtitle": "Snaky 的 35 步证书核验",
+      "area": "组合博弈",
+      "summary": "验证 Snaky 证书的 610 条表项、1,837 个放置项，以及关键重建局面和递归深度界。",
+      "en": {
+        "subtitle": "The 35-move Snaky certificate",
+        "area": "Combinatorial games",
+        "summary": "Verifies the 610-entry Snaky certificate, its 1,837 placements, reconstructed positions and depth bounds."
+      },
+      "status": "locally_verified",
+      "model": "TheoremOS · deepseek-flash",
+      "updatedAt": "2026-10-23T20:05:01.292Z",
+      "directory": "SnakyCertificate",
+      "files": {
+        "Challenge.lean": "591087a6b083d2b610bd863e0b5e7424f83d8ca8c3587cf77785570d06e8bedf",
+        "Submission.lean": "b7dc0b2898b8d4ee8ed4a3b10394429f939ff9e4d73761dcd6968e46a4579751",
+        "process.json": "65c0043fab2e02a695791df5ae7986d59f9416660739c90df837e943ff7bc1a7",
+        "verification.json": "a7630c50d866bd6f7c631c127bfc52fb6bccad34da3c00366cdcf9e3ba5d2f2f"
+      },
+      "declaration": "theorem certificate_correct",
+      "campaign": {
+        "target": "SnakyCertificate",
+        "runId": "6d22ec7c-5c2b-41a4-911d-dcf3f0b7ddf0",
+        "targets": [
+          "OAI.SnakyCertificate.certificate_correct"
+        ],
+        "proofCommit": "ed230f9c5d4458f2e4fb5c4f27a04614d62fbb49",
+        "proofSha256": "b7dc0b2898b8d4ee8ed4a3b10394429f939ff9e4d73761dcd6968e46a4579751",
+        "kernelReceiptIds": [
+          "lean-933f3569c486571cc5563b6c"
+        ],
+        "comparatorExitCode": 0,
+        "reviewStatus": "accepted",
+        "attribution": "TheoremOS 原生运行；记录包含外部代理提供的独立数学辅助、已保存候选的交接或续跑。",
+        "attributionEn": "TheoremOS native run with recorded independent mathematical assistance from external agents, saved-candidate handoff or continuation.",
+        "evidenceUrl": "data/proofs/openai_snaky_certificate/verification.json"
+      },
+      "processSummary": {
+        "runs": 1,
+        "tasks": 1
+      }
+    },
+    {
+      "id": "openai_totient_companion_zero",
+      "title": "Totient companion: zero case",
+      "subtitle": "欧拉函数伴随定理的零值情形",
+      "area": "数论",
+      "summary": "不存在满足指定倍数条件的种子时，证明加权计数与极限系数均为零。",
+      "en": {
+        "subtitle": "Totient companion: zero case",
+        "area": "Number theory",
+        "summary": "In the no-seed case, the weighted count and its limiting coefficient both vanish."
+      },
+      "status": "locally_verified",
+      "model": "TheoremOS · deepseek-flash",
+      "updatedAt": "2026-11-02T08:05:56.071Z",
+      "directory": "TotientCompanionZero",
+      "files": {
+        "Challenge.lean": "6e6e993b423efc7a30384d656956721918f9c484fca64036169715106799c878",
+        "Submission.lean": "7d3509714928edd3f6b6a634c42d9dbeefd01c17a65d0e152fc09d97e6568a20",
+        "Submission/Library/TheoremOS/Analysis/AsymptoticModuli.lean": "14c8c655a1521ffdd91bed3b4afd7d15092bee9a2feba77d6279fc70ff023f7e",
+        "Submission/Library/TheoremOS/Analysis/Daugavet.lean": "5ee31788907ce7b812c786c35cb2ccb5b300d60f843b9d18dd2645d16324271c",
+        "Submission/Library/TheoremOS/Analysis/LittlewoodPolynomial.lean": "b6848444e02449f5585d89b75fcaa351d7f57c1384bd57792a6b8b747ed86870",
+        "Submission/Library/TheoremOS/Analysis/MetricDistortion.lean": "15c5ebcc9242df00be1df9b967439f748b85879a5bb5a4060002ab96427503f5",
+        "Submission/Library/TheoremOS/BooleanCube/Fourier.lean": "f0a09eb8c04aca84e36c01734425cd07319a122ae516b2da471bcac6c47a6260",
+        "Submission/Library/TheoremOS/BooleanCube/Hypercontractivity.lean": "07cbd5eef79ee9febf6864dea2e2435f24144c2f6856ca07242768968c776997",
+        "Submission/Library/TheoremOS/BooleanCube/Influence.lean": "948c2b58a58dbdb44609c0f924fa76e87c2307f9407b0162b68847201d91f015",
+        "Submission/Library/TheoremOS/BooleanCube/LevelOne.lean": "c55d83aea93df19b8b242ee95734a6a86135e1ddbfa9dc6d90b24825ea1bc7a2",
+        "Submission/Library/TheoremOS/BooleanCube/Polynomial.lean": "ddf9fa8a20af3cca00c9fb40095d3791dcc3a72067f1bf0c92775e34f68ad970",
+        "Submission/Library/TheoremOS/BooleanCube/Product.lean": "142e451051fe7cf9ed644efabe8040bd44b7ed461575245ceefb3e6eb4c31ad6",
+        "Submission/Library/TheoremOS/BooleanCube/Relabel.lean": "ae5bba44af2f246084cfdafd70cb0d53110c3a8559783c384c20f33bb44e43ff",
+        "Submission/Library/TheoremOS/BooleanCube/Sensitivity.lean": "3d9eb595c51e9576bd7f0498ef3e3e8e2669090c0bcaa4e8fc1778635d495454",
+        "Submission/Library/TheoremOS/Combinatorics/BinomialEntropy.lean": "c546fd714c5453bf84350a57b70a4e9edca7ecfe46775334c4fc4d8d9f05924e",
+        "Submission/Library/TheoremOS/Combinatorics/EditDistance.lean": "4a6c2af4d563d6adb5e87f5805286d29e52b0be11ea55acaac4b7fe3a12daa0e",
+        "Submission/Library/TheoremOS/Combinatorics/GraphIndependence.lean": "8fe8bb8b33dd9da1441c8aa2b7eb6b414295f3aff14b0777b6e0ce06ab7bcad7",
+        "Submission/Library/TheoremOS/Combinatorics/PerfectMatching.lean": "2c2b235dc645d6e9e7cecb03a70fa955d4932c214e3772a2749f76dde4b5cfa1",
+        "Submission/Library/TheoremOS/Combinatorics/Ramsey.lean": "f4074b6622c28fd6146e4a8f8337811ab4544003064c86a0fff7c4d7a415fe47",
+        "Submission/Library/TheoremOS/Combinatorics/RamseyLower.lean": "33e40b8f4fc1220369dc0082e90a02a27e13b56459044a13fd10f636e6756321",
+        "Submission/Library/TheoremOS/Geometry/EuclideanCoordinates.lean": "c952ba750cd589d52b0127557fa81f9b6f904ac4cb56f983685e716188b0a248",
+        "Submission/Library/TheoremOS/Geometry/EuclideanRamsey.lean": "0dd86e82f255fa60d7612736135cbfc69111f776bff5c93ea949d3194bd2d3d6",
+        "Submission/Library/TheoremOS/Geometry/TranslativeCovering.lean": "4933683c1669980bd906d1ed2edc6238b733f1dcf5aba56a14d4b0bcffc0ef09",
+        "Submission/Library/TheoremOS/InformationTheory/Divergence.lean": "8e5eb6a47f74d0e1aa5e1e41cc6ecc61e5affe8aee75661c5c8d6b88fd9ff36c",
+        "Submission/Library/TheoremOS/InformationTheory/Entropy.lean": "cdf2132bbaf741c0317d68dffba14a23bdcc6dd5ac363de905960b1230742f5f",
+        "Submission/Library/TheoremOS/InformationTheory/Shearer.lean": "6a0a84121b0623fc6763a40f3fc3fa4c3a0633571a52f1f27f8f032d1b6ec1b2",
+        "Submission/Library/TheoremOS/LinearAlgebra/DensityMatrix.lean": "41142f65813bb7e375d2df4d03517395a340cfe2a080dbbd65ad37c2f135ea4b",
+        "Submission/Library/TheoremOS/LinearAlgebra/NumericalRange.lean": "b8ec1a3f74d2d6602c8800b85dcdbba64816597bbc50e6f12417b3fd0c123f9a",
+        "Submission/Library/TheoremOS/LinearAlgebra/Pauli.lean": "e074d65184d8bf4e6795d88f986c85dc45fdf9ba44013b3f766e9190bf740f84",
+        "Submission/Library/TheoremOS/LinearAlgebra/PiTensor.lean": "507c05b5a2ad7bf864948001dffa47a1f4a88683a6373b0982a4c0be0d512e62",
+        "Submission/Library/TheoremOS/LinearAlgebra/VonNeumannEntropy.lean": "c67cd4d888ca9d6e5e65541824ded0f75094eff904a12c535fa35926a8cd7439",
+        "Submission/Library/TheoremOS/Probability/BiasedProduct.lean": "3aba352332d21d1e23cd5129c31c5e2324001b565e172d08e61052e3aaf9e86a",
+        "Submission/Library/TheoremOS/Probability/Concentration.lean": "7f4b81c456990832101e726c12a45c08688f8d075000327d147caeed75c56c23",
+        "Submission/Library/TheoremOS/Probability/Coupling.lean": "10de7c80bb5f163ed6035c1ab44c670affab89ae66e1f3f01ea6644cc91cea23",
+        "Submission/Library/TheoremOS/Probability/Dobrushin.lean": "1f2fb5d31e153c880e3e9dfeb76e1ab46dd2501010520d17cb511ba4f2594450",
+        "Submission/Library/TheoremOS/Probability/FiniteProbability.lean": "92b0f51cf0d792ded51aad74d7f7c263edd78604f84cdc9ff62acdf631cbb996",
+        "Submission/Library/TheoremOS/Probability/GaussianIBP.lean": "819c32889631651e2301ce86f1b1edb90681da9500ebb8cf3bb8eee253c05e47",
+        "Submission/Library/TheoremOS/Probability/LocalLemma.lean": "50c6809fcf8d04d37f724b2880ff81a6deef29fbb4773489c9581c711d39e28a",
+        "Submission/Library/TheoremOS/Probability/MixingLowerBound.lean": "5542c32827d6ace88a20086974a6b00647e197f9544babfbfb9f8f7bf7835f4d",
+        "Submission/Library/TheoremOS/Probability/RandomKSAT.lean": "537759213f92186ddb2f8421c004248f1b743f6a7ccb0e62396bfb015ae98b98",
+        "Submission/Library/TheoremOS/Probability/RandomKSATThreshold.lean": "4b4ca067b54b97c4dc1de10f6188e6ed341bf47c1e4810e3d90a87e7ad551685",
+        "Submission/Library/TheoremOS/Probability/SpectralGap.lean": "3902b6999f3f6a115feaed05e0b2034e948892c233b410e913ae1b3ba3490eb4",
+        "Submission/Library/TheoremOS/Probability/SphereLaw.lean": "8da2473c0e75d137696cdff9115e38b658402ba3bd7ba03d5521d1344e86cc0c",
+        "Submission/Library/TheoremOS/Probability/TreeReconstruction.lean": "cf91591ad7ab77463ba4c64dee04529a87e730716380bc87a569359d2485f54e",
+        "Submission/Library/TheoremOS/RepresentationTheory/GroupFourier.lean": "1c7941dad0d9e6c4a998b9bca99057d78a18a2b093364df4c401f1656e6a1ea7",
+        "Submission/Library/TheoremOS/RepresentationTheory/Plancherel.lean": "8bc8e66a977c0163e4dbec79746e899738537415d10558008654ceb30266a06e",
+        "process.json": "8ffdbe3930cff45eb51504dbd7f9a5549ed6f504975834100d4fb5f8f49e3762",
+        "verification.json": "71a4845c20f1ce0a8dc17f9ff58e968f11b9c0f1853a0b73b4aa8380a92974d3"
+      },
+      "declaration": "theorem companion_zero_case",
+      "campaign": {
+        "target": "TotientCompanionZero",
+        "runId": "41f80030-d1b0-4b66-acb6-3f0ddc1f26de",
+        "targets": [
+          "OAI.TotientAsymptotic.companion_zero_case"
+        ],
+        "proofCommit": "aa806af94c74165066e97791ffc34e05eaa416a3",
+        "proofSha256": "7d3509714928edd3f6b6a634c42d9dbeefd01c17a65d0e152fc09d97e6568a20",
+        "kernelReceiptIds": [
+          "lean-8ecef6aef371642566c229e1"
+        ],
+        "comparatorExitCode": 0,
+        "reviewStatus": "accepted",
+        "attribution": "TheoremOS 原生运行；记录包含外部代理提供的独立数学辅助、已保存候选的交接或续跑。",
+        "attributionEn": "TheoremOS native run with recorded independent mathematical assistance from external agents, saved-candidate handoff or continuation.",
+        "evidenceUrl": "data/proofs/openai_totient_companion_zero/verification.json"
+      },
+      "processSummary": {
+        "runs": 1,
+        "tasks": 1
+      }
+    },
+    {
+      "id": "openai_truffet_counterexample",
+      "title": "A finite counterexample to Truffet’s procedure",
+      "subtitle": "Truffet 优化程序的有限反例",
+      "area": "热带优化",
+      "summary": "构造两步均具有唯一选择且正常终止的执行，所得可行解目标值为 1，而另一可行解目标值为 0。",
+      "en": {
+        "subtitle": "A finite counterexample to Truffet’s procedure",
+        "area": "Tropical optimization",
+        "summary": "A forced two-step execution terminates with objective value 1 despite a feasible alternative of value 0."
+      },
+      "status": "locally_verified",
+      "model": "TheoremOS · deepseek-flash",
+      "updatedAt": "2026-10-22T18:43:27.138Z",
+      "directory": "TruffetCounterexample",
+      "files": {
+        "Challenge.lean": "03fe8de8feab6eeb5144931898f079a0f900e695bf3f8c5d3de3dbc177e21169",
+        "Submission.lean": "442334bfd22cf81c9582b071cd6b370f2b6969d961418e6b084a25cc87ae4a91",
+        "process.json": "9c927927241b79712fc736eef7ccbbe7ae524cdb6eed62d0b5368cd17e8a706c",
+        "verification.json": "053c1d2513dd063d7e3717001755ad44db07c0ba9bdca205a21928940a93ac25"
+      },
+      "declaration": "theorem finite_execution_not_optimal",
+      "campaign": {
+        "target": "TruffetCounterexample",
+        "runId": "de7a57e9-becf-4f94-9276-2090ab3f2738",
+        "targets": [
+          "OAI.TruffetV4Counterexample.finite_execution_not_optimal"
+        ],
+        "proofCommit": "df3f7cd329218f4eaca2d1b1020b2887a2e2018d",
+        "proofSha256": "442334bfd22cf81c9582b071cd6b370f2b6969d961418e6b084a25cc87ae4a91",
+        "kernelReceiptIds": [
+          "lean-d0437fcbebf92fbd081ff7e8"
+        ],
+        "comparatorExitCode": 0,
+        "reviewStatus": "accepted",
+        "attribution": "TheoremOS 原生运行；当前接受运行未见外部数学编辑记录，保留已记录的历史续跑。",
+        "attributionEn": "TheoremOS native run. No external mathematical edit was found in the accepted run; recorded continuation is retained.",
+        "evidenceUrl": "data/proofs/openai_truffet_counterexample/verification.json"
+      },
+      "processSummary": {
+        "runs": 3,
+        "tasks": 5
       }
     },
     {
@@ -790,7 +726,7 @@
       "files": {
         "Challenge.lean": "23841ffc513082acb9bb26c50733c4efa852c41f94ec018d8271c0a74feae099",
         "Submission.lean": "fc4c35ba96e2fef31d57635d0cd237498eaacf87bdeba7510a0daac5d6d663af",
-        "process.json": "97f86b1823a5245f4c163ff9c5fdb70f801f5a6ec238890097e57d9f7b1e762b",
+        "process.json": "b7a269831ea535c7bd08e2022fbff431a5c1b62a09e23995edd03940fe489f84",
         "verification.json": "2b01d8e286e5a0760b474a331d7882e003cb23029bb5366ad835e7ca33428fa6"
       },
       "declaration": "theorem numericalClosure_geometry",
@@ -949,6 +885,270 @@
       "processSummary": {
         "runs": 4,
         "tasks": 19
+      }
+    },
+    {
+      "id": "openai_snaky_conditional",
+      "title": "A 35-move winning strategy for Snaky",
+      "subtitle": "Snaky 的 35 步获胜策略",
+      "area": "组合博弈",
+      "summary": "构造面对合法应手时能在 35 步内完成 Snaky 的合法策略，并证明题设棋盘不变量。",
+      "en": {
+        "subtitle": "A 35-move winning strategy for Snaky",
+        "area": "Combinatorial games",
+        "summary": "Constructs a legal strategy completing a Snaky within 35 moves against legal replies while preserving the stated board invariants."
+      },
+      "status": "locally_verified",
+      "model": "TheoremOS · deepseek-flash",
+      "updatedAt": "2026-10-24T13:50:29.323Z",
+      "directory": "SnakyConditional",
+      "files": {
+        "Challenge.lean": "3ab27d66779b557d0efcc3cfcf8317c40511e3cc655da29e61e95ba3f34d45ea",
+        "Submission.lean": "dc40df160330f9058ff0af4e85adac6ed1be8be0b2d54c7fba5f10f71450eaae",
+        "process.json": "dd74f0c6be9f53e5d16fed1a89db3e5b0d402ca55134484d9709453f5f66e333",
+        "verification.json": "c070e5bc6b5e8a6b2f657792657e34ffa1f78514095468403604733a59058620"
+      },
+      "declaration": "theorem snaky_winning_strategy_with_legal_states",
+      "campaign": {
+        "target": "SnakyConditional",
+        "runId": "e2b78e94-e26d-4b02-a8e5-53375547ef4d",
+        "targets": [
+          "OAI.SnakyConditional.snaky_winning_strategy_with_legal_states"
+        ],
+        "proofCommit": "14d49c0f2bb94a8973471120f675554798126117",
+        "proofSha256": "dc40df160330f9058ff0af4e85adac6ed1be8be0b2d54c7fba5f10f71450eaae",
+        "kernelReceiptIds": [
+          "lean-63766151ffe8a0523a860487"
+        ],
+        "comparatorExitCode": 0,
+        "reviewStatus": "accepted",
+        "attribution": "TheoremOS 原生运行；记录包含外部代理提供的独立数学辅助、已保存候选的交接或续跑。",
+        "attributionEn": "TheoremOS native run with recorded independent mathematical assistance from external agents, saved-candidate handoff or continuation.",
+        "evidenceUrl": "data/proofs/openai_snaky_conditional/verification.json"
+      },
+      "processSummary": {
+        "runs": 2,
+        "tasks": 2
+      }
+    },
+    {
+      "id": "openai_honeycomb_free_energy",
+      "title": "The honeycomb free-energy limit",
+      "subtitle": "蜂窝格自由能极限的存在性",
+      "area": "概率与统计物理",
+      "summary": "证明蜂窝格自避游走的单位长度对数配分函数在给定外力参数下收敛。",
+      "en": {
+        "subtitle": "The honeycomb free-energy limit",
+        "area": "Probability and statistical physics",
+        "summary": "Convergence of the normalized logarithmic partition function for honeycomb self-avoiding walks under the specified force parameters."
+      },
+      "status": "locally_verified",
+      "model": "TheoremOS · deepseek-flash",
+      "updatedAt": "2026-10-28T14:45:48.559Z",
+      "directory": "HoneycombFreeEnergy",
+      "files": {
+        "Challenge.lean": "30d5989a93216f9aea4f6bb23846090e24bd87b797ea1620d661de2bd9f99f81",
+        "Submission.lean": "1472d78c68ac552b7ec3ff4c3d307035cb30aa08c734c95eae7f66e6b4b3601c",
+        "process.json": "4b9704aa9b515f9bb4772d8a222b79499e851ec268cc64ebe7c3d48fdb667216",
+        "verification.json": "e36a23c663eb8f7d1fd73fce2416b6d7741cee201f40758c79ff2065e95e5786"
+      },
+      "declaration": "theorem logPartition_tendsto",
+      "campaign": {
+        "target": "HoneycombFreeEnergy",
+        "runId": "42061240-6393-47da-b4bf-a58bef9080ea",
+        "targets": [
+          "OAI.HoneycombForce.logPartition_tendsto"
+        ],
+        "proofCommit": "7d45dd3e782398f02a4f953671e055f2e7ff54db",
+        "proofSha256": "1472d78c68ac552b7ec3ff4c3d307035cb30aa08c734c95eae7f66e6b4b3601c",
+        "kernelReceiptIds": [
+          "lean-83aa30ee1bd32191189113c6"
+        ],
+        "comparatorExitCode": 0,
+        "reviewStatus": "accepted",
+        "attribution": "TheoremOS 原生运行；当前接受运行未见外部数学编辑记录，保留已记录的历史续跑。",
+        "attributionEn": "TheoremOS native run. No external mathematical edit was found in the accepted run; recorded continuation is retained.",
+        "evidenceUrl": "data/proofs/openai_honeycomb_free_energy/verification.json"
+      },
+      "processSummary": {
+        "runs": 5,
+        "tasks": 55
+      }
+    },
+    {
+      "id": "openai_plane_coloring",
+      "title": "A seven-coloring of the Euclidean plane",
+      "subtitle": "欧氏平面的七色着色",
+      "area": "离散几何",
+      "summary": "证明欧氏平面存在七色着色，使任意距离恰为 1 的两点颜色不同。",
+      "en": {
+        "subtitle": "A seven-coloring of the Euclidean plane",
+        "area": "Discrete geometry",
+        "summary": "The Euclidean plane admits a seven-coloring in which points at unit distance have different colors."
+      },
+      "status": "locally_verified",
+      "model": "TheoremOS · deepseek-flash",
+      "updatedAt": "2026-10-28T13:26:18.865Z",
+      "directory": "PlaneColoring",
+      "files": {
+        "Challenge.lean": "868e71b127ba5bc82474130618483289ac29cc58c45898eb0216199080c9dc37",
+        "Submission.lean": "3e842122e50547b602873e71db599cc6782414fec9c60a08c664d43586341d12",
+        "process.json": "ea450ee5b706f20cadba4c43b61a1b6fc151ccd98aefcc950d24aa9b90eee42f",
+        "verification.json": "07fc2e40e574af14e84bde2dc8c7c96b428e1970de32bec68e4a4866eee07570"
+      },
+      "declaration": "theorem properColoring_seven",
+      "campaign": {
+        "target": "PlaneColoring",
+        "runId": "58e5a793-5940-4b38-aa6a-2a71ae0cac3f",
+        "targets": [
+          "OAI.Problem160.properColoring_seven"
+        ],
+        "proofCommit": "0571db4c10de8a17ba937c853f480284cbbb9642",
+        "proofSha256": "3e842122e50547b602873e71db599cc6782414fec9c60a08c664d43586341d12",
+        "kernelReceiptIds": [
+          "lean-a9016accc1b094f81c9dc7bd"
+        ],
+        "comparatorExitCode": 0,
+        "reviewStatus": "accepted",
+        "attribution": "TheoremOS 原生运行；当前接受运行未见外部数学编辑记录，保留已记录的历史续跑。",
+        "attributionEn": "TheoremOS native run. No external mathematical edit was found in the accepted run; recorded continuation is retained.",
+        "evidenceUrl": "data/proofs/openai_plane_coloring/verification.json"
+      },
+      "processSummary": {
+        "runs": 3,
+        "tasks": 24
+      }
+    },
+    {
+      "id": "openai_finite_congruence_graph",
+      "title": "A colored-graph criterion for congruence lattices",
+      "subtitle": "有限同余格的彩色图判据",
+      "area": "泛代数与格论",
+      "summary": "证明有限格可表示为非空有限代数的完整同余格，当且仅当它具有满足给定条件的有限非空彩色图见证。",
+      "en": {
+        "subtitle": "A colored-graph criterion for congruence lattices",
+        "area": "Universal algebra and lattice theory",
+        "summary": "A finite lattice is the full congruence lattice of a nonempty finite algebra exactly when it admits the specified finite colored-graph witness."
+      },
+      "status": "locally_verified",
+      "model": "TheoremOS · deepseek-flash",
+      "updatedAt": "2026-10-28T15:52:23.095Z",
+      "directory": "FiniteCongruenceGraph",
+      "files": {
+        "Challenge.lean": "2ee495def2e1228bf13df520f6c66699ec22b2cd3bc1ae7383a30957aae9f967",
+        "Submission.lean": "6b32441db35b95aed73a9f7acdb44c57bc0f5c3e1556113478e96f921b022a3f",
+        "process.json": "fbef60fc6b3e57e10093e56017e3eacc5470379656561efb3be9b721c52ba898",
+        "verification.json": "62c70ee83974aa282ca8be91418ee74e7584bc15776557d4212481671516472e"
+      },
+      "declaration": "theorem graph_criterion",
+      "campaign": {
+        "target": "FiniteCongruenceGraph",
+        "runId": "24910705-72c7-4d57-9d54-d8c3d6cb4e2e",
+        "targets": [
+          "OAI.FiniteCongruence.graph_criterion"
+        ],
+        "proofCommit": "01ed741391d019c9dc0029aecb7caa618152a0e8",
+        "proofSha256": "6b32441db35b95aed73a9f7acdb44c57bc0f5c3e1556113478e96f921b022a3f",
+        "kernelReceiptIds": [
+          "lean-62d0a01bd5f9297b85941d84"
+        ],
+        "comparatorExitCode": 0,
+        "reviewStatus": "accepted",
+        "attribution": "TheoremOS 原生运行；当前接受运行未见外部数学编辑记录，保留已记录的历史续跑。",
+        "attributionEn": "TheoremOS native run. No external mathematical edit was found in the accepted run; recorded continuation is retained.",
+        "evidenceUrl": "data/proofs/openai_finite_congruence_graph/verification.json"
+      },
+      "processSummary": {
+        "runs": 3,
+        "tasks": 11
+      }
+    },
+    {
+      "id": "openai_hadamard_cube_fiber",
+      "title": "Hadamard cube-fiber cancellation",
+      "subtitle": "六阶 Hadamard 行比值的立方纤维消去",
+      "area": "线性代数",
+      "summary": "对矩阵及其逐项平方均为复 Hadamard 的六阶情形，证明题设指定立方纤维上的行比值之和为零。",
+      "en": {
+        "subtitle": "Hadamard cube-fiber cancellation",
+        "area": "Linear algebra",
+        "summary": "For an order-six complex Hadamard matrix whose entrywise square is also Hadamard, proves cancellation on the cube fiber specified by the statement."
+      },
+      "status": "locally_verified",
+      "model": "TheoremOS · deepseek-flash",
+      "updatedAt": "2026-10-22T19:37:43.061Z",
+      "directory": "HadamardCubeFiber",
+      "files": {
+        "Challenge.lean": "9f412781be8b38c88a6efb3a4528d4c990071a233cd931612d4710213d6366a1",
+        "Submission.lean": "d818e4c8217e53057b254f92285bb22930f2b47504ed68d7e8def9d2547fa3a1",
+        "process.json": "0363bf16eb309c650770431fcd400e4930bad727055bfce37d693e6922c9cbc7",
+        "verification.json": "50edea09a1ab435df33ef1d7acffbc18234c0bef38b22728bdba747018b9bc37"
+      },
+      "declaration": "theorem rowRatio_cubeFiber_sum_zero",
+      "campaign": {
+        "target": "HadamardCubeFiber",
+        "runId": "3f2c13eb-fbf3-47d4-bff5-aed2489d23aa",
+        "targets": [
+          "OAI.HadamardSix.rowRatio_cubeFiber_sum_zero"
+        ],
+        "proofCommit": "be3ac1e85859e7f88229dd3eab02a492b9ca2d5a",
+        "proofSha256": "d818e4c8217e53057b254f92285bb22930f2b47504ed68d7e8def9d2547fa3a1",
+        "kernelReceiptIds": [
+          "lean-56712d405ce90b7537a528c4"
+        ],
+        "comparatorExitCode": 0,
+        "reviewStatus": "accepted",
+        "attribution": "TheoremOS 原生运行；记录包含外部代理提供的独立数学辅助、已保存候选的交接或续跑。",
+        "attributionEn": "TheoremOS native run with recorded independent mathematical assistance from external agents, saved-candidate handoff or continuation.",
+        "evidenceUrl": "data/proofs/openai_hadamard_cube_fiber/verification.json"
+      },
+      "processSummary": {
+        "runs": 1,
+        "tasks": 1
+      }
+    },
+    {
+      "id": "openai_surface_cone_candidate_support",
+      "title": "A three-dimensional complete local candidate ring",
+      "subtitle": "三维完备局部候选环",
+      "area": "交换代数",
+      "summary": "构造 Krull 维数为 3、剩余域为复数域的完备诺特正规局部复代数。",
+      "en": {
+        "subtitle": "A three-dimensional complete local candidate ring",
+        "area": "Commutative algebra",
+        "summary": "A complete Noetherian normal local complex algebra of Krull dimension three with residue field equal to the complex numbers."
+      },
+      "status": "locally_verified",
+      "model": "TheoremOS · deepseek-flash",
+      "updatedAt": "2026-10-22T19:19:24.949Z",
+      "directory": "SurfaceConeCandidateSupport",
+      "files": {
+        "Challenge.lean": "c75e9be97bcb12a6c289b6652337fc32398064fe8bef7cd910110a9d96fae56e",
+        "Submission.lean": "bc4a1cec74196b46dd726a46dc467c40b8657527dbd235a49a3cf0b5e4355ac9",
+        "process.json": "f2deb32d28858d5dac51925315fb51c757b978b446689a6596b996066162f140",
+        "verification.json": "4ae49258691771d60927a99c786e7d26b9fe5a69fef2009f89630509bf2f807b"
+      },
+      "declaration": "theorem candidate_ring_properties",
+      "campaign": {
+        "target": "SurfaceConeCandidateSupport",
+        "runId": "cbfa1f3c-2760-4d7e-987a-97b48698fd49",
+        "targets": [
+          "OAI.SmallCM.candidate_ring_properties"
+        ],
+        "proofCommit": "2ef811423f23eea4d7bea4bc2b74b49f436a706e",
+        "proofSha256": "bc4a1cec74196b46dd726a46dc467c40b8657527dbd235a49a3cf0b5e4355ac9",
+        "kernelReceiptIds": [
+          "lean-19a2a6295419e03112cc5e18"
+        ],
+        "comparatorExitCode": 0,
+        "reviewStatus": "accepted",
+        "attribution": "TheoremOS 原生运行；记录包含外部代理提供的独立数学辅助、已保存候选的交接或续跑。",
+        "attributionEn": "TheoremOS native run with recorded independent mathematical assistance from external agents, saved-candidate handoff or continuation.",
+        "evidenceUrl": "data/proofs/openai_surface_cone_candidate_support/verification.json"
+      },
+      "processSummary": {
+        "runs": 2,
+        "tasks": 4
       }
     }
   ]

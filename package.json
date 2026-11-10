@@ -59,6 +59,11 @@
     "test:web-plan-structure": "bun scripts/test-web-plan-structure.ts",
     "test:web-guidance-recovery": "bun scripts/test-web-guidance-recovery.ts",
     "test:web-research-progress": "bun scripts/test-web-research-progress.ts",
+    "test:web-research-information": "bun scripts/test-web-research-information.ts",
+    "test:web-installed-library": "bun scripts/test-web-installed-library.ts",
+    "test:web-library-reference": "bun scripts/test-web-library-reference.ts",
+    "test:web-live-source-actions": "bun scripts/test-web-live-source-actions.ts",
+    "test:web-openai-problems": "bun scripts/test-web-openai-problems.ts",
     "test:web-mathematical-changes": "bun scripts/test-web-mathematical-changes.ts",
     "test:web-reviews": "bun scripts/test-web-reviews.ts",
     "test:web-workbench-ux": "bun scripts/test-web-workbench-ux.ts",
@@ -99,6 +104,8 @@
     "test:web-classics": "bun scripts/test-web-classics.ts",
     "test:web-formalize": "bun scripts/test-web-formalize.ts",
     "test:web-chat-session": "bun scripts/test-web-chat-session.ts",
+    "test:web-chat-mathematics": "bun scripts/test-web-chat-mathematics.ts",
+    "test:web-research-login-navigation": "bun scripts/test-web-research-login-navigation.ts",
     "test:web-chat-recovery": "bun scripts/test-web-chat-recovery.ts",
     "test:web-chat-cancel-recovery": "bun scripts/test-web-chat-cancel-recovery.ts",
     "test:web-chat-artifacts": "bun scripts/test-web-chat-artifacts.ts",
@@ -109,7 +116,11 @@
     "test": "vitest run",
     "test:solver-reliability": "THEOREMOS_TEST_REQUIRE_LEAN=1 vitest run --maxWorkers=4 tests/leanTestEnvironment.test.ts tests/continuationSeed.test.ts tests/continuationInput.test.ts tests/continuationContext.test.ts tests/continuationSearch.test.ts tests/taskSourceProjection.test.ts tests/taskTypePreflight.test.ts tests/solverTaskTypePreflight.test.ts tests/leanTypeDiagnostics.test.ts tests/leanTypeDiagnosticsEnvironment.test.ts tests/verificationCheckpoint.test.ts tests/workerProofCheckpoint.test.ts tests/solverProofReady.test.ts tests/solverProofReadyIntake.test.ts tests/solverProofImport.test.ts tests/solverRestore.test.ts tests/solverCooperativeCheckpoints.test.ts tests/solverHumanEditRecovery.test.ts tests/solverIntegrationRecovery.test.ts tests/solverIntegrationConcurrency.test.ts tests/solverIntegrationBatch.test.ts tests/solverCanonicalTaskProof.test.ts tests/solverConditionalIntegration.test.ts tests/proofReuseEnvironment.test.ts tests/cooperativeReplay.test.ts",
     "test:formalization": "bun scripts/test-formalization.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:frontend-product-continuity": "bun scripts/test-web-research-entry.ts && bun scripts/test-web-collaboration-actions.ts && bun scripts/test-web-collaboration-entry-permissions.ts && bun scripts/test-web-collaboration-continuity.ts && bun scripts/test-web-candidate-continuity.ts && bun scripts/test-web-research-library-trials.ts && bun scripts/test-web-research-collections.ts && bun scripts/test-web-research-workspace.ts && bun scripts/test-web-research-problem.ts && bun scripts/test-web-practice.ts && bun scripts/test-web-first-research-sharing.ts",
+    "test:frontend-research-redesign": "bun scripts/test-web-installed-library.ts && bun scripts/test-web-openai-problems.ts && bun scripts/test-web-library-reference.ts && bun scripts/test-web-live-source-actions.ts && bun scripts/test-web-research-information.ts && bun scripts/test-web-chat-mathematics.ts && bun scripts/test-web-research-login-navigation.ts && bun scripts/test-web-results.ts",
+    "test:frontend-research-unit": "bunx vitest run --maxWorkers=4 tests/firstResearchModel.test.ts tests/researchCollaboration.test.ts tests/researchDraftStore.test.ts tests/researchEntry.test.ts tests/researchPractice.test.ts tests/shareReading.test.ts tests/webResearchCollections.test.ts tests/webResearchLibraryTrials.test.ts tests/webResearchMathExamples.test.ts tests/webResearchProblems.test.ts tests/webResearchReleaseComparison.test.ts tests/webResearchWorkspace.test.ts tests/webChatAnswer.test.ts tests/webChatMathematics.test.ts tests/webInstalledLibrary.test.ts tests/webLoginReturn.test.ts tests/webResearchProblemDraft.test.ts tests/archiveProcessEvidence.test.ts tests/archiveRoadmap.test.ts tests/proofWalkthrough.test.ts tests/libraryCatalog.test.ts tests/webResearchApi.test.ts tests/webResearchAssets.test.ts tests/webResearchProjects.test.ts tests/webPresentation.test.ts tests/webShare.test.ts tests/webI18n.test.ts tests/webChatDraft.test.ts tests/webOwnedDrafts.test.ts tests/webRunSnapshot.test.ts",
+    "test:site-research-entry": "node scripts/test-site-research-entry.mjs"
   },
   "dependencies": {
     "eventsource-parser": "3.0.6",

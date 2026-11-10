@@ -46,7 +46,7 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
   const buildManifestRef = path.resolve(required(flags, 'build-manifest'));
   readMathBuildManifest(buildManifestRef, root, path.join(root, 'out/main'));
   const codex = flags.get('codex') ?? process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE ?? 'codex';
-  const coordination = flags.get('coordination') ?? 'cooperative';
+  const coordination = flags.get('coordination') ?? 'independent';
   if (coordination !== 'cooperative' && coordination !== 'independent') throw new Error('--coordination must be cooperative or independent');
   const request = prepareAutoLibraryBuild(directory, root, {
     challengeId: required(flags, 'challenge-id'), challengeSource: readFile(required(flags, 'challenge-file'), LEAN_TASK_SOURCE_MAX_BYTES),
@@ -55,7 +55,7 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
     planner: { model: flags.get('model') ?? 'deepseek-flash', effort: flags.get('effort') ?? 'max', executable: codex,
       profile: path.resolve(flags.get('profile') ?? (process.env.CODEX_HOME || path.join(os.homedir(), '.config/deepscientist/math-sol-codex'))) },
     prover: { model: flags.get('prover-model') ?? flags.get('model') ?? 'deepseek-flash', effort: flags.get('prover-effort') ?? flags.get('effort') ?? 'max',
-      executable: codex, workers: integerFlag(flags, 'workers', 4), coordination,
+      executable: codex, workers: integerFlag(flags, 'workers', 1), coordination,
       maxRunSeconds: integerFlag(flags, 'prover-max-run-seconds', 3600), maxTurns: integerFlag(flags, 'prover-max-turns', 200),
       maxTurnSeconds: integerFlag(flags, 'prover-max-turn-seconds', 180), maxTotalTokens: integerFlag(flags, 'prover-max-total-tokens', 0),
       prepareTimeoutSeconds: integerFlag(flags, 'prepare-timeout-seconds', 1800) },
@@ -109,7 +109,7 @@ export async function autoLibrary(argv: string[]): Promise<number> {
       + '  [--demand-file FILE] (a frozen source-bound gap from the demand phase)\n'
       + '  [--definition-targets Qualified.name,Other.name] (original definitions to solve)\n'
       + '  [--model deepseek-flash --effort max] (planner) [--prover-model M --prover-effort E] [--profile DIR] [--codex FILE]\n'
-      + '  [--workers 4] [--coordination cooperative|independent] [--max-modules 1] [--max-rounds 3]\n'
+      + '  [--workers 1] [--coordination independent|cooperative] [--max-modules 1] [--max-rounds 3]\n'
       + '  [--max-run-seconds 7200] [--max-total-tokens 0] [--planner-turn-seconds 1800]\n'
       + '  [--prover-max-run-seconds 3600] [--prover-max-turns 200] [--prover-max-turn-seconds 180] [--prover-max-total-tokens 0]\n'
       + '  [--prepare-timeout-seconds 1800] (0 = unlimited for run, token and turn limits)\n'

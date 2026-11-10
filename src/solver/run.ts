@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { VerificationCheckpointError, withVerificationCheckpoints } from './verificationCheckpoint';
 import { parseArgs } from 'node:util';
 import { readMathBuildManifest } from '../math/mathBuildManifest';
+import { MathGitError } from '../math/mathGit';
 import { canonicalMathJson, mathDigest, readMathJson, readMathText, withMathRuntimeLease, writeMathJsonDurable, type MathLease } from '../math/mathRuntimeIo';
 import { projectMathematicsRuntimeEnvironment, resolveMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnvironment';
 import { MATH_TOOLS_ROOT_ENV, MATH_TOOLS_SHA256_ENV, readMathTools } from '../math/mathTools';
@@ -527,7 +528,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
     } catch (error) {
       // Cleanup remains under the run lock; preserve the execution error if cleanup also fails.
       try { await disposeProofEnvironment(); } catch { /* The original failure controls the checkpoint. */ }
-      if (!ownsRun) { emit('rejected', { reason: error instanceof Error ? error.message : 'math_runtime_error' }); return 1; }
+      if (!ownsRun) { emit('rejected', { reason: error instanceof Error ? error.message : 'math_runtime_error',
+        ...(error instanceof MathGitError ? { git: error.diagnostic } : {}) }); return 1; }
       lease.assertOwned();
       const checkpoint = error instanceof VerificationCheckpointError;
       const libraryRequest = error instanceof LibraryInstallationRequested ? error : undefined;
@@ -554,7 +556,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
         ...(libraryRequest ? { libraryRequest: { request: libraryRequest.request, worktree: libraryRequest.worktree } } : {}),
         evaluator: { status: 'skipped' }, stateFile });
       publishedExit = controller.signal.aborted || checkpoint ? 4 : 1;
-      emit('finished', { status, output });
+      emit('finished', { status, output, ...(error instanceof MathGitError ? { git: error.diagnostic } : {}) });
       return publishedExit;
     }
   };

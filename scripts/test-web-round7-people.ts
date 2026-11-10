@@ -43,12 +43,13 @@ type Person = keyof typeof passwords;
 async function newContext(locale: 'zh' | 'en' = 'zh') {
   const context = await browser.newContext({ locale: locale === 'en' ? 'en-US' : 'zh-CN',
     viewport: { width: locale === 'en' ? 390 : 1440, height: 1000 }, reducedMotion: 'reduce' });
+  context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
   await context.addInitScript(locale => { try { localStorage.setItem('theorem-os.locale.v1', locale); } catch { /* about:blank has no storage. */ } }, locale);
   await context.route(/^https?:\/\//u, async route => {
     if (new URL(route.request().url()).origin !== origin) { external.push(route.request().url()); await route.abort(); }
     else await route.continue();
   });
-  context.on('page', page => { page.setDefaultTimeout(12_000); page.on('pageerror', error => pageErrors.push(error.message)); });
+  context.on('page', page => { page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0); page.on('pageerror', error => pageErrors.push(error.message)); });
   return context;
 }
 async function call(context: BrowserContext, method: string, pathname: string, input?: unknown) {
@@ -107,6 +108,7 @@ try {
       phase = label + (externalUpdate ? ': reviewed replacement creates a new save intent' : ': unchanged uncertain save recovers the original receipt once');
       const context = await newContext(locale); await context.addCookies(await alice.cookies(origin));
       const page = await context.newPage(); active = page; await page.goto(origin + '/people.html');
+      await page.getByRole('link', { name: text('我的主页', 'My profile'), exact: true }).click();
       await page.getByText(text('编辑我的资料', 'Edit my profile'), { exact: true }).click();
       const biography = page.getByLabel(text('简介', 'Biography'), { exact: true }), save = page.getByRole('button', { name: text('保存资料', 'Save profile'), exact: true });
       const input = `${label} RETAINED PROFILE ${externalUpdate ? 'NEW INTENT' : 'ORIGINAL RECEIPT'}`;

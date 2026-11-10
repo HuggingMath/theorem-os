@@ -18,6 +18,7 @@ try {
   assert.equal(await page.locator('.proof-row').count(), catalog.records.length);
   await page.locator('[data-proof-id="annals_equiangular_lines_fixed_angle"]').click();
   assert.equal(await page.locator('#inspector .detail-title').innerText(), 'Equiangular lines');
+  await page.evaluate(() => scrollTo(0, 0));
   await page.screenshot({ path: path.join(root, 'docs/assets/archive-preview.png') });
   await page.setViewportSize({ width: 390, height: 844 });
   const inspector = page.locator('#inspector');
@@ -25,6 +26,9 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   const bounds = await inspector.boundingBox();
   assert.ok(bounds && bounds.width > 300 && bounds.height > 500);
+  // Keep the full panel inside the viewport when capturing fixed-position elements.
+  await page.setViewportSize({ width: 390, height: Math.ceil(bounds.height) + 60 });
+  await inspector.scrollIntoViewIfNeeded();
   await inspector.screenshot({ path: path.join(root, 'docs/assets/archive-preview-mobile.png') });
   console.log(JSON.stringify({ source: 'local proof archive', acceptedCount, recordCount: catalog.records.length,
     desktop: { width: 1440, height: 900 },
