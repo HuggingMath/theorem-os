@@ -166,15 +166,17 @@ print('independent snapshots passed')`);
   it('discovers bounded standard-library metadata before explicitly requesting full types in the namespace', async () => {
     const f = fixture(), sandbox = await prepare(f), missing = 'Nat.missing_library_api_fixture';
     const command = ['/usr/bin/python3', '-I', '/opt/formalization/library-api.py'];
+    const literalQueries = ['Fin.cast.*', 'Fin.cast"', 'TheoremOS.不存在_🔍'];
     const discovery = await runCommand(sandbox, [...command,
-      '--query', 'Fin.cast', '--query', 'fIN.CAST', '--query', 'NAT.ADD_ZERO', '--query', missing, '--limit', '2'], '', 95_000);
+      '--query', 'Fin.cast', '--query', 'fIN.CAST', '--query', 'NAT.ADD_ZERO', '--query', missing,
+      ...literalQueries.flatMap(query => ['--query', query]), '--query', 'Fin.cast', '--limit', '2'], '', 95_000);
     expect(discovery.status, discovery.stderr + discovery.stdout).toBe(0); expect(discovery.stderr).toBe('');
     const discovered = JSON.parse(discovery.stdout), config = getLeanTaskEnvironment('standard');
     const identity = { schema: 'theorem-os.library-api.v2', authority: 'advisory-lean-process', environment: 'standard',
       toolchain: config.toolchain, environmentDigest: config.dependencyDigest, mathlibRevision: null };
     expect(discovered).toMatchObject(identity); expect(discovered.symbols).toEqual([]);
     const [upper, lower, exact, absent] = discovered.queries;
-    expect(discovered.queries).toHaveLength(4); expect(upper.query).toBe('Fin.cast'); expect(lower.query).toBe('fIN.CAST');
+    expect(discovered.queries).toHaveLength(7); expect(upper.query).toBe('Fin.cast'); expect(lower.query).toBe('fIN.CAST');
     expect(upper.names).toHaveLength(2); expect(upper.totalMatches).toBeGreaterThan(2); expect(upper.truncated).toBe(true);
     expect(lower).toEqual({ ...upper, query: 'fIN.CAST' });
     for (const query of discovered.queries) {
@@ -190,6 +192,8 @@ print('independent snapshots passed')`);
     expect(exact.names[0]).toBe('Nat.add_zero');
     expect(exact.matches[0]).toMatchObject({ name: 'Nat.add_zero', kind: 'theorem', class: false, structure: false });
     expect(absent).toEqual({ query: missing, totalMatches: 0, truncated: false, names: [], matches: [] });
+    expect(discovered.queries.slice(4)).toEqual(literalQueries.map(query =>
+      ({ query, totalMatches: 0, truncated: false, names: [], matches: [] })));
 
     const names = ['Nat.add_zero', 'Nat', 'Inhabited', missing, 'nat.add_zero', upper.names[0], 'Nat.add_zero'];
     const result = await runCommand(sandbox, [...command, ...names.flatMap(name => ['--name', name]),

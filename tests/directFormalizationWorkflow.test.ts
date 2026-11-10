@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { formalizationCandidateSchema, prepareFormalization, readFormalizationArtifact } from '../src/math/formalization';
 import { readMathText } from '../src/math/mathRuntimeIo';
@@ -102,6 +103,11 @@ describe('direct formalization workflow', () => {
     expect(f.seen[0].instructions).toContain('necessity and sufficiency belong to one iff target');
     expect(f.seen[0].instructions).toContain('they do not require additional formalization targets');
     expect(f.seen[0].instructions).toContain('/usr/bin/python3 /opt/formalization/library-api.py');
+    expect(f.seen[0].instructions).toContain('Prepare source and its coverage/definition notes together');
+    expect(f.seen[0].instructions).toContain('reuse its exact file bytes in source');
+    expect(f.seen[0].instructions).toContain('Lean remains available for a specific unresolved type or syntax question');
+    expect(f.seen[0].instructions).toContain('wait on that same session with write_stdin and empty chars');
+    expect(f.seen[0].instructions).not.toContain('Use lean directly to inspect declarations when necessary');
     const evidence = readFormalizationArtifact(path.join(f.directory, 'artifact'));
     expect(evidence).toMatchObject({ authority: 'compiler', semanticReview: 'not-performed', proofVerified: false });
     expect(evidence.sessions.map(session => session.role)).toEqual(['generate']);
@@ -109,6 +115,45 @@ describe('direct formalization workflow', () => {
     expect(readMathText(path.join(f.directory, 'task.md'))).toContain('Original problem (verbatim):\n\n' + fixtureStatement);
     expect(await runFormalization(f.directory, f.root, options)).toMatchObject({ status: 'approved' });
     expect(f.seen).toHaveLength(1); expect(compilations).toBe(1);
+  });
+
+  it('packages the chosen draft source and exact notes with the supplied Python recipe before host validation', async () => {
+    const f = fixture(), candidate = candidateFixture();
+    candidate.source = '/- Keep apostrophes \' backticks ` $() and Unicode 原题 literal. -/\r\n' + candidate.source.replace(/\n/gu, '\r\n');
+    candidate.definitionsExplanation = 'Exact notes: \' " ` $() \\ 原题\nsecond line.';
+    const { source, ...metadata } = candidate;
+    let compilations = 0;
+    const result = await runFormalization(f.directory, f.root, {
+      openSession: async options => ({
+        threadId: 'packaged-direct-source', close: async () => {}, interrupt: async () => {},
+        run: async (_message, _id, workspace, started) => {
+          started('packaged-direct-turn'); options.onUsage({ totalTokens: 1 });
+          const script = options.instructions.match(/<<'THEOREMOS_PACKAGE'\n([\s\S]*?)\nTHEOREMOS_PACKAGE\n/u)?.[1];
+          expect(script).toBeDefined();
+          fs.writeFileSync(path.join(workspace, 'Candidate.lean'), source);
+          fs.writeFileSync(path.join(workspace, 'Candidate.metadata.json'), JSON.stringify(metadata));
+          expect(fs.existsSync(path.join(workspace, 'OUTPUT.json'))).toBe(false);
+          execFileSync('/usr/bin/python3', ['-I', '-c', script!], { cwd: workspace });
+          const output = JSON.parse(readMathText(path.join(workspace, 'OUTPUT.json')));
+          expect(output).toEqual(candidate);
+          expect(fs.existsSync(path.join(workspace, 'OUTPUT.json.tmp'))).toBe(false);
+          expect(fs.readFileSync(path.join(workspace, 'Candidate.lean'), 'utf8')).toBe(source);
+          options.completedOutput!.validate(output);
+          return 'submitted';
+        },
+      }),
+      elaborate: async (_directory, compiledSource, environment, limits) => {
+        compilations++;
+        expect(compiledSource).toContain('theorem addition');
+        return syntheticElaboration(compiledSource, environment, limits);
+      },
+    });
+    expect(result).toMatchObject({ status: 'approved', rounds: 1, candidatesTried: 1 });
+    expect(compilations).toBe(1);
+    expect(readFormalizationArtifact(path.join(f.directory, 'artifact'))).toMatchObject({
+      authority: 'compiler', semanticReview: 'not-performed', proofVerified: false,
+      candidate: { coverage: candidate.coverage, definitionsExplanation: candidate.definitionsExplanation },
+    });
   });
 
   it('repairs compiler feedback using generation only and retains the failed attempt', async () => {
@@ -190,6 +235,8 @@ describe('direct formalization workflow', () => {
     expect(reminder).toContain('Preserve every required domain, quantifier, hypothesis, conclusion and definition');
     expect(reminder).toContain('The host compiles your submission and returns diagnostics for repair');
     expect(reminder).toContain('Do not guess missing semantics, truncate the statement or weaken it');
+    expect(reminder).toContain('Let any running library query finish; this reminder does not cancel tools');
+    expect(reminder).toContain('reuse that file instead of rewriting it');
     for (const message of [f.seen[0].message, reminder]) {
       if (maxRunSeconds) {
         const countdown = message.match(/has (\d+) seconds remaining/u);
