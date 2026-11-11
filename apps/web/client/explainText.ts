@@ -142,21 +142,42 @@ function closing(text: string, close: string, from: number) {
   }
   return -1;
 }
+const mathEnvironments = new Set('aligned align align* equation equation* gather gather* gathered split alignat alignat* alignedat array darray subarray smallmatrix matrix matrix* pmatrix pmatrix* bmatrix bmatrix* Bmatrix Bmatrix* vmatrix vmatrix* Vmatrix Vmatrix* cases dcases rcases drcases'.split(' '));
+/** A raw TeX environment is one source-preserving atom, including unfinished or unsupported environments. */
+export function proseMathEnvironment(text: string, start = 0): { end: number; text: string; complete: boolean; supported: boolean } | undefined {
+  const first = /^\\begin\{([A-Za-z]+\*?)\}/u.exec(text.slice(start));
+  if (!first) return;
+  const stack = [first[1]!];
+  const markers = /\\(begin|end)\{([A-Za-z]+\*?)\}/gu;
+  markers.lastIndex = start + first[0].length;
+  let valid = true, supported = mathEnvironments.has(first[1]!), match: RegExpExecArray | null;
+  while ((match = markers.exec(text))) {
+    let escapes = 0;
+    for (let at = match.index - 1; at >= start && text[at] === '\\'; at--) escapes++;
+    if (escapes % 2) continue;
+    if (match[1] === 'begin') { stack.push(match[2]!); supported &&= mathEnvironments.has(match[2]!); }
+    else if (stack.at(-1) === match[2]) stack.pop();
+    else valid = false;
+    if (!stack.length) return { end: markers.lastIndex, text: text.slice(start, markers.lastIndex), complete: valid, supported };
+  }
+  return { end: text.length, text: text.slice(start), complete: false, supported };
+}
 // Bare expressions have no Markdown boundaries. Limit words to mathematical functions and the named Greek variables
 // used in the saved research records, so a following English sentence cannot become part of the formula.
-const mathWords = new Set('sin cos tan cot sec csc sinh cosh tanh log ln exp lim sup inf max min det dim ker gcd lcm arg Pr mod conj area rank tr diag card alpha beta gamma delta epsilon theta lambda lam mu nu xi pi rho sigma tau phi psi omega TV'.split(' '));
+const mathWords = new Set('sin cos tan cot sec csc sinh cosh tanh log ln exp lim sup inf max min det dim ker gcd lcm arg Pr Re Im mod conj area rank tr diag card alpha beta gamma delta epsilon theta lambda lam mu nu xi pi rho sigma tau phi psi omega TV'.split(' '));
 const mathCommand = /^(?:frac|dfrac|tfrac|binom|sqrt|sum|prod|coprod|int|iint|iiint|oint|lim|limits|nolimits|left|right|big|Big|bigg|Bigg|mathbb|mathcal|mathscr|mathfrak|mathrm|mathbf|mathit|mathsf|mathtt|text|operatorname|overline|underline|overbrace|underbrace|hat|widehat|bar|vec|dot|ddot|tilde|widetilde|substack|boxed|infty|partial|nabla|forall|exists|in|notin|subset|subseteq|supset|supseteq|cup|cap|setminus|le|leq|ge|geq|ne|neq|equiv|approx|sim|simeq|cong|propto|times|cdot|div|pm|mp|to|mapsto|rightarrow|leftarrow|Rightarrow|Leftarrow|leftrightarrow|Leftrightarrow|alpha|beta|gamma|delta|epsilon|varepsilon|theta|vartheta|lambda|mu|nu|xi|pi|rho|sigma|tau|phi|varphi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Phi|Psi|Omega|sin|cos|tan|log|ln|exp|max|min|sup|inf|det|dim|ker|quad|qquad|ldots|cdots|dots)$/u;
 const mathLetter = /[\p{Script=Greek}\u2102-\u2149\u{1d400}-\u{1d7ff}]/u;
-const unicodeScript = /[\u00b2\u00b3\u00b9\u1d2c-\u1d6a\u2070-\u209f]/u;
+const unicodeScript = /[\u00b2\u00b3\u00b9\u02b0\u02b2\u02b3\u02b7\u02b8\u02e1-\u02e3\u1d2c-\u1d6a\u1d9c\u1da0\u1dbb\u1dbf\u2070-\u209f\u2c7c\u2c7d]/u;
+const combiningMathMark = /\p{M}/u;
 const mathOperator = /[\u2200-\u22ff\u27c0-\u27ef\u2190-\u21d4\u00b1\u00d7\u00f7\u00b7\u2212]/u;
 const bigOperator = /[∑∏∐∫∬∭∮⋃⋂√]/u;
 const mathConstant = /[∞∅⊤⊥]/u;
 /** A lexical candidate, including rejected candidates so their suffix cannot be mistaken for a separate formula. */
 function bareMath(text: string, start: number): { end: number; math: boolean } | undefined {
   const previous = text[start - 1] ?? '';
-  if (/[A-Za-z0-9_./\\@:^]/u.test(previous) || mathLetter.test(previous) || unicodeScript.test(previous)) return;
+  if (/[A-Za-z0-9_./\\@:^]/u.test(previous) || mathLetter.test(previous) || unicodeScript.test(previous) || combiningMathMark.test(previous)) return;
   const first = String.fromCodePoint(text.codePointAt(start)!);
-  if (!/[A-Za-z0-9\\([|+-]/u.test(first) && !mathLetter.test(first) && !mathOperator.test(first)) return;
+  if (!/[A-Za-z0-9\\([|+\u2016-]/u.test(first) && !mathLetter.test(first) && !mathOperator.test(first)) return;
   let index = start, clear = false, operand = false, unsafe = false, tex = false, scriptable = false;
   let last: 'operand' | 'operator' | 'command' | 'script' | 'open' | 'close' = 'open';
   const brackets: string[] = [];
@@ -165,6 +186,11 @@ function bareMath(text: string, start: number): { end: number; math: boolean } |
     if (/[A-Za-z]/u.test(character)) {
       const word = /^[A-Za-z]+/u.exec(text.slice(index))![0];
       if (word.length > 1 && !mathWords.has(word) && !brackets.includes('}')) {
+        if (brackets.length) {
+          // A product such as Ax is unambiguous inside a mathematical fence; longer words stay source as a whole.
+          if (word.length !== 2 || !brackets.some(close => close === '\u27e9' || close === '\u2016')) unsafe = true;
+          index += word.length; operand = scriptable = true; last = 'operand'; continue;
+        }
         if (index === start) index += word.length;
         break;
       }
@@ -177,9 +203,13 @@ function bareMath(text: string, start: number): { end: number; math: boolean } |
       if (!scriptable) unsafe = true;
       clear = true; index += character.length; last = 'operand'; continue;
     }
+    if (combiningMathMark.test(character) && scriptable) {
+      clear = true; index += character.length; continue;
+    }
     if (character === '\\') {
       const command = /^\\([A-Za-z]+)/u.exec(text.slice(index));
-      if (!command || !mathCommand.test(command[1]!)) break;
+      if (!command) break;
+      if (!mathCommand.test(command[1]!)) unsafe = true;
       index += command[0].length; clear = tex = scriptable = true; last = 'command'; continue;
     }
     if (character === '_' || character === '^') {
@@ -197,14 +227,24 @@ function bareMath(text: string, start: number): { end: number; math: boolean } |
       if (next === '\\') { index++; last = 'script'; continue; }
       unsafe = true; index++; last = 'script'; continue;
     }
-    if ('([{'.includes(character)) {
+    if (character === '\u2016') {
+      clear = true; index++;
+      if (brackets.at(-1) === character) { brackets.pop(); operand = scriptable = true; last = 'close'; }
+      else { brackets.push(character); scriptable = false; last = 'open'; }
+      continue;
+    }
+    if ('([{\u27e8'.includes(character)) {
       // Ordinary set/indicator braces need explicit TeX escapes; treating them as groups would hide their visible braces.
       if (character === '{' && last !== 'script' && last !== 'command' && !(tex && last === 'close') && !brackets.includes('}')) unsafe = true;
-      brackets.push(character === '(' ? ')' : character === '[' ? ']' : '}');
+      if (character === '\u27e8') clear = true;
+      brackets.push(character === '(' ? ')' : character === '[' ? ']' : character === '\u27e8' ? '\u27e9' : '}');
       index++; scriptable = false; last = 'open'; continue;
     }
-    if (')]}'.includes(character)) {
-      if (brackets.at(-1) !== character) break;
+    if (')]}\u27e9'.includes(character)) {
+      if (brackets.at(-1) !== character) {
+        if (!brackets.length) break;
+        unsafe = true; index++; continue;
+      }
       brackets.pop(); index++; operand = scriptable = true; last = 'close'; continue;
     }
     if (/\s/u.test(character)) {
@@ -213,7 +253,7 @@ function bareMath(text: string, start: number): { end: number; math: boolean } |
       if (!next) break;
       const word = text.slice(index).match(/^\s*([A-Za-z]+)/u)?.[1];
       if (!brackets.length && word && word.length > 1 && !mathWords.has(word)) break;
-      if (!brackets.length && !/[A-Za-z0-9\\(+*/=<>|^_-]/u.test(next) && !mathLetter.test(next) && !unicodeScript.test(next) && !mathOperator.test(next)) break;
+      if (!brackets.length && !/[A-Za-z0-9\\(+*/=<>|^_\u2016-]/u.test(next) && !mathLetter.test(next) && !unicodeScript.test(next) && !mathOperator.test(next)) break;
       index++; continue;
     }
     if (character === '.' && /[0-9]/u.test(text[index - 1] ?? '') && /[0-9]/u.test(text[index + 1] ?? '')) { index++; continue; }
@@ -247,6 +287,11 @@ function proseAtoms(text: string): ProseAtom[] {
       const end = text.indexOf(ticks, index + ticks.length);
       index = end > 0 ? end + ticks.length : index + ticks.length;
       atoms.push(end > 0 ? { kind: 'code', start, end: index, text: text.slice(start + ticks.length, end).trim() } : { kind: 'text', start, end: index, text: ticks });
+      continue;
+    }
+    const environment = !unclosedMath && proseMathEnvironment(text, index);
+    if (environment) {
+      atoms.push({ kind: environment.complete && environment.supported ? 'display' : 'text', start, end: index = environment.end, text: environment.text });
       continue;
     }
     if (text.startsWith('**', index)) {

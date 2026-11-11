@@ -25,6 +25,24 @@ const cases = [
   { id: 'chinese', text: '$f(x)=\\frac{x}{2}\\quad\\text{其中 }x\\text{ 为正数}$', tag: 'mtext' },
   { id: 'long-inline', text: '$' + Array.from({ length: 32 }, (_, i) => `\\frac{a_{${i}}+b_{${i}}}{1+c_{${i}}^2}`).join('+') + '$', tag: 'mfrac' },
   { id: 'long-display', text: '$$\\underbrace{\\begin{pmatrix}' + Array.from({ length: 64 }, (_, i) => `x_{${i}}`).join('&') + '\\end{pmatrix}}_{\\text{完整的长向量}}$$', tag: 'mtable' },
+  { id: 'legacy-subscripts', text: 'qᵢⱼ(A)', tag: 'msub' },
+  { id: 'legacy-accent', text: 'x̃ₛ', tag: 'mover' },
+  { id: 'legacy-power-accent', text: 'A_Eʲx̃ₛ', tag: 'msup,msubsup' },
+  { id: 'legacy-norm', text: '‖b(x)‖²=4|x₀|²+∑ᵢ|xᵢ|²', tag: 'msup' },
+  { id: 'legacy-inner-product', text: '⟨x̃ₛ,yⱼ⟩=0', tag: 'msub' },
+  { id: 'legacy-real-part', text: 'Re⟨Ax,x⟩≤‖A‖‖x‖²', tag: 'msup' },
+];
+const environments = [
+  { id: 'aligned', text: String.raw`\begin{aligned}a&=\frac{x}{y}\\b&=a^2\end{aligned}`, tag: 'mtable' },
+  { id: 'align-star', text: String.raw`\begin{align*}a&=\frac{x}{y}\\b&=a^2\end{align*}`, tag: 'mtable' },
+  { id: 'equation', text: String.raw`\begin{equation}a^2+b^2=c^2\end{equation}`, tag: 'msup' },
+  { id: 'gather-star', text: String.raw`\begin{gather*}a=\frac{x}{y}\\b=a^2\end{gather*}`, tag: 'mtable' },
+  { id: 'matrix', text: String.raw`\begin{pmatrix}a&b\\c&d\end{pmatrix}`, tag: 'mtable' },
+];
+const literals = [
+  { id: 'legacy-set', text: 'σ(qᵢⱼ(A))={qᵢⱼ(z):z∈σ(A)}' },
+  { id: 'unknown-environment', text: String.raw`\begin{proof}a=\frac{x}{y}\end{proof}` },
+  { id: 'unclosed-environment', text: String.raw`\begin{aligned}a&=\frac{x}{y}` },
 ];
 const suffixSource = cases.find(item => item.id === 'long-inline')!.text.slice(1, -1);
 const suffixCases = [
@@ -52,6 +70,7 @@ configureMathAssets(nested?{script:'../data/math.js',stylesheet:'../assets/katex
 const query=new URL(location.href).searchParams;
 document.documentElement.dataset.theme=query.get('theme')||'light';
 const records=${JSON.stringify(cases)};
+const environmentRecords=${JSON.stringify(environments)},literalRecords=${JSON.stringify(literals)};
 const suffixRecords=${JSON.stringify(suffixCases)};
 const exclusion=${JSON.stringify('价格 \\$5；代码 ``$x^2$``；源码 `\\frac{1}{x}`。')};
 const unknown=String.raw\`$\\unknownCommand{x}$\`,unclosed=String.raw\`尚未完成 $\\frac{1}{x\`;
@@ -68,6 +87,11 @@ function start(){
  for(const item of records){const section=document.createElement('section');section.className='formula-case';section.dataset.formulaCase=item.id;
  const label=document.createElement('h3');label.textContent=item.id;const content=document.createElement('div');content.className='formula-content';
  section.append(label,content);document.querySelector('#cases').append(section);render(h(Rich,{text:item.text}),content);}
+ for(const renderer of ['rich','chat'])for(const item of environmentRecords){const section=document.createElement('section');section.className='formula-case';section.dataset.environmentCase=renderer+'-'+item.id;
+ const label=document.createElement('h3');label.textContent=renderer+' · '+item.id;const content=document.createElement('div');content.className='formula-content';
+ section.append(label,content);document.querySelector('#environments').append(section);render(h(renderer==='chat'?ChatMessageContent:Rich,{text:item.text}),content);}
+ for(const renderer of ['rich','chat'])for(const item of literalRecords){const section=document.createElement('section');section.dataset.literalCase=renderer+'-'+item.id;
+ document.querySelector('#literals').append(section);render(h(renderer==='chat'?ChatMessageContent:Rich,{text:item.text}),section);}
  for(const item of suffixRecords){const section=document.createElement('section');section.className='formula-case';section.dataset.suffixCase=item.id;
  const label=document.createElement('h3');label.textContent=item.id;const content=document.createElement('div');content.className='suffix-content';
  section.append(label,content);document.querySelector('#suffix-cases').append(section);render(h(item.renderer==='chat'?ChatMessageContent:Rich,{text:item.text}),content);}
@@ -76,10 +100,13 @@ function start(){
  render(h(Rich,{text:unclosed}),document.querySelector('#unclosed'));
  render(h(Rich,{text:linkText,links:[{start:linkStart,end:linkEnd,title:'Read the saved proof',attributes:{'data-fixture-link':'proof'}}],marks:[{start:linkText.indexOf('x_1'),end:linkText.indexOf('x_2')+3}]}),linked);
  render(h(ChatMessageContent,{text:String.raw\`正在接收 $\\frac{a}{\`}),chatHost);
+ render(h(ChatMessageContent,{text:literalRecords.find(item=>item.id==='unclosed-environment').text}),document.querySelector('#environment-stream'));
+ const codeEnvironment=environmentRecords[0].text;
+ render(h(ChatMessageContent,{text:'\x60\x60\x60latex\\n'+codeEnvironment+'\\n\x60\x60\x60'}),document.querySelector('#environment-code'));
  typesetProse(document.querySelector('#legacy'));
  const long=records.find(item=>item.id==='long-display').text;
  model={schema:'theoremos.solution-route.v1',id:'unseen-math-rendering',locale:'zh',basis:'recorded',title:'数学路线与公式',initial:'goal',
- nodes:[{id:'goal',kind:'problem',status:'recorded',title:String.raw\`目标 $S_n$\`,summary:String.raw\`局部界 $\\frac{1+\\frac{x}{y}}{\\sqrt{1+n^2}}$\`,sections:[{title:'真实积分',text:records[0].text},{title:'完整递推',text:records[1].text},{title:'复杂公式',text:records[6].text},{title:'长公式',text:long}]},
+ nodes:[{id:'goal',kind:'problem',status:'recorded',title:String.raw\`目标 $S_n$\`,summary:String.raw\`局部界 $\\frac{1+\\frac{x}{y}}{\\sqrt{1+n^2}}$\`,sections:[{title:'真实积分',text:records[0].text},{title:'完整递推',text:records[1].text},{title:'复杂公式',text:records[6].text},{title:'长公式',text:long},{title:'谱分量',text:'A_Eʲx̃ₛ=qᵢⱼ(A)x̃ₛ'},{title:'逐步推导',text:environmentRecords[0].text}]},
  {id:'task',kind:'task',status:'passed',title:String.raw\`证明 $M_{n+1}$ 的递推\`,summary:String.raw\`$M_{n+1}=M_n+1$\`,sections:[{title:'结论',text:records[3].text}]}],edges:[{from:'goal',to:'task',kind:'dependency'}]};
  route=mountSolutionRoute(document.querySelector('#route'),model,{onSelect:id=>events.selected.push(id),onOpen:target=>events.opened.push(target)});
 }
@@ -88,16 +115,26 @@ window.mathFixture={events,start,linkText,exclusion,unknown,unclosed,button,
  typesetAgain(){typesetProse(document.querySelector('#legacy'));},
  update(){route.update({...model,nodes:model.nodes.map(node=>({...node}))});},
  completeChat(){render(h(ChatMessageContent,{text:String.raw\`接收完成 $\\frac{a}{b}$，并且 \\(x^2\\)。\`}),chatHost);},
+ completeEnvironment(){render(h(ChatMessageContent,{text:environmentRecords[0].text}),document.querySelector('#environment-stream'));},
+ retryRecovery(){render(h(Rich,{text:'资源恢复 $\\\\frac{1}{1+x^2}$。'}),document.querySelector('#recovery'));},
  destroy(){route?.destroy();}}
 window.fixtureReady=true;
 ` },
   bundle: true, write: false, format: 'iife', platform: 'browser', target: 'es2022', jsx: 'automatic', jsxImportSource: 'preact',
 });
 const fixtureCss = `html{height:auto;overflow:visible}body{height:auto;display:block;overflow:visible}.fixture-page{max-width:1100px;width:100%;margin:0 auto;padding:24px;color:var(--ink,var(--gray-900));font:15px/1.8 var(--sans)}.fixture-page>h1{font-size:24px}.fixture-section{margin:24px 0;border-top:1px solid var(--gray-150);padding-top:18px;min-width:0}.formula-case{min-width:0;padding:18px 0;border-bottom:1px solid var(--gray-150)}.formula-case h3{font-size:12px;color:var(--muted);margin-bottom:6px}.formula-content{min-width:0}#legacy p{margin:10px 0}#legacy button,#render-fixture{padding:8px 14px;border:1px solid var(--gray-200);background:var(--card);color:var(--ink);border-radius:4px}#linked .explain-link{cursor:pointer;text-decoration:underline;text-underline-offset:5px}#linked mark{background:var(--find-match);color:var(--find-match-ink)}#chat{min-width:0}.fixture-fallback{margin:12px 0}#legacy pre,#legacy code{white-space:pre-wrap;overflow-wrap:anywhere}@media(max-width:520px){.fixture-page{padding:14px;font-size:14px}.fixture-page>h1{font-size:21px}}`;
-const styles = (await Promise.all(['apps/web/client/app.css', 'apps/web/solutionRoute.css', 'apps/web/math.css'].map(file => fs.readFile(path.join(root, file), 'utf8')))).join('\n') + '\n' + fixtureCss;
+const styles = (await Promise.all(['apps/web/client/app.css', 'apps/web/client/research-conversation.css', 'apps/web/solutionRoute.css', 'apps/web/math.css'].map(file => fs.readFile(path.join(root, file), 'utf8')))).join('\n') + '\n' + fixtureCss;
 const legacy = '真实积分 ∫_{Bₙ}F≥cπ/25>0。再由 \\(x^2+y^2\\) 得到结论。';
 const csp = "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; object-src 'none'";
-const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/fixture.css"></head><body><main class="fixture-page"><h1>数学公式 · 浏览器回归</h1><p>真实归档表达式、复杂公式与流式消息</p><button id="render-fixture">呈现公式</button><section id="cases" class="fixture-section"></section><section id="suffix-cases" class="fixture-section"><h2>公式尾标点</h2></section><section class="fixture-section"><h2>排除与保留</h2><div id="excluded" class="fixture-fallback"></div><div id="unknown" class="fixture-fallback"></div><div id="unclosed" class="fixture-fallback"></div></section><section class="fixture-section"><h2>链接与标注</h2><div id="linked"></div></section><section id="legacy" class="fixture-section"><h2>既有正文</h2><p>${legacy}<button id="legacy-button">保留的原始按钮</button> 按钮之后 $z^2$。</p><pre><code>$x^2$ 与 \\frac{1}{x}</code></pre></section><section class="fixture-section"><h2>流式消息</h2><div id="chat"></div></section><section class="fixture-section"><h2>共用路线图</h2><div id="route" data-solution-route></div></section></main><script src="/fixture.js"></script></body></html>`;
+const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/fixture.css"></head><body><main class="fixture-page">
+<h1>数学公式 · 浏览器回归</h1><p>真实归档表达式、复杂公式与流式消息</p><button id="render-fixture">呈现公式</button>
+<section id="cases" class="fixture-section"></section><section id="environments" class="fixture-section"><h2>多行推导</h2></section>
+<section id="suffix-cases" class="fixture-section"><h2>公式尾标点</h2></section>
+<section class="fixture-section"><h2>排除与保留</h2><div id="literals"></div><div id="excluded" class="fixture-fallback"></div><div id="unknown" class="fixture-fallback"></div><div id="unclosed" class="fixture-fallback"></div><div id="environment-code"></div></section>
+<section class="fixture-section"><h2>链接与标注</h2><div id="linked"></div></section>
+<section id="legacy" class="fixture-section"><h2>既有正文</h2><p>${legacy}<button id="legacy-button">保留的原始按钮</button> 按钮之后 $z^2$。</p><pre><code>$x^2$ 与 \\frac{1}{x}</code></pre></section>
+<section class="fixture-section"><h2>流式消息</h2><div id="chat"></div><div id="environment-stream"></div><div id="recovery"></div></section>
+<section class="fixture-section"><h2>共用路线图</h2><div id="route" data-solution-route></div></section></main><script src="/fixture.js"></script></body></html>`;
 const requests: { path: string; status: number }[] = [];
 const server = createServer(async (req, res) => {
   const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://fixture').pathname);
@@ -180,6 +217,32 @@ try {
         mtext: [...host.querySelectorAll('mtext')].map(node => node.textContent).join(''),
       }));
       assert.ok(chinese.mtext.includes('为正数'), JSON.stringify(chinese));
+    });
+    await check('Legacy subscripts, accents, norms and inner products stay whole with their exact source', async () => {
+      for (const item of cases.filter(item => item.id.startsWith('legacy-'))) {
+        const content = page.locator(`[data-formula-case="${item.id}"] .formula-content`);
+        assert.equal(await content.locator('.math').count(), 1, item.id);
+        assert.equal(await content.locator('.math').getAttribute('title'), item.text, item.id);
+        assert.equal(await content.evaluate(host => [...host.childNodes].filter(node => node.nodeType === Node.TEXT_NODE).map(node => node.textContent).join('')), '', item.id);
+        assert.equal(await content.locator('annotation').textContent(), item.text, item.id);
+      }
+    });
+    await check('Bare multiline environments share structured rendering in explanation and chat', async () => {
+      for (const renderer of ['rich', 'chat']) for (const item of environments) {
+        const host = page.locator(`[data-environment-case="${renderer}-${item.id}"] .formula-content`);
+        assert.equal(await host.locator('.math-display[data-math-state="ready"]').count(), 1, `${renderer}-${item.id}`);
+        assert.ok(await host.locator(`.katex-mathml ${item.tag}`).count() > 0, `${renderer}-${item.id}`);
+        assert.equal(await host.locator('.math').getAttribute('title'), item.text);
+      }
+    });
+    await check('Unsafe sets and unsupported or unfinished environments remain entirely literal, with code excluded', async () => {
+      for (const renderer of ['rich', 'chat']) for (const item of literals) {
+        const host = page.locator(`[data-literal-case="${renderer}-${item.id}"]`);
+        assert.equal(await host.textContent(), item.text, `${renderer}-${item.id}`);
+        assert.equal(await host.locator('.katex').count(), 0, `${renderer}-${item.id}`);
+      }
+      assert.equal(await page.locator('#environment-code code').textContent(), environments[0]!.text);
+      assert.equal(await page.locator('#environment-code .math').count(), 0);
     });
     await check('Rich and chat keep Chinese and English tail punctuation on the final formula line', async () => {
       const details = [];
@@ -271,6 +334,10 @@ try {
       assert.equal(await page.locator('#chat .math[data-math-state="ready"]').count(), 2);
       assert.equal(await page.locator('#chat mfrac').count(), 1);
       assert.ok(!(await page.locator('#chat').innerText()).includes('$\\frac'));
+      assert.equal(await page.locator('#environment-stream').textContent(), literals.find(item => item.id === 'unclosed-environment')!.text);
+      await page.evaluate(() => (window as any).mathFixture.completeEnvironment()); await settledMath(page);
+      assert.equal(await page.locator('#environment-stream .math-display[data-math-state="ready"]').count(), 1);
+      assert.equal(await page.locator('#environment-stream mtable').count(), 1);
     });
     await check('Shared graph math survives repeated polling with selection, zoom and search focus', async () => {
       assert.ok(await page.locator('.solution-route-node > strong .katex').count() > 0);
@@ -328,6 +395,8 @@ try {
       return fonts.filter(font => font.status === 'loaded');
     });
     await screenshot('complex', '[data-formula-case="aligned"]');
+    await screenshot('legacy-notation', '[data-formula-case="legacy-subscripts"]');
+    await screenshot('bare-environments', '[data-environment-case="rich-aligned"]');
     await screenshot('long-formula', '[data-formula-case="long-display"]');
     await screenshot('tail-punctuation', '[data-suffix-case="chat-zh"]');
     await screenshot('shared-route', '#route');
@@ -336,6 +405,48 @@ try {
     console.log(`${width}/${theme}: ${current.checks.filter(item => item.pass).length}/${current.checks.length} checks passed`);
     for (const failure of current.checks.filter(item => !item.pass)) console.log(`FAIL ${failure.name}: ${JSON.stringify(failure.detail)}`);
     await context.close(); await fs.writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n');
+  }
+  for (const asset of ['math.js', 'katex.min.css']) {
+    const current = { width: 390, theme: `recovery-${asset}`, path: '/fixture.html', checks: [] as Check[], errors: [] as string[], csp: [] as unknown[], screenshots: [] as string[] };
+    report.cases.push(current);
+    const context = await browser.newContext({ viewport: { width: 390, height: 1000 }, reducedMotion: 'reduce' });
+    let failed = false;
+    await context.route('**/*', async route => {
+      const request = route.request(), url = new URL(request.url());
+      if (!request.url().startsWith(origin + '/') || !['GET', 'HEAD'].includes(request.method()) || url.pathname.includes('/api/')) {
+        report.blocked.push(`${request.method()} ${request.url()}`); await route.abort();
+      } else if (!failed && url.pathname.endsWith('/' + asset)) {
+        failed = true; await route.fulfill({ status: 503, contentType: 'text/plain', body: 'Local fixture: temporarily unavailable' });
+      } else await route.continue();
+    });
+    const page = await context.newPage(); page.setDefaultTimeout(8000);
+    page.on('pageerror', error => current.errors.push(error.message));
+    try {
+      await page.goto(`${origin}/fixture.html`); await page.waitForFunction(() => (window as any).fixtureReady);
+      await page.locator('#render-fixture').click(); await settledMath(page);
+      assert.equal(failed, true);
+      assert.equal(await page.locator('#cases .katex').count(), 0);
+      assert.ok(await page.locator('#cases [data-math-state="source"]').count() >= cases.length);
+      const original = await page.locator('#cases .math').first().elementHandle(); assert.ok(original);
+      await page.evaluate(() => (window as any).mathFixture.retryRecovery());
+      await page.waitForFunction(() => document.querySelector('#recovery .math')?.getAttribute('data-math-state') === 'ready');
+      assert.equal(await page.locator('#cases [data-math-state="source"],#cases [data-math-state="loading"]').count(), 0);
+      assert.equal(await original.evaluate(element => element === document.querySelector('#cases .math') && element.dataset.mathState === 'ready'), true);
+      for (const item of cases.filter(item => item.id.startsWith('legacy-'))) {
+        assert.equal(await page.locator(`[data-formula-case="${item.id}"] annotation`).textContent(), item.text);
+      }
+      assert.equal(await page.locator('#unknown [data-math-state="source"]').count(), 1);
+      assert.equal(await page.locator('#environment-stream [data-math-state="pending"]').count(), 1);
+      assert.deepEqual(current.errors, []);
+      current.checks.push({ name: `Existing formulas recover after ${asset} becomes available, with original DOM and source preserved`, pass: true });
+      const file = path.join(output, `390-recovered-${asset}.png`);
+      await page.locator('[data-formula-case="legacy-subscripts"]').scrollIntoViewIfNeeded();
+      await page.screenshot({ path: file }); current.screenshots.push(file);
+    } catch (error) {
+      current.checks.push({ name: `Existing formulas recover after ${asset} becomes available`, pass: false, detail: error instanceof Error ? error.message : String(error) });
+    } finally { await context.close(); }
+    console.log(`${current.theme}: ${current.checks.filter(item => item.pass).length}/${current.checks.length} checks passed`);
+    for (const failure of current.checks.filter(item => !item.pass)) console.log(`FAIL ${failure.name}: ${JSON.stringify(failure.detail)}`);
   }
 } finally {
   await browser.close(); await new Promise<void>(resolve => server.close(() => resolve()));

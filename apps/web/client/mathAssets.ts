@@ -1,5 +1,11 @@
 export type MathRuntime = Pick<typeof import('katex'), 'render'>;
 type MathAssets = { script: string; stylesheet: string };
+const mathReady = new Set<(math: MathRuntime) => void>();
+/** Existing formulas can recover when a later request successfully loads the shared assets. */
+export function onMathReady(render: (math: MathRuntime) => void): () => void {
+  mathReady.add(render);
+  return () => { mathReady.delete(render); };
+}
 declare global {
   interface Window {
     theoremosMath?: MathRuntime;
@@ -34,7 +40,10 @@ export function loadMath(): Promise<MathRuntime> {
     script.onerror = () => { script.remove(); reject(new Error('math_runtime_unavailable')); };
     document.head.append(script);
   });
-  const loading = Promise.all([runtime, loadStylesheet(assets.stylesheet)]).then(([math]) => math);
+  const loading = Promise.all([runtime, loadStylesheet(assets.stylesheet)]).then(([math]) => {
+    for (const render of [...mathReady]) render(math);
+    return math;
+  });
   window.theoremosMathLoading = loading.catch(error => { window.theoremosMathLoading = undefined; throw error; });
   return window.theoremosMathLoading;
 }

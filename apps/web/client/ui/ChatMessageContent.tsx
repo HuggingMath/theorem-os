@@ -2,6 +2,7 @@ import { Fragment, type ComponentChildren } from 'preact';
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { Marked, type Token, type Tokens, type TokenizerExtension } from 'marked';
 import { t } from '../../i18n';
+import { proseMathEnvironment } from '../explainText';
 import { leanTokens } from '../sourceText';
 import { Icon } from './Icon';
 import { MathFormula, inlineMathPunctuation } from './MathFormula';
@@ -9,6 +10,10 @@ import { MathFormula, inlineMathPunctuation } from './MathFormula';
 type MathToken = { type: 'chat_math'; raw: string; text: string; display: boolean; closed: boolean };
 
 function mathToken(source: string, block: boolean): MathToken | undefined {
+  const environmentStart = block ? /^ {0,3}(?=\\begin\{)/u.exec(source)?.[0].length : 0;
+  const environment = environmentStart === undefined ? undefined : proseMathEnvironment(source, environmentStart);
+  if (environment) return { type: 'chat_math', raw: source.slice(0, environment.end), text: environment.text,
+    display: true, closed: environment.complete && environment.supported };
   const opening = (block ? /^ {0,3}(\$\$|\\\[)/u : /^(\$\$|\$(?!\s)|\\\(|\\\[)/u).exec(source);
   if (!opening) return;
   const delimiter = opening[1], closing = delimiter === '\\(' ? '\\)' : delimiter === '\\[' ? '\\]' : delimiter;
@@ -27,9 +32,9 @@ function mathToken(source: string, block: boolean): MathToken | undefined {
   return { type: 'chat_math', raw: source, text: source.slice(opening[0].length), display, closed: false };
 }
 const mathExtensions: TokenizerExtension[] = [
-  { name: 'chat_math', level: 'block', start: source => source.search(/(?:^|\n) {0,3}(?:\$\$|\\\[)/u),
+  { name: 'chat_math', level: 'block', start: source => source.search(/(?:^|\n) {0,3}(?:\$\$|\\\[|\\begin\{)/u),
     tokenizer: source => mathToken(source, true) },
-  { name: 'chat_math', level: 'inline', start: source => source.search(/\$|\\[([]/u),
+  { name: 'chat_math', level: 'inline', start: source => source.search(/\$|\\[([]|\\begin\{/u),
     tokenizer: source => mathToken(source, false) },
 ];
 const markdown = new Marked({ gfm: true, breaks: true, extensions: mathExtensions });

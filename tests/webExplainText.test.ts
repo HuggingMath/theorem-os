@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anchorSpan, coversAll, explanationEstimate, leanGutter, leanLines, linkedProse, proseAt, proseSegments, quotePieces, quoteRange, refLines, stepAtLine, wholeQuotes } from '../apps/web/client/explainText';
+import { anchorSpan, coversAll, explanationEstimate, leanGutter, leanLines, linkedProse, proseAt, proseMathEnvironment, proseSegments, quotePieces, quoteRange, refLines, stepAtLine, wholeQuotes } from '../apps/web/client/explainText';
 import type { WebExplanationDocument, WebExplanationSection } from '../apps/web/shared';
 
 // The explanation page's pure helpers: Lean lines, step mapping, estimates and source-preserving prose segments.
@@ -125,6 +125,36 @@ describe('prose segments', () => {
     expect(proseSegments(`${cauchySchwarz}。`)).toEqual([{ kind: 'math', text: cauchySchwarz }, { kind: 'text', text: '。' }]);
   });
 
+  it.each([
+    '‖b(x)‖²=4|x₀|²|x₁|²+(|x₀|²−|x₁|²)²=(|x₀|²+|x₁|²)²=1',
+    'b(x)=(2 Re(x̄₀x₁),2 Im(x̄₀x₁),|x₀|²−|x₁|²)',
+    'A_Eʲ⁺¹x̃ₛ=P_E(Aʲ⁺¹xₛ)=Aʲ⁺¹xₛ',
+    '|⟨x,Ax⟩|≤‖x‖‖Ax‖≤‖A‖',
+    'qᵢⱼ(z)≠0',
+    'x̃ₛ=Aʲxₛ',
+  ])('keeps Unicode scripts, accents and fences in one complete mathematical expression: %s', formula => {
+    expect(proseSegments(`${formula}。`)).toEqual([{ kind: 'math', text: formula }, { kind: 'text', text: '。' }]);
+  });
+
+  it('preserves visible set braces and the whole expression when bare TeX would hide them', () => {
+    const set = 'σ(qᵢⱼ(A))={qᵢⱼ(z):z∈σ(A)}';
+    expect(proseSegments(`${set}，所以 0∉σ(qᵢⱼ(A))。`)).toEqual([
+      { kind: 'text', text: `${set}，所以 ` }, { kind: 'math', text: '0∉σ(qᵢⱼ(A))' }, { kind: 'text', text: '。' },
+    ]);
+  });
+
+  it.each(['‖evaluation‖≤1', '⟨x,operator⟩≤y²', '\\unknown{x_i}+y^2', 'f(x_i]+y²'])
+    ('preserves an unsafe mathematical candidate without rendering only its suffix: %s', text => {
+      expect(proseSegments(text)).toEqual([{ kind: 'text', text }]);
+    });
+
+  it('keeps ordinary English words outside the neighboring formula', () => {
+    expect(proseSegments('In x≤y，By x≤y。')).toEqual([
+      { kind: 'text', text: 'In ' }, { kind: 'math', text: 'x≤y' }, { kind: 'text', text: '，By ' },
+      { kind: 'math', text: 'x≤y' }, { kind: 'text', text: '。' },
+    ]);
+  });
+
   it('recognizes bare TeX commands, keeping following prose out of the formula', () => {
     expect(proseSegments('先用 \\frac{a}{b} 得到 x≤y，再用 \\sum_{k=0}^{n} a_k。')).toEqual([
       { kind: 'text', text: '先用 ' }, { kind: 'math', text: '\\frac{a}{b}' }, { kind: 'text', text: ' 得到 ' },
@@ -135,6 +165,67 @@ describe('prose segments', () => {
       { kind: 'text', text: 'Use ' }, { kind: 'math', text: '\\left(\\frac{a}{b}\\right)^2' }, { kind: 'text', text: ' and ' },
       { kind: 'math', text: '\\text{对任意 n} x^{2}' }, { kind: 'text', text: '.' },
     ]);
+  });
+
+  it.each(['aligned', 'align', 'align*', 'equation', 'equation*', 'gather', 'gather*', 'gathered',
+    'matrix', 'pmatrix', 'bmatrix', 'vmatrix', 'cases'])('recognizes a complete bare %s environment as one display formula', name => {
+    const environment = '\\begin{' + name + '}a_i=b_i\\end{' + name + '}';
+    const text = '先用 ' + environment + ' 得到 $x^2$。';
+    expect(proseSegments(text)).toEqual([
+      { kind: 'text', text: '先用 ' }, { kind: 'display', text: environment }, { kind: 'text', text: ' 得到 ' },
+      { kind: 'math', text: 'x^2' }, { kind: 'text', text: '。' },
+    ]);
+  });
+
+  it('keeps nested environments together and stops at the outer closing marker', () => {
+    const environment = '\\begin{equation}f(x)=\\begin{cases}x&x>0\\\\0&x≤0\\end{cases}\\end{equation}';
+    const text = environment + ' 因而 $f(1)=1$。';
+    expect(proseMathEnvironment(text)).toEqual({ end: environment.length, text: environment, complete: true, supported: true });
+    expect(proseSegments(text)).toEqual([
+      { kind: 'display', text: environment }, { kind: 'text', text: ' 因而 ' }, { kind: 'math', text: 'f(1)=1' },
+      { kind: 'text', text: '。' },
+    ]);
+  });
+
+  it('preserves a complete unsupported environment without swallowing following prose or math', () => {
+    const environment = '\\begin{unknown}a_i=b_i\\end{unknown}';
+    const text = environment + ' 再用 $x^2$。';
+    expect(proseMathEnvironment(text)).toEqual({ end: environment.length, text: environment, complete: true, supported: false });
+    expect(proseSegments(text)).toEqual([
+      { kind: 'text', text: environment + ' 再用 ' }, { kind: 'math', text: 'x^2' }, { kind: 'text', text: '。' },
+    ]);
+  });
+
+  it('preserves a supported outer environment containing an unsupported nested environment', () => {
+    const environment = '\\begin{equation}\\begin{unknown}a_i=b_i\\end{unknown}\\end{equation}';
+    const text = environment + ' 再用 $x^2$。';
+    expect(proseMathEnvironment(text)).toEqual({ end: environment.length, text: environment, complete: true, supported: false });
+    expect(proseSegments(text)).toEqual([
+      { kind: 'text', text: environment + ' 再用 ' }, { kind: 'math', text: 'x^2' }, { kind: 'text', text: '。' },
+    ]);
+  });
+
+  it.each([
+    '\\begin{aligned}a_i=b_i',
+    '\\begin{aligned}a_i=b_i\\end{matrix}',
+    '\\begin{aligned}\\begin{matrix}a_i\\end{aligned}\\end{matrix}',
+  ])('preserves an unfinished or mismatched environment, including later apparent formulas: %s', environment => {
+    const text = environment + ' $x^2$';
+    expect(proseMathEnvironment(text)).toEqual({ end: text.length, text, complete: false, supported: true });
+    expect(proseSegments(text)).toEqual([{ kind: 'text', text }]);
+  });
+
+  it('keeps a bare environment in a code span as code', () => {
+    const environment = '\\begin{aligned}a_i&=b_i\\\\&=c_i\\end{aligned}';
+    const ticks = String.fromCharCode(96);
+    expect(proseSegments(ticks + environment + ticks)).toEqual([{ kind: 'code', text: environment }]);
+  });
+
+  it('reports original UTF-16 environment offsets after non-BMP prose', () => {
+    const prefix = '🧠 由 ', environment = '\\begin{aligned}a_i&=b_i\\\\&=c_i\\end{aligned}';
+    expect(proseMathEnvironment(prefix + environment + ' 得到结论。', prefix.length)).toEqual({
+      end: prefix.length + environment.length, text: environment, complete: true, supported: true,
+    });
   });
 
   it.each([
@@ -224,6 +315,18 @@ describe('linked prose', () => {
     ]);
     expect(flatten(runs)).toEqual(proseSegments(text));
     expect(quoteRange(text, inside, inside + 1)).toEqual({ start: 5, end: 5 + integral.length });
+  });
+
+  it.each([
+    { kind: 'math', text: 'A_Eʲ⁺¹x̃ₛ=P_E(Aʲ⁺¹xₛ)' },
+    { kind: 'display', text: '\\begin{aligned}a_i&=b_i\\\\&=c_i\\end{aligned}' },
+  ])('keeps $kind expressions whole for linked references and marks after non-BMP prose', formula => {
+    const prefix = '👩‍🔬 由 ', text = prefix + formula.text + ' 得到结论。';
+    const inside = text.indexOf('_'), start = prefix.length, end = start + formula.text.length;
+    const runs = linkedProse(text, [{ start: inside, end: inside + 1 }], [{ start: inside, end: inside + 1 }]);
+    expect(runs.filter(run => run.link !== undefined)).toEqual([{ segments: [formula], link: 0, marked: true }]);
+    expect(flatten(runs)).toEqual(proseSegments(text));
+    expect(quoteRange(text, inside, inside + 1)).toEqual({ start, end });
   });
 
   it('keeps a phrase and its bare formula in one link and still splits plain identifier marks precisely', () => {
