@@ -9,6 +9,7 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRunInput } from '../apps/web/shared';
+import { englishAuthoredSample } from './web-i18n-fixture';
 import { newResearch, openHistory, openModulesTab, selectHistoryRun, stageLabelsReadable, enterLean, showExamples, openSample, openSettings } from './web-ui-controls';
 import { freePort, postRun, readRun, settled, startBrowser, ready } from './web-scenario';
 
@@ -39,7 +40,7 @@ const noOverflow = (page: Page) => page.evaluate(() => document.documentElement.
  */
 function chineseText(page: Page, selector = 'body') {
   return page.evaluate(selector => {
-    const han = /[　-〿一-鿿＀-￯]/u, found: string[] = [];
+    const han = /\p{Script=Han}/u, found: string[] = [];
     const exempt = (element: Element | null) => element?.closest('[translate="no"],[lang="zh-CN"],[hidden],template') !== null;
     const scope = document.querySelector(selector);
     if (!scope) return [`missing ${selector}`];
@@ -72,7 +73,7 @@ async function english(page: Page, where: string, selector?: string) {
 
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;
 const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin,
-  THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web') }), runner);
+  THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web') }), runner, { sample: englishAuthoredSample() });
 const input: WebRunInput = { providerId: 'openai', apiKey: 'sk-theoremos-i18n-fixture', model: 'deepseek-flash', effort: 'max',
   environment: 'standard', source: 'theorem fixture : True := by\n  sorry\n', task: '证明一个平凡命题', maxTurns: 4, maxRunSeconds: 120,
   workers: 2, coordination: 'cooperative' };
@@ -85,6 +86,9 @@ try {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  // Punctuation and authored content are allowed; an untranslated interface label must still fail the audit.
+  await page.setContent('<span>＋，。</span><p translate="no">用户原文</p><span lang="zh-CN">中文</span><button>未翻译的按钮</button>');
+  assert.deepEqual(await chineseText(page), ['button.: 未翻译的按钮']);
   await page.goto(origin);
   await page.locator('#natural-research #formalize-original').waitFor();
   await english(page, 'natural-language start');
@@ -112,7 +116,7 @@ try {
     if (tab === 'modules') await openModulesTab(page);
     else await page.locator(`#detail-tab-${tab}`).click();
     await page.locator(`#detail-panel[data-tab="${tab}"]`).waitFor();
-    if (tab === 'trajectory') await page.locator('#detail-panel .research-roadmap').waitFor();
+    if (tab === 'trajectory') await page.locator('#detail-panel .solution-route').waitFor();
     await settled(page);
     await english(page, `sample ${tab} tab`);
   }
