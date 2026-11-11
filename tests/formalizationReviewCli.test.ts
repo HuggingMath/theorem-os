@@ -266,18 +266,18 @@ describe('direct semantic review CLI with disposable offline evidence', () => {
     expect(result.code).toBe(0);
     for (const text of ['prepare|review|score', '--execution replay|model', '--replay', '--build-manifest',
       'Direct semantic review', 'no model, Lean compiler, provider or credentials', 'heldOut always excludes validation',
-      'kernel-v2', 'missing observations remain unknown'])
+      'kernel-v3', 'missing required observations remain unknown'])
       expect(result.output).toContain(text);
     expect(production.open).not.toHaveBeenCalled(); expect(readMathBuildManifest).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])('defaults a new model run to kernel-v2 with explicit review v2=%s without launching a model', async explicit => {
+  it.each([false, true])('defaults a new model run to kernel-v3 with explicit review v2=%s without launching a model', async explicit => {
     const f = modelFixture(1);
     const run = vi.spyOn(reviewRunner, 'runFormalizationReview').mockResolvedValue({ status: 'complete' } as any);
     await invoke([...f.common, '--execution', 'model', '--build-manifest', f.build, '--profile', f.profile,
       ...(explicit ? ['--protocol', 'v2'] : [])]);
     expect(run).toHaveBeenCalledWith(f.bundle, f.run, expect.objectContaining({
-      protocol: 'v2', contextProtocol: 'kernel-v2', execution: 'model', environment: 'auto', model: 'deepseek-flash', effort: 'max',
+      protocol: 'v2', contextProtocol: 'kernel-v3', execution: 'model', environment: 'auto', model: 'deepseek-flash', effort: 'max',
     }), expect.any(Object));
     expect(production.open).not.toHaveBeenCalled();
     expect(readMathBuildManifest).not.toHaveBeenCalled();
