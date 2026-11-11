@@ -11,7 +11,7 @@ import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import { loadWebSample } from '../apps/web/sample';
 import { decodeTaskDraft } from '../apps/web/client/draft';
 import type { WebRunner } from '../apps/web/runner';
-import { webSampleRunId, type WebResult, type WebRun, type WebRunInput, type WebSession, type WorkerInput, type WorkerMessage } from '../apps/web/shared';
+import { webLimits, webSampleRunId, type WebResult, type WebRun, type WebRunInput, type WebSession, type WorkerInput, type WorkerMessage } from '../apps/web/shared';
 import type { WebObservation } from '../apps/web/collaboration';
 
 const key = 'sk-http-test-never-publish';
@@ -371,7 +371,7 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     const invalid = [
       { providerId: 'unconfigured' }, { baseUrl: 'https://attacker.example/v1' }, { extra: true },
       { maxTurns: 21 }, { maxTurns: -1 }, { maxRunSeconds: -1 }, { maxRunSeconds: 901 }, { maxRunSeconds: 29 }, { workers: 5 },
-      { workers: 0 }, { maxTurns: 1.5 }, { source: '数'.repeat(11_000) }, { task: '数'.repeat(2_800) },
+      { workers: 0 }, { maxTurns: 1.5 }, { source: '数'.repeat(Math.floor(webLimits.maxSourceBytes / 3) + 1) }, { task: '数'.repeat(2_800) },
       { effort: 'unlimited' }, { coordination: 'unknown' }, { model: '--model-flag' }, { apiKey: 'short' },
       { environment: 'custom' }, { environment: 'https://attacker.example/mathlib' }, { environment: null },
       { environment: { id: 'mathlib', url: 'https://attacker.example' } }, { mathlibRevision: 'attacker-revision' },
@@ -402,6 +402,16 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     expect(large.status).toBe(413);
     expect(await large.text()).not.toContain(key);
     expect(runner.calls).toHaveLength(0);
+  });
+
+  it('accepts a complete original source above 32 KB within the advertised editor limit', async () => {
+    const alice = await session();
+    const source = `${'-- certificate data\n'.repeat(4000)}${input().source}`;
+    expect(Buffer.byteLength(source)).toBeGreaterThan(32768);
+    const response = await request('/api/runs', alice, { body: { ...input(), source } });
+    expect(response.status).toBe(201);
+    await tick();
+    expect(runner.calls[0]!.value.input.source).toBe(source);
   });
 
   it('isolates two sessions across listing, lookup, cancellation and result downloads', async () => {

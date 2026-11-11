@@ -164,7 +164,6 @@ export const formalize: Record<string, string> = {
   '原题形式化已完成，但证明研究未能启动。没有生成证明结果，可重新发起解题。': 'Formalization finished, but proof research could not start. No proof result was produced. You can start a new attempt.',
   '原题检查已通过，已进入证明研究。是否完成证明以最终 Lean 验证结果为准。': 'The problem passed fidelity checks and proof research has started. Completion depends on the final Lean verification results.',
   '原题检查已通过，正在创建证明研究。': 'The problem passed fidelity checks. Proof research is being created.',
-  '正在形式化并检查原题。通过后自动开始证明，无需再次确认。': 'The problem is being formalized and checked. Proof research starts automatically when the checks pass, with no further confirmation.',
   '形式化尚未完成，未启动证明研究。': 'Formalization did not finish. Proof research has not started.',
   '下方保留原题形式化与一致性检查记录。陈述通过检查不等于证明完成，请查看研究中的最终 Lean 验证结果。': 'The formalization and fidelity checks are recorded below. Statement approval does not complete the proof; see the final Lean verification results in the research page.',
   '原题或证明环境已修改，下面的结果属于之前的输入。请重新生成 Lean 陈述，再核对并继续研究。': 'The problem or proof environment has changed. The result below belongs to the previous input. Generate a new Lean statement, review it, then continue your research.',

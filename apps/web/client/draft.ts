@@ -1,6 +1,8 @@
 import type { WebContinuation, WebCoordination, WebEffort, WebEnvironment } from '../shared';
+import { webLimits } from '../shared';
 import { researchModulePlanDraftSchema, type ResearchModulePlan } from '../../../src/solver/modules/policy';
 import { t } from '../i18n';
+import type { ClassicOrigin } from './classicPreparation';
 
 export const taskDraftSchema = 'theorem-os.web-draft.v1';
 export const taskDraftStorageKey = 'theorem-os.web-draft.v1';
@@ -29,6 +31,7 @@ export type TaskDraft = {
   problemBudget?: { runId: string; projectId?: string };
   /** Recipient-owned reading reference, never the author's private run or the share capability. */
   sharedProofOrigin?: { readingId: string; title: string; digest: string };
+  classicOrigin?: ClassicOrigin;
 };
 
 const archiveSchemas = ['theorem-os.web-export.v1', 'theorem-os.web-archive.v1'];
@@ -102,6 +105,12 @@ function validatedDraft(value: unknown): TaskDraft {
   let formalization: TaskDraft['formalization'];
   let problemBudget: TaskDraft['problemBudget'];
   let sharedProofOrigin: TaskDraft['sharedProofOrigin'];
+  let classicOrigin: TaskDraft['classicOrigin'];
+  if (Object.hasOwn(draft, 'classicOrigin')) {
+    const origin = object(draft.classicOrigin), id = text(origin, 'id', 128), title = text(origin, 'title', 500), sourceSha256 = text(origin, 'sourceSha256', 64);
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(id) || !title.trim() || /\p{Cc}/u.test(title) || !/^[a-f0-9]{64}$/u.test(sourceSha256)) invalid();
+    classicOrigin = { id, title, sourceSha256 };
+  }
   if (Object.hasOwn(draft, 'sharedProofOrigin')) {
     const origin = object(draft.sharedProofOrigin), readingId = text(origin, 'readingId', 128), title = text(origin, 'title', 500), digest = text(origin, 'digest', 64);
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(readingId) || !title.trim() || /\p{Cc}/u.test(title) || !/^[a-f0-9]{64}$/u.test(digest)) invalid();
@@ -121,7 +130,7 @@ function validatedDraft(value: unknown): TaskDraft {
   }
   return {
     providerId: text(draft, 'providerId', 64), model: text(draft, 'model', 128),
-    source: utf8Text(draft, 'source', 32 * 1024), task: utf8Text(draft, 'task', 8_000),
+    source: utf8Text(draft, 'source', webLimits.maxSourceBytes), task: utf8Text(draft, 'task', webLimits.maxTaskBytes),
     maxTurns: budget(draft, 'maxTurns'), maxRunSeconds: budget(draft, 'maxRunSeconds'), workers: budget(draft, 'workers'),
     ...(Object.hasOwn(draft, 'maxTotalTokens') ? { maxTotalTokens: budget(draft, 'maxTotalTokens') } : {}),
     effort: enumeration(draft, 'effort', ['low', 'medium', 'high', 'xhigh', 'max']),
@@ -135,6 +144,7 @@ function validatedDraft(value: unknown): TaskDraft {
     ...(formalization ? { formalization } : {}),
     ...(problemBudget ? { problemBudget } : {}),
     ...(sharedProofOrigin ? { sharedProofOrigin } : {}),
+    ...(classicOrigin ? { classicOrigin } : {}),
   };
 }
 

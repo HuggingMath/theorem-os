@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { decodeTaskDraft, encodeTaskDraft, readTaskDraftFile, taskDraftSchema, taskDraftStorageKey, type TaskDraft } from '../apps/web/client/draft';
 import { tokenCap } from '../apps/web/client/submission';
+import { webLimits } from '../apps/web/shared';
 
 const encoder = new TextEncoder();
 const maximumFileBytes = 16 * 1024 * 1024;
@@ -183,7 +184,7 @@ describe('task draft codecs without credentials or run-result state', () => {
     expect(() => encodeTaskDraft(draft({ [key]: 'a'.repeat(maximum + 1) }))).toThrow('任务草稿格式无效');
   });
 
-  it.each([['source', 32 * 1024], ['task', 8_000]] as const)('enforces the UTF-8 byte boundary for %s', (key, maximum) => {
+  it.each([['source', webLimits.maxSourceBytes], ['task', 8_000]] as const)('enforces the UTF-8 byte boundary for %s', (key, maximum) => {
     const atBoundary = '题'.repeat(Math.floor(maximum / 3)) + 'a'.repeat(maximum % 3);
     expect(encoder.encode(atBoundary).byteLength).toBe(maximum);
     const valid = draft({ [key]: atBoundary });
@@ -257,7 +258,7 @@ describe('UTF-8 task draft file import', () => {
     expect(encodeTaskDraft(decoded)).not.toMatch(/archive-secret-key|archive-result-marker|archive-event-marker|candidateCheck|evaluator|stdoutPreview|apiKey|status|events|result/);
   });
 
-  it.each([['source', 32 * 1024 + 1], ['task', 8_001]] as const)('still rejects an oversized projected %s in a valid-size archive', async (key, size) => {
+  it.each([['source', webLimits.maxSourceBytes + 1], ['task', 8_001]] as const)('still rejects an oversized projected %s in a valid-size archive', async (key, size) => {
     const archived = archive();
     archived.run[key] = 'a'.repeat(size);
     const input = file(JSON.stringify(archived));

@@ -200,20 +200,24 @@ function WorkspaceUsage({ context }: { context: ResearchContext }) {
   </Panel>{data.data && <UsageRates ledger={data.data} context={context} onSave={data.refresh} />}</>;
 }
 function UsageRates({ ledger, context, onSave }: { ledger: ResearchUsageLedger; context: ResearchContext; onSave(): void }) {
+  const modelKey = (model: { providerId: string; model: string }) => JSON.stringify([model.providerId, model.model]);
   const entries = ledger.groups.flatMap(group => group.entries), models = [...new Map(entries.filter(entry => entry.providerId)
-    .map(entry => [`${entry.providerId}/${entry.model}`, { providerId: entry.providerId!, model: entry.model }])).values()];
-  const [selected, setSelected] = useState(0), [rate, setRate] = useState(''), [currency, setCurrency] = useState<'CNY' | 'USD'>('CNY');
-  const action = useMutation(), model = models[selected];
+    .map(entry => { const model = { providerId: entry.providerId!, model: entry.model }; return [modelKey(model), model] as const; })).values()];
+  const firstModel = models[0] && modelKey(models[0]);
+  const [selected, setSelected] = useState(firstModel ?? ''), [rate, setRate] = useState(''), [currency, setCurrency] = useState<'CNY' | 'USD'>('CNY');
+  useEffect(() => { if (!selected && firstModel) setSelected(firstModel); }, [selected, firstModel]);
+  const action = useMutation(), model = models.find(model => modelKey(model) === selected);
   const saved = ledger.rates.find(rate => rate.providerId === model?.providerId && rate.model === model.model);
   return <Panel title={tx('模型单价', 'Model rates')}><details><summary>{tx('填写综合单价，查看金额估算', 'Enter a blended rate to estimate cost')}</summary>
-    {models.length ? <form class="research-form" onSubmit={event => { event.preventDefault(); if (model) void action.run<Item<ResearchTokenRate>>('PUT', `${base}/workspace/rates`,
+    {models.length || selected ? <form class="research-form" onSubmit={event => { event.preventDefault(); if (model) void action.run<Item<ResearchTokenRate>>('PUT', `${base}/workspace/rates`,
       { ...model, currency, perMillion: Number(rate) }, () => { setRate(''); onSave(); }); }}>
-      <label>{tx('模型与服务商', 'Model and provider')}<select value={selected} onChange={event => { setSelected(Number(event.currentTarget.value)); setRate(''); }}>
-        {models.map((model, index) => <option key={`${model.providerId}/${model.model}`} value={index}>{model.model} · {model.providerId}</option>)}</select></label>
+      <label>{tx('模型与服务商', 'Model and provider')}<select value={selected} onChange={event => { setSelected(event.currentTarget.value); setRate(''); }}>
+        {selected && !model && <option value={selected} disabled>{tx('所选模型已不在账本中，请重新选择', 'The selected model is no longer in this ledger. Choose a model.')}</option>}
+        {models.map(model => <option key={modelKey(model)} value={modelKey(model)}>{model.model} · {model.providerId}</option>)}</select></label>
       {saved && <p>{tx('已保存', 'Saved')}: {saved.currency} {saved.perMillion} / {tx('百万 Token', 'million tokens')}</p>}
       <div class="research-form-row"><label>{tx('每百万 Token 综合单价', 'Blended price per million tokens')}<input type="number" step="any" min="0" max="1000000" value={rate} onInput={event => setRate(event.currentTarget.value)} required /></label>
         <label>{tx('币种', 'Currency')}<select value={currency} onChange={event => setCurrency(event.currentTarget.value as 'CNY' | 'USD')}><option value="CNY">CNY</option><option value="USD">USD</option></select></label></div>
-      <button class="button" type="submit" disabled={action.busy || !context.session.authenticated || !rate || !Number.isFinite(Number(rate)) || Number(rate) < 0}>{tx('保存单价', 'Save rate')}</button><MutationState action={action} />
+      <button class="button" type="submit" disabled={!model || action.busy || !context.session.authenticated || !rate || !Number.isFinite(Number(rate)) || Number(rate) < 0}>{tx('保存单价', 'Save rate')}</button><MutationState action={action} />
     </form> : <Empty>{tx('有模型用量记录后，可以填写单价。', 'Rates can be set once a model appears in your records.')}</Empty>}
   </details></Panel>;
 }

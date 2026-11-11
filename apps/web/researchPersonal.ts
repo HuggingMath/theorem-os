@@ -15,6 +15,7 @@ import type { ResearchDiscussionContext } from './researchProjectTypes';
 import type { WebFormalization } from './formalizationTypes';
 import type { ProblemDraftValue } from './problemDraftTypes';
 import { matchesProblemFormalization, matchesProblemRun } from './problemDraftSubmission';
+import { webLimits } from './shared';
 
 const key = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u), hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const text = (max: number) => z.string().max(max).refine(value => !value.includes('\0'));
@@ -39,12 +40,13 @@ const values = {
       environment: z.enum(['standard', 'mathlib']), effort: z.enum(['low', 'high', 'max']), participation: z.enum(['guided', 'automatic']),
       maxRunSeconds: z.number().finite().nonnegative(), maxTotalTokens: z.number().finite().nonnegative(),
       research: z.object({ maxRunSeconds: z.number().finite().nonnegative(), maxTotalTokens: z.number().finite().nonnegative(), maxTurns: z.number().finite().nonnegative() }).strict() }).strict() }).strict(),
-    z.object({ mode: z.literal('lean'), draft: z.object({ providerId: text(64), model: text(128), source: text(32768), task: text(8000),
+    z.object({ mode: z.literal('lean'), draft: z.object({ providerId: text(64), model: text(128), source: text(webLimits.maxSourceBytes).refine(value => Buffer.byteLength(value) <= webLimits.maxSourceBytes), task: text(8000),
       maxTurns: text(40), maxRunSeconds: text(40), workers: text(40), maxTotalTokens: text(40).optional(),
       effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']), environment: z.enum(['standard', 'mathlib']),
       coordination: z.enum(['cooperative', 'independent']), planApproval: z.literal(true).optional(), templateId: text(64),
       modulePlan: researchModulePlanDraftSchema.optional(), knowledgeDigest: text(256).nullable().optional(),
-      sharedProofOrigin: z.object({ readingId: key, title: text(500), digest: hash }).strict().optional() }).strict(),
+      sharedProofOrigin: z.object({ readingId: key, title: text(500), digest: hash }).strict().optional(),
+      classicOrigin: z.object({ id: key, title: text(500), sourceSha256: hash }).strict().optional() }).strict(),
       libraries: z.array(z.object({ assetId: key, version: text(64), digest: hash.optional() }).strict()).max(64).optional() }).strict(),
   ]),
   candidate: z.object({ source: text(128_000), text: text(8000), edited: z.boolean(), needsReview: z.boolean(), baseSource: sourceSchema,

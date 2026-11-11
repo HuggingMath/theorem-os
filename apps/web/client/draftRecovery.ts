@@ -16,6 +16,7 @@ function copyDraft(draft: TaskDraft): TaskDraft {
     ...(draft.formalization ? { formalization: { ...draft.formalization } } : {}),
     ...(draft.knowledgeDigest !== undefined ? { knowledgeDigest: draft.knowledgeDigest } : {}),
     ...(draft.continueFrom ? { continueFrom: { ...draft.continueFrom } } : {}),
+    ...(draft.classicOrigin ? { classicOrigin: { ...draft.classicOrigin } } : {}),
     ...(draft.modulePlan ? { modulePlan: structuredClone(draft.modulePlan) } : {}) };
 }
 

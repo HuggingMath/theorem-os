@@ -19,6 +19,7 @@ export function ShareReceiverActions({ share, token, readingId }: { share: WebSh
   const registerId = useRef(crypto.randomUUID()), preparationId = useRef(crypto.randomUUID());
   const registered = useRef<Pick<SharedProofReading, 'id' | 'digest'>>();
   const createPending = useRef<Pending>(), savePending = useRef<Pending>(), lock = useRef(false);
+  const noteDrafts = useRef(new Map<string, string>());
   const failure = (cause: unknown) => setError(cause instanceof TypeError ? tx('暂时无法连接服务，请重试。', 'Could not connect to the service. Please retry.')
     : cause instanceof Error ? localizeMessage(cause.message) : tx('操作未完成，请重试。', 'The action did not finish. Please retry.'));
   async function request<T>(url: string, web?: WebSession, body?: unknown): Promise<T> {
@@ -48,8 +49,10 @@ export function ShareReceiverActions({ share, token, readingId }: { share: WebSh
         }
         const collection = result.items.find(item => item.id === selected)
           ?? result.items.find(collection => collection.items.some(item => item.target.kind === 'share' && item.target.shareId === id)) ?? result.items[0];
-        setSharedId(id); setCollections(result.items); setSelected(collection?.id ?? 'new');
-        setNote(collection?.items.find(item => item.target.kind === 'share' && item.target.shareId === id)?.note ?? ''); setNoteEdited(false);
+        const nextId = selected === 'new' ? 'new' : collection?.id ?? 'new';
+        setSharedId(id); setCollections(result.items); setSelected(nextId);
+        setNote(noteDrafts.current.get(nextId) ?? (nextId === collection?.id ? collection.items.find(item => item.target.kind === 'share' && item.target.shareId === id)?.note : undefined) ?? '');
+        setNoteEdited(noteDrafts.current.has(nextId));
       }
     } catch (cause) { failure(cause); }
     finally { lock.current = false; setBusy(false); }
@@ -60,11 +63,11 @@ export function ShareReceiverActions({ share, token, readingId }: { share: WebSh
   }, []);
   const existingBookmark = collections.find(item => item.id === selected)?.items.find(item => item.target.kind === 'share' && item.target.shareId === sharedId);
   const chooseCollection = (id: string) => {
-    setSelected(id); setSaved(undefined); setNoteEdited(false);
-    setNote(collections.find(item => item.id === id)?.items.find(item => item.target.kind === 'share' && item.target.shareId === sharedId)?.note ?? '');
+    setSelected(id); setSaved(undefined); setNoteEdited(noteDrafts.current.has(id));
+    setNote(noteDrafts.current.get(id) ?? collections.find(item => item.id === id)?.items.find(item => item.target.kind === 'share' && item.target.shareId === sharedId)?.note ?? '');
   };
-  const pending = (ref: { current?: Pending }, value: Record<string, unknown>) => {
-    const signature = JSON.stringify(value);
+  const pending = (ref: { current?: Pending }, value: Record<string, unknown>, scope = '') => {
+    const signature = JSON.stringify([scope, value]);
     if (ref.current?.signature !== signature) ref.current = { signature, body: { ...value, requestId: crypto.randomUUID() } };
     return ref.current.body;
   };
@@ -86,11 +89,13 @@ export function ShareReceiverActions({ share, token, readingId }: { share: WebSh
       if (selected === 'new' || !collections.length) {
         const result = await request<{ item: ResearchCollection }>('/api/research/collections', session, pending(createPending, { title: title.trim() }));
         collection = result.item; setCollections(previous => [...previous.filter(item => item.id !== collection!.id), collection!]); setSelected(collection.id);
+        if (noteDrafts.current.has('new')) { noteDrafts.current.set(collection.id, noteDrafts.current.get('new')!); noteDrafts.current.delete('new'); }
       }
       if (!collection) throw new Error(tx('请重新读取资料夹后选择。', 'Reload and choose a collection.'));
       const result = await request<{ item: ResearchCollection }>(`/api/research/collections/${encodeURIComponent(collection.id)}/items`, session,
-        pending(savePending, { expectedRevision: collection.revision, target: { kind: 'share', shareId: reading.id }, ...(noteEdited ? { note } : {}) }));
+        pending(savePending, { expectedRevision: collection.revision, target: { kind: 'share', shareId: reading.id }, ...(noteEdited ? { note } : {}) }, collection.id));
       setSharedId(reading.id); setCollections(previous => previous.map(item => item.id === result.item.id ? result.item : item)); setSaved(result.item.id);
+      noteDrafts.current.delete(result.item.id);
       setNote(result.item.items.find(item => item.target.kind === 'share' && item.target.shareId === reading.id)?.note ?? ''); setNoteEdited(false);
     } catch (cause) { failure(cause); }
     finally { lock.current = false; setBusy(false); }
@@ -119,7 +124,7 @@ export function ShareReceiverActions({ share, token, readingId }: { share: WebSh
           {collections.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}<option value="new">{tx('新建资料夹', 'New collection')}</option></select></label>}
         {(selected === 'new' || !collections.length) && <label>{tx('资料夹名称', 'Collection name')}<input data-share-collection-title value={title} required maxLength={120} onInput={event => setTitle(event.currentTarget.value)} /></label>}
         {existingBookmark && <p data-share-existing-bookmark role="status">{tx('已收藏在这个资料夹中。', 'Already saved in this collection.')}</p>}
-        <label>{tx('私人备注（可选）', 'Private note (optional)')}<textarea data-share-bookmark-note disabled={busy} rows={2} maxLength={4000} value={note} onInput={event => { setNote(event.currentTarget.value); setNoteEdited(true); setSaved(undefined); }} /></label>
+        <label>{tx('私人备注（可选）', 'Private note (optional)')}<textarea data-share-bookmark-note disabled={busy} rows={2} maxLength={4000} value={note} onInput={event => { const value = event.currentTarget.value; noteDrafts.current.set(selected, value); setNote(value); setNoteEdited(true); setSaved(undefined); }} /></label>
         <div class="share-receiver-buttons"><button type="submit" class="button button-primary" data-share-save-bookmark disabled={busy || Boolean(saved)}>{saved ? tx('已收藏', 'Saved') : tx('保存收藏', 'Save bookmark')}</button>
           <button type="button" class="text-button" disabled={busy} onClick={() => void begin('bookmark')}>{tx('刷新资料夹', 'Refresh collections')}</button>
           {saved && <a class="text-button" data-share-saved-collection href={`workspace.html?${new URLSearchParams({ tab: 'collections', collection: saved })}`}>{tx('打开我的资料夹', 'Open my collection')}</a>}</div>

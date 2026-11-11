@@ -5,6 +5,9 @@ import { OwnedDrafts, researchEnvironmentStorageKey, researchSelectionStorageKey
 import { locale } from '../i18n';
 import { base, enc, Empty, ErrorBox, Field, MutationState, Panel, tx, useMutation, useResource, type Item, type Items, type ResearchContext } from './researchShared';
 
+const bookmarkIdentity = (target: ResearchBookmarkTarget) => JSON.stringify(Object.entries(target)
+  .filter(([key, value]) => value !== undefined && !(target.kind === 'release' && key === 'digest')).sort(([a], [b]) => a.localeCompare(b)));
+
 export function BookmarkControl(props: { target: ResearchBookmarkTarget; context: ResearchContext }) {
   const target = props.target, login = target.kind === 'release'
     ? `login.html?${new URLSearchParams({ returnTo: 'library', entry: target.assetId, version: target.version, action: 'bookmark', lang: locale })}` : 'login.html';
@@ -14,11 +17,19 @@ export function BookmarkControl(props: { target: ResearchBookmarkTarget; context
 function BookmarkForm({ target }: { target: ResearchBookmarkTarget; context: ResearchContext }) {
   const parameters = new URLSearchParams(location.search), requested = target.kind === 'release' && parameters.get('action') === 'bookmark'
     && parameters.get('entry') === target.assetId && parameters.get('version') === target.version;
-  const [open, setOpen] = useState(requested), [collectionId, setCollectionId] = useState(''), [title, setTitle] = useState(''), [note, setNote] = useState('');
-  const [created, setCreated] = useState<ResearchCollection>(), [saved, setSaved] = useState(false), [noteEdited, setNoteEdited] = useState(false);
+  const [open, setOpen] = useState(requested), [collectionId, setCollectionId] = useState(''), [title, setTitle] = useState('');
+  const [created, setCreated] = useState<ResearchCollection>(), [saved, setSaved] = useState(false), [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
   const control = useRef<HTMLDetailsElement>(null), returnFocused = useRef(false);
   const collections = useResource<Items<ResearchCollection>>(open ? `${base}/collections` : undefined);
-  const create = useMutation(), save = useMutation(), items = [...(collections.data?.items ?? []), ...(created && !collections.data?.items.some(item => item.id === created.id) ? [created] : [])];
+  const create = useMutation(), save = useMutation(), items = [...(collections.data?.items ?? []).map(item => created?.id === item.id && created.revision > item.revision ? created : item),
+    ...(created && !collections.data?.items.some(item => item.id === created.id) ? [created] : [])];
+  const selectedId = collectionId || items[0]?.id || 'new', selectedCollection = items.find(item => item.id === selectedId);
+  const existingBookmark = selectedCollection?.items.find(item => bookmarkIdentity(item.target) === bookmarkIdentity(target));
+  const noteEdited = Object.hasOwn(noteDrafts, selectedId), note = noteEdited ? noteDrafts[selectedId] : existingBookmark?.note ?? '';
+  useEffect(() => {
+    if (collections.data && !collectionId) setCollectionId(items[0]?.id ?? 'new');
+    if (created && collections.data?.items.some(item => item.id === created.id && item.revision >= created.revision)) setCreated(undefined);
+  }, [collections.data, collectionId, created]);
   useEffect(() => {
     if (!requested || !open || !collections.data || returnFocused.current || !control.current) return;
     returnFocused.current = true;
@@ -26,14 +37,22 @@ function BookmarkForm({ target }: { target: ResearchBookmarkTarget; context: Res
     control.current.querySelector<HTMLElement>('select, input, textarea')?.focus({ preventScroll: true });
   }, [requested, open, collections.data]);
   const submit = async () => {
-    let collection = items.find(item => item.id === (collectionId || items[0]?.id));
-    if (collectionId === 'new' || !items.length) {
+    let collection = selectedCollection;
+    if (selectedId === 'new') {
       const result = await create.run<Item<ResearchCollection>>('POST', `${base}/collections`, { title: title.trim() });
       if (!result) return;
       collection = result.item; setCreated(collection); setCollectionId(collection.id); collections.refresh();
+      const id = collection.id;
+      setNoteDrafts(current => {
+        if (!Object.hasOwn(current, 'new')) return current;
+        const { new: draft, ...rest } = current; return { ...rest, [id]: draft };
+      });
     }
     if (!collection) return;
-    await save.run<Item<ResearchCollection>>('POST', `${base}/collections/${enc(collection.id)}/items`, { expectedRevision: collection.revision, target, ...(noteEdited ? { note } : {}) }, () => {
+    const id = collection.id;
+    await save.run<Item<ResearchCollection>>('POST', `${base}/collections/${enc(id)}/items`, { expectedRevision: collection.revision, target, ...(noteEdited ? { note } : {}) }, result => {
+      setCreated(result.item);
+      setNoteDrafts(current => { const next = { ...current }; delete next[id]; return next; });
       setSaved(true); collections.refresh();
       if (requested) { const address = new URL(location.href); address.searchParams.delete('action'); history.replaceState(null, '', address); }
     });
@@ -42,17 +61,17 @@ function BookmarkForm({ target }: { target: ResearchBookmarkTarget; context: Res
     <summary>{saved ? tx('已收藏', 'Saved') : tx('收藏到资料夹', 'Save to a collection')}</summary>
     {open && <form class="research-form" onSubmit={event => { event.preventDefault(); void submit(); }}>
       <ErrorBox message={collections.error} />{collections.error && <button class="text-button" type="button" onClick={collections.refresh}>{tx('重新读取', 'Try again')}</button>}
-      {collections.loading && !collections.data ? <p role="status">{tx('正在读取资料夹…', 'Loading collections…')}</p> : collections.data && <>
-        {items.length > 0 && <label>{tx('资料夹', 'Collection')}<select value={collectionId || items[0]?.id} onChange={event => { setCollectionId(event.currentTarget.value); setSaved(false); }}>
+      {collections.loading && !collections.data ? <p role="status">{tx('正在读取资料夹…', 'Loading collections…')}</p> : collections.data && <fieldset class="research-bookmark-fields" disabled={create.busy || save.busy}>
+        {items.length > 0 && <label>{tx('资料夹', 'Collection')}<select value={selectedId} onChange={event => { setCollectionId(event.currentTarget.value); setSaved(false); save.setMessage(''); save.setError(''); }}>
           {items.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}<option value="new">{tx('新建资料夹', 'New collection')}</option></select></label>}
-        {(collectionId === 'new' || !items.length) && <Field label={tx('资料夹名称', 'Collection name')} value={title} onInput={setTitle} required maxLength={120} />}
-        <Field label={tx('私人备注（可选）', 'Private note (optional)')} value={note} onInput={value => { setNote(value); setNoteEdited(true); setSaved(false); }} multiline rows={2} maxLength={4000} />
+        {selectedId === 'new' && <Field label={tx('资料夹名称', 'Collection name')} value={title} onInput={setTitle} required maxLength={120} />}
+        <Field label={tx('私人备注（可选）', 'Private note (optional)')} value={note} onInput={value => { setNoteDrafts(current => ({ ...current, [selectedId]: value })); setSaved(false); }} multiline rows={2} maxLength={4000} />
         <MutationState action={create} /><MutationState action={save} />
         {save.error && <button class="text-button" type="button" onClick={collections.refresh}>{tx('重新读取资料夹后重试', 'Reload collections and try again')}</button>}
         {saved && <p class="research-status" role="status">{tx('已保存到你的资料夹。', 'Saved to your collection.')}</p>}
         <div class="research-actions"><button class="button" type="submit" disabled={create.busy || save.busy}>{tx('保存收藏', 'Save bookmark')}</button>
           <a class="text-button" href="workspace.html?tab=collections">{tx('管理资料夹', 'Manage collections')}</a></div>
-      </>}
+      </fieldset>}
     </form>}
   </details>;
 }

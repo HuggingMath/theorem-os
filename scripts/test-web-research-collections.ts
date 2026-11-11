@@ -14,8 +14,9 @@ import type { ResearchCollection, ResearchCollectionPreparation } from '../apps/
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import { freePort, startBrowser } from './web-scenario';
 
-const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/research-collections');
-await fs.access(path.join(root, 'out/web/workspace.html')); await fs.mkdir(output, { recursive: true });
+const root = path.resolve(import.meta.dirname, '..'), output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/research-collections');
+const staticRoot = process.env.THEOREMOS_FRONTEND_TEST_STATIC_ROOT ?? path.join(root, 'out/web');
+await fs.access(path.join(staticRoot, 'workspace.html')); await fs.mkdir(output, { recursive: true });
 const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-browser-collections-'));
 let runnerCalls = 0, mailCalls = 0;
 const runner: WebRunner = {
@@ -25,7 +26,7 @@ const runner: WebRunner = {
 };
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;
 const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin,
-  THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web'), THEOREMOS_WEB_DATA_ROOT: dataRoot }), runner,
+  THEOREMOS_WEB_STATIC_ROOT: staticRoot, THEOREMOS_WEB_DATA_ROOT: dataRoot }), runner,
 { sample: null, mailer: async () => { mailCalls++; throw new Error('Collections must not send mail'); } });
 const fixtures = new WebResearchAssets(service.storage, { identity: owner => service.research.projects.identity(owner),
   async resolveMathematics() {

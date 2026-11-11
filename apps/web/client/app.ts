@@ -77,6 +77,7 @@ import type { TermId } from './glossary';
 import { locale, localeTag, localizeMessage, localizeText, otherLocale, sentences, switchLocale, t } from '../i18n';
 import { historyStorageKey, markHistoryCollapsed, readHistoryCollapsed } from './historyPreference';
 import { classicLibraryUrl } from './classicLibrary';
+import { loadClassicPreparation, readClassicId } from './classicPreparation';
 import { renderContinuationPreview } from './productFlowView';
 import { relatedResearchRuns, type ContinuationPreview } from './productFlow';
 import type { InstalledLibraryDetail } from '../installedLibraryTypes';
@@ -157,6 +158,8 @@ function withAddressLanguage(search: string) {
   const parameters = new URLSearchParams(search);
   if (language === 'zh' || language === 'en') parameters.set('lang', language);
   if (!search && problemDraftTarget) { parameters.set('accountDraft', problemDraftTarget.id); if (problemDraftTarget.version) parameters.set('draftVersion', problemDraftTarget.version); }
+  const classic = readClassicId(new URLSearchParams(location.search)) ?? draftClassicOrigin?.id;
+  if (classic && !parameters.has('run') && !parameters.has('chat') && !parameters.has('editProblem')) parameters.set('fromClassic', classic);
   return parameters.size ? `?${parameters}` : '';
 }
 let researchEntry: 'natural' | 'lean' = 'natural';
@@ -441,6 +444,7 @@ function clearOwnedDrafts() {
   document.querySelector('[data-budget-attempt-start]')?.remove(); budgetDraftHandled = false;
   document.querySelector('[data-shared-proof-start]')?.remove(); sharedDraftHandled = false;
   document.querySelector('[data-shared-proof-origin]')?.remove(); draftSharedProofOrigin = undefined; sharedProofOriginRead = undefined;
+  document.querySelector('[data-classic-origin]')?.remove(); draftClassicOrigin = undefined;
   recoveryEntryHandled = false;
   budgetDraftOrigin = undefined;
   chatWorkspace?.bindOwner('');
@@ -478,6 +482,7 @@ let draftContinuation: WebContinuation | undefined;
 let continuationPreview: ContinuationPreview | undefined;
 let budgetDraftOrigin: { runId: string; projectId?: string; source: string; environment: WebEnvironment } | undefined;
 let draftSharedProofOrigin: TaskDraft['sharedProofOrigin'];
+let draftClassicOrigin: TaskDraft['classicOrigin'];
 let sharedProofOriginRead: { key: string; status: 'loading' | 'available' | 'unavailable' } | undefined;
 let draftFormalization: (NonNullable<TaskDraft['formalization']> & { source: string; environment: WebEnvironment; original?: string }) | undefined;
 let moduleSettingsPolicy: string | undefined;
@@ -1057,7 +1062,8 @@ function captureDraft(): TaskDraft {
     ...(budgetDraftOrigin && budgetDraftOrigin.source === field('source').value && budgetDraftOrigin.environment === field('environment').value
       ? { problemBudget: { runId: budgetDraftOrigin.runId, ...(budgetDraftOrigin.projectId ? { projectId: budgetDraftOrigin.projectId } : {}) } } : {}),
     ...(draftFormalization ? { formalization: { id: draftFormalization.id, evidenceSha256: draftFormalization.evidenceSha256 } } : {}),
-    ...(draftSharedProofOrigin ? { sharedProofOrigin: { ...draftSharedProofOrigin } } : {}) };
+    ...(draftSharedProofOrigin ? { sharedProofOrigin: { ...draftSharedProofOrigin } } : {}),
+    ...(draftClassicOrigin ? { classicOrigin: { ...draftClassicOrigin } } : {}) };
 }
 function selectedProblemLibraries() {
   const selection = researchSelection.value();
@@ -1123,6 +1129,11 @@ function replaceDraft(reason: ReplacementReason, change: () => void) {
   if (reason !== 'edit' && reason !== 'reuse') budgetDraftOrigin = undefined;
   if (reason !== 'edit') draftFormalization = undefined;
   if (reason !== 'edit') { draftSharedProofOrigin = undefined; renderSharedProofOrigin(); }
+  if (reason !== 'edit') {
+    const clearAddress = draftReady || Boolean(draftClassicOrigin);
+    draftClassicOrigin = undefined; document.querySelector('[data-classic-origin]')?.remove();
+    if (clearAddress) { const address = new URL(location.href); address.searchParams.delete('fromClassic'); history.replaceState(null, '', address); }
+  }
   try { change(); } finally { replacingDraft = nested; }
   if (track) {
     draftRecovery.remember(before, captureDraft(), reason);
@@ -1134,6 +1145,8 @@ function recoverDraft() {
   if (!recovery || !state.session || state.submitting) return;
   const fromSettings = element<HTMLDialogElement>('#run-settings').open;
   draftRecovery.clear();
+  document.querySelector('[data-classic-origin]')?.remove();
+  const address = new URL(location.href); address.searchParams.delete('fromClassic'); history.replaceState(null, '', address);
   applyTaskDraft(recovery.draft);
   startDraft(); saveDraft(); renderDraftRecovery();
   if (fromSettings) openSettings('source');
@@ -1179,6 +1192,8 @@ function saveDraft() {
 function applyTaskDraft(draft: TaskDraft) {
   continuationPreview = undefined;
   draftSharedProofOrigin = draft.sharedProofOrigin ? { ...draft.sharedProofOrigin } : undefined;
+  draftClassicOrigin = draft.classicOrigin ? { ...draft.classicOrigin } : undefined;
+  if (draftClassicOrigin) showClassicOrigin();
   renderSharedProofOrigin();
   budgetDraftOrigin = draft.problemBudget ? { ...draft.problemBudget, source: draft.source, environment: draft.environment } : undefined;
   modulePlanLibrary.resetSelection();
@@ -2265,12 +2280,50 @@ async function openSharedProofDraft() {
   retry.addEventListener('click', () => void prepare()); await prepare();
 }
 function showClassicOrigin() {
-  const id = productTarget.get('fromClassic');
-  if (!id || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(id) || document.querySelector('[data-classic-origin]')) return;
+  const id = readClassicId(new URLSearchParams(location.search)) ?? draftClassicOrigin?.id;
+  if (!id || !state.session) return;
+  const existing = document.querySelector<HTMLElement>('[data-classic-origin]');
+  if (existing?.dataset.classicOrigin === id) return;
+  existing?.remove();
+  const owner = ownerOfSession(state.session), tx = (zh: string, en: string) => locale === 'en' ? en : zh;
   const panel = document.createElement('aside'); panel.className = 'composer-research-selection'; panel.dataset.classicOrigin = '';
-  const text = document.createElement('p'); text.textContent = t('从经典题库开始自己的研究。可以参照原路线，在下方填写要证明的问题。');
+  panel.dataset.classicOrigin = id;
+  const heading = document.createElement('strong'); heading.textContent = draftClassicOrigin?.id === id ? draftClassicOrigin.title : tx('从经典题开始研究', 'Start research from a classic problem');
+  const text = document.createElement('p'); text.setAttribute('role', 'status'); text.textContent = tx('正在读取原题…', 'Loading the original problem…');
   const back = document.createElement('a'); back.href = `classics/${locale === 'en' ? 'en/' : ''}archive.html#${new URLSearchParams({ proof: id, tab: 'process' })}`;
-  back.textContent = t('返回来源题目'); panel.append(text, back); element('.workbench').before(panel);
+  back.textContent = t('返回来源题目');
+  const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'text-button'; retry.hidden = true;
+  retry.textContent = tx('重新读取原题', 'Load the original problem again');
+  panel.append(heading, text, back, retry); element('.workbench').before(panel);
+  const load = async () => {
+    retry.hidden = true; retry.disabled = true;
+    try {
+      const prepared = await loadClassicPreparation(id, locale);
+      if (!panel.isConnected || !state.session || ownerOfSession(state.session) !== owner) return;
+      heading.textContent = prepared.origin.title;
+      const applied = draftClassicOrigin?.id === id;
+      panel.dataset.classicReady = String(applied);
+      text.textContent = applied ? tx('原题草稿已保留。核对模型与预算后开始研究。', 'Your problem draft is saved. Review the model and budget before starting research.') : prepared.summary;
+      const preview = document.createElement('details'); preview.dataset.classicPreview = '';
+      const summary = document.createElement('summary'); summary.textContent = tx('预览原题与 Lean 声明', 'Preview the original problem and Lean statements');
+      const source = document.createElement('pre'); source.className = 'classic-preparation-source'; source.textContent = prepared.source;
+      const note = document.createElement('p'); note.textContent = tx('载入后可编辑，当前 Lean 草稿可撤销恢复。', 'You can edit after loading. Your current Lean draft can be restored with Undo.');
+      const confirm = document.createElement('button'); confirm.type = 'button'; confirm.className = 'button'; confirm.dataset.classicConfirm = '';
+      confirm.textContent = applied ? tx('重新载入原题草稿', 'Reload the original problem into a draft') : tx('载入原题草稿', 'Load the original problem into a draft');
+      confirm.addEventListener('click', () => {
+        if (!state.session || ownerOfSession(state.session) !== owner || state.submitting) return;
+        const draft: TaskDraft = { ...captureDraft(), source: prepared.source, task: prepared.task, environment: 'mathlib',
+          templateId: '', modulePlan: undefined, knowledgeDigest: undefined, formalization: undefined, continueFrom: undefined,
+          problemBudget: undefined, sharedProofOrigin: undefined, classicOrigin: prepared.origin };
+        replaceDraft('reuse', () => applyTaskDraft(draft)); researchSelection.clear(); formalizationLink = null;
+        chooseEntry('lean'); startDraft(false, 'replace'); draftChanged(); saveDraft(); renderDraftRecovery();
+      });
+      preview.append(summary, source, note, confirm); panel.append(preview);
+    } catch (error) {
+      if (panel.isConnected) { text.textContent = message(error); retry.hidden = false; }
+    } finally { retry.disabled = false; }
+  };
+  retry.addEventListener('click', () => void load()); void load();
 }
 async function openRecoveryEntry() {
   const id = productTarget.get('run'), action = productTarget.get('recovery');
@@ -2609,9 +2662,9 @@ function initialize(): Promise<void> {
           }
         }
       }
-      if (firstLoad && (budgetDraftOrigin || draftSharedProofOrigin || resumeLeanDraft) && state.composing && !productEntry && !problemDraftTarget
+      if (firstLoad && (budgetDraftOrigin || draftSharedProofOrigin || draftClassicOrigin || resumeLeanDraft) && state.composing && !productEntry && !problemDraftTarget
         && !readResearchProblemDraft(productTarget) && !readLibraryReference(productTarget) && !readEditedProblemId(productTarget)
-        && !productTarget.has('fromClassic') && !productTarget.has('chat') && !linkedRun) {
+        && (!productTarget.has('fromClassic') || draftClassicOrigin?.id === readClassicId(productTarget)) && !productTarget.has('chat') && !linkedRun) {
         await naturalPage;
         if (!currentConnection(epoch)) return;
         chooseEntry('lean');
@@ -2637,6 +2690,8 @@ function initialize(): Promise<void> {
 }
 const mac = /Mac|iPhone|iPad/.test(navigator.userAgent);
 function renderShell() {
+  const classicPanel = document.querySelector<HTMLElement>('[data-classic-origin]');
+  if (classicPanel) classicPanel.hidden = !state.composing || Boolean(currentRun());
   renderAccountProblemDraft();
   const session = state.session, ready = Boolean(state.connected && session?.runtime.ready && session.providers.length);
   const run = currentRun(), running = state.runs.filter(activeRun);

@@ -1,7 +1,7 @@
 import { useState } from 'preact/hooks';
 import type { ResearchAsset } from '../researchAssetTypes';
 import type { ResearchAssetFollows, ResearchAssetUpdate } from '../researchCollectionTypes';
-import type { ResearchReleaseChange, ResearchReleaseComparison } from '../researchReleaseComparison';
+import type { ResearchReleaseChange, ResearchReleaseComparison, ResearchReleaseUsageChange, ResearchReleaseUsageField } from '../researchReleaseComparison';
 import { Rich, RichProse } from './richText';
 import { compareSources } from './sourceDiff';
 import { base, enc, Empty, ErrorBox, libraryHref, MutationState, Panel, tx, useMutation, useResource, type Item, type ResearchContext } from './researchShared';
@@ -68,14 +68,29 @@ export function ReleaseComparison({ asset, selectedVersion, useVersion }: { asse
       <h4>{tx('证明环境', 'Proof environment')}</h4>{data.data.item.environment.changed ? <BeforeAfter before={data.data.item.environment.before ?? tx('未记录', 'Not recorded')} after={data.data.item.environment.after ?? tx('未记录', 'Not recorded')} />
         : <p class="research-status">{tx('环境没有变化。', 'The environment is unchanged.')}</p>}
       <ChangeGroup title={tx('内容与源码', 'Content and source')} items={data.data.item.content} diff />
+      {asset.type === 'mathematics' && <UsageChangeGroup items={data.data.item.usage} />}
       <ChangeGroup title={tx('名称、说明与许可证', 'Name, description and license')} items={data.data.item.metadata} />
       <div class="research-actions"><button class="button" type="button" disabled={from === to || data.loading || Boolean(data.error)} onClick={() => useVersion(to)}>{tx('用对照版本准备新研究', 'Prepare new research with this version')}</button></div>
       <p class="research-field-note">{tx('采用这个版本会先带入工作台供你确认。已有研究继续保留原来的固定版本。', 'This prepares a configuration for your review in the workbench. Existing runs retain their original fixed versions.')}</p>
     </>}</>}
   </details>;
 }
-function BeforeAfter({ before, after }: { before: string; after: string }) {
-  return <div class="research-release-before-after"><div><span>{tx('之前', 'Before')}</span><pre class="research-block-code">{before}</pre></div><div><span>{tx('之后', 'After')}</span><pre class="research-block-code">{after}</pre></div></div>;
+function BeforeAfter({ before, after, prose = false }: { before: string; after: string; prose?: boolean }) {
+  return <div class="research-release-before-after"><div><span>{tx('之前', 'Before')}</span>{prose ? <RichProse text={before} /> : <pre class="research-block-code">{before}</pre>}</div>
+    <div><span>{tx('之后', 'After')}</span>{prose ? <RichProse text={after} /> : <pre class="research-block-code">{after}</pre>}</div></div>;
+}
+function UsageChangeGroup({ items }: { items: ResearchReleaseUsageChange[] }) {
+  const labels: Record<ResearchReleaseUsageField, string> = { conditions: tx('适用条件', 'When this applies'), result: tx('能够得到什么', 'What this establishes'),
+    title: tx('示例标题', 'Example title'), declaration: tx('调用的声明', 'Referenced declaration'), type: tx('示例目标类型', 'Example goal type'),
+    proof: tx('示例证明', 'Example proof'), argumentNotes: tx('参数与前提', 'Arguments and premises') };
+  return <section class="research-release-changes" data-release-usage-changes><h4>{tx('适用说明与调用示例', 'Usage and invocation examples')} <span>{items.length}</span></h4>
+    {!items.length ? <p class="research-status">{tx('没有变化。', 'No changes.')}</p> : items.map(item => <details key={item.name} data-usage-field={item.field} data-usage-example={item.exampleId}>
+      <summary>{({ added: tx('新增', 'Added'), removed: tx('移除', 'Removed'), changed: tx('修改', 'Changed') })[item.kind]} · {labels[item.field]}
+        {item.exampleId && <> · {item.exampleTitle || item.exampleId}</>}</summary>
+      <BeforeAfter before={item.before ?? tx('无', 'None')} after={item.after ?? tx('无', 'None')}
+        prose={item.field === 'conditions' || item.field === 'result' || item.field === 'argumentNotes' || item.field === 'title'} />
+    </details>)}
+  </section>;
 }
 function ChangeGroup({ title, items, diff = false }: { title: string; items: ResearchReleaseChange[]; diff?: boolean }) {
   return <section class="research-release-changes"><h4>{title} <span>{items.length}</span></h4>{!items.length ? <p class="research-status">{tx('没有变化。', 'No changes.')}</p> : items.map(item => {

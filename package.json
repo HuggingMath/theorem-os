@@ -125,7 +125,8 @@
     "test:web-project-participation": "bun scripts/test-web-project-participation.ts",
     "test:frontend-followthrough": "bun scripts/test-web-problem-drafts.ts && bun scripts/test-web-library-followthrough.ts && bun scripts/test-web-research-decisions-followthrough.ts && bun scripts/test-web-research-notifications.ts",
     "test:frontend-lifecycle": "bun scripts/test-web-problem-lifecycle.ts && bun scripts/test-web-research-decisions-lifecycle.ts && bun scripts/test-web-collections-lifecycle.ts",
-    "test:site-feedback-drafts": "node scripts/test-site-feedback-drafts.mjs"
+    "test:site-feedback-drafts": "node scripts/test-site-feedback-drafts.mjs",
+    "test:frontend-product-gaps": "bunx vitest run --maxWorkers=4 tests/researchIssueExecutionDraft.test.ts tests/webClassicPreparation.test.ts tests/webResearchReleaseComparison.test.ts tests/webDraft.test.ts tests/webDraftRecovery.test.ts tests/webProblemDrafts.test.ts tests/webServer.test.ts tests/webBudgetContinuity.test.ts tests/webResearchWorkspace.test.ts tests/webResearchCollections.test.ts && bun scripts/test-web-library-product-gaps.ts && bun scripts/test-web-share-bookmark-notes.ts && bun scripts/test-web-budget-live-refresh.ts && bun scripts/test-web-issue-action-continuity.ts && bun scripts/test-web-classic-preparation.ts"
   },
   "dependencies": {
     "eventsource-parser": "3.0.6",

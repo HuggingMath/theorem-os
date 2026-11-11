@@ -146,7 +146,6 @@ export const release: Record<string, string> = {
   '草稿已变化，未载入分享原题。请核对后重新读取。': 'Your draft changed, so the shared problem was not loaded. Review it and try again.',
   '已载入「{0}」的原题。核对模型与预算后开始自己的研究，结果会重新检查。': 'Loaded the original problem from “{0}”. Review your model and budget to start your own research. The result will be checked again.',
   '查看来源证明': 'View the source proof',
-  '从经典题库开始自己的研究。可以参照原路线，在下方填写要证明的问题。': 'Start your own research from the classic library. Use the original route as a reference and enter your problem below.',
   '返回来源题目': 'Return to the source problem',
   '研究状态已更新，请查看当前可用的后续操作。': 'The research status has changed. Review the actions available now.',
   '通过邀请加入研究项目': 'Joined the research project by invitation',

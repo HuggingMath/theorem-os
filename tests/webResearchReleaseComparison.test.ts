@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { compareResearchReleases } from '../apps/web/researchReleaseComparison';
-import type { ResearchAssetRelease } from '../apps/web/researchAssetTypes';
+import type { ResearchAssetRelease, ResearchCheckedMathExample } from '../apps/web/researchAssetTypes';
 
 function release(): ResearchAssetRelease {
   return { schema: 'theorem-os.research-asset-release.v1', assetId: 'fixture-asset', type: 'mathematics', authorId: 'fixture-author',
@@ -13,6 +13,17 @@ function release(): ResearchAssetRelease {
       pack: { schema: 'theorem-os.library-pack.v1', modules: [{ file: 'Submission/Library/One.lean', source: 'theorem add_zero := by simp',
         origin: { kind: 'run', runId: 'fixture-run', commit: '1'.repeat(40), file: 'Main.lean' } }],
         requires: [{ file: 'Foundation.lean', digest: 'd'.repeat(64) }] } } };
+}
+function example(id = 'addition'): ResearchCheckedMathExample {
+  return { id, title: 'Use the addition identity', declaration: 'add_zero', type: '∀ n : Nat, n + 0 = n',
+    proof: 'by\n  intro n\n  exact add_zero n', argumentNotes: 'Pass the natural number n.', source: 'fixed example source', sourceDigest: 'f'.repeat(64),
+    check: { receiptId: '1'.repeat(64), receipt: { schema: 'theorem-os.research-library-example-check.v1', exampleId: id, declaration: 'add_zero',
+      sourceDigest: 'f'.repeat(64), libraryPackDigest: 'c'.repeat(64), environment: 'standard', environmentDigest: 'e'.repeat(64),
+      checkedDeclaration: 'FixtureExample', passed: true, exitCode: 0, timedOut: false, diagnostics: [], checkedAt: '2026-11-10T00:00:00Z' } } };
+}
+function withUsage() {
+  const value = release(); value.mathematics!.usage = { conditions: 'For $n \\in \\mathbb{N}$.', result: 'Conclude $n + 0 = n$.', examples: [example()] };
+  return value;
 }
 describe('fixed Library release comparisons', () => {
   it('distinguishes declarations, fixed dependencies, environment, sources and authored metadata', () => {
@@ -52,5 +63,45 @@ describe('fixed Library release comparisons', () => {
     const difference = compareResearchReleases(before, after);
     expect(difference.dependencies).toEqual([{ name: 'base@v1', kind: 'changed',
       before: `v1\n${'b'.repeat(64)}`, after: `v1\n${'d'.repeat(64)}` }]);
+  });
+  it('reports changed applicability and result descriptions even when mathematical source is unchanged', () => {
+    const before = withUsage(), after = structuredClone(before); after.version = 'v2';
+    after.mathematics!.usage!.conditions = 'First locate the $n + 0$ subexpression.';
+    after.mathematics!.usage!.result = 'This gives $n + 0 = n$, not the reversed addition order.';
+    const difference = compareResearchReleases(before, after);
+    expect(difference).toMatchObject({ content: [], declarations: [], dependencies: [], metadata: [], environment: { changed: false } });
+    expect(difference.usage).toEqual(['conditions', 'result'].map(field => ({ name: field, field, kind: 'changed',
+      before: before.mathematics!.usage![field as 'conditions' | 'result'], after: after.mathematics!.usage![field as 'conditions' | 'result'] })));
+    expect(before.mathematics!.usage!.conditions).toBe('For $n \\in \\mathbb{N}$.');
+  });
+  it.each(['title', 'declaration', 'type', 'proof', 'argumentNotes'] as const)('compares the authored example %s by example identity', field => {
+    const before = withUsage(), after = structuredClone(before); after.version = 'v2';
+    after.mathematics!.usage!.examples[0][field] = `Updated ${field}`;
+    const difference = compareResearchReleases(before, after);
+    expect(difference.content).toEqual([]);
+    expect(difference.usage).toEqual([{ name: `examples.addition.${field}`, field, exampleId: 'addition',
+      exampleTitle: after.mathematics!.usage!.examples[0].title, kind: 'changed', before: example()[field], after: `Updated ${field}` }]);
+  });
+  it('reports added and removed examples and explicitly cleared descriptions', () => {
+    const before = withUsage(), after = structuredClone(before); after.version = 'v2';
+    after.mathematics!.usage!.examples = [example('new-identity')]; after.mathematics!.usage!.conditions = '';
+    const difference = compareResearchReleases(before, after);
+    expect(difference.usage.filter(item => item.exampleId === 'addition')).toHaveLength(5);
+    expect(difference.usage.filter(item => item.exampleId === 'addition').every(item => item.kind === 'removed')).toBe(true);
+    expect(difference.usage.filter(item => item.exampleId === 'new-identity')).toHaveLength(5);
+    expect(difference.usage.filter(item => item.exampleId === 'new-identity').every(item => item.kind === 'added')).toBe(true);
+    expect(difference.usage.find(item => item.field === 'conditions')).toEqual({ name: 'conditions', field: 'conditions', kind: 'removed', before: before.mathematics!.usage!.conditions });
+    delete after.mathematics!.usage;
+    expect(compareResearchReleases(before, after).usage).toHaveLength(7);
+  });
+  it('ignores example ordering and receipt-only updates while preserving authored usage', () => {
+    const before = withUsage(); before.mathematics!.usage!.examples.push(example('second'));
+    const after = structuredClone(before); after.version = 'v2'; after.mathematics!.usage!.examples.reverse();
+    for (const item of after.mathematics!.usage!.examples) {
+      item.check.receiptId = '2'.repeat(64); item.check.receipt.checkedAt = '2026-11-11T00:00:00Z'; item.sourceDigest = '3'.repeat(64);
+    }
+    expect(compareResearchReleases(before, after).usage).toEqual([]);
+    const blank = release(), empty = structuredClone(blank); empty.mathematics!.usage = { conditions: '', result: '', examples: [] };
+    expect(compareResearchReleases(blank, empty).usage).toEqual([]);
   });
 });

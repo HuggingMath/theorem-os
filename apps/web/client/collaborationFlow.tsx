@@ -9,6 +9,7 @@ import { Rich, RichProse } from './richText';
 import { BookmarkControl } from './researchCollections';
 import { ResearchDraftPicker, useResearchDrafts } from './researchDrafts';
 import { IssueExecution } from './researchIssueExecution';
+import { completeIssueReply, type IssueReplyDraft } from './researchIssueReplyDraft';
 import { SharedStageReference } from './researchStageReference';
 import { ProjectInvitationLinks } from './researchInvite';
 import { ResearchHandoffComposer } from './researchHandoffComposer';
@@ -197,12 +198,27 @@ export function CollaborationIssues({ project, selfId, request, refresh, onRevea
 function IssueThread({ issue, project, selfId, refresh, onRevealFeedback }: { issue: ResearchIssue; project: ResearchProjectDetail; selfId: string; refresh(): void; onRevealFeedback(id: string): void }) {
   const [text, setText] = useState(''), [kind, setKind] = useState('comment'), [replyTo, setReplyTo] = useState(''), [proposalId, setProposal] = useState(''), [feedbackId, setFeedback] = useState(''), action = useMutation();
   const [revision, setRevision] = useState(issue.revision), stale = revision !== issue.revision;
-  type ReplyDraft = { text: string; kind: string; replyTo: string; proposalId: string; feedbackId: string; revision: number };
-  const drafts = useResearchDrafts<ReplyDraft>(selfId, project.id, 'issue-reply');
-  const saveDraft = (next: Partial<ReplyDraft>) => {
+  const currentReply = useRef<IssueReplyDraft>({ text, kind, replyTo, proposalId, feedbackId, revision });
+  currentReply.current = { text, kind, replyTo, proposalId, feedbackId, revision };
+  const drafts = useResearchDrafts<IssueReplyDraft>(selfId, project.id, 'issue-reply');
+  const saveDraft = (next: Partial<IssueReplyDraft>) => {
     const value = { text, kind, replyTo, proposalId, feedbackId, revision, ...next };
+    currentReply.current = value;
     if (value.text.trim()) drafts.save({ issueId: issue.id, issueRevision: value.revision, statementVersionId: issue.statementVersionId,
       runId: issue.target?.runId, taskId: issue.target?.taskRef?.id, taskVersion: issue.target?.taskRef?.version }, value, issue.title);
+  };
+  const completeReply = (submitted: IssueReplyDraft, submittedDraft: ReturnType<typeof drafts.current>, result: ResearchIssue) => {
+    const before = currentReply.current, next = completeIssueReply(before, submitted, result.revision);
+    if (submittedDraft) { drafts.remove(submittedDraft, true); void drafts.complete(submittedDraft, { kind: 'issue-reply', id: result.id }); }
+    if (JSON.stringify(before) !== JSON.stringify(submitted)) {
+      const newer = drafts.current(), nextScope = { issueId: issue.id, issueRevision: next.revision, statementVersionId: issue.statementVersionId,
+        runId: issue.target?.runId, taskId: issue.target?.taskRef?.id, taskVersion: issue.target?.taskRef?.version };
+      if (next.text.trim()) {
+        drafts.save(nextScope, next, issue.title);
+        if (newer && JSON.stringify(drafts.read(nextScope)?.value) === JSON.stringify(next)) drafts.remove(newer, true);
+      }
+    }
+    currentReply.current = next; setText(next.text); setReplyTo(next.replyTo); setRevision(next.revision); refresh();
   };
   const links = project.feedback.filter(item => !issue.target || item.target?.runId === issue.target.runId && item.target.statementVersionId === issue.target.statementVersionId);
   return <article class="collaboration-issue" id={`issue-${issue.id}`} tabIndex={-1} data-collaboration-issue={issue.id}>
@@ -216,12 +232,12 @@ function IssueThread({ issue, project, selfId, refresh, onRevealFeedback }: { is
       {project.permissions.member && issue.status === 'open' && <button class="text-button" type="button" onClick={() => { setReplyTo(reply.id); saveDraft({ replyTo: reply.id }); const input = document.getElementById(`issue-input-${issue.id}`); const details = input?.closest('details'); if (details) details.open = true; input?.focus(); }}>{tx('回复此条', 'Reply')}</button>}</li>)}</ol>
     {issue.resolution && <div class="collaboration-resolution"><strong>{issue.resolution.author.displayName} · {issue.resolution.action === 'reopen' ? tx('重新讨论的原因', 'Reason for reopening') : tx('决议', 'Resolution')}</strong><RichProse text={issue.resolution.text} />
       {issue.resolution.proposalId && <a href={`#reply-${issue.resolution.proposalId}`}>{tx('采用的方案', 'Selected proposal')}</a>}{issue.resolution.feedbackIds.map(id => <a class="research-inline-link" key={id} href={`#feedback-${enc(id)}`} onClick={event => { event.preventDefault(); onRevealFeedback(id); }}>{tx('查看决议关联的指导或调整', 'View linked guidance or changes')}</a>)}</div>}
-    {issue.status === 'resolved' && issue.resolution && project.permissions.edit && <IssueExecution issue={issue} project={project} selfId={selfId} refresh={refresh} onRevealFeedback={onRevealFeedback} />}
+    {issue.status === 'resolved' && issue.resolution && project.permissions.edit && <IssueExecution key={`${selfId}:${project.id}:${issue.id}`} issue={issue} project={project} selfId={selfId} refresh={refresh} onRevealFeedback={onRevealFeedback} />}
     {Boolean(issue.resolutionHistory?.length) && <details><summary>{tx('历次决议与重新讨论', 'Previous resolutions and reopenings')}</summary>{issue.resolutionHistory!.map((record, index) => <div class="collaboration-resolution" key={index}><div class="collaboration-meta">{record.author.displayName} · {stamp(record.createdAt)}</div><RichProse text={record.text} />{record.proposalId && <a href={`#reply-${record.proposalId}`}>{tx('采用的方案', 'Selected proposal')}</a>}</div>)}</details>}
     {selfId && project.permissions.member && (issue.status === 'open' || project.permissions.edit) && <details onToggle={event => { if (event.currentTarget.open && !text.trim()) setRevision(issue.revision); }}><summary>{issue.status === 'open' ? tx('补充意见或记录决议', 'Reply or record a resolution') : tx('重新讨论', 'Reopen discussion')}</summary>
       <ResearchDraftPicker drafts={drafts} filter={item => item.scope.issueId === issue.id} onRestore={item => { const value = item.value; setText(value.text); setKind(value.kind); setReplyTo(value.replyTo); setProposal(value.proposalId); setFeedback(value.feedbackId); setRevision(value.revision); action.reset(); }} />
-      <form class="research-form" onSubmit={event => { event.preventDefault(); if (stale || issue.status !== 'open') return; const submittedDraft = drafts.current(), sentText = text; void action.run<Item<ResearchIssue>>('POST', `${projectPath(project.id)}/issues/${issue.id}/replies`,
-      { kind, text, ...(replyTo ? { replyTo } : {}), feedbackIds: feedbackId ? [feedbackId] : [], expectedRevision: revision }, result => { if (submittedDraft) void drafts.complete(submittedDraft, { kind: 'issue-reply', id: result.item.id }); setText(value => value === sentText ? '' : value); setReplyTo(''); setRevision(result.item.revision); refresh(); }); }}>
+      <form class="research-form" onSubmit={event => { event.preventDefault(); if (stale || issue.status !== 'open') return; const submittedDraft = drafts.current(), snapshot = currentReply.current; void action.run<Item<ResearchIssue>>('POST', `${projectPath(project.id)}/issues/${issue.id}/replies`,
+      { kind, text, ...(replyTo ? { replyTo } : {}), feedbackIds: feedbackId ? [feedbackId] : [], expectedRevision: revision }, result => completeReply(snapshot, submittedDraft, result.item)); }}>
       {issue.status === 'open' && <label>{tx('内容类型', 'Type')}<select value={kind} onChange={event => { setKind(event.currentTarget.value); saveDraft({ kind: event.currentTarget.value }); }}><option value="comment">{tx('意见或疑问', 'Comment or question')}</option><option value="proposal">{tx('提出方案', 'Proposal')}</option></select></label>}
       {replyTo && <p>{tx('正在回复：', 'Replying to: ')}{issue.replies.find(item => item.id === replyTo)?.author.displayName}<button type="button" class="text-button" onClick={() => { setReplyTo(''); saveDraft({ replyTo: '' }); }}>{tx('取消回复关联', 'Clear reply target')}</button></p>}
       <label>{tx('补充内容', 'Your contribution')}<textarea id={`issue-input-${issue.id}`} value={text} required maxLength={4000} rows={3} onInput={event => { setText(event.currentTarget.value); saveDraft({ text: event.currentTarget.value }); }} /></label>

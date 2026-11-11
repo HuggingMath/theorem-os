@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { encodeTaskDraft, taskDraftStorageKey, type TaskDraft } from '../apps/web/client/draft';
 import { DraftRecovery, draftRecoveryStorageKey, replacementReasons } from '../apps/web/client/draftRecovery';
+import { webLimits } from '../apps/web/shared';
 
 const draft = (changes: Partial<TaskDraft> = {}): TaskDraft => ({
   providerId: 'openai', model: 'fixture-recovery-model', effort: 'high', environment: 'standard',
@@ -107,7 +108,7 @@ describe('one recoverable draft replacement', () => {
   });
 
   it.each([
-    ['oversized source', { source: 'x'.repeat(32 * 1024 + 1) }],
+    ['oversized source', { source: 'x'.repeat(webLimits.maxSourceBytes + 1) }],
     ['oversized task', { task: 'x'.repeat(8_001) }],
     ['invalid numeric text', { maxTurns: 'not-a-number' }],
     ['NUL in source', { source: 'unfinished\0source' }],
@@ -144,7 +145,7 @@ describe('one recoverable draft replacement', () => {
     JSON.stringify({ ...envelope(), reason: 'submit' }),
     JSON.stringify({ schema: draftRecoveryStorageKey, reason: 'template' }),
     JSON.stringify({ ...envelope(), task: { schema: 'unknown', draft: draft() } }),
-    JSON.stringify({ ...envelope(), task: { schema: taskDraftStorageKey, draft: draft({ source: 'x'.repeat(32_769) }) } }),
+    JSON.stringify({ ...envelope(), task: { schema: taskDraftStorageKey, draft: draft({ source: 'x'.repeat(webLimits.maxSourceBytes + 1) }) } }),
   ])('discards malformed or incompatible stored recovery without blocking the page: %s', raw => {
     const saved = storage(), recovery = new DraftRecovery(() => saved);
     recovery.remember(draft(), draft({ task: 'Previously valid' }), 'template');

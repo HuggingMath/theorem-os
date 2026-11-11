@@ -99,6 +99,15 @@ describe('unsubmitted account problem drafts', () => {
     }
     expect(() => personal.draft(bob, saved.draft.id)).toThrow('不存在');
   });
+  it('preserves a complete classic original and its source reference in an account draft', () => {
+    const { personal } = fixture();
+    const origin = { id: 'classic-original', title: 'A classic certificate problem', sourceSha256: 'a'.repeat(64) };
+    const source = `${lean.source}\n${'-- recorded certificate data\n'.repeat(3000)}`;
+    const value = leanProblemDraft({ ...lean, source, classicOrigin: origin });
+    const saved = personal.saveDraft(alice, input('classic-problem', value));
+    expect(personal.draft(alice, saved.draft.id).version.value).toMatchObject({ mode: 'lean', draft: { source, classicOrigin: origin } });
+    expect(() => personal.draft(bob, saved.draft.id)).toThrow('不存在');
+  });
 });
 
 

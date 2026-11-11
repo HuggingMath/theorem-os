@@ -8,6 +8,7 @@ import type { Page } from 'playwright';
 import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import { shareSnapshot } from '../apps/web/share';
+import { WebResearchCollections } from '../apps/web/researchCollections';
 import { localeStorageKey } from '../apps/web/i18n';
 import type { ResearchCollection } from '../apps/web/researchCollectionTypes';
 import { readingRun } from '../tests/helpers/shareReadingFixture';
@@ -27,6 +28,7 @@ const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port
   async formalize() { prohibited++; throw new Error('No model allowed'); },
 }, { sample: null, mailer: async () => { prohibited++; throw new Error('No mail allowed'); } });
 const browser = await startBrowser(service.server, port), errors: string[] = [], external: string[] = [], checks: object[] = [];
+const collectionFixtures = new WebResearchCollections({ storage: service.storage, projects: service.research.projects, assets: service.research.assets });
 const collections = (page: Page): Promise<ResearchCollection[]> => page.evaluate(async () => (await (await fetch('/api/research/collections')).json()).items);
 try {
   for (const [language, width] of [['zh', 1440], ['en', 390]] as const) {
@@ -82,6 +84,35 @@ try {
     await page.waitForFunction(value => document.querySelector<HTMLTextAreaElement>('[data-share-bookmark-note]')?.value === value, note);
     await page.locator('[data-share-collection]').selectOption(second.id);
     await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('[data-share-bookmark-note]')?.value === 'A different private note.');
+    phase = `conflict-refresh-keeps-unsaved-note-${language}`;
+    const unsavedNote = '人工复核尚未完成：保留边界条件与后续参数检查。 Human review is incomplete; retain the boundary conditions and follow-up parameter checks.';
+    await page.locator('[data-share-bookmark-note]').fill(unsavedNote);
+    const viewer = (await context.cookies(origin)).find(cookie => cookie.name === 'theoremos_session')!.value;
+    const latest = collectionFixtures.get(viewer, second.id);
+    collectionFixtures.update(viewer, second.id, { requestId: `concurrent-rename-${language}`, expectedRevision: latest.revision,
+      title: latest.title + ' (renamed in another tab)', description: latest.description });
+    const conflicted = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === `/api/research/collections/${second.id}/items`);
+    await page.locator('[data-share-save-bookmark]').click(); assert.equal((await conflicted).status(), 409);
+    await page.locator('[data-share-receiver] [role=alert]').waitFor();
+    const reloaded = page.waitForResponse(response => response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/research/collections');
+    await page.getByRole('button', { name: language === 'zh' ? '刷新资料夹' : 'Refresh collections', exact: true }).click();
+    await (await reloaded).finished(); await page.locator('[data-share-bookmark-note]:enabled').waitFor();
+    assert.equal(await page.locator('[data-share-collection]').inputValue(), second.id);
+    assert.equal(await page.locator('[data-share-bookmark-note]').inputValue(), unsavedNote, 'Conflict recovery refreshes revisions without replacing the local note');
+    await page.locator('[data-share-receiver]').screenshot({ path: path.join(output, `${language}-${width}-conflict-recovered.png`) });
+    await page.locator('[data-share-save-bookmark]').click(); await page.locator('[data-share-saved-collection]').waitFor();
+    assert.equal((await collections(page)).find(folder => folder.id === second.id)!.items[0].note, unsavedNote);
+    phase = `folder-specific-unsaved-drafts-${language}`;
+    await page.locator('[data-share-bookmark-note]').fill('B: unsaved local draft.');
+    await page.locator('[data-share-collection]').selectOption(first.id);
+    assert.equal(await page.locator('[data-share-bookmark-note]').inputValue(), note);
+    await page.locator('[data-share-bookmark-note]').fill('A: a separate unsaved draft.');
+    await page.locator('[data-share-collection]').selectOption(second.id);
+    assert.equal(await page.locator('[data-share-bookmark-note]').inputValue(), 'B: unsaved local draft.');
+    await page.locator('[data-share-collection]').selectOption(first.id);
+    assert.equal(await page.locator('[data-share-bookmark-note]').inputValue(), 'A: a separate unsaved draft.');
+    await page.locator('[data-share-collection]').selectOption(second.id);
     phase = `explicit-edit-and-clear-${language}`;
     await page.locator('[data-share-bookmark-note]').fill('Revised private note.'); await page.locator('[data-share-save-bookmark]').click();
     await page.locator('[data-share-saved-collection]').waitFor(); assert.equal(posts.at(-1)?.note, 'Revised private note.');
@@ -96,6 +127,7 @@ try {
     await page.screenshot({ path: path.join(output, `${language}-${width}-notes.png`), fullPage: true });
     checks.push({ language, width, originalLinkRestoresNote: true, readingLinkRestoresNote: true, noWriteBeforeSave: true,
       firstSaveFailurePreservesNote: true, untouchedNoteOmitted: true, folderSwitchRestoresNote: true, explicitEdit: true, explicitClear: true, otherFolderUnchanged: true });
+    Object.assign(checks.at(-1)!, { conflictStatus: 409, conflictRefreshPreservesNote: true, retryPersistsLocalNote: true, folderSpecificUnsavedDrafts: true });
     await context.close(); active = undefined;
   }
   assert.equal(prohibited, 0); assert.deepEqual(errors, []); assert.deepEqual(external, []);

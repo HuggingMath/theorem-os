@@ -9,7 +9,7 @@ export type WebEnvironment = 'standard' | 'mathlib';
 /** What one web run may ask for; the server enforces these, and the workbench reads them to know when a limit is already at its highest. */
 /** `maxRuns` is how many run records one owner may keep; the composer warns before the server refuses the next one. */
 export const webLimits = Object.freeze({ maxTurns: 20, maxRunSeconds: 900, maxWorkers: 4, maxTotalTokens: 100_000_000,
-  maxSourceBytes: 32_768, maxTaskBytes: 8_000, maxRuns: 20 });
+  maxSourceBytes: 128 * 1024, maxTaskBytes: 8_000, maxRuns: 20 });
 /** How long a run may spend preparing its proof environment; this is separate from the solve budget, which starts after it. */
 export const webPreparationSeconds: Readonly<Record<WebEnvironment, number>> = { standard: 120, mathlib: 600 };
 /** Why a run stopped without an accepted proof. Categories carry no provider text. */
