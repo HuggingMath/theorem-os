@@ -550,8 +550,14 @@ export class CooperativeResearch extends CooperationInputs {
       JSON.stringify(obligations.nextCheckOutcomes.map(record => ({ checkId: record.id,
         outcomeDeliveryId: record.outcome?.deliveryId }))) + '.');
     if (obligations.feedback) required.push('Repair the current host plan validation feedback; an unchanged saved draft does not answer it.');
+    const revision = this.archive.tasks.length && action.planVersion
+      ? ' When the task graph stays unchanged, start the decision-only revision with ' +
+        JSON.stringify({ baseVersion: action.planVersion, upsert: [] }) +
+        ' and include the required researchDecisions, progressReview or nextCheckDecisions in that same JSON object. ' +
+        'A decision without tasks or upsert/remove is not a plan revision. '
+      : ' Include a complete tasks array and the required decisions in the same JSON object; an initial plan cannot use upsert/remove. ';
     return 'Save or publish a validated math-plan revision as your instructions describe before returning. ' + required.join(' ') +
-      ' The task graph may stay unchanged when a decision-only revision satisfies these obligations. ';
+      revision;
   }
   private leadDecision(worker: ResearchWorker, head: string, inputDigest: string): CooperativeAction {
     this.syncPlanNotes();

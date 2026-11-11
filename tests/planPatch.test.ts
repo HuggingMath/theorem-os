@@ -36,6 +36,48 @@ describe('Lead plan revisions', () => {
     expect(() => parseLeadPlan(problem, { tasks: [] })).toThrow(/^math_plan_invalid$/u);
   });
 
+  it('keeps research, progress and next-check decisions identical when lifting a nested revision', () => {
+    const decisions = {
+      researchDecisions: [{ deliveryId: 'finding', outcome: 'decline', reason: 'The finding does not close this gap.' }],
+      progressReview: { id: 'review', reason: 'Check the exact construction before changing the route.',
+        nextChecks: [{ action: 'construction-check', targetTaskId: 'goal', objective: 'Check the original construction.',
+          expectedEvidence: 'A checked construction or its exact missing premise.' }] },
+      nextCheckDecisions: [{ checkId: 'a'.repeat(64), outcomeDeliveryId: 'outcome', action: 'continue',
+        reason: 'The scoped check leaves a concrete construction to investigate.' }],
+    };
+    const flat = { baseVersion: 'v1', upsert: [], ...decisions };
+    const nested = { baseVersion: 'v1', tasks: { baseVersion: 'v1', upsert: [], ...decisions } };
+    const before = structuredClone(nested);
+    expect(parseLeadPlan(problem, nested, base)).toEqual(parseLeadPlan(problem, flat, base));
+    expect(nested).toEqual(before);
+  });
+
+  it('rejects invalid or conflicting decisions inside a nested revision', () => {
+    const invalid = { id: 'review', reason: 'Missing the required discriminating checks.' };
+    expect(() => parseLeadPlan(problem, { baseVersion: 'v1', tasks: {
+      baseVersion: 'v1', upsert: [], progressReview: invalid } }, base))
+      .toThrow('math_plan_progress_review_invalid');
+    expect(() => parseLeadPlan(problem, { baseVersion: 'v1', progressReview: invalid, tasks: {
+      baseVersion: 'v1', upsert: [], progressReview: { ...invalid, reason: 'A conflicting response.' } } }, base))
+      .toThrow('math_plan_patch_invalid: progressReview appears both');
+    expect(() => parseLeadPlan(problem, { baseVersion: 'v1', researchDecisions: [], tasks: {
+      baseVersion: 'v1', upsert: [], researchDecisions: [{ deliveryId: 'finding', outcome: 'decline', reason: 'Conflicting.' }] } }, base))
+      .toThrow('math_plan_patch_invalid: researchDecisions appears both');
+  });
+
+  it('explains the required graph syntax when a decision-only revision omits upsert and remove', () => {
+    let failure: unknown;
+    try { parseLeadPlan(problem, { baseVersion: 'v1', researchDecisions: [] }, base); }
+    catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(Error);
+    const message = (failure as Error).message;
+    expect(message).toMatch(/^math_plan_invalid/u);
+    expect(message).toContain('tasks');
+    expect(message).toContain('upsert');
+    expect(message).toContain('remove');
+    expect(message).toContain('"upsert":[]');
+  });
+
   it('merges supplied fields into an existing task, deletes null fields and appends new tasks', () => {
     const plan = parseLeadPlan(problem, { baseVersion: 'v1', upsert: [
       { id: 'core', status: 'paused' }, { id: 'side', ownerId: 'researcher-1' }, lemma('bridge', ['side']),

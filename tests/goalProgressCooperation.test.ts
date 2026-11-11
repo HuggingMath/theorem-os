@@ -189,6 +189,26 @@ describe('goal progress controls the cooperative planning loop', () => {
     expect(run.check).not.toHaveBeenCalled();
   });
 
+  it('accepts the exact presented progress decision from a nested live revision without changing the graph', async () => {
+    const run = fixture(); await run.startGoal(); await vi.advanceTimersByTimeAsync(interval);
+    const action = await run.leadAction(), archive = run.state.cooperation!, id = archive.goalProgress!.pending!.id;
+    const planVersion = archive.planVersion;
+    const event = { kind: 'plan', dispatchNonce: action.planNonce, baseVersion: action.planVersion,
+      tasks: { baseVersion: action.planVersion, upsert: [], progressReview: { id,
+        reason: 'Preserve the exact proof obligation and check its missing construction.',
+        nextChecks: [{ action: 'construction-check', targetTaskId: 'goal_1', objective: 'Check the original construction.',
+          expectedEvidence: 'A checked construction or its exact missing premise.' }] } } };
+    fs.appendFileSync(path.join(run.workers[0].worktree, leadPlanDeliveryFile(action)!), JSON.stringify(event) + '\n');
+    await run.cooperation.pulse();
+    expect(archive.planVersion).toBe(planVersion);
+    expect(archive.planPublication).toMatchObject({ nonce: action.planNonce });
+    expect(archive.goalProgress!.pending).toBeUndefined();
+    expect(archive.goalProgress!.decisions?.filter(decision => decision.id === id)).toHaveLength(1);
+    expect(run.events.filter(item => item.event === 'plan_publication_rejected')).toHaveLength(0);
+    expect(archive.error).toBeUndefined();
+    expect(run.check).not.toHaveBeenCalled();
+  });
+
   it('reports an omitted progress review while the draft is still editable and accepts the same-turn correction', async () => {
     const run = fixture(); await run.startGoal(); await vi.advanceTimersByTimeAsync(interval);
     const notify = vi.fn(async (_message: string) => {}), action = await run.leadAction(notify);

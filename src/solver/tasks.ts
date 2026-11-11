@@ -208,6 +208,10 @@ export function parseCooperationPlan(problem: SolverProblem, value: any): { task
   if (value?.tasks && typeof value.tasks === 'object' && !Array.isArray(value.tasks))
     throw planError('math_plan_invalid', { field: 'tasks' },
       'tasks must be the complete array of task objects; a revision omits tasks and puts baseVersion, upsert and remove at the top level');
+  if (value && typeof value === 'object' && !Array.isArray(value) && value.tasks === undefined)
+    throw planError('math_plan_invalid', { field: 'tasks' },
+      'include the complete tasks array, or use a revision with baseVersion and upsert/remove; ' +
+      'when only answering decisions, use {"baseVersion":"CURRENT_PLAN_VERSION","upsert":[]} plus the required decisions in the same JSON object');
   if (!value || !Array.isArray(value.tasks) || value.tasks.length < 1)
     throw new Error('math_plan_invalid');
   // Leads routinely serialize an empty explicit list; it carries the same meaning as omitting it.

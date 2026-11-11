@@ -242,7 +242,8 @@ describe('Lead scheduling checkpoint control responses', () => {
     const action = await start(planText({ ...graph(), ...decide('decline') }));
     const reminder = cooperative.leadCheckpointInstruction(action);
     expect(reminder).toContain('researchDecisions: ["proposal-delivery"]');
-    expect(reminder).toContain('task graph may stay unchanged');
+    expect(reminder).toContain('task graph stays unchanged');
+    expect(reminder).toContain(JSON.stringify({ baseVersion: action.planVersion, upsert: [] }));
     expect(reminder).not.toContain('return without a revision');
     await checkpoint(action);
     expect(state.cooperation!.researchDecisions).toContainEqual(expect.objectContaining({
@@ -252,6 +253,23 @@ describe('Lead scheduling checkpoint control responses', () => {
     expect(state.cooperation!.error).toBeUndefined();
     expect(events.some(item => item.event === 'lead_checkpoint_saved')).toBe(false);
     expect(cooperative.leadCheckpointInstruction(action)).toContain('return without a revision');
+  });
+
+  it('accepts a nested research decision through the live plan intake without inventing proof progress', async () => {
+    const action = await start(), planVersion = state.cooperation!.planVersion;
+    fs.appendFileSync(path.join(workers[0].worktree, leadPlanDeliveryFile(action)!), JSON.stringify({
+      kind: 'plan', dispatchNonce: action.planNonce, baseVersion: action.planVersion,
+      tasks: { baseVersion: action.planVersion, upsert: [], ...decide('decline') },
+    }) + '\n');
+    await cooperative.pulse();
+    expect(state.cooperation!.planVersion).toBe(planVersion);
+    expect(state.cooperation!.planPublication).toMatchObject({ nonce: action.planNonce });
+    expect(state.cooperation!.researchDecisions).toContainEqual(expect.objectContaining({
+      deliveryId: 'proposal-delivery', outcome: 'decline' }));
+    expect(state.cooperation!.tasks.some(node => node.task.id === proposal.id)).toBe(false);
+    expect(state.cooperation!.tasks.some(node => node.status === 'integrated')).toBe(false);
+    expect(state.cooperation!.error).toBeUndefined();
+    expect(events.some(item => item.event === 'plan_publication_rejected')).toBe(false);
   });
 
   it('does not add a later research publication to the old dispatch checkpoint obligations', async () => {

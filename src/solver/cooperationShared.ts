@@ -191,9 +191,10 @@ type LeadPlanOptions = Parameters<typeof expandPlanPatch>[2] & { goalPath?: Goal
  */
 export function parseLeadPlan(problem: SolverProblem, value: unknown, base?: PlanPatchBase, options: LeadPlanOptions = {}): LeadPlan {
   const { goalPath, restoring, ...patchOptions } = options;
+  value = liftNestedPlanPatch(value);
   const progressDecision = parseGoalProgressDecision(value, restoring);
-  const nextCheckDecisions = parseNextCheckDecisions(liftNestedPlanPatch(value));
-  const answered = applyGoalPathDecisions(liftNestedPlanPatch(value), goalPath, base);
+  const nextCheckDecisions = parseNextCheckDecisions(value);
+  const answered = applyGoalPathDecisions(value, goalPath, base);
   const decisions = { ...(answered.decisions ? { goalPathDecisions: answered.decisions } : {}),
     ...(progressDecision ? { goalProgressDecision: progressDecision } : {}),
     ...(value && typeof value === 'object' && 'researchDecisions' in value
