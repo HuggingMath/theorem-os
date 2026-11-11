@@ -10,7 +10,8 @@ import './researchJourney.css';
 import { ResearchCheckDetails } from './researchCheckDetails';
 
 type Props = { runId: string; projectId?: string };
-type JourneyFocus = { runId: string; task: ResearchBriefTask };
+type JourneyAttemptSelection = { runId: string; projectId?: string; href: string };
+type JourneyFocus = JourneyAttemptSelection & { task: ResearchBriefTask };
 const endpoint = (run: string, project: string | undefined, section: string) =>
   `${base}/workspace/problem/${enc(run)}/${section}${project ? `?project=${enc(project)}` : ''}`;
 const sourceEndpoint = (ref: ResearchJourneySourceRef) => `${endpoint(ref.runId, ref.projectId, 'journey/source')}${ref.projectId ? '&' : '?'}${new URLSearchParams({
@@ -169,7 +170,7 @@ export function ResearchJourneyTaskSource({ runId, projectId, task, close, obser
 }
 
 export function ResearchJourneyView({ runId, projectId, focusedTask, onTaskSelection, onAttemptSelection, frozen }: Props & {
-  focusedTask?: { id: string; version: string; commit?: string }; onTaskSelection?(value: JourneyFocus): void; onAttemptSelection?(runId: string): void;
+  focusedTask?: { id: string; version: string; commit?: string }; onTaskSelection?(value: JourneyFocus): void; onAttemptSelection?(value: JourneyAttemptSelection): void;
   frozen?: ResearchJourneyEvolution['selected'];
 }) {
   const resource = useResource<Item<ResearchJourney>>(endpoint(runId, projectId, 'journey'), 15_000);
@@ -185,9 +186,14 @@ export function ResearchJourneyView({ runId, projectId, focusedTask, onTaskSelec
   const chooseTask = (attempt: ResearchJourneyAttempt, id: string) => {
     setSelection(taskId(attempt.id, id)); setExpanded(previous => new Set([...previous, attempt.id]));
     const task = attempt.tasks.find(item => item.task.id === id)?.task;
-    if (task) onTaskSelection?.({ runId: attempt.id, task });
+    if (task) onTaskSelection?.({ runId: attempt.id, projectId: attempt.projectId, href: attempt.href, task });
   };
-  const chooseAttempt = (id: string) => { setSelection(attemptId(id)); setExpanded(previous => new Set([...previous, id])); onAttemptSelection?.(id); };
+  const chooseAttempt = (id: string) => {
+    const attempt = journey?.attempts.find(item => item.id === id);
+    if (!attempt) return;
+    setSelection(attemptId(id)); setExpanded(previous => new Set([...previous, id]));
+    onAttemptSelection?.({ runId: id, projectId: attempt.projectId, href: attempt.href });
+  };
   const open = (target: string) => {
     const attempt = journey?.attempts.find(attempt => attemptId(attempt.id) === target);
     if (attempt) { chooseAttempt(attempt.id); return; }

@@ -3,7 +3,7 @@ import { useLayoutEffect, useRef } from 'preact/hooks';
 import { rollDigits, rollStatus } from '../motion';
 import { Icon, Spinner } from './Icon';
 import { fill } from './Section';
-import { t } from '../../i18n';
+import { locale, t } from '../../i18n';
 import { ResearchBudgetAttempt, type ResearchBudgetAttemptProps } from '../researchBudgetAttempt';
 import { ResearchLibraryProposalAttempt, type ResearchLibraryProposalAttemptProps } from '../researchLibraryProposalAttempt';
 
@@ -31,6 +31,11 @@ export type PlanApprovalProps = {
   /** The Lead is revising the plan after a note from the owner; approving waits for the revised version. */ revising: boolean;
   /** The owner's approval was sent and the run has not answered yet. */ busy: boolean;
   /** Why the owner's last approval did not take effect. */ error?: string;
+  /** A submitted decision remains separate from the current plan until its exact result is known. */
+  original?: { id: string; planVersion: string; status?: string };
+  checking?: boolean;
+  onCheck?(): void;
+  onReviewCurrent?(): void;
 };
 
 function StatusBadge({ status }: { status: RunHeaderProps['status'] }) {
@@ -150,6 +155,7 @@ function Actions(props: RunHeaderProps) {
 
 /** The plan waits for its owner: approve it as it is, change it first, or ask the Lead to revise it. */
 function ApprovalBanner({ approval, connected }: { approval: PlanApprovalProps; connected: boolean }) {
+  const tx = (zh: string, en: string) => locale === 'en' ? en : zh;
   return <section class="run-approval" aria-labelledby="run-approval-heading" data-run-approval>
     <Icon name="list-ordered" />
     <div class="run-approval-copy">
@@ -158,9 +164,18 @@ function ApprovalBanner({ approval, connected }: { approval: PlanApprovalProps; 
         : t('Lead 把题目拆成了 {0} 项任务。批准后 Agent 才开始工作；也可以先改计划，或给 Lead 留言让它修改。', approval.tasks)}</p>
       <p class="run-approval-note">{t('等待确认不计入证明预算；拟定和修改计划正常计时。')}</p>
       {approval.error && <p class="run-approval-error" role="alert">{approval.error}</p>}
+      {approval.original && <div data-run-original-plan-approval={approval.original.id}>
+        <p>{tx('原批准版本：', 'Original approval version: ')}<code>{approval.original.planVersion}</code></p>
+        {approval.original.status && <p>{tx('原提交回执：', 'Original receipt: ')}{approval.original.status}</p>}
+      </div>}
       <div class="run-approval-actions">
         <button type="button" class="button button-primary" data-action="approve-plan" disabled={!connected || approval.busy || approval.revising || approval.reviewable === false}>
-          {approval.busy ? <Spinner /> : <Icon name="check" />}{approval.busy ? t('正在批准') : t('批准并开始')}</button>
+          {approval.checking ? <Spinner /> : <Icon name="check" />}{approval.original ? tx('原批准待核对', 'Original approval awaiting confirmation')
+            : approval.onReviewCurrent ? tx('先重新核对计划', 'Review the current plan first') : approval.busy ? t('正在批准') : t('批准并开始')}</button>
+        {approval.onCheck && <button type="button" class="button" data-run-check-plan-approval disabled={!connected || approval.checking} onClick={approval.onCheck}>
+          {approval.checking ? tx('正在核对…', 'Checking…') : approval.original ? tx('核对并重试原提交', 'Check and retry the original submission') : tx('重新读取批准记录', 'Reload approval record')}</button>}
+        {approval.onReviewCurrent && <button type="button" class="button" data-run-review-current-plan disabled={!connected || approval.checking || approval.revising || approval.reviewable === false} onClick={approval.onReviewCurrent}>
+          {tx('已重新核对当前计划', 'I reviewed the current plan again')}</button>}
         <button type="button" class="button" data-action="show-plan"><Icon name="network" />{t('查看计划')}</button>
         <button type="button" class="button" data-action="edit-plan" disabled={!connected || approval.busy}><Icon name="square-pen" />{t('修改计划')}</button>
         <button type="button" class="text-button" data-action="guide-lead" disabled={!connected || approval.busy}><Icon name="message-square" />{t('给 Lead 留言')}</button>

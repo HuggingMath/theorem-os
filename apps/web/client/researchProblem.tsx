@@ -114,10 +114,10 @@ export function ProblemPage({ context }: { context: ResearchContext }) {
       navigate({ task: id, taskVersion: task.version, commit: task.commit ?? '', decision: '', annotation: '', feedback: '', accountDraft: '', draftVersion: '' }, false);
     }
   };
-  const runChoice = (run: string) => {
+  const runChoice = (run: string, project = selection.project) => {
     setFocus(undefined); setIssue(undefined);
     setCheckId(''); setSourceKey('');
-    navigate({ run, at: '', atState: '', task: '', taskVersion: '', commit: '', decision: '', feedback: '', annotation: '', accountDraft: '', draftVersion: '', compare: selection.compare === run ? '' : selection.compare });
+    navigate({ run, project, at: '', atState: '', task: '', taskVersion: '', commit: '', decision: '', feedback: '', annotation: '', accountDraft: '', draftVersion: '', compare: project !== selection.project || selection.compare === run ? '' : selection.compare });
   };
   const chooseMoment = (moment?: ResearchObservationRef) => {
     setCheckId(''); setSourceKey(''); setRouteFocus(undefined);
@@ -168,8 +168,9 @@ export function ProblemPage({ context }: { context: ResearchContext }) {
       </div>
       {historical && !frozen && <p role="status">{evolution.error ? tx('所选保存时点暂时无法读取，请重试或回到当前记录。', 'The selected saved moment could not be read. Retry or return to the current record.') : tx('正在读取所选保存时点…', 'Loading the selected saved moment…')} <button type="button" class="text-button" onClick={() => chooseMoment()}>{tx('回到当前记录', 'Return to the current record')}</button></p>}
       {routeBrief && routeProblem && (selection.map === 'global' ? <ResearchJourneyView runId={selection.run} projectId={problem.project?.id} focusedTask={selected} frozen={frozen}
-        onAttemptSelection={run => { if (run !== selection.run) runChoice(run); }}
-        onTaskSelection={({ runId, task }) => navigate({ run: runId, ...(runId !== selection.run ? { at: '', atState: '' } : {}), task: task.id, taskVersion: task.version, commit: task.commit ?? '', decision: '', annotation: '', feedback: '', accountDraft: '', draftVersion: '' }, false)} />
+        onAttemptSelection={({ runId, projectId }) => { if (runId !== selection.run) runChoice(runId, projectId ?? ''); }}
+        onTaskSelection={({ runId, projectId, task }) => navigate({ run: runId, project: projectId ?? '', ...(runId !== selection.run ? { at: '', atState: '' } : {}),
+          ...((projectId ?? '') !== selection.project ? { compare: '' } : {}), task: task.id, taskVersion: task.version, commit: task.commit ?? '', decision: '', annotation: '', feedback: '', accountDraft: '', draftVersion: '' }, false)} />
         : <Panel title={tx('当前尝试的证明路线', 'Proof route for the current attempt')}>
 
       {routeBrief.decisions.length > 0 && <div class="problem-decision-nav" data-problem-decision-nav><h3>{tx('人工决定', 'Human decisions')}</h3>{routeBrief.decisions.map(item => <button type="button" key={item.id} data-problem-select-decision={item.id} aria-pressed={selection.decision === item.id}

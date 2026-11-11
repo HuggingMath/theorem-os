@@ -243,15 +243,18 @@ try {
   revise(control, 'plan-v2');
   await page.locator('[data-run-approval] [data-action="approve-plan"]').click();
   await page.locator('.run-approval-error').getByText('批准没有生效：你批准之前计划又改过了。请看一遍新的计划再批准。').waitFor();
-  assert.equal(await page.locator('[data-run-approval] [data-action="approve-plan"]').isEnabled(), true, 'the owner can approve again');
+  assert.equal(await page.locator('[data-run-approval] [data-action="approve-plan"]').isDisabled(), true, 'a rejection requires reviewing the current plan again');
+  await page.locator('[data-run-review-current-plan]').waitFor();
   assert.deepEqual(approvals.map(item => item.planVersion), ['plan-v1']);
   await shot(page, 'conflict-1440.png');
   mark('an approval of an older plan is rejected with a readable reason');
 
   // The current version: busy while the solver reads it, then the run goes on and the banner leaves.
   control.emit(); await poll(page);
+  await page.locator('[data-run-review-current-plan]').click();
   await page.locator('[data-run-approval] [data-action="approve-plan"]').click();
-  await page.locator('[data-run-approval] [data-action="approve-plan"]').getByText('正在批准').waitFor();
+  await page.locator('[data-run-original-plan-approval]').waitFor();
+  assert.equal(await page.locator('[data-run-approval] [data-action="approve-plan"]').isDisabled(), true);
   assert.equal(await page.locator('[data-run-approval] [data-action="edit-plan"]').isDisabled(), true);
   await page.locator('#toast:not([hidden])').getByText('批准已提交，运行确认后 Agent 就开始工作').waitFor();
   for (let tries = 0; control.approval.status !== 'approved' && tries < 50; tries++) await page.waitForTimeout(100);
@@ -287,6 +290,7 @@ try {
   for (let tries = 0; !revising.approval.rejections.length && tries < 50; tries++) await page.waitForTimeout(100);
   await poll(page);
   await page.locator('.run-approval-error').getByText('批准没有生效：你批准之前计划又改过了。请看一遍新的计划再批准。').waitFor();
+  await page.locator('[data-run-review-current-plan]').click();
   assert.equal(await page.locator('[data-run-approval] [data-action="approve-plan"]').isEnabled(), true);
   revising.approval.rejections = []; revising.emit();
   mark('a revising Lead blocks approval, and a rejection read by the solver is shown');

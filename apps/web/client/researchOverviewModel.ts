@@ -2,6 +2,7 @@ import type { WebRun } from '../shared';
 import type { WebConversationSummary } from '../conversationTypes';
 import type { WebFormalization } from '../formalizationTypes';
 import type { ResearchOverviewData, ResearchOverviewProject } from '../researchOverviewTypes';
+import { isAcceptedRun } from '../presentation';
 
 export type ResearchOverviewAction = {
   id: string; kind: 'statement' | 'research' | 'plan' | 'feedback' | 'update'; title: string; href: string; updatedAt: string;
@@ -21,6 +22,19 @@ const theoremHref = (projectId: string, runId?: string, version?: string, feedba
   return `theorems.html?${parameters}${feedbackId ? `#feedback-${encodeURIComponent(feedbackId)}` : ''}`;
 };
 export const overviewProjectHref = theoremHref;
+
+/** Show a directly readable accepted run for each statement version, including older versions. */
+export function researchVerifiedRuns(card: ResearchOverviewCard) {
+  const versions = new Set<string>();
+  return newest(card.runs.filter(isAcceptedRun)).flatMap(run => {
+    const binding = card.project?.runs.find(item => item.runId === run.id);
+    const versionId = binding?.statementVersionId ?? '';
+    if (versions.has(versionId)) return [];
+    versions.add(versionId);
+    const index = card.project?.versions.findIndex(version => version.id === versionId) ?? -1;
+    return [{ run, ...(index >= 0 ? { version: index + 1 } : {}) }];
+  });
+}
 
 /** Exact source bytes, environment and frozen formalization identity distinguish unbound statements. */
 export function researchStatementIdentity(run: WebRun): string {

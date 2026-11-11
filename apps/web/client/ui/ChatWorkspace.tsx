@@ -33,6 +33,7 @@ import { ChatMathematicalAnswer, ChatMathematicalProgress } from './ChatMathemat
 import type { ResearchStartCostProps } from '../researchStartCost';
 import { libraryReferenceId, type ChatLibraryReference } from '../chatReference';
 import { ProblemDraftPanel, type ProblemDraftPanelProps } from '../problemDrafts';
+import { firstResearchBudgetIssues, type FirstResearchBudgetField, type FirstResearchBudgetIssue } from '../firstResearchBudgetValidation';
 
 
 export type ChatThreadProps = {
@@ -91,6 +92,7 @@ function StatementDecision(props: ChatThreadProps) {
 }
 
 function PlanDecision(props: ChatThreadProps) {
+  const tx = (zh: string, en: string) => locale === 'en' ? en : zh;
   const run = props.run, decision = props.planDecision;
   const previousPlan = usePreviousDecisionPlan(run?.observation?.plan, run?.id ?? '');
   if (!run || !decision) return null;
@@ -106,6 +108,11 @@ function PlanDecision(props: ChatThreadProps) {
     {plan && <DecisionSummary plan={plan} previousPlan={previousPlan} expectedVersion={approval ? run.observation?.inspection.planApproval?.planVersion : undefined}
       onOpenTask={id => props.onArtifact('roadmap', { taskId: id })} />}
     {approval?.error && <p class="chat-error" role="alert">{approval.error}</p>}
+    {approval?.original && <div class="chat-send-status" data-chat-original-plan-approval={approval.original.id}>
+      <p>{tx('原批准版本：', 'Original approval version: ')}<code translate={false}>{approval.original.planVersion}</code></p>
+      {approval.original.planVersion !== run.observation?.inspection.planApproval?.planVersion && <p>{tx('当前计划已有变化，先核对原决定；这不会批准新版本。', 'The current plan has changed. Check the original decision first; this does not approve the new version.')}</p>}
+      {approval.original.status && <p>{tx('原提交回执：', 'Original receipt: ')}{approval.original.status}</p>}
+    </div>}
     <div class="chat-task-actions">
       {plan && <>
         <button type="button" class="button" data-chat-review-plan data-research-artifact="plan" onClick={decision.onReview}><Icon name="network" />{t('查看全部 {0} 项任务', plan.tasks.length)}</button>
@@ -113,7 +120,11 @@ function PlanDecision(props: ChatThreadProps) {
       </>}
       {props.onGuidance && <button type="button" class="text-button" data-research-guidance onClick={() => props.onGuidance?.()}>{t('调整研究方向')}</button>}
       {approval && <button type="button" class="button button-primary" data-chat-approve-plan disabled={!decision.connected || approval.busy || approval.revising || approval.reviewable === false || !plan} onClick={decision.onApprove}>
-        {approval.busy ? t('正在批准') : approval.revising ? t('等待修改完成') : t('批准计划，开始证明')}</button>}
+        {approval.original ? tx('原批准待核对', 'Original approval awaiting confirmation') : approval.onReviewCurrent ? tx('先重新核对计划', 'Review the current plan first') : approval.busy ? t('正在批准') : approval.revising ? t('等待修改完成') : t('批准计划，开始证明')}</button>}
+      {approval?.onCheck && <button type="button" class="button" data-chat-check-plan-approval disabled={!decision.connected || approval.checking} onClick={approval.onCheck}>
+        {approval.checking ? tx('正在核对…', 'Checking…') : approval.original ? tx('核对并重试原提交', 'Check and retry the original submission') : tx('重新读取批准记录', 'Reload approval record')}</button>}
+      {approval?.onReviewCurrent && <button type="button" class="button" data-chat-review-current-plan disabled={!decision.connected || approval.checking || approval.revising || !plan} onClick={approval.onReviewCurrent}>
+        {tx('已重新核对当前计划', 'I reviewed the current plan again')}</button>}
     </div>
   </section>;
 }
@@ -365,13 +376,37 @@ function ChatComposer(props: ChatComposerProps) {
     : props.checkingConnection ? tx('正在检查', 'Checking') : props.connection?.status === 'available' ? tx('模型列表可访问', 'Model list accessible')
       : props.connection?.status === 'error' ? tx('连接需处理', 'Connection needs attention')
         : props.connection?.status === 'unknown' ? tx('仍需核对', 'Needs confirmation') : tx('已填写，待检查', 'Filled in, not checked');
-  const validLimit = (value: number, maximum: number) => Number.isSafeInteger(value) && value >= 0 && (maximum === 0 || value <= maximum);
-  const validBudget = validLimit(props.budgets.maxRunSeconds, props.budgetLimits.maxRunSeconds) && props.budgets.maxRunSeconds % 60 === 0
-    && validLimit(props.budgets.maxTotalTokens, props.budgetLimits.maxTotalTokens)
-    && (props.budgets.maxTotalTokens === 0 || props.budgets.maxTotalTokens >= 10_000)
-    && props.budgets.research.maxRunSeconds % 60 === 0
-    && (props.budgets.research.maxTotalTokens === 0 || props.budgets.research.maxTotalTokens >= 10_000)
-    && Object.entries(props.budgets.research).every(([key, value]) => validLimit(value, props.budgetLimits.research[key as keyof ChatBudgets['research']]));
+  const budgetIssues = firstResearchBudgetIssues(props.budgets, props.budgetLimits), validBudget = budgetIssues.length === 0;
+  const budgetLabel = (field: FirstResearchBudgetField) => ({
+    'formalize-minutes': tx('形式化时间', 'Statement time'), 'formalize-tokens': tx('形式化 Token 上限', 'Statement token limit'),
+    'research-minutes': tx('证明时间', 'Proof time'), 'research-tokens': tx('证明 Token 上限', 'Proof token limit'),
+    'research-turns': tx('研究轮次', 'Research turns'),
+  })[field];
+  const budgetIssueText = ({ kind, maximum }: FirstResearchBudgetIssue) => {
+    const upper = (kind === 'minutes' ? Math.floor(maximum / 60) : maximum).toLocaleString(locale === 'en' ? 'en-US' : 'zh-CN');
+    if (kind === 'tokens') return maximum > 0
+      ? tx(`请填写 10,000 至 ${upper} 的整数，或留空表示不限。`, `Enter a whole number from 10,000 to ${upper}, or leave blank for unlimited.`)
+      : tx('请填写至少 10,000 的整数，或留空表示不限。', 'Enter a whole number of at least 10,000, or leave blank for unlimited.');
+    return maximum > 0
+      ? tx(`请填写 1 至 ${upper} 的整数，或留空表示不限。`, `Enter a whole number from 1 to ${upper}, or leave blank for unlimited.`)
+      : tx('请填写正整数，或留空表示不限。', 'Enter a positive whole number, or leave blank for unlimited.');
+  };
+  const budgetFieldProps = (field: FirstResearchBudgetField) => ({
+    'aria-invalid': budgetIssues.some(issue => issue.field === field) || undefined,
+    'aria-describedby': budgetIssues.some(issue => issue.field === field) ? `${field}-error` : undefined,
+  });
+  const budgetFieldError = (field: FirstResearchBudgetField) => {
+    const issue = budgetIssues.find(issue => issue.field === field);
+    return issue && <span class="field-validation" id={`${field}-error`} data-chat-budget-field-error={field}>{budgetIssueText(issue)}</span>;
+  };
+  const focusBudget = (field: FirstResearchBudgetField) => {
+    if (settings.current) {
+      settings.current.open = true;
+      const advanced = settings.current.querySelector<HTMLDetailsElement>('[data-chat-advanced-settings]');
+      if (advanced) advanced.open = true;
+      settings.current.querySelector<HTMLInputElement>(`#${field}`)?.focus();
+    }
+  };
   const canSend = !!props.input.trim() && !!props.model.trim() && (props.hasConversation || !!provider && validBudget)
     && !props.pending && !props.submitting && !props.disabled && (!props.keyRequired || !!props.apiKey.trim());
   useLayoutEffect(() => {
@@ -519,23 +554,28 @@ function ChatComposer(props: ChatComposerProps) {
                 <label for="formalize-effort">{t("推理强度")}<select id="formalize-effort" value={props.effort} onChange={event => props.onEffort(event.currentTarget.value as ChatComposerProps['effort'])} disabled={props.hasConversation}><option value="max">{t("最高")}</option><option value="high">{t("高")}</option><option value="low">{t("低")}</option></select></label></div>
             {!props.hasConversation && <>
               <fieldset class="chat-budget-fields"><legend>{t('形式化预算')}</legend><div class="chat-settings-options">
-                <label for="formalize-minutes">{t('最多分钟')}<input id="formalize-minutes" type="number" min={0} max={props.budgetLimits.maxRunSeconds / 60} step={1}
+                <label for="formalize-minutes">{t('最多分钟')}<input id="formalize-minutes" type="number" min={0} max={props.budgetLimits.maxRunSeconds ? Math.floor(props.budgetLimits.maxRunSeconds / 60) : undefined} step={1}
+                  {...budgetFieldProps('formalize-minutes')}
                   value={props.budgets.maxRunSeconds ? props.budgets.maxRunSeconds / 60 : ''} placeholder={t('不限')}
-                  onInput={event => props.onBudget('formalization', 'maxRunSeconds', Number(event.currentTarget.value) * 60)} /></label>
-                <label for="formalize-tokens">{t('最多 Token')}<input id="formalize-tokens" type="number" min={0} max={props.budgetLimits.maxTotalTokens} step={1}
+                  onInput={event => props.onBudget('formalization', 'maxRunSeconds', Number(event.currentTarget.value) * 60)} />{budgetFieldError('formalize-minutes')}</label>
+                <label for="formalize-tokens">{t('最多 Token')}<input id="formalize-tokens" type="number" min={10000} max={props.budgetLimits.maxTotalTokens || undefined} step={1}
+                  {...budgetFieldProps('formalize-tokens')}
                   value={props.budgets.maxTotalTokens || ''} placeholder={t('不限')}
-                  onInput={event => props.onBudget('formalization', 'maxTotalTokens', Number(event.currentTarget.value))} /></label>
+                  onInput={event => props.onBudget('formalization', 'maxTotalTokens', Number(event.currentTarget.value))} />{budgetFieldError('formalize-tokens')}</label>
               </div></fieldset>
               <fieldset class="chat-budget-fields"><legend>{t('随后证明的预算')}</legend><div class="chat-settings-options">
-                <label for="research-minutes">{t('最多分钟')}<input id="research-minutes" type="number" min={0} max={props.budgetLimits.research.maxRunSeconds / 60} step={1}
+                <label for="research-minutes">{t('最多分钟')}<input id="research-minutes" type="number" min={0} max={props.budgetLimits.research.maxRunSeconds ? Math.floor(props.budgetLimits.research.maxRunSeconds / 60) : undefined} step={1}
+                  {...budgetFieldProps('research-minutes')}
                   value={props.budgets.research.maxRunSeconds ? props.budgets.research.maxRunSeconds / 60 : ''} placeholder={t('不限')}
-                  onInput={event => props.onBudget('research', 'maxRunSeconds', Number(event.currentTarget.value) * 60)} /></label>
-                <label for="research-tokens">{t('最多 Token')}<input id="research-tokens" type="number" min={0} max={props.budgetLimits.research.maxTotalTokens} step={1}
+                  onInput={event => props.onBudget('research', 'maxRunSeconds', Number(event.currentTarget.value) * 60)} />{budgetFieldError('research-minutes')}</label>
+                <label for="research-tokens">{t('最多 Token')}<input id="research-tokens" type="number" min={10000} max={props.budgetLimits.research.maxTotalTokens || undefined} step={1}
+                  {...budgetFieldProps('research-tokens')}
                   value={props.budgets.research.maxTotalTokens || ''} placeholder={t('不限')}
-                  onInput={event => props.onBudget('research', 'maxTotalTokens', Number(event.currentTarget.value))} /></label>
-                <label for="research-turns">{t('最多研究轮次')}<input id="research-turns" type="number" min={0} max={props.budgetLimits.research.maxTurns} step={1}
+                  onInput={event => props.onBudget('research', 'maxTotalTokens', Number(event.currentTarget.value))} />{budgetFieldError('research-tokens')}</label>
+                <label for="research-turns">{t('最多研究轮次')}<input id="research-turns" type="number" min={0} max={props.budgetLimits.research.maxTurns || undefined} step={1}
+                  {...budgetFieldProps('research-turns')}
                   value={props.budgets.research.maxTurns || ''} placeholder={t('不限')}
-                  onInput={event => props.onBudget('research', 'maxTurns', Number(event.currentTarget.value))} /></label>
+                  onInput={event => props.onBudget('research', 'maxTurns', Number(event.currentTarget.value))} />{budgetFieldError('research-turns')}</label>
               </div></fieldset>
               <p class="field-note">{t('按已报告用量停止，在途请求可能超额；Token 上限不代表金额封顶。')}</p>
             </>}
@@ -559,7 +599,9 @@ function ChatComposer(props: ChatComposerProps) {
         onClick={props.submissionRecovery.onPrepareEdited}>{t('保留修改，另起新题')}</button>
       <p>{t('另起新题会先恢复原任务记录，再准备修改后的题目；再次发送才会启动。')}</p>
     </div>}
-    {!props.hasConversation && !validBudget && <p class="chat-send-status" role="alert">{t('预算可留空，填写时须为允许范围内的正整数。')}</p>}
+    {!props.hasConversation && !validBudget && <div class="chat-send-status" role="alert" data-chat-budget-errors>{budgetIssues.map(issue => <p key={issue.field}>
+      <button type="button" class="text-button" data-chat-fix-budget={issue.field} onClick={() => focusBudget(issue.field)}>{budgetLabel(issue.field)}</button>{' · '}{budgetIssueText(issue)}
+    </p>)}</div>}
     {props.sendStatus && <p id="formalize-send-status" class="chat-send-status" role="status">{props.sendStatus}</p>}
     {props.input.trim() && missingKey && <div class="chat-key-next-step" role="status" data-chat-key-required>
       <p>{t('题目已保留，填写 API Key 后即可发送。')}</p>

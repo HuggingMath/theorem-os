@@ -9,7 +9,7 @@ import { summarizeGoals, summarizeStuck } from '../report';
 import type { WebApi } from './collaborationUi';
 import { locale } from '../i18n';
 import { Rich, RichProse } from './richText';
-import { buildResearchOverview, overviewProjectHref, type ResearchOverviewAction } from './researchOverviewModel';
+import { buildResearchOverview, overviewProjectHref, researchVerifiedRuns, type ResearchOverviewAction } from './researchOverviewModel';
 import { problemEntryHref } from './researchProblemNavigation';
 import type { ResearchPersonalProblem } from '../researchPersonalTypes';
 import { PersonalNextNote, PersonalProblemControl, personalProblemUrl } from './researchPersonal';
@@ -93,7 +93,7 @@ export function ResearchOverview(props: ResearchOverviewProps) {
     {model.cards.length > 0 && <div class="research-overview-tools"><label><span class="sr-only">{tx('搜索我的研究', 'Search my research')}</span><input type="search" data-overview-search value={query}
       placeholder={tx('搜索题目、定理或对话', 'Find a problem, theorem or conversation')} onInput={event => setQuery(event.currentTarget.value)} /></label>
       <div role="group" aria-label={tx('研究状态', 'Research status')}>{(['all', 'waiting', 'active', 'passed'] as const).map(value => <button type="button" key={value}
-        aria-pressed={filter === value} data-overview-filter={value} onClick={() => setFilter(value)}>{({ all: tx('全部', 'All'), waiting: tx('待处理', 'Needs attention'), active: tx('进行中', 'Active'), passed: tx('已通过', 'Verified') })[value]}</button>)}</div></div>}
+        aria-pressed={filter === value} data-overview-filter={value} onClick={() => setFilter(value)}>{({ all: tx('全部', 'All'), waiting: tx('待处理', 'Needs attention'), active: tx('进行中', 'Active'), passed: tx('有通过记录', 'Has verified runs') })[value]}</button>)}</div></div>}
     {model.cards.length > 0 && <div class="research-overview-personal-tools" data-overview-personal-tools>
       <label>{tx('个人整理', 'My organization')}<select value={organization} data-overview-organization onChange={event => setOrganization(event.currentTarget.value as typeof organization)}>
         <option value="current">{tx('未归档', 'Unarchived')}</option><option value="all">{tx('全部题目', 'All problems')}</option><option value="active">{tx('持续研究', 'Active research')}</option>
@@ -107,6 +107,7 @@ export function ResearchOverview(props: ResearchOverviewProps) {
     {loading && !research && <p role="status" class="research-overview-note">{tx('正在读取协作项目…', 'Loading shared projects…')}</p>}
     <div class="research-overview-cards">{cards.map(card => {
       const latest = card.runs[0], conversation = card.conversations[0];
+      const verified = researchVerifiedRuns(card);
       const projectRun = card.project?.runs[0];
       const action = card.actions[0];
       const workspaceRun = action?.runId ?? latest?.id ?? projectRun?.runId;
@@ -123,11 +124,18 @@ export function ResearchOverview(props: ResearchOverviewProps) {
         <h3><a href={workspaceHref ?? href} data-overview-primary={card.id} title={card.title} onClick={event => { if (!workspaceHref) open(event, target); }}><Rich text={card.title} /></a></h3>
         <p class="research-overview-summary">{card.project ? `${card.project.versions.length} ${tx('个陈述版本', 'statement versions')} · ${card.project.runs.length} ${tx('次研究', 'research runs')}`
           : `${card.runs.length} ${tx('次研究', 'research runs')} · ${card.conversations.length} ${tx('段对话', 'conversations')}`}</p>
-        {latest && <p class="research-overview-progress" data-overview-progress={latest.id}>{progress(latest)}</p>}
+        {latest && <p class="research-overview-progress" data-overview-progress={latest.id}>{tx('最新尝试', 'Latest attempt')} · {progress(latest)}</p>}
+        {verified.length > 0 && <section data-overview-verified aria-label={tx('通过记录', 'Verified runs')}>
+          <ul class="research-overview-records">{verified.map(({ run, version }) => <li key={run.id}>
+            <a class="text-button" data-overview-verified-run={run.id} href={problemEntryHref({ runId: run.id, projectId: card.project?.id })}>
+              {version ? tx(`陈述 v${version} 已验收`, `Statement v${version} accepted`) : tx('查看已验收的尝试', 'Open the accepted attempt')} →
+            </a><span>{date(run.updatedAt)}</span>
+          </li>)}</ul>
+        </section>}
         <PersonalNextNote item={saved} />
         <div class="research-overview-card-actions"><a class="button" data-overview-open={card.id} href={workspaceHref ?? href} onClick={event => { if (!workspaceHref) open(event, target); }}>{card.actions.length ? tx('继续处理', 'Continue') : tx('打开研究', 'Open research')} →</a>
           {workspaceHref && <a class="text-button" href={href} onClick={event => open(event, target)}>{action ? actionLabel(action.kind) : tx('研究操作', 'Research controls')}</a>}
-          {latest && <span data-overview-run-status={latest.id}>{runLabel(latest)}</span>}
+          {latest && <span data-overview-run-status={latest.id}>{tx('最新尝试', 'Latest attempt')}: {runLabel(latest)}</span>}
           {card.project && latest && <a class="text-button" href={overviewProjectHref(card.project.id)}>{tx('协作与版本', 'Collaboration and versions')}</a>}</div>
         {(card.runs.length > 0 || card.conversations.length > 0 || Boolean(card.project?.runs.length)) && <details><summary>{tx('历次研究与对话', 'Runs and conversations')}</summary><ul class="research-overview-records">
           {card.project?.runs.map(binding => <li key={`bound:${binding.runId}`}><a href={problemEntryHref({ runId: binding.runId, projectId: card.project!.id, href: overviewProjectHref(card.project!.id, binding.runId, binding.statementVersionId) })}><Rich text={binding.title} /></a><span>{`v${card.project!.versions.findIndex(version => version.id === binding.statementVersionId) + 1}`}</span></li>)}

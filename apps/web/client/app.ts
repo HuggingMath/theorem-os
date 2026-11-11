@@ -75,6 +75,7 @@ import { renderAdminPanel } from './ui/AdminPanel';
 import { feedbackUrl, localizeSiteLinks } from './feedback';
 import type { TermId } from './glossary';
 import { locale, localeTag, localizeMessage, localizeText, otherLocale, sentences, switchLocale, t } from '../i18n';
+import { tx } from './researchShared';
 import { historyStorageKey, markHistoryCollapsed, readHistoryCollapsed } from './historyPreference';
 import { classicLibraryUrl } from './classicLibrary';
 import { loadClassicPreparation, readClassicId } from './classicPreparation';
@@ -85,6 +86,7 @@ import { libraryReferenceKeys, libraryReference, readLibraryReference } from './
 import { readEditedProblemId } from './chatDraft';
 import { clearResearchProblemDraft, loadResearchProblemDraft, readResearchProblemDraft, researchProblemDraftKeys } from './researchProblemDraft';
 import { renderResearchProblemDraft } from './ui/ResearchProblemDraft';
+import { checkPersonalApproval, completePersonalApprovalReview, observedPersonalApproval, personalApprovalNeedsReview, personalApprovalSettled, readPersonalApproval, removePersonalApproval, requirePersonalApprovalReview, savePersonalApproval, type PersonalApprovalAttempt } from './personalApprovalStore';
 
 const iconSet = { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, BookOpen, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
   Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
@@ -117,6 +119,9 @@ type DetailTab = 'result' | 'trajectory' | 'collaboration' | 'source' | 'events'
 // The module plan is opened from the run menu; it joins the tabs only while it is the open one.
 const baseTabs = [['result', t('结果')], ['trajectory', t('路线图')], ['collaboration', t('协作')], ['source', t('源码')], ['events', t('活动')]] as const;
 const detailTabs = (): readonly (readonly [DetailTab, string])[] => state.tab === 'modules' ? [...baseTabs, ['modules', t('模块方案')]] : baseTabs;
+type PersonalApprovalView = { pending?: PersonalApprovalAttempt; receipt?: WebCommandResult; busy: boolean; checked: boolean;
+  error?: string; storageError?: boolean; reviewRequired?: boolean; reviewedVersion?: string };
+let personalApprovalIdentity: { session: WebSession; loading: boolean; owner?: string; error?: string } | undefined;
 const state = {
   session: undefined as WebSession | undefined,
   runs: [] as WebRun[], selectedId: '', selectedRun: undefined as WebRun | undefined,
@@ -125,8 +130,8 @@ const state = {
   draftView: 'source' as 'source' | 'modules',
   foldUnchanged: true, diffChange: 0,
   reportMode: 'summary' as 'summary' | 'json', deleting: new Set<string>(),
-  /** The owner's approval of a run's plan (先审计划), by run, from sending it until the run records it; `error` once it did not take effect. */
-  approving: new Map<string, { id: string; planVersion: string; error?: string }>(),
+  /** UI state only; unresolved approval identities are shared with the route page in owner/run storage. */
+  approving: new Map<string, PersonalApprovalView>(),
   /** The run whose 完整源码 is open beside its result. */ proofViewer: '',
   /** 对比代码 open beside a run's result: the run, and the later run compared with it. */ compare: undefined as { runId: string; laterId: string } | undefined,
   detailError: '', listGeneration: 0, runsEtag: '',
@@ -439,6 +444,7 @@ problemDraftHost.id = 'lean-problem-drafts'; problemDraftHost.hidden = true;
 element('#run-form').after(problemDraftHost);
 const ownerOfSession = webDraftOwner;
 function clearOwnedDrafts() {
+  state.approving.clear(); personalApprovalIdentity = undefined;
   document.querySelector('[data-library-proposal-start]')?.remove(); libraryProposalHandled = false;
   problemDraftRevision++; renderResearchProblemDraft(element('#research-problem-draft'));
   document.querySelector('[data-library-trial-start]')?.remove(); libraryTrialHandled = false;
@@ -2073,34 +2079,120 @@ const approvalErrors: Record<string, string> = {
   math_plan_approval_limit: t('批准没有生效：这次运行的批准次数已用完。'),
 };
 const approvalError = (reason?: string) => approvalErrors[reason ?? ''] ?? t('批准没有生效，请刷新后再试。');
-/** The approval banner of a run whose plan waits for its owner. */
+/** Research pages already use this stable identity for their saved approvals, including anonymous sessions. */
+function personalApprovalOwner() {
+  const session = state.session;
+  if (!session) return;
+  if (personalApprovalIdentity?.session !== session && (!personalApprovalIdentity || !sameSession(personalApprovalIdentity.session))) {
+    const identity = { session, loading: true } as NonNullable<typeof personalApprovalIdentity>;
+    personalApprovalIdentity = identity;
+    void api<{ authenticated: boolean; researcherId: string | null }>('/api/research/session').then(result => {
+      if (personalApprovalIdentity !== identity || !sameSession(session)) return;
+      if (!result.authenticated || !result.researcherId) throw new Error(tx('请重新登录后核对原批准。', 'Sign in again to check the original approval.'));
+      identity.owner = result.researcherId;
+    }).catch(cause => {
+      if (personalApprovalIdentity === identity && sameSession(session)) identity.error = message(cause);
+    }).finally(() => { if (personalApprovalIdentity === identity && sameSession(session)) { identity.loading = false; renderDetail(); } });
+  }
+  return personalApprovalIdentity;
+}
+const approvalViewKey = (owner: string, runId: string) => JSON.stringify([owner, runId]);
+function resolvePersonalApproval(owner: string, run: WebRun, view: PersonalApprovalView, attempt: PersonalApprovalAttempt, receipt: WebCommandResult) {
+  if (view.pending?.id !== attempt.id) return;
+  const settled = personalApprovalSettled(attempt, receipt);
+  view.receipt = receipt;
+  if (settled) {
+    if (receipt.status !== 'approved') requirePersonalApprovalReview(localStorage, owner, run.id);
+    removePersonalApproval(localStorage, owner, run.id, attempt.id); view.pending = undefined;
+    view.reviewRequired = receipt.status !== 'approved'; view.reviewedVersion = undefined;
+    view.error = receipt.status === 'approved' ? undefined : approvalError(receipt.reason);
+  } else view.error = receipt.status === 'unknown'
+    ? tx('原批准结果尚未确认，请先核对这次决定。', 'The original approval is unconfirmed. Check its result before submitting another decision.')
+    : undefined;
+}
+function personalApprovalView(owner: string, run: WebRun) {
+  const key = approvalViewKey(owner, run.id);
+  let view = state.approving.get(key);
+  if (!view) { view = { busy: false, checked: false }; state.approving.set(key, view); }
+  try {
+    const original = readPersonalApproval(localStorage, owner, run.id);
+    view.reviewRequired = personalApprovalNeedsReview(localStorage, owner, run.id);
+    if (original && original.id !== view.pending?.id) {
+      view.pending = original; view.receipt = undefined; view.checked = false; view.error = undefined; view.reviewedVersion = undefined;
+    }
+    view.storageError = false;
+    if (view.pending) {
+      const receipt = observedPersonalApproval(view.pending, run.observation);
+      if (receipt) resolvePersonalApproval(owner, run, view, view.pending, receipt);
+    }
+  } catch {
+    view.storageError = true; view.error = tx('无法读取原批准记录，请恢复浏览器存储后重新核对。', 'The original approval record could not be read. Restore browser storage and check again.');
+  }
+  if (view.pending && !view.checked && !view.busy && !view.storageError) {
+    view.checked = true;
+    queueMicrotask(() => { void checkWorkbenchApproval(run, false); });
+  }
+  return view;
+}
+/** Both entry points retain the same original command, even when the current plan has moved on. */
+async function checkWorkbenchApproval(run: WebRun, retry = true) {
+  const identity = personalApprovalOwner();
+  if (!identity?.owner) { if (identity && !identity.loading) { personalApprovalIdentity = undefined; personalApprovalOwner(); renderDetail(); } return; }
+  const owner = identity.owner, session = state.session;
+  const view = personalApprovalView(owner, run), attempt = view.pending;
+  if (view.busy || view.storageError || !attempt) { renderDetail(); return; }
+  view.busy = true; view.error = undefined; renderDetail();
+  try {
+    const current = currentRun()?.id === run.id ? currentRun()! : run, pending = planAwaitingApproval(current);
+    const receipt = await checkPersonalApproval({ root: `/api/runs/${encodeURIComponent(run.id)}`, attempt, request: api, retry,
+      currentPlanVersion: state.connected && pending && !pending.leadRevising && current.observation?.plan?.baseVersion === pending.planVersion ? pending.planVersion : undefined,
+      missing: cause => cause instanceof ApiError && cause.status === 404 });
+    if (!sameSession(session) || personalApprovalIdentity !== identity) return;
+    if (receipt) {
+      resolvePersonalApproval(owner, current, view, attempt, receipt);
+      if (receipt.observation) receiveRunObservation(receipt.observation);
+    } else view.error = tx('暂未找到原批准回执；原请求和计划版本仍已保留。', 'The original receipt is not available yet. Its request and plan version are retained.');
+  } catch (cause) { if (sameSession(session) && personalApprovalIdentity === identity) view.error = message(cause); }
+  finally { view.busy = false; if (sameSession(session) && personalApprovalIdentity === identity) renderDetail(); }
+}
+/** The banner also stays available to reconcile an older decision after the current plan changes. */
 function approvalProps(run: WebRun): RunHeaderProps['approval'] {
   const approval = planAwaitingApproval(run), observation = run.observation;
-  if (!approval || !observation || isSample(run)) return;
-  const sent = state.approving.get(run.id), rejected = sent && approval.rejections.find(item => item.id === sent.id);
-  const error = sent?.error ?? (rejected ? approvalError(rejected.reason) : undefined);
-  return { tasks: observation.inspection.tasks.length, revising: approval.leadRevising, busy: Boolean(sent && !error),
-    reviewable: Boolean(observation.plan && observation.plan.baseVersion === approval.planVersion && observation.plan.baseVersion === observation.inspection.planVersion), ...(error ? { error } : {}) };
+  if (!observation || isSample(run) || !approval && !run.planApproval && !observation.inspection.planApproval?.required) return;
+  const identity = personalApprovalOwner(), view = identity?.owner ? personalApprovalView(identity.owner, run) : undefined;
+  if (!approval && !view?.pending) return;
+  const needsReview = Boolean(view?.reviewRequired || view?.reviewedVersion && view.reviewedVersion !== approval?.planVersion);
+  const error = identity?.error ?? view?.error;
+  return { tasks: observation.inspection.tasks.length, revising: approval?.leadRevising ?? false,
+    busy: !identity?.owner || Boolean(view?.pending || view?.storageError || needsReview || view?.busy), checking: identity?.loading || view?.busy,
+    reviewable: Boolean(approval && observation.plan && observation.plan.baseVersion === approval.planVersion && observation.plan.baseVersion === observation.inspection.planVersion),
+    ...(error ? { error } : {}), ...(view?.pending ? { original: { ...view.pending, ...(view.receipt ? { status: view.receipt.status } : {}) } } : {}),
+    ...(view?.pending || view?.storageError || identity?.error ? { onCheck: () => { void checkWorkbenchApproval(run); } } : {}),
+    ...(needsReview && !view?.pending && !view?.storageError && approval ? { onReviewCurrent: () => {
+      try { completePersonalApprovalReview(localStorage, identity!.owner!, run.id); view!.reviewRequired = false; view!.reviewedVersion = approval.planVersion; view!.error = undefined; }
+      catch { view!.storageError = true; view!.error = tx('未能保存核对结果，请恢复浏览器存储后再试。', 'Your review could not be saved. Restore browser storage and check again.'); }
+      renderDetail();
+    } } : {}) };
 }
-/** Approve the plan as the owner last saw it; the run rejects the approval if the plan has changed since. */
+/** Persist before sending; a failed response can only be reconciled under this original identity. */
 async function approvePlan(run: WebRun) {
-  const pending = planAwaitingApproval(run), planVersion = run.observation?.inspection.planVersion, sent = state.approving.get(run.id);
-  // One approval at a time: another is sent only after the last one was rejected or could not be sent.
-  const settled = !sent || sent.error !== undefined || pending?.rejections.some(item => item.id === sent.id);
-  if (!state.connected || !pending || pending.leadRevising || !planVersion || !settled || run.observation?.plan?.baseVersion !== planVersion || pending.planVersion !== planVersion) return;
-  const approval = { id: commandId(), planVersion };
-  state.approving.set(run.id, approval); renderDetail();
+  const identity = personalApprovalOwner(), owner = identity?.owner, session = state.session;
+  if (!owner) return;
+  const pending = planAwaitingApproval(run), planVersion = run.observation?.inspection.planVersion, view = personalApprovalView(owner, run);
+  if (!state.connected || !pending || pending.leadRevising || !planVersion || view.busy || view.pending || view.storageError || view.reviewRequired
+    || view.reviewedVersion && view.reviewedVersion !== planVersion || run.observation?.plan?.baseVersion !== planVersion || pending.planVersion !== planVersion) return;
+  const attempt = { id: commandId(), planVersion };
+  try { savePersonalApproval(localStorage, owner, run.id, attempt); }
+  catch { view.storageError = true; view.error = tx('无法保存批准记录，本次尚未发送。请恢复浏览器存储后再试。', 'The approval record could not be saved, so nothing was sent. Restore browser storage and try again.'); renderDetail(); return; }
+  view.pending = attempt; view.checked = true; view.busy = true; view.error = undefined; view.receipt = undefined; renderDetail();
   try {
-    const { receipt } = await api<{ receipt: WebCommandResult }>(`/api/runs/${encodeURIComponent(run.id)}/plan-approval`, { method: 'POST', body: JSON.stringify(approval) });
+    const { receipt } = await api<{ receipt: WebCommandResult }>(`/api/runs/${encodeURIComponent(run.id)}/plan-approval`, { method: 'POST', body: JSON.stringify(attempt) });
+    if (!sameSession(session) || personalApprovalIdentity !== identity) return;
+    resolvePersonalApproval(owner, run, view, attempt, receipt);
     if (receipt.observation) receiveRunObservation(receipt.observation);
-    if (state.approving.get(run.id) !== approval) return;
-    if (receipt.status === 'rejected') state.approving.set(run.id, { ...approval, error: approvalError(receipt.reason) });
-    else if (receipt.status === 'unknown') state.approving.set(run.id, { ...approval, error: t('批准结果尚未确认，请稍后刷新查看。') });
-    // Queued is not yet approved: the banner stays busy until the solver records it, or shows its rejection.
-    else toast(t('批准已提交，运行确认后 Agent 就开始工作'));
-  } catch (error) {
-    if (state.approving.get(run.id) === approval) state.approving.set(run.id, { ...approval, error: message(error) });
-  } finally { renderDetail(); }
+    if (receipt.status === 'queued') toast(t('批准已提交，运行确认后 Agent 就开始工作'));
+  } catch (cause) { if (sameSession(session) && personalApprovalIdentity === identity) view.error = message(cause); }
+  finally { view.busy = false; if (sameSession(session) && personalApprovalIdentity === identity) renderDetail(); }
 }
 /** Opens the guidance composer in the collaboration tab, optionally with a line of text added to its draft. */
 function closeProofViewer() {

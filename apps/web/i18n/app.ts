@@ -737,7 +737,6 @@ export const app: Record<string, string> = {
   "批准没有生效：运行已经结束。": "The approval did not take effect: the run has ended.",
   "批准没有生效：这次运行的批准次数已用完。": "The approval did not take effect: this run has used up its approval attempts.",
   "批准没有生效，请刷新后再试。": "The approval did not take effect; refresh and try again.",
-  "批准结果尚未确认，请稍后刷新查看。": "The approval is not confirmed yet; refresh in a moment to check.",
   "批准已提交，运行确认后 Agent 就开始工作": "Approval sent; the Agents start once the run confirms it",
   "修改完成后可以再看一遍再批准。": "Once it is revised you can review it again before approving.",
   "Lead 把题目拆成了 {0} 项任务。批准后 Agent 才开始工作；也可以先改计划，或给 Lead 留言让它修改。": "The Lead split the problem into {0} tasks. The Agents start only after you approve; you can also edit the plan first, or leave the Lead a note asking it to revise.",

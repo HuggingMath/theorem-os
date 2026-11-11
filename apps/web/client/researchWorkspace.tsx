@@ -248,21 +248,39 @@ function WorkspaceBrief({ context }: { context: ResearchContext }) {
 export function BriefPreview({ brief, context }: { brief: ResearchBrief; context: ResearchContext }) {
   const article = useRef<HTMLElement>(null), [error, setError] = useState(''), [exporting, setExporting] = useState(false);
   const exportHtml = async () => {
-    if (exporting) return; setExporting(true); setError('');
+    const source = article.current;
+    if (exporting || !source) return; setExporting(true); setError('');
     try {
-      await loadMath();
-      // Let already-mounted Rich formulas finish rendering before taking the standalone document.
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-      const sheets = await Promise.all(['app.css', 'research.css', 'assets/katex/katex.min.css'].map(async href => {
-        const response = await fetch(href); if (!response.ok) throw new Error(tx('导出样式未能读取，请重试。', 'Export styles could not be loaded. Please retry.'));
-        return { css: await response.text(), url: new URL(href, location.href).href };
-      }));
-      const copy = article.current!.cloneNode(true) as HTMLElement; copy.querySelectorAll('[data-brief-controls],details.research-bookmark-control').forEach(element => element.remove());
+      // Keep this download tied to the clicked brief even if its preview is replaced while assets load.
+      const copy = source.cloneNode(true) as HTMLElement, width = source.getBoundingClientRect().width;
+      const sourceURL = location.href, title = brief.title, runId = brief.selectedRunId, language = locale;
+      copy.querySelectorAll('[data-brief-controls],details.research-bookmark-control,.research-error').forEach(element => element.remove());
       copy.querySelectorAll('details').forEach(details => details.open = true);
-      copy.querySelectorAll<HTMLAnchorElement>('a[href]').forEach(anchor => anchor.href = new URL(anchor.getAttribute('href')!, location.href).href);
+      copy.querySelectorAll<HTMLAnchorElement>('a[href]').forEach(anchor => {
+        const href = anchor.getAttribute('href')!;
+        if (!href.startsWith('#')) anchor.href = new URL(href, sourceURL).href;
+      });
+      const math = await loadMath();
+      // The clone has no live MathFormula effects, so finish formulas captured before the runtime was ready.
+      copy.querySelectorAll<HTMLElement>('.math:not([data-math-state="ready"])').forEach(element => {
+        const formula = element.title, fallback = element.textContent ?? '', suffix = fallback.startsWith(formula) ? fallback.slice(formula.length) : '';
+        try {
+          math.render(formula, element, { displayMode: element.classList.contains('math-display'), throwOnError: true, trust: false,
+            strict: 'ignore', maxSize: 20, maxExpand: 1000, output: 'htmlAndMathml' });
+          if (suffix) {
+            const bases = element.querySelectorAll('.katex-html > .katex-base');
+            (bases.item(bases.length - 1) ?? element).append(suffix);
+          }
+          element.classList.remove('math-source'); element.dataset.mathState = 'ready';
+        } catch { element.textContent = fallback; element.dataset.mathState = 'source'; }
+      });
+      const sheets = await Promise.all(['app.css', 'research.css', 'assets/katex/katex.min.css'].map(async href => {
+        const url = new URL(href, sourceURL).href, response = await fetch(url); if (!response.ok) throw new Error(tx('导出样式未能读取，请重试。', 'Export styles could not be loaded. Please retry.'));
+        return { css: await response.text(), url };
+      }));
       const preview = document.createElement('div');
       preview.className = 'research-page'; preview.setAttribute('aria-hidden', 'true');
-      Object.assign(preview.style, { position: 'fixed', left: '-10000px', top: '0', width: `${article.current!.getBoundingClientRect().width}px`, pointerEvents: 'none' });
+      Object.assign(preview.style, { position: 'fixed', left: '-10000px', top: '0', width: `${width}px`, pointerEvents: 'none' });
       preview.append(copy); document.body.append(preview);
       let embedded: string[];
       try {
@@ -276,13 +294,13 @@ export function BriefPreview({ brief, context }: { brief: ResearchBrief; context
           });
         });
       } finally { preview.remove(); }
-      const documentCopy = document.implementation.createHTMLDocument(brief.title); documentCopy.documentElement.lang = locale === 'en' ? 'en' : 'zh-CN';
+      const documentCopy = document.implementation.createHTMLDocument(title); documentCopy.documentElement.lang = language === 'en' ? 'en' : 'zh-CN';
       const charset = documentCopy.createElement('meta'); charset.setAttribute('charset', 'utf-8'); documentCopy.head.prepend(charset);
       const meta = documentCopy.createElement('meta'); meta.name = 'viewport'; meta.content = 'width=device-width, initial-scale=1'; documentCopy.head.append(meta);
       const style = documentCopy.createElement('style'); style.textContent = embedded.join('\n')
         + '\nbody{display:block;margin:0;padding:40px;background:#fff;color:#222}.workspace-brief{max-width:920px;margin:auto}.topbar{display:none}@media(max-width:700px){body{padding:16px}}@media print{body{padding:0}}';
       documentCopy.head.append(style); documentCopy.body.className = 'research-page'; documentCopy.body.append(documentCopy.importNode(copy, true));
-      downloadResearchFile(`theoremos-brief-${brief.selectedRunId}.html`, `<!doctype html>\n${documentCopy.documentElement.outerHTML}`, 'text/html;charset=utf-8');
+      downloadResearchFile(`theoremos-brief-${runId}.html`, `<!doctype html>\n${documentCopy.documentElement.outerHTML}`, 'text/html;charset=utf-8');
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setExporting(false); }
   };

@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { WebCommandResult, WebObservation } from '../collaboration';
 import type { WebRun } from '../shared';
 import { DecisionSummary } from './decisionSummary';
-import { api, enc, ErrorBox, errorText, ResearchHttpError, tx } from './researchShared';
-import { readPersonalApproval, removePersonalApproval, savePersonalApproval, type PersonalApprovalAttempt } from './personalApprovalStore';
+import { api, ErrorBox, errorText, ResearchHttpError, tx } from './researchShared';
+import { checkPersonalApproval, completePersonalApprovalReview, observedPersonalApproval, personalApprovalSettled, readPersonalApproval, removePersonalApproval, requirePersonalApprovalReview, savePersonalApproval, type PersonalApprovalAttempt } from './personalApprovalStore';
 
 export function InlinePersonalApproval({ owner, run, observation, root, refresh }: { owner: string; run: WebRun; observation: WebObservation; root: string; refresh(): void }) {
   const [initial] = useState(() => {
@@ -18,9 +18,10 @@ export function InlinePersonalApproval({ owner, run, observation, root, refresh 
   const setPending = (attempt?: PersonalApprovalAttempt) => { pendingRef.current = attempt; setPendingState(attempt); };
   const resolve = (attempt: PersonalApprovalAttempt, result: WebCommandResult) => {
     if (pendingRef.current?.id !== attempt.id) return;
-    if (result.id !== attempt.id) throw new Error(tx('批准回执与原提交不一致，请重新核对。', 'The approval receipt does not match the original submission. Check it again.'));
+    const settled = personalApprovalSettled(attempt, result);
     setReceipt(result); setSubmitted(attempt);
-    if (['approved', 'rejected', 'failed'].includes(result.status)) {
+    if (settled) {
+      if (result.status !== 'approved') requirePersonalApprovalReview(localStorage, owner, run.id);
       removePersonalApproval(localStorage, owner, run.id, attempt.id); setPending(undefined); setConfirmed('');
       if (result.status !== 'approved') setError(result.reason ?? tx('原批准未生效，请重新核对计划。', 'The original approval failed. Review the plan again.'));
     }
@@ -30,16 +31,9 @@ export function InlinePersonalApproval({ owner, run, observation, root, refresh 
     if (lock.current || !attempt) return;
     lock.current = true; setBusy(true); setError('');
     try {
-      let result: WebCommandResult;
-      try { result = (await api<{ receipt: WebCommandResult }>(`${root}/commands/${enc(attempt.id)}`)).receipt; }
-      catch (cause) {
-        if (!(cause instanceof ResearchHttpError && cause.status === 404)) throw cause;
-        // Reloads only reconcile. A user retry may resend the same command for the same reviewed plan.
-        if (!retry || !canApprove || approval?.planVersion !== attempt.planVersion) {
-          setReceipt(undefined); setError(tx('暂未找到原批准回执；原请求和计划版本仍已保留。', 'The original receipt is not available yet. Its request and plan version are retained.')); return;
-        }
-        result = (await api<{ receipt: WebCommandResult }>(`${root}/plan-approval`, { method: 'POST', body: JSON.stringify(attempt) })).receipt;
-      }
+      const result = await checkPersonalApproval({ root, attempt, request: api, retry,
+        currentPlanVersion: canApprove ? approval?.planVersion : undefined, missing: cause => cause instanceof ResearchHttpError && cause.status === 404 });
+      if (!result) { setReceipt(undefined); setError(tx('暂未找到原批准回执；原请求和计划版本仍已保留。', 'The original receipt is not available yet. Its request and plan version are retained.')); return; }
       resolve(attempt, result); refresh();
     } catch (cause) { setError(errorText(cause)); }
     finally { lock.current = false; setBusy(false); }
@@ -48,10 +42,9 @@ export function InlinePersonalApproval({ owner, run, observation, root, refresh 
   useEffect(() => {
     const attempt = pendingRef.current;
     if (!attempt) return;
-    const rejected = approval?.rejections.find(item => item.id === attempt.id);
     try {
-      if (approval?.approvedId === attempt.id) resolve(attempt, { id: attempt.id, status: 'approved', planVersion: approval.approvedVersion });
-      else if (rejected) resolve(attempt, { id: attempt.id, status: 'rejected', reason: rejected.reason, planVersion: rejected.planVersion });
+      const result = observedPersonalApproval(attempt, observation);
+      if (result) resolve(attempt, result);
     } catch (cause) { setError(errorText(cause)); }
   }, [approval]);
   const submit = async () => {
@@ -59,8 +52,11 @@ export function InlinePersonalApproval({ owner, run, observation, root, refresh 
     const attempt = { id: crypto.randomUUID(), planVersion: approval.planVersion! };
     lock.current = true; setBusy(true); setError(''); setReceipt(undefined);
     try {
+      const original = readPersonalApproval(localStorage, owner, run.id);
+      if (original) { setPending(original); setSubmitted(original); return; }
       // Persist before sending so leaving this page cannot turn an unknown result into a second command.
       savePersonalApproval(localStorage, owner, run.id, attempt); setPending(attempt); setSubmitted(attempt);
+      completePersonalApprovalReview(localStorage, owner, run.id);
       resolve(attempt, (await api<{ receipt: WebCommandResult }>(`${root}/plan-approval`, { method: 'POST', body: JSON.stringify(attempt) })).receipt); refresh();
     } catch (cause) { setError(pendingRef.current ? errorText(cause) : tx('无法保存批准记录，本次尚未发送。请恢复浏览器存储后再试。', 'The approval record could not be saved, so nothing was sent. Restore browser storage and try again.')); }
     finally { lock.current = false; setBusy(false); }

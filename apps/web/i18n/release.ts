@@ -140,7 +140,6 @@ export const release: Record<string, string> = {
   '最多 Token': 'Maximum tokens',
   '随后证明的预算': 'Proof budget',
   '最多研究轮次': 'Maximum research turns',
-  '预算可留空，填写时须为允许范围内的正整数。': 'Leave budgets blank, or enter positive integers within the allowed ranges.',
   '重新读取分享研究草稿': 'Reload the shared-proof draft',
   '正在读取分享的原题…': 'Loading the shared problem…',
   '草稿已变化，未载入分享原题。请核对后重新读取。': 'Your draft changed, so the shared problem was not loaded. Review it and try again.',
