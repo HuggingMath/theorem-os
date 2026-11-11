@@ -22,7 +22,7 @@ import { CooperationIntegration } from './cooperationIntegration';
 import { researchRouteGroups, researchWorkerCanNode } from './modules/organization';
 import { currentCapacityExploration } from './capacityExploration';
 import { currentNextCheck, prepareNextCheckDecisions } from './nextChecks';
-import { prepareGoalProgressDecision } from './goalProgress';
+import { prepareGoalProgressDecision, requireGoalProgressDecision } from './goalProgress';
 import { answerResearchInputs } from './researchDecisions';
 import { leadResearchInputs } from './contextCompiler';
 
@@ -173,16 +173,18 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       return fs.existsSync(file) ? git(this.lead.worktree, ['hash-object', '--', file]) : 'missing';
     }
   }
-  protected rejectPlan(error: unknown) {
+  protected rejectPlan(error: unknown, recoveryKind?: 'checkpoint' | 'request-failure' | 'scheduling-checkpoint') {
     const reason = error instanceof Error ? error.message : 'math_plan_invalid';
-    const proposalDigest = this.proposedPlanDigest(), inputDigest = this.planningInputDigest();
+    // Saving this same rejected draft is bookkeeping, not a new mathematical input for another retry.
+    const proposalDigest = this.proposedPlanDigest(), inputDigest = this.planningInputDigest(true);
     const previous = this.archive.planRejection;
     const stalled = previous?.proposalDigest === proposalDigest && previous.inputDigest === inputDigest && previous.error === reason;
     this.archive.error = reason;
     this.archive.planRejection = { proposalDigest, inputDigest, error: reason, stalled };
     // A repeated rejection of the same proposal for the same input answers its wake-ups; it is not new input.
     if (stalled) dropLeadWakes(this.archive.leadWakes!); else this.wakeLead('plan-rejected');
-    this.input.emit('plan_rejected', { ...this.archive.planRejection });
+    this.input.emit('plan_rejected', { ...this.archive.planRejection,
+      ...(recoveryKind ? { incomplete: true, recoveryKind } : {}) });
   }
   protected async mergeLeadSources(commit: string, seedCommit: string, canonical = this.archive.canonicalCommit!) {
     const problem = this.input.state.problem;
@@ -298,10 +300,10 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     }
     // Peer evidence can settle a review while its Lead is still composing an otherwise valid plan.
     // Only the still-owed review shown to this dispatch may contribute a new progress decision.
-    const progressDecision = plan.goalProgressDecision && decidingAction &&
-      this.archive.goalProgress?.pending?.id === plan.goalProgressDecision.id &&
-      this.presentedGoalProgress.get(decidingAction) === plan.goalProgressDecision.id
-      ? prepareGoalProgressDecision(plan.goalProgressDecision, this.archive.goalProgress, plan,
+    const requiredProgressDecision = requireGoalProgressDecision(this.archive.goalProgress,
+      decidingAction ? this.presentedGoalProgress.get(decidingAction) : undefined, plan.goalProgressDecision);
+    const progressDecision = requiredProgressDecision
+      ? prepareGoalProgressDecision(requiredProgressDecision, this.archive.goalProgress, plan,
         this.archive.nextChecks, this.archive.tasks) : undefined;
     const publicationResponseDigest = publication ? this.proposedPlanDigest(
       git(this.lead.worktree, ['ls-tree', '--name-only', publication.action.seedCommit, '--', 'RESEARCH.md'])

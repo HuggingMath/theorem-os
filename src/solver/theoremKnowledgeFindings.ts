@@ -3,7 +3,8 @@ import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import type { TheoremKnowledgeBase } from './theoremKnowledge';
 import { mathematicalGapSchema } from './mathematicalGapContract';
 import { largestFittingPage, splitsSurrogate } from './textPage';
-import { knowledgeRelevanceGroups, knowledgeRelevanceTerms, knowledgeRequestBatch } from './theoremKnowledgeSearch';
+import { knowledgeRelevanceGroups, knowledgeRelevanceTerms, knowledgeRequestBatch, knowledgeTypeExpression } from './theoremKnowledgeSearch';
+import { knowledgeResidualViews, splitStatement } from './theoremKnowledgeGoal';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const text = z.string().min(1).max(1_000_000);
@@ -92,6 +93,23 @@ export type KnowledgeRouteFindingSearchOptions = {
 export type KnowledgeRouteFindingSearchRequest = { query: string; goal?: string };
 const lexicalTerms = (value: string) => [...new Set(value.toLowerCase().match(/[\p{L}\p{N}_']{2,}/gu) ?? [])];
 const preview = (value: string, max: number) => value.length <= max ? value : value.slice(0, max - 1).replace(/[\uD800-\uDBFF]$/u, '') + '…';
+// Stand-alone workflow words and broad mathematical qualifiers cannot be independent topic
+// anchors. Keep compound identifiers intact (FixedPoint, UpperBound, IsTestFunction), and
+// leave manual lexical recall unchanged.
+const genericFindingWords = new Set(['fixed', 'proposed', 'data', 'application', 'applications', 'scratch', 'tmp',
+  'deliverable', 'deliverables', 'harness', 'probe', 'probes', 'docstring', 'docstrings', 'header', 'headers', 'generated',
+  'host', 'module', 'modules', 'problem', 'cross', 'jsonl', 'never', 'declarations', 'id', 'each', 'intended',
+  'inference', 'material', 'premise', 'identify', 'giving', 'supply', 'write', 'over', 'consistent', 'reproduce',
+  'reproduces', 'construction', 'construct', 'sufficient', 'validate', 'valid', 'constant', 'constants',
+  'bound', 'bounds', 'upper', 'lower', 'estimate', 'estimates', 'identity', 'identities', 'range', 'set', 'below', 'above']);
+const findingRelevanceText = (value: string) => value.replace(/[\p{L}_][\p{L}\p{M}\p{N}_']*/gu,
+  name => genericFindingWords.has(name.toLowerCase()) ? ' ' : name);
+
+/** Carrier declarations and instance assumptions do not identify a finding's mathematical subject. */
+function statementSubject(value: string): string {
+  const shape = splitStatement(value);
+  return shape ? [...shape.parts.filter(part => !part.binder).map(part => part.key), shape.conclusion].join('\n') : value;
+}
 
 function validateFindingQuery(query: string, options: KnowledgeRouteFindingSearchOptions) {
   const limit = options.limit ?? 10;
@@ -106,10 +124,12 @@ function validateFindingQuery(query: string, options: KnowledgeRouteFindingSearc
 function prepareFindingSearch(base: SearchBase, options: Omit<KnowledgeRouteFindingSearchOptions, 'goal'>) {
   const documents = (base.routeFindings ?? []).filter(item => !options.problemId || item.scope.problemId === options.problemId)
     .map(item => {
-      const statements = [item.scope.source.statement, ...item.scope.dependencies.map(value => value.statement),
-        ...(item.scope.originalConsumer ? [item.scope.originalConsumer.statement] : [])];
-      const scope = new Set(knowledgeRelevanceTerms(statements.join('\n'), true)), summary = item.summary;
-      return { item, statements, scope, summary: new Set(knowledgeRelevanceTerms(summary)),
+      const contracts = [item.scope.source, ...item.scope.dependencies, ...(item.scope.originalConsumer ? [item.scope.originalConsumer] : [])];
+      const statements = contracts.map(contract => contract.statement), summary = item.summary;
+      const subjects = contracts.map((contract, index) => contract.statementKind === 'research-objective' ? statements[index]! :
+        statementSubject(knowledgeTypeExpression({ type: statements[index]!, typeKind: contract.statementKind })));
+      const scope = new Set(knowledgeRelevanceTerms(findingRelevanceText(subjects.join('\n')), true));
+      return { item, statements, scope, summary: new Set(knowledgeRelevanceTerms(findingRelevanceText(summary))),
         lexical: new Set(lexicalTerms([...statements, summary].join('\n'))) };
     });
   const frequencies = new Map<string, number>();
@@ -137,8 +157,10 @@ function searchPreparedFindings(prepared: ReturnType<typeof prepareFindingSearch
   options: KnowledgeRouteFindingSearchOptions) {
   const limit = options.limit ?? 10;
   const text = query + '\n' + (options.goal ?? '');
-  const inputs = options.requireMathematicalRelevance ? knowledgeRelevanceTerms(text, !query.trim()) : lexicalTerms(text);
-  const groups = options.requireMathematicalRelevance ? knowledgeRelevanceGroups(text, !query.trim()) : [];
+  const subject = findingRelevanceText(query + '\n' + (options.goal ? knowledgeResidualViews(options.goal)
+    .map(view => statementSubject(view.goal)).join('\n') : ''));
+  const inputs = options.requireMathematicalRelevance ? knowledgeRelevanceTerms(subject, !query.trim()) : lexicalTerms(text);
+  const groups = options.requireMathematicalRelevance ? knowledgeRelevanceGroups(subject, !query.trim()) : [];
   const weight = (term: string) => 1 + Math.log((prepared.documents.length + 1) / (1 + (prepared.frequencies.get(term) ?? 0)));
   const inputWeight = inputs.reduce((sum, term) => sum + weight(term), 0);
   const coverage = (matches: readonly string[]) => inputWeight ? matches.reduce((sum, term) => sum + weight(term), 0) / inputWeight : 0;

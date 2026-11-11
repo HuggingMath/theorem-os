@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from '../src/solver/archive';
 import { mathDigest } from '../src/math/mathRuntimeIo';
+import { VerifierFailureError } from '../src/solver/verifierFailure';
 
 describe('advisory type and residual checkpoint records', () => {
   let root: string, state: SolverRunState;
@@ -34,6 +35,19 @@ describe('advisory type and residual checkpoint records', () => {
     expect(restored.cooperation!.tasks[0]).toMatchObject({ status: 'blocked', attempts: 0 });
     expect(restored.cooperation!.tasks[0].proof).toBeUndefined();
     expect(restored.cooperation!.tasks[0].integratedCheck).toBeUndefined();
+  });
+
+  it('round-trips fatal verifier diagnostics at the run and worker without restoring acceptance', () => {
+    const diagnostic = new VerifierFailureError({ stage: 'environment-stability', taskId: 'helper',
+      sourceCommit: 'fixed-source', projectionMode: 'compact', changes: { tools: true } },
+    new Error('Verifier tool identity changed.')).diagnostic;
+    state.verifierFailure = diagnostic;
+    state.workers = [{ id: 'peer', role: 'researcher', worktree: root, phase: 'finished', turns: 0,
+      error: 'math_verifier_unavailable', verifierFailure: diagnostic }];
+    const restored = read();
+    expect(restored.verifierFailure).toEqual(diagnostic);
+    expect(restored.workers![0]!.verifierFailure).toEqual(diagnostic);
+    expect(restored.cooperation!.tasks[0]!.integratedCheck).toBeUndefined();
   });
 
   it('keeps old checkpoints without preflight or diagnostic retrieval metadata readable', () => {

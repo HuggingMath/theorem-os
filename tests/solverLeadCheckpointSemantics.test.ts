@@ -121,14 +121,16 @@ describe('Lead scheduling checkpoint control responses', () => {
     vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  it.each([false, true])('preserves an unchanged control draft without rejecting it or adopting its proposal (prose-only: %s)', async prose => {
+  it.each([false, true])('retains an unanswered research decision in an unchanged control draft (prose-only: %s)', async prose => {
     const action = await start(), before = structuredClone(state.cooperation!.tasks), base = state.cooperation!.planVersion;
     const pending = pendingProposals().map(item => item.id);
     if (prose) fs.appendFileSync(notes(), '\nA still unfinished mathematical investigation.\n');
     await expect(checkpoint(action)).resolves.toEqual({ checkWhole: false });
-    expect(events).toContainEqual(expect.objectContaining({ event: 'lead_checkpoint_saved',
-      details: expect.objectContaining({ reason: 'unchanged-control-response' }) }));
-    expect(events.some(item => item.event === 'plan_rejected' || item.event === 'plan_updated')).toBe(false);
+    expect(state.cooperation!.error).toContain('math_plan_research_decisions_missing');
+    expect(state.cooperation!.planRejection).toMatchObject({ stalled: false });
+    expect(state.cooperation!.lastLeadPauseInputDigest).toBeUndefined();
+    expect(events.some(item => item.event === 'lead_draft_preserved')).toBe(true);
+    expect(events.some(item => item.event === 'plan_updated')).toBe(false);
     expect(state.cooperation!.tasks).toEqual(before);
     expect(state.cooperation!.planVersion).toBe(base);
     expect(pending).toEqual(['proposal-delivery']);
@@ -136,12 +138,58 @@ describe('Lead scheduling checkpoint control responses', () => {
     expect(fs.readFileSync(notes(), 'utf8')).toContain(prose ? 'unfinished mathematical' : 'math-plan');
   });
 
-  it.each(['ordinary Markdown with no control response', null])('preserves an unchanged non-JSON draft: %s', async baseline => {
+  it.each(['ordinary Markdown with no control response', null])('preserves an incomplete draft and its required feedback: %s', async baseline => {
     const action = await start(baseline);
+    await checkpoint(action);
+    expect(events.some(item => item.event === 'lead_draft_preserved')).toBe(true);
+    expect(events.some(item => item.event === 'plan_rejected')).toBe(true);
+    expect(state.cooperation!.lastLeadPauseInputDigest).toBeUndefined();
+    expect(pendingProposals()).toHaveLength(1);
+  });
+
+  it.each(['control', 'Markdown', null])('preserves an unchanged draft without a required decision: %s', async baseline => {
+    state.cooperation!.deliveries = [];
+    const action = await start(baseline === 'control' ? undefined : baseline);
     await checkpoint(action);
     expect(events.some(item => item.event === 'lead_checkpoint_saved')).toBe(true);
     expect(events.some(item => item.event === 'plan_rejected')).toBe(false);
+    expect(state.cooperation!.lastLeadPauseInputDigest).toBeDefined();
+  });
+
+  it('answers a research finding from a checkpoint without changing the graph', async () => {
+    const action = await start(planText({ ...graph(), ...decide('decline') }));
+    await checkpoint(action);
+    expect(state.cooperation!.researchDecisions).toContainEqual(expect.objectContaining({
+      deliveryId: 'proposal-delivery', outcome: 'decline' }));
+    expect(state.cooperation!.lastLeadInputDigest).toBeDefined();
+    expect(state.cooperation!.lastLeadPauseInputDigest).toBeUndefined();
+    expect(state.cooperation!.error).toBeUndefined();
+    expect(events.some(item => item.event === 'lead_checkpoint_saved')).toBe(false);
+  });
+
+  it('bounds repeated incomplete checkpoints even when each saves different draft prose', async () => {
+    for (const node of state.cooperation!.tasks) node.task.status = 'paused';
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const action = await start();
+      fs.appendFileSync(notes(), `\nUnfinished draft slice ${attempt}.\n`);
+      await checkpoint(action);
+    }
+    expect(state.cooperation!.planRejection).toMatchObject({ stalled: true,
+      error: expect.stringContaining('math_plan_research_decisions_missing') });
+    expect(state.cooperation!.lastLeadPauseInputDigest).toBeUndefined();
+    expect(await cooperative.next(workers[0], budget)).toBeUndefined();
+    expect(events.some(item => item.event === 'plan_stalled')).toBe(true);
     expect(pendingProposals()).toHaveLength(1);
+  });
+
+  it('does not let a saved pause or completed-input digest hide an unanswered finding', async () => {
+    write(graph());
+    // A restored pre-fix archive can contain both markers despite never answering this publication.
+    state.cooperation!.lastLeadInputDigest = (cooperative as any).planningInputDigest();
+    state.cooperation!.lastLeadPauseInputDigest = (cooperative as any).leadPauseInputDigest();
+    state.cooperation!.leadWakes = { requested: 1, consumed: 0, settled: 0 };
+    const action = await start();
+    expect(cooperative.contextState(action, workers[0]).leadResearchInputIds).toEqual(['proposal-delivery']);
   });
 
   it('keeps initial dispatch response validation even if an existing graph is present', async () => {
@@ -156,7 +204,8 @@ describe('Lead scheduling checkpoint control responses', () => {
   it.each(['final', 'request-failure', 'checkpoint'] as const)('still validates an inherited graph delivered as %s', async kind => {
     const action = await start(planText({ ...graph(), ...decide('decline') })), commit = commitSolverSources(problem, workers[0].worktree);
     cooperative.deactivate(workers[0]);
-    await cooperative.deliver(workers[0], action, commit, kind !== 'final', kind === 'final' ? 'checkpoint' : kind);
+    const result = await cooperative.deliver(workers[0], action, commit, kind !== 'final', kind === 'final' ? 'checkpoint' : kind);
+    expect(result).toEqual({ checkWhole: false, ...(kind === 'request-failure' ? { savedPlan: true } : {}) });
     expect(events.some(item => item.event === 'plan_updated')).toBe(true);
     expect(events.some(item => item.event === 'lead_checkpoint_saved')).toBe(false);
     // The declined proposal is not added to the plan.
@@ -194,8 +243,8 @@ describe('Lead scheduling checkpoint control responses', () => {
     await expect(checkpoint(action)).resolves.toEqual({ checkWhole: true });
     const canonical = state.cooperation!.canonicalCommit!;
     expect(committedSource(workers[0].worktree, canonical, `${problem.projectRelative}/Submission.lean`)).toContain('lemma checkpoint_draft : True');
-    expect(events.some(item => item.event === 'lead_checkpoint_saved')).toBe(true);
-    expect(events.some(item => item.event === 'plan_rejected')).toBe(false);
+    expect(events.some(item => item.event === 'lead_draft_preserved')).toBe(true);
+    expect(state.cooperation!.error).toContain('math_plan_research_decisions_missing');
     expect(pendingProposals()).toHaveLength(1);
     expect(state.cooperation!.tasks.every(node => !node.proof && !node.integratedCheck)).toBe(true);
   });

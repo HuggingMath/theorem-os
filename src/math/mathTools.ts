@@ -45,13 +45,25 @@ export function readMathTools(root: string): MathTools {
   return Object.freeze({ root, digest: mathDigest(bytes), tools: parsed.tools });
 }
 
+/** Per-worker tool state must keep the same anchor even when the shell changes directories. */
+export function mathToolsUsageInstruction(tools: MathTools, worktree?: string): string {
+  const commands = new Set(tools.tools.flatMap(tool => tool.commands));
+  const runDir = path.join(worktree ?? '/ABSOLUTE_WORKER_WORKTREE', '.scratch/reference-search');
+  const quotedRunDir = "'" + runDir.replaceAll("'", "'\\''") + "'";
+  return (commands.has('math-python')
+    ? 'Use math-python for the installed NumPy, SciPy, SymPy and PySAT dependencies; /usr/bin/python3 is suitable for standard-library-only scripts. A missing module in system Python does not mean the mathematics environment lacks it.\n' : '') +
+    (commands.has('reference-search')
+      ? `Keep reference-search state under this worker's fixed absolute directory: reference-search --run-dir ${quotedRunDir} search 'QUERY' --limit 6, then reference-search --run-dir ${quotedRunDir} read REF-0123456789ABCDEF --term 'KEYWORD' --window 650. Replace the example REF id with a returned id. Reuse the identical --run-dir for every stateful command, including after cd; follow the returned read handles and command help for arguments.\n` : '') +
+    'For check-lean JSON, save stdout separately from stderr progress (for example, > "$TMPDIR/check.json" 2> "$TMPDIR/check.log") and parse only stdout. Its --file is relative to --workspace; do not repeat the Lean project prefix.\n';
+}
+
 /** Worker guidance: tools explore and find certificates; only Lean grants acceptance. */
-export function mathToolsInstruction(tools: MathTools): string {
+export function mathToolsInstruction(tools: MathTools, worktree?: string): string {
   return `Installed mathematics tools (on PATH, manifest ${path.join(tools.root, 'manifest.json')}):\n` +
     tools.tools.map(tool => `- ${tool.name} ${tool.version} [${tool.commands.join(', ')}]: ${tool.purpose}`).join('\n') +
     '\nUse them to compute examples, test conjectures, search counterexamples, simplify expressions and find certificates or witnesses. ' +
     'Run them from a directory under $TMPDIR after mkdir -p "$TMPDIR": some write output beside their input or in the current directory. ' +
     'Bound every run with timeout SECONDS and at most 4 threads, and keep printed output small. ' +
     'Their results are advisory and never proof acceptance: restate a useful finding as a Lean statement and prove it, using the computed certificate or witness where it helps. ' +
-    'Record the command, input and decisive output in RESEARCH.md.\n';
+    'Record the command, input and decisive output in RESEARCH.md.\n' + mathToolsUsageInstruction(tools, worktree);
 }

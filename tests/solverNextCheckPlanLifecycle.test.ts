@@ -1,6 +1,8 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { currentNextCheck } from '../src/solver/nextChecks';
+import { commitSolverSources } from '../src/solver/problem';
 import { parseCooperationPlan } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
@@ -40,8 +42,42 @@ async function fixture(routes = false) {
     acceptPlan(plan: typeof next): Promise<void>;
   }).acceptPlan(next);
   const identity = { problemReceiptDigest: example.problem.receiptDigest, environmentDigest: state.environmentDigest };
-  return { state, plan, cooperation, checker, acceptPlan, identity, events };
+  return { state, plan, cooperation, lead, checker, problem: example.problem, acceptPlan, identity, events };
 }
+
+it('requires the presented check outcome decision even when a checkpoint inherits an unchanged graph', async () => {
+  const f = await fixture(), archive = f.state.cooperation!, record = archive.nextChecks![0];
+  record.status = 'awaiting-decision';
+  record.outcome = { checkId: record.id, deliveryId: 'definition-outcome', conclusion: 'inconclusive',
+    summary: 'The definition still needs its characterizing estimate.', evidenceRefs: ['retained-check-notes'] };
+  archive.tasks.find(node => node.task.id === record.taskId)!.status = 'completed';
+  const budget = { maxTurns: Infinity, remainingMs: Infinity };
+  const start = async () => {
+    const action = await f.cooperation.next(f.lead, budget);
+    if (action?.kind !== 'lead') throw new Error('fixture_expected_lead_decision');
+    f.cooperation.contextState(action, f.lead);
+    expect(f.cooperation.started(f.lead, action)).toBe(true);
+    f.cooperation.activate(f.lead, action, async () => {}, async () => {});
+    return action;
+  };
+  const notes = path.join(f.lead.worktree, 'RESEARCH.md');
+  fs.writeFileSync(notes, '```math-plan\n' + JSON.stringify(f.plan) + '\n```\n');
+  const first = await start();
+  await f.cooperation.deliver(f.lead, first, first.seedCommit, true, 'scheduling-checkpoint');
+  f.cooperation.deactivate(f.lead);
+  expect(archive.error).toContain('math_plan_next_check_decision_required');
+  expect(archive.lastLeadPauseInputDigest).toBeUndefined();
+  expect(record.status).toBe('awaiting-decision');
+  const next = await start();
+  fs.writeFileSync(notes, '```math-plan\n' + JSON.stringify({ baseVersion: next.planVersion, upsert: [],
+    nextCheckDecisions: [{ checkId: record.id, outcomeDeliveryId: record.outcome.deliveryId,
+      action: 'continue', reason: 'Continue the separately assigned estimate while retaining the unresolved check.' }] }) + '\n```\n');
+  await f.cooperation.deliver(f.lead, next, commitSolverSources(f.problem, f.lead.worktree), true, 'scheduling-checkpoint');
+  f.cooperation.deactivate(f.lead);
+  expect(record.status).toBe('decided');
+  expect(archive.error).toBeUndefined();
+  expect(archive.lastLeadPauseInputDigest).toBeUndefined();
+});
 
 it('preserves the host check and its dispatch identity across a group revision', async () => {
   const f = await fixture(), record = f.state.cooperation!.nextChecks![0];

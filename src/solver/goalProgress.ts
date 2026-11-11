@@ -257,6 +257,16 @@ export function parseGoalProgressDecision(value: unknown, restoring = false): Go
     nextChecks: nextChecks.data.map(check => ({ ...check, targetTaskId: check.targetTaskId })) };
 }
 
+/** A still-current review shown to this dispatch requires an explicit answer. Peer-settled reviews do not. */
+export function requireGoalProgressDecision(state: GoalProgressState | undefined, presentedId: string | undefined,
+  decision: GoalProgressDecision | undefined): GoalProgressDecision | undefined {
+  if (!presentedId || state?.pending?.id !== presentedId) return;
+  if (!decision) throw new Error('math_plan_progress_review_missing: answer the presented review in progressReview.');
+  if (decision.id !== presentedId)
+    throw new Error('math_plan_progress_review_stale: progressReview must answer ' + presentedId);
+  return decision;
+}
+
 /** Bind an accepted plan's next checks to live tasks serving the goals of this review. */
 export function prepareGoalProgressDecision(decision: GoalProgressDecision, state: GoalProgressState | undefined,
   plan: { tasks: readonly CooperativeTask[]; groups: readonly RouteGroup[]; proofRoutes?: readonly ProofRoute[] },

@@ -4,10 +4,12 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -256,6 +258,100 @@ class SourcePolicyTests(unittest.TestCase):
             self.assertEqual(reads, [])
             self.assertEqual(len(sends), 1)
 
+    def test_provenance_registry_normalizes_dois_and_explicit_uri_aliases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / 'provenance.json'
+            file.write_text(json.dumps({'schema': 'theorem-os.reference-source-provenance.v1', 'records': [
+                {'id': 'synthetic-review', 'status': 'unverified',
+                 'identifiers': ['doi:10.5555/Unresolved-Proof', 'https://preprint.example/notes/proof'],
+                 'metadata': {'authors': ['Example Institute']}}
+            ]}))
+            self.policy.SOURCE_PROVENANCE = self.policy.load_source_provenance(file)
+        for source in ['10.5555/unresolved-proof', 'https://doi.org/10.5555/UNRESOLVED-PROOF',
+                       'https://DX.DOI.ORG/10.5555%252fUnresolved-Proof#section',
+                       'https://PREPRINT.EXAMPLE/notes/proof#theorem']:
+            with self.subTest(source=source), self.assertRaisesRegex(PermissionError, 'provenance_unverified'):
+                self.policy.require_permitted(source)
+        self.assertIsNotNone(self.policy.unverified_source('https://journal.example/abstract',
+                                                          {'doi': '10.5555/unresolved-proof'}))
+        # Matching authors, title words or DOI prefixes are not themselves a ban.
+        self.policy.require_permitted('https://doi.org/10.5555/general-paper', 'Example Institute: general mathematics')
+        self.policy.require_permitted('https://arxiv.org/abs/2401.12345', 'OpenAI: A general mathematics paper')
+
+    def test_unverified_discovery_read_redirect_and_cache_share_the_registry(self):
+        ids = self.policy.source_identifiers('https://doi.org/10.5555/synthetic-note')
+        self.policy.SOURCE_PROVENANCE = [{'id': 'synthetic-source', 'status': 'unverified', '_identifiers': ids}]
+        research = research_double()
+        sent, bodies = [], []
+        class Session:
+            def send(self, request, **kwargs):
+                sent.append(request.url)
+                return request.url
+        research.base.requests = SimpleNamespace(sessions=SimpleNamespace(Session=Session))
+        research.read_page = lambda url: bodies.append(url) or {'url': url}
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            research.workspace._source_dir = lambda ref, run_root=None: folder
+            research.workspace.load_source = lambda ref, version=None, run_root=None: bodies.append(ref)
+            self.policy.install_source_policy(research)
+            public = research._public_leads({'results': [
+                {'url': 'https://journal.example/abstract', 'doi': '10.5555/synthetic-note', 'title': 'Unresolved metadata'},
+                {'url': 'https://arxiv.org/abs/2401.12345', 'title': 'General mathematics', 'snippet': 'OpenAI | cited by 4'},
+                {'url': 'https://mirror.example/other', 'title': 'Alias',
+                 'alternate_sources': [{'url': 'https://dx.doi.org/10.5555/synthetic-note'}]}
+            ]})
+            self.assertEqual(public['excluded_source_count'], 2)
+            self.assertEqual(public['unverified_source_count'], 2)
+            self.assertEqual(public['forbidden_source_count'], 0)
+            self.assertEqual(len(research.refs), 1)
+            self.assertEqual(public['results'][0]['title'], 'General mathematics')
+            with self.assertRaisesRegex(PermissionError, 'provenance_unverified'):
+                research.read_page('https://doi.org/10.5555/synthetic-note')
+            Session().send(SimpleNamespace(url='https://allowed.example/redirect'))
+            with self.assertRaisesRegex(PermissionError, 'provenance_unverified'):
+                Session().send(SimpleNamespace(url='https://dx.doi.org/10.5555/synthetic-note'))
+            (folder / 'metadata.json').write_text(json.dumps({'url': 'https://journal.example/abstract',
+                                                             'doi': '10.5555/synthetic-note'}))
+            with self.assertRaisesRegex(PermissionError, 'provenance_unverified'):
+                research.workspace.load_source('REF-synthetic')
+            self.assertEqual(bodies, [])
+            self.assertEqual(sent, ['https://allowed.example/redirect'])
+
+    def test_observed_cards_are_held_as_unverified_not_asserted_to_be_answers(self):
+        data = json.loads((SCRIPTS / 'reference-source-provenance.json').read_text())
+        for row in data['records']:
+            self.assertEqual(row['status'], 'unverified')
+            self.assertIsNotNone(self.policy.unverified_source(row['identifiers'][0]))
+        self.assertEqual({row['metadata']['snippet'] for row in data['records']}, {'OpenAI | cited by 0'})
+
+    def test_explicit_absolute_run_anchor_wins_over_cwd_and_inherited_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Path(directory) / 'worker with spaces' / '.scratch/reference-search'
+            with patch.dict(os.environ, {'DRBENCH_RUN_DIR': '/wrong/campaign', 'DEEP_RESEARCH_RUN_DIR': '/wrong/other'}, clear=True):
+                self.assertEqual(self.policy.configure_run_directory(['--run-dir', str(worker), 'search', 'heat kernel']),
+                                 ['search', 'heat kernel'])
+                self.assertEqual(os.environ['DRBENCH_RUN_DIR'], str(worker))
+                self.assertEqual(os.environ['DEEP_RESEARCH_RUN_DIR'], str(worker))
+                self.assertFalse(worker.exists())
+            with patch.dict(os.environ, {}, clear=True):
+                with self.assertRaisesRegex(ValueError, 'reference_run_directory_required'):
+                    self.policy.configure_run_directory(['search', 'heat kernel'])
+                with self.assertRaisesRegex(ValueError, 'reference_run_directory_required'):
+                    self.policy.configure_run_directory(['--run-dir', '.scratch/reference-search', 'search', 'heat kernel'])
+                self.assertEqual(self.policy.configure_run_directory(['--help']), ['--help'])
+            with patch.dict(os.environ, {'DEEP_RESEARCH_RUN_DIR': str(worker)}, clear=True):
+                self.assertEqual(self.policy.configure_run_directory(['read', 'REF-old']), ['read', 'REF-old'])
+
+    def test_cli_without_anchor_fails_before_loading_helper_or_writing_cwd(self):
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {key: value for key, value in os.environ.items() if key not in ('DEEP_RESEARCH_RUN_DIR', 'DRBENCH_RUN_DIR')}
+            result = subprocess.run([sys.executable, '-B', str(SCRIPTS / 'reference-search-policy.py'), 'search', 'heat kernel'],
+                                    cwd=directory, env=environment, capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('reference_run_directory_required', result.stderr)
+            self.assertNotIn('Traceback', result.stderr)
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
     def test_installer_pins_base_and_launcher_handles_spaces(self):
         installer = load('campaign_reference_installer', SCRIPTS / 'install.py')
         with tempfile.TemporaryDirectory() as directory:
@@ -263,20 +359,30 @@ class SourcePolicyTests(unittest.TestCase):
             source.mkdir()
             for name in installer.BASE_SCRIPTS:
                 (source / name).write_text('# frozen helper\n')
+            registry = Path(directory) / 'source-provenance.json'
+            registry.write_text(json.dumps({'schema': 'theorem-os.reference-source-provenance.v1', 'records': [
+                {'id': 'installed-synthetic', 'status': 'unverified', 'identifiers': ['doi:10.5555/installed-note']}
+            ]}))
             original_argv = sys.argv
             try:
-                sys.argv = ['install.py', '--dest', str(dest), '--research-script', str(source / 'research.py'), '--python', sys.executable]
+                sys.argv = ['install.py', '--dest', str(dest), '--research-script', str(source / 'research.py'), '--python', sys.executable,
+                            '--source-provenance', str(registry)]
                 self.assertEqual(installer.main(), 0)
             finally:
                 sys.argv = original_argv
             (source / 'research.py').write_text('# changed global helper\n')
+            registry.write_text('{}')
             config = json.loads((dest / 'reference-search-config.json').read_text())
             self.assertEqual(Path(config['researchScript']).read_text(), '# frozen helper\n')
             manifest = json.loads((dest / 'reference-search-manifest.json').read_text())
             self.assertEqual(len(manifest['baseSourceHashes']), 15)
+            self.assertIn('reference-source-provenance.json', manifest['files'])
+            self.assertNotIn('$PWD', (dest / 'reference-search').read_text())
             # Parsing --help imports the real installed entry point without a search.
             installed_policy = load('installed_policy_test', dest / 'reference-search-policy.py')
             self.assertEqual(installed_policy.RESEARCH_SCRIPT, dest / 'base/research.py')
+            self.assertEqual(installed_policy.unverified_source('https://doi.org/10.5555/installed-note')['id'],
+                             'installed-synthetic')
             self.assertTrue(os.access(dest / 'reference-search', os.X_OK))
             self.assertIn('reference-search-policy.py" "$@"', (dest / 'reference-search').read_text())
 

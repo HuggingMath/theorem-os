@@ -2,6 +2,7 @@
 """Install the versioned campaign adapter into an explicitly chosen directory."""
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,9 @@ def main():
     parser.add_argument('--research-script', type=Path, required=True)
     parser.add_argument('--python', type=Path, required=True, dest='interpreter')
     parser.add_argument('--forbidden-local-root', action='append', default=[])
+    parser.add_argument('--source-provenance', type=Path,
+                        default=Path(__file__).with_name('reference-source-provenance.json'),
+                        help='Versioned metadata-only registry of unresolved public source identities')
     args = parser.parse_args()
     script, interpreter = args.research_script.resolve(), args.interpreter.absolute()
     if not script.is_file() or not interpreter.is_file() or not os.access(interpreter, os.X_OK):
@@ -27,6 +31,10 @@ def main():
     missing = [name for name in BASE_SCRIPTS if not script.with_name(name).is_file()]
     if missing:
         parser.error('research helper dependency missing: ' + ', '.join(missing))
+    policy_spec = importlib.util.spec_from_file_location('campaign_install_source_policy', Path(__file__).with_name('reference-search-policy.py'))
+    policy = importlib.util.module_from_spec(policy_spec)
+    policy_spec.loader.exec_module(policy)
+    policy.load_source_provenance(args.source_provenance)
     dest = args.dest.resolve()
     dest.mkdir(parents=True, exist_ok=True)
     base = dest / 'base'
@@ -39,11 +47,11 @@ def main():
         (base / name).write_bytes(data)
     for name in ('campaign_reference.py', 'reference-search-policy.py'):
         shutil.copyfile(Path(__file__).with_name(name), dest / name)
+    shutil.copyfile(args.source_provenance, dest / 'reference-source-provenance.json')
     config = {'researchScript': str(base / script.name), 'forbiddenLocalRoots': args.forbidden_local_root}
     (dest / 'reference-search-config.json').write_text(json.dumps(config, indent=2) + '\n')
     launcher = '''#!/bin/sh
 export PYTHONDONTWRITEBYTECODE=1
-export DEEP_RESEARCH_RUN_DIR="${DEEP_RESEARCH_RUN_DIR:-$PWD/.scratch/reference-search}"
 export DEEP_RESEARCH_SOURCE_POLICY=mixed
 export DEEP_RESEARCH_SEARCH_PROVIDER="${DEEP_RESEARCH_SEARCH_PROVIDER:-auto}"
 exec ''' + shlex.quote(str(interpreter)) + ''' -B "$(dirname "$0")/reference-search-policy.py" "$@"

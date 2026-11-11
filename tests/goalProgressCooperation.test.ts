@@ -161,8 +161,33 @@ describe('goal progress controls the cooperative planning loop', () => {
       run.cooperation.deactivate(run.workers[0]);
       expect(run.state.cooperation!.goalProgress!.pending?.id).toBe(pending.id);
       expect(run.events.filter(item => item.event === 'goal_progress_review_answered')).toHaveLength(0);
+      expect(run.state.cooperation!.planRejection).toBeDefined();
+      expect(run.state.cooperation!.lastLeadPauseInputDigest).toBeUndefined();
+      if (kind === 'checkpoint' || kind === 'missing-answer')
+        expect(run.state.cooperation!.error).toContain('math_plan_progress_review_missing');
+      if (kind === 'wrong-review-id')
+        expect(run.state.cooperation!.error).toContain('math_plan_progress_review_stale');
       expect(run.check).not.toHaveBeenCalled();
     });
+
+  it('settles a progress decision saved in a checkpoint even when the accepted graph stays identical', async () => {
+    const run = fixture(); await run.startGoal(); await vi.advanceTimersByTimeAsync(interval);
+    const action = await run.leadAction(), archive = run.state.cooperation!, id = archive.goalProgress!.pending!.id;
+    const planVersion = archive.planVersion;
+    const commit = run.commitPlan({ baseVersion: action.planVersion, upsert: [], progressReview: { id,
+      reason: 'Check the exact original construction before selecting a different route.',
+      nextChecks: [{ action: 'construction-check', targetTaskId: 'goal_1', objective: 'Check the original construction.',
+        expectedEvidence: 'A checked construction or its exact residual gap.' }] } });
+    await run.cooperation.deliver(run.workers[0], action, commit, true, 'scheduling-checkpoint');
+    run.cooperation.deactivate(run.workers[0]);
+    expect(archive.planVersion).toBe(planVersion);
+    expect(archive.goalProgress!.pending).toBeUndefined();
+    expect(archive.goalProgress!.decisions?.filter(decision => decision.id === id)).toHaveLength(1);
+    expect(run.events.filter(item => item.event === 'goal_progress_review_answered')).toHaveLength(1);
+    expect(archive.lastLeadPauseInputDigest).toBeUndefined();
+    expect(archive.error).toBeUndefined();
+    expect(run.check).not.toHaveBeenCalled();
+  });
 
   it.each(['model-disabled', 'plan-approval', 'provider-cooldown'] as const)(
     'excludes %s waiting from active execution and resumes the remaining interval', async gate => {

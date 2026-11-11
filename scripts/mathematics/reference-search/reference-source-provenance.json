@@ -1,0 +1,31 @@
+{
+  "schema": "theorem-os.reference-source-provenance.v1",
+  "records": [
+    {
+      "id": "audit15-sat-variance-metadata",
+      "status": "unverified",
+      "identifiers": ["https://doi.org/10.83295/mnz8-emjq", "https://openalex.org/W7225014336"],
+      "metadata": {
+        "title": "Variance of the Random k-SAT Hitting Time",
+        "snippet": "OpenAI | cited by 0",
+        "engine": "openalex"
+      },
+      "reason": "The observed OpenAI-attributed card directly matches the campaign problem. Its provenance has not been established independently of the answer body.",
+      "observation": "audit15 reference-review.json; SDK sourceLine 283/286, 2026-11-10T19:13:13.087Z",
+      "metadataSnapshotSha256": "3b000069cee2a3f44052c09318d769bb021c0f8355bc38e1635f3910339e8656"
+    },
+    {
+      "id": "audit15-sat3-variance-metadata",
+      "status": "unverified",
+      "identifiers": ["https://doi.org/10.83295/pyk9-v9tn", "https://openalex.org/W7225003563"],
+      "metadata": {
+        "title": "Linear Variance of the Random 3-SAT Hitting Time",
+        "snippet": "OpenAI | cited by 0",
+        "engine": "openalex"
+      },
+      "reason": "The observed OpenAI-attributed card directly matches the campaign problem. Its provenance has not been established independently of the answer body.",
+      "observation": "audit15 reference-review.json; SDK sourceLine 283/286, 2026-11-10T19:13:13.087Z",
+      "metadataSnapshotSha256": "3b000069cee2a3f44052c09318d769bb021c0f8355bc38e1635f3910339e8656"
+    }
+  ]
+}

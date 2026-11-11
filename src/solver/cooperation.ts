@@ -27,7 +27,7 @@ import { contextCheckpointRejection } from './contextCheckpoint';
 import { leadResearchInputs } from './contextCompiler';
 import { deliverHumanGuidance, readHumanGuidance } from './humanGuidance';
 import { mathematicalGaps, mathematicalGapVisible } from './mathematicalGaps';
-import { visibleNextChecks } from './nextChecks';
+import { currentNextCheck, visibleNextChecks } from './nextChecks';
 import { goalProgressForTask } from './goalProgress';
 import { automaticTaskConnection, createTaskConnectionCheck } from './taskConnections';
 import { TACTIC_BATTERY_TIMEOUT_MS } from './tacticBattery';
@@ -433,12 +433,14 @@ export class CooperativeResearch extends CooperationInputs {
     const pendingProgress = this.archive.goalProgress?.pending;
     const owedProgress = pendingProgress && (pendingProgress.retryAt ?? 0) <= Date.now();
     // Conditions recomputed from durable state; only one-shot events are saved wake-ups.
-    let wake = leadWakePending(wakes);
+    const required = this.leadDecisionObligations();
+    const owedFeedback = required.feedback || required.research || required.nextCheck;
+    let wake = leadWakePending(wakes) || owedFeedback;
     // Idle peers are not in the planning digests, so their unconsumed wake must not be deduplicated away.
     const owedIdle = (wakes.recent ?? []).some(item => item.reason === 'peers-idle' && item.seq > wakes.consumed && item.seq <= through);
     const rejection = this.archive.planRejection;
     if (rejection?.stalled && !owedProgress) {
-      if (rejection.inputDigest === this.planningInputDigest() && rejection.proposalDigest === this.proposedPlanDigest()) {
+      if (rejection.inputDigest === this.planningInputDigest(true) && rejection.proposalDigest === this.proposedPlanDigest()) {
         dropLeadWakes(wakes, through);
         if (!running && !this.canAdvance()) {
           if (this.input.continuousResearch) return this.idleFrontier(this.activeGoalFrontier(), rejection.inputDigest);
@@ -492,14 +494,15 @@ export class CooperativeResearch extends CooperationInputs {
     if (wake || (!running && (!this.livePeers.length || !this.hasAssignableTask()))) {
       const inputDigest = this.planningInputDigest();
       // The previous decision (or pause) already answers these inputs; drop the wake-ups without a turn.
-      if (inputDigest === this.archive.lastLeadInputDigest && !this.archive.error && !owedStall && !owedIdle && !owedProgress) {
+      if (inputDigest === this.archive.lastLeadInputDigest && !owedFeedback && !owedStall && !owedIdle && !owedProgress) {
         dropLeadWakes(wakes, through);
         // An older pause can still differ after this input was answered. Retrying immediately
         // would observe that same pause forever and starve peer completions and stop signals.
         return !running && !this.hasAssignableTask()
           ? this.idleFrontier(this.activeGoalFrontier(), inputDigest) : this.waitForDispatch();
       }
-      if (this.archive.tasks.length && this.archive.lastLeadPauseInputDigest === this.leadPauseInputDigest() && !owedStall && !owedIdle && !owedProgress) {
+      if (this.archive.tasks.length && this.archive.lastLeadPauseInputDigest === this.leadPauseInputDigest() &&
+          !owedFeedback && !owedStall && !owedIdle && !owedProgress) {
         dropLeadWakes(wakes, through);
         return !running && !this.hasAssignableTask()
           ? this.idleFrontier(this.activeGoalFrontier(), inputDigest) : this.waitForDispatch();
@@ -510,6 +513,25 @@ export class CooperativeResearch extends CooperationInputs {
       return action;
     }
     return this.waitForDispatch();
+  }
+  /** Unanswered current inputs survive a notes-only pause; a live publication can already have answered them. */
+  private leadDecisionObligations(action?: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>) {
+    const shown = action ? this.presentedResearchInputs.get(action)?.shown ?? [] : undefined;
+    const merging = action ? this.pendingSourceResearchDecisions.get(action) ?? [] : [];
+    const research = leadResearchInputs(this.archive.deliveries ?? [],
+      new Map(this.archive.tasks.map(node => [node.task.id, node])), this.archive.researchDecisions).some(record =>
+      (!shown || shown.some(item => item.id === record.id && item.taskDigest === record.taskDigest &&
+        item.findingDigest === record.findingDigest)) && !merging.some(item => item.deliveryId === record.id &&
+        item.taskDigest === record.taskDigest && item.findingDigest === record.findingDigest));
+    const progressId = this.archive.goalProgress?.pending?.id;
+    const progress = Boolean(progressId && (!action || this.presentedGoalProgress.get(action) === progressId));
+    const outcomes = action ? this.presentedNextCheckOutcomes.get(action) ?? [] : undefined;
+    const nextCheck = (this.archive.nextChecks ?? []).some(record => record.status === 'awaiting-decision' &&
+      currentNextCheck(record, this.archive, this.explorationIdentity) && (!outcomes || outcomes.some(item =>
+        item.checkId === record.id && item.outcomeDeliveryId === record.outcome?.deliveryId)));
+    const feedback = Boolean(this.archive.error || this.archive.planPublicationRejection &&
+      this.archive.planPublicationRejection.baseVersion === this.archive.planVersion);
+    return { research, progress, nextCheck, feedback, any: research || progress || nextCheck || feedback };
   }
   private leadDecision(worker: ResearchWorker, head: string, inputDigest: string): CooperativeAction {
     this.syncPlanNotes();
@@ -1192,6 +1214,8 @@ export class CooperativeResearch extends CooperationInputs {
       let accepted = false;
       const publishedPlan = this.planSnapshot(action);
       const previousPlanVersion = this.planVersion();
+      const obligations = this.leadDecisionObligations(action);
+      const requiredDecision = obligations.any;
       try {
         const schedulingDraft = recovering && recoveryKind === 'scheduling-checkpoint' && !action.initialPlanNonce &&
           !publishedPlan && this.archive.tasks.length > 0;
@@ -1209,7 +1233,7 @@ export class CooperativeResearch extends CooperationInputs {
         const notes = savedNotes.trimStart();
         const hasFinalPlan = this.publishedPlans.get(action)?.responseDigest !== this.proposedPlanDigest() &&
           (notes.startsWith('{') || /```(?:math|json|math-plan)\s*\n/u.test(notes));
-        if (unchangedCheckpoint) {
+        if (unchangedCheckpoint && !requiredDecision) {
           // Inherited control notes are a draft, not a fresh response to this dispatch.
           // Continue below so saved Lean source changes still take the ordinary merge path.
           this.pin(commit); this.wakeLead('lead-checkpoint-unchanged');
@@ -1219,23 +1243,24 @@ export class CooperativeResearch extends CooperationInputs {
           // A published immutable event remains useful when the continued writer only saves notes.
           accepted = true;
         } else await this.acceptPlan(undefined, undefined, undefined, action);
-        if (!unchangedCheckpoint) accepted = true;
+        if (!unchangedCheckpoint || requiredDecision) accepted = true;
       } catch (error) {
+        this.rejectPlan(error, recovering ? recoveryKind : undefined);
         if (recovering) {
           // A checkpoint or failed request may leave only a partial graph. Keep it resumable.
-          this.archive.planRejection = undefined;
           const reason = error instanceof Error ? error.message : 'math_plan_incomplete';
-          this.input.emit('plan_rejected', { proposalDigest: this.proposedPlanDigest(), inputDigest: this.planningInputDigest(),
-            error: reason, stalled: false, incomplete: true, recoveryKind });
-          this.preserveLeadDraft(commit, action.seedCommit, reason);
-        } else this.rejectPlan(error);
+          this.preserveLeadDraft(commit, action.seedCommit, reason, false);
+        }
         if (!this.archive.tasks.length && !(recovering && recoveryKind === 'request-failure')) {
           try { await this.startInitialTasks(); }
           catch (fallbackError) { this.input.emit('initial_plan_fallback_failed', {
             reason: fallbackError instanceof Error ? fallbackError.message : 'math_initial_plan_failed' }); }
         }
       }
-      const decisionProgress = Boolean(publishedPlan) || accepted && previousPlanVersion !== this.planVersion();
+      // Clearing generic host feedback does not recover an unchanged failed request.
+      // Explicit research, progress and check decisions can advance an unchanged graph.
+      const decisionProgress = Boolean(publishedPlan) || accepted &&
+        (previousPlanVersion !== this.planVersion() || obligations.research || obligations.progress || obligations.nextCheck);
       const savedPlan = recovering && recoveryKind === 'request-failure' && decisionProgress;
       if (accepted && !recovering && action.kind === 'lead') {
         const nonce = action.initialPlanNonce ?? action.planNonce;
@@ -1244,7 +1269,7 @@ export class CooperativeResearch extends CooperationInputs {
       }
       if (accepted && (!recovering || decisionProgress)) this.rememberLeadDecision(action);
       if (recovering && recoveryKind !== 'request-failure' && action.kind === 'lead' &&
-          !action.initialPlanNonce && !decisionProgress) {
+          !action.initialPlanNonce && !decisionProgress && !this.leadDecisionObligations(action).any) {
         this.archive.lastLeadPauseInputDigest = this.leadPauseInputs.get(action);
       }
       // The decision or pause above is durable now; a restart must not re-ask this turn's wake-ups.

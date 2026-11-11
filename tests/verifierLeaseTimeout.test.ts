@@ -6,6 +6,8 @@ import { commitSolverSources } from '../src/solver/problem';
 import { LOCAL_EXAMPLE_PROOF } from '../src/math/localExample';
 import { MathProofEnvironmentLeaseTimeoutError } from '../src/math/mathProofEnvironment';
 import { checkManyFormalVerifications } from '../src/math/verifier';
+import { limitMathOutput, MATH_PROCESS_OUTPUT_LIMIT } from '../src/math/mathProcess';
+import { hasDeterministicLeanFailure } from '../src/solver/proofReuse';
 import { checkpointVerification, VerificationCheckpointError, withVerificationCheckpoints,
   type VerificationCheckpoint } from '../src/solver/verificationCheckpoint';
 
@@ -110,4 +112,36 @@ it('identifies an exhausted batch deadline separately from the compiler allowanc
   expect(events.at(-1)).toMatchObject({ event: 'verification_checkpoint', details: { diagnostics: [{
     error: 'Formal verification batch deadline exceeded.',
   }] } });
+});
+
+it.each(['stdout', 'stderr'] as const)('retains a located source error before a giant %s body is truncated', async stream => {
+  host.lease.mockResolvedValue(undefined);
+  const output = 'build progress\n'.repeat(2000) +
+    'Submission.lean:99:17: error: Type mismatch\n' + 'huge proof expression\n'.repeat(3000);
+  host.compile.mockImplementationOnce((_command, _args, options) => {
+    expect(options.onOutput).toBeTypeOf('function');
+    for (let offset = 0; offset < output.length; offset += 97)
+      options.onOutput(stream, Buffer.from(output.slice(offset, offset + 97)));
+    return { started: true, exitCode: 1, signal: null, stdout: '', stderr: '', [stream]: limitMathOutput(output),
+      timedOut: false, aborted: false, durationMs: 1 };
+  });
+  const result = await run(), preview = result.results[0]![`${stream}Preview`]!;
+  expect(result.results[0]).toMatchObject({ status: 'failed', error: 'Lean exited with status 1.' });
+  expect(preview).toContain('Submission.lean:99:17: error: Type mismatch');
+  expect(Buffer.byteLength(preview)).toBeLessThanOrEqual(MATH_PROCESS_OUTPUT_LIMIT);
+  expect(hasDeterministicLeanFailure(result)).toBe(true);
+  expect(checkpoints).toEqual([]);
+});
+
+it('does not classify a bare failed invocation as a deterministic source rejection', async () => {
+  host.lease.mockResolvedValue(undefined);
+  host.compile.mockImplementationOnce((_command, _args, options) => {
+    const output = 'Submission.lean:5:1: warning: unused variable\n' + 'unattributed output\n'.repeat(3000);
+    options.onOutput('stderr', Buffer.from(output));
+    return { started: true, exitCode: 1, signal: null, stdout: '', stderr: limitMathOutput(output),
+      timedOut: false, aborted: false, durationMs: 1 };
+  });
+  const result = await run();
+  expect(result.results[0]).toMatchObject({ status: 'failed', error: 'Lean exited with status 1.' });
+  expect(hasDeterministicLeanFailure(result)).toBe(false);
 });

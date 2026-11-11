@@ -8,6 +8,7 @@ import { bindLeanPackages } from '../../math/leanDiagnostics';
 import { findLeanTypeQueryDeclaration, hashMathFormalSourceDeclaration } from '../../math/leanSource';
 import { hasDeterministicLeanFailure, hasLeanResourceLimitFailure, proofReuseEnvironment, proofVerificationDigest } from '../proofReuse';
 import { checkpointVerification } from '../verificationCheckpoint';
+import { VerifierFailureError } from '../verifierFailure';
 
 export type ProofCheck = Readonly<{ commit: string; sourceDigest: string; passed: boolean; verification: MathematicsVerifierBatchResult }>;
 
@@ -67,7 +68,8 @@ export function attributeProofEvidence(verification: MathematicsVerifierBatchRes
         !distinct(verification.results.map(result => result.checkId)) ||
         verification.results.some((result, index) => !matches(index) || result.sessionId !== verification.sessionId ||
           result.checkId !== (items[index]!.id?.trim() || `check-${index + 1}`)))
-      throw new Error('math_task_check_identity_changed');
+      throw new VerifierFailureError({ stage: 'batch-receipt-attribution', sourceCommit: commit, verification },
+        undefined, 'math_task_check_identity_changed');
   }
   // Infrastructure failures belong to the shared invocation, even when aggregateStatus reports failed.
   const interrupted = verification.results.some(result => result.cleanupError ||

@@ -12,7 +12,8 @@ import { assumableLemma, isDefinitionTask, taskVersion, type CooperativeTask, ty
 import { captureProofReferences, type ProofReferences } from './proofReferences';
 import { hasDeterministicLeanFailure, proofReuseEnvironment } from './proofReuse';
 import { TaskProofCache, type TaskVerificationArtifact } from './taskProofCache';
-import { formalVerificationToolIdentity, type MathematicsVerifierBatchItem } from '../math/verifier';
+import { formalVerificationToolIdentity, type MathematicsVerifierBatchItem, type MathematicsVerifierBatchResult } from '../math/verifier';
+import { VerifierFailureError } from './verifierFailure';
 import { hasTaskConnectionCheck } from './taskConnections';
 import { compactTaskSources } from './taskProjection';
 import { projectionDependencyHintId, type ProjectionDeclaration, type ProjectionDependencyHint } from './projectionDependencyHints';
@@ -899,18 +900,27 @@ async function checkTaskProofsWithProjection(problem: SolverProblem, worktree: s
     const sourceProject = path.join(worktree, problem.projectRelative);
     const environment = cache ? proofReuseEnvironment(sourceProject, env) : undefined;
     const tools = environment && formalVerificationToolIdentity(project, environment.env);
+    let observedVerification: MathematicsVerifierBatchResult | undefined;
+    const failureContext = (stage: string) => ({ stage, sourceCommit, seedCommit: requests[0]!.assignment.seedCommit,
+      taskId: requests[0]!.task.id, taskDigest: taskVersion(requests[0]!.task),
+      projectionMode: compacted ? 'compact' as const : 'full' as const,
+      conditions: (requests[0]!.conditions ?? []).map(task => ({ taskId: task.id, taskDigest: taskVersion(task) })),
+      verification: observedVerification });
     const assertStableEnvironment = () => {
       signal.throwIfAborted();
       if (!environment) return;
       const after = proofReuseEnvironment(sourceProject, env);
-      if (after.reusable !== environment.reusable || after.digest !== environment.digest ||
-          canonicalMathJson(after.env) !== canonicalMathJson(environment.env) ||
-          formalVerificationToolIdentity(project, after.env) !== tools) throw new Error('math_verifier_unavailable');
+      const changes = { reusable: after.reusable !== environment.reusable, digest: after.digest !== environment.digest,
+        environment: canonicalMathJson(after.env) !== canonicalMathJson(environment.env),
+        tools: formalVerificationToolIdentity(project, after.env) !== tools };
+      if (Object.values(changes).some(Boolean)) throw new VerifierFailureError({ ...failureContext('environment-stability'), changes });
     };
     const run = async () => {
       try {
-        return await checkProjectedDeclarations(problem, checkout, worktree, commit, targets,
+        const checked = await checkProjectedDeclarations(problem, checkout, worktree, commit, targets,
           { env: environment?.env ?? env, signal, timeoutMs, ...execution });
+        observedVerification = checked.verification;
+        return checked;
       } finally { assertStableEnvironment(); }
     };
     let attributions: Awaited<ReturnType<typeof checkProjectedDeclarations>>['attributions'];

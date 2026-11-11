@@ -13,11 +13,17 @@ import { digest, taskSourceRejections, integrationRejections, rejectionCode, bou
 import { CooperationTaskProofs, type ProofDeliveryAnnotation, type ProofDeliveryState } from './cooperationTaskProofs';
 import { reusableFreshConditionalCheck } from './freshContinuationChecks';
 import type { ResearchWorker } from './modules/organization';
+import { VerifierFailureError } from './verifierFailure';
 
 const recheckBatchFallbacks = new Set([...taskSourceRejections, 'math_task_batch_projection_mismatch', 'math_task_missing_declaration',
   'math_task_batch_resource_limit']);
 const integrationBatchFallbacks = new Set([...taskSourceRejections, 'math_task_integration_conflict', 'math_task_integration_missing_context',
   'math_task_integration_missing_declaration', 'math_task_batch_projection_mismatch', 'math_task_batch_resource_limit']);
+function verifierFailure(stage: string, proof?: TaskProof, task?: CooperativeTask) {
+  return new VerifierFailureError({ stage, taskId: task?.id, taskDigest: proof?.taskDigest,
+    sourceCommit: proof?.commit, seedCommit: proof?.seedCommit, projectionMode: proof?.projectionMode ?? 'full',
+    conditions: proof?.conditions, verification: proof?.verification });
+}
 /** A changed check identity leaves no usable verifier result; aborts and unlisted failures propagate. */
 function expectedRejection(error: unknown, expected: ReadonlySet<string>): Error {
   if (error instanceof Error && rejectionCode(error) === 'math_task_check_identity_changed')
@@ -222,15 +228,16 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
       ...this.sourceGoalInputs(node.task, tasks, this.lead.worktree, canonical).map(item => item.task.id) ])]]));
     const ready = (node: TaskRecord) => prerequisites.get(node.task.id)!.every(id => !selected.has(id) ||
       tasks.find(item => item.task.id === id)?.status !== 'integrated' || checked.has(id));
-    let projector: ReturnType<typeof createTaskSourceProjector> | undefined;
     const projections = new Map<string, string | Error>();
-    const projection = (node: TaskRecord) => {
+    const projection = (node: TaskRecord, receipt?: TaskProof) => {
       const retainedGoals = request(node).retainedGoals;
-      const key = canonicalMathJson({ taskDigest: digest(node.task), retainedGoals });
+      const compact = receipt?.projectionMode === 'compact';
+      const preserved = compact ? receipt.changes : [];
+      const key = canonicalMathJson({ taskDigest: digest(node.task), retainedGoals, compact, preserved });
       let value = projections.get(key);
       if (value === undefined) {
         try {
-          projector ??= createTaskSourceProjector(this.input.state.problem, this.lead.worktree, canonical);
+          const projector = this.sourceProjector(this.lead.worktree, canonical, compact, preserved);
           value = mathDigest(canonicalMathJson([...projector(node.task, retainedGoals)]));
         } catch (error) { value = error instanceof Error ? error : new Error(String(error)); }
         projections.set(key, value);
@@ -247,8 +254,9 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
           !taskDependenciesReady(node.task, tasks)) return false;
       if (taskReferenceDependencies(node) && proofReferencesUnchanged(this.input.state.problem, this.lead.worktree, canonical, references,
           snapshot?.environmentDigest ?? this.input.state.environmentDigest)) return true;
-      // Generated Lean references conservatively bind the entire module. An unchanged
-      // complete task projection still has the exact sources checked by this process.
+      // Only the process-local acceptance gates above authorize this receipt's mode.
+      // A compact receipt must be compared with its compact projection, retaining
+      // every changed declaration that was checked with the delivery.
       const commit = receipt.verification.targetCommit;
       if (!commit) return false;
       let checked = checkedProjections.get(commit);
@@ -257,7 +265,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
           committedSource(this.lead.worktree, commit, `${this.input.state.problem.projectRelative}/${file}`)])));
         checkedProjections.set(commit, checked);
       }
-      return projection(node) === checked;
+      return projection(node, receipt) === checked;
     };
     const progress = { canonicalCommit: canonical, total: pending.length, completed: 0, taskId: undefined as string | undefined };
     const persistProgress = async () => {
@@ -321,12 +329,12 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
                 snapshot?.environmentDigest ?? this.input.state.environmentDigest, this.taskProofCache);
               this.input.signal.throwIfAborted();
               if (proofs.some(proof => hasLeanResourceLimitFailure(proof.verification))) throw new Error('math_task_batch_resource_limit');
-              if (proofs.some(proof => ['unavailable', 'blocked'].includes(proof.verification.status) || !isAttributedTaskProof(proof)))
-                throw new Error('math_verifier_unavailable');
+              const failed = proofs.find(proof => ['unavailable', 'blocked'].includes(proof.verification.status) || !isAttributedTaskProof(proof));
+              if (failed) throw verifierFailure('integrated-batch-recheck', failed);
               if (snapshot && !snapshot.current()) return false;
               group.forEach((item, index) => {
                 const proof = proofs[index];
-                if (!proof) throw new Error('math_verifier_unavailable');
+                if (!proof) throw verifierFailure('integrated-batch-missing-receipt', undefined, item.task);
                 // A failed shared compilation cannot identify a bad member. Leave
                 // failed views to the ordinary single-target compact/full check.
                 if (proof.passed) batched.set(item, { proof, source, retainedGoals: canonicalMathJson(requests[index].retainedGoals) });
@@ -348,7 +356,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
         const receipt = await this.check(node.task, assignment, this.lead.worktree, canonical, [], checkedProof, false, false, tasks,
           snapshot && { environment: snapshot.environment, digest: snapshot.environmentDigest }, extraGoals(node));
         this.input.signal.throwIfAborted();
-        if (['unavailable', 'blocked'].includes(receipt.verification.status)) throw new Error('math_verifier_unavailable');
+        if (['unavailable', 'blocked'].includes(receipt.verification.status)) throw verifierFailure('integrated-task-recheck', receipt, node.task);
         if (snapshot && !snapshot.current()) return false;
         node.integratedCheck = receipt;
         if (!receipt.passed && !retried.has(node) && !receipt.conditions?.length &&
@@ -406,7 +414,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
           if (checked) this.input.emit('task_conditional_check_reused', { taskId: node.task.id, commit: proof.commit });
           return proof;
         });
-        if (['unavailable', 'blocked'].includes(proof.verification.status)) throw new Error('math_verifier_unavailable');
+        if (['unavailable', 'blocked'].includes(proof.verification.status)) throw verifierFailure('conditional-task-recheck', proof, node.task);
         node.proof = proof;
         if (proof.passed) node.feedback = undefined;
         else {
@@ -513,15 +521,15 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
         if (proofs.some(proof => hasLeanResourceLimitFailure(proof.verification))) {
           fallback = 'math_task_batch_resource_limit'; return;
         }
-        if (proofs.some(proof => ['unavailable', 'blocked'].includes(proof.verification.status)))
-          throw new Error('math_verifier_unavailable');
+        const failed = proofs.find(proof => ['unavailable', 'blocked'].includes(proof.verification.status));
+        if (failed) throw verifierFailure('task-batch-integration', failed);
         const deterministic = proofs.every(proof => proof.passed || isAttributedTaskProof(proof) && hasDeterministicLeanFailure(proof.verification));
         receipts = [];
         for (const [index, snapshot] of snapshots.entries()) receipts.push(await this.check(snapshot.task, requests[index].assignment,
           checkout, merged, [], proofs[index], false, false, first.tasks,
           { environment, digest: first.environmentDigest }));
         if (receipts.some(receipt => !receipt.passed)) {
-          if (!deterministic) throw new Error('math_verifier_unavailable');
+          if (!deterministic) throw verifierFailure('task-batch-unattributed', receipts.find(receipt => !receipt.passed));
           fallback = 'math_task_merged_proof_failed';
         } else if (receipts.some(receipt => receipt.references?.tasks?.some(reference =>
           snapshots.some(snapshot => snapshot.task.id === reference.taskId)))) fallback = 'math_task_batch_dependency_changed';
@@ -588,7 +596,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
             submitted = await check(submitted.commit, snapshot.assignment, conditions);
           }
           this.input.signal.throwIfAborted();
-          if (['unavailable', 'blocked'].includes(submitted.verification.status)) throw new Error('math_verifier_unavailable');
+          if (['unavailable', 'blocked'].includes(submitted.verification.status)) throw verifierFailure('task-integration-delivery', submitted, snapshot.task);
           if (!submitted.passed) throw new Error('math_task_delivery_no_longer_checks');
           if (!taskDependenciesReady(snapshot.task, snapshot.tasks)) throw new Error('math_task_dependency_invalidated');
           const resolvedConditions = (submitted.conditions ?? []).map(condition => {
@@ -614,7 +622,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
               throw conflict;
             }
             this.input.signal.throwIfAborted();
-            if (['unavailable', 'blocked'].includes(existing.verification.status)) throw new Error('math_verifier_unavailable');
+            if (['unavailable', 'blocked'].includes(existing.verification.status)) throw verifierFailure('task-integration-conflict', existing, snapshot.task);
             if (!existing.passed) throw conflict;
             receipt = existing; merged = snapshot.canonical;
             return;
@@ -622,7 +630,7 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
           merged = commitSolverSources(problem, checkout);
           receipt = await check(merged, this.canonicalCheckAssignment(snapshot.task, merged, snapshot.tasks), []);
           this.input.signal.throwIfAborted();
-          if (['unavailable', 'blocked'].includes(receipt.verification.status)) throw new Error('math_verifier_unavailable');
+          if (['unavailable', 'blocked'].includes(receipt.verification.status)) throw verifierFailure('task-integration-merged', receipt, snapshot.task);
         });
       } catch (error) { failure = error; }
       const result = await this.input.exclusiveCheck(async () => {

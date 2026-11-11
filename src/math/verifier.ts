@@ -1,5 +1,8 @@
 import { runMathProcess as runProcess, runLeanProcess, limitMathOutput, MATH_PROCESS_OUTPUT_LIMIT, type MathProcessResult } from './mathProcess';
-type ProcessResult = MathProcessResult & { sandboxBackend?: SandboxBackend };
+import { createLeanDiagnosticCapture, leanDiagnosticPreview, renderLeanDiagnosticMessage } from './leanDiagnosticMessages';
+import type { LeanDiagnosticMessage } from './leanTypes';
+type ProcessResult = MathProcessResult & { sandboxBackend?: SandboxBackend;
+  sourceDiagnostics?: { stdout?: LeanDiagnosticMessage; stderr?: LeanDiagnosticMessage } };
 import { declarationHashes, inspectLeanSource } from './leanSource';
 export { hashMathFormalSourceDeclaration, inspectLeanDeclarationRegions, inspectLeanDeclarations, inspectLeanSource } from './leanSource';
 export type { MathematicsLeanSourceDeclaration } from './leanSource';
@@ -1220,6 +1223,7 @@ const runLeanSandboxed = async (input: {
   lakePackagesMountPath?: string;
   outputCapture?: 'head' | 'tail';
   outputLimit?: number;
+  captureSourceDiagnostics?: boolean;
   onDuplexSpawn?: (child: ChildProcess) => void;
   sandboxCapability?: ReturnType<typeof inspectMathematicsSandboxBackends>;
 }): Promise<ProcessResult> => {
@@ -1464,7 +1468,7 @@ exec /runtime/pinned-lean/bin/lean "$@" -j1
         testCounter: testCounterPath ? '/workspace/.deepscientist-test-counter' : '',
         testAxioms: input.env?.DEEPSCIENTIST_TEST_LEAN_AXIOMS || '',
       };
-      const runBackend = (backend: MathematicsSandboxBackend): Promise<ProcessResult> => {
+      const runBackend = async (backend: MathematicsSandboxBackend): Promise<ProcessResult> => {
         const args = backend.kind === 'unshare'
           ? [
               '--user', '--map-root-user', '--net', '--mount', '--pid', '--fork', '--kill-child=SIGKILL',
@@ -1488,12 +1492,17 @@ exec /runtime/pinned-lean/bin/lean "$@" -j1
                 interactive: Boolean(input.onDuplexSpawn || input.stdin !== undefined), cidfile: sessionContainerIdFile,
                 image: input.env?.DEEPSCIENTIST_MATH_SANDBOX_IMAGE || process.env.DEEPSCIENTIST_MATH_SANDBOX_IMAGE || '',
               });
-        return runLeanProcess(backend.executable, args, {
+        const captures = input.captureSourceDiagnostics ? {
+          stdout: createLeanDiagnosticCapture(), stderr: createLeanDiagnosticCapture(),
+        } : undefined;
+        const result = await runLeanProcess(backend.executable, args, {
           cwd: path.join(input.checkoutRoot, input.projectRelative), timeoutMs: input.timeoutMs,
           signal: input.signal, env: { ...sandboxEnv, DEEPSCIENTIST_MATH_LEAN_LOCK: input.env?.DEEPSCIENTIST_MATH_LEAN_LOCK }, stdin: input.stdin,
           outputCapture: input.outputCapture, outputLimit: input.outputLimit, onDuplexSpawn: input.onDuplexSpawn,
+          ...(captures ? { onOutput: (stream: 'stdout' | 'stderr', chunk: Buffer | string) => captures[stream].append(chunk) } : {}),
           ...(backend.kind === 'bwrap' && sealedRootFd !== undefined ? { inheritedFds: [sealedRootFd] } : {}),
         });
+        return captures ? { ...result, sourceDiagnostics: { stdout: captures.stdout.finish(), stderr: captures.stderr.finish() } } : result;
       };
       // `backends` is non-empty here, so the loop always assigns a result.
       let result!: ProcessResult;
@@ -2136,6 +2145,7 @@ function createVerifierModuleBuilder(input: {
           args: ['env', '/bin/sh', '-ceu', `mkdir -p ${quote(path.posix.dirname(output))}\nexec lean -j1 -R ${quote(module.sourceRoot)} -o ${quote(output)} ${quote(module.file)} 1>&2`],
           env: input.runtimeEnvironment, sandboxCapability: input.sandboxCapability, signal: input.options.signal,
           timeoutMs: Math.min(clampTimeout(input.request.timeoutMs), availableMs), outputLimit: MATH_PROCESS_OUTPUT_LIMIT,
+          captureSourceDiagnostics: true,
           lakePackagesPath: input.lakePackagesPath });
       }, input.options.signal);
       return leanModuleSucceeded(result) ? { ok: true as const } : { ok: false as const, failure: result };
@@ -2154,12 +2164,14 @@ function classifyLeanCheck(result: ProcessResult, context: {
     ? 'Formal verification batch deadline exceeded.' : 'Lean verification timed out.');
   if (result.errorMessage) return blocked(`Lean could not be executed: ${result.errorMessage}`);
   if (result.exitCode !== 0) {
+    const output = [result.stdout, result.stderr, ...Object.values(result.sourceDiagnostics ?? {}).flatMap(message =>
+      message ? [renderLeanDiagnosticMessage(message)] : [])].join('\n');
     if (/(?:^|\n)(?:error: (?:external command 'git'|toolchain |failed to (?:fetch|download|clone))|git: 'remote-https' is not a git command)/u.test(result.stderr))
       return blocked('Lean verification environment could not initialize; retry the same frozen candidate after restoring dependencies.');
-    if (hasUnavailablePinnedLeanModule(`${result.stdout}\n${result.stderr}`, context.projectRoot, context.packagesPath))
+    if (hasUnavailablePinnedLeanModule(output, context.projectRoot, context.packagesPath))
       return blocked('Lean verification cannot load a module supplied by the pinned dependencies; restore the compiled cache or search path and retry the same frozen candidate.');
     // Lean's own panics under the sandbox's fixed limits; an external kill has no such message.
-    const resourceLimit = leanResourceLimitError(`${result.stdout}\n${result.stderr}`);
+    const resourceLimit = leanResourceLimitError(output);
     if (resourceLimit) return { status: 'failed', verifier: 'lean-kernel', error: resourceLimit };
     return { status: 'failed', verifier: 'lean-kernel', error: `Lean exited with status ${result.exitCode ?? 'unknown'}.` };
   }
@@ -2308,6 +2320,7 @@ async function verifyFormalFile(file: PreparedFile, context: FormalFileVerificat
       signal: options.signal,
       timeoutMs: Math.min(requestedTimeoutMs, availableMs),
       outputLimit: MATH_PROCESS_OUTPUT_LIMIT * Math.min(64, verifiableItems.length),
+      captureSourceDiagnostics: true,
       lakePackagesPath,
     });
   }, options.signal);
@@ -2340,8 +2353,8 @@ async function verifyFormalFile(file: PreparedFile, context: FormalFileVerificat
   } finally {
     if (declarationQuery) fs.rmSync(declarationQuery.absolutePath, { force: true });
   }
-  const stdoutPreview = preview(processResult.stdout);
-  const stderrPreview = preview(processResult.stderr);
+  const stdoutPreview = leanDiagnosticPreview(processResult.stdout, processResult.sourceDiagnostics?.stdout);
+  const stderrPreview = leanDiagnosticPreview(processResult.stderr, processResult.sourceDiagnostics?.stderr);
   if (stdoutPreview) diagnostic('stdout', processResult.exitCode === 0 ? 'info' : 'warning', stdoutPreview);
   if (stderrPreview) diagnostic('stderr', processResult.exitCode === 0 ? 'warning' : 'error', stderrPreview);
 

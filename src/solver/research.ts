@@ -5,6 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { VerificationCheckpointError } from './verificationCheckpoint';
 import type { MathAgentActivity, MathAgentFailureDiagnostic, MathAgentSession } from '../runtime/codexSession';
 import { safeFailureDiagnostic } from '../runtime/failureDiagnostic';
+import { VerifierFailureError, verifierFailureDiagnostic } from './verifierFailure';
 import { readMathBuildManifest } from '../math/mathBuildManifest';
 import { MathGitError } from '../math/mathGit';
 import { canonicalMathJson, mathDigest, writeMathJsonDurable } from '../math/mathRuntimeIo';
@@ -1032,7 +1033,9 @@ export async function runResearchWorkers(input: {
           save(); emit('candidate_selected', { commit: research.check.commit }); abort();
           return;
         }
-        if (['unavailable', 'blocked'].includes(research.check.verification.status)) throw new Error('math_verifier_unavailable');
+        if (['unavailable', 'blocked'].includes(research.check.verification.status))
+          throw new VerifierFailureError({ stage: 'solver-proof-check', sourceCommit: research.check.commit,
+            verification: research.check.verification });
       };
       const proofLifecycle = cooperation && new WorkerProofLifecycle({ state, research, worker, cooperation,
         close, save, emit, checked: () => { retries = 0; } });
@@ -1397,7 +1400,7 @@ export async function runResearchWorkers(input: {
               await rotateSession('request');
               emit('worker_recovered', { reason: researchFailureReason(turnError),
                 ...(savedTaskProof ? { savedTaskProof: true } : {}), ...(savedPlan ? { savedPlan: true } : {}) });
-            } else throw new Error(researchFailureReason(turnError));
+            } else throw new Error(researchFailureReason(turnError), { cause: turnError });
           }
         }
       } catch (error) {
@@ -1407,7 +1410,11 @@ export async function runResearchWorkers(input: {
           else if (error instanceof LibraryInstallationRequested) emit('worker_checkpoint', { reason: error.message });
           else {
             research.error = error instanceof Error ? error.message : 'math_worker_failed';
-            emit('worker_failed', { reason: research.error, ...(error instanceof MathGitError ? { git: error.diagnostic } : {}) });
+            const verification = verifierFailureDiagnostic(error) ?? (research.error === 'math_verifier_unavailable'
+              ? new VerifierFailureError({ stage: 'worker-boundary' }, error).diagnostic : undefined);
+            if (verification) { research.verifierFailure = verification; state.verifierFailure = verification; }
+            emit('worker_failed', { reason: research.error, ...(verification ? { verification } : {}),
+              ...(error instanceof MathGitError ? { git: error.diagnostic } : {}) });
           }
           if (error instanceof LibraryInstallationRequested || !parallel || (cooperation && worker.id === input.workers[0].id && research.error !== 'math_model_context_capacity_blocked') ||
               (error instanceof VerificationCheckpointError || error instanceof Error && error.message === 'math_verifier_unavailable')) abort();

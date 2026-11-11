@@ -2,6 +2,7 @@ import { isAdvisoryTask as advisory, isFeasibilityReview } from './tasks';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { VerifierFailureError } from './verifierFailure';
 import { mathGitResult } from '../math/mathGit';
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import { projectMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnvironment';
@@ -733,7 +734,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       });
     }
   }
-  private sourceProjector(worktree: string, commit: string, compact = false,
+  protected sourceProjector(worktree: string, commit: string, compact = false,
     preserved: readonly { file: string; name: string }[] = []) {
     const identity = mathDigest(canonicalMathJson({ problem: this.input.state.problem, worktree, commit, compact, preserved }));
     let cached = this.preparedSources.get(compact);
@@ -846,15 +847,21 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     const proof = checked ?? await checker(this.input.state.problem, worktree, commit, task, assignment, retainedGoals,
       environment, this.input.signal, this.input.timeoutMs, conditions, environmentDigest,
       ...(checker === checkTaskProof ? [this.taskProofCache] : []));
+    const failureContext = { taskId: task.id, taskDigest, sourceCommit: commit,
+      seedCommit: assignment.seedCommit, projectionMode: proof.projectionMode ?? 'full' as const,
+      conditions: conditions.map(task => ({ taskId: task.id, taskDigest: digest(task) })), verification: proof.verification };
+    const identityFailure = () => new VerifierFailureError({ ...failureContext, stage: 'task-proof-identity' },
+      undefined, 'math_task_check_identity_changed');
     const reuse = trustedTaskProjectionReuse(proof);
     if (proof.projectionReuse && !reuse || checker === checkTaskProof && proof.passed && !isAttributedTaskProof(proof))
-      throw new Error('math_task_check_identity_changed');
-    if (checker === checkTaskProof && !isAttributedTaskProof(proof)) throw new Error('math_verifier_unavailable');
+      throw identityFailure();
+    if (checker === checkTaskProof && !isAttributedTaskProof(proof)) throw new VerifierFailureError({
+      ...failureContext, stage: 'task-proof-attribution' });
     const projectionCommit = reuse?.projectionCommit ?? proof.verification.targetCommit;
     if (reuse && (reuse.checkedProjectionCommit !== proof.verification.targetCommit ||
         git(worktree, ['rev-parse', `${reuse.projectionCommit}^{tree}`]) !== reuse.projectionTree ||
         git(worktree, ['rev-parse', `${reuse.checkedProjectionCommit}^{tree}`]) !== reuse.projectionTree))
-      throw new Error('math_task_check_identity_changed');
+      throw identityFailure();
     const declarationHash = proof.passed && proof.verification.targetCommit && hashMathFormalSourceDeclaration(
       committedSource(worktree, proof.verification.targetCommit, `${this.input.state.problem.projectRelative}/${task.proofPath}`), task.theoremName!);
     const compact = isAttributedTaskProof(proof) && proof.projectionMode === 'compact';
@@ -874,7 +881,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
         (proof.passed && (!projectionMatches || !declarationHash || !proofReceiptsMatch(proof.verification, proof.verification.targetCommit,
           [{ proofPath: task.proofPath!, theoremName: task.theoremName!, expectedSourceDeclarationHash: declarationHash,
             statementHash: taskDigest, leanStatementHash: taskDigest, claim: 'statement' }]))))
-      throw new Error('math_task_check_identity_changed');
+      throw identityFailure();
     if (proof.passed && conditions.length && projected) proof.projection = {
       environmentDigest,
       problemReceiptDigest: this.input.state.problem.receiptDigest,
@@ -1060,7 +1067,9 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
   private deliverProof(node: TaskRecord, proof: TaskProof) {
     if (['unavailable', 'blocked'].includes(proof.verification.status)) {
       node.proof ??= proof;
-      throw new Error('math_verifier_unavailable');
+      throw new VerifierFailureError({ stage: 'task-proof-delivery', taskId: node.task.id,
+        taskDigest: digest(node.task), sourceCommit: proof.commit, seedCommit: proof.seedCommit,
+        projectionMode: proof.projectionMode ?? 'full', conditions: proof.conditions, verification: proof.verification });
     }
     node.proof = proof;
     this.settleTaskSourceRepair(node);

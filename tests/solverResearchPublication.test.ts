@@ -227,8 +227,18 @@ it('wakes Lead after restore for an unanswered refutation until a plan answers i
   expect(wakePending()).toBe(true);
   state.cooperation!.lastLeadInputDigest = (cooperative as any).planningInputDigest();
   await restart();
-  // The saved wake-up survives, but an answered input waits for new work without a turn or a busy retry.
+  // A saved completed-input marker is insufficient: the exact publication still has no answer.
   expect(wakePending()).toBe(true);
+  const lead = await (cooperative as any).nextLead(workers[0], { maxTurns: Infinity, remainingMs: Infinity }, true);
+  expect(lead).toMatchObject({ kind: 'lead' });
+  const shown = cooperative.contextState(lead, workers[0]).leadResearchInputIds!;
+  expect(shown).toHaveLength(1);
+  const plan = parseCooperationPlan(state.problem, { tasks: state.cooperation!.tasks.map(node => node.task),
+    groups: state.cooperation!.groups!.map(record => record.group) });
+  await (cooperative as any).acceptPlan({ ...plan, researchDecisions: shown.map(deliveryId => ({ deliveryId,
+    outcome: 'decline', reason: 'The scoped refutation does not affect the distinct retained consumer.' })) }, undefined, undefined, lead);
+  (cooperative as any).rememberLeadDecision(lead);
+  // The explicit answer now waits for new work without a turn or a busy retry.
   let settled = false;
   const dispatch = (cooperative as any).nextLead(workers[0], { maxTurns: Infinity, remainingMs: Infinity }, true)
     .then((result: unknown) => { settled = true; return result; });

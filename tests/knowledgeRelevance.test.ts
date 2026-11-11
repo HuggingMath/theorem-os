@@ -7,7 +7,7 @@ import type { SolverProblem } from '../src/solver/problem';
 import { taskVersion, type CooperativeAction, type CooperativeTask } from '../src/solver/tasks';
 import type { TheoremKnowledgeEntry } from '../src/solver/theoremKnowledge';
 import { buildKnowledgeRouteFindings, searchKnowledgeRouteFindings, type KnowledgeRouteFinding } from '../src/solver/theoremKnowledgeFindings';
-import { searchTheoremKnowledge } from '../src/solver/theoremKnowledgeSearch';
+import { knowledgeApplicationRelevant, searchTheoremKnowledge } from '../src/solver/theoremKnowledgeSearch';
 
 const environmentDigest = mathDigest('relevance-test-environment');
 const file = 'Submission/Library/Fixture/Support.lean', fileDigest = mathDigest('frozen-library-source');
@@ -36,12 +36,13 @@ function consumer(type: string) {
 }
 const packet = (text: string) => JSON.parse(text.slice(text.indexOf('\n') + 1));
 
-function finding(statement: string, summary: string) {
+function finding(statement: string, summary: string,
+  statementKind: 'research-objective' | 'closed-task-type' | 'source-header' = 'research-objective') {
   const notes = 'Recorded reasoning is advisory and must be reviewed in the current setting.';
   return buildKnowledgeRouteFindings([{ evidence: 'recorded-advisory-not-replayed', acceptance: 'not-assessed',
     conclusion: 'refuted', summary, finding: summary, notes,
     scope: { problemId: 'another-problem', problemReceiptDigest: mathDigest('another-problem'), environmentDigest,
-      source: { kind: 'research', statementKind: 'research-objective', statement, premises: [] }, dependencies: [] },
+      source: { kind: statementKind === 'research-objective' ? 'research' : 'lemma', statementKind, statement, premises: [] }, dependencies: [] },
     evidenceRefs: [], obstructions: [], remainingObligations: ['The original theorem still requires proof.'], reconsiderWhen: [],
     provenance: { source: '/archive/state.json', sourceDigest: mathDigest('archive'), runId: 'historical', taskId: 'investigation',
       taskDigest: mathDigest(statement), groupId: 'main', deliveryId: 'delivery', sourceCommit: 'b'.repeat(40),
@@ -70,6 +71,39 @@ describe('automatic mathematical relevance boundaries', () => {
       .toEqual([expect.objectContaining({ id: utility.id, lowInformationMatch: false })]);
     const [retrieval] = installedLibraryRetrievals({ ...f, library: knowledge, forApplication: true });
     expect(retrieval!.candidateIds).toEqual([utility.id]);
+  });
+
+  it('does not apply a norm bound because a namespace and conversion contain fragments of the goal predicates', async () => {
+    const support = { ...entry('TheoremOS.RepresentationTheory.IsUnitaryRepresentation.opNorm_le_one',
+      'opNorm_le_one (hρ : IsUnitaryRepresentation ρ) (g : G) : ‖LinearMap.toContinuousLinearMap (ρ g)‖ ≤ 1'),
+      typeKind: 'source-header' as const };
+    // The real time-continuity failure shared Continuous only inside toContinuousLinearMap,
+    // and unitary only inside IsUnitaryRepresentation. Neither is the candidate's conclusion.
+    const goal = '∀ {H : Type*} [NormedAddCommGroup H] [InnerProductSpace ℂ H] [CompleteSpace H] ' +
+      '(D : SpectralCalculus H) {I : Set ℝ}, IsCompact I → ∀ {h : H}, ' +
+      'D.HasSpectralSupport I h → Continuous (fun t : ℝ => D.unitary t h)';
+    const f = consumer(goal), knowledge = snapshot([support]);
+    expect(knowledgeApplicationRelevant(support, goal)).toBe(false);
+    expect(searchTheoremKnowledge(knowledge.base, support.name).hits[0]!.id).toBe(support.id);
+    const [retrieval] = installedLibraryRetrievals({ ...f, library: knowledge, forApplication: true });
+    expect(retrieval!.relevantCandidateIds ?? retrieval!.searchCandidateIds).toEqual([]);
+    expect(await prepareLibraryApplication({ ...f, library: knowledge, worktree: '/unused-relevance-fixture',
+      seedCommit: f.problem.baseCommit })).toMatchObject({ status: 'skipped', reason: 'no-matching-installed-theorem', candidates: [] });
+    // A worker's explicit named request still authorizes a bounded application check.
+    expect(installedLibraryRetrievals({ ...f, library: knowledge, forApplication: true,
+      taskText: `Use ${support.name}.` })[0]!.candidateIds).toEqual([support.id]);
+  });
+
+  it('matches whole conclusion predicates while retaining renamed lambda binders and genuine continuity lemmas', () => {
+    const goal = '∀ (D : SpectralCalculus H) (h : H), Continuous (fun time : ℝ => D.unitary time h)';
+    const usable = entry('Saved.continuous_orbit',
+      '∀ (D : SpectralCalculus H) (h : H), HasControl D → Continuous (fun parameter : ℝ => D.unitary parameter h)');
+    const premiseOnly = entry('Saved.Continuous.unitary_norm',
+      '∀ (D : SpectralCalculus H) (h : H), Continuous (fun time : ℝ => D.unitary time h) → ‖h‖ ≤ 1');
+    expect(knowledgeApplicationRelevant(usable, goal)).toBe(true);
+    expect(knowledgeApplicationRelevant(premiseOnly, goal)).toBe(false);
+    expect(knowledgeApplicationRelevant(entry('Saved.IsCompact.use', 'IsCompactlyGeneratedSpace X'), 'IsCompact X')).toBe(false);
+    expect(knowledgeApplicationRelevant(entry('Saved.bound', 'tight_bound_extended x'), 'tight_bound x')).toBe(false);
   });
 
   it('puts an entropy interface before unrelated declarations in an entropy namespace', () => {
@@ -121,5 +155,67 @@ describe('automatic mathematical relevance boundaries', () => {
     // A focused lookup remains able to find the old representation investigation.
     expect(searchKnowledgeRouteFindings(knowledge.base, 'independent dimensional', { requireMathematicalRelevance: true }).hits)
       .toContainEqual(expect.objectContaining({ id: unrelated.id }));
+  });
+
+  it('keeps carrier typeclasses out of automatic findings without hiding exact contracts or mathematical class goals', () => {
+    const assumptions = '∀ {H : Type*} [NormedAddCommGroup H] [InnerProductSpace ℂ H] [CompleteSpace H] ';
+    const goal = assumptions + '(D : SpectralCalculus H) {I J : Set ℝ} {h k : H}, ' +
+      'D.HasSpectralSupport I h → D.HasSpectralSupport J k → D.HasSpectralSupport (I ∪ J) (h + k)';
+    const noise = finding(assumptions + '(A : H →L[ℂ] H), spectrum ℂ A ⊆ numericalClosure A',
+      'The spectrum inclusion draft is still missing a numerical-range estimate. ' + 'Archived detail. '.repeat(100), 'closed-task-type');
+    const exact = finding(goal, 'The spectral support addition step needs a uniform spectral estimate.', 'closed-task-type');
+    const utility = entry('Saved.band_add', goal), knowledge = snapshot([utility], [noise]);
+    const f = consumer(goal), [section] = knowledgeContextSections({ ...f, knowledge });
+    expect(section!.knowledge.routeFindingIds).toEqual([]);
+    expect(section!.knowledge.candidateIds).toEqual([utility.id]);
+    expect(packet(section!.text).omittedForBytes).toBe(0);
+    expect(searchKnowledgeRouteFindings(knowledge.base, 'NormedAddCommGroup InnerProductSpace CompleteSpace').hits)
+      .toContainEqual(expect.objectContaining({ id: noise.id }));
+    expect(searchKnowledgeRouteFindings(snapshot([], [noise, exact]).base, '',
+      { goal, requireMathematicalRelevance: true }).hits.map(hit => hit.id)).toEqual([exact.id]);
+    const classGoal = '∀ (E : Type*) [NormedAddCommGroup E], CompleteSpace E';
+    const completion = finding('∀ (X : Type*) [NormedAddCommGroup X], CompleteSpace X',
+      'Completeness follows from the Cauchy construction.', 'closed-task-type');
+    expect(searchKnowledgeRouteFindings(snapshot([], [completion]).base, '',
+      { goal: classGoal, requireMathematicalRelevance: true }).hits[0]!.id).toBe(completion.id);
+  });
+
+  it.each([
+    {
+      query: 'Identify the variance tail mechanism for fixed B from the exact second-moment count. ' +
+        'Group assignments by Hamming distance, validate the proposed tail bound against scaling data, ' +
+        'and deliver exact closed Lean statements whose application closes the consumer.',
+      statement: 'Capacity decomposition: keep the consumer fixed. Publish proposed exact closed Lean types with ' +
+        'existing input dependencies in this group. Explain their application to the consumer and record the data.',
+      summary: 'A sheet-flow decomposition remains unproved; the closed node types and fixed data are recorded.',
+      relevant: 'The variance second-moment tail estimate does not yet control Hamming-distance correlations.',
+      manual: 'fixed proposed data closed application',
+    },
+    {
+      query: 'Reconstruct the geodesic Hessian route from GeodesicConstantSpeedAC and SecondDerivativeIntegral. ' +
+        'Use a scratch harness under .scratch/tmp, record the discriminating test and deliverable, ' +
+        'then locate Gamma-calculus / test-function-density material and the remaining inference.',
+      statement: 'Determine optimal-transport existence. Deliverable: a Lean-checked statement in a scratch file ' +
+        'under .scratch/tmp about densityMeasure. Report the discriminating test on an identity optimal map.',
+      summary: 'The optimal map existence layer still lacks a minimizer for density measures.',
+      relevant: 'Geodesic Hessian reconstruction still requires Gamma-calculus and test-function-density arguments.',
+      manual: 'scratch tmp deliverable test density',
+    },
+  ])('rejects workflow overlap while preserving substantive negative findings: $manual', test => {
+    const unrelated = finding(test.statement, test.summary), relevant = finding(test.relevant, test.relevant);
+    const knowledge = snapshot([], [unrelated, relevant]);
+    expect(searchKnowledgeRouteFindings(knowledge.base, test.manual).hits)
+      .toContainEqual(expect.objectContaining({ id: unrelated.id }));
+    const selected = searchKnowledgeRouteFindings(knowledge.base, test.query, { requireMathematicalRelevance: true });
+    expect(selected.hits.map(hit => hit.id)).toEqual([relevant.id]);
+    expect(selected.hits[0]!.conclusion).toBe('refuted');
+  });
+
+  it('preserves mathematical compound identifiers containing workflow words', () => {
+    const goal = '∀ (d : SheetData), HasFixedPoint d → IsTestFunction (density d)';
+    const relevant = finding('∀ (data : SheetData), HasFixedPoint data → IsTestFunction (density data)',
+      'The SheetData fixed-point reduction still requires an IsTestFunction proof.', 'closed-task-type');
+    expect(searchKnowledgeRouteFindings(snapshot([], [relevant]).base, '',
+      { goal, requireMathematicalRelevance: true }).hits[0]!.id).toBe(relevant.id);
   });
 });

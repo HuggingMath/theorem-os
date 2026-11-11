@@ -1,3 +1,5 @@
+import { StringDecoder } from 'node:string_decoder';
+import { limitMathOutput, MATH_PROCESS_OUTPUT_LIMIT } from './mathProcess';
 import type { LeanDiagnosticMessage } from './leanTypes';
 
 const position = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
@@ -48,4 +50,44 @@ export function renderLeanDiagnosticOutput(output: string) {
   const parsed = parseLeanDiagnosticOutput(output);
   const json = parsed.messages.filter(message => message.format === 'lean-json').map(renderLeanDiagnosticMessage).join('\n');
   return [json, parsed.raw].filter(Boolean).join('\n');
+}
+
+/** Retain the first located source error even when its body exceeds the process output budget. */
+export function createLeanDiagnosticCapture(maxBytes = 4096) {
+  const decoder = new StringDecoder('utf8');
+  let line = '', diagnostic: LeanDiagnosticMessage | undefined, finished = false;
+  const observe = () => {
+    diagnostic ??= parseLeanDiagnosticOutput(line).messages.find(message => message.severity === 'error' &&
+      message.file?.endsWith('.lean') && message.line !== undefined && message.column !== undefined);
+  };
+  const appendText = (text: string) => {
+    let begin = 0;
+    while (begin < text.length && !diagnostic) {
+      const newline = text.indexOf('\n', begin), end = newline < 0 ? text.length : newline;
+      line = limitMathOutput(line + text.slice(begin, end), maxBytes, 'head');
+      if (newline < 0) { if (Buffer.byteLength(line) >= maxBytes - 3) observe(); break; }
+      observe(); line = ''; begin = end + 1;
+    }
+  };
+  return {
+    append(chunk: Buffer | string) {
+      if (!diagnostic && !finished) appendText(decoder.write(typeof chunk === 'string' ? Buffer.from(chunk) : chunk));
+    },
+    finish() {
+      if (!finished) { appendText(decoder.end()); observe(); finished = true; }
+      return diagnostic;
+    },
+  };
+}
+
+/** A failure preview keeps both the located error and the ordinary bounded output tail. */
+export function leanDiagnosticPreview(output: string, diagnostic?: LeanDiagnosticMessage,
+  maxBytes = MATH_PROCESS_OUTPUT_LIMIT): string | undefined {
+  const tail = limitMathOutput(output.trim(), maxBytes);
+  if (!diagnostic) return tail || undefined;
+  const retained = limitMathOutput(renderLeanDiagnosticMessage(diagnostic), Math.min(4096, maxBytes), 'head');
+  if (!tail || tail.includes(retained)) return tail || retained;
+  const separator = '\n[bounded output tail; first located Lean error retained above]\n';
+  const available = maxBytes - Buffer.byteLength(retained + separator);
+  return available > 0 ? retained + separator + limitMathOutput(tail, available) : retained;
 }

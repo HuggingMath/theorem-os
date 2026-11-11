@@ -7,6 +7,7 @@ import type { ResearchRole } from './modules/organization';
 import type { CooperationState } from './cooperation';
 import type { MathAgentActivity } from '../runtime/codexSession';
 import { safeFailureDiagnostic, type MathAgentFailureDiagnostic } from '../runtime/failureDiagnostic';
+import { safeVerifierFailureDiagnostic, type VerifierFailureDiagnostic } from './verifierFailure';
 import type { TokenBudget, UsageAccounting, RequestUsageAccounting } from './usageBudget';
 import type { ContextManifest } from './contextCompiler';
 import type { KnowledgeRetrievalObservation, KnowledgeUse } from './knowledgeUsage';
@@ -37,7 +38,7 @@ export type DispatchWaitObservation = {
 };
 
 export type SolverWorkerState = Pick<SolverRunState, 'worktree' | 'threadId' | 'previousThreadIds' |
-  'lastInputTokens' | 'lastActivity' | 'lastFailure' | 'recovery' | 'contextOverflow' | 'contextCheckpoint' | 'contextCheckpointBaseline' | 'advisoryCheckpoint' | 'advisoryCheckpoints' | 'lastContextManifest' | 'phase' | 'turns' | 'dispatchCounts' | 'usage' | 'usageBeforeThread' | 'usageAccounting' | 'requestUsageAccounting' | 'check' | 'candidate' | 'failures' | 'error' | 'writerStopUnconfirmed'> & {
+  'lastInputTokens' | 'lastActivity' | 'lastFailure' | 'recovery' | 'contextOverflow' | 'contextCheckpoint' | 'contextCheckpointBaseline' | 'advisoryCheckpoint' | 'advisoryCheckpoints' | 'lastContextManifest' | 'phase' | 'turns' | 'dispatchCounts' | 'usage' | 'usageBeforeThread' | 'usageAccounting' | 'requestUsageAccounting' | 'check' | 'candidate' | 'failures' | 'error' | 'verifierFailure' | 'writerStopUnconfirmed'> & {
   id: string;
   role: ResearchRole;
   sessionRole?: ResearchRole;
@@ -121,6 +122,8 @@ export type SolverRunState = {
   candidate?: ResearchCandidate;
   failures?: SolverFailure[];
   error?: string;
+  /** Last fatal check diagnosis; recorded evidence never grants proof acceptance. */
+  verifierFailure?: VerifierFailureDiagnostic;
   workerCount?: number;
   workers?: SolverWorkerState[];
   cooperation?: CooperationState;
@@ -209,7 +212,8 @@ const research = z.object({ worktree: z.string().min(1), phase, turns: count, th
   usage: record.optional(), usageBeforeThread: record.optional(), usageAccounting: usageAccounting.optional(),
   requestUsageAccounting: requestUsageAccountingSchema.optional(),
   tokenBudget: tokenBudget.optional(), candidate: record.optional(),
-  failures: z.array(record).optional(), error: z.string().optional() }).passthrough();
+  failures: z.array(record).optional(), error: z.string().optional(),
+  verifierFailure: z.unknown().transform(safeVerifierFailureDiagnostic).optional() }).passthrough();
 const role = z.enum(['lead', 'researcher', 'prover', 'engineer', 'reviewer']);
 const task = z.object({ id: z.string().min(1), kind: z.enum(['research', 'sketch', 'lemma', 'goal']),
   objective: z.string(), dependsOn: z.array(z.string()), revision: count }).passthrough();

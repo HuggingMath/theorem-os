@@ -3143,8 +3143,17 @@ describe('isolated solver and host acceptance', () => {
     };
     expect(await runSolver([...args, '--workers', '2', '--max-turns', '2'], directory,
       { ...directSolverModules, M2: { ...directSolverModules.M2, checkTask } })).toBe(1);
-    expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ status: 'runtime_error', reason: 'math_verifier_unavailable' });
+    const result = JSON.parse(fs.readFileSync(output, 'utf8'));
+    expect(result).toMatchObject({ status: 'runtime_error', reason: 'math_verifier_unavailable', verifierFailure: {
+      schema: 'theorem-os.verifier-failure.v1', stage: 'task-proof-delivery',
+      verification: { status: 'unavailable', results: [expect.objectContaining({ receiptId: expect.any(String) })] },
+    } });
     const state = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
+    expect(state.verifierFailure).toEqual(result.verifierFailure);
+    expect(state.workers.some((worker: any) => worker.verifierFailure?.stage === 'task-proof-delivery')).toBe(true);
+    const events = vi.mocked(console.log).mock.calls.map(([line]) => JSON.parse(line));
+    expect(events.some((event: any) => event.event === 'worker_failed' &&
+      event.verification?.verification?.status === 'unavailable')).toBe(true);
     const archived = state.cooperation;
     const pending = archived.tasks.find((node: any) => node.status === 'pending' &&
       node.feedback === 'math_verifier_unavailable' && node.proof.verification.status === 'unavailable');

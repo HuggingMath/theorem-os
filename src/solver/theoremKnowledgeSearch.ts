@@ -136,6 +136,18 @@ function goalShape(value: string) {
   return views.length === 1 ? knowledgeGoalSurfaceShape(views[0]!.goal) : undefined;
 }
 
+/** Application anchors are whole identifiers in a proposition, never fragments of API names. */
+function applicationIdentifiers(value: string): string[] {
+  const text = leanText(value), bound = new Set<string>();
+  for (const match of text.matchAll(/(?:[([{]|\bforall\b|\bexists\b|\bfun\b|λ|^|\n)\s*([\p{L}_][\p{L}\p{M}\p{N}_' \t]*?)\s*(?::|=>)/gu))
+    for (const name of match[1]!.trim().split(/\s+/u)) bound.add(name);
+  const arithmetic = new Set(['nat', 'int', 'rat', 'real', 'complex', 'ennreal', 'nnreal', 'succ', 'pred']);
+  return [...new Set([...text.matchAll(/[\p{L}_][\p{L}\p{M}\p{N}_']*(?:\.[\p{L}_][\p{L}\p{M}\p{N}_']*)*/gu)]
+    .map(match => match[0].split('.').at(-1)!).filter(name => !bound.has(name))
+    .map(name => name.toLowerCase()).filter(name => !boilerplate.has(name) && !arithmetic.has(name) &&
+      !/^_b\d+$/u.test(name) && (name.length > 1 || /[^\x00-\x7f]/u.test(name))))];
+}
+
 /** A retrieval hint may be useful to a model without warranting an automatic theorem application. */
 export function knowledgeApplicationRelevant(item: TheoremKnowledgeEntry, goal: string): boolean {
   const type = knowledgeTypeExpression(item), normalizedGoal = canonical(goalTarget(goal)), normalizedType = canonical(type);
@@ -143,12 +155,12 @@ export function knowledgeApplicationRelevant(item: TheoremKnowledgeEntry, goal: 
       normalizedGoal.length >= 8 && normalizedType.endsWith(normalizedGoal))) return true;
   const surface = goalShape(goal);
   if (surface !== undefined && surface === knowledgeGoalSurfaceShape(type)) return true;
-  // Reuse the ranker's conclusion terms and name/type fields. Built-in arithmetic normal forms can
-  // differ definitionally (`n = n` versus `n + 0 = n`, or `n + 1` versus `Nat.succ n`).
-  const arithmetic = new Set(['nat', 'int', 'rat', 'real', 'complex', 'ennreal', 'nnreal', 'succ', 'pred']);
-  const required = terms(conclusion(goalTarget(goal)), true)
-    .filter(term => !/^\p{N}+$/u.test(term) && !arithmetic.has(term));
-  const available = new Set([...terms(item.name), ...terms(conclusion(type), true)]);
+  const targetConclusion = splitStatement(goalTarget(goal))?.conclusion, candidateConclusion = splitStatement(type)?.conclusion;
+  if (!targetConclusion || !candidateConclusion) return false;
+  // Namespaces and premises are retrieval hints, not conclusion predicates. For example,
+  // toContinuousLinearMap does not establish Continuous, even inside a unitary namespace.
+  // Arithmetic normal forms remain eligible (`n = n` versus `n + 0 = n`, or Nat.succ n).
+  const required = applicationIdentifiers(targetConclusion), available = new Set(applicationIdentifiers(candidateConclusion));
   return required.every(term => available.has(term));
 }
 

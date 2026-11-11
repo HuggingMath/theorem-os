@@ -45,8 +45,10 @@ import { copyContinuationSnapshot, freezeContinuationInput, readContinuationInpu
   type ContinuationSnapshot } from './continuationInput';
 import { seedSolverContinuation } from './continuationSeed';
 import type { TaskProof } from './cooperativeProof';
+import { verifierFailureDiagnostic } from './verifierFailure';
 
 const runSummary = (state: SolverRunState | undefined) => ({ turns: state?.turns, dispatchCounts: state?.dispatchCounts,
+  ...(state?.verifierFailure ? { verifierFailure: state.verifierFailure } : {}),
   usage: state?.usage, tokenBudget: state?.tokenBudget, workers: state?.workers?.map(worker => ({ id: worker.id, role: worker.role,
     turns: worker.turns, dispatchCounts: worker.dispatchCounts, usage: worker.usage, error: worker.error })) });
 
@@ -545,6 +547,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
         if (ownedState.solveStartedAt && !ownedState.solveFinishedAt) ownedState.solveFinishedAt = Date.now();
         if (executionClock) ownedState.solveWaitingMs = executionClock.waitingMs();
         ownedState.error = controller.signal.aborted || checkpoint || libraryRequest ? undefined : error instanceof Error ? error.message : 'math_runtime_error';
+        const verification = verifierFailureDiagnostic(error);
+        if (verification) ownedState.verifierFailure = verification;
         writeSolverRunState(stateFile, ownedState);
       }
       writeMathJsonDurable(output, { schema: 'deepscientist.math.run.v2', status, run_outcome: status,

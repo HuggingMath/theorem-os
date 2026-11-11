@@ -132,6 +132,8 @@ export const runMathProcess = (
     outputLimit?: number;
     stopGraceMs?: number;
     onDuplexSpawn?: (child: ChildProcess) => void;
+    /** Observe compiler bytes before bounded stdout/stderr capture discards them. */
+    onOutput?: (stream: 'stdout' | 'stderr', chunk: Buffer | string) => void;
     inheritedFds?: readonly number[];
     onExtraPipe?: (stream: Readable) => void;
   }
@@ -230,11 +232,13 @@ export const runMathProcess = (
     child.stdout?.on('data', (chunk: Buffer | string) => {
       if (settled) return;
       stdoutHash.update(chunk);
+      options.onOutput?.('stdout', chunk);
       stdout = capture(stdout, chunk);
     });
     child.stderr?.on('data', (chunk: Buffer | string) => {
       if (settled) return;
       stderrHash.update(chunk);
+      options.onOutput?.('stderr', chunk);
       stderr = capture(stderr, chunk);
     });
     child.once('spawn', () => { started = true; });

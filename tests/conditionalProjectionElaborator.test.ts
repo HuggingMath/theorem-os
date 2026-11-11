@@ -40,6 +40,13 @@ function accepted(result: ReturnType<typeof compile>) {
 }
 
 describe.skipIf(!lean)('host conditional projection elaborators', () => {
+  it.each([false, true])('preserves implicit and instance binders with a conditional input used=%s', used => {
+    accepted(compile('theorem target {n : Nat} [Nonempty (Fin n)] (x : Fin n) : x = x := by ' +
+      (used ? 'exact D.refl x' : 'rfl'),
+    [{ theoremName: 'D.refl', type: '∀ {n : Nat} (x : Fin n), x = x' }],
+    { expectedType: '∀ {n : Nat} [Nonempty (Fin n)] (x : Fin n), x = x' }));
+  });
+
   it.each(['theorem', 'lemma'])('normalizes Mathlib %s without leaking its conditional proof assumptions', kind => {
     accepted(compile(kind + ' target (n : Nat) : n = n := by exact D.refl n',
       [{ theoremName: 'D.refl', type: '∀ n : Nat, n = n' }],

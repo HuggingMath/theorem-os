@@ -124,7 +124,7 @@ def install(research):
     base_identity = hashlib.sha256(b"".join(path.name.encode() + path.read_bytes()
                                   for path in sorted(Path(research.__file__).parent.glob('*.py')))).hexdigest()
     identity = hashlib.sha256(base_identity.encode() + b"".join(Path(__file__).with_name(name).read_bytes()
-                              for name in ("campaign_reference.py", "reference-search-policy.py"))).hexdigest()
+                              for name in ("campaign_reference.py", "reference-search-policy.py", "reference-source-provenance.json"))).hexdigest()
     original_config = research._provider_config
     research._provider_config = lambda plan: {**original_config(plan), "campaign_reference_adapter_sha256": identity,
                                              "campaign_reference_base_sha256": base_identity}

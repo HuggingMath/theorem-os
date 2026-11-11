@@ -268,8 +268,10 @@ export function conditionalProjection(input: ConditionalProjectionInput): { sour
   const kind = match?.[2], prefix = match?.[1] ?? '';
   if (!kind) throw new Error('math_task_conditional_header_unsupported');
   const payload = JSON.stringify(JSON.stringify({ declaration: input.declaration, dependencies: input.dependencies }));
+  // The elaborator returns the complete lambda, including implicit/instance binders.
+  // Prevent Lean from introducing those binders again before elaborating the term.
   return { source: prefix + kind + ' ' + input.writtenName + ' : theorem_os_conditional_type% ' + payload +
-    ' :=\n  theorem_os_conditional_proof% ' + payload + '\n', prelude: conditionalProjectionPrelude };
+    ' :=\n  @(theorem_os_conditional_proof% ' + payload + ')\n', prelude: conditionalProjectionPrelude };
 }
 
 export function conditionalExpectedType(theoremName: string, taskType: string,

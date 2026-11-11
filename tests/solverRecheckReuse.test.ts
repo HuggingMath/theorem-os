@@ -100,6 +100,28 @@ describe('process-local reuse of unchanged integrated projections', () => {
     expect(source()).toContain('by exact Nat.zero_add n');
   });
 
+  it.each([false, true])('reuses a fresh compact receipt with whole-module references and changed sibling=%s', async changed => {
+    update(text => text.replace('theorem add_zero', 'lemma inherited_unused : True := by trivial\ntheorem add_zero'));
+    const seedCommit = state.cooperation!.canonicalCommit!;
+    if (changed) update(text => text.replace('theorem add_zero', 'lemma changed_sibling : True := by trivial\ntheorem add_zero'));
+    const canonical = state.cooperation!.canonicalCommit!, helper = node('helper');
+    helper.integratedCheck = await (cooperative as any).check(helper.task,
+      { taskId: helper.task.id, taskDigest: taskVersion(helper.task), workerId: 'solver',
+        seedCommit: changed ? seedCommit : canonical }, workspace, canonical);
+    expect(helper.integratedCheck!.projectionMode).toBe('compact');
+    expect(helper.integratedCheck!.changes.some(change => change.name === 'changed_sibling')).toBe(changed);
+    expect(helper.integratedCheck!.references!.inputs.some(input => !input.name)).toBe(true);
+    expect(taskReferenceDependencies(helper)).toBeUndefined();
+    const proof = helper.integratedCheck;
+    host.verify.mockClear(); events = [];
+
+    await recheck();
+
+    expect(checkedNames()).not.toContain('Tutorial.helper');
+    expect(reusedIds()).toContain('helper');
+    expect(helper.integratedCheck).toBe(proof);
+  });
+
   it('checks changed-only targets with the same full projection in one independent verifier batch', async () => {
     const extra: CooperativeTask = { id: 'extra', kind: 'lemma', objective: 'Prove another helper.', type: 'True',
       proofPath: 'Submission.lean', theoremName: 'Tutorial.extra', dependsOn: [], revision: 0 };
