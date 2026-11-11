@@ -68,6 +68,7 @@ CLI 与数学运行时独立于 Web。Agent 完成消息、引理通过和同伴
 
 带日期的 `frontend-*`、`research-round*` 和发布文章保留当时的修复与测试事实，当前部署从[发布状态](web-release-status.md)进入。近期记录：
 
+- [2026-11-11 最终增量与发布队列](releases/2026-11-11-final-closeout.md)：产品衔接、公式、统一环境、讲解与 solver17；源码已推送，生产排空与最终上线分别回读。
 - [2026-11-11 跨会话收尾发布](releases/2026-11-11-closeout.md)：前端七项衔接、求解器第 16 轮、单模型交付、语言测试及新任务 high 默认值。
 - [2026-11-11 统一增量发布](releases/2026-11-11-integrated-release.md)：前端草稿与产品衔接、求解器第 15 轮及形式化 universe 指导。
 - [2026-11-11 形式化增量发布](releases/2026-11-11-formalization-followup.md)：生成会话内的准入修正与可选查库模块范围。
