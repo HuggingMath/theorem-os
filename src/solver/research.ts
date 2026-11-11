@@ -43,6 +43,7 @@ import { LibraryInstallationRequested, takeLibraryRequest, writeLibraryAccess, t
 import { hasTaskConnectionCheck } from './taskConnections';
 import { DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT } from './tacticBatteryFailureCache';
 import { committedResearchNotesDigest, researchHandoffNotesDigest } from './researchCheckpoints';
+import { SingleSolverProofHandoff } from './singleSolverProofHandoff';
 
 // Scheduling checkpoints preserve unlimited solving budgets and resume the same assignment/thread.
 const advisoryCheckpointNoticeMs = 90_000;
@@ -196,6 +197,8 @@ export async function runResearchWorkers(input: {
       const access = input.access.get(worker.id)!;
       const view = (): SolverRunState => ({ ...state, ...research, turns: state.turns });
       const emit = (event: string, details = {}) => input.emit(event, { workerId: worker.id, ...details });
+      const singleHandoff = !parallel ? new SingleSolverProofHandoff(state.problem, worker.worktree,
+        submission => emit('proof_ready_checkpoint_requested', { ...submission, reason: 'current-lean-diagnostics' })) : undefined;
       // A stray untracked file must not stop a cooperative peer; the single solver keeps its strict stop.
       const sourceFeedback = () => solverSourceFeedback(state.problem, worker.worktree,
         cooperation ? paths => emit('source_quarantined', { paths: paths.slice(0, 32), count: paths.length }) : undefined);
@@ -902,6 +905,7 @@ export async function runResearchWorkers(input: {
               session = await modules.M1.open({ executable: input.executable, profile: input.profile,
                 hiddenRoots: [DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT],
                 ...(!statement ? { proofProjectRoot: path.join(worker.worktree, state.problem.projectRelative) } : {}),
+                ...(singleHandoff ? { completedOutput: singleHandoff.output } : {}),
                 workspace, environment: { ...environment,
                   DEEPSCIENTIST_MATH_WORKER_ID: worker.id, DEEPSCIENTIST_MATH_WORKER_WORKTREE: workspace },
                 model: state.model, effort: state.effort, threadId: research.threadId,
@@ -1314,6 +1318,25 @@ export async function runResearchWorkers(input: {
             await cooperation.deliverCompletedGuidance(worker, assignment,
               completedGuidanceDecisions(turnSession, executedTurnId, candidate.status));
           if (await proofLifecycle?.settleTurn(assignment, candidate, operation, turnSession)) continue;
+          const singleSubmission = singleHandoff?.takeSubmission();
+          if (singleSubmission) {
+            // The runtime has settled the turn and stopped new requests. Reap all remaining
+            // writer processes before the ordinary source freeze and independent host check.
+            let stopped: Awaited<ReturnType<NonNullable<MathAgentSession['stopForFreeze']>>> | undefined;
+            try { stopped = await turnSession.stopForFreeze?.(); }
+            catch { stopped = { status: 'unconfirmed', reason: 'shutdown-failed' }; }
+            if (stopped?.status !== 'stopped') {
+              const reason = stopped?.reason ?? 'writer-stop-confirmation-unavailable';
+              research.writerStopUnconfirmed = { at: Date.now(), reason };
+              save(); emit('proof_ready_freeze_deferred', { ...singleSubmission, reason });
+              try { await close(); } catch { /* Persisted quarantine controls whether this writer may be reopened. */ }
+              throw new Error('math_writer_stop_unconfirmed:' + worker.id + ':' + reason);
+            }
+            await close();
+            // submitted is a delivery status, never proof acceptance. The usual M2 check below
+            // fingerprints the stopped writer's actual sources and verifies every original target.
+            candidate = { ...candidate, status: 'completed' };
+          }
           // Closing can yield to a plan edit; check ownership after the writer has stopped.
           if (candidate.status === 'failed' || planningCheckpoint) await close();
           if (assignment && cooperation && !cooperation.current(assignment)) {

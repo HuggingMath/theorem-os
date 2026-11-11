@@ -63,6 +63,47 @@ it('names the bundled Agent commands instead of the application when the shell c
   expect(bundled).not.toContain('/opt/app');
 });
 
+it.each(['cooperative', 'independent'] as const)('gives a single solver a complete diagnostic handoff without team protocols (coordination: %s)', coordination => {
+  const problem = { projectRelative: 'generated/problem', ownedFiles: ['Submission.lean', 'Other.lean'], declarations: {},
+    targets: [
+      { proofPath: 'Submission.lean', theoremName: 'first', declarationHash: 'first' },
+      { proofPath: 'Submission.lean', theoremName: 'second', declarationHash: 'second' },
+      { proofPath: 'Other.lean', theoremName: 'third', declarationHash: 'third' },
+    ], receiptDigest: 'problem', baseCommit: 'fixed-commit',
+    contract: { formalStatement: 'Prove all three targets.', assumptions: [] } } as unknown as SolverProblem;
+  const state = { coordination, workerCount: 1 } as SolverRunState;
+  const context = buildResearchContext(problem, state, { root: '/runtime', worktree: '/proof', environment: {},
+    taskText: 'Prove all three targets.', retrievalRoot: '/library',
+    frozenContexts: { 'Submission.lean': 'theorem first : True := by sorry\ntheorem second : True := by sorry',
+      'Other.lean': 'theorem third : True := by sorry' },
+    customModuleRules: [{ id: 'team-rule', name: 'Team rule', slot: 'M5', mode: 'append', enabled: true,
+      instructions: 'TEAM_ONLY_SENTINEL' }] });
+  const instructions = context.instructions;
+  expect(instructions).toContain('save all proof files and a concise worktree-root RESEARCH.md before the final diagnostic');
+  expect(instructions).toContain("check-lean --worktree '/proof' --file 'Submission.lean' --file 'Other.lean' --timeout-seconds 0");
+  expect(instructions).not.toContain("--file 'Submission.lean' --file 'Submission.lean'");
+  expect(instructions).toContain('automatically hands writing back to the host');
+  expect(instructions).toContain('Reuse a successful diagnostic when its sources and environment are unchanged');
+  expect(instructions).toContain('Return briefly if the turn is still open');
+  expect(instructions).toContain('The host freezes the sources and performs independent Lean acceptance');
+  expect(instructions).toContain('a local diagnostic is not acceptance');
+  expect(instructions).toContain('If the host reports a failed check, repair the reported error');
+  expect(instructions).toContain('Do not search for delivery protocols or create result JSON or receipts');
+  for (const text of ['delivery logs', 'cooperative agents', 'Lead planning', 'task graph', 'TEAM_ONLY_SENTINEL'])
+    expect(instructions).not.toContain(text);
+});
+
+it('keeps independent multiworker completion on the existing return protocol', () => {
+  const problem = { projectRelative: '.', ownedFiles: ['Submission.lean'], declarations: {}, targets: [], receiptDigest: 'problem',
+    baseCommit: 'fixed-commit', contract: { formalStatement: 'theorem target : True := by sorry', assumptions: [] } } as unknown as SolverProblem;
+  const context = buildResearchContext(problem, { workerCount: 2, coordination: 'independent' } as SolverRunState,
+    { root: '/runtime', worktree: '/proof', environment: {}, taskText: 'Prove the target', retrievalRoot: '/library',
+      frozenContexts: { 'Submission.lean': 'theorem target : True := by sorry' } });
+  expect(context.instructions).toContain('Then return for independent host checking.');
+  expect(context.instructions).not.toContain('automatically hands writing back to the host');
+  expect(context.instructions).not.toContain('Lead planning');
+});
+
 it.each([false, true])('keeps the Lead on read-only planning and prompt delivery (existing graph: %s)', existing => {
   const formal = 'theorem target (P : Prop) (h : P) : P := by sorry';
   const frozen = 'theorem target (P : Prop) (h : P) : P := /- body omitted -/';
@@ -116,6 +157,9 @@ it.each([false, true])('keeps the Lead on read-only planning and prompt delivery
     expect(dispatched.workContract).toEqual(context.workContract);
     expect(dispatched.manifest!.usedBytes).toBeLessThanOrEqual(dispatched.manifest!.maxBytes);
   }
+  expect(context.instructions).toContain('The host launches the cooperative agents');
+  expect(context.instructions).toContain('Lead planning saves a task graph and returns promptly');
+  expect(context.instructions).not.toContain('automatically hands writing back to the host');
   // Only an accepted graph can be revised; initial planning still writes a complete plan.
   for (const message of [context.instructions, context.continuationMessage]) {
     expect(message?.includes('Revise the accepted graph instead of retyping it.')).toBe(existing);
