@@ -1,0 +1,12 @@
+@one_div_lt_one_div_of_lt.{u_1} : ∀ {α : Type u_1} [inst : Semifield.{u_1} α] [inst_1 : PartialOrder.{u_1} α]
+  [PosMulReflectLT.{u_1} α] {a b : α},
+  LT.lt.{u_1} 0 a → LT.lt.{u_1} a b → LT.lt.{u_1} (HDiv.hDiv.{u_1, u_1, u_1} 1 b) (HDiv.hDiv.{u_1, u_1, u_1} 1 a)
+theorem one_div_lt_one_div_of_lt.{u_2} : ∀ {α : Type u_2} [inst : Semifield α] [inst_1 : PartialOrder α]
+  [PosMulReflectLT α] {a b : α}, 0 < a → a < b → 1 / b < 1 / a :=
+fun {α} [Semifield α] [PartialOrder α] [PosMulReflectLT α] {a b} ha h =>
+  Eq.mpr (id (congrArg (fun _a => _a) (propext (lt_div_iff₀' ha))))
+    (Eq.mpr (id (congrArg (fun _a => _a < 1) (Eq.symm (div_eq_mul_one_div a b))))
+      (Eq.mpr (id (congrArg (fun _a => _a) (propext (div_lt_one (LT.lt.trans ha h))))) h))
+lt_add_of_pos_right.{u_1} {α : Type u_1} [AddZeroClass α] [LT α] [AddLeftStrictMono α] (a : α) {b : α} (h : 0 < b) :
+  a < a + b
+Real.instField : Field ℝ

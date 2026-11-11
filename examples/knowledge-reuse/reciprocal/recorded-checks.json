@@ -1,0 +1,145 @@
+{
+  "schema": "theoremos.e02-offline-checks.v1",
+  "caseId": "e02-reciprocal-v1",
+  "startedAt": "2026-11-11T15:35:13.425Z",
+  "finishedAt": "2026-11-11T15:35:21.122Z",
+  "passed": true,
+  "packageDigest": "d258ac8d9a9a6ff72a4576d9fddf6d403519e022ecbb1077856a4f60132d321c",
+  "environmentDigest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db",
+  "imageId": "sha256:1c1e516d7176418a83c241ceefa4a39027db882a6ac1edcb212dff1bc2d43986",
+  "leanVersion": "Lean (version 4.33.0, x86_64-unknown-linux-gnu, commit d8b18978322de05a8f3dba51ef03cf5461676c17, Release)",
+  "projectionHelperSha256": "da0a6c443044ad374c7f10005f278191a64dd7d505570d36886137779c3903bb",
+  "checks": [
+    {
+      "branchId": "positive",
+      "targetVersion": "e2bbc5fd70de817e83b22a934c11eb2cdf020efb4832741caf7427808c8070d6",
+      "sourceDigest": "2d29cf6fd77aabc6db2a1e8d31d36510971f0f4bd0732ec379d487ef77849a05",
+      "projectionDigest": "f631ead96cd99a6955d87d7c36e560ebb3d9671d6ba0c2c4f2f024e7cbe604c1",
+      "status": "elaborated",
+      "authority": "advisory-application-elaboration",
+      "execution": "offline-direct-lean-projection",
+      "proofAcceptance": "not-assessed",
+      "consumerCoverage": "not-assessed",
+      "selectedDeclarationUsed": true,
+      "constants": [
+        "Real",
+        "LT.lt",
+        "Real.instLT",
+        "OfNat.ofNat",
+        "Zero.toOfNat0",
+        "Real.instZero",
+        "one_div_lt_one_div_of_lt",
+        "Field.toSemifield",
+        "Real.instField",
+        "Real.partialOrder",
+        "PosMulReflectLE.toPosMulReflectLT",
+        "instMulZeroClassOfSemiring",
+        "Real.semiring",
+        "PosMulStrictMono.toPosMulReflectLE",
+        "MulZeroClass.toMul",
+        "MulZeroClass.toZero",
+        "Real.linearOrder",
+        "IsStrictOrderedRing.toPosMulStrictMono",
+        "Real.instIsStrictOrderedRing",
+        "HAdd.hAdd",
+        "instHAdd",
+        "Real.instAdd",
+        "lt_add_of_pos_right",
+        "AddMonoid.toAddZeroClass",
+        "Real.instAddMonoid",
+        "IsLeftCancelAdd.addLeftStrictMono_of_addLeftMono",
+        "AddZero.toAdd",
+        "AddZeroClass.toAddZero",
+        "instIsLeftCancelAddOfAddLeftReflectLE",
+        "AddGroup.addLeftReflectLE_of_addLeftMono",
+        "Real.instAddGroup",
+        "Preorder.toLE",
+        "PartialOrder.toPreorder",
+        "IsOrderedAddMonoid.toAddLeftMono",
+        "Real.instAddCommMonoid",
+        "Real.instPreorder",
+        "Real.instIsOrderedAddMonoid"
+      ],
+      "elaboratedType": "∀ (a b : ℝ), 0 < a → 0 < b → 1 / (a + b) < 1 / a",
+      "diagnostic": "",
+      "artifacts": {
+        "manifest": "evidence/positive/manifest.json",
+        "query": "evidence/positive/TypeDiagnostic.lean",
+        "source": "evidence/positive/Submission.lean",
+        "stdout": "evidence/positive/query.stdout.log",
+        "stderr": "evidence/positive/query.stderr.log",
+        "export": "evidence/positive/application.json"
+      },
+      "compilation": {
+        "argv": [
+          "/opt/elan/toolchains/leanprover--lean4---v4.33.0/bin/lean",
+          "-j2",
+          "/case/lean/Success.lean"
+        ],
+        "exitCode": 0,
+        "stdout": "evidence/positive/original.stdout.log",
+        "stderr": "evidence/positive/original.stderr.log"
+      }
+    },
+    {
+      "branchId": "nonnegative",
+      "targetVersion": "5c79c58b6fc776e0f845355c5c296994e337dfd79e452cb95093d7fc72bf26a7",
+      "sourceDigest": "434486d648cd7d70373d1ff3636e454f2ca2de755e519c8cc5ff322e7f517fd6",
+      "projectionDigest": "1e0b53489674b67aa608b417f011e6a3e75fd2eb254d4213c08aa334b71327d3",
+      "status": "failed",
+      "authority": "advisory-application-elaboration",
+      "execution": "offline-direct-lean-projection",
+      "proofAcceptance": "not-assessed",
+      "consumerCoverage": "not-assessed",
+      "selectedDeclarationUsed": null,
+      "constants": [],
+      "elaboratedType": null,
+      "diagnostic": "TypeDiagnostic.lean:5:15: error: Application type mismatch: The argument\n  hb\nhas type\n  0 ≤ b\nbut is expected to have type\n  0 < b\nin the application\n  lt_add_of_pos_right a hb\nTypeDiagnostic.lean:6:0: error: Application contains an admitted term",
+      "artifacts": {
+        "manifest": "evidence/nonnegative/manifest.json",
+        "query": "evidence/nonnegative/TypeDiagnostic.lean",
+        "source": "evidence/nonnegative/Submission.lean",
+        "stdout": "evidence/nonnegative/query.stdout.log",
+        "stderr": "evidence/nonnegative/query.stderr.log",
+        "export": null
+      },
+      "compilation": {
+        "argv": [
+          "/opt/elan/toolchains/leanprover--lean4---v4.33.0/bin/lean",
+          "-j2",
+          "/case/lean/Insufficient.lean"
+        ],
+        "exitCode": 1,
+        "stdout": "evidence/nonnegative/original.stdout.log",
+        "stderr": "evidence/nonnegative/original.stderr.log"
+      }
+    }
+  ],
+  "counterexample": {
+    "argv": [
+      "/opt/elan/toolchains/leanprover--lean4---v4.33.0/bin/lean",
+      "-j2",
+      "/case/lean/Counterexample.lean"
+    ],
+    "exitCode": 0,
+    "stdout": "evidence/counterexample.stdout.log",
+    "stderr": "evidence/counterexample.stderr.log"
+  },
+  "inspection": {
+    "argv": [
+      "/opt/elan/toolchains/leanprover--lean4---v4.33.0/bin/lean",
+      "-j2",
+      "/case/lean/Inspect.lean"
+    ],
+    "exitCode": 0,
+    "stdout": "evidence/inspection.stdout.log",
+    "stderr": "evidence/inspection.stderr.log"
+  },
+  "wholeProblemAcceptance": {
+    "status": "not-run",
+    "reason": "E02 freezes the real case and status conventions. No solver run, independent S3 evaluation or evaluated_passed receipt was produced."
+  },
+  "modelsInvoked": false,
+  "network": "none",
+  "productionMounts": false
+}

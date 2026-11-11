@@ -1,0 +1,109 @@
+{
+  "schema": "theoremos.e02-offline-application.v1",
+  "branchId": "positive",
+  "targetVersion": "e2bbc5fd70de817e83b22a934c11eb2cdf020efb4832741caf7427808c8070d6",
+  "sourceDigest": "2d29cf6fd77aabc6db2a1e8d31d36510971f0f4bd0732ec379d487ef77849a05",
+  "projectionDigest": "f631ead96cd99a6955d87d7c36e560ebb3d9671d6ba0c2c4f2f024e7cbe604c1",
+  "status": "elaborated",
+  "authority": "advisory-application-elaboration",
+  "execution": "offline-direct-lean-projection",
+  "proofAcceptance": "not-assessed",
+  "consumerCoverage": "not-assessed",
+  "selectedDeclarationUsed": true,
+  "constants": [
+    "Real",
+    "LT.lt",
+    "Real.instLT",
+    "OfNat.ofNat",
+    "Zero.toOfNat0",
+    "Real.instZero",
+    "one_div_lt_one_div_of_lt",
+    "Field.toSemifield",
+    "Real.instField",
+    "Real.partialOrder",
+    "PosMulReflectLE.toPosMulReflectLT",
+    "instMulZeroClassOfSemiring",
+    "Real.semiring",
+    "PosMulStrictMono.toPosMulReflectLE",
+    "MulZeroClass.toMul",
+    "MulZeroClass.toZero",
+    "Real.linearOrder",
+    "IsStrictOrderedRing.toPosMulStrictMono",
+    "Real.instIsStrictOrderedRing",
+    "HAdd.hAdd",
+    "instHAdd",
+    "Real.instAdd",
+    "lt_add_of_pos_right",
+    "AddMonoid.toAddZeroClass",
+    "Real.instAddMonoid",
+    "IsLeftCancelAdd.addLeftStrictMono_of_addLeftMono",
+    "AddZero.toAdd",
+    "AddZeroClass.toAddZero",
+    "instIsLeftCancelAddOfAddLeftReflectLE",
+    "AddGroup.addLeftReflectLE_of_addLeftMono",
+    "Real.instAddGroup",
+    "Preorder.toLE",
+    "PartialOrder.toPreorder",
+    "IsOrderedAddMonoid.toAddLeftMono",
+    "Real.instAddCommMonoid",
+    "Real.instPreorder",
+    "Real.instIsOrderedAddMonoid"
+  ],
+  "elaboratedType": "∀ (a b : ℝ), 0 < a → 0 < b → 1 / (a + b) < 1 / a",
+  "diagnostic": "",
+  "artifacts": {
+    "manifest": "evidence/positive/manifest.json",
+    "query": "evidence/positive/TypeDiagnostic.lean",
+    "source": "evidence/positive/Submission.lean",
+    "stdout": "evidence/positive/query.stdout.log",
+    "stderr": "evidence/positive/query.stderr.log",
+    "export": "evidence/positive/application.json"
+  },
+  "compilation": {
+    "argv": [
+      "/opt/elan/toolchains/leanprover--lean4---v4.33.0/bin/lean",
+      "-j2",
+      "/case/lean/Success.lean"
+    ],
+    "exitCode": 0,
+    "stdout": "evidence/positive/original.stdout.log",
+    "stderr": "evidence/positive/original.stderr.log"
+  },
+  "packageDigest": "d258ac8d9a9a6ff72a4576d9fddf6d403519e022ecbb1077856a4f60132d321c",
+  "entryVersion": "b113c09f4ce36f1db7a0b6a659f9bf680c8a2430db686ce83a26f121644661c3",
+  "environment": {
+    "toolchain": "leanprover/lean4:v4.33.0",
+    "mathlibRevision": "db584cd6d46c92f209a44c0f1c829460d327499d",
+    "imageId": "sha256:1c1e516d7176418a83c241ceefa4a39027db882a6ac1edcb212dff1bc2d43986",
+    "digest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db",
+    "catalogDigest": "615d45c2236296bb3e3bb7f22b0516022f7fb2d02f3444a55898a7250c728e6f",
+    "ownModules": 53
+  },
+  "requestedType": "∀ (a b : ℝ), 0 < a → 0 < b → 1 / (a + b) < 1 / a",
+  "requestedExpression": "fun (a b : ℝ) (ha : 0 < a) (hb : 0 < b) => one_div_lt_one_div_of_lt ha (lt_add_of_pos_right a hb)",
+  "sourceFile": "lean/Success.lean",
+  "projectionHelperSha256": "da0a6c443044ad374c7f10005f278191a64dd7d505570d36886137779c3903bb",
+  "projectionBuild": {
+    "argv": [
+      "/opt/elan/toolchains/leanprover--lean4---v4.33.0/bin/lean",
+      "-j2",
+      "-o",
+      "Submission.olean",
+      "Submission.lean"
+    ],
+    "exitCode": 0,
+    "stdout": "evidence/positive/projection-build.stdout.log",
+    "stderr": "evidence/positive/projection-build.stderr.log"
+  },
+  "queryExecution": {
+    "argv": [
+      "/opt/elan/toolchains/leanprover--lean4---v4.33.0/bin/lean",
+      "-j2",
+      "TypeDiagnostic.lean"
+    ],
+    "exitCode": 0,
+    "stdout": "evidence/positive/query.stdout.log",
+    "stderr": "evidence/positive/query.stderr.log"
+  },
+  "scope": "Calls the existing projection/closed-term helper, then direct Lean in this fixed image. Does not call checkLeanType, KnowledgeApplicationCheck persistence, checkSolverProof or evaluateSolverProof."
+}

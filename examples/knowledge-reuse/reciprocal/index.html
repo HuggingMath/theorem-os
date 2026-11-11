@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>倒数不等式 · TheoremOS E02</title>
+  <link rel="stylesheet" href="prototype.css">
+  <script type="module" src="prototype.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <a class="wordmark" href="./">TheoremOS <span>数学知识层</span></a>
+    <span class="prototype-label">E02 · 本地交互原型</span>
+  </header>
+  <main id="app" aria-busy="true">
+    <div class="page-intro">
+      <p class="eyebrow">固定案例 / 知识复用</p>
+      <h1>倒数不等式</h1>
+      <p class="intro-note">回放已保存的真实 Lean 检查。页面操作只保存在本地，不启动证明任务。</p>
+    </div>
+    <p id="loading" role="status">正在读取固定案例…</p>
+    <p id="error" class="error" role="alert" hidden></p>
+    <div id="workspace" hidden>
+      <section class="target-panel" aria-labelledby="target-heading">
+        <div class="section-topline"><h2 id="target-heading">当前目标</h2><span id="branch-label" class="muted"></span></div>
+        <fieldset class="branch-picker">
+          <legend>选择前提分支</legend>
+          <label><input type="radio" name="branch" value="positive" checked> <span>b &gt; 0 · 可完成</span></label>
+          <label><input type="radio" name="branch" value="nonnegative"> <span>b ≥ 0 · 前提不足</span></label>
+        </fieldset>
+        <div class="target-body">
+          <div>
+            <p id="assumptions" class="assumptions"></p>
+            <math display="block" aria-label="一除以 a 加 b，小于一除以 a"><mfrac><mn>1</mn><mrow><mi>a</mi><mo>+</mo><mi>b</mi></mrow></mfrac><mo>&lt;</mo><mfrac><mn>1</mn><mi>a</mi></mfrac></math>
+          </div>
+          <div class="target-identity"><span class="label">固定目标版本</span><code id="target-version"></code><a id="target-source">查看目标源码</a></div>
+        </div>
+      </section>
+      <ol class="state-strip" aria-label="当前分支状态">
+        <li><span class="step-number">1</span><div><span class="label">参考</span><strong id="reference-status">未加入</strong></div></li>
+        <li><span class="step-number">2</span><div><span class="label">应用尝试</span><strong id="attempt-status">未创建</strong></div></li>
+        <li><span class="step-number">3</span><div><span class="label">应用检查</span><strong id="application-status">未查看</strong></div></li>
+        <li><span class="step-number">4</span><div><span class="label">整题 S3 验收</span><strong id="acceptance-status">未执行</strong></div></li>
+      </ol>
+      <div class="workspace-grid">
+        <aside class="search-panel" aria-labelledby="search-heading">
+          <h2 id="search-heading">搜索知识</h2>
+          <label class="label" for="search">声明名或关键词</label>
+          <input id="search" type="search" placeholder="倒数 / reciprocal / one_div" autocomplete="off">
+          <p class="small muted">当前固定包包含 1 个条目</p>
+          <button id="search-result" class="result-card" type="button" aria-controls="math-card" aria-pressed="true"><span class="result-kind">Mathlib · 引理</span><strong>正数上的倒数严格反序</strong><code id="result-name"></code><span class="small">查看完整前提与固定材料 →</span></button>
+          <p id="no-results" role="status" hidden>没有匹配条目。试试“倒数”或声明名。</p>
+          <div class="pinned-reference"><span class="label">当前目标的参考材料</span><p id="reference-summary">尚未加入参考</p></div>
+        </aside>
+        <div class="main-column">
+          <article id="math-card" class="math-card" aria-labelledby="entry-heading" tabindex="-1">
+            <div class="section-topline"><p class="eyebrow">Math Card · 固定条目</p><span class="verified-label">来源已固定</span></div>
+            <h2 id="entry-heading">正数上的倒数严格反序</h2>
+            <code id="entry-name" class="declaration"></code>
+            <p class="plain-statement">当 0 &lt; x 且 x &lt; y 时，有 1 / y &lt; 1 / x。</p>
+            <h3>完整声明与前提</h3>
+            <pre id="full-type"></pre>
+            <ul id="entry-premises" class="premises"></ul>
+            <p class="small">实数实例：<code id="real-type"></code></p>
+            <div class="actions">
+              <button id="add-reference" type="button" class="secondary">加入参考</button>
+              <button id="try-application" type="button" class="primary">尝试应用</button>
+              <button id="view-check" type="button" class="secondary" disabled>查看检查结果</button>
+            </div>
+            <p class="action-note">“尝试应用”建立本地演示记录；“查看检查结果”读取该分支已保存的离线证据。</p>
+            <details class="source-details"><summary>来源、版本与材料</summary><dl id="source-metadata"></dl><div class="material-links"><a id="entry-source">本地完整源码</a><a id="entry-license">许可证</a><a id="upstream-source" target="_blank" rel="noreferrer">固定版本上游源码 ↗</a></div></details>
+          </article>
+          <section id="attempt-panel" class="evidence-panel" aria-labelledby="attempt-heading" hidden>
+            <div class="section-topline"><h2 id="attempt-heading">本地应用尝试</h2><span class="small muted">未创建运行时任务</span></div>
+            <p id="attempt-id" class="small monospace"></p>
+            <h3>具体实例化</h3><p class="small">令 x = a，y = a + b；需要证明 a &lt; a + b。</p>
+            <pre id="application-expression"></pre>
+            <dl id="attempt-versions"></dl>
+            <h3>待补证义务</h3><ul id="obligations" class="obligations"></ul>
+          </section>
+          <section id="check-panel" class="evidence-panel" aria-labelledby="check-heading" hidden>
+            <div class="section-topline"><h2 id="check-heading">已保存的应用检查</h2><span id="check-badge" class="check-badge"></span></div>
+            <p id="check-scope"></p>
+            <p class="small muted">检查范围：离线 Lean 直接执行既有类型诊断投影；proofAcceptance 与 consumerCoverage 均为 not-assessed。</p>
+            <h3>诊断</h3><pre id="diagnostic"></pre>
+            <p id="declaration-use" class="small"></p>
+            <dl id="check-versions"></dl>
+            <div id="check-artifacts" class="material-links"></div>
+            <div id="counterexample" class="counterexample" hidden><h3>b = 0 的独立反例</h3><p id="counterexample-description"></p><p class="small">反例证明已单独经 Lean 编译；这与上述应用失败诊断是两份证据。</p><a id="counterexample-source">查看反例源码</a><span id="counterexample-status" class="small"></span></div>
+          </section>
+          <section class="acceptance-panel" aria-labelledby="acceptance-heading"><h2 id="acceptance-heading">整题验收仍需独立执行</h2><p id="acceptance-reason">本案例未执行 S3。</p><p class="small muted">条目阅读、应用表达式检查和直接 Lean 编译，各自保留原有范围。</p></section>
+        </div>
+      </div>
+      <footer class="case-footer"><span id="case-id"></span><span id="package-version"></span><a href="case.json">案例清单</a><a href="recorded-checks.json">原始检查索引</a></footer>
+    </div>
+    <p id="announcement" class="sr-only" role="status" aria-live="polite"></p>
+  </main>
+</body>
+</html>

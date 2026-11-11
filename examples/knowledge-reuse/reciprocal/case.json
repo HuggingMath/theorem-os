@@ -1,0 +1,220 @@
+{
+  "schema": "theoremos.e02-reciprocal.v1",
+  "caseId": "e02-reciprocal-v1",
+  "title": "倒数不等式：同一条目的成功与前提不足分支",
+  "package": {
+    "version": "reciprocal-v1",
+    "files": [
+      {
+        "path": "lean/Counterexample.lean",
+        "sha256": "37163a454b9529e9f1516642985095fc2c63b867c613f77576079942231ec6a7",
+        "bytes": 542
+      },
+      {
+        "path": "lean/Inspect.lean",
+        "sha256": "617ef5b9a5512ddbe2d01df6e6df4b71cb077f6ee3d7f82a93838cd72a677fe2",
+        "bytes": 219
+      },
+      {
+        "path": "lean/Insufficient.lean",
+        "sha256": "ea64eadaa03fad36df5a2d84823edbc2126c070736dd05dd1b6ccaa4c9cc431a",
+        "bytes": 368
+      },
+      {
+        "path": "lean/Success.lean",
+        "sha256": "b7c0755f477e8f829130279328eaa1e5235b24d4444b70638ffedd97288d0844",
+        "bytes": 274
+      },
+      {
+        "path": "material/Field.Basic.lean",
+        "sha256": "1d6672beae57890d355067ff20de13b715bece8e87e0d088b7e959e773025f57",
+        "bytes": 34578
+      },
+      {
+        "path": "material/LICENSE.Mathlib",
+        "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+        "bytes": 11357
+      },
+      {
+        "path": "material/declaration.txt",
+        "sha256": "80cc331a7624dd31bc63099b4ca7c1738f871700fc26e0117b532493d424701f",
+        "bytes": 938
+      }
+    ],
+    "digest": "d258ac8d9a9a6ff72a4576d9fddf6d403519e022ecbb1077856a4f60132d321c"
+  },
+  "environment": {
+    "toolchain": "leanprover/lean4:v4.33.0",
+    "mathlibRevision": "db584cd6d46c92f209a44c0f1c829460d327499d",
+    "imageId": "sha256:1c1e516d7176418a83c241ceefa4a39027db882a6ac1edcb212dff1bc2d43986",
+    "digest": "c3ba186edb3024032ca0d87fa85b0eaa4f62c5d71588936132acebc12625c7db",
+    "catalogDigest": "615d45c2236296bb3e3bb7f22b0516022f7fb2d02f3444a55898a7250c728e6f",
+    "ownModules": 53
+  },
+  "entry": {
+    "id": "e02:mathlib:one_div_lt_one_div_of_lt",
+    "name": "one_div_lt_one_div_of_lt",
+    "module": "Mathlib.Algebra.Order.Field.Basic",
+    "fullType": "∀ {α : Type u} [Semifield α] [PartialOrder α] [PosMulReflectLT α] {a b : α}, 0 < a → a < b → 1 / b < 1 / a",
+    "realType": "∀ {x y : ℝ}, 0 < x → x < y → 1 / y < 1 / x",
+    "premises": [
+      "α : Type u",
+      "[Semifield α]",
+      "[PartialOrder α]",
+      "[PosMulReflectLT α]",
+      "{a b : α}",
+      "ha : 0 < a",
+      "h : a < b"
+    ],
+    "source": {
+      "file": "Mathlib/Algebra/Order/Field/Basic.lean",
+      "line": 72,
+      "sha256": "1d6672beae57890d355067ff20de13b715bece8e87e0d088b7e959e773025f57",
+      "url": "https://github.com/leanprover-community/mathlib4/blob/db584cd6d46c92f209a44c0f1c829460d327499d/Mathlib/Algebra/Order/Field/Basic.lean#L72",
+      "localPath": "material/Field.Basic.lean",
+      "license": "Apache-2.0",
+      "licensePath": "material/LICENSE.Mathlib",
+      "licenseSha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+      "declarationPath": "material/declaration.txt",
+      "copyright": "Copyright (c) 2014 Robert Y. Lewis. All rights reserved.",
+      "authors": [
+        "Robert Y. Lewis",
+        "Leonardo de Moura",
+        "Mario Carneiro",
+        "Floris van Doorn"
+      ]
+    },
+    "version": "b113c09f4ce36f1db7a0b6a659f9bf680c8a2430db686ce83a26f121644661c3"
+  },
+  "branches": [
+    {
+      "id": "positive",
+      "label": "严格正前提 · b > 0",
+      "assumptions": [
+        "a b : ℝ",
+        "ha : 0 < a",
+        "hb : 0 < b"
+      ],
+      "theoremName": "TheoremOSE02.reciprocal_strict",
+      "file": "lean/Success.lean",
+      "sourceSha256": "b7c0755f477e8f829130279328eaa1e5235b24d4444b70638ffedd97288d0844",
+      "expectedType": "∀ (a b : ℝ), 0 < a → 0 < b → 1 / (a + b) < 1 / a",
+      "expression": "fun (a b : ℝ) (ha : 0 < a) (hb : 0 < b) => one_div_lt_one_div_of_lt ha (lt_add_of_pos_right a hb)",
+      "arguments": [
+        {
+          "parameter": "α",
+          "value": "ℝ"
+        },
+        {
+          "parameter": "a (entry)",
+          "value": "a (target)"
+        },
+        {
+          "parameter": "b (entry)",
+          "value": "a + b (target)"
+        },
+        {
+          "parameter": "ha",
+          "value": "ha"
+        },
+        {
+          "parameter": "h",
+          "value": "lt_add_of_pos_right a hb"
+        }
+      ],
+      "adaptationSteps": [
+        "将条目中的两参数实例化为 x = a、y = a + b。",
+        "使用局部假设 ha : 0 < a。",
+        "由 hb 的严格正性构造 a < a + b，再调用固定倒数条目。"
+      ],
+      "obligations": [
+        {
+          "id": "positive-denominator",
+          "statement": "0 < a",
+          "status": "closed",
+          "reason": "局部假设 ha。"
+        },
+        {
+          "id": "strict-increase",
+          "statement": "a < a + b",
+          "status": "closed",
+          "reason": "由 hb : 0 < b，lt_add_of_pos_right a hb 通过。"
+        }
+      ],
+      "change": {
+        "kind": "hand-authored-case",
+        "expressionApplied": "one_div_lt_one_div_of_lt ha (lt_add_of_pos_right a hb)",
+        "source": "lean/Success.lean",
+        "strictConclusionUnchanged": true
+      },
+      "targetVersion": "e2bbc5fd70de817e83b22a934c11eb2cdf020efb4832741caf7427808c8070d6"
+    },
+    {
+      "id": "nonnegative",
+      "label": "前提不足 · b ≥ 0",
+      "assumptions": [
+        "a b : ℝ",
+        "ha : 0 < a",
+        "hb : 0 ≤ b"
+      ],
+      "theoremName": "TheoremOSE02.reciprocal_strict_nonnegative_attempt",
+      "file": "lean/Insufficient.lean",
+      "sourceSha256": "ea64eadaa03fad36df5a2d84823edbc2126c070736dd05dd1b6ccaa4c9cc431a",
+      "expectedType": "∀ (a b : ℝ), 0 < a → 0 ≤ b → 1 / (a + b) < 1 / a",
+      "expression": "fun (a b : ℝ) (ha : 0 < a) (hb : 0 ≤ b) => one_div_lt_one_div_of_lt ha (lt_add_of_pos_right a hb)",
+      "arguments": [
+        {
+          "parameter": "α",
+          "value": "ℝ"
+        },
+        {
+          "parameter": "a (entry)",
+          "value": "a (target)"
+        },
+        {
+          "parameter": "b (entry)",
+          "value": "a + b (target)"
+        },
+        {
+          "parameter": "ha",
+          "value": "ha"
+        },
+        {
+          "parameter": "h",
+          "value": "lt_add_of_pos_right a hb"
+        }
+      ],
+      "adaptationSteps": [
+        "将条目中的两参数实例化为 x = a、y = a + b。",
+        "使用局部假设 ha : 0 < a。",
+        "尝试由 hb 构造 a < a + b，但 hb 仅给出 0 ≤ b，缺少 0 < b；该适配未闭合。"
+      ],
+      "obligations": [
+        {
+          "id": "positive-denominator",
+          "statement": "0 < a",
+          "status": "closed",
+          "reason": "局部假设 ha。"
+        },
+        {
+          "id": "strict-increase",
+          "statement": "a < a + b",
+          "status": "open",
+          "reason": "hb 只有 0 ≤ b，无法提供 lt_add_of_pos_right 所需的 0 < b；b = 0 时严格结论为假。"
+        }
+      ],
+      "change": {
+        "kind": "hand-authored-case",
+        "expressionApplied": "one_div_lt_one_div_of_lt ha (lt_add_of_pos_right a hb)",
+        "source": "lean/Insufficient.lean",
+        "strictConclusionUnchanged": true
+      },
+      "targetVersion": "5c79c58b6fc776e0f845355c5c296994e337dfd79e452cb95093d7fc72bf26a7"
+    }
+  ],
+  "counterexample": {
+    "file": "lean/Counterexample.lean",
+    "description": "取 a = 1、b = 0，满足 a > 0 与 b ≥ 0，但严格结论变成 1 < 1。另有任意 a 的 b = 0 边界以及弱化全称命题的否定证明。"
+  },
+  "identityScope": "E02 offline case/package/target identities; not runtime catalog IDs, taskVersion, run IDs or solver receipts."
+}

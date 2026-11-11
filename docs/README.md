@@ -15,6 +15,7 @@ TheoremOS 包含独立的数学求解运行时、网页研究工作台和数学�
 | 管理数学家、定理、共享成果与 Library | [研究空间](research-space.md) |
 | 将自然语言或 TeX 转成冻结 Lean 原题 | [形式化流程](formalization.md) · [题意保持](formalization-fidelity.md) |
 | 检索已检查的定理、依赖与来源 | [定理知识库](theorem-knowledge.md) |
+| 对照真实条目的成功与前提不足应用 | [E02 倒数案例与本地原型](../examples/knowledge-reuse/reciprocal/README.md) |
 | 构建、固定版本和安装数学库 | [库目录](library-catalog.md) · [宿主配置](LIBRARY-HOST-CONFIG.md) |
 | 恢复已归档的研究材料 | [历史快照恢复](recovery.md) |
 
@@ -69,6 +70,7 @@ CLI 与数学运行时独立于 Web。Agent 完成消息、引理通过和同伴
 带日期的 `frontend-*`、`research-round*` 和发布文章保留当时的修复与测试事实，当前部署从[发布状态](web-release-status.md)进入。近期记录：
 
 - [E01当前基线与执行入口](execution/2026-11-11-e01-baseline.md)：五个知识复用/验收入口、275项定向复验、真实离线Lean读取及后续缺口。
+- [E02真实案例、对象与状态](execution/2026-11-11-e02-reuse-case.md)：固定倒数条目、成功/前提不足分支、真实离线Lean检查与最小可点击原型；整题S3仍待后续执行。
 - [2026-11-11 solver18 规划决策增量](releases/2026-11-11-solver18.md)：嵌套规划保留决策与复盘，补充合法修正格式；后台调度由原求解会话独立持有。
 - [2026-11-11 最终增量部署与验收](releases/2026-11-11-final-closeout.md)：产品衔接、公式、统一环境、讲解与 solver17 已上线，成对切换、备份恢复及公网验收分别记录。
 - [2026-11-11 跨会话收尾发布](releases/2026-11-11-closeout.md)：前端七项衔接、求解器第 16 轮、单模型交付、语言测试及新任务 high 默认值。

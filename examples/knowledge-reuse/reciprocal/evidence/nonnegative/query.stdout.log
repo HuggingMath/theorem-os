@@ -1,0 +1,9 @@
+TypeDiagnostic.lean:5:15: error: Application type mismatch: The argument
+  hb
+has type
+  0 ≤ b
+but is expected to have type
+  0 < b
+in the application
+  lt_add_of_pos_right a hb
+TypeDiagnostic.lean:6:0: error: Application contains an admitted term
