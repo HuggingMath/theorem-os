@@ -98,6 +98,9 @@ describe('Lead checkpoint waits for its required decision handoff', () => {
     expect(action).toBeDefined();
     const startCommand = () => activity!({ event: 'item_started', itemType: 'commandExecution' });
     const finishCommand = () => activity!({ event: 'item_completed', itemType: 'commandExecution' });
+    const startCompaction = () => activity!({ event: 'item_started', itemType: 'contextCompaction' });
+    const finishCompaction = () => activity!({ event: 'item_completed', itemType: 'contextCompaction' });
+    const reasoning = () => activity!({ event: 'reasoning' });
     const command = (save?: () => void) => { startCommand(); save?.(); finishCommand(); };
     const write = (response: unknown) => fs.writeFileSync(path.join(workspace, 'RESEARCH.md'),
       '```math-plan\n' + JSON.stringify(response) + '\n```\n');
@@ -115,6 +118,7 @@ describe('Lead checkpoint waits for its required decision handoff', () => {
       expect(interrupt).not.toHaveBeenCalled();
     };
     return { state, events, interrupt, check, command, startCommand, finishCommand, write, revision, awaitSlice,
+      startCompaction, finishCompaction, reasoning,
       pulse: () => cooperation!.pulse(workers[0].id), action: action!, workspace, notice, notify };
   }
 
@@ -245,6 +249,134 @@ describe('Lead checkpoint waits for its required decision handoff', () => {
     f.command();
     await vi.advanceTimersByTimeAsync(0);
     expect(f.interrupt).toHaveBeenCalledOnce();
+    expect(f.check).not.toHaveBeenCalled();
+  });
+
+  it.each(['during-compaction', 'at-recovery'] as const)(
+    'preserves the required Lead handoff when the queued notice arrives %s', async delivery => {
+      const f = await fixture({ pendingNotice: true }); await f.awaitSlice();
+      await vi.advanceTimersByTimeAsync(34_000);
+      f.startCompaction();
+      await vi.advanceTimersByTimeAsync(5 * 60_000 - 9);
+      expect(f.interrupt).not.toHaveBeenCalled();
+      if (delivery === 'during-compaction') { f.notice.resolve(); await vi.advanceTimersByTimeAsync(0); }
+      await vi.advanceTimersByTimeAsync(9);
+      f.finishCompaction();
+      if (delivery === 'at-recovery') f.notice.resolve();
+      // No reasoning or tool output has arrived since before the wait started. A delivered
+      // reminder and a completed compaction do not complete the dispatch's required decision.
+      await vi.advanceTimersByTimeAsync(13);
+      expect(f.interrupt).not.toHaveBeenCalled();
+      expect(f.state.cooperation!.researchDecisions).toBeUndefined();
+      expect(f.events.some(event => event.event === 'cooperative_checkpoint_request_settled')).toBe(false);
+      f.startCommand(); f.write(f.revision());
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(f.interrupt).not.toHaveBeenCalled();
+      f.finishCommand();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.interrupt).toHaveBeenCalledOnce();
+      expect(f.events).toContainEqual({ event: 'cooperative_checkpoint_request_settled',
+        details: expect.objectContaining({ workerId: 'solver', boundary: 'request-returned', waitedMs: 364_013 }) });
+      expect(f.events.filter(event => event.event === 'cooperative_checkpoint_awaiting_request')).toHaveLength(1);
+      expect(f.check).not.toHaveBeenCalled();
+    });
+
+  it('keeps the original wait deadline after compaction resumes without a saved required decision', async () => {
+    const f = await fixture({ pendingNotice: true }); await f.awaitSlice();
+    await vi.advanceTimersByTimeAsync(34_000);
+    f.startCompaction();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    f.notice.resolve(); await vi.advanceTimersByTimeAsync(0);
+    f.finishCompaction();
+    await vi.advanceTimersByTimeAsync(13);
+    expect(f.interrupt).not.toHaveBeenCalled();
+    // The five minutes spent compacting still count against this one existing wait window.
+    await vi.advanceTimersByTimeAsync(WAIT_MS - 334_013 - 1);
+    expect(f.interrupt).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.interrupt).toHaveBeenCalledOnce();
+    expect(f.events).toContainEqual({ event: 'cooperative_checkpoint_request_settled',
+      details: expect.objectContaining({ workerId: 'solver', boundary: 'wait-limit', waitedMs: WAIT_MS }) });
+    expect(f.events.filter(event => event.event === 'cooperative_checkpoint_awaiting_request')).toHaveLength(1);
+    expect(f.state.cooperation!.researchDecisions).toBeUndefined();
+    expect(f.check).not.toHaveBeenCalled();
+  });
+
+  it('checkpoints on recovery when compaction has crossed the original wait deadline', async () => {
+    const f = await fixture({ pendingNotice: true }); await f.awaitSlice();
+    await vi.advanceTimersByTimeAsync(34_000);
+    f.startCompaction();
+    await vi.advanceTimersByTimeAsync(60_000);
+    f.notice.resolve(); await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(WAIT_MS - 94_000 + 1);
+    expect(f.interrupt).not.toHaveBeenCalled();
+    f.finishCompaction();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.interrupt).toHaveBeenCalledOnce();
+    expect(f.events).toContainEqual({ event: 'cooperative_checkpoint_request_settled',
+      details: expect.objectContaining({ workerId: 'solver', boundary: 'wait-limit', waitedMs: WAIT_MS + 1 }) });
+    expect(f.events.filter(event => event.event === 'cooperative_checkpoint_awaiting_request')).toHaveLength(1);
+    expect(f.state.cooperation!.researchDecisions).toBeUndefined();
+    expect(f.check).not.toHaveBeenCalled();
+  });
+
+  it('preserves notification failure as a checkpoint boundary after compaction', async () => {
+    const f = await fixture({ pendingNotice: true }); await f.awaitSlice();
+    await vi.advanceTimersByTimeAsync(34_000);
+    f.startCompaction();
+    await vi.advanceTimersByTimeAsync(60_000);
+    f.notice.reject(new Error('fixture_notice_rejected'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.interrupt).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(4 * 60_000);
+    f.finishCompaction();
+    await vi.advanceTimersByTimeAsync(13);
+    expect(f.interrupt).toHaveBeenCalledOnce();
+    expect(f.events.filter(event => event.event === 'cooperative_checkpoint_notice_failed')).toHaveLength(1);
+    expect(f.events.some(event => event.event === 'lead_handoff_requested')).toBe(false);
+    expect(f.state.cooperation!.researchDecisions).toBeUndefined();
+    expect(f.check).not.toHaveBeenCalled();
+  });
+
+  it('keeps the ordinary checkpoint on compaction recovery when notifications are unavailable', async () => {
+    const f = await fixture({ noNotify: true });
+    await vi.advanceTimersByTimeAsync(SLICE_MS - 30_000); f.reasoning();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(f.events).toContainEqual({ event: 'cooperative_checkpoint_awaiting_request',
+      details: expect.objectContaining({ workerId: 'solver', maxWaitMs: WAIT_MS }) });
+    await vi.advanceTimersByTimeAsync(34_000);
+    f.startCompaction();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    f.finishCompaction();
+    await vi.advanceTimersByTimeAsync(13);
+    expect(f.interrupt).not.toHaveBeenCalled();
+    f.command();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.interrupt).toHaveBeenCalledOnce();
+    expect(f.notify).not.toHaveBeenCalled();
+    expect(f.events.some(event => event.event === 'lead_handoff_requested')).toBe(false);
+    expect(f.state.cooperation!.researchDecisions).toBeUndefined();
+    expect(f.check).not.toHaveBeenCalled();
+  });
+
+  it('does not reopen a required handoff after a valid decision was published during compaction', async () => {
+    const f = await fixture({ pendingNotice: true }); await f.awaitSlice();
+    await vi.advanceTimersByTimeAsync(34_000);
+    f.startCompaction();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    fs.appendFileSync(path.join(f.workspace, leadPlanDeliveryFile(f.action)!), JSON.stringify({
+      kind: 'plan', dispatchNonce: f.action.planNonce, ...f.revision(),
+    }) + '\n');
+    await f.pulse();
+    expect(f.state.cooperation!.planPublication).toMatchObject({ nonce: f.action.planNonce });
+    expect(f.state.cooperation!.researchDecisions).toContainEqual(expect.objectContaining({
+      deliveryId: 'bridge-delivery', outcome: 'decline' }));
+    f.notice.resolve(); await vi.advanceTimersByTimeAsync(0);
+    expect(f.interrupt).not.toHaveBeenCalled();
+    f.finishCompaction();
+    await vi.advanceTimersByTimeAsync(13);
+    expect(f.interrupt).toHaveBeenCalledOnce();
+    expect(f.events.some(event => event.event === 'lead_handoff_requested')).toBe(false);
     expect(f.check).not.toHaveBeenCalled();
   });
 });

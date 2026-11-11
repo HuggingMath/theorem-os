@@ -779,7 +779,9 @@ export async function runResearchWorkers(input: {
               };
               return;
             }
-            awaitRequest();
+            // Compaction can re-enter this slice after the queued save notice was delivered.
+            // Resume the same Lead handoff; its existing wait is not a second checkpoint.
+            awaitRequest(requestWaited && noticeDelivery === 'delivered' && assignment?.kind === 'lead');
           };
           scheduleSlice = () => {
             if (!current() || compactionStartedAt !== undefined || checkpointRequested || readyRequested) return;
