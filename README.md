@@ -14,6 +14,7 @@
   <a href="https://theoremos.top/archive.html">证明档案</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="docs/usage.md">使用文档</a> ·
+  <a href="docs/README.md">项目与文档导航</a> ·
   <a href="https://theoremos.top/feedback.html">反馈与建议</a>
 </p>
 
@@ -250,6 +251,8 @@ TheoremOS 使用 `gpt-5.6-sol`、`xhigh`、每题 4 个 worker，通过 **6/6 �
 当前通过 TypeScript 源码接口替换组件，尚未提供稳定 SDK 或动态插件加载。运行时保存组件版本，恢复时检查版本一致性。跨任务学习仍是后续扩展。
 
 ## 文档与开发
+
+完整入口见[项目与文档导航](docs/README.md)，按使用、实现、维护、成果与历史记录组织。部署版本及验收范围见[工作台发布状态](docs/web-release-status.md)。
 
 | 文档 | 内容 |
 | --- | --- |
