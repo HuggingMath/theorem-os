@@ -6,7 +6,8 @@ import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import { mathGitResult } from '../math/mathGit';
 import { type ResearchWorker } from './modules/organization';
 import { taskCanStart } from './modules/search';
-import { deliveryDetails, readDeliveryLines } from './deliveries';
+import { deliveryDetails, readDeliveryLines, readMathResponse, parseMathResponse } from './deliveries';
+import { committedSource, git } from './problem';
 import { isStatementAction } from './statementReview';
 import { captureDeliveryArtifacts } from './deliveryArtifacts';
 import { bindMathematicalGap } from './mathematicalGaps';
@@ -22,6 +23,7 @@ import { recordHumanGuidanceDecisions } from './humanGuidance';
 
 /** Worker delivery intake. */
 export abstract class CooperationInputs extends CooperationPlanning {
+  abstract leadCheckpointInstruction(action: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>): string;
   protected guidancePulse?: Promise<void>;
   protected async retainGuidanceDecisions(worker: ResearchWorker, action: CooperativeAction, decisions: unknown) {
     if (decisions === undefined || isStatementAction(action)) return;
@@ -51,6 +53,8 @@ export abstract class CooperationInputs extends CooperationPlanning {
     return this.proofReadyFrozen(worker, action, commit);
   }
   private planPublicationNotification?: PlanPublicationRejection;
+  private leadDraftBaselines = new WeakMap<CooperativeAction, string | null>();
+  private leadDraftNotifications = new WeakMap<CooperativeAction, { digest: string; reason: string }>();
   private contextCheckpointNotifications?: WeakMap<object, object>;
   protected syncEditChecks(nodes: ReadonlyMap<string, TaskRecord>, versions: TaskVersions) {
     for (const edit of this.archive.edits ?? []) {
@@ -142,6 +146,7 @@ export abstract class CooperationInputs extends CooperationPlanning {
     }
     this.readPlanApprovals(cursors);
     await this.readPlanDelivery(cursors);
+    this.notifyLeadDraftCorrection();
     for (const worker of this.input.workers) {
       if (this.deliveryChecks.has(worker.id)) continue;
       const active = this.active.get(worker.id);
@@ -158,6 +163,65 @@ export abstract class CooperationInputs extends CooperationPlanning {
       }).catch(() => {});
     }
     return new Map(this.deliveryChecks);
+  }
+  /** Saved notes are drafts: offer same-turn corrections without publishing them or changing the graph. */
+  private notifyLeadDraftCorrection() {
+    const active = this.active.get(this.lead.id), action = active?.action;
+    if (!active || action?.kind !== 'lead' || this.publishedPlans.has(action)) return;
+    const current = () => this.active.get(this.lead.id) === active && !active.cancelled &&
+      !this.stopping && !this.input.signal.aborted && this.current(action) && !this.publishedPlans.has(action);
+    const inspect = () => {
+      if (!current()) return;
+      let response: unknown;
+      // A partial write, ordinary mathematical notes or missing file is not a submission to correct.
+      try { response = readMathResponse(this.lead.worktree, 'math-plan'); } catch { return; }
+      const digest = mathDigest(canonicalMathJson(response));
+      if (!this.leadDraftBaselines.has(action)) {
+        let baseline: string | null = null;
+        try {
+          if (git(this.lead.worktree, ['ls-tree', '--name-only', action.seedCommit, '--', 'RESEARCH.md']))
+            baseline = mathDigest(canonicalMathJson(parseMathResponse(
+              committedSource(this.lead.worktree, action.seedCommit, 'RESEARCH.md'), 'math-plan')));
+        } catch { /* An inherited notes-only seed has no control response. */ }
+        this.leadDraftBaselines.set(action, baseline);
+      }
+      if (this.leadDraftBaselines.get(action) === digest) return;
+      try {
+        const plan = parseLeadPlan(this.input.state.problem, response, this.planPatchBase(), { goalPath: this.goalPathReview() });
+        this.preparePlan(plan, action);
+      } catch (error) {
+        if (error instanceof Error && /^math_plan_/u.test(error.message))
+          return { digest, reason: bounded(error.message, 4000) };
+        throw error;
+      }
+    };
+    const correction = inspect();
+    if (!correction) { this.leadDraftNotifications.delete(action); return; }
+    const previous = this.leadDraftNotifications.get(action);
+    if (previous?.digest === correction.digest && previous.reason === correction.reason) return;
+    this.leadDraftNotifications.set(action, correction);
+    const pending = Promise.resolve().then(async () => {
+      if (!current() || this.leadDraftNotifications.get(action) !== correction) return;
+      const latest = inspect();
+      if (!latest || latest.digest !== correction.digest || latest.reason !== correction.reason) {
+        if (this.leadDraftNotifications.get(action) === correction) this.leadDraftNotifications.delete(action);
+        return;
+      }
+      const file = leadPlanDeliveryFile(action);
+      await active.notify('The complete math-plan draft saved in RESEARCH.md needs correction before publication: ' +
+        correction.reason + '. ' + this.leadCheckpointInstruction(action) +
+        'Correct the same draft now, before returning or starting another search. Keep the mathematical decisions your own; ' +
+        'this preflight has not accepted the plan or any proof. ' + (file
+          ? 'To publish after correction, append one complete JSON line to ' + file + ' using ' +
+            JSON.stringify({ kind: 'plan', dispatchNonce: action.initialPlanNonce ?? action.planNonce, baseVersion: action.planVersion }) +
+            ' plus the complete revision and all required decisions. Preserve the log; RESEARCH.md may retain the single corrected math-plan fence instead.'
+          : 'Save one complete corrected math-plan JSON fence in RESEARCH.md.'));
+      this.input.emit('lead_draft_correction_requested', { workerId: this.lead.id, draftDigest: correction.digest, reason: correction.reason });
+    }).catch(() => {
+      if (this.leadDraftNotifications.get(action) === correction) this.leadDraftNotifications.delete(action);
+      this.input.emit('notification_deferred', { workerId: this.lead.id, reason: 'lead-draft-correction' });
+    });
+    this.notifications.add(pending); void pending.finally(() => this.notifications.delete(pending));
   }
   /** Human approvals queued by queuePlanApproval; each names the exact plan version it opens dispatch for. */
   private readPlanApprovals(cursors: Record<string, number>) {

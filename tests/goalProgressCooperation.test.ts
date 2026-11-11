@@ -77,12 +77,12 @@ describe('goal progress controls the cooperative planning loop', () => {
       cooperation.activate(workers[1], action, interrupt, async () => {});
       return { action, interrupt };
     };
-    const leadAction = async () => {
+    const leadAction = async (notify: (message: string) => Promise<void> = async () => {}) => {
       const action = await cooperation.next(workers[0], budget);
       expect(action).toMatchObject({ kind: 'lead' });
       if (action?.kind !== 'lead') throw new Error('fixture_expected_lead_review');
       expect(cooperation.started(workers[0], action)).toBe(true);
-      cooperation.activate(workers[0], action, async () => {}, async () => {});
+      cooperation.activate(workers[0], action, async () => {}, notify);
       return action;
     };
     const commitPlan = (value: unknown) => {
@@ -186,6 +186,35 @@ describe('goal progress controls the cooperative planning loop', () => {
     expect(run.events.filter(item => item.event === 'goal_progress_review_answered')).toHaveLength(1);
     expect(archive.lastLeadPauseInputDigest).toBeUndefined();
     expect(archive.error).toBeUndefined();
+    expect(run.check).not.toHaveBeenCalled();
+  });
+
+  it('reports an omitted progress review while the draft is still editable and accepts the same-turn correction', async () => {
+    const run = fixture(); await run.startGoal(); await vi.advanceTimersByTimeAsync(interval);
+    const notify = vi.fn(async (_message: string) => {}), action = await run.leadAction(notify);
+    const pending = structuredClone(run.state.cooperation!.goalProgress!.pending!);
+    const patch = { baseVersion: action.planVersion, upsert: [] };
+    fs.writeFileSync(path.join(run.workers[0].worktree, 'RESEARCH.md'), '```math-plan\n' + JSON.stringify(patch) + '\n```\n');
+    await run.cooperation.pulse();
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify.mock.calls[0][0]).toContain('math_plan_progress_review_missing');
+    expect(notify.mock.calls[0][0]).toContain(pending.id);
+    expect(notify.mock.calls[0][0]).toContain('goal_1');
+    expect(run.state.cooperation!.goalProgress!.pending?.id).toBe(pending.id);
+    expect(run.state.cooperation!.planPublication).toBeUndefined();
+    await run.cooperation.pulse();
+    expect(notify).toHaveBeenCalledOnce();
+    const commit = run.commitPlan({ ...patch, progressReview: { id: pending.id,
+      reason: 'Check the exact original construction and preserve its proof obligation.',
+      nextChecks: [{ action: 'construction-check', targetTaskId: 'goal_1', objective: 'Check the original construction.',
+        expectedEvidence: 'A checked construction or its exact residual gap.' }] } });
+    await run.cooperation.pulse();
+    expect(notify).toHaveBeenCalledOnce();
+    await run.cooperation.deliver(run.workers[0], action, commit, true, 'scheduling-checkpoint');
+    run.cooperation.deactivate(run.workers[0]);
+    expect(run.state.cooperation!.goalProgress!.pending).toBeUndefined();
+    expect(run.state.cooperation!.goalProgress!.decisions).toContainEqual(expect.objectContaining({ id: pending.id }));
+    expect(run.state.cooperation!.error).toBeUndefined();
     expect(run.check).not.toHaveBeenCalled();
   });
 

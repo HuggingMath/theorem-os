@@ -62,6 +62,7 @@ describe('Lead scheduling checkpoint control responses', () => {
   let directory: string, problem: SolverProblem, workers: ResearchWorker[], state: SolverRunState;
   let cooperative: CooperativeResearch, controller: AbortController;
   let events: { event: string; details?: Record<string, unknown> }[];
+  let notify: ReturnType<typeof vi.fn<(message: string) => Promise<void>>>;
   let proposal: CooperativeTask;
   // Current research deliveries whose exact lemma proposals are not yet in the plan.
   const pendingProposals = () => (state.cooperation!.deliveries ?? []).filter(delivery => delivery.kind === 'research' &&
@@ -82,7 +83,7 @@ describe('Lead scheduling checkpoint control responses', () => {
     const action = await cooperative.next(workers[0], budget);
     if (action?.kind !== 'lead' || !action.planNonce) throw new Error('fixture_expected_revision_dispatch');
     expect(cooperative.started(workers[0], action)).toBe(true);
-    cooperative.activate(workers[0], action, async () => {}, async () => {});
+    cooperative.activate(workers[0], action, async () => {}, notify);
     return action;
   };
   const checkpoint = (action: Lead) => {
@@ -111,7 +112,7 @@ describe('Lead scheduling checkpoint control responses', () => {
         deliveries: [{ id: 'proposal-delivery', producer: workers[1].id, taskId: question.id, taskDigest: taskVersion(question),
           kind: 'research', status: 'advisory', summary: 'A typed bridge needs a Lead decision.', statement: '', premises: [],
           dependencies: [], remainingObligations: [], evidenceRefs: [], createdAt: 1, lemmaRequests: [proposal] }] } });
-    events = []; controller = new AbortController();
+    events = []; controller = new AbortController(); notify = vi.fn(async (_message: string) => {});
     cooperative = cooperativeResearch({ state, workers, retrievalRoot: directory, signal: controller.signal,
       emit: (event, details) => events.push({ event, details }) });
   });
@@ -119,6 +120,87 @@ describe('Lead scheduling checkpoint control responses', () => {
     controller.abort(); await cooperative.stop();
     expect(host.verify).not.toHaveBeenCalled(); expect(host.createSession).not.toHaveBeenCalled();
     vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  it('corrects a saved incomplete Lead decision in the same dispatch without publishing the draft', async () => {
+    const action = await start(), before = structuredClone(state.cooperation!.tasks);
+    await cooperative.pulse();
+    expect(notify).not.toHaveBeenCalled(); // The inherited accepted graph is still just the dispatch seed.
+    write({ ...graph(), tasks: [...graph().tasks, proposal] });
+    await cooperative.pulse();
+    expect(notify).toHaveBeenCalledOnce();
+    const message = notify.mock.calls[0][0];
+    expect(message).toContain('math_plan_research_decisions_missing');
+    expect(message).toContain('proposal-delivery');
+    expect(message).toContain(leadPlanDeliveryFile(action));
+    expect(message).toContain('has not accepted the plan or any proof');
+    expect(state.cooperation!.tasks).toEqual(before);
+    expect(state.cooperation!.researchDecisions).toBeUndefined();
+    expect(state.cooperation!.planPublication).toBeUndefined();
+    expect(state.cooperation!.planRejection).toBeUndefined();
+    await cooperative.pulse(); await cooperative.pulse();
+    expect(notify).toHaveBeenCalledOnce();
+    write({ ...graph(), tasks: [...graph().tasks, proposal], ...decide('adopt') });
+    await cooperative.pulse();
+    expect(notify).toHaveBeenCalledOnce();
+    expect(state.cooperation!.tasks).toEqual(before);
+    await checkpoint(action);
+    expect(state.cooperation!.tasks.find(node => node.task.id === proposal.id)?.status).toBe('pending');
+    expect(state.cooperation!.researchDecisions).toContainEqual(expect.objectContaining({
+      deliveryId: 'proposal-delivery', outcome: 'adopt' }));
+    expect(state.cooperation!.error).toBeUndefined();
+  });
+
+  it('ignores a missing, partial or prose-only draft while the Lead is still writing', async () => {
+    await start();
+    fs.rmSync(notes()); await cooperative.pulse();
+    for (const text of ['A mathematical argument under construction.', '```math-plan\n{"tasks":[',
+      '```math-plan\n{"tasks":[\n```']) {
+      fs.writeFileSync(notes(), text); await cooperative.pulse();
+    }
+    expect(notify).not.toHaveBeenCalled();
+    expect(events.some(item => item.event === 'lead_draft_correction_requested')).toBe(false);
+  });
+
+  it('ignores an unpublished draft after its dispatch has already published a valid decision', async () => {
+    const action = await start();
+    const response = { ...graph(), tasks: [...graph().tasks, proposal], ...decide('adopt') };
+    write({ ...graph(), tasks: [...graph().tasks, proposal] });
+    fs.appendFileSync(path.join(workers[0].worktree, leadPlanDeliveryFile(action)!), JSON.stringify({
+      ...response, kind: 'plan', dispatchNonce: action.planNonce, baseVersion: action.planVersion,
+    }) + '\n');
+    await cooperative.pulse(); await cooperative.pulse();
+    expect(state.cooperation!.planPublication).toMatchObject({ nonce: action.planNonce });
+    expect(state.cooperation!.researchDecisions).toContainEqual(expect.objectContaining({
+      deliveryId: 'proposal-delivery', outcome: 'adopt' }));
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('does not notify a deactivated Lead or require a research decision already settled by a peer', async () => {
+    await start();
+    write({ ...graph(), tasks: [...graph().tasks, proposal] });
+    const delivery = state.cooperation!.deliveries!.find(record => record.id === 'proposal-delivery')!;
+    state.cooperation!.researchDecisions = [{ deliveryId: delivery.id, taskDigest: delivery.taskDigest,
+      findingDigest: delivery.findingDigest, outcome: 'decline',
+      reason: 'A peer settled this finding in the accepted plan.', at: 1, planVersion: state.cooperation!.planVersion! }];
+    await cooperative.pulse();
+    expect(notify).not.toHaveBeenCalled();
+    state.cooperation!.researchDecisions = [];
+    cooperative.deactivate(workers[0]);
+    await cooperative.pulse();
+    expect(notify).not.toHaveBeenCalled();
+    expect(pendingProposals()).toHaveLength(1);
+  });
+
+  it('retries a failed correction notification without losing or accepting the saved draft', async () => {
+    await start();
+    notify.mockRejectedValueOnce(new Error('fixture_request_boundary_unavailable'));
+    write({ ...graph(), tasks: [...graph().tasks, proposal] });
+    await cooperative.pulse(); await Promise.resolve();
+    await cooperative.pulse();
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(state.cooperation!.planPublication).toBeUndefined();
+    expect(pendingProposals()).toHaveLength(1);
   });
 
   it.each([false, true])('retains an unanswered research decision in an unchanged control draft (prose-only: %s)', async prose => {

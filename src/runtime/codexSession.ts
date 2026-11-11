@@ -16,6 +16,7 @@ import { startFormalizationRelay } from './formalizationRelay';
 import type { LeanTaskEnvironment } from '../math/leanTaskEnvironment';
 import { mathDigest, readMathText } from '../math/mathRuntimeIo';
 import { scheduleMathTimeout } from '../math/mathTimers';
+import { CodexShellRejectionReader } from './codexShellRejection';
 import { CODEX_FAILURE_CODES, HTTP_FAILURE_CODES, safeFailureReason, safeHttpStatusCode,
   type MathAgentFailureDiagnostic } from './failureDiagnostic';
 export type { MathAgentFailureDiagnostic, MathAgentFailureReason } from './failureDiagnostic';
@@ -39,6 +40,11 @@ const RELAY_CAPABILITY_ENV = 'THEOREM_OS_MODEL_RELAY_CAPABILITY';
 // Responses may remain silent between completed reasoning and their next tool/output event.
 // Restore Codex's default idle tolerance per session, preserving frozen provider profiles.
 const RESPONSES_STREAM_IDLE_TIMEOUT_MS = 300_000;
+const shellTurnContract = 'Shell call contract for this turn: set "login": false on exec_command and omit justification and sandbox_permissions. '
+  + 'Only an explicit argument rejection establishes that a call did not execute. Other parallel calls may already have executed; '
+  + 'inspect their results before retrying. Do not replay a command after an ordinary exit error or an unclear execution result.';
+const shellRejectionFeedback = 'The native executor explicitly rejected exec_command arguments before execution. '
+  + shellTurnContract + ' Correct the rejected call arguments and continue the assigned task. The host has not replayed any command.';
 
 export const MATH_WORKER_PERMISSION_PROFILE = 'math-worker';
 
@@ -81,7 +87,8 @@ const failureDiagnostic = (error: Json): MathAgentFailureDiagnostic | undefined 
     ...(httpStatusCode !== undefined ? { httpStatusCode } : {}), ...(reason ? { reason } : {}) };
 };
 export type MathAgentActivity = {
-  event: 'item_started' | 'item_completed' | 'reasoning' | 'message' | 'command_output' | 'lean_lock_waiting' | 'lean_lock_acquired';
+  event: 'item_started' | 'item_completed' | 'reasoning' | 'message' | 'command_output' | 'lean_lock_waiting' | 'lean_lock_acquired'
+    | 'shell_argument_rejected';
   itemType?: string;
 };
 export type MathAgentOptions = {
@@ -283,6 +290,9 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   let cancelNotifications = () => {};
   let drainSubmittedRequests: (() => void) | undefined;
   let checkCompletedOutput: (() => void) | undefined;
+  let checkShellRejections: ((allowFeedback?: boolean) => void) | undefined;
+  let shellRejectionReader: CodexShellRejectionReader | undefined;
+  let pendingShellRejections = 0;
   const requestGate: ModelRequestGate = identity => {
     // A tool can submit and immediately request more model work between output polls.
     // Inspect that file synchronously before admitting another paid request.
@@ -299,6 +309,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   requestGate.beforeRequest = async signal => {
     const turn = requestTurn;
     let deferredFence: NotificationFence | undefined;
+    checkShellRejections?.();
     await options.requestGate?.beforeRequest?.(signal);
     if ([...notices].some(notice => notice.waitForRequest)) {
       // A settled response may still be executing its submission tool. The next
@@ -675,6 +686,13 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     // A new thread fixes its sandbox now; one that ignored the profile would keep host network and sockets.
     if (!isolated && !options.threadId && object(result.activePermissionProfile ?? {}).id !== MATH_WORKER_PERMISSION_PROFILE)
       throw new Error('math_codex_sandbox_profile_mismatch');
+    const rollout = object(result.thread).path;
+    // An isolated app-server reports its in-sandbox /profile path. Only its
+    // existing host audit directory is the corresponding readable profile.
+    const rolloutProfile = isolated?.receipt.auditDirectory ?? nativeProfile;
+    const rolloutPath = isolated && typeof rollout === 'string' && rollout.startsWith(`${isolated.profile}/`)
+      ? path.join(rolloutProfile, path.relative(isolated.profile, rollout)) : rollout;
+    shellRejectionReader = CodexShellRejectionReader.create(rolloutProfile, threadId, rolloutPath);
     options.signal?.throwIfAborted();
     return {
       threadId,
@@ -710,18 +728,37 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         let interruptionRequested = false;
         let cancelTimer: (() => void) | undefined;
         let outputWatcher: NodeJS.Timeout | undefined;
+        let shellWatcher: NodeJS.Timeout | undefined;
         let interruptDeadline: NodeJS.Timeout | undefined;
         try {
+          shellRejectionReader?.beginTurn();
+          const previousRejections = pendingShellRejections;
           const started = await rpc.request('turn/start', {
             threadId, clientUserMessageId: messageId, cwd: isolated?.workspace ?? workspace,
             model: options.model, effort: options.effort, approvalPolicy: 'never',
             ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}),
             ...(isolated ? { sandboxPolicy: { type: 'dangerFullAccess' } } : {}),
-            input: [{ type: 'text', text: message, text_elements: [] }],
+            input: [{ type: 'text', text: message, text_elements: [] },
+              { type: 'text', text: shellTurnContract + (previousRejections
+                ? ` The previous turn had ${previousRejections} explicitly rejected exec_command call(s). Correct those call arguments; the host has not replayed them.` : ''),
+              text_elements: [] }],
           });
+          pendingShellRejections -= previousRejections;
           const turnId = object(started.turn).id;
           if (typeof turnId !== 'string' || !turnId) throw new Error('math_codex_turn_missing');
           activeTurn = turnId;
+          checkShellRejections = (allowFeedback = true) => {
+            const rejected = shellRejectionReader?.poll(turnId) ?? [];
+            if (!rejected.length) return;
+            pendingShellRejections += rejected.length;
+            for (const _rejection of rejected) activity('shell_argument_rejected');
+            // Direct native providers expose no unpaid admission boundary. Keep
+            // their correction for the next run instead of cancelling paid work.
+            if (!allowFeedback || !(bridge || responsesRelay || isolated) || turnSettled || turnStopping || closing) return;
+            void notify(shellRejectionFeedback, { waitForRequest: true })
+              .then(() => { pendingShellRejections -= rejected.length; }, () => {});
+          };
+          if (shellRejectionReader) shellWatcher = setInterval(checkShellRejections, 100);
           turnHasOutput ||= earlyOutputTurns.has(turnId);
           earlyOutputTurns.clear();
           for (const [key, entry] of publicItems) {
@@ -835,7 +872,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           options.signal?.throwIfAborted();
           throw error;
         } finally {
-          cancelTimer?.(); clearTimeout(interruptDeadline); clearInterval(outputWatcher);
+          checkShellRejections?.(false); checkShellRejections = undefined;
+          cancelTimer?.(); clearTimeout(interruptDeadline); clearInterval(outputWatcher); clearInterval(shellWatcher);
           checkCompletedOutput = undefined;
           drainSubmittedRequests = undefined;
           turnSettled = true; cancelNotifications();

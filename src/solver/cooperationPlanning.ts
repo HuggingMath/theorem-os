@@ -266,20 +266,16 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     }
     return invalidated;
   }
-  protected async acceptPlan(planInput?: LeadPlan, edit?: HumanEditRecord,
-    publication?: { action: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>;
-      receipt: Omit<InitialPlanPublication, 'planVersion'> },
-    leadAction?: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>) {
-    const plan = planInput ?? this.readLeadPlan(leadAction);
+  /** Validate a proposed decision without publishing, changing tasks or claiming proof acceptance. */
+  protected preparePlan(plan: LeadPlan, decidingAction?: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>,
+    restoringPlan = false) {
     plan.tasks = keepRespacedObjectives(plan.tasks, new Map(this.archive.tasks.map(node => [node.task.id, node.task])));
-    const decidingAction = publication?.action ?? leadAction;
     const nextCheckDecisions = prepareNextCheckDecisions(this.archive, this.explorationIdentity, plan,
       plan.nextCheckDecisions, decidingAction ? this.presentedNextCheckOutcomes.get(decidingAction) : []);
     this.includeCapacityExplorations(plan);
     this.includeNextCheckTasks(plan);
-    const { tasks, groups, proofRoutes } = plan;
+    const { tasks, groups } = plan;
     assertPlanTaskTypeContracts(tasks, this.archive.tasks.map(node => node.task));
-    const restoringPlan = !decidingAction && !edit && this.archive.tasks.length > 0;
     const shown = decidingAction?.kind === 'lead' ? this.presentedResearchInputs.get(decidingAction)?.shown ?? [] :
       restoringPlan ? leadResearchInputs(this.archive.deliveries ?? [],
         new Map(this.archive.tasks.map(node => [node.task.id, node])), this.archive.researchDecisions).slice(-8) : [];
@@ -305,9 +301,6 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     const progressDecision = requiredProgressDecision
       ? prepareGoalProgressDecision(requiredProgressDecision, this.archive.goalProgress, plan,
         this.archive.nextChecks, this.archive.tasks) : undefined;
-    const publicationResponseDigest = publication ? this.proposedPlanDigest(
-      git(this.lead.worktree, ['ls-tree', '--name-only', publication.action.seedCommit, '--', 'RESEARCH.md'])
-        ? committedSource(this.lead.worktree, publication.action.seedCommit, 'RESEARCH.md') : '') : undefined;
     for (const task of tasks) if (task.ownerId || task.preferredOwnerId) {
       const owner = this.input.workers.find(worker => worker.id === (task.ownerId ?? task.preferredOwnerId));
       const previous = this.archive.tasks.find(node => node.task.id === task.id);
@@ -315,12 +308,26 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       if (!owner || !researchWorkerCanNode(owner, { ...(previous ?? { status: 'pending', attempts: 0 }), task: ownershipTask }))
         throw new Error('math_plan_task_owner_unavailable');
     }
-    const previousGroups = new Map(this.archive.groups?.map(record => [record.group.id, record]));
     const configuredGroups = researchRouteGroups(groups, this.input.workers).map(group => {
       if (group.engineerId && !this.input.workers.some(worker => worker.id === group.engineerId && worker.role === 'engineer'))
         throw new Error('math_plan_group_engineer_unavailable');
       return { ...group };
     });
+    return { plan, nextCheckDecisions, researchDecisions, progressDecision, configuredGroups, shown };
+  }
+  protected async acceptPlan(planInput?: LeadPlan, edit?: HumanEditRecord,
+    publication?: { action: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>;
+      receipt: Omit<InitialPlanPublication, 'planVersion'> },
+    leadAction?: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>) {
+    const decidingAction = publication?.action ?? leadAction;
+    const restoringPlan = !decidingAction && !edit && this.archive.tasks.length > 0;
+    const { plan, nextCheckDecisions, researchDecisions, progressDecision, configuredGroups, shown } = this.preparePlan(
+      planInput ?? this.readLeadPlan(leadAction), decidingAction, restoringPlan);
+    const { tasks, proofRoutes } = plan;
+    const publicationResponseDigest = publication ? this.proposedPlanDigest(
+      git(this.lead.worktree, ['ls-tree', '--name-only', publication.action.seedCommit, '--', 'RESEARCH.md'])
+        ? committedSource(this.lead.worktree, publication.action.seedCommit, 'RESEARCH.md') : '') : undefined;
+    const previousGroups = new Map(this.archive.groups?.map(record => [record.group.id, record]));
     const current = new Map(this.archive.tasks.map(node => [node.task.id, node]));
     const invalidated = this.planInvalidation(plan);
     const proofChanges = this.planInvalidation(plan, true);
