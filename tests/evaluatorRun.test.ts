@@ -103,7 +103,7 @@ describe('evaluator failure attribution in persisted run results', () => {
       state.verificationCheckpoints = [checkpoint];
       throw new VerificationCheckpointError(checkpoint);
     });
-    expect(await runSolver(args, directory)).toBe(4);
+    expect(await runSolver([...args, '--proof-timeout-seconds', '1800'], directory)).toBe(4);
     expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ status: 'limit_reached', reason: 'math_verification_checkpoint',
       evaluator: { status: 'skipped' } });
     const state = JSON.parse(fs.readFileSync(output + '.runtime/state.json', 'utf8'));
