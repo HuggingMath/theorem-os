@@ -45,7 +45,7 @@ try {
       const actual = new URL(page.url());
       assert.equal(actual.origin, 'https://app.theoremos.top'); assert.equal(actual.searchParams.get('entry'), kind);
       assert.equal(actual.searchParams.get('template'), kind === 'statement' ? 'add-zero' : 'polynomial');
-      assert.equal(actual.searchParams.get('environment'), kind === 'statement' ? 'standard' : 'mathlib');
+      assert.equal(actual.searchParams.get('environment'), 'mathlib');
       assert.equal(actual.searchParams.get('lang'), language);
       assert.deepEqual([...actual.searchParams.keys()].sort(), ['entry', 'environment', 'lang', 'template']);
       await page.goto(home); await page.waitForSelector('[data-decision-state=review]');

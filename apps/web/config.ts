@@ -5,6 +5,7 @@ import { webLimits, type WebEnvironment, type WebEnvironmentOption, type WebProv
 import { allowlistFile, normalizeEmail, type WebAuthConfig, type WebSignupMode } from './auth';
 import { webQuotaDefaults, type WebQuotaLimits } from './quota';
 import { researchExamples } from './problemExamples';
+import { webTaskEnvironment, webTaskEnvironmentName, webTaskEnvironmentDescription } from './environment';
 
 const providerSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/),
@@ -130,7 +131,7 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
 export { webLimits };
 // The first provider is the host's deployed sub2api gateway, reached from isolated Docker workers.
 export const webDefaults = Object.freeze({ model: 'deepseek-flash', effort: 'high' as const,
-  environment: 'mathlib' as const, maxTurns: 0, maxRunSeconds: 0, maxTotalTokens: 0, workers: 1, coordination: 'cooperative' as const });
+  environment: webTaskEnvironment, maxTurns: 0, maxRunSeconds: 0, maxTotalTokens: 0, workers: 1, coordination: 'cooperative' as const });
 /**
  * Proof explanations (docs/informalization.md) run one at a time on the sub2api gateway. The reference is the measured
  * Mathlib smoke run of 2026-10-29: 14 declarations, about 4.5 hours and 10.75 million provider tokens.
@@ -142,17 +143,17 @@ export const webExplanationLimits = Object.freeze({ maxRunSeconds: 0, maxTotalTo
 export function getWebEnvironments(): WebEnvironmentOption[] {
   return (['standard', 'mathlib'] as WebEnvironment[]).map(id => {
     const trusted = getLeanTaskEnvironment(id);
-    return { id, name: id === 'mathlib' ? 'Mathlib 数学库' : 'Lean 标准库',
-      description: id === 'mathlib' ? '固定版本 Mathlib 数学库与预编译依赖。' : 'Lean 核心与标准库，无第三方数学依赖。',
+    return { id, name: id === webTaskEnvironment ? webTaskEnvironmentName : 'Lean 标准库',
+      description: id === webTaskEnvironment ? webTaskEnvironmentDescription : 'Lean 核心与标准库，无第三方数学依赖。',
       toolchain: trusted.toolchain, ...(trusted.mathlibRevision ? { mathlibRevision: trusted.mathlibRevision } : {}) };
   });
 }
 export const webTemplates: WebTemplate[] = [
   ...researchExamples.map(({ id, name, environment, source, task }) => ({ id, name, environment, source, task })),
-  { id: 'addition', name: '自然数加法', environment: 'standard',
+  { id: 'addition', name: '自然数加法', environment: webTaskEnvironment,
     source: 'namespace Tutorial\n\ntheorem add_zero (n : Nat) : n + 0 = n := by sorry\n\ntheorem zero_add (n : Nat) : 0 + n = n := by sorry\n\nend Tutorial\n',
     task: '证明两个自然数加法定理，保持原题声明不变。根据 Lean 反馈修复候选，并验收完整原题。' },
-  { id: 'logic', name: '命题逻辑', environment: 'standard',
+  { id: 'logic', name: '命题逻辑', environment: webTaskEnvironment,
     source: 'namespace Logic\n\ntheorem and_comm (P Q : Prop) : P ∧ Q → Q ∧ P := by sorry\n\nend Logic\n',
     task: '构造这个命题逻辑定理的 Lean 证明，保留全部参数与命题。' },
   { id: 'polynomial', name: '实数多项式', environment: 'mathlib',

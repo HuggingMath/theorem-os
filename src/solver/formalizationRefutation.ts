@@ -13,6 +13,8 @@ import { resolveMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnviron
 import { canonicalMathJson, mathDigest, readMathText, writeMathFrozen } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath } from '../math/paths';
 import { resolveMathematicsLakePackagesCache } from '../math/verifier';
+import { selectFormalizationLibraryPack, type FormalizationLibrary } from '../math/formalizationLibrary';
+import { installLibraryPack } from '../math/libraryPacks';
 
 export type FormalizationRefutationCheck = {
   schema: 'theorem-os.formalization-refutation-check.v1';
@@ -30,7 +32,7 @@ const frozenJson = (file: string, value: unknown) => writeMathFrozen(file, canon
  */
 export async function checkFormalizationRefutations(directory: string, source: string, environment: LeanTaskEnvironment,
   probes: readonly FormalizationRefutationProbe[], options: { env: NodeJS.ProcessEnv; signal?: AbortSignal; timeoutMs: number;
-    nonce?: string }): Promise<FormalizationRefutationCheck> {
+    nonce?: string; library?: FormalizationLibrary }): Promise<FormalizationRefutationCheck> {
   options.signal?.throwIfAborted();
   directory = path.resolve(directory);
   assertMathCanonicalPath(directory);
@@ -42,6 +44,9 @@ export async function checkFormalizationRefutations(directory: string, source: s
   const project = path.join(directory, 'project');
   fs.mkdirSync(project, { recursive: true, mode: 0o700 });
   for (const [file, contents] of Object.entries(config.files)) writeMathFrozen(path.join(project, file), contents);
+  const libraryPack = options.library ? selectFormalizationLibraryPack(options.library, source) : undefined;
+  if (libraryPack) installLibraryPack(project, libraryPack, { trustedFiles: Object.keys(config.files),
+    solverOwnedFiles: ['Formalization.lean', 'FormalizationRefutation.lean'] });
   writeMathFrozen(path.join(project, 'Formalization.lean'), source);
   const { query, sentinelFile, resultFiles } = refutationQuery('Formalization', probes, nonce);
   const queryFile = 'FormalizationRefutation.lean';

@@ -19,6 +19,7 @@ import { reportedTotalTokens } from '../../src/solver/usageBudget';
 import { startGatewayForwarder } from './explanationWorker';
 import { createFormalizationActivity } from './formalizationActivity';
 import { prepareWebProviderProfile } from './worker';
+import { webAgentLibraryAccess } from './frozenLibrary';
 import { webFormalizationLimits, webFormalizationReason, type WorkerFormalizationInput,
   type WorkerFormalizationMessage, type WorkerFormalizationAuditMessage,
   type WebFormalizationProgress } from './formalizationTypes';
@@ -155,8 +156,9 @@ async function main() {
       await send({ type: 'audit-result', result });
       return;
     }
-    prepareFormalization(directory, webFormalizationPreparation(input, profile, buildIndex.buildManifestRef,
-      process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex'));
+    const libraryCatalog = webAgentLibraryAccess(input.environment);
+    prepareFormalization(directory, { ...webFormalizationPreparation(input, profile, buildIndex.buildManifestRef,
+      process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex'), ...(libraryCatalog ? { libraryCatalog } : {}) });
     poll = setInterval(() => { refresh(); report(); }, 10_000);
     const activity = createFormalizationActivity({ scratch, directory, root, apiKey: key, redact: [input.provider.baseUrl],
       send: entry => { void send({ type: 'activity', activity: entry }); } });

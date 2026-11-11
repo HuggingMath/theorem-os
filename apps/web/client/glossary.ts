@@ -10,7 +10,7 @@ export const terms: Record<TermId, Term> = {
   statement: { name: t('原题'), short: t('你提交的 Lean 文件，用 sorry 留出待证明的定理。'),
     detail: t('每个用 sorry 留空的定理都是一个目标。研究过程中定理的声明不能改，只有证明部分会被填写。') },
   environment: { name: t('证明环境'), short: t('检查证明时使用的固定版本 Lean 和库。'),
-    detail: t('Lean 标准库或固定版本的 Mathlib。同一道题在同一环境下检查，结果才可重复。') },
+    detail: t('固定版本 Lean、Mathlib 与 TheoremOS 自有库，供形式化、证明和独立验收共同使用。') },
   candidate: { name: t('候选证明'), short: t('Agent 写出、还没经过最终验收的证明。'),
     detail: t('候选可能已经通过局部检查，但只有独立验收通过后才算证明完成。') },
   acceptance: { name: t('独立验收'), short: t('用干净的 Lean 环境重新检查完整原题，这是唯一算数的结论。'),

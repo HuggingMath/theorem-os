@@ -2,6 +2,7 @@ import type { ResearchModulePlan, ResearchModuleSlot } from '../../src/solver/mo
 import type { WebObservation, WebArchive } from './collaboration';
 import type { WebFormalizationBackgroundReview } from './formalizationTypes';
 import type { ResearchLibraryProposalOrigin } from './researchLibraryProposalOrigin';
+import { webTaskEnvironment } from './environment';
 
 export type WebEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type WebCoordination = 'cooperative' | 'independent';
@@ -531,8 +532,9 @@ export function workbenchReturn(search: string): string {
       kept.set('libraryProposal', proposal); kept.set('project', project);
     }
   } else if (params.get('entry') === 'statement' || params.get('entry') === 'lean') {
-    const entry = params.get('entry')!, template = entry === 'statement' ? 'add-zero' : 'polynomial', environment = entry === 'statement' ? 'standard' : 'mathlib';
-    if ((!params.has('template') || params.get('template') === template) && (!params.has('environment') || params.get('environment') === environment)) {
+    const entry = params.get('entry')!, template = entry === 'statement' ? 'add-zero' : 'polynomial', environment = webTaskEnvironment;
+    if ((!params.has('template') || params.get('template') === template) && (!params.has('environment') || params.get('environment') === environment
+      || entry === 'statement' && params.get('environment') === 'standard')) {
       kept.set('entry', entry); kept.set('template', template); kept.set('environment', environment);
     }
   } else {

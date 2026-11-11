@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { decodeTaskDraft, encodeTaskDraft, readTaskDraftFile, taskDraftSchema, taskDraftStorageKey, type TaskDraft } from '../apps/web/client/draft';
+import { decodeTaskDraft, editableTaskDraft, encodeTaskDraft, readTaskDraftFile, taskDraftSchema, taskDraftStorageKey, type TaskDraft } from '../apps/web/client/draft';
 import { tokenCap } from '../apps/web/client/submission';
 import { webLimits } from '../apps/web/shared';
 
@@ -21,6 +21,25 @@ const file = (content: string | Uint8Array, name = 'task.json', declaredSize?: n
 };
 
 describe('task draft codecs without credentials or run-result state', () => {
+  it('upgrades only editable originals to the shared environment, keeping pending and frozen identities intact', () => {
+    const original = draft({ environment: 'standard' });
+    const restored = decodeTaskDraft(JSON.parse(encodeTaskDraft(original)));
+    expect(restored.environment).toBe('standard');
+    expect(editableTaskDraft(restored)).toEqual({ ...original, environment: 'mathlib' });
+    expect(editableTaskDraft(restored, true)).toBe(restored);
+    for (const binding of [
+      { formalization: { id: 'a'.repeat(36), evidenceSha256: 'b'.repeat(64) } },
+      { continueFrom: { runId: 'a'.repeat(36), taskId: 'goal', commit: 'b'.repeat(40), label: 'Saved version', environmentDigest: 'c'.repeat(64) } },
+      { problemBudget: { runId: 'a'.repeat(36), projectId: 'project-one' } },
+      { sharedProofOrigin: { readingId: 'reading-one', title: 'Shared theorem', digest: 'd'.repeat(64) } },
+      { libraryProposalOrigin: { projectId: 'project-one', feedbackId: 'feedback-one', trialDigest: 'e'.repeat(64) } },
+    ]) {
+      const frozen = { ...original, ...binding };
+      expect(editableTaskDraft(frozen)).toBe(frozen);
+    }
+    expect(original.environment).toBe('standard');
+  });
+
   it('round trips a complete draft in the versioned envelope', () => {
     const original = draft();
     expect(taskDraftSchema).toBe('theorem-os.web-draft.v1');

@@ -27,6 +27,7 @@ import { formalizationExemplarSchema, formalizationExemplarsSchema, formalizatio
 import { FORMALIZATION_NAMES_FILE, formalizationNameCompatibilitySchema, prepareFormalizationNameCompatibility,
   type FormalizationNameCompatibilitySource } from './formalizationNameCompatibility';
 import { formalizationFalsificationSchema } from './formalizationRefutation';
+import { assertFormalizationLibraryPack, formalizationLibrarySchema, prepareFormalizationLibrary } from './formalizationLibrary';
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const text = z.string().min(1).max(32_000).refine(value => value.trim().length > 0);
@@ -69,6 +70,7 @@ export const formalizationRequestSchema = z.object({
   exemplars: formalizationExemplarsSchema.optional(),
   compatibility: formalizationNameCompatibilitySchema.optional(),
   falsification: formalizationFalsificationSchema.optional(),
+  library: formalizationLibrarySchema.optional(),
 }).strict();
 export type FormalizationRequest = z.infer<typeof formalizationRequestSchema>;
 export type FormalizationCandidate = z.infer<typeof formalizationCandidateSchema>;
@@ -273,12 +275,12 @@ export function assertFormalizationCandidate(request: FormalizationRequest, cand
 }
 
 export function prepareFormalization(directory: string, input: Omit<FormalizationRequest,
-  'schema' | 'statementSha256' | 'environmentDigest' | 'buildDigest' | 'retrieval' | 'exemplars' | 'compatibility'> &
+  'schema' | 'statementSha256' | 'environmentDigest' | 'buildDigest' | 'retrieval' | 'exemplars' | 'compatibility' | 'library'> &
   { retrieval?: FormalizationRetrievalSource; exemplars?: FormalizationExemplarSource;
-    compatibility?: FormalizationNameCompatibilitySource }): FormalizationRequest {
+    compatibility?: FormalizationNameCompatibilitySource; libraryCatalog?: { file: string; digest: string } }): FormalizationRequest {
   directory = path.resolve(directory); assertMathCanonicalPath(directory);
   if (fs.existsSync(directory)) throw new Error('formalization_directory_exists');
-  const { retrieval: retrievalSource, exemplars: exemplarSource, compatibility: compatibilitySource, ...base } = input;
+  const { retrieval: retrievalSource, exemplars: exemplarSource, compatibility: compatibilitySource, libraryCatalog, ...base } = input;
   const retrieval = retrievalSource ? prepareFormalizationRetrieval(retrievalSource, input.environment) : undefined;
   const exemplars = exemplarSource ? prepareFormalizationExemplars(exemplarSource, input.statement) : undefined;
   const compatibility = compatibilitySource ? prepareFormalizationNameCompatibility(compatibilitySource) : undefined;
@@ -287,6 +289,7 @@ export function prepareFormalization(directory: string, input: Omit<Formalizatio
     ...(retrieval ? { retrieval: retrieval.configuration } : {}),
     ...(exemplars ? { exemplars } : {}),
     ...(compatibility ? { compatibility: compatibility.configuration } : {}),
+    ...(libraryCatalog ? { library: prepareFormalizationLibrary(libraryCatalog, input.environment) } : {}),
     statementSha256: mathDigest(input.statement), environmentDigest: getLeanTaskEnvironment(input.environment).dependencyDigest,
     buildDigest: mathDigest(readMathText(input.buildManifestRef, 8_000_000)) });
   assertRequestWorkflow(request);
@@ -308,6 +311,10 @@ export function readFormalizationRequest(directory: string): FormalizationReques
 }
 
 function assertRequestWorkflow(request: FormalizationRequest): void {
+  if (request.library && (request.schema !== 'theorem-os.formalization-request.v3' || request.environment !== 'mathlib' ||
+      request.library.environmentDigest !== request.environmentDigest ||
+      new Set(request.library.modules.map(module => module.file)).size !== request.library.modules.length))
+    throw new Error('formalization_library_configuration_invalid');
   if (request.reviewMode === 'direct' && (request.schema !== 'theorem-os.formalization-request.v3' ||
       request.workflow || request.fidelityPolicy || request.retrieval || request.exemplars || request.falsification))
     throw new Error('formalization_direct_review_configuration_invalid');
@@ -461,14 +468,18 @@ function assertWorkflowEvidence(e: ReviewedFormalizationEvidence): void {
         e.sessions[index + 3]!.outputDigest !== formalizationDigest(review)) return fail();
     if (r.fidelityPolicy) {
       if (!('fidelity' in review) || !review.fidelity || !correspondence) return fail();
-      assertFormalizationReferenceResult(fidelityReferenceInput(e.snapshot as ReviewStatementSnapshot, review.fidelity), correspondence);
+      const libraryPack = assertFormalizationLibraryPack(r.library, [e.candidate.source, review.fidelity.sourceContract!.source],
+        'libraryPack' in correspondence ? correspondence.libraryPack : undefined);
+      assertFormalizationReferenceResult(fidelityReferenceInput(e.snapshot as ReviewStatementSnapshot, review.fidelity, libraryPack), correspondence);
       if (correspondence.status !== 'established') return fail();
     } else if (correspondence) return fail();
   }
   if (Boolean(w.reference) !== Boolean(observed.reference)) return fail();
   if (w.reference && observed.reference) {
+    const libraryPack = assertFormalizationLibraryPack(r.library, [e.candidate.source, w.reference.source],
+      'libraryPack' in observed.reference ? observed.reference.libraryPack : undefined);
     assertFormalizationReferenceResult({ candidateSource: e.candidate.source, referenceSource: w.reference.source,
-      environment: r.environment, pairs: w.reference.pairs }, observed.reference);
+      environment: r.environment, pairs: w.reference.pairs, ...(libraryPack ? { libraryPack } : {}) }, observed.reference);
     if (observed.reference.status !== 'established') return fail();
   }
 }
@@ -510,6 +521,9 @@ function assertCompilationEvidence(e: FormalizationCompiledCandidate): void {
   const sourceFiles = latest?.sourceFiles as { file: string; digest: string }[] | undefined;
   const configuration = latest?.configuration as { file: string; digest: string | null }[] | undefined;
   const fail = () => { throw new Error('formalization_compilation_evidence_invalid'); };
+  const libraryPack = assertFormalizationLibraryPack(e.request.library, e.candidate.source, diagnostics.libraryPack);
+  const expectedSources = new Map([['Formalization.lean', e.sourceSha256], ['FormalizationContext.lean', mathDigest(query)],
+    ...(libraryPack?.modules.map(module => [module.file, mathDigest(module.source)] as [string, string]) ?? [])]);
   if (!latest || latest.schema !== 'theoremos.lean-diagnostics-latest.v1' || latest.authority !== 'advisory-lean-process' ||
       latest.exitCode !== 0 || latest.timedOut !== false || latest.aborted !== false ||
       latest.sourceDigest !== diagnostics.sourceDigest || latest.environmentDigest !== e.compilation.environmentDigest ||
@@ -518,9 +532,8 @@ function assertCompilationEvidence(e: FormalizationCompiledCandidate): void {
       configuration.some((item, index) => item.file !== LAKE_CONFIGURATION_FILES[index] ||
         (item.file === '.lake/package-overrides.json' && e.request.environment === 'mathlib' ? !hash.safeParse(item.digest).success :
           item.digest !== (config.files[item.file] ? mathDigest(config.files[item.file]!) : null))) ||
-      !sourceFiles || sourceFiles.length !== 2 ||
-      sourceFiles.find(item => item.file === 'Formalization.lean')?.digest !== e.sourceSha256 ||
-      sourceFiles.find(item => item.file === 'FormalizationContext.lean')?.digest !== mathDigest(query) ||
+      !sourceFiles || sourceFiles.length !== expectedSources.size || new Set(sourceFiles.map(item => item.file)).size !== sourceFiles.length ||
+      sourceFiles.some(item => expectedSources.get(item.file) !== item.digest) ||
       diagnostics.sourceDigest !== mathDigest(JSON.stringify([configuration.map(item => item.digest ?? ''),
         sourceFiles.map(item => [item.file, item.digest])])) ||
       !Array.isArray(records) || !records.length || !Array.isArray(references) || records.length !== references.length ||
@@ -579,7 +592,11 @@ export function readFormalizationArtifact(artifact: string): FormalizationEviden
 /** Creates only a frozen proof task. Proof search and final S3 acceptance remain the native solver's responsibility. */
 export function bootstrapFormalizedProblem(directory: string, options: { libraryPack?: LibraryPack } = {}) {
   const artifact = path.join(directory, 'artifact'), evidence = readFormalizationArtifact(artifact);
-  const libraryPack = options.libraryPack && parseLibraryPack(options.libraryPack);
+  const compiledLibrary = assertFormalizationLibraryPack(evidence.request.library, evidence.candidate.source,
+    evidence.compilation.diagnostics.libraryPack);
+  const libraryPack = options.libraryPack ? parseLibraryPack(options.libraryPack) : compiledLibrary;
+  if (compiledLibrary?.modules.some(module => !libraryPack?.modules.some(installed =>
+    installed.file === module.file && installed.source === module.source))) throw new Error('formalization_library_source_changed');
   const expectedLibrary = libraryPack ? { digest: libraryPackDigest(libraryPack),
     files: Object.fromEntries(libraryPack.modules.map(module => [module.file, mathDigest(module.source)])) } : null;
   const workspace = path.join(directory, 'workspace'), taskFile = path.join(directory, 'task.md');

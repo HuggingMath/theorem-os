@@ -5,7 +5,7 @@ import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 /** Match the host sandbox receipt to the actual role payload and pinned environment. */
 export function assertFormalizationReviewIsolation(receipt: Record<string, unknown> | undefined,
   environment: LeanTaskEnvironment, input: string, instructions: string, schema: string,
-  allowedContents: 'complete' | 'sources' = 'complete') {
+  allowedContents: 'complete' | 'sources' = 'complete', library?: { digest: string }) {
   const config = getLeanTaskEnvironment(environment);
   const expected = { schema: 'theorem-os.formalization-sandbox.v2', backend: 'bwrap',
     workspace: '/workspace', profile: '/profile',
@@ -25,4 +25,10 @@ export function assertFormalizationReviewIsolation(receipt: Record<string, unkno
       !config.mathlibRevision && packages.data.kind !== 'none' ||
       packages.data.contents === 'sources' && (allowedContents !== 'sources' || packages.data.kind !== 'sealed'))
     throw new Error('formalization_review_isolation_invalid');
+  if (library) {
+    const mounted = z.object({ root: z.literal('/opt/theoremos-library'), catalogDigest: hash, buildReceiptSha256: hash })
+      .strict().safeParse(receipt.library);
+    if (!mounted.success || mounted.data.catalogDigest !== library.digest)
+      throw new Error('formalization_review_isolation_invalid');
+  } else if (receipt.library !== undefined) throw new Error('formalization_review_isolation_invalid');
 }

@@ -2,6 +2,7 @@ import type { WebFormalization, WebFormalizationRequest, WebResearchBudget } fro
 import type { WebRun } from '../shared';
 import { webConversationLimits } from '../conversationTypes';
 import { decodeLibraryReferences, type ChatLibraryReference } from './chatReference';
+import { webTaskEnvironment } from '../environment';
 
 const schema = 'theorem-os.chat-draft.v1';
 export type ChatDraftSettings = Required<Pick<WebFormalizationRequest,
@@ -12,6 +13,10 @@ export type ChatGuidanceDraft = { runId: string; taskRef?: { id: string; version
 export type ChatPendingMessage = { requestId: string; text: string };
 export type ChatOriginalBackup = { text: string; settings?: ChatDraftSettings };
 export type ChatDraft = { text: string; settings?: ChatDraftSettings; guidance?: ChatGuidanceDraft; pendingMessage?: ChatPendingMessage; references?: ChatLibraryReference[]; originalBackup?: ChatOriginalBackup };
+/** History and an uncertain POST retain their settings; a new original uses the shared mathematics environment. */
+export function editableChatSettings(settings: ChatDraftSettings, preserve = false): ChatDraftSettings {
+  return preserve || settings.environment === webTaskEnvironment ? settings : { ...settings, environment: webTaskEnvironment };
+}
 export function readEditedProblemId(parameters: URLSearchParams): string {
   const id = parameters.get('editProblem') ?? '';
   return /^[A-Za-z0-9_-]{1,128}$/u.test(id) ? id : '';

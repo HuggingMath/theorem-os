@@ -1,4 +1,5 @@
 import type { WebTemplate } from '../shared';
+import { webTaskEnvironment } from '../environment';
 
 export type ResearchEntry = {
   kind: 'statement' | 'lean';
@@ -14,9 +15,11 @@ export function readResearchEntry(search: string | URLSearchParams): ResearchEnt
   const kind = params.get('entry'), language = params.get('lang') ?? 'zh';
   if ((kind !== 'statement' && kind !== 'lean') || (language !== 'zh' && language !== 'en')) return;
   const template = kind === 'statement' ? 'add-zero' : 'polynomial';
-  const environment = kind === 'statement' ? 'standard' : 'mathlib';
+  const environment = webTaskEnvironment;
   if (params.has('template') && params.get('template') !== template) return;
-  if (params.has('environment') && params.get('environment') !== environment) return;
+  // Published addition links used standard before the Web environment was unified.
+  if (params.has('environment') && params.get('environment') !== environment
+    && !(kind === 'statement' && params.get('environment') === 'standard')) return;
   return { kind, template, environment, language };
 }
 

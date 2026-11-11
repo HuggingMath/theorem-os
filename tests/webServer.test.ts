@@ -247,11 +247,11 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     expect(created.status).toBe(201);
     const run = (await created.json()).run;
     expect(run.id).toMatch(/^[a-f0-9-]{36}$/);
-    expect(run.environment).toBe('standard');
+    expect(run.environment).toBe('mathlib');
     await tick();
     expect(runner.calls).toHaveLength(1);
     expect(runner.calls[0].value.input.apiKey).toBe(key);
-    expect(runner.calls[0].value.input.environment).toBe('standard');
+    expect(runner.calls[0].value.input.environment).toBe('mathlib');
     runner.calls[0].finish();
   });
 
@@ -296,10 +296,13 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     } finally { clock.mockRestore(); }
   });
 
-  it('advertises pinned trusted environments and defaults the web form to Mathlib', async () => {
+  it('advertises the shared TheoremOS environment, retains historical metadata and uses it for every new template', async () => {
     const alice = await session();
     expect(alice.session.defaults.environment).toBe('mathlib');
     expect(alice.session.environments.map(environment => environment.id)).toEqual(['standard', 'mathlib']);
+    expect(alice.session.environments.find(environment => environment.id === 'mathlib')).toMatchObject({
+      name: 'TheoremOS 数学环境', description: expect.stringContaining('TheoremOS 自有库'),
+    });
     for (const environment of alice.session.environments) {
       const trusted = getLeanTaskEnvironment(environment.id);
       expect(environment.toolchain).toBe(trusted.toolchain);
@@ -310,7 +313,7 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     const template = alice.session.templates.find(template => template.id === 'polynomial');
     expect(template?.environment).toBe('mathlib');
     expect(template?.source).toContain('import Mathlib');
-    expect(alice.session.templates.every(template => ['standard', 'mathlib'].includes(template.environment))).toBe(true);
+    expect(alice.session.templates.every(template => template.environment === 'mathlib')).toBe(true);
     const created = await request('/api/runs', alice, { body: { ...input(), environment: 'mathlib', source: template!.source } });
     expect(created.status).toBe(201);
     const { run } = await created.json();
@@ -326,6 +329,56 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
       const body = await response.json();
       expect((body.run || body.runs[0]).environment).toBe('mathlib');
     }
+  });
+
+  it('preserves an explicit standard request and its idempotent replay for legacy clients', async () => {
+    const alice = await session();
+    const body = { ...input(), environment: 'standard', requestId: 'legacy-standard-environment' };
+    const created = await request('/api/runs', alice, { body });
+    expect(created.status).toBe(201);
+    const { run } = await created.json();
+    expect(run.environment).toBe('standard');
+    await tick();
+    expect(runner.calls[0].value.input.environment).toBe('standard');
+    runner.ready = false;
+    const replay = await request('/api/runs', alice, { body: { ...body, apiKey: '' } });
+    expect(replay.status).toBe(200);
+    expect((await replay.json()).run.id).toBe(run.id);
+    expect((await request('/api/runs', alice, { body: { ...body, environment: 'mathlib' } })).status).toBe(409);
+    expect(runner.calls).toHaveLength(1);
+    runner.calls[0].finish();
+  });
+
+  it('replays the old omitted-environment default while new requests use the unified environment', async () => {
+    const alice = await session();
+    // The old HTTP parser persisted this same identity for an omitted environment.
+    const legacy = { ...input(), environment: 'standard', requestId: 'legacy-omitted-environment' };
+    const created = await request('/api/runs', alice, { body: legacy });
+    expect(created.status).toBe(201);
+    const { run } = await created.json();
+    await tick();
+    runner.ready = false;
+    const { environment: _environment, ...retry } = legacy;
+    const replay = await request('/api/runs', alice, { body: { ...retry, apiKey: '' } });
+    expect(replay.status).toBe(200);
+    expect((await replay.json()).run).toMatchObject({ id: run.id, environment: 'standard' });
+    expect((await request('/api/runs', alice, { body: { ...retry, task: 'changed' } })).status).toBe(409);
+    expect((await request('/api/runs', alice, { body: { ...retry, environment: 'mathlib' } })).status).toBe(409);
+    expect(runner.calls).toHaveLength(1);
+    runner.calls[0].finish();
+    await tick();
+    expect((await request(`/api/runs/${run.id}`, alice, { method: 'DELETE' })).status).toBe(200);
+    expect((await request('/api/runs', alice, { body: retry })).status).toBe(410);
+
+    runner.ready = true;
+    const current = { ...retry, requestId: 'new-omitted-environment' };
+    const fresh = await request('/api/runs', alice, { body: current });
+    expect(fresh.status).toBe(201);
+    const { run: newRun } = await fresh.json();
+    expect(newRun.environment).toBe('mathlib');
+    const repeated = await request('/api/runs', alice, { body: current });
+    expect(repeated.status).toBe(200);
+    expect((await repeated.json()).run.id).toBe(newRun.id);
   });
 
   it('rejects foreign origins and host headers before exposing a session or executing work', async () => {

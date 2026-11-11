@@ -93,13 +93,17 @@ export class WebJobs {
       input: { ...visible, environment: input.environment ?? 'standard' }, provider: { id: provider.id, baseUrl: provider.baseUrl },
     })).digest('hex') };
   }
-  replay(owner: string, input: WebRunInput, provider: WebProvider, requestId?: string): WebRun | undefined {
+  replay(owner: string, input: WebRunInput, provider: WebProvider, requestId?: string, legacyEnvironmentOmitted = false): WebRun | undefined {
     if (!requestId) return;
     const expected = this.creation(input, provider, requestId);
     const stored = this.creations.get(JSON.stringify([owner, requestId]));
     const previous = stored ?? this.storage.deletedCreation(owner, requestId);
     if (!previous) return;
-    if (previous.digest !== expected.digest) throw new WebStorageError(409, '同一提交请求不能使用不同的题目或配置。');
+    // Older HTTP clients could omit the environment when its default was standard.
+    // Match that frozen identity only on a replay; new submissions keep the current default.
+    if (previous.digest !== expected.digest && (!legacyEnvironmentOmitted ||
+        previous.digest !== this.creation({ ...input, environment: 'standard' }, provider, requestId).digest))
+      throw new WebStorageError(409, '同一提交请求不能使用不同的题目或配置。');
     const run = stored && this.get(owner, stored.runId);
     if (!run) throw new WebStorageError(410, '这次提交对应的运行已删除，请发起新研究。');
     return run;

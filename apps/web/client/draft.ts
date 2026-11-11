@@ -4,6 +4,7 @@ import { researchModulePlanDraftSchema, type ResearchModulePlan } from '../../..
 import { t } from '../i18n';
 import type { ClassicOrigin } from './classicPreparation';
 import type { ResearchLibraryProposalOrigin } from '../researchLibraryProposalOrigin';
+import { webTaskEnvironment } from '../environment';
 
 export const taskDraftSchema = 'theorem-os.web-draft.v1';
 export const taskDraftStorageKey = 'theorem-os.web-draft.v1';
@@ -35,6 +36,13 @@ export type TaskDraft = {
   classicOrigin?: ClassicOrigin;
   libraryProposalOrigin?: ResearchLibraryProposalOrigin;
 };
+
+/** Editable originals use the shared environment; pending requests and saved evidence keep their exact identity. */
+export function editableTaskDraft(draft: TaskDraft, unresolved = false): TaskDraft {
+  return unresolved || draft.formalization || draft.continueFrom || draft.problemBudget || draft.sharedProofOrigin
+    || draft.classicOrigin || draft.libraryProposalOrigin || draft.environment === webTaskEnvironment
+    ? draft : { ...draft, environment: webTaskEnvironment };
+}
 
 const archiveSchemas = ['theorem-os.web-export.v1', 'theorem-os.web-archive.v1'];
 const maximumFileBytes = 16 * 1024 * 1024;

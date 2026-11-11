@@ -113,7 +113,7 @@ export type MathAgentOptions = {
   /** Directories this session's shells cannot read; see mathWorkerPermissionConfig. */
   hiddenRoots?: readonly string[];
   /** Required OS read boundary for natural-language formalization roles. */
-  readIsolation?: { environment: LeanTaskEnvironment; packages?: 'none' | 'sources' };
+  readIsolation?: { environment: LeanTaskEnvironment; packages?: 'none' | 'sources'; library?: { file: string; digest: string } };
   /** The first complete contract-valid file is an explicit submission. */
   completedOutput?: {
     file: string;
@@ -351,6 +351,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     workspace: options.workspace, executable: options.executable, profile: options.profile,
     model: options.model, effort: options.effort, environment: options.readIsolation.environment,
     packages: options.readIsolation.packages,
+    library: options.readIsolation.library,
     ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}),
     env: options.environment, signal: options.signal,
     requestGate, onUsageIncomplete: options.onUsageIncomplete,

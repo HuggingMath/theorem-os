@@ -95,6 +95,14 @@ describe('base instructions for isolated formalization sessions', () => {
     vi.unstubAllGlobals(); fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it('passes the frozen library access to the read-isolated sandbox', async () => {
+    const library = { file: '/opt/theoremos-library/release/catalog.json', digest: 'a'.repeat(64) };
+    const configured = options(true, false);
+    configured.readIsolation!.library = library;
+    session = await createCodexMathSession(configured);
+    expect(host.sandbox).toHaveBeenCalledWith(expect.objectContaining({ library }));
+  });
+
   it.each([false, true])('uses a concise math base while preserving the complete isolated protocol (resume=%s)', async resume => {
     session = await createCodexMathSession(options(true, resume));
     const started = vi.fn();

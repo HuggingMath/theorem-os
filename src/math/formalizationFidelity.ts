@@ -5,6 +5,7 @@ import { eraseFormalizationProofs, FORMALIZATION_SOURCE_MAX_BYTES, formalization
 import type { LeanStatementBindings } from './leanStatementContext';
 import type { LeanTaskEnvironment } from './leanTaskEnvironment';
 import { isSimpleLeanName } from './leanSyntax';
+import type { LibraryPack } from './libraryPacks';
 
 const text = z.string().min(1).refine(value => value.trim().length > 0);
 const targetName = text.refine(isSimpleLeanName);
@@ -87,7 +88,7 @@ export function assertFormalizationFidelity(input: FidelityInput,
 
 /** Construct the exact existing comparison request; never accept model bridge proofs. */
 export function fidelityReferenceInput(snapshot: FormalizationFidelitySnapshot,
-  value: FormalizationFidelity): FormalizationReferenceInput {
+  value: FormalizationFidelity, libraryPack?: LibraryPack): FormalizationReferenceInput {
   const fidelity = formalizationFidelitySchema.parse(value);
   if (!fidelity.sourceContract) throw new Error('formalization_fidelity_source_contract_required');
   assertTargetCoverage(snapshot, fidelity);
@@ -95,6 +96,7 @@ export function fidelityReferenceInput(snapshot: FormalizationFidelitySnapshot,
     candidateSource: eraseFormalizationProofs(snapshot.source),
     referenceSource: fidelity.sourceContract.source, environment: snapshot.environment,
     pairs: fidelity.sourceContract.pairs,
+    ...(libraryPack ? { libraryPack } : {}),
     purpose: fidelity.policy === 'task-preserving-v2' ? 'task-fidelity-v2' : 'task-fidelity-v1',
   });
 }

@@ -127,7 +127,7 @@ async function credentials(page: Page) {
   if (!await page.locator('#formalize-key').isVisible()) await page.locator('#open-settings').click();
   await page.locator('#formalize-key').fill('sk-disposable-browser-fixture');
   await openAdvancedChatSettings(page);
-  if (await page.locator('#formalize-environment').isEnabled()) await page.locator('#formalize-environment').selectOption('standard');
+  if (await page.locator('#formalize-environment').isEnabled()) await page.locator('#formalize-environment').selectOption('mathlib');
   await page.locator('#formalize-start:enabled').waitFor();
 }
 async function conversation(page: Page): Promise<WebConversation> {

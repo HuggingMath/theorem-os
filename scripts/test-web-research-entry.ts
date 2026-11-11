@@ -93,7 +93,7 @@ try {
       if (kind === 'statement') {
         await page.locator('body[data-entry=natural]').waitFor({ state: 'attached' });
         assert.equal(await page.locator('#formalize-original').inputValue(), draft.statement);
-        assert.equal(await page.locator('#formalize-environment').inputValue(), 'standard');
+        assert.equal(await page.locator('#formalize-environment').inputValue(), 'mathlib');
         assert.equal(await page.locator('#formalize-start').isDisabled(), true);
         await page.waitForFunction(() => {
           const input = document.querySelector<HTMLTextAreaElement>('#formalize-original');

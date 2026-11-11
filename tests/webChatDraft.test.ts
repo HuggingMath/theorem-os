@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { decodeChatDraft, encodeChatDraft, historicalChatSettings, readEditedProblemId, type ChatDraftSettings } from '../apps/web/client/chatDraft';
+import { decodeChatDraft, editableChatSettings, encodeChatDraft, historicalChatSettings, readEditedProblemId, type ChatDraftSettings } from '../apps/web/client/chatDraft';
 import { decodeLibraryReferences, libraryReferenceId, withLibraryReferences, type ChatLibraryReference } from '../apps/web/client/chatReference';
 import type { WebFormalization } from '../apps/web/formalizationTypes';
 import { SubmissionIdentity } from '../apps/web/client/submissionIdentity';
@@ -102,6 +102,12 @@ it('recognizes separate edited-problem draft routes without treating arbitrary U
   expect(readEditedProblemId(new URLSearchParams({ editProblem: '../home' }))).toBe('');
 });
 
+it('uses the shared environment for an editable original without rewriting historical settings', () => {
+  expect(editableChatSettings(settings)).toEqual({ ...settings, environment: 'mathlib' });
+  expect(editableChatSettings(settings, true)).toBe(settings);
+  expect(decodeChatDraft(encodeChatDraft({ text: 'old original', settings })).settings?.environment).toBe('standard');
+});
+
 it('recovers a natural submission across refresh without retaining the key or statement in its identity', async () => {
   const values = new Map<string, string>();
   const storage = { getItem: (key: string) => values.get(key) ?? null,
@@ -110,6 +116,8 @@ it('recovers a natural submission across refresh without retaining the key or st
   const first = new SubmissionIdentity(storage, 'natural.alice'), id = await first.prepare(input);
   const refreshed = new SubmissionIdentity(storage, 'natural.alice');
   expect(refreshed.unresolved).toBe(true);
+  expect(editableChatSettings(settings, refreshed.unresolved).environment).toBe('standard');
+  expect(await refreshed.prepare({ ...input, ...editableChatSettings(settings, refreshed.unresolved), apiKey: '' })).toBe(id);
   expect(await refreshed.prepare({ ...input, apiKey: '' })).toBe(id);
   const { maxRunSeconds, maxTotalTokens, maxTurns } = input.research;
   expect(await refreshed.prepare({ ...input, research: { maxTurns, maxTotalTokens, maxRunSeconds } })).toBe(id);

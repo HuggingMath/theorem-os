@@ -7,6 +7,7 @@ import { formalizationDigest, type FormalizationCandidate } from '../../src/math
 import { eraseFormalizationProofs, formalizationTargets } from '../../src/math/formalizationSource';
 import { getLeanTaskEnvironment, type LeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { LAKE_CONFIGURATION_FILES } from '../../src/math/mathConstructionSources';
+import type { LibraryPack } from '../../src/math/libraryPacks';
 import { leanStatementContextCommands } from '../../src/math/leanStatementContext';
 import type { LeanStatementSemantic } from '../../src/math/leanStatementSemantic';
 import { STRUCTURED_REVIEW_EVIDENCE_VERSION, structuredReviewAspects, structuredReviewDigest,
@@ -68,7 +69,8 @@ export function structureContextFixture() {
 }
 
 export function syntheticElaboration(input: string, environment: LeanTaskEnvironment = 'standard',
-  options: { detailedContext?: boolean; semanticContext?: boolean; structureContext?: boolean; boundedLibraryContext?: boolean } = {}) {
+  options: { detailedContext?: boolean; semanticContext?: boolean; structureContext?: boolean; boundedLibraryContext?: boolean;
+    libraryPack?: LibraryPack } = {}) {
   const source = eraseFormalizationProofs(input), sourceSha256 = mathDigest(source), targets = formalizationTargets(source);
   const config = getLeanTaskEnvironment(environment), environmentDigest = 'd'.repeat(64), toolIdentity = 'e'.repeat(64);
   const query = 'import Lean\nimport Formalization\n' + leanStatementContextCommands(
@@ -79,13 +81,15 @@ export function syntheticElaboration(input: string, environment: LeanTaskEnviron
   const configuration = LAKE_CONFIGURATION_FILES.map(file => ({ file, digest:
     file === '.lake/package-overrides.json' && environment === 'mathlib' ? mathDigest('synthetic-mathlib-package-overrides') :
       config.files[file] ? mathDigest(config.files[file]!) : null }));
-  const sourceFiles = [{ file: 'Formalization.lean', digest: sourceSha256 }, { file: 'FormalizationContext.lean', digest: mathDigest(query) }];
+  const sourceFiles = [{ file: 'Formalization.lean', digest: sourceSha256 }, { file: 'FormalizationContext.lean', digest: mathDigest(query) },
+    ...(options.libraryPack?.modules.map(module => ({ file: module.file, digest: mathDigest(module.source) })) ?? [])];
   const sourceDigest = mathDigest(JSON.stringify([configuration.map(item => item.digest ?? ''), sourceFiles.map(item => [item.file, item.digest])]));
   const artifact = { schema: 'theoremos.lean-diagnostics.v1', authority: 'advisory-lean-process', sourceDigest,
     environmentDigest, toolIdentity, sourceFiles, sourceCurrent: true, exitCode: 0, timedOut: false, aborted: false,
     captureComplete: true, stdout: '', stderr: '', stdoutSha256: mathDigest(''), stderrSha256: mathDigest('') };
   const text = canonicalMathJson(artifact), digest = mathDigest(text);
   const diagnostics = { exitCode: 0, timedOut: false, sourceDigest, environmentDigest, toolIdentity,
+    ...(options.libraryPack ? { libraryPack: options.libraryPack } : {}),
     latest: { schema: 'theoremos.lean-diagnostics-latest.v1', authority: 'advisory-lean-process', sourceDigest, environmentDigest,
       toolIdentity, sourceFiles, configuration, exitCode: 0, timedOut: false, aborted: false },
     diagnosticArtifacts: [{ path: 'compilation-artifacts/' + digest + '.json', digest, sourceDigest, environmentDigest, captureComplete: true }],

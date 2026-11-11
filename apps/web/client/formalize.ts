@@ -4,6 +4,7 @@ import type { WebConversation } from '../conversationTypes';
 import { webFormalizationDefaults } from '../formalizationTypes';
 import { locale, localeTag, localizeDocument, localizeMessage, mountLocaleSwitch, sentences, t } from '../i18n';
 import { researchExamples } from '../problemExamples';
+import { webTaskEnvironment } from '../environment';
 import { renderFormalization } from './formalizationView';
 import { formalizationReasonText, formalizationNextStep } from './formalizationReasons';
 import { correspondenceSpans, fragmentLadder } from './correspondence';
@@ -32,7 +33,8 @@ if (embedded) {
 const original = $<HTMLTextAreaElement>('#formalize-original'), key = $<HTMLInputElement>('#formalize-key');
 const environment = $<HTMLSelectElement>('#formalize-environment'), effort = $<HTMLSelectElement>('#formalize-effort');
 let researchEffort: WebFormalizationRequest['effort'] = 'high';
-if (embedded) { environment.value = 'mathlib'; effort.value = 'high'; }
+environment.value = webTaskEnvironment;
+if (embedded) effort.value = 'high';
 const exampleSelect = $<HTMLSelectElement>('#formalize-example');
 for (const example of researchExamples) exampleSelect.add(new Option(locale === 'en' ? example.nameEn : example.name, example.id));
 let selectedExample = '';
@@ -57,7 +59,8 @@ function restoreDraft(session: WebSession) {
     if (!saved || typeof saved.original !== 'string') return;
     draftEdited = true;
     original.value = saved.original;
-    environment.value = saved.environment === 'standard' ? 'standard' : 'mathlib';
+    environment.value = saved.environment === 'standard' && (submission.unresolved || typeof saved.selected === 'string' && !!saved.selected)
+      ? 'standard' : webTaskEnvironment;
     effort.value = ['low', 'high', 'max'].includes(String(saved.effort)) ? String(saved.effort) : 'high';
     researchEffort = ['low', 'high', 'max'].includes(String(saved.researchEffort)) ? saved.researchEffort as WebFormalizationRequest['effort']
       : ['low', 'high', 'max'].includes(String(saved.effort)) ? saved.effort as WebFormalizationRequest['effort'] : 'high';
@@ -79,7 +82,7 @@ function loadExample(id: string) {
   const example = researchExamples.find(item => item.id === id);
   if (!example) { selectedExample = ''; return; }
   original.value = locale === 'en' ? example.originalEn : example.original;
-  environment.value = example.environment;
+  environment.value = webTaskEnvironment;
   exampleSelect.value = selectedExample = id;
   $('#formalize-example-note').textContent = locale === 'en' ? example.summaryEn : example.summary;
 }
@@ -372,6 +375,7 @@ $('#formalize-form').addEventListener('submit', async event => {
   if (new TextEncoder().encode(original.value).length > caps.limits.maxOriginalBytes) { error(t('原题超过 {0} 字节，请缩短后重试。', caps.limits.maxOriginalBytes)); return; }
   if (embedded) window.dispatchEvent(new CustomEvent('theoremos:begin-natural'));
   const generation = conversationGeneration;
+  if (!(recoveringSubmission && submission?.unresolved)) environment.value = webTaskEnvironment;
   state.busy = true; controls(); error();
   const input: WebFormalizationRequest = { original: original.value, environment: environment.value === 'mathlib' ? 'mathlib' : 'standard',
     effort: effort.value as WebFormalizationRequest['effort'], apiKey: key.value,

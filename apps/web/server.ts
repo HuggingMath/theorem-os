@@ -54,7 +54,7 @@ const inputSchema = z.object({
   providerId: z.string().min(1).max(40), apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/), saveKey: z.boolean().optional(),
   model: z.string().trim().min(1).max(128).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/),
   effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']),
-  environment: z.enum(['standard', 'mathlib']).default('standard'),
+  environment: z.enum(['standard', 'mathlib']).optional(),
   source: z.string().min(1).refine(value => value.trim().length > 0 && Buffer.byteLength(value) <= webLimits.maxSourceBytes),
   task: z.string().trim().min(1).refine(value => Buffer.byteLength(value) <= webLimits.maxTaskBytes),
   maxTurns: z.union([z.literal(0), z.number().int().min(1).max(webLimits.maxTurns)]).default(0),
@@ -86,7 +86,7 @@ const explainSchema = z.object({
 }).strict();
 const precheckSchema = z.object({
   checkScope: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u).optional(),
-  environment: z.enum(['standard', 'mathlib']),
+  environment: z.enum(['standard', 'mathlib']).default(webDefaults.environment),
   source: z.string().min(1).refine(value => Buffer.byteLength(value) <= webLimits.maxSourceBytes),
   researchSelection: researchSelectionSchema.optional(),
 }).strict();
@@ -99,7 +99,7 @@ const explanationSchema = z.object({
 const formalizationSchema = z.object({
   requestId: inputSchema.shape.requestId,
   original: z.string().min(1).refine(value => value.trim().length > 0 && Buffer.byteLength(value) <= webFormalizationLimits.maxOriginalBytes),
-  environment: z.enum(['standard', 'mathlib']), effort: z.enum(['low', 'high', 'max']).optional(),
+  environment: z.enum(['standard', 'mathlib']).default(webDefaults.environment), effort: z.enum(['low', 'high', 'max']).optional(),
   researchEffort: z.enum(['low', 'high', 'max']).optional(),
   apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default(''),
   solve: z.boolean().optional(), humanReview: z.boolean().optional(),
@@ -908,6 +908,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const provider = config.providers.find(item => item.id === parsed.data.providerId);
           if (!provider) throw new HttpError(400, '该模型服务尚未配置。');
           const { saveKey, requestId: bodyRequestId, ...input } = parsed.data;
+          const legacyEnvironmentOmitted = input.environment === undefined;
+          input.environment ??= webDefaults.environment;
           const headerId = request.headers['idempotency-key'];
           if (headerId !== undefined && (typeof headerId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/u.test(headerId)
               || bodyRequestId && bodyRequestId !== headerId)) throw new HttpError(400, '提交请求标识无效或不一致。');
@@ -921,7 +923,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const submissionKeys = (failed = false) => vault ? { savedKeys: savedKeysFor(session),
             ...(failed || saveKey && typed && session.account && vault.get(session.account.id, provider.id, provider.baseUrl) !== typed
               ? { keySaveFailed: true } : {}) } : {};
-          const previous = jobs.replay(owner, input as WebRunInput, provider, requestId);
+          const previous = jobs.replay(owner, input as WebRunInput, provider, requestId, legacyEnvironmentOmitted);
           if (previous) { json(response, 200, { run: previous, ...submissionKeys() }); return; }
           if (input.libraryProposalOrigin) research.validateLibraryProposalOrigin(owner, input.libraryProposalOrigin);
           if (input.budgetOrigin) {
@@ -950,7 +952,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           }
           const readiness = await runner.readiness();
           // Another request can be accepted while readiness is being checked.
-          const raced = jobs.replay(owner, input as WebRunInput, provider, requestId);
+          const raced = jobs.replay(owner, input as WebRunInput, provider, requestId, legacyEnvironmentOmitted);
           if (raced) { json(response, 200, { run: raced, ...submissionKeys() }); return; }
           if (!readiness.ready) throw new HttpError(503, '运行环境尚未就绪，请先构建 worker 镜像。');
           const from = input.continueFrom as WebContinuation | undefined;

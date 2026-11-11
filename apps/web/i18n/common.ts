@@ -4,7 +4,6 @@ export const common: Record<string, string> = {
   "你提交的 Lean 文件，用 sorry 留出待证明的定理。": "The Lean file you submit, with the theorems to prove left as sorry.",
   "每个用 sorry 留空的定理都是一个目标。研究过程中定理的声明不能改，只有证明部分会被填写。": "Every theorem left as sorry is a goal. Statements cannot change during research; only the proofs are filled in.",
   "检查证明时使用的固定版本 Lean 和库。": "The pinned Lean version and libraries used to check proofs.",
-  "Lean 标准库或固定版本的 Mathlib。同一道题在同一环境下检查，结果才可重复。": "The Lean standard library or a pinned Mathlib. Checking a problem in the same environment keeps results reproducible.",
   "候选证明": "Candidate proof",
   "Agent 写出、还没经过最终验收的证明。": "A proof an Agent wrote that has not passed final acceptance yet.",
   "候选可能已经通过局部检查，但只有独立验收通过后才算证明完成。": "A candidate may already pass local checks, but the proof only counts as done after independent acceptance.",

@@ -238,6 +238,27 @@ describe('online formalization ownership and evidence handoff', () => {
     expect(runner.runs).toHaveLength(2);
   });
 
+  it('defaults an omitted environment to the shared mathematics environment and replays the same explicit configuration', async () => {
+    const alice = await client();
+    const input = { original: fixtureStatement, apiKey: KEY, requestId: 'shared-environment-default' };
+    const response = await request(alice, '/api/formalizations', input);
+    expect(response.status).toBe(201); await settle();
+    const value = (await response.json()).formalization as WebFormalization;
+    expect(value.environment).toBe('mathlib');
+    const pending = runner.pending.at(-1)!;
+    expect(pending.input.environment).toBe('mathlib');
+    const evidence = webFormalizationEvidence(pending.input);
+    expect(() => assertFormalizationEvidence(evidence)).not.toThrow();
+    pending.send({ type: 'result', status: 'approved', evidence }); pending.resolve(); await settle();
+    expect((await (await request(alice, `/api/formalizations/${value.id}`)).json()).formalization.status).toBe('review');
+    runner.ready = false;
+    const replay = await request(alice, '/api/formalizations', { ...input, apiKey: '', environment: 'mathlib' });
+    expect(replay.status).toBe(200);
+    expect((await replay.json()).formalization.id).toBe(value.id);
+    expect(runner.inputs).toHaveLength(1);
+    expect((await request(alice, '/api/formalizations', { ...input, environment: 'standard' })).status).toBe(409);
+  });
+
   it.each([undefined, 'max'] as const)('defaults omitted effort to high and preserves explicit effort %s through generation', async effort => {
     const alice = await client();
     const response = await request(alice, '/api/formalizations', { original: fixtureStatement, environment: 'standard', apiKey: KEY,

@@ -8,6 +8,7 @@ import { canonicalMathJson, readMathText, writeMathFrozen } from '../math/mathRu
 import { assertMathCanonicalPath } from '../math/paths';
 import type { StructuredReviewInput, StructuredSemanticReview } from '../math/formalizationSemanticReview';
 import { compareFormalizationReference } from './formalizationReference';
+import type { LibraryPack } from '../math/libraryPacks';
 
 const cancellationReasons = new Set([
   'formalization_reference_aborted', 'This operation was aborted', 'The operation was aborted',
@@ -51,11 +52,12 @@ export function shareFormalizationFidelityComparisons(
 export async function checkFormalizationFidelity(directory: string, input: StructuredReviewInput,
   review: StructuredSemanticReview, options: {
     env: NodeJS.ProcessEnv; signal?: AbortSignal; timeoutMs: number; restoreOnly?: boolean;
+    libraryPack?: LibraryPack;
     compareReference?: typeof compareFormalizationReference;
   }): Promise<FormalizationReferenceResult | undefined> {
   if (!input.fidelityPolicy || review.verdict !== 'approved') return undefined;
   if (!input.observation.snapshot || !review.fidelity) throw new Error('formalization_fidelity_evidence_missing');
-  const request = fidelityReferenceInput(input.observation.snapshot, review.fidelity);
+  const request = fidelityReferenceInput(input.observation.snapshot, review.fidelity, options.libraryPack);
   const file = path.join(directory, 'comparison.json');
   assertMathCanonicalPath(file);
   options.signal?.throwIfAborted();

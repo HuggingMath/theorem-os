@@ -14,9 +14,10 @@ export function leanLibrarySymbolCommands(names: readonly string[], environment:
     '  Lean.Core.liftIOCore <| IO.FS.writeFile ".lake/library-symbols.json" (Lean.toJson reports).compress');
 }
 
-function symbolProgram(environment: LeanTaskEnvironment, requested: string[], result: string): string {
+function symbolProgram(environment: LeanTaskEnvironment, requested: string[], result: string, imports: readonly string[] = []): string {
   return [
     'import Lean', ...(environment === 'standard' ? [] : ['import Mathlib']),
+    ...imports.map(module => 'import ' + module),
     'set_option pp.all true', 'set_option pp.fullNames true', 'set_option pp.explicit true',
     'set_option pp.universes true', 'set_option pp.notation false', 'set_option pp.deepTerms true',
     // 4.8 has no pp.maxSteps option; in 4.33, zero immediately omits the term.
@@ -61,8 +62,10 @@ function symbolProgram(environment: LeanTaskEnvironment, requested: string[], re
 }
 
 /** Role-local discovery and type inspection, using only the installed Lean environment. */
-export function leanLibraryApiProgram(environment: LeanTaskEnvironment): string {
+export function leanLibraryApiProgram(environment: LeanTaskEnvironment, imports: readonly string[] = []): string {
   const config = getLeanTaskEnvironment(environment);
+  if (imports.some(module => !/^Submission\.Library(?:\.[A-Z][A-Za-z0-9_]*)+$/u.test(module)))
+    throw new Error('lean_library_api_import_invalid');
   return symbolProgram(environment, [
     '  let text <- Lean.Core.liftIOCore <| IO.FS.readFile ".lake/library-api-query.json"',
     '  let .ok input := Lean.Json.parse text | throwError "Invalid library API query JSON"',
@@ -129,5 +132,5 @@ export function leanLibraryApiProgram(environment: LeanTaskEnvironment): string 
     `    ("mathlibRevision", ${config.mathlibRevision ? 'Lean.toJson ' + leanString(config.mathlibRevision, environment) : 'Lean.Json.null'}),`,
     '    ("queries", Lean.toJson searches), ("symbols", Lean.toJson reports)] ++ scope)',
     '  Lean.Core.liftIOCore <| IO.FS.writeFile ".lake/library-api.json" result.compress',
-  ].join('\n'));
+  ].join('\n'), [...new Set(imports)]);
 }

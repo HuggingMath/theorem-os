@@ -34,6 +34,7 @@ import { defaultFormalizationWorkflow, formalizationModelConfigurations, formali
 import { compareFormalizationReference } from './formalizationReference';
 import { assertFormalizationReferenceResult, type FormalizationReferenceResult } from '../math/formalizationReference';
 import { checkFormalizationFidelity, shareFormalizationFidelityComparisons } from './formalizationFidelity';
+import { selectFormalizationLibraryPack } from '../math/formalizationLibrary';
 import { assertStructuredSemanticReview, resolveStructuredReviewPanel, structuredReviewAspects,
   formalizationReviewInstructions, STRUCTURED_REVIEW_PROTOCOL,
   type StructuredReviewInput } from '../math/formalizationSemanticReview';
@@ -119,7 +120,7 @@ type Options = {
 };
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
 const infrastructureFailure = (message: string) =>
-  /(?:formalization_(?:sandbox|relay|profile|build|retrieval|checkpoint|fidelity_comparison_interrupted)|math_model_api_key_missing|math_codex_(?:transport_closed|rpc_failed|session_binding_mismatch))/u.test(message);
+  /(?:formalization_(?:sandbox|relay|profile|build|library|retrieval|checkpoint|fidelity_comparison_interrupted)|math_library_catalog_(?:changed|source_changed|environment_changed)|math_model_api_key_missing|math_codex_(?:transport_closed|rpc_failed|session_binding_mismatch))/u.test(message);
 class FormalizationRoleFailure extends Error {
   constructor(status: string, readonly diagnostic?: MathAgentFailureDiagnostic) {
     super('formalization_role_incomplete:' + status + (diagnostic ? ':' + diagnostic.code +
@@ -459,6 +460,9 @@ export async function runFormalization(directory: string, root: string, options:
           (request.fidelityPolicy || direct) && request.environment === 'standard' ?
             'This request uses only the Lean standard library. Installed Lean sources are in /opt/lean/src/lean; Mathlib is unavailable and /opt/lean-packages is not mounted.' :
             'Installed Lean sources are in /opt/lean/src/lean; pinned Mathlib and dependencies are in /opt/lean-packages (Mathlib: /opt/lean-packages/mathlib/Mathlib).',
+          ...(request.library && !sourceOnlyPlan ? [
+            'The same pinned TheoremOS library is available read-only at /opt/theoremos-library, with its compiled modules in LEAN_PATH. The library API also discovers TheoremOS declarations and reports their real types and defining modules. Import the returned Submission.Library.TheoremOS module explicitly when its symbols are needed; the host freezes and compiles that exact source dependency closure for the proof task. Do not redefine an installed mathematical object or change library files.',
+          ] : []),
           direct && role === 'generate' ?
             'Use the library API below for declaration discovery and type inspection. Lean remains available for a specific unresolved type or syntax question: /opt/lean/bin/lean ./SyntaxCheck.lean. Preserve its exit code; do not pipe it through head. LEAN_PATH is configured and the read-only library cache needs no Lake setup. Preserve LEAN_PATH: source directories are not compiled library paths. Do not replace it or run Lake setup/build.' :
             'Use lean directly to inspect declarations when necessary; LEAN_PATH is already configured. The installed library cache is read-only and does not need Lake setup.',
@@ -587,6 +591,7 @@ export async function runFormalization(directory: string, root: string, options:
             environment: env, signal: lease.signal,
             turnTimeoutMs: Number.isFinite(turnTimeout) ? turnTimeout : undefined,
             ...(request.execution === 'model' ? { readIsolation: { environment: request.environment,
+              ...(request.library && !sourceOnlyPlan ? { library: { file: request.library.file, digest: request.library.digest } } : {}),
               ...(sourceOnlyPlan ? { packages: 'none' as const } : {}) } } : {}),
             completedOutput: { file: outputFile, validate: value => { validateOutput(value); },
               ...(outputFeedback ? { validationFeedback: outputFeedback } : {}) },
@@ -779,6 +784,7 @@ export async function runFormalization(directory: string, root: string, options:
           const base = path.join(roundDirectory, 'refutation');
           const check = await (options.refute ?? checkFormalizationRefutations)(fs.existsSync(base) ? base + '-' + crypto.randomUUID() : base,
             source, request.environment, probes, { env, signal: lease.signal,
+              ...(request.library ? { library: request.library } : {}),
               timeoutMs: Math.max(1, Math.min(request.falsification!.maxSeconds * 1000, remaining())) });
           writeMathJsonDurable(resultFile, { status: check.status, timedOut: check.timedOut, probes: check.probes, rejected });
           event('formalization_refutation_finished', 'refute');
@@ -923,6 +929,7 @@ export async function runFormalization(directory: string, root: string, options:
               const base = path.join(roundDirectory, 'elaboration');
               elaborated = await (options.elaborate ?? elaborateFormalization)(fs.existsSync(base) ? base + '-' + crypto.randomUUID() : base,
                 candidate.source, request.environment, { env, signal: lease.signal,
+                  ...(request.library ? { library: request.library } : {}),
                   ...(structured ? { detailedContext: true } : {}),
                   ...(semanticContext ? { semanticContext: true } : {}),
                   ...(structureContext ? { structureContext: true } : {}),
@@ -1029,7 +1036,10 @@ export async function runFormalization(directory: string, root: string, options:
               const correspondence = structured ? await checkFormalizationFidelity(
                 path.join(roundDirectory, 'fidelity-' + (reviewer.id ?? 'reviewer')), compareInput as StructuredReviewInput, review as
                   import('../math/formalizationSemanticReview').StructuredSemanticReview,
-                { env, signal: lease.signal, timeoutMs: Number.isFinite(stageTimeout(request.maxCompileSeconds)) ?
+                { env, signal: lease.signal,
+                  ...(request.library && review.verdict === 'approved' && 'fidelity' in review && review.fidelity?.sourceContract ? { libraryPack:
+                    selectFormalizationLibraryPack(request.library, [candidate.source, review.fidelity.sourceContract.source]) } : {}),
+                  timeoutMs: Number.isFinite(stageTimeout(request.maxCompileSeconds)) ?
                   stageTimeout(request.maxCompileSeconds) : 0, compareReference: compareFidelity }) : undefined;
               if (request.fidelityPolicy && request.workflow?.reviewScheduling === 'parallel' && review.verdict === 'changes_requested')
                 revisionRequested = true;
@@ -1096,6 +1106,7 @@ export async function runFormalization(directory: string, root: string, options:
                 throw new Error('formalization_reference_target_mapping_invalid');
               const referenceInput = {
                 candidateSource: candidate.source, referenceSource: configured.source, environment: request.environment, pairs: configured.pairs,
+                ...(request.library ? { libraryPack: selectFormalizationLibraryPack(request.library, [candidate.source, configured.source]) } : {}),
               };
               const cachedReference = readStageCheckpoint('reference');
               if (cachedReference === undefined) {

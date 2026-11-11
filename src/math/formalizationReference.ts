@@ -13,17 +13,29 @@ import { getLeanTaskEnvironment } from './leanTaskEnvironment';
 import { inspectLeanDeclarationRegions, inspectScopedLeanDeclarations } from './leanSource';
 import { isSimpleLeanName, leanScopeCommands, maskLeanCommentsAndStrings } from './leanSyntax';
 import { canonicalMathJson, mathDigest } from './mathRuntimeIo';
-import { LAKE_CONFIGURATION_FILES } from './mathConstructionSources';
+import { LAKE_CONFIGURATION_FILES, localModuleFile, mathConstructionImports } from './mathConstructionSources';
+import { MAX_LIBRARY_MODULE_BYTES, MAX_LIBRARY_PACK_MODULES, parseLibraryPack } from './libraryPacks';
 
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const target = z.string().max(1000).refine(isSimpleLeanName);
+const libraryPackSchema = z.unknown().transform((value, context) => {
+  try {
+    const pack = parseLibraryPack(value);
+    if (pack.requires?.length) throw new Error('reference_library_external_requirement_unsupported');
+    return pack;
+  } catch (cause) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: cause instanceof Error ? cause.message : String(cause) });
+    return z.NEVER;
+  }
+});
 // Earlier generators and validators remain frozen. Only the current correspondence
 // method admits the already pinned Lean 4.8 environment, using structural rules only.
 export const formalizationReferenceInputSchema = legacyInputSchema.innerType().extend({
   environment: z.enum(['standard', 'mathlib', 'mathlib-4.8']),
   purpose: z.enum(['task-fidelity-v1', 'task-fidelity-v2']).optional(),
+  libraryPack: libraryPackSchema.optional(),
 }).strict().superRefine((input, context) => {
-  const { purpose: _purpose, ...base } = input;
+  const { purpose: _purpose, libraryPack: _libraryPack, ...base } = input;
   const checked = legacyInputSchema.safeParse({ ...base, environment: input.environment === 'standard' ? 'standard' : 'mathlib' });
   if (!checked.success) for (const issue of checked.error.issues) context.addIssue(issue);
 });
@@ -59,12 +71,13 @@ const representationResultSchema = z.object({
   check: z.enum(['completed', 'unsupported', 'unavailable']),
   proofVerified: z.literal(false), semanticEquivalenceClaimed: z.literal(false), modelInvoked: z.literal(false),
   inputDigest: digest, candidateSourceSha256: digest, referenceSourceSha256: digest,
+  libraryPack: libraryPackSchema.optional(),
   environment: z.enum(['standard', 'mathlib', 'mathlib-4.8']), environmentDigest: digest,
   limits: z.object({ timeoutMs: z.number().int().safe().nonnegative(), maxPairs: z.literal(16), maxHeartbeats: z.literal(100000) }).strict(),
   pairs: z.array(pairResult).min(1).max(16), reason: z.string().min(1).max(1000).optional(),
-  files: z.array(z.object({ file: z.string().min(1).max(100), text: z.string().max(300000), sha256: digest }).strict()).max(6),
+  files: z.array(z.object({ file: z.string().min(1).max(512), text: z.string().max(MAX_LIBRARY_MODULE_BYTES), sha256: digest }).strict()).max(MAX_LIBRARY_PACK_MODULES + 6),
   evidence: z.object({ toolIdentity: digest, sourceDigest: digest, environmentDigest: digest,
-    latest: z.unknown(), artifacts: z.array(z.object({ digest, text: z.string().max(4000000) }).strict()).min(1).max(4),
+    latest: z.unknown(), artifacts: z.array(z.object({ digest, text: z.string().max(4000000) }).strict()).min(1).max(MAX_LIBRARY_PACK_MODULES + 4),
     reportText: z.string().max(1000000), reportSha256: digest }).strict().optional(),
 }).strict();
 const taskFidelityV2ResultSchema = representationResultSchema.extend({
@@ -412,9 +425,28 @@ function referenceFiles(input: FormalizationReferenceInput, legacyV2: boolean): 
       input.pairs.some(pair => !candidateTargets.includes(pair.candidateTarget) || !referenceTargets.includes(pair.referenceTarget)))
     throw new Error('reference_target_mapping_incomplete');
   return { ...getLeanTaskEnvironment(input.environment).files,
+    ...referenceLibraryFiles(input),
     'ReferenceCandidate.lean': carrierSource(input.candidateSource, 'candidate'),
     'ReferenceGold.lean': carrierSource(input.referenceSource, 'reference'),
     [FORMALIZATION_REFERENCE_QUERY]: querySource(input, legacyV2) };
+}
+
+/** Keep precisely the imported immutable modules in both compilation and its saved evidence. */
+function referenceLibraryFiles(input: FormalizationReferenceInput): Record<string, string> {
+  if (!input.libraryPack) return {};
+  const modules = new Map(input.libraryPack.modules.map(module => [module.file, module.source]));
+  const selected = new Set<string>();
+  const imports = (source: string) => mathConstructionImports(source).map(name => name.replaceAll('«', '').replaceAll('»', ''))
+    .filter(name => name.startsWith('Submission.Library.')).map(localModuleFile);
+  const pending = [...imports(input.candidateSource), ...imports(input.referenceSource)];
+  for (let cursor = 0; cursor < pending.length; cursor++) {
+    const file = pending[cursor]!;
+    if (selected.has(file)) continue;
+    const source = modules.get(file);
+    if (source === undefined) throw new Error('reference_library_module_missing:' + file);
+    selected.add(file); pending.push(...imports(source));
+  }
+  return Object.fromEntries([...selected].sort().map(file => [file, modules.get(file)!]));
 }
 
 /** Validate saved advisory evidence against the exact request and host-generated files. */
@@ -422,6 +454,8 @@ export function assertFormalizationReferenceResult(input: FormalizationReference
   input = formalizationReferenceInputSchema.parse(input);
   const parsed = formalizationReferenceResultSchema.parse(value);
   const strictIdentity = parsed.schema === 'theoremos.formalization-reference.v7';
+  if (input.libraryPack && ['theoremos.formalization-reference.v1', 'theoremos.formalization-reference.v2',
+    'theoremos.formalization-reference.v3'].includes(parsed.schema)) throw new Error('formalization_reference_legacy_environment_unsupported');
   const taskV2Schema = parsed.schema === 'theoremos.formalization-reference.v5' || parsed.schema === 'theoremos.formalization-reference.v6' || strictIdentity;
   if (input.purpose === 'task-fidelity-v2' && !taskV2Schema ||
       input.purpose !== 'task-fidelity-v2' && (input.environment === 'mathlib-4.8' || input.purpose) &&
@@ -445,6 +479,7 @@ export function assertFormalizationReferenceResult(input: FormalizationReference
   const result = parsed;
   const invalid = () => { throw new Error('formalization_reference_evidence_invalid'); };
   if (result.inputDigest !== mathDigest(canonicalMathJson(input)) ||
+      canonicalMathJson(result.libraryPack ?? null) !== canonicalMathJson(input.libraryPack ?? null) ||
       result.candidateSourceSha256 !== mathDigest(input.candidateSource) || result.referenceSourceSha256 !== mathDigest(input.referenceSource) ||
       result.environment !== input.environment || result.environmentDigest !== getLeanTaskEnvironment(input.environment).dependencyDigest ||
       canonicalMathJson(result.pairs.map(pair => ({ candidateTarget: pair.candidateTarget, referenceTarget: pair.referenceTarget }))) !== canonicalMathJson(input.pairs))

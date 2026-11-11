@@ -10,6 +10,7 @@ import { prepareFormalizationSandbox, type FormalizationSandbox } from '../src/r
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import { MATH_PROOF_ENVIRONMENT_ENV } from '../src/math/mathProofEnvironment';
 import { mathDigest } from '../src/math/mathRuntimeIo';
+import { compiledFormalizationLibrary, formalizationLibraryLean } from './helpers/formalizationLibraryFixture';
 
 const mocks = vi.hoisted(() => ({ relay: vi.fn(), cache: vi.fn(), resolve: vi.fn(), prepare: vi.fn(), lease: vi.fn() }));
 vi.mock('../src/runtime/formalizationRelay', () => ({ startFormalizationRelay: mocks.relay }));
@@ -301,6 +302,66 @@ assert sorted(str(p) for p in pathlib.Path('/tmp').glob('library-api-*')) == bef
 print('module prefix bounds passed')`]);
     expect(result).toMatchObject({ status: 0, stdout: 'module prefix bounds passed\n', stderr: '' });
     expect(observed).toEqual([]);
+  });
+
+  it.skipIf(!fs.existsSync(formalizationLibraryLean))('discovers and imports the same frozen TheoremOS library through real Lean', async () => {
+    const f = fixture(), installed = compiledFormalizationLibrary(path.join(f.directory, 'installed-library'));
+    fs.writeFileSync(path.join(installed.root, 'HOST_PRIVATE_CANARY'), 'unlisted installed directory content');
+    const sandbox = await prepare(f, { library: installed.access });
+    expect(sandbox.receipt.library).toEqual({ root: '/opt/theoremos-library', catalogDigest: installed.access.digest,
+      buildReceiptSha256: mathDigest(fs.readFileSync(path.join(installed.root, 'build-receipt.json'))) });
+    fs.writeFileSync(path.join(installed.root, installed.modules[0].file), '-- replaced host bytes after snapshot');
+    const result = await runCommand(sandbox, ['/usr/bin/python3', '-I', '-c', `import json, os, subprocess
+root = '/opt/theoremos-library'
+assert root + '/.lake/build/lib/lean' in os.environ['LEAN_PATH'].split(':')
+assert not os.path.exists(root + '/HOST_PRIVATE_CANARY')
+assert not os.path.exists(${JSON.stringify(installed.root)})
+source = root + '/Submission/Library/TheoremOS/Environment/Base.lean'
+assert 'def successor' in open(source).read()
+for file in [source, root + '/.lake/build/lib/lean/Submission/Library/TheoremOS/Environment/Base.olean']:
+    try:
+        open(file, 'ab')
+        raise AssertionError('writable library file')
+    except OSError: pass
+lookup = subprocess.run(['/usr/bin/python3', '-I', '/opt/formalization/library-api.py',
+    '--name', 'TheoremOS.Environment.successor_zero', '--name', 'TheoremOS.Environment.Witness',
+    '--name', 'Nat.add_zero', '--query', 'successor', '--module-prefix', 'Submission.Library.TheoremOS', '--limit', '4'],
+    capture_output=True, text=True, timeout=90)
+assert lookup.returncode == 0, lookup.stdout + lookup.stderr
+packet = json.loads(lookup.stdout)
+open('/tmp/Consumer.lean', 'w').write('import Submission.Library.TheoremOS.Environment.Laws\\nexample : TheoremOS.Environment.successor 0 = 1 := TheoremOS.Environment.successor_zero\\n')
+consumer = subprocess.run(['/opt/lean/bin/lean', '/tmp/Consumer.lean'], capture_output=True, text=True)
+assert consumer.returncode == 0, consumer.stdout + consumer.stderr
+print(json.dumps(packet))`], '', 95_000);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const packet = JSON.parse(result.stdout);
+    expect(packet.symbols[0]).toMatchObject({ name: 'TheoremOS.Environment.successor_zero', exists: true,
+      module: 'Submission.Library.TheoremOS.Environment.Laws', kind: 'theorem', fields: [] });
+    expect(packet.symbols[0].type).toContain('TheoremOS.Environment.successor');
+    expect(packet.symbols[1]).toMatchObject({ name: 'TheoremOS.Environment.Witness', exists: true, structure: true,
+      fields: [{ name: 'TheoremOS.Environment.Witness.value', type: expect.stringContaining('Nat') }] });
+    expect(packet.symbols[2]).toMatchObject({ name: 'Nat.add_zero', exists: true });
+    expect(packet.queries[0].names).toContain('TheoremOS.Environment.successor');
+    expect(packet.queries[0].matches.every((match: { module: string }) => match.module.startsWith('Submission.Library.TheoremOS.'))).toBe(true);
+    expect(observed).toEqual([]);
+  }, 120_000);
+
+  it('leaves the dedicated library unavailable for older requests without a library binding', async () => {
+    const f = fixture(), sandbox = await prepare(f);
+    expect(sandbox.receipt).not.toHaveProperty('library');
+    const result = await run(sandbox, `import os
+assert not os.path.exists('/opt/theoremos-library')
+assert 'theoremos-library' not in os.environ['LEAN_PATH']
+assert 'import Submission.Library.' not in open('/opt/formalization/library-api.lean').read()
+print('legacy environment preserved')`);
+    expect(result).toMatchObject({ status: 0, stdout: 'legacy environment preserved\n', stderr: '' });
+  });
+
+  it.skipIf(!fs.existsSync(formalizationLibraryLean))('reports a changed installed library as a sandbox failure before opening a model relay', async () => {
+    const f = fixture(), installed = compiledFormalizationLibrary(path.join(f.directory, 'installed-library'));
+    fs.appendFileSync(path.join(installed.build, installed.modules[0].file.replace(/\.lean$/u, '.olean')), 'changed');
+    await expect(prepare(f, { library: installed.access })).rejects.toThrow('formalization_sandbox_library_unavailable');
+    expect(mocks.relay).not.toHaveBeenCalled();
   });
 
   it('keeps library tools read-only and malicious names inert without exposing host data or leaving queries', async () => {

@@ -4,7 +4,7 @@ import { consumeResearchEntry, readResearchEntry, researchEntryQuery, resolveRes
 import type { WebTemplate } from '../apps/web/shared';
 
 const templates: WebTemplate[] = [
-  { id: 'add-zero', name: 'Addition', environment: 'standard', source: 'theorem example (n : Nat) : n + 0 = n := by sorry', task: 'Keep this original statement.' },
+  { id: 'add-zero', name: 'Addition', environment: 'mathlib', source: 'theorem example (n : Nat) : n + 0 = n := by sorry', task: 'Keep this original statement.' },
   { id: 'polynomial', name: 'Square expansion', environment: 'mathlib', source: 'import Mathlib\n-- fixed polynomial example', task: 'Prove the fixed polynomial.' },
 ];
 
@@ -26,8 +26,9 @@ describe('public research entry continuity', () => {
 
   it('passes only a prepared draft to the matching consumer', () => {
     const statement = vi.fn(), lean = vi.fn();
+    expect(readResearchEntry('?entry=statement&environment=standard')).toEqual(readResearchEntry('?entry=statement&environment=mathlib'));
     expect(consumeResearchEntry('?entry=statement&template=add-zero&environment=standard&lang=en&text=private&key=ignored', templates, { statement, lean })).toBe(true);
-    expect(statement).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ language: 'en', environment: 'standard', statement: 'For every natural number n, prove that n + 0 = n.' }));
+    expect(statement).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ language: 'en', environment: 'mathlib', statement: 'For every natural number n, prove that n + 0 = n.' }));
     expect(statement.mock.calls[0]![0]).not.toHaveProperty('key');
     expect(statement.mock.calls[0]![0]).not.toHaveProperty('text');
     expect(lean).not.toHaveBeenCalled();
@@ -35,7 +36,7 @@ describe('public research entry continuity', () => {
     expect(lean).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ source: templates[1]!.source, environment: 'mathlib' }));
   });
 
-  it.each(['?entry=remote', '?entry=lean&template=../../private', '?entry=statement&environment=mathlib', '?entry=lean&lang=invalid'])('ignores an unsupported public entry: %s', search => {
+  it.each(['?entry=remote', '?entry=lean&template=../../private', '?entry=statement&environment=unknown', '?entry=lean&lang=invalid'])('ignores an unsupported public entry: %s', search => {
     const statement = vi.fn(), lean = vi.fn();
     expect(readResearchEntry(search)).toBeUndefined();
     expect(consumeResearchEntry(search, templates, { statement, lean })).toBe(false);

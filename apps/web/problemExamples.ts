@@ -1,4 +1,5 @@
 import type { WebEnvironment } from './shared';
+import { webTaskEnvironment } from './environment';
 
 /** The same complete problems can begin with an original statement or a Lean declaration. */
 export type ResearchExample = {
@@ -25,7 +26,7 @@ export const researchExamples: readonly ResearchExample[] = [
     summaryEn: 'Prove that adding zero leaves every natural number unchanged, using only the Lean standard library.',
     original: '证明：对任意自然数 n，都有 n + 0 = n。',
     originalEn: 'Prove that for every natural number n, n + 0 = n.',
-    environment: 'standard',
+    environment: webTaskEnvironment,
     source: 'theorem add_zero_trial (n : Nat) : n + 0 = n := by sorry\n',
     task: '证明这个自然数加零定理，保持原题声明不变。使用 Lean 标准库，根据 Lean 编译反馈修复证明，并验收完整原题。',
     taskEn: 'Prove this natural-number addition theorem without changing the original statement. Use the Lean standard library, repair the proof using Lean compiler feedback, and verify the complete original problem.',

@@ -3,6 +3,14 @@ import { loginHref, loginReturn, researchContextHref, researchNavigation, safeAp
 
 const chat = '0123abcd-0123-4abc-8def-0123456789ab', run = 'abcdef01-0123-4abc-8def-0123456789ab';
 describe('same-site app login returns', () => {
+  it('retains new mathematics entry links and upgrades published legacy addition links through login', () => {
+    const expected = '?entry=statement&template=add-zero&environment=mathlib&lang=en';
+    expect(workbenchReturn('?entry=statement&template=add-zero&environment=mathlib&lang=en')).toBe(expected);
+    expect(workbenchReturn('?entry=statement&template=add-zero&environment=standard&lang=en')).toBe(expected);
+    expect(workbenchReturn('?entry=statement&template=private&environment=mathlib&lang=en')).toBe('?lang=en');
+    expect(workbenchReturn('?entry=lean&template=polynomial&environment=standard&lang=en')).toBe('?lang=en');
+  });
+
   it.each([
     '/theorems.html?q=%E7%BE%A4&field=algebra&sort=updated&offset=20&create=1#new-theorem',
     './people.html?id=mathematician&q=Galois&field=algebra&offset=20#follow',

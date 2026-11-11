@@ -86,8 +86,14 @@ export function webDirectFormalizationEvidence(input: WorkerFormalizationInput):
   const { configurationDigest: _configuration, reviewerId: _reviewer, ...generationSession } = reviewed.sessions[1]!;
   const { translation: _translation, translationDigest: _translationDigest, review: _review,
     workflow: _evidenceWorkflow, ...base } = reviewed;
+  // The recorded review receipt stays standard-only; direct compilation follows the actual task environment.
+  const elaborated = syntheticElaboration(reviewed.candidate.source, input.environment, { detailedContext: true, semanticContext: true,
+    structureContext: true, ...(request.contextProtocol === 'kernel-v3' ? { boundedLibraryContext: true } : {}) });
   return { ...base, schema: 'theorem-os.formalization-evidence.v4', authority: 'compiler',
     method: 'generation-and-compilation', semanticReview: 'not-performed', request,
+    sourceSha256: elaborated.sourceSha256, targets: elaborated.targets,
+    snapshot: { ...elaborated.snapshot, environment: input.environment }, snapshotDigest: elaborated.snapshotDigest,
+    compilation: elaborated.compilation,
     requestDigest: formalizationDigest(request), inputDigest: formalizationInputDigest(request, reviewed.candidate),
     generation: { input: generationInput, output: reviewed.generation.output },
     sessions: [{ ...generationSession, inputDigest: formalizationDigest(generationInput) }] };

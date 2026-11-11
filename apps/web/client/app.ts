@@ -5,6 +5,7 @@ import {
 } from 'lucide';
 import type { WebAdminOverview, WebContinuation, WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebRun, WebRunRequest, WebSavedKey, WebSession } from '../shared';
 import { loginHref } from '../shared';
+import { webTaskEnvironment } from '../environment';
 import { ResearchSelection } from './researchSelection';
 import type { ResearchLibraryAttemptPreparation, ResearchLibraryPersonalAttemptPreparation } from '../researchLibraryTrialTypes';
 import { consumeResearchEntry, readResearchEntry } from './researchEntry';
@@ -25,7 +26,7 @@ import type { SourceSelection } from './sourceText';
 import { EditorNavigation, revealOffset } from './editorNavigation';
 import { diagnosticText, renderSourceCheck, SourceCheck, sourceOffset } from './sourceCheck';
 import { EditorReview } from './editorReview';
-import { decodeTaskDraft, encodeTaskDraft, readTaskDraftFile, taskDraftStorageKey, type TaskDraft } from './draft';
+import { decodeTaskDraft, editableTaskDraft, encodeTaskDraft, readTaskDraftFile, taskDraftStorageKey, type TaskDraft } from './draft';
 import { compareSources, type SourceComparison } from './sourceDiff';
 import { submissionFields, submissionIssues, tokenCap, type SubmissionField, type SubmissionIssue } from './submission';
 import { SourceReader } from './sourceReader';
@@ -1027,7 +1028,7 @@ function forgetRememberedKey() {
   restoredKey = ''; element<HTMLInputElement>('#remember-key').checked = false; element('#forget-key').hidden = true;
 }
 const environmentInfo = (id: WebEnvironment | string) => state.session?.environments.find(environment => environment.id === id);
-const environmentName = (id: WebEnvironment | string) => environmentInfo(id)?.name ?? (id === 'mathlib' ? 'Mathlib' : t('Lean 标准库'));
+const environmentName = (id: WebEnvironment | string) => environmentInfo(id)?.name ?? (id === webTaskEnvironment ? t('TheoremOS 数学环境') : t('Lean 标准库'));
 const leanVersion = (toolchain: string) => toolchain.replace(/^leanprover\/lean4:/, '');
 function updateEnvironment() {
   const environment = environmentInfo(field('environment').value);
@@ -1099,6 +1100,7 @@ async function restoreProblemDraft(value: ProblemDraftValue, beforeApply: () => 
   if (!state.session || state.submitting) throw new Error(t('编辑器尚未就绪，请重新选择恢复。'));
   const owner = ownerOfSession(state.session), revision = draftRevision, entry = researchEntry;
   const original = JSON.stringify(chatWorkspace?.problemDraft());
+  if (value.mode === 'lean') value = { ...value, draft: editableTaskDraft(value.draft, submissionIdentity.unresolved) };
   const selected = value.mode === 'lean' && value.libraries?.length ? await researchSelection.prepare(value.libraries, value.draft.environment) : undefined;
   if (value.mode === 'natural') { if (!naturalPage) naturalPage = Promise.resolve().then(loadNaturalResearch); await naturalPage; }
   if (!state.session || ownerOfSession(state.session) !== owner || state.submitting || currentRun() || draftRevision !== revision || researchEntry !== entry
@@ -1170,7 +1172,8 @@ async function recoverDraft() {
   const fromSettings = element<HTMLDialogElement>('#run-settings').open;
   restoringDraft = true; renderDraftRecovery();
   try {
-    const selected = recovery.libraries?.length ? await researchSelection.prepare(recovery.libraries, recovery.draft.environment) : undefined;
+    const draft = editableTaskDraft(recovery.draft, submissionIdentity.unresolved);
+    const selected = recovery.libraries?.length ? await researchSelection.prepare(recovery.libraries, draft.environment) : undefined;
     if (!state.session || ownerOfSession(state.session) !== owner || state.submitting || draftRevision !== revision
       || selectedId !== state.selectedId || composing !== state.composing || librariesBefore !== JSON.stringify(selectedProblemLibraries())
       || identity !== JSON.stringify(draftRecovery.current)) {
@@ -1179,7 +1182,7 @@ async function recoverDraft() {
     draftRecovery.clear();
     document.querySelector('[data-classic-origin]')?.remove();
     const address = new URL(location.href); address.searchParams.delete('fromClassic'); history.replaceState(null, '', address);
-    applyTaskDraft(recovery.draft);
+    applyTaskDraft(draft);
     if (recovery.libraries) { if (selected) researchSelection.adopt(selected); else researchSelection.clear(); }
     startDraft(); draftChanged(); saveDraft();
     if (fromSettings) openSettings('source');
@@ -1226,6 +1229,7 @@ function saveDraft() {
   }
 }
 function applyTaskDraft(draft: TaskDraft) {
+  draft = editableTaskDraft(draft, submissionIdentity.unresolved);
   continuationPreview = undefined;
   draftSharedProofOrigin = draft.sharedProofOrigin ? { ...draft.sharedProofOrigin } : undefined;
   draftClassicOrigin = draft.classicOrigin ? { ...draft.classicOrigin } : undefined;
@@ -1287,7 +1291,7 @@ async function importTaskFile(file: File) {
   const sequence = ++taskImportSequence, revision = draftRevision;
   element('#draft-error').hidden = true;
   try {
-    const draft = await readTaskDraftFile(file);
+    const draft = editableTaskDraft(await readTaskDraftFile(file), submissionIdentity.unresolved);
     if (sequence !== taskImportSequence) return;
     if (revision !== draftRevision || state.submitting) { toast(t('草稿已变化，未导入文件')); return; }
     pendingImport = { draft, revision };
@@ -2767,6 +2771,8 @@ function initialize(): Promise<void> {
       const previousEnvironment = field('environment').value;
       renderOptions(element<HTMLSelectElement>('#environment'), session.environments.map(environment => [environment.id, environment.name] as const),
         session.environments.some(environment => environment.id === previousEnvironment) ? previousEnvironment : session.defaults.environment);
+      // Keep the legacy option addressable for restored evidence, without offering it for new tasks.
+      for (const option of element<HTMLSelectElement>('#environment').options) option.hidden = option.value !== webTaskEnvironment;
       renderTemplates(field('template').value);
       element<HTMLInputElement>('#max-turns').max = String(session.limits.maxTurns);
       element<HTMLInputElement>('#max-seconds').max = String(session.limits.maxRunSeconds);
@@ -3174,7 +3180,11 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     return;
   }
   try {
-    const capturedDraft = captureDraft();
+    let capturedDraft = editableTaskDraft(captureDraft(), submissionIdentity.unresolved);
+    if (field('environment').value !== capturedDraft.environment) {
+      field('environment').value = capturedDraft.environment; renderTemplates(); updateEnvironment();
+      capturedDraft = captureDraft();
+    }
     const accountDraft = session.account ? captureProblemDraftSubmission(ownerOfSession(session), leanProblemDraft(capturedDraft, selectedProblemLibraries())) : undefined;
     const input: WebRunRequest = {
       providerId: field('provider').value, apiKey: field('api-key').value.trim(), model: field('model').value.trim(),

@@ -78,7 +78,8 @@ try {
     await page.locator('[data-chat-first-example]').click();
     const starter = researchExamples.find(example => example.id === 'add-zero')!;
     assert.equal(await page.locator('#formalize-original').inputValue(), locale === 'en' ? starter.originalEn : starter.original);
-    assert.equal(await page.locator('#formalize-environment').inputValue(), 'standard');
+    assert.equal(await page.locator('#formalize-environment').inputValue(), 'mathlib');
+    assert.deepEqual(await page.locator('#formalize-environment option:not([hidden])').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value)), ['mathlib']);
     assert.equal(writes.length, 0, 'The first-use example only fills the draft');
     await page.locator('#topbar-draft').click();
     await page.locator('[data-chat-sample]').click();

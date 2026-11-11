@@ -115,7 +115,7 @@ docker compose -f apps/web/compose.yml up -d web
 
 也可以跳过本地构建，拉取 GitHub Actions 发布到 GHCR 的镜像：`docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml pull worker web`，再用同样的两个 `-f` 参数执行 `up -d --no-build web`。
 
-打开 <http://127.0.0.1:8787>，选择证明环境和模板，填写自己的 API Key。默认连接宿主机 8080 端口的 Sub2API，模型为 `deepseek-flash`，形式化与证明的默认推理强度均为 `high`；也可选择 OpenAI 并填写其支持的模型。默认使用 Mathlib，也可切换为 Lean 标准库；页面会显示固定的 Lean 工具链和 Mathlib 版本。
+打开 <http://127.0.0.1:8787>，输入题目或选择模板，填写自己的 API Key。默认连接宿主机 8080 端口的 Sub2API，模型为 `deepseek-flash`，形式化与证明的默认推理强度均为 `high`；也可选择 OpenAI 并填写其支持的模型。网页新任务统一使用 TheoremOS 数学环境，包含固定版本的 Lean、Mathlib 和项目自有库；形式化、证明和独立验收使用同一份冻结依赖。历史任务恢复时保留原环境。
 
 <details>
 <summary>资源要求、API Key 与运行记录</summary>

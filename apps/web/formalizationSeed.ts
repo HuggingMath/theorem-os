@@ -2,11 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { bootstrapLeanTask } from '../../src/math/leanTask';
 import { assertFormalizationCompiledCandidate, bootstrapFormalizedProblem, formalizationCompiledCandidateDigest,
-  formalizationCompiledCandidateSchema, formalizationEvidenceSchema, writeFormalizationArtifact } from '../../src/math/formalization';
+  formalizationCompiledCandidateSchema, formalizationEvidenceSchema, writeFormalizationArtifact,
+  type FormalizationCompiledCandidate } from '../../src/math/formalization';
 import type { WorkerInput } from './shared';
 import { selectWebLibraryPack } from './frozenLibrary';
 import { LIBRARY_PACK_SCHEMA, parseLibraryPack, type LibraryPack } from '../../src/math/libraryPacks';
 import { canonicalMathJson } from '../../src/math/mathRuntimeIo';
+import { assertFormalizationLibraryPack } from '../../src/math/formalizationLibrary';
 
 /** Combining imports keeps identical dependencies once and rejects a changed module. */
 export function combineWebLibraryPacks(...packs: (LibraryPack | undefined)[]): LibraryPack | undefined {
@@ -32,7 +34,12 @@ export function combineWebLibraryPacks(...packs: (LibraryPack | undefined)[]): L
 export function prepareWebProblem(directory: string, request: Pick<WorkerInput, 'input' | 'formalization' | 'compiledFormalization' | 'researchConfiguration'>,
   options: { libraryPack?: LibraryPack } = {}) {
   const { input } = request;
-  const libraryPack = options.libraryPack ?? request.researchConfiguration?.libraryPack ?? selectWebLibraryPack(input);
+  const configuredLibrary = options.libraryPack ?? request.researchConfiguration?.libraryPack;
+  const taskLibrary = (evidence?: Pick<FormalizationCompiledCandidate, 'request' | 'candidate' | 'compilation'>) => {
+    const frozen = evidence && assertFormalizationLibraryPack(evidence.request.library, evidence.candidate.source,
+      evidence.compilation.diagnostics.libraryPack);
+    return combineWebLibraryPacks(frozen, configuredLibrary ?? (frozen ? undefined : selectWebLibraryPack(input)));
+  };
   const taskFile = path.join(directory, 'task.md');
   if (request.compiledFormalization) {
     if (request.formalization || !input.formalizationId) throw new Error('formalization_binding_missing');
@@ -45,7 +52,7 @@ export function prepareWebProblem(directory: string, request: Pick<WorkerInput, 
       + '\nCompiled candidate SHA256: ' + formalizationCompiledCandidateDigest(compiled)
       + '\nPreserve all definitions, assumptions and target declarations.\n' + input.task;
     const receipt = bootstrapLeanTask(path.join(directory, 'workspace'), {
-      source: compiled.candidate.source, task, environment: compiled.request.environment, libraryPack });
+      source: compiled.candidate.source, task, environment: compiled.request.environment, libraryPack: taskLibrary(compiled) });
     fs.writeFileSync(path.join(directory, 'compiled-formalization.json'), JSON.stringify(compiled), { flag: 'wx', mode: 0o400 });
     fs.writeFileSync(taskFile, task + '\nProve every target in generated/problem/Submission.lean.\n', { mode: 0o600 });
     return { workspaceRoot: receipt.workspaceRoot, activeProblemPath: receipt.activeProblemPath, taskFile };
@@ -58,13 +65,13 @@ export function prepareWebProblem(directory: string, request: Pick<WorkerInput, 
     const frozen = path.join(directory, 'formalized');
     fs.mkdirSync(frozen, { mode: 0o700 });
     writeFormalizationArtifact(frozen, evidence);
-    const seed = bootstrapFormalizedProblem(frozen, { libraryPack });
+    const seed = bootstrapFormalizedProblem(frozen, { libraryPack: taskLibrary(evidence) });
     fs.writeFileSync(taskFile, fs.readFileSync(seed.taskFile, 'utf8') + '\n\nAdditional research instructions:\n' + input.task + '\n', { mode: 0o600 });
     return { workspaceRoot: seed.workspaceRoot, activeProblemPath: seed.receiptFile, taskFile };
   }
   const receipt = bootstrapLeanTask(path.join(directory, 'workspace'), {
     source: input.source, task: input.task, environment: input.environment ?? 'standard',
-    libraryPack });
+    libraryPack: taskLibrary() });
   fs.writeFileSync(taskFile, input.task + '\nOverall run objective: prove every original target in generated/problem/Submission.lean, preserving all original declarations. ' +
     'In cooperative mode, complete only your current assignment and preserve other original goal proofs, including existing sorry placeholders; the host integrates checked tasks and verifies all targets.\n', { mode: 0o600 });
   return { workspaceRoot: receipt.workspaceRoot, activeProblemPath: receipt.activeProblemPath, taskFile };

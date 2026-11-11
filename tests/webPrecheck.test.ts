@@ -7,7 +7,7 @@ import { bootstrapLeanTask, LEAN_TASK_DECLARATIONS_MAX } from '../src/math/leanT
 import { createWebService } from '../apps/web/server';
 import { readWebConfig } from '../apps/web/config';
 import type { WebRunner } from '../apps/web/runner';
-import type { WebSession } from '../apps/web/shared';
+import { webLimits, type WebSession } from '../apps/web/shared';
 import { inspectStatement, leanDiagnostics, precheckResult, PrecheckSuperseded, WebPrechecker, type WebPrecheckOutput } from '../apps/web/precheck';
 
 // Captured from `lean --json` 4.33 in theorem-os-worker:local.
@@ -235,12 +235,25 @@ describe('POST /api/precheck', () => {
       expect(service.session.precheck).toBe(true);
       expect((await service.post(body, '0'.repeat(64))).status).toBe(403);
       expect((await service.post({ ...body, environment: 'other' })).status).toBe(400);
-      expect((await service.post({ ...body, source: 'x'.repeat(40_000) })).status).toBe(400);
+      expect((await service.post({ ...body, source: 'x'.repeat(webLimits.maxSourceBytes + 1) })).status).toBe(400);
       expect((await service.post({ ...body, extra: true })).status).toBe(400);
       const response = await service.post(body);
       expect(response.status).toBe(200);
       expect((await response.json()).precheck).toMatchObject({ status: 'ready', environment: 'standard', sorries: 1, targets: 1 });
       expect(seen).toEqual([body.source]);
+    } finally { await service.close(); }
+  });
+  it('uses the shared environment when omitted and retains an explicit legacy environment', async () => {
+    const environments: string[] = [];
+    const service = await start(async input => { environments.push(input.environment); return ok(sorry); });
+    try {
+      const shared = await service.post({ source: body.source });
+      expect(shared.status).toBe(200);
+      expect((await shared.json()).precheck).toMatchObject({ environment: 'mathlib', status: 'ready' });
+      const legacy = await service.post(body);
+      expect(legacy.status).toBe(200);
+      expect((await legacy.json()).precheck).toMatchObject({ environment: 'standard', status: 'ready' });
+      expect(environments).toEqual(['mathlib', 'standard']);
     } finally { await service.close(); }
   });
   it('answers 409 to a check replaced by a newer one and stops the compile when the client leaves', async () => {

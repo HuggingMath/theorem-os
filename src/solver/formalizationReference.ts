@@ -82,6 +82,7 @@ async function referenceAttempt(directory: string, input: FormalizationReference
     authority: 'advisory-lean-process', status: 'not-established', check: 'unavailable', proofVerified: false,
     semanticEquivalenceClaimed: false, modelInvoked: false, inputDigest: mathDigest(canonicalMathJson(input)),
     candidateSourceSha256: mathDigest(input.candidateSource), referenceSourceSha256: mathDigest(input.referenceSource),
+    ...(input.libraryPack ? { libraryPack: input.libraryPack } : {}),
     environment: input.environment, environmentDigest: config.dependencyDigest,
     limits: { timeoutMs: options.timeoutMs, maxPairs: 16, maxHeartbeats: 100000 },
     pairs: unknownPairs('not-run'), files: [],
@@ -91,7 +92,10 @@ async function referenceAttempt(directory: string, input: FormalizationReference
     result.files = Object.entries(files).map(([file, text]) => ({ file, text, sha256: mathDigest(text) }));
     const project = path.join(directory, 'project');
     fs.mkdirSync(project, { mode: 0o700 });
-    for (const [file, contents] of Object.entries(files)) writeMathFrozen(path.join(project, file), contents);
+    for (const [file, contents] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(project, file)), { recursive: true, mode: 0o700 });
+      writeMathFrozen(path.join(project, file), contents);
+    }
     let env = resolveMathematicsRuntimeEnvironment(options.env);
     const readiness = checkResolvedLeanToolchainReadiness({ projectRoot: project, env, timeoutMs: Math.min(10000, remaining()) });
     frozenJson(path.join(directory, 'toolchain-readiness.json'), readiness);
@@ -124,7 +128,7 @@ async function referenceAttempt(directory: string, input: FormalizationReference
       if (mathDigest(text) !== reference.digest) throw new Error('formalization_reference_evidence_changed');
       return { digest: reference.digest, text };
     });
-    if (result.files.some(file => readMathText(path.join(project, file.file), 300000) !== file.text))
+    if (result.files.some(file => readMathText(path.join(project, file.file), Buffer.byteLength(file.text)) !== file.text))
       throw new Error('formalization_reference_source_changed');
     const reportFile = path.join(project, FORMALIZATION_REFERENCE_REPORT);
     assertMathCanonicalPath(reportFile);

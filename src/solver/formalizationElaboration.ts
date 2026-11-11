@@ -12,12 +12,15 @@ import { resolveMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnviron
 import { canonicalMathJson, mathDigest, readMathFile, readMathText, writeMathFrozen } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath } from '../math/paths';
 import { resolveMathematicsLakePackagesCache } from '../math/verifier';
+import { selectFormalizationLibraryPack, type FormalizationLibrary } from '../math/formalizationLibrary';
+import { installLibraryPack } from '../math/libraryPacks';
 
 type ElaborationOptions = {
   env: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   timeoutMs: number;
   proofEnvironmentCacheRoot?: string;
+  library?: FormalizationLibrary;
   /** Export explicit elaborated terms and the top-level binder dependency graph. */
   detailedContext?: boolean;
   /** Export raw/kernel types and the local definition meaning closure. */
@@ -71,6 +74,9 @@ export async function elaborateFormalization(directory: string, source: string, 
   const project = path.join(directory, 'project');
   fs.mkdirSync(project, { recursive: true, mode: 0o700 });
   for (const [file, contents] of Object.entries(config.files)) writeMathFrozen(path.join(project, file), contents);
+  const libraryPack = options.library ? selectFormalizationLibraryPack(options.library, source) : undefined;
+  const libraryFiles = libraryPack ? installLibraryPack(project, libraryPack, { trustedFiles: Object.keys(config.files),
+    solverOwnedFiles: ['Formalization.lean', 'FormalizationContext.lean'] }) : {};
   writeMathFrozen(path.join(project, 'Formalization.lean'), source);
   const queryFile = 'FormalizationContext.lean', contextFile = '.lake/formalization-context.json';
   const query = 'import Lean\nimport Formalization\n' + leanStatementContextCommands(
@@ -145,6 +151,7 @@ export async function elaborateFormalization(directory: string, source: string, 
         return { ...reference, path: relative };
       });
       if (readMathText(path.join(project, 'Formalization.lean')) !== source || readMathText(path.join(project, queryFile)) !== query ||
+          Object.entries(libraryFiles).some(([file, digest]) => mathDigest(readMathText(path.join(project, file))) !== digest) ||
           Object.entries(config.files).some(([file, contents]) => readMathText(path.join(project, file)) !== contents))
         throw new Error('formalization_compilation_source_changed');
       const contextPath = path.join(project, contextFile);
@@ -160,7 +167,8 @@ export async function elaborateFormalization(directory: string, source: string, 
       const snapshot = { schema: 'theorem-os.formalization-snapshot.v1', source, sourceSha256,
         environment, environmentDigest: config.dependencyDigest,
         targets: targets.map(target => ({ ...target, context: contexts.get(target.name)! })) };
-      const evidence = { ...diagnostics, toolIdentity: latest.toolIdentity, latest, diagnosticArtifacts: artifacts, artifactRecords,
+      const evidence = { ...diagnostics, ...(libraryPack ? { libraryPack } : {}),
+        toolIdentity: latest.toolIdentity, latest, diagnosticArtifacts: artifacts, artifactRecords,
         contextExport: { path: contextFile, digest: mathDigest(contextText), text: contextText } };
       if (Buffer.byteLength(canonicalMathJson(evidence)) > 8_000_000) throw new Error('formalization_compilation_evidence_incomplete');
       compiled = { source, sourceSha256, environmentDigest: config.dependencyDigest, targets, snapshot,

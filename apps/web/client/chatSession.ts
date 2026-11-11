@@ -4,6 +4,7 @@ import { webFormalizationDefaults, webFormalizationLimits, type WebFormalization
 import type { WebRun, WebSavedKey, WebSession } from '../shared';
 import { locale, localizeMessage, t } from '../i18n';
 import { researchExamples } from '../problemExamples';
+import { webTaskEnvironment } from '../environment';
 import { renderChatComposer, renderChatHistory, renderChatOriginal, renderChatThread, type ChatBudgets, type ChatProvider } from './ui/ChatWorkspace';
 import { renderLiveWorkspace } from './ui/LiveWorkspace';
 import { ChatReadingPosition } from './chatReadingPosition';
@@ -15,7 +16,7 @@ import { nextSteps, summarizeGoals } from '../report';
 import type { ChatArtifactKind } from './chatArtifactNavigation';
 import { clockTime } from './collaborationUi';
 import type { PlanApprovalProps } from './ui/RunHeader';
-import { decodeChatDraft, encodeChatDraft, historicalChatSettings, readEditedProblemId, type ChatDraft, type ChatDraftSettings, type ChatPendingMessage, type ChatOriginalBackup } from './chatDraft';
+import { decodeChatDraft, editableChatSettings, encodeChatDraft, historicalChatSettings, readEditedProblemId, type ChatDraft, type ChatDraftSettings, type ChatPendingMessage, type ChatOriginalBackup } from './chatDraft';
 import { libraryReferenceId, withLibraryReferences, type ChatLibraryReference } from './chatReference';
 import type { ProblemDraftValue } from '../problemDraftTypes';
 import type { ProblemDraftPanelProps } from './problemDrafts';
@@ -289,7 +290,8 @@ export class ChatSession {
     } catch { /* In-memory drafts remain available. */ }
     this.references = draft?.references ?? [];
     if (draft?.settings) {
-      const { providerId, model, environment, effort, researchEffort, participation, maxRunSeconds, maxTotalTokens, research } = draft.settings;
+      const { providerId, model, environment, effort, researchEffort, participation, maxRunSeconds, maxTotalTokens, research } = editableChatSettings(draft.settings,
+        !(id === 'home' || id.startsWith('edit-')) || this.submissionIdentity.unresolved);
       Object.assign(this, { providerId, model, environment, effort, researchEffort: researchEffort ?? effort, participation });
       this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...webFormalizationDefaults.research, ...research } }; this.hasDraftSettings = true;
     }
@@ -419,13 +421,13 @@ export class ChatSession {
     if (reset) this.references = [];
     this.draft = reset ? '' : this.restoredDraft('home');
     if (reset) { this.pendingMessage = undefined; this.messageErrorId = ''; this.originalBackup = undefined; }
-    if (reset) { this.submissionIdentity.clear(); this.rememberDraft(); }
+    if (reset) { this.submissionIdentity.clear(); this.environment = webTaskEnvironment; this.rememberDraft(); }
     document.body.dataset.chatArtifact = '';
     document.body.dataset.outputOpen = 'false';
     this.draw(); this.options.onConversation();
   }
   /** Edits have their own saved input; returning home restores its independent unfinished question. */
-  openEditedProblem(id: string, original?: string, mode: 'push' | 'replace' = 'push', environment?: 'standard' | 'mathlib') {
+  openEditedProblem(id: string, original?: string, mode: 'push' | 'replace' = 'push', _environment?: 'standard' | 'mathlib') {
     if (!readEditedProblemId(new URLSearchParams({ editProblem: id }))) return;
     const settings = historicalChatSettings(this.formalization, this.run, this.problemDraft().settings);
     this.home(false); this.editedProblem = id;
@@ -434,9 +436,9 @@ export class ChatSession {
       try { return sessionStorage.getItem(`theorem-os.chat-draft.${this.options.draftScope}.${this.draftId}`) !== null; } catch { return false; }
     })();
     if (!saved && original !== undefined) {
-      const { maxRunSeconds, maxTotalTokens, research, ...historical } = settings;
+      const { maxRunSeconds, maxTotalTokens, research, ...historical } = editableChatSettings(settings, this.submissionIdentity.unresolved);
       Object.assign(this, historical, { researchEffort: historical.researchEffort ?? historical.effort }); this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...research } }; this.hasDraftSettings = true;
-      this.draft = original; this.references = []; if (environment) this.environment = environment;
+      this.draft = original; this.references = [];
     }
     this.rememberDraft(); this.options.onNavigate('', mode, false, id); this.options.onSelection(); this.draw(); this.focus();
   }
@@ -446,7 +448,7 @@ export class ChatSession {
   }
   restoreProblemDraft(value: Extract<ProblemDraftValue, { mode: 'natural' }>) {
     this.home(false); this.keepOriginal();
-    const { maxRunSeconds, maxTotalTokens, research, ...settings } = value.settings;
+    const { maxRunSeconds, maxTotalTokens, research, ...settings } = editableChatSettings(value.settings, this.submissionIdentity.unresolved);
     Object.assign(this, settings, { researchEffort: settings.researchEffort ?? settings.effort }); this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...research } }; this.hasDraftSettings = true;
     this.draft = value.text; this.apiKey = ''; this.clearConnection(); this.rememberDraft(); this.draw(); this.focus();
   }
@@ -459,14 +461,16 @@ export class ChatSession {
     const backup = this.originalBackup; if (!backup) return;
     this.originalBackup = undefined;
     if (backup.settings) {
-      const { maxRunSeconds, maxTotalTokens, research, ...settings } = backup.settings;
+      const { maxRunSeconds, maxTotalTokens, research, ...settings } = editableChatSettings(backup.settings, this.submissionIdentity.unresolved);
       Object.assign(this, settings, { researchEffort: settings.researchEffort ?? settings.effort }); this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...research } };
     }
     this.draft = backup.text; this.apiKey = ''; this.clearConnection(); this.rememberDraft(); this.draw(); this.focus();
   }
   fillOriginal(original: string) { if (original !== this.draft) this.keepOriginal(); this.quotedDrafts.delete(this.draftId); this.draft = original; this.rememberDraft(); this.draw(); this.focus(); }
-  prepareOriginal(original: string, environment: 'standard' | 'mathlib') {
-    this.home(false); this.keepOriginal(); this.environment = environment; this.fillOriginal(original);
+  prepareOriginal(original: string, _environment: 'standard' | 'mathlib') {
+    this.home(false); this.keepOriginal();
+    if (!this.submissionIdentity.unresolved) this.environment = webTaskEnvironment;
+    this.fillOriginal(original);
     requestAnimationFrame(() => this.composer.querySelector<HTMLTextAreaElement>('textarea')?.scrollIntoView({ block: 'center', behavior: 'instant' }));
   }
   revealMessage(id: string) {
@@ -487,7 +491,7 @@ export class ChatSession {
   includeProblemDraft(text: string, environment: 'standard' | 'mathlib', independentId?: string) {
     if (!this.options.draftScope || this.loading || this.submitting || this.currentId || this.run || this.seed) return false;
     if (independentId) { this.openEditedProblem(independentId, text, 'push', environment); return true; }
-    this.environment = environment;
+    if (!this.submissionIdentity.unresolved) this.environment = webTaskEnvironment;
     if (!this.draft.includes(text)) this.draft += `${this.draft ? '\n\n' : ''}${text}`;
     this.rememberDraft(); this.draw(); this.focus(); return true;
   }
@@ -650,6 +654,7 @@ export class ChatSession {
     const text = seed?.original ?? message?.text ?? retryText ?? withLibraryReferences(draftText, references, locale);
     if (conversation?.messages.some(message => message.kind === 'text' && message.status === 'pending')) return;
     const session = this.options.session();
+    if (!conversation && !seed && !this.submissionIdentity.unresolved) this.environment = webTaskEnvironment;
     const accountDraft = !conversation && !seed && session?.account ? captureProblemDraftSubmission(session.draftOwner ?? this.options.draftScope, this.problemDraft()) : undefined;
     this.readRevision++; this.submitting = true; this.error = ''; this.draw();
     try {
@@ -899,7 +904,7 @@ export class ChatSession {
   }
   private useExample(id: string) {
     const example = researchExamples.find(item => item.id === id);
-    if (example) { this.keepOriginal(); this.environment = example.environment; this.fillOriginal(locale === 'en' ? example.originalEn : example.original); }
+    if (example) { this.keepOriginal(); if (!this.submissionIdentity.unresolved) this.environment = webTaskEnvironment; this.fillOriginal(locale === 'en' ? example.originalEn : example.original); }
   }
   private refreshGuidanceFeedback(force = false) {
     const runId = this.run?.id;
@@ -966,6 +971,7 @@ export class ChatSession {
     const newProblem = !this.conversation && !this.run;
     const editedSubmission = newProblem && !!this.seed && withLibraryReferences(this.draft, this.references, locale) !== this.seed.original;
     const pendingSubmission = newProblem && this.submissionIdentity.unresolved;
+    if (newProblem && !this.seed && !pendingSubmission) this.environment = webTaskEnvironment;
     const busyFormalization = newProblem && !this.seed && !pendingSubmission && !!this.capabilities
       && this.formalizations.filter(item => running(item)).length >= this.capabilities.limits.perOwner;
     const unavailable = newProblem && !pendingSubmission && this.capabilities?.available === false;
@@ -1122,7 +1128,7 @@ export class ChatSession {
             ? t('当前服务暂不支持自然语言解题，可切换到 Lean 输入。')
             : t('运行环境暂未就绪，原题会保留；恢复后可继续发送。')
         : newProblem && !this.capabilities ? t("正在连接…") : canGuide ? t('讨论用于交流思路；想调整研究，请切换到「指导研究」。') : undefined,
-      onEnvironment: value => { this.environment = value; this.rememberDraft(); this.draw(); }, onEffort: value => { this.effort = value; this.researchEffort = value; this.rememberDraft(); this.draw(); },
+      onEnvironment: () => { if (!this.submissionIdentity.unresolved && !this.seed && !this.conversation && !this.run) this.environment = webTaskEnvironment; this.rememberDraft(); this.draw(); }, onEffort: value => { this.effort = value; this.researchEffort = value; this.rememberDraft(); this.draw(); },
       onKey: value => { this.apiKey = value; this.keyNotice = ''; this.clearConnection(); this.draw(); },
       onExample: id => this.useExample(id),
       onLean: this.options.onLean,

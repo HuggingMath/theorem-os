@@ -16,6 +16,8 @@ import { resolveMathematicsLakePackagesCache } from '../math/verifier';
 import { startFormalizationRelay } from './formalizationRelay';
 import type { ModelRequestGate } from './modelRequest';
 import { sub2apiModelCatalog } from './sub2api';
+import { FORMALIZATION_LIBRARY_ROOT, readFormalizationLibraryRelease, snapshotFormalizationLibrary,
+  type FormalizationLibraryAccess } from './formalizationLibrary';
 
 const CAPABILITY_ENV = 'FORMALIZATION_RELAY_CAPABILITY';
 const BASE_URL = 'http://127.0.0.1:18888/v1';
@@ -96,6 +98,7 @@ export type FormalizationSandboxReceipt = Readonly<{
   roleInstructionsSha256: string; outputSchemaSha256: string;
   packages: Readonly<{ kind: 'none' | 'sealed'; root?: '/opt/lean-packages'; identity?: string; contents?: 'sources' }>;
   libraryApi?: Readonly<{ scriptSha256: string; programSha256: string }>;
+  library?: Readonly<{ root: typeof FORMALIZATION_LIBRARY_ROOT; catalogDigest: string; buildReceiptSha256: string }>;
   auditDirectory: string; canary: 'passed';
 }>;
 export type FormalizationSandbox = Readonly<{
@@ -107,6 +110,7 @@ type Input = Readonly<{
   workspace: string; executable: string; profile: string; model: string; effort: string;
   environment: LeanTaskEnvironment; env?: NodeJS.ProcessEnv; signal?: AbortSignal;
   packages?: 'none' | 'sources';
+  library?: FormalizationLibraryAccess;
   outputSchema?: Record<string, unknown>;
   requestGate?: ModelRequestGate; onUsageIncomplete?: () => void;
 }>;
@@ -236,7 +240,15 @@ export async function prepareFormalizationSandbox(input: Input): Promise<Formali
   try {
     const profile = path.join(temporary, 'profile'), probe = path.join(temporary, 'probe');
     fs.mkdirSync(profile, { mode: 0o700 }); fs.mkdirSync(probe, { mode: 0o700 });
-    const apiProgram = leanLibraryApiProgram(input.environment);
+    const librarySnapshot = path.join(temporary, 'library');
+    let library: ReturnType<typeof readFormalizationLibraryRelease> | undefined;
+    if (input.library) {
+      try {
+        library = readFormalizationLibraryRelease(input.library, input.environment);
+        snapshotFormalizationLibrary(librarySnapshot, library);
+      } catch (cause) { throw new Error('formalization_sandbox_library_unavailable', { cause }); }
+    }
+    const apiProgram = leanLibraryApiProgram(input.environment, library?.modules.map(module => module.import));
     fs.writeFileSync(path.join(temporary, 'library-api.py'), libraryApiScript, { mode: 0o400, flag: 'wx' });
     fs.writeFileSync(path.join(temporary, 'library-api.lean'), apiProgram, { mode: 0o400, flag: 'wx' });
     for (const [name, text] of Object.entries(config.files)) {
@@ -303,9 +315,10 @@ export async function prepareFormalizationSandbox(input: Input): Promise<Formali
     // Also support a directly supplied native executable without exposing its host parent.
     args.push('--ro-bind', executable.file, COMMAND);
     if (packagesFd !== undefined) args.push('--ro-bind-fd', '3', '/opt/lean-packages');
+    if (library) args.push('--ro-bind', librarySnapshot, FORMALIZATION_LIBRARY_ROOT);
     const variables = { PATH: '/opt/codex/codex-path:/opt/codex/path:/opt/lean/bin:/usr/bin:/bin', HOME: '/home/role',
       CODEX_HOME: '/profile', TMPDIR: '/tmp', LANG: 'C.UTF-8', LAKE_HOME: '/tmp/lake', ELAN_HOME: '/tmp/elan',
-      LEAN_NUM_THREADS: '1', LEAN_PATH: ['/opt/lean/lib/lean', ...packageNames.map(name =>
+      LEAN_NUM_THREADS: '1', LEAN_PATH: ['/opt/lean/lib/lean', ...(library ? [`${FORMALIZATION_LIBRARY_ROOT}/${library.buildDirectory}`] : []), ...packageNames.map(name =>
         `/opt/lean-packages/${name}/${config.packageLibraryDirectory ?? '.lake/build/lib/lean'}`)].join(':'),
       ...(packageNames.includes('mathlib') ? { MATHLIB_ROOT: '/opt/lean-packages/mathlib' } : {}), [CAPABILITY_ENV]: relay.apiKey };
     args.push('--chdir', '/workspace', ...Object.entries(variables).flatMap(([name, value]) => ['--setenv', name, value]));
@@ -335,6 +348,8 @@ assert 'Lean (version ${expectedVersion},' in result.stdout
       inputSha256: mathDigest(protocol[0].bytes), roleInstructionsSha256: mathDigest(protocol[1].bytes),
       outputSchemaSha256: mathDigest(protocol[2].bytes),
       libraryApi: { scriptSha256: mathDigest(libraryApiScript), programSha256: mathDigest(apiProgram) },
+      ...(library ? { library: { root: FORMALIZATION_LIBRARY_ROOT, catalogDigest: input.library!.digest,
+        buildReceiptSha256: library.buildReceiptSha256 } } : {}),
       packages, auditDirectory: profile, canary: 'passed' };
     fs.writeFileSync(path.join(temporary, 'receipt.json'), canonicalMathJson(receipt), { mode: 0o400, flag: 'wx' });
     audit = true;

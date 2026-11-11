@@ -128,7 +128,8 @@ export async function runFormalizationAudit(directory: string, root: string, evi
     session = await (options.openSession ?? createCodexMathSession)({ ...config, workspace,
       instructions, environment: resolveMathematicsRuntimeEnvironment(options.env ?? process.env),
       signal: controller.signal, turnTimeoutMs: maxRunSeconds ? Math.max(1, maxRunSeconds * 1000 - (Date.now() - Date.parse(state.startedAt))) : undefined,
-      readIsolation: { environment: evidence.request.environment, packages: 'sources' },
+      readIsolation: { environment: evidence.request.environment, packages: 'sources',
+        ...(evidence.request.library ? { library: { file: evidence.request.library.file, digest: evidence.request.library.digest } } : {}) },
       outputSchema: formalizationAuditOutputSchema,
       onItem: (phase, item, context) => {
         if (phase === 'completed' && item.type === 'agentMessage' && typeof item.text === 'string' &&
@@ -156,7 +157,8 @@ export async function runFormalizationAudit(directory: string, root: string, evi
     if (evidence.sessions.some(author => author.threadId === record.threadId)) throw new Error('formalization_audit_generation_thread_reused');
     state.isolationReceipt = session.isolationReceipt;
     if (!options.openSession || evidence.execution === 'model' || session.isolationReceipt)
-      assertFormalizationReviewIsolation(session.isolationReceipt, evidence.request.environment, inputText, instructions, schemaText, 'sources');
+      assertFormalizationReviewIsolation(session.isolationReceipt, evidence.request.environment, inputText, instructions, schemaText, 'sources',
+        evidence.request.library ? { digest: evidence.request.library.digest } : undefined);
     if (session.usageSource === 'upstream-requests') initializeRequestUsageAccounting(record);
     record.usageAccounting.startedTurns = 1; record.usageAccounting.pending = true; record.status = 'running'; save();
     const message = inlineView

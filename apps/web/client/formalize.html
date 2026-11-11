@@ -21,7 +21,7 @@
           <textarea id="formalize-original" rows="9" required spellcheck="false" placeholder="粘贴完整的数学题目，包括假设、定义与需要证明的结论。支持 TeX。" aria-describedby="formalize-original-note"></textarea>
           <p id="formalize-original-note" class="field-note">全文按输入保存，空格与换行不会被改写。请勿在这里填研究指令。</p>
           <details id="formalize-settings" open><summary>模型设置</summary><div class="formalize-settings-fields">
-          <div class="formalize-options"><label for="formalize-environment">证明环境<select id="formalize-environment"><option value="standard">标准库</option><option value="mathlib">Mathlib</option></select></label><label for="formalize-effort">推理强度<select id="formalize-effort"><option value="max">最高</option><option value="high" selected>高</option><option value="low">低</option></select></label></div>
+          <div class="formalize-options"><label for="formalize-environment">证明环境<select id="formalize-environment"><option value="mathlib">TheoremOS 数学环境</option><option value="standard" hidden>Lean 标准库</option></select></label><label for="formalize-effort">推理强度<select id="formalize-effort"><option value="max">最高</option><option value="high" selected>高</option><option value="low">低</option></select></label></div>
           <label for="formalize-key">API Key<span id="formalize-key-note" class="field-note"></span></label><input id="formalize-key" type="password" autocomplete="off" spellcheck="false" aria-describedby="formalize-key-note" placeholder="仅本次使用，不在浏览器保存">
           <div id="formalize-budget" class="formalize-budget" aria-live="polite">正在读取可用配置…</div>
           <p id="formalize-unavailable" class="field-note" hidden></p>

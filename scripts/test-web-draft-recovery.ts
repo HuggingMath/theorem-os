@@ -22,7 +22,7 @@ const injection = '<img data-recovery-injection src=x onerror="window.__recovery
 const widths = [1440, 375, 320];
 const ids = { providerId: 'provider', model: 'model', effort: 'effort', environment: 'environment', templateId: 'template',
   source: 'source', task: 'task', maxTurns: 'max-turns', maxRunSeconds: 'max-seconds', workers: 'workers' };
-const original: TaskDraft = { providerId: 'backup', model: 'fixture-original-model', effort: 'medium', environment: 'standard', templateId: '',
+const original: TaskDraft = { providerId: 'backup', model: 'fixture-original-model', effort: 'medium', environment: 'mathlib', templateId: '',
   source: `-- ${injection}\ntheorem unsent_original : True := by sorry\n`, task: `Unsent original task\n${injection}`,
   maxTurns: '4', maxRunSeconds: '120', workers: '2', coordination: 'independent' };
 const taskFile = (draft: TaskDraft) => Buffer.from(JSON.stringify({ schema: draftKey, draft }));
@@ -201,17 +201,32 @@ const writeReport = (status: 'passed' | 'failed', error?: unknown) => writeScena
 try {
   browser = await startBrowser(service.server, port);
 
-  await scenario('Select changes recover the previous environment and template before input/change handlers update them', async h => {
+  for (const pending of [false, true]) await scenario(`A legacy standard draft ${pending ? 'retains an uncertain request identity' : 'opens in the shared environment'}`, async h => {
+    const { page } = h; await open(h);
+    const legacy = { ...original, environment: 'standard' as const };
+    const identity = { requestId: crypto.randomUUID(), digest: 'a'.repeat(64) };
+    await page.addInitScript(({ legacy, identity, pending }) => {
+      sessionStorage.setItem('theorem-os.web-draft.v1', JSON.stringify({ schema: 'theorem-os.web-draft.v1', draft: legacy }));
+      sessionStorage.setItem('theorem-os.research-entry.v1', 'lean');
+      if (pending) sessionStorage.setItem('theorem-os.web-submission.v1', JSON.stringify(identity));
+    }, { legacy, identity, pending });
+    await page.reload(); await ready(page);
+    await assertDraft(page, pending ? legacy : original);
+    assert.deepEqual(await page.locator('#environment option:not([hidden])').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value)), ['mathlib']);
+    assert.deepEqual(await page.evaluate(() => JSON.parse(sessionStorage.getItem('theorem-os.web-submission.v1') ?? 'null')), pending ? identity : null);
+  });
+
+  await scenario('Template changes preserve the previous draft within the shared environment', async h => {
     const { page } = h; await open(h);
     assert.equal(await page.locator('#draft-recovery').isVisible(), false, 'initialization must not create a replacement backup');
-    // A new draft starts blank with no template; an environment change replaces only a chosen template's content.
+    // Templates share the same environment and keep one replacement backup.
     await selectConfig(page, 'template', 'polynomial'); await dismiss(page);
     const defaults = await snapshot(page);
     await fillConfig(page, 'api-key', credential);
-    await selectConfig(page, 'environment', 'standard');
+    await selectConfig(page, 'template', 'add-zero');
     await assertBackup(page, defaults, 'template');
     await openSettings(page); await restore(page, defaults, true); await closeSettings(page);
-    await selectConfig(page, 'environment', 'standard'); await dismiss(page);
+    await selectConfig(page, 'template', 'add-zero'); await dismiss(page);
     const addition = await snapshot(page);
     assert.equal(addition.templateId, 'add-zero');
     await selectConfig(page, 'template', 'logic'); await assertBackup(page, addition, 'template');
@@ -222,7 +237,7 @@ try {
     assert.equal(await recovery(page), null, 'restoring must consume the backup');
   });
 
-  await scenario('Chat suggestions cross environments atomically and repeated suggestions preserve the existing backup', async h => {
+  await scenario('Chat suggestions share one environment and repeated suggestions preserve the existing backup', async h => {
     const { page } = h; await open(h); await cleanDraft(page);
     await fillConfig(page, 'api-key', credential);
     await showExamples(page); await page.locator('[data-chat-template="polynomial"]').click();
