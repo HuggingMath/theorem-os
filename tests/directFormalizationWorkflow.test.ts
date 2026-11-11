@@ -33,7 +33,7 @@ function fixture(candidates: ReturnType<typeof candidateFixture>[] = [], request
       const input = JSON.parse(readMathText(path.join(workspace, 'INPUT.json')));
       seen.push({ input, message, instructions: options.instructions });
       started('direct-turn-' + seen.length); options.onUsage({ totalTokens: 1 });
-      fs.writeFileSync(path.join(workspace, 'OUTPUT.json'), JSON.stringify(candidates[input.round - 1] ?? candidateFixture(input.statement)));
+      fs.writeFileSync(path.join(workspace, 'OUTPUT.json'), JSON.stringify(candidates[seen.length - 1] ?? candidateFixture(input.statement)));
       return 'completed';
     },
   });
@@ -171,7 +171,7 @@ describe('direct formalization workflow', () => {
     expect(evidence.round).toBe(2); expect(evidence.sessions).toHaveLength(1);
   });
 
-  it('repairs an unsupported structure from its original candidate before invoking the host compiler', async () => {
+  it('repairs an unsupported structure in the same generator thread before invoking the host compiler', async () => {
     const unsupported = formalizationCandidateSchema.parse({ ...candidateFixture(),
       source: 'structure RadicalTower where\n  level : Nat\n\n' + candidateFixture().source });
     const f = fixture([unsupported]); let compilations = 0;
@@ -180,15 +180,19 @@ describe('direct formalization workflow', () => {
         compilations++; expect(source).toBe(candidateFixture().source); expect(limits.timeoutMs).toBe(0);
         return syntheticElaboration(source, environment, limits);
       } });
-    expect(result).toMatchObject({ status: 'approved', rounds: 2, candidatesTried: 2, roleTurns: { generate: 2 } });
+    expect(result).toMatchObject({ status: 'approved', rounds: 1, candidatesTried: 1, roleTurns: { generate: 2 } });
     expect(compilations).toBe(1); expect(f.seen).toHaveLength(2);
-    expect(f.seen[1].input.previousCandidate).toEqual(unsupported);
-    expect(f.seen[1].input.feedback).toContain('formalization_unsupported_declaration');
-    expect(f.seen[1].input.feedback).toContain('ordinary named def/abbrev/instance/theorem/lemma');
-    expect(f.seen[1].input.feedback).toContain('Replace structure or inductive declarations with ordinary predicates or existential quantifiers');
-    expect(readFormalizationState(f.directory).sessions.map(session => session.role)).toEqual(['generate', 'generate']);
+    expect(f.seen[1].input).toEqual(f.seen[0].input);
+    expect(f.seen[1].message).toContain('formalization_unsupported_declaration');
+    expect(f.seen[1].message).toContain('ordinary named def/abbrev/instance/theorem/lemma');
+    expect(readFormalizationState(f.directory).sessions.map(session => session.role)).toEqual(['generate']);
+    const round = fs.readdirSync(f.directory).find(file => file.startsWith('round-'))!;
+    const rejected = fs.readdirSync(path.join(f.directory, round)).find(file => file.startsWith('generate-rejected-output-'))!;
+    expect(JSON.parse(readMathText(path.join(f.directory, round, rejected)))).toEqual({
+      error: 'formalization_unsupported_declaration', outputText: JSON.stringify(unsupported),
+    });
     const evidence = readFormalizationArtifact(path.join(f.directory, 'artifact'));
-    expect(evidence.round).toBe(2); expect(evidence.candidate.source).toBe(candidateFixture().source);
+    expect(evidence.round).toBe(1); expect(evidence.candidate.source).toBe(candidateFixture().source);
     expect(evidence.sessions).toHaveLength(1);
   });
 
@@ -196,7 +200,7 @@ describe('direct formalization workflow', () => {
     ['ordinary source', ''],
     ['source containing reserved stop markers',
       ' formalization_build_changed formalization_plan_task_kind_unsupported formalization_role_incomplete:failed:unauthorized'],
-  ])('repairs an inexact coverage quote before compiling unchanged Lean source (%s)', async (_caseName, suffix) => {
+  ])('repairs an inexact coverage quote in the same generator thread before compiling unchanged Lean source (%s)', async (_caseName, suffix) => {
     const statement = 'For every natural number n ({n} ⊆ ℕ), prove n + 0 = n.' + suffix;
     const repaired = candidateFixture(statement), invalid = { ...repaired,
       coverage: [{ ...repaired.coverage[0], originalText: statement.replace('⊆', '⊔') }] };
@@ -206,17 +210,79 @@ describe('direct formalization workflow', () => {
         compilations++; expect(f.seen).toHaveLength(2); expect(source).toBe(repaired.source);
         return syntheticElaboration(source, environment, limits);
       } });
-    expect(result).toMatchObject({ status: 'approved', rounds: 2, candidatesTried: 2, roleTurns: { generate: 2 } });
+    expect(result).toMatchObject({ status: 'approved', rounds: 1, candidatesTried: 1, roleTurns: { generate: 2 } });
     expect(compilations).toBe(1); expect(f.seen).toHaveLength(2);
     const repairInput = f.seen[1].input;
     expect(repairInput.statement).toBe(statement);
-    expect(repairInput.feedback).toContain('formalization_coverage_invalid');
-    expect(repairInput.feedback).toContain('coverage[0].originalText');
-    expect(repairInput.feedback).toContain('{n} ⊆ ℕ');
-    expect(repairInput.feedback).toContain('{n} ⊔ ℕ');
-    expect(repairInput.previousCandidate).toEqual(invalid);
+    expect(repairInput).toEqual(f.seen[0].input);
+    expect(f.seen[1].message).toContain('formalization_coverage_invalid');
+    expect(f.seen[1].message).toContain('coverage[0].originalText');
+    expect(f.seen[1].message).toContain('{n} ⊆ ℕ');
+    expect(f.seen[1].message).toContain('{n} ⊔ ℕ');
     const evidence = readFormalizationArtifact(path.join(f.directory, 'artifact'));
-    expect(evidence.round).toBe(2); expect(evidence.candidate).toEqual(repaired);
+    expect(evidence.round).toBe(1); expect(evidence.candidate).toEqual(repaired);
+  });
+
+  it.each(['active', 'completed'] as const)('repairs an inferable definition underscore during an %s turn without a new round', async mode => {
+    const f = fixture([], { maxRounds: 1 }), valid = candidateFixture();
+    const invalid = { ...valid, source: 'def identity (n : Nat) : Nat := @id _ n\n' + valid.source };
+    const originalProtocol: string[] = [], feedback: string[] = [];
+    let opened = 0, turns = 0, compilations = 0;
+    const result = await runFormalization(f.directory, f.root, {
+      openSession: async config => {
+        opened++;
+        expect(config.turnTimeoutMs).toBeUndefined();
+        expect(config.instructions).toContain('including inferable instance arguments');
+        return { threadId: 'underscore-generator', close: async () => {}, interrupt: async () => {},
+          usageSource: 'upstream-requests',
+          run: async (message, _id, workspace, started) => {
+            turns++; started('underscore-turn-' + turns);
+            const protocol = ['INPUT.json', 'ROLE.md', 'OUTPUT.schema.json'].map(file => readMathText(path.join(workspace, file)));
+            if (!originalProtocol.length) originalProtocol.push(...protocol);
+            else expect(protocol).toEqual(originalProtocol);
+            const paid = config.requestGate!({ requestId: 'underscore-request-' + turns, source: 'responses-relay' });
+            expect(paid.allowed).toBe(true);
+            if (!paid.allowed) throw new Error(paid.reason);
+            paid.settle(completeRequest);
+            const outputFile = path.join(workspace, 'OUTPUT.json');
+            if (turns === 1) {
+              fs.writeFileSync(outputFile, JSON.stringify(invalid));
+              let error: unknown;
+              try { config.completedOutput!.validate(invalid); } catch (cause) { error = cause; }
+              expect(String(error)).toContain('formalization_placeholder_outside_proof');
+              expect(String(error)).toContain('line 1, column 37');
+              if (mode === 'completed') return 'completed';
+              feedback.push(config.completedOutput!.validationFeedback!(error, { text: JSON.stringify(invalid), turnId: 'underscore-turn-1' }));
+            } else feedback.push(message);
+            fs.writeFileSync(outputFile, JSON.stringify(valid));
+            config.completedOutput!.validate(valid);
+            return 'submitted';
+          },
+        };
+      },
+      elaborate: async (_directory, source, environment, limits) => {
+        compilations++; expect(source).toBe(valid.source); expect(limits.timeoutMs).toBe(0);
+        return syntheticElaboration(source, environment, limits);
+      },
+    });
+    expect(result).toMatchObject({ status: 'approved', rounds: 1, candidatesTried: 1 });
+    expect(opened).toBe(1); expect(compilations).toBe(1); expect(turns).toBe(mode === 'active' ? 1 : 2);
+    expect(feedback).toHaveLength(1); expect(feedback[0]).toContain('even when Lean could infer an underscore');
+    const state = readFormalizationState(f.directory)!;
+    expect(state.sessions).toHaveLength(1);
+    expect(state.sessions[0].requestUsageAccounting).toMatchObject({
+      startedRequests: turns, reportedRequests: turns, pendingRequests: 0, incomplete: false,
+    });
+    const evidence = readFormalizationArtifact(path.join(f.directory, 'artifact'));
+    expect(evidence).toMatchObject({ round: 1, generation: { output: valid },
+      authority: 'compiler', semanticReview: 'not-performed', proofVerified: false });
+    expect(evidence.sessions).toHaveLength(1);
+    const round = fs.readdirSync(f.directory).find(file => file.startsWith('round-'))!;
+    const rejected = fs.readdirSync(path.join(f.directory, round)).filter(file => file.startsWith('generate-rejected-output-'));
+    expect(rejected).toHaveLength(1);
+    expect(JSON.parse(readMathText(path.join(f.directory, round, rejected[0]))).outputText).toBe(JSON.stringify(invalid));
+    expect(await runFormalization(f.directory, f.root, { openSession: f.openSession })).toMatchObject({ status: 'approved' });
+    expect(f.seen).toEqual([]);
   });
 
   it.each([0, 60])('reminds direct generation once and submits for compilation with maxRunSeconds=%s', async maxRunSeconds => {
