@@ -110,7 +110,11 @@ function inspectFormalizationSource(source: string) {
     // Term proofs (including a benchmark's `:= sorry`) are erased just like
     // tactic proofs. Placeholders in declarations and definitions stay forbidden.
     const owner = theoremRegions.find(region => hole.index >= region.bodyOffset && hole.index < region.endOffset);
-    if (!owner) throw new Error('formalization_placeholder_outside_proof');
+    if (!owner) {
+      const prefix = source.slice(0, hole.index), line = prefix.split('\n').length;
+      const column = hole.index - source.lastIndexOf('\n', hole.index - 1);
+      throw new Error(`formalization_placeholder_outside_proof: ${JSON.stringify(hole[0])} at line ${line}, column ${column} (UTF-16)`);
+    }
   }
   return { statement, targets, theoremRegions };
 }

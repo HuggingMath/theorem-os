@@ -98,6 +98,13 @@ describe('formalization source admission', () => {
     expect(() => formalizationTargets(input)).toThrow('formalization_placeholder_outside_proof');
   });
 
+  it('reports the submitted source position of inferable placeholders without counting holes in comments or strings', () => {
+    const input = '-- _ ignored\r\ndef label : String := "_ ? sorry"\r\n' +
+      'def identity (n : Nat) : Nat := @id _ n\r\n' + source;
+    expect(() => formalizationTargets(input)).toThrow(
+      'formalization_placeholder_outside_proof: "_" at line 3, column 37 (UTF-16)');
+  });
+
   it('keeps unfinished tactic proofs separate from unfinished definitions and statement types', () => {
     const proof = 'by\n  have aux : n + 0 = n := by admit\n  exact aux';
     expect(formalizationTargets(source.replace('by sorry', proof))).toEqual(formalizationTargets(source));

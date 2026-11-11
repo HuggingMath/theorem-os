@@ -175,6 +175,7 @@ print('independent snapshots passed')`);
     const identity = { schema: 'theorem-os.library-api.v2', authority: 'advisory-lean-process', environment: 'standard',
       toolchain: config.toolchain, environmentDigest: config.dependencyDigest, mathlibRevision: null };
     expect(discovered).toMatchObject(identity); expect(discovered.symbols).toEqual([]);
+    expect(discovered).not.toHaveProperty('queryModulePrefixes');
     const [upper, lower, exact, absent] = discovered.queries;
     expect(discovered.queries).toHaveLength(7); expect(upper.query).toBe('Fin.cast'); expect(lower.query).toBe('fIN.CAST');
     expect(upper.names).toHaveLength(2); expect(upper.totalMatches).toBeGreaterThan(2); expect(upper.truncated).toBe(true);
@@ -201,6 +202,7 @@ print('independent snapshots passed')`);
     expect(result.status, result.stderr + result.stdout).toBe(0); expect(result.stderr).toBe('');
     const packet = JSON.parse(result.stdout);
     expect(packet).toMatchObject(identity);
+    expect(packet).not.toHaveProperty('queryModulePrefixes');
     expect(packet.symbols.map((symbol: any) => symbol.name)).toEqual([...new Set(names)]);
     expect(packet.queries).toEqual([upper]);
     const inspected = packet.symbols.find((symbol: any) => symbol.name === upper.names[0]);
@@ -223,6 +225,83 @@ print('independent snapshots passed')`);
     expect(fs.readdirSync(f.workspace).sort()).toEqual(protocolFiles.map(file => file.name).sort());
     expect(observed).toEqual([]);
   }, 100_000);
+
+  it('filters query counts and matches by case-sensitive module boundaries while preserving exact-name inspection', async () => {
+    const f = fixture(), sandbox = await prepare(f);
+    const command = ['/usr/bin/python3', '-I', '/opt/formalization/library-api.py',
+      '--name', 'Nat.add_zero', '--name', 'Inhabited', '--query', 'NAT.ADD_ZERO', '--query', 'Inhabited', '--limit', '1'];
+    const lookup = async (prefixes: string[] = []) => {
+      const result = await runCommand(sandbox, [...command, ...prefixes.flatMap(prefix => ['--module-prefix', prefix])], '', 95_000);
+      expect(result.status, result.stderr + result.stdout).toBe(0); expect(result.stderr).toBe('');
+      return { packet: JSON.parse(result.stdout), text: result.stdout };
+    };
+    const baseline = await lookup();
+    const modules = baseline.packet.symbols.map((symbol: any) => symbol.module) as string[];
+    expect(modules[0]).toMatch(/^Init\./u); expect(modules[1]).toBe('Init.Prelude');
+    expect(modules[0]).not.toBe(modules[1]);
+    expect(baseline.packet).not.toHaveProperty('queryModulePrefixes');
+    const scoped = [];
+    for (const module of modules) {
+      const { packet } = await lookup([module]);
+      scoped.push(packet);
+      expect(packet.queryModulePrefixes).toEqual([module]);
+      expect(packet.symbols).toEqual(baseline.packet.symbols);
+      for (const query of packet.queries) {
+        expect(query.totalMatches).toBeGreaterThanOrEqual(query.names.length);
+        expect(query.truncated).toBe(query.totalMatches > 1);
+        expect(query.matches.map((match: any) => match.name)).toEqual(query.names);
+        for (const match of query.matches) expect(match.module).toBe(module);
+      }
+    }
+    expect(scoped[0].queries[0].names).toEqual(['Nat.add_zero']);
+    expect(scoped[1].queries[1].names).toEqual(['Inhabited']);
+    expect(scoped[1].queries[1].totalMatches).toBeGreaterThan(1);
+    expect(scoped[1].queries[1].truncated).toBe(true);
+
+    // Eight arguments are permitted and deduplicated in order. Disjoint defining
+    // modules provide an independent union/count oracle for multiple-prefix OR.
+    const { packet: union } = await lookup([...modules, ...Array<string>(6).fill(modules[0])]);
+    expect(union.queryModulePrefixes).toEqual(modules);
+    expect(union.symbols).toEqual(baseline.packet.symbols);
+    expect(union.queries.map((query: any) => query.names[0])).toEqual(['Nat.add_zero', 'Inhabited']);
+    for (let index = 0; index < union.queries.length; index++) {
+      const query = union.queries[index];
+      expect(query.totalMatches).toBe(scoped[0].queries[index].totalMatches + scoped[1].queries[index].totalMatches);
+      expect(query.truncated).toBe(query.totalMatches > 1);
+      for (const match of query.matches) expect(modules).toContain(match.module);
+    }
+    const { packet: subtree } = await lookup(['Init']);
+    expect(subtree.queries.map((query: any) => query.names[0])).toEqual(['Nat.add_zero', 'Inhabited']);
+    for (const query of subtree.queries)
+      for (const match of query.matches) expect(match.module).toMatch(/^Init(?:\.|$)/u);
+    for (const prefix of ['Ini', 'init', 'TheoremOS.不存在_🔍', '🔍'.repeat(128)]) {
+      const { packet } = await lookup([prefix]);
+      expect(packet.queryModulePrefixes).toEqual([prefix]);
+      expect(packet.symbols).toEqual(baseline.packet.symbols);
+      expect(packet.queries).toEqual(['NAT.ADD_ZERO', 'Inhabited'].map(query =>
+        ({ query, totalMatches: 0, truncated: false, names: [], matches: [] })));
+    }
+    expect((await lookup()).text).toBe(baseline.text);
+    expect(fs.readdirSync(f.workspace).sort()).toEqual(protocolFiles.map(file => file.name).sort());
+    expect(observed).toEqual([]);
+  }, 100_000);
+
+  it('rejects excess, blank and oversized module prefixes before starting a lookup', async () => {
+    const f = fixture(), sandbox = await prepare(f);
+    const result = await runCommand(sandbox, ['/usr/bin/python3', '-I', '-c', `import json, pathlib, subprocess
+command = ['/usr/bin/python3', '-I', '/opt/formalization/library-api.py', '--query', 'Nat.add_zero']
+before = sorted(str(p) for p in pathlib.Path('/tmp').glob('library-api-*'))
+invalid = [['--module-prefix', ' '], ['--module-prefix', '界' * 171], ['--module-prefix', 'Init'] * 9]
+for arguments in invalid:
+    result = subprocess.run(command + arguments, capture_output=True, text=True)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert not result.stdout, result.stdout
+    assert 'module prefix' in result.stderr, result.stderr
+assert sorted(str(p) for p in pathlib.Path('/tmp').glob('library-api-*')) == before
+print('module prefix bounds passed')`]);
+    expect(result).toMatchObject({ status: 0, stdout: 'module prefix bounds passed\n', stderr: '' });
+    expect(observed).toEqual([]);
+  });
 
   it('keeps library tools read-only and malicious names inert without exposing host data or leaving queries', async () => {
     const f = fixture(), secret = 'sk-library-api-synthetic-upstream';
@@ -253,11 +332,15 @@ names = ${JSON.stringify(names)}
 arguments = ['/usr/bin/python3', '-I', '/opt/formalization/library-api.py']
 for name in names:
     arguments.extend(['--name', name])
+    arguments.extend(['--module-prefix', name])
+arguments.extend(['--query', 'Nat.add_zero'])
 lookup = subprocess.run(arguments, capture_output=True, text=True, timeout=90)
 assert lookup.returncode == 0, lookup.stderr + lookup.stdout
 assert not lookup.stderr, lookup.stderr
 packet = json.loads(lookup.stdout)
 assert packet['symbols'] == [{'name': name, 'exists': False} for name in names]
+assert packet['queryModulePrefixes'] == names
+assert packet['queries'] == [{'query': 'Nat.add_zero', 'totalMatches': 0, 'truncated': False, 'names': [], 'matches': []}]
 assert not pathlib.Path('/workspace/LEAN_INJECTION').exists()
 assert not pathlib.Path('/workspace/SHELL_INJECTION').exists()
 assert sorted(os.listdir('/workspace')) == before_workspace

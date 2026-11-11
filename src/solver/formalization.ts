@@ -170,6 +170,18 @@ const reviewOutputFeedback = (cause: unknown) => [
   'Preserve your independent mathematical assessment; a valid unknown or changes_requested verdict is acceptable. This feedback supplies no semantic verdict. Do not change INPUT.json, ROLE.md or OUTPUT.schema.json.',
   'Write the complete corrected JSON atomically to OUTPUT.json, then stop.',
 ].join('\n');
+const generationOutputFeedback = (cause: unknown) => [
+  'OUTPUT.json failed source or coverage admission. Repair it in this same generator thread using the existing candidate and library observations.',
+  'Host validation error (data): ' + JSON.stringify(errorText(cause).slice(0, 16000)),
+  ...(errorText(cause).startsWith('formalization_placeholder_outside_proof') ? [
+    'Definitions and statement types must contain no _, ?holes, sorry or admit, even when Lean could infer an underscore. Use ordinary implicit application, a named instance or inferInstance where appropriate. Establish local instances before quantifying objects that depend on them.',
+  ] : []),
+  ...(errorText(cause).startsWith('formalization_unsupported_declaration') ? [
+    'Use only ordinary named def/abbrev/instance/theorem/lemma declarations and the allowed scope/import commands. Replace unsupported structure or inductive declarations with complete ordinary predicates or existential quantifiers.',
+  ] : []),
+  'Preserve every domain, hypothesis, conclusion and definition. Copy coverage.originalText from the decoded INPUT.statement exactly and map it to generated theorem names. Keep theorem bodies := by sorry. Do not change INPUT.json, ROLE.md or OUTPUT.schema.json.',
+  'Rewrite the complete corrected JSON atomically to OUTPUT.json, then stop. Host Lean compilation still follows source admission; this feedback is not semantic or proof approval.',
+].join('\n');
 const roleInstructions: Record<Role, string> = {
   plan: [
     'Plan a faithful Lean formalization of the complete original mathematical task in INPUT.json before generating declarations.',
@@ -234,6 +246,7 @@ const directGenerationInstructions = [
   'Submit one JSON object to OUTPUT.json using the supplied schema: source, coverage, assumptions, assumptionsExplanation, definitionsExplanation. No separate planning document, backtranslation or reviewer report is needed.',
   'source is a complete Lean file with imports, ordinary definitions and theorem targets. Every requested conclusion must be represented with its actual domains, quantifiers, hypotheses and definitions; each theorem body is := by sorry. Do not solve or prove the theorem during formalization.',
   'Allowed source syntax is imports, namespaces, sections, variable and universe declarations, and ordinary named def, abbrev, instance, theorem and lemma declarations. Structure and inductive declarations, custom notation and metaprogramming are unsupported; do not use them.',
+  'Source admission rejects _, ?holes, sorry and admit in definitions and statement types, including inferable instance arguments. Use normal implicit application or explicit named instances/inferInstance; establish local instances before quantifying dependent objects. Only theorem proof bodies may contain sorry.',
   'Represent towers and nested families with ordinary predicates or existential quantifiers, not new structures. Preserve successive inclusions and construct each step over the preceding object. Ambient universes must accommodate the required embeddings.',
   'For a requested equivalence, necessity and sufficiency belong to one iff target; do not create duplicate forward and reverse targets. Proof-method, citation and auxiliary-lemma proof requirements remain in the original task for the subsequent proof stage; they do not require additional formalization targets. Add other theorem targets only for additional mathematical conclusions explicitly requested as independent statements.',
   'Use installed library declarations when they express the source faithfully. Inspect the pinned library only for a specific missing declaration or mathematical meaning. The host compiles the submitted file and returns diagnostics for repair.',
@@ -376,8 +389,21 @@ export async function runFormalization(directory: string, root: string, options:
         const sourceSpan = role === 'plan' && Buffer.byteLength(request.statement) <= INLINE_ROLE_CONTEXT_BYTES &&
           formalizationCandidateSchema.shape.coverage.element.shape.originalText.safeParse(request.statement).success ?
           { id: 'source', start: 0, end: request.statement.length, text: request.statement } : undefined;
-        const validateOutput = (value: unknown) => structuredInput ? assertStructuredSemanticReview(structuredInput, value) :
-          getFormalizationRoleOutputValidator(role).parse(value);
+        const directGenerator = direct && role === 'generate';
+        const validateOutput = (value: unknown) => {
+          if (structuredInput) return assertStructuredSemanticReview(structuredInput, value);
+          const output = getFormalizationRoleOutputValidator(role).parse(value);
+          if (directGenerator) {
+            const candidate = formalizationCandidateSchema.parse(output);
+            assertFormalizationCandidate(request, { ...candidate, source: eraseFormalizationProofs(candidate.source) });
+          }
+          return output;
+        };
+        const outputFeedback = directGenerator ? (cause: unknown, output: { text: string }) => {
+          writeMathJsonDurable(path.join(roundDirectory, 'generate-rejected-output-' + mathDigest(output.text) + '.json'),
+            { error: errorText(cause), outputText: output.text });
+          return generationOutputFeedback(cause);
+        } : request.fidelityPolicy && structuredInput ? reviewOutputFeedback : undefined;
         const instructionsText = (direct && role === 'generate' ? directGenerationInstructions :
           request.fidelityPolicy && role === 'plan' ? taskPreservingPlanInstructions :
           structured && reviewing ? formalizationReviewInstructions(role === 'compare' ? 'review' : 'backtranslate',
@@ -434,10 +460,11 @@ export async function runFormalization(directory: string, root: string, options:
             'This request uses only the Lean standard library. Installed Lean sources are in /opt/lean/src/lean; Mathlib is unavailable and /opt/lean-packages is not mounted.' :
             'Installed Lean sources are in /opt/lean/src/lean; pinned Mathlib and dependencies are in /opt/lean-packages (Mathlib: /opt/lean-packages/mathlib/Mathlib).',
           direct && role === 'generate' ?
-            'Use the library API below for declaration discovery and type inspection. Lean remains available for a specific unresolved type or syntax question; LEAN_PATH is configured and the read-only library cache needs no Lake setup.' :
+            'Use the library API below for declaration discovery and type inspection. Lean remains available for a specific unresolved type or syntax question: /opt/lean/bin/lean ./SyntaxCheck.lean. Preserve its exit code; do not pipe it through head. LEAN_PATH is configured and the read-only library cache needs no Lake setup. Preserve LEAN_PATH: source directories are not compiled library paths. Do not replace it or run Lake setup/build.' :
             'Use lean directly to inspect declarations when necessary; LEAN_PATH is already configured. The installed library cache is read-only and does not need Lake setup.',
           ...(direct && role === 'generate' ? [
             'For a specific unresolved library API, batch related lookups in one command: /usr/bin/python3 /opt/formalization/library-api.py --name Nat.add_zero --name Nat.succ --query Fin.cast --limit 4. Use at most 32 names, 8 queries and --limit 1..8. Names are exact and case-sensitive; queries match literal name fragments case-insensitively. Query matches contain only names, defining modules, kinds and class/structure status. Inspect only the selected declarations with --name to obtain actual closed types and direct field projection types; broad discovery does not expand those types. Each invocation uses one pinned Lean process. Missing exact names are explicit; query truncation is explicit. It returns no declaration bodies or proofs. Use the returned module as the import location; do not guess import paths. Treat results as library observations, not evidence of mathematical fidelity or proof acceptance.',
+            'Use contiguous declaration-name fragments, such as IsSplittingField, rather than prose such as "splitting field". If a broad fragment returns unrelated areas, narrow its defining modules with --module-prefix Mathlib.FieldTheory (for field-theory APIs), or repeat --module-prefix for an OR of up to 8 areas. Module prefixes are case-sensitive whole module names or dot-separated subtrees. Only fragment results and their counts are filtered; explicit --name inspection is unchanged. The packet reports queryModulePrefixes when filtered. No scoped match does not establish absence outside those modules.',
             'A running exec_command session is not a timeout or failed lookup. If a library query yields a session ID, wait on that same session with write_stdin and empty chars until it returns. Do not restart or interrupt a healthy lookup merely because the yield interval elapsed; keep its eventual result for the candidate.',
           ] : []),
           'Use these exact library paths when needed. Other tasks, benchmark answers and prior sessions are unavailable.',
@@ -464,7 +491,8 @@ export async function runFormalization(directory: string, root: string, options:
           ...(request.fidelityPolicy ? [
             'When submitting JSON with exec_command, use a quoted shell heredoc: cat > ./OUTPUT.json.tmp <<\'THEOREMOS_OUTPUT_JSON\', followed on the next line by your complete JSON, then THEOREMOS_OUTPUT_JSON on its own line, then mv ./OUTPUT.json.tmp ./OUTPUT.json. Use a delimiter absent from the JSON. The quoted heredoc preserves apostrophes, backticks, dollar signs and backslashes literally. Do not place JSON prose inside a single-quoted printf or echo argument: an apostrophe in mathematical prose would break that shell quoting and require another model request.',
           ] : []),
-          'The first complete schema-valid OUTPUT.json is your submission: the host ends this role and validates it. Stop after submitting.',
+          directGenerator ? 'The first complete source- and coverage-valid OUTPUT.json is your submission. Source or coverage failures receive precise feedback in this same thread; correct the existing candidate and resubmit. The host stops the writer before Lean compilation and validates the final bytes again. Stop after a valid submission.' :
+            'The first complete schema-valid OUTPUT.json is your submission: the host ends this role and validates it. Stop after submitting.',
           'Do not change INPUT.json, ROLE.md or OUTPUT.schema.json. Read only this role input, protocol and installed libraries; do not search for benchmark answers.',
         ].join('\n');
         const roleContract = { schema: 'theorem-os.formalization-role-contract.v1' as const,
@@ -560,7 +588,7 @@ export async function runFormalization(directory: string, root: string, options:
             ...(request.execution === 'model' ? { readIsolation: { environment: request.environment,
               ...(sourceOnlyPlan ? { packages: 'none' as const } : {}) } } : {}),
             completedOutput: { file: outputFile, validate: value => { validateOutput(value); },
-              ...(request.fidelityPolicy && structuredInput ? { validationFeedback: reviewOutputFeedback } : {}) },
+              ...(outputFeedback ? { validationFeedback: outputFeedback } : {}) },
             onUsage: usage => {
               // Relayed roles settle each provider request; cumulative native notifications are observational.
               if (record.requestUsageAccounting) return;
@@ -639,21 +667,23 @@ export async function runFormalization(directory: string, root: string, options:
               throw new FormalizationRoleFailure(record.status, session.lastFailureDiagnostic);
             }
             // A normal turn may finish before the output watcher can send feedback.
-            // Keep a malformed review in its own thread; valid semantic judgments
-            // leave this loop and still require the full independent panel.
-            if (request.fidelityPolicy && structuredInput && record.status === 'completed') {
+            // Keep source/coverage repairs and malformed reviews in their own
+            // threads. Compilation and independent judgments still follow.
+            if (outputFeedback && record.status === 'completed') {
               if (currentProfileDigest() !== profileDigest || readMathText(inputFile, 8_000_000) !== inputText ||
                   readMathText(instructionsFile, 1_000_000) !== instructionsText || readMathText(schemaFile, 1_000_000) !== schemaText)
                 throw new Error('formalization_role_contract_changed');
-              let output: unknown;
-              try { output = JSON.parse(readMathText(outputFile, 2_000_000)); }
+              let output: unknown, outputText = '';
+              try { outputText = readMathText(outputFile, 2_000_000); output = JSON.parse(outputText); }
               catch (cause) {
                 if (!(cause instanceof SyntaxError) && (cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause;
-                message = reviewOutputFeedback(cause); event('formalization_review_output_repairing', role, errorText(cause)); continue;
+                message = outputFeedback(cause, { text: outputText });
+                event(directGenerator ? 'formalization_generation_output_repairing' : 'formalization_review_output_repairing', role, errorText(cause)); continue;
               }
               try { validateOutput(output); }
               catch (cause) {
-                message = reviewOutputFeedback(cause); event('formalization_review_output_repairing', role, errorText(cause)); continue;
+                message = outputFeedback(cause, { text: outputText });
+                event(directGenerator ? 'formalization_generation_output_repairing' : 'formalization_review_output_repairing', role, errorText(cause)); continue;
               }
             }
             break;
