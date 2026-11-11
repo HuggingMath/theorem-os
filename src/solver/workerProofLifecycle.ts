@@ -72,8 +72,10 @@ export class WorkerProofLifecycle {
       const sourceError = solverSourceFeedback(state.problem, worker.worktree, paths =>
         this.input.emit('source_quarantined', { paths: paths.slice(0, 32), count: paths.length }));
       if (sourceError) {
+        research.check = undefined;
         cooperation.proofReadyFailedFreeze(worker, assignment, sourceError);
         cooperation.rejected(assignment, sourceError);
+        save(); emit('source_rejected');
         return true;
       }
       const commit = commitSolverSources(state.problem, worker.worktree);

@@ -299,8 +299,8 @@ describe('offline PutnamBench module samples', () => {
     expect(changed.problems.every(problem => problem.report.freshness === 'current')).toBe(true);
   });
 
-  it('prepares three proof identities and twelve isolated Sub2API attempts without a model or network', async () => {
-    const context = await prepare({ realReceipts: true });
+  it.each(['high', 'max'] as const)('prepares twelve isolated Sub2API attempts with %s effort frozen without a model or network', async effort => {
+    const context = await prepare({ realReceipts: true, flags: effort === 'max' ? ['--effort', 'max'] : [] });
     const { sample, plans, bootstrap, readProblem, output } = context;
     expect(sample.selection).toMatchObject({ count: 3, seed: putnam.DEFAULT_PUTNAM_SAMPLE_SEED, eligibleCount: 5 });
     expect(sample.selection.poolDigest).toMatch(/^[a-f0-9]{64}$/u);
@@ -316,7 +316,7 @@ describe('offline PutnamBench module samples', () => {
       const selected = sample.problems[index], source = context.problems.find(problem => problem.id === selected.id)!;
       expect(plan).toMatchObject({ dataset: 'putnambench', problem: selected.id, sourceCommit: putnam.PUTNAM_BENCH_SOURCE_COMMIT,
         sourceProblem: { sourceRelativePath: source.sourceRelativePath, sourceSha256: source.sourceSha256 },
-        configuration: { provider: 'sub2api', model: 'deepseek-flash', effort: 'max', workers: 4, repetitions: 1,
+        configuration: { provider: 'sub2api', model: 'deepseek-flash', effort, workers: 4, repetitions: 1,
           maxTurns: 20, maxRunSeconds: 600, maxTurnSeconds: 180, maxTotalTokens: 30000, evaluatorTimeoutSeconds: 1800 } });
       expect(mathDigest(fs.readFileSync(path.join(selected.comparisonDirectory, 'comparison.json')))).toBe(selected.comparisonDigest);
       expect(plan.jobs.map(job => job.arm)).toEqual(['default', 'essential-context', 'critical-path', 'construction-rule']);
@@ -328,7 +328,7 @@ describe('offline PutnamBench module samples', () => {
         expect(argument(launch.args, '--workers')).toBe('4');
         expect(argument(launch.args, '--coordination')).toBe('cooperative');
         expect(argument(launch.args, '--model')).toBe('deepseek-flash');
-        expect(argument(launch.args, '--effort')).toBe('max');
+        expect(argument(launch.args, '--effort')).toBe(effort);
         expect(argument(launch.args, '--max-total-tokens')).toBe('30000');
         expect(argument(launch.args, '--evaluator-timeout-seconds')).toBe('1800');
         expect(argument(launch.args, '--module-plan')).toBe(job.modulePlan);

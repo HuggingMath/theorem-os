@@ -445,6 +445,12 @@ export abstract class CooperationInputs extends CooperationPlanning {
     const automaticId = scoped ? mathDigest(canonicalMathJson({ file: assignmentKey, value })) : undefined;
     if (scoped) value = { id: automaticId, kind: 'progress', taskId: action.task.id,
       taskDigest: action.assignment.taskDigest, ...value };
+    if (value.kind === 'research') {
+      const misplaced = ['mathematicalGap', 'lemmaRequests', 'blockers'].filter(key => Object.hasOwn(value, key));
+      if (misplaced.length) throw new ResearchAdmissionError({ status: 'rejected', code: 'math_research_delivery_invalid',
+        recovery: 'correct-and-resubmit', issues: misplaced.map(key => ({ path: key,
+          message: `Move ${key} inside finding.${key}; research events publish the complete nested finding. Remove the outer field.` })) });
+    }
     const details = deliveryDetails(value);
     if (!value || typeof value.id !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/u.test(value.id) ||
         !['progress', 'proof', 'research', 'ready', 'checkpoint'].includes(value.kind) || value.taskId !== action.task.id || value.taskDigest !== action.assignment.taskDigest) throw new Error('math_delivery_invalid');

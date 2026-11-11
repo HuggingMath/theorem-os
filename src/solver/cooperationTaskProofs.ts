@@ -650,7 +650,8 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       assignment, tasks: this.archive.tasks, deliveries: this.archive.deliveries,
       nextChecks: this.archive.nextChecks, proofSearchRecords: this.archive.proofSearchRecords,
       identity: { problemReceiptDigest, environmentDigest } });
-    if (admission.status === 'rejected') throw new ResearchAdmissionError(admission);
+    if (admission.status === 'rejected') throw new ResearchAdmissionError(submission.kind === 'event' && admission.code === 'math_route_blocker_invalid'
+      ? { ...admission, issues: admission.issues.map(issue => ({ ...issue, path: 'finding.' + issue.path })) } : admission);
     const finding = structuredClone(admission.finding), text = JSON.stringify(finding);
     const complete = !checkpoint && (submission.kind === 'notes' || finding.checkOutcome !== undefined);
     const node = this.node(action.task.id), details = deliveryDetails(finding);

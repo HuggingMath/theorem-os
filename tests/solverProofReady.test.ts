@@ -66,6 +66,7 @@ describe('runner proof readiness freeze barrier', () => {
     const interrupt = vi.fn(async () => {});
     const notify = vi.fn(async (_message: string) => {});
     const closed = vi.fn();
+    const save = vi.fn();
     const stopForFreeze = vi.fn(async () => {
       stopping.resolve();
       if (options.stop === 'throw') throw new Error('fixture_shutdown_failed');
@@ -93,7 +94,7 @@ describe('runner proof readiness freeze barrier', () => {
     const completion = runResearchWorkers({ state, workers, access: workerAccess(workers, directory), modules, root: directory,
       buildFile: path.join(directory, 'build.json'), taskText: 'Prove the original goals.', executable: 'offline-fixture',
       profile: 'offline-fixture', signal: controller.signal, deadline: Infinity, maxTurns: Infinity, maxTurnMs: Infinity,
-      maxTotalTokens: 0, save: () => {}, emit: (event, details) => {
+      maxTotalTokens: 0, save, emit: (event, details) => {
         events.push({ event, details }); eventWaiters.get(event)?.resolve();
       },
     });
@@ -113,7 +114,7 @@ describe('runner proof readiness freeze barrier', () => {
     const appendReady = () => fs.appendFileSync(path.join(writer.worktree, assignmentDeliveryFile(action().assignment)),
       JSON.stringify({ kind: 'ready', id: 'ready-runner-submission' }) + '\n');
     const current = { directory, problem, state, workers, modules, writer, controller, stopResult, turns, events, interrupt, notify, stopForFreeze,
-      open, closed, completion, action, writeProof, appendReady, waitEvent, wait, started, stopping,
+      open, closed, save, completion, action, writeProof, appendReady, waitEvent, wait, started, stopping,
       pulse: () => cooperation.pulse(writer.id), head: () => git(writer.worktree, ['rev-parse', 'HEAD']),
     };
     fixtures.push(current); return current;
@@ -156,6 +157,25 @@ describe('runner proof readiness freeze barrier', () => {
       commit: ready.snapshotCommit, sourceDigest: ready.sourceDigest });
     expect(current.state.tokenBudget).toMatchObject({ maxTotalTokens: 0, status: 'unlimited' });
     expect(current.open.mock.calls.every(([access]) => access.turnTimeoutMs === undefined)).toBe(true);
+  });
+
+  it('clears and persists the previous check when a ready snapshot changes the frozen declaration', async () => {
+    const current = fixture(); await current.wait(current.started.promise);
+    current.writeProof(); current.appendReady(); await current.pulse();
+    current.turns[0].done.resolve('interrupted'); await current.wait(current.stopping.promise);
+    const research = current.state.workers![1];
+    research.check = { passed: true, commit: 'old-commit', sourceDigest: 'old-source' } as NonNullable<typeof research.check>;
+    const file = path.join(current.writer.worktree, current.problem.projectRelative, 'Submission.lean');
+    const name = current.problem.targets[0].theoremName.split('.').at(-1)!;
+    const source = fs.readFileSync(file, 'utf8'), renamed = source.replace(name, name + '_changed');
+    expect(renamed).not.toBe(source); fs.writeFileSync(file, renamed);
+    const savedBefore = current.save.mock.calls.length;
+    current.stopResult.resolve({ status: 'stopped' }); await current.waitEvent('source_rejected');
+    expect(research.check).toBeUndefined();
+    expect(current.save.mock.calls.length).toBeGreaterThan(savedBefore);
+    expect(current.state.cooperation!.proofReadyRecords).toMatchObject([{ status: 'failed',
+      reason: expect.stringContaining('math_original_declaration_changed') }]);
+    expect(host.verify).not.toHaveBeenCalled();
   });
 
   it('hands a completed declaration to the existing ready flow during a pending context checkpoint', async () => {

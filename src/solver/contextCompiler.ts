@@ -5,7 +5,7 @@ import { maskLeanCommentsAndStrings } from '../math/leanSyntax';
 import type { CooperationState } from './cooperation';
 import { deliveryFinding, type DeliveryRecord } from './deliveries';
 import { originalDeclarationRegions, type SolverProblem } from './problem';
-import { assignmentDeliveryFile, hasTaskAcceptance, leadPlanDeliveryFile, taskGroup, taskVersion, type CooperativeAction, type TaskRecord } from './tasks';
+import { assignmentDeliveryFile, hasTaskAcceptance, leadPlanDeliveryFile, taskGroup, taskReferenceDependencies, taskVersion, type CooperativeAction, type TaskRecord } from './tasks';
 import { buildProofContinuation } from './progress';
 import { contextTaskConsumers } from './taskConsumers';
 import { mathematicalGapContextText } from './mathematicalGaps';
@@ -236,8 +236,14 @@ function requiredTasks(input: TaskContextInput, omitted: ContextManifest['omitte
       visit(condition.taskId);
     }
     if (!scopedLead || !closedLeadHelper(node)) {
-      for (const dependency of node.task.dependsOn) visit(dependency, node);
-      if (action?.kind === 'lead') for (const route of [
+      const references = taskReferenceDependencies(node);
+      for (const dependency of references ?? node.task.dependsOn.map(taskId => ({ taskId }))) {
+        const current = byId.get(dependency.taskId);
+        if ('taskDigest' in dependency && current && taskVersion(current.task) !== dependency.taskDigest)
+          return stale(`dependency:${dependency.taskId}`);
+        visit(dependency.taskId, node);
+      }
+      if (action?.kind === 'lead' && !references) for (const route of [
         ...(input.cooperation?.proofRoutes ?? []), ...(node.alternativeRoutes ?? []),
       ]) if (route.targetTaskId === id) [...route.prerequisiteTaskIds, route.closingTaskId].forEach(dependency => visit(dependency));
     }

@@ -5,6 +5,7 @@ import { researchReferenceIssues, type ResearchSourceUse } from './researchRefer
 import { checkOutcomeSchema, type CheckOutcome, type NextCheckRecord, type NextCheckScope } from './nextCheckContract';
 import { bindCheckOutcome } from './nextChecks';
 import type { ProofSearchRecord } from './proofSearchRecords';
+import { RouteBlockerValidationError, validateBlockerProposals } from './routeControl';
 
 export type ResearchSubmission =
   | Readonly<{ kind: 'notes'; text: string }>
@@ -82,6 +83,11 @@ export function prepareResearchDelivery(input: ResearchSubmission, scope: Resear
     if (finding[key] !== undefined && (!Array.isArray(finding[key]) ||
         !(finding[key] as unknown[]).every(item => typeof item === 'string')))
       return rejection('math_delivery_invalid', key, 'Provide an array of strings.');
+  }
+  try { validateBlockerProposals(finding.blockers, scope.source, scope.tasks); }
+  catch (error) {
+    if (!(error instanceof RouteBlockerValidationError)) throw error;
+    return { status: 'rejected', code: 'math_route_blocker_invalid', issues: error.issues, recovery: 'correct-and-resubmit' };
   }
   const referenceIssues = researchReferenceIssues(finding.sourceUses, scope.source, scope.tasks, finding.lemmaRequests);
   if (referenceIssues.length) return { status: 'rejected', code: 'math_research_delivery_invalid',

@@ -61,6 +61,16 @@ describe('research response selection', () => {
 });
 
 describe('research delivery admission', () => {
+  it('returns the same precise blocker correction for notes and event findings without changing the report', () => {
+    const value = { ...finding, blockers: [{ mechanism: 'Need a bound', scope: 'Local method',
+      reopenOn: [{ kind: 'dependency-checked', taskId: consumer.id }] }] }, original = structuredClone(value);
+    const event = admit(value);
+    expect(prepareResearchDelivery({ kind: 'notes', text: JSON.stringify(value) }, scope())).toEqual(event);
+    expect(event).toMatchObject({ status: 'rejected', code: 'math_route_blocker_invalid', recovery: 'correct-and-resubmit',
+      issues: [{ path: 'blockers[0].reopenOn[0].taskId', message: expect.stringContaining('This task has no declared dependencies') }] });
+    expect(value).toEqual(original);
+  });
+
   it('normalizes notes and event findings through the same frozen identity', () => {
     const current = scope();
     expect(prepareResearchDelivery({ kind: 'notes', text: JSON.stringify(finding) }, current))

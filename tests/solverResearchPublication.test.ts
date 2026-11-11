@@ -281,6 +281,34 @@ it('rejects an invalid research event and continues consuming the following line
   expect(cooperative.contextState(undefined, workers[2]).deliveryReceipts).toEqual([]);
 });
 
+it('rejects misplaced finding fields and records the corrected nested report without proof acceptance', async () => {
+  const log = path.join(workers[1].worktree, assignmentDeliveryFile(action.assignment));
+  const blockers = [{ mechanism: 'Missing estimate', scope: 'Local argument' }];
+  const misplaced = { kind: 'research', finding: finding(), blockers, lemmaRequests: [], mathematicalGap: {} };
+  fs.writeFileSync(log, JSON.stringify(misplaced) + '\n');
+  await (cooperative as any).readWorkerDeliveries(workers[1], action, {});
+  expect(state.cooperation!.deliveries ?? []).toHaveLength(0);
+  const receipt = state.cooperation!.deliveryReceipts![0];
+  expect(receipt).toMatchObject({ status: 'needs-correction',
+    issues: ['mathematicalGap', 'lemmaRequests', 'blockers'].map(path => ({ path, message: expect.stringContaining('finding.' + path) })) });
+  await publish({ kind: 'research', finding: { ...finding(), blockers, replacesReceipt: receipt.id } });
+  expect(receipt.status).toBe('recorded');
+  expect(state.cooperation!.deliveries).toHaveLength(1);
+  expect(state.cooperation!.tasks[0]).toMatchObject({ status: 'running' });
+  expect(state.cooperation!.tasks[0].proof).toBeUndefined();
+});
+
+it('retains the nested blocker field path in a correctable research-event receipt', async () => {
+  const log = path.join(workers[1].worktree, assignmentDeliveryFile(action.assignment));
+  fs.writeFileSync(log, JSON.stringify({ kind: 'research', finding: { ...finding(), blockers: [{
+    mechanism: 'Need a bound', scope: 'Local method', reopenOn: [{ kind: 'dependency-checked', taskId: 'unrelated' }],
+  }] } }) + '\n');
+  await (cooperative as any).readWorkerDeliveries(workers[1], action, {});
+  expect(state.cooperation!.deliveries ?? []).toHaveLength(0);
+  expect(state.cooperation!.deliveryReceipts).toMatchObject([{ status: 'needs-correction',
+    issues: [{ path: 'finding.blockers[0].reopenOn[0].taskId', message: expect.stringContaining('declared dependency cone') }] }]);
+});
+
 it('resolves the explicitly replaced receipt only after a corrected finding is recorded', async () => {
   const log = path.join(workers[1].worktree, assignmentDeliveryFile(action.assignment));
   fs.writeFileSync(log, JSON.stringify({ kind: 'research', finding: { summary: 'Invalid', conclusion: 'accepted' } }) + '\n');

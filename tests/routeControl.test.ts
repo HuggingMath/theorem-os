@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
-import { recordRouteBlockers, refreshRouteBlockers, routeBlockerBasis, validateBlockerProposals,
+import { recordRouteBlockers, refreshRouteBlockers, routeBlockerBasis, RouteBlockerValidationError, validateBlockerProposals,
   type BlockerProposal, type RouteBlocker } from '../src/solver/routeControl';
 import { readyResearchTasks, researchCanAdvance, routeAllowsTask } from '../src/solver/modules/search';
 import { markTaskAcceptance, taskVersion, type RouteRecord, type TaskRecord } from '../src/solver/tasks';
@@ -37,6 +37,21 @@ function parked(item: TaskRecord, tasks: TaskRecord[], value: BlockerProposal = 
 }
 
 describe('route blocker proposals', () => {
+  it('identifies an unrelated reopening input and lists the allowed dependency cone', () => {
+    const first = node('first'), second = node('second', ['first']), target = node('target', ['second']);
+    const tasks = [first, second, target, node('unrelated')];
+    try {
+      validateBlockerProposals([{ ...proposal, reopenOn: [{ kind: 'dependency-checked', taskId: 'unrelated' }] }], target.task, tasks);
+      throw new Error('Expected rejected reopening condition');
+    } catch (error) {
+      expect(error).toBeInstanceOf(RouteBlockerValidationError);
+      expect(error).toMatchObject({ issues: [{ path: 'blockers[0].reopenOn[0].taskId', message: expect.stringContaining('["first","second"]') }] });
+      expect((error as Error).message).toContain('task "target"');
+    }
+    expect(() => validateBlockerProposals([{ ...proposal, reopenOn: [{ kind: 'dependency-checked', taskId: 'first' }] }], first.task, tasks))
+      .toThrow('This task has no declared dependencies');
+  });
+
   it('normalizes reports and permits reopen evidence only from the declared dependency cone', () => {
     const root = node('root'), intermediate = node('intermediate', ['root']), target = node('target', ['intermediate']);
     const unrelated = node('unrelated'), tasks = [root, intermediate, target, unrelated];
