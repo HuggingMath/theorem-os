@@ -84,6 +84,7 @@ export class ChatSession {
   private originalBackup?: ChatOriginalBackup;
   private environment: 'standard' | 'mathlib' = 'mathlib';
   private effort: 'low' | 'high' | 'max' = 'high';
+  private researchEffort: 'low' | 'high' | 'max' = 'max';
   private participation: 'guided' | 'automatic' = 'guided';
   private apiKey = '';
   private keyBusy = false;
@@ -189,7 +190,7 @@ export class ChatSession {
     } catch { /* In-memory ownership also resets when storage is unavailable. */ }
     this.summaries = []; this.historyLoaded = false; this.historyFailed = false;
     this.capabilities = undefined; this.formalizations = []; this.providerId = ''; this.model = '';
-    this.environment = 'mathlib'; this.effort = 'high'; this.participation = 'guided'; this.budgets = structuredClone(webFormalizationDefaults); this.hasDraftSettings = false;
+    this.environment = 'mathlib'; this.effort = 'high'; this.researchEffort = 'max'; this.participation = 'guided'; this.budgets = structuredClone(webFormalizationDefaults); this.hasDraftSettings = false;
     this.keyBusy = false; this.guidanceVersion = undefined;
     this.lastTaskRefresh = 0; this.lastListRefresh = 0; this.lastActionPoll = 0;
     this.liveShown.clear(); this.liveSelected.clear(); this.solveCache = undefined;
@@ -241,7 +242,7 @@ export class ChatSession {
     });
     const position = this.draftPositions.get(id);
     const settings: ChatDraftSettings = { providerId: this.providerId, model: this.model, environment: this.environment,
-      effort: this.effort, participation: this.participation, ...structuredClone(this.budgets) };
+      effort: this.effort, ...(this.researchEffort !== this.effort ? { researchEffort: this.researchEffort } : {}), participation: this.participation, ...structuredClone(this.budgets) };
     const draft: ChatDraft = { text: this.draft, settings, ...(!this.currentId && this.originalBackup ? { originalBackup: this.originalBackup } : {}),
       ...(this.guidanceMode && this.guidanceRunId ? { guidance: { runId: this.guidanceRunId,
         ...(this.guidanceTarget && this.guidanceVersion ? { taskRef: { id: this.guidanceTarget, version: this.guidanceVersion } } : {}) } } : {}),
@@ -288,8 +289,8 @@ export class ChatSession {
     } catch { /* In-memory drafts remain available. */ }
     this.references = draft?.references ?? [];
     if (draft?.settings) {
-      const { providerId, model, environment, effort, participation, maxRunSeconds, maxTotalTokens, research } = draft.settings;
-      Object.assign(this, { providerId, model, environment, effort, participation });
+      const { providerId, model, environment, effort, researchEffort, participation, maxRunSeconds, maxTotalTokens, research } = draft.settings;
+      Object.assign(this, { providerId, model, environment, effort, researchEffort: researchEffort ?? effort, participation });
       this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...webFormalizationDefaults.research, ...research } }; this.hasDraftSettings = true;
     }
     this.originalBackup = id === 'home' ? draft?.originalBackup : undefined;
@@ -434,19 +435,19 @@ export class ChatSession {
     })();
     if (!saved && original !== undefined) {
       const { maxRunSeconds, maxTotalTokens, research, ...historical } = settings;
-      Object.assign(this, historical); this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...research } }; this.hasDraftSettings = true;
+      Object.assign(this, historical, { researchEffort: historical.researchEffort ?? historical.effort }); this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...research } }; this.hasDraftSettings = true;
       this.draft = original; this.references = []; if (environment) this.environment = environment;
     }
     this.rememberDraft(); this.options.onNavigate('', mode, false, id); this.options.onSelection(); this.draw(); this.focus();
   }
   problemDraft(): Extract<ProblemDraftValue, { mode: 'natural' }> {
     return { mode: 'natural', text: this.draft, settings: { providerId: this.providerId, model: this.model, environment: this.environment,
-      effort: this.effort, participation: this.participation, ...structuredClone(this.budgets) } };
+      effort: this.effort, ...(this.researchEffort !== this.effort ? { researchEffort: this.researchEffort } : {}), participation: this.participation, ...structuredClone(this.budgets) } };
   }
   restoreProblemDraft(value: Extract<ProblemDraftValue, { mode: 'natural' }>) {
     this.home(false); this.keepOriginal();
     const { maxRunSeconds, maxTotalTokens, research, ...settings } = value.settings;
-    Object.assign(this, settings); this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...research } }; this.hasDraftSettings = true;
+    Object.assign(this, settings, { researchEffort: settings.researchEffort ?? settings.effort }); this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...research } }; this.hasDraftSettings = true;
     this.draft = value.text; this.apiKey = ''; this.clearConnection(); this.rememberDraft(); this.draw(); this.focus();
   }
   private keepOriginal() {
@@ -459,7 +460,7 @@ export class ChatSession {
     this.originalBackup = undefined;
     if (backup.settings) {
       const { maxRunSeconds, maxTotalTokens, research, ...settings } = backup.settings;
-      Object.assign(this, settings); this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...research } };
+      Object.assign(this, settings, { researchEffort: settings.researchEffort ?? settings.effort }); this.budgets = { maxRunSeconds, maxTotalTokens, research: { ...research } };
     }
     this.draft = backup.text; this.apiKey = ''; this.clearConnection(); this.rememberDraft(); this.draw(); this.focus();
   }
@@ -659,7 +660,8 @@ export class ChatSession {
         const input: WebConversationRequest = { text, apiKey: key, requestId: message!.requestId };
         ({ conversation: next } = await this.post<{ conversation: WebConversation }>(`/api/conversations/${conversation.id}/messages`, input));
       } else {
-        const settings = { providerId: this.providerId, model: this.model.trim(), environment: this.environment, effort: this.effort, ...this.budgets,
+        const settings = { providerId: this.providerId, model: this.model.trim(), environment: this.environment, effort: this.effort,
+          ...(this.researchEffort !== this.effort ? { researchEffort: this.researchEffort } : {}), ...this.budgets,
           ...(this.participation === 'guided' ? { humanReview: true } : {}) };
         const input = { original: text, ...settings, apiKey: key, solve: true };
         let formalization = seed;
@@ -1120,7 +1122,7 @@ export class ChatSession {
             ? t('当前服务暂不支持自然语言解题，可切换到 Lean 输入。')
             : t('运行环境暂未就绪，原题会保留；恢复后可继续发送。')
         : newProblem && !this.capabilities ? t("正在连接…") : canGuide ? t('讨论用于交流思路；想调整研究，请切换到「指导研究」。') : undefined,
-      onEnvironment: value => { this.environment = value; this.rememberDraft(); this.draw(); }, onEffort: value => { this.effort = value; this.rememberDraft(); this.draw(); },
+      onEnvironment: value => { this.environment = value; this.rememberDraft(); this.draw(); }, onEffort: value => { this.effort = value; this.researchEffort = value; this.rememberDraft(); this.draw(); },
       onKey: value => { this.apiKey = value; this.keyNotice = ''; this.clearConnection(); this.draw(); },
       onExample: id => this.useExample(id),
       onLean: this.options.onLean,

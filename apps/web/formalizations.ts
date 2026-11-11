@@ -230,6 +230,7 @@ export class WebFormalizations {
     if (!/^[A-Za-z0-9_-]{1,128}$/u.test(request.requestId)) throw new WebStorageError(400, '提交请求标识无效。');
     return { schema: 'theorem-os.web-creation.v1', requestId: request.requestId, digest: mathDigest(canonicalMathJson({
       original: request.original, environment: request.environment, effort: request.effort, model,
+      ...(request.researchEffort && request.researchEffort !== request.effort ? { researchEffort: request.researchEffort } : {}),
       provider: { id: provider.id, baseUrl: provider.baseUrl }, solve: Boolean(request.solve), humanReview: Boolean(request.humanReview),
       maxRunSeconds: request.maxRunSeconds ?? webFormalizationDefaults.maxRunSeconds,
       maxTotalTokens: request.maxTotalTokens ?? webFormalizationDefaults.maxTotalTokens,
@@ -266,6 +267,7 @@ export class WebFormalizations {
       maxTotalTokens: request.maxTotalTokens ?? webFormalizationDefaults.maxTotalTokens,
       maxRounds: 0, maxPlanningRounds: 0,
       research: { ...webFormalizationDefaults.research, ...request.research },
+      researchEffort: request.researchEffort ?? request.effort,
       effort: request.effort, status: 'queued', createdAt: now, updatedAt: now, progress: { phase: 'queued', updatedAt: now },
       ...(request.solve ? { workflow: 'solve' } : {}), ...(request.humanReview ? { humanReview: true } : {}) };
     const input: WorkerFormalizationInput = { original: request.original, environment: request.environment, effort: request.effort,

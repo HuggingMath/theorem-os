@@ -31,6 +31,7 @@ if (embedded) {
 } else mountLocaleSwitch(document.querySelector<HTMLButtonElement>('#locale-switch')!);
 const original = $<HTMLTextAreaElement>('#formalize-original'), key = $<HTMLInputElement>('#formalize-key');
 const environment = $<HTMLSelectElement>('#formalize-environment'), effort = $<HTMLSelectElement>('#formalize-effort');
+let researchEffort: WebFormalizationRequest['effort'] = 'max';
 if (embedded) { environment.value = 'mathlib'; effort.value = 'high'; }
 const exampleSelect = $<HTMLSelectElement>('#formalize-example');
 for (const example of researchExamples) exampleSelect.add(new Option(locale === 'en' ? example.nameEn : example.name, example.id));
@@ -41,7 +42,7 @@ function saveDraft() {
   if (!draftStorageKey) return;
   try {
     sessionStorage.setItem(draftStorageKey, JSON.stringify({ original: original.value, environment: environment.value,
-      effort: effort.value, selected: state.selected, example: selectedExample }));
+      effort: effort.value, ...(researchEffort !== effort.value ? { researchEffort } : {}), selected: state.selected, example: selectedExample }));
   } catch { /* The editable draft remains usable when browser storage is unavailable. */ }
 }
 function restoreDraft(session: WebSession) {
@@ -58,6 +59,8 @@ function restoreDraft(session: WebSession) {
     original.value = saved.original;
     environment.value = saved.environment === 'standard' ? 'standard' : 'mathlib';
     effort.value = ['low', 'high', 'max'].includes(String(saved.effort)) ? String(saved.effort) : 'high';
+    researchEffort = ['low', 'high', 'max'].includes(String(saved.researchEffort)) ? saved.researchEffort as WebFormalizationRequest['effort']
+      : ['low', 'high', 'max'].includes(String(saved.effort)) ? saved.effort as WebFormalizationRequest['effort'] : 'max';
     state.selected = typeof saved.selected === 'string' ? saved.selected : '';
     recoveringSubmission = submission.unresolved;
     const example = researchExamples.find(item => item.id === saved.example);
@@ -123,6 +126,7 @@ const matchesInput = (item: WebFormalization) => environment.value === item.envi
   && (original.value === item.original || embedded && !original.value && state.selected === item.id);
 function loadOriginal(item: WebFormalization) {
   original.value = item.original; environment.value = item.environment; effort.value = item.effort;
+  researchEffort = item.researchEffort ?? item.effort;
   clearExample(); saveDraft(); controls();
 }
 function mayReplaceOriginal(item: WebFormalization) {
@@ -370,7 +374,8 @@ $('#formalize-form').addEventListener('submit', async event => {
   const generation = conversationGeneration;
   state.busy = true; controls(); error();
   const input: WebFormalizationRequest = { original: original.value, environment: environment.value === 'mathlib' ? 'mathlib' : 'standard',
-    effort: effort.value as WebFormalizationRequest['effort'], apiKey: key.value, ...(embedded ? { solve: true } : {}) };
+    effort: effort.value as WebFormalizationRequest['effort'], apiKey: key.value,
+    ...(researchEffort !== effort.value ? { researchEffort } : {}), ...(embedded ? { solve: true } : {}) };
   key.value = '';
   saveDraft();
   // Reloading an uncertain new submission restores that draft; explicit record URLs remain read-only destinations.
@@ -417,7 +422,7 @@ if (embedded) {
   });
 }
 environment.addEventListener('change', () => { submission?.clear(); autoOpen = ''; clearExample(); saveDraft(); controls(); });
-effort.addEventListener('change', () => { submission?.clear(); saveDraft(); controls(); });
+effort.addEventListener('change', () => { researchEffort = effort.value as WebFormalizationRequest['effort']; submission?.clear(); saveDraft(); controls(); });
 key.addEventListener('input', controls);
 $('#formalize-use').addEventListener('click', event => {
   if (state.busy || state.item?.status !== 'confirmed' || !matchesInput(state.item)) { event.preventDefault(); controls(); return; }
@@ -449,6 +454,7 @@ if (embedded) window.addEventListener('theoremos:natural-original', event => {
 if (embedded) window.addEventListener('theoremos:new-natural', () => {
   conversationGeneration++; submission?.clear();
   autoOpen = ''; original.value = ''; key.value = ''; environment.value = 'mathlib'; effort.value = 'high';
+  researchEffort = 'max';
   state.selected = ''; state.item = undefined; report = undefined;
   clearExample(); saveDraft(); error(); drawCurrent(); drawList(); controls();
   $<HTMLDetailsElement>('#formalize-settings').open = false;

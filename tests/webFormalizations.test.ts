@@ -251,6 +251,73 @@ describe('online formalization ownership and evidence handoff', () => {
     expect(completed).toMatchObject({ status: 'review', effort: effort ?? 'high', report: { effort: effort ?? 'high' } });
   });
 
+  it.each([
+    { name: 'omitted defaults', settings: {}, generation: 'high', proof: 'max' },
+    { name: 'browser defaults', settings: { effort: 'high', researchEffort: 'max' }, generation: 'high', proof: 'max' },
+    { name: 'explicit high', settings: { effort: 'high' }, generation: 'high', proof: 'high' },
+    { name: 'explicit low', settings: { effort: 'low' }, generation: 'low', proof: 'low' },
+  ])('keeps $name across both compiled and approved proof handoffs', async ({ settings, generation, proof }) => {
+    const alice = await client();
+    for (const compiled of [false, true]) {
+      const response = await request(alice, '/api/formalizations', { original: fixtureStatement, environment: 'standard', apiKey: KEY,
+        solve: true, ...settings });
+      expect(response.status).toBe(201); await settle();
+      const value = (await response.json()).formalization as WebFormalization, pending = runner.pending.at(-1)!;
+      expect(value).toMatchObject({ effort: generation, researchEffort: proof });
+      expect(pending.input.effort).toBe(generation); expect(pending.input).not.toHaveProperty('researchEffort');
+      const evidence = webFormalizationEvidence(pending.input);
+      if (compiled) { pending.send({ type: 'compiled', candidate: formalizationCompiledCandidate(evidence) }); await settle(); }
+      pending.send({ type: 'result', status: 'approved', evidence }); pending.resolve(); await settle();
+      const completed = (await (await request(alice, `/api/formalizations/${value.id}`)).json()).formalization as WebFormalization;
+      expect(completed).toMatchObject({ status: 'confirmed', effort: generation, researchEffort: proof, report: { effort: generation } });
+      const run = runner.runs.at(-1)!;
+      expect(run.input).toMatchObject({ effort: proof, maxRunSeconds: 0, maxTotalTokens: 0 });
+      expect((run.formalization ?? run.compiledFormalization)?.request.effort).toBe(generation);
+      runner.proofs.at(-1)!.resolve(); await settle();
+    }
+    expect(runner.runs).toHaveLength(2);
+  });
+
+  it.each([false, true])('keeps proof effort through restart and research retry (legacy=%s)', async legacy => {
+    const alice = await client();
+    const response = await request(alice, '/api/formalizations', { ...body, effort: 'high', solve: true,
+      ...(legacy ? {} : { researchEffort: 'max' }) });
+    expect(response.status).toBe(201); await settle();
+    const value = (await response.json()).formalization as WebFormalization, pending = runner.pending.at(-1)!;
+    config.queueLimit = 0;
+    const evidence = webFormalizationEvidence(pending.input);
+    pending.send({ type: 'result', status: 'approved', evidence }); pending.resolve(); await settle();
+    const recordPath = ['owners', mathDigest(alice.cookie.slice('theoremos_session='.length)), 'formalizations', value.id];
+    if (legacy) {
+      const stored = service.storage.getRecord<any>([...recordPath, 'record.json']);
+      delete stored.formalization.researchEffort;
+      service.storage.saveRecord([...recordPath, 'record.json'], stored);
+    }
+    await service.close(); runner = new Runner(); service = createWebService(config, runner, { sample: null });
+    await new Promise<void>(resolve => service.server.listen(config.port, '127.0.0.1', resolve));
+    config.queueLimit = 8;
+    const resumed = await request(alice, `/api/formalizations/${value.id}/research`, { apiKey: KEY });
+    expect(resumed.status).toBe(200); await settle();
+    expect(runner.inputs).toHaveLength(0); expect(runner.runs).toHaveLength(1);
+    expect(runner.runs[0].input.effort).toBe(legacy ? 'high' : 'max');
+    expect(runner.runs[0].formalization).toEqual(evidence);
+    const persisted = service.storage.getRecord<any>([...recordPath, 'evidence.json']);
+    expect(formalizationDigest(persisted)).toBe(formalizationDigest(evidence));
+  });
+
+  it('binds distinct proof effort to new receipts while replaying legacy equal-effort receipts', async () => {
+    const alice = await client(), input = { ...body, requestId: 'legacy-effort-receipt' };
+    const created = await request(alice, '/api/formalizations', input);
+    expect(created.status).toBe(201);
+    const value = (await created.json()).formalization as WebFormalization;
+    const equivalent = await request(alice, '/api/formalizations', { ...input, researchEffort: 'max' });
+    expect(equivalent.status).toBe(200); expect((await equivalent.json()).formalization.id).toBe(value.id);
+    expect((await request(alice, '/api/formalizations', { ...input, researchEffort: 'high' })).status).toBe(409);
+    const defaults = { ...body, effort: 'high', researchEffort: 'max', requestId: 'separate-effort-receipt' };
+    expect((await request(alice, '/api/formalizations', defaults)).status).toBe(201);
+    expect((await request(alice, '/api/formalizations', { ...defaults, researchEffort: 'high' })).status).toBe(409);
+  });
+
   it('uses authenticated session and CSRF boundaries, hides other owners and never stores keys', async () => {
     const alice = await client(), bob = await client();
     expect((await fetch(base + '/api/formalizations')).status).toBe(401);

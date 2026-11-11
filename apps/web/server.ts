@@ -99,7 +99,8 @@ const explanationSchema = z.object({
 const formalizationSchema = z.object({
   requestId: inputSchema.shape.requestId,
   original: z.string().min(1).refine(value => value.trim().length > 0 && Buffer.byteLength(value) <= webFormalizationLimits.maxOriginalBytes),
-  environment: z.enum(['standard', 'mathlib']), effort: z.enum(['low', 'high', 'max']).default('high'),
+  environment: z.enum(['standard', 'mathlib']), effort: z.enum(['low', 'high', 'max']).optional(),
+  researchEffort: z.enum(['low', 'high', 'max']).optional(),
   apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default(''),
   solve: z.boolean().optional(), humanReview: z.boolean().optional(),
   providerId: inputSchema.shape.providerId.optional(), model: inputSchema.shape.model.optional(),
@@ -274,7 +275,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     const run = jobs.create(owner, { ...webDefaults, ...webFormalizationDefaults.research, ...formalization.research,
       ...(formalization.humanReview ? { workers: 2, coordination: 'cooperative' as const, planApproval: true } : {}),
       providerId: input.provider.id, apiKey: input.apiKey,
-      model: input.model, effort: input.effort, source: evidence.candidate.source, environment: evidence.request.environment,
+      model: input.model, effort: formalization.researchEffort ?? input.effort, source: evidence.candidate.source, environment: evidence.request.environment,
       task: '依据自然语言原题及其 Lean 陈述，证明全部目标，保留所有定义、假设与声明。', formalizationId: formalization.id }, input.provider, undefined, undefined,
     { evidence, provenance: { id: formalization.id, evidenceSha256: formalizationDigest(evidence), original: formalization.original,
       candidateDigest: digest, confirmedAt: formalization.confirmedAt!, confirmation: formalization.confirmation ?? 'automatic',
@@ -288,7 +289,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         run.formalization?.candidateDigest === digest && run.source === compiled.candidate.source && run.environment === compiled.request.environment);
       if (existing) return existing.id;
       const run = jobs.create(owner, { ...webDefaults, ...webFormalizationDefaults.research, ...formalization.research,
-        providerId: input.provider.id, apiKey: input.apiKey, model: input.model, effort: input.effort,
+        providerId: input.provider.id, apiKey: input.apiKey, model: input.model, effort: formalization.researchEffort ?? input.effort,
         source: compiled.candidate.source, environment: compiled.request.environment, formalizationId: formalization.id,
         task: '证明编译通过的固定候选陈述的全部目标，保留所有定义、假设与声明。原题含义审核正在后台进行。' }, input.provider, undefined, undefined,
       { compiled, provenance: { id: formalization.id, original: formalization.original, candidateDigest: digest, confirmation: 'pending' } });
@@ -725,17 +726,20 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (request.method === 'POST') {
             const parsed = formalizationSchema.safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请检查原题、证明环境与 API Key。');
+            // Omitted settings use separate defaults; explicit and older requests retain their chosen effort.
+            const input = { ...parsed.data, effort: parsed.data.effort ?? 'high' as const,
+              researchEffort: parsed.data.researchEffort ?? parsed.data.effort ?? webDefaults.effort };
             if (parsed.data.humanReview && !parsed.data.solve) throw new HttpError(400, '人工审核模式需要启用证明研究。');
             const provider = parsed.data.providerId ? providers.find(item => item.id === parsed.data.providerId) : defaultProvider;
             if (!provider) throw new HttpError(409, '当前服务没有配置这个题目使用的模型服务。');
             const model = parsed.data.model ?? providerModel(provider);
             if (provider.id === SUB2API_PROVIDER.id && model !== SUB2API_PROVIDER.defaultModel)
               throw new HttpError(400, 'Sub2API 形式化目前支持 deepseek-flash 模型。');
-            const previous = formalizations.replay(owner, parsed.data as WebFormalizationRequest, provider, model);
+            const previous = formalizations.replay(owner, input as WebFormalizationRequest, provider, model);
             if (previous) { json(response, 200, { formalization: previous }); return; }
             const ready = Boolean(runner.formalize) && (await runner.readiness()).ready;
             // Readiness yields to concurrent requests; replay again before spending quota.
-            const raced = formalizations.replay(owner, parsed.data as WebFormalizationRequest, provider, model);
+            const raced = formalizations.replay(owner, input as WebFormalizationRequest, provider, model);
             if (raced) { json(response, 200, { formalization: raced }); return; }
             if (!ready) throw new HttpError(503, '形式化运行环境尚未就绪。');
             const apiKey = parsed.data.apiKey || heldKey(session, provider);
@@ -744,7 +748,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             admitWork();
             const refund = spend(session, 'formalizations');
             try {
-              json(response, 201, { formalization: formalizations.create(owner, { ...parsed.data, apiKey } as WebFormalizationRequest, provider, model) }); return;
+              json(response, 201, { formalization: formalizations.create(owner, { ...input, apiKey } as WebFormalizationRequest, provider, model) }); return;
             } catch (error) {
               refund();
               throw error;

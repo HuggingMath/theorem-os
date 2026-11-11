@@ -11,6 +11,7 @@ export function matchesProblemFormalization(value: ProblemDraftValue, item: WebF
   const { settings } = value;
   return item.original === value.text && item.workflow === 'solve' && item.environment === settings.environment
     && item.providerId === settings.providerId && item.model === settings.model.trim() && item.effort === settings.effort
+    && (item.researchEffort ?? item.effort) === (settings.researchEffort ?? settings.effort)
     && Boolean(item.humanReview) === (settings.participation === 'guided') && item.maxRunSeconds === settings.maxRunSeconds
     && item.maxTotalTokens === settings.maxTotalTokens && equal(item.research, settings.research);
 }

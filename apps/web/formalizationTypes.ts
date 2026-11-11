@@ -29,6 +29,8 @@ export type WebFormalization = {
   workflow?: 'solve'; humanReview?: boolean; confirmation?: 'automatic' | 'manual'; runId?: string; researchError?: string;
   /** Absent on older records; new generations bind the exact submitted budgets and provider. */
   providerId?: string; maxRunSeconds?: number; maxTotalTokens?: number; maxRounds?: number; maxPlanningRounds?: number; research?: WebResearchBudget;
+  /** Frozen proof effort; older records inherit their formalization effort. */
+  researchEffort?: 'low' | 'high' | 'max';
   /** Absent on legacy kernel-v2 records; new generations freeze their context export protocol. */
   contextProtocol?: LeanStatementContextProtocol;
   /** Frozen on new direct generations; absent on independently reviewed legacy records. */
@@ -41,8 +43,8 @@ export type WebFormalizationCapabilities = { available: boolean; reason?: 'provi
   providers?: (WebProvider & { defaultModel: string; key: 'required' | 'saved' | 'server'; keyUrl?: string })[];
   defaults?: typeof webFormalizationDefaults };
 export type WebFormalizationRequest = { original: string; environment: WebEnvironment; apiKey: string; effort: 'low' | 'high' | 'max'; solve?: boolean; humanReview?: boolean;
-  requestId?: string; providerId?: string; model?: string; maxRunSeconds?: number; maxTotalTokens?: number; research?: Partial<WebResearchBudget> };
-export type WorkerFormalizationInput = Omit<WebFormalizationRequest, 'solve' | 'humanReview' | 'requestId' | 'providerId' | 'research'> & { id: string; model: string; provider: WebProvider;
+  requestId?: string; providerId?: string; model?: string; researchEffort?: 'low' | 'high' | 'max'; maxRunSeconds?: number; maxTotalTokens?: number; research?: Partial<WebResearchBudget> };
+export type WorkerFormalizationInput = Omit<WebFormalizationRequest, 'solve' | 'humanReview' | 'requestId' | 'providerId' | 'research' | 'researchEffort'> & { id: string; model: string; provider: WebProvider;
   maxRunSeconds: number; maxTotalTokens: number; maxRounds: number; maxPlanningRounds: number; reviewers: number;
   contextProtocol?: LeanStatementContextProtocol; reviewMode?: 'direct' };
 export type WorkerFormalizationAuditMessage = { type: 'audit-progress'; tokens: number }

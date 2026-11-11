@@ -11,7 +11,7 @@ import { webFormalizationLimits, type WebFormalization, type WebFormalizationCap
 import type { WebConversation } from '../apps/web/conversationTypes';
 import { localeStorageKey } from '../apps/web/i18n';
 import { researchExamples } from '../apps/web/problemExamples';
-import { freePort, startBrowser, ready } from './web-scenario';
+import { freePort, startBrowser } from './web-scenario';
 import { audit } from './web-a11y';
 import { openSettings, closeSettings, enterLean, showExamples } from './web-ui-controls';
 
@@ -76,7 +76,8 @@ async function setup(browser: Browser, options: { width?: number; locale?: strin
       assert.match(body.requestId, /^[a-f0-9-]{36}$/u);
       const previous = creations.get(body.requestId);
       if (previous) return json({ formalization: previous });
-      items.unshift({ ...baseItem, original: body.original, environment: body.environment, effort: body.effort });
+      items.unshift({ ...baseItem, original: body.original, environment: body.environment, effort: body.effort,
+        researchEffort: body.researchEffort });
       creations.set(body.requestId, items[0]!);
       if (options.loseCreationResponse && !lostResponse) { lostResponse = true; return route.abort('connectionreset'); }
       return json({ formalization: items[0] });
@@ -165,6 +166,7 @@ try {
     await page.locator('#formalize-start').click(); await page.locator('#formalize-progress').filter({ hasText: '规划陈述' }).waitFor();
     assert.equal(writes.length, 1); assert.equal(writes[0]!.body.original, original); assert.equal(writes[0]!.body.apiKey, 'fixture-secret-key');
     assert.equal(writes[0]!.body.effort, 'high');
+    assert.equal(writes[0]!.body.researchEffort, 'max');
     assert.equal(await page.locator('#formalize-key').inputValue(), '');
     assert.equal(await page.evaluate(() => JSON.stringify([localStorage, sessionStorage]).includes('fixture-secret-key')), false);
     await page.reload(); await page.locator('#formalize-progress').filter({ hasText: '规划陈述' }).waitFor(); assert.equal(writes.length, 1);
@@ -187,18 +189,19 @@ try {
     await context.close();
   }
   console.log('PASS exact original input, key lifecycle, persisted read-only refresh, reviewed evidence and explicit confirmation');
-  {
+  for (const chosenEffort of ['high', 'max'] as const) {
     const { page, context, writes } = await setup(browser);
-    await page.locator('#formalize-effort').selectOption('max');
+    await page.locator('#formalize-effort').selectOption(chosenEffort);
     await page.locator('#formalize-original').fill(original);
     await page.reload(); await page.locator('#formalize-budget').filter({ hasText: 'deepseek-flash' }).waitFor();
-    assert.equal(await page.locator('#formalize-effort').inputValue(), 'max');
-    await page.locator('#formalize-key').fill('fixture-explicit-max-key');
+    assert.equal(await page.locator('#formalize-effort').inputValue(), chosenEffort);
+    await page.locator('#formalize-key').fill('fixture-explicit-effort-key');
     await page.locator('#formalize-start').click(); await page.locator('#formalize-current').waitFor();
-    assert.equal(writes.length, 1); assert.equal(writes[0]!.body.effort, 'max');
+    assert.equal(writes.length, 1); assert.equal(writes[0]!.body.effort, chosenEffort);
+    assert.equal(writes[0]!.body.researchEffort, undefined, 'Matching explicit effort retains the legacy request shape');
     await context.close();
   }
-  console.log('PASS standalone defaults to high while a saved explicit max draft remains max');
+  console.log('PASS standalone defaults to formalization high and research max while saved explicit high/max choices remain unchanged');
   for (const destination of ['reload', 'record', 'example']) {
     const other = { ...baseItem, id: '22222222-2222-4222-8222-222222222222', original: 'A different saved record' };
     const caps = { ...capabilities };
@@ -211,6 +214,13 @@ try {
       assert.equal(new URL(page.url()).search, '', 'A new submission no longer names the older selected record');
       assert.equal(items.length, 2);
       if (destination === 'reload') {
+        // A pending request from an older client has no separate research effort in its saved draft.
+        await page.evaluate(() => {
+          for (const key of Object.keys(sessionStorage)) if (key.startsWith('theorem-os.natural-research-draft.v2:')) {
+            const draft = JSON.parse(sessionStorage.getItem(key)!);
+            delete draft.researchEffort; sessionStorage.setItem(key, JSON.stringify(draft));
+          }
+        });
         caps.available = false;
         await page.reload(); await page.locator('#formalize-start:enabled').waitFor();
         assert.equal(await page.locator('#formalize-original').inputValue(), 'Uncertain standalone original');
@@ -220,6 +230,7 @@ try {
         await page.locator('#formalize-source-text').filter({ hasText: 'Uncertain standalone original' }).waitFor({ state: 'attached' });
         const creates = writes.filter(write => write.path === '/api/formalizations');
         assert.equal(creates.length, 2); assert.equal(creates[0]!.body.requestId, creates[1]!.body.requestId);
+        assert.equal(creates[0]!.body.researchEffort, undefined); assert.equal(creates[1]!.body.researchEffort, undefined);
         assert.equal(items.length, 2, 'Replay needs neither a key, runtime availability nor a free queue slot');
       } else if (destination === 'record') {
         await page.goto(`${origin}/formalize.html?id=${other.id}`);
@@ -341,7 +352,8 @@ try {
     assert.equal(await page.locator('#environment').inputValue(), report.environment);
     assert.equal(await page.locator('#draft-formalization-link').getAttribute('href'), 'formalize.html?id=11111111-1111-4111-8111-111111111111');
     assert.equal(writes.length, 0, 'Opening the confirmed problem must not start research');
-    await page.reload(); await enterLean(page); await page.locator('#draft-formalization-link').waitFor();
+    // Reload restores the same owner's Lean draft asynchronously; wait for that editor instead of clicking its transient natural entry.
+    await page.reload(); await page.locator('#source').waitFor(); await page.locator('#draft-formalization-link').waitFor();
     assert.equal(await page.locator('#source').inputValue(), report.statement);
     assert.equal(await page.locator('#environment').inputValue(), report.environment);
     await openSettings(page); await page.locator('#api-key').fill('fixture-research-key'); await closeSettings(page);
@@ -353,7 +365,7 @@ try {
     assert.equal(writes[0]!.body.environment, report.environment);
     await page.locator('#source').fill(report.statement + '-- edited\n');
     assert.equal(await page.locator('#draft-formalization-link').isVisible(), false, 'Edited source must release the evidence binding');
-    await page.reload(); await enterLean(page); await ready(page);
+    await page.reload(); await page.locator('#source').waitFor();
     assert.equal(await page.locator('#draft-formalization-link').isVisible(), false);
     assert.equal(await page.locator('#source').inputValue(), report.statement + '-- edited\n');
     await context.close();

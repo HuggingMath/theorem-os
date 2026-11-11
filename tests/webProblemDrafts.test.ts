@@ -137,6 +137,18 @@ function stubTab() {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('problem draft submission lifecycle', () => {
+  it('stores separate proof effort and archives only a formalization with matching proof settings', () => {
+    const { personal, storage } = fixture();
+    const separate = { ...natural, settings: { ...natural.settings, effort: 'high' as const, researchEffort: 'max' as const } };
+    const first = personal.saveDraft(alice, input('separate-proof-effort', separate));
+    expect(first.version.value).toEqual(separate);
+    storeFormalization(storage, alice, 'wrong-proof-effort', { ...separate, settings: { ...separate.settings, researchEffort: 'high' } });
+    const complete = (id: string) => personal.updateDraft(alice, first.draft.id, { requestId: id, versionId: first.version.id,
+      action: 'submitted', submission: { kind: 'formalization', id } });
+    expect(() => complete('wrong-proof-effort')).toThrow();
+    storeFormalization(storage, alice, 'matching-proof-effort', separate);
+    expect(complete('matching-proof-effort').version.status).toBe('submitted');
+  });
   it('archives only the confirmed natural branch and links its actual formalization', () => {
     const { personal, storage } = fixture();
     const first = personal.saveDraft(alice, input('submitted-natural'));

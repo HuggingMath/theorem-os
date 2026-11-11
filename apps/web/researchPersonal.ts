@@ -38,6 +38,7 @@ const values = {
   problem: z.discriminatedUnion('mode', [
     z.object({ mode: z.literal('natural'), text: text(32768), settings: z.object({ providerId: text(64), model: text(128),
       environment: z.enum(['standard', 'mathlib']), effort: z.enum(['low', 'high', 'max']), participation: z.enum(['guided', 'automatic']),
+      researchEffort: z.enum(['low', 'high', 'max']).optional(),
       maxRunSeconds: z.number().finite().nonnegative(), maxTotalTokens: z.number().finite().nonnegative(),
       research: z.object({ maxRunSeconds: z.number().finite().nonnegative(), maxTotalTokens: z.number().finite().nonnegative(), maxTurns: z.number().finite().nonnegative() }).strict() }).strict() }).strict(),
     z.object({ mode: z.literal('lean'), draft: z.object({ providerId: text(64), model: text(128), source: text(webLimits.maxSourceBytes).refine(value => Buffer.byteLength(value) <= webLimits.maxSourceBytes), task: text(8000),

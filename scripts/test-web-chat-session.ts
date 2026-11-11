@@ -286,6 +286,7 @@ try {
     assert.equal(await page.locator('#formalize-original').inputValue(), '');
     assert.equal((await conversation(page)).messages[0]?.text, original, 'Server message preserves the exact original');
     const pending = formalizations.at(-1)!;
+    assert.equal(pending.input.effort, 'high', 'New formalizations default to high reasoning');
     await outcomes(page);
     if (width === 1440) {
       assert.equal(pending.input.maxRunSeconds, 240); assert.equal(pending.input.maxTotalTokens, 120000);
@@ -296,6 +297,7 @@ try {
     pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve();
     await page.locator('[data-research-artifact="source"]:enabled').waitFor();
     await eventually(() => runs.length === formalizations.length, 'The approved formalization starts one proof');
+    assert.equal(runs.at(-1)?.input.effort, 'max', 'Default proof effort remains max after high formalization');
     assert.equal((runs.at(-1)?.formalization as { request?: { statement?: string } } | undefined)?.request?.statement, original);
     assert.equal(await page.locator('.research-conversation-status').getAttribute('data-accepted'), String(width === 390));
     assert.match(await page.locator('#research-chat-thread [data-statement-verdict]').innerText(), /Lean 编译通过/u);

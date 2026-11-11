@@ -2,7 +2,7 @@
 
 `theorem-os formalize` turns a natural-language or TeX problem into Lean definitions and theorem targets. New CLI and web requests default to direct generation followed by host Lean compilation. A failed compilation returns diagnostics to the generator for repair. The first compiled candidate becomes a frozen native `lean-task` seed; the proof solver and its independent S3 Lean acceptance run afterwards.
 
-New CLI and web formalization requests default to `deepseek-flash` with `high` reasoning. Explicit effort selections, saved drafts and frozen tasks retain their configuration, including `max`.
+New CLI and web formalization requests default to `deepseek-flash` with `high` reasoning; web proof handoff defaults to `max`. The web record freezes a separate `researchEffort` for proof creation and retries. An explicit reasoning selection still applies to both stages. Saved drafts and frozen tasks retain their configuration; older records without `researchEffort` inherit their original `effort`. The browser sends the extra field only when the two efforts differ, preserving pending submissions and their request IDs.
 
 Web requests and both first-research presets (`trial` and `standard`) leave execution time and total token use unlimited for formalization and proof research: `maxRunSeconds: 0` and `maxTotalTokens: 0`. Choosing a preset adjusts the proof turn count without introducing a time or token ceiling. Manually entered positive time or token budgets remain explicit and are preserved in the frozen request.
 

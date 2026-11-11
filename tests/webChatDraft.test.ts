@@ -28,6 +28,17 @@ it('keeps explicit unlimited historical budgets and uses fallback only for missi
     maxRunSeconds: 0, maxTotalTokens: 0 });
 });
 
+it('preserves separate proof effort in new drafts and retains legacy effort when no proof field was stored', () => {
+  const separate = { ...settings, effort: 'high' as const, researchEffort: 'max' as const };
+  expect(decodeChatDraft(encodeChatDraft({ text: 'new task', settings: separate }))).toEqual({ text: 'new task', settings: separate });
+  const formalization: WebFormalization = { id: 'separate', original: 'new task', model: settings.model, environment: 'standard',
+    effort: 'high', researchEffort: 'max', status: 'confirmed', createdAt: '', updatedAt: '' };
+  expect(historicalChatSettings(formalization, undefined, settings)).toMatchObject({ effort: 'high', researchEffort: 'max' });
+  const { researchEffort: _proof, ...legacy } = formalization;
+  expect(historicalChatSettings(legacy, undefined, separate)).toMatchObject({ effort: 'high' });
+  expect(historicalChatSettings(legacy, undefined, separate)).not.toHaveProperty('researchEffort');
+});
+
 it('retains exact draft text and selected budgets while projecting out credentials', () => {
   const draft = { text: '  Original statement\nSecond line.\n', settings: { ...settings, apiKey: 'never-save-this-key' } };
   const encoded = encodeChatDraft(draft);
