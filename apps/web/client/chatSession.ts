@@ -84,7 +84,7 @@ export class ChatSession {
   private originalBackup?: ChatOriginalBackup;
   private environment: 'standard' | 'mathlib' = 'mathlib';
   private effort: 'low' | 'high' | 'max' = 'high';
-  private researchEffort: 'low' | 'high' | 'max' = 'max';
+  private researchEffort: 'low' | 'high' | 'max' = 'high';
   private participation: 'guided' | 'automatic' = 'guided';
   private apiKey = '';
   private keyBusy = false;
@@ -190,7 +190,7 @@ export class ChatSession {
     } catch { /* In-memory ownership also resets when storage is unavailable. */ }
     this.summaries = []; this.historyLoaded = false; this.historyFailed = false;
     this.capabilities = undefined; this.formalizations = []; this.providerId = ''; this.model = '';
-    this.environment = 'mathlib'; this.effort = 'high'; this.researchEffort = 'max'; this.participation = 'guided'; this.budgets = structuredClone(webFormalizationDefaults); this.hasDraftSettings = false;
+    this.environment = 'mathlib'; this.effort = 'high'; this.researchEffort = 'high'; this.participation = 'guided'; this.budgets = structuredClone(webFormalizationDefaults); this.hasDraftSettings = false;
     this.keyBusy = false; this.guidanceVersion = undefined;
     this.lastTaskRefresh = 0; this.lastListRefresh = 0; this.lastActionPoll = 0;
     this.liveShown.clear(); this.liveSelected.clear(); this.solveCache = undefined;

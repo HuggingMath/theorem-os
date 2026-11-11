@@ -196,6 +196,29 @@ describe('isolated solver and host acceptance', () => {
     return { source, task };
   }
 
+  it.each([undefined, 'max'] as const)('defaults new proof effort to high and preserves explicit %s', async effort => {
+    expect(await runSolver([...args, ...(effort ? ['--effort', effort] : [])], directory)).toBe(0);
+    expect(readSolverRunState(`${output}.runtime/state.json`).effort).toBe(effort ?? 'high');
+    expect(host.createSession).toHaveBeenCalled();
+    for (const [options] of host.createSession.mock.calls) expect(options.effort).toBe(effort ?? 'high');
+  });
+
+  it.each([{ flags: [] }, { flags: ['--effort', 'max'] }, { flags: ['--effort=max'] }])('resumes frozen max effort with matching or omitted flags $flags', async ({ flags }) => {
+    expect(await runSolver([...args, '--effort', 'max', '--startup-only'], directory)).toBe(0);
+    const prepared = readSolverRunState(`${output}.runtime/state.json`);
+    expect(prepared.effort).toBe('max'); expect(host.createSession).not.toHaveBeenCalled();
+    expect(await runSolver([...args, '--resume', ...flags], directory)).toBe(0);
+    expect(readSolverRunState(`${output}.runtime/state.json`)).toMatchObject({ runId: prepared.runId, effort: 'max' });
+    expect(host.createSession).toHaveBeenCalled();
+    for (const [options] of host.createSession.mock.calls) expect(options.effort).toBe('max');
+    const stateBytes = fs.readFileSync(`${output}.runtime/state.json`), resultBytes = fs.readFileSync(output);
+    host.createSession.mockClear();
+    expect(await runSolver([...args, '--resume', '--effort=high'], directory)).toBe(1);
+    expect(fs.readFileSync(`${output}.runtime/state.json`)).toEqual(stateBytes);
+    expect(fs.readFileSync(output)).toEqual(resultBytes);
+    expect(host.createSession).not.toHaveBeenCalled();
+  });
+
   it('runs a custom M1 without the Codex route while retaining proof checks and independent acceptance', async () => {
     host.connectivity.mockResolvedValue({ status: 'unavailable' });
     const modules = { ...directSolverModules, id: 'custom-execution', M1: { ...directSolverModules.M1,

@@ -31,7 +31,7 @@ if (embedded) {
 } else mountLocaleSwitch(document.querySelector<HTMLButtonElement>('#locale-switch')!);
 const original = $<HTMLTextAreaElement>('#formalize-original'), key = $<HTMLInputElement>('#formalize-key');
 const environment = $<HTMLSelectElement>('#formalize-environment'), effort = $<HTMLSelectElement>('#formalize-effort');
-let researchEffort: WebFormalizationRequest['effort'] = 'max';
+let researchEffort: WebFormalizationRequest['effort'] = 'high';
 if (embedded) { environment.value = 'mathlib'; effort.value = 'high'; }
 const exampleSelect = $<HTMLSelectElement>('#formalize-example');
 for (const example of researchExamples) exampleSelect.add(new Option(locale === 'en' ? example.nameEn : example.name, example.id));
@@ -60,7 +60,7 @@ function restoreDraft(session: WebSession) {
     environment.value = saved.environment === 'standard' ? 'standard' : 'mathlib';
     effort.value = ['low', 'high', 'max'].includes(String(saved.effort)) ? String(saved.effort) : 'high';
     researchEffort = ['low', 'high', 'max'].includes(String(saved.researchEffort)) ? saved.researchEffort as WebFormalizationRequest['effort']
-      : ['low', 'high', 'max'].includes(String(saved.effort)) ? saved.effort as WebFormalizationRequest['effort'] : 'max';
+      : ['low', 'high', 'max'].includes(String(saved.effort)) ? saved.effort as WebFormalizationRequest['effort'] : 'high';
     state.selected = typeof saved.selected === 'string' ? saved.selected : '';
     recoveringSubmission = submission.unresolved;
     const example = researchExamples.find(item => item.id === saved.example);
@@ -454,7 +454,7 @@ if (embedded) window.addEventListener('theoremos:natural-original', event => {
 if (embedded) window.addEventListener('theoremos:new-natural', () => {
   conversationGeneration++; submission?.clear();
   autoOpen = ''; original.value = ''; key.value = ''; environment.value = 'mathlib'; effort.value = 'high';
-  researchEffort = 'max';
+  researchEffort = 'high';
   state.selected = ''; state.item = undefined; report = undefined;
   clearExample(); saveDraft(); error(); drawCurrent(); drawList(); controls();
   $<HTMLDetailsElement>('#formalize-settings').open = false;

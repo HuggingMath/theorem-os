@@ -319,13 +319,13 @@ export async function compareMathRuns(argv: string[]): Promise<number> {
     console.log('Usage: theorem-os compare --phase prepare|run|report|check-report --directory DIR\n'
       + 'prepare also requires --repo PINNED_REPO --problem ID --task-file FILE --build-manifest FILE\n'
       + '--dataset imo2026|putnambench selects the pinned public source (default: imo2026).\n'
-      + 'Optional: --repetitions 1 --workers 4 --model deepseek-flash --effort max --method direct --scheduler plan|critical-path|continuation\n'
+      + 'Optional: --repetitions 1 --workers 4 --model deepseek-flash --effort high --method direct --scheduler plan|critical-path|continuation\n'
       + `          --workers accepts 2..${MAX_RESEARCH_WORKERS}; default 4\n`
       + '          --max-turns 200 --max-run-seconds 1800 --max-turn-seconds 180 --max-total-tokens 0 --evaluator-timeout-seconds 1800\n'
       + '          --proof-environment-cache-dir HOST_PRIVATE_DIR\n'
       + '          --knowledge-base FILE [--knowledge-mode transfer|recovery] (frozen snapshot; default transfer rejects recorded target material)\n'
       + `          --module-experiment FILE (compare module plans with 3 to ${MAX_RESEARCH_WORKERS} cooperative workers instead of coordination arms)\n`
-      + '          --provider profile|sub2api|deepseek|westlake (private per-attempt profiles; Sub2API deepseek-flash/max)\n'
+      + '          --provider profile|sub2api|deepseek|westlake (private per-attempt profiles; Sub2API deepseek-flash/high)\n'
       + 'prepare never invokes a model. run executes every planned attempt sequentially. Every arm receives the same token allowance.\n'
       + 'check-report reads a saved report and its current observations without rewriting files; older unbound reports have unknown freshness.\n'
       + 'Use 0 to disable a limit. All solving and evaluator limits may be zero for an unlimited experiment.\n'
@@ -368,7 +368,7 @@ export async function compareMathRuns(argv: string[]): Promise<number> {
     const preparedProvider = provider === 'profile' ? undefined : provider as PreparedProvider;
     const profileApi = preparedProvider ? providerProfiles[preparedProvider] : undefined;
     const model = flags.get('model') ?? profileApi?.metadata.defaultModel ?? 'deepseek-flash';
-    const effort = flags.get('effort') ?? profileApi?.metadata.defaultEffort ?? 'max';
+    const effort = flags.get('effort') ?? profileApi?.metadata.defaultEffort ?? 'high';
     profileApi?.validate(model, effort);
     const configuration: Plan['configuration'] = { model, effort, method, scheduler,
       ...(preparedProvider ? { provider: preparedProvider } : {}),

@@ -84,6 +84,19 @@ describe('CLI worker capacity', () => {
     expect(result.stderr).toContain('Invalid example case');
     expect(fs.readdirSync(directory)).toEqual(['case.json']);
   });
+
+  it('rejects an explicit effort change to a frozen max example before accessing the provider', () => {
+    const directory = temporary();
+    const config = { schema: 'theorem-os.example-case.v1', mode: 'model', workers: 1,
+      model: 'fixture', effort: 'max', buildManifestRef: 'unused' };
+    fs.writeFileSync(path.join(directory, 'case.json'), JSON.stringify(config));
+    const result = spawnSync('bun', ['scripts/mathematics/runExample.ts', 'resume', '--dir', directory, '--effort', 'high'],
+      { cwd: root, encoding: 'utf8', timeout: 10_000 });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('--effort differs from the prepared case');
+    expect(read(path.join(directory, 'case.json'))).toEqual(config);
+    expect(fs.readdirSync(directory)).toEqual(['case.json']);
+  });
 });
 
 describe('comparison capacity and frozen launches', () => {

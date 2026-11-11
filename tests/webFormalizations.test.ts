@@ -252,8 +252,8 @@ describe('online formalization ownership and evidence handoff', () => {
   });
 
   it.each([
-    { name: 'omitted defaults', settings: {}, generation: 'high', proof: 'max' },
-    { name: 'browser defaults', settings: { effort: 'high', researchEffort: 'max' }, generation: 'high', proof: 'max' },
+    { name: 'omitted defaults', settings: {}, generation: 'high', proof: 'high' },
+    { name: 'explicit separate proof effort', settings: { effort: 'high', researchEffort: 'max' }, generation: 'high', proof: 'max' },
     { name: 'explicit high', settings: { effort: 'high' }, generation: 'high', proof: 'high' },
     { name: 'explicit low', settings: { effort: 'low' }, generation: 'low', proof: 'low' },
   ])('keeps $name across both compiled and approved proof handoffs', async ({ settings, generation, proof }) => {
@@ -475,7 +475,7 @@ describe('online formalization ownership and evidence handoff', () => {
     expect(completed).toMatchObject({ status: 'confirmed', confirmation: 'automatic', workflow: 'solve' });
     expect(completed.runId).toMatch(/^[a-f0-9-]{36}$/u); expect(completed.researchError).toBeUndefined();
     expect(runner.runs).toHaveLength(1);
-    expect(runner.runs[0].input).toMatchObject({ ...webDefaults, environment: 'standard', apiKey: KEY,
+    expect(runner.runs[0].input).toMatchObject({ ...webDefaults, effort: value.researchEffort ?? value.effort, environment: 'standard', apiKey: KEY,
       providerId: 'sub2api', model: 'deepseek-flash', source: evidence.candidate.source, formalizationId: value.id });
     expect(runner.runs[0].input).toMatchObject({ maxRunSeconds: 0, maxTotalTokens: 0, maxTurns: 0 });
     expect(runner.runs[0].formalization).toEqual(evidence);

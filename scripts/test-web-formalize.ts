@@ -166,7 +166,7 @@ try {
     await page.locator('#formalize-start').click(); await page.locator('#formalize-progress').filter({ hasText: '规划陈述' }).waitFor();
     assert.equal(writes.length, 1); assert.equal(writes[0]!.body.original, original); assert.equal(writes[0]!.body.apiKey, 'fixture-secret-key');
     assert.equal(writes[0]!.body.effort, 'high');
-    assert.equal(writes[0]!.body.researchEffort, 'max');
+    assert.equal(writes[0]!.body.researchEffort, undefined, 'Default high/high uses the shared effort without an override');
     assert.equal(await page.locator('#formalize-key').inputValue(), '');
     assert.equal(await page.evaluate(() => JSON.stringify([localStorage, sessionStorage]).includes('fixture-secret-key')), false);
     await page.reload(); await page.locator('#formalize-progress').filter({ hasText: '规划陈述' }).waitFor(); assert.equal(writes.length, 1);
@@ -201,7 +201,7 @@ try {
     assert.equal(writes[0]!.body.researchEffort, undefined, 'Matching explicit effort retains the legacy request shape');
     await context.close();
   }
-  console.log('PASS standalone defaults to formalization high and research max while saved explicit high/max choices remain unchanged');
+  console.log('PASS standalone defaults to formalization high and research high while saved explicit high/max choices remain unchanged');
   for (const destination of ['reload', 'record', 'example']) {
     const other = { ...baseItem, id: '22222222-2222-4222-8222-222222222222', original: 'A different saved record' };
     const caps = { ...capabilities };

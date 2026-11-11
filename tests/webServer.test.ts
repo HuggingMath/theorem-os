@@ -124,7 +124,7 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     const alice = await session();
     const provider = alice.session.providers[0];
     expect(provider).toMatchObject({ id: 'sub2api', baseUrl: 'http://host.docker.internal:8080/v1' });
-    expect(alice.session.defaults).toMatchObject({ model: 'deepseek-flash', effort: 'max', maxTurns: 0, maxRunSeconds: 0, maxTotalTokens: 0 });
+    expect(alice.session.defaults).toMatchObject({ model: 'deepseek-flash', effort: 'high', maxTurns: 0, maxRunSeconds: 0, maxTotalTokens: 0 });
 
     const submitted = { ...input(), ...alice.session.defaults, providerId: provider.id };
     const created = await request('/api/runs', alice, { body: submitted });
@@ -134,7 +134,7 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     await tick();
     expect(runner.calls).toHaveLength(1);
     expect(runner.calls[0].value).toMatchObject({ provider,
-      input: { providerId: provider.id, model: 'deepseek-flash', effort: 'max' } });
+      input: { providerId: provider.id, model: 'deepseek-flash', effort: 'high' } });
     runner.calls[0].finish();
   });
 

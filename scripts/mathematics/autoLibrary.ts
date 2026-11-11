@@ -52,9 +52,9 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
     challengeId: required(flags, 'challenge-id'), challengeSource: readFile(required(flags, 'challenge-file'), LEAN_TASK_SOURCE_MAX_BYTES),
     task: flags.has('task-file') ? readFile(required(flags, 'task-file'), 64 * 1024).trim() : '',
     environment: flags.get('environment') ?? 'mathlib', pool: externalPath(required(flags, 'pool')), buildManifestRef,
-    planner: { model: flags.get('model') ?? 'deepseek-flash', effort: flags.get('effort') ?? 'max', executable: codex,
+    planner: { model: flags.get('model') ?? 'deepseek-flash', effort: flags.get('effort') ?? 'high', executable: codex,
       profile: path.resolve(flags.get('profile') ?? (process.env.CODEX_HOME || path.join(os.homedir(), '.config/deepscientist/math-sol-codex'))) },
-    prover: { model: flags.get('prover-model') ?? flags.get('model') ?? 'deepseek-flash', effort: flags.get('prover-effort') ?? flags.get('effort') ?? 'max',
+    prover: { model: flags.get('prover-model') ?? flags.get('model') ?? 'deepseek-flash', effort: flags.get('prover-effort') ?? flags.get('effort') ?? 'high',
       executable: codex, workers: integerFlag(flags, 'workers', 1), coordination,
       maxRunSeconds: integerFlag(flags, 'prover-max-run-seconds', 3600), maxTurns: integerFlag(flags, 'prover-max-turns', 200),
       maxTurnSeconds: integerFlag(flags, 'prover-max-turn-seconds', 180), maxTotalTokens: integerFlag(flags, 'prover-max-total-tokens', 0),
@@ -108,7 +108,7 @@ export async function autoLibrary(argv: string[]): Promise<number> {
       + '  [--task-file FILE] [--environment mathlib|standard|mathlib-4.8|openai-math] [--base-pack PACK.json] (the hand library after its exclusions)\n'
       + '  [--demand-file FILE] (a frozen source-bound gap from the demand phase)\n'
       + '  [--definition-targets Qualified.name,Other.name] (original definitions to solve)\n'
-      + '  [--model deepseek-flash --effort max] (planner) [--prover-model M --prover-effort E] [--profile DIR] [--codex FILE]\n'
+      + '  [--model deepseek-flash --effort high] (planner) [--prover-model M --prover-effort E] [--profile DIR] [--codex FILE]\n'
       + '  [--workers 1] [--coordination independent|cooperative] [--max-modules 1] [--max-rounds 3]\n'
       + '  [--max-run-seconds 7200] [--max-total-tokens 0] [--planner-turn-seconds 1800]\n'
       + '  [--prover-max-run-seconds 3600] [--prover-max-turns 200] [--prover-max-turn-seconds 180] [--prover-max-total-tokens 0]\n'

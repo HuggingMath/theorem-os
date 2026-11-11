@@ -41,6 +41,21 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true }); });
 
 describe('auto-library CLI entry points', () => {
+  it.each([
+    { flags: [], planner: 'high', prover: 'high' },
+    { flags: ['--effort', 'max'], planner: 'max', prover: 'max' },
+    { flags: ['--prover-effort', 'max'], planner: 'high', prover: 'max' },
+  ])('freezes prepare efforts without replacing explicit settings: %j', async ({ flags, planner, prover }) => {
+    const challenge = path.join(directory, 'Challenge.lean');
+    fs.writeFileSync(challenge, 'theorem target : True := by sorry\n');
+    expect(await autoLibrary(['--phase', 'prepare', '--directory', path.join(directory, 'build'), '--challenge-id', 'effort',
+      '--challenge-file', challenge, '--pool', path.join(directory, 'pool'), '--build-manifest', path.join(directory, 'manifest.json'),
+      ...flags])).toBe(0);
+    expect(host.prepare).toHaveBeenCalledWith(path.join(directory, 'build'), expect.any(String), expect.objectContaining({
+      planner: expect.objectContaining({ effort: planner }), prover: expect.objectContaining({ effort: prover }),
+    }));
+  });
+
   it('accepts --delivery and writes a frozen demand in a new parent directory', async () => {
     const run = path.join(directory, 'result.json'), output = path.join(directory, 'new', 'nested', 'demand.json');
     expect(await autoLibrary(['--phase', 'demand', '--run', run, '--delivery', 'gap', '--output', output])).toBe(0);

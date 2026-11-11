@@ -297,7 +297,7 @@ try {
     pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve();
     await page.locator('[data-research-artifact="source"]:enabled').waitFor();
     await eventually(() => runs.length === formalizations.length, 'The approved formalization starts one proof');
-    assert.equal(runs.at(-1)?.input.effort, 'max', 'Default proof effort remains max after high formalization');
+    assert.equal(runs.at(-1)?.input.effort, 'high', 'New proof tasks also default to high after formalization');
     assert.equal((runs.at(-1)?.formalization as { request?: { statement?: string } } | undefined)?.request?.statement, original);
     assert.equal(await page.locator('.research-conversation-status').getAttribute('data-accepted'), String(width === 390));
     assert.match(await page.locator('#research-chat-thread [data-statement-verdict]').innerText(), /Lean 编译通过/u);

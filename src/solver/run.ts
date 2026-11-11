@@ -56,7 +56,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
   const { values } = parseArgs({ args, options: {
     workspace: { type: 'string' }, 'receipt-file': { type: 'string' }, 'task-file': { type: 'string' },
     output: { type: 'string' }, 'build-manifest': { type: 'string' }, model: { type: 'string', default: 'deepseek-flash' },
-    effort: { type: 'string', default: 'max' }, codex: { type: 'string' }, resume: { type: 'boolean' },
+    effort: { type: 'string', default: 'high' }, codex: { type: 'string' }, resume: { type: 'boolean' },
     'max-run-seconds': { type: 'string', default: '0' }, 'max-turns': { type: 'string', default: '0' },
     'max-total-tokens': { type: 'string', default: '0' },
     'prepare-timeout-seconds': { type: 'string', default: '0' }, 'max-turn-seconds': { type: 'string', default: '0' },
@@ -75,6 +75,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
   if (values.help) {
     console.log(`Usage: theorem-os run --workspace DIR --task-file FILE --output FILE --build-manifest FILE [--receipt-file FILE] [--resume] [--method direct] [--scheduler plan|critical-path|continuation] [--module-plan FILE] [--coordination cooperative|independent] [--workers 1..${MAX_RESEARCH_WORKERS}] [--plan-approval] [--model MODEL --effort LEVEL] [--max-run-seconds N --max-turns N --max-turn-seconds N] [--max-total-tokens N] [--prepare-timeout-seconds N] [--proof-timeout-seconds N] [--evaluator-command CMD --evaluator-timeout-seconds N] [--proof-environment-cache-dir DIR] [--startup-only] [--check-statement]\n--module-plan loads the shared research-module plan JSON; use --scheduler plan.\nUse 0 for --prepare-timeout-seconds, --max-run-seconds, --max-turns, --max-turn-seconds, --proof-timeout-seconds or --evaluator-timeout-seconds to disable that limit. All time, turn and token limits default to 0 (unlimited). With an explicit proof-check timeout, an expired check saves a resumable checkpoint and the identical candidate gets more time on its next check.\n--max-total-tokens defaults to 0 (unlimited). A finite value stops new model turns after provider-reported consumption reaches it; in-flight turns finish and may exceed it. Resume retains cumulative usage and the saved allowance unless explicitly changed.`);
     console.log('--knowledge-base FILE attaches an immutable saved-theorem catalog. Resume requires the same catalog digest. Historical knowledge never grants proof acceptance.');
+    console.log('New proof runs default to --effort high. Resume retains the saved effort when --effort is omitted; an explicit effort must match the frozen run.');
     console.log('--library-catalog FILE --library-catalog-sha256 DIGEST enables agent search/get/request against one pinned release. Installation requests end this frozen run for host-controlled continuation.');
     console.log('--continuation-manifest FILE attaches explicit historical sources and notes without changing the verbatim task file. Resume retains the frozen attachment identity; historical material remains advisory.');
     console.log('--continuation-source-run OLD_RESULT_OR_STATE initializes a new cooperative run from the old run, freshly checks its saved helpers, and starts solving in the same process. Use --resume to retry an interrupted zero-turn initialization; combine with --startup-only to retain a prepared checkpoint.');
@@ -110,6 +111,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
   let maxTotalTokens = Number(values['max-total-tokens']);
   if (!Number.isSafeInteger(maxTotalTokens) || maxTotalTokens < 0) throw new Error('invalid --max-total-tokens');
   const tokenLimitSpecified = args.some(arg => arg === '--max-total-tokens' || arg.startsWith('--max-total-tokens='));
+  const effortSpecified = args.some(arg => arg === '--effort' || arg.startsWith('--effort='));
   const evaluatorMs = limit('evaluator-timeout-seconds', true) * 1000;
   const workerCount = limit('workers');
   if (workerCount > MAX_RESEARCH_WORKERS) throw new Error('invalid --workers');
@@ -210,17 +212,19 @@ export async function runSolver(args: string[], root: string, customModules?: So
         ? selectedDeepSeekProfile(profile) ?? sub2apiProfile ?? westlakeProfile : undefined;
       const knowledge = values['knowledge-base'] ? readAuthorizedKnowledgeCatalog(values['knowledge-base'], workspace,
         values['receipt-file'] || path.join(workspace, 'active-problem.json')) : undefined;
+      const resumedState = values.resume ? readSolverRunState(stateFile) : undefined;
       const identity = { taskDigest: mathDigest(task), buildDigest: mathDigest(fs.readFileSync(buildFile)),
         providerProfile: providerProfile?.profile, providerProfileDigest: providerProfile?.digest,
         environmentDigest: mathDigest(canonicalMathJson(projectMathematicsRuntimeEnvironment(env))),
-        evaluatorDigest: mathDigest(values['evaluator-command'] || 'host-default'), model: values.model!, effort: values.effort!,
+        evaluatorDigest: mathDigest(values['evaluator-command'] || 'host-default'), model: values.model!,
+        effort: resumedState && !effortSpecified ? resumedState.effort : values.effort!,
         methodDigest: solverMethodDigest(modules, coordination), knowledgeDigest: knowledge?.digest,
         libraryCatalogDigest: libraryCatalog ? libraryCatalog.identity.catalogDigest : undefined };
       const moduleConfiguration = solverModuleConfiguration(modules);
       let state: SolverRunState;
       let sourceFeedback: string | undefined;
       if (values.resume) {
-        state = readSolverRunState(stateFile);
+        state = resumedState!;
         if (problem.libraryBinding?.hostConfiguration && state.continuationDigest)
           throw new Error('library_knowledge_history_unauthorized');
         if ([state, ...(state.workers ?? [])].some(record => record.writerStopUnconfirmed))

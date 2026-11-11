@@ -31,7 +31,7 @@ afterEach(() => {
   for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
 });
 
-async function prepare(repetitions = 1, provider?: string) {
+async function prepare(repetitions = 1, provider?: string, effort?: string) {
   const directory = temporary(), repository = path.join(directory, 'repo');
   fs.mkdirSync(repository);
   const task = path.join(directory, 'task.md'), manifest = path.join(directory, 'build.json');
@@ -45,7 +45,7 @@ async function prepare(repetitions = 1, provider?: string) {
     '--problem', 'imo2026_q1', '--task-file', task, '--build-manifest', manifest,
     '--module-experiment', path.join(root, 'examples/components/module-experiment.json'),
     '--repetitions', String(repetitions), '--max-turns', '20', '--max-run-seconds', '600', '--max-total-tokens', '30000',
-    ...(provider ? ['--provider', provider] : [])]);
+    ...(provider ? ['--provider', provider] : []), ...(effort ? ['--effort', effort] : [])]);
   return { directory: output, plan: read(path.join(output, 'comparison.json')), bootstrap };
 }
 
@@ -144,6 +144,21 @@ describe('paired module evidence', () => {
 });
 
 describe('frozen module comparison launches', () => {
+  it.each([undefined, 'max'])('freezes new profile comparison effort %s and reuses its saved launches', async effort => {
+    const { directory, plan } = await prepare(1, undefined, effort);
+    expect(plan.configuration.effort).toBe(effort ?? 'high');
+    const launches = plan.jobs.map(job => fs.readFileSync(job.launch, 'utf8'));
+    for (const launch of launches) {
+      const { args } = JSON.parse(launch);
+      expect(args[args.indexOf('--effort') + 1]).toBe(effort ?? 'high');
+    }
+    const run = vi.spyOn(batch, 'runMathBatch').mockResolvedValue(0);
+    expect(await compareMathRuns(['--phase', 'run', '--directory', directory])).toBe(0);
+    expect(run).toHaveBeenCalledOnce();
+    expect(read(path.join(directory, 'comparison.json')).configuration.effort).toBe(effort ?? 'high');
+    expect(plan.jobs.map(job => fs.readFileSync(job.launch, 'utf8'))).toEqual(launches);
+  });
+
   it.each([
     ['deepseek', 'deepseek-v4-pro', 'DEEPSEEK_API_KEY', 'https://api.deepseek.com', 'responses'],
     ['westlake', 'deepseek-flash', 'WESTLAKEHPC_API_KEY', 'https://hpc-api.westlake.edu.cn/v1', 'chat-completions'],
@@ -152,7 +167,7 @@ describe('frozen module comparison launches', () => {
     vi.stubEnv(envKey, '');
     const run = vi.spyOn(batch, 'runMathBatch').mockResolvedValue(0);
     const { directory, plan } = await prepare(2, provider);
-    expect(plan.configuration).toMatchObject({ provider, model, effort: provider === 'deepseek' ? 'high' : 'max' });
+    expect(plan.configuration).toMatchObject({ provider, model, effort: provider === 'westlake' ? 'max' : 'high' });
     expect(new Set(plan.jobs.map(job => job.codexProfile)).size).toBe(8);
     for (const job of plan.jobs) {
       expect(read(job.launch).codexHome).toBe(job.codexProfile);

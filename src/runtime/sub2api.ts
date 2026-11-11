@@ -4,7 +4,7 @@ import { createProviderProfile } from './providerProfile';
 export const SUB2API_PROVIDER = {
   id: 'sub2api', baseUrl: 'http://127.0.0.1:8080/v1', wireApi: 'responses',
   apiKeyEnvironment: 'SUB2API_WESTLAKE_API_KEY',
-  defaultModel: 'deepseek-flash', defaultEffort: 'max',
+  defaultModel: 'deepseek-flash', defaultEffort: 'high',
 } as const;
 
 export function validateSub2apiModel(model: string, effort: string): void {
