@@ -8,8 +8,8 @@ export function explanationSolutionRoute(document: Pick<WebExplanationDocument, 
   const t = translator(document.language);
   const code = proof.replace(/\r\n?/gu, '\n').split('\n');
   const excerpt = (lines: readonly WebExplanationLines[]) => lines.map(range => code.slice(range.start - 1, range.end).join('\n')).filter(Boolean).join('\n\n');
-  const section = (title: string, text: string | undefined, literal = false): SolutionRouteSection[] => text?.trim()
-    ? [{ title, text, ...(literal ? { code: true } : {}) }] : [];
+  const section = (title: string, text: string | undefined, literal = false, detail = false): SolutionRouteSection[] => text?.trim()
+    ? [{ title, text, ...(literal ? { code: true } : {}), ...(detail ? { detail: true } : {}) }] : [];
   const declaration = (index: number) => `declaration:${document.sections[index]!.name}`;
   const nodes: SolutionRouteNode[] = [{ id: 'problem', kind: 'problem', title: document.target, status: 'recorded', summary: document.problem?.original ?? document.overview,
     sections: [...section(t('原题'), document.problem?.original), ...section(t('证明思路'), document.overview)] }];
@@ -30,7 +30,7 @@ export function explanationSolutionRoute(document: Pick<WebExplanationDocument, 
       sections: [...section(t('数学陈述'), item.statement),
         ...section(t('Lean 声明'), excerpt([item.signature]), true),
         ...section(t('引用的结论'), uses.join('\n'), true),
-        ...section(t('陈述审阅'), item.statementReviews.join('\n\n'))],
+        ...section(t('陈述审阅'), item.statementReviews.join('\n\n'), false, true)],
       source: { name: 'Submission.lean', line: item.lines.start, endLine: item.lines.end },
       action: { label: t('定位到证明'), target: `section:${index}` },
     });
@@ -51,7 +51,7 @@ export function explanationSolutionRoute(document: Pick<WebExplanationDocument, 
             : goals.after.join('\n\n') + (goals.afterCount > goals.after.length ? '\n' + t('另有 {0} 个目标', goals.afterCount - goals.after.length) : ''), true) : []),
           ...section(t('这一步使用的结论'), step.uses.map(use => use.name).join('\n'), true),
           ...section(t('对应源码'), excerpt(step.lines), true),
-          ...section(t('逐步审阅'), step.reviews.join('\n\n')),
+          ...section(t('逐步审阅'), step.reviews.join('\n\n'), false, true),
         ],
         source: { name: 'Submission.lean', line: step.lines[0]?.start ?? item.lines.start, endLine: step.lines.at(-1)?.end ?? item.lines.end },
         action: { label: t('定位到这一步'), target: `step:${index}:${stepIndex}` },
@@ -61,7 +61,9 @@ export function explanationSolutionRoute(document: Pick<WebExplanationDocument, 
       for (const use of step.uses) { const input = owner(use.name); if (input !== undefined && input !== index) connect(declaration(input), childId, 'reference'); }
     });
   });
+  const target = document.sections.findIndex(section => section.target);
   return { schema: 'theoremos.solution-route.v1', id, title: t('证明路线'), locale: document.language, basis: 'explanation', nodes, edges,
-    initial: document.sections.some(section => section.target) ? declaration(document.sections.findIndex(section => section.target)) : 'problem',
+    overview: [...section(t('要证明什么'), document.problem?.original ?? document.sections[target]?.statement), ...section(t('证明思路'), document.overview)],
+    initial: target >= 0 ? document.sections[target]!.steps.length ? `derivation:${document.sections[target]!.name}:0` : declaration(target) : 'problem',
     ...(document.metrics.proofLines > document.metrics.explainedLines ? { partial: true } : {}) };
 }

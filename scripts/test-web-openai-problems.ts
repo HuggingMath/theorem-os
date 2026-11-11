@@ -136,21 +136,27 @@ async function screenshot(page: Page, check: typeof checks[number], name: string
 async function firstReadingStep(page: Page, check: typeof checks[number]) {
   await healthy(page); await page.evaluate(() => scrollTo(0, 0)); await settled(page);
   const first = page.locator('[data-proof-derivation]').first();
-  assert.equal(await page.locator('.proof-reading-intro').getAttribute('open'), null, 'strategy and full problem stay available in a compact disclosure');
+  assert.equal(await page.locator('.proof-reading-intro').count(), 0, 'mathematical context is not hidden in a closed disclosure');
+  const introduction = page.locator('.proof-walkthrough-intro');
+  assert(await introduction.locator('.proof-walkthrough-strategy').isVisible(), 'the proof strategy is visible without a disclosure');
+  assert(await introduction.locator('.proof-walkthrough-goal').isVisible(), 'the complete problem is visible without a disclosure');
+  assert(await introduction.locator('.proof-walkthrough-notation').isVisible(), 'notation is visible before the mathematical steps');
+  assert.equal(await introduction.locator('details.proof-walkthrough-problem').count(), 0, 'problem and notation need no second disclosure');
+  await first.locator('.proof-walkthrough-given').evaluate(element => element.scrollIntoView({ block: 'center' })); await settled(page);
   assert(await first.locator('.proof-walkthrough-given').evaluate(element => {
     const bounds = element.getBoundingClientRect();
     return bounds.top >= 0 && bounds.top + Math.min(bounds.height, 40) <= innerHeight;
-  }), `${check.scenario}: actual first-step premises are readable in the initial viewport`);
+  }), `${check.scenario}: actual first-step premises are readable after the visible mathematical context`);
   assert(await first.locator('.proof-walkthrough-claim').evaluate(element => {
     const bounds = element.getBoundingClientRect(); return bounds.top >= 0 && bounds.top + 32 <= innerHeight;
-  }), `${check.scenario}: the first mathematical claim starts in the initial viewport`);
-  const introduction = page.locator('.proof-reading-intro');
-  await introduction.locator(':scope > summary').click({ timeout: 0 });
-  assert(await introduction.locator('.proof-walkthrough-goal').isVisible(), 'one disclosure reveals the complete problem');
-  assert(await introduction.locator('.proof-walkthrough-notation').isVisible(), 'the same disclosure reveals notation');
-  assert.equal(await introduction.locator('details.proof-walkthrough-problem').count(), 0, 'problem and notation need no second disclosure');
-  await introduction.locator(':scope > summary').click({ timeout: 0 });
-  check.assertions.push('Accepted mathematical reading shows the actual first-step premises and claim in the initial viewport; full strategy, problem and notation remain available in a disclosure.');
+  }), `${check.scenario}: the first mathematical claim is readable after the visible mathematical context`);
+  const evidence = first.locator('.proof-walkthrough-source');
+  assert.equal(await evidence.getAttribute('open'), null, 'technical proof evidence starts collapsed');
+  assert.equal(await evidence.locator('.proof-walkthrough-source-open').isVisible(), false, 'technical links stay within the collapsed evidence');
+  await evidence.locator(':scope > summary').click({ timeout: 0 });
+  assert(await evidence.locator('.proof-walkthrough-source-open').isVisible(), 'proof evidence reveals the original checked-source action');
+  await evidence.locator(':scope > summary').click({ timeout: 0 });
+  check.assertions.push('Accepted mathematical reading shows its strategy, problem and notation directly, followed by readable premises and claims; checked source and research evidence remain available in one disclosure.');
 }
 async function checkReadingLocation(page: Page, check: typeof checks[number], anchor: string) {
   const section = page.locator(`#${anchor}`);
@@ -206,7 +212,7 @@ async function researchDraftFlow(page: Page, check: typeof checks[number], recor
   const candidate = page.locator('[data-problem-draft-candidate]'); await visible(candidate); await visible(composer);
   assert.equal(await composer.inputValue(), previous, 'opening a problem candidate preserves the exact unsent home draft');
   const originalSource = await fs.readFile(path.join(root, 'research/openai-math', record.directory, 'Challenge.lean'), 'utf8');
-  assert((await candidate.innerText()).includes(en ? record.en?.subtitle ?? record.title : record.subtitle ?? record.title));
+  assert.equal(await candidate.locator('h3').textContent(), en ? record.en?.subtitle ?? record.title : record.subtitle ?? record.title);
   assert((await candidate.locator('[data-problem-draft-source]').textContent())!.includes(originalSource), 'the candidate retains the complete original statement source');
   assert.equal(new URL(page.url()).searchParams.get('archiveProblem'), record.id, 'identity remains pending until the user chooses');
   const sourceHref = await candidate.getByRole('link', { name: en ? 'View the problem source' : '查看题目来源', exact: true }).getAttribute('href'); assert(sourceHref);
@@ -689,10 +695,7 @@ try {
         assert.equal(await solution.locator('.proof-route-panel').getAttribute('open'), null, 'the proof diagram starts collapsed');
         await firstReadingStep(page, check);
         await screenshot(page, check, 'reading-derivation');
-        const introduction = solution.locator('.proof-reading-intro');
-        await introduction.locator(':scope > summary').click({ timeout: 0 });
-        assert(await introduction.locator('.proof-walkthrough-strategy').isVisible(), 'the unchanged mathematical strategy remains available');
-        await introduction.locator(':scope > summary').click({ timeout: 0 });
+        assert(await solution.locator('.proof-walkthrough-strategy').isVisible(), 'the unchanged mathematical strategy remains visible');
         const next = solution.locator('[data-proof-derivation]').first().locator('.proof-walkthrough-next > button');
         const nextTarget = await next.getAttribute('data-global-scroll'); assert(nextTarget);
         await next.click({ timeout: 0 });
@@ -721,6 +724,30 @@ try {
       assert(await page.locator(`[data-proof-id="${record.id}"]`).evaluate(element => element === document.activeElement), 'classic Back to results focuses the selected classic row');
     }
     check.assertions.push('Read solution opens accepted linear reading with localized titles: the newest and historical proofs show exact accepted target source, while an existing walkthrough keeps its derivations and Continue controls. History and graphs are available separately.');
+
+    phase = `${scenario.name}: the explanation route opens on mathematical reasoning with its context and stage connections`;
+    const explainedRoute = new URL(links.reading);
+    explainedRoute.hash = new URLSearchParams({ proof: explained.id, tab: 'process', mode: 'global', status: 'verified' }).toString();
+    await page.goto(explainedRoute.href, { waitUntil: 'domcontentloaded', timeout: 0 });
+    await visible(page.locator(`[data-solution-route-record="${explained.id}"][data-solution-route-state="ready"]`));
+    const mathematicalRoute = page.locator('.solution-route');
+    assert.equal(await mathematicalRoute.getAttribute('data-solution-route-basis'), 'explanation', 'an available explanation is the initial route');
+    assert(await mathematicalRoute.locator('.solution-route-overview').isVisible(), 'goal, notation and strategy are visible above the graph');
+    const stages = mathematicalRoute.locator('.solution-route-stages button');
+    assert(await stages.count() > 0, 'the mathematical stages remain interactive');
+    assert(await mathematicalRoute.locator('.solution-route-reason').first().isVisible(), 'each transformation retains its reason');
+    const proofEvidence = mathematicalRoute.locator('.solution-route-evidence');
+    assert.equal(await proofEvidence.getAttribute('open'), null, 'technical evidence starts folded');
+    assert.equal(await proofEvidence.locator('pre').isVisible(), false);
+    await stages.last().click({ timeout: 0 });
+    const selectedStep = await stages.last().getAttribute('data-solution-select');
+    assert.equal(await mathematicalRoute.locator(`[data-solution-node="${selectedStep}"]`).getAttribute('aria-pressed'), 'true');
+    await stages.first().click({ timeout: 0 });
+    await proofEvidence.locator(':scope > summary').click({ timeout: 0 });
+    assert(await proofEvidence.locator('pre').isVisible(), 'the original Lean excerpt stays available on demand');
+    await proofEvidence.locator(':scope > summary').click({ timeout: 0 });
+    await screenshot(page, check, 'mathematical-route', mathematicalRoute.locator('.solution-route-heading'));
+    check.assertions.push('The shared explanation route defaults to mathematics and retains the goal, notation, strategy, interactive stages, individual reasons and folded exact source.');
 
     phase = `${scenario.name}: newest problem source link opens its real static proof and SHA binding`;
     await page.goto(links.source, { waitUntil: 'domcontentloaded', timeout: 0 }); await visible(page.locator('#source-file'));

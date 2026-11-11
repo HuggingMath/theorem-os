@@ -1,7 +1,7 @@
 /** Recorded work and proof structure share this graph in the workbench and archive. */
 export type SolutionRouteStatus = 'passed' | 'failed' | 'running' | 'pending' | 'conditional' | 'human' | 'recorded';
 export type SolutionRouteKind = 'problem' | 'plan' | 'task' | 'finding' | 'attempt' | 'check' | 'decision' | 'proof' | 'review' | 'acceptance' | 'outcome' | 'declaration' | 'derivation' | 'group';
-export type SolutionRouteSection = { title: string; text: string; code?: boolean };
+export type SolutionRouteSection = { title: string; text: string; code?: boolean; reason?: string; detail?: boolean };
 export type SolutionRouteNode = {
   id: string; kind: SolutionRouteKind; title: string; status: SolutionRouteStatus;
   summary?: string; sections?: SolutionRouteSection[]; at?: string; taskId?: string;
@@ -18,6 +18,8 @@ export type SolutionRoute = {
   schema: 'theoremos.solution-route.v1'; id: string; title: string; locale: 'zh' | 'en';
   basis: 'recorded' | 'source' | 'explanation'; nodes: SolutionRouteNode[]; edges: SolutionRouteEdge[];
   initial?: string; partial?: boolean;
+  overview?: SolutionRouteSection[];
+  stages?: { title: string; summary: string; nodeIds: string[] }[];
 };
 export type SolutionRouteInput = {
   id: string; title: string; locale: 'zh' | 'en'; goal: SolutionRouteNode;

@@ -225,14 +225,17 @@ describe('direct reading of the current accepted proof', () => {
   it('opens every existing mathematical walkthrough linearly before offering the research history', () => {
     for (const record of explainedRecords()) for (const locale of ['zh', 'en'] as const) {
       const process = record.process!, walkthrough = process.walkthrough!;
-      const output = renderProofSolution(record, process, locale);
+      const output = renderProofSolution(record, process, locale, { workbenchHref: '../' });
       expect(output).toContain(`data-proof-solution-run="${record.campaign!.runId}"`);
       expect(output).toContain(`data-proof-solution-sha="${record.campaign!.proofSha256}"`);
       expect(output).toContain('data-proof-solution-mode="derivation"');
       expect(output).toContain('data-proof-reading="linear"');
-      expect(output).toContain('<details class="proof-reading-intro"><summary>');
-      expect(output).not.toContain('<details class="proof-reading-intro" open>');
-      expect(output).toContain(`<summary>${locale === 'en' ? 'Full problem and notation' : '完整题目与符号'}`);
+      expect(output).not.toContain('class="proof-reading-intro"');
+      const introduction = output.split('<header class="proof-walkthrough-intro">')[1]!.split('<details class="workflow-full-text">')[0]!;
+      expect(introduction).not.toContain('<details');
+      expect(introduction).toContain(escaped(walkthrough.strategy[locale]));
+      expect(introduction).toContain(escaped(walkthrough.goal[locale]));
+      if (walkthrough.notation) expect(introduction).toContain(escaped(walkthrough.notation[locale]));
       expect(output).toContain('<section class="proof-walkthrough-problem">');
       expect(output).not.toContain('<details class="proof-walkthrough-problem">');
       expect(output).toContain(escaped(walkthrough.strategy[locale]));
@@ -246,12 +249,29 @@ describe('direct reading of the current accepted proof', () => {
       expect(output).toContain('id="global-review"');
       const summary = locale === 'en' ? record.en!.summary : record.summary;
       expect(output).toContain(escaped(summary));
-      for (const step of walkthrough.steps) {
+      for (const [stepIndex, step] of walkthrough.steps.entries()) {
         for (const line of step.derivation) {
           expect(output).toContain(escaped(line.statement[locale]));
           expect(output).toContain(escaped(line.reason[locale]));
         }
         if (step.figureHtml) expect(output).toContain(`<summary>${locale === 'en' ? 'View figure' : '查看图示'}</summary>${step.figureHtml[locale]}`);
+        const start = output.indexOf(`data-proof-derivation="${step.id}"`), next = walkthrough.steps[stepIndex + 1];
+        const content = output.slice(start, next ? output.indexOf(`data-proof-derivation="${next.id}"`) : output.length);
+        const evidence = content.match(/<details class="proof-walkthrough-source"([^>]*)>([\s\S]*?)<\/details>/u)!;
+        expect(evidence).not.toBeNull();
+        expect(evidence[1]).not.toMatch(/(?:^|\s)open(?:\s|=|$)/u);
+        expect(evidence[1]).toContain(`data-proof-source-lines="${step.evidence.source.line}:${step.evidence.source.endLine}"`);
+        expect(evidence[2]).toContain(`<summary>${locale === 'en' ? 'Proof evidence' : '证明依据'}`);
+        expect(evidence[2]).toContain('class="proof-walkthrough-source-open"');
+        expect(evidence[2]).toContain(`data-global-run="${walkthrough.runId}"`);
+        expect(evidence[2]).toContain('data-global-code="source"');
+        for (const id of step.evidence.taskIds ?? []) expect(evidence[2]).toContain(`data-global-node="task:${id}"`);
+        for (const id of step.evidence.deliveryIds ?? []) expect(evidence[2]).toContain(`data-global-step="delivery:${id}"`);
+        expect(content.indexOf('class="proof-walkthrough-calculation"')).toBeLessThan(content.indexOf(evidence[0]));
+        const reading = content.replace(evidence[0], '');
+        expect(reading).not.toContain('data-global-code="source"');
+        expect(reading).toContain(`data-proof-copy-reading="proof-derivation-${step.id}"`);
+        expect(reading).toContain(`data-proof-position-research="proof-derivation-${step.id}"`);
       }
     }
   });

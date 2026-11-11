@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { informalize } from '../scripts/mathematics/informalize';
 import { formalizationDigest, readFormalizationArtifact } from '../src/math/formalization';
-import { INFORMALIZATION_ALIGNMENT, informalizationDigest, readInformalizationRequest } from '../src/math/informalization';
+import { INFORMALIZATION_ALIGNMENT, INFORMALIZATION_EXPLANATION_POLICY, informalizationDigest, readInformalizationRequest } from '../src/math/informalization';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { ADDITION_PROOF, approvedFormalization } from './helpers/approvedFormalizationFixture';
 import { fixtureStatement } from './helpers/formalizationFixture';
@@ -49,7 +49,8 @@ describe('informalize offline CLI', () => {
     const writer = { model: 'deepseek-flash', effort: 'max', profile, executable: 'codex' };
     expect(prepared).toMatchObject({ code: 0, report: { phase: 'prepare', status: 'prepared', modelInvoked: false,
       requestDigest: informalizationDigest(request), request: { proofId: 'double_add_zero', target: 'double_add_zero',
-        environment: 'standard', rootModule: 'Proof', language: 'zh', statementSha256: null, alignment: INFORMALIZATION_ALIGNMENT, writer,
+        environment: 'standard', rootModule: 'Proof', language: 'zh', statementSha256: null, alignment: INFORMALIZATION_ALIGNMENT,
+        explanationPolicy: INFORMALIZATION_EXPLANATION_POLICY, writer,
         auditors: [{ ...writer, id: 'auditor-1' }, { ...writer, id: 'auditor-2' }],
         batching: { maxUnits: 12, maxSourceBytes: 60_000 }, maxRoundsPerBatch: 6,
         maxRunSeconds: 0, maxTurnSeconds: 0, maxCompileSeconds: 0, maxTotalTokens: 0,
@@ -140,6 +141,19 @@ describe('informalize offline CLI', () => {
     expect(readInformalizationRequest(f.directory).request).not.toHaveProperty('alignment');
   });
 
+  it('can prepare the legacy explanation contract and inspect existing requests without adding a policy', async () => {
+    const f = fixture();
+    const prepared = await invoke([...f.args, '--explanation-policy', 'none']);
+    const { request } = readInformalizationRequest(f.directory);
+    expect(request).not.toHaveProperty('explanationPolicy');
+    expect(prepared.report.request).not.toHaveProperty('explanationPolicy');
+    const before = fs.readFileSync(path.join(f.directory, 'request.json'), 'utf8');
+    const inspected = await invoke(['--phase', 'inspect', '--directory', f.directory]);
+    expect(inspected.report.request).not.toHaveProperty('explanationPolicy');
+    expect(inspected.report.requestDigest).toBe(informalizationDigest(request));
+    expect(fs.readFileSync(path.join(f.directory, 'request.json'), 'utf8')).toBe(before);
+  });
+
   it('refuses a statement beside a formalization, an unknown alignment and a directory without an approved artifact', async () => {
     const f = fixture(), statement = path.join(f.base, 'statement.txt');
     fs.writeFileSync(statement, 'Show that double (n + 0) is 2n.\n');
@@ -148,6 +162,7 @@ describe('informalize offline CLI', () => {
     for (const old of ['lean-phrase-alignment-v1', 'lean-phrase-alignment-v3'])
       await expect(invoke([...f.args, '--alignment', old])).rejects.toThrow('--alignment must be lean-phrase-alignment-v2 or none');
     await expect(invoke([...f.args, '--formalization', f.base])).rejects.toThrow('--formalization must name an approved formalization run or its artifact');
+    await expect(invoke([...f.args, '--explanation-policy', 'unknown'])).rejects.toThrow('--explanation-policy must be mathematical-steps-v1 or none');
     expect(fs.existsSync(f.directory)).toBe(false);
   });
 
@@ -156,6 +171,7 @@ describe('informalize offline CLI', () => {
     expect(result.code).toBe(0);
     for (const text of ['prepare|run|inspect|report', '--max-rounds-per-batch 6', '--max-units-per-batch 12', '--auditors 2',
       'auditors never see it', '--formalization DIR', 'excludes --statement-file', '--alignment lean-phrase-alignment-v2|none',
+      '--explanation-policy mathematical-steps-v1|none',
       'report (offline): --output FILE.html', 'not human-reviewed', 'docs/informalization.md']) expect(result.output).toContain(text);
   });
 });

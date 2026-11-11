@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseFlags, required } from './arguments';
-import { INFORMALIZATION_ALIGNMENT, informalizationDigest, prepareInformalization, readInformalizationArtifact,
+import { INFORMALIZATION_ALIGNMENT, INFORMALIZATION_EXPLANATION_POLICY, informalizationDigest, prepareInformalization, readInformalizationArtifact,
   readInformalizationRequest, type InformalizationRequest } from '../../src/math/informalization';
 import { leanSourceSlice } from '../../src/math/informalizationExtraction';
 import { lineEnds } from '../../src/math/informalizationAlignment';
@@ -18,7 +18,7 @@ import { defaultProofId } from '../../apps/web/shared';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
 const configurationFlags = ['proof-file', 'project-root', 'target', 'proof-id', 'environment', 'statement-file', 'formalization',
-  'alignment', 'language',
+  'alignment', 'explanation-policy', 'language',
   'model', 'effort', 'profile', 'codex', 'auditors', 'max-rounds-per-batch', 'max-units-per-batch', 'max-batch-source-bytes',
   'max-run-seconds', 'max-turn-seconds', 'max-compile-seconds', 'max-total-tokens', 'build-manifest'] as const;
 
@@ -59,6 +59,7 @@ const requestSummary = (request: InformalizationRequest) => ({
   rootModule: request.rootModule, sources: request.sources.map(item => ({ origin: item.origin, sha256: item.sha256, bytes: item.bytes })),
   statementSha256: request.statementSha256, ...request.formalization ? { formalization: request.formalization } : {},
   alignment: request.alignment ?? 'none', language: request.language, writer: request.writer,
+  ...request.explanationPolicy ? { explanationPolicy: request.explanationPolicy } : {},
   auditors: request.auditors, batching: request.batching, maxRoundsPerBatch: request.maxRoundsPerBatch,
   maxRunSeconds: request.maxRunSeconds, maxTurnSeconds: request.maxTurnSeconds, maxCompileSeconds: request.maxCompileSeconds,
   maxTotalTokens: request.maxTotalTokens, buildManifestRef: request.buildManifestRef, buildDigest: request.buildDigest });
@@ -80,6 +81,9 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
   }
   const alignment = flags.get('alignment') ?? INFORMALIZATION_ALIGNMENT;
   if (alignment !== INFORMALIZATION_ALIGNMENT && alignment !== 'none') throw new Error(`--alignment must be ${INFORMALIZATION_ALIGNMENT} or none`);
+  const explanationPolicy = flags.get('explanation-policy') ?? INFORMALIZATION_EXPLANATION_POLICY;
+  if (explanationPolicy !== INFORMALIZATION_EXPLANATION_POLICY && explanationPolicy !== 'none')
+    throw new Error('--explanation-policy must be ' + INFORMALIZATION_EXPLANATION_POLICY + ' or none');
   const writer = {
     model: flags.has('model') ? required(flags, 'model') : 'deepseek-flash',
     effort: flags.has('effort') ? required(flags, 'effort') : 'max',
@@ -92,6 +96,7 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
     proofId: flags.get('proof-id') ?? defaultProofId(target),
     proofFile, projectRoot: path.resolve(flags.get('project-root') ?? path.dirname(proofFile)),
     target, environment, statement, language, writer,
+    ...explanationPolicy === 'none' ? {} : { explanationPolicy },
     ...flags.has('formalization') ? { formalizationArtifact: formalizationArtifact(required(flags, 'formalization')) } : {},
     ...alignment === 'none' ? {} : { alignment },
     auditors: Array.from({ length: auditorCount }, (_, index) => ({ ...writer, id: `auditor-${index + 1}` })),
@@ -173,6 +178,7 @@ export async function informalize(argv: string[]): Promise<number> {
       + '    the proof must keep its declarations; excludes --statement-file)\n'
       + `  [--alignment ${INFORMALIZATION_ALIGNMENT}|none] (default ${INFORMALIZATION_ALIGNMENT}: phrases paired with Lean, steps checked against goals)\n`
       + '  [--language zh|en] [--model deepseek-flash] [--effort max] [--profile DIR] [--codex FILE] [--auditors 2]\n'
+      + '  [--explanation-policy mathematical-steps-v1|none] (default mathematical-steps-v1: reasons, conditions and connected mathematical steps)\n'
       + '  [--max-rounds-per-batch 6] [--max-units-per-batch 12] [--max-batch-source-bytes 60000]\n'
       + '  [--max-run-seconds 0] [--max-turn-seconds 0] [--max-compile-seconds 0] [--max-total-tokens 0] (0 = unlimited)\n'
       + 'run: compile the frozen proof in the pinned environment, extract its declarations, then write and audit the explanation batch by batch.\n'

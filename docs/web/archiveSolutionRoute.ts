@@ -184,14 +184,20 @@ function explanationRoute(record: RouteRecord, process: ArchiveProcess, run: Run
     summary: localized(step.claim), source: { name: step.evidence.source.name, sha256: walkthrough.proofSha256, line: step.evidence.source.line, endLine: step.evidence.source.endLine },
     sections: [{ title: text(locale, '已知', 'Given'), text: localized(step.given) },
       { title: text(locale, '推出', 'Establishes'), text: localized(step.claim) },
-      ...step.derivation.map((line, index) => ({ title: text(locale, `推导 ${index + 1}`, `Derivation ${index + 1}`), text: `${localized(line.statement)}\n${localized(line.reason)}` })),
+      ...step.derivation.map((line, index) => ({ title: text(locale, `推导 ${index + 1}`, `Derivation ${index + 1}`), text: localized(line.statement), reason: localized(line.reason) })),
       { title: text(locale, '接到下一步', 'Connection to the next step'), text: localized(step.next) },
+      { title: text(locale, '连起来看', 'How these lines fit together'), text: localized(step.because), detail: true },
       { title: text(locale, '对应源码', 'Corresponding source'), text: source.code.split('\n').slice(step.evidence.source.line - 1, step.evidence.source.endLine).join('\n'), code: true }],
     ...(check ? { action: { label: text(locale, '打开已检查源码', 'Open the checked source'), target: JSON.stringify({ run: run.runId,
       node: 'original', step: `check:${check.id}`, code: 'source', sourceName: step.evidence.source.name,
       sourceDigest: walkthrough.proofSha256, sourceLine: step.evidence.source.line, sourceEndLine: step.evidence.source.endLine }) } } : {}) }));
   return { schema: 'theoremos.solution-route.v1', id: `${record.id}:explanation:${run.runId}`, title: text(locale, '逐步证明讲解', 'Step-by-step proof explanation'), locale,
-    basis: 'explanation', nodes, edges: walkthrough.steps.flatMap(step => step.dependsOn.map(from => ({ from, to: step.id, kind: 'dependency' as const }))), initial: nodes[0]?.id };
+    basis: 'explanation', nodes, edges: walkthrough.steps.flatMap(step => step.dependsOn.map(from => ({ from, to: step.id, kind: 'dependency' as const }))), initial: nodes[0]?.id,
+    overview: [{ title: text(locale, '要证明什么', 'Goal'), text: localized(walkthrough.goal) },
+      ...(walkthrough.notation ? [{ title: text(locale, '符号', 'Notation'), text: localized(walkthrough.notation) }] : []),
+      { title: text(locale, '证明思路', 'Proof outline'), text: localized(walkthrough.strategy) }],
+    stages: walkthrough.stages.map(stage => ({ title: localized(stage.title), summary: localized(stage.summary), nodeIds: [...stage.stepIds] })),
+  };
 }
 
 /** Every record has a source route; recorded runs and precise explanations add independent views. */

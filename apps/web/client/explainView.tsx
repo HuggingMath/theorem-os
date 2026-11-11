@@ -141,13 +141,10 @@ function DocumentView({ document, proof, runId, active, gap, chosen, onRouteOpen
   let owned = ownedBy.get(document);
   if (!owned) ownedBy.set(document, owned = new Map(document.sections.map((section, index) => [section.name, index])));
   return <article class="explain-document" lang={document.language === 'en' ? 'en' : 'zh-CN'}>
-    <p class="explain-notice"><Icon name="triangle-alert" />
-      <span>{t('这份讲解由模型根据 Lean 证明写成，并由 {0} 个审核模型逐步对照 Lean 检查，未经人工审阅。Lean 只检查了证明本身，没有检查这份讲解。', document.auditors)}</span></p>
+    <details class="explain-reviews explain-provenance"><summary>{t('讲解来源与审阅')}</summary>
+      <p class="explain-notice"><span>{t('这份讲解由模型根据 Lean 证明写成，并由 {0} 个审核模型逐步对照 Lean 检查，未经人工审阅。Lean 只检查了证明本身，没有检查这份讲解。', document.auditors)}</span></p>
+      {linkedDocument(document) && <p>{t('讲解中划虚线的短语各对应一段 Lean，点它标出那段 Lean；审核模型核对过每一对。')}</p>}</details>
     {document.problem && <ProblemCard {...document.problem} active={chosen} />}
-    <section class="explain-overview" aria-labelledby="explain-overview-heading"><h3 id="explain-overview-heading">{t('证明思路')}</h3>
-      <p class="explain-rich"><Rich text={document.overview} /></p>
-      {linkedDocument(document) && <p class="formal-note"><Icon name="locate-fixed" />
-        <span>{t('讲解中划虚线的短语各对应一段 Lean，点它标出那段 Lean；审核模型核对过每一对。')}</span></p>}</section>
     <SolutionRouteGraph model={route} onOpen={onRouteOpen} />
     {document.sections.map((section, index) => <CachedSection key={section.name} section={section} index={index} owned={owned}
       active={active?.section === index ? active : undefined} gap={active?.section === index ? gap : undefined} />)}
@@ -188,7 +185,7 @@ function SectionView(props: SectionProps) {
       <Reviews notes={section.statementReviews} />
     </div>
     {props.gap !== undefined && <p class="explain-gap-note" role="status"><Icon name="circle-help" />
-      <span>{t('第 {0} 行没有单独的讲解步骤。审核模型检查的是整个声明，有实质证明内容没讲到就不会通过；没有单独一步的行，通常是 intro、rfl 这类记账步骤。', props.gap)}</span></p>}
+      <span>{t('第 {0} 行没有单独的讲解步骤。可对照本声明的前后推导和 Lean 源码；现有记录无法确认这一行是否已被充分解释。', props.gap)}</span></p>}
     {section.steps.length > 0 && <ol class="explain-steps">{section.steps.map((step, stepIndex) =>
       <li key={stepIndex} class={active?.step === stepIndex ? 'is-active' : undefined} data-anchor={index} data-step={stepIndex}>
         <p class="explain-rich"><Rich text={step.text} links={richLinks(step.links, { 'data-section': index, 'data-step': stepIndex })} /></p>

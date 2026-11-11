@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { chromium, type Page } from 'playwright';
-import type { SolutionRouteInput, SolutionRouteNode } from '../apps/web/solutionRoute';
+import type { SolutionRoute, SolutionRouteInput, SolutionRouteNode } from '../apps/web/solutionRoute';
 import type { ArchiveCatalog } from '../docs/web/types';
 
 // An unseen problem: no walkthrough, model calls, solver, Lean or application API.
@@ -65,16 +65,35 @@ function fixture(locale: 'zh' | 'en'): SolutionRouteInput {
   };
 }
 
+function explanationFixture(locale: 'zh' | 'en'): SolutionRoute {
+  const t = (zh: string, en: string) => choose(locale, zh, en);
+  return { schema: 'theoremos.solution-route.v1', id: `unseen-explanation-${locale}`, locale, basis: 'explanation',
+    title: t('分式估计的证明', 'Proof of a fraction bound'), initial: 'positive',
+    overview: [{ title: t('要证明什么', 'Goal'), text: '$0<1/x$' }, { title: t('符号', 'Notation'), text: t('$x$ 是正实数。', '$x$ is a positive real number.') }],
+    stages: [{ title: t('先检查条件', 'Establish the hypothesis'), summary: t('先得到分母严格为正。', 'First establish strict positivity of the denominator.'), nodeIds: ['positive'] },
+      { title: t('再取倒数', 'Take the reciprocal'), summary: t('把正性传给倒数引理。', 'Supply positivity to the reciprocal lemma.'), nodeIds: ['reciprocal'] }],
+    nodes: [{ id: 'positive', kind: 'derivation', status: 'recorded', title: t('分母为正', 'Positive denominator'), summary: '$x>0$',
+      sections: [{ title: t('推导', 'Derivation'), text: '$x>0$', reason: t('原假设给出严格正性，保留给下一步取倒数。', 'The hypothesis gives strict positivity, retained for taking the reciprocal. evidence-reason-search-marker') },
+        { title: t('对应源码', 'Corresponding source'), text: 'have hpos : 0 < x := hx\n-- technical-evidence-marker', code: true },
+        { title: t('补充', 'Details'), text: 'supplementary-review-marker', detail: true }], source: { name: 'Submission.lean', line: 2, endLine: 3 } },
+      { id: 'reciprocal', kind: 'derivation', status: 'recorded', title: t('得到倒数为正', 'Positive reciprocal'), summary: '$0<1/x$',
+        sections: [{ title: t('推导', 'Derivation'), text: '$0<1/x$', reason: t('将上一步的 $x>0$ 代入正数倒数仍为正的结论。', 'Apply positivity of the reciprocal with the preceding result $x>0$.') }] }],
+    edges: [{ from: 'positive', to: 'reciprocal', kind: 'dependency' }, { from: 'positive', to: 'reciprocal', kind: 'sequence' }],
+  };
+}
+
 const bundle = await build({
   stdin: { contents: `import {buildSolutionRoute} from './apps/web/solutionRoute';
     import {mountSolutionRoute} from './apps/web/solutionRouteView';
     const locale = new URL(location.href).searchParams.get('locale') === 'en' ? 'en' : 'zh';
     const fixtures = ${JSON.stringify({ zh: fixture('zh'), en: fixture('en') })};
+    const explanations = ${JSON.stringify({ zh: explanationFixture('zh'), en: explanationFixture('en') })};
     let model = buildSolutionRoute(fixtures[locale]);
     const events = { selected: [], opened: [] };
     const root = document.querySelector('#route');
     const controller = mountSolutionRoute(root, model, {onSelect:id=>events.selected.push(id), onOpen:target=>events.opened.push(target)});
     window.routeFixture = {model, events, controller, update() { model = {...model, nodes:model.nodes.map(node=>({...node}))}; controller.update(model); },
+      showExplanation() { model = explanations[locale]; controller.update(model); },
       destroy() { window.detachedRouteButton = root.querySelector('[data-solution-node]'); controller.destroy(); }};
     window.fixtureReady = true;`, resolveDir: root, sourcefile: 'universal-route-fixture.ts', loader: 'ts' },
   bundle: true, format: 'iife', target: 'es2022', platform: 'browser', jsx: 'automatic', jsxImportSource: 'preact', write: false,
@@ -356,7 +375,7 @@ try {
     });
     await check('Exact source revision button only invokes the read-only open callback', async () => {
       await page.locator('[data-solution-all]').click(); await page.locator('[data-solution-node="attempt-fixed"]').click();
-      await page.locator('.solution-route-source summary').click();
+      if (!await page.locator('.solution-route-source').evaluate(details => (details as HTMLDetailsElement).open)) await page.locator('.solution-route-source summary').click();
       assert.ok((await page.locator('.solution-route-source').innerText()).includes('e'.repeat(64)));
       await page.locator('[data-solution-open="attempt-fixed"]').click();
       assert.deepEqual(await page.evaluate(() => (window as any).routeFixture.events.opened), ['source:immutable:attempt-fixed']);
@@ -384,7 +403,8 @@ try {
       assert.equal(await search(page).inputValue(), 'bound-body-only');
       assert.equal(await search(page).evaluate(input => document.activeElement === input), true);
       assert.deepEqual(await search(page).evaluate(input => ({ start: (input as HTMLInputElement).selectionStart, end: (input as HTMLInputElement).selectionEnd })), { start: 5, end: 9 });
-      assert.equal(await page.locator('[data-solution-inspector]').evaluate(view => view.scrollTop), before);
+      const after = await page.locator('[data-solution-inspector]').evaluate(view => ({ top: view.scrollTop, height: view.clientHeight, content: view.scrollHeight }));
+      assert.equal(after.top, before, JSON.stringify({ before, after }));
       await search(page).fill('');
     });
     await check('No horizontal document overflow at this viewport', async () => {
@@ -392,6 +412,47 @@ try {
       assert.ok(widths.document <= widths.viewport, JSON.stringify(widths)); return widths;
     });
     await page.locator('[data-solution-zoom="fit"]').click(); await screenshot('expanded-research');
+    await check('Mathematical reading keeps context, reasons and connections visible while source and review stay folded', async () => {
+      await page.evaluate(() => (window as any).routeFixture.showExplanation());
+      assert.equal(await selected(page), 'positive');
+      assert.equal(await page.locator('.solution-route-overview').isVisible(), true);
+      assert.equal(await page.locator('.solution-route-stages button').count(), 2);
+      assert.equal(await page.locator('.solution-route-reason').isVisible(), true);
+      const evidence = page.locator('.solution-route-evidence');
+      assert.equal(await evidence.getAttribute('open'), null);
+      assert.equal(await evidence.locator('pre').isVisible(), false);
+      assert.equal(await evidence.getByText('supplementary-review-marker').isVisible(), false);
+      const summary = evidence.locator('summary');
+      await summary.focus(); await page.keyboard.press('Enter');
+      assert.equal(await evidence.locator('pre').isVisible(), true);
+      await page.evaluate(() => { for (let index = 0; index < 3; index++) (window as any).routeFixture.update(); });
+      assert.equal(await evidence.locator('pre').isVisible(), true);
+      assert.equal(await summary.evaluate(element => element === document.activeElement), true);
+      await page.locator('[data-solution-zoom="in"]').click();
+      assert.equal(await evidence.locator('pre').isVisible(), true, 'zoom preserves the open proof evidence');
+      await summary.click();
+      await page.locator('.solution-route-stages button').nth(1).click();
+      assert.equal(await selected(page), 'reciprocal');
+      assert.equal(await page.locator('.solution-route-relation-preview .math').count() > 0, true);
+      const headings = await page.locator('.solution-route-relations h5').allTextContents();
+      assert.ok(headings.includes(choose(locale, '用到的结论', 'Results used here')));
+      assert.ok(headings.includes(choose(locale, '阅读顺序', 'Reading order')));
+      await page.locator('.solution-route-stages button').first().click();
+      assert.equal(await evidence.locator('pre').isVisible(), false, 'the collapsed state belongs to the selected step');
+      await page.locator('.solution-route-view-controls [data-solution-view="read"]').click();
+      assert.equal(await page.locator('.solution-route-reason').isVisible(), true);
+      assert.equal(await evidence.locator('pre').isVisible(), false);
+      await screenshot('mathematical-reading');
+      await page.locator('[data-solution-expand]').click();
+      const escaped = await page.locator('.solution-route-workspace').evaluate(element => {
+        const bounds = element.getBoundingClientRect(); return bounds.width <= innerWidth && bounds.height > 80 && bounds.bottom <= innerHeight + 1;
+      });
+      assert.equal(escaped, true, 'expanded reading keeps the content within the viewport');
+      await page.keyboard.press('Escape');
+      await page.locator('[data-solution-view="map"]').click();
+      const widths = await page.evaluate(() => ({ document: document.documentElement.scrollWidth, viewport: innerWidth }));
+      assert.ok(widths.document <= widths.viewport, JSON.stringify(widths));
+    });
     await check('Destroy removes the UI and its event handlers', async () => {
       const before = await page.evaluate(() => JSON.stringify((window as any).routeFixture.events));
       const overflow = await page.evaluate(() => document.body.style.overflow);

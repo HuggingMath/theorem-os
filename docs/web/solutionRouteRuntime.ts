@@ -11,7 +11,8 @@ const runtime: ArchiveSolutionRuntime = {
     const models = archiveSolutionRoutes(record, process, run, locale);
     if (!models.length) { root.textContent = locale === 'en' ? 'No proof source or research record was saved.' : '没有保存证明源码或研究记录。'; return { destroy() {} }; }
     const key = `${record.id}/${runId}/${locale}`;
-    let active = Math.max(0, models.findIndex(model => model.id === modes.get(key)));
+    const saved = models.findIndex(model => model.id === modes.get(key));
+    let active = saved >= 0 ? saved : Math.max(0, models.findIndex(model => model.basis === 'explanation'));
     const navigation = document.createElement('div'); navigation.className = 'solution-route-modes';
     const graph = document.createElement('div'); root.replaceChildren(navigation, graph);
     const controller = mountSolutionRoute(graph, models[active], { onOpen(target) {

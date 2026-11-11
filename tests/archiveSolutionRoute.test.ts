@@ -227,6 +227,21 @@ describe('universal archive solution routes', () => {
       const routes = archiveSolutionRoutes(value, value.process!, undefined, 'en');
       const source = routes.find(route => route.basis === 'source')!;
       expect(source.nodes.some(node => node.source), value.id).toBe(true);
+      const walkthrough = value.process!.walkthrough, explanation = routes.find(route => route.basis === 'explanation');
+      if (walkthrough) {
+        expect(explanation, value.id).toBeDefined();
+        expect(explanation!.overview!.map(section => section.text)).toEqual([
+          walkthrough.goal.en, ...(walkthrough.notation ? [walkthrough.notation.en] : []), walkthrough.strategy.en,
+        ]);
+        expect(explanation!.stages).toEqual(walkthrough.stages.map(stage => ({ title: stage.title.en, summary: stage.summary.en, nodeIds: stage.stepIds })));
+        for (const step of walkthrough.steps) {
+          const node = explanation!.nodes.find(node => node.id === step.id)!;
+          expect(node.sections!.filter(section => section.reason).map(section => [section.text, section.reason])).toEqual(
+            step.derivation.map(line => [line.statement.en, line.reason.en]));
+          expect(node.sections).toContainEqual({ title: 'How these lines fit together', text: step.because.en, detail: true });
+          expect(node.sections).toContainEqual({ title: 'Connection to the next step', text: step.next.en });
+        }
+      } else expect(explanation, value.id).toBeUndefined();
       for (const route of routes.filter(item => item.basis === 'source' || item.basis === 'explanation')) {
         for (const node of route.nodes.filter(item => item.source?.line && item.action)) {
           expect(JSON.parse(node.action!.target), `${value.id}: ${node.id}`).toMatchObject({ sourceName: node.source!.name,

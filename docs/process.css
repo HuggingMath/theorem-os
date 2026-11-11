@@ -26,8 +26,8 @@
 .proof-reading-intro { margin: 0 0 16px; }
 .proof-reading-intro > summary { display: flex; align-items: baseline; gap: 16px; padding: 9px 0; color: var(--green); cursor: pointer; font-size: 12px; }
 .proof-reading-intro > summary > span { margin-left: auto; color: var(--muted); font: 10px var(--mono); white-space: nowrap; }
-.proof-reading-intro[open] > .proof-walkthrough-intro { padding: 10px 0 16px; }
-.proof-reading-intro section.proof-walkthrough-problem { flex-basis: 100%; }
+.proof-walkthrough[data-proof-reading="linear"] > .proof-walkthrough-intro { max-width: 800px; margin-bottom: 20px; }
+.proof-walkthrough[data-proof-reading="linear"] section.proof-walkthrough-problem { flex-basis: 100%; }
 .proof-walkthrough[data-proof-reading="linear"] .proof-walkthrough-route { padding-right: 0; border-right: 0; }
 .proof-source-index { margin: 12px 0 22px; }
 .proof-source-index > summary { cursor: pointer; color: var(--green); font-size: 12px; padding: 8px 0; }
@@ -320,6 +320,7 @@
 .proof-walkthrough-source > ol code { color: var(--ink); }
 .proof-walkthrough-links { display: flex; flex-wrap: wrap; gap: 8px 20px; padding-top: 8px; }
 .proof-walkthrough-links > button { background: transparent; color: var(--green); font-size: 11px; padding: 3px 0; text-align: left; }
+.proof-walkthrough-source > .proof-walkthrough-links { padding: 0 0 12px; }
 .workflow-journal-heading { display: flex; gap: 12px; align-items: baseline; margin: 0 0 25px; border-top: 1px solid var(--line); padding-top: 30px; font-size: 19px; font-weight: 500; }
 .workflow-journal-heading > span { font: 11px var(--mono); color: var(--muted); }
 .global-final-badge { padding: 22px 25px; background: #f0f3e7; border: 1px solid #c7cfb5; border-radius: 4px; }

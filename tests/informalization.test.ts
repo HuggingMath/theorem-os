@@ -8,9 +8,9 @@ import { formalizationDigest, readFormalizationArtifact } from '../src/math/form
 import { attachInformalizationGoals, informalizationExtractionQuery, informalizationGoalsQuery, informalizationLibraryContext,
   informalizationOutline, informalizationOutlineSchema, leanSourceSlice, type InformalizationGoalsResult,
   type InformalizationOutline } from '../src/math/informalizationExtraction';
-import { INFORMALIZATION_ALIGNMENT, INFORMALIZATION_AUDITOR_INSTRUCTIONS, INFORMALIZATION_WRITER_INSTRUCTIONS,
+import { INFORMALIZATION_ALIGNMENT, INFORMALIZATION_EXPLANATION_POLICY, INFORMALIZATION_AUDITOR_INSTRUCTIONS, INFORMALIZATION_WRITER_INSTRUCTIONS,
   assertInformalizationEvidence, informalizationAuditApproved, informalizationAuditFeedback, informalizationAuditInput,
-  informalizationAuditRejections, informalizationBatches, informalizationExcerptCoverage, informalizationRoleInstructions,
+  informalizationAuditRejections, informalizationBatches, informalizationDigest, informalizationExcerptCoverage, informalizationRoleInstructions,
   informalizationRoleOutputSchema, informalizationWriterInput, informalizationWriterRejections, informalizationWriterSubmissionRejections,
   readInformalizationArtifact,
   readInformalizationRequest, renderInformalization, type InformalizationAlignedAuditOutput, type InformalizationAlignedSection,
@@ -337,6 +337,39 @@ describe('host checks', () => {
     expect(INFORMALIZATION_WRITER_INSTRUCTIONS).toContain('Cite every name in mustCite');
     expect(INFORMALIZATION_AUDITOR_INSTRUCTIONS).toContain('You are not given the informal problem');
     expect(INFORMALIZATION_AUDITOR_INSTRUCTIONS).toContain('their absence is not an omission');
+  });
+
+  it.each([
+    [undefined, '3ea8f7d5e4d3df03e8066fd728612eeb26f5576054ca6cf92075c4aee7ee134f', 'c33da91837910d2895e58e9159367962324761dc769a212e402281a664f7a89c'],
+    ['lean-phrase-alignment-v1', '6239e7329abe102efb8b4627366b72fe82fb657777d4c11ebd8b375b456f3ccd', '166b97ed520a97bb58b2e8ef00ac07f58d025093d4d45ce5a7511f7c28b6b44b'],
+    ['lean-phrase-alignment-v2', '3e50bac484d4b8dcb2c90d0e7bb61d77267623ecdda687f5ab711fcc6cdff4c0', '7445a3fdac26f3414bd6a20ed1293354bdda7fbf2b95fb5e598eba6fc4b8542f'],
+  ] as const)('preserves exact legacy role bytes without a policy, for alignment %s', (alignment, writer, auditor) => {
+    expect(mathDigest(informalizationRoleInstructions('write', alignment))).toBe(writer);
+    expect(mathDigest(informalizationRoleInstructions('audit', alignment))).toBe(auditor);
+  });
+
+  it('binds the opted-in explanation policy to writer and auditor inputs without changing their output shape', () => {
+    const context = { outline, batch: batchesOf()[1]!, accepted: new Map<string, InformalizationSection>(),
+      sources: informalizationSources(), language: 'zh' as const };
+    const draft = { ...context, round: 1, problemStatement: null, feedback: null, previousOutput: null };
+    const legacy = informalizationWriterInput(draft), current = informalizationWriterInput({ ...draft,
+      explanationPolicy: INFORMALIZATION_EXPLANATION_POLICY });
+    expect(legacy).not.toHaveProperty('explanationPolicy');
+    expect(current.explanationPolicy).toBe(INFORMALIZATION_EXPLANATION_POLICY);
+    expect(current.inputDigest).not.toBe(legacy.inputDigest);
+    const output = explain(current);
+    expect(informalizationWriterRejections(current, output)).toEqual([]);
+    const auditLegacy = informalizationAuditInput({ ...context, explanation: output });
+    const auditCurrent = informalizationAuditInput({ ...context, explanation: output,
+      explanationPolicy: INFORMALIZATION_EXPLANATION_POLICY });
+    expect(auditCurrent.inputDigest).not.toBe(auditLegacy.inputDigest);
+    const verdicts = review(auditLegacy);
+    expect(informalizationAuditRejections(auditCurrent, verdicts)).toEqual(['inputDigest must equal INPUT.inputDigest']);
+    expect(informalizationAuditRejections(auditCurrent, review(auditCurrent))).toEqual([]);
+    for (const role of ['write', 'audit'] as const) {
+      expect(informalizationRoleInstructions(role, undefined, current.explanationPolicy)).not.toBe(informalizationRoleInstructions(role));
+      expect(informalizationRoleInstructions(role, undefined, current.explanationPolicy)).toContain('mathematical-steps-v1');
+    }
   });
 });
 
@@ -820,8 +853,8 @@ describe('informalization runner', () => {
     expect(idle.calls).toHaveLength(0);
   });
 
-  it('stops on a non-retryable role failure and resumes from every closed role', async () => {
-    const r = runner(), failing = presetAgent({ diagnostic: (call, count) =>
+  it.each([undefined, INFORMALIZATION_EXPLANATION_POLICY])('resumes every closed role after a non-retryable failure with explanation policy %s', async explanationPolicy => {
+    const r = runner({ explanationPolicy }), failing = presetAgent({ diagnostic: (call, count) =>
       call.auditorId === 'auditor-2' && count === 2 ? { code: 'other' } : undefined });
     const stopped = await r.run(failing);
     expect(stopped).toMatchObject({ status: 'stopped', approvedBatches: 1, rounds: 2 });
@@ -923,6 +956,78 @@ describe('informalization runner', () => {
         .toBe(call.role === 'write' ? INFORMALIZATION_WRITER_INSTRUCTIONS : INFORMALIZATION_AUDITOR_INSTRUCTIONS);
     }
     expect(readInformalizationArtifact(path.join(r.directory, 'artifact'))).not.toHaveProperty('alignment');
+    expect(r.request).not.toHaveProperty('explanationPolicy');
+    expect(readInformalizationArtifact(path.join(r.directory, 'artifact'))).not.toHaveProperty('explanationPolicy');
+    const relabelled = structuredClone(readInformalizationArtifact(path.join(r.directory, 'artifact')));
+    relabelled.explanationPolicy = INFORMALIZATION_EXPLANATION_POLICY;
+    expect(() => assertInformalizationEvidence(relabelled)).toThrow('informalization_evidence_invalid');
+  });
+
+  it('binds mathematical steps to the request, role contracts and evidence while allowing multiple tactic lines in one step', async () => {
+    const r = runner({ alignment: INFORMALIZATION_ALIGNMENT, explanationPolicy: INFORMALIZATION_EXPLANATION_POLICY });
+    r.extract.mockImplementation(async (_directory, _request, sources) => attachInformalizationGoals(
+      informalizationOutline(informalizationReport(), { nonce: INFORMALIZATION_NONCE, target: 'double_add_zero', sources }),
+      goalResults(), { nonce: INFORMALIZATION_NONCE, sources }));
+    const agent = presetAgent({ write: input => alignedExplain(input, sections => {
+      for (const section of sections) {
+        if (section.declaration === 'double_eq') section.proof = [{
+          text: 'Expanding `double n` gives $n+n$. The identity $2n=n+n$ then gives $n+n=2n$, proving the claimed value of `double n`.',
+          uses: ['double', 'Nat.two_mul'], lean: ['unfold double\n  omega'], links: [{ text: 'n+n=2n', lean: 'omega' }],
+        }];
+        if (section.declaration === 'double_add_zero') section.proof = [{
+          text: 'Apply `lib_fact` to this natural number $n$: $n+0=n$. Substituting in `double (n + 0)` leaves `double n`; the proved `double_eq` at the same $n$ now gives $2n$, which closes the target.',
+          uses: ['lib_fact', 'double_eq'], lean: ['rw [lib_fact]\n  exact double_eq n'],
+          links: [{ text: 'n+0=n', lean: 'lib_fact' }, { text: '2n', lean: 'double_eq n' }],
+        }];
+      }
+    }), audit: input => alignedReview(input) });
+    expect(readInformalizationRequest(r.directory).request.explanationPolicy).toBe(INFORMALIZATION_EXPLANATION_POLICY);
+    expect(await r.run(agent)).toMatchObject({ status: 'approved', rounds: 2 });
+    for (const call of agent.calls) {
+      expect(call.input.explanationPolicy).toBe(INFORMALIZATION_EXPLANATION_POLICY);
+      expect(readMathText(path.join(call.workspace, 'ROLE.md')))
+        .toBe(informalizationRoleInstructions(call.role, INFORMALIZATION_ALIGNMENT, INFORMALIZATION_EXPLANATION_POLICY));
+      expect(JSON.parse(readMathText(path.join(call.workspace, 'OUTPUT.schema.json'))))
+        .toEqual(informalizationRoleOutputSchema(call.role, INFORMALIZATION_ALIGNMENT));
+    }
+    const audit = agent.calls.find(call => call.role === 'audit' && call.batch === 1)!;
+    expect((audit.input as unknown as InformalizationAuditInput).stepGoals!.map(section => section.steps.map(step => step?.lines)))
+      .toEqual([[{ start: 7, end: 8 }], [{ start: 11, end: 12 }]]);
+    const evidence = readInformalizationArtifact(path.join(r.directory, 'artifact'));
+    expect(evidence).toMatchObject({ explanationPolicy: INFORMALIZATION_EXPLANATION_POLICY, alignment: INFORMALIZATION_ALIGNMENT,
+      requestDigest: informalizationDigest(r.request), metrics: { steps: 3 } });
+    expect(evidence.batches[1]!.writer.sections[0]!.proof).toHaveLength(1);
+    const relabelled = structuredClone(evidence);
+    delete relabelled.explanationPolicy;
+    expect(() => assertInformalizationEvidence(relabelled)).toThrow('informalization_evidence_invalid');
+    const idle = presetAgent();
+    expect(await r.run(idle)).toMatchObject({ status: 'approved' });
+    expect(idle.calls).toHaveLength(0);
+  });
+
+  it('returns missing reasons and lemma connections as auditor gaps before accepting a revised mathematical explanation', async () => {
+    const r = runner({ explanationPolicy: INFORMALIZATION_EXPLANATION_POLICY });
+    // These preset verdicts exercise feedback and acceptance, not model accuracy or a host mathematics checker.
+    const agent = presetAgent({ write: input => explain(input, sections => {
+      if (input.batch.index !== 1) return;
+      sections[0]!.proof[0]!.text = input.feedback === null ? 'By omega.' :
+        'Unfolding `double` leaves $n+n=2n$, the identity obtained by multiplying $n$ by two.';
+      sections[1]!.proof[0]!.text = input.feedback === null ? 'Apply the lemmas to obtain the result.' :
+        'At this $n$, `lib_fact` gives $n+0=n$. Substitution reduces the target to `double n = 2 * n`, exactly the proved `double_eq` at the same natural number.';
+    }), audit: (input, auditorId) => review(input, output => {
+      if (input.batch.index !== 1 || auditorId !== 'auditor-1' || input.explanation.sections[0]!.proof[0]!.text !== 'By omega.') return;
+      output.sections[0]!.steps[0] = { verdict: 'gap', explanation: 'State why the unfolded relation n+n=2n holds; naming omega gives no mathematical reason.' };
+      output.sections[1]!.steps[0] = { verdict: 'gap', explanation: 'Instantiate lib_fact and double_eq at n, check the natural-number domain, and show how the first equality reduces the target for the second lemma.' };
+    }) });
+    expect(await r.run(agent)).toMatchObject({ status: 'approved', rounds: 3 });
+    const writes = agent.calls.filter(call => call.role === 'write');
+    expect(writes.map(call => [call.batch, call.round])).toEqual([[0, 1], [1, 1], [1, 2]]);
+    expect(writes[2]!.input.feedback).toContain('double_eq, step 1 gap: State why the unfolded relation');
+    expect(writes[2]!.input.feedback).toContain('double_add_zero, step 1 gap: Instantiate lib_fact and double_eq at n');
+    expect((writes[2]!.input.previousOutput as InformalizationWriterOutput).sections[0]!.proof[0]!.text).toBe('By omega.');
+    const evidence = readInformalizationArtifact(path.join(r.directory, 'artifact'));
+    expect(evidence.explanationPolicy).toBe(INFORMALIZATION_EXPLANATION_POLICY);
+    expect(evidence.batches[1]!.writer.sections[0]!.proof[0]!.text).not.toBe('By omega.');
   });
 
   it('stops at the token limit before dispatching another role', async () => {

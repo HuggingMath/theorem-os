@@ -1,5 +1,8 @@
 /** The proof explanation page (explain.html) and its workbench links. */
 export const explain: Record<string, string> = {
+  "讲解来源与审阅": "Explanation source and review",
+  "要证明什么": "Goal",
+  "第 {0} 行没有单独的讲解步骤。可对照本声明的前后推导和 Lean 源码；现有记录无法确认这一行是否已被充分解释。": "Line {0} has no explanation step of its own. Compare the surrounding reasoning and Lean source; the saved record does not establish whether this line is sufficiently explained.",
   "证明讲解": "Proof explanation",
   "Lean → 自然语言": "Lean → natural language",
   "证明讲解 · TheoremOS": "Proof explanation · TheoremOS",
@@ -104,7 +107,6 @@ export const explain: Record<string, string> = {
   "之后": "After",
   "没有剩余目标": "No goals left",
   "另有 {0} 个目标没有显示": "{0} more goals not shown",
-  "第 {0} 行没有单独的讲解步骤。审核模型检查的是整个声明，有实质证明内容没讲到就不会通过；没有单独一步的行，通常是 intro、rfl 这类记账步骤。": "Line {0} has no step of its own. The auditors check the whole declaration and reject it if any substantive proof content is left unexplained; lines without a step are usually bookkeeping such as intro or rfl.",
   "讲解步骤": "Explanation step",
   "由陈述讲解": "Explained by the statement",
   "没有单独讲解 ({0} 行)": "No step of its own ({0} lines)",

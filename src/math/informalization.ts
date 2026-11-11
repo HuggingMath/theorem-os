@@ -32,6 +32,8 @@ import { findWithin, lineEnds, placeExcerpts, sectionStepGoals, statementRegion,
  * The Lean proof is the authority. The prose is model-written and model-reviewed.
  */
 export const INFORMALIZATION_PROTOCOL = 'lean-proof-informalization-v1';
+/** Opted into by new entry points; absent on requests whose original role contracts must remain unchanged. */
+export const INFORMALIZATION_EXPLANATION_POLICY = 'mathematical-steps-v1';
 /**
  * Phrase alignment, opted into per request: the writer also pairs phrases of its prose with the Lean text they translate
  * (links), the host checks each pair is verbatim on both sides and inside the Lean the statement or step explains, and
@@ -71,6 +73,7 @@ export const informalizationRequestSchema = z.object({
   formalization: z.object({ problemId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u), evidenceSha256: hash,
     statementSha256: hash, originalSha256: hash }).strict().optional(),
   alignment: z.enum(INFORMALIZATION_ALIGNMENTS).optional(),
+  explanationPolicy: z.literal(INFORMALIZATION_EXPLANATION_POLICY).optional(),
   language: z.enum(['zh', 'en']),
   writer: formalizationModelConfigurationSchema,
   auditors: z.array(auditorSchema).min(1).max(5),
@@ -158,6 +161,7 @@ export function prepareInformalization(directory: string, input: Informalization
     ...formalization ? { formalization: { problemId: formalization.request.problemId, evidenceSha256: formalizationDigest(formalization),
       statementSha256: formalization.sourceSha256, originalSha256: formalization.request.statementSha256 } } : {},
     ...input.alignment ? { alignment: input.alignment } : {},
+    ...input.explanationPolicy ? { explanationPolicy: input.explanationPolicy } : {},
     language: input.language, writer: input.writer, auditors: input.auditors, batching: input.batching,
     maxRoundsPerBatch: input.maxRoundsPerBatch, maxRunSeconds: input.maxRunSeconds, maxTurnSeconds: input.maxTurnSeconds,
     maxCompileSeconds: input.maxCompileSeconds, maxTotalTokens: input.maxTotalTokens,
@@ -273,6 +277,7 @@ export const informalizationAlignedAuditOutputSchema = informalizationAuditOutpu
 }).strict();
 export type InformalizationAlignedAuditOutput = z.infer<typeof informalizationAlignedAuditOutputSchema>;
 type Alignment = InformalizationRequest['alignment'];
+type ExplanationPolicy = InformalizationRequest['explanationPolicy'];
 const writerOutputSchema = (alignment: Alignment) => alignment ? informalizationAlignedWriterOutputSchema : informalizationWriterOutputSchema;
 const auditOutputSchema = (alignment: Alignment) => alignment ? informalizationAlignedAuditOutputSchema : informalizationAuditOutputSchema;
 /** The writer output a request's alignment requires. */
@@ -338,10 +343,11 @@ export type InformalizationWriterInput = ReturnType<typeof informalizationWriter
 export type InformalizationAuditInput = ReturnType<typeof informalizationAuditInput>;
 
 export function informalizationWriterInput(context: BatchContextInput & { language: InformalizationRequest['language'];
-  alignment?: Alignment; round: number; problemStatement: string | null; feedback: string | null;
+  alignment?: Alignment; explanationPolicy?: ExplanationPolicy; round: number; problemStatement: string | null; feedback: string | null;
   previousOutput: InformalizationWriterOutput | null }) {
   const body = { schema: 'theorem-os.informalization-write-input.v1' as const, protocol: INFORMALIZATION_PROTOCOL,
     ...context.alignment ? { alignment: context.alignment } : {}, language: context.language, round: context.round,
+    ...context.explanationPolicy ? { explanationPolicy: context.explanationPolicy } : {},
     batch: { index: context.batch.index, count: context.batch.count, final: context.batch.final },
     problemStatement: context.problemStatement, ...batchContext(context),
     feedback: context.feedback, previousOutput: context.previousOutput };
@@ -353,7 +359,7 @@ export function informalizationWriterInput(context: BatchContextInput & { langua
  * they also get, per step, the goals the explanation page shows beside it (null when none are recorded).
  */
 export function informalizationAuditInput(context: BatchContextInput & { language: InformalizationRequest['language'];
-  alignment?: Alignment; explanation: InformalizationWriterOutput }) {
+  alignment?: Alignment; explanationPolicy?: ExplanationPolicy; explanation: InformalizationWriterOutput }) {
   const byName = new Map(context.outline.units.map(unit => [unit.name, unit]));
   const stepGoals = context.alignment ? { stepGoals: context.explanation.sections.map(section => {
     const unit = byName.get(section.declaration);
@@ -363,6 +369,7 @@ export function informalizationAuditInput(context: BatchContextInput & { languag
   }) } : {};
   const body = { schema: 'theorem-os.informalization-audit-input.v1' as const, protocol: INFORMALIZATION_PROTOCOL,
     ...context.alignment ? { alignment: context.alignment } : {}, language: context.language,
+    ...context.explanationPolicy ? { explanationPolicy: context.explanationPolicy } : {},
     batch: { index: context.batch.index, count: context.batch.count, final: context.batch.final }, ...batchContext(context),
     explanation: { sections: context.explanation.sections, overview: context.explanation.overview }, ...stepGoals };
   return { ...body, inputDigest: informalizationDigest(body) };
@@ -651,8 +658,9 @@ export const informalizationEvidenceSchema = z.object({
   proofCompiledByHost: z.literal(true), humanReviewed: z.literal(false),
   requestDigest: hash, target: leanName, language: z.enum(['zh', 'en']),
   toolchain: text, mathlibRevision: text.nullable(), statementSha256: hash.nullable(),
-  /** The request's records: the approved formalization this proof proves, and phrase alignment. */
+  /** The request's records: the approved formalization, phrase alignment and opted-in explanation rules. */
   formalization: informalizationRequestSchema.shape.formalization, alignment: informalizationRequestSchema.shape.alignment,
+  explanationPolicy: informalizationRequestSchema.shape.explanationPolicy,
   sources: informalizationRequestSchema.shape.sources, batching: informalizationRequestSchema.shape.batching,
   writer: formalizationModelConfigurationSchema, auditors: informalizationRequestSchema.shape.auditors,
   outlineDigest: hash, outline: informalizationOutlineSchema,
@@ -685,7 +693,7 @@ export function assertInformalizationEvidence(value: unknown): { evidence: Infor
     if (record.index !== index || canonicalMathJson(record.declarations) !== canonicalMathJson(batch.declarations))
       throw new Error('informalization_evidence_invalid');
     const audit = informalizationAuditInput({ outline, batch, accepted, sources: files, language: evidence.language,
-      alignment: evidence.alignment, explanation: record.writer });
+      alignment: evidence.alignment, explanationPolicy: evidence.explanationPolicy, explanation: record.writer });
     const writerCheck = { units: audit.units, batch: audit.batch, alignment: evidence.alignment,
       inputDigest: record.writerInputDigest } as InformalizationWriterInput;
     if (informalizationWriterRejections(writerCheck, record.writer).length ||
@@ -715,6 +723,7 @@ export function informalizationEvidence(input: { request: InformalizationRequest
     requestDigest: informalizationDigest(request), target: outline.target, language: request.language,
     toolchain: request.toolchain, mathlibRevision: request.mathlibRevision, statementSha256: request.statementSha256,
     ...request.formalization ? { formalization: request.formalization } : {}, ...request.alignment ? { alignment: request.alignment } : {},
+    ...request.explanationPolicy ? { explanationPolicy: request.explanationPolicy } : {},
     sources: request.sources, batching: request.batching, writer: request.writer, auditors: request.auditors,
     outlineDigest: informalizationDigest(outline), outline, batches: input.batches, sessions: input.sessions,
     metrics: evidenceMetrics(outline, sections), proofMarkdownSha256: mathDigest(markdown) };
@@ -784,6 +793,36 @@ const AUDITOR_LINES = [
   'overview.verdict is absent when INPUT.explanation.overview is null; otherwise consistent if it describes how these declarations prove the target, and inconsistent if not.',
   'Judge mathematical correctness and fidelity to the Lean proof, not style or language. summary states the main problems, or that there are none.',
 ];
+// Separate guides keep the exact legacy ROLE.md bytes available to existing requests and resumable sessions.
+const MATHEMATICAL_WRITER_LINES = [
+  'Write a natural-language proof that explains the given Lean proof under INPUT.explanationPolicy = mathematical-steps-v1. INPUT.json holds a batch of declarations in dependency order, their Lean source and signatures, recorded tactic goals when available, proved dependency statements and the library theorems their terms use.',
+  'Write exactly one strict JSON object to OUTPUT.json with inputDigest (copied from INPUT), sections and overview. Keep the output structure in OUTPUT.schema.json.',
+  'sections has one item per INPUT.units entry, in the same order, with declaration equal to its name. title names its mathematical purpose. statement preserves the Lean signature: every mathematical hypothesis, quantifier, domain, type constraint and conclusion. Explain a coercion when it changes the mathematical object or domain; implementation-only elaboration needs no separate prose.',
+  'The Lean source is the only authority. Follow its substantive argument: cases, induction hypotheses, intermediate results and lemma applications, retaining their dependency order. Combine adjacent routine introductions, unfolding, rewrites, casts and automation into a meaningful mathematical step. A step need not correspond to one tactic or line. Do not replace the proof with a different argument or claim a step the Lean proof does not take.',
+  'Each step has text, uses and lean. lean quotes 1 to 8 verbatim excerpts of that declaration\'s Lean source that the mathematical step explains; a multi-line excerpt may cover the routine commands combined in the step. uses names the owned declarations and citableLibrary theorems relied on, by exact name.',
+  'Cite every name in mustCite in the step that applies it. For a lemma application, explain which variables or objects are substituted, where its hypotheses have been established, and which conclusion follows. Use dependency statements as already proved results; explain their use here without proving them again. Routine arithmetic needs no citation but still needs its mathematical reason.',
+  'Write each step as connected reasoning: identify the current goal and relevant available conditions, show the operation and key equalities or inequalities, state the result, and make clear how that result is used by the following step or closes the target. A formula may make a connection clear without an extra sentence. Do not skip a necessary transformation, side condition or case. Do not pad the proof with repeated statements of the problem, tactic logs, generic progress reports or fixed labels for these parts.',
+  'When automation such as simp, ring, linarith, omega, norm_num, decide or positivity closes a goal, give the actual relation it proves and the identities, inequalities, hypotheses or finite cases that justify it. Naming the tactic, repeating the desired conclusion, or saying it is obvious is not that reason. If the needed reasoning cannot be established from the source, recorded goals or inspected library theorem, describe the limitation rather than inventing it.',
+  'Where goals are recorded, keep intermediate claims, active cases and the goals automation closes mathematically consistent with them. Use mathematical notation for the same objects; do not translate the goal display line by line.',
+  'A definition, instance or structure needs proof steps only for mathematical content that needs explaining, such as a recursion, proof field or termination argument; its statement describes what it defines. A theorem needs at least one step. Explain a definition unfolding or change of domain within the argument when understanding it is necessary; routine bookkeeping needs no standalone step.',
+  'Write mathematics in LaTeX ($...$). Write Lean names, tactics and Lean expressions as inline code, never inside $...$, where TeX reads _ as a subscript and drops spaces. Write prose in INPUT.language (zh: Chinese, en: English); keep Lean names unchanged.',
+  'overview is null unless INPUT.batch.final is true. In the final batch, explain the chain of mathematical results that proves the target and why they fit together; do not merely list declaration names.',
+  'problemStatement, when present, is the informal problem the proof was written for; use it only for vocabulary. If it differs from the Lean statement, follow Lean.',
+  'When INPUT.feedback is present it lists host check failures or auditor findings about previousOutput. Check each against the Lean source, fix missing reasons and connections, and keep the parts that were not challenged.',
+];
+const MATHEMATICAL_AUDITOR_LINES = [
+  'Audit a natural-language explanation of a Lean proof under INPUT.explanationPolicy = mathematical-steps-v1. Judge it only against the Lean declarations in INPUT.units. You are not given the informal problem; the explanation is model-written and may be wrong.',
+  'The explanation is written in batches (INPUT.batch). Declarations in proof/ that are not in INPUT.units belong to other batches and are audited there; their absence is not an omission.',
+  'Write exactly one strict JSON object to OUTPUT.json with inputDigest (copied from INPUT), sections, overview and summary. Keep the existing verdicts and exact structure in OUTPUT.schema.json.',
+  'sections has one item per INPUT.explanation.sections entry, in the same order and with the same declaration.',
+  'statement.verdict is faithful if it states the mathematical content of the Lean signature: hypotheses, quantifiers, domains, type constraints and conclusion, including any coercion that changes the mathematical object or domain. Implementation-only elaboration needs no separate prose. It is mismatch if mathematical content is added, dropped, weakened or strengthened, and unclear if you cannot tell.',
+  'steps has one verdict per explanation step, in order. justified means the quoted Lean supports the claim and the explanation supplies the mathematical reasoning needed to reach it. gap means a necessary reason, lemma instantiation, hypothesis check, transformation, case or connection to the adjacent steps is missing. A tactic name, a progress report or a repetition of the desired conclusion alone does not justify it. invented means the explanation claims something the Lean proof does not do, or cites a declaration for content it does not provide. unclear means you cannot tell. Explain every verdict other than justified, identifying the missing condition or inference the writer must supply.',
+  'Read successive steps together. Check which earlier result each step uses, how a cited lemma is instantiated, how its hypotheses are met, what a key equality or inequality follows from, and how its result enables the next step or closes the target. Do not assume an unstated side condition or case. An already proved dependency need not be proved again.',
+  'Where goals are recorded, check intermediate claims, active cases and claims about what remains to be shown against them. A mathematical disagreement is invented; equivalent notation and combining adjacent routine tactics are allowed.',
+  'omissions lists substantive parts of the Lean proof with no explanation, including missing cases, induction reasoning, applied lemma content, necessary definition unfoldings or nontrivial side conditions. Quote the Lean text verbatim in lean. Routine introductions, rfl, rewrites and casts need no standalone step; if their mathematical effect is necessary to understand the argument, that effect must be explained within a relevant step. Judge their role, not the tactic name.',
+  'overview.verdict is absent when INPUT.explanation.overview is null; otherwise consistent if it explains how these declarations combine to prove the target, and inconsistent if not.',
+  'Judge correctness, fidelity and completeness of the mathematical argument. Concise steps may combine multiple routine commands; do not require a tactic-by-tactic narration or decorative labels. Missing reasoning is a gap even when the conclusion is true. summary states the concrete problems, or that there are none.',
+];
 const auditorAlignmentLines = (alignment: NonNullable<Alignment>) => [
   `INPUT.alignment is ${alignment}: statements and steps carry links pairing a phrase of the prose with the Lean text it translates. A statement link whose phrase means something other than its Lean makes the statement a mismatch; such a step link makes the step invented. Explain which link is wrong.`,
   'INPUT.stepGoals gives, for each explanation step, the goals before the first and after the last tactic it quotes, as the explanation page shows them beside the step (null when none are recorded). '
@@ -794,6 +833,9 @@ const instructions = (lines: readonly string[], alignment: Alignment, extra: (al
   [...lines, ...alignment ? extra(alignment) : [], ...SHARED_INSTRUCTIONS].join('\n');
 export const INFORMALIZATION_WRITER_INSTRUCTIONS = instructions(WRITER_LINES, undefined, writerAlignmentLines);
 export const INFORMALIZATION_AUDITOR_INSTRUCTIONS = instructions(AUDITOR_LINES, undefined, auditorAlignmentLines);
-/** ROLE.md for a role; alignment adds its rules, and without it the text is unchanged. */
-export const informalizationRoleInstructions = (role: InformalizationRole, alignment?: Alignment) => role === 'write' ?
-  instructions(WRITER_LINES, alignment, writerAlignmentLines) : instructions(AUDITOR_LINES, alignment, auditorAlignmentLines);
+/** ROLE.md for a role; absent policy preserves legacy bytes, and alignment adds its independent rules. */
+export const informalizationRoleInstructions = (role: InformalizationRole, alignment?: Alignment, explanationPolicy?: ExplanationPolicy) => {
+  const mathematical = explanationPolicy === INFORMALIZATION_EXPLANATION_POLICY;
+  return role === 'write' ? instructions(mathematical ? MATHEMATICAL_WRITER_LINES : WRITER_LINES, alignment, writerAlignmentLines) :
+    instructions(mathematical ? MATHEMATICAL_AUDITOR_LINES : AUDITOR_LINES, alignment, auditorAlignmentLines);
+};

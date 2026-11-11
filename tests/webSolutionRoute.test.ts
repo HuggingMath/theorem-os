@@ -250,6 +250,8 @@ describe('complete recorded explanation projection', () => {
     };
     const route = explanationSolutionRoute(document, proof), first = route.nodes.find(node => node.id === 'derivation:target:0')!;
     expect(route.basis).toBe('explanation');
+    expect(route.initial).toBe('derivation:target:0');
+    expect(route.overview?.map(section => section.text)).toEqual(['Q follows from P.', document.overview]);
     expect(route.edges).toEqual(expect.arrayContaining([
       { from: 'declaration:helper', to: 'declaration:target', kind: 'dependency' },
       { from: 'declaration:helper', to: 'derivation:target:0', kind: 'reference' },
@@ -257,6 +259,7 @@ describe('complete recorded explanation projection', () => {
     ]));
     expect(first.source).toMatchObject({ line: 4, endLine: 4 });
     expect(first.action?.target).toBe('step:1:0');
+    expect(first.sections?.find(section => section.title === 'Step review')?.detail).toBe(true);
     expect(first.sections?.map(section => section.text)).toEqual(expect.arrayContaining(['Obtain P from the helper theorem.', '⊢ Q', 'h : P\n⊢ Q', '  have h := helper']));
     expect(route.nodes.find(node => node.id === 'derivation:target:1')?.sections?.some(section => section.text === 'This goal is closed.')).toBe(true);
     expect(route.nodes.some(node => node.kind === 'acceptance')).toBe(false);

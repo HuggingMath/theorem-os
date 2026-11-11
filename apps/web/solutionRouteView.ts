@@ -1,9 +1,9 @@
-import type { SolutionRoute, SolutionRouteEdge, SolutionRouteNode } from './solutionRoute';
+import type { SolutionRoute, SolutionRouteEdge, SolutionRouteNode, SolutionRouteSection } from './solutionRoute';
 import { h, render } from 'preact';
 import { Rich, RichProse } from './client/richText';
 
 type Options = { onSelect?: (id: string) => void; onOpen?: (target: string) => void };
-type Memory = { selected: string; zoom: number; left: number; top: number; all: boolean; opened: Set<string>; query: string; reading: boolean };
+type Memory = { selected: string; zoom: number; left: number; top: number; all: boolean; opened: Set<string>; query: string; reading: boolean; details: Map<string, boolean> };
 type Box = { x: number; y: number; width: number; height: number };
 const memories = new Map<string, Memory>();
 const html = (value: unknown) => String(value ?? '').replace(/[&<>"']/gu, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -120,7 +120,12 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       : edge.kind === 'decision' ? word('决策', 'Decision') : edge.kind === 'integration' ? word('接入结果', 'Contributes to result') : word('依据记录', 'Recorded evidence');
   function memory(next: SolutionRoute): Memory {
     let saved = memories.get(next.id);
-    if (!saved) { saved = { selected: next.initial ?? next.nodes[0]?.id ?? '', zoom: 1, left: 0, top: 0, all: false, opened: new Set(), query: '', reading: false }; memories.set(next.id, saved); }
+    if (!saved) {
+      const selected = next.initial ?? next.nodes[0]?.id ?? '', opened = new Set<string>();
+      let parent = next.nodes.find(node => node.id === selected)?.parentId;
+      while (parent && !opened.has(parent)) { opened.add(parent); parent = next.nodes.find(node => node.id === parent)?.parentId; }
+      saved = { selected, zoom: 1, left: 0, top: 0, all: false, opened, query: '', reading: false, details: new Map() }; memories.set(next.id, saved);
+    }
     return saved;
   }
   function shown() {
@@ -136,7 +141,7 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       }
       return true;
     });
-    const matches = model.nodes.filter(node => [node.title, node.summary, ...(node.sections ?? []).map(section => section.text)]
+    const matches = model.nodes.filter(node => [node.title, node.summary, ...(node.sections ?? []).flatMap(section => [section.text, section.reason])]
       .some(value => value?.toLocaleLowerCase().includes(query)));
     const ids = new Set(matches.map(node => node.id));
     for (const node of matches) {
@@ -151,20 +156,28 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
     const relation = (incoming: boolean) => {
       const items = related(node.id, incoming).filter(item => item.edge.kind !== 'evidence' || !item.node.parentId);
       if (!items.length) return '';
-      return `<section class="solution-route-relations"><h5>${incoming ? word('这一步从哪里来', 'What this step uses') : word('接下来到哪里', 'What follows')}</h5>${items.map(({ edge, node: other }) => `<button type="button" data-solution-select="${html(other.id)}"><span>${edgeName(edge)}</span>${html(other.title)} ${incoming ? '↑' : '→'}</button>`).join('')}</section>`;
+      const renderRelations = (members: typeof items, title: string) => members.length ? `<section class="solution-route-relations"><h5>${title}</h5>${members.map(({ edge, node: other }) => `<button type="button" data-solution-select="${html(other.id)}"><span>${edgeName(edge)}</span><strong data-solution-prose>${html(other.title)}</strong>${other.summary && other.summary !== other.title ? `<span class="solution-route-relation-preview" data-solution-prose>${html(other.summary)}</span>` : ''} ${incoming ? '↑' : '→'}</button>`).join('')}</section>` : '';
+      if (model.basis !== 'explanation') return renderRelations(items, incoming ? word('这一步从哪里来', 'What this step uses') : word('接下来到哪里', 'What follows'));
+      const mathematical = items.filter(item => item.edge.kind === 'dependency' || item.edge.kind === 'reference');
+      return renderRelations(mathematical, incoming ? word('用到的结论', 'Results used here') : word('本步结论用于', 'Where this result is used'))
+        + renderRelations(items.filter(item => item.edge.kind === 'sequence'), word('阅读顺序', 'Reading order'));
     };
     const children = model.nodes.filter(item => item.parentId === node.id);
     const source = node.source;
     const sections = (node.sections ?? []).filter(section => section.text.trim());
+    const supporting = (section: SolutionRouteSection) => section.detail || (model.basis === 'explanation' && section.code);
+    const sectionContent = (section: SolutionRouteSection, index: number) => `<section class="solution-route-section"><h5 tabindex="-1" data-solution-section-heading="${index}"><span class="solution-route-section-number">${String(index + 1).padStart(2, '0')}</span>${html(section.title)}</h5>${section.code ? `<pre tabindex="0"><code>${html(section.text)}</code></pre>` : `<div data-solution-prose="block">${html(section.text)}</div>`}${section.reason ? `<div class="solution-route-reason" data-solution-prose="block">${html(section.reason)}</div>` : ''}</section>`;
+    const evidence = sections.map((section, index) => supporting(section) ? sectionContent(section, index) : '').join('');
     const summary = node.summary && !sections.some(section => !section.code && section.text.trim() === node.summary!.trim()) ? node.summary : '';
     return `<header class="solution-route-detail-heading"><p>${kindNames[model.locale][node.kind]}<span data-status="${node.status}">${statusNames[model.locale][node.status]}</span></p><h4 tabindex="-1" data-solution-heading="${html(node.id)}" data-solution-prose>${html(node.title)}</h4>
       ${!state.reading ? `<button type="button" class="solution-route-read" data-solution-view="read">${word('展开阅读', 'Read in full')} ↗</button>` : ''}</header>
       ${summary ? `<div class="solution-route-summary" data-solution-prose="block">${html(summary)}</div>` : ''}
       ${node.at ? `<time>${html(node.at)}</time>` : ''}
-      ${state.reading && sections.length > 2 ? `<nav class="solution-route-contents" aria-label="${word('这一步的内容', 'Contents of this step')}">${sections.map((section, index) => `<button type="button" data-solution-section="${index}"><span>${String(index + 1).padStart(2, '0')}</span>${html(section.title)}</button>`).join('')}</nav>` : ''}
+      ${state.reading && sections.filter(section => !supporting(section)).length > 2 ? `<nav class="solution-route-contents" aria-label="${word('这一步的内容', 'Contents of this step')}">${sections.map((section, index) => supporting(section) ? '' : `<button type="button" data-solution-section="${index}"><span>${String(index + 1).padStart(2, '0')}</span>${html(section.title)}</button>`).join('')}</nav>` : ''}
       ${relation(true)}
-      ${sections.map((section, index) => `<section class="solution-route-section"><h5 tabindex="-1" data-solution-section-heading="${index}"><span class="solution-route-section-number">${String(index + 1).padStart(2, '0')}</span>${html(section.title)}</h5>${section.code ? `<pre tabindex="0"><code>${html(section.text)}</code></pre>` : `<div data-solution-prose="block">${html(section.text)}</div>`}</section>`).join('')}
-      ${source ? `<details class="solution-route-source"><summary>${html(source.name)}${source.line ? `:${source.line}${source.endLine && source.endLine !== source.line ? `–${source.endLine}` : ''}` : ''}</summary>${source.sha256 ? `<p>SHA-256 <code>${html(source.sha256)}</code></p>` : ''}${source.commit ? `<p>commit <code>${html(source.commit)}</code></p>` : ''}</details>` : ''}
+      ${sections.map((section, index) => supporting(section) ? '' : sectionContent(section, index)).join('')}
+      ${evidence ? `<details class="solution-route-evidence" data-solution-details="evidence:${html(node.id)}"${state.details.get(`evidence:${node.id}`) ? ' open' : ''}><summary>${word('证明依据与补充', 'Proof evidence and details')}</summary>${evidence}</details>` : ''}
+      ${source ? `<details class="solution-route-source" data-solution-details="source:${html(node.id)}"${state.details.get(`source:${node.id}`) ? ' open' : ''}><summary>${html(source.name)}${source.line ? `:${source.line}${source.endLine && source.endLine !== source.line ? `–${source.endLine}` : ''}` : ''}</summary>${source.sha256 ? `<p>SHA-256 <code>${html(source.sha256)}</code></p>` : ''}${source.commit ? `<p>commit <code>${html(source.commit)}</code></p>` : ''}</details>` : ''}
       ${children.length ? `<section class="solution-route-records"><h5>${word('这一步的完整记录', 'Every record for this step')} <span>${children.length}</span></h5><button type="button" class="solution-route-children" data-solution-children="${html(node.id)}" aria-expanded="${state.all || state.opened.has(node.id)}">${state.all || state.opened.has(node.id) ? word('收起这些步骤', 'Collapse these steps') : word('在图中展开这些步骤', 'Expand these steps in the graph')}</button><ol>${children.map(child => `<li><button type="button" data-solution-select="${html(child.id)}" data-status="${child.status}"><span>${kindNames[model.locale][child.kind]} · ${statusNames[model.locale][child.status]}</span><strong data-solution-prose>${html(child.title)}</strong>${child.summary ? `<span class="solution-route-record-preview" data-solution-prose>${html(child.summary)}</span>` : ''}</button></li>`).join('')}</ol></section>` : ''}
       ${relation(false)}
       ${node.action ? `<button type="button" class="solution-route-open" data-solution-open="${html(node.id)}">${html(node.action.label)} ↗</button>` : ''}`;
@@ -178,6 +191,8 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
     if (expanded) { root.setAttribute('role', 'dialog'); root.setAttribute('aria-modal', 'true'); root.setAttribute('aria-label', model.title); }
     else { root.removeAttribute('role'); root.removeAttribute('aria-modal'); root.removeAttribute('aria-label'); }
     root.innerHTML = `<header class="solution-route-heading"><div><h3 data-solution-prose="inline">${html(model.title)}</h3><p>${model.basis === 'source' ? word('证明声明与源码引用', 'Proof declarations and source references') : model.basis === 'explanation' ? word('推导步骤与所用结论', 'Derivation steps and the results they use') : word('任务依赖、推导、尝试与验收', 'Tasks, reasoning, attempts and acceptance')}</p></div><span data-solution-count>${state.reading ? model.nodes.length : `${visible.length} / ${model.nodes.length}`} ${state.reading ? word('步骤', 'steps') : word('节点', 'nodes')}</span></header>
+      ${model.overview?.length ? `<div class="solution-route-overview">${model.overview.filter(section => section.text.trim()).map(section => `<section><h4>${html(section.title)}</h4><div data-solution-prose="block">${html(section.text)}</div></section>`).join('')}</div>` : ''}
+      ${model.stages?.length ? `<nav class="solution-route-stages" aria-label="${word('证明主线', 'Proof outline')}">${model.stages.map((stage, index) => `<button type="button" data-solution-select="${html(stage.nodeIds[0])}"${stage.nodeIds.includes(state.selected) ? ' aria-current="step"' : ''}><span>${String(index + 1).padStart(2, '0')}</span><strong data-solution-prose>${html(stage.title)}</strong><span data-solution-prose>${html(stage.summary)}</span></button>`).join('')}</nav>` : ''}
       <div class="solution-route-tools"><label class="solution-route-search"><span class="sr-only">${word('查找路线中的步骤', 'Find a route step')}</span><input type="search" data-solution-search placeholder="${word('查找目标、引理或推导', 'Find a goal, lemma or derivation')}" value="${html(state.query)}"></label>
         ${model.nodes.some(node => node.parentId) ? `<button type="button" data-solution-all aria-pressed="${state.all || state.opened.size > 0}">${state.all || state.opened.size ? word('收起步骤', 'Collapse steps') : word('展开全部步骤', 'Expand every step')}</button>` : ''}
         <div class="solution-route-view-controls" role="group" aria-label="${word('阅读方式', 'Reading view')}"><button type="button" data-solution-view="map" aria-pressed="${!state.reading}">${word('路线图', 'Route map')}</button><button type="button" data-solution-view="read" aria-pressed="${state.reading}">${word('阅读推导', 'Read reasoning')}</button></div>
@@ -281,12 +296,17 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
     }
     if (!expanded) root.querySelector<HTMLElement>('.solution-route-tools')?.scrollIntoView({ block: value ? 'start' : 'nearest' });
   }
+  root.addEventListener('toggle', event => {
+    const details = event.target as HTMLDetailsElement;
+    if (root.contains(details) && details.matches('details[data-solution-details]')) state.details.set(details.dataset.solutionDetails!, details.open);
+  }, { capture: true, signal: signal.signal });
   root.addEventListener('click', event => {
     const target = (event.target as Element).closest<HTMLElement>('button'); if (!target || !root.contains(target)) return;
     if (target.dataset.solutionNode || target.dataset.solutionSelect) { select(target.dataset.solutionNode ?? target.dataset.solutionSelect!, true); return; }
     if (target.dataset.solutionView) { reading(target.dataset.solutionView === 'read'); return; }
     if (target.dataset.solutionSection) {
       const heading = root.querySelector<HTMLElement>(`[data-solution-section-heading="${target.dataset.solutionSection}"]`);
+      const details = heading?.closest('details'); if (details) details.open = true;
       heading?.focus({ preventScroll: true }); heading?.scrollIntoView({ block: 'start', inline: 'nearest' }); return;
     }
     if (target.dataset.solutionOpen) {
@@ -396,7 +416,7 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       // Keep the native IME composition range intact while the same route refreshes.
       if (composingSearch?.isConnected && next.id === model.id) { pendingSearchUpdate = next; return; }
       composingSearch = undefined; pendingSearchUpdate = undefined;
-      const previous = model, previousInitial = lastInitial;
+      const previous = model, previousInitial = lastInitial, previousSelection = state.selected;
       model = next; lastInitial = next.initial;
       if (previous.id !== next.id) state = memory(next);
       // A changed initial navigates within one route; another route restores its own reading position.
@@ -408,17 +428,21 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       const controlValue = controlAttribute ? active!.getAttribute(controlAttribute) : undefined;
       const viewportFocused = active?.classList.contains('solution-route-viewport');
       const codeIndex = active?.tagName === 'PRE' ? [...root.querySelectorAll('pre')].indexOf(active as HTMLPreElement) : -1;
-      const openDetails = [...root.querySelectorAll('details')].map(details => details.open);
+      const openDetails = previous.id === next.id && previousSelection === state.selected
+        ? [...root.querySelectorAll('details')].map(details => details.open) : undefined;
       const input = searchFocused ? active as HTMLInputElement : undefined;
       const selection = input ? { start: input.selectionStart, end: input.selectionEnd, direction: input.selectionDirection } : undefined;
       const detailTop = detailScroller()?.scrollTop ?? 0;
       draw();
-      root.querySelectorAll('details').forEach((details, index) => { details.open = openDetails[index] ?? false; });
+      if (openDetails) root.querySelectorAll('details').forEach((details, index) => { details.open = openDetails[index] ?? false; });
       if (focus) [...root.querySelectorAll<HTMLButtonElement>('[data-solution-node]')].find(button => button.dataset.solutionNode === focus)?.focus({ preventScroll: true });
       else if (controlAttribute) [...root.querySelectorAll<HTMLElement>(`[${controlAttribute}]`)].find(button => button.getAttribute(controlAttribute) === controlValue)?.focus({ preventScroll: true });
       else if (viewportFocused) root.querySelector<HTMLElement>('.solution-route-viewport')?.focus({ preventScroll: true });
       else if (codeIndex >= 0) root.querySelectorAll<HTMLPreElement>('pre')[codeIndex]?.focus({ preventScroll: true });
-      else if (active?.tagName === 'SUMMARY') root.querySelector<HTMLElement>('.solution-route-source > summary')?.focus({ preventScroll: true });
+      else if (active?.tagName === 'SUMMARY') {
+        const id = active.parentElement?.dataset.solutionDetails;
+        [...root.querySelectorAll<HTMLElement>('details[data-solution-details]')].find(details => details.dataset.solutionDetails === id)?.querySelector<HTMLElement>('summary')?.focus({ preventScroll: true });
+      }
       if (searchFocused) {
         const next = root.querySelector<HTMLInputElement>('[data-solution-search]')!; next.focus({ preventScroll: true });
         if (selection) next.setSelectionRange(selection.start, selection.end, selection.direction ?? undefined);

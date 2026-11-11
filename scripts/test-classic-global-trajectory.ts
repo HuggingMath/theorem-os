@@ -205,8 +205,10 @@ async function firstViewport(page: Page, label: string, locale: string) {
   const title = await visible(page, '.solution-route-heading h3', label);
   const selection = await visible(page, '.global-workflow-heading', label);
   const routeEntry = await visible(page, '[data-solution-mode="recorded"]', label);
+  assert.equal(await page.locator('.solution-route').getAttribute('data-solution-route-basis'), 'explanation');
+  assert.equal(await page.locator('.solution-route-overview').isVisible(), true, 'the mathematical context is visible by default');
+  await page.locator('[data-solution-expand]').scrollIntoViewIfNeeded(); await settled(page);
   const expand = await visible(page, '[data-solution-expand]', label);
-  assert.equal(await page.locator('.solution-route').getAttribute('data-solution-route-basis'), 'recorded');
   assert.ok(title.top < title.height * 0.65, label + ': the shared solution route must appear in the first part of the viewport');
   viewportEvidence.push({ label, title, selection, routeEntry, expand });
 }
@@ -832,12 +834,12 @@ async function verifyWorkflow(page: Page, record: ArchiveRecord, run: Run, local
     else if (full.length > 720) assert.equal(row.preview, expectedProse(full.slice(0, 720).trimEnd() + '…'));
     else assert.equal(row.preview, expectedProse(full));
     assert.equal(row.retained, older.has(delivery.id) || !!run.startedAt && delivery.at < run.startedAt);
-    assert.deepEqual(row.link, { run: run.runId, node: delivery.taskId ? 'task:' + delivery.taskId : delivery.kind === 'review' ? 'review' : 'problem', step: 'delivery:' + delivery.id });
+    assert.deepEqual(row.link, { run: run.runId, node: taskIds.has(delivery.taskId ?? '') ? 'task:' + delivery.taskId : delivery.kind === 'review' ? 'review' : 'problem', step: 'delivery:' + delivery.id });
   }
   for (const check of run.checks ?? []) {
     const row = actual.entries.find(row => row.id === 'check:' + check.id)!;
     assert.equal(row.time, check.at); assert.equal(row.retained, !!run.startedAt && check.at < run.startedAt);
-    assert.deepEqual(row.link, { run: run.runId, node: check.scope === 'original' ? 'original' : check.taskId ? 'task:' + check.taskId : 'problem', step: 'check:' + check.id });
+    assert.deepEqual(row.link, { run: run.runId, node: check.scope === 'original' ? 'original' : taskIds.has(check.taskId ?? '') ? 'task:' + check.taskId : 'problem', step: 'check:' + check.id });
   }
   assert.deepEqual(await page.locator('.global-run-lane').evaluateAll(lanes => lanes.map(lane => lane.getAttribute('data-global-run-id'))),
     record.process!.runs.map(run => run.runId));
@@ -963,7 +965,9 @@ try {
       assert.equal(await page.locator(attr('data-proof-derivation', followingStep.id) + ' h5').evaluate(element => element === document.activeElement), true);
       await reading(page, walkthrough, followingStep.id, locale);
       assert.equal(page.url(), beforeStep);
-      await page.locator(attr('data-proof-derivation', followingStep.id) + ' .proof-walkthrough-source-open').click();
+      const followingEvidence = page.locator(attr('data-proof-derivation', followingStep.id) + ' .proof-walkthrough-source');
+      await followingEvidence.locator(':scope > summary').click();
+      await followingEvidence.locator('.proof-walkthrough-source-open').click();
       await page.locator('.process-code:not(.process-diff) code').waitFor();
       assert.equal(hash(page).get('code'), 'source');
       assert.equal(await page.locator('.process-code:not(.process-diff) code').textContent(), triangle.process!.sources![walkthrough.proofSha256].code);

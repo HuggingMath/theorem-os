@@ -164,7 +164,7 @@ export async function runInformalization(directory: string, root: string, option
         const config = slot.role === 'write' ? request.writer : request.auditors.find(item => item.id === slot.auditorId)!;
         const inputText = canonicalMathJson(input);
         if (Buffer.byteLength(inputText) > 8_000_000) throw new Error('informalization_role_input_too_large');
-        const instructionsText = informalizationRoleInstructions(slot.role, request.alignment);
+        const instructionsText = informalizationRoleInstructions(slot.role, request.alignment, request.explanationPolicy);
         const schemaText = canonicalMathJson(informalizationRoleOutputSchema(slot.role, request.alignment));
         const roleContract = { roleInstructionsSha256: mathDigest(instructionsText), outputSchemaSha256: mathDigest(schemaText) };
         const configurationDigest = formalizationModelConfigurationDigest(config);
@@ -333,7 +333,7 @@ export async function runInformalization(directory: string, root: string, option
               record.rounds++; record.open = true; save();
             }
             const round = record.rounds, context = { outline, batch, accepted, sources, language: request.language,
-              alignment: request.alignment };
+              alignment: request.alignment, explanationPolicy: request.explanationPolicy };
             const writerInput = informalizationWriterInput({ ...context, round, problemStatement: request.statement,
               feedback: record.feedback ?? null, previousOutput: record.previous ?? null });
             const written = await dispatch({ role: 'write', batch: batch.index, round, attempt: 1 }, writerInput,

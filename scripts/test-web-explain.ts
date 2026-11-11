@@ -265,11 +265,16 @@ try {
 
   const route = page.locator('#explain-prose .solution-route');
   await route.waitFor();
+  assert.equal(await page.locator('.explain-provenance').getAttribute('open'), null, 'source and review context starts folded');
+  assert.equal(await route.locator('.solution-route-overview').isVisible(), true, 'the proof outline stays available with the mathematical route');
   assert.equal(await route.getAttribute('data-solution-route-basis'), 'explanation');
   assert.equal(await route.locator('[data-solution-edge="dependency"][data-to="declaration:target_thm"]').count(), 6,
     'the common graph connects each cited helper to the target');
-  await route.locator('[data-solution-select="derivation:target_thm:0"]').click();
+  assert.equal(await route.locator('[data-solution-node="derivation:target_thm:0"]').getAttribute('aria-pressed'), 'true',
+    'an approved explanation opens on a visible mathematical step');
   assert.match(await route.locator('[data-solution-inspector]').innerText(), /前三个引理/u, 'the graph retains the full saved derivation');
+  assert.equal(await route.locator('.solution-route-evidence').getAttribute('open'), null, 'technical evidence starts folded');
+  await route.locator('.solution-route-evidence > summary').click();
   assert.match(await route.locator('[data-solution-inspector]').innerText(), /have k1 := step_1 a b/u, 'the graph shows the exact source of this step');
   await route.locator('[data-solution-open]').click();
   const graphLines = explained.sections.at(-1)!.steps[0]!.lines.flatMap(item => range(item.start, item.end));
@@ -401,7 +406,7 @@ try {
   assert.equal(await notes.evaluate(node => (node as HTMLDetailsElement).open), true);
   assert.equal(await notes.locator('li').innerText(), 'Step 2 is what the quoted Lean does.');
   assert.deepEqual(await marked(page, 'active'), gap, 'opening the notes keeps the selection');
-  assert.equal(await page.locator('.explain-reviews:not(.explain-goals)').count(), 21, 'one note for each statement and step the first auditor explained');
+  assert.equal(await page.locator('.explain-section .explain-reviews:not(.explain-goals)').count(), 21, 'one note for each statement and step the first auditor explained');
   mark('a line no step quotes opens its declaration with a note, and auditor notes open without changing the selection');
 
   // Each target step shows, folded, Lean's goal before its first quoted tactic and after its last; the lemmas have no recorded goals.
