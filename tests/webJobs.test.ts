@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebJobs } from '../apps/web/jobs';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebObservation } from '../apps/web/collaboration';
-import type { WebProvider, WebResult, WebRunInput, WorkerInput, WorkerMessage } from '../apps/web/shared';
+import { webLimits, type WebProvider, type WebResult, type WebRunInput, type WorkerInput, type WorkerMessage } from '../apps/web/shared';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { buildTheoremKnowledge, type KnowledgeCandidate } from '../src/solver/theoremKnowledge';
 import { mailsCompletion } from '../apps/web/completionMail';
@@ -307,31 +307,31 @@ describe('web job ownership, scheduling and secret lifetime without provider cal
     expect(runner.calls[1].input.input.apiKey).toBe('');
   });
 
-  it('frees a session\'s 20-record limit by removing finished history while preserving other owners and the queue', async () => {
+  it('frees a session\'s record limit by removing finished history while preserving other owners and the queue', async () => {
     const { jobs, runner } = setup();
     const history = [];
-    for (let index = 0; index < 20; index++) {
+    for (let index = 0; index < webLimits.maxRuns; index++) {
       history.push(jobs.create('alice', { ...input(), task: `History ${index}` }, provider));
       await tick();
       runner.calls[index].finish();
       await tick();
     }
-    expect(jobs.list('alice')).toHaveLength(20);
-    expect(() => jobs.create('alice', input(), provider)).toThrow(/20.*删除已结束.*重试/);
+    expect(jobs.list('alice')).toHaveLength(40);
+    expect(() => jobs.create('alice', input(), provider)).toThrow(/条运行记录.*删除已结束.*重试/);
     const other = jobs.create('bob', input('sk-other-running-secret'), provider);
     await tick();
     expect(jobs.remove('alice', history[0].id)).toBe('deleted');
     const next = jobs.create('alice', input('sk-new-history-secret'), provider);
-    expect(jobs.list('alice')).toHaveLength(20);
+    expect(jobs.list('alice')).toHaveLength(webLimits.maxRuns);
     expect(jobs.list('alice')).not.toContain(history[0]);
     expect(jobs.list('bob')).toEqual([other]);
     expect(next.status).toBe('queued');
-    expect(runner.calls[20].signal.aborted).toBe(false);
-    expect(runner.calls[20].input.input.apiKey).toBe('sk-other-running-secret');
-    runner.calls[20].finish();
+    expect(runner.calls[webLimits.maxRuns].signal.aborted).toBe(false);
+    expect(runner.calls[webLimits.maxRuns].input.input.apiKey).toBe('sk-other-running-secret');
+    runner.calls[webLimits.maxRuns].finish();
     await tick();
-    expect(runner.calls[21].input.id).toBe(next.id);
-    runner.calls[21].finish();
+    expect(runner.calls[webLimits.maxRuns + 1].input.id).toBe(next.id);
+    runner.calls[webLimits.maxRuns + 1].finish();
     await tick();
     expect(next.status).toBe('completed');
     expect(runner.calls.every(call => call.input.input.apiKey === '')).toBe(true);

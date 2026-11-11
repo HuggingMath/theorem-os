@@ -33,6 +33,21 @@ it('retains uncertain submission identity through refresh and credential changes
   expect(await refreshed.prepare({ ...input, task: 'new task' })).not.toBe(id);
   refreshed.clear(); expect(await refreshed.prepare(input)).not.toBe(id);
 });
+it('separates creation identities by owner and surface and protects newer work from a late response', async () => {
+  const raw = storage(), chat = new SubmissionIdentity(raw, 'chat:alice');
+  const input = { original: 'private original', environment: 'standard', effort: 'max', solve: true, apiKey: 'secret' };
+  const first = await chat.prepare(input);
+  expect(new SubmissionIdentity(raw, 'chat:alice').unresolved).toBe(true);
+  expect(await new SubmissionIdentity(raw, 'chat:alice').prepare({ ...input, apiKey: '' })).toBe(first);
+  expect(await new SubmissionIdentity(raw, 'chat:bob').prepare(input)).not.toBe(first);
+  expect(await new SubmissionIdentity(raw, 'formalize:alice').prepare(input)).not.toBe(first);
+  chat.clear();
+  const next = await chat.prepare(input);
+  expect(next).not.toBe(first);
+  chat.clear(first);
+  expect(await new SubmissionIdentity(raw, 'chat:alice').prepare(input)).toBe(next);
+  expect(JSON.stringify([...raw.values.values()])).not.toMatch(/secret|private original/u);
+});
 it('preserves a pending submission created by the previous client digest format', async () => {
   const raw = storage();
   const visible = { task: 'prove t', source: 'theorem t : True := by sorry', model: 'fixture' };

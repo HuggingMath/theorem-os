@@ -84,6 +84,21 @@ describe('bounded web module observations', () => {
     expect(value.modules?.M1).toBeUndefined();
   });
 
+  it('records a checked library application in M2 without exposing its private candidates or accepting the run', () => {
+    const translated = translateWebProgress({ event: 'task_library_application', workerId: 'solver', taskId: 'goal-1',
+      passed: true, status: 'candidate', candidates: [{ name: 'private-declaration' }], receiptIds: ['private-receipt'] });
+    expect(translated).toEqual({ type: 'progress', event: 'task_library_application', message: '已检查库定理的实际应用 · solver',
+      details: { workerId: 'solver', taskId: 'goal-1', passed: true } });
+    expect(parseWorkerMessage(JSON.stringify(translated))).toEqual(translated);
+    const value = run();
+    append(value, translated!.event, translated!.details);
+    expect(value.modules?.M2).toMatchObject({ eventCount: 1, lastEvent: { type: 'task_library_application',
+      details: { workerId: 'solver', taskId: 'goal-1', passed: true } }, activeWorkers: [] });
+    expect(value.status).toBe('running');
+    expect(value.result).toBeUndefined();
+    expect(webModuleSnapshots({ ...value, modules: undefined })).toEqual(value.modules);
+  });
+
   it('ends research intervals at independent evaluation and retains its separate outcome', () => {
     const value = run();
     append(value, 'ready');

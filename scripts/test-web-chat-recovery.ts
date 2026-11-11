@@ -34,7 +34,7 @@ const config = readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_P
   THEOREMOS_WEB_KEY_SECRET: 'a'.repeat(64) });
 let service = createWebService(config, runner, { mailer: async item => { mail.push(item); }, captchaAnswer: () => '24680' });
 const selected = { 'formalize-provider': 'openai', 'formalize-model': 'fixture-chosen-model',
-  'formalize-environment': 'standard', 'formalize-effort': 'low', 'formalize-minutes': '2', 'formalize-tokens': '20000',
+  'formalize-environment': 'mathlib', 'formalize-effort': 'low', 'formalize-minutes': '2', 'formalize-tokens': '20000',
   'research-minutes': '1', 'research-tokens': '15000', 'research-turns': '2' };
 const original = `${webFormalizationStatement}\n\n第二行：保留原题的空白和说明。`;
 async function snapshot() {
@@ -101,6 +101,7 @@ try {
   await page.locator('#formalize-start').click(); await page.locator('.chat-error').waitFor();
   assert.ok(sent?.requestId); assert.equal(sent?.maxRunSeconds, 120); assert.equal(sent?.maxTotalTokens, 20_000);
   assert.deepEqual(sent?.research, { maxRunSeconds: 60, maxTotalTokens: 15_000, maxTurns: 2 });
+  assert.equal(sent?.environment, 'mathlib');
   assert.equal(sent?.humanReview, undefined); assert.equal(sent?.providerId, 'openai'); assert.equal(sent?.model, selected['formalize-model']);
   assert.equal(formalizations.length, 0); await page.unroute('**/api/formalizations', interceptBudget);
   mark('G02: actual refreshed request retains 120s/20k formalization and 60s/15k/2-turn proof limits');
@@ -157,7 +158,7 @@ try {
   await page.locator('#formalize-original').fill(webFormalizationStatement);
   await page.locator('#open-settings').click();
   await openAdvancedChatSettings(page);
-  await page.locator('#formalize-environment').selectOption('standard'); await page.locator('#formalize-key').fill(credential);
+  await page.locator('#formalize-environment').selectOption('mathlib'); await page.locator('#formalize-key').fill(credential);
   let defaultRequestId = '', defaultDropped = false;
   await page.route('**/api/formalizations', async route => {
     if (route.request().method() !== 'POST') return route.continue();

@@ -741,10 +741,11 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     expect(runner.calls[0].value.input.apiKey).toBe('');
   });
 
-  it('accepts a new run after deleting finished history at the 20-record limit without changing another session', async () => {
+  it('accepts a new run after deleting finished history at the record limit without changing another session', async () => {
     const alice = await session();
+    expect(alice.session.limits.maxRuns).toBe(40);
     const history: string[] = [];
-    for (let index = 0; index < 20; index++) {
+    for (let index = 0; index < webLimits.maxRuns; index++) {
       const created = await request('/api/runs', alice, { body: { ...input(), task: `History ${index}` } });
       expect(created.status).toBe(201);
       history.push((await created.json()).run.id);
@@ -754,7 +755,7 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     }
     const full = await request('/api/runs', alice, { body: input() });
     expect(full.status).toBe(429);
-    expect((await full.json()).error).toMatch(/20.*删除已结束.*重试/);
+    expect((await full.json()).error).toMatch(/条运行记录.*删除已结束.*重试/);
     const bob = await session();
     const other = (await (await request('/api/runs', bob, { body: input() })).json()).run;
     await tick();
@@ -766,15 +767,15 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     const next = (await created.json()).run;
     expect(next.status).toBe('queued');
     const remaining = (await (await request('/api/runs', alice)).json()).runs;
-    expect(remaining).toHaveLength(20);
+    expect(remaining).toHaveLength(webLimits.maxRuns);
     expect(remaining.map((run: { id: string }) => run.id)).not.toContain(history[0]);
     expect((await (await request('/api/runs', bob)).json()).runs.map((run: { id: string }) => run.id)).toEqual([other.id]);
-    expect(runner.calls[20].signal.aborted).toBe(false);
-    expect(runner.calls[20].value.input.apiKey).toBe(key);
-    runner.calls[20].finish();
+    expect(runner.calls[webLimits.maxRuns].signal.aborted).toBe(false);
+    expect(runner.calls[webLimits.maxRuns].value.input.apiKey).toBe(key);
+    runner.calls[webLimits.maxRuns].finish();
     await tick();
-    expect(runner.calls[21].value.id).toBe(next.id);
-    runner.calls[21].finish();
+    expect(runner.calls[webLimits.maxRuns + 1].value.id).toBe(next.id);
+    runner.calls[webLimits.maxRuns + 1].finish();
     await tick();
     expect((await (await request(`/api/runs/${next.id}`, alice)).json()).run.status).toBe('completed');
     expect(runner.calls.every(call => call.value.input.apiKey === '')).toBe(true);

@@ -52,6 +52,7 @@ async function open(page: Page, id: string) {
 }
 /** The verdict at the top of the run's 结果 tab. */
 const result = (page: Page) => page.locator('#detail-panel .result-verdict');
+const recovery = (page: Page, action = '') => page.locator(`#detail-panel [data-recovery${action ? `="${action}"` : ''}]`);
 let browser: Awaited<ReturnType<typeof startBrowser>> | undefined;
 try {
   browser = await startBrowser(service.server, port);
@@ -122,10 +123,10 @@ try {
   await settledRun(page, auth.id, run => run.status === 'completed');
   await open(page, auth.id);
   await result(page).locator('h3', { hasText: 'API Key 未通过认证' }).waitFor();
-  assert.equal(await page.locator('[data-recovery]').count(), 1);
+  assert.equal(await recovery(page).count(), 1);
   assert.equal(await result(page).getAttribute('class'), 'result-verdict failed', 'A failure that needs action is not shown as a neutral end');
   await page.screenshot({ path: path.join(output, 'failure-auth-1440.png') });
-  await page.locator('[data-recovery="key"]').click();
+  await recovery(page, 'key').click();
   await page.locator('#run-settings[open]').waitFor();
   await settled(page);
   assert.equal(await page.evaluate(() => document.activeElement?.id), 'api-key');
@@ -137,7 +138,7 @@ try {
   await settledRun(page, time.id, run => run.status === 'completed');
   await open(page, time.id);
   await result(page).locator('h3', { hasText: '已达到解题时间预算' }).waitFor();
-  await page.locator('[data-recovery="budget"]').click();
+  await recovery(page, 'budget').click();
   await page.locator('#run-settings[open]').waitFor();
   await settled(page);
   assert.equal(await page.evaluate(() => document.activeElement?.id), 'max-seconds');
@@ -151,7 +152,7 @@ try {
   await open(page, crash.id);
   await result(page).locator('h3', { hasText: '运行环境出错' }).waitFor();
   assert.doesNotMatch(await result(page).innerText(), /未返回验收结果/u, 'The guide replaces the operator message');
-  assert.equal(await page.locator('[data-recovery="retry"]').count(), 1);
+  assert.equal(await recovery(page, 'retry').count(), 1);
   assert.equal(await page.locator('#detail-panel [data-action="reuse-run"]').count(), 0, 'Retry is the one way to start over inside the result');
   // A failure on our side links to the prefilled public feedback form, which never carries the run or the task.
   const feedback = new URL((await page.locator('#detail-panel [data-feedback-link]').getAttribute('href'))!);

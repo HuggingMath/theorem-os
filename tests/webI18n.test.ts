@@ -90,8 +90,9 @@ describe('server error messages in an English browser', () => {
     expect(localizeMessage('会话已过期，请刷新页面。')).toBe(en['会话已过期，请刷新页面。']);
     expect(localizeMessage('运行队列已满：3 个任务正在运行，12 个在排队。草稿已保留，请等几分钟后再提交。'))
       .toBe('The run queue is full: 3 running, 12 waiting. Your draft was kept; submit again in a few minutes.');
-    expect(localizeMessage('已达到 20 条运行记录的上限。请先下载需要的档案，删除已结束的记录后重试。'))
-      .toBe('You have reached the limit of 20 run records. Download the archives you need, delete finished records and try again.');
+    for (const limit of [20, 40])
+      expect(localizeMessage(`已达到 ${limit} 条运行记录的上限。请先下载需要的档案，删除已结束的记录后重试。`))
+        .toBe(`You have reached the limit of ${limit} run records. Download the archives you need, delete finished records and try again.`);
     expect(localizeMessage('模型服务返回错误（HTTP 502）。')).toBe('The model provider returned an error (HTTP 502).');
     expect(localizeMessage('任务版本已改变，请重新核对。')).toBe('The task version has changed. Review it again.');
     expect(localizeMessage('资产已更新，请刷新后重试。当前版本：12')).toBe('The asset has changed. Refresh and try again. Current revision: 12');

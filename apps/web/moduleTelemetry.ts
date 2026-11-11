@@ -45,7 +45,7 @@ const moduleEvents: Record<WebModuleId, readonly string[]> = {
     'worker_recovering', 'worker_recovered', 'assignment_superseded'],
   M2: ['proof_check_started', 'proof_checked', 'candidate_selected', 'lemma_checked', 'source_rejected', 'source_quarantined',
     'task_checked', 'task_check_reused', 'task_failure_check_reused', 'task_recheck_started', 'task_recheck_finished', 'task_tactic_battery',
-    'task_canonical_probe', 'task_family_assembly', 'task_type_preflight', 'proof_ready_checked',
+    'task_canonical_probe', 'task_family_assembly', 'task_library_application', 'task_type_preflight', 'proof_ready_checked',
     'task_conditional_recheck_started', 'task_conditional_recheck_finished', 'task_recheck_batch_started'],
   M3: ['research_action', 'turn_retry', 'model_budget_stopped', 'planning_budget_stopped', 'route_parked', 'route_reopened', 'routes_idle', 'plan_stalled',
     'route_blocker_recorded', 'goal_path_stalled', 'goal_path_decided', 'blocked_tasks_reconsidered', 'unattempted_frontier_resumed',

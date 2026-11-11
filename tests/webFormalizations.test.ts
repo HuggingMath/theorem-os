@@ -387,12 +387,19 @@ describe('online formalization ownership and evidence handoff', () => {
   it('replays a lost formalization receipt before admission, survives restart, and retains deletion identity', async () => {
     const alice = await client(), bob = await client(), requestId = 'natural-receipt-loss';
     const input = { ...body, requestId, solve: true, humanReview: true };
-    const responses = await Promise.all([request(alice, '/api/formalizations', input), request(alice, '/api/formalizations', input)]);
+    const readiness = runner.readiness.bind(runner);
+    let arrivals = 0, release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    runner.readiness = async () => { if (++arrivals === 2) release(); await gate; return readiness(); };
+    const responses = await Promise.all([request(alice, '/api/formalizations', input), request(alice, '/api/formalizations', input)])
+      .finally(() => { release(); runner.readiness = readiness; });
+    expect(arrivals).toBe(2);
     expect(responses.map(response => response.status).sort()).toEqual([200, 201]);
     const receipts = await Promise.all(responses.map(response => response.json()));
     const value = receipts[0].formalization as WebFormalization;
     expect(receipts[1].formalization.id).toBe(value.id);
     await settle(); expect(runner.inputs).toHaveLength(1);
+    expect(runner.inputs[0]).not.toHaveProperty('requestId');
     expect((await request(alice, '/api/formalizations', { ...input, apiKey: '' })).status).toBe(200);
     expect((await request(alice, '/api/formalizations', { ...input, original: 'Changed statement' })).status).toBe(409);
     expect((await request(bob, `/api/formalizations/${value.id}`)).status).toBe(404);
