@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { readWebConfig, webDefaults } from '../apps/web/config';
 import { DockerWebRunner, parseWorkerMessage, webPrivateImagePaths } from '../apps/web/runner';
-import type { WorkerInput, WorkerMessage } from '../apps/web/shared';
+import type { WorkerExplanationInput, WorkerExplanationMessage, WorkerInput, WorkerMessage } from '../apps/web/shared';
 
 function candidateCheckDocker(reply: { severity?: string; wrongMarker?: boolean; plain?: boolean; exitCode: number }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-target-query-'));
@@ -44,6 +44,58 @@ main().catch(error => { if (error?.fixtureExit) process.exitCode = error.code; e
 }
 
 describe('Docker web runner', () => {
+  it.each(['standard', 'mathlib'] as const)('keeps an unlimited %s explanation running until the user cancels', async environment => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-docker-explanation-'));
+    fs.writeFileSync(path.join(root, 'docker'), `#!${process.execPath}
+const fs = require('node:fs'), path = require('node:path'), root = __dirname, args = process.argv.slice(2);
+fs.appendFileSync(path.join(root, 'calls.jsonl'), JSON.stringify(args) + '\\n');
+async function main() {
+  if (args[0] === 'create') fs.writeFileSync(path.join(root, 'container'), 'running');
+  else if (args[0] === 'start') {
+    for await (const _chunk of process.stdin) {}
+    process.stdout.write(JSON.stringify({ type: 'progress', progress: { phase: 'writing' } }) + '\\n');
+    setInterval(() => {}, 10);
+  } else if (args[0] === 'rm') fs.rmSync(path.join(root, 'container'), { force: true });
+  else process.exit(1);
+}
+main().catch(() => process.exit(1));
+`, { mode: 0o700 });
+    vi.stubEnv('PATH', root);
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const controller = new AbortController();
+    let outcome: Promise<Error | undefined> | undefined;
+    try {
+      const config = readWebConfig({}), request: WorkerExplanationInput = {
+        id: 'unlimited-explanation-fixture', proof: 'theorem goal : True := by trivial', target: 'goal', language: 'zh', environment,
+        model: 'deepseek-flash', effort: 'max', apiKey: 'sk-offline-fixture', provider: config.providers[0],
+        maxRunSeconds: 0, maxTotalTokens: 0, maxRoundsPerBatch: 0, auditors: 2,
+      };
+      let writing!: () => void;
+      const ready = new Promise<void>(resolve => { writing = resolve; }), messages: WorkerExplanationMessage[] = [];
+      outcome = new DockerWebRunner(config).explain(request, message => {
+        messages.push(message); if (message.type === 'progress') writing();
+      }, controller.signal).then(() => undefined, error => error as Error);
+      await Promise.race([ready, outcome.then(() => { throw new Error('fixture_stopped_before_writing'); })]);
+      await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1_000);
+      expect(fs.existsSync(path.join(root, 'container'))).toBe(true);
+      expect(fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8')).not.toContain('"rm"');
+      controller.abort();
+      expect((await outcome)?.message).toBe('explanation_cancelled');
+      expect(messages).toEqual([{ type: 'progress', progress: { phase: 'writing' } }]);
+      expect(fs.existsSync(path.join(root, 'container'))).toBe(false);
+      const calls = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]);
+      expect(calls.map(args => args[0])).toEqual(['create', 'start', 'rm']);
+      expect(calls[0]!.slice(-3)).toEqual([config.workerImage, environment, 'explain']);
+      expect(calls[0]).toContain(`--memory=${environment === 'mathlib' ? '12g' : '4g'}`);
+      expect(calls[0]!.includes('--device=/dev/fuse:/dev/fuse:rw')).toBe(environment === 'mathlib');
+      expect(calls[2]).toEqual(['rm', '--force', '--volumes', `theoremos-explain-${request.id}`]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      controller.abort(); await outcome;
+      vi.useRealTimers(); vi.unstubAllEnvs(); fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { decision: 'approve', maxRunSeconds: 1, planApproval: true },
     { decision: 'cancel', maxRunSeconds: 1, planApproval: true },
@@ -160,7 +212,7 @@ main().catch(() => process.exit(1));
       expect(received).toEqual(request);
       expect(received).toMatchObject({
         provider: { id: 'sub2api', baseUrl: 'http://host.docker.internal:8080/v1' },
-        input: { model: 'deepseek-flash', effort: 'max' },
+        input: { model: 'deepseek-flash', effort: 'high' },
       });
       const metadata = JSON.parse(fs.readFileSync(path.join(root, 'metadata.json'), 'utf8'));
       expect(metadata).toEqual({ apiKeyInEnvironment: false });
