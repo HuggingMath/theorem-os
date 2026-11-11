@@ -19,6 +19,33 @@ const envelope = (value: TaskDraft = draft(), reason = 'template') => ({
 });
 
 describe('one recoverable draft replacement', () => {
+  it('restores project budget, shared provenance and fixed libraries as one recoverable context', () => {
+    const saved = storage(), recovery = new DraftRecovery(() => saved);
+    const original = draft({ problemBudget: { runId: 'a'.repeat(36), projectId: 'project-one' },
+      sharedProofOrigin: { readingId: 'shared-one', title: 'Source proof', digest: 'b'.repeat(64) },
+      libraryProposalOrigin: { projectId: 'project-one', feedbackId: 'feedback-one', trialDigest: 'c'.repeat(64) } });
+    const libraries = [{ assetId: 'library-one', version: 'v1', digest: 'd'.repeat(64) }];
+    recovery.remember(original, draft({ task: 'A different problem' }), 'reuse', libraries);
+    libraries[0].version = 'mutated'; original.problemBudget!.projectId = 'mutated';
+    const reloaded = new DraftRecovery(() => saved); reloaded.load();
+    expect(reloaded.current?.draft.problemBudget?.projectId).toBe('project-one');
+    expect(reloaded.current?.draft.sharedProofOrigin?.readingId).toBe('shared-one');
+    expect(reloaded.current?.draft.libraryProposalOrigin?.feedbackId).toBe('feedback-one');
+    expect(reloaded.current?.libraries).toEqual([{ assetId: 'library-one', version: 'v1', digest: 'd'.repeat(64) }]);
+    reloaded.current!.libraries![0].version = 'also-mutated';
+    expect(reloaded.current?.libraries?.[0].version).toBe('v1');
+  });
+  it('retains an explicit empty selection so Undo can clear the replacement problem’s libraries', () => {
+    const saved = storage(), recovery = new DraftRecovery(() => saved);
+    recovery.remember(draft(), draft({ task: 'New problem with a library' }), 'reuse', []);
+    const reloaded = new DraftRecovery(() => saved); reloaded.load();
+    expect(reloaded.current?.libraries).toEqual([]);
+  });
+  it('rejects malformed persisted dependency identities instead of silently removing them', () => {
+    const saved = storage(), recovery = new DraftRecovery(() => saved);
+    saved.values.set(draftRecoveryStorageKey, JSON.stringify({ ...envelope(), libraries: [{ assetId: '../foreign', version: 'v1' }] }));
+    recovery.load(); expect(recovery.current).toBeUndefined();
+  });
   it('restores the confirmed formalization reference along with the unchanged source', () => {
     const saved = storage(), recovery = new DraftRecovery(() => saved);
     const original = draft({ formalization: { id: 'd5a5c217-b5a4-4600-9aae-97846e615ab2', evidenceSha256: 'a'.repeat(64) } });

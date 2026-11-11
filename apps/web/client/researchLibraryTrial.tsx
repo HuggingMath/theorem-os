@@ -115,7 +115,7 @@ function TrialForm({ release, owner }: { release: ResearchAssetRelease; owner: s
           expectedDigest: draft.digest, confirmed: true,
         }, result => setPrepared({ input, item: result.item }))}>{check.busy ? tx('正在独立检查…', 'Checking independently…') : tx('确认并独立检查', 'Confirm and check independently')}</button></>}
       <MutationState action={check} />{draft.check && <TrialReceipt trial={draft} />}
-      {draft.status === 'passed' && <><PersonalTrialAttempt key={`personal:${draft.digest}`} trial={draft} /><LibraryTrialProposal key={draft.digest} trial={draft} /></>}
+      {draft.status === 'passed' && <><PersonalTrialAttempt key={`personal:${draft.digest}`} trial={draft} /><LibraryTrialProposal key={draft.digest} trial={draft} owner={owner} /></>}
       <p class="research-field-note">{tx('试用只检查这份候选目标。原研究的题目、源码、任务状态和完整验收结果均保留原记录。', 'This trial checks the candidate goal. The original problem, source, task status and full acceptance records remain as recorded.')}</p>
     </section>}
   </details></>;

@@ -23,6 +23,7 @@ export function leanProblemDraft(value: TaskDraft, libraries?: ResearchReleaseRe
     ...(value.knowledgeDigest !== undefined ? { knowledgeDigest: value.knowledgeDigest } : {}),
     ...(value.sharedProofOrigin ? { sharedProofOrigin: { ...value.sharedProofOrigin } } : {}),
     ...(value.classicOrigin ? { classicOrigin: { ...value.classicOrigin } } : {}),
+    ...(value.libraryProposalOrigin ? { libraryProposalOrigin: { ...value.libraryProposalOrigin } } : {}),
   };
   return { mode: 'lean', draft, ...(libraries?.length ? { libraries: libraries.map(({ assetId, version, digest }) => ({ assetId, version, ...(digest ? { digest } : {}) })) } : {}) };
 }

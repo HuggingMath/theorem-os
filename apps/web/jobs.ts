@@ -468,6 +468,7 @@ export class WebJobs {
       this.event(job.run, 'preparing', '正在准备独立运行环境');
       // Project provenance remains on the visible run; preserve the input object whose key is cleared on cancellation and completion.
       delete job.input.budgetOrigin;
+      delete job.input.libraryProposalOrigin;
       await this.runner.run({ id: job.run.id, input: job.input, provider: job.provider,
         ...(job.researchConfiguration ? { researchConfiguration: job.researchConfiguration } : {}),
         ...(job.formalization ? { formalization: job.formalization } : {}),

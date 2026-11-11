@@ -411,6 +411,7 @@ export class WebResearchApi {
         return { status: 200, body: { ...result, ...(result.feedback ? { feedback: await this.dispatch(viewer, id, result.feedback) } : {}) } };
       }
       if (action === 'library-proposals' && ref && subaction === 'prepare' && method === 'GET') return item(this.libraryTrials.prepareAttempt(viewer, id, ref));
+      if (action === 'library-proposals' && ref && subaction === 'attempts' && method === 'POST') return item(this.libraryTrials.attachProposalAttempt(viewer, id, ref, await body()));
       if (action === 'runs' && ref) {
         if (method === 'POST' && ['guidance', 'edits', 'plan-approval'].includes(subaction)) {
           const permission = subaction === 'guidance' ? 'guidance' : subaction === 'edits' ? 'edit' : 'approve';
@@ -454,7 +455,7 @@ export class WebResearchApi {
           this.projects.syncRunObservation(viewer, id, ref);
           // Cross-account research reads expose this run's work only, without account-level resource handles.
           const { researchConfiguration: _configuration, continueFrom: _continuation, knowledgeDigest: _knowledge, archives: _archives,
-            knowledgeCatalogDigest: _catalog, formalizationId: _formalization, budgetOrigin: _budgetOrigin, ...run } = resolved.run;
+            knowledgeCatalogDigest: _catalog, formalizationId: _formalization, budgetOrigin: _budgetOrigin, libraryProposalOrigin: _libraryOrigin, ...run } = resolved.run;
           if (run.observation) run.observation = this.observationView(viewer, id, run.observation);
           if (subaction === 'observation') return { status: 200, body: { run, observation: run.observation ?? null } };
           if (!subaction) return { status: 200, body: { run } };
@@ -479,6 +480,9 @@ export class WebResearchApi {
       }
     }
     return fail(404, '研究接口不存在。');
+  }
+  validateLibraryProposalOrigin(viewer: string, origin: import('./researchLibraryProposalOrigin').ResearchLibraryProposalOrigin) {
+    return this.libraryTrials.validateProposalOrigin(viewer, origin);
   }
   async close() { this.controller.abort(); await this.libraryTrials.close(); await this.assets.close(); await Promise.allSettled([...this.pendingProofs.values()]); }
 }

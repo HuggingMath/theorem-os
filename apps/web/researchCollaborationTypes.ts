@@ -3,8 +3,10 @@ import type { ResearchStageReference } from './researchProblemTypes';
 
 export type ResearchInvitation = {
   id: string; projectId: string; kind: 'invitation' | 'application'; author: ResearchAuthor; recipient: ResearchAuthor;
-  role: ResearchMemberRole; note: string; status: 'pending' | 'accepted' | 'declined' | 'cancelled';
+  role: ResearchMemberRole; note: string; status: 'pending' | 'accepted' | 'declined' | 'cancelled' | 'joined';
   revision: number; createdAt: string; updatedAt: string;
+  /** Read projection of the member's effective role; the original invitation role stays unchanged. */
+  currentMemberRole?: ResearchMemberRole;
 };
 /** The capability is returned only to the project owner; one link admits one colleague. */
 export type ResearchInvitationLink = {

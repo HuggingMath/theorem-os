@@ -1,6 +1,7 @@
 import type { ResearchModulePlan, ResearchModuleSlot } from '../../src/solver/modules/policy';
 import type { WebObservation, WebArchive } from './collaboration';
 import type { WebFormalizationBackgroundReview } from './formalizationTypes';
+import type { ResearchLibraryProposalOrigin } from './researchLibraryProposalOrigin';
 
 export type WebEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type WebCoordination = 'cooperative' | 'independent';
@@ -69,6 +70,7 @@ export type WebRunInput = {
   /** References only. The server resolves and freezes all contents before starting work. */
   researchSelection?: import('./researchAssetTypes').ResearchConfigurationSelection;
   budgetOrigin?: WebProjectBudgetOrigin;
+  libraryProposalOrigin?: ResearchLibraryProposalOrigin;
 };
 /**
  * A version recorded in one of the account's runs that a new run starts from: its code reaches every Agent as an
@@ -151,6 +153,7 @@ export type WebRun = {
   moduleConfiguration?: WebFrozenModuleConfiguration;
   researchConfiguration?: import('./researchAssetTypes').FrozenResearchConfiguration;
   budgetOrigin?: WebProjectBudgetOrigin;
+  libraryProposalOrigin?: ResearchLibraryProposalOrigin;
   events: WebEvent[];
   /** How many Agent actions are stored (read them from /actions) and how many arrived past the per-run limit. */
   actions?: { count: number; dropped?: number };

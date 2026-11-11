@@ -3,6 +3,7 @@ import { webLimits } from '../shared';
 import { researchModulePlanDraftSchema, type ResearchModulePlan } from '../../../src/solver/modules/policy';
 import { t } from '../i18n';
 import type { ClassicOrigin } from './classicPreparation';
+import type { ResearchLibraryProposalOrigin } from '../researchLibraryProposalOrigin';
 
 export const taskDraftSchema = 'theorem-os.web-draft.v1';
 export const taskDraftStorageKey = 'theorem-os.web-draft.v1';
@@ -32,6 +33,7 @@ export type TaskDraft = {
   /** Recipient-owned reading reference, never the author's private run or the share capability. */
   sharedProofOrigin?: { readingId: string; title: string; digest: string };
   classicOrigin?: ClassicOrigin;
+  libraryProposalOrigin?: ResearchLibraryProposalOrigin;
 };
 
 const archiveSchemas = ['theorem-os.web-export.v1', 'theorem-os.web-archive.v1'];
@@ -106,6 +108,12 @@ function validatedDraft(value: unknown): TaskDraft {
   let problemBudget: TaskDraft['problemBudget'];
   let sharedProofOrigin: TaskDraft['sharedProofOrigin'];
   let classicOrigin: TaskDraft['classicOrigin'];
+  let libraryProposalOrigin: TaskDraft['libraryProposalOrigin'];
+  if (Object.hasOwn(draft, 'libraryProposalOrigin')) {
+    const origin = object(draft.libraryProposalOrigin), projectId = text(origin, 'projectId', 128), feedbackId = text(origin, 'feedbackId', 128), trialDigest = text(origin, 'trialDigest', 64);
+    if (!/^[A-Za-z0-9_-]{1,128}$/u.test(projectId) || !/^[A-Za-z0-9_-]{1,128}$/u.test(feedbackId) || !/^[a-f0-9]{64}$/u.test(trialDigest)) invalid();
+    libraryProposalOrigin = { projectId, feedbackId, trialDigest };
+  }
   if (Object.hasOwn(draft, 'classicOrigin')) {
     const origin = object(draft.classicOrigin), id = text(origin, 'id', 128), title = text(origin, 'title', 500), sourceSha256 = text(origin, 'sourceSha256', 64);
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(id) || !title.trim() || /\p{Cc}/u.test(title) || !/^[a-f0-9]{64}$/u.test(sourceSha256)) invalid();
@@ -145,6 +153,7 @@ function validatedDraft(value: unknown): TaskDraft {
     ...(problemBudget ? { problemBudget } : {}),
     ...(sharedProofOrigin ? { sharedProofOrigin } : {}),
     ...(classicOrigin ? { classicOrigin } : {}),
+    ...(libraryProposalOrigin ? { libraryProposalOrigin } : {}),
   };
 }
 

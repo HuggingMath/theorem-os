@@ -9,6 +9,7 @@ import type { TaskDraft } from '../apps/web/client/draft';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRunInput } from '../apps/web/shared';
+import { webLimits } from '../apps/web/shared';
 import { closeDialog, closeSettings, discardSourceEditor, fillConfig, fitViewport, newResearch, openSettings, selectConfig, selectHistoryRun, showChat, withSettings, showArtifacts, showExamples } from './web-ui-controls';
 import { freePort, postRun, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport, ready, runtimeWrite } from './web-scenario';
 
@@ -95,7 +96,7 @@ async function recovery(page: Page): Promise<Recovery | null> {
 }
 async function assertBackup(page: Page, expected: TaskDraft, reason: string) {
   await page.locator('#draft-recovery').waitFor({ state: 'visible' });
-  assert.deepEqual(await recovery(page), { schema: recoveryKey, reason, task: { schema: draftKey, draft: expected } });
+  assert.deepEqual(await recovery(page), { schema: recoveryKey, reason, task: { schema: draftKey, draft: expected }, libraries: [] });
   assert.equal(await page.locator('#draft-recovery-local').isVisible(), false);
 }
 async function privateStorage(page: Page) {
@@ -411,7 +412,7 @@ try {
 
   await scenario('An oversized unfinished draft remains recoverable without writing an invalid backup', async h => {
     const { page } = h; await open(h);
-    const oversized = { ...original, source: `${original.source}${'x'.repeat(32 * 1024)}` };
+    const oversized = { ...original, source: `${original.source}${'x'.repeat(webLimits.maxSourceBytes + 1)}` };
     await cleanDraft(page, oversized); await fillConfig(page, 'api-key', credential);
     await newResearch(page); await page.locator('#draft-recovery-local').waitFor({ state: 'visible' });
     assert.equal(await recovery(page), null);

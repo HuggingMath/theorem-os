@@ -4,6 +4,7 @@ import type { ResearchProblem } from '../researchProblemTypes';
 import { formatTokens } from '../presentation';
 import { base, enc, ErrorBox, MutationState, Panel, tx, useMutation, useResource, type Item } from './researchShared';
 import { ResearchBudgetContinuity } from './researchBudgetContinuity';
+import { budgetEditorState, completeBudgetSave, readBudgetIntoEditor } from './researchBudgetEditor';
 
 export function ResearchBudgetFacts({ value }: { value: ResearchBudgetView }) {
   const { plan, forecast } = value;
@@ -31,21 +32,29 @@ export function ResearchProblemBudget({ problem }: { problem: Pick<ResearchProbl
   const endpoint = `${base}/workspace/problem/${enc(runId)}/budget${projectId ? `?project=${enc(projectId)}` : ''}`;
   const [next, setNext] = useState('100000'), tokens = Number(next), valid = Number.isSafeInteger(tokens) && tokens >= 10_000 && tokens <= 1e12;
   const data = useResource<Item<ResearchBudgetView>>(`${endpoint}${projectId ? '&' : '?'}tokens=${valid ? tokens : 0}`, 15_000), value = data.data?.item;
-  const [tokenLimit, setTokenLimit] = useState(''), [amount, setAmount] = useState(''), [currency, setCurrency] = useState<'CNY' | 'USD'>('CNY');
-  const [editing, setEditing] = useState(false), [expected, setExpected] = useState(0), action = useMutation();
-  useEffect(() => { if (value && !editing) { setTokenLimit(value.plan.tokenLimit === null ? '' : String(value.plan.tokenLimit)); setAmount(value.plan.amountLimit === null ? '' : String(value.plan.amountLimit)); setCurrency(value.plan.currency); setExpected(value.plan.revision); } }, [value?.plan.revision, editing]);
+  const [editor, setEditor] = useState(budgetEditorState), action = useMutation();
+  const { tokenLimit, amount, currency, editing, expectedRevision: expected } = editor;
+  useEffect(() => { if (value) setEditor(current => readBudgetIntoEditor(current, value.plan)); }, [value?.plan.revision, editing]);
   const ready = (tokenLimit === '' || Number.isSafeInteger(Number(tokenLimit)) && Number(tokenLimit) >= 0)
     && (amount === '' || Number.isFinite(Number(amount)) && Number(amount) >= 0);
   return <Panel title={tx('整道题的预算', 'Budget for the whole problem')}>
     <ErrorBox message={data.error} />{data.error && <button class="button" type="button" onClick={data.refresh}>{tx('重新读取', 'Try again')}</button>}
     {value && <><ResearchBudgetFacts value={value} /><ResearchBudgetContinuity value={value} endpoint={endpoint} onResolved={data.refresh} /><details data-budget-editor hidden={value.continuity?.status === 'conflict'}><summary>{tx('设置题目预算', 'Set a problem budget')}</summary>
-      <form class="research-form" onSubmit={event => { event.preventDefault(); if (!ready) return; void action.run<Item<ResearchBudgetView>>('PUT', endpoint,
-        { expectedRevision: expected, tokenLimit: tokenLimit === '' ? null : Number(tokenLimit), amountLimit: amount === '' ? null : Number(amount), currency }, () => { setEditing(false); data.refresh(); }); }}>
-        <div class="research-form-row"><label>{tx('整题 Token 预算（可留空）', 'Problem token budget (optional)')}<input type="number" data-budget-token-limit value={tokenLimit} min="0" max="1000000000000" step="1" onInput={event => { setEditing(true); setTokenLimit(event.currentTarget.value); }} /></label>
-          <label>{tx('整题金额预算（可留空）', 'Problem cost budget (optional)')}<input type="number" data-budget-amount value={amount} min="0" max="1000000000" step="any" onInput={event => { setEditing(true); setAmount(event.currentTarget.value); }} /></label>
-          <label>{tx('币种', 'Currency')}<select value={currency} onChange={event => { setEditing(true); setCurrency(event.currentTarget.value as 'CNY' | 'USD'); }}><option>CNY</option><option>USD</option></select></label></div>
-        {editing && expected !== value.plan.revision && <p role="status">{tx('预算已在其他设备更新，输入已保留。', 'The budget changed on another device. Your inputs are preserved.')} <button class="text-button" type="button" onClick={() => setExpected(value.plan.revision)}>{tx('核对后使用最新版本', 'Use the latest version after review')}</button></p>}
-        <button class="button" type="submit" data-save-problem-budget disabled={!ready || action.busy || expected !== value.plan.revision}>{tx('保存题目预算', 'Save problem budget')}</button><MutationState action={action} />
+      <form class="research-form" onSubmit={event => { event.preventDefault(); if (!ready || action.busy || expected !== value.plan.revision) return;
+        const submitted = editor;
+        void action.run<Item<ResearchBudgetView>>('PUT', endpoint,
+          { expectedRevision: expected, tokenLimit: tokenLimit === '' ? null : Number(tokenLimit), amountLimit: amount === '' ? null : Number(amount), currency }).then(result => {
+          if (result) setEditor(current => completeBudgetSave(current, submitted, result.item.plan));
+          data.refresh();
+        }); }}>
+        <div class="research-form-row"><label>{tx('整题 Token 预算（可留空）', 'Problem token budget (optional)')}<input type="number" data-budget-token-limit value={tokenLimit} min="0" max="1000000000000" step="1" onInput={event => { const tokenLimit = event.currentTarget.value; setEditor(current => ({ ...current, editing: true, tokenLimit })); }} /></label>
+          <label>{tx('整题金额预算（可留空）', 'Problem cost budget (optional)')}<input type="number" data-budget-amount value={amount} min="0" max="1000000000" step="any" onInput={event => { const amount = event.currentTarget.value; setEditor(current => ({ ...current, editing: true, amount })); }} /></label>
+          <label>{tx('币种', 'Currency')}<select value={currency} onChange={event => { const currency = event.currentTarget.value as 'CNY' | 'USD'; setEditor(current => ({ ...current, editing: true, currency })); }}><option>CNY</option><option>USD</option></select></label></div>
+        {editing && !action.busy && <p role="status" data-budget-unsaved>{tx('当前预算修改尚未保存。', 'Your budget edits have not been saved yet.')}</p>}
+        {editing && expected < value.plan.revision && <div role="status" data-budget-revision-conflict><p>{tx('预算已在其他设备更新，输入已保留。', 'The budget changed on another device. Your inputs are preserved.')}</p>
+          <p data-budget-latest-plan>{tx('最新已保存预算', 'Latest saved budget')}: {value.plan.tokenLimit === null ? tx('未设 Token 预算', 'No token budget') : `${formatTokens(value.plan.tokenLimit)} Token`} · {value.plan.amountLimit === null ? tx('未设金额预算', 'No cost budget') : `${value.plan.currency} ${value.plan.amountLimit}`}</p>
+          <button class="text-button" type="button" data-review-budget-revision disabled={action.busy} onClick={() => { action.reset(); setEditor(current => ({ ...current, expectedRevision: value.plan.revision })); }}>{tx('核对后使用最新版本', 'Use the latest version after review')}</button></div>}
+        <button class="button" type="submit" data-save-problem-budget disabled={!ready || action.busy || expected !== value.plan.revision}>{tx('保存题目预算', 'Save problem budget')}</button><MutationState action={{ ...action, message: editing ? '' : action.message }} />
       </form></details>
       <form class="research-form" onSubmit={event => { event.preventDefault(); }}><label>{tx('规划下一次尝试的 Token 上限', 'Plan the next attempt’s token limit')}<input type="number" data-budget-next-tokens value={next} min="10000" step="1" max="1000000000000" onInput={event => setNext(event.currentTarget.value)} /></label>
         <div class="research-actions">{valid && <a class="button" data-prepare-budget-attempt href={`./?${new URLSearchParams({ budgetRun: runId, budgetTokens: String(tokens), ...(projectId ? { project: projectId } : {}) })}`}>{tx('按此预算准备新尝试', 'Prepare a new attempt with this budget')}</a>}

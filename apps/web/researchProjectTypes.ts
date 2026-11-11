@@ -2,6 +2,7 @@
 import type { WebCommand, WebGuidanceInput, WebPlanProposal, WebTaskSource } from './collaboration';
 import type { WebEnvironment, WebPrecheckDiagnostic, WebRunStatus } from './shared';
 import type { ResearchLibraryCandidateAttachment } from './researchLibraryTrialTypes';
+import type { ResearchLibraryProposalOrigin } from './researchLibraryProposalOrigin';
 
 export type ResearchVisibility = 'private' | 'members' | 'public';
 export type ResearchMemberRole = 'collaborator' | 'reader';
@@ -43,6 +44,7 @@ export type ResearchRunBinding = {
   runId: string; statementVersionId: string; owner: ResearchAuthor; exposure: 'members' | 'public';
   grants: ResearchRunGrants; createdAt: string; status: WebRunStatus; title: string;
   permissions: ResearchRunGrants & { read: boolean; manage: boolean };
+  libraryProposalOrigin?: ResearchLibraryProposalOrigin;
 };
 export type ResearchFeedbackTarget = {
   runId: string; statementVersionId: string;

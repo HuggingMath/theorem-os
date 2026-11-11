@@ -430,6 +430,7 @@ let draftRevision = 0;
 let draftTimer: ReturnType<typeof setTimeout> | undefined;
 let latestDraft: TaskDraft | undefined;
 let replacingDraft = false;
+let restoringDraft = false;
 const ownedDrafts = new OwnedDrafts(() => sessionStorage);
 const submissionIdentity = new SubmissionIdentity(ownedDrafts);
 const draftRecovery = new DraftRecovery(() => ownedDrafts);
@@ -445,6 +446,8 @@ function clearOwnedDrafts() {
   document.querySelector('[data-shared-proof-start]')?.remove(); sharedDraftHandled = false;
   document.querySelector('[data-shared-proof-origin]')?.remove(); draftSharedProofOrigin = undefined; sharedProofOriginRead = undefined;
   document.querySelector('[data-classic-origin]')?.remove(); draftClassicOrigin = undefined;
+  document.querySelector('[data-library-proposal-origin]')?.remove(); draftLibraryProposalOrigin = undefined;
+  libraryProposalOriginRead = undefined;
   recoveryEntryHandled = false;
   budgetDraftOrigin = undefined;
   chatWorkspace?.bindOwner('');
@@ -483,7 +486,9 @@ let continuationPreview: ContinuationPreview | undefined;
 let budgetDraftOrigin: { runId: string; projectId?: string; source: string; environment: WebEnvironment } | undefined;
 let draftSharedProofOrigin: TaskDraft['sharedProofOrigin'];
 let draftClassicOrigin: TaskDraft['classicOrigin'];
+let draftLibraryProposalOrigin: TaskDraft['libraryProposalOrigin'];
 let sharedProofOriginRead: { key: string; status: 'loading' | 'available' | 'unavailable' } | undefined;
+let libraryProposalOriginRead: { key: string; status: 'loading' | 'available' | 'unavailable' } | undefined;
 let draftFormalization: (NonNullable<TaskDraft['formalization']> & { source: string; environment: WebEnvironment; original?: string }) | undefined;
 let moduleSettingsPolicy: string | undefined;
 let settingsWorkspaceReturn: { focus?: HTMLElement; preview?: boolean } | undefined;
@@ -893,7 +898,12 @@ function renderComposerSummary() {
   const matchingBudgetOrigin = budgetOrigin && budgetOrigin.source === field('source').value && budgetOrigin.environment === field('environment').value ? budgetOrigin : undefined;
   const budgetTokens = state.session ? tokenCap(field('max-tokens').value, state.session.limits.maxTotalTokens) : undefined;
   renderResearchBudgetDraft(element('#research-budget-draft'), matchingBudgetOrigin
-    ? { runId: matchingBudgetOrigin.runId, projectId: matchingBudgetOrigin.projectId, tokens: budgetTokens ?? 0, providerId: field('provider').value, model: field('model').value.trim() } : undefined, api);
+    ? { runId: matchingBudgetOrigin.runId, projectId: matchingBudgetOrigin.projectId, tokens: budgetTokens ?? 0, providerId: field('provider').value, model: field('model').value.trim() } : undefined, api,
+    matchingBudgetOrigin?.projectId ? () => {
+      if (state.submitting) return;
+      budgetDraftOrigin = { runId: matchingBudgetOrigin.runId, source: field('source').value, environment: field('environment').value as WebEnvironment };
+      draftChanged(); saveDraft();
+    } : undefined);
   renderResearchStartCost(element('#research-run-cost'), state.session && !matchingBudgetOrigin ? { owner: ownerOfSession(state.session), account: Boolean(state.session.account),
     request: api, providerId: field('provider').value, model: field('model').value.trim(), stages: [{ kind: 'proof', tokens: budgetTokens ?? 0 }], locked: state.submitting,
     onSetTokenLimit: () => openSettings('max-tokens') } : undefined);
@@ -1063,7 +1073,8 @@ function captureDraft(): TaskDraft {
       ? { problemBudget: { runId: budgetDraftOrigin.runId, ...(budgetDraftOrigin.projectId ? { projectId: budgetDraftOrigin.projectId } : {}) } } : {}),
     ...(draftFormalization ? { formalization: { id: draftFormalization.id, evidenceSha256: draftFormalization.evidenceSha256 } } : {}),
     ...(draftSharedProofOrigin ? { sharedProofOrigin: { ...draftSharedProofOrigin } } : {}),
-    ...(draftClassicOrigin ? { classicOrigin: { ...draftClassicOrigin } } : {}) };
+    ...(draftClassicOrigin ? { classicOrigin: { ...draftClassicOrigin } } : {}),
+    ...(draftLibraryProposalOrigin ? { libraryProposalOrigin: { ...draftLibraryProposalOrigin } } : {}) };
 }
 function selectedProblemLibraries() {
   const selection = researchSelection.value();
@@ -1107,9 +1118,11 @@ function setDraftStatus(text: string, warning = false) {
 function renderDraftRecovery() {
   const recovery = draftRecovery.current;
   element('#draft-recovery').hidden = !recovery;
-  const button = element<HTMLButtonElement>('#restore-draft-settings');
-  button.hidden = !recovery;
-  button.disabled = state.submitting;
+  for (const id of ['restore-draft', 'restore-draft-settings']) {
+    const button = element<HTMLButtonElement>(`#${id}`);
+    button.hidden = !recovery;
+    button.disabled = state.submitting || restoringDraft;
+  }
   if (!recovery) return;
   const labels: Record<ReplacementReason, string> = {
     template: t('已切换示例'), reset: t('已重置草稿'), reuse: t('已复用任务'), import: t('已载入任务文件'),
@@ -1120,6 +1133,7 @@ function renderDraftRecovery() {
 }
 function replaceDraft(reason: ReplacementReason, change: () => void) {
   const before = latestDraft ?? captureDraft();
+  const libraries = selectedProblemLibraries();
   const track = draftReady && !replacingDraft;
   const nested = replacingDraft;
   replacingDraft = true;
@@ -1129,6 +1143,7 @@ function replaceDraft(reason: ReplacementReason, change: () => void) {
   if (reason !== 'edit' && reason !== 'reuse') budgetDraftOrigin = undefined;
   if (reason !== 'edit') draftFormalization = undefined;
   if (reason !== 'edit') { draftSharedProofOrigin = undefined; renderSharedProofOrigin(); }
+  if (reason !== 'edit') { draftLibraryProposalOrigin = undefined; renderLibraryProposalOrigin(); }
   if (reason !== 'edit') {
     const clearAddress = draftReady || Boolean(draftClassicOrigin);
     draftClassicOrigin = undefined; document.querySelector('[data-classic-origin]')?.remove();
@@ -1136,22 +1151,37 @@ function replaceDraft(reason: ReplacementReason, change: () => void) {
   }
   try { change(); } finally { replacingDraft = nested; }
   if (track) {
-    draftRecovery.remember(before, captureDraft(), reason);
+    draftRecovery.remember(before, captureDraft(), reason, libraries);
     renderDraftRecovery();
   }
 }
-function recoverDraft() {
+async function recoverDraft() {
+  const tx = (zh: string, en: string) => locale === 'en' ? en : zh;
   const recovery = draftRecovery.current;
-  if (!recovery || !state.session || state.submitting) return;
+  if (!recovery || !state.session || state.submitting || restoringDraft) return;
+  const owner = ownerOfSession(state.session), revision = draftRevision, identity = JSON.stringify(recovery);
+  const selectedId = state.selectedId, composing = state.composing, librariesBefore = JSON.stringify(selectedProblemLibraries());
   const fromSettings = element<HTMLDialogElement>('#run-settings').open;
-  draftRecovery.clear();
-  document.querySelector('[data-classic-origin]')?.remove();
-  const address = new URL(location.href); address.searchParams.delete('fromClassic'); history.replaceState(null, '', address);
-  applyTaskDraft(recovery.draft);
-  startDraft(); saveDraft(); renderDraftRecovery();
-  if (fromSettings) openSettings('source');
-  else focusProofInstructions(true);
-  toast(t('已恢复替换前的草稿，请重新填写 API Key'));
+  restoringDraft = true; renderDraftRecovery();
+  try {
+    const selected = recovery.libraries?.length ? await researchSelection.prepare(recovery.libraries, recovery.draft.environment) : undefined;
+    if (!state.session || ownerOfSession(state.session) !== owner || state.submitting || draftRevision !== revision
+      || selectedId !== state.selectedId || composing !== state.composing || librariesBefore !== JSON.stringify(selectedProblemLibraries())
+      || identity !== JSON.stringify(draftRecovery.current)) {
+      toast(tx('核对依赖期间草稿已变化，请重新选择撤销。', 'The draft changed while checking its dependencies. Choose Undo again.')); return;
+    }
+    draftRecovery.clear();
+    document.querySelector('[data-classic-origin]')?.remove();
+    const address = new URL(location.href); address.searchParams.delete('fromClassic'); history.replaceState(null, '', address);
+    applyTaskDraft(recovery.draft);
+    if (recovery.libraries) { if (selected) researchSelection.adopt(selected); else researchSelection.clear(); }
+    startDraft(); draftChanged(); saveDraft();
+    if (fromSettings) openSettings('source');
+    else focusProofInstructions(true);
+    toast(t('已恢复替换前的草稿，请重新填写 API Key'));
+  } catch (error) {
+    toast(tx('暂时无法恢复固定依赖，两份草稿均已保留，请重新撤销。', 'Could not restore the fixed dependencies. Your drafts are preserved; retry Undo. ') + message(error));
+  } finally { restoringDraft = false; renderDraftRecovery(); }
 }
 /** 先审计划 holds the Agents after the Lead's plan, so it needs a Lead and at least one other Agent. */
 const planApprovalAvailable = () => element<HTMLInputElement>('input[name="coordination"]:checked').value === 'cooperative' && Number(field('workers').value) >= 2;
@@ -1193,6 +1223,8 @@ function applyTaskDraft(draft: TaskDraft) {
   continuationPreview = undefined;
   draftSharedProofOrigin = draft.sharedProofOrigin ? { ...draft.sharedProofOrigin } : undefined;
   draftClassicOrigin = draft.classicOrigin ? { ...draft.classicOrigin } : undefined;
+  draftLibraryProposalOrigin = draft.libraryProposalOrigin ? { ...draft.libraryProposalOrigin } : undefined;
+  renderLibraryProposalOrigin();
   if (draftClassicOrigin) showClassicOrigin();
   renderSharedProofOrigin();
   budgetDraftOrigin = draft.problemBudget ? { ...draft.problemBudget, source: draft.source, environment: draft.environment } : undefined;
@@ -2025,6 +2057,7 @@ function renderRunHeader(run: WebRun) {
     sample: isSample(run), ...(stalledMinutes(run) !== undefined ? { stalled: stalledMinutes(run)! } : {}),
     ...(run.formalizationId ? { formalizationId: run.formalizationId } : {}),
     ...(run.budgetOrigin && !isSample(run) ? { budgetAttempt: { run, request: api } } : {}),
+    ...(run.libraryProposalOrigin && !isSample(run) ? { libraryProposalAttempt: { run, request: api } } : {}),
     // The sample's Agents were offline scripts; its recorded token counts would read as a real cost.
     ...(!isSample(run) && runTokens(run) ? { tokens: { used: formatTokens(runTokens(run)!), ...(run.maxTotalTokens ? { cap: formatTokens(run.maxTotalTokens) } : {}) } } : {}),
     ...(approvalProps(run) ? { approval: approvalProps(run)! } : {}),
@@ -2161,6 +2194,7 @@ async function openFormalizedDraft(id: string) {
     if (draftRevision !== revision) throw new Error(t('草稿已变化，未载入形式化原题。请从形式化页面重新打开。'));
     const report = formalization.report;
     const draft: TaskDraft = { ...captureDraft(), source: report.statement, environment: report.environment, templateId: '',
+      problemBudget: undefined, sharedProofOrigin: undefined, classicOrigin: undefined, libraryProposalOrigin: undefined,
       task: t('证明已确认原题中的全部目标，保留所有定义、假设与声明。'),
       formalization: { id: formalization.id, evidenceSha256: report.evidenceSha256 } };
     delete draft.continueFrom;
@@ -2194,7 +2228,9 @@ async function openLibraryProposalDraft() {
       if (!state.session || ownerOfSession(state.session) !== owner || draftRevision !== revision || state.submitting)
         throw new Error(t('草稿已变化，未载入候选。请核对后重新准备。'));
       const draft: TaskDraft = { ...captureDraft(), source: item.source, task: item.task, environment: item.environment,
-        templateId: '', modulePlan: item.modulePlan, formalization: undefined, continueFrom: undefined, problemBudget: undefined };
+        templateId: '', modulePlan: item.modulePlan, formalization: undefined, continueFrom: undefined, problemBudget: undefined,
+        sharedProofOrigin: undefined, classicOrigin: undefined,
+        libraryProposalOrigin: { projectId, feedbackId, trialDigest: item.trialDigest } };
       const contentIssue = submissionIssues(draft, field('api-key').value, state.session).find(issue => issue.field === 'source' || issue.field === 'task');
       if (contentIssue) throw new Error(contentIssue.message);
       replaceDraft('reuse', () => applyTaskDraft(draft));
@@ -2202,11 +2238,54 @@ async function openLibraryProposalDraft() {
       chooseEntry('lean'); startDraft(false, 'replace'); draftChanged(); saveDraft(); renderDraftRecovery();
       notice.textContent = t('候选与固定库版本已载入。核对源码、模型和预算后即可开始研究。');
       panel.dataset.libraryProposalReady = 'true';
+      panel.remove();
     } catch (error) { notice.textContent = message(error); retry.hidden = false; }
     finally { retry.disabled = false; }
   };
   retry.addEventListener('click', () => void prepare());
   await prepare();
+}
+function renderLibraryProposalOrigin() {
+  let panel = document.querySelector<HTMLElement>('[data-library-proposal-origin]');
+  const origin = draftLibraryProposalOrigin;
+  if (!origin) { panel?.remove(); libraryProposalOriginRead = undefined; return; }
+  const tx = (zh: string, en: string) => locale === 'en' ? en : zh;
+  if (!panel) {
+    panel = document.createElement('aside'); panel.className = 'composer-research-selection'; panel.dataset.libraryProposalOrigin = '';
+    element('#run-form').prepend(panel);
+  }
+  const key = JSON.stringify([state.session && ownerOfSession(state.session), origin]);
+  if (libraryProposalOriginRead?.key !== key) {
+    const read = libraryProposalOriginRead = { key, status: 'loading' };
+    void api<{ item: ResearchLibraryAttemptPreparation }>(`/api/research/theorems/${encodeURIComponent(origin.projectId)}/library-proposals/${encodeURIComponent(origin.feedbackId)}/prepare`)
+      .then(({ item }) => {
+        if (libraryProposalOriginRead !== read) return;
+        libraryProposalOriginRead = { key, status: item.trialDigest === origin.trialDigest ? 'available' : 'unavailable' }; renderLibraryProposalOrigin();
+      }).catch(() => {
+        if (libraryProposalOriginRead !== read) return;
+        libraryProposalOriginRead = { key, status: 'unavailable' }; renderLibraryProposalOrigin();
+      });
+  }
+  panel.replaceChildren(); panel.dataset.libraryProposalOriginStatus = libraryProposalOriginRead.status;
+  panel.dataset.libraryProposalReady = String(libraryProposalOriginRead.status === 'available');
+  const text = document.createElement('p');
+  text.textContent = tx('来自已评审的 Library 候选。草稿可继续修改，新尝试会重新检查。', 'Prepared from a reviewed Library candidate. You can edit this draft; the new attempt will be checked again.'); panel.append(text);
+  if (libraryProposalOriginRead.status === 'available') {
+    const back = document.createElement('a'); back.href = `theorems.html?id=${encodeURIComponent(origin.projectId)}#feedback-${encodeURIComponent(origin.feedbackId)}`;
+    back.textContent = tx('查看来源提案', 'View the source proposal'); panel.append(back);
+  } else {
+    const status = document.createElement('p'); status.setAttribute('role', 'status');
+    status.textContent = libraryProposalOriginRead.status === 'loading' ? tx('正在核对提案来源…', 'Checking the source proposal…')
+      : tx('暂时无法打开来源提案，草稿已保留。重试核对后再提交，或另起个人研究。', 'The source proposal is unavailable. Your draft is preserved. Retry the check before submitting, or start an independent personal study.'); panel.append(status);
+    if (libraryProposalOriginRead.status === 'unavailable') {
+      const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'text-button'; retry.dataset.retryLibraryProposalOrigin = '';
+      retry.textContent = tx('重新核对提案来源', 'Check the source proposal again');
+      retry.addEventListener('click', () => { libraryProposalOriginRead = undefined; renderLibraryProposalOrigin(); }); panel.append(retry);
+    }
+  }
+  const detach = document.createElement('button'); detach.type = 'button'; detach.className = 'text-button'; detach.dataset.detachLibraryProposalOrigin = '';
+  detach.textContent = tx('另起独立个人研究', 'Start an independent personal study');
+  detach.addEventListener('click', () => { if (state.submitting) return; draftLibraryProposalOrigin = undefined; renderLibraryProposalOrigin(); draftChanged(); saveDraft(); }); panel.append(detach);
 }
 function renderSharedProofOrigin() {
   let panel = document.querySelector<HTMLElement>('[data-shared-proof-origin]');
@@ -2266,6 +2345,7 @@ async function openSharedProofDraft() {
         throw new Error(t('草稿已变化，未载入分享原题。请核对后重新读取。'));
       const draft: TaskDraft = { ...captureDraft(), source: item.source, task: item.task, environment: item.environment,
         templateId: '', modulePlan: undefined, knowledgeDigest: undefined, formalization: undefined, continueFrom: undefined, problemBudget: undefined,
+        libraryProposalOrigin: undefined, classicOrigin: undefined,
         sharedProofOrigin: { readingId: item.origin.readingId, title: item.origin.title, digest: item.origin.digest } };
       const contentIssue = submissionIssues(draft, field('api-key').value, state.session).find(issue => issue.field === 'source' || issue.field === 'task');
       if (contentIssue) throw new Error(contentIssue.message);
@@ -2314,7 +2394,7 @@ function showClassicOrigin() {
         if (!state.session || ownerOfSession(state.session) !== owner || state.submitting) return;
         const draft: TaskDraft = { ...captureDraft(), source: prepared.source, task: prepared.task, environment: 'mathlib',
           templateId: '', modulePlan: undefined, knowledgeDigest: undefined, formalization: undefined, continueFrom: undefined,
-          problemBudget: undefined, sharedProofOrigin: undefined, classicOrigin: prepared.origin };
+          problemBudget: undefined, sharedProofOrigin: undefined, libraryProposalOrigin: undefined, classicOrigin: prepared.origin };
         replaceDraft('reuse', () => applyTaskDraft(draft)); researchSelection.clear(); formalizationLink = null;
         chooseEntry('lean'); startDraft(false, 'replace'); draftChanged(); saveDraft(); renderDraftRecovery();
       });
@@ -2356,7 +2436,8 @@ async function openLibraryPersonalAttemptDraft() {
       if (!state.session || ownerOfSession(state.session) !== owner || draftRevision !== revision || state.submitting)
         throw new Error(t('草稿已变化，未载入候选。请核对后重新准备。'));
       const draft: TaskDraft = { ...captureDraft(), source: item.source, task: item.task, environment: item.environment,
-        templateId: '', modulePlan: item.modulePlan, formalization: undefined, continueFrom: undefined, problemBudget: undefined };
+        templateId: '', modulePlan: item.modulePlan, formalization: undefined, continueFrom: undefined, problemBudget: undefined,
+        libraryProposalOrigin: undefined, sharedProofOrigin: undefined, classicOrigin: undefined };
       const contentIssue = submissionIssues(draft, field('api-key').value, state.session).find(issue => issue.field === 'source' || issue.field === 'task');
       if (contentIssue) throw new Error(contentIssue.message);
       replaceDraft('reuse', () => applyTaskDraft(draft));
@@ -3016,6 +3097,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
       ...(capturedDraft.knowledgeDigest !== undefined ? { knowledgeDigest: capturedDraft.knowledgeDigest } : {}),
       ...(draftContinuation ? { continueFrom: draftContinuation } : {}),
       ...(capturedDraft.problemBudget?.projectId ? { budgetOrigin: { runId: capturedDraft.problemBudget.runId, projectId: capturedDraft.problemBudget.projectId } } : {}),
+      ...(capturedDraft.libraryProposalOrigin ? { libraryProposalOrigin: capturedDraft.libraryProposalOrigin } : {}),
       ...(draftFormalization ? { formalizationId: draftFormalization.id } : {}),
       ...(researchSelection.value() ? { researchSelection: researchSelection.value() } : {}),
     };
@@ -3341,7 +3423,9 @@ function applyReusedRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 're
   chooseEntry('lean');
   if (recovery === 'key') forgetRememberedKey();
   replaceDraft('reuse', () => {
-    budgetDraftOrigin = { runId: run.id, source: run.source, environment: run.environment };
+    budgetDraftOrigin = { ...(run.budgetOrigin ?? { runId: run.id }), source: run.source, environment: run.environment };
+    draftLibraryProposalOrigin = run.libraryProposalOrigin ? { ...run.libraryProposalOrigin } : undefined;
+    renderLibraryProposalOrigin();
     draftContinuation = from;
     continuationPreview = { title: run.title, runId: run.id, from, originalSeconds: run.maxRunSeconds, originalTurns: run.maxTurns, originalTokens: run.maxTotalTokens };
     draftFormalization = isStatementReviewed(run) && run.formalization?.evidenceSha256 ? { id: run.formalization.id, evidenceSha256: run.formalization.evidenceSha256,

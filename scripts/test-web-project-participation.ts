@@ -93,7 +93,8 @@ async function names(page: Page, ownName?: string) {
   const members = page.locator('#research-members'); await members.getByText('Bob', { exact: true }).waitFor({ timeout: 0 });
   await members.getByText('Carol', { exact: true }).waitFor({ timeout: 0 });
   const content = await members.textContent(); assert.ok(content?.includes('Alice'));
-  assert.ok(!content?.includes('PRIVATE_MEMBER_NAME')); assert.ok(!content?.includes('PRIVATE_MEMBER_BIO'));
+  assert.equal(Boolean(content?.includes('PRIVATE_MEMBER_NAME')), Boolean(ownName), 'Members may see a colleague’s name; public visitors may not');
+  assert.ok(!content?.includes('PRIVATE_MEMBER_BIO'));
   if (ownName) assert.ok(content?.includes(`${ownName} · ${ownName === 'Carol' ? 'Me' : '我'}`));
 }
 async function signIn(value: BrowserContext, email: string) {
@@ -214,10 +215,15 @@ try {
   mark('the no-project path carries its chosen researcher through real login, creation and refresh into the focused member form without adding them');
   const memberReceipt = creator.waitForResponse(response => response.request().method() === 'PUT' &&
     new URL(response.url()).pathname === `/api/research/theorems/${createdId}/members/${carol.profile.id}`, { timeout: 0 });
+  assert.equal(await creator.locator('[data-project-member-form]').getByRole('button', { name: '保存成员', exact: true }).isDisabled(), true);
+  await creator.locator('[data-confirm-member-visibility]').check();
   await creator.locator('[data-project-member-form]').getByRole('button', { name: '保存成员', exact: true }).click();
   assert.equal((await memberReceipt).status(), 200);
   await creator.waitForFunction(() => (document.querySelector('[data-project-member-person]') as HTMLInputElement)?.value === '');
-  assert.deepEqual(service.research.projects.detail(bob.owner, createdId).members, [{ researcherId: carol.profile.id, role: 'collaborator' }]);
+  const createdProject = service.research.projects.detail(bob.owner, createdId);
+  assert.equal(createdProject.visibility, 'members');
+  assert.deepEqual(createdProject.members.map(({ researcherId, role }) => ({ researcherId, role })), [{ researcherId: carol.profile.id, role: 'collaborator' }]);
+  assert.equal(service.research.projects.detail(carol.owner, createdId).permissions.edit, true);
   assert.equal(new URL(creator.url()).searchParams.has('addResearcher'), false);
   mark('only explicit Save member adds the chosen collaborator and clears the completed prefill intent');
   await creatorContext.close();

@@ -380,6 +380,43 @@ describe('Library candidates as reviewed task proposals', () => {
 });
 
 describe('private Library trial history and personal follow-through', () => {
+  it('validates reviewed provenance without claiming that later source edits were approved', async () => {
+    const f = setup(), { shared, trial, feedback } = await proposal(f);
+    const origin = { projectId: shared.id, feedbackId: feedback.id, trialDigest: trial.digest };
+    denied(() => f.trials.validateProposalOrigin(alice, origin), 409);
+    f.projects.candidateDelivery(bob, shared.id, feedback.id, { requestId: 'approve-origin', expectedRevision: feedback.revision, action: 'approve' });
+    expect(f.trials.validateProposalOrigin(alice, origin)).toEqual(origin);
+    denied(() => f.trials.validateProposalOrigin(carol, origin), 404);
+    denied(() => f.trials.validateProposalOrigin(alice, { ...origin, trialDigest: 'f'.repeat(64) }), 409);
+    const current = f.projects.feedback(alice, shared.id, feedback.id);
+    f.projects.candidateDelivery(alice, shared.id, feedback.id, { requestId: 'withdraw-origin', expectedRevision: current.revision, action: 'withdraw' });
+    denied(() => f.trials.validateProposalOrigin(alice, origin), 409);
+  });
+
+  it('shares a personal follow-up only after explicit confirmation, preserving original evidence and restricting grants', async () => {
+    const f = setup(), { shared, trial, feedback } = await proposal(f);
+    f.projects.candidateDelivery(bob, shared.id, feedback.id, { requestId: 'approve-followup', expectedRevision: feedback.revision, action: 'approve' });
+    const before = f.projects.detail(alice, shared.id), source = `${trial.source}\n-- personal revision`;
+    const run = f.jobs.create(alice, { providerId: 'fixture', apiKey: 'sk-disposable-fixture', model: 'fixture', effort: 'high',
+      environment: 'standard', source, task: 'Personal revised proof', maxTurns: 1, maxRunSeconds: 30, workers: 1, coordination: 'independent',
+      libraryProposalOrigin: { projectId: shared.id, feedbackId: feedback.id, trialDigest: trial.digest } }, { id: 'fixture', name: 'Fixture', baseUrl: 'http://127.0.0.1/never-called' });
+    expect(f.storage.getRun(alice, run.id)?.libraryProposalOrigin).toEqual(run.libraryProposalOrigin);
+    expect(f.projects.detail(bob, shared.id).runs.some(item => item.runId === run.id)).toBe(false);
+    const input = { requestId: 'attach-followup', expectedRevision: before.revision, runId: run.id, trialDigest: trial.digest, confirmed: true, createStatementVersion: true };
+    denied(() => f.trials.attachProposalAttempt(alice, shared.id, feedback.id, { ...input, confirmed: false }), 400);
+    denied(() => f.trials.attachProposalAttempt(alice, shared.id, feedback.id, { ...input, createStatementVersion: false }), 409);
+    denied(() => f.trials.attachProposalAttempt(bob, shared.id, feedback.id, input), 404);
+    const attached = f.trials.attachProposalAttempt(alice, shared.id, feedback.id, input);
+    expect(attached.versions).toHaveLength(before.versions.length + 1);
+    expect(attached.versions[0]).toEqual(before.versions[0]);
+    const binding = attached.runs.find(item => item.runId === run.id)!;
+    expect(binding).toMatchObject({ exposure: 'members', grants: { guidance: false, edit: false, approve: false, proof: false }, libraryProposalOrigin: run.libraryProposalOrigin });
+    expect(attached.versions.find(item => item.id === binding.statementVersionId)?.source).toBe(source);
+    expect(f.projects.feedback(alice, shared.id, feedback.id)).toEqual(before.feedback.find(item => item.id === feedback.id));
+    expect(f.projects.detail(bob, shared.id).runs.find(item => item.runId === run.id)?.libraryProposalOrigin).toEqual(run.libraryProposalOrigin);
+    expect(f.trials.attachProposalAttempt(alice, shared.id, feedback.id, input).versions).toHaveLength(attached.versions.length);
+    denied(() => f.projects.detail(carol, shared.id), 404);
+  });
   it('lists saved prepared/passed/failed trials by run, release and state without leaking them across owners', async () => {
     const f = setup(), release = await publish(f), prepared = candidate(f, release, alice, 'prepared').draft;
     const passed = candidate(f, release, alice, 'passed').draft; await f.trials.check(alice, passed.id, checkInput(passed));

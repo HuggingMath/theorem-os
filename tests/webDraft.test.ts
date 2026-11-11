@@ -50,6 +50,14 @@ describe('task draft codecs without credentials or run-result state', () => {
     expect(decodeTaskDraft({ ...archive(), run: { ...archive().run, problemBudget } })).not.toHaveProperty('problemBudget');
     expect(() => decodeTaskDraft(envelope(draft({ problemBudget: { runId: '../../private' } })))).toThrow('任务草稿格式无效');
   });
+  it('keeps the fixed Library proposal source through draft reload without importing a foreign archive source', () => {
+    const libraryProposalOrigin = { projectId: 'project-one', feedbackId: 'feedback-one', trialDigest: 'c'.repeat(64) };
+    const original = draft({ libraryProposalOrigin });
+    expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(original)))).toEqual(original);
+    expect(decodeTaskDraft({ ...archive(), run: { ...archive().run, libraryProposalOrigin } })).not.toHaveProperty('libraryProposalOrigin');
+    expect(() => decodeTaskDraft(envelope(draft({ libraryProposalOrigin: { ...libraryProposalOrigin, trialDigest: 'bad' } })))).toThrow('任务草稿格式无效');
+    expect(() => decodeTaskDraft(envelope(draft({ libraryProposalOrigin: { ...libraryProposalOrigin, projectId: '../foreign' } })))).toThrow('任务草稿格式无效');
+  });
   it('retains exact continuation identities in a locally restored draft', () => {
     const continueFrom = { runId: 'a'.repeat(36), taskId: 'goal', commit: 'b'.repeat(40), label: 'Saved source',
       taskVersion: 'v1', sourceDigest: 'c'.repeat(64), environmentDigest: 'd'.repeat(64), file: 'Main.lean' };

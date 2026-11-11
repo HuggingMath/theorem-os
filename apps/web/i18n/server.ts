@@ -1,6 +1,7 @@
 import { researchExamples } from '../problemExamples';
 /** Text the server stores or sends in Chinese: run events, runtime status, templates, environments, plan validation. */
 export const server: Record<string, string> = {
+  "添加成员前，请确认将题目改为项目成员可见。": "Confirm that the project may become visible to its members before adding a member.",
   ...Object.fromEntries(researchExamples.flatMap(example => [[example.name, example.nameEn], [example.task, example.taskEn]])),
   "Mathlib 数学库": "Mathlib",
   "Lean 标准库": "Lean standard library",
@@ -200,4 +201,10 @@ export const server: Record<string, string> = {
   "必要证明上下文": "Essential proof context",
   "角色分工与交付": "Roles and handoffs",
   "完整原题独立验收": "Independent acceptance of the complete problem",
+  "提案来源与固定试用候选不一致，请重新打开已评审提案。": "The proposal source does not match the fixed trial candidate. Reopen the reviewed proposal.",
+  "这次运行未记录此提案的固定来源。": "This run does not record the fixed source of this proposal.",
+  "原提案或其固定来源当前不可访问。": "The original proposal or its fixed source is currently unavailable.",
+  "来源陈述版本不存在。": "The source statement version does not exist.",
+  "本次源码与现有陈述不同，请确认创建新的陈述版本后再关联。": "This source differs from existing statements. Confirm creating a statement version before attaching the run.",
+  "研究项目已经更新，请刷新后重新核对。": "The project has changed. Refresh it and review again.",
 };

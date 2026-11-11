@@ -582,28 +582,39 @@ function Members({ project, selfId, refresh }: { project: ResearchProjectDetail;
   const directory = useResource<Items<ResearcherProfile>>(project.permissions.manage ? `${base}/people?limit=100` : undefined);
   const requested = new URLSearchParams(location.search).get('addResearcher') ?? '';
   const [person, setPerson] = useState(project.permissions.manage && /^[A-Za-z0-9_-]{1,128}$/u.test(requested) && requested !== project.owner.id ? requested : ''),
-    [role, setRole] = useState('collaborator'), action = useMutation();
+    [role, setRole] = useState('collaborator'), [shareConfirmed, setShareConfirmed] = useState(false), action = useMutation();
   const memberInput = useRef<HTMLInputElement>(null);
+  const needsVisibilityConfirmation = project.visibility === 'private';
+  useEffect(() => setShareConfirmed(false), [project.id, project.revision, project.visibility]);
   useEffect(() => {
     if (!project.permissions.manage || !requested || !person) return;
     const frame = requestAnimationFrame(() => { memberInput.current?.focus({ preventScroll: true }); memberInput.current?.scrollIntoView({ block: 'center' }); });
     return () => cancelAnimationFrame(frame);
   }, []);
-  const write = (id: string, memberRole: string | null) => void action.run('PUT', `${base}/theorems/${enc(project.id)}/members/${enc(id)}`,
-    { role: memberRole, expectedRevision: project.revision }, () => {
+  const write = (id: string, memberRole: string | null) => {
+    if (memberRole && needsVisibilityConfirmation && !shareConfirmed) {
+      action.setError(tx('请先确认将题目改为项目成员可见。', 'Confirm that the project may become visible to its members.')); return;
+    }
+    void action.run('PUT', `${base}/theorems/${enc(project.id)}/members/${enc(id)}`,
+    { role: memberRole, expectedRevision: project.revision, ...(memberRole && needsVisibilityConfirmation ? { confirmMembersVisibility: true } : {}) }, () => {
       if (memberRole !== null && id === person) {
         const next = new URL(location.href); next.searchParams.delete('addResearcher'); history.replaceState(null, '', next); setPerson('');
       }
       refresh();
     });
-  return <><ul class="research-list"><li class="research-list-item"><span class="research-item-title"><a href={personHref(project.owner.id)}>{project.owner.displayName}</a></span><span class="research-item-meta">{tx('发起者', 'Owner')}</span></li>
+  };
+  return <>{project.permissions.manage && needsVisibilityConfirmation && <div data-member-visibility-confirmation>
+    <p>{tx('添加成员时，需要将题目从“仅自己”改为“项目成员”可见。', 'Adding a member will change this project from Private to Members.')}</p>
+    <label class="research-check"><input type="checkbox" data-confirm-member-visibility checked={shareConfirmed} onChange={event => setShareConfirmed(event.currentTarget.checked)} />
+      {tx('我同意让项目成员阅读题目及已向成员共享的内容。', 'I agree that project members may read the project and content shared with members.')}</label>
+  </div>}<ul class="research-list"><li class="research-list-item"><span class="research-item-title"><a href={personHref(project.owner.id)}>{project.owner.displayName}</a></span><span class="research-item-meta">{tx('发起者', 'Owner')}</span></li>
     {project.members.map(member => <li class="research-list-item" key={member.researcherId} data-project-member={member.researcherId}><span class="research-item-title">{member.profileVisible ? <a href={personHref(member.researcherId)}>{member.displayName ?? member.researcherId}</a> : <span>{member.displayName ?? member.researcherId}</span>}{member.researcherId === selfId ? ` · ${tx('我', 'Me')}` : ''}</span>
-      <div class="research-item-meta">{project.permissions.manage ? <label>{tx('角色', 'Role')}<select data-member-role={member.researcherId} value={member.role} disabled={action.busy} onChange={event => write(member.researcherId, event.currentTarget.value)}><option value="collaborator">{tx('协作者', 'Collaborator')}</option><option value="reader">{tx('只读成员', 'Reader')}</option></select></label> : <span>{member.role === 'reader' ? tx('只读成员', 'Reader') : tx('协作者', 'Collaborator')}</span>}{project.permissions.manage && <button class="text-button" type="button" disabled={action.busy} onClick={() => write(member.researcherId, null)}>{tx('移除成员', 'Remove member')}</button>}</div></li>)}</ul>
+      <div class="research-item-meta">{project.permissions.manage ? <label>{tx('角色', 'Role')}<select data-member-role={member.researcherId} value={member.role} disabled={action.busy || needsVisibilityConfirmation && !shareConfirmed} onChange={event => write(member.researcherId, event.currentTarget.value)}><option value="collaborator">{tx('协作者', 'Collaborator')}</option><option value="reader">{tx('只读成员', 'Reader')}</option></select></label> : <span>{member.role === 'reader' ? tx('只读成员', 'Reader') : tx('协作者', 'Collaborator')}</span>}{project.permissions.manage && <button class="text-button" type="button" disabled={action.busy} onClick={() => write(member.researcherId, null)}>{tx('移除成员', 'Remove member')}</button>}</div></li>)}</ul>
     {requested && !project.permissions.manage && <p class="research-status" role="status">{tx('当前账号不能添加成员，请联系项目发起者。', 'This account cannot add members. Contact the project owner.')}</p>}
     {project.permissions.manage && <form class="research-form" data-project-member-form onSubmit={event => { event.preventDefault(); if (person) write(person, role); }}><h3>{tx('添加或调整成员', 'Add or update a member')}</h3>
       <label>{tx('数学家', 'Mathematician')}<input ref={memberInput} data-project-member-person value={person} list="research-people" onInput={event => setPerson(event.currentTarget.value)} required placeholder={tx('选择或填写数学家 ID', 'Choose or enter researcher ID')} /></label>
       <datalist id="research-people">{directory.data?.items.filter(item => item.id !== project.owner.id).map(item => <option key={item.id} value={item.id}>{item.displayName}</option>)}</datalist>
       <label>{tx('角色', 'Role')}<select value={role} onChange={event => setRole(event.currentTarget.value)}><option value="collaborator">{tx('协作者', 'Collaborator')}</option><option value="reader">{tx('只读成员', 'Reader')}</option></select></label>
-      <ErrorBox message={directory.error} /><MutationState action={action} /><button class="button" type="submit" disabled={action.busy}>{tx('保存成员', 'Save member')}</button>
+      <ErrorBox message={directory.error} /><MutationState action={action} /><button class="button" type="submit" disabled={action.busy || needsVisibilityConfirmation && !shareConfirmed}>{tx('保存成员', 'Save member')}</button>
     </form>}</>;
 }

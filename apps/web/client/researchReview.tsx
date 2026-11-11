@@ -4,7 +4,7 @@ import { RichProse } from './richText';
 import { ResearchAnnotations } from './researchAnnotations';
 import { ResearchDraftPicker } from './researchDrafts';
 import { useResearchInputDraft } from './researchInputDraft';
-import { base, enc, Field, MutationState, stamp, tx, useMutation } from './researchShared';
+import { base, enc, Field, MutationState, nameOf, stamp, theoremHref, tx, useMutation } from './researchShared';
 import { projectPeople, projectPersonLabel } from './researchMembers';
 import { reviewerMembersHref } from './researchReviewerNavigation';
 
@@ -27,6 +27,9 @@ export function ResearchReview({ feedback, project, selfId, canReview, refresh, 
   const canJudge = canReview && feedback.author.id !== selfId && (!previousReviewer || previousReviewer.id === selfId || project.permissions.manage);
   const needsNewCandidate = Boolean(feedback.reviewContinuation);
   const newAttempt = feedback.payload && 'libraryTrial' in feedback.payload && feedback.payload.libraryTrial?.requiresNewAttempt;
+  const trialDigest = feedback.payload && 'libraryTrial' in feedback.payload ? feedback.payload.libraryTrial?.trial.digest : undefined;
+  const relatedAttempts = trialDigest ? project.runs.filter(run => run.libraryProposalOrigin?.feedbackId === feedback.id
+    && run.libraryProposalOrigin.trialDigest === trialDigest) : [];
   const canPrepareAttempt = newAttempt && canReview && feedback.proofCheck?.status === 'checked' && !feedback.supersededBy && feedback.continuation?.action !== 'end'
     && !['declined', 'needs-info'].includes(feedback.decision.status) && feedback.candidateDelivery?.status !== 'withdrawn'
     && (feedback.candidateDelivery?.approvedAt && feedback.candidateDelivery.approvedBy && ['approved', 'dispatched'].includes(feedback.candidateDelivery.status)
@@ -46,6 +49,11 @@ export function ResearchReview({ feedback, project, selfId, canReview, refresh, 
       {['checking', 'awaiting-review', 'approved'].includes(feedback.candidateDelivery.status) && (feedback.author.id === selfId || project.permissions.manage) && <button class="text-button" type="button" data-candidate-withdraw disabled={action.busy} onClick={() => void action.run('POST', `${base}/theorems/${enc(project.id)}/feedback/${enc(feedback.id)}/candidate-delivery`, { action: 'withdraw', expectedRevision: feedback.revision }, refresh)}>{tx('撤回投递', 'Withdraw delivery')}</button>}
       {canPrepareAttempt && <a class="button" data-prepare-library-attempt href={`./?libraryProposal=${enc(feedback.id)}&project=${enc(project.id)}`}>{tx('带入完整源码与固定库，准备新尝试', 'Prepare a new attempt with the complete source and fixed library')}</a>}
     </div>}
+    {Boolean(relatedAttempts.length) && <section data-library-proposal-followups>
+      <h4>{tx('已关联的后续尝试', 'Attached follow-up attempts')}</h4>
+      <p>{tx('这些运行由成员确认共享。提案来源用于追溯，修改后的证明与完整题目结果需查看各次独立检查。', 'Members confirmed sharing these runs. Proposal provenance records the starting point; check each run for its revised proof and full-problem result.')}</p>
+      <ul class="research-list">{relatedAttempts.map(run => <li key={run.runId}><a data-library-proposal-followup={run.runId} href={theoremHref(project.id, run.runId, { statementVersionId: run.statementVersionId })}>{run.title} · {nameOf(run.status)}</a></li>)}</ul>
+    </section>}
     <p>{assigned ? <>{tx('负责评审：', 'Responsible reviewer: ')}<strong>{assigned.displayName}</strong></> : tx('尚未指定评审人', 'No reviewer assigned')}
       {!assigned && canReview && feedback.author.id !== selfId && <button type="button" class="button" data-claim-review disabled={action.busy} onClick={() => void action.run('POST', path, { action: 'claim', expectedRevision: feedback.revision }, refresh)}>{tx('由我评审', 'Review this myself')}</button>}</p>
     {previousReviewer && !assigned && <p class="research-status" data-reviewer-unavailable>{tx(`原评审人 ${previousReviewer.displayName} 已无评审权限，需要重新指定。`, `${previousReviewer.displayName} no longer has review permission. Assign a new reviewer.`)}</p>}

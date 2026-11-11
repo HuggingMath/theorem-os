@@ -46,6 +46,7 @@ import { combineWebLibraryPacks } from './formalizationSeed';
 import { selectWebLibraryPack } from './frozenLibrary';
 import type { ResearchConfigurationSelection, ResearchLibraryPack } from './researchAssetTypes';
 import { canonicalMathJson, mathDigest } from '../../src/math/mathRuntimeIo';
+import { researchLibraryProposalOriginSchema } from './researchLibraryProposalOrigin';
 
 const inputSchema = z.object({
   requestId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u).optional(),
@@ -64,6 +65,7 @@ const inputSchema = z.object({
   planApproval: z.boolean().optional(),
   modulePlan: researchModulePlanSchema.optional(),
   researchSelection: researchSelectionSchema.optional(),
+  libraryProposalOrigin: researchLibraryProposalOriginSchema.optional(),
   budgetOrigin: z.object({ runId: z.string().uuid(), projectId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u) }).strict().optional(),
   knowledgeDigest: z.string().regex(/^[a-f0-9]{64}$/u).nullable().optional(),
   formalizationId: z.string().uuid().optional(),
@@ -917,6 +919,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
               ? { keySaveFailed: true } : {}) } : {};
           const previous = jobs.replay(owner, input as WebRunInput, provider, requestId);
           if (previous) { json(response, 200, { run: previous, ...submissionKeys() }); return; }
+          if (input.libraryProposalOrigin) research.validateLibraryProposalOrigin(owner, input.libraryProposalOrigin);
           if (input.budgetOrigin) {
             const origin = research.projects.resolveBinding(owner, input.budgetOrigin.projectId, input.budgetOrigin.runId);
             if (origin.run.source !== input.source || origin.run.environment !== input.environment)

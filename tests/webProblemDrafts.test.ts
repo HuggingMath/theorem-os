@@ -108,6 +108,17 @@ describe('unsubmitted account problem drafts', () => {
     expect(personal.draft(alice, saved.draft.id).version.value).toMatchObject({ mode: 'lean', draft: { source, classicOrigin: origin } });
     expect(() => personal.draft(bob, saved.draft.id)).toThrow('不存在');
   });
+  it('preserves a fixed Library proposal reference without carrying approval or execution state', () => {
+    const { personal } = fixture();
+    const origin = { projectId: 'project-one', feedbackId: 'feedback-one', trialDigest: 'c'.repeat(64) };
+    const value = leanProblemDraft({ ...lean, libraryProposalOrigin: origin });
+    const saved = personal.saveDraft(alice, input('proposal-problem', value));
+    expect(personal.draft(alice, saved.draft.id).version.value).toMatchObject({ mode: 'lean', draft: { libraryProposalOrigin: origin } });
+    for (const patch of [{ trialDigest: 'bad' }, { projectId: '../foreign' }, { approved: true }]) {
+      expect(() => personal.saveDraft(alice, input('invalid-proposal', { ...value, draft: { ...value.draft, libraryProposalOrigin: { ...origin, ...patch } } }))).toThrow('请求格式无效');
+    }
+    expect(() => personal.draft(bob, saved.draft.id)).toThrow('不存在');
+  });
 });
 
 

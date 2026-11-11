@@ -18,6 +18,7 @@ import { WebStorage, WebStorageError } from './storage';
 import { selectWebLibraryPack } from './frozenLibrary';
 import { researchCandidateScopeReason } from './researchCandidateScope';
 import { leanDiagnostics } from './precheck';
+import { researchLibraryProposalOriginSchema, type ResearchLibraryProposalOrigin } from './researchLibraryProposalOrigin';
 
 const key = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u), version = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u);
 const hash = z.string().regex(/^[a-f0-9]{64}$/u), text = (max: number, min = 0) => z.string().min(min).max(max).refine(value => !value.includes('\0'));
@@ -299,6 +300,43 @@ export class WebResearchLibraryTrials {
       fail(409, '只有这份已通过独立检查的固定候选可以准备个人新尝试。');
     return { trialId: id, originRunId: run.id, ...this.attemptConfiguration(viewer, run, trial, trial.source, stored.libraryPack as ResearchLibraryPack, stored.dependencySources) };
   }
+  validateProposalOrigin(viewer: string, raw: ResearchLibraryProposalOrigin): ResearchLibraryProposalOrigin {
+    const origin = parse(researchLibraryProposalOriginSchema, raw);
+    const prepared = this.prepareAttempt(viewer, origin.projectId, origin.feedbackId);
+    if (prepared.trialDigest !== origin.trialDigest) fail(409, '提案来源与固定试用候选不一致，请重新打开已评审提案。');
+    return origin;
+  }
+  /** Sharing remains an explicit action after the private run has been created. */
+  attachProposalAttempt(viewer: string, projectId: string, feedbackId: string, raw: unknown) {
+    const input = parse(z.object({ requestId: key, expectedRevision: z.number().int().nonnegative(), runId: z.string().uuid(),
+      trialDigest: hash, confirmed: z.literal(true), createStatementVersion: z.boolean() }).strict(), raw);
+    const run = this.deps.jobs.get(viewer, input.runId) ?? fail(404, '运行不存在或不属于本人。');
+    const origin = run.libraryProposalOrigin;
+    if (!origin || origin.projectId !== projectId || origin.feedbackId !== feedbackId || origin.trialDigest !== input.trialDigest)
+      fail(409, '这次运行未记录此提案的固定来源。');
+    let project = this.deps.projects.detail(viewer, projectId);
+    const feedback = project.feedback.find(item => item.id === feedbackId), attachment = feedback?.payload && 'libraryTrial' in feedback.payload ? feedback.payload.libraryTrial : undefined;
+    if (!attachment || attachment.trial.digest !== input.trialDigest || !feedback?.target) fail(404, '原提案或其固定来源当前不可访问。');
+    const attached = project.runs.find(item => item.runId === run.id);
+    if (attached) return project;
+    if (!project.permissions.edit) fail(403, '只有协作者可绑定研究运行。');
+    const sourceTarget = feedback?.target ?? fail(404, '来源陈述版本不存在。');
+    const sourceVersion = project.versions.find(item => item.id === sourceTarget.statementVersionId) ?? fail(404, '来源陈述版本不存在。');
+    let version = project.versions.find(item => item.source === run.source && item.environment === run.environment
+      && (!item.environmentDigest || item.environmentDigest === run.observation?.inspection.configuration.environmentDigest));
+    if (!version) {
+      if (!input.createStatementVersion) fail(409, '本次源码与现有陈述不同，请确认创建新的陈述版本后再关联。');
+      const requestId = `library-source-${mathDigest(input.requestId).slice(0, 48)}`;
+      project = this.deps.projects.addVersion(viewer, projectId, { requestId, expectedRevision: input.expectedRevision,
+        statement: sourceVersion.statement, source: run.source, environment: run.environment,
+        ...(sourceVersion.assumptions ? { assumptions: sourceVersion.assumptions } : {}),
+        ...(run.observation?.inspection.configuration.environmentDigest ? { environmentDigest: run.observation.inspection.configuration.environmentDigest } : {}) });
+      version = project.versions.find(item => item.source === run.source && item.environment === run.environment)!;
+    } else if (project.revision !== input.expectedRevision) fail(409, '研究项目已经更新，请刷新后重新核对。');
+    return this.deps.projects.bindRun(viewer, projectId, { requestId: `library-attach-${mathDigest(input.requestId).slice(0, 48)}`,
+      expectedRevision: project.revision, runId: run.id, statementVersionId: version.id, exposure: 'members',
+      grants: { guidance: false, edit: false, approve: false, proof: false } });
+  }
   private attemptConfiguration(viewer: string, run: WebRun, trial: ResearchLibraryTrial, source: string, libraryPack: ResearchLibraryPack,
     dependencySources: { file: string; source: string }[]): Omit<ResearchLibraryAttemptPreparation, 'projectId' | 'feedbackId'> {
     const declarations = inspectScopedLeanDeclarations(source);
@@ -407,6 +445,8 @@ export function createResearchLibraryTrialsHandler(deps: Dependencies) {
     },
     resolveCandidateAttachment: (viewer: string, projectId: string, id: string, digest: string, shared: true) => service.resolveCandidateAttachment(viewer, projectId, id, digest, shared),
     prepareAttempt: (viewer: string, projectId: string, feedbackId: string) => service.prepareAttempt(viewer, projectId, feedbackId),
+    validateProposalOrigin: (viewer: string, origin: ResearchLibraryProposalOrigin) => service.validateProposalOrigin(viewer, origin),
+    attachProposalAttempt: (viewer: string, projectId: string, feedbackId: string, input: unknown) => service.attachProposalAttempt(viewer, projectId, feedbackId, input),
     close: () => service.close(),
   };
 }

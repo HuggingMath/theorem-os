@@ -20,8 +20,15 @@ import type { ResearcherProfile } from '../researchProjectTypes';
 const projectPath = (id: string) => `${base}/theorems/${enc(id)}`;
 const collaborationPath = (id: string) => `${projectPath(id)}/collaboration`;
 const invitationStatus = (item: ResearchInvitation | ResearchHandoff) => item.status === 'pending' ? tx('等待回应', 'Awaiting a response')
-  : item.status === 'accepted' ? tx('已接受', 'Accepted') : item.status === 'declined' ? tx('已拒绝', 'Declined') : tx('已撤回', 'Cancelled');
+  : item.status === 'joined' ? tx('已通过其他方式加入', 'Joined another way')
+    : item.status === 'accepted' ? tx('已接受', 'Accepted') : item.status === 'declined' ? tx('已拒绝', 'Declined') : tx('已撤回', 'Cancelled');
 const roleName = (role: string) => role === 'reader' ? tx('只读成员', 'Reader') : tx('协作者', 'Collaborator');
+function JoinedInvitationNotice({ item }: { item: ResearchInvitation }) {
+  if (item.status !== 'joined') return null;
+  return <p data-invitation-already-joined>{item.currentMemberRole ? <>{tx('当前角色：', 'Current role: ')}<strong>{roleName(item.currentMemberRole)}</strong>{tx('。', '. ')}
+    {item.currentMemberRole !== item.role && tx('如需调整角色，请联系发起者在成员列表中确认。', 'Contact the project owner to confirm a role change in the member list.')}</>
+    : tx('这份邀请在加入项目后已关闭。当前访问权限请联系发起者确认。', 'This invitation was closed after joining. Contact the project owner to confirm current access.')}</p>;
+}
 const claimStatus = (status: string) => status === 'claimed' ? tx('已认领', 'Claimed') : status === 'submitted' ? tx('已提交候选', 'Candidate submitted') : tx('已释放', 'Released');
 const inboxLabel = (kind: string) => ({ invitation: tx('协作邀请', 'Invitation'), application: tx('加入申请', 'Join request'),
   handoff: tx('任务交接', 'Handoff'), claim: tx('我的认领', 'My claim'), review: tx('待我评审', 'Needs my review'),
@@ -108,7 +115,8 @@ export function CollaborationInbox({ context, request = api }: { context: Resear
           {item.issueAction && <span>{item.issueAction === 'resolve' ? tx('议题已有决议', 'Issue resolved') : tx('议题重新讨论', 'Issue reopened')}</span>}
           {!item.read && <strong>{tx('未读', 'Unread')}</strong>}{(item.processed || item.resolved) && <span>{tx('已处理', 'Processed')}</span>}</div>
         <div class="collaboration-inbox-copy"><RichProse text={item.title} />{item.reviewReassignment && <p>{tx('原评审人已无权限，请重新指定评审人。', 'The previous reviewer no longer has permission. Assign a new reviewer.')}</p>}{item.text && <RichProse text={item.kind === 'claim' ? claimStatus(item.text) : item.text} />}</div>
-        {record && <p>{record.author.displayName} → {record.recipient.displayName} · {invitationStatus(record)}{'role' in record && <> · {roleName(record.role)}</>}</p>}
+        {record && <p>{record.author.displayName} → {record.recipient.displayName} · {invitationStatus(record)}{'role' in record && <> · {record.status === 'joined' && tx('原邀请角色：', 'Original role: ')}{roleName(record.role)}</>}</p>}
+        {item.invitation && <JoinedInvitationNotice item={item.invitation} />}
         <div class="research-actions">{item.href && <a class="button" href={href} onClick={event => { if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault();
           void write(`${base}/collaboration/inbox/${enc(item.id)}`, { action: 'read' }, item.id).then(saved => { if (saved) location.assign(href); }); }}>{tx('打开并继续', 'Open and continue')}</a>}
           {respond && record.status === 'pending' && (record.recipient.id === self ? <>
@@ -158,7 +166,7 @@ export function CollaborationMembership({ project, selfId, refresh }: { project:
       <Field label={tx('想参与的方向与可提供的帮助', 'Your research interest and what you can contribute')} value={note} onInput={setNote} required multiline maxLength={4000} />
       <label>{tx('希望以何种方式参与', 'How would you like to participate?')}<select value={role} onChange={event => setRole(event.currentTarget.value)}><option value="collaborator">{roleName('collaborator')}</option><option value="reader">{roleName('reader')}</option></select></label>
       <button class="button" disabled={action.busy}>{tx('提交加入申请', 'Send join request')}</button></form></details>}
-    {invitations.map(item => <div class="collaboration-request" key={item.id}><div>{item.author.displayName} → {item.recipient.displayName} · {roleName(item.role)} · {invitationStatus(item)}</div><RichProse text={item.note} />
+    {invitations.map(item => <div class="collaboration-request" key={item.id}><div>{item.author.displayName} → {item.recipient.displayName} · {item.status === 'joined' && tx('原邀请角色：', 'Original role: ')}{roleName(item.role)} · {invitationStatus(item)}</div><RichProse text={item.note} /><JoinedInvitationNotice item={item} />
       {item.status === 'pending' && <div class="research-actions">{item.recipient.id === selfId ? <>{['accept', 'decline'].map(choice => <button class="button" type="button" key={choice} disabled={action.busy} onClick={() => void action.run('POST', `${projectPath(project.id)}/invitations/${item.id}/respond`, { action: choice, expectedRevision: item.revision }, changed)}>{choice === 'accept' ? tx('接受', 'Accept') : tx('拒绝', 'Decline')}</button>)}</>
         : item.author.id === selfId && <button type="button" class="text-button" disabled={action.busy} onClick={() => void action.run('POST', `${projectPath(project.id)}/invitations/${item.id}/respond`, { action: 'cancel', expectedRevision: item.revision }, changed)}>{tx('撤回请求', 'Cancel request')}</button>}</div>}</div>)}
     <ErrorBox message={resource.error} /><MutationState action={action} />

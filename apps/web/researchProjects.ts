@@ -77,7 +77,7 @@ const feedbackSchema = z.discriminatedUnion('kind', [
 const decisionSchema = z.object({ ...mutation, status: z.enum(['accepted', 'declined', 'needs-info']), reason: nonempty(4000),
   evidenceRefs: z.array(nonempty(512)).max(100).optional(), planVersion: nonempty(128).optional(),
   taskRefs: z.array(taskRefSchema).max(100).optional() }).strict();
-const memberSchema = z.object({ ...mutation, role: z.enum(['collaborator', 'reader']).nullable() }).strict();
+const memberSchema = z.object({ ...mutation, role: z.enum(['collaborator', 'reader']).nullable(), confirmMembersVisibility: z.literal(true).optional() }).strict();
 const noGrants: ResearchRunGrants = { guidance: false, edit: false, approve: false, proof: false };
 const now = () => new Date().toISOString();
 const clone = <T>(value: T): T => structuredClone(value);
@@ -315,7 +315,15 @@ export class WebResearchProjects {
         return profile && (profile.visibility === 'public' || viewer !== 'public' && profile.id === this.identity(viewer))
           ? [{ id: profile.id, displayName: profile.displayName }] : [];
       }),
-      runs: stored.bindings.flatMap(binding => { const view = this.bindingView(viewer, stored, binding); return view ? [view] : []; }),
+      runs: stored.bindings.flatMap(binding => {
+        const view = this.bindingView(viewer, stored, binding);
+        if (!view) return [];
+        const origin = this.storage.getRun(binding.runOwner, binding.runId)?.libraryProposalOrigin;
+        const source = origin?.projectId === projectId && (this.access(viewer, stored).member || viewer === binding.runOwner)
+          ? feedback.find(item => item.id === origin.feedbackId) : undefined;
+        const trial = source?.payload && 'libraryTrial' in source.payload ? source.payload.libraryTrial?.trial : undefined;
+        return [{ ...view, ...(origin && trial?.digest === origin.trialDigest ? { libraryProposalOrigin: origin } : {}) }];
+      }),
       feedback, activity: this.activities(viewer, stored), assignments: (stored.assignments ?? []).filter(assignment => {
         const binding = stored.bindings.find(binding => binding.runId === assignment.target.runId);
         // Assignment targets contain the same precise task/observation identities as the private runtime view.
@@ -340,13 +348,21 @@ export class WebResearchProjects {
   }
   setMember(viewer: string, projectId: string, researcherId: string, value: unknown): ResearchProjectDetail {
     parse(id, researcherId);
-    const stored = this.writable(viewer, projectId, true), input = parse(memberSchema, value) as ResearchMutation & { role: ResearchMemberRole | null };
+    const stored = this.writable(viewer, projectId, true), input = parse(memberSchema, value) as ResearchMutation & { role: ResearchMemberRole | null; confirmMembersVisibility?: true };
     const operation = `member:${researcherId}`;
     if (researcherId === stored.project.owner.id) throw new WebStorageError(400, '不能改变发起者角色。');
     if (this.request(stored, viewer, operation, input)) return this.detail(viewer, projectId);
     this.compare(stored.project.revision, input.expectedRevision);
+    if (input.role && stored.project.visibility === 'private' && !input.confirmMembersVisibility)
+      throw new WebStorageError(409, '添加成员前，请确认将题目改为项目成员可见。');
+    // Close invitations while the old member still exists, so removing them cannot revive an obsolete invitation.
+    this.closeJoinedInvitations(stored);
     stored.project.members = stored.project.members.filter(member => member.researcherId !== researcherId);
-    if (input.role) stored.project.members.push({ researcherId, role: input.role });
+    if (input.role) {
+      stored.project.members.push({ researcherId, role: input.role });
+      if (stored.project.visibility === 'private') stored.project.visibility = 'members';
+      this.closeJoinedInvitations(stored);
+    }
     this.event(stored, viewer, 'membership-updated', input.role ? '更新研究成员' : '撤销研究成员');
     this.remember(stored, viewer, operation, input); this.save(stored); return this.detail(viewer, projectId);
   }
@@ -1215,10 +1231,24 @@ export class WebResearchProjects {
   collaboration(viewer: string, projectId: string): ResearchCollaborationView {
     const stored = this.readable(viewer, projectId), access = this.access(viewer, stored), self = this.identity(viewer), state = this.collaborationState(stored);
     return clone({ projectId, revision: stored.project.revision,
-      invitations: state.invitations.filter(item => access.manage || item.author.id === self || item.recipient.id === self),
+      invitations: state.invitations.filter(item => access.manage || item.author.id === self || item.recipient.id === self).map(item => this.invitationView(stored, item)),
       ...(access.manage ? { invitationLinks: state.invitationLinks ?? [] } : {}),
       handoffs: access.member ? state.handoffs.filter(item => this.bindingView(viewer, stored, stored.bindings.find(binding => binding.runId === item.target.runId)!)) : [],
       issues: access.member ? state.issues : [] });
+  }
+  private invitationMember(stored: StoredProject, invitation: ResearchInvitation) {
+    const researcherId = invitation.kind === 'application' ? invitation.author.id : invitation.recipient.id;
+    return stored.project.members.find(member => member.researcherId === researcherId);
+  }
+  private invitationView(stored: StoredProject, invitation: ResearchInvitation): ResearchInvitation {
+    const member = this.invitationMember(stored, invitation);
+    return clone({ ...invitation, ...(member ? { currentMemberRole: member.role,
+      ...(invitation.status === 'pending' ? { status: 'joined' as const } : {}) } : {}) });
+  }
+  private closeJoinedInvitations(stored: StoredProject) {
+    for (const invitation of this.collaborationState(stored).invitations) if (invitation.status === 'pending' && this.invitationMember(stored, invitation)) {
+      invitation.status = 'joined'; invitation.revision++; invitation.updatedAt = now();
+    }
   }
   createInvitationLink(viewer: string, projectId: string, value: unknown): ResearchInvitationLink {
     const stored = this.writable(viewer, projectId, true), input = parse(z.object({ ...mutation,
@@ -1267,6 +1297,7 @@ export class WebResearchProjects {
     if (this.access(viewer, stored).member) throw new WebStorageError(409, '你已经是这个项目的成员。');
     stored.project.members.push({ researcherId: self, role: link.role });
     if (stored.project.visibility === 'private') stored.project.visibility = 'members';
+    this.closeJoinedInvitations(stored);
     link.status = 'accepted'; link.acceptedBy = this.author(viewer); link.revision++; link.updatedAt = now();
     // Joining changes project membership only. Per-run runtime grants remain exactly as set by their owner.
     this.event(stored, viewer, 'membership-updated', '通过邀请加入研究项目');
@@ -1306,21 +1337,25 @@ export class WebResearchProjects {
     const record = state.invitations.find(item => item.id === invitationId);
     if (!record || record.author.id !== self && record.recipient.id !== self) throw new WebStorageError(404, '研究不存在。');
     const operation = `invitation:${invitationId}`, previous = this.request(stored, viewer, operation, input);
-    if (previous) return clone(record);
-    this.compare(record.revision, input.expectedRevision);
-    if (record.status !== 'pending') throw new WebStorageError(409, '资料已经更新，请重新核对当前版本。');
+    if (previous) return this.invitationView(stored, record);
     if (input.action === 'cancel' ? record.author.id !== self : record.recipient.id !== self) throw new WebStorageError(403, '没有修改权限。');
     if (record.kind === 'application' && input.action !== 'cancel' && !this.access(viewer, stored).manage) throw new WebStorageError(403, '没有修改权限。');
+    if (record.status === 'joined' || record.status === 'pending' && this.invitationMember(stored, record)) {
+      this.closeJoinedInvitations(stored);
+      this.remember(stored, viewer, operation, input, record.id); this.save(stored); return this.invitationView(stored, record);
+    }
+    this.compare(record.revision, input.expectedRevision);
+    if (record.status !== 'pending') throw new WebStorageError(409, '资料已经更新，请重新核对当前版本。');
     const memberId = record.kind === 'application' ? record.author.id : record.recipient.id;
     if (input.action === 'accept') {
-      if (stored.project.members.some(member => member.researcherId === memberId)) throw new WebStorageError(409, '资料已经更新，请重新核对当前版本。');
       stored.project.members.push({ researcherId: memberId, role: record.role });
       // An owner-created invitation makes a private project visible to its accepted members only.
       if (stored.project.visibility === 'private') stored.project.visibility = 'members';
       this.event(stored, viewer, 'membership-updated', '更新研究成员');
     }
     record.status = input.action === 'accept' ? 'accepted' : input.action === 'decline' ? 'declined' : 'cancelled';
-    record.revision++; record.updatedAt = now(); this.remember(stored, viewer, operation, input, record.id); this.save(stored); return clone(record);
+    if (input.action === 'accept') this.closeJoinedInvitations(stored);
+    record.revision++; record.updatedAt = now(); this.remember(stored, viewer, operation, input, record.id); this.save(stored); return this.invitationView(stored, record);
   }
   createHandoff(viewer: string, projectId: string, value: unknown): ResearchHandoff {
     const stored = this.writable(viewer, projectId), input = parse(z.object({ ...mutation, recipientId: id, target: targetSchema,
@@ -1432,12 +1467,13 @@ export class WebResearchProjects {
       ...(target ? { run: target.runId, version: target.statementVersionId, ...(target.taskRef ? { task: target.taskRef.id, taskVersion: target.taskRef.version } : {}) } : statementVersionId ? { version: statementVersionId } : {}) })}${anchor}`;
     for (const stored of projects) {
       const access = this.access(viewer, stored), state = this.collaborationState(stored);
-      for (const invitation of state.invitations) if (invitation.recipient.id === self || invitation.author.id === self) {
+      for (const record of state.invitations) if (record.recipient.id === self || record.author.id === self) {
+        const invitation = this.invitationView(stored, record);
         // Pending invitees see only the title, sender and invitation, never private project data or task identities.
         add(stored, { id: `invitation:${invitation.id}`, kind: invitation.kind, title: invitation.note, createdAt: invitation.updatedAt,
           category: invitation.status === 'pending' && invitation.recipient.id === self ? 'decision' : 'progress',
           read: invitation.status === 'pending' && invitation.author.id === self,
-          resolved: invitation.status !== 'pending', invitation: clone(invitation), href: invitation.status === 'accepted' || access.visible ? href(stored, undefined, '#collaboration-members') : '' });
+          resolved: invitation.status !== 'pending', invitation, href: access.visible ? href(stored, undefined, '#collaboration-members') : '' });
       }
       if (!access.visible) continue;
       for (const handoff of state.handoffs) if (access.member && (handoff.recipient.id === self || handoff.author.id === self)
