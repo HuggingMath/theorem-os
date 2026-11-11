@@ -119,7 +119,7 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
     provenance: required(flags, 'compatibility-provenance') } : undefined;
   const author = {
     model: flags.has('model') ? required(flags, 'model') : 'deepseek-flash',
-    effort: flags.has('effort') ? required(flags, 'effort') : 'max',
+    effort: flags.has('effort') ? required(flags, 'effort') : 'high',
     profile: path.resolve(flags.has('profile') ? required(flags, 'profile') :
       process.env.CODEX_HOME || path.join(os.homedir(), '.config/deepscientist/math-sol-codex')),
     executable: flags.has('codex') ? required(flags, 'codex') : process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex' };
@@ -234,7 +234,7 @@ export async function formalize(argv: string[]): Promise<number> {
     console.log('Usage: theorem-os formalize --phase prepare|run|inspect|replay|report --directory DIR [options]\n'
       + 'prepare (offline): --problem ID --task-file FILE --build-manifest FILE\n'
       + '  or --first-proof-problem first_proof_batch3_01 [--source-root DIR] --build-manifest FILE\n'
-      + '  [--environment mathlib|standard] [--model deepseek-flash] [--effort max] [--profile DIR] [--codex FILE]\n'
+      + '  [--environment mathlib|standard] [--model deepseek-flash] [--effort high] [--profile DIR] [--codex FILE]\n'
       + '  [--max-rounds 0] [--max-run-seconds 0] [--max-turn-seconds 0] [--max-compile-seconds 0] [--max-total-tokens 0]\n'
       + '  [--review-mode direct|independent] (default: direct generation and Lean compilation, without model review)\n'
       + '  [--review-config FILE] [--max-planning-rounds 0] (opt in to independent planning, backtranslation and review)\n'

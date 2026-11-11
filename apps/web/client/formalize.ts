@@ -31,7 +31,7 @@ if (embedded) {
 } else mountLocaleSwitch(document.querySelector<HTMLButtonElement>('#locale-switch')!);
 const original = $<HTMLTextAreaElement>('#formalize-original'), key = $<HTMLInputElement>('#formalize-key');
 const environment = $<HTMLSelectElement>('#formalize-environment'), effort = $<HTMLSelectElement>('#formalize-effort');
-if (embedded) { environment.value = 'mathlib'; effort.value = 'max'; }
+if (embedded) { environment.value = 'mathlib'; effort.value = 'high'; }
 const exampleSelect = $<HTMLSelectElement>('#formalize-example');
 for (const example of researchExamples) exampleSelect.add(new Option(locale === 'en' ? example.nameEn : example.name, example.id));
 let selectedExample = '';
@@ -57,7 +57,7 @@ function restoreDraft(session: WebSession) {
     draftEdited = true;
     original.value = saved.original;
     environment.value = saved.environment === 'standard' ? 'standard' : 'mathlib';
-    effort.value = ['low', 'high', 'max'].includes(String(saved.effort)) ? String(saved.effort) : 'max';
+    effort.value = ['low', 'high', 'max'].includes(String(saved.effort)) ? String(saved.effort) : 'high';
     state.selected = typeof saved.selected === 'string' ? saved.selected : '';
     recoveringSubmission = submission.unresolved;
     const example = researchExamples.find(item => item.id === saved.example);
@@ -448,7 +448,7 @@ if (embedded) window.addEventListener('theoremos:natural-original', event => {
 });
 if (embedded) window.addEventListener('theoremos:new-natural', () => {
   conversationGeneration++; submission?.clear();
-  autoOpen = ''; original.value = ''; key.value = ''; environment.value = 'mathlib'; effort.value = 'max';
+  autoOpen = ''; original.value = ''; key.value = ''; environment.value = 'mathlib'; effort.value = 'high';
   state.selected = ''; state.item = undefined; report = undefined;
   clearExample(); saveDraft(); error(); drawCurrent(); drawList(); controls();
   $<HTMLDetailsElement>('#formalize-settings').open = false;

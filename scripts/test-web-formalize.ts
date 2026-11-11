@@ -159,15 +159,17 @@ try {
   {
     const { page, context, items, writes } = await setup(browser);
     assert.equal(writes.length, 0);
+    assert.equal(await page.locator('#formalize-effort').inputValue(), 'high');
     assert.equal(await page.locator('#formalize-start').isDisabled(), true);
     await page.locator('#formalize-original').fill(original); await page.locator('#formalize-key').fill('fixture-secret-key');
     await page.locator('#formalize-start').click(); await page.locator('#formalize-progress').filter({ hasText: '规划陈述' }).waitFor();
     assert.equal(writes.length, 1); assert.equal(writes[0]!.body.original, original); assert.equal(writes[0]!.body.apiKey, 'fixture-secret-key');
+    assert.equal(writes[0]!.body.effort, 'high');
     assert.equal(await page.locator('#formalize-key').inputValue(), '');
     assert.equal(await page.evaluate(() => JSON.stringify([localStorage, sessionStorage]).includes('fixture-secret-key')), false);
     await page.reload(); await page.locator('#formalize-progress').filter({ hasText: '规划陈述' }).waitFor(); assert.equal(writes.length, 1);
     assert.equal(await page.locator('#formalize-source-text').textContent(), original);
-    items[0]!.status = 'review'; items[0]!.report = report;
+    items[0]!.status = 'review'; items[0]!.report = { ...report, effort: items[0]!.effort };
     await page.locator('#formalize-refresh').click(); await page.locator('#formalize-review').waitFor();
     assert.equal(await page.locator('#formalize-confirm').isDisabled(), true);
     assert.match(await page.locator('#formalize-prose').innerText(), /The statement preserves/u);
@@ -185,6 +187,18 @@ try {
     await context.close();
   }
   console.log('PASS exact original input, key lifecycle, persisted read-only refresh, reviewed evidence and explicit confirmation');
+  {
+    const { page, context, writes } = await setup(browser);
+    await page.locator('#formalize-effort').selectOption('max');
+    await page.locator('#formalize-original').fill(original);
+    await page.reload(); await page.locator('#formalize-budget').filter({ hasText: 'deepseek-flash' }).waitFor();
+    assert.equal(await page.locator('#formalize-effort').inputValue(), 'max');
+    await page.locator('#formalize-key').fill('fixture-explicit-max-key');
+    await page.locator('#formalize-start').click(); await page.locator('#formalize-current').waitFor();
+    assert.equal(writes.length, 1); assert.equal(writes[0]!.body.effort, 'max');
+    await context.close();
+  }
+  console.log('PASS standalone defaults to high while a saved explicit max draft remains max');
   for (const destination of ['reload', 'record', 'example']) {
     const other = { ...baseItem, id: '22222222-2222-4222-8222-222222222222', original: 'A different saved record' };
     const caps = { ...capabilities };
@@ -211,6 +225,7 @@ try {
         await page.goto(`${origin}/formalize.html?id=${other.id}`);
         await page.locator('#formalize-source-text').filter({ hasText: other.original }).waitFor({ state: 'attached' });
         assert.equal(await page.locator('#formalize-original').inputValue(), other.original);
+        assert.equal(await page.locator('#formalize-effort').inputValue(), 'max');
         assert.equal(new URL(page.url()).search, `?id=${other.id}`);
         assert.equal(writes.length, 1, 'Explicit record navigation only reads its requested record');
       } else {

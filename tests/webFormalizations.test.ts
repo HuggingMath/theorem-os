@@ -238,6 +238,19 @@ describe('online formalization ownership and evidence handoff', () => {
     expect(runner.runs).toHaveLength(2);
   });
 
+  it.each([undefined, 'max'] as const)('defaults omitted effort to high and preserves explicit effort %s through generation', async effort => {
+    const alice = await client();
+    const response = await request(alice, '/api/formalizations', { original: fixtureStatement, environment: 'standard', apiKey: KEY,
+      ...(effort ? { effort } : {}) });
+    expect(response.status).toBe(201); await settle();
+    const value = (await response.json()).formalization as WebFormalization, pending = runner.pending.at(-1)!;
+    expect(value).toMatchObject({ effort: effort ?? 'high', maxRunSeconds: 0, maxTotalTokens: 0 });
+    expect(pending.input).toMatchObject({ effort: effort ?? 'high', maxRunSeconds: 0, maxTotalTokens: 0 });
+    pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve(); await settle();
+    const completed = (await (await request(alice, `/api/formalizations/${value.id}`)).json()).formalization as WebFormalization;
+    expect(completed).toMatchObject({ status: 'review', effort: effort ?? 'high', report: { effort: effort ?? 'high' } });
+  });
+
   it('uses authenticated session and CSRF boundaries, hides other owners and never stores keys', async () => {
     const alice = await client(), bob = await client();
     expect((await fetch(base + '/api/formalizations')).status).toBe(401);
@@ -471,13 +484,13 @@ describe('online formalization ownership and evidence handoff', () => {
     };
     await restart();
     const review = (await (await request(alice, route)).json()).formalization as WebFormalization;
-    expect(review).toMatchObject({ status: 'review', humanReview: true, report: { evidenceSha256: digest } });
+    expect(review).toMatchObject({ status: 'review', effort: 'max', humanReview: true, report: { evidenceSha256: digest } });
     expect((await request(alice, route + '/research', { apiKey: KEY })).status).toBe(409);
     expect((await request(alice, route + '/confirm', { evidenceSha256: digest })).status).toBe(200);
     expect(runner.runs).toHaveLength(0);
     await restart();
     const confirmed = (await (await request(alice, route)).json()).formalization as WebFormalization;
-    expect(confirmed).toMatchObject({ status: 'confirmed', confirmation: 'manual', humanReview: true, research });
+    expect(confirmed).toMatchObject({ status: 'confirmed', effort: 'max', confirmation: 'manual', humanReview: true, research });
     expect(confirmed.researchError).toBeUndefined(); expect(confirmed.runId).toBeUndefined(); expect(runner.runs).toHaveLength(0);
     config.queueLimit = 0;
     expect((await request(alice, route + '/research', { apiKey: KEY })).status).toBe(429);
@@ -834,7 +847,8 @@ describe('online formalization ownership and evidence handoff', () => {
   it('rejects a Lean candidate that cannot fit the research source limit', async () => {
     const alice = await client(), value = await create(alice), pending = runner.pending.at(-1)!;
     const evidence = webFormalizationEvidence(pending.input);
-    evidence.candidate.source += '--' + 'a'.repeat(webLimits.maxSourceBytes);
+    // Exceed the UTF-8 byte limit while staying within the evidence schema's character limit.
+    evidence.candidate.source += '--' + 'λ'.repeat(Math.ceil(webLimits.maxSourceBytes / 2));
     pending.send({ type: 'result', status: 'approved', evidence }); pending.resolve(); await settle();
     expect((await (await request(alice, `/api/formalizations/${value.id}`)).json()).formalization)
       .toMatchObject({ status: 'error', reason: 'formalization_source_too_large' });

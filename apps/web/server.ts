@@ -99,7 +99,7 @@ const explanationSchema = z.object({
 const formalizationSchema = z.object({
   requestId: inputSchema.shape.requestId,
   original: z.string().min(1).refine(value => value.trim().length > 0 && Buffer.byteLength(value) <= webFormalizationLimits.maxOriginalBytes),
-  environment: z.enum(['standard', 'mathlib']), effort: z.enum(['low', 'high', 'max']).default('max'),
+  environment: z.enum(['standard', 'mathlib']), effort: z.enum(['low', 'high', 'max']).default('high'),
   apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default(''),
   solve: z.boolean().optional(), humanReview: z.boolean().optional(),
   providerId: inputSchema.shape.providerId.optional(), model: inputSchema.shape.model.optional(),

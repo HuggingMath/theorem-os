@@ -100,6 +100,7 @@ try {
     if (width === 320) await page.setViewportSize({ width, height: 640 });
     await page.locator('[data-chat-configure]').click();
     await page.locator('.chat-settings-fields').waitFor(); await page.waitForTimeout(100);
+    assert.equal(await page.locator('#formalize-effort').inputValue(), 'high');
     const placement = await page.evaluate(() => {
       const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
       return { panel: box('.chat-settings-fields'), form: box('#natural-research #formalize-form'), heading: box('.chat-start h1'), height: innerHeight };
@@ -146,6 +147,7 @@ try {
       await page.locator('#formalize-minutes').fill('4');
       await page.locator('#research-minutes').fill('3');
       await page.locator('#research-turns').fill('4');
+      await page.locator('#formalize-effort').selectOption('max');
       assert.equal(await page.locator('#formalize-start').isEnabled(), true);
       assert.match(await page.locator('[data-chat-budget]').innerText(), /4 分钟[\s\S]*3 分钟/u);
       assert.equal(writes.length, 0, 'Connection checks and budget edits create no paid task');
@@ -178,6 +180,8 @@ try {
     assert.equal(await noOverflow(page), true); assert.deepEqual(await audit(page), []);
     await page.screenshot({ path: path.join(output, `inline-lean-${locale}-${width}.png`), fullPage: true });
     await page.locator('#open-natural-language').click(); await page.locator('#formalize-original').waitFor();
+    assert.equal(await page.locator('#formalize-effort').inputValue(), width === 1440 ? 'max' : 'high',
+      'Reload preserves an explicit max selection and otherwise keeps the high default');
     assert.equal(await page.locator('#formalize-original').inputValue(), original);
     assert.equal(writes.length, 0);
     mark(`${locale} ${width}px: original and Lean drafts remain separate; credentials clear on refresh; advanced editing needs no configuration dialog`);

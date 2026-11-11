@@ -74,7 +74,7 @@ describe('formalize offline CLI', () => {
     const result = await invoke(f.args);
     expect(result.code).toBe(0);
     expect(result.report).toMatchObject({ phase: 'prepare', status: 'prepared', modelInvoked: false, proofVerified: false,
-      request: { problemId: 'natural_add_zero', environment: 'mathlib', execution: 'model', model: 'deepseek-flash', effort: 'max',
+      request: { problemId: 'natural_add_zero', environment: 'mathlib', execution: 'model', model: 'deepseek-flash', effort: 'high',
         maxRounds: 0, maxRunSeconds: 0, maxTurnSeconds: 0, maxCompileSeconds: 0, maxTotalTokens: 0,
         reviewMode: 'direct' } });
     const request = readFormalizationRequest(f.directory);
@@ -93,15 +93,19 @@ describe('formalize offline CLI', () => {
     expect(readFormalizationRequest(f.directory).statement).toBe(original);
   });
 
-  it('freezes explicitly chosen model, profile, environment and budgets without running them', async () => {
+  it.each(['medium', 'max'])('freezes explicitly chosen %s effort, model, profile, environment and budgets without running them', async effort => {
     const f = fixture();
-    const result = await invoke([...f.args, '--environment', 'standard', '--model', 'offline-model-label', '--effort', 'medium',
+    const result = await invoke([...f.args, '--environment', 'standard', '--model', 'offline-model-label', '--effort', effort,
       '--profile', path.join(f.base, 'unused-profile'), '--codex', '/unused/codex', '--max-rounds', '2',
       '--max-run-seconds', '60', '--max-turn-seconds', '20', '--max-compile-seconds', '10', '--max-total-tokens', '8000']);
-    expect(result.report.request).toMatchObject({ environment: 'standard', model: 'offline-model-label', effort: 'medium',
+    expect(result.report.request).toMatchObject({ environment: 'standard', model: 'offline-model-label', effort,
       profile: path.join(f.base, 'unused-profile'), executable: '/unused/codex', maxRounds: 2,
       maxRunSeconds: 60, maxTurnSeconds: 20, maxCompileSeconds: 10, maxTotalTokens: 8000 });
     expect(fs.readdirSync(f.directory)).toEqual(['request.json']);
+    const frozen = fs.readFileSync(path.join(f.directory, 'request.json'), 'utf8');
+    const inspected = await invoke(['--phase', 'inspect', '--directory', f.directory]);
+    expect(inspected.report.request.effort).toBe(effort);
+    expect(fs.readFileSync(path.join(f.directory, 'request.json'), 'utf8')).toBe(frozen);
   });
 
   it('retains independent review only when explicitly selected', async () => {
