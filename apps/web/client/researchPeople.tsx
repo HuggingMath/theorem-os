@@ -215,7 +215,7 @@ function Feed() {
   const feed = useResource<Items<FeedEvent>>(`${base}/feed?field=${enc(field)}&limit=30`, 15000);
   const source = new URLSearchParams(location.search); field ? source.set('feedField', field) : source.delete('feedField');
   return <Panel id="research-feed" title={tx('同行动态', 'Following feed')} note={tx('你关注的数学家和定理的可见更新。', 'Visible updates from mathematicians and theorems you follow.')}>
-    <Field label={tx('按领域筛选', 'Filter by field')} value={field} onInput={setField} /><ErrorBox message={feed.error} />
+    <Field label={tx('按领域筛选', 'Filter by field')} value={field} onInput={setField} placeholder={tx('输入研究领域', 'Enter a research field')} /><ErrorBox message={feed.error} />
     {feed.data?.items.map(event => <FeedRow key={event.id} event={event} section="research-feed" search={`?${source}`} />)}
     {feed.data && !feed.data.items.length && <Empty>{tx('暂时没有动态。关注数学家或定理后，相关进展会出现在这里。', 'No updates yet. Follow researchers or theorems to see their progress here.')}</Empty>}
   </Panel>;

@@ -579,11 +579,15 @@ function render() {
   writeLocation();
 }
 
-function revealRecord() {
+function revealRecord(opened = false) {
   if (!matchMedia('(max-width: 700px)').matches || state.view !== 'archive' || !selectedRecord()) return false;
+  // Reading and process tabs hide the list, so the record already starts below the top bar. A link that opens the
+  // page there leaves focus and scroll alone; scrolling would only push the top bar off screen.
+  const listHidden = element('#archive-view').classList.contains('reading-process');
+  if (opened && listHidden) return true;
   const inspector = element('#inspector');
   inspector.focus({ preventScroll: true });
-  inspector.scrollIntoView({ block: 'start' });
+  if (!listHidden) inspector.scrollIntoView({ block: 'start' });
   return true;
 }
 
@@ -597,7 +601,7 @@ function restoreLocation() {
     const ready = (state.tab === 'process' || state.tab === 'reading') && record ? loadProcess(record).catch(() => undefined) : Promise.resolve();
     void ready.then(() => document.fonts.ready).then(() => {
       if (state.selected === requested) {
-        if (!revealProofReadingLocation()) revealRecord();
+        if (!revealProofReadingLocation()) revealRecord(true);
         if (record) revealCheckedSource(record, true);
       }
     });

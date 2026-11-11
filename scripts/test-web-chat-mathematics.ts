@@ -195,7 +195,7 @@ try {
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(origin + '/', { timeout: 0 });
     await page.locator('#topbar .research-space-links').waitFor({ timeout: 0 });
-    await visibleNavigation(page, ['工作台', '我的研究', '定理', '数学家', 'Library']);
+    await visibleNavigation(page, ['工作台', '我的研究', '定理', '数学家', '数学库']);
     const participation = page.locator('[data-chat-participation-control]'), input = page.locator('#formalize-original');
     await participation.waitFor({ timeout: 0 });
     assert.equal(await participation.evaluate((element: HTMLDetailsElement) => element.open), false);
@@ -384,7 +384,7 @@ try {
     if (width === 320) {
       await page.goto(origin + '/', { timeout: 0 }); await input.waitFor({ timeout: 0 });
       await page.setViewportSize({ width: 640, height: 360 });
-      await visibleNavigation(page, ['工作台', '我的研究', '定理', '数学家', 'Library']); await fit(page);
+      await visibleNavigation(page, ['工作台', '我的研究', '定理', '数学家', '数学库']); await fit(page);
       await screenshot(page, '640-360-visible-navigation.png');
       await page.setViewportSize({ width: 320, height: 568 });
       await Promise.all([page.waitForEvent('domcontentloaded', { timeout: 0 }), page.locator('#locale-switch').click({ timeout: 0 })]);

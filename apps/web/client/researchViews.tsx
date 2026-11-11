@@ -13,7 +13,7 @@ import { loginHref, researchContextHref, researchNavigation } from '../shared';
 import { ResearchRunNotifications } from './researchRunNotifications';
 
 const page = document.body.dataset.researchPage ?? 'people';
-const pageNames = { workspace: ['我的研究', 'My research'], theorems: ['定理', 'Theorems'], people: ['数学家', 'Mathematicians'], library: ['Library', 'Library'] } as const;
+const pageNames = { workspace: ['我的研究', 'My research'], theorems: ['定理', 'Theorems'], people: ['数学家', 'Mathematicians'], library: ['数学库', 'Library'] } as const;
 function Header() {
   const language = useRef<HTMLButtonElement>(null);
   const navigation = researchNavigation(location.search);

@@ -87,7 +87,7 @@ async function fit() {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'navigation fits the viewport');
   assert.deepEqual(await audit(page), []);
 }
-const labels = ['工作台', '我的研究', '定理', '数学家', 'Library'];
+const labels = ['工作台', '我的研究', '定理', '数学家', '数学库'];
 async function navigation() {
   const desktop = page.locator('#topbar .research-space-links');
   if (await desktop.isVisible()) return desktop;

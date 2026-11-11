@@ -25,7 +25,7 @@ function Topbar(props: TopbarProps) {
     { href: navigation.workspace, label: t('我的研究') },
     { href: navigation.theorems, label: t('定理') },
     { href: navigation.people, label: t('数学家') },
-    { href: navigation.library, label: 'Library', library: true },
+    { href: navigation.library, label: t('数学库'), library: true },
   ];
   return <>
     {props.history.docked

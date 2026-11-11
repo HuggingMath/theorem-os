@@ -27,6 +27,7 @@ export const release: Record<string, string> = {
   '准备一道新题': 'Prepare a new problem',
   '研究空间': 'Research space',
   '数学家': 'Mathematicians',
+  '数学库': 'Library',
   '反馈': 'Feedback',
   '{0} 条反馈 · {1} 条需要关注': '{0} feedback · {1} need attention',
   '；': '; ',

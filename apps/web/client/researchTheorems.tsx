@@ -90,10 +90,10 @@ export function TheoremsPage({ context }: { context: ResearchContext }) {
           requestAnimationFrame(() => document.querySelector<HTMLInputElement>('.research-solutions-view input[type="search"]')?.focus());
         }} />
       </section> : <section class="research-discovery research-page-section" aria-labelledby="theorem-directory-title"><div class="research-section-head"><h2 id="theorem-directory-title">{tx('定理目录', 'Theorem directory')}</h2>
-        {directory.data && <span class="research-status">{tx(`共 ${directory.data.total ?? directory.data.items.length} 道定理`, `${directory.data.total ?? directory.data.items.length} theorems`)}</span>}</div>
+        {directory.data && <span class="research-status">{tx(`共 ${directory.data.total ?? directory.data.items.length} 个定理`, `${directory.data.total ?? directory.data.items.length} theorems`)}</span>}</div>
       <div class="research-directory-toolbar">
       <Search key={collection} label={tx('搜索定理与研究描述', 'Search theorems and descriptions')} initial={query} onSearch={value => { setQuery(value); setOffset(0); }} />
-      <Field label={tx('按领域筛选', 'Filter by field')} value={field} onInput={value => { setField(value); setOffset(0); }} /></div>
+      <Field label={tx('按领域筛选', 'Filter by field')} value={field} onInput={value => { setField(value); setOffset(0); }} placeholder={tx('输入研究领域', 'Enter a research field')} /></div>
       <ErrorBox message={directory.error} />{directory.loading && <p class="research-status" role="status">{tx('正在读取…', 'Loading…')}</p>}
       <ul class="research-directory-grid">{directory.data?.items.map(project => {
         const item = new URLSearchParams(browse); item.set('id', project.id);

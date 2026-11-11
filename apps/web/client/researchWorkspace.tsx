@@ -31,7 +31,7 @@ const readTab = (): Tab => {
 };
 const kinds: Record<ResearchSearchKind, string> = {
   problem: tx('题目', 'Problems'), conversation: tx('对话', 'Conversations'), lemma: tx('定理与引理', 'Theorems and lemmas'),
-  route: tx('研究路线', 'Routes'), library: 'Library',
+  route: tx('研究路线', 'Routes'), library: tx('数学库', 'Library'),
   history: tx('历史推导与检查', 'Historical reasoning and checks'), decision: tx('讨论与评审', 'Discussions and reviews'), stage: tx('阶段结论', 'Stage conclusions'),
 };
 export function WorkspacePage({ context }: { context: ResearchContext }) {
