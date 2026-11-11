@@ -434,6 +434,7 @@ export async function runResearchWorkers(input: {
         let requestWaitTimer: ReturnType<typeof setTimeout> | undefined;
         let cutAtRequestBoundary: (() => void) | undefined;
         let noticeDelivery: 'unavailable' | 'pending' | 'delivered' | 'failed' = 'unavailable';
+        let typedWorkYield = false;
         let afterNotice: ((delivered: boolean) => void) | undefined;
         const live = () => !finished && !signal.aborted && session === activeSession;
         const current = () => live() && Boolean(assignment && cooperation?.current(assignment));
@@ -606,9 +607,11 @@ export async function runResearchWorkers(input: {
             backoffCapped: Boolean(backoff) && noProgressStreak >= advisoryMaxBackoff });
           if (noProgressStreak && backoff) emit('cooperative_checkpoint_deferred', { turnId, checkpointAfterMs,
             noProgressStreak, protected: false, reason: 'no-durable-progress' });
-          const sendNotice = () => {
-            if (!current() || noticeSent || assignment?.kind === 'lead' && cooperation?.planSnapshot(assignment)) return;
+          let noticeSequence = 0;
+          const sendNotice = (yieldForProof = false) => {
+            if (!current() || noticeSent && !yieldForProof || assignment?.kind === 'lead' && cooperation?.planSnapshot(assignment)) return;
             noticeSent = true;
+            const sequence = ++noticeSequence;
             noticeDelivery = activeSession.notify ? 'pending' : 'unavailable';
             emit('cooperative_checkpoint_requested', { turnId, checkpointAfterMs, noProgressStreak, protected: false });
             void Promise.resolve().then(() => {
@@ -617,7 +620,13 @@ export async function runResearchWorkers(input: {
               if (!current() || assignment?.kind === 'lead' && cooperation?.planSnapshot(assignment)) return;
               // A goal turn is never yielded, so its reminder must not promise a checkpoint that will
               // not come: it asks for the durable handoff and leaves the writing turn running.
-              return activeSession.notify?.(assignment?.kind === 'task' && isFeasibilityReview(assignment.task)
+              return activeSession.notify?.(yieldForProof
+                ? 'A typed proof task is now ready for you. Save this investigation or review\'s exact inspected inputs, ' +
+                  'current argument, reproduction commands and observed results in root RESEARCH.md now, then return. ' +
+                  'Do not start another search. This checkpoint preserves an unfinished draft with its original inputs; ' +
+                  'it is not a completed review verdict or proof acceptance. The host will yield this assignment at a safe ' +
+                  'request boundary within the existing fixed checkpoint wait, then dispatch eligible proof work.'
+                : assignment?.kind === 'task' && isFeasibilityReview(assignment.task)
                 ? 'Save this independent review\'s intermediate work in root RESEARCH.md now: the exact inspected inputs, ' +
                   'methods already tried, exact failed search scope, remaining uncertainties, and complete useful scratch-probe ' +
                   'code with reproduction commands and observed results. A scratch path alone is not a recoverable probe; ' +
@@ -645,11 +654,12 @@ export async function runResearchWorkers(input: {
                   'This advisory turn will yield a scheduling checkpoint shortly, including when no new notes are saved. ' +
                   'The same thread and saved work will remain available for continuation; this does not end the solving budget.');
             }).then(() => {
-              if (!current()) return;
+              if (!current() || sequence !== noticeSequence) return;
               const delivered = noticeDelivery === 'pending';
               noticeDelivery = delivered ? 'delivered' : 'unavailable';
               afterNotice?.(delivered);
             }, error => {
+              if (sequence !== noticeSequence) return;
               const reason = noticeFailureReason(error);
               noticeDelivery = reason === undefined ? 'unavailable' : 'failed';
               if (reason === undefined || !current()) return;
@@ -663,8 +673,10 @@ export async function runResearchWorkers(input: {
               emit('research_checkpoint_missing_notes', { taskId: researchAssignment.task.id,
                 assignmentId: researchAssignment.assignment.assignmentId });
             if (interruptForCheckpoint('cooperative_checkpoint_interrupted',
-              { turnId, checkpointAfterMs, noProgressStreak, protected: false }) && yieldForProof)
-              emit('capacity_exploration_yielded', { turnId, reason: 'typed-work-ready' });
+              { turnId, checkpointAfterMs, noProgressStreak, protected: false }) && (yieldForProof || typedWorkYield))
+              emit(assignment?.kind === 'task' && state.cooperation?.tasks.some(node =>
+                node.task.id === assignment.task.id && node.capacityExploration)
+                ? 'capacity_exploration_yielded' : 'advisory_yielded_for_typed_work', { turnId, reason: 'typed-work-ready' });
           };
           // Interrupting a streaming request discards its unfinished reasoning and tool call, and research whose every
           // cut lands mid-request saves nothing and is parked as unchanged. A slice cut (initial plan, revision or
@@ -672,7 +684,29 @@ export async function runResearchWorkers(input: {
           let waitStartedAt: number;
           let handoffRequested = false;
           const cut = (boundary: 'request-returned' | 'wait-limit' | 'notice-failed') => {
-            if (!current() || checkpointRequested || readyRequested) return;
+            if (!current() || compactionStartedAt !== undefined || checkpointRequested || readyRequested) return;
+            if (boundary === 'request-returned' && assignment?.kind === 'lead' && noticeDelivery === 'delivered' &&
+                cooperation?.leadCheckpointNeedsHandoff(assignment)) {
+              // Reading the current graph is not a decision. Give this dispatch the remainder of
+              // the same wait window to save a complete answer before freezing its workspace.
+              if (!handoffRequested) {
+                handoffRequested = true;
+                emit('lead_handoff_requested', { turnId,
+                  remainingMs: Math.max(0, advisoryRequestWaitMs - (Date.now() - waitStartedAt)) });
+                void Promise.resolve().then(() => {
+                  if (!current() || checkpointRequested || readyRequested) return;
+                  return activeSession.notify?.(cooperation!.leadCheckpointInstruction(assignment) +
+                    'Save the complete decision now, before another search. The host is waiting only until the existing ' +
+                    'checkpoint deadline; reading the inherited plan or saving prose does not answer the required decisions.');
+                }).catch(error => {
+                  const reason = noticeFailureReason(error);
+                  if (reason === undefined || !current()) return;
+                  emit('cooperative_checkpoint_notice_failed', { reason });
+                  cut('notice-failed');
+                });
+              }
+              return;
+            }
             if (boundary === 'request-returned' && researchAssignment && noticeDelivery === 'delivered' &&
                 !researchHandoffNotes()) {
               // A search result may be the first tool after a long request. Let the model write
@@ -713,25 +747,29 @@ export async function runResearchWorkers(input: {
               ...(lastModelOutputAt !== undefined ? { outputAgeMs: Date.now() - lastModelOutputAt } : {}) });
           };
           const awaitRequest = (handoff = false) => {
-            if (!current() || checkpointRequested || readyRequested) return;
+            if (!current() || compactionStartedAt !== undefined || checkpointRequested || readyRequested) return;
             // One fixed wait window per turn, also covering a queued save notice and its response.
             // Notes may become visible before their writing tool finishes; wait for its result before freezing them.
-            const waitForResearchTool = researchAssignment && noticeDelivery === 'delivered';
+            const waitForHandoffTool = noticeDelivery === 'delivered' && (researchAssignment || assignment?.kind === 'lead');
+            const pendingLeadHandoff = handoff && noticeDelivery === 'delivered' && assignment?.kind === 'lead' &&
+              cooperation?.leadCheckpointNeedsHandoff(assignment);
             const modelOutputStale = lastModelOutputAt === undefined || Date.now() - lastModelOutputAt > advisoryModelStreamingMs;
-            if ((requestWaited && !handoff) || (toolsRunning ? !waitForResearchTool : modelOutputStale)) {
+            if ((requestWaited && !handoff) || (toolsRunning ? !waitForHandoffTool : modelOutputStale && !pendingLeadHandoff)) {
               clearTimeout(requestWaitTimer); checkpoint(); return;
             }
             if (!requestWaited) startWait();
             cutAtRequestBoundary = () => cut('request-returned');
           };
           const endSlice = () => {
-            if (compactionStartedAt !== undefined || cutAtRequestBoundary || afterNotice) return;
-            if (noticeDelivery === 'pending' && !requestWaited) {
+            if (compactionStartedAt !== undefined) return;
+            if (requestWaited && Date.now() - waitStartedAt >= advisoryRequestWaitMs) { cut('wait-limit'); return; }
+            if (cutAtRequestBoundary || afterNotice) return;
+            if (noticeDelivery === 'pending') {
               // The provider can take longer than the slice. Let the queued save instruction reach
               // the model before cutting its first tool result, then give it the ordinary save gap.
               // The same fixed request-wait deadline bounds both notification and handoff; a missing
               // or failed notification can never extend the turn indefinitely.
-              startWait(true);
+              if (!requestWaited) startWait(true);
               afterNotice = delivered => {
                 afterNotice = undefined;
                 if (!current() || checkpointRequested || readyRequested) return;
@@ -759,6 +797,16 @@ export async function runResearchWorkers(input: {
               return;
             }
             sliceStartedAt = Date.now();
+            if (typedWorkYield) {
+              // Compaction pauses the handoff's save timer, but cannot lose the requested yield
+              // or reset the original wait deadline when maintenance returns.
+              if (requestWaited && Date.now() - waitStartedAt >= advisoryRequestWaitMs) cut('wait-limit');
+              else if (!afterNotice) {
+                checkpointTimer = setTimeout(() => awaitRequest(true), 0);
+                checkpointTimer.unref();
+              }
+              return;
+            }
             if (!noticeSent) {
               noticeTimer = setTimeout(sendNotice, Math.max(0, noticeAfterMs - activeSliceMs));
               noticeTimer.unref();
@@ -769,10 +817,17 @@ export async function runResearchWorkers(input: {
             checkpointTimer.unref();
           };
           scheduleSlice(); watchCompaction();
-          if (assignment?.kind === 'task' && state.cooperation?.tasks.some(node =>
-              node.task.id === assignment.task.id && node.capacityExploration)) {
+          if (researchAssignment) {
             capacityTimer = setInterval(() => {
-              if (current() && cooperation?.shouldYieldCapacityExploration(worker, assignment)) checkpoint(true);
+              if (!current() || compactionStartedAt !== undefined || typedWorkYield ||
+                  !cooperation?.shouldYieldAdvisoryForTypedWork(worker, researchAssignment)) return;
+              // Preserve the existing capacity checkpoint; planned investigations and independent
+              // reviews first get a save instruction and the same bounded handoff window.
+              if (cooperation.shouldYieldCapacityExploration(worker, researchAssignment)) { checkpoint(true); return; }
+              typedWorkYield = true;
+              clearTimeout(noticeTimer); clearTimeout(checkpointTimer);
+              cutAtRequestBoundary = undefined;
+              sendNotice(true); endSlice();
             }, advisoryProgressPollMs);
             capacityTimer.unref();
           }
@@ -784,7 +839,9 @@ export async function runResearchWorkers(input: {
           if (usage.stopReason && detail !== usage.stopReason) throw new Error(detail);
           planningCheckpoint = usage.stopReason === 'math_initial_planning_limit';
           const resultStatus = typeof result === 'string' ? result : result && typeof result === 'object' && 'status' in result ? result.status : undefined;
-          cooperativeCheckpoint = checkpointRequested && (resultStatus === 'interrupted' || resultStatus === 'checkpoint' ||
+          // The typed-work notice explicitly requests an unfinished handoff. A cooperative natural
+          // return honors that request too; prose notes must not become a completed review verdict.
+          cooperativeCheckpoint = typedWorkYield && resultStatus === 'completed' || checkpointRequested && (resultStatus === 'interrupted' || resultStatus === 'checkpoint' ||
             checkpointClosing && resultStatus === 'failed' && researchFailureReason(detail) === 'math_codex_transport_closed');
           completed = resultStatus === 'completed';
           if (completed) recovered();
@@ -973,8 +1030,11 @@ export async function runResearchWorkers(input: {
           return;
         }
         retries = retry.attempt;
-        if (research.threadId && (retry.reason === 'math_model_tool_failed' || retries === 1 &&
-            ['math_model_request_failed', 'math_model_request_timeout', 'math_codex_transport_closed'].includes(retry.reason)))
+        // A transient upstream failure does not invalidate the saved native thread. Retry it
+        // once after closing the failed writer; a repeated failure still gets a fresh thread.
+        if (research.threadId && (retry.reason === 'math_model_tool_failed' ||
+            retry.reason === 'math_model_request_failed' && retries === 2 || retries === 1 &&
+            ['math_model_request_timeout', 'math_codex_transport_closed'].includes(retry.reason)))
           await rotateSession('request');
         emit('worker_recovering', { reason: retry.reason, attempt: retries, delayMs: retry.delayMs });
         emit('turn_retry', { reason: retry.reason, attempt: retries, delayMs: retry.delayMs,

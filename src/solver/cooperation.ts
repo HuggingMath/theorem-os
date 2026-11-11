@@ -155,14 +155,22 @@ export class CooperativeResearch extends CooperationInputs {
   }
   /** A normal advisory checkpoint preserves the draft before the new typed task takes priority. */
   shouldYieldCapacityExploration(worker: ResearchWorker, action: CooperativeAction): boolean {
-    if (action.kind !== 'task' || !this.current(action)) return false;
+    return action.kind === 'task' && Boolean(this.node(action.task.id)?.capacityExploration) &&
+      this.shouldYieldAdvisoryForTypedWork(worker, action);
+  }
+  /** Reviews and investigations retain their exact-input drafts when this same worker can start a proof. */
+  shouldYieldAdvisoryForTypedWork(worker: ResearchWorker, action: CooperativeAction): boolean {
+    if (action.kind !== 'task' || action.assignment.workerId !== worker.id || !advisory(action.task) ||
+        !this.current(action)) return false;
     const node = this.node(action.task.id);
-    if (!node?.capacityExploration || !['prover', 'researcher', 'engineer'].includes(worker.role)) return false;
+    if (node?.status !== 'running' || !['prover', 'researcher', 'engineer'].includes(worker.role)) return false;
     const groups = this.archive.groups?.map(route => ({ ...route,
       busy: Math.max(0, (route.busy ?? 0) - Number(route.group.id === taskGroup(node.task))) }));
-    const ready = readyResearchTasks(this.archive.tasks, groups).filter(candidate => !candidate.capacityExploration &&
-      !advisory(candidate.task) && !this.preparingTaskTypes.has(candidate) && !this.synchronizationBlocked(candidate.task));
-    return Boolean(assignSharedResearchTask(ready, worker, this.allocationPeers, groups, this.archive.tasks, this.stoppedWorkers));
+    const ready = this.input.modules.M3.ready(this.archive.tasks, groups).filter(candidate => !candidate.capacityExploration &&
+      (candidate.task.kind === 'goal' || candidate.task.kind === 'lemma' && Boolean(candidate.task.type?.trim())) &&
+      !this.preparingTaskTypes.has(candidate) && !this.synchronizationBlocked(candidate.task));
+    const selected = this.input.modules.M5.assign(ready, worker, this.allocationPeers, groups, this.archive.tasks, this.stoppedWorkers);
+    return Boolean(selected && ready.includes(selected));
   }
   private leadPauseInputs = new WeakMap<CooperativeAction, string>();
   private pendingLeadInboxBases = new WeakMap<CooperativeAction, LeadInboxBasis>();
@@ -534,6 +542,13 @@ export class CooperativeResearch extends CooperationInputs {
     const research = researchInputs.length > 0, progress = Boolean(progressReview), nextCheck = nextCheckOutcomes.length > 0;
     return { research, progress, nextCheck, feedback, any: research || progress || nextCheck || feedback,
       researchInputs, progressReview, nextCheckOutcomes };
+  }
+  /** A read or incomplete draft cannot satisfy this dispatch's still-owed decisions. */
+  leadCheckpointNeedsHandoff(action: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>): boolean {
+    if (!this.current(action) || this.planSnapshot(action) ||
+        this.archive.tasks.length && !this.leadDecisionObligations(action).any) return false;
+    const draft = this.inspectLeadCheckpointDraft(action);
+    return !draft || Boolean(draft.reason);
   }
   /** Re-read this dispatch's still-owed decisions when its checkpoint reminder is delivered. */
   leadCheckpointInstruction(action: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>): string {

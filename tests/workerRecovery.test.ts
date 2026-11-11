@@ -15,6 +15,7 @@ import { researchFailureDetail, researchFailureReason, recoverableResearchFailur
 import { git } from '../src/solver/problem';
 import { runSolver } from '../src/solver/run';
 import type { CooperativeAction } from '../src/solver/tasks';
+import { deferred } from './helpers/async';
 
 const host = vi.hoisted(() => ({ open: vi.fn(), verify: vi.fn(), prepare: vi.fn(), delay: vi.fn(), official: vi.fn() }));
 vi.mock('../src/math/mathBuildManifest', () => ({ readMathBuildManifest: vi.fn() }));
@@ -178,19 +179,28 @@ describe('bounded role session recovery', () => {
     'opaque provider failure',
   ])('retries an empty failed turn using its upstream diagnostic: %s', async error => {
     const diagnostic: MathAgentFailureDiagnostic = { code: 'other', reason: 'upstream_request_failed' };
+    const writerClosing = deferred(), releaseWriter = deferred();
     host.open.mockImplementationOnce(async (options: MathAgentOptions) => ({
       ...session(options, async () => 'failed', error), lastFailureDiagnostic: diagnostic,
+      close: async () => { writerClosing.resolve(); await releaseWriter.promise; },
     }));
-    host.open.mockImplementationOnce(async (options: MathAgentOptions) => session(options, async () => {
-      expect(options.threadId).toBeUndefined();
-      expect(fs.readFileSync(proof(options), 'utf8')).toBe(original);
-      fs.writeFileSync(proof(options), completed);
-      return 'completed';
-    }));
-    expect(await runSolver(args, directory)).toBe(0);
+    host.open.mockImplementationOnce(async (options: MathAgentOptions) => {
+      expect(options.threadId).toBe('thread-1');
+      return session(options, async () => {
+        expect(fs.readFileSync(proof(options), 'utf8')).toBe(original);
+        fs.writeFileSync(proof(options), completed);
+        return 'completed';
+      });
+    });
+    const running = runSolver(args, directory);
+    await Promise.race([writerClosing.promise, running.then(() => { throw new Error('fixture_writer_not_closed'); })]);
+    try { expect(host.open).toHaveBeenCalledOnce(); }
+    finally { releaseWriter.resolve(); }
+    expect(await running).toBe(0);
     expect(result().status).toBe('evaluated_passed');
-    expect(state()).toMatchObject({ turns: 2, previousThreadIds: ['thread-1'],
+    expect(state()).toMatchObject({ turns: 2, threadId: 'thread-1',
       lastFailure: { reason: 'math_model_request_failed', diagnostic } });
+    expect(state().previousThreadIds ?? []).toEqual([]);
     expect(host.open).toHaveBeenCalledTimes(2);
     expect(host.delay).toHaveBeenCalledOnce();
     expect(host.delay).toHaveBeenCalledWith(10_000, undefined, { signal: expect.any(AbortSignal) });
@@ -208,27 +218,28 @@ describe('bounded role session recovery', () => {
   it('keeps a cooperative proof worker available after an empty upstream failure', async () => {
     const assignments = new Map<string, CooperativeAction>();
     let proofTurns = 0;
-    let failedWorkspace: string | undefined;
+    let failedWorkspace: string | undefined, failedThread: string | undefined;
     host.open.mockImplementation(async (options: MathAgentOptions) => {
       let diagnostic: MathAgentFailureDiagnostic | undefined;
-      return { ...session(options, async () => {
+      const current: MathAgentSession = session(options, async () => {
         const action = assignments.get(options.workspace)!;
         if (action.kind === 'lead') research(options, { tasks: [claim] });
         else if (action.kind === 'task') {
           if (++proofTurns === 1) {
             failedWorkspace = options.workspace;
+            failedThread = current.threadId;
             diagnostic = { code: 'other', reason: 'upstream_request_failed' };
             return 'failed';
           }
           expect(options.workspace).toBe(failedWorkspace);
-          expect(options.threadId).toBeUndefined();
+          expect(options.threadId).toBe(failedThread);
           expect(fs.readFileSync(proof(options), 'utf8')).toBe(original);
           fs.writeFileSync(proof(options), completed);
         } else if (action.kind === 'review') research(options, { commit: action.seedCommit, verdict: 'accepted' });
         else throw new Error(`unexpected recovery action: ${action.kind}`);
         return 'completed';
-      }, 'upstream request failed: completed turn had no assistant output or tool operation'),
-      get lastFailureDiagnostic() { return diagnostic; } };
+      }, 'upstream request failed: completed turn had no assistant output or tool operation');
+      return { ...current, get lastFailureDiagnostic() { return diagnostic; } };
     });
     expect(await cooperate(assignments)).toBe(0);
     expect(proofTurns).toBe(2);
@@ -237,6 +248,8 @@ describe('bounded role session recovery', () => {
       expect.objectContaining({ reason: 'math_model_request_failed', attempt: 1, delayMs: 10_000 }),
     ]);
     expect(events().filter(event => event.event === 'turn_retry')).toHaveLength(1);
+    expect(events().filter(event => event.event === 'context_restarted' && event.reason === 'request' &&
+      event.previousThreadId === failedThread)).toHaveLength(0);
     expect(events().filter(event => event.event === 'worker_failed')).toHaveLength(0);
     expect(state().workers.some((worker: { lastFailure?: { reason: string; diagnostic?: MathAgentFailureDiagnostic } }) =>
       worker.lastFailure?.reason === 'math_model_request_failed' &&
@@ -331,18 +344,22 @@ describe('bounded role session recovery', () => {
       throw new Error('math_model_turn_failed', { cause: new Error(detail) });
     }, 'math_model_turn_failed'));
     host.open.mockImplementationOnce(async (options: MathAgentOptions) => session(options, async message => {
-      expect(options.threadId).toBeUndefined(); expect(options.turnTimeoutMs).toBeUndefined();
+      expect(options.threadId).toBe(kind === 'tool' ? undefined : 'thread-1');
+      expect(options.turnTimeoutMs).toBeUndefined();
       expect(fs.readFileSync(proof(options), 'utf8')).toBe(partial);
       expect(fs.readFileSync(path.join(options.workspace, 'RESEARCH.md'), 'utf8')).toContain('checked checkpoint');
       expect(message).toContain('unsolved goals');
-      options.onUsage({ totalTokens: 7 }); options.onUsage({ totalTokens: 7 });
+      const totalTokens = kind === 'tool' ? 7 : 19;
+      options.onUsage({ totalTokens }); options.onUsage({ totalTokens });
       fs.writeFileSync(proof(options), completed); return 'completed';
     }));
     expect(await runSolver(args, directory)).toBe(0);
     expect(host.open).toHaveBeenCalledTimes(2);
     expect(host.open.mock.calls.map(([options]) => options.workspace)).toEqual([state().worktree, state().worktree]);
-    expect(state()).toMatchObject({ turns: 2, usage: { totalTokens: 19 }, usageBeforeThread: { totalTokens: 12 },
-      previousThreadIds: ['thread-1'], usageAccounting: { startedTurns: 2, reportedTurns: 1, incomplete: true, pending: false } });
+    expect(state()).toMatchObject({ turns: 2, usage: { totalTokens: 19 },
+      usageAccounting: { startedTurns: 2, reportedTurns: 1, incomplete: true, pending: false } });
+    expect(state().usageBeforeThread).toEqual(kind === 'tool' ? { totalTokens: 12 } : undefined);
+    expect(state().previousThreadIds ?? []).toEqual(kind === 'tool' ? ['thread-1'] : []);
     expect(events().filter(event => event.event === 'worker_recovering')).toHaveLength(1);
     expect(events().filter(event => event.event === 'worker_failed')).toHaveLength(0);
     expect(host.delay).toHaveBeenCalledWith(10_000, undefined, { signal: expect.any(AbortSignal) });
@@ -398,17 +415,22 @@ describe('bounded role session recovery', () => {
   it('retains the same worker and draft across two cooldown cycles of failed requests', async () => {
     const clock = recoveryClock();
     let requests = 0;
-    host.open.mockImplementation(async (options: MathAgentOptions) => session(options, async message => {
-      if (++requests <= 8) {
-        fs.writeFileSync(proof(options), partial);
-        fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), 'Preserve the checkpoint lemma across reconnections.');
-        return 'failed';
-      }
-      expect(fs.readFileSync(proof(options), 'utf8')).toBe(partial);
-      expect(fs.readFileSync(path.join(options.workspace, 'RESEARCH.md'), 'utf8')).toContain('checkpoint lemma');
-      expect(message).toContain('unsolved goals');
-      fs.writeFileSync(proof(options), completed); return 'completed';
-    }, 'stream disconnected before completion: error sending request'));
+    host.open.mockImplementation(async (options: MathAgentOptions) => {
+      const opening = host.open.mock.calls.length;
+      if (opening === 2) expect(options.threadId).toBe('thread-1');
+      if (opening === 3) expect(options.threadId).toBeUndefined();
+      return session(options, async message => {
+        if (++requests <= 8) {
+          fs.writeFileSync(proof(options), partial);
+          fs.writeFileSync(path.join(options.workspace, 'RESEARCH.md'), 'Preserve the checkpoint lemma across reconnections.');
+          return 'failed';
+        }
+        expect(fs.readFileSync(proof(options), 'utf8')).toBe(partial);
+        expect(fs.readFileSync(path.join(options.workspace, 'RESEARCH.md'), 'utf8')).toContain('checkpoint lemma');
+        expect(message).toContain('unsolved goals');
+        fs.writeFileSync(proof(options), completed); return 'completed';
+      }, 'stream disconnected before completion: error sending request');
+    });
     expect(await runSolver(args, directory)).toBe(0);
     expect(requests).toBe(9);
     expect(new Set(host.open.mock.calls.map(([options]) => options.workspace))).toEqual(new Set([state().worktree]));
@@ -716,6 +738,11 @@ describe('recoverable failure classification', () => {
     [{ code: 'rateLimitExceeded', reason: 'upstream_request_failed' }, 'math_model_concurrency_limit'],
     [{ code: 'contextWindowExceeded', reason: 'upstream_request_failed' }, 'math_model_context_window_exceeded'],
     [{ code: 'sandboxError', reason: 'upstream_request_failed' }, 'math_model_turn_failed'],
+    [{ code: 'httpConnectionFailed', httpStatusCode: 401, reason: 'invalid_tool_call_arguments' }, 'math_model_authentication_failed'],
+    [{ code: 'httpConnectionFailed', httpStatusCode: 429, reason: 'invalid_tool_call_arguments' }, 'math_model_concurrency_limit'],
+    [{ code: 'contextWindowExceeded', reason: 'invalid_tool_call_arguments' }, 'math_model_context_window_exceeded'],
+    [{ code: 'badRequest', reason: 'invalid_tool_call_arguments' }, 'math_model_turn_failed'],
+    [{ code: 'sandboxError', reason: 'invalid_tool_call_arguments' }, 'math_model_turn_failed'],
   ] as const)('uses structured provider metadata before arbitrary message text: %j', (diagnostic, expected) => {
     const error = 'Invalid authentication; stream disconnected; rate limit';
     expect(researchFailureReason(error, diagnostic as MathAgentFailureDiagnostic)).toBe(expected);
@@ -734,13 +761,33 @@ describe('recoverable failure classification', () => {
       .toBe('math_source_outside_ownership');
   });
 
-  it.each([{ code: 'other' }, { code: 'other', reason: 'invalid_tool_call_arguments' }] as const)(
+  it.each([{ code: 'other' }] as const)(
     'does not retry an unspecified upstream failure: %j', diagnostic => {
       const error = 'opaque provider failure';
       expect(researchFailureReason(error, diagnostic)).toBe('math_model_turn_failed');
       const detail = researchFailureDetail(new Error(error), undefined, diagnostic);
       expect(recoverableResearchFailure(detail)).toBe(false);
     });
+
+  it.each([
+    { code: 'other', reason: 'invalid_tool_call_arguments' },
+    { code: 'httpConnectionFailed', httpStatusCode: 502, reason: 'invalid_tool_call_arguments' },
+    { code: 'responseStreamDisconnected', httpStatusCode: 502, reason: 'invalid_tool_call_arguments' },
+    { code: 'responseTooManyFailedAttempts', httpStatusCode: 503, reason: 'invalid_tool_call_arguments' },
+  ] as const)('recovers an explicit tool argument failure through tool recovery: %j', diagnostic => {
+    const detail = researchFailureDetail(new Error('math_model_turn_failed'), 'opaque provider failure', diagnostic);
+    expect(researchFailureReason('stream disconnected', diagnostic)).toBe('math_model_tool_failed');
+    expect(detail).toBe('math_model_tool_failed');
+    expect(recoverableResearchFailure(detail)).toBe(true);
+    const budget = { maxTurns: Infinity, remainingMs: Infinity, aborted: false };
+    expect(planResearchRetry(detail, 0, { turns: 1 } as Parameters<typeof planResearchRetry>[2], budget))
+      .toEqual({ attempt: 1, delayMs: 10_000, reason: 'math_model_tool_failed' });
+    expect(planResearchCooldown(detail, 0, budget)).toBeUndefined();
+    expect(researchFailureDetail(new Error('math_source_outside_ownership'), undefined, diagnostic))
+      .toBe('math_source_outside_ownership');
+    for (const reason of localStops)
+      expect(researchFailureDetail(new Error('math_model_turn_failed'), undefined, diagnostic, reason)).toBe(reason);
+  });
 
   it('uses a concrete cause or same-turn session error without guessing from a generic failure', () => {
     const tool = 'Error parsing function call: invalid JSON arguments';

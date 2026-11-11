@@ -164,6 +164,32 @@ export abstract class CooperationInputs extends CooperationPlanning {
     }
     return new Map(this.deliveryChecks);
   }
+  /** Inspect this dispatch's complete new response using the same validation as publication. */
+  protected inspectLeadCheckpointDraft(action: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>) {
+    let response: unknown;
+    // A partial write, ordinary mathematical notes or missing file is not a submission to correct.
+    try { response = readMathResponse(this.lead.worktree, 'math-plan'); } catch { return; }
+    const digest = mathDigest(canonicalMathJson(response));
+    if (!this.leadDraftBaselines.has(action)) {
+      let baseline: string | null = null;
+      try {
+        if (git(this.lead.worktree, ['ls-tree', '--name-only', action.seedCommit, '--', 'RESEARCH.md']))
+          baseline = mathDigest(canonicalMathJson(parseMathResponse(
+            committedSource(this.lead.worktree, action.seedCommit, 'RESEARCH.md'), 'math-plan')));
+      } catch { /* An inherited notes-only seed has no control response. */ }
+      this.leadDraftBaselines.set(action, baseline);
+    }
+    if (this.leadDraftBaselines.get(action) === digest) return;
+    try {
+      const plan = parseLeadPlan(this.input.state.problem, response, this.planPatchBase(), { goalPath: this.goalPathReview() });
+      this.preparePlan(plan, action);
+    } catch (error) {
+      if (error instanceof Error && /^math_plan_/u.test(error.message))
+        return { digest, reason: bounded(error.message, 4000) };
+      throw error;
+    }
+    return { digest, reason: undefined };
+  }
   /** Saved notes are drafts: offer same-turn corrections without publishing them or changing the graph. */
   private notifyLeadDraftCorrection() {
     const active = this.active.get(this.lead.id), action = active?.action;
@@ -172,28 +198,8 @@ export abstract class CooperationInputs extends CooperationPlanning {
       !this.stopping && !this.input.signal.aborted && this.current(action) && !this.publishedPlans.has(action);
     const inspect = () => {
       if (!current()) return;
-      let response: unknown;
-      // A partial write, ordinary mathematical notes or missing file is not a submission to correct.
-      try { response = readMathResponse(this.lead.worktree, 'math-plan'); } catch { return; }
-      const digest = mathDigest(canonicalMathJson(response));
-      if (!this.leadDraftBaselines.has(action)) {
-        let baseline: string | null = null;
-        try {
-          if (git(this.lead.worktree, ['ls-tree', '--name-only', action.seedCommit, '--', 'RESEARCH.md']))
-            baseline = mathDigest(canonicalMathJson(parseMathResponse(
-              committedSource(this.lead.worktree, action.seedCommit, 'RESEARCH.md'), 'math-plan')));
-        } catch { /* An inherited notes-only seed has no control response. */ }
-        this.leadDraftBaselines.set(action, baseline);
-      }
-      if (this.leadDraftBaselines.get(action) === digest) return;
-      try {
-        const plan = parseLeadPlan(this.input.state.problem, response, this.planPatchBase(), { goalPath: this.goalPathReview() });
-        this.preparePlan(plan, action);
-      } catch (error) {
-        if (error instanceof Error && /^math_plan_/u.test(error.message))
-          return { digest, reason: bounded(error.message, 4000) };
-        throw error;
-      }
+      const draft = this.inspectLeadCheckpointDraft(action);
+      return draft?.reason ? { digest: draft.digest, reason: draft.reason } : undefined;
     };
     const correction = inspect();
     if (!correction) { this.leadDraftNotifications.delete(action); return; }

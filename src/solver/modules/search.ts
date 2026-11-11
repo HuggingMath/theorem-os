@@ -443,7 +443,9 @@ function structuredResearchFailure(diagnostic?: MathAgentFailureDiagnostic): str
   if (status !== undefined && status >= 400 && status < 500) return 'math_model_turn_failed';
   if (['httpConnectionFailed', 'responseStreamConnectionFailed', 'responseStreamDisconnected',
     'responseTooManyFailedAttempts', 'flexUnavailable', 'serverOverloaded', 'internalServerError'].includes(diagnostic.code))
-    return 'math_model_request_failed';
+    return diagnostic.reason === 'invalid_tool_call_arguments' ? 'math_model_tool_failed' : 'math_model_request_failed';
+  if (diagnostic.code === 'other' && diagnostic.reason === 'invalid_tool_call_arguments')
+    return 'math_model_tool_failed';
   if (diagnostic.code === 'other' && diagnostic.reason === 'upstream_request_failed')
     return 'math_model_request_failed';
   return diagnostic.code === 'other' ? undefined : 'math_model_turn_failed';

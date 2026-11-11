@@ -6738,7 +6738,7 @@ describe('isolated solver and host acceptance', () => {
       return 'completed';
     }));
     expect(await runSolver([...args, '--max-turns', '3'], directory)).toBe(0);
-    expect(host.createSession.mock.calls[1][0].threadId).toBe(error.includes('Concurrency limit') ? 'fixture-thread' : undefined);
+    expect(host.createSession.mock.calls[1][0].threadId).toBe(error.startsWith('math_codex_transport_closed') ? undefined : 'fixture-thread');
     expect(resumed.mock.calls[0][0]).toContain(unsolved);
     expect(host.delay).toHaveBeenCalledWith(10_000, undefined, { signal: expect.any(AbortSignal) });
     expect(host.verify).toHaveBeenCalledTimes(3);
@@ -6746,7 +6746,7 @@ describe('isolated solver and host acceptance', () => {
     expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ status: 'evaluated_passed', turns: 2 });
   });
 
-  it('starts a fresh thread after the first request failure while retaining proof and feedback', async () => {
+  it('retries a transient failure on its saved thread before rotating after another failure', async () => {
     const partial = original.replace('theorem first : True := by sorry', 'theorem first : True := by trivial');
     let turns = 0;
     host.verify.mockImplementation(async request => turns < 3 ? failed(verified(request), { stdoutPreview: unsolved }) : verified(request));
@@ -6755,10 +6755,10 @@ describe('isolated solver and host acceptance', () => {
       lastError: 'stream disconnected before completion: error sending request',
       run: async (message: string) => {
         turns++;
-        options.onUsage({ totalTokens: turns === 3 ? 15 : 10 });
+        options.onUsage({ totalTokens: turns === 3 ? 15 : turns * 10 });
         if (turns === 1) fs.writeFileSync(path.join(options.workspace, 'generated/p/Submission.lean'), partial);
         if (turns < 3) return 'failed';
-        expect(options.threadId).toBe('fresh-thread');
+        expect(options.threadId).toBeUndefined();
         expect(fs.readFileSync(path.join(options.workspace, 'generated/p/Submission.lean'), 'utf8')).toBe(partial);
         expect(message).toContain(unsolved);
         fs.writeFileSync(path.join(options.workspace, 'generated/p/Submission.lean'), original.replaceAll('by sorry', 'by trivial'));
@@ -6766,12 +6766,49 @@ describe('isolated solver and host acceptance', () => {
       }, close: vi.fn(), interrupt: vi.fn(),
     }));
     expect(await runSolver([...args, '--max-turns', '4'], directory)).toBe(0);
-    expect(host.createSession.mock.calls.map(call => call[0].threadId)).toEqual([undefined, undefined, 'fresh-thread']);
+    expect(host.createSession.mock.calls.map(call => call[0].threadId)).toEqual([undefined, 'fixture-thread', undefined]);
     expect(host.delay.mock.calls.map(call => call[0])).toEqual([10_000, 20_000]);
     const state = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
     expect(state).toMatchObject({ turns: 3, threadId: 'fresh-thread', previousThreadIds: ['fixture-thread'],
-      usage: { totalTokens: 25 }, usageBeforeThread: { totalTokens: 10 }, lastFailure: { reason: 'math_model_request_failed' } });
+      usage: { totalTokens: 35 }, usageBeforeThread: { totalTokens: 20 }, lastFailure: { reason: 'math_model_request_failed' } });
     expect(host.officialGate).toHaveBeenCalledOnce();
+  });
+
+  it('preserves a saved thread through the first structured upstream 502', async () => {
+    const close = vi.fn();
+    host.verify.mockImplementationOnce(async request => failed(verified(request), { stdoutPreview: unsolved }));
+    host.createSession.mockResolvedValueOnce({ threadId: 'saved-upstream-thread',
+      lastError: 'Service unavailable (502)',
+      lastFailureDiagnostic: { code: 'httpConnectionFailed', httpStatusCode: 502 },
+      run: vi.fn().mockResolvedValue('failed'), close, interrupt: vi.fn() });
+    host.createSession.mockImplementationOnce(session(options => options.threadId!, async options => {
+      expect(options.threadId).toBe('saved-upstream-thread');
+      expect(close).toHaveBeenCalledOnce();
+      fs.writeFileSync(path.join(options.workspace, 'generated/p/Submission.lean'), original.replaceAll('by sorry', 'by trivial'));
+      return 'completed';
+    }));
+    expect(await runSolver([...args, '--max-turns', '3'], directory)).toBe(0);
+    const state = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
+    expect(state.threadId).toBe('saved-upstream-thread');
+    expect(state.previousThreadIds ?? []).toEqual([]);
+    expect(host.delay).toHaveBeenCalledOnce();
+  });
+
+  it('rotates a malformed tool-call thread even when upstream reports it as a 502', async () => {
+    host.verify.mockImplementationOnce(async request => failed(verified(request), { stdoutPreview: unsolved }));
+    host.createSession.mockResolvedValueOnce({ threadId: 'malformed-tool-thread',
+      lastError: 'Service unavailable (502)',
+      lastFailureDiagnostic: { code: 'responseStreamDisconnected', httpStatusCode: 502, reason: 'invalid_tool_call_arguments' },
+      run: vi.fn().mockResolvedValue('failed'), close: vi.fn(), interrupt: vi.fn() });
+    host.createSession.mockImplementationOnce(session(options => options.threadId ?? 'fresh-tool-thread', async options => {
+      expect(options.threadId).toBeUndefined();
+      fs.writeFileSync(path.join(options.workspace, 'generated/p/Submission.lean'), original.replaceAll('by sorry', 'by trivial'));
+      return 'completed';
+    }));
+    expect(await runSolver([...args, '--max-turns', '3'], directory)).toBe(0);
+    const state = JSON.parse(fs.readFileSync(`${output}.runtime/state.json`, 'utf8'));
+    expect(state.previousThreadIds).toEqual(['malformed-tool-thread']);
+    expect(state.lastFailure.reason).toBe('math_model_tool_failed');
   });
 
   it('reopens a disconnected startup without spending another turn or discarding saved proof', async () => {

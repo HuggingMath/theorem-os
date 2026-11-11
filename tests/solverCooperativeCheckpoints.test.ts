@@ -38,7 +38,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
     if (directory) fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  function fixture(initial = false, projectRelative?: string, continuation?: 'lead' | 'lead-capacity' | 'custom-full' | 'peer') {
+  function fixture(initial = false, projectRelative?: string, continuation?: 'lead' | 'lead-capacity' | 'custom-full' | 'peer', review = false) {
     let cooperation: CooperativeResearch | undefined;
     const activate = CooperativeResearch.prototype.activate;
     vi.spyOn(CooperativeResearch.prototype, 'activate').mockImplementation(function (this: CooperativeResearch, ...args) {
@@ -59,7 +59,8 @@ describe('cooperative advisory scheduling checkpoints', () => {
     const plan = parseCooperationPlan(problem, { tasks: [
       ...problem.targets.map((target, index) => ({ id: `goal_${index + 1}`, kind: 'goal',
         objective: `Prove ${target.theoremName}`, ...target, status: 'paused' })),
-      { id: 'investigate', kind: 'research', ownerId: 'researcher', objective: 'Resolve the precise missing construction.' },
+      { id: 'investigate', kind: 'research', ownerId: 'researcher', objective: 'Resolve the precise missing construction.',
+        ...(review ? { reviewScope: 'feasibility' } : {}) },
     ] });
     const state = solverState(problem, workspace, { runId: 'advisory-checkpoint-fixture', phase: 'prepared',
       workers: workers.map(worker => ({ ...worker, phase: 'prepared', turns: 0 })),
@@ -251,9 +252,10 @@ describe('cooperative advisory scheduling checkpoints', () => {
 
   it.each([{ event: 'reasoning' as const }, { event: 'item_started' as const, itemType: 'commandExecution' }])(
     'starts the work slice only at real model or tool activity (%j)', async firstActivity => {
-      const { events, controller, run } = fixture(false, undefined, 'lead');
+      const { state, events, controller, run } = fixture(false, undefined, 'lead');
       const held = heldContinuationTurns({ deferFirstActivity: true }), completion = run(held.open, Infinity);
       void completion.catch(() => {}); await held.wait(0, completion);
+      delete state.cooperation!.error;
       const activity = held.open.mock.calls[0][0].onActivity!;
       activity({ event: 'item_started', itemType: 'userMessage' });
       activity({ event: 'item_completed', itemType: 'userMessage' });
@@ -270,7 +272,12 @@ describe('cooperative advisory scheduling checkpoints', () => {
       expect(held.notify).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(LEAD_REVISION_MS - 4 * 60_000 - 1);
       expect(held.interrupt).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1); await held.wait(1, completion);
+      await vi.advanceTimersByTimeAsync(1);
+      if (firstActivity.itemType === 'commandExecution') {
+        expect(held.interrupt).not.toHaveBeenCalled();
+        activity({ event: 'item_completed', itemType: 'commandExecution' });
+      }
+      await held.wait(1, completion);
       expect(held.interrupt).toHaveBeenCalledOnce();
       controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
       expect(vi.getTimerCount()).toBe(0);
@@ -387,9 +394,11 @@ describe('cooperative advisory scheduling checkpoints', () => {
 
   it.each(['request-returned', 'wait-limit'] as const)(
     'lets a Lead revision slice that ends mid-request wait for that request (%s)', async boundary => {
-      const { events, controller, run } = fixture(false, undefined, 'lead');
+      const { state, events, controller, run } = fixture(false, undefined, 'lead');
       const held = heldContinuationTurns(), completion = run(held.open, Infinity); void completion.catch(() => {});
       await held.wait(0, completion);
+      // This case has no required decision; required handoffs have their own regression fixtures.
+      delete state.cooperation!.error;
       const activity = held.open.mock.calls[0][0].onActivity!;
       // The model is still streaming one long request when the slice ends.
       await vi.advanceTimersByTimeAsync(LEAD_REVISION_MS - 30_000);
@@ -414,6 +423,54 @@ describe('cooperative advisory scheduling checkpoints', () => {
       expect(held.interrupt).toHaveBeenCalledOnce();
       expect(events).toContainEqual({ event: 'cooperative_checkpoint_request_settled', details: expect.objectContaining({
         workerId: 'solver', boundary, waitedMs: boundary === 'request-returned' ? 4 * 60_000 : 10 * 60_000 }) });
+      controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+  it.each(['none', 'before-notice', 'during-save', 'past-deadline'] as const)(
+    'lets a feasibility review save and yield to ready proof work across compaction (%s)', async compaction => {
+      const { state, workers, check, events, controller, run } = fixture(false, undefined, undefined, true);
+      const held = heldAdvisoryTurns(2, ['investigate', 'goal_1']);
+      const completion = run(held.open, Infinity); void completion.catch(() => {});
+      await held.wait(0, completion);
+      const activity = held.open.mock.calls[0][0].onActivity!;
+      if (compaction === 'before-notice') activity({ event: 'item_started', itemType: 'contextCompaction' });
+      const goal = state.cooperation!.tasks.find(node => node.task.id === 'goal_1')!;
+      goal.task = { ...goal.task, status: 'active', ownerId: 'researcher' };
+      await vi.advanceTimersByTimeAsync(5_000);
+      if (compaction === 'before-notice') {
+        expect(held.notify).not.toHaveBeenCalled();
+        activity({ event: 'item_completed', itemType: 'contextCompaction' });
+        await vi.advanceTimersByTimeAsync(5_000);
+      }
+      expect(held.notify.mock.calls.some(([message]) => message.includes('A typed proof task is now ready'))).toBe(true);
+      const notes = 'Inspected the exact pinned input. The independent review is unfinished; no verdict is claimed.\n';
+      if (compaction === 'during-save' || compaction === 'past-deadline') {
+        if (compaction === 'past-deadline') await vi.advanceTimersByTimeAsync(60_000);
+        activity({ event: 'item_started', itemType: 'contextCompaction' });
+        await vi.advanceTimersByTimeAsync(compaction === 'past-deadline' ? 9 * 60_000 + 1 : 35_000);
+        expect(held.interrupt).not.toHaveBeenCalled();
+        fs.writeFileSync(path.join(workers[1].worktree, 'RESEARCH.md'), notes);
+        activity({ event: 'item_completed', itemType: 'contextCompaction' });
+      } else await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(1);
+      if (compaction !== 'past-deadline') {
+        expect(held.interrupt).not.toHaveBeenCalled();
+        activity({ event: 'item_started', itemType: 'commandExecution' });
+        fs.writeFileSync(path.join(workers[1].worktree, 'RESEARCH.md'), notes);
+        activity({ event: 'item_completed', itemType: 'commandExecution' });
+      }
+      await held.wait(1, completion);
+      expect(held.interrupt).toHaveBeenCalledOnce();
+      expect(held.actions[1].task.id).toBe('goal_1');
+      const audit = state.cooperation!.tasks.find(node => node.task.id === 'investigate')!;
+      const draft = state.cooperation!.researchDrafts!.investigate;
+      expect(audit.status).toBe('pending'); expect(audit.researchCompletion).toBeUndefined();
+      expect(draft.feasibilityInputDigest).toBe(held.actions[0].assignment.feasibilityInputDigest);
+      expect(committedSource(workers[1].worktree, draft.commit, 'RESEARCH.md')).toBe(notes);
+      expect(events).toContainEqual({ event: 'advisory_yielded_for_typed_work',
+        details: expect.objectContaining({ workerId: 'researcher', reason: 'typed-work-ready' }) });
+      expect(check).not.toHaveBeenCalled();
       controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
       expect(vi.getTimerCount()).toBe(0);
     });
@@ -956,7 +1013,7 @@ describe('cooperative advisory scheduling checkpoints', () => {
       expect(actions[1].assignment).toEqual(actions[0].assignment);
       expect(open).toHaveBeenCalledTimes(interruptKind === 'stalled' ? 2 : 1);
       if (interruptKind === 'stalled') expect(open.mock.calls[1][0].threadId).toBe('saved-advisory-thread');
-      expect(vi.getTimerCount()).toBe(3);
+      expect(vi.getTimerCount()).toBe(4);
       await vi.advanceTimersByTimeAsync(15_000);
       expect(interrupt).toHaveBeenCalledOnce();
       expect(close).toHaveBeenCalledTimes(interruptKind === 'stalled' ? 1 : 0);
