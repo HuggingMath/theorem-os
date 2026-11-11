@@ -158,6 +158,10 @@ describe('Lead scheduling checkpoint control responses', () => {
 
   it('answers a research finding from a checkpoint without changing the graph', async () => {
     const action = await start(planText({ ...graph(), ...decide('decline') }));
+    const reminder = cooperative.leadCheckpointInstruction(action);
+    expect(reminder).toContain('researchDecisions: ["proposal-delivery"]');
+    expect(reminder).toContain('task graph may stay unchanged');
+    expect(reminder).not.toContain('return without a revision');
     await checkpoint(action);
     expect(state.cooperation!.researchDecisions).toContainEqual(expect.objectContaining({
       deliveryId: 'proposal-delivery', outcome: 'decline' }));
@@ -165,6 +169,36 @@ describe('Lead scheduling checkpoint control responses', () => {
     expect(state.cooperation!.lastLeadPauseInputDigest).toBeUndefined();
     expect(state.cooperation!.error).toBeUndefined();
     expect(events.some(item => item.event === 'lead_checkpoint_saved')).toBe(false);
+    expect(cooperative.leadCheckpointInstruction(action)).toContain('return without a revision');
+  });
+
+  it('does not add a later research publication to the old dispatch checkpoint obligations', async () => {
+    const later = state.cooperation!.deliveries!.splice(0)[0]!;
+    const action = await start();
+    state.cooperation!.deliveries!.push(later);
+    const reminder = cooperative.leadCheckpointInstruction(action);
+    expect(reminder).toContain('return without a revision');
+    expect(reminder).not.toContain(later.id);
+  });
+
+  it('drops only the exact source decision already being merged from the checkpoint reminder', async () => {
+    const action = await start(), delivery = state.cooperation!.deliveries![0]!;
+    const merging = { deliveryId: delivery.id, taskDigest: delivery.taskDigest, findingDigest: delivery.findingDigest };
+    (cooperative as any).pendingSourceResearchDecisions.set(action, [{ ...merging, findingDigest: 'different-finding' }]);
+    expect(cooperative.leadCheckpointInstruction(action)).toContain('researchDecisions');
+    (cooperative as any).pendingSourceResearchDecisions.set(action, [merging]);
+    expect(cooperative.leadCheckpointInstruction(action)).toContain('return without a revision');
+  });
+
+  it('requires current host feedback to be repaired before returning from the checkpoint', async () => {
+    state.cooperation!.deliveries = [];
+    const action = await start();
+    state.cooperation!.error = 'math_plan_progress_review_goal_unanswered: goal_0';
+    const reminder = cooperative.leadCheckpointInstruction(action);
+    expect(reminder).toContain('Repair the current host plan validation feedback');
+    expect(reminder).not.toContain('return without a revision');
+    delete state.cooperation!.error;
+    expect(cooperative.leadCheckpointInstruction(action)).toContain('return without a revision');
   });
 
   it('bounds repeated incomplete checkpoints even when each saves different draft prose', async () => {

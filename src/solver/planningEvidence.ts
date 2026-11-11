@@ -161,7 +161,9 @@ export function leadPlanningEvidenceText(evidence: ReturnType<typeof leadPlannin
       '","reason":"evidence for the chosen route or change","nextChecks":[{"action":"construction-check",' +
       '"objective":"the next discriminating check","expectedEvidence":"the observation that will decide it",' +
       '"targetTaskId":"ACTIVE_TASK_ID"}]} beside baseVersion. Use the existing nextCheck actions ' +
-      '(feasibility, apply-lemma, construction-check); each target must be an active task serving a reviewed goal. ' +
+      '(feasibility, apply-lemma, construction-check); each target must be an active task serving a reviewed goal, ' +
+      'and nextChecks must cover every reviewed goal. One check may cover multiple goals through recorded dependencies, ' +
+      'proof routes or advisory consumerGoalIds; do not invent connections merely to satisfy coverage. ' +
       'The host delivers these directions to that task; existing host next checks keep their checkOutcome protocol. ' +
       'You may retain a useful long proof with a specific reason and next check. Elapsed execution alone does not establish failure, ' +
       'and it does not require interrupting a worker. A checkpoint, an unaccepted plan or a description edit does not answer this review.' : '') +

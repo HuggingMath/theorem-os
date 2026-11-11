@@ -63,6 +63,14 @@ it('requires the presented check outcome decision even when a checkpoint inherit
   const notes = path.join(f.lead.worktree, 'RESEARCH.md');
   fs.writeFileSync(notes, '```math-plan\n' + JSON.stringify(f.plan) + '\n```\n');
   const first = await start();
+  const reminder = f.cooperation.leadCheckpointInstruction(first);
+  expect(reminder).toContain('nextCheckDecisions');
+  expect(reminder).toContain(JSON.stringify({ checkId: record.id, outcomeDeliveryId: record.outcome.deliveryId }));
+  expect(reminder).not.toContain('return without a revision');
+  const shownOutcome = record.outcome;
+  record.outcome = { ...shownOutcome, deliveryId: 'later-definition-outcome' };
+  expect(f.cooperation.leadCheckpointInstruction(first)).not.toContain('nextCheckDecisions');
+  record.outcome = shownOutcome;
   await f.cooperation.deliver(f.lead, first, first.seedCommit, true, 'scheduling-checkpoint');
   f.cooperation.deactivate(f.lead);
   expect(archive.error).toContain('math_plan_next_check_decision_required');
@@ -77,6 +85,7 @@ it('requires the presented check outcome decision even when a checkpoint inherit
   expect(record.status).toBe('decided');
   expect(archive.error).toBeUndefined();
   expect(archive.lastLeadPauseInputDigest).toBeUndefined();
+  expect(f.cooperation.leadCheckpointInstruction(next)).toContain('return without a revision');
 });
 
 it('preserves the host check and its dispatch identity across a group revision', async () => {

@@ -682,9 +682,11 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
           }
         }
       }
-      // Required syntax and injected assumption types need their source context even
-      // when source lookup cannot establish an unambiguous dependency.
-      const context: ProjectionDeclaration[] = [], pendingContext = [...requiredNotations, ...conditionalContext!], visitedContext = new Set<string>();
+      // Ordinary consumers need the same conservative source closure as syntax and
+      // injected assumption types: receiver fields can have several possible owners.
+      // These observations only discover original inputs; callers must freshly accept
+      // each one before retaining its source for another independent kernel check.
+      const context: ProjectionDeclaration[] = [], pendingContext = [target, ...requiredNotations, ...conditionalContext!], visitedContext = new Set<string>();
       for (const id of pendingContext) {
         if (visitedContext.has(id)) continue;
         visitedContext.add(id);

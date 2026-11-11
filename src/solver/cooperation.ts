@@ -518,20 +518,40 @@ export class CooperativeResearch extends CooperationInputs {
   private leadDecisionObligations(action?: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>) {
     const shown = action ? this.presentedResearchInputs.get(action)?.shown ?? [] : undefined;
     const merging = action ? this.pendingSourceResearchDecisions.get(action) ?? [] : [];
-    const research = leadResearchInputs(this.archive.deliveries ?? [],
-      new Map(this.archive.tasks.map(node => [node.task.id, node])), this.archive.researchDecisions).some(record =>
+    const researchInputs = leadResearchInputs(this.archive.deliveries ?? [],
+      new Map(this.archive.tasks.map(node => [node.task.id, node])), this.archive.researchDecisions).filter(record =>
       (!shown || shown.some(item => item.id === record.id && item.taskDigest === record.taskDigest &&
         item.findingDigest === record.findingDigest)) && !merging.some(item => item.deliveryId === record.id &&
         item.taskDigest === record.taskDigest && item.findingDigest === record.findingDigest));
-    const progressId = this.archive.goalProgress?.pending?.id;
-    const progress = Boolean(progressId && (!action || this.presentedGoalProgress.get(action) === progressId));
+    const pending = this.archive.goalProgress?.pending;
+    const progressReview = pending?.id && (!action || this.presentedGoalProgress.get(action) === pending.id) ? pending : undefined;
     const outcomes = action ? this.presentedNextCheckOutcomes.get(action) ?? [] : undefined;
-    const nextCheck = (this.archive.nextChecks ?? []).some(record => record.status === 'awaiting-decision' &&
+    const nextCheckOutcomes = (this.archive.nextChecks ?? []).filter(record => record.status === 'awaiting-decision' &&
       currentNextCheck(record, this.archive, this.explorationIdentity) && (!outcomes || outcomes.some(item =>
         item.checkId === record.id && item.outcomeDeliveryId === record.outcome?.deliveryId)));
     const feedback = Boolean(this.archive.error || this.archive.planPublicationRejection &&
       this.archive.planPublicationRejection.baseVersion === this.archive.planVersion);
-    return { research, progress, nextCheck, feedback, any: research || progress || nextCheck || feedback };
+    const research = researchInputs.length > 0, progress = Boolean(progressReview), nextCheck = nextCheckOutcomes.length > 0;
+    return { research, progress, nextCheck, feedback, any: research || progress || nextCheck || feedback,
+      researchInputs, progressReview, nextCheckOutcomes };
+  }
+  /** Re-read this dispatch's still-owed decisions when its checkpoint reminder is delivered. */
+  leadCheckpointInstruction(action: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>): string {
+    const obligations = this.leadDecisionObligations(action);
+    if (!obligations.any) return 'If the new deliveries, failures or idle peers call for a change, ' +
+      'save or publish the math-plan revision as your instructions describe and return. If the accepted graph already ' +
+      'gives each live peer its useful work, return without a revision. ';
+    const required: string[] = [];
+    if (obligations.research) required.push('Answer each still-unanswered presented delivery in researchDecisions: ' +
+      JSON.stringify(obligations.researchInputs.map(record => record.id)) + '.');
+    if (obligations.progressReview) required.push('Include progressReview with id ' + JSON.stringify(obligations.progressReview.id) +
+      ', a reason and nextChecks covering every reviewed goal: ' + JSON.stringify(obligations.progressReview.goalIds) + '.');
+    if (obligations.nextCheck) required.push('Include nextCheckDecisions for each still-unanswered presented outcome: ' +
+      JSON.stringify(obligations.nextCheckOutcomes.map(record => ({ checkId: record.id,
+        outcomeDeliveryId: record.outcome?.deliveryId }))) + '.');
+    if (obligations.feedback) required.push('Repair the current host plan validation feedback; an unchanged saved draft does not answer it.');
+    return 'Save or publish a validated math-plan revision as your instructions describe before returning. ' + required.join(' ') +
+      ' The task graph may stay unchanged when a decision-only revision satisfies these obligations. ';
   }
   private leadDecision(worker: ResearchWorker, head: string, inputDigest: string): CooperativeAction {
     this.syncPlanNotes();

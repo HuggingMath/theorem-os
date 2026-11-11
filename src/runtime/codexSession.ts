@@ -638,7 +638,11 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       developerInstructions: options.instructions + '\n\n' +
         'Shell execution: login shells are disabled to preserve the prepared proof environment. ' +
         'For every exec_command call, explicitly set "login": false; do not use login: true or rely on the default. ' +
-        'If a command is rejected because login shells are disabled, it did not execute: retry it with login: false and continue the task.',
+        'Omit both justification and sandbox_permissions, including empty or default values; this session already has its permission policy. ' +
+        'If the tool explicitly rejects a call before execution because login shells are disabled or the arguments are invalid ' +
+        '(for example, justification requires sandbox_permissions), the command did not execute: ' +
+        'retry the same command with "login": false and without justification or sandbox_permissions, then continue the task. ' +
+        'Do not replay a command merely because it exited with an error or its execution result is unclear; inspect that result first.',
       config: {
         mcp_servers: disabled,
         'features.apps': false,

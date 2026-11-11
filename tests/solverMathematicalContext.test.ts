@@ -36,6 +36,11 @@ it.each(['lead', 'researcher', 'engineer'] as const)('retains mathematical inter
     expect(text).toContain('quantifier order, uniform constants');
     expect(text).toContain('semilinear scalar maps');
     expect(text).toContain('quantitative moment or L² estimate');
+    expect(text).toContain('linearity and continuity do not imply norm preservation');
+    expect(text).toContain('every continuous linear equivalence or every equivalent norm');
+    expect(text).toContain('record the exact missing premise and its consumer for a Lead route decision');
+    expect(text).toContain('check integrability of its local model');
+    expect(text).toContain('infinite value on a null set does not by itself have an infinite integral');
     expect(text).toContain('old immutable commit or finding digest');
     expect(text).toContain(role === 'lead' ? 'answer the affected shown research deliveries through researchDecisions' :
       'Publish the correction through the current research-finding protocol');
@@ -45,5 +50,10 @@ it.each(['lead', 'researcher', 'engineer'] as const)('retains mathematical inter
     expect(text).toContain('save stdout separately from stderr progress');
     expect(text).toContain('--file is relative to --workspace');
     expect(text).not.toContain('Use /usr/bin/python3 for Python on this host');
+    if (role !== 'lead') {
+      expect(text).toContain('without writing shared package caches');
+      expect(text).toContain('Use this entry point for saved-file checks and temporary #check/#synth probes');
+      expect(text).toContain('Remove temporary probe commands before proof delivery');
+    }
   }
 });

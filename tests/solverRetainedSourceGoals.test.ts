@@ -50,9 +50,15 @@ const firstSolved = original.replace('first (box : Box) : box.value = box.value 
   'first (box : Box) : box.value = box.value := by cases box; rfl');
 
 type NotationBridge = boolean | 'overloaded';
-async function fixture(chain = false, notation: NotationBridge = false) {
+async function fixture(chain = false, notation: NotationBridge = false, receiver?: 'box' | '(id box)') {
   const directory = temporaryDirectory('solver-retained-source-goals-');
-  const bridge = (source: string) => notation ? source.replace(
+  const bridge = (source: string) => receiver ? source.replace(
+    'def frozen (box : Box) : box.value = box.value := first box', [
+      'namespace Box', 'def field (box : Box) : box.value = box.value := first box', 'end Box',
+      'namespace Other', 'def field (box : Box) : box.value = box.value := first box', 'end Other',
+      `def receiverBridge (box : Box) : box.value = box.value := ${receiver}.field`,
+      'def frozen (box : Box) : box.value = box.value := receiverBridge box',
+    ].join('\n')) : notation ? source.replace(
     'def frozen (box : Box) : box.value = box.value := first box',
     ['local notation "frozen" => first',
       ...(notation === 'overloaded' ? ['local notation (priority := high) "frozen" => (fun box : Box => Eq.refl (Box.value box))'] : []),
@@ -142,6 +148,37 @@ async function fixture(chain = false, notation: NotationBridge = false) {
 }
 
 describe.skipIf(!lean)('fresh original source retention before independent kernel checks', () => {
+  it.each((['box', '(id box)'] as const).flatMap(receiver =>
+    (['fresh', 'unaccepted', 'serialized', 'conditional', 'stale-version'] as const).map(kind => ({ receiver, kind }))))
+  ('requires fresh acceptance for ambiguous $receiver field context ($kind)', async ({ receiver, kind }) => {
+    const f = await fixture(false, false, receiver), old = f.first.integratedCheck!;
+    if (kind === 'unaccepted') setTaskStatus(f.first, 'pending', 'reconstructed');
+    if (kind === 'serialized') {
+      f.first.integratedCheck = structuredClone(old);
+      (f.cooperative as any).checkedDeliveries.add(f.first.integratedCheck);
+    }
+    if (kind === 'conditional') {
+      old.conditions = [{ taskId: 'unfinished', taskDigest: 'unfinished-version' }]; markTaskAcceptance(old);
+    }
+    if (kind === 'stale-version') f.first.task = { ...f.first.task, revision: f.first.task.revision + 1 };
+    expect(f.helper.dependsOn).toEqual([]);
+    expect(f.retained()).toEqual(kind === 'fresh' ? ['Retained.first'] : []);
+    const before = f.nativeChecks.length;
+    const proof = await f.check(f.helper, f.candidate, f.seed);
+    expect(proof.passed, JSON.stringify(proof.verification)).toBe(kind === 'fresh');
+    expect(f.nativeChecks.length).toBeGreaterThan(before);
+    expect(f.nativeChecks.at(-1)!.source.includes('theorem first')).toBe(kind === 'fresh');
+    expect(f.records.find(node => node.task.id === 'helper')!.integratedCheck).toBeUndefined();
+    if (kind === 'fresh') {
+      const checked = f.nativeChecks.at(-1)!;
+      for (const declaration of ['def field', 'def receiverBridge', 'def frozen']) expect(checked.source).toContain(declaration);
+      expect(checked.output).not.toContain('sorryAx');
+      expect(proof.verification.targetCommit).toBe(checked.commit);
+      expect(proof.verification.targetCommit).not.toBe(old.verification.targetCommit);
+      expect(proof.verification.results[0].receiptId).not.toBe(old.verification.results[0].receiptId);
+    }
+  });
+
   it('rechecks source after generated references bind an older whole module', async () => {
     const f = await fixture(), old = f.first.integratedCheck!;
     expect(f.nativeChecks[0].output).toContain('Box.casesOn');

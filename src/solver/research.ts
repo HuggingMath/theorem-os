@@ -633,9 +633,8 @@ export async function runResearchWorkers(input: {
                     'If the host accepted it while this notice was waiting, save the current argument and exact uncertainties in ' +
                     'RESEARCH.md and return promptly. This is a reminder, not an interruption.'
                 : revision
-                ? 'Decide now, before further searches or experiments. If the new deliveries, failures or idle peers call for a change, ' +
-                  'save or publish the math-plan revision as your instructions describe and return. If the accepted graph already ' +
-                  'gives each live peer its useful work, return without a revision. Delegate any open search as a research task instead of ' +
+                ? 'Decide now, before further searches or experiments. ' + cooperation!.leadCheckpointInstruction(assignment!) +
+                  'Delegate any open search as a research task instead of ' +
                   'running it in this turn. This turn yields a scheduling checkpoint at ' + Math.round(checkpointAfterMs / 60_000) +
                   ' minutes; the same thread and saved work remain available.'
                 : 'Save the current mathematical argument, exact unresolved step and useful references in RESEARCH.md now. ' +

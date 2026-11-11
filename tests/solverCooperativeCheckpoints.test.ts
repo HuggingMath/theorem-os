@@ -5,8 +5,10 @@ import type { MathAgentOptions, MathAgentSession } from '../src/runtime/codexSes
 import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
 import { CooperativeResearch } from '../src/solver/cooperation';
 import { leadResearchInputs } from '../src/solver/contextCompiler';
+import { observeGoalProgress } from '../src/solver/goalProgress';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { directSolverModules, type SolverModules } from '../src/solver/modules';
+import { captureObligationSnapshot } from '../src/solver/obligationProgress';
 import { committedSource, commitSolverSources, git } from '../src/solver/problem';
 import { runResearchWorkers } from '../src/solver/research';
 import { assignmentDeliveryFile, leadPlanDeliveryFile, parseCooperationPlan, taskVersion, type CooperativeAction } from '../src/solver/tasks';
@@ -340,6 +342,48 @@ describe('cooperative advisory scheduling checkpoints', () => {
     controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it.each(['current', 'settled', 'replaced'] as const)(
+    'rechecks the presented progress review when the queued Lead reminder is delivered (%s)', async status => {
+      const { state, events, controller, run } = fixture(false, undefined, 'lead');
+      const tasks = state.cooperation!.tasks.map(node => ({ ...node, task: { ...node.task, status: 'active' as const } }));
+      const intervalMs = 24 * 3_600_000, now = Date.now();
+      const input = { problemReceiptDigest: state.problem.receiptDigest, targets: state.problem.targets, tasks,
+        snapshot: captureObligationSnapshot(tasks), intervalMs,
+        activeTaskIds: new Set(tasks.filter(node => node.task.kind === 'goal').map(node => node.task.id)) };
+      const observed = observeGoalProgress(undefined, { ...input, now: now - intervalMs });
+      const progress = observeGoalProgress(observed.state, { ...input, now }).state;
+      const presented = structuredClone(progress.pending!);
+      expect(presented.goalIds.length).toBeGreaterThan(0);
+      state.cooperation!.goalProgress = progress;
+      const held = heldContinuationTurns(), completion = run(held.open, Infinity); void completion.catch(() => {});
+      await held.wait(0, completion);
+      delete state.cooperation!.error;
+      // emit runs after the timer fires and before the queued notify microtask. A peer may settle
+      // this review in that gap, so the reminder must not keep the timer's earlier obligation snapshot.
+      vi.spyOn(events, 'push').mockImplementation((...items) => {
+        if (items.some(item => item.event === 'cooperative_checkpoint_requested')) {
+          if (status === 'settled') delete state.cooperation!.goalProgress!.pending;
+          if (status === 'replaced') state.cooperation!.goalProgress!.pending = { ...presented, id: 'replacement-review' };
+        }
+        return Array.prototype.push.apply(events, items);
+      });
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      expect(held.notify).toHaveBeenCalledOnce();
+      const reminder = held.notify.mock.calls[0]![0];
+      if (status === 'current') {
+        expect(reminder).toContain('Include progressReview with id ' + JSON.stringify(presented.id));
+        expect(reminder).toContain('nextChecks covering every reviewed goal: ' + JSON.stringify(presented.goalIds));
+        expect(reminder).not.toContain('return without a revision');
+      } else {
+        expect(reminder).toContain('return without a revision');
+        expect(reminder).not.toContain(presented.id);
+        expect(reminder).not.toContain('replacement-review');
+      }
+      expect(held.interrupt).not.toHaveBeenCalled();
+      controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
+      expect(vi.getTimerCount()).toBe(0);
+    });
 
   it.each(['request-returned', 'wait-limit'] as const)(
     'lets a Lead revision slice that ends mid-request wait for that request (%s)', async boundary => {

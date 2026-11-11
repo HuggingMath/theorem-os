@@ -10,6 +10,7 @@ import { answerGoalProgress, GOAL_PROGRESS_REVIEW_MS as interval, goalProgressFo
 import { buildResearchContext } from '../src/solver/modules/context';
 import type { NextCheckRecord } from '../src/solver/nextCheckContract';
 import { captureObligationSnapshot } from '../src/solver/obligationProgress';
+import { leadPlanningEvidence, leadPlanningEvidenceText } from '../src/solver/planningEvidence';
 import { leadPlanDeliveryFile, markTaskAcceptance, parseCooperationPlan, taskVersion, type CooperativeTask, type TaskRecord } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
@@ -163,6 +164,10 @@ describe('executable goal reviews', () => {
     expect(cooperation.contextState(leadAction, lead).goalProgress!.pending!.id).toBe(oldReview);
     expect(cooperation.started(lead, leadAction)).toBe(true);
     cooperation.activate(lead, leadAction, async () => {}, async () => {});
+    const reminder = cooperation.leadCheckpointInstruction(leadAction);
+    expect(reminder).toContain('Include progressReview with id ' + JSON.stringify(oldReview));
+    expect(reminder).toContain('nextChecks covering every reviewed goal: ["goal_0"]');
+    expect(reminder).not.toContain('return without a revision');
 
     // Another worker's checked receipt reaches the archive while the Lead is still composing this plan.
     const checked = proof(core);
@@ -178,6 +183,11 @@ describe('executable goal reviews', () => {
     if (replacement) { now += interval; (cooperation as any).changed(); }
     const nextReview = state.cooperation!.goalProgress!.pending?.id;
     if (replacement) expect(nextReview).not.toBe(oldReview);
+    const settledReminder = cooperation.leadCheckpointInstruction(leadAction);
+    expect(settledReminder).toContain('return without a revision');
+    expect(settledReminder).not.toContain('Include progressReview');
+    expect(settledReminder).not.toContain(oldReview);
+    if (nextReview) expect(settledReminder).not.toContain(nextReview);
 
     fs.appendFileSync(path.join(lead.worktree, leadPlanDeliveryFile(leadAction)!), JSON.stringify({ kind: 'plan',
       dispatchNonce: leadAction.planNonce, baseVersion: leadAction.planVersion,
@@ -217,6 +227,27 @@ describe('executable goal reviews', () => {
     expect(clock.observe(2 * interval).requested).toBe(true);
     expect(goalProgressTaskContext(clock.state, tasks[0]!.task)).toContain(prepared.nextChecks[0]!.expectedEvidence);
     expect(goalProgressTaskContext(clock.state, { ...tasks[0]!.task, type: 'False', revision: 1 })).toBe('');
+  });
+
+  it('reports the uncovered independent goal while allowing one shared check to cover multiple goals', () => {
+    const shared = lemma('shared'), independent = goal('independent', []);
+    const tasks = [node(shared), node(goal('left', [shared.id])), node(goal('right', [shared.id])), node(independent)];
+    const clock = observer(tasks, [shared.id, independent.id]);
+    clock.observe(0); clock.observe(interval);
+    expect(clock.state.pending!.goalIds).toEqual(['left', 'right', 'independent']);
+    const plan = { tasks: tasks.map(item => item.task), groups: [] };
+    const decision = { id: clock.state.pending!.id, reason: 'Check the shared estimate and retain the independent proof.',
+      nextChecks: [check(shared)] };
+    expect(() => prepareGoalProgressDecision(decision, clock.state, plan))
+      .toThrow('math_plan_progress_review_goal_unanswered: independent');
+    const prepared = prepareGoalProgressDecision({ ...decision, nextChecks: [...decision.nextChecks, check(independent)] },
+      clock.state, plan);
+    expect(prepared.nextChecks.map(item => item.targetTaskId)).toEqual(['shared', 'independent']);
+    expect(plan.tasks.map(task => task.dependsOn)).toEqual([[], ['shared'], ['shared'], []]);
+    const prompt = leadPlanningEvidenceText(leadPlanningEvidence({ tasks, goalProgress: clock.state }));
+    expect(prompt).toContain('nextChecks must cover every reviewed goal');
+    expect(prompt).toContain('One check may cover multiple goals through recorded dependencies');
+    expect(prompt).toContain('do not invent connections merely to satisfy coverage');
   });
 
   it('preserves old reason-only records but exposes only exact bound directions to each worker', () => {

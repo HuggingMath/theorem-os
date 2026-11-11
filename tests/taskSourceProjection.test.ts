@@ -6,7 +6,7 @@ import { bootstrapLeanTask } from '../src/math/leanTask';
 import { createTaskSourceProjector, projectedGoalInputs, taskChanges } from '../src/solver/cooperativeProof';
 import { committedSource, commitSolverSources, git, readSolverProblem } from '../src/solver/problem';
 import * as problemApi from '../src/solver/problem';
-import { taskVersion, type CooperativeTask } from '../src/solver/tasks';
+import { taskVersion, type CooperativeTask, type TaskRecord } from '../src/solver/tasks';
 import { temporaryDirectory } from './helpers/files';
 import { newestLeanBinary } from './helpers/lean';
 import * as taskProjection from '../src/solver/taskProjection';
@@ -592,6 +592,43 @@ describe('owned source projection through dot notation', () => {
       `goal (x : Right) : x = x := by exact ${receiver}.field`));
     expect(f.project(f.task('goal'), []).get('Submission.lean')).not.toContain('def frozen');
     expect(f.project.dependencyHints(f.task('goal'), [])).toEqual([]);
+  });
+
+  it.skipIf(!newestLeanBinary()).each(['x', '(id x)'].flatMap(receiver => [false, true]
+    .map(helper => ({ receiver, helper }))))
+  ('discovers source context through ambiguous $receiver fields (helper: $helper)', ({ receiver, helper }) => {
+    const source = [
+      'structure Left where', '  value : Nat',
+      'structure Right where', '  value : Nat',
+      'namespace Left', 'theorem left_input (x : Left) : x = x := by sorry',
+      'def field (x : Left) : x = x := left_input x', 'end Left',
+      'namespace Right', 'theorem right_input (x : Right) : x = x := by sorry',
+      'def field (x : Right) : x = x := right_input x', 'end Right',
+      `def frozen (x : Right) : x = x := ${receiver}.field`,
+      'theorem goal (x : Right) : x = x := by sorry', '',
+    ].join('\n');
+    const solved = source.replace('goal (x : Right) : x = x := by sorry',
+      `goal (x : Right) : x = x := by exact ${helper ? 'frozen x' : `${receiver}.field`}`)
+      .replaceAll('by sorry', 'by rfl');
+    const f = fixture(source, solved), task = f.task('goal');
+    const records: TaskRecord[] = f.problem.targets.map(target => ({ task: f.task(target.theoremName),
+      status: 'pending', attempts: 0 }));
+    const expected = ['Left.left_input', 'Right.right_input'];
+    expect(f.project.dependencyHints(task, [])).toEqual([]);
+    expect(f.project.possibleContextGoals(task, []).map(root => root.name).sort()).toEqual(expected);
+    expect(projectedGoalInputs(f.project, task, records).map(record => record.task.theoremName).sort()).toEqual(expected);
+    // Discovery is advisory even though these particular candidate bodies are solved.
+    const missing = f.project(task, []).get('Submission.lean')!;
+    expect(missing).not.toContain('theorem left_input');
+    expect(missing).not.toContain('theorem right_input');
+    expect(missing).not.toContain('def frozen');
+    const partial = f.project(task, ['Right.right_input']).get('Submission.lean')!;
+    expect(partial).not.toContain('def frozen');
+    const retained = f.project(task, expected).get('Submission.lean')!;
+    expect(retained).toContain('def frozen');
+    expect(f.project.possibleContextGoals(task, expected)).toEqual([]);
+    leanCheck(f, retained, 'goal');
+    expect(fs.readFileSync(f.file, 'utf8')).toBe(solved);
   });
 
   it('keeps explicit namespace references distinct from unrelated declarations sharing their leaf', () => {

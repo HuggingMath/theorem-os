@@ -288,9 +288,10 @@ export function prepareGoalProgressDecision(decision: GoalProgressDecision, stat
       throw new Error('math_plan_progress_review_task_unavailable: ' + check.targetTaskId);
     return { ...check, taskDigest: taskVersion(task) };
   });
-  if (goals.some(goal => !checks.some(check => goal.path.has(check.targetTaskId) ||
-      researchServesGoal(tasks.get(check.targetTaskId)!, goal.id, goal.path, nextChecks))))
-    throw new Error('math_plan_progress_review_goal_unanswered');
+  const unanswered = goals.filter(goal => !checks.some(check => goal.path.has(check.targetTaskId) ||
+    researchServesGoal(tasks.get(check.targetTaskId)!, goal.id, goal.path, nextChecks)));
+  if (unanswered.length)
+    throw new Error('math_plan_progress_review_goal_unanswered: ' + unanswered.map(goal => goal.id).join(', '));
   return { ...decision, nextChecks: checks };
 }
 

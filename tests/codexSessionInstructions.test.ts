@@ -56,6 +56,16 @@ describe('base instructions for isolated formalization sessions', () => {
   ].join('\n');
   const message = 'Review the complete frozen INPUT.json and OUTPUT.schema.json.\nDo not omit either conclusion.';
   const calls = () => fs.readFileSync(traceFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  const expectShellCallContract = (text: string) => {
+    expect(text).toContain('login shells are disabled');
+    expect(text).toContain('"login": false');
+    expect(text).toContain('Omit both justification and sandbox_permissions, including empty or default values');
+    expect(text).toContain('this session already has its permission policy');
+    expect(text).toContain('explicitly rejects a call before execution');
+    expect(text).toContain('justification requires sandbox_permissions');
+    expect(text).toContain('retry the same command with "login": false and without justification or sandbox_permissions');
+    expect(text).toContain('Do not replay a command merely because it exited with an error or its execution result is unclear');
+  };
   const options = (isolated: boolean, resume: boolean): MathAgentOptions => ({
     executable, profile, workspace: root, model: 'gpt-6.1-sol', effort: 'max', instructions, onUsage: vi.fn(),
     environment: { PATH: process.env.PATH, FIXTURE_TRACE: traceFile },
@@ -93,8 +103,7 @@ describe('base instructions for isolated formalization sessions', () => {
     const method = resume ? 'thread/resume' : 'thread/start';
     const start = calls().find(call => call.method === method).params;
     expect(start.developerInstructions.slice(0, instructions.length + 2)).toBe(instructions + '\n\n');
-    expect(start.developerInstructions.slice(instructions.length)).toContain('login shells are disabled');
-    expect(start.developerInstructions.slice(instructions.length)).toContain('\"login\": false');
+    expectShellCallContract(start.developerInstructions.slice(instructions.length));
     expect(start.baseInstructions).toBeTypeOf('string');
     expect(start.baseInstructions.length).toBeLessThan(1_000);
     expect(start.baseInstructions).toMatch(/mathematical.*agent/i);
@@ -145,8 +154,7 @@ describe('base instructions for isolated formalization sessions', () => {
     });
     const start = calls().find(call => call.method === (resume ? 'thread/resume' : 'thread/start')).params;
     expect(start.developerInstructions.slice(0, instructions.length + 2)).toBe(instructions + '\n\n');
-    expect(start.developerInstructions.slice(instructions.length)).toContain('login shells are disabled');
-    expect(start.developerInstructions.slice(instructions.length)).toContain('\"login\": false');
+    expectShellCallContract(start.developerInstructions.slice(instructions.length));
     expect(start).not.toHaveProperty('outputSchema');
     expect(session.isolationReceipt).toEqual(receipt);
     expect(fetch).not.toHaveBeenCalled();
@@ -159,8 +167,7 @@ describe('base instructions for isolated formalization sessions', () => {
     expect(start).not.toHaveProperty('baseInstructions');
     expect(start).not.toHaveProperty('sandbox');
     expect(start.developerInstructions.slice(0, instructions.length + 2)).toBe(instructions + '\n\n');
-    expect(start.developerInstructions.slice(instructions.length)).toContain('login shells are disabled');
-    expect(start.developerInstructions.slice(instructions.length)).toContain('\"login\": false');
+    expectShellCallContract(start.developerInstructions.slice(instructions.length));
     expect(start).toMatchObject({ model: 'gpt-6.1-sol', cwd: root, approvalPolicy: 'never', config: {
       model_provider: 'web_provider', model_reasoning_effort: 'max', default_permissions: 'math-worker',
       'model_providers.web_provider.base_url': 'https://models.example.test/v1',

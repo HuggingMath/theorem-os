@@ -140,19 +140,21 @@ describe('integrated task projection preparation', () => {
     });
 
   it.each([{ count: 64, oldGroupingCalls: 96 }, { count: 128, oldGroupingCalls: 320 }])
-  ('prepares $count helper grouping and host checks once per snapshot', async ({ count, oldGroupingCalls }) => {
+  ('reuses one prepared snapshot to group and validate $count helpers', async ({ count, oldGroupingCalls }) => {
     const canonical = prepare(count);
 
     await recheck();
 
     expectVerified(canonical);
-    expect(proofApi.createTaskSourceProjector).toHaveBeenCalledTimes(2);
-    expect(preparations.map(item => [item.worktree, item.commit])).toEqual([[workspace, canonical], [workspace, canonical]]);
+    // This spy observes the cooperation cache. The proof checker also constructs
+    // its own isolated projection through a module-local factory call.
+    expect(proofApi.createTaskSourceProjector).toHaveBeenCalledOnce();
+    expect(preparations.map(item => [item.worktree, item.commit])).toEqual([[workspace, canonical]]);
     const targetIds = helpers().map(node => node.task.id);
-    expect(preparations[0]!.targets).toEqual(targetIds);
-    expect(preparations[0]!.targets.length).toBeLessThan(oldGroupingCalls);
-    // Every target still crosses the host's exact-source receipt boundary.
-    expect(preparations[1]!.targets).toEqual(targetIds);
+    // One projection per target for grouping, and one for receipt validation.
+    // Batching must not repeatedly project every remaining grouping candidate.
+    expect(preparations[0]!.targets.toSorted()).toEqual([...targetIds, ...targetIds].toSorted());
+    expect(preparations[0]!.targets.length - count).toBeLessThan(oldGroupingCalls);
     expect(host.verify).toHaveBeenCalledTimes(count / 32);
     const requests = host.verify.mock.calls.map(([request]) => request as MathematicsVerifierBatchRequest);
     expect(requests.map(request => request.items.length)).toEqual(Array(count / 32).fill(32));
@@ -163,13 +165,14 @@ describe('integrated task projection preparation', () => {
     const canonical = prepare(4), targetIds = helpers().map(node => node.task.id);
     await recheck();
     expectVerified(canonical);
-    const firstHost = preparations[1]!;
+    const firstHost = preparations[0]!;
     await recheck();
 
     expectVerified(canonical);
-    expect(preparations).toHaveLength(3);
-    expect(firstHost.targets).toEqual(targetIds);
+    expect(preparations).toHaveLength(1);
+    expect(firstHost.targets.toSorted()).toEqual(Array(4).fill(targetIds).flat().toSorted());
     expect(host.verify).toHaveBeenCalledOnce();
+    const firstTargets = [...firstHost.targets];
 
     fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('helper_0 : True := by trivial', 'helper_0 : True := by exact True.intro'));
     const changed = commitSolverSources(problem, workspace);
@@ -178,9 +181,10 @@ describe('integrated task projection preparation', () => {
 
     expect(changed).not.toBe(canonical);
     expectVerified(changed);
-    expect(preparations).toHaveLength(5);
-    expect(preparations.slice(3).map(item => [item.commit, item.targets])).toEqual([[changed, targetIds], [changed, targetIds]]);
-    expect(firstHost.targets).toEqual(targetIds);
+    expect(preparations).toHaveLength(2);
+    expect(preparations[1]).toMatchObject({ worktree: workspace, commit: changed });
+    expect(preparations[1]!.targets.toSorted()).toEqual([...targetIds, ...targetIds].toSorted());
+    expect(firstHost.targets).toEqual(firstTargets);
     expect(host.verify).toHaveBeenCalledTimes(2);
     const request = host.verify.mock.calls[1]![0] as MathematicsVerifierBatchRequest;
     expect(committedSource(workspace, request.targetCommit!, `${problem.projectRelative}/Submission.lean`))
