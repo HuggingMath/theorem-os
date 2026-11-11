@@ -1,0 +1,2658 @@
+{
+  "schema": "theoremos.commit-closeout.ledger.v1",
+  "generatedAt": "2026-11-11T17:50:58.124340+00:00",
+  "scope": "148 unique historical nonancestor objects in the pre-closeout three-repository audit; branch count and Git ancestry are not a count of missing changes.",
+  "originalAudit": {
+    "path": "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json",
+    "sha256": "57c6245dea65552cabf2a16e26c4ff92b9d8d3fe7b1a5ab119c8ac148ee9b0ad",
+    "summary": {
+      "uniqueNonAncestorCommits": 148,
+      "historicalCheckpointsPreserved": 51,
+      "runtimeOrdinaryBranchCommitsOutsideMainGraph": 61,
+      "runtimeOrdinaryBranchExactPatchEquivalents": 40,
+      "runtimeOrdinaryBranchOtherHistoricalCommits": 21,
+      "confirmedUnintegratedWebChanges": 2,
+      "runtimeSolverHistoricalCommitsWithUnconfirmedResiduals": 6,
+      "recordsRequiringFollowup": 13,
+      "dispositions": {
+        "historical-checkpoint-preserved-not-merged": 51,
+        "exact-patch-equivalent-in-main-history": 40,
+        "merge-result-files-in-main-history": 1,
+        "merge-result-blobs-covered-in-main-history": 2,
+        "mixed-historical-merge-residual-intent-unconfirmed": 1,
+        "historical-forward-port-reviewed-and-integrated": 1,
+        "historical-snapshot-reviewed-no-new-runtime-fix-found": 12,
+        "cumulative-web-implementation-covered": 3,
+        "confirmed-unintegrated-change": 2,
+        "superseded-source-feature-present": 4,
+        "historical-stash-partially-reviewed": 1,
+        "empty-stash-index-object-preserved": 3,
+        "formalization-source-review-with-forward-port-evidence": 1,
+        "stash-exactly-preserved-in-reviewed-snapshot": 1,
+        "all-result-files-in-main-history": 1,
+        "historical-merge-inspection-test-residual-unconfirmed": 1,
+        "mixed-historical-snapshot-retain-residual-review": 2,
+        "later-implementation-covered-at-behavior-level": 3,
+        "superseded-by-current-unlimited-budget-ui": 1,
+        "runtime-gate-covered-doc-aggregation-diff": 1,
+        "formalization-core-present-residual-equivalence-unconfirmed": 1,
+        "historical-stash-features-reviewed-with-residual-boundary": 1,
+        "untracked-stash-tests-covered-diagnostics-preserved": 1,
+        "partially-superseded-with-concrete-deltas-and-unconfirmed-semantics": 1,
+        "scoped-source-tree-equivalent": 1,
+        "delta-equivalent-except-test-whitespace": 1,
+        "partially-covered-with-unconfirmed-old-deltas": 1,
+        "integrated-adapted-and-expanded": 1,
+        "historical-generated-release-equivalent": 3,
+        "historical-mixed-snapshot-preserved-not-replayed": 1,
+        "published-independent-pages-redirect-branch": 2,
+        "local-validation-copy-preserved": 1,
+        "pending-remote-validation-before-master-release": 1
+      }
+    },
+    "counts": {
+      "checkedAt": "2026-11-11T17:05:28.562611+00:00",
+      "repositories": [
+        {
+          "name": "runtime",
+          "root": "/home/lzh/theorem-os",
+          "base": "b22efedaf222cac564375711ab471b8ed01d1c39",
+          "localBranches": 213,
+          "checkpointBranches": 41,
+          "unmergedAllRefsCommits": 129,
+          "unmergedNormalLocalBranchCommits": 61,
+          "baseHistoryCommitCount": 581,
+          "originalBranch": "feat/product-continuity",
+          "originalHead": "c5bad6bee39e022c9525c91485967314f491e40f",
+          "originalVsCurrentMain": "0\t143",
+          "originalHeadCommitCount": 438,
+          "headsAndRemoteRefs": 234,
+          "allRefs": 251,
+          "refsByNamespace": {
+            "refs/archive": 6,
+            "refs/heads": 213,
+            "refs/remotes": 21,
+            "refs/stash": 1,
+            "refs/tags": 10
+          },
+          "ancestorLocalBranchHeads": 123,
+          "nonAncestorLocalBranchHeads": 90
+        },
+        {
+          "name": "website",
+          "root": "/home/lzh/theorem-os-site",
+          "base": "039423cff5733604d37b2c6445512bd8a34c6a95",
+          "localBranches": 47,
+          "checkpointBranches": 8,
+          "unmergedAllRefsCommits": 15,
+          "unmergedNormalLocalBranchCommits": 7,
+          "baseHistoryCommitCount": 62,
+          "headsAndRemoteRefs": 49,
+          "allRefs": 50,
+          "refsByNamespace": {
+            "refs/heads": 47,
+            "refs/remotes": 2,
+            "refs/tags": 1
+          },
+          "ancestorLocalBranchHeads": 33,
+          "nonAncestorLocalBranchHeads": 14
+        },
+        {
+          "name": "library",
+          "root": "/home/lzh/workspace/projects/theorem-os/library",
+          "base": "03b02ee173eb990e97c93716d8ae03cf9ebdda0c",
+          "localBranches": 7,
+          "checkpointBranches": 2,
+          "unmergedAllRefsCommits": 4,
+          "unmergedNormalLocalBranchCommits": 2,
+          "baseHistoryCommitCount": 53,
+          "headsAndRemoteRefs": 9,
+          "allRefs": 9,
+          "refsByNamespace": {
+            "refs/heads": 7,
+            "refs/remotes": 2
+          },
+          "ancestorLocalBranchHeads": 3,
+          "nonAncestorLocalBranchHeads": 4
+        }
+      ],
+      "remoteRuntimeMainVerified": "b22efedaf222cac564375711ab471b8ed01d1c39"
+    }
+  },
+  "allHistoricalRecordsHandled": true,
+  "allHistoricalShasMergedIntoMain": false,
+  "historicalRecordCount": 148,
+  "previouslyPending": 13,
+  "pendingRecordCount": 0,
+  "preservedCheckpointCount": 51,
+  "dispositions": {
+    "historical-checkpoint-preserved-not-merged": 51,
+    "exact-patch-equivalent-in-main-history": 40,
+    "merge-result-files-in-main-history": 1,
+    "merge-result-blobs-covered-in-main-history": 2,
+    "merge-result-history-confirmed": 1,
+    "historical-forward-port-reviewed-and-integrated": 1,
+    "historical-snapshot-reviewed-no-new-runtime-fix-found": 12,
+    "cumulative-web-implementation-covered": 3,
+    "omitted-behavior-adapted": 2,
+    "superseded-source-feature-present": 4,
+    "mixed-stash-residuals-resolved": 1,
+    "empty-stash-index-object-preserved": 3,
+    "forward-port-and-historical-test-closure": 1,
+    "stash-exactly-preserved-in-reviewed-snapshot": 1,
+    "all-result-files-in-main-history": 1,
+    "inspection-residual-is-strict-current-subset": 1,
+    "mixed-snapshot-residuals-resolved": 1,
+    "later-implementation-covered-at-behavior-level": 3,
+    "superseded-by-current-unlimited-budget-ui": 1,
+    "runtime-gate-covered-doc-aggregation-diff": 1,
+    "renamed-and-expanded-tests-confirmed": 1,
+    "canonical-probe-and-historical-contracts-resolved": 1,
+    "untracked-stash-tests-covered-diagnostics-preserved": 1,
+    "adapted-gaps-and-explicitly-retired-proposals": 1,
+    "scoped-source-tree-equivalent": 1,
+    "mixed-solver-snapshot-resolved": 1,
+    "delta-equivalent-except-test-whitespace": 1,
+    "fresh-actual-dependency-context-adapted": 1,
+    "integrated-adapted-and-expanded": 1,
+    "historical-generated-release-equivalent": 3,
+    "historical-mixed-snapshot-preserved-not-replayed": 1,
+    "published-independent-pages-redirect-branch": 2,
+    "local-validation-copy-preserved": 1,
+    "formal-library-published-and-private-master-updated": 1
+  },
+  "records": [
+    {
+      "repository": "runtime",
+      "commit": "893ea5abe3e64508545e8ab8fa970eecb5bb2e69",
+      "title": "chore: checkpoint solver-release-integration-20261110-11 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "ec04ccf457b154acf9c9c85ad740f8799666abe7",
+      "title": "chore: checkpoint solver-throughput-20261107 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "bbeffdb1e1898bc19782eed54a2dbc49ead56799",
+      "title": "chore: checkpoint stale-assignment-release-20261109 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "2bb97acbdaf1a882ba2697042d8af7414ea3a566",
+      "title": "chore: checkpoint ui-followup-release-record-20261111 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "107f9b0a013ad3f6184f5177d2b7a1b396786a0b",
+      "title": "chore: checkpoint solver-process-fixes-20261110-08 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "425d104a4880c728725f91559f699c9211ac3d52",
+      "title": "chore: checkpoint solver-process-fixes-20261110-09 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "50918a685d07f0562ba898ff51581762370bb59d",
+      "title": "chore: checkpoint solver-process-fixes-20261110-10 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "05237eedf4a4ecc7bab3d76ef2341917bd6ab8ff",
+      "title": "chore: checkpoint solver-process-fixes-20261110-11 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "92d856ce04ed6c8f5a53974570911a1d7a3a2fe6",
+      "title": "chore: checkpoint solver-process-fixes-20261111-12 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "33b7ba7b1270263b4562a9019ffb74eedce9360f",
+      "title": "chore: checkpoint solver-process-fixes-20261111-13 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "00a6634c92785e868f47a9ce90bf480615dbd009",
+      "title": "chore: checkpoint solver-process-fixes-20261111-15 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "178e52ecef5743274f559f78bb7a221af7cad1a9",
+      "title": "chore: checkpoint solver-process-fixes-20261111-16 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "910ba0d9fb8c1bb624773bd1e37de15c46558739",
+      "title": "chore: checkpoint solver-process-fixes-20261111-17 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "1ae7a1c2494fac09eab5cb1cbb9e0ae96efb9f7b",
+      "title": "chore: checkpoint solver-process-fixes-20261111-18 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "b6b89a195c98fb9765b7e965550b896a29240dc2",
+      "title": "chore: checkpoint solver-recovery-20261108 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "1f72a37ffb1917c4bba12eb9a7b23186de622adb",
+      "title": "chore: checkpoint solver-blockers-20261108 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "48bb343320815856bb70afa8d78811932183bba2",
+      "title": "chore: checkpoint solver-continuity-20261108 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "cd5d0297059571046399f15d6e649b2c0b459e81",
+      "title": "chore: checkpoint solver-followup-20261107 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "56b9d9de729c77da1c8bddfedbc6fb9afe421d64",
+      "title": "chore: checkpoint solver-pipeline-20261108 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "d60ec9c1ce869fb0bb1b45a9e3827f5e61243891",
+      "title": "chore: checkpoint solver-process-fixes-20261110-07 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "0ca5c33e3ed2c6334df9418b1f71740faf75c09e",
+      "title": "chore: checkpoint progress-recovery-20261109 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "f19ffcdd97f177e77d84929786cdb9c4d7d06db6",
+      "title": "chore: checkpoint research-collaboration-fixes-20261109 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "934a12377af48bb218e1599dfc9cec8703cc6fb9",
+      "title": "chore: checkpoint research-interface-redesign-20261110 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "e5b7ff68a6e2750b57a9e16f417104be8aa515de",
+      "title": "chore: checkpoint research-ux-followup-20261110 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "a3810e91fe8f40f4704c92fba3e26176d98ccedb",
+      "title": "chore: checkpoint single-solver-closeout-2af1303-20261111 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "b1d2c8a3357eac567d0d3c84f99c660337cd3d1e",
+      "title": "chore: checkpoint solve-pipeline-fixes-20261109 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "b171d044f6d3d4ea6530ac8b651c6d6296fd5468",
+      "title": "chore: checkpoint failure-remediation-20261109 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "cc2308c6f7f74bac6903bf519972472519520fc6",
+      "title": "chore: checkpoint failure-remediation-activation-20261109 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "af0485c968ace441304a366b81d6421a501eaa1e",
+      "title": "chore: checkpoint formalization-latency-20261108 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "f733b874aa7e576ca3a922e564ac6935ea990665",
+      "title": "chore: checkpoint frontend-audit-fixes-20261109 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "2c7aef2959e9d84a172bc319fde2f3f803da5bff",
+      "title": "chore: checkpoint frontend-continuity-seven-20261111 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "f94c26adc2cfd5173338e338e7e2a0531acf8d0a",
+      "title": "chore: checkpoint frontend-product-four-20261111 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "2aa4419a245d66c59815e090a9471927652ce086",
+      "title": "chore: checkpoint frontend-product-gaps-20261111 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "882697471b39950073a19ed6dfe44921fe0f1e9f",
+      "title": "chore: checkpoint frontend-round8-fixes-20261109 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "66a7af5b70f99c8977028b2457aae497c3fdbd21",
+      "title": "chore: checkpoint frontend-round9-fixes-20261109 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "f9a546dfebd8de24da107b256f267bb014aba554",
+      "title": "chore: checkpoint mathematician-feedback-fixes-20261109 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "886e3c0edbce2f9619f70e9965b4a47128f6e345",
+      "title": "chore: checkpoint mathematician-revalidation-20261109 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "9cd5a3452a8fd9cbc7a52c965a563261d4688219",
+      "title": "chore: checkpoint explanation-content-20261111 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "11dbc981d97629ce7b1368fb8750b25e73ba6b47",
+      "title": "chore: checkpoint explanation-latex-20261111 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "fad65cd656dd857b42e624fb621998fa8c6955a2",
+      "title": "chore: checkpoint full-src uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "a251ba08451fd23e9b37f32965550b94c4022f00",
+      "title": "chore: checkpoint theorem-os uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "3fb952dcf20a220ed99ed0e49654c37daf0ce0da",
+      "title": "fix: integrate solver17 draft correction and native shell feedback [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "31f53da005834335aacfefd5e003794cc923fe3f",
+      "title": "fix: unify Web mathematics environment and freeze formalization libraries [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "14d7afbadc3bfcc3b73deb960d3c6d7c10e595db",
+      "title": "Default new proof runs to high reasoning [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "a510e0ca873c3f555ad1133a06a1ce3a366049b5",
+      "title": "Preserve max proof defaults after high formalization [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "02483178dd8a0dc2097a72d1307bef7012a0ab31",
+      "title": "fix(solver): hand single-worker proof diagnostics to host acceptance [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "7da43ae914c9d26ef7b0e0759223f83a3bdd1cf2",
+      "title": "Repair workbench language audit fixtures and current selectors [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "ae4d5d53e1e2139ddf5ce67b61616bb6ba2bc1b2",
+      "title": "Default new formalization requests to high reasoning [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "5bd64266e071552101af2915d04e3f6cc195a74b",
+      "title": "Fix solver checkpoint decisions and retain verifier diagnostics [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "e25093d00225342da12f13c8552ef6a9c45263b4",
+      "title": "fix(web): complete research draft, library and budget continuity [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "09baa8174fbc80d618774908a75f99759b47161e",
+      "title": "Clarify ambient carrier universes during formalization [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "df032fbf90834a19b5b8469d80916665cd3aac7f",
+      "title": "Reduce formalization lookup and source-repair round trips [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "da7f0853b646dbf920e3ccdc366ff69fc886e264",
+      "title": "Align Library state checks with the current directory controls [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "babd47abaa89f64f00f515278d6326c15299dbed",
+      "title": "Translate the review decision archive receipt [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "69cf4534361000e5d6ac7764611c20917750efd2",
+      "title": "Merge frozen research state and budget continuity fixes [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "c52deca57615ea65e573cf482dfcd203970b219a",
+      "title": "perf(formalization): share batched lookup scans and reuse candidate source [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "a20384c477b115dca7c0de6abbd0cdf52eba8349",
+      "title": "fix(solver): reuse fresh receipts and improve mathematical retrieval [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "2e0dc8d0c8a8409a981e11a25040de2f9e37006a",
+      "title": "Merge current release before formalization speed verification [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "All28result paths match current main or its history; feature parent is separately exact patch equivalent. Do not replay the historical merge.",
+      "previousDisposition": "merge-result-files-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "merge-result-files-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "fce8ac8ebab8a4d34226dc218ddcf0a9d98b1bb0",
+      "title": "perf(formalization): share batched lookup scans and reuse candidate source [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "fba8f9d4fe571b62b91c731eaf6bb0ee958f7fda",
+      "title": "test(web): seed independent edit recovery through local jobs [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "ee34ebc493de76a35de549bd05fe7906a823bdeb",
+      "title": "fix(web): preserve drafts, provenance and research actions [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "85cd9b03bbf798ad0b1299cbcaaf06059c0dfe18",
+      "title": "fix(web): keep historical candidate conversations bound to their proof [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "5a4319d109c2aa1f303c0e33fe631d932a58c814",
+      "title": "feat(web): preserve drafts and review continuity after lifecycle [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "10a2445f319d0001eb805908dcb1d262c74f1e32",
+      "title": "feat(web): integrate compiled candidate background review [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "7cb7a020dad2001d370a1c7ffd9e9ba91f486ee6",
+      "title": "Merge verified main and fix narrow workbench login checks",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "All four first-parent result files occur in main history or current main; this includes the narrow-login test change. The old merge identity need not be replayed.",
+      "previousDisposition": "merge-result-blobs-covered-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "merge-result-blobs-covered-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "03496be80f70acc2246b1c4a7bf170b364f0f34f",
+      "title": "Merge current research workbench into formalization queue integration",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "487 result files (292 exact current, 195 exact historical) and 1104 hunks are covered in main history; retain the historical merge object.",
+      "previousDisposition": "mixed-historical-merge-residual-intent-unconfirmed",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "merge-result-history-confirmed",
+      "closeoutEvidence": [
+        "frontend/handoff.json",
+        "frontend/hunk-dispositions.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "eb65babac7b5c27f31cdbd29922256f5543ae2ec",
+      "title": "fix(web): integrate formalization retry and FIFO queue support",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Prior integration evidence maps eb65bab to adapted 8da38db, merged by 8ba4a14; reuse that reviewed adaptation.",
+      "previousDisposition": "historical-forward-port-reviewed-and-integrated",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-forward-port-reviewed-and-integrated",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "345b428aed52d8d0cfce8b4a761c6f5d188d3b71",
+      "title": "Snapshot current solver-continuity-20261108 work for all-session integration",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Reuse the prior23worktree hunk review (base3e0548 is an ancestor of this main), plus current symbol/test-presence inspection. Source adaptations, stale Lead reminder tests, module identities and documentation intermediate states must not be replayed.",
+      "previousDisposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "78a5bccf29bdb268d900392b471cd9cf56be1b6f",
+      "title": "Snapshot current solver-followup-20261107 work for all-session integration",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Reuse the prior23worktree hunk review (base3e0548 is an ancestor of this main), plus current symbol/test-presence inspection. Source adaptations, stale Lead reminder tests, module identities and documentation intermediate states must not be replayed.",
+      "previousDisposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "35e1ca6ebb42f4fa7047c4b8ef0d61caf789a08b",
+      "title": "Snapshot current solver-recovery-20261108 work for all-session integration",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Reuse the prior23worktree hunk review (base3e0548 is an ancestor of this main), plus current symbol/test-presence inspection. Source adaptations, stale Lead reminder tests, module identities and documentation intermediate states must not be replayed.",
+      "previousDisposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "19c92b673fdad76ef35a26443724153c01b0d50f",
+      "title": "Snapshot current solver-throughput-20261107 work for all-session integration",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Reuse the prior23worktree hunk review (base3e0548 is an ancestor of this main), plus current symbol/test-presence inspection. Source adaptations, stale Lead reminder tests, module identities and documentation intermediate states must not be replayed.",
+      "previousDisposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "01644a2827f864e0d138fa68f23cb623a1a792fd",
+      "title": "Snapshot current stale-assignment-release-20261109 work for all-session integration",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Reuse the prior23worktree hunk review (base3e0548 is an ancestor of this main), plus current symbol/test-presence inspection. Source adaptations, stale Lead reminder tests, module identities and documentation intermediate states must not be replayed.",
+      "previousDisposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "13089c21ce041093f186cedbd4f1c28f2235b2d0",
+      "title": "Snapshot current frontend-round8-fixes-20261109 work for all-session integration",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "round9 7c6d381a75（等价主线92275f5）累积包含此快照；20文件中17逐字节相同，另3文件仅含round9追加项。不可重放旧预算测试。",
+      "previousDisposition": "cumulative-web-implementation-covered",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "cumulative-web-implementation-covered",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "7c6d381a7590ddb360c663559a639fbf438071a2",
+      "title": "Snapshot current frontend-round9-fixes-20261109 work for all-session integration",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "5498b39481953333958ef3ecd0707fb023925151",
+      "title": "Snapshot current mathematician-feedback-fixes-20261109 work for all-session integration",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Reuse the prior23worktree hunk review (base3e0548 is an ancestor of this main), plus current symbol/test-presence inspection. Source adaptations, stale Lead reminder tests, module identities and documentation intermediate states must not be replayed.",
+      "previousDisposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "944456fd9852b6d343e1610b8b4981a5c53739ca",
+      "title": "Snapshot current mathematician-revalidation-20261109 work for all-session integration",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Reuse the prior23worktree hunk review (base3e0548 is an ancestor of this main), plus current symbol/test-presence inspection. Source adaptations, stale Lead reminder tests, module identities and documentation intermediate states must not be replayed.",
+      "previousDisposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "f18ace020d9f3a6345cd63aeb8143c8f1d5784bb",
+      "title": "Snapshot current progress-recovery-20261109 work for all-session integration",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Reuse the prior23worktree hunk review (base3e0548 is an ancestor of this main), plus current symbol/test-presence inspection. Source adaptations, stale Lead reminder tests, module identities and documentation intermediate states must not be replayed.",
+      "previousDisposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "65aaeaead5b33a969838c5945f0db88ddceab4fd",
+      "title": "Snapshot current research-collaboration-fixes-20261109 work for all-session integration",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "6个实现/API测试文件在主线祖先916ec0b逐字节相同；其余为旧package命令和2浏览器脚本。产品实现有证据；旧“刷新后撤销guidance grant，保留禁用转发草稿”精确浏览器断言仍未定位，属于测试覆盖限制。",
+      "previousDisposition": "cumulative-web-implementation-covered",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "cumulative-web-implementation-covered",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "1b1e658eeb4950c5529129d734ee13a1c8281faf",
+      "title": "Snapshot current solver-pipeline-20261108 work for all-session integration",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Reuse the prior23worktree hunk review (base3e0548 is an ancestor of this main), plus current symbol/test-presence inspection. Source adaptations, stale Lead reminder tests, module identities and documentation intermediate states must not be replayed.",
+      "previousDisposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "7c2efe9631acd485f7bbc43930bf743d8706c4f9",
+      "title": "Snapshot current auto-library-recovery-20261102-validation work for all-session integration",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Reuse the prior23worktree hunk review (base3e0548 is an ancestor of this main), plus current symbol/test-presence inspection. Source adaptations, stale Lead reminder tests, module identities and documentation intermediate states must not be replayed.",
+      "previousDisposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "2dc23271952828f86fc3c9afe307de37f5a85a6f",
+      "title": "Snapshot current failure-remediation-20261109 work for all-session integration",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Reuse the prior23worktree hunk review (base3e0548 is an ancestor of this main), plus current symbol/test-presence inspection. Source adaptations, stale Lead reminder tests, module identities and documentation intermediate states must not be replayed.",
+      "previousDisposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "446f7bc469061fc183aef7ffab22316ade1d125d",
+      "title": "Snapshot current failure-remediation-activation-20261109 work for all-session integration",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Reuse the prior23worktree hunk review (base3e0548 is an ancestor of this main), plus current symbol/test-presence inspection. Source adaptations, stale Lead reminder tests, module identities and documentation intermediate states must not be replayed.",
+      "previousDisposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-snapshot-reviewed-no-new-runtime-fix-found",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "ef84e779bd4a17b6bef040de4d14704da6b8560c",
+      "title": "Snapshot current formalization-latency-20261108 work for all-session integration",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "45d1e6fb4df8e91d11882730d7e11b24d26c9c9a",
+      "title": "Snapshot current frontend-audit-fixes-20261109 work for all-session integration",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "72933a0a470bac5794c8421bf606fe0ae3dec539",
+      "title": "Snapshot current product-continuity work for all-session integration",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "120个Web/浏览器/测试/文档路径中119精确存在当前主线或主线历史。唯一未匹配test-web-research-problem.ts仅为后续输出路径/独立场景IP头/定位器/expectedRevision修复，原产品检查保留。非Web部分由中央总审计负责。",
+      "previousDisposition": "cumulative-web-implementation-covered",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "cumulative-web-implementation-covered",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "d8c22479ea611a6dd4da331f75380aeebac075a4",
+      "title": "test(web): align browser checks with research summaries",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "2d7b889740dab7e913a5e70d76f96b77d4f9570a",
+      "title": "fix(web): isolate research accounts and retain active release contributions",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "ac72a6d27a7676544bd9459d07f8af64202611ba",
+      "title": "fix(web): recover library requests and publish scoped lemmas",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "10c1e16c477b89e69a1f00aba2ac457cfd5c310f",
+      "title": "Fix statement draft preservation and historical claim releases",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "23f8b151b6424cee87baa2e51142c8f6261651a1",
+      "title": "fix(web): preserve sharing drafts and reviewed library contents",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "be7e07dbf94d1bfa67f5abacd41c1e1394e66864",
+      "title": "Keep research field hints separate from accessible names",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "99bf79c97cb8a17f51b39b3e62679d3a09189d1a",
+      "title": "Preserve frontend decisions across submission, profile, route, and login recovery",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "da9d616db883b397b1368e702f25ff59feb134c0",
+      "title": "Fix frontend navigation, owned library drafts, and compact layouts",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "87d83c6d3110994f5590a8801ca8ff244acfb758",
+      "title": "Keep CLI alive while human plan approval pauses its deadline",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "463acbb32d16104504f903c2bb684d2282930126",
+      "title": "Pause execution budgets during idle human plan approval",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "08c0ddad3dbb60fc4b887cb4c9fa8c7101ff9657",
+      "title": "Carry checked helper results forward and export complete research archives",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "b3ae3b1b46f578a1a34f4dea1063c4c0a8fe9992",
+      "title": "fix(web): make key storage opt in and align guided workflow docs",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "0b95e21cba90ea8c010e73a5cd3dfc928a50595c",
+      "title": "archive: preserve mixed main worktree before synchronization",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "task_library_application now contributes to M2 telemetry and history reconstruction, with no private receipt propagation or proof-acceptance implication.",
+      "previousDisposition": "confirmed-unintegrated-change",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "omitted-behavior-adapted",
+      "closeoutEvidence": [
+        "frontend/handoff.json",
+        "frontend/tests/behavior-initial.log"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "2b4b8bce0fa6c651b92a8a09c78df72e6cb9ad4e",
+      "title": "Let mathematical step links wrap on narrow screens",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "62256ba7385572745380c205418ae4e066ac1156",
+      "title": "Keep the reading position stable during route updates",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "3f0ed059a114f1cfb0e5bfc9bed5a74d6a6d9f39",
+      "title": "Fix empty model turn recovery and task workspace resumption",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "An identical stable patch appears under another main commit. Later changes may supersede its behavior.",
+      "previousDisposition": "exact-patch-equivalent-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "exact-patch-equivalent-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "b4a609a9db97fc0ec4d5967cab48991b58da4b33",
+      "title": "Improve mobile proof archive navigation and beta access",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Old source aggregate is superseded by later site work. The identified user-facing behavior remains in current source; do not replace newer README/landing/reader snapshots with these files. This is not an assertion that every old sentence or screenshot is retained.",
+      "previousDisposition": "superseded-source-feature-present",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "superseded-source-feature-present",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "a9ccc3a412b4219a18c9e64a1a64784b27eb703c",
+      "title": "Clarify follow-up for private beta applications",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Old source aggregate is superseded by later site work. The identified user-facing behavior remains in current source; do not replace newer README/landing/reader snapshots with these files. This is not an assertion that every old sentence or screenshot is retained.",
+      "previousDisposition": "superseded-source-feature-present",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "superseded-source-feature-present",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "e1db2f97502dc672327e5044ca43d6c35e9ff0ba",
+      "title": "Guide visitors from proof replay to beta application",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Old source aggregate is superseded by later site work. The identified user-facing behavior remains in current source; do not replace newer README/landing/reader snapshots with these files. This is not an assertion that every old sentence or screenshot is retained.",
+      "previousDisposition": "superseded-source-feature-present",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "superseded-source-feature-present",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "c2b5393b7e63fbe111bba9d370519a1963cb635b",
+      "title": "Clarify beta applications and complete official proof archive",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Old source aggregate is superseded by later site work. The identified user-facing behavior remains in current source; do not replace newer README/landing/reader snapshots with these files. This is not an assertion that every old sentence or screenshot is retained.",
+      "previousDisposition": "superseded-source-feature-present",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "superseded-source-feature-present",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "38eccead557c7646b8c8af30fc83af49722a64ca",
+      "title": "On codex/release-readiness-20261107: release-readiness-before-955da1b-sync",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Web, workflow, role relay/sandbox and runtime optional-catalog hunks are accounted for by their owners; current high/mathlib defaults and request/owner compatibility retained.",
+      "previousDisposition": "historical-stash-partially-reviewed",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "mixed-stash-residuals-resolved",
+      "closeoutEvidence": [
+        "frontend/hunk-dispositions.json",
+        "formalization/handoff.json",
+        "solver/cross-owner-runtime-closure.json",
+        "workflow/historical-workflow-closure.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "5264c79ee9a4eed05d8d7bb3f3dad7e411a2ace8",
+      "title": "index on codex/release-readiness-20261107: ce885a5 Open signup, terms consent and a per-account allowance",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Zero changes from its first parent; this is stash metadata, not an unmerged functional increment.",
+      "previousDisposition": "empty-stash-index-object-preserved",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "empty-stash-index-object-preserved",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "34421d5057ccafd2a62fbfe3c95b494ad1c97be0",
+      "title": "fix(web): close formalization retry and queue review gaps",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Old formalization/Web changes are present or adapted; restore atomic-create and identity-isolation regressions, deterministic readiness race, and confirm workflow source-commit labeling.",
+      "previousDisposition": "formalization-source-review-with-forward-port-evidence",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "forward-port-and-historical-test-closure",
+      "closeoutEvidence": [
+        "frontend/handoff.json",
+        "frontend/hunk-dispositions.json",
+        "workflow/historical-workflow-closure.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "209ddc13b788986e0946ffd475e1f6640d948ba3",
+      "title": "On (no branch): auto-library-recovery-20261102 full-src working changes",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "All six files are byte-identical to snapshot 7c2efe9631acd485f7bbc43930bf743d8706c4f9, whose runtime disposition is recorded in reviews/solver.json.",
+      "previousDisposition": "stash-exactly-preserved-in-reviewed-snapshot",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "stash-exactly-preserved-in-reviewed-snapshot",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "c03542c1d266981bde9c3882c8bd4aac9e041c03",
+      "title": "index on (no branch): ae10e16 Merge pull request #1 from LikC1606/codex/evaluation-improvement-plan-20261101",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Zero changes from its first parent; this is stash metadata, not an unmerged functional increment.",
+      "previousDisposition": "empty-stash-index-object-preserved",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "empty-stash-index-object-preserved",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "5c507dd6693f7959ab25c0db99eb54a63e83be7a",
+      "title": "Merge feat/explain-lean-names-20261030: Lean names outside formulas, finer reviewer quotes, token cap, nested 原题 fragments",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "All 24 first-parent result files occur in main history/current main. This records historical source incorporation, not a claim that later source is unchanged.",
+      "previousDisposition": "merge-result-blobs-covered-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "merge-result-blobs-covered-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "bcbfb6288679c1319c4a4a1b9703a1dc4f372acb",
+      "title": "Formalization: Lean refutation gate, Mathlib name gate, exemplars, kernel-v3",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "All28result paths are exact current or historical main blobs; current50added exports and56added test names also present. No new replay needed.",
+      "previousDisposition": "all-result-files-in-main-history",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "all-result-files-in-main-history",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "a8027ec61f7ea45652630ff4c3010e81da05a363",
+      "title": "Merge origin/main into formalization effect work",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Old inspection tests are a strict current subset; current coverage adds malformed-helper and legacy-repair checks. No product source gap.",
+      "previousDisposition": "historical-merge-inspection-test-residual-unconfirmed",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "inspection-residual-is-strict-current-subset",
+      "closeoutEvidence": [
+        "formalization/inspection-subset.json",
+        "formalization/handoff.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "9f9664464530762a7a68b11847c028c4502d5385",
+      "title": "wip: formalization effect work snapshot",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Formalization/provenance paths accounted for; runtime failure classification retained, retired investigation architecture remains removed by 5d8643b. No whole snapshot replay.",
+      "previousDisposition": "mixed-historical-snapshot-retain-residual-review",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "mixed-snapshot-residuals-resolved",
+      "closeoutEvidence": [
+        "formalization/9f966446-file-dispositions.json",
+        "solver/cross-owner-runtime-closure.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "3d288c7ea8e672f5119239594bb6376c8d6a4dd9",
+      "title": "Keep the source's own claim shape, not an equivalent one",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Current formalization plan/generation/review instructions preserve the source own type and claim shape, including quantified witness, operand order/association and structure equivalence. Later main refinements supersede the older instruction snapshots.",
+      "previousDisposition": "later-implementation-covered-at-behavior-level",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "later-implementation-covered-at-behavior-level",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "ea905df65b9d61f817fa1cb09b8ded46387719e7",
+      "title": "State formalization conclusions at the source's own type",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Current formalization plan/generation/review instructions preserve the source own type and claim shape, including quantified witness, operand order/association and structure equivalence. Later main refinements supersede the older instruction snapshots.",
+      "previousDisposition": "later-implementation-covered-at-behavior-level",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "later-implementation-covered-at-behavior-level",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "d1ba6acece684ef9089cacfb23c410173c5c479c",
+      "title": "Copy the cooperative fixture module next to the codex fixture",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Current tests/webProviderFixture.test.ts copies web-cooperative-codex.mjs next to the codex fixture before launch.",
+      "previousDisposition": "later-implementation-covered-at-behavior-level",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "later-implementation-covered-at-behavior-level",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "03afbcc0b4d014e56dcfff6943e08cf1da2a909f",
+      "title": "Raise the per-session run record limit to 40",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Per-owner retained run-record capacity is 40; overflow and deletion-capacity recovery are covered. Call quota, queue and concurrency remain independently enforced.",
+      "previousDisposition": "confirmed-unintegrated-change",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "omitted-behavior-adapted",
+      "closeoutEvidence": [
+        "frontend/handoff.json",
+        "frontend/tests/browser-failures-rerun.log"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "7ebc0db1454fdbbd16de68f13f010d760ce9df32",
+      "title": "Show unlimited imported run budgets as 不限时",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "旧formatRunBudget helper和沿用正数默认值的reuse workaround已被真正支持0=unlimited的新界面替代。未认定产品遗漏。",
+      "previousDisposition": "superseded-by-current-unlimited-budget-ui",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "superseded-by-current-unlimited-budget-ui",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "cd119fd918117c7ebf4564698bc6f880bec38ee1",
+      "title": "Require complete native formalization regression checks",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "scripts/test-formalization.ts is exact current blob; package.json exposes test:formalization. The gate pins native versions and rejects skip/todo. No regression run performed by this read-only audit.",
+      "previousDisposition": "runtime-gate-covered-doc-aggregation-diff",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "runtime-gate-covered-doc-aggregation-diff",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "1816700c163826a09f402a582f27664841b80a33",
+      "title": "Add audited Lean formalization and evaluation workflows",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Four absent-title regressions are renamed/expanded; fixed-round retrieval cache and explicit medium/max frozen review semantics are covered. Existing forward port remains authoritative.",
+      "previousDisposition": "formalization-core-present-residual-equivalence-unconfirmed",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "renamed-and-expanded-tests-confirmed",
+      "closeoutEvidence": [
+        "formalization/1816700c-test-dispositions.json",
+        "formalization/handoff.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "725d56ec6549a0f521e362b2d80b77317d332509",
+      "title": "On main: pre-align-main-20261024",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Canonical probe/precheck, advisory diagnostics, host-prepared publication, Lean names/comments and all residual hunks reviewed; preserve current immutable sources and explicit recovery contracts.",
+      "previousDisposition": "historical-stash-features-reviewed-with-residual-boundary",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "canonical-probe-and-historical-contracts-resolved",
+      "closeoutEvidence": [
+        "solver/historical-hunk-closure.json",
+        "solver/validation-summary.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "d0e1c76cecb288452113c1281bd0bf966d9d4851",
+      "title": "index on main: eb92da8 Centralize contribution evidence association rules",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Zero changes from its first parent; this is stash metadata, not an unmerged functional increment.",
+      "previousDisposition": "empty-stash-index-object-preserved",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "empty-stash-index-object-preserved",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "97b7254ea2f09c604d6218e5ad33efe0593ed01d",
+      "title": "untracked files on main: eb92da8 Centralize contribution evidence association rules",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Both test files occur byte-for-byte in main history. check-changes.ts and check-verifier.ts are historical hardcoded Q1 diagnostics; preserve them without importing or executing them.",
+      "previousDisposition": "untracked-stash-tests-covered-diagnostics-preserved",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "untracked-stash-tests-covered-diagnostics-preserved",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "a1d896da8bc47749fb252ff56d268b0714e4ea0e",
+      "title": "Fix cooperative recovery, source retention and context dependencies",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Adapt correctable nested research/blocker feedback and persist stale-check invalidation. Existing typed proposals are covered; optional unused obligation/diagnostic schemas are retired with explicit reasons.",
+      "previousDisposition": "partially-superseded-with-concrete-deltas-and-unconfirmed-semantics",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "adapted-gaps-and-explicitly-retired-proposals",
+      "closeoutEvidence": [
+        "solver/historical-hunk-closure.json",
+        "solver/handoff.json",
+        "formalization/solver-patch-review.md"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "9389c1ccf2818c0724d28e06d4f1b2bb8be38e08",
+      "title": "Fix CLI concurrency and durable proof recovery",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "All runtime/CLI/source/scripts/tests/package paths exactly equal main4759587. README difference remains outside this scoped conclusion.",
+      "previousDisposition": "scoped-source-tree-equivalent",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "scoped-source-tree-equivalent",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "d299e2876867d2ad1a575c8aff5e537704f586a2",
+      "title": "Snapshot existing TheoremOS worktree for isolated Q1 recovery fixes",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Resolve all hunks against current contracts and deliberate architecture removals; retain scratch quarantine, immutable source identities and current high default; verify explicit max freeze.",
+      "previousDisposition": "mixed-historical-snapshot-retain-residual-review",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "mixed-solver-snapshot-resolved",
+      "closeoutEvidence": [
+        "solver/historical-hunk-closure.json",
+        "solver/putnam-final.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "40467b324752e883a5f6eaf4c476291f74b2d8af",
+      "title": "Improve proof continuation scheduling and shared token budgets",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "All18changed file deltas match mainc60e5d7, ignoring one empty added test line.",
+      "previousDisposition": "delta-equivalent-except-test-whitespace",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "delta-equivalent-except-test-whitespace",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "runtime",
+      "commit": "6ac8fd98df7e3ffb54262bd2c9ce795811ea9628",
+      "title": "Improve cooperative proof recovery and obligation tracking",
+      "checkpoint": false,
+      "comparisonBase": "b22efedaf222cac564375711ab471b8ed01d1c39",
+      "directAncestorOfBase": false,
+      "reason": "Context closure follows current host-attributed actual inputs while retaining required assignment inputs, receipts, task digests and conditions; restored/stale evidence uses planned fallback.",
+      "previousDisposition": "partially-covered-with-unconfirmed-old-deltas",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "fresh-actual-dependency-context-adapted",
+      "closeoutEvidence": [
+        "solver/historical-hunk-closure.json",
+        "solver/regression.json",
+        "formalization/solver-patch-review.md"
+      ]
+    },
+    {
+      "repository": "website",
+      "commit": "7ef29d8684cacb98e1091e7e8d7f5606597d2f8f",
+      "title": "chore: checkpoint lifecycle-final-20261111 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "039423cff5733604d37b2c6445512bd8a34c6a95",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "website",
+      "commit": "7e6303ff50edf787c7469710bfcff083820780e9",
+      "title": "chore: checkpoint theoremos-launch-materials-20261108 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "039423cff5733604d37b2c6445512bd8a34c6a95",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "website",
+      "commit": "a8ef283eb5fc7aefea6dca934994b8557ab24dac",
+      "title": "chore: checkpoint all-sessions-d948588-20261110 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "039423cff5733604d37b2c6445512bd8a34c6a95",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "website",
+      "commit": "5e9ad1de72ae27327e44f9531a48a1fb8383ae0e",
+      "title": "chore: checkpoint all-sessions-release-20261110 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "039423cff5733604d37b2c6445512bd8a34c6a95",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "website",
+      "commit": "7d4945de81ca35740a977ff3f75049dd909152dc",
+      "title": "chore: checkpoint copy-polish-20261108 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "039423cff5733604d37b2c6445512bd8a34c6a95",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "website",
+      "commit": "7038e3529e50db359c5788b24c369bd89765b2d2",
+      "title": "chore: checkpoint cross-session-c4f90ef-20261111 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "039423cff5733604d37b2c6445512bd8a34c6a95",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "website",
+      "commit": "a4f439d5a39d32da5a135e0cc5a0c3ce716eb530",
+      "title": "chore: checkpoint all-sessions-2fbd53f-20261110 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "039423cff5733604d37b2c6445512bd8a34c6a95",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "website",
+      "commit": "09f3714b8416dbb45bf0a575535e19fad82a7c9c",
+      "title": "chore: checkpoint theorem-os-site uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "039423cff5733604d37b2c6445512bd8a34c6a95",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "website",
+      "commit": "302b92d28c7e6c606b9457f80197287984687b50",
+      "title": "Preserve feedback drafts across reloads and language changes [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "039423cff5733604d37b2c6445512bd8a34c6a95",
+      "directAncestorOfBase": false,
+      "reason": "Feedback draft recovery was centrally rebuilt in f57597f and later expanded to preserve presets in b4ae2d0. 3/9 paths exactly current; other paths are generated revision/current-reader differences.",
+      "previousDisposition": "integrated-adapted-and-expanded",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "integrated-adapted-and-expanded",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "website",
+      "commit": "5210274341af839301b93ce86feb7c8d01c82735",
+      "title": "Publish integrated research workflows and two checked archives",
+      "checkpoint": false,
+      "comparisonBase": "039423cff5733604d37b2c6445512bd8a34c6a95",
+      "directAncestorOfBase": false,
+      "reason": "Generated release superseded by current canonical release. Current 144/153 changed paths match byte-for-byte; site.js differs only by archiveRevision from an exact published historical ancestor.",
+      "previousDisposition": "historical-generated-release-equivalent",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-generated-release-equivalent",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "website",
+      "commit": "8f29118279d7c4926145f3f9e2fc253822bddd51",
+      "title": "Publish integrated research workflows and two checked archives",
+      "checkpoint": false,
+      "comparisonBase": "039423cff5733604d37b2c6445512bd8a34c6a95",
+      "directAncestorOfBase": false,
+      "reason": "Generated release superseded by current canonical release. Current 144/153 changed paths match byte-for-byte; site.js differs only by archiveRevision from an exact published historical ancestor.",
+      "previousDisposition": "historical-generated-release-equivalent",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-generated-release-equivalent",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "website",
+      "commit": "15d9b6029cddcc2b3f7bf8fc201b480002de4c9f",
+      "title": "Publish integrated research workflows and two checked archives",
+      "checkpoint": false,
+      "comparisonBase": "039423cff5733604d37b2c6445512bd8a34c6a95",
+      "directAncestorOfBase": false,
+      "reason": "Generated release superseded by current canonical release. Current 144/153 changed paths match byte-for-byte; site.js differs only by archiveRevision from an exact published historical ancestor.",
+      "previousDisposition": "historical-generated-release-equivalent",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-generated-release-equivalent",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "website",
+      "commit": "1b80b10bf5f7f3d56c6728ae960e682d0f8f26c6",
+      "title": "Snapshot existing TheoremOS public site changes for all-session integration",
+      "checkpoint": false,
+      "comparisonBase": "039423cff5733604d37b2c6445512bd8a34c6a95",
+      "directAncestorOfBase": false,
+      "reason": "Old 23-record aggregate lacks current six records and later reader/feedback behavior. 278 changed paths match current blobs; preserve old snapshot, not a current release candidate.",
+      "previousDisposition": "historical-mixed-snapshot-preserved-not-replayed",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-mixed-snapshot-preserved-not-replayed",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "website",
+      "commit": "88146bb56c153ec1bd33392fb66e0cbe43320945",
+      "title": "fix: redirect renamed TheoremOS Pages paths",
+      "checkpoint": false,
+      "comparisonBase": "039423cff5733604d37b2c6445512bd8a34c6a95",
+      "directAncestorOfBase": false,
+      "reason": "Separate GitHub Pages redirect deployment. Do not merge redirect-only index.html into canonical website main.",
+      "previousDisposition": "published-independent-pages-redirect-branch",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "published-independent-pages-redirect-branch",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "website",
+      "commit": "fa6d219eff4868de2b6f2b3c033356aa20f60f7f",
+      "title": "Serve a redirect stub from GitHub Pages instead of the duplicate site",
+      "checkpoint": false,
+      "comparisonBase": "039423cff5733604d37b2c6445512bd8a34c6a95",
+      "directAncestorOfBase": false,
+      "reason": "Separate GitHub Pages redirect deployment. Do not merge redirect-only index.html into canonical website main.",
+      "previousDisposition": "published-independent-pages-redirect-branch",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "published-independent-pages-redirect-branch",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "library",
+      "commit": "3088c21aefd22de7c8438afc51143d6c31572201",
+      "title": "chore: retain final library local validation source [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "03b02ee173eb990e97c93716d8ae03cf9ebdda0c",
+      "directAncestorOfBase": false,
+      "reason": "The same final mathematical sources exist in current-base candidate 8dab415. This caa3417-based local validation checkout must not overwrite newer master scripts/docs.",
+      "previousDisposition": "local-validation-copy-preserved",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "local-validation-copy-preserved",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "library",
+      "commit": "8dab4159db48f1bb2606f2d194479d7aac93d84e",
+      "title": "feat: preserve closed-ideal and proper-action library candidate [skip ci]",
+      "checkpoint": false,
+      "comparisonBase": "03b02ee173eb990e97c93716d8ae03cf9ebdda0c",
+      "directAncestorOfBase": false,
+      "reason": "User-approved equivalent local Linux gates passed using fixed Lean4.34.1/Mathlib: fresh build, dual kernels, forged-False rejection, all1772 catalogue declarations verified; five artifacts pinned and private master fast-forwarded to7946b7e.",
+      "previousDisposition": "pending-remote-validation-before-master-release",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "formal-library-published-and-private-master-updated",
+      "closeoutEvidence": [
+        "library/formal-postcheck.json",
+        "library/release-completed.json",
+        "library/local-validation-02/publication.json",
+        "library/local-validation-02/supervision.json"
+      ]
+    },
+    {
+      "repository": "library",
+      "commit": "701ab04f8e8db4c4edd170111d4cb7ba97ebd8dc",
+      "title": "chore: checkpoint library-closed-ideal-20261109 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "03b02ee173eb990e97c93716d8ae03cf9ebdda0c",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    },
+    {
+      "repository": "library",
+      "commit": "df2cf09e97a937d5f96b2aea1a1600542087e33e",
+      "title": "chore: checkpoint library-demand-20261109 uncommitted work [skip ci]",
+      "checkpoint": true,
+      "comparisonBase": "03b02ee173eb990e97c93716d8ae03cf9ebdda0c",
+      "directAncestorOfBase": false,
+      "reason": "Preservation is complete; this commit is not counted as a source merge. Prior dirty-worktree audits and checkpoint evidence remain authoritative for source coverage.",
+      "previousDisposition": "historical-checkpoint-preserved-not-merged",
+      "requiresFollowup": false,
+      "handled": true,
+      "disposition": "historical-checkpoint-preserved-not-merged",
+      "closeoutEvidence": [
+        "/home/lzh/workspace/outputs/theoremos-commit-audit-20261112/ledger.json"
+      ]
+    }
+  ],
+  "evidence": {
+    "formalization/1816700c-test-dispositions.json": {
+      "sha256": "f424c3228d197e21411ae8a839160f08b4214e0db15783a33d0800c883c5e63a",
+      "bytes": 2820
+    },
+    "workflow/historical-workflow-closure.json": {
+      "sha256": "1da3494a9e0a9f19e92866845fe8803e012f112fea4b43dba3802be00134d7ce",
+      "bytes": 2211
+    },
+    "frontend/hunk-dispositions.json": {
+      "sha256": "668c2eb251c7c6f75d10a095c25b3408a1d9655562b024b6e3d64089e88f724b",
+      "bytes": 1853038
+    },
+    "solver/cross-owner-runtime-closure.json": {
+      "sha256": "96109c5b99b45ad7dabbff7dda0ad5341a98c164c6b3a55f70346c672e32b398",
+      "bytes": 36451
+    },
+    "formalization/inspection-subset.json": {
+      "sha256": "b6ff739649ba5304d5b21471e33801551a6a64ade642e31aad4debc988ed7ac6",
+      "bytes": 598
+    },
+    "library/local-validation-02/publication.json": {
+      "sha256": "ae1a62de6815991c7778c8e4e9241e62bec7c5d14bd5786a164a823d4ef16b40",
+      "bytes": 3226
+    },
+    "frontend/tests/browser-failures-rerun.log": {
+      "sha256": "22d14f7ba91bba17c991eff43979be6695890c050bc6af5f9687fa2e2307aaaf",
+      "bytes": 835
+    },
+    "solver/regression.json": {
+      "sha256": "045506ff9fc0ff0d026312d03ac8fbbc9accf30b6ce82c8b9f323afeb5ce3016",
+      "bytes": 238137
+    },
+    "solver/handoff.json": {
+      "sha256": "410c632982771d2737f38a01cd912d52db8f26eeacf0b404f0e5260c906c8b4c",
+      "bytes": 5040
+    },
+    "library/formal-postcheck.json": {
+      "sha256": "8f7f38786b05035bfb01c26cfe292cecb4c4d0fc74d675baf32b75dc6cdcf302",
+      "bytes": 1110
+    },
+    "library/release-completed.json": {
+      "sha256": "506a6ce1662d04af9435399dc90db08104c95f04f7a2f822797ff692f2bf0cb0",
+      "bytes": 552
+    },
+    "solver/historical-hunk-closure.json": {
+      "sha256": "d2fa5515d71e66ebe056ec559b00563aa70e533bd9be0feb6dc92acfea1accd7",
+      "bytes": 827078
+    },
+    "frontend/tests/behavior-initial.log": {
+      "sha256": "e30edc30d811ce3d53b47fe205d2b749592796dcac9c6d6d21245738ec5a4f0a",
+      "bytes": 260
+    },
+    "library/local-validation-02/supervision.json": {
+      "sha256": "32072f2f5a2559bac7c650a882f28e4d560f32d9610baf2b71e788497e4a84df",
+      "bytes": 408
+    },
+    "frontend/handoff.json": {
+      "sha256": "70636a07f4c45baefec011b8ebcecc1c557ced2bae60a343c1da49f047f10034",
+      "bytes": 9400
+    },
+    "formalization/handoff.json": {
+      "sha256": "cf4aef24911b9ccd8340f31759d3039d7abb9e5594183fef511d379414f0e12a",
+      "bytes": 6922
+    },
+    "solver/putnam-final.json": {
+      "sha256": "a1d7a3b9732f2a8c86f3f8483d6f49e0b8d0252943d872cfff58b44238c36818",
+      "bytes": 14345
+    },
+    "formalization/solver-patch-review.md": {
+      "sha256": "b80b20abd65231cb3d99b5e5e27c7cc2c035ffea3c38f36352420137e384768c",
+      "bytes": 4724
+    },
+    "solver/validation-summary.json": {
+      "sha256": "28066593d86c92bebbbd5d96e35f3ffb57a362586b01af7e7ae1d8ca73cbfab5",
+      "bytes": 229937
+    },
+    "formalization/9f966446-file-dispositions.json": {
+      "sha256": "2fba8879ba8c751762cc2aba9845e93d73b64680432fad91b2084a075abc96bc",
+      "bytes": 39347
+    }
+  },
+  "sourceIntegration": {
+    "base": "b22efedaf222cac564375711ab471b8ed01d1c39",
+    "solver20Commit": "1032d83415b98758075bbe4da0aa5f2e02c8e332",
+    "formalizationCommit": "0bc8816",
+    "frontendCommit": "d947119",
+    "solverCommit": "622f7740f790626f991b3e46a1e9ad5f186d7b5e"
+  },
+  "historicalTestCoverageLimits": [
+    {
+      "sourceCommit": "65aaeaead5b33a969838c5945f0db88ddceab4fd",
+      "scenario": "刷新后撤销guidance grant，保留已禁用的转发草稿",
+      "status": "exact-current-browser-assertion-not-located",
+      "implementation": "6个实现/API测试文件精确历史覆盖；不能将该测试限制说成产品遗漏"
+    }
+  ],
+  "boundaries": [
+    "Historical checkpoints, source indexes and frozen artifacts remain preserved.",
+    "No whole historical snapshot replay or artificial ours merge.",
+    "Git graph ancestry is not claimed for preserved or superseded source SHAs.",
+    "Private Lean4.34.1 library publication is separate from production Lean4.33.0 adaptation.",
+    "Final combined validation, source push and Web deployment are recorded separately in release-completed.json."
+  ]
+}
