@@ -22,7 +22,7 @@ import { base, enc, Empty, ErrorBox, MutationState, nameOf, Panel, State, stamp,
 const tabs = {
   inbox: tx('我的待办', 'My inbox'), search: tx('全局搜索', 'Search'), usage: tx('用量账本', 'Usage'),
   brief: tx('研究简报', 'Research briefs'), collections: tx('专题资料夹', 'Collections'),
-  drafts: tx('账号草稿', 'Account drafts'), trials: tx('Library 试用', 'Library trials'), help: tx('帮助与版本', 'Help and version'),
+  drafts: tx('账号草稿', 'Account drafts'), trials: tx('数学库试用', 'Library trials'), help: tx('帮助与版本', 'Help and version'),
 } as const;
 type Tab = keyof typeof tabs;
 const readTab = (): Tab => {
@@ -56,7 +56,7 @@ export function WorkspacePage({ context }: { context: ResearchContext }) {
   const loginParameters = new URLSearchParams(location.search);
   loginParameters.set('returnTo', 'workspace'); loginParameters.set('tab', tab); loginParameters.set('lang', locale);
   return <div class="workspace-page" data-workspace-page>
-    <header class="workspace-heading"><div><p class="research-eyebrow">TheoremOS</p><h1>{tx('我的研究空间', 'My research space')}</h1>
+    <header class="workspace-heading"><div><p class="research-eyebrow">TheoremOS / Research</p><h1>{tx('我的研究空间', 'My research space')}</h1>
       <p>{tx('接着处理待办，找回线索，整理研究结果。', 'Pick up a task, find a lead, or bring your research together.')}</p></div>
       <div class="research-actions"><a class="button" href={`practice.html?lang=${locale}`}>{tx('参与演练', 'Try the practice')}</a><a class="button button-primary" href="./">{tx('开始研究', 'Start research')}</a></div>
     </header>

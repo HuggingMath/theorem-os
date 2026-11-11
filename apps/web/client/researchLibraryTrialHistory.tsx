@@ -16,7 +16,7 @@ export function LibraryTrialHistory({ context, runId, assetId }: { context?: Res
     return () => window.removeEventListener('popstate', back); }, []);
   const choose = (id: string) => { setSelected(id); const url = new URL(location.href); url.searchParams.set('trial', id); history.pushState(null, '', url); };
   if (context && !context.session.authenticated) return null;
-  return <Panel title={tx('我的 Library 试用', 'My Library trials')}>
+  return <Panel title={tx('我的数学库试用', 'My Library trials')}>
     <p>{tx('找回保存的候选、参数和检查回执。局部检查结果独立于原题验收。', 'Find saved candidates, arguments and check receipts. Local checks are separate from acceptance of the original problem.')}</p>
     <label>{tx('试用状态', 'Trial status')}<select data-trial-history-filter value={status} onChange={event => setStatus(event.currentTarget.value)}>
       <option value="">{tx('全部试用', 'All trials')}</option>{(['prepared', 'checking', 'passed', 'failed'] as const).map(value => <option value={value} key={value}>{label(value)}</option>)}</select></label>

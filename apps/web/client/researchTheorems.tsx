@@ -90,8 +90,8 @@ export function TheoremsPage({ context }: { context: ResearchContext }) {
           requestAnimationFrame(() => document.querySelector<HTMLInputElement>('.research-solutions-view input[type="search"]')?.focus());
         }} />
       </section> : <section class="research-discovery research-page-section" aria-labelledby="theorem-directory-title"><div class="research-section-head"><h2 id="theorem-directory-title">{tx('定理目录', 'Theorem directory')}</h2>
-        {directory.data && <span class="research-status">{tx(`共 ${directory.data.total ?? directory.data.items.length} 个定理`, `${directory.data.total ?? directory.data.items.length} theorems`)}</span>}</div>
-      <div class="research-directory-toolbar">
+        {directory.data && (directory.data.items.length > 0 || query || field || offset > 0) && <span class="research-status">{tx(`共 ${directory.data.total ?? directory.data.items.length} 个定理`, `${directory.data.total ?? directory.data.items.length} theorems`)}</span>}</div>
+      <div class="research-directory-toolbar" hidden={Boolean(directory.data && !directory.data.items.length && !query && !field && offset === 0)}>
       <Search key={collection} label={tx('搜索定理与研究描述', 'Search theorems and descriptions')} initial={query} onSearch={value => { setQuery(value); setOffset(0); }} />
       <Field label={tx('按领域筛选', 'Filter by field')} value={field} onInput={value => { setField(value); setOffset(0); }} placeholder={tx('输入研究领域', 'Enter a research field')} /></div>
       <ErrorBox message={directory.error} />{directory.loading && <p class="research-status" role="status">{tx('正在读取…', 'Loading…')}</p>}
@@ -107,6 +107,10 @@ export function TheoremsPage({ context }: { context: ResearchContext }) {
       })}</ul>
       {directory.data && !directory.data.items.length && <Empty>{query || field ? tx('暂无匹配的定理。试试其他关键词或领域。', 'No matching theorems. Try another keyword or field.')
         : tx('这里还没有定理。可以创建一个研究题目，邀请同行参与。', 'No theorems yet. Create a research question and invite others to join.')}</Empty>}
+      {directory.data && !directory.data.items.length && !query && !field && offset === 0 && <div class="research-actions" data-theorem-empty-actions>
+        {context.session.authenticated ? <button class="button button-primary" type="button" onClick={() => create(true)}>{tx('新建定理', 'New theorem')}</button>
+          : <a class="button" href={loginHref(createHref)}>{tx('登录后创建定理', 'Sign in to create a theorem')}</a>}
+        <button class="button" type="button" onClick={() => changeCollection('solved')}>{tx('先看已解决题目', 'Browse solved problems')}</button></div>}
       <div class="research-actions">{offset > 0 && <button class="text-button" type="button" onClick={() => setOffset(Math.max(0, offset - 14))}>{tx('上一页', 'Previous')}</button>}
         {directory.data?.nextOffset !== undefined && <button class="text-button" type="button" onClick={() => setOffset(directory.data!.nextOffset!)}>{tx('下一页', 'Next')}</button>}</div>
     </section>}</div></>;
