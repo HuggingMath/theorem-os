@@ -68,6 +68,7 @@ CLI 与数学运行时独立于 Web。Agent 完成消息、引理通过和同伴
 
 带日期的 `frontend-*`、`research-round*` 和发布文章保留当时的修复与测试事实，当前部署从[发布状态](web-release-status.md)进入。近期记录：
 
+- [2026-11-11 形式化增量发布](releases/2026-11-11-formalization-followup.md)：生成会话内的准入修正与可选查库模块范围。
 - [2026-11-11 跨会话发布](releases/2026-11-11-cross-session.md)：形式化查库与前端状态修复。
 - [研究状态连续性](frontend-product-state-continuity-20261111.md)、[研究产品衔接](frontend-research-product-continuity-20261111.md)、[研究生命周期](frontend-research-lifecycle-20261110.md)：各轮功能与验收记录。
 - [产品流程发布](product-flow-release-20261110.md)、[第八至十轮前端发布](frontend-round10-release-20261110.md)、[第六至七轮发布](frontend-round7-release-20261109.md)：此前发布历史。
