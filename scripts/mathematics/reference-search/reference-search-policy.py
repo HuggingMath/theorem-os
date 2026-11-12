@@ -99,7 +99,19 @@ def require_permitted(source, label='', metadata=None):
         raise PermissionError('reference_source_provenance_unverified: establish permitted provenance from metadata before reading')
 
 
+def candidate_source_status(row):
+    label = str(row.get('title', '')) + ' ' + str(row.get('snippet', ''))
+    sources = [row.get('url', ''), *(item.get('url', '') for item in row.get('alternate_sources') or [] if isinstance(item, dict))]
+    if any(forbidden_source(source, label) for source in sources):
+        return 'forbidden', None
+    provenance = unverified_source(row.get('url', ''), row)
+    return ('unverified', provenance) if provenance else ('permitted', None)
+
+
 def install_source_policy(research):
+    # Discovery may stop before public REF registration. Held cards must not
+    # satisfy that decision or crowd permitted documents out of the result page.
+    research._campaign_reference_candidate_permitted = lambda row: candidate_source_status(row)[0] == 'permitted'
     original_url_ok = research.base._url_ok
     research.base._url_ok = lambda url: not forbidden_source(url) and original_url_ok(url)
 
@@ -146,13 +158,11 @@ def install_source_policy(research):
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            label = str(row.get('title', '')) + ' ' + str(row.get('snippet', ''))
-            sources = [row.get('url', ''), *(item.get('url', '') for item in row.get('alternate_sources') or [] if isinstance(item, dict))]
-            if any(forbidden_source(source, label) for source in sources):
+            status, provenance = candidate_source_status(row)
+            if status == 'forbidden':
                 forbidden_count += 1
                 continue
-            provenance = unverified_source(row.get('url', ''), row)
-            if provenance:
+            if status == 'unverified':
                 unresolved.append({'title': row.get('title', ''), 'engine': row.get('engine'),
                                    'provenance_record': provenance['id'], 'source_status': 'unverified', 'citable': False})
                 continue
@@ -162,6 +172,8 @@ def install_source_policy(research):
         output['excluded_source_count'] = forbidden_count + len(unresolved)
         output['forbidden_source_count'] = forbidden_count
         output['unverified_source_count'] = len(unresolved)
+        if (forbidden_count or unresolved) and not output.get('results'):
+            output['status'] = 'partial'
         if unresolved:
             output['unverified_sources'] = unresolved
             output['next_action'] += ' Some source identities need permitted provenance established from metadata; they have not been registered as readable REFs.'

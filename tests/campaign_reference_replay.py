@@ -36,7 +36,7 @@ def main():
     research = policy.load_research()
     research.base.requests.sessions.Session.send = no_network
     old_search_id = research.workspace.search_id
-    from campaign_reference import install
+    from campaign_reference import arxiv_query, install
     install(research)
     policy.install_source_policy(research)
     empty = '<feed xmlns="http://www.w3.org/2005/Atom" />'
@@ -67,7 +67,7 @@ def main():
                 calls[parsed.netloc] += 1
                 if parsed.netloc == 'export.arxiv.org':
                     query = parse_qs(parsed.query)['search_query'][0]
-                    phrase = 'all:"psd rank"' if index == 0 else 'all:"semidefinite extension complexity"'
+                    phrase = arxiv_query('psd rank' if index == 0 else 'semidefinite extension complexity')
                     body = (fixtures / ('psdrank1.xml' if index == 0 else 'sdpext.xml')).read_text() if query == phrase else empty
                     return body, url
                 if parsed.netloc == 'api.openalex.org':

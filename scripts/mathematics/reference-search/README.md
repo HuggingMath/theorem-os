@@ -1,16 +1,30 @@
 # Campaign reference discovery
 
-This versioned adapter preserves quoted mathematical phrases, all explicitly
-quoted objects, and the research target in arXiv / OpenAlex requests. Quoted
-connecting words and target names longer than four words are retained. If recall gaps remain, it issues at most four
-additional academic requests (concept-only and subject-only queries). Explicit
-quotes and `--target` help when an unquoted phrase boundary is ambiguous.
+This versioned adapter preserves the original query, its unquoted qualifiers,
+all explicitly quoted objects, and the research target in arXiv / OpenAlex
+requests. Only caller-supplied quotes become exact arXiv phrases. Inferred
+phrase boundaries inform explicitly broader fallbacks, never rewrite the first
+request. If discovery gaps remain, it issues at most four additional academic
+requests (concept-only and subject-only queries). Explicit quotes and `--target`
+help when an unquoted phrase boundary is ambiguous.
 
-Cards are labelled `matching`, `background`, or `low`. Low-relevance web cards
+Cards are labelled `matching`, `background`, or `low`. A core concept must match
+all its meaningful words. Explicit quoted objects, `--target`, and noun-anchored
+objects guide relevance; an arbitrary second slice of a long query is never a
+required research subject. Low-relevance web cards
 are exposed under `low_relevance_results`, separately from literature results.
 Background papers do not necessarily concern the research object. Search gaps,
 provider errors, and unread/non-citable status stay visible. A hit is not a
 validated theorem, and an empty bounded search does not establish absence.
+
+Ordinary mathematical direct searches try academic providers and bounded
+broader academic queries before general web fallbacks. With at least two
+distinct matching documents (one when `--limit 1`), missing unquoted snippet
+modifiers alone do not trigger more searches. They remain listed under
+`recall_checks.unmatched_query_terms` and must be checked in the proof text.
+Missing quoted objects, explicit targets, and insufficient distinct documents
+still cause discovery to continue. Cached failed-request recovery replays old
+successful branches as needed without adding new requests.
 
 arXiv abs/pdf/html aliases share a result slot only for the same explicit
 version. Unversioned references, v1 and v3 remain distinct even when a title or
@@ -94,6 +108,8 @@ bunx vitest run tests/campaignReference.test.ts
   --bundle /path/to/new/reference-tools --output /path/to/reference-replay.json
 /path/to/dependency-complete/python -B tests/campaign_reference_reader_replay.py \
   --bundle /path/to/new/reference-tools --output /path/to/reader-replay.json
+/path/to/dependency-complete/python -B tests/campaign_reference_efficiency_replay.py \
+  --bundle /path/to/new/reference-tools --output /path/to/efficiency-replay.json
 ```
 
 The final replay disables sockets and supplies saved XML / mock provider results.

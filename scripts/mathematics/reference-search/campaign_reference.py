@@ -31,49 +31,67 @@ def normalized(text):
     return " ".join(WORD.findall(str(text).casefold()))
 
 
-def phrases(query):
-    # Quoted phrases are the caller's exact terminology. Removing connecting
-    # words or cutting a long title changes the query rather than broadening it.
-    explicit = [" ".join(value.casefold().split()[:MAX_QUERY_WORDS]) for value in re.findall(r'"([^\"]+)"', query)]
-    if explicit:
-        return list(dict.fromkeys(filter(None, explicit)))[:4]
+def explicit_phrases(query):
+    return list(dict.fromkeys(' '.join(value.casefold().split())
+                             for value in re.findall(r'"([^\"]+)"', query) if value.strip()))
+
+
+def head_phrases(query):
     tokens = words(re.sub(r"\bsite:\S+", " ", query))[:MAX_QUERY_WORDS]
     groups, start = [], 0
     for index, word in enumerate(tokens):
         if word in HEADS or word.endswith("s") and word[:-1] in HEADS:
             groups.append(" ".join(tokens[max(start, index + 1 - MAX_PHRASE_WORDS):index + 1]))
             start = index + 1
+    return list(dict.fromkeys(groups))[:4]
+
+
+def phrases(query):
+    # Quoted phrases are the caller's exact terminology. Removing connecting
+    # words or cutting a long title changes the query rather than broadening it.
+    explicit = explicit_phrases(query)
+    if explicit:
+        return explicit
+    groups = head_phrases(query)
     if not groups:
+        tokens = words(query)[:MAX_QUERY_WORDS]
         groups = [" ".join(tokens[:3]), " ".join(tokens[3:6])]
     return list(dict.fromkeys(filter(None, groups)))[:4]
 
 
 def query_plan(query, target=None):
+    # Start with the caller's question. Heuristic phrase boundaries only inform
+    # explicitly broader fallbacks, never rewrite the primary provider request.
+    primary = ' '.join(query.casefold().split())
+    subject = ' '.join(target.casefold().split()) if target else ''
+    if subject:
+        primary += (' ' if primary else '') + '"' + subject + '"'
+    if not primary:
+        return []
     groups = phrases(query)
     concept = groups[0] if groups else " ".join(words(query)[:3])
-    subject = " ".join(target.casefold().split()[:MAX_QUERY_WORDS]) if target else (groups[1] if len(groups) > 1 else "")
+    subject = subject or (groups[1] if len(groups) > 1 else "")
     quote = lambda value: '"' + value + '"'
-    primary = [*groups, subject] if '"' in query else [concept, subject]
-    candidates = [("concept-and-subject", " ".join(quote(value) for value in dict.fromkeys(primary) if value)),
-                  ("concept-only", quote(concept))]
+    explicit = explicit_phrases(query)
+    candidates = [("original", primary)]
+    if concept:
+        candidates.append(("concept-only", quote(concept) if explicit else concept))
     if subject:
-        candidates.append(("subject-only", quote(subject)))
+        candidates.append(("subject-only", quote(subject) if target or explicit else subject))
     queries, seen = [], set()
     for stage, value in candidates:
-        if concept and value not in seen:
+        if value and value not in seen:
             queries.append({"stage": stage, "query": value})
             seen.add(value)
     return queries
 
 
 def arxiv_query(query):
-    # A provider request with explicit phrases already names its exact query.
-    if '"' not in query:
-        plan = query_plan(query)
-        query = plan[0]["query"] if plan else query
-    terms = re.findall(r'"([^\"]+)"|(\S+)', query)
+    # Unquoted terms remain separate. Removing connecting words and adding
+    # quotes can manufacture a phrase that the caller never asked for.
+    terms = re.findall(r'"([^\"]+)"|(\S+)', query.casefold())
     return " AND ".join('all:"' + phrase + '"' if phrase else 'all:' + word
-                        for phrase, word in terms[:MAX_QUERY_WORDS])
+                        for phrase, word in terms)
 
 
 def _academic(card):
@@ -84,13 +102,21 @@ def relevance(card, query, target=None):
     card = dict(card)
     groups = phrases(query)
     concept = set(words(groups[0] if groups else query))
-    subject = set(words(target or (groups[1] if len(groups) > 1 else "")))
+    # A noun-anchored object can guide discovery, but an arbitrary second slice
+    # of a natural-language query cannot become a required subject.
+    explicit = explicit_phrases(query)
+    subjects = [set(words(value)) for value in explicit[1:]]
+    heads = head_phrases(query) if not explicit else []
+    if not target and len(heads) > 1:
+        subjects.append(set(words(heads[1])))
+    if target:
+        subjects.append(set(words(target)))
     # Singular/plural spelling should not hide an otherwise exact object match.
     singular = lambda values: {value[:-1] if value.endswith("s") and not value.endswith("ss") else value for value in values}
     text = singular(words(str(card.get("title", "")) + " " + str(card.get("snippet", ""))))
-    concept, subject = singular(concept), singular(subject)
-    concept_match = bool(concept) and len(concept & text) >= min(2, len(concept))
-    subject_match = not subject or subject <= text
+    concept = singular(concept)
+    concept_match = bool(concept) and concept <= text
+    subject_match = all(singular(subject) <= text for subject in subjects)
     level = "matching" if concept_match and subject_match else "background" if concept_match and _academic(card) else "low"
     card["relevance"] = level
     card["relevance_reasons"] = ([] if concept_match else ["concept_not_matched"]) + ([] if subject_match else ["research_subject_not_matched"])
@@ -160,8 +186,7 @@ def install(research):
         return cards
 
     def openalex(query, limit):
-        plan = query_plan(query)
-        compact = (plan[0]["query"] if plan else query).replace('"', '')
+        compact = ' '.join(query.casefold().replace('"', '').split())
         body, _ = research.base._get("https://api.openalex.org/autocomplete/works?" + urlencode({"q": compact}))
         rows = json.loads(body).get("results")
         if not isinstance(rows, list):
@@ -178,10 +203,14 @@ def install(research):
     research._arxiv, research._openalex_exact = arxiv, openalex
     original_rank = research._rank_discovery
 
+    def permitted(card):
+        predicate = getattr(research, '_campaign_reference_candidate_permitted', None)
+        return predicate(card) if predicate else True
+
     def rank(cards, query, limit, target=None, *, diagnostics=None):
         ranked = original_rank(cards, query, len(cards), target, diagnostics=diagnostics)
         ranked = [relevance(card, query, target) for card in ranked]
-        ranked.sort(key=lambda card: {"matching": 0, "background": 1, "low": 2}[card["relevance"]])
+        ranked.sort(key=lambda card: (not permitted(card), {"matching": 0, "background": 1, "low": 2}[card["relevance"]]))
         groups = []
         for card in ranked:
             ids = document_ids(card)
@@ -208,6 +237,8 @@ def install(research):
                 card["alternate_sources"] = list(aliases.values())
                 card["alias_count"] = len(aliases)
             output.append(card)
+        # Merging aliases can itself reveal a held source identity.
+        output.sort(key=lambda card: not permitted(card))
         if diagnostics is not None:
             diagnostics.update(document_versions_merged=len(ranked) - len(groups), returned_candidates=min(limit, len(output)),
                                page_limit_omitted=max(0, len(output) - limit), relevance_policy="matching_then_background_then_labelled_low")
@@ -217,23 +248,43 @@ def install(research):
     original_gaps = research._recall_gaps
 
     def gaps(cards, query, limit, target=None):
-        labelled = [relevance(card, query, target) for card in cards]
-        useful = [card for card in labelled if card["relevance"] != "low"]
+        labelled = [relevance(card, query, target) for card in cards if permitted(card)]
+        useful = rank([card for card in labelled if card["relevance"] != "low"], query, len(labelled), target)
         result = original_gaps(useful, query, limit, target)
+        required = min(2, limit)
+        if len(useful) < required:
+            result.append('too_few_distinct_documents')
         if labelled and not any(card["relevance"] == "matching" for card in labelled):
             result.append("no_research_subject_match")
+        if sum(card['relevance'] == 'matching' for card in useful) >= required:
+            # Snippets rarely contain every requested exponent or qualifier.
+            # Read these candidates before spending more requests on modifiers;
+            # the omitted words remain visible in the public recall diagnostics.
+            result = [gap for gap in result if gap not in (
+                'need_terms_missing_from_results', 'similar_titles_require_read')]
         return list(dict.fromkeys(result))
 
     research._recall_gaps = gaps
     original_direct = research._search_direct
 
     def direct(query, limit=8, target=None):
-        result = original_direct(query, limit, target)
         plan = query_plan(query, target)
+        execution = research._ACTIVE_SEARCH.get()
+        mathematical = (research._academic_search_enabled() and
+                        not research._practitioner_search_enabled(query) and
+                        (not execution or execution.artifact in (None, 'paper')))
+        if mathematical:
+            outcomes, rows = [], []
+            request = {'query': plan[0]['query'] if plan else query, 'limit': max(2, limit // 3)}
+            for provider, operation in (('arxiv', arxiv), ('openalex', openalex)):
+                rows.extend(research._call_provider(provider, lambda operation=operation: operation(**request),
+                                                    outcomes, request=request))
+            result = {'query': query, 'results': rows, 'provider_results': outcomes, 'discovery_diagnostics': {}}
+        else:
+            result = original_direct(query, limit, target)
         attempts = 0
         if research._academic_search_enabled() and gaps(result.get("results", []), query, limit, target):
-            baseline = query_plan(query)
-            variants = [row for row in plan if not baseline or row["query"] != baseline[0]["query"]]
+            variants = plan[1:]
             for variant in variants:
                 for provider, operation in (("arxiv", arxiv), ("openalex", openalex)):
                     if attempts >= MAX_FALLBACK_REQUESTS:
@@ -243,10 +294,30 @@ def install(research):
                                                    result["provider_results"], request=request)
                     result["results"].extend(rows)
                     attempts += 1
+                    if not gaps(result['results'], query, limit, target):
+                        break
                 if not gaps(result["results"], query, limit, target):
                     break
+        web_request = {'query': query, 'limit': max(8, limit)}
+        if mathematical and (gaps(result['results'], query, limit, target) or
+                             research._recovery_has('duckduckgo', web_request)):
+            # Academic candidates come first; a slow general web provider is a
+            # fallback, not a prerequisite for reading useful papers.
+            result['results'].extend(research._call_provider(
+                'duckduckgo', lambda: research._duckduckgo(**web_request),
+                result['provider_results'], request=web_request))
+            if gaps(result['results'], query, limit, target) or research._recovery_has('bing', web_request):
+                result['results'].extend(research._call_provider(
+                    'bing', lambda: research.base._bing(**web_request, strict=True),
+                    result['provider_results'], request=web_request))
+            if not research.v1._is_english_query(query):
+                result['results'].extend(research._call_provider(
+                    '360', lambda: research.base._so360(**web_request, strict=True),
+                    result['provider_results'], request=web_request))
         diagnostics = result.setdefault("discovery_diagnostics", {})
-        diagnostics["academic_recall"] = {"query_plan": plan, "fallback_requests": attempts, "max_fallback_requests": MAX_FALLBACK_REQUESTS}
+        diagnostics["academic_recall"] = {"query_plan": plan, "fallback_requests": attempts,
+                                          "max_fallback_requests": MAX_FALLBACK_REQUESTS,
+                                          "academic_first": mathematical}
         diagnostics["academic_ranking"] = {}
         result["results"] = rank(result["results"], query, limit, target, diagnostics=diagnostics["academic_ranking"])
         result["provider_errors"] = research._outcome_errors(result["provider_results"])
@@ -258,7 +329,8 @@ def install(research):
     original_execute = research._search_base_execute
 
     def execute(query, limit, mode, artifact, target):
-        return {**original_execute(query, limit, mode, artifact, target), "research_target": target}
+        return {**original_execute(query, limit, mode, artifact, target),
+                "research_target": target, "research_limit": limit}
 
     research._search_base_execute = execute
 
@@ -273,7 +345,11 @@ def install(research):
         output["low_relevance_results"] = [row for row in output["results"] if row["relevance"] == "low"]
         output["results"] = [row for row in output["results"] if row["relevance"] != "low"]
         output["relevance_summary"] = {level: sum(row["relevance"] == level for row in labelled) for level in ("matching", "background", "low")}
-        output["recall_checks"] = {**output.get("recall_checks", {}), "remaining_gaps": gaps(labelled, query, len(labelled) or 1, target)}
+        covered = set(words(' '.join(str(card.get(key) or '') for card in labelled for key in ('title', 'snippet'))))
+        output["recall_checks"] = {**output.get("recall_checks", {}),
+                                   "remaining_gaps": gaps(labelled, query, result.get('research_limit', 2), target),
+                                   "unmatched_query_terms": sorted(set(words(query)) - covered),
+                                   "note": "Discovery checks guide candidate selection only. Read the proof text to verify all requested hypotheses and bounds; unmatched snippet terms remain unverified."}
         output["campaign_reference_adapter_sha256"] = identity
         if output["recall_checks"]["remaining_gaps"] and labelled:
             output["status"] = "partial"

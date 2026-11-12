@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from contextvars import ContextVar
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -28,11 +29,16 @@ def load(name, file):
 
 def research_double():
     research = SimpleNamespace(__file__=__file__, calls=[], mock_web=[], refs={})
-    research.v1 = SimpleNamespace(read_page=lambda *args, **kwargs: {})
+    research.v1 = SimpleNamespace(read_page=lambda *args, **kwargs: {}, _is_english_query=lambda _: True)
     research.workspace = SimpleNamespace(search_id=lambda request: hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest())
     research.base = SimpleNamespace(_get=lambda url: (_ for _ in ()).throw(AssertionError('unmocked request: ' + url)),
                                     _clean=lambda value, limit: ' '.join(value.split())[:limit],
-                                    _url_ok=lambda url: url.startswith(('http://', 'https://')))
+                                    _url_ok=lambda url: url.startswith(('http://', 'https://')),
+                                    _bing=lambda *args, **kwargs: [])
+    research._ACTIVE_SEARCH = ContextVar('campaign_reference_test_execution', default=None)
+    research._practitioner_search_enabled = lambda _: False
+    research._recovery_has = lambda *args: False
+    research._duckduckgo = lambda *args, **kwargs: list(research.mock_web)
     research._provider_config = lambda plan: {'implementation_sha256': 'base-fixture'}
     research._academic_search_enabled = lambda: True
     research._outcome_errors = lambda rows: [row for row in rows if row['status'] == 'error']
@@ -92,15 +98,16 @@ class QueryTests(unittest.TestCase):
         for query, concept, subject in examples:
             with self.subTest(query=query):
                 plan = adapter.query_plan(query)
-                self.assertEqual(plan[0]['query'], concept + ' ' + subject)
-                self.assertIn({'stage': 'concept-only', 'query': concept}, plan)
-                self.assertIn({'stage': 'subject-only', 'query': subject}, plan)
+                self.assertEqual(plan[0]['query'], query.casefold())
+                self.assertIn({'stage': 'concept-only', 'query': concept.strip('"')}, plan)
+                self.assertIn({'stage': 'subject-only', 'query': subject.strip('"')}, plan)
                 self.assertLessEqual(len(plan), 3)
-                self.assertIn('all:' + concept, adapter.arxiv_query(query))
+                self.assertTrue(all('all:' + term in adapter.arxiv_query(query)
+                                    for term in query.casefold().split()))
 
     def test_explicit_phrase_and_target_are_preserved_and_work_is_bounded(self):
         plan = adapter.query_plan('"heat kernel" estimates asymptotics', 'compact Riemannian manifold')
-        self.assertEqual(plan[0]['query'], '"heat kernel" "compact riemannian manifold"')
+        self.assertEqual(plan[0]['query'], '"heat kernel" estimates asymptotics "compact riemannian manifold"')
         self.assertLessEqual(len(adapter.query_plan(' '.join(['word'] * 10000))), 3)
         self.assertEqual(adapter.query_plan(''), [])
 
@@ -126,7 +133,7 @@ class QueryTests(unittest.TestCase):
                 parsed = urlsplit(url)
                 if parsed.netloc == 'export.arxiv.org':
                     query = parse_qs(parsed.query)['search_query'][0]
-                    phrase = 'all:"psd rank"' if index == 0 else 'all:"semidefinite extension complexity"'
+                    phrase = adapter.arxiv_query('psd rank' if index == 0 else 'semidefinite extension complexity')
                     body = (FIXTURES / ('psdrank1.xml' if index == 0 else 'sdpext.xml')).read_text() if query == phrase else EMPTY
                     return body, url
                 if parsed.netloc == 'api.openalex.org':
@@ -144,9 +151,9 @@ class QueryTests(unittest.TestCase):
             self.assertTrue(all(row['relevance'] == 'low' for row in public['low_relevance_results']))
             self.assertEqual(public['status'], 'partial')
             self.assertIn('no_research_subject_match', public['recall_checks']['remaining_gaps'])
-            self.assertLessEqual(len(research.calls), 2 + adapter.MAX_FALLBACK_REQUESTS)
+            self.assertLessEqual(len(research.calls), 4 + adapter.MAX_FALLBACK_REQUESTS)
             self.assertEqual(result['discovery_diagnostics']['academic_recall']['fallback_requests'], 4)
-            self.assertTrue(any('"perfect matching polytope"' in request['query'] for _, request in research.calls))
+            self.assertTrue(any('perfect matching polytope' in request['query'] for _, request in research.calls))
             self.assertTrue(any(parse_qs(urlsplit(url).query).get('q') == [adapter.query_plan(case['request']['query'])[0]['query'].replace('"', '')] for url in urls))
             self.assertTrue(all(not row['citable'] for row in public['results']))
 
@@ -194,7 +201,7 @@ class QueryTests(unittest.TestCase):
         research.base._get = get
         adapter.install(research)
         result = research._search_direct('heat kernel compact manifold estimates', 8)
-        self.assertEqual(len(research.calls), 6)
+        self.assertEqual(len(research.calls), 8)
         self.assertEqual(len(result['provider_errors']), 3)
         self.assertEqual(result['results'], [])
 
@@ -337,6 +344,30 @@ class SourcePolicyTests(unittest.TestCase):
             self.assertEqual(row['status'], 'unverified')
             self.assertIsNotNone(self.policy.unverified_source(row['identifiers'][0]))
         self.assertEqual({row['metadata']['snippet'] for row in data['records']}, {'OpenAI | cited by 0'})
+
+    def test_held_candidates_cannot_close_discovery_or_displace_permitted_documents(self):
+        research = research_double()
+        class Session:
+            def send(self, request, **kwargs):
+                raise AssertionError('unexpected network')
+        research.base.requests = SimpleNamespace(sessions=SimpleNamespace(Session=Session))
+        research.read_page = lambda *args, **kwargs: {}
+        research.workspace.load_source = lambda *args, **kwargs: None
+        adapter.install(research)
+        self.policy.install_source_policy(research)
+        held = [dict(row['metadata'], url=row['identifiers'][0]) for row in self.policy.SOURCE_PROVENANCE]
+        query = 'variance random SAT hitting time'
+        self.assertIn('too_few_distinct_documents', research._recall_gaps(held, query, 2))
+        allowed = [{'url': f'https://arxiv.org/abs/2401.1234{index}',
+                    'title': 'Variance of random SAT hitting time estimates',
+                    'snippet': '', 'engine': 'arxiv'} for index in range(2)]
+        ranked = research._rank_discovery(held + allowed, query, 2)
+        self.assertEqual({card['url'] for card in ranked}, {card['url'] for card in allowed})
+        public = research._public_leads({'query': query, 'results': held, 'status': 'ok'})
+        self.assertEqual(public['results'], [])
+        self.assertEqual(public['status'], 'partial')
+        self.assertEqual(public['unverified_source_count'], 2)
+        self.assertEqual(research.refs, {})
 
     def test_explicit_absolute_run_anchor_wins_over_cwd_and_inherited_environment(self):
         with tempfile.TemporaryDirectory() as directory:
