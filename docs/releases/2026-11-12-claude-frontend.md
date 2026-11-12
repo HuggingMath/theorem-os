@@ -14,4 +14,4 @@ Claude 会话的 15 文件增量基于 `26ae1e9`，已隔离接入最新主线 `
 
 后台核心仍为 solver22 同一服务实例；原会话独立启用的 search27 仅作只读身份核对，本次前端发布未迁移或重启后台。search27 源码包待独立接入；生产 Lean 仍为 4.33.0，官网沿用 039423c。验证未调用真实模型，未声明新增整题证明通过。
 
-完整证据：`/home/lzh/workspace/outputs/theoremos-claude-frontend-release-20261112/release-completed.json`。原 Claude 工作区及其 index 保持，发布源码和文档分别保存在隔离工作区。
+完整证据：`/home/lzh/workspace/outputs/theoremos-claude-frontend-release-20261112/release-completed.json`。原15文件冻结包保留，发布源码和文档分别保存在隔离工作区。Claude原会话于16:55自行保存WIP分支、同步到已发布版本并继续下一轮开发；中央未改写该会话工作区。
