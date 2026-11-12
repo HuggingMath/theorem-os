@@ -238,7 +238,11 @@ try {
   assert.deepEqual(await rowsWith(page, '#explain-lean-code', 'is-active'), [4]);
   assert.equal(await addition.locator('.explain-goal-checked').innerText(), '2 个审核模型对照过');
   assert.equal(await helper.locator('.explain-goals').count(), 0, 'no goals were recorded for the helper');
-  assert.ok(await page.locator('.explain-overview .formal-note').isVisible());
+  // The note on dotted phrases sits with the source and review context, folded until asked for.
+  const provenance = page.locator('.explain-provenance');
+  await provenance.locator('summary').click();
+  assert.ok(await provenance.getByText('讲解中划虚线的短语各对应一段 Lean').isVisible());
+  await provenance.locator('summary').click();
   mark('Enter chooses a focused link; the target step\'s goals say both auditors checked them; the page explains the dotted phrases');
 
   // A cited lemma jumps within the file; Back returns to the citation instead of leaving the report.
@@ -251,7 +255,9 @@ try {
   assert.deepEqual(await contrastProblems(page), [], 'contrast problems on the explanation report');
   await page.evaluate(() => history.back());
   await back.waitFor({ state: 'detached' });
-  assert.equal(page.url(), pathToFileURL(explainFile).href, 'Back stays in the report');
+  // The address also records the place in the proof, after the #.
+  assert.equal(page.url().split('#')[0], pathToFileURL(explainFile).href, 'Back stays in the report');
+  assert.match(page.url(), /#at=addition&step=\d+$/u, 'the address records the place Back returned to');
   assert.deepEqual(await rowsWith(page, '#explain-lean-code', 'is-active'), [4], 'Back chooses the step it left');
   assert.ok(await cite.evaluate(node => node === document.activeElement));
   mark('in the report, Back after a cited lemma returns to the citation and stays on the page');
@@ -308,7 +314,8 @@ try {
   await english.page.locator('#explain-prose .explain-document').waitFor();
   assert.equal(await english.page.title(), 'synthetic_addition · Proof explanation · TheoremOS');
   assert.equal(await english.page.locator('#explain-problem-heading').innerText(), 'Original problem');
-  assert.match(await english.page.locator('.explain-overview .formal-note').innerText(), /^Each phrase with a dotted underline/u);
+  await english.page.locator('.explain-provenance > summary').click();
+  assert.ok(await english.page.locator('.explain-provenance').getByText(/^Each phrase with a dotted underline/u).isVisible());
   assert.match(await english.page.locator('.explain-goal-checked').innerText(), /^checked by 2 auditors$/u);
   await english.context.close();
   mark('English chrome is English on the explanation report');

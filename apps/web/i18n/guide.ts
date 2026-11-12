@@ -57,8 +57,8 @@ export const guide: Record<string, string> = {
   "审阅研究计划": "Review the research plan",
   "「共同推进」使用 2 个 Agent，初始计划直接显示在对话中。你可以查看全部任务、修改任务与依赖，再批准开始证明。拟定和修改计划计入证明预算；纯等待你审阅或批准时暂停证明计时，不调用模型，批准后继续同一次运行，关闭再打开页面也无需重建。后续修改计划会继续生效，不会每次重新等待批准。Lean 入口也可在执行配置中勾选「先审计划再开始」。":
     "Work together uses 2 Agents and shows the initial plan in the conversation. Review tasks and dependencies, request changes, then approve the plan to start proving. Drafting and revisions consume the proof budget. Pure waiting for your review or approval pauses the proof timer without model calls. Approval continues the same run, even after closing and reopening the page. Later edits update the plan without another approval gate. The Lean entry also offers Review plan before starting under Execution.",
-  "运行中在对话输入框选择「指导研究」，给负责人或具体任务发送方法建议，并查看送达回执。指导供 Agent 参考；「讨论思路」用于交流想法，不会改动运行计划。协作区还可向具体 Agent 留言、引用代码与检查记录。":
-    "During a run, choose Guide research in the chat composer to suggest methods to the lead or a task, then check delivery receipts. Agents consider this guidance. Discuss ideas is for exploring the problem and does not change the running plan. In Collaboration, you can also address an Agent and reference code and checks.",
+  "运行中在对话输入框选择「指导 Agent」，给负责人或具体任务发送方法建议，并查看送达回执。指导供 Agent 参考；「讨论思路」用于交流想法，不会改动运行计划。协作区还可向具体 Agent 留言、引用代码与检查记录。":
+    "During a run, choose Guide the Agents in the chat composer to suggest methods to the lead or a task, then check delivery receipts. Agents consider this guidance. Discuss ideas is for exploring the problem and does not change the running plan. In Collaboration, you can also address an Agent and reference code and checks.",
   "归档与知识": "Archives and knowledge",
   "协作区可归档研究证据、下载归档包，并在「知识」中搜索历史定理、引理与路线发现。引用知识时会带上来源和记录环境；历史检查通过不代表当前题目通过，使用前仍需重新检查。":
     "In Collaboration, archive research evidence, download an archive and search historical theorems, lemmas and route findings under Knowledge. References include their source and recorded environment. A historical check does not establish the current problem; reused work must be checked again.",

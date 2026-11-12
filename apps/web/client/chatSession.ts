@@ -1132,7 +1132,7 @@ export class ChatSession {
           : this.options.session()?.runtime.ready
             ? t('当前服务暂不支持自然语言解题，可切换到 Lean 输入。')
             : t('运行环境暂未就绪，原题会保留；恢复后可继续发送。')
-        : newProblem && !this.capabilities ? t("正在连接…") : canGuide ? t('讨论用于交流思路；想调整研究，请切换到「指导研究」。')
+        : newProblem && !this.capabilities ? t("正在连接…") : canGuide ? t('讨论用于交流思路；想调整研究，请切换到「指导 Agent」。')
         // A running proof that takes no guidance says so, so a message here is not mistaken for an instruction to the Agent.
         : this.conversation && this.run?.status === 'running' && !this.options.isSample(this.run)
           ? canDecide ? t('研究计划建立后，可以在这里指导 Agent。') : t('本次由单个 Agent 自动推进，不接收中途指导；这里发送的是讨论。') : undefined,

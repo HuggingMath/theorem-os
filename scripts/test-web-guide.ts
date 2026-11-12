@@ -27,7 +27,7 @@ const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port
   THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web') }), runner);
 const mark = (check: string) => console.log(`PASS ${check}`);
 const noOverflow = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
-const sections = ['start', 'watch', 'language', 'collaborate', 'results', 'after', 'keys', 'data'];
+const sections = ['start', 'watch', 'language', 'collaborate', 'results', 'after', 'keys', 'data', 'service-status'];
 
 async function open(browser: Browser, options: { locale?: 'zh' | 'en'; theme?: 'light' | 'dark'; width?: number } = {}) {
   const context = await browser.newContext({ viewport: { width: options.width ?? 1440, height: 900 } });
