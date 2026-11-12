@@ -594,7 +594,7 @@ button.solve-row-head{cursor:pointer}
 body[data-chat-artifact=live] #chat-live-panel{display:flex;flex-direction:column}
 body[data-chat-artifact=live] #run-detail{display:none}
 .live-workspace{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0}
-.live-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 20px;border-bottom:1px solid var(--line)}
+.live-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 20px 0}
 .live-heading{min-width:0}
 .live-head h2{margin:0;font-size:15px;font-weight:600}
 .live-state{display:flex;align-items:center;gap:8px;margin:0;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
@@ -603,7 +603,8 @@ body[data-chat-artifact=live] #run-detail{display:none}
 .live-empty{margin:0;padding:20px;color:var(--muted);font-size:13px;line-height:1.8}
 .live-head-tools{display:flex;align-items:center;gap:14px;flex-shrink:0}
 /* What runs now, then the route: stages on one line and the plan's tasks, each with where it stands. */
-.live-now{flex:none;padding:10px 20px;border-bottom:1px solid var(--line)}
+.live-now{flex:none;padding:10px 20px;border-top:1px solid var(--line)}
+.live-tabs,.live-file-panel:first-of-type{border-top:1px solid var(--line)}
 .live-now h3,.live-plan h3{margin:0;font-size:12px;font-weight:600}
 .live-now ul{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:4px}
 .live-now li{display:flex;align-items:baseline;flex-wrap:wrap;gap:2px 8px;font-size:12.5px;line-height:1.6}
@@ -614,15 +615,24 @@ body[data-chat-artifact=live] #run-detail{display:none}
 .live-now-task{min-width:0;font:11.5px var(--mono);overflow-wrap:anywhere}
 button.live-now-task{padding:0;text-align:left}
 .live-now-idle{margin:6px 0 0;font-size:12.5px;color:var(--muted)}
-.live-plan{display:flex;flex-direction:column;flex:0 1 auto;min-height:0;max-height:46%;border-bottom:1px solid var(--line)}
-.live-plan[open]::details-content{display:flex;flex-direction:column;flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin}
-.live-plan>summary{display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;padding:9px 20px;cursor:pointer;list-style:none}
-.live-plan>summary::-webkit-details-marker{display:none}
-.live-plan>summary::after{content:"";width:6px;height:6px;margin-left:auto;border:solid var(--gray-400);border-width:0 1.5px 1.5px 0;transform:rotate(-135deg)}
-.live-plan[open]>summary::after{transform:rotate(45deg) translateY(-2px)}
-.live-plan-facts{display:flex;flex-wrap:wrap;gap:2px 12px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.live-plan{display:flex;flex-direction:column;flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;padding-top:6px}
+.live-plan[hidden],.live-file-panel[hidden]{display:none}
+.live-file-panel{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0}
+.live-progress{flex:none;display:grid;gap:6px;padding:0 20px 10px}
+.live-progress-bar{display:flex;gap:3px;height:4px}
+.live-progress-bar i{flex:1;min-width:0;border-radius:2px;background:var(--gray-200)}
+.live-progress-bar i[data-tone=done]{background:var(--green-600)}
+.live-progress-bar i[data-tone=active]{background:repeating-linear-gradient(90deg,var(--green-300) 0 5px,transparent 5px 8px)}
+.live-progress-bar i[data-tone=failed]{background:var(--red-600)}
+.live-tabs{flex:none;display:flex;gap:20px;padding:0 20px;border-bottom:1px solid var(--line)}
+.live-tabs button{display:inline-flex;align-items:center;gap:7px;height:36px;padding:0;border:0;border-bottom:2px solid transparent;margin-bottom:-1px;background:none;font:inherit;font-size:12.5px;color:var(--gray-600);cursor:pointer}
+.live-tabs button:hover{color:var(--ink)}
+.live-tabs button[aria-selected=true]{color:var(--ink);font-weight:600;border-bottom-color:var(--ink)}
+.live-tab-count,.live-tab-outcome{font-size:11.5px;font-weight:400;color:var(--muted);font-variant-numeric:tabular-nums}
+.live-tab-outcome[data-tone=failed]{color:var(--red-700)}
+.live-plan-facts{display:flex;flex-wrap:wrap;gap:2px 12px;margin:0;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
 .live-plan-facts [data-live-failed]{color:var(--red-700)}
-.live-stages{list-style:none;display:flex;flex-wrap:wrap;gap:4px 18px;margin:0;padding:0 20px 8px;font-size:12.5px;color:var(--gray-600)}
+.live-stages{list-style:none;flex:none;display:flex;flex-wrap:wrap;gap:4px 18px;margin:0;padding:8px 20px 10px;font-size:12.5px;color:var(--gray-600)}
 .live-stages li{display:inline-flex;align-items:center;gap:6px}
 .live-stages li[data-tone=active]{color:var(--ink);font-weight:600}
 .live-stages li[data-tone=pending],.live-stages li[data-tone=skipped]{color:var(--gray-500)}
@@ -708,14 +718,14 @@ button.live-now-task{padding:0;text-align:left}
 /* A narrow screen shows the workspace in place of the conversation: it scrolls as one column instead of in four small regions. */
 @media(max-width:1100px){
   .live-workspace{overflow:auto;overscroll-behavior:contain}
-  .live-plan,.live-checks{flex:none;max-height:none}
-  .live-plan[open]::details-content{overflow:visible}
+  .live-plan,.live-checks,.live-file-panel{flex:none;max-height:none}
+  .live-plan{overflow:visible}
   .live-file{flex:none}
   .live-code{flex:none;max-height:60dvh}
   /* A long check history keeps its own scrollbar, so the page does not grow with every check. */
   .live-checks>ol{max-height:50dvh}
 }
-@media(max-width:480px){.live-head,.live-checks>summary,.live-checks-tools,.live-now,.live-plan>summary,.live-plan-tools{padding-inline:14px}.live-stages{padding-inline:14px}.live-tasks{padding-inline:4px}.live-file-head,.live-file-toolbar{padding-inline:14px}.live-file-toolbar .live-file-head{padding:0}.live-code .lean-line{padding-left:40px}.live-marks{padding-inline:14px}}
+@media(max-width:480px){.live-head,.live-checks>summary,.live-checks-tools,.live-now,.live-progress,.live-tabs,.live-plan-tools{padding-inline:14px}.live-stages{padding-inline:14px}.live-tasks{padding-inline:4px}.live-file-head,.live-file-toolbar{padding-inline:14px}.live-file-toolbar .live-file-head{padding:0}.live-code .lean-line{padding-left:40px}.live-marks{padding-inline:14px}}
 /* Forced colours drop the tinted fills; the marks keep their own borders and the current check its outline. */
 @media(forced-colors:active){
   .solve-process,#chat-live-panel .live-code{border:1px solid CanvasText}

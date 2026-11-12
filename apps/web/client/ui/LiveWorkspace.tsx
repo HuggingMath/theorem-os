@@ -172,34 +172,41 @@ function TaskRow({ task, open, onToggle, props }: { task: LiveTask; open: boolea
   </li>;
 }
 
-/** The route of the whole task: its three stages, then the research plan's tasks with where each one stands. */
-function Plan({ process, props }: { process: SolveProcess; props: LiveWorkspaceProps }) {
+/** The research plan's tasks, in plan order, with where each one stands. */
+function Plan({ process, props, hidden }: { process: SolveProcess; props: LiveWorkspaceProps; hidden: boolean }) {
   // A task that did not pass shows why without being opened; the reader's own choice replaces that.
-  const [open, setOpen] = useState(true), [expanded, setExpanded] = useState<ReadonlyMap<string, boolean>>(new Map());
-  const tasks = process.tasks, count = (tone: ProcessTone) => tasks.filter(task => task.tone === tone).length;
-  const done = count('done'), running = count('active'), failed = count('failed');
+  const [expanded, setExpanded] = useState<ReadonlyMap<string, boolean>>(new Map());
+  const tasks = process.tasks;
   const toggle = (task: LiveTask) => setExpanded(current => new Map(current).set(task.id, !(current.get(task.id) ?? (task.tone === 'failed'))));
-  return <details class="live-plan" data-live-plan open={open} onToggle={event => setOpen((event.currentTarget as HTMLDetailsElement).open)}>
-    <summary><h3 id="chat-live-plan">{t('路线图')}</h3>
-      {tasks.length > 0 && <span class="live-plan-facts"><span data-live-done>{t('已完成 {0}/{1}', done, tasks.length)}</span>
-        {running > 0 && <span>{t('{0} 项进行中', running)}</span>}{failed > 0 && <span data-live-failed>{t('{0} 项未通过', failed)}</span>}</span>}</summary>
-    <ol class="live-stages" aria-label={t('阶段')}>{process.stages.map(stage => <li key={stage.id} data-live-stage={stage.id} data-tone={stage.tone}
-      aria-current={stage.tone === 'active' ? 'step' : undefined}><ToneMark tone={stage.tone} /><span>{stage.label}</span></li>)}</ol>
-    {tasks.length > 0 && <ol class="live-tasks" aria-labelledby="chat-live-plan">{tasks.map(task => <TaskRow key={task.id} task={task}
+  return <section class="live-plan" data-live-plan id="chat-live-plan-panel" role="tabpanel" aria-labelledby="chat-live-tab-plan" hidden={hidden}>
+    {tasks.length > 0 && <ol class="live-tasks" aria-label={t('路线图')}>{tasks.map(task => <TaskRow key={task.id} task={task}
       open={expanded.get(task.id) ?? (task.tone === 'failed')} onToggle={() => toggle(task)} props={props} />)}</ol>}
     {props.onEditPlan && tasks.length > 0 && <div class="live-plan-tools"><button type="button" class="text-button" data-live-edit-plan onClick={props.onEditPlan}>
       <Icon name="square-pen" />{t('修改任务与依赖')}</button></div>}
-  </details>;
+  </section>;
 }
 
+/** How far the plan is: one segment per task in plan order, then the counts. */
+function Progress({ tasks }: { tasks: readonly LiveTask[] }) {
+  if (!tasks.length) return null;
+  const count = (tone: ProcessTone) => tasks.filter(task => task.tone === tone).length;
+  const done = count('done'), running = count('active'), failed = count('failed');
+  return <div class="live-progress" data-live-progress>
+    <div class="live-progress-bar" aria-hidden="true">{tasks.map(task => <i key={task.id} data-tone={task.tone} title={task.label} />)}</div>
+    <p class="live-plan-facts"><span data-live-done>{t('已完成 {0}/{1}', done, tasks.length)}</span>
+      {running > 0 && <span>{t('{0} 项进行中', running)}</span>}{failed > 0 && <span data-live-failed>{t('{0} 项未通过', failed)}</span>}</p>
+  </div>;
+}
+
+type Tab = 'plan' | 'file';
 const stateTones: Record<SolveState, ProcessTone> = { queued: 'active', formalizing: 'active', proving: 'active', verifying: 'active',
   review: 'done', accepted: 'done', failed: 'failed', stopped: 'stopped', cancelled: 'stopped' };
 const checkTones: Record<LiveCheck['state'], ProcessTone> = { running: 'active', passed: 'done', failed: 'failed' };
 
 /**
- * Beside the chat on a wide screen: what runs now, the route with where each task passed or failed, then the Lean file the
- * task is on, with Lean's messages under the lines they are about, and every Lean check so far, newest first. The file
- * follows the latest check until the reader picks one.
+ * Beside the chat on a wide screen: how far the plan is and what runs now, then either the route with where each task
+ * passed or failed, or the Lean file the task is on with Lean's messages under the lines they are about and every Lean
+ * check so far, newest first. The file follows the latest check until the reader picks one.
  */
 function LiveWorkspace(props: LiveWorkspaceProps) {
   const { process } = props;
@@ -211,7 +218,20 @@ function LiveWorkspace(props: LiveWorkspaceProps) {
   // Messages the file cannot show under its lines are listed above it.
   const listed = check && (check.lean ? !view?.inline && <LeanReport lean={check.lean} />
     : check.text && <pre class="solve-feedback" tabIndex={0} aria-label={t('反馈全文')} translate={false}>{check.text}</pre>);
-  return <div class="live-workspace">
+  // The route and the Lean file take turns in the space below, so neither is squeezed. With a plan the route opens
+  // first; picking a Lean check brings its file forward, and the reader's own choice of tab stays for this task.
+  const planned = process.tasks.length > 0;
+  const [chosen, setChosen] = useState<{ key: string; tab: Tab }>();
+  const tab: Tab = !planned ? 'file' : chosen?.key === process.key ? chosen.tab : 'plan';
+  const show = (next: Tab) => setChosen({ key: process.key, tab: next });
+  const pickedBefore = useRef(props.selected);
+  useLayoutEffect(() => {
+    if (props.selected && props.selected !== pickedBefore.current) show('file');
+    pickedBefore.current = props.selected;
+  });
+  const latest = checks.at(-1), outcome = latest && latest.state !== 'passed' ? checkOutcome(latest) : undefined;
+  const done = process.tasks.filter(task => task.tone === 'done').length;
+  return <div class="live-workspace" data-live-tab-shown={tab}>
     <header class="live-head">
       <div class="live-heading"><h2 id="chat-live-title" class="sr-only">{t('实时工作区')}</h2>
         <p class="live-state"><ToneMark tone={stateTones[process.state]} /><span>{process.label}</span>
@@ -221,8 +241,18 @@ function LiveWorkspace(props: LiveWorkspaceProps) {
         {props.onRoadmap && <button type="button" class="text-button" data-live-roadmap onClick={props.onRoadmap}><Icon name="network" />{t('完整记录')}</button>}
       </div>
     </header>
+    <ol class="live-stages" aria-label={t('阶段')}>{process.stages.map(stage => <li key={stage.id} data-live-stage={stage.id} data-tone={stage.tone}
+      aria-current={stage.tone === 'active' ? 'step' : undefined}><ToneMark tone={stage.tone} /><span>{stage.label}</span></li>)}</ol>
+    <Progress tasks={process.tasks} />
     <Now process={process} {...(props.onTask ? { onTask: props.onTask } : {})} />
-    <Plan key={process.key} process={process} props={props} />
+    {planned && <div class="live-tabs" role="tablist" aria-label={t('实时工作区')}>
+      <button type="button" role="tab" id="chat-live-tab-plan" data-live-tab="plan" aria-selected={tab === 'plan'} aria-controls="chat-live-plan-panel"
+        onClick={() => show('plan')}>{t('路线图')}<span class="live-tab-count">{done}/{process.tasks.length}</span></button>
+      <button type="button" role="tab" id="chat-live-tab-file" data-live-tab="file" aria-selected={tab === 'file'} aria-controls="chat-live-file-panel"
+        onClick={() => show('file')}>{t('Lean 文件')}{outcome && <span class="live-tab-outcome" data-tone={outcome.tone}>{outcome.text}</span>}</button>
+    </div>}
+    {planned && <Plan key={process.key} process={process} props={props} hidden={tab !== 'plan'} />}
+    <div class="live-file-panel" id="chat-live-file-panel" role={planned ? 'tabpanel' : undefined} aria-labelledby={planned ? 'chat-live-tab-file' : undefined} hidden={tab !== 'file'}>
     <section class="live-file" aria-labelledby="chat-live-file">
       {view ? <div class="live-file-toolbar">
         <p class="live-file-head" id="chat-live-file"><Icon name="file-code-2" /><code translate={false}>{view.file}</code><span>{view.caption}</span>
@@ -246,6 +276,7 @@ function LiveWorkspace(props: LiveWorkspaceProps) {
           <span class="route-item-outcome" data-tone={outcome.tone}>{outcome.text}</span><time dateTime={item.at}>{props.time(item.at)}</time></button></li>;
       })}</ol> : <p class="live-empty">{process.active ? t('第一次 Lean 检查后会出现在这里。') : t('这个任务没有记录 Lean 检查。')}</p>}
     </details>
+    </div>
   </div>;
 }
 export function renderLiveWorkspace(root: HTMLElement, props: LiveWorkspaceProps) { render(<LiveWorkspace {...props} />, root); }
