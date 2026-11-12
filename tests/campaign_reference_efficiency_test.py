@@ -80,6 +80,36 @@ class DiscoveryEfficiencyTests(unittest.TestCase):
         self.assertIn('no_research_subject_match', research._recall_gaps(
             [card, other], 'heat kernel estimates', 5, 'noncompact hyperbolic manifold'))
 
+    def test_recovered_academic_candidates_survive_sufficient_primary_results(self):
+        query = 'heat kernel gaussian lower bounds'
+        primary = [paper(f'2401.1234{i}v1', f'Heat kernel estimates primary {i}') for i in range(2)]
+        for recovered in (('arxiv',), ('openalex',), ('arxiv', 'openalex')):
+            with self.subTest(recovered=recovered):
+                research = research_double()
+                calls = []
+                saved = {provider: [paper(f'2401.{prefix}{i}v1', f'Heat kernel estimates recovered {provider} {i}')
+                                    for i in range(2)]
+                         for provider, prefix in (('arxiv', '3334'), ('openalex', '4444'))}
+
+                def call(provider, operation, outcomes, *, request):
+                    calls.append((provider, request['query']))
+                    if request['query'] == query:
+                        return primary if provider == 'arxiv' else []
+                    self.assertEqual(request['query'], 'heat kernel')
+                    self.assertIn(provider, recovered)
+                    return saved[provider]
+
+                research._call_provider = call
+                research._recovery_has = lambda provider, request=None: (
+                    provider in recovered and request is not None and request['query'] == 'heat kernel')
+                adapter.install(research)
+                result = research._search_base_execute(query, 6, 'direct', None, None)
+                expected = primary + [card for provider in recovered for card in saved[provider]]
+                self.assertEqual({card['url'] for card in result['results']},
+                                 {card['url'] for card in expected})
+                self.assertEqual(calls, [('arxiv', query), ('openalex', query)] +
+                                 [(provider, 'heat kernel') for provider in recovered])
+
 
 if __name__ == '__main__':
     unittest.main()

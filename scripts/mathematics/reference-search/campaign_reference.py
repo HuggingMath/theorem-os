@@ -283,21 +283,21 @@ def install(research):
         else:
             result = original_direct(query, limit, target)
         attempts = 0
-        if research._academic_search_enabled() and gaps(result.get("results", []), query, limit, target):
+        if research._academic_search_enabled():
             variants = plan[1:]
             for variant in variants:
                 for provider, operation in (("arxiv", arxiv), ("openalex", openalex)):
                     if attempts >= MAX_FALLBACK_REQUESTS:
                         break
                     request = {"query": variant["query"], "limit": min(8, max(4, limit))}
+                    # Recovery already retried recorded failures. Consume their
+                    # saved output even when the primary candidates now suffice.
+                    if not gaps(result['results'], query, limit, target) and not research._recovery_has(provider, request):
+                        continue
                     rows = research._call_provider(provider, lambda operation=operation, request=request: operation(**request),
                                                    result["provider_results"], request=request)
                     result["results"].extend(rows)
                     attempts += 1
-                    if not gaps(result['results'], query, limit, target):
-                        break
-                if not gaps(result["results"], query, limit, target):
-                    break
         web_request = {'query': query, 'limit': max(8, limit)}
         if mathematical and (gaps(result['results'], query, limit, target) or
                              research._recovery_has('duckduckgo', web_request)):
