@@ -547,7 +547,8 @@ try {
       touch(); summary('researcher', 'research-summary', copy.researcherSummary, true);
       for (const [index, command] of ["theorem-os search-lean --query 'Nat.add_zero'", 'rg SyntheticProofFixture Mathlib', "theorem-os search-lean --query 'Nat.zero_add'"].entries()) {
         touch(); action({ workerId: 'researcher', itemId: `simple-tool-${index}`, kind: 'command', phase: 'completed', status: 'done',
-          command, output: `UI_FIXTURE_PROOF_SIMPLE_TOOL_OUTPUT_${index}` });
+          command, output: `UI_FIXTURE_PROOF_SIMPLE_TOOL_OUTPUT_${index}${index === 0
+            ? '\n' + Array.from({ length: 40 }, (_, row) => `Earlier tool output row ${row + 1}`).join('\n') : ''}` });
       }
       touch(); summary('engineer', 'proof-summary', copy.engineerSummary, true);
       touch(); run.artifact = { source: failedSource, workerId: 'engineer', status: 'candidate', capturedAt: run.updatedAt };
@@ -631,9 +632,37 @@ try {
       // The count is in saved records: the folded line of three tools stands for three of them.
       assert.equal(await rows.count() + 2, 12 + hidden, 'The earlier count matches the records it reveals');
       await capture('simple-reading-history');
+
+      stage = 'simple-search-context';
+      // A context jump must reopen a manually folded group and reveal the matching action, beyond an open long output.
+      await group.locator(':scope > details > summary').click(); await settled(page);
+      const earlierTool = group.locator('[data-thinking-detail="prove:researcher:simple-tool-0"]');
+      await earlierTool.locator(':scope > summary').click(); await settled(page);
+      assert.equal(await earlierTool.getAttribute('open'), '');
+      await group.locator(':scope > details > summary').click(); await settled(page);
+      assert.equal(await group.locator(':scope > details').getAttribute('open'), null);
+      await searchToggle.click(); await findRecords('UI_FIXTURE_PROOF_SIMPLE_TOOL_OUTPUT_1', 1);
+      await thinking.locator('[data-thinking-context="prove:researcher:simple-tool-1"]').click(); await settled(page);
+      assert.equal(await group.locator(':scope > details').getAttribute('open'), '', 'Search context reopens the manually folded tool group');
+      const matchingTool = group.locator('[data-thinking-detail="prove:researcher:simple-tool-1"]');
+      assert.equal(await matchingTool.getAttribute('open'), '', 'The matching action opens inside the group');
+      assert.equal(await earlierTool.getAttribute('open'), '', 'The unrelated open action keeps its state');
+      const contextBounds = await matchingTool.locator(':scope > summary').evaluate(node => {
+        const body = node.closest('.thinking-body')!.getBoundingClientRect(), toolbar = node.closest('[data-thinking-process]')!.querySelector('.thinking-controls')!.getBoundingClientRect();
+        const thread = document.querySelector('#research-chat-thread')!.getBoundingClientRect();
+        return { top: node.getBoundingClientRect().top, visibleTop: Math.max(body.top, toolbar.bottom, thread.top),
+          visibleBottom: Math.min(body.bottom, thread.bottom, innerHeight) };
+      });
+      assert.ok(contextBounds.top >= contextBounds.visibleTop - 4 && contextBounds.top < contextBounds.visibleBottom,
+        `Search context reveals the matching action below the earlier output: ${JSON.stringify(contextBounds)}`);
+      await capture('simple-search-context', '[data-thinking-detail="prove:researcher:simple-tool-1"]');
+      await searchBack.click(); await settled(page);
+      assert.equal(await query.inputValue(), 'UI_FIXTURE_PROOF_SIMPLE_TOOL_OUTPUT_1', 'Returning to search keeps the original query');
+      assert.equal(await thinking.locator('[data-thinking-selected="true"]').getAttribute('data-thinking-entry'), 'prove:researcher:simple-tool-1');
       assert.deepEqual(errors, []); assert.deepEqual(writes, []); assert.deepEqual(external, []); assert.deepEqual(unexpectedApi, []); assert.deepEqual(runtimeCalls, []);
       checks.push({ scenario, defaultIsSimple: true, oneRecordPerTask: true, toolRunsGrouped: true, failedCheckFirstError: true,
-        versionsOnlyInFull: true, checklistFoldedWhileRunning: true, levelSwitchBothWaysAndPersisted: true, latestTwelveRows: true, hidden, rootScrollHeights });
+        versionsOnlyInFull: true, checklistFoldedWhileRunning: true, levelSwitchBothWaysAndPersisted: true, latestTwelveRows: true,
+        searchContextReopensGroup: true, searchContextRevealsMatchingAction: true, searchReturnKeepsQuery: true, contextBounds, hidden, rootScrollHeights });
       await context.close(); activeContext = undefined; activePage = undefined;
       continue;
     }

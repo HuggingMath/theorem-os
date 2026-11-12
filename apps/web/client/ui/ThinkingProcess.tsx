@@ -288,8 +288,15 @@ export function ThinkingProcess({ process, time, onCheck, onQuestion }: {
       applying.current = true;
       if (memory.following) node.scrollTop = node.scrollHeight;
       else {
-        const anchor = memory.anchor && node.querySelector<HTMLElement>(memory.anchor.detail
+        let anchor = memory.anchor && node.querySelector<HTMLElement>(memory.anchor.detail
           ? `[data-thinking-detail="${CSS.escape(memory.anchor.id)}"] > summary` : `[data-thinking-entry="${CSS.escape(memory.anchor.id)}"]`);
+        if (!anchor && memory.anchor) {
+          // Some actions have no disclosure body; their row still provides the exact context position.
+          const group = shown.find(row => row.actions && row.actions.length > 1 && row.actions.some(entry => entry.id === memory.anchor!.id));
+          const index = group?.actions?.findIndex(entry => entry.id === memory.anchor!.id);
+          if (group && index !== undefined) anchor = node.querySelector<HTMLElement>(
+            `[data-thinking-entry="${CSS.escape(group.id)}"] > details > .route-items > li:nth-child(${index + 1})`);
+        }
         if (anchor) node.scrollTop += anchor.getBoundingClientRect().top - node.getBoundingClientRect().top - memory.anchor!.offset;
         else node.scrollTop = memory.top;
       }
@@ -350,7 +357,21 @@ export function ThinkingProcess({ process, time, onCheck, onQuestion }: {
     }
     stopSearch(); memory.open = true; memory.following = false;
     memory.anchor = { id: entry.id, offset: 0 }; memory.top = 0;
-    if (entry.kind === 'action') memory.items.add(entry.id);
+    if (entry.kind === 'action') {
+      memory.items.add(entry.id);
+      if (simple) {
+        // Search renders each action alone; its context may put it back inside a group the reader folded.
+        const index = filtered.findIndex(item => item.id === entry.id);
+        let first = index;
+        while (first > 0 && filtered[first - 1]!.kind === 'action') first--;
+        const grouped = first >= 0 && (first < index || filtered[index + 1]?.kind === 'action');
+        if (grouped) {
+          memory.groups.set(`group:${filtered[first]!.id}`, true);
+          // Grouped ItemRow exposes the action through its details, rather than a top-level entry.
+          memory.anchor = { id: entry.id, detail: true, offset: 0 };
+        }
+      }
+    }
     if (entry.kind === 'check' || entry.kind === 'work') memory.checks.set(entry.id, true);
     focusBody.current = true; focusContext.current = true; refresh();
   };
