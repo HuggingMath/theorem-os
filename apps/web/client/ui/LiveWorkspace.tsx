@@ -85,9 +85,9 @@ function FileActions({ view }: { view: FileView }) {
   return <>
     <div class="live-file-actions">
       <button type="button" class="text-button" data-live-copy onClick={() => void copy()} title={`${copyLabel} · ${view.caption}`}>
-        <Icon name={kind === 'copied' ? 'check' : 'copy'} />{kind === 'copied' ? t('代码已复制') : copyLabel}</button>
+        <Icon name={kind === 'copied' ? 'check' : 'copy'} /><span class="sr-only">{kind === 'copied' ? t('代码已复制') : copyLabel}</span></button>
       <button type="button" class="text-button" data-live-download onClick={download} title={`${downloadLabel} · ${view.caption}`}>
-        <Icon name="download" />{downloadLabel}</button>
+        <Icon name="download" /><span class="sr-only">{downloadLabel}</span></button>
     </div>
     {kind && <p class="live-file-feedback" role="status" data-error={kind !== 'copied' || undefined}>
       {kind === 'copied' ? t('Lean 源码已复制') : kind === 'copy-failed' ? t('复制失败，请选择代码复制。') : t('下载失败，请重试。')}</p>}
@@ -118,7 +118,7 @@ function Code({ view, lean }: { view: FileView; lean?: WebAgentLeanCheck }) {
     if (first !== undefined) jump(first); else if (box.current) box.current.scrollTop = 0;
   });
   return <>
-    {built.marks.lines.size > 0 && <p class="live-marks" data-severity={warning ? 'warning' : 'error'}><Icon name={warning ? 'triangle-alert' : 'circle-alert'} />
+    {built.marks.lines.size > 1 && <p class="live-marks" data-severity={warning ? 'warning' : 'error'}><Icon name={warning ? 'triangle-alert' : 'circle-alert'} />
       <span>{warning ? t('Lean 警告在') : t('Lean 报错在')}</span>
       {[...built.marks.lines.keys()].slice(0, 8).map(line => <button key={line} type="button" class="text-button" data-live-line={line} onClick={() => jump(line)}>{t('第 {0} 行', line)}</button>)}</p>}
     <div class="live-code" ref={box} tabIndex={0} aria-label={view.file}>
@@ -148,7 +148,7 @@ function LiveWorkspace(props: LiveWorkspaceProps) {
     : check.text && <pre class="solve-feedback" tabIndex={0} aria-label={t('反馈全文')} translate={false}>{check.text}</pre>);
   return <div class="live-workspace">
     <header class="live-head">
-      <div class="live-heading"><h2 id="chat-live-title">{t('实时工作区')}</h2>
+      <div class="live-heading"><h2 id="chat-live-title" class="sr-only">{t('实时工作区')}</h2>
         <p class="live-state"><ToneMark tone={stateTones[process.state]} /><span>{process.label}</span>
           {process.startedAt && <Elapsed from={process.startedAt} to={process.endedAt} />}</p></div>
       {props.onRoadmap && <button type="button" class="text-button" data-live-roadmap onClick={props.onRoadmap}><Icon name="network" />{t('完整记录')}</button>}
@@ -164,17 +164,17 @@ function LiveWorkspace(props: LiveWorkspaceProps) {
       {listed}
       {view && <Code view={view} lean={check?.lean} />}
     </section>
-    <section class="live-checks" aria-labelledby="chat-live-checks">
-      <header><h3 id="chat-live-checks">{t('Lean 检查')} <span>{checks.length}</span></h3>
-        {checks.length > 0 && <button type="button" class="text-button" aria-pressed={following} title={t('总是显示最新一次检查')}
-          onClick={() => props.onSelect(following ? checks.at(-1)!.id : undefined)}><Icon name="locate-fixed" />{t('跟随最新')}</button>}</header>
+    <details class="live-checks" aria-labelledby="chat-live-checks">
+      <summary><h3 id="chat-live-checks">{t('Lean 检查')} <span>{checks.length}</span></h3></summary>
+      {checks.length > 0 && <div class="live-checks-tools"><button type="button" class="text-button" aria-pressed={following} title={t('总是显示最新一次检查')}
+        onClick={() => props.onSelect(following ? checks.at(-1)!.id : undefined)}><Icon name="locate-fixed" />{t('跟随最新')}</button></div>}
       {checks.length ? <ol>{[...checks].reverse().map(item => {
         const outcome = checkOutcome(item);
         return <li key={item.id}><button type="button" class="live-check" data-live-check={item.id} aria-current={item.id === check?.id || undefined}
           onClick={() => props.onSelect(item.id)}><ToneMark tone={checkTones[item.state]} /><span class="live-check-label">{item.label}</span>
           <span class="route-item-outcome" data-tone={outcome.tone}>{outcome.text}</span><time dateTime={item.at}>{props.time(item.at)}</time></button></li>;
       })}</ol> : <p class="live-empty">{process.active ? t('第一次 Lean 检查后会出现在这里。') : t('这个任务没有记录 Lean 检查。')}</p>}
-    </section>
+    </details>
   </div>;
 }
 export function renderLiveWorkspace(root: HTMLElement, props: LiveWorkspaceProps) { render(<LiveWorkspace {...props} />, root); }

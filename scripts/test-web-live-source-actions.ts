@@ -43,6 +43,12 @@ const time = (sequence: number) => new Date(Date.UTC(2026, 10, 10, 1, sequence))
 const live = (page: Page) => page.locator('#chat-live-panel');
 const copy = (page: Page) => live(page).locator('[data-live-copy]');
 const download = (page: Page) => live(page).locator('[data-live-download]');
+// The Lean check list is folded under the code by default; the reader opens it to pick a version.
+async function openChecks(page: Page) {
+  const list = live(page).locator('details.live-checks');
+  await list.waitFor({ timeout: 0 });
+  if (await list.getAttribute('open') === null) await list.locator(':scope > summary').click();
+}
 async function settled(page: Page) {
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 }
@@ -136,6 +142,7 @@ try {
 
     append({ round: 1, step: 'compile', state: 'failed', lean: { passed: false, messages: [{ severity: 'error', file: 'Formalization.lean', line: 3, text: 'Recorded local fixture error' }] } });
     append({ round: 2, step: 'compile', state: 'started', source: revised });
+    await openChecks(page);
     await live(page).locator('[data-live-check="f:3"]').waitFor({ timeout: 0 });
     await copied(page, revised); await downloaded(page, revised, 'Formalization.lean');
     await live(page).locator('[data-live-check="f:1"]').click();
@@ -209,6 +216,7 @@ try {
       const firstRound = mobile.locator('[data-solve-row="f:round:1"] > .solve-row-line > .solve-row-head');
       if (await firstRound.getAttribute('aria-expanded') === 'false') await firstRound.click();
       await mobile.locator('[data-solve-check="f:1"]').click();
+      await openChecks(mobile);
       await live(mobile).locator('[data-live-check="f:1"][aria-current="true"]').waitFor({ timeout: 0 });
       await live(mobile).locator('.lean-line[data-marked]').waitFor({ timeout: 0 });
       await copied(mobile, original); await downloaded(mobile, original, 'Formalization.lean');
@@ -238,6 +246,35 @@ try {
     await live(page).locator('[data-live-check="f:7"]').click();
     await copied(page, ''); await downloaded(page, '', 'Formalization.lean');
     mark(`${language}: an explicitly saved empty source exports zero bytes`);
+    // A long folded history must keep its own scrollbar so the oldest saved file remains reachable.
+    const previousChecks = await live(page).locator('[data-live-check]').count();
+    for (let round = 5; round < 25; round++) {
+      append({ round, step: 'compile', state: 'started', source: revised });
+      append({ round, step: 'compile', state: 'passed', lean: { passed: true, messages: [] } });
+    }
+    await page.waitForFunction(count => document.querySelectorAll('#chat-live-panel [data-live-check]').length === count,
+      previousChecks + 20, { timeout: 0 });
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 1000 }); await openChecks(page); await settled(page);
+      const history = live(page).locator('.live-checks > ol');
+      const geometry = await history.evaluate(list => {
+        const before = { clientHeight: list.clientHeight, scrollHeight: list.scrollHeight };
+        list.scrollTop = list.scrollHeight;
+        const box = list.getBoundingClientRect(), last = list.lastElementChild!.getBoundingClientRect();
+        return { ...before, scrollTop: list.scrollTop, lastVisible: last.top >= box.top - 1 && last.bottom <= box.bottom + 1 };
+      });
+      assert.ok(geometry.scrollHeight > geometry.clientHeight && geometry.scrollTop > 0, 'The long history scrolls inside its panel');
+      assert.ok(geometry.lastVisible, 'The oldest check is reachable without scrolling the clipped outer panel');
+      await live(page).locator('[data-live-check="f:1"]').click();
+      await live(page).locator('[data-live-check="f:1"][aria-current="true"]').waitFor({ timeout: 0 });
+      await copied(page, original); await downloaded(page, original, 'Formalization.lean');
+      await live(page).locator('.live-checks > summary').click();
+      assert.equal(await live(page).locator('details.live-checks').getAttribute('open'), null);
+      await openChecks(page);
+      assert.equal(await live(page).locator('[data-live-check="f:1"][aria-current="true"]').count(), 1, 'Folding keeps the selected historical file');
+      await fit(page);
+      mark(`${language}/${width}px: long check history scrolls to its oldest source and preserves selection when folded`);
+    }
     await context.close(); active = undefined;
   }
   assert.deepEqual(forbiddenCalls, []); assert.deepEqual(external, []); assert.deepEqual(errors, []); assert.deepEqual(writes, []);

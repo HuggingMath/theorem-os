@@ -564,10 +564,10 @@ button.solve-row-head{cursor:pointer}
 body[data-chat-artifact=live] #chat-live-panel{display:flex;flex-direction:column}
 body[data-chat-artifact=live] #run-detail{display:none}
 .live-workspace{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0}
-.live-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:16px 20px 12px;border-bottom:1px solid var(--line)}
+.live-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 20px;border-bottom:1px solid var(--line)}
 .live-heading{min-width:0}
 .live-head h2{margin:0;font-size:15px;font-weight:600}
-.live-state{display:flex;align-items:center;gap:8px;margin:6px 0 0;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.live-state{display:flex;align-items:center;gap:8px;margin:0;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
 .live-head .text-button{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;font-size:12px}
 .live-head .text-button svg{width:14px;height:14px}
 .live-empty{margin:0;padding:20px;color:var(--muted);font-size:13px;line-height:1.8}
@@ -579,8 +579,9 @@ body[data-chat-artifact=live] #run-detail{display:none}
 .live-file-head code{min-width:0;font:12px var(--mono);color:var(--ink);overflow-wrap:anywhere}
 .live-file-head span{color:var(--muted);overflow-wrap:anywhere}
 .live-file-head .live-excerpt{color:var(--amber-700)}
-.live-file-actions{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;max-width:100%}
-.live-file-actions .text-button{display:inline-flex;align-items:center;gap:5px;min-height:32px;font-size:12px}
+.live-file-actions{display:flex;align-items:center;gap:2px;max-width:100%}
+.live-file-actions .text-button{display:inline-flex;align-items:center;justify-content:center;width:32px;min-height:32px;padding:0;border-radius:6px;color:var(--gray-500)}
+.live-file-actions .text-button:hover{background:var(--gray-50);color:var(--ink)}
 .live-file-actions svg{width:14px;height:14px;flex-shrink:0}
 .live-file-feedback{flex-basis:100%;margin:0;font-size:12px;color:var(--muted);overflow-wrap:anywhere}
 .live-file-feedback[data-error=true]{color:var(--red-600)}
@@ -589,8 +590,11 @@ body[data-chat-artifact=live] #run-detail{display:none}
 .live-file>.solve-feedback{flex:none;margin:0 20px 10px}
 .live-code{position:relative;flex:1;min-height:120px;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;border-top:1px solid var(--line);background:var(--gray-25)}
 .live-code:focus-visible{outline:2px solid var(--blue-500);outline-offset:-2px}
-.live-code pre{margin:0;padding:10px 0;font:12px/1.9 var(--mono);white-space:pre;tab-size:2}
-.live-code code{display:block;min-width:max-content}
+.live-code pre{margin:0;padding:10px 0;font:12px/1.7 var(--mono);white-space:pre;tab-size:2}
+/* Rows are blocks separated by real newlines (kept so copying keeps them); a zero-size line box hides the blank row each newline would add. */
+.live-code code{display:block;min-width:max-content;font-size:0;line-height:0}
+.live-code code>*{font-size:12px;line-height:1.7}
+.live-code code>.lean-line{min-height:calc(12px * 1.7)}
 .live-code .lean-line{position:relative;display:block;padding:0 16px 0 48px}
 .live-code .lean-line[data-line]::before{content:attr(data-line);position:absolute;left:0;width:36px;padding-right:10px;text-align:right;color:var(--gray-400);user-select:none;font-variant-numeric:tabular-nums}
 .live-code .lean-line[data-marked]{background:var(--red-50)}
@@ -604,12 +608,17 @@ body[data-chat-artifact=live] #run-detail{display:none}
 .live-marks .text-button{padding:0;font-size:var(--text-xs)}
 .live-messages{margin:0 20px 10px;font-size:var(--text-xs);color:var(--muted)}
 .live-checks{display:flex;flex-direction:column;flex:0 0 auto;min-height:0;max-height:38%;border-top:1px solid var(--line)}
-.live-checks>header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 20px 6px}
+.live-checks[open]::details-content{display:flex;flex-direction:column;flex:1;min-height:0}
+.live-checks>summary{display:flex;align-items:center;gap:8px;padding:9px 20px;cursor:pointer;list-style:none}
+.live-checks>summary::-webkit-details-marker{display:none}
+.live-checks>summary::after{content:"";width:6px;height:6px;margin-left:auto;border:solid var(--gray-400);border-width:0 1.5px 1.5px 0;transform:rotate(-135deg)}
+.live-checks[open]>summary::after{transform:rotate(45deg) translateY(-2px)}
+.live-checks-tools{display:flex;justify-content:flex-end;padding:0 20px 4px}
 .live-checks h3{margin:0;font-size:12px;font-weight:600}
 .live-checks h3 span{margin-left:6px;color:var(--muted);font-weight:400;font-variant-numeric:tabular-nums}
 .live-checks .text-button{display:inline-flex;align-items:center;gap:5px;font-size:var(--text-xs)}
 .live-checks .text-button svg{width:12px;height:12px}
-.live-checks>ol{list-style:none;margin:0;padding:0 10px 10px;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin}
+.live-checks>ol{list-style:none;margin:0;padding:0 10px 10px;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin}
 .live-check{display:flex;align-items:center;gap:8px;width:100%;min-height:32px;padding:5px 10px;border:0;border-radius:8px;background:none;text-align:left;font:inherit;font-size:12.5px;color:inherit;cursor:pointer}
 .live-check:hover{background:var(--gray-50)}
 .live-check[aria-current=true]{background:var(--blue-50)}
@@ -622,7 +631,7 @@ body[data-chat-artifact=live] #run-detail{display:none}
 .chat-outcome-summary strong{font-weight:500;overflow-wrap:anywhere}
 .chat-history-status,.chat-history-time{display:block;font-size:11px;line-height:1.7;color:var(--muted)}
 .chat-history-time{font-variant-numeric:tabular-nums;font-size:10px}
-@media(max-width:480px){.live-head,.live-checks>header{padding-inline:14px}.live-file-head,.live-file-toolbar{padding-inline:14px}.live-file-toolbar .live-file-head{padding:0}.live-code .lean-line{padding-left:40px}.live-marks{padding-inline:14px}}
+@media(max-width:480px){.live-head,.live-checks>summary,.live-checks-tools{padding-inline:14px}.live-file-head,.live-file-toolbar{padding-inline:14px}.live-file-toolbar .live-file-head{padding:0}.live-code .lean-line{padding-left:40px}.live-marks{padding-inline:14px}}
 /* Forced colours drop the tinted fills; the marks keep their own borders and the current check its outline. */
 @media(forced-colors:active){
   .solve-process,#chat-live-panel .live-code{border:1px solid CanvasText}

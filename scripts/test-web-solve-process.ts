@@ -144,6 +144,9 @@ try {
       assert.equal(await live(page).isVisible(), true);
       await live(page).locator('.live-code .lean-line').first().waitFor();
       assert.match(await live(page).locator('.live-file-head').innerText(), /Submission\.lean/u);
+      // The check list stays folded to one line under the code until the reader opens it.
+      assert.equal(await live(page).locator('details.live-checks').getAttribute('open'), null, 'The check list starts folded');
+      await live(page).locator('details.live-checks > summary').click();
       assert.ok(await live(page).locator('[data-live-check]').count() > 0);
       assert.equal(await live(page).locator('.live-check[aria-current=true]').count(), 1, 'It follows the latest check');
       // The Agent's own check kept the file it read; picking it puts Lean's error under the line it names.
@@ -151,7 +154,7 @@ try {
       await own.waitFor();
       await own.click();
       assert.equal(await live(page).locator('.live-check[aria-current=true]').count(), 1, 'A picked check stays current');
-      assert.match(await live(page).locator('.live-marks').innerText(), /第 2 行/u);
+      assert.match(await live(page).locator('.live-code .lean-marks').innerText(), /第 2 行/u);
       assert.ok(await live(page).locator('.live-code .lean-line[data-marked]').count() > 0, 'Lean\'s error is shown under its line');
       await page.locator('.live-code').screenshot({ path: path.join(output, 'live-code-1440.png') });
       mark('1440px: the live workspace shows the checked file with Lean\'s error under its line');
