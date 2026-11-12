@@ -118,6 +118,17 @@ def install(research):
             details = {}
             try:
                 raw, fetched_url, mime = reader._fetch_bytes(target)
+                fetched_identity = arxiv_identity(fetched_url)
+                if identity and fetched_identity:
+                    # Compare known arXiv identities before extracting any text;
+                    # an explicit version cannot admit a moving or different one.
+                    requested_id, resolved_id = identity[1].casefold(), fetched_identity[1].casefold()
+                    requested_document = re.sub(r'v\d+$', '', requested_id)
+                    resolved_document = re.sub(r'v\d+$', '', resolved_id)
+                    if requested_document != resolved_document or (
+                            requested_id != requested_document and requested_id != resolved_id):
+                        raise RuntimeError('arxiv_source_identity_mismatch: requested ' + url
+                                           + '; resolved ' + fetched_url)
                 if raw.startswith(b'%PDF') or 'application/pdf' in mime.casefold():
                     title, text = reader._pdf_text(raw, details)
                     content_type = 'pdf'
@@ -133,7 +144,6 @@ def install(research):
                         raise RuntimeError('unreadable content shell (' + (title or 'untitled') + ')')
                 if not text:
                     raise RuntimeError('empty text')
-                fetched_identity = arxiv_identity(fetched_url)
                 if content_type == 'pdf' or content_type == 'html' and fetched_identity and fetched_identity[0] == 'html':
                     scope = 'full_text'
                 elif fetched_identity and fetched_identity[0] == 'abs':

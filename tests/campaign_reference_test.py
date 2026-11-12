@@ -32,6 +32,7 @@ def research_double():
     research.v1 = SimpleNamespace(read_page=lambda *args, **kwargs: {}, _is_english_query=lambda _: True)
     research.workspace = SimpleNamespace(search_id=lambda request: hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest())
     research.base = SimpleNamespace(_get=lambda url: (_ for _ in ()).throw(AssertionError('unmocked request: ' + url)),
+                                    TIMEOUT=15,
                                     _clean=lambda value, limit: ' '.join(value.split())[:limit],
                                     _url_ok=lambda url: url.startswith(('http://', 'https://')),
                                     _bing=lambda *args, **kwargs: [])

@@ -39,6 +39,15 @@ When restored background results skip an old direct branch, successfully
 retried academic cards are still merged from the recorded execution; recovery
 does not issue new provider requests.
 
+The DuckDuckGo HTML fallback uses a four-second connect/read timeout, capped by
+the base helper's existing timeout if that is shorter. This applies only to its
+HTTPS `/html/` search endpoint; academic APIs and document downloads keep the
+base helper's timeout. Request accounting, redirect checks, response limits and
+failed-request recovery remain in the existing helpers. The limit applies to
+each connection/read and redirect hop, not to the duration of a whole search.
+arXiv Atom service-error entries remain provider errors eligible for recovery,
+separately from successful empty feeds and ordinary paper cards.
+
 arXiv abs/pdf/html aliases share a result slot only for the same explicit
 version. Unversioned references, v1 and v3 remain distinct even when a title or
 journal DOI matches. Non-arXiv DOI aliases and identical long titles with matching
@@ -53,6 +62,12 @@ first; PDF failures try the same version's arXiv HTML before its abstract page.
 page text) and `abstract`. A readable page does not establish that the entire
 paper or its proof was read. `academic_read_attempts` and failures remain in the
 saved source metadata. The existing HTTP/response/read budgets still apply.
+When a returned URL identifies an arXiv document, the reader rejects a different
+document or a changed/missing explicitly requested version before extraction,
+records the failed attempt, and tries the next same-version candidate. An
+unversioned request can still resolve to a concrete version of that document.
+An unrelated external CDN URL does not provide an arXiv version identity to
+compare, so the adapter does not infer a version from it.
 
 The existing campaign answer-source ban surrounds discovery and reading,
 including encoded URLs, redirect destinations, and source-cache metadata.

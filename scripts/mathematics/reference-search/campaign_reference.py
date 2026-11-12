@@ -9,12 +9,13 @@ import hashlib
 import json
 from pathlib import Path
 import re
-from urllib.parse import unquote, urlencode
+from urllib.parse import unquote, urlencode, urlsplit
 import xml.etree.ElementTree as ET
 
 MAX_FALLBACK_REQUESTS = 4
 MAX_QUERY_WORDS = 24
 MAX_PHRASE_WORDS = 4
+DUCKDUCKGO_TIMEOUT_SECONDS = 4
 ATOM = {"a": "http://www.w3.org/2005/Atom"}
 WORD = re.compile(r"[^\W_]+", re.UNICODE)
 # Phrase boundaries, not domain-specific synonym expansion. Explicit quotes and
@@ -170,13 +171,35 @@ def install(research):
     research._campaign_reference_adapter = True
     from academic_read import install as install_academic_reader
     install_academic_reader(research)
+    original_get = research.base._get
+
+    def get(url):
+        endpoint = urlsplit(url)
+        if not (endpoint.scheme == 'https' and endpoint.hostname == 'html.duckduckgo.com' and
+                endpoint.port in (None, 443) and endpoint.path in ('/html', '/html/')):
+            return original_get(url)
+        base = research.base
+        if not base._url_ok(url):
+            raise ValueError('blocked or unsupported URL: ' + url)
+        # A timeout on this discovery fallback must not stall the next provider.
+        # Keep the original HTTP accounting and redirect policy, without changing
+        # a global timeout shared by concurrent searches or document downloads.
+        with base.metrics.request(base.requests.get, url, url_ok=base._url_ok,
+                                  headers={'User-Agent': base.UA, 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.1'},
+                                  timeout=min(base.TIMEOUT, DUCKDUCKGO_TIMEOUT_SECONDS)) as response:
+            response.raise_for_status()
+            raw = response.content[:base.MAX_BYTES]
+            return raw.decode(response.encoding or 'utf-8', errors='replace'), response.url
+
+    research.base._get = get
     base_identity = hashlib.sha256(b"".join(path.name.encode() + path.read_bytes()
                                   for path in sorted(Path(research.__file__).parent.glob('*.py')))).hexdigest()
     identity = hashlib.sha256(base_identity.encode() + b"".join(Path(__file__).with_name(name).read_bytes()
                               for name in ("campaign_reference.py", "academic_read.py", "reference-search-policy.py", "reference-source-provenance.json"))).hexdigest()
     original_config = research._provider_config
     research._provider_config = lambda plan: {**original_config(plan), "campaign_reference_adapter_sha256": identity,
-                                             "campaign_reference_base_sha256": base_identity}
+                                             "campaign_reference_base_sha256": base_identity,
+                                             "campaign_duckduckgo_timeout_seconds": min(research.base.TIMEOUT, DUCKDUCKGO_TIMEOUT_SECONDS)}
     original_search_id = research.workspace.search_id
     research.workspace.search_id = lambda request: original_search_id({**request, "campaign_reference_adapter_sha256": identity})
 
@@ -191,6 +214,9 @@ def install(research):
         for entry in root.findall("a:entry", ATOM)[:limit]:
             get = lambda name: entry.findtext("a:" + name, default="", namespaces=ATOM)
             url = re.sub(r"^http://", "https://", get("id").strip())
+            identity = urlsplit(url)
+            if identity.hostname in ('arxiv.org', 'export.arxiv.org') and identity.path.rstrip('/') == '/api/errors':
+                raise ValueError('arXiv search error: ' + research.base._clean(get('summary'), 500))
             title = research.base._clean(get("title"), 240)
             if url and title and research.base._url_ok(url):
                 cards.append({"url": url, "title": title, "snippet": research.base._clean(get("published")[:10] + ". " + get("summary"), 900),
