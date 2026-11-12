@@ -333,7 +333,14 @@ export class CooperativeResearch extends CooperationInputs {
             rejection.inputDigest !== this.planningInputDigest()) {
           const plan = this.readLeadPlan();
           const initial = !this.archive.tasks.length;
-          await this.acceptPlan(plan);
+          // Host-synced notes describe the accepted graph, not a new answer to findings that
+          // arrived since it was accepted. Changed drafts and explicit decisions still validate.
+          const inherited = !initial && !plan.fromPatch && plan.researchDecisions === undefined &&
+            !plan.goalProgressDecision && !plan.goalPathDecisions && !plan.nextCheckDecisions &&
+            canonicalMathJson({ tasks: plan.tasks, groups: plan.groups, proofRoutes: plan.proofRoutes ?? [] }) ===
+            canonicalMathJson({ tasks: this.plannedTasks().map(node => node.task),
+              groups: this.archive.groups?.map(route => route.group) ?? [], proofRoutes: this.archive.proofRoutes ?? [] });
+          if (!inherited) await this.acceptPlan(plan);
           if (initial) dropLeadWakes(this.archive.leadWakes!);
         }
       } catch (error) { this.rejectPlan(error); }
@@ -572,7 +579,8 @@ export class CooperativeResearch extends CooperationInputs {
         'A decision without tasks or upsert/remove is not a plan revision. '
       : ' Include a complete tasks array and the required decisions in the same JSON object; an initial plan cannot use upsert/remove. ';
     return 'Save or publish a validated math-plan revision as your instructions describe before returning. ' + required.join(' ') +
-      revision;
+      revision + 'Keep still-unanswered ids and pending decisions in RESEARCH.md when saving an unfinished draft; ' +
+      'notes alone do not answer these requirements. ';
   }
   private leadDecision(worker: ResearchWorker, head: string, inputDigest: string): CooperativeAction {
     this.syncPlanNotes();
@@ -1197,6 +1205,7 @@ export class CooperativeResearch extends CooperationInputs {
             (action?.kind === 'lead' ? action.planVersion ?? this.archive.planVersion : this.archive.planVersion));
       }) : undefined;
     return { ...this.archive, tasks: scopedTasks, leadInbox: leadInboxView, humanGuidance: guidance,
+      leadDecisionInstruction: action?.kind === 'lead' ? this.leadCheckpointInstruction(action) : undefined,
       researchDecisions: action?.kind === 'lead' || worker?.id === this.lead.id ? this.archive.researchDecisions : undefined,
       ...(action?.kind === 'lead' && this.presentedResearchInputs.has(action) ? {
         leadResearchInputIds: this.presentedResearchInputs.get(action)!.shown.map(record => record.id),

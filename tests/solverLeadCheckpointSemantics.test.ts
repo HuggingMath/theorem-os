@@ -324,6 +324,10 @@ describe('Lead scheduling checkpoint control responses', () => {
     state.cooperation!.leadWakes = { requested: 1, consumed: 0, settled: 0 };
     const action = await start();
     expect(cooperative.contextState(action, workers[0]).leadResearchInputIds).toEqual(['proposal-delivery']);
+    expect(cooperative.contextState(action, workers[0]).leadDecisionInstruction)
+      .toBe(cooperative.leadCheckpointInstruction(action));
+    expect(cooperative.contextState(action, workers[0]).leadDecisionInstruction)
+      .toContain('researchDecisions: ["proposal-delivery"]');
   });
 
   it('keeps initial dispatch response validation even if an existing graph is present', async () => {

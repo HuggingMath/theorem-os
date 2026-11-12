@@ -93,6 +93,8 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   researchDecisions?: ResearchDecision[];
   /** Exact research publications shown in this Lead dispatch; later arrivals wait for the next turn. */
   leadResearchInputIds?: string[]; leadResearchInputCount?: number;
+  /** Context-only current requirements, derived from the exact inputs presented to this Lead dispatch. */
+  leadDecisionInstruction?: string;
   deliveryReceipts?: DeliveryReceipt[];
   proofReadyRecords?: ProofReadyRecord[];
   proofImports?: ProofImportRecord[];

@@ -507,6 +507,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   requestStateChanged = () => { drainSubmittedRequests?.(); flushNotifications(); };
   let lastStreamActivityAt = 0;
   const outputTails = new Map<string, string>();
+  const outputKey = (turnId: unknown, itemId: string) => `${typeof turnId === 'string' ? turnId : ''}\u0000${itemId}`;
   type PublicItem = { turnId: string; id: string; type: 'reasoning' | 'agentMessage'; summary: Map<number, string>;
     text: string; changed: boolean; completed: boolean };
   const publicItems = new Map<string, PublicItem>();
@@ -555,12 +556,30 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   };
   const reportedInvalidOutputs = new Set<string>();
   let validationFeedbackPending = false;
-  const activity = (event: MathAgentActivity['event'], itemType?: string, streaming = false) => {
-    if (!options.onActivity || !completion) return;
-    const now = Date.now();
-    if (streaming && now - lastStreamActivityAt < 30_000) return;
-    lastStreamActivityAt = now;
-    options.onActivity({ event, ...(itemType && /^[A-Za-z][A-Za-z0-9]{0,63}$/u.test(itemType) ? { itemType } : {}) });
+  type BufferedActivity = { value: MathAgentActivity; streaming: boolean; at: number };
+  const earlyActivities = new Map<string, BufferedActivity[]>();
+  const emitActivity = ({ value, streaming, at }: BufferedActivity) => {
+    if (!options.onActivity || !completion || turnSettled || turnStopping || closing || options.signal?.aborted) return;
+    if (streaming && at - lastStreamActivityAt < 30_000) return;
+    lastStreamActivityAt = at;
+    options.onActivity(value);
+  };
+  const activity = (event: MathAgentActivity['event'], itemType?: string, streaming = false, turnId: unknown = activeTurn) => {
+    if (!options.onActivity || !completion || turnSettled || turnStopping || closing || options.signal?.aborted) return;
+    if (typeof turnId === 'string' && (activeTurn ? turnId !== activeTurn : earlyCompletions.has(turnId))) return;
+    const entry = { value: { event, ...(itemType && /^[A-Za-z][A-Za-z0-9]{0,63}$/u.test(itemType) ? { itemType } : {}) },
+      streaming, at: Date.now() };
+    if (!activeTurn && typeof turnId === 'string') {
+      // Bind early scheduling events only after turn/start confirms their owner.
+      // Store metadata only, with the same bounded turn history as early completions.
+      if (!earlyActivities.has(turnId) && earlyActivities.size >= 32) earlyActivities.delete(earlyActivities.keys().next().value!);
+      const pending = earlyActivities.get(turnId) ?? [];
+      if (streaming && pending.length && entry.at - pending.at(-1)!.at < 30_000) return;
+      if (pending.length >= 256) pending.shift();
+      pending.push(entry); earlyActivities.set(turnId, pending);
+      return;
+    }
+    emitActivity(entry);
   };
   const recordTurnOutput = (turnId: unknown) => {
     if (!completion) return;
@@ -590,8 +609,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           completedMessages.set(params.turnId, text);
         }
       }
-      activity(method === 'item/started' ? 'item_started' : 'item_completed', typeof item.type === 'string' ? item.type : undefined);
-      if (method === 'item/completed' && typeof item.id === 'string') outputTails.delete(item.id);
+      activity(method === 'item/started' ? 'item_started' : 'item_completed', typeof item.type === 'string' ? item.type : undefined, false, params.turnId);
+      if (method === 'item/completed' && typeof item.id === 'string') outputTails.delete(outputKey(params.turnId, item.id));
       if (options.onItem && threadId !== undefined) {
         try { options.onItem(method === 'item/started' ? 'started' : 'completed', item,
           { ...(typeof params.turnId === 'string' ? { turnId: params.turnId } : {}) }); } catch { /* Observation never changes the session. */ }
@@ -600,13 +619,13 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       observePublicItem(method, params);
     } else if (method === 'item/reasoning/textDelta' || method === 'item/reasoning/summaryTextDelta') {
       if (method === 'item/reasoning/summaryTextDelta') observePublicItem(method, params);
-      activity('reasoning', undefined, true);
+      activity('reasoning', undefined, true, params.turnId);
     } else if (method === 'item/agentMessage/delta') {
       if (typeof params.delta === 'string' && params.delta.trim()) recordTurnOutput(params.turnId);
       observePublicItem(method, params);
-      activity('message', undefined, true);
+      activity('message', undefined, true, params.turnId);
     } else if (method === 'item/commandExecution/outputDelta') {
-      const key = typeof params.itemId === 'string' ? params.itemId : '';
+      const key = outputKey(params.turnId, typeof params.itemId === 'string' ? params.itemId : '');
       const delta = typeof params.delta === 'string' ? params.delta : '';
       if (delta) recordTurnOutput(params.turnId);
       let tail = (outputTails.get(key) ?? '') + delta;
@@ -614,12 +633,12 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       for (const event of ['lean_lock_waiting', 'lean_lock_acquired'] as const) {
         const marker = `"event":"${event}"`, index = tail.indexOf(marker);
         if (index < 0) continue;
-        activity(event, 'commandExecution'); reported = true;
+        activity(event, 'commandExecution', false, params.turnId); reported = true;
         tail = tail.slice(index + marker.length);
       }
       if (!outputTails.has(key) && outputTails.size >= 32) outputTails.delete(outputTails.keys().next().value!);
       outputTails.set(key, tail.slice(-128));
-      if (!reported) activity('command_output', 'commandExecution', true);
+      if (!reported) activity('command_output', 'commandExecution', true, params.turnId);
     }
     if (method === 'thread/tokenUsage/updated') {
       const usage = object(params.tokenUsage ?? {}), last = object(usage.last ?? {});
@@ -721,7 +740,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           resolve: turn => { turnSettled = true; cancelNotifications(); publicItems.clear(); resolve(turn); },
           reject: error => { turnSettled = true; cancelNotifications(); publicItems.clear(); reject(error); },
         };
-        lastStreamActivityAt = 0; outputTails.clear(); publicItems.clear();
+        lastStreamActivityAt = 0; outputTails.clear(); publicItems.clear(); earlyActivities.clear();
         let checkpoint = false;
         let submitted = false;
         let submissionDrain: Promise<void> | undefined;
@@ -747,6 +766,9 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           const turnId = object(started.turn).id;
           if (typeof turnId !== 'string' || !turnId) throw new Error('math_codex_turn_missing');
           activeTurn = turnId;
+          // Replay pre-terminal activity before applying an early completion below.
+          for (const entry of earlyActivities.get(turnId) ?? []) emitActivity(entry);
+          earlyActivities.clear();
           checkShellRejections = (allowFeedback = true) => {
             const rejected = shellRejectionReader?.poll(turnId) ?? [];
             if (!rejected.length) return;
@@ -880,7 +902,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           activeTurn = undefined; completion = undefined;
           earlyCompletions.clear();
           earlyOutputTurns.clear();
-          outputTails.clear(); publicItems.clear(); completedMessages.clear();
+          outputTails.clear(); publicItems.clear(); completedMessages.clear(); earlyActivities.clear();
         }
       },
       interrupt: async () => {

@@ -436,6 +436,7 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
   const leadDeliveryRules = action.kind === 'lead'
     ? 'Once a complete plan has useful executable work, save the plan, or a revision of the accepted graph, and return promptly so peers can start it. Delegate unresolved library or mathematical searches as research tasks to eligible Researchers or the Engineer. For new, unstarted helpers that need no worker-specific context, omit ownerId so eligible peers can claim them. Keep explicit reservations when needed; removing ownerId never releases a saved assignment. Before adding work, inspect ready tasks reserved by ownerId to a busy worker while an eligible generalist is idle. Explicitly reassign an unstarted, unassigned task through the plan when useful, preserving its mathematical contract. Preserve route gates, group scope, independent reviewer eligibility and running assignments; an idle Engineer can do research while its original goal waits on a genuine route prerequisite. Apply this on every decision, including later replanning. Include every original target and preserve checked task contracts and active independent task definitions; publish the plan or revision once through the current dispatch delivery log; keep concise mathematical route notes in RESEARCH.md. If you return without a log publication, save the complete plan or revision in a single math-plan JSON fence in RESEARCH.md. After a successful publication, a second copy of the graph in RESEARCH.md or the final response is unnecessary. The host owns mathematician plan approval; return after publication without polling or waiting for approval. Add only mathematically useful executable tasks. ' +
       'A goal/lemma objective may guide the argument, but cannot replace its frozen proof deliverable with a read-only audit or diagnostic report. Create a separate untyped research/sketch task for those checks. ' +
+      'consumerGoalIds is allowed only on untyped research/sketch tasks; connect a typed lemma through its actual consumer\'s dependsOn or proofRoutes. ' +
       'The delivery, plan and checkpoint formats in these instructions are complete; do not read the TheoremOS runtime source or docs to learn them.\n'
     : '';
   // A revision states only changed tasks; the host expands it against the accepted graph and validates the result.
@@ -677,8 +678,13 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     'Save useful progress and use the current assignment delivery protocol. A progress report, retained draft or intake receipt is advisory; only independent host checking can establish proof acceptance.',
     proofDeliverableRules, researchSourcesRules, sharing,
   ].filter(Boolean).join('\n\n') : undefined;
+  const leadDecision = action.kind === 'lead' && cooperation.leadDecisionInstruction
+    ? { id: 'lead-decision-requirements', kind: 'assignment' as const,
+      text: 'Current Lead decision requirements (this dispatch only):\n' + cooperation.leadDecisionInstruction }
+    : undefined;
   const compileFull = (checkpointInstruction?: string) => compileTaskContext({ ...compilation, instructions, optional,
-      mandatory: [...dispatchPrefix(checkpointInstruction), ...(compilation.mandatory ?? []), ...receiptIndex,
+      mandatory: [...dispatchPrefix(checkpointInstruction), ...(leadDecision ? [leadDecision] : []),
+        ...(compilation.mandatory ?? []), ...receiptIndex,
         { id: 'work-contract', kind: 'assignment', text: 'Host work contract (one product; completion is not proof acceptance):\n' + JSON.stringify(workContract) },
         ...(planningEvidence ? [{ id: 'planning-evidence', kind: 'continuation' as const, text: leadPlanningEvidenceText(planningEvidence) }] : []),
         ...(capacityExploration ? [{ id: 'capacity-exploration', kind: 'assignment' as const,
@@ -707,7 +713,8 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     'knowledge-application:', 'knowledge-application-hints:'].some(prefix => section.id.startsWith(prefix));
   const continuationOptional = (compilation.optional ?? []).filter(section => section.kind === 'feedback' || currentLibraryHint(section));
   const compileContinuation = (checkpointInstruction?: string) => compileContextSections({ instructions,
-    mandatory: [...dispatchPrefix(checkpointInstruction), { id: 'same-thread-continuation', kind: 'continuation',
+    mandatory: [...dispatchPrefix(checkpointInstruction), ...(leadDecision ? [leadDecision] : []),
+      { id: 'same-thread-continuation', kind: 'continuation',
       text: continuationText! }, ...(researchInputs ? [researchInputs] : []), ...(planRejection ? [planRejection] : []), ...receiptIndex],
     optional: [...receiptDetails, ...continuationOptional].sort((a, b) => (a.priority ?? 20) - (b.priority ?? 20)),
     omitted: (compilation.optional ?? []).filter(section => !continuationOptional.includes(section))

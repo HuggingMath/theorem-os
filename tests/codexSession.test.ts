@@ -478,6 +478,55 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     await ready; return { done };
   };
 
+  it.each(['public-stream-early', 'public-stream-early-settled'])(
+    'binds %s scheduling activity before acknowledgement to the confirmed turn', async message => {
+      const activities: unknown[] = [];
+      session = await createCodexMathSession({ ...options, onActivity: activity => activities.push(activity) });
+      const { done } = await startStream('early-activity-turn', message);
+      void done.catch(() => {});
+      if (message === 'public-stream-early') await session.interrupt();
+      expect(await done).toBe(message === 'public-stream-early' ? 'interrupted' : 'completed');
+      expect(activities).toEqual([{ event: 'item_started', itemType: 'reasoning' }]);
+    });
+
+  it('ignores stale and settled scheduling events while retaining their audit items', async () => {
+    const activities: unknown[] = [], items: unknown[] = [];
+    session = await createCodexMathSession({ ...options, onActivity: activity => activities.push(activity),
+      onItem: (_phase, item) => items.push(item) });
+    const { done } = await startStream('active-activity-turn');
+    await streamEvents([
+      streamEvent('old-turn', 'item/started', { item: { id: 'old-compaction', type: 'contextCompaction' } }),
+      streamEvent('old-turn', 'item/started', { item: { id: 'old-tool', type: 'commandExecution' } }),
+      streamEvent('old-turn', 'item/commandExecution/outputDelta', { itemId: 'shared-tool', delta: '{"event":"lean_lock_' }),
+      streamEvent('active-activity-turn', 'item/commandExecution/outputDelta', { itemId: 'shared-tool', delta: 'waiting"}' }),
+      streamEvent('active-activity-turn', 'item/commandExecution/outputDelta', { itemId: 'shared-tool', delta: '{"event":"lean_lock_' }),
+      streamEvent('old-turn', 'item/completed', { item: { id: 'shared-tool', type: 'commandExecution' } }),
+      streamEvent('active-activity-turn', 'item/commandExecution/outputDelta', { itemId: 'shared-tool', delta: 'acquired"}' }),
+      streamEvent('old-turn', 'item/reasoning/textDelta', { delta: 'old reasoning' }),
+      streamEvent('active-activity-turn', 'item/started', { item: { id: 'current-tool', type: 'commandExecution' } }),
+      streamEvent('active-activity-turn', 'item/completed', { item: { id: 'current-tool', type: 'commandExecution' } }),
+      streamEvent('active-activity-turn', 'turn/completed', { turn: { id: 'active-activity-turn', status: 'completed' } }),
+      streamEvent('active-activity-turn', 'item/completed', { item: { id: 'late-compaction', type: 'contextCompaction' } }),
+    ]);
+    expect(await done).toBe('completed');
+    await expect.poll(() => items).toContainEqual({ id: 'late-compaction', type: 'contextCompaction' });
+    expect(activities).toEqual([
+      { event: 'command_output', itemType: 'commandExecution' },
+      { event: 'lean_lock_acquired', itemType: 'commandExecution' },
+      { event: 'item_started', itemType: 'commandExecution' },
+      { event: 'item_completed', itemType: 'commandExecution' },
+    ]);
+    expect(items).toContainEqual({ id: 'old-compaction', type: 'contextCompaction' });
+  });
+
+  it('stops scheduling activity when interruption begins before the terminal event', async () => {
+    const activities: unknown[] = [];
+    session = await createCodexMathSession({ ...options, onActivity: activity => activities.push(activity) });
+    const { done } = await startStream('stopping-activity-turn');
+    await session.interrupt(); expect(await done).toBe('interrupted');
+    expect(activities).toEqual([]);
+  });
+
   it('streams only public summary sections and commentary, retaining ordinary authoritative item callbacks', async () => {
     const updates: unknown[] = [], items: unknown[] = [];
     session = await createCodexMathSession({ ...options, onItemUpdate: (item, context) => updates.push({ item, context }),

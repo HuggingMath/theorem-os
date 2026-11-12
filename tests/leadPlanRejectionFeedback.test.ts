@@ -22,6 +22,28 @@ const build = (cooperation: CooperationState, action: CooperativeAction) => buil
     taskText: 'Prove target', retrievalRoot: '/library', maxOptionalContextBytes: 0,
     frozenContexts: { 'Submission.lean': 'theorem target : True := /- body omitted -/' }, assignment: action });
 
+it('keeps exact current decision requirements mandatory in full and warm Lead contexts', () => {
+  const leadDecisionInstruction = 'Answer researchDecisions: ["finding-current"]. Include progressReview with id "review-current". ' +
+    'Use {"baseVersion":"plan","upsert":[]} and put all decisions in that same JSON object.';
+  const cooperation: CooperationState = { tasks: [{ task, status: 'pending', attempts: 0 }], leadDecisionInstruction };
+  const action: CooperativeAction = { kind: 'lead', seedCommit: 'fixed', planVersion: 'plan', planNonce: 'current' };
+  const context = build(cooperation, action);
+  for (const continuation of [false, true]) {
+    const dispatch = finalizeResearchDispatch(context, { continuation });
+    expect(dispatch.message).toContain(leadDecisionInstruction);
+    expect(dispatch.manifest.included).toContainEqual(expect.objectContaining({ id: 'lead-decision-requirements', required: true }));
+    expect(dispatch.manifest.optionalBytes).toBe(0);
+    expect(dispatch.message).toContain('consumerGoalIds is allowed only on untyped research/sketch tasks');
+  }
+  const peer = build(cooperation, { kind: 'task', task,
+    assignment: { taskId: task.id, taskDigest: taskVersion(task), workerId: 'peer', seedCommit: 'fixed' } });
+  for (const continuation of [false, true]) {
+    const dispatch = finalizeResearchDispatch(peer, { continuation });
+    expect(dispatch.message).not.toContain(leadDecisionInstruction);
+    expect(dispatch.manifest.included.some(section => section.id === 'lead-decision-requirements')).toBe(false);
+  }
+});
+
 it.each([false, true])('carries only the current rejected plan into full and warm Lead dispatches (existing graph: %s)', existing => {
   const cooperation: CooperationState = { tasks: existing ? [{ task, status: 'pending', attempts: 0 }] : [] };
   const action: CooperativeAction = { kind: 'lead', seedCommit: 'fixed', planVersion: 'plan',

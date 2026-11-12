@@ -150,6 +150,8 @@ export function leadPlanningEvidenceText(evidence: ReturnType<typeof leadPlannin
       ? '\nPlanning connection gaps name active work with no recorded connection to an unfinished original goal. ' +
         'For an intended proof input, record the actual consumer dependency or proof route; for advisory effort, ' +
         'set consumerGoalIds to its original goals and use dependsOn only for the questions or inputs it investigates. ' +
+        'consumerGoalIds is allowed only on untyped research/sketch tasks. A typed lemma must instead be connected ' +
+        'through the actual consumer\'s dependsOn or proofRoutes; do not put consumerGoalIds on a lemma or goal. ' +
         'A use described only in objective prose is not an executable connection. Independent exploration may remain ' +
         'unconnected when intentional; explain that choice instead of adding a speculative dependency. These are planning ' +
         'facts, not proof failure, and do not require pausing active work.' : '') +
@@ -162,7 +164,10 @@ export function leadPlanningEvidenceText(evidence: ReturnType<typeof leadPlannin
       '"objective":"the next discriminating check","expectedEvidence":"the observation that will decide it",' +
       '"targetTaskId":"ACTIVE_TASK_ID"}]} beside baseVersion. Use the existing nextCheck actions ' +
       '(feasibility, apply-lemma, construction-check); each target must be an active task serving a reviewed goal, ' +
-      'and nextChecks must cover every reviewed goal. One check may cover multiple goals through recorded dependencies, ' +
+      'with its group active. A new target may be created in upsert in this same revision; connect it to the reviewed ' +
+      'goal in the resulting graph through the consumer\'s dependsOn or proofRoutes, or use consumerGoalIds only for ' +
+      'an untyped research/sketch target. An unchanged completed or integrated target is unavailable. ' +
+      'nextChecks must cover every reviewed goal. One check may cover multiple goals through recorded dependencies, ' +
       'proof routes or advisory consumerGoalIds; do not invent connections merely to satisfy coverage. ' +
       'The host delivers these directions to that task; existing host next checks keep their checkOutcome protocol. ' +
       'You may retain a useful long proof with a specific reason and next check. Elapsed execution alone does not establish failure, ' +

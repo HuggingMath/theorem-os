@@ -3,6 +3,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
 import { type CooperativeResearch } from '../src/solver/cooperation';
+import { parseLeadPlan } from '../src/solver/cooperationShared';
 import type { TaskProof } from '../src/solver/cooperativeProof';
 import { answerGoalProgress, GOAL_PROGRESS_REVIEW_MS as interval, goalProgressForTask, goalProgressStateSchema,
   goalProgressTaskContext, observeGoalProgress, parseGoalProgressDecision, prepareGoalProgressDecision,
@@ -136,6 +137,41 @@ describe('goal effort and unresolved frontier', () => {
 });
 
 describe('executable goal reviews', () => {
+  it.each(['typed-lemma', 'advisory-research'])('binds a review to a connected new %s target in the same revision', kind => {
+    const example = localExample('goal-review-new-target-'); roots.push(example.directory);
+    const originals = example.problem.targets.map((target, index) => ({ ...target, id: `goal_${index}`, kind: 'goal' as const,
+      objective: `Prove ${target.theoremName}.`, dependsOn: [], revision: 0,
+      ...(index ? { status: 'paused' as const } : {}) }));
+    const basePlan = parseCooperationPlan(example.problem, { tasks: originals });
+    const current = basePlan.tasks.map(node), clock = observer(current, [originals[0].id]);
+    clock.observe(0); clock.observe(interval);
+    const target = kind === 'typed-lemma' ? { ...lemma('bridge'), theoremName: 'Tutorial.bridge' }
+      : research('investigation', [originals[0].id]);
+    const base = { ...basePlan, version: 'accepted-plan' };
+    const revision = { baseVersion: base.version, upsert: [target,
+      ...(kind === 'typed-lemma' ? [{ id: originals[0].id, dependsOn: [target.id] }] : [])],
+      progressReview: { id: clock.state.pending!.id, reason: 'Test the exact missing input.', nextChecks: [check(target)] } };
+    const plan = parseLeadPlan(example.problem, revision, base);
+    expect(prepareGoalProgressDecision(plan.goalProgressDecision!, clock.state, plan, [], current).nextChecks[0])
+      .toMatchObject({ targetTaskId: target.id, taskDigest: taskVersion(plan.tasks.find(task => task.id === target.id)!) });
+
+    const disconnected = parseLeadPlan(example.problem, { ...revision,
+      upsert: [kind === 'typed-lemma' ? target : { ...target, consumerGoalIds: [] }] }, base);
+    expect(() => prepareGoalProgressDecision(disconnected.goalProgressDecision!, clock.state, disconnected, [], current))
+      .toThrow('math_plan_progress_review_task_unavailable: ' + target.id);
+    if (kind === 'typed-lemma') {
+      expect(() => parseLeadPlan(example.problem, { ...revision,
+        upsert: [{ ...target, consumerGoalIds: [originals[0].id] }, revision.upsert[1]] }, base))
+        .toThrow('consumerGoalIds');
+      const wrongDeclaration = { ...plan.goalProgressDecision!, nextChecks: [{ ...check(target), execution: {
+        kind: 'application' as const, expectedType: 'True', expression: 'by trivial',
+        context: { file: target.proofPath!, declaration: 'Tutorial.other' },
+      } }] };
+      expect(() => prepareGoalProgressDecision(wrongDeclaration, clock.state, plan, [], current))
+        .toThrow('math_plan_progress_review_task_unavailable: ' + target.id);
+    }
+  });
+
   it.each([false, true])('accepts a live Lead plan after peer proof progress supersedes its review (new review: %s)', async replacement => {
     const example = localExample('goal-review-race-'); roots.push(example.directory);
     const lead = leadWorker(example.problem, example.workspace), peer = peerWorker(example, 'peer');
@@ -168,6 +204,7 @@ describe('executable goal reviews', () => {
     expect(reminder).toContain('Include progressReview with id ' + JSON.stringify(oldReview));
     expect(reminder).toContain('nextChecks covering every reviewed goal: ["goal_0"]');
     expect(reminder).not.toContain('return without a revision');
+    expect(cooperation.contextState(leadAction, lead).leadDecisionInstruction).toBe(reminder);
 
     // Another worker's checked receipt reaches the archive while the Lead is still composing this plan.
     const checked = proof(core);
@@ -248,6 +285,8 @@ describe('executable goal reviews', () => {
     expect(prompt).toContain('nextChecks must cover every reviewed goal');
     expect(prompt).toContain('One check may cover multiple goals through recorded dependencies');
     expect(prompt).toContain('do not invent connections merely to satisfy coverage');
+    expect(prompt).toContain('A new target may be created in upsert in this same revision');
+    expect(prompt).toContain('An unchanged completed or integrated target is unavailable');
   });
 
   it('preserves old reason-only records but exposes only exact bound directions to each worker', () => {

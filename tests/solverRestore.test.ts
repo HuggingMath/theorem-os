@@ -10,6 +10,7 @@ import { taskVersion, type CooperativeTask } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 import { verifiedBatch } from './helpers/verifier';
+import { leadResearchInputs } from '../src/solver/contextCompiler';
 
 const host = vi.hoisted(() => ({ verify: vi.fn(), createSession: vi.fn() }));
 vi.mock('../src/math/verifier', async importOriginal => ({
@@ -134,6 +135,65 @@ describe('cooperative Lead checkpoint restoration', () => {
     await deliverPeerProof(cooperative, 'zero_add', 'by exact Nat.zero_add n');
     expect((await nextLead)?.kind).toBe('assemble');
     expect(state.cooperation!.initialPlanFallback).toBeUndefined();
+  });
+
+  const researchPlan = () => {
+    const plan = savePlan([{ id: 'question', kind: 'research', objective: 'Investigate the missing bridge.',
+      dependsOn: [], revision: 0 }, ...goalTasks()]);
+    const question = state.cooperation!.tasks[0];
+    question.status = 'completed';
+    state.cooperation!.deliveries = [{ id: 'new-finding', producer: peer.id, taskId: question.task.id,
+      taskDigest: taskVersion(question.task), kind: 'research', status: 'advisory', statement: '', premises: [],
+      dependencies: [], remainingObligations: [], summary: 'A bridge is ready for a Lead decision.', evidenceRefs: [],
+      createdAt: 1, lemmaRequests: [{ id: 'bridge', kind: 'lemma', objective: 'Prove the exact bridge.',
+        type: 'True', proofPath: 'Submission.lean', theoremName: 'Tutorial.bridge', dependsOn: [], revision: 0 }] }];
+    return plan;
+  };
+
+  it('keeps inherited accepted notes without rejecting them for research that has not been presented yet', async () => {
+    researchPlan();
+    const before = structuredClone(state.cooperation!.tasks);
+    const cooperative = create();
+
+    await cooperative.restore();
+
+    expect(events.filter(item => item.event === 'plan_rejected')).toEqual([]);
+    expect(events.filter(item => item.event === 'plan_updated')).toEqual([]);
+    expect(state.cooperation!.tasks).toMatchObject(before);
+    expect(state.cooperation!.researchDecisions).toBeUndefined();
+    const action = await leadAssignment(cooperative);
+    expect(cooperative.contextState(action, lead).leadResearchInputIds).toEqual(['new-finding']);
+    expect(cooperative.leadCheckpointInstruction(action as Extract<typeof action, { kind: 'lead' }>))
+      .toContain('researchDecisions: ["new-finding"]');
+  });
+
+  it('still validates a changed saved draft against pending research inputs on restore', async () => {
+    const plan = researchPlan(), proposal = state.cooperation!.deliveries![0].lemmaRequests![0];
+    fs.writeFileSync(path.join(workspace, 'RESEARCH.md'), '```math-plan\n' +
+      JSON.stringify({ ...plan, tasks: [...plan.tasks, proposal] }) + '\n```');
+    const cooperative = create();
+
+    await cooperative.restore();
+
+    expect(events.filter(item => item.event === 'plan_rejected')).toHaveLength(1);
+    expect(state.cooperation!.error).toContain('math_plan_research_decisions_missing');
+    expect(state.cooperation!.tasks.some(node => node.task.id === proposal.id)).toBe(false);
+    expect(state.cooperation!.researchDecisions).toBeUndefined();
+  });
+
+  it('recovers an explicit research decision even when the saved graph is unchanged', async () => {
+    const plan = researchPlan();
+    fs.writeFileSync(path.join(workspace, 'RESEARCH.md'), '```math-plan\n' + JSON.stringify({ ...plan,
+      researchDecisions: [{ deliveryId: 'new-finding', outcome: 'decline', reason: 'The bridge does not resolve the current gap.' }],
+    }) + '\n```');
+    const cooperative = create();
+
+    await cooperative.restore();
+
+    expect(events.filter(item => item.event === 'plan_rejected')).toEqual([]);
+    expect(state.cooperation!.researchDecisions).toContainEqual(expect.objectContaining({ deliveryId: 'new-finding', outcome: 'decline' }));
+    expect(leadResearchInputs(state.cooperation!.deliveries!,
+      new Map(state.cooperation!.tasks.map(node => [node.task.id, node])), state.cooperation!.researchDecisions)).toEqual([]);
   });
 
   it('preserves a committed Lead proof and its new library import after process restoration', async () => {
