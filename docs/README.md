@@ -73,6 +73,7 @@ CLI 与数学运行时独立于 Web。Agent 完成消息、引理通过和同伴
 
 带日期的 `frontend-*`、`research-round*` 和发布文章保留当时的修复与测试事实，当前部署从[发布状态](web-release-status.md)进入。近期记录：
 
+- [2026-11-12 search27 目标检索、开放正文与引用追踪](releases/2026-11-12-search27.md)：单独target检索、已知OA正文与HTML/REF引用图；main/Web发布完成。
 - [2026-11-12 实时研究任务与任务级指导](releases/2026-11-12-claude-frontend.md)：Agent 当前步骤、计划状态与任务指导；两项审查补修及本地/公网验收已完成。
 - [2026-11-12 search26 检索等待与论文版本校验](releases/2026-11-12-search26.md)：DDG连接/读取限时、arXiv错误恢复和文档/版本核对；main/Web发布完成。
 - [2026-11-12 search25 主题资料与恢复结果](releases/2026-11-12-search25.md)：主题资料保留、明确partial边界与恢复结果合入；保留中央R1修复，后台待办关闭。
