@@ -183,12 +183,14 @@ try {
       c = await task(page, ctx); const live = page.locator('#chat-live-panel');
       // A wide screen opens the workspace of a running task by itself; a phone opens it from the status line.
       if (width < 1100) await page.locator('#research-chat-thread [data-research-artifact="live"]').click();
-      await live.locator('[data-live-now]').waitFor();
+      await live.locator('[data-live-plan]').waitFor();
       const row = live.locator('[data-live-task="goal"]');
       assert.equal(await row.getAttribute('data-tone'), 'pending');
       assert.equal(await live.locator('[data-live-done]').innerText(), locale === 'zh' ? '已完成 0/1' : '0 of 1 done');
       assert.equal(await live.locator('[data-live-failed]').count(), 0);
-      assert.equal(await page.locator('#research-chat-thread [data-research-guidance]').count(), 1, 'The status line offers guidance while the proof runs');
+      // Guidance while the proof runs has one entry, the composer's 指导 Agent; the status line no longer repeats it.
+      assert.equal(await page.locator('#research-chat-thread [data-research-guidance]').count(), 0);
+      assert.equal(await page.locator('[data-chat-guidance-mode-open]').count(), 1);
       await row.locator('.live-task-head').click();
       const control = controls.get(c.runId)!;
       const recordedTask = control.observation.inspection.tasks[0]!;

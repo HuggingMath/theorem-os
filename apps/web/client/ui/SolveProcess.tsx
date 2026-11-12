@@ -128,8 +128,7 @@ export function SolveProcessView(props: SolveProcessProps) {
     memory.open = now; refresh();
   }}>
     <summary><span class="solve-process-title">{t('解题过程')}</span>
-      <span class="solve-process-facts">{process.startedAt && <Elapsed from={process.startedAt} to={process.endedAt} />}
-        {facts.map(fact => <span key={fact}>{fact}</span>)}</span><Icon name="chevron-down" /></summary>
+      <span class="solve-process-facts">{facts.map(fact => <span key={fact}>{fact}</span>)}</span><Icon name="chevron-down" /></summary>
     {open && <>
       <ol class="solve-stages">{process.stages.map(stage => <li key={stage.id} class="solve-stage" data-stage={stage.id} data-tone={stage.tone}>
         <p class="solve-stage-head"><ToneMark tone={stage.tone} /><strong>{stage.label}</strong>{stage.summary && <span>{stage.summary}</span>}</p>

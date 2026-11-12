@@ -56,7 +56,7 @@ export function CollaborationMessageSummary({ request = api }: { request?: WebAp
 }
 
 /** A personal view; injected WebApi retains the workbench's existing owner/CSRF boundary. */
-export function CollaborationInbox({ context, request = api }: { context: ResearchContext; request?: WebApi }) {
+export function CollaborationInbox({ context, request = api, heading = true }: { context: ResearchContext; request?: WebApi; heading?: boolean }) {
   const [data, setData] = useState<ResearchCollaborationInbox>(), [error, setError] = useState(''), [revision, setRevision] = useState(0);
   const [filter, setFilter] = useState(() => { const selected = new URLSearchParams(location.search).get('inbox') ?? ''; return ['decision', 'reply', 'progress', 'unread', 'claim', 'processed', 'all'].includes(selected) ? selected : 'pending'; }), [busy, setBusy] = useState('');
   const pending = useRef<{ signature: string; requestId: string }>(), locked = useRef(false), generation = useRef(0), owner = useRef(context.session.researcherId);
@@ -96,13 +96,13 @@ export function CollaborationInbox({ context, request = api }: { context: Resear
     : value === 'reply' ? tx('待回复', 'Replies') : value === 'progress' ? tx('研究进展', 'Progress') : value === 'unread' ? tx('未读', 'Unread')
     : value === 'claim' ? tx('我的认领', 'My claims') : value === 'processed' ? tx('已收起或完成', 'Dismissed or completed') : tx('全部', 'All');
   return <section class="collaboration-inbox" id="collaboration-inbox" data-collaboration-inbox aria-label={tx('个人处理中心', 'Personal inbox')}>
-    <header><div><h2>{tx('个人处理中心', 'Personal inbox')}</h2><p>{tx('需要你决定或回应的事项，与研究进展分开查看。', 'Find decisions and replies here, with research progress in its own view.')}</p></div>
+    <header>{heading && <div><h2>{tx('个人处理中心', 'Personal inbox')}</h2><p>{tx('需要你决定或回应的事项，与研究进展分开查看。', 'Find decisions and replies here, with research progress in its own view.')}</p></div>}
       {data && <span>{tx(`${data.pending} 项待处理 · ${data.unread} 条未读`, `${data.pending} pending · ${data.unread} unread`)}
         {data.unread > 0 && <button type="button" class="text-button" data-inbox-read-all disabled={Boolean(busy)} onClick={() => void write(`${base}/collaboration/inbox/read-all`, {}, 'read-all')}>{tx('全部标已读', 'Mark all as read')}</button>}</span>}</header>
     <div class="collaboration-filter" role="group" aria-label={tx('筛选消息', 'Filter messages')}>{['pending', 'decision', 'reply', 'progress'].map(value => <button type="button" class="button" key={value} data-inbox-filter={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>
       {label(value)}{value !== 'pending' && data?.counts && <> · {data.counts[value as keyof typeof data.counts]}</>}</button>)}
       <label class="collaboration-more-filter"><span class="sr-only">{tx('其他范围', 'Other views')}</span><select aria-label={tx('其他消息范围', 'Other message views')} value={['unread', 'claim', 'processed', 'all'].includes(filter) ? filter : ''} onChange={event => { if (event.currentTarget.value) setFilter(event.currentTarget.value); }}>
-        <option value="">{tx('其他范围', 'Other views')}</option>{['unread', 'claim', 'processed', 'all'].map(value => <option key={value} value={value}>{label(value)}</option>)}</select></label></div>
+        <option value="">{tx('更多', 'More')}</option>{['unread', 'claim', 'processed', 'all'].map(value => <option key={value} value={value}>{label(value)}</option>)}</select></label></div>
     <ErrorBox message={error} />{error && <button type="button" class="text-button" onClick={() => setRevision(value => value + 1)}>{tx('重新读取', 'Try again')}</button>}
     {!data && !error && <p role="status">{tx('正在读取协作事项…', 'Loading collaboration items…')}</p>}
     {items.map(item => {

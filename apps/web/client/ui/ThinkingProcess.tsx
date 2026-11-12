@@ -6,7 +6,7 @@ import { detailLevel, onDetailLevel, setDetailLevel, type DetailLevel } from '..
 import { condenseThinking, thinkingEntryMatch, type ThinkingEntry, type ThinkingMatch, type ThinkingStep } from '../thinkingProcess';
 import { ActionBody, firstLine, ItemRow, LeanReport, summarize, type ItemContext } from './AgentRoute';
 import { ChatCodeBlock, ChatMessageContent } from './ChatMessageContent';
-import { Elapsed, ToneMark } from './SolveProcess';
+import { ToneMark } from './SolveProcess';
 import { Icon, Spinner } from './Icon';
 
 type Reading = { all?: boolean; following: boolean; top: number; anchor?: { id: string; detail?: boolean; offset: number } };
@@ -413,7 +413,7 @@ export function ThinkingProcess({ process, time, onCheck, onQuestion }: {
     }}>
     <summary onClick={() => save()}>
       <span class="thinking-title"><Icon name="brain" /><strong>{proof ? process.active ? t('正在解题…') : t('解题思路与进展') : process.active ? t('正在思考…') : t('思考过程')}</strong>
-        <Elapsed from={process.startedAt} to={process.endedAt} /><Icon name="chevron-down" /></span>
+        <Icon name="chevron-down" /></span>
       {preview && !open && <span class="thinking-preview" role="status" aria-live="polite" aria-atomic="true">{preview}</span>}
     </summary>
     {open && <>

@@ -1544,7 +1544,8 @@ function renderRunMonitor() {
   for (const id of state.finishedRuns) if (!available.has(id) || id === state.selectedId) state.finishedRuns.delete(id);
   const runs = state.runs.filter(run => activeRun(run) || state.finishedRuns.has(run.id)).toReversed();
   const active = runs.filter(activeRun).length, finished = runs.length - active;
-  root.hidden = !runs.length;
+  // One entry that is the run on screen repeats its status line; the strip appears once there is something else to watch.
+  root.hidden = !runs.length || runs.length === 1 && runs[0]!.id === state.selectedId;
   root.dataset.stale = String(!state.connected);
   patchText(element('#run-monitor-summary'), [active ? t('{0} 项进行中', active) : '', finished ? t('{0} 项已结束', finished) : ''].filter(Boolean).join('\n'));
   const focused = document.activeElement instanceof HTMLElement && list.contains(document.activeElement) ? document.activeElement : undefined;
@@ -2877,9 +2878,9 @@ function renderShell() {
   const named = run?.title ?? (researchEntry === 'natural' ? chatWorkspace?.selected?.title : undefined);
   const title = documentTitle(baseTitle, running.length, state.unseenRuns.size, running.filter(waitsForOwner).length, named);
   if (document.title !== title) document.title = title;
-  const live = run && activeRun(run)
-    ? { label: state.cancelling.has(run.id) ? t('正在取消') : status(run).label, detail: formatDuration(runProgress(run).elapsed), tone: status(run).tone, count: running.length }
-    : running.length ? { label: t('{0} 项研究进行中', running.length), detail: '', tone: 'running', count: running.length } : undefined;
+  // The open run already says where it is in its own status line; the pill points at research running elsewhere.
+  const elsewhere = running.filter(item => item.id !== run?.id);
+  const live = elsewhere.length ? { label: t('{0} 项研究进行中', elsewhere.length), detail: '', tone: 'running', count: elsewhere.length } : undefined;
   renderTopbar(element('#topbar'), {
     model: researchEntry === 'natural' && !run ? t('默认版配置') : field('model').value || t('模型配置'), mac, live,
     libraryHref: chatWorkspace?.id ? `library.html?${new URLSearchParams({ workbenchChat: chatWorkspace.id })}`
@@ -2889,7 +2890,7 @@ function renderShell() {
     settingsDisabled: !session || state.submitting, account: session?.account?.email, onAccount: openAccount,
     onHistory: toggleHistory, onHome: () => { void openNaturalResearch(); }, onDraft: openDraft, onSettings: () => openSettings(), onPalette: () => palette.open(), onGlossary: () => openGlossary(), onLocale: changeLocale,
     onLive: () => {
-      const target = run && activeRun(run) ? run : state.runs.filter(activeRun).at(-1);
+      const target = state.runs.filter(item => activeRun(item) && item.id !== run?.id).at(-1);
       if (!target) return;
       if (target.id !== state.selectedId) selectRun(target.id);
       // The status line opens the run's own detail, so whatever the conversation was showing steps aside.

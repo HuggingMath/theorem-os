@@ -154,6 +154,8 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 #natural-research .chat-composer #formalize-form:has(#formalize-original:focus){border-color:var(--gray-500);box-shadow:0 0 0 1px var(--gray-500),0 4px 20px #00000006}
 #natural-research .chat-composer #formalize-original{display:block;width:100%;min-width:0;min-height:92px;max-height:260px;margin:0;padding:14px 16px 10px;border:0;border-radius:14px;background:transparent;color:var(--ink);font:inherit;font-size:16px;line-height:1.8;resize:none;box-shadow:none;overflow-y:auto}
 #natural-research .chat-composer #formalize-original:focus{outline:none}
+/* The shortcut hint starts where the typed text starts, quieter than the problem itself. */
+#natural-research .chat-composer [data-new-problem-shortcut]{margin:0;padding:0 16px 8px;color:var(--muted);font-size:12px;line-height:1.6}
 .chat-quote-notice{display:flex;align-items:center;gap:12px;margin:2px 4px 0;padding:2px 10px 6px;border-bottom:1px solid var(--line);color:var(--muted);font-size:12px;line-height:1.5}
 .chat-quote-notice>span{flex:1;min-width:0;overflow-wrap:anywhere}
 .chat-quote-notice .text-button{flex-shrink:0;min-height:36px;font-size:12px}
@@ -340,6 +342,7 @@ body[data-view=draft][data-output-open=true] .research-output-close{display:bloc
   .chat-messages{padding:24px 16px;gap:30px}.chat-message-user{max-width:95%;padding:12px 16px}
   #research-conversation-panel #natural-research{padding:8px 12px max(12px,env(safe-area-inset-bottom))}
   #natural-research .chat-composer #formalize-original{padding:12px;min-height:92px}
+  #natural-research .chat-composer [data-new-problem-shortcut]{padding-inline:12px}
   .chat-composer-toolbar{padding-inline:4px}.chat-settings-fields{padding:16px}.chat-settings-options{gap:12px}
   body[data-chat-empty=true] #research-conversation-panel{padding-bottom:8vh}
 }

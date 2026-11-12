@@ -184,7 +184,6 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
       {discovery.loading && <p role="status">{tx('正在读取目标、前提与证明环境…', 'Loading the goal, premises and proof environment…')}</p>}
       {discovery.error && <div class="research-actions"><button class="button" type="button" onClick={discovery.refresh}>{tx('重新读取这一步', 'Reload this step')}</button>
         <a class="button" href={`problem.html?${new URLSearchParams({ ...Object.fromEntries(targetParameters), tab: 'route' })}`}>{tx('回到题目核对', 'Return to the problem')}</a></div>}</Panel>}
-    {context.session.authenticated && <div class="research-actions"><a class="text-button" href="workspace.html?tab=collections">{tx('我的资料夹', 'My collections')}</a><a class="text-button" href="workspace.html?tab=inbox#asset-updates">{tx('关注更新', 'Release updates')}</a></div>}
     <div class="research-library-controls">
       <nav class="research-section-nav research-directory-grid research-library-type-tabs" aria-label={tx('内容类型', 'Content type')}>{(['mathematics', 'agent', 'skill'] as const).map(value => {
         const label = value === 'mathematics' ? tx('数学库', 'Math libraries') : nameOf(value);
@@ -201,6 +200,7 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
           : <button type="button" aria-pressed={ownView} onClick={() => changeCollection('shared', true)}>{tx('我的资源', 'My resources')}</button>}
         {!creating && selection.length > 0 && <a href="#research-library-selection">{tx('配置选择', 'Selection')} ({selection.length})</a>}
       </nav>
+      {context.session.authenticated && <div class="research-library-links"><a class="text-button" href="workspace.html?tab=collections">{tx('我的资料夹', 'My collections')}</a><a class="text-button" href="workspace.html?tab=inbox#asset-updates">{tx('关注更新', 'Release updates')}</a></div>}
     </div>
     {creatorMounted && <div hidden={!creating} class="research-page-section"><Panel id="new-asset" title={tx('创建草稿', 'Create a draft')} note={tx('先保存到个人空间；确认内容、许可证与可见范围后再发布。', 'Save it in your space, then review the content, license and visibility before publishing.')}>
       {fromRun !== null ? <RunAssetCreator context={context} runId={fromRun} parameters={parameters} onSaved={(asset, newerInput) => { directory.refresh(); if (!newerInput) location.assign(filteredLibraryHref(asset.id)); }} /> : <AssetEditor context={context} onSaved={(asset, newerInput) => {

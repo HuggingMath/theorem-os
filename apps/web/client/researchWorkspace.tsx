@@ -25,6 +25,7 @@ const tabs = {
   drafts: tx('账号草稿', 'Account drafts'), trials: tx('数学库试用', 'Library trials'), help: tx('帮助与版本', 'Help and version'),
 } as const;
 type Tab = keyof typeof tabs;
+const primaryTabs: Tab[] = ['inbox', 'search', 'brief', 'collections'];
 const readTab = (): Tab => {
   const value = new URLSearchParams(location.search).get('tab') ?? '';
   return value in tabs ? value as Tab : 'inbox';
@@ -56,19 +57,23 @@ export function WorkspacePage({ context }: { context: ResearchContext }) {
   const loginParameters = new URLSearchParams(location.search);
   loginParameters.set('returnTo', 'workspace'); loginParameters.set('tab', tab); loginParameters.set('lang', locale);
   return <div class="workspace-page" data-workspace-page>
-    <header class="workspace-heading"><div><p class="research-eyebrow">TheoremOS / Research</p><h1>{tx('我的研究空间', 'My research space')}</h1>
+    <header class="workspace-heading"><div><p class="research-eyebrow">TheoremOS / Research</p><h1>{tx('我的研究', 'My research')}</h1>
       <p>{tx('接着处理待办，找回线索，整理研究结果。', 'Pick up a task, find a lead, or bring your research together.')}</p></div>
       <div class="research-actions"><a class="button" href={`practice.html?lang=${locale}`}>{tx('参与演练', 'Try the practice')}</a><a class="button button-primary" href="./">{tx('开始研究', 'Start research')}</a></div>
     </header>
-    <nav ref={navigation} class="workspace-tabs" aria-label={tx('个人研究工具', 'Personal research tools')}>
-      {Object.entries(tabs).map(([id, label]) => <a key={id} href={`workspace.html?tab=${id}`} aria-current={tab === id ? 'page' : undefined}
-        onClick={event => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); choose(id as Tab); }}>{label}</a>)}
+    <div class="workspace-tabbar"><nav ref={navigation} class="workspace-tabs" aria-label={tx('个人研究工具', 'Personal research tools')}>
+      {(Object.keys(tabs) as Tab[]).filter(id => primaryTabs.includes(id) || id === tab).map(id => <a key={id} href={`workspace.html?tab=${id}`} aria-current={tab === id ? 'page' : undefined}
+        onClick={event => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); choose(id); }}>{tabs[id]}</a>)}
     </nav>
+      <details class="workspace-tabs-more"><summary>{tx('更多', 'More')}</summary><div>
+        {(Object.keys(tabs) as Tab[]).filter(id => !primaryTabs.includes(id) && id !== tab).map(id => <a key={id} href={`workspace.html?tab=${id}`}
+          onClick={event => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); event.currentTarget.closest('details')!.open = false; choose(id); }}>{tabs[id]}</a>)}
+      </div></details></div>
     {tab === 'help' ? <ProductStatusPanel /> : !context.session.authenticated ? <Panel title={tx('登录后继续你的研究', 'Sign in to continue your research')}>
       <p>{tx('待办、搜索、用量和资料夹保存在你的账号中。', 'Your inbox, search, usage and collections belong to your account.')}</p>
       <div class="research-actions"><a class="button button-primary" href={`login.html${workbenchReturn(loginParameters.toString())}`}>{tx('登录', 'Sign in')}</a>
         <a href={`practice.html?lang=${locale}`}>{tx('先体验一次完整参与流程', 'Try the participation flow first')}</a></div></Panel>
-      : <div class="workspace-content" key={tab}>{tab === 'inbox' ? <><CollaborationInbox context={context} /><AssetUpdatesPanel context={context} /></>
+      : <div class="workspace-content" key={tab}>{tab === 'inbox' ? <><CollaborationInbox context={context} heading={false} /><AssetUpdatesPanel context={context} /></>
         : tab === 'search' ? <WorkspaceSearch context={context} /> : tab === 'usage' ? <WorkspaceUsage context={context} />
           : tab === 'brief' ? <WorkspaceBrief context={context} /> : tab === 'drafts' ? <PersonalDraftsPanel context={context} /> : tab === 'trials' ? <LibraryTrialHistory context={context} /> : <><SaveIncomingTarget context={context} /><CollectionsPanel context={context} /></>}</div>}
   </div>;

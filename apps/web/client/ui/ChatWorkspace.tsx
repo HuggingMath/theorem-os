@@ -219,9 +219,6 @@ function TaskMessage(props: ChatThreadProps) {
         {solve.process.tokens !== undefined && <span>{t('Token {0}', formatTokens(solve.process.tokens))}</span>}
         {liveAvailable && <button type="button" class="text-button" data-research-artifact="live" onClick={() => props.onArtifact('live')}>
           <Icon name="panel-right" />{t('实时工作区')}</button>}
-        {/* 详细 keeps this entry on its plan card below. */}
-        {active && run && props.onGuidance && (simple ? !props.planDecision?.approval : !props.planDecision) && <button type="button" class="text-button" data-research-guidance
-          title={t('不必停止解题：指导会送到正在工作的 Agent')} onClick={() => props.onGuidance?.()}><Icon name="message-square-text" />{t('指导 Agent')}</button>}
         {active && props.onCancelTask && <button type="button" class="text-button" data-research-stop onClick={props.onCancelTask}>{t("停止解题")}</button>}
       </p>}
       {(!statementDecision || failed) && <p class="research-conversation-description">{description}</p>}
@@ -444,7 +441,7 @@ function ChatComposer(props: ChatComposerProps) {
       </div>}
       {props.hasConversation && props.onGuidance && <div class="chat-message-destination" role="group" aria-label={t('消息用途')}>
         <button type="button" data-chat-discussion-mode aria-pressed={!props.guidance} disabled={props.submitting} title={t('提问和讨论，不会送到 Agent')} onClick={() => props.guidance?.onCancel()}>{t('讨论思路')}</button>
-        <button type="button" data-chat-guidance-mode-open aria-pressed={Boolean(props.guidance)} disabled={props.submitting} title={t('不必停止解题：指导会送到正在工作的 Agent')} onClick={props.onGuidance}>{t('指导研究')}</button>
+        <button type="button" data-chat-guidance-mode-open aria-pressed={Boolean(props.guidance)} disabled={props.submitting} title={t('不必停止解题：指导会送到正在工作的 Agent')} onClick={props.onGuidance}>{t('指导 Agent')}</button>
       </div>}
       {props.guidance && <div class="chat-guidance-target" data-chat-guidance-mode>
         <label>{t('发送研究指导至')}<select data-chat-guidance-target value={props.guidance.target} disabled={props.submitting} onChange={event => props.guidance!.onTarget(event.currentTarget.value)}>

@@ -136,16 +136,16 @@ function Code({ view, lean }: { view: FileView; lean?: WebAgentLeanCheck }) {
 
 /** What runs at this moment: one line per working Agent, or the platform's own step. */
 function Now({ process, onTask }: { process: SolveProcess; onTask?: (id: string) => void }) {
-  if (!process.active) return null;
+  if (!process.active || !process.now.length) return null;
   return <section class="live-now" data-live-now aria-labelledby="chat-live-now">
     <h3 id="chat-live-now">{t('正在执行')}</h3>
-    {process.now.length ? <ul>{process.now.map(item => <li key={item.id} data-live-now-item={item.id}>
+    <ul>{process.now.map(item => <li key={item.id} data-live-now-item={item.id}>
       <Spinner />{item.who && <strong>{item.who}</strong>}
       <span class="live-now-text">{item.text}{item.code && <> <code translate={false}>{item.code}</code></>}</span>
       {item.task && (onTask ? <button type="button" class="text-button live-now-task" data-live-now-task={item.task.id} translate={false}
         title={t('在路线图中查看这项任务')} onClick={() => onTask(item.task!.id)}>{item.task.label}</button>
         : <span class="live-now-task" translate={false}>{item.task.label}</span>)}
-    </li>)}</ul> : <p class="live-now-idle">{process.label}</p>}
+    </li>)}</ul>
   </section>;
 }
 

@@ -3257,6 +3257,7 @@ button.formal-lean{vertical-align:top}
 .first-research-budget-top>div{display:flex;flex-wrap:wrap;gap:12px}.first-research-budget-top .text-button{min-height:36px}
 .first-research-budgets{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px 18px;margin:6px 0 10px}
 .first-research-budgets>div{min-width:0}.first-research-budgets dt{color:var(--muted);font-size:12px}.first-research-budgets dd{margin:2px 0;overflow-wrap:anywhere}
+.first-research-more{margin:2px 0 0;color:var(--muted);font-size:12px}.first-research-more>summary{padding:8px 0;cursor:pointer}.first-research-more[open]>summary{color:var(--ink)}
 .first-research-quota,.first-research-cost{margin:6px 0;color:var(--muted);font-size:12px;line-height:1.7}
 .chat-input-view{display:flex;gap:14px;margin:10px 12px 0}.chat-input-view button{font-size:12px;padding:6px 0;border-bottom:2px solid transparent}.chat-input-view button[aria-pressed=true]{color:var(--ink);border-color:var(--green-600)}
 .chat-input-preview{margin:8px 12px 12px;min-height:92px;max-height:320px;overflow:auto;line-height:1.8;overflow-wrap:anywhere}.chat-input-preview .solution-route-prose{font-size:inherit}.chat-input-preview .solution-route-prose>p{white-space:pre-wrap}.chat-input-preview .katex-display{overflow-x:auto;overflow-y:hidden;padding:4px 0}

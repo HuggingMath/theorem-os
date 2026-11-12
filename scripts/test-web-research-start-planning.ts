@@ -55,6 +55,8 @@ try {
     await page.locator('#formalize-model').fill('planned-model');
     await page.locator('#formalize-settings > summary').click();
     const cost = page.locator('#natural-research [data-start-cost]');
+    // Quota and cost sit behind one closed line under the limits.
+    await page.locator('[data-first-research-more] > summary').click();
     await cost.locator('[data-cost-unavailable]').waitFor();
     await cost.locator('[data-start-rate] > summary').click();
     await cost.locator('[data-start-rate-value]').fill('10');
@@ -95,7 +97,7 @@ try {
     assert.equal(await page.locator('#formalize-original').inputValue(), formula);
     await page.waitForFunction(() => document.activeElement?.id === 'formalize-original');
     assert.equal(writes.length, writeCount, 'Preview has no write or model request');
-    await page.reload(); await cost.locator('[data-cost-total]').waitFor();
+    await page.reload(); await page.locator('[data-first-research-more] > summary').click(); await cost.locator('[data-cost-total]').waitFor();
     assert.match(await cost.locator('[data-cost-total]').innerText(), /USD 6\.00/u);
     assert.equal(await page.locator('#formalize-original').inputValue(), formula);
     phase = `rate-isolation-${language}`;
