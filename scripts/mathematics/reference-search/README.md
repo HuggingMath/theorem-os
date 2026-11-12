@@ -1,7 +1,8 @@
 # Campaign reference discovery
 
-This versioned adapter preserves short mathematical phrases and the research
-object in arXiv / OpenAlex requests. If recall gaps remain, it issues at most four
+This versioned adapter preserves quoted mathematical phrases, all explicitly
+quoted objects, and the research target in arXiv / OpenAlex requests. Quoted
+connecting words and target names longer than four words are retained. If recall gaps remain, it issues at most four
 additional academic requests (concept-only and subject-only queries). Explicit
 quotes and `--target` help when an unquoted phrase boundary is ambiguous.
 
@@ -11,9 +12,20 @@ Background papers do not necessarily concern the research object. Search gaps,
 provider errors, and unread/non-citable status stay visible. A hit is not a
 validated theorem, and an empty bounded search does not establish absence.
 
-arXiv versions, DOI aliases, and preprint/journal entries with identical long
-titles and explicit matching author lists share a result slot. Alternate source
-identities remain attached; title coincidence alone does not merge documents.
+arXiv abs/pdf/html aliases share a result slot only for the same explicit
+version. Unversioned references, v1 and v3 remain distinct even when a title or
+journal DOI matches. Non-arXiv DOI aliases and identical long titles with matching
+explicit author lists can share a slot. Alternate identities remain attached;
+title coincidence alone does not merge documents.
+
+Academic reading attempts actual document text before returning a metadata
+abstract. DOI/OpenAlex reads use at most two explicitly recorded open-access
+locations and the original or recorded DOI. An explicit arXiv HTML URL is read
+first; PDF failures try the same version's arXiv HTML before its abstract page.
+`content_scope` distinguishes `full_text` (PDF/arXiv HTML), `page_text` (publisher
+page text) and `abstract`. A readable page does not establish that the entire
+paper or its proof was read. `academic_read_attempts` and failures remain in the
+saved source metadata. The existing HTTP/response/read budgets still apply.
 
 The existing campaign answer-source ban surrounds discovery and reading,
 including encoded URLs, redirect destinations, and source-cache metadata.
@@ -48,7 +60,7 @@ environment used by the existing helper:
 ```
 
 Installation copies the helper's 15 imported Python files into `base/`, plus the
-adapter, policy, source registry and launcher; it never edits the source skill. The manifest records
+adapter, academic reader, policy, source registry and launcher; it never edits the source skill. The manifest records
 every copied source hash. Point campaign invocations at the generated
 `reference-search` launcher. Installing a staging bundle does not switch live
 workers; the campaign owner controls activation.
@@ -58,17 +70,30 @@ the REF store and cache remain available even when cwd changes. An explicitly se
 absolute `DEEP_RESEARCH_RUN_DIR` or `DRBENCH_RUN_DIR` is also supported; `--run-dir`
 takes precedence. Commands that access run state require this anchor and fail
 with a usage message when it is missing; `--help` needs no writable directory.
-The launcher no longer chooses `$PWD`, so a read-only campaign root cannot become
-the accidental output directory.
+The launcher does not choose `$PWD`, so a read-only campaign root cannot become
+the accidental output directory. Subcommand `--help` also works without an anchor.
+
+Search and read work from the same fixed worker directory. Reuse an already read
+REF with `find REF --term 'KEYWORD' --offset 0` or `open REF --start-line 1 --count 80`.
+Follow returned offsets/line handles to inspect the needed proof and limitations.
+`read REF --refresh` can replace a cached abstract with a newly available text
+snapshot while retaining source history. For independent queries, use
+`search-batch PLAN.json --workers 2`, with a short `reason` beside each `query`.
+Dependent follow-up queries use actual terms from the newly read text. `follow
+REF --direction references --limit 4` discovers further unread leads. Search
+errors, successful empty searches and irrelevant hits are different outcomes;
+use `--retry-failed` for old failed requests and `--refresh` for new discovery.
 
 Offline verification uses repository fixtures copied from the public audit13
 responses, with provenance in `tests/fixtures/campaign-reference/provenance.json`:
 
 ```sh
-/usr/bin/python3 -B -m unittest discover -s tests -p campaign_reference_test.py -v
+/usr/bin/python3 -B -m unittest discover -s tests -p 'campaign_reference*_test.py' -v
 bunx vitest run tests/campaignReference.test.ts
 /path/to/dependency-complete/python -B tests/campaign_reference_replay.py \
   --bundle /path/to/new/reference-tools --output /path/to/reference-replay.json
+/path/to/dependency-complete/python -B tests/campaign_reference_reader_replay.py \
+  --bundle /path/to/new/reference-tools --output /path/to/reader-replay.json
 ```
 
 The final replay disables sockets and supplies saved XML / mock provider results.

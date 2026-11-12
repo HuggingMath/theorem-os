@@ -28,6 +28,7 @@ def load(name, file):
 
 def research_double():
     research = SimpleNamespace(__file__=__file__, calls=[], mock_web=[], refs={})
+    research.v1 = SimpleNamespace(read_page=lambda *args, **kwargs: {})
     research.workspace = SimpleNamespace(search_id=lambda request: hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest())
     research.base = SimpleNamespace(_get=lambda url: (_ for _ in ()).throw(AssertionError('unmocked request: ' + url)),
                                     _clean=lambda value, limit: ' '.join(value.split())[:limit],
@@ -102,6 +103,16 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(plan[0]['query'], '"heat kernel" "compact riemannian manifold"')
         self.assertLessEqual(len(adapter.query_plan(' '.join(['word'] * 10000))), 3)
         self.assertEqual(adapter.query_plan(''), [])
+
+    def test_explicit_phrases_keep_connecting_words_and_all_named_objects(self):
+        query = '"rank of a matrix" "nonnegative factorization" "extension complexity"'
+        self.assertEqual(adapter.query_plan(query)[0]['query'], query)
+        self.assertIn('all:"rank of a matrix"', adapter.arxiv_query(query))
+        self.assertIn('all:"extension complexity"', adapter.arxiv_query(query))
+
+    def test_explicit_research_target_is_not_cut_after_four_words(self):
+        target = 'finite dimensional normed spaces with an unconditional basis'
+        self.assertIn('"' + target + '"', adapter.query_plan('"projection constants"', target)[0]['query'])
 
     def test_replay_saved_responses_and_xml_recovers_academic_background(self):
         saved = json.loads((FIXTURES / 'saved-searches.json').read_text())
@@ -187,23 +198,26 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(len(result['provider_errors']), 3)
         self.assertEqual(result['results'], [])
 
-    def test_paper_versions_merge_without_title_only_false_merge(self):
+    def test_paper_versions_stay_separate_and_same_version_aliases_merge(self):
         research = research_double()
         adapter.install(research)
         title = 'On the existence of polytopes with high extension complexity'
         rows = [
             {'url': 'https://arxiv.org/abs/1305.3268v1', 'title': title, 'engine': 'arxiv', 'doi': '10.1007/example', 'snippet': 'semidefinite extension complexity'},
+            {'url': 'https://arxiv.org/pdf/1305.3268v1.pdf', 'title': title, 'engine': 'arxiv', 'doi': '10.1007/example', 'snippet': 'semidefinite extension complexity'},
             {'url': 'https://arxiv.org/pdf/1305.3268v3.pdf', 'title': title, 'engine': 'arxiv', 'snippet': 'semidefinite extension complexity'},
+            {'url': 'https://arxiv.org/abs/1305.3268', 'title': title, 'engine': 'arxiv', 'snippet': 'semidefinite extension complexity'},
             {'url': 'https://doi.org/10.1007/example', 'title': title, 'engine': 'openalex', 'snippet': 'semidefinite extension complexity'},
             {'url': 'https://example.org/other', 'title': title, 'engine': 'openalex', 'snippet': 'Other Author | cited by 2'},
         ]
         result = research._rank_discovery(rows, 'semidefinite extension complexity', 8)
-        self.assertEqual(len(result), 2)
-        self.assertEqual(result[0]['alias_count'], 2)
-        self.assertEqual(len(research._rank_discovery(result + [rows[2]], 'semidefinite extension complexity', 8)), 2)
+        self.assertEqual(len(result), 5)
+        self.assertEqual(result[0]['alias_count'], 1)
+        self.assertEqual(result[0]['alternate_sources'][0]['url'], rows[1]['url'])
+        self.assertEqual(len(research._rank_discovery(result + [rows[2]], 'semidefinite extension complexity', 8)), 5)
         saved = json.loads((FIXTURES / 'saved-searches.json').read_text())[1]
         academic = [row for row in saved['results'] if row['engine'] == 'openalex']
-        self.assertEqual(len(research._rank_discovery(academic, saved['request']['query'], 8)), 1)
+        self.assertEqual(len(research._rank_discovery(academic, saved['request']['query'], 8)), 2)
 
     def test_legacy_search_key_is_kept_and_new_cache_and_old_ref_both_work(self):
         research = research_double()
@@ -339,6 +353,7 @@ class SourcePolicyTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'reference_run_directory_required'):
                     self.policy.configure_run_directory(['--run-dir', '.scratch/reference-search', 'search', 'heat kernel'])
                 self.assertEqual(self.policy.configure_run_directory(['--help']), ['--help'])
+                self.assertEqual(self.policy.configure_run_directory(['search', '--help']), ['search', '--help'])
             with patch.dict(os.environ, {'DEEP_RESEARCH_RUN_DIR': str(worker)}, clear=True):
                 self.assertEqual(self.policy.configure_run_directory(['read', 'REF-old']), ['read', 'REF-old'])
 
@@ -377,6 +392,7 @@ class SourcePolicyTests(unittest.TestCase):
             manifest = json.loads((dest / 'reference-search-manifest.json').read_text())
             self.assertEqual(len(manifest['baseSourceHashes']), 15)
             self.assertIn('reference-source-provenance.json', manifest['files'])
+            self.assertIn('academic_read.py', manifest['files'])
             self.assertNotIn('$PWD', (dest / 'reference-search').read_text())
             # Parsing --help imports the real installed entry point without a search.
             installed_policy = load('installed_policy_test', dest / 'reference-search-policy.py')

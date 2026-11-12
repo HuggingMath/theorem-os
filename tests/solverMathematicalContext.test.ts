@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { MathTools } from '../src/math/mathTools';
+import { mathToolsUsageInstruction, type MathTools } from '../src/math/mathTools';
 import type { SolverRunState } from '../src/solver/archive';
 import type { CooperationState } from '../src/solver/cooperation';
 import { buildResearchContext, finalizeResearchDispatch } from '../src/solver/modules/context';
@@ -14,7 +14,7 @@ const problem = { projectRelative: 'generated/problem', ownedFiles: ['Submission
 const goal: CooperativeTask = { id: 'goal', kind: 'goal', objective: 'Prove target.', dependsOn: [], revision: 0,
   proofPath: 'Submission.lean', theoremName: 'target', type: 'True' };
 const research: CooperativeTask = { id: 'question', kind: 'research', objective: 'Check the exact construction.',
-  consumerGoalIds: ['goal'], dependsOn: [], revision: 0 };
+  consumerGoalIds: ['goal'], dependsOn: [], revision: 0, researchSource: 'public-literature' };
 const worktree = "/proof/worker's directory";
 const tools: MathTools = { root: '/tools', digest: 'tools-digest', tools: [
   { name: 'python-math', version: '1', purpose: 'Installed scientific Python.', commands: ['math-python'] },
@@ -47,6 +47,19 @@ it.each(['lead', 'researcher', 'engineer'] as const)('retains mathematical inter
     expect(text).toContain('Use math-python for the installed NumPy, SciPy, SymPy and PySAT');
     expect(text).toContain("reference-search --run-dir '/proof/worker'\\''s directory/.scratch/reference-search' search");
     expect(text).toContain("reference-search --run-dir '/proof/worker'\\''s directory/.scratch/reference-search' read REF-");
+    expect(text).toContain('find REF --term');
+    expect(text).toContain('open REF --start-line');
+    expect(text).toContain('search-batch PLAN.json --workers 2');
+    expect(text).toContain('follow REF --direction references --limit 4');
+    expect(text).toContain('--retry-failed');
+    expect(text).toContain('Provider errors are failed retrievals');
+    if (role === 'researcher') {
+      const contractText = [dispatch.instructions, dispatch.message].join('\n');
+      expect(contractText).toContain('proactively search permitted public literature');
+      expect(contractText).toContain('omit internal task IDs, OAI namespaces and local paths');
+      expect(contractText).toContain('Read the relevant proof section and check assumptions');
+      expect(contractText).toContain('advisory-reference-requiring-current-consumer-check');
+    }
     expect(text).toContain('save stdout separately from stderr progress');
     expect(text).toContain('--file is relative to --workspace');
     expect(text).not.toContain('Use /usr/bin/python3 for Python on this host');
@@ -56,4 +69,13 @@ it.each(['lead', 'researcher', 'engineer'] as const)('retains mathematical inter
       expect(text).toContain('Remove temporary probe commands before proof delivery');
     }
   }
+});
+
+it('offers stateful reference commands only when the frozen tool set includes reference-search', () => {
+  const unavailable = { ...tools, tools: tools.tools.filter(tool => !tool.commands.includes('reference-search')) };
+  const text = mathToolsUsageInstruction(unavailable, worktree);
+  expect(text).toContain('Use math-python');
+  expect(text).not.toContain('reference-search');
+  expect(text).not.toContain('search-batch');
+  expect(text).not.toContain('follow REF');
 });

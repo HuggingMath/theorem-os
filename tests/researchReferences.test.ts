@@ -48,4 +48,19 @@ describe('source-specific mathematical research', () => {
       .toBe('admitted');
     expect(prepareResearchDelivery({ kind: 'notes', text: 'Legacy finding' }, scope()).status).toBe('admitted');
   });
+
+  it.each(['public-literature', undefined] as const)('offers gap-driven discovery for %s without changing the consumer or proof boundary', researchSource => {
+    const current = scope(), task = { ...research, researchSource }, before = structuredClone(current.tasks);
+    const contract = cooperativeWorkContract({ kind: 'task', task, assignment: current.assignment }, current.tasks);
+    expect(contract.researchSources?.workflow).toContain('reuse saved source snapshots');
+    expect(contract.researchSources?.workflow).toContain('proactively search permitted public literature');
+    expect(contract.researchSources?.workflow).toContain('omit internal task IDs, OAI namespaces and local paths');
+    expect(contract.researchSources?.workflow).toContain('Read the relevant proof section and check assumptions');
+    expect(contract.researchSources?.workflow).toContain('keeping the original gap in scope');
+    expect(contract.researchSources?.workflow).toContain('provider failure, irrelevant hits and an empty successful search');
+    expect(contract.researchSources?.workflow).toContain('retrieval time and exact section/theorem/lines');
+    expect(contract.researchSources?.acceptance).toBe('advisory-reference-requiring-current-consumer-check');
+    expect(contract.researchSources?.sourcePolicy).toContain('OpenAI Math benchmark answers');
+    expect(current.tasks).toEqual(before);
+  });
 });

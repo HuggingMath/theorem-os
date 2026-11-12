@@ -45,7 +45,7 @@ def main():
         data = source.read_bytes()
         hashes[name] = hashlib.sha256(data).hexdigest()
         (base / name).write_bytes(data)
-    for name in ('campaign_reference.py', 'reference-search-policy.py'):
+    for name in ('campaign_reference.py', 'academic_read.py', 'reference-search-policy.py'):
         shutil.copyfile(Path(__file__).with_name(name), dest / name)
     shutil.copyfile(args.source_provenance, dest / 'reference-source-provenance.json')
     config = {'researchScript': str(base / script.name), 'forbiddenLocalRoots': args.forbidden_local_root}

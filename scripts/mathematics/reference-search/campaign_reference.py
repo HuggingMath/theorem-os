@@ -32,7 +32,9 @@ def normalized(text):
 
 
 def phrases(query):
-    explicit = [" ".join(words(value)[:MAX_PHRASE_WORDS]) for value in re.findall(r'"([^\"]+)"', query)]
+    # Quoted phrases are the caller's exact terminology. Removing connecting
+    # words or cutting a long title changes the query rather than broadening it.
+    explicit = [" ".join(value.casefold().split()[:MAX_QUERY_WORDS]) for value in re.findall(r'"([^\"]+)"', query)]
     if explicit:
         return list(dict.fromkeys(filter(None, explicit)))[:4]
     tokens = words(re.sub(r"\bsite:\S+", " ", query))[:MAX_QUERY_WORDS]
@@ -49,9 +51,10 @@ def phrases(query):
 def query_plan(query, target=None):
     groups = phrases(query)
     concept = groups[0] if groups else " ".join(words(query)[:3])
-    subject = " ".join(words(target)[:MAX_PHRASE_WORDS]) if target else (groups[1] if len(groups) > 1 else "")
+    subject = " ".join(target.casefold().split()[:MAX_QUERY_WORDS]) if target else (groups[1] if len(groups) > 1 else "")
     quote = lambda value: '"' + value + '"'
-    candidates = [("concept-and-subject", " ".join(quote(value) for value in dict.fromkeys([concept, subject]) if value)),
+    primary = [*groups, subject] if '"' in query else [concept, subject]
+    candidates = [("concept-and-subject", " ".join(quote(value) for value in dict.fromkeys(primary) if value)),
                   ("concept-only", quote(concept))]
     if subject:
         candidates.append(("subject-only", quote(subject)))
@@ -95,16 +98,20 @@ def relevance(card, query, target=None):
 
 
 def document_ids(card):
-    ids = set()
+    ids, arxiv_ids = set(), set()
     for value in [card.get("url", ""), card.get("doi", ""), card.get("arxiv_id", ""),
                   *(row.get("url", "") for row in card.get("alternate_sources", []))]:
         value = unquote(str(value)).casefold().strip()
-        match = re.search(r"(?:arxiv(?:\.org/(?:abs|pdf|html)/|:)|10\.48550/arxiv\.)(\d{4}\.\d{4,5}|[a-z][a-z.-]*/\d{7})(?:v\d+)?", value)
+        match = re.search(r"(?:arxiv(?:\.org/(?:abs|pdf|html)/|:)|10\.48550/arxiv\.)(\d{4}\.\d{4,5}|[a-z][a-z.-]*/\d{7})(v\d+)?", value)
         if match:
-            ids.add("arxiv:" + match[1])
+            arxiv_ids.add("arxiv:" + match[1] + (match[2] or ""))
         doi = re.search(r"(?:doi\.org/|^)(10\.\d{4,9}/[^?#\s]+)", value)
         if doi and not doi[1].startswith("10.48550/arxiv."):
             ids.add("doi:" + doi[1].rstrip("/"))
+    if arxiv_ids:
+        # A journal DOI or identical title must not bridge v1, v3 and a moving
+        # unversioned preprint into one slot: their proof text may differ.
+        return arxiv_ids | {"url:" + str(card.get("url", "")).split("#", 1)[0]}
     if _academic(card):
         authors = card.get("authors")
         author_text = " ".join(authors) if isinstance(authors, list) else str(card.get("snippet", "")).split(" | cited by ")[0]
@@ -121,10 +128,12 @@ def install(research):
     if getattr(research, "_campaign_reference_adapter", False):
         return
     research._campaign_reference_adapter = True
+    from academic_read import install as install_academic_reader
+    install_academic_reader(research)
     base_identity = hashlib.sha256(b"".join(path.name.encode() + path.read_bytes()
                                   for path in sorted(Path(research.__file__).parent.glob('*.py')))).hexdigest()
     identity = hashlib.sha256(base_identity.encode() + b"".join(Path(__file__).with_name(name).read_bytes()
-                              for name in ("campaign_reference.py", "reference-search-policy.py", "reference-source-provenance.json"))).hexdigest()
+                              for name in ("campaign_reference.py", "academic_read.py", "reference-search-policy.py", "reference-source-provenance.json"))).hexdigest()
     original_config = research._provider_config
     research._provider_config = lambda plan: {**original_config(plan), "campaign_reference_adapter_sha256": identity,
                                              "campaign_reference_base_sha256": base_identity}

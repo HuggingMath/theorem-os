@@ -53,7 +53,12 @@ export function mathToolsUsageInstruction(tools: MathTools, worktree?: string): 
   return (commands.has('math-python')
     ? 'Use math-python for the installed NumPy, SciPy, SymPy and PySAT dependencies; /usr/bin/python3 is suitable for standard-library-only scripts. A missing module in system Python does not mean the mathematics environment lacks it.\n' : '') +
     (commands.has('reference-search')
-      ? `Keep reference-search state under this worker's fixed absolute directory: reference-search --run-dir ${quotedRunDir} search 'QUERY' --limit 6, then reference-search --run-dir ${quotedRunDir} read REF-0123456789ABCDEF --term 'KEYWORD' --window 650. Replace the example REF id with a returned id. Reuse the identical --run-dir for every stateful command, including after cd; follow the returned read handles and command help for arguments.\n` : '') +
+      ? `Keep reference-search state under this worker's fixed absolute directory: reference-search --run-dir ${quotedRunDir} search 'QUERY' --limit 6, then reference-search --run-dir ${quotedRunDir} read REF-0123456789ABCDEF --term 'KEYWORD' --window 650. Replace the example REF id with a returned id. Reuse the identical --run-dir prefix for every stateful command, including after cd and for subcommand help. ` +
+        'Reuse saved text with find REF --term \'KEYWORD\' --offset 0 or open REF --start-line 1 --count 80; continue returned next_offset or line handles to inspect the relevant proof and its limitations. ' +
+        'For independent queries, use search-batch PLAN.json --workers 2 with {"searches":[{"query":"PUBLIC_MATHEMATICAL_QUERY","reason":"specific missing inference"}]}; dependent queries follow the newly read evidence. ' +
+        'For a relevant paper, follow REF --direction references --limit 4 (or --direction citations) discovers additional unread leads. Read a useful lead before citing it. ' +
+        'Provider errors are failed retrievals, not evidence that no paper or theorem exists. A partial search retains useful hits; read those hits and use the same search with --retry-failed only for failed provider requests. Use --refresh when new retrieval is needed. ' +
+        'Search titles/snippets, abstract and page_text reads do not establish that the complete proof was read. Inspect content_scope; use read REF --refresh to retry a saved abstract when a full-text route is available, then save the source URL, locator, assumptions and exact consumer adaptation.\n' : '') +
     'For check-lean JSON, save stdout separately from stderr progress (for example, > "$TMPDIR/check.json" 2> "$TMPDIR/check.log") and parse only stdout. Its --file is relative to --workspace; do not repeat the Lean project prefix.\n';
 }
 

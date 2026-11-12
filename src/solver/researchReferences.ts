@@ -35,12 +35,20 @@ export function researchReferenceIssues(value: unknown, source: CooperativeTask,
 }
 
 export function researchSourceContract(source?: CooperativeTask['researchSource']) {
+  const publicWorkflow = 'For the exact consumer gap, reuse saved source snapshots and pinned library results first. ' +
+    'If the missing mechanism remains unresolved, proactively search permitted public literature using public mathematical terms, theorem names or author/title identifiers; ' +
+    'omit internal task IDs, OAI namespaces and local paths from public queries. ' +
+    'Read the relevant proof section and check assumptions before adapting its result. ' +
+    'Use actual terms or references from a relevant passage for the next query, keeping the original gap in scope. ' +
+    'Distinguish provider failure, irrelevant hits and an empty successful search. ' +
+    'Record the public URL, retrieval time and exact section/theorem/lines in the saved snapshot; state abstract/proof-section/full-text scope in locator and retain the remaining inference. ' +
+    'When repeated queries add no new evidence, save the scoped result and change that search branch; this does not establish global absence.';
   return { source: source ?? 'choose-for-current-gap',
     allowedSources: researchSourceKinds,
     workflow: source === 'mathlib' ? 'Search the pinned source corpus and confirm exact types and imports with Lean.' :
       source === 'verified-library' ? 'Search the frozen knowledge catalog and installed declaration index before proposing a missing helper.' :
-        source === 'public-literature' ? 'Use the permitted reference tools; record the public URL and theorem or section in the saved snapshot. State in locator whether you read an abstract, a proof section or full text. Read the relevant proof before ruling out its route; an abstract or failed search cannot establish that no usable proof exists.' :
-          'Select pinned Mathlib, an installed verified module, or permitted public literature for the current gap.',
+        source === 'public-literature' ? publicWorkflow :
+          'Select pinned Mathlib, an installed verified module, or permitted public literature for the current gap. ' + publicWorkflow,
     output: 'sourceUses:[{kind,reference,locator,assumptions,adaptation,consumer:{taskId,taskDigest},lemmaRequestIds,remaining}]',
     acceptance: 'advisory-reference-requiring-current-consumer-check',
     sourcePolicy: 'Exclude OpenAI Math benchmark answers, previous benchmark solver answers, forks, mirrors, archives and cached copies. A source claim never proves its adaptation.' };

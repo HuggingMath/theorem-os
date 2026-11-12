@@ -185,7 +185,7 @@ def configure_run_directory(argv):
         if len(args) < 2 or not args[1]:
             raise ValueError('reference_run_directory_required: --run-dir requires an absolute worker-local directory')
         run_directory, args = args[1], args[2:]
-    if not args or args[0] in ('-h', '--help'):
+    if not args or any(arg in ('-h', '--help') for arg in args):
         return args
     run_directory = run_directory or os.environ.get('DRBENCH_RUN_DIR') or os.environ.get('DEEP_RESEARCH_RUN_DIR')
     if not run_directory or not Path(run_directory).is_absolute():
