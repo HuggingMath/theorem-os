@@ -59,6 +59,12 @@ def phrases(query):
     return list(dict.fromkeys(filter(None, groups)))[:4]
 
 
+def topic_words(query):
+    # With no explicit object or reliable noun boundary, a short prefix keeps a
+    # broader query attached to its original topic instead of isolated modifiers.
+    return list(dict.fromkeys(words(query)[:2]))
+
+
 def query_plan(query, target=None):
     # Start with the caller's question. Heuristic phrase boundaries only inform
     # explicitly broader fallbacks, never rewrite the primary provider request.
@@ -70,14 +76,17 @@ def query_plan(query, target=None):
         return []
     groups = phrases(query)
     concept = groups[0] if groups else " ".join(words(query)[:3])
-    subject = subject or (groups[1] if len(groups) > 1 else "")
-    quote = lambda value: '"' + value + '"'
     explicit = explicit_phrases(query)
+    inferred = head_phrases(query)
+    subject = subject or (groups[1] if len(groups) > 1 and (explicit or inferred) else "")
+    quote = lambda value: '"' + value + '"'
     candidates = [("original", primary)]
     if concept:
         candidates.append(("concept-only", quote(concept) if explicit else concept))
     if subject:
         candidates.append(("subject-only", quote(subject) if target or explicit else subject))
+    elif not explicit and not inferred:
+        candidates.append(('topic-only', ' '.join(topic_words(query))))
     queries, seen = [], set()
     for stage, value in candidates:
         if value and value not in seen:
@@ -117,9 +126,14 @@ def relevance(card, query, target=None):
     concept = singular(concept)
     concept_match = bool(concept) and concept <= text
     subject_match = all(singular(subject) <= text for subject in subjects)
-    level = "matching" if concept_match and subject_match else "background" if concept_match and _academic(card) else "low"
+    topic = singular(topic_words(query))
+    partial_topic = (not explicit and not target and not heads and _academic(card) and
+                     len(topic) == 2 and topic <= text and not concept_match)
+    level = "matching" if concept_match and subject_match else "background" if _academic(card) and (concept_match or partial_topic) else "low"
     card["relevance"] = level
     card["relevance_reasons"] = ([] if concept_match else ["concept_not_matched"]) + ([] if subject_match else ["research_subject_not_matched"])
+    if partial_topic:
+        card['relevance_reasons'].append('partial_topic_only')
     return card
 
 
@@ -247,7 +261,7 @@ def install(research):
     research._rank_discovery = rank
     original_gaps = research._recall_gaps
 
-    def gaps(cards, query, limit, target=None):
+    def coverage_gaps(cards, query, limit, target=None):
         labelled = [relevance(card, query, target) for card in cards if permitted(card)]
         useful = rank([card for card in labelled if card["relevance"] != "low"], query, len(labelled), target)
         result = original_gaps(useful, query, limit, target)
@@ -263,6 +277,19 @@ def install(research):
             result = [gap for gap in result if gap not in (
                 'need_terms_missing_from_results', 'similar_titles_require_read')]
         return list(dict.fromkeys(result))
+
+    def background_ready(cards, query, limit, target=None):
+        if target or explicit_phrases(query) or head_phrases(query):
+            return False
+        candidates = rank([card for card in cards if permitted(card)], query, len(cards), target)
+        readable = [card for card in candidates if card['relevance'] == 'matching' or
+                    'partial_topic_only' in card['relevance_reasons']]
+        return len(readable) >= 2 and any('partial_topic_only' in card['relevance_reasons'] for card in readable)
+
+    def gaps(cards, query, limit, target=None):
+        # This hook controls automatic provider fan-out. Public coverage remains
+        # partial until proof text verifies the missing qualifiers.
+        return [] if background_ready(cards, query, limit, target) else coverage_gaps(cards, query, limit, target)
 
     research._recall_gaps = gaps
     original_direct = research._search_direct
@@ -329,8 +356,19 @@ def install(research):
     original_execute = research._search_base_execute
 
     def execute(query, limit, mode, artifact, target):
-        return {**original_execute(query, limit, mode, artifact, target),
-                "research_target": target, "research_limit": limit}
+        result = original_execute(query, limit, mode, artifact, target)
+        execution = research._ACTIVE_SEARCH.get()
+        if execution and execution.providers.recovering:
+            # Recovery retries recorded failures before routing. Newly recovered
+            # background from the first provider can skip the old direct branch;
+            # retain its successfully retried academic cards without any new IO.
+            records = execution.providers
+            recovered = [card for key, row in records.records.items()
+                         if key in records.retried and row['provider'] in ('arxiv', 'openalex')
+                         and row['status'] == 'ok' for card in row['output']]
+            if recovered:
+                result['results'] = rank(result.get('results', []) + recovered, query, limit, target)
+        return {**result, 'research_target': target, 'research_limit': limit}
 
     research._search_base_execute = execute
 
@@ -341,19 +379,26 @@ def install(research):
             # search question against which to assess relevance.
             return {**original_public(result), "campaign_reference_adapter_sha256": identity}
         labelled = [relevance(card, query, target) for card in result.get("results", [])]
-        output = original_public({**result, "results": labelled})
+        limit = result.get('research_limit', 2)
+        remaining = coverage_gaps(labelled, query, limit, target)
+        paused = background_ready(labelled, query, limit, target)
+        output = original_public({**result, "results": labelled,
+                                  'recall_checks': {**result.get('recall_checks', {}), 'remaining_gaps': remaining}})
         output["low_relevance_results"] = [row for row in output["results"] if row["relevance"] == "low"]
         output["results"] = [row for row in output["results"] if row["relevance"] != "low"]
         output["relevance_summary"] = {level: sum(row["relevance"] == level for row in labelled) for level in ("matching", "background", "low")}
         covered = set(words(' '.join(str(card.get(key) or '') for card in labelled for key in ('title', 'snippet'))))
         output["recall_checks"] = {**output.get("recall_checks", {}),
-                                   "remaining_gaps": gaps(labelled, query, result.get('research_limit', 2), target),
+                                   "remaining_gaps": remaining,
                                    "unmatched_query_terms": sorted(set(words(query)) - covered),
+                                   "automatic_discovery_paused_for_reading": paused,
                                    "note": "Discovery checks guide candidate selection only. Read the proof text to verify all requested hypotheses and bounds; unmatched snippet terms remain unverified."}
         output["campaign_reference_adapter_sha256"] = identity
         if output["recall_checks"]["remaining_gaps"] and labelled:
             output["status"] = "partial"
         output["next_action"] += " Low-relevance cards are separated from literature results. Background papers may not concern the research object; failed or bounded searches do not establish absence of a theorem."
+        if paused:
+            output['next_action'] += ' Read the saved topic papers before more discovery; their background relevance does not verify the missing hypotheses or bounds.'
         return output
 
     research._public_leads = public

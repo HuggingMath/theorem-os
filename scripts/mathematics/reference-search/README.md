@@ -26,6 +26,19 @@ Missing quoted objects, explicit targets, and insufficient distinct documents
 still cause discovery to continue. Cached failed-request recovery replays old
 successful branches as needed without adding new requests.
 
+For an unquoted long query without a reliable noun boundary or explicit target,
+academic cards that match both leading topic words can remain `background`
+with `partial_topic_only`, even when they lack the full core concept. Two
+distinct readable topic documents can pause automatic discovery for reading;
+the public status stays `partial`, missing coverage stays visible, and
+`automatic_discovery_paused_for_reading` records the decision. Single documents,
+aliases, ordinary web overlap and held sources cannot satisfy this condition.
+The last broader query keeps the original two-word topic instead of an isolated
+middle slice. Explicit quoted objects and targets keep their existing rules.
+When restored background results skip an old direct branch, successfully
+retried academic cards are still merged from the recorded execution; recovery
+does not issue new provider requests.
+
 arXiv abs/pdf/html aliases share a result slot only for the same explicit
 version. Unversioned references, v1 and v3 remain distinct even when a title or
 journal DOI matches. Non-arXiv DOI aliases and identical long titles with matching
@@ -43,6 +56,10 @@ saved source metadata. The existing HTTP/response/read budgets still apply.
 
 The existing campaign answer-source ban surrounds discovery and reading,
 including encoded URLs, redirect destinations, and source-cache metadata.
+This includes the observed `openai-math-explorer` mirror namespace. Source,
+resolved/citation identities and known alternate locations use the same guard,
+including before a cached body is opened; unrelated academic pages on the same
+host remain available.
 The versioned `reference-source-provenance.json` registry separately holds public
 identities whose permitted provenance remains unresolved. URI/DOI aliases are
 compared before search cards receive REFs, before requests (including redirects),
@@ -110,6 +127,8 @@ bunx vitest run tests/campaignReference.test.ts
   --bundle /path/to/new/reference-tools --output /path/to/reader-replay.json
 /path/to/dependency-complete/python -B tests/campaign_reference_efficiency_replay.py \
   --bundle /path/to/new/reference-tools --output /path/to/efficiency-replay.json
+/path/to/dependency-complete/python -B tests/campaign_reference_topic_replay.py \
+  --bundle /path/to/new/reference-tools --output /path/to/topic-replay.json
 ```
 
 The final replay disables sockets and supplies saved XML / mock provider results.

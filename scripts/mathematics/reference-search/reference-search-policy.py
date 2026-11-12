@@ -15,7 +15,7 @@ FORBIDDEN_LOCAL_ROOTS = (
     Path('/home/lzh/reports/openai-math-difficulty-2026-10-22/sources'),
 ) + tuple(Path(root).expanduser().resolve() for root in CONFIG.get('forbiddenLocalRoots', []))
 REPOSITORY = re.compile(r'(?:^|[/\s:=?&])openai/math(?:$|[/\s.?#&])', re.I)
-REPOSITORY_ALIAS = re.compile(r'/openai[-_]math(?:$|[/._?#&])', re.I)
+REPOSITORY_ALIAS = re.compile(r'/openai[-_]math(?:[-_]explorer)?(?:$|[/._?#&])', re.I)
 LABELLED_ANSWERS = re.compile(
     r'\bopenai[ _-]+math\b.{0,100}\b(?:answers?|solutions?|benchmark|mirror|fork)\b|'
     r'\b(?:answers?|solutions?|mirror|fork)\b.{0,100}\bopenai[ _-]+math\b|'
@@ -32,14 +32,21 @@ def decoded_source(source):
     return value.replace('\\', '/')
 
 
-def source_identifiers(source, metadata=None):
-    """Compare public identifiers without dereferencing a DOI or opening a body."""
+def source_values(source, metadata=None):
+    """Known source locations, without resolving links or reading document text."""
     values = [source]
     metadata = metadata or {}
-    values.extend(metadata.get(key, '') for key in ('url', 'resolved_url', 'citation_url', 'doi', 'openalex_id'))
-    values.extend(row.get('url', '') for row in metadata.get('alternate_sources') or [] if isinstance(row, dict))
+    values.extend(metadata[key] for key in ('url', 'resolved_url', 'citation_url', 'doi', 'openalex_id')
+                  if metadata.get(key))
+    values.extend(row['url'] for row in metadata.get('alternate_sources') or []
+                  if isinstance(row, dict) and row.get('url'))
+    return values
+
+
+def source_identifiers(source, metadata=None):
+    """Compare public identifiers without dereferencing a DOI or opening a body."""
     identifiers = set()
-    for value in values:
+    for value in source_values(source, metadata):
         value = decoded_source(value)
         doi = re.fullmatch(r'(?:doi:\s*|https?://(?:www\.)?(?:dx\.)?doi\.org/)?(10\.\d{4,9}/[^\s?#]+)(?:[?#].*)?', value, re.I)
         if doi:
@@ -93,7 +100,7 @@ def forbidden_source(source, label=''):
 
 
 def require_permitted(source, label='', metadata=None):
-    if forbidden_source(source, label):
+    if any(forbidden_source(value, label) for value in source_values(source, metadata)):
         raise PermissionError('reference_source_forbidden: OpenAI Math answers, copies and mirrors are excluded')
     if unverified_source(source, metadata):
         raise PermissionError('reference_source_provenance_unverified: establish permitted provenance from metadata before reading')
@@ -101,8 +108,7 @@ def require_permitted(source, label='', metadata=None):
 
 def candidate_source_status(row):
     label = str(row.get('title', '')) + ' ' + str(row.get('snippet', ''))
-    sources = [row.get('url', ''), *(item.get('url', '') for item in row.get('alternate_sources') or [] if isinstance(item, dict))]
-    if any(forbidden_source(source, label) for source in sources):
+    if any(forbidden_source(source, label) for source in source_values(row.get('url', ''), row)):
         return 'forbidden', None
     provenance = unverified_source(row.get('url', ''), row)
     return ('unverified', provenance) if provenance else ('permitted', None)
@@ -143,9 +149,6 @@ def install_source_policy(research):
         metadata_file = folder / (f'{version}.json' if version else 'metadata.json')
         if metadata_file.exists():
             metadata = json.loads(metadata_file.read_text())
-            for key in ('url', 'resolved_url', 'citation_url'):
-                if metadata.get(key):
-                    require_permitted(metadata[key], metadata.get('title', ''), metadata)
             require_permitted('', metadata.get('title', ''), metadata)
         return original_load(ref, version, run_root=run_root)
 
