@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SolverRunState } from '../src/solver/archive';
 import type { CooperativeResearch } from '../src/solver/cooperation';
 import type { ResearchWorker } from '../src/solver/modules/organization';
+import { buildResearchContext, finalizeResearchDispatch } from '../src/solver/modules/context';
+import { parseLeadPlan } from '../src/solver/cooperationShared';
 import { committedSource, commitSolverSources, type SolverProblem } from '../src/solver/problem';
 import { advisoryCheckpointScope } from '../src/solver/research';
 import { leadPlanDeliveryFile, parseCooperationPlan, taskVersion, type CooperativeAction, type CooperativeTask } from '../src/solver/tasks';
@@ -314,6 +316,74 @@ describe('Lead scheduling checkpoint control responses', () => {
     expect(await cooperative.next(workers[0], budget)).toBeUndefined();
     expect(events.some(item => item.event === 'plan_stalled')).toBe(true);
     expect(pendingProposals()).toHaveLength(1);
+  });
+
+  it('reopens a stalled graph when only its decision response is corrected', async () => {
+    for (const node of state.cooperation!.tasks) node.task.status = 'paused';
+    state.cooperation!.deliveries!.push({ ...state.cooperation!.deliveries![0], id: 'second-delivery' });
+    const incomplete = (reason: string) => ({ ...graph(), researchDecisions: [{
+      deliveryId: 'proposal-delivery', outcome: 'decline', reason,
+    }] });
+    const first = await start(planText(incomplete('The proposed bridge does not yet apply.')));
+    await checkpoint(first);
+    expect(state.cooperation!.planRejection).toMatchObject({ stalled: false,
+      error: 'math_plan_research_decisions_missing: second-delivery' });
+    const correction = incomplete('The proposed bridge needs an additional uniformity hypothesis.');
+    const second = await start(planText(correction));
+    await checkpoint(second);
+    // A changed decision is not deduplicated merely because the graph and remaining error are unchanged.
+    expect(state.cooperation!.planRejection).toMatchObject({ stalled: false });
+    const repeated = await start(planText(correction));
+    await checkpoint(repeated);
+    expect(state.cooperation!.planRejection).toMatchObject({ stalled: true });
+    expect(await cooperative.next(workers[0], budget)).toBeUndefined();
+    write({ ...correction, researchDecisions: [...correction.researchDecisions, {
+      deliveryId: 'second-delivery', outcome: 'decline', reason: 'This independent finding has the same missing hypothesis.',
+    }] });
+    const resumed = await cooperative.next(workers[0], budget);
+    if (resumed?.kind !== 'lead') throw new Error('fixture_expected_corrected_decision_dispatch');
+    expect(cooperative.started(workers[0], resumed)).toBe(true);
+    cooperative.activate(workers[0], resumed, async () => {}, notify);
+    await checkpoint(resumed);
+    expect(state.cooperation!.researchDecisions?.map(record => record.deliveryId)).toEqual(['proposal-delivery', 'second-delivery']);
+    expect(state.cooperation!.error).toBeUndefined();
+    expect(state.cooperation!.planRejection).toBeUndefined();
+    expect(state.cooperation!.tasks.every(node => !node.proof && !node.integratedCheck)).toBe(true);
+  });
+
+  it('presents simultaneous current research and progress answers in one mandatory response object', async () => {
+    const action = await start();
+    const progress = state.cooperation!.goalProgress!;
+    progress.pending = { id: 'current-progress-review', at: Date.now(),
+      goalKeys: progress.goals.map(goal => goal.key), goalIds: progress.goals.map(goal => goal.taskId!) };
+    (cooperative as any).presentedGoalProgress.set(action, progress.pending.id);
+    const context = buildResearchContext(problem, { ...state, cooperation: cooperative.contextState(action, workers[0]) }, {
+      root: directory, worktree: workers[0].worktree, environment: {}, taskText: 'Prove the frozen original targets.',
+      retrievalRoot: directory, maxOptionalContextBytes: 0, assignment: action,
+      frozenContexts: Object.fromEntries(problem.ownedFiles.filter(file => file.endsWith('.lean')).map(file =>
+        [file, fs.readFileSync(path.join(workers[0].worktree, problem.projectRelative, file), 'utf8')])),
+    });
+    for (const continuation of [false, true]) {
+      const dispatch = finalizeResearchDispatch(context, { continuation });
+      const matched = dispatch.message.match(/Current response template[^\n]*\n([^\n]+)\n/u);
+      expect(matched).not.toBeNull();
+      const response = JSON.parse(matched![1]);
+      expect(response).toMatchObject({ baseVersion: action.planVersion, upsert: [],
+        researchDecisions: [{ deliveryId: 'proposal-delivery' }],
+        progressReview: { id: progress.pending.id, nextChecks: [{
+          action: expect.any(String), objective: expect.any(String), expectedEvidence: expect.any(String), targetTaskId: expect.any(String),
+        }] } });
+      expect(response.researchDecisions[0].outcome).toContain('<choose');
+      // The host supplies shape and exact identities, never a mathematical judgment.
+      expect(() => parseLeadPlan(problem, response, (cooperative as any).planPatchBase())).toThrow('math_plan_progress_review_invalid');
+      expect(dispatch.manifest.included).toContainEqual(expect.objectContaining({ id: 'lead-decision-requirements', required: true }));
+      expect(dispatch.manifest.optionalBytes).toBe(0);
+    }
+    write({ ...graph(), ...decide('decline') });
+    await cooperative.pulse();
+    expect(notify.mock.calls.at(-1)?.[0]).toContain('math_plan_progress_review_missing');
+    expect(state.cooperation!.goalProgress!.pending?.id).toBe(progress.pending.id);
+    expect(state.cooperation!.researchDecisions).toBeUndefined();
   });
 
   it('does not let a saved pause or completed-input digest hide an unanswered finding', async () => {

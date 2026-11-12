@@ -91,6 +91,10 @@ describe('scoped next check lifecycle', () => {
     expect(f.state.cooperation!.tasks.find(node => node.task.id === f.record.taskId)?.status).toBe('completed');
     expect(f.state.cooperation!.tasks.find(node => node.task.id === 'construction')?.status).toBe('running');
     const lead = await f.leadDecision();
+    const template = JSON.parse(lead.view.leadDecisionInstruction!.match(/Current response template[^\n]*\n([^\n]+)\n/u)![1]);
+    expect(template).toMatchObject({ baseVersion: lead.leadAction.planVersion, upsert: [],
+      nextCheckDecisions: [{ checkId: f.record.id, outcomeDeliveryId: f.record.outcome!.deliveryId }] });
+    expect(template.nextCheckDecisions[0].action).toBe('<choose continue, revise or stop>');
     await lead.publish([{ checkId: f.record.id, outcomeDeliveryId: f.record.outcome!.deliveryId, action: 'stop', reason: 'Try another route before spending more effort on this construction.' }]);
     expect(f.state.cooperation!.planPublicationRejection).toBeUndefined();
     expect(f.record).toMatchObject({ status: 'decided', decision: { action: 'stop' } });

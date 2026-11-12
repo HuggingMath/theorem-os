@@ -24,6 +24,7 @@ import { recordHumanGuidanceDecisions } from './humanGuidance';
 /** Worker delivery intake. */
 export abstract class CooperationInputs extends CooperationPlanning {
   abstract leadCheckpointInstruction(action: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>): string;
+  protected abstract leadDecisionObligations(action?: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>): { any: boolean };
   protected guidancePulse?: Promise<void>;
   protected async retainGuidanceDecisions(worker: ResearchWorker, action: CooperativeAction, decisions: unknown) {
     if (decisions === undefined || isStatementAction(action)) return;
@@ -179,7 +180,13 @@ export abstract class CooperationInputs extends CooperationPlanning {
       } catch { /* An inherited notes-only seed has no control response. */ }
       this.leadDraftBaselines.set(action, baseline);
     }
-    if (this.leadDraftBaselines.get(action) === digest) return;
+    if (this.leadDraftBaselines.get(action) === digest) {
+      const rejection = this.archive.planRejection;
+      // An accepted seed is not a new response. A previously rejected draft still owes its
+      // correction in this dispatch, even when the writer has not changed the saved response yet.
+      if (!this.leadDecisionObligations(action).any || !rejection || rejection.error !== this.archive.error ||
+          rejection.proposalDigest !== this.proposedPlanDigest()) return;
+    }
     try {
       const plan = parseLeadPlan(this.input.state.problem, response, this.planPatchBase(), { goalPath: this.goalPathReview() });
       this.preparePlan(plan, action);
@@ -346,7 +353,7 @@ export abstract class CooperationInputs extends CooperationPlanning {
       this.planPublicationNotification = rejection;
       const pending = Promise.resolve().then(async () => {
         if (this.archive.planPublicationRejection !== rejection || !open()) return;
-        await active.notify(leadPlanPublicationFeedback(action, this.archive)!);
+        await active.notify(leadPlanPublicationFeedback(action, this.archive)! + ' ' + this.leadCheckpointInstruction(action));
       }).catch(() => {
         if (this.planPublicationNotification === rejection) this.planPublicationNotification = undefined;
         this.input.emit('notification_deferred', { workerId: this.lead.id, file, offset: rejection.offset });

@@ -289,7 +289,7 @@ function requiredTasks(input: TaskContextInput, omitted: ContextManifest['omitte
 
 function taskRecordReference(node: TaskRecord) {
   return { id: node.task.id, taskDigest: taskVersion(node.task), recordDigest: mathDigest(canonicalMathJson(node)),
-    kind: node.task.kind, status: node.status, control: node.task.status ?? 'active', groupId: taskGroup(node.task),
+    kind: node.task.kind, status: node.task.status ?? 'active', executionStatus: node.status, groupId: taskGroup(node.task),
     owner: node.assignment?.workerId ?? node.task.ownerId, dependsOn: node.task.dependsOn,
     theoremName: node.task.theoremName, proofPath: node.task.proofPath };
 }
@@ -521,7 +521,8 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
   }
   const references = evidenceReferenceDictionary();
   const graph = tasks.map(node => ({ ...leadTaskInterface(node, action, omitted), taskDigest: taskVersion(node.task),
-    status: node.status, attempts: node.attempts, groupId: taskGroup(node.task), producer: node.assignment?.workerId,
+    status: node.task.status ?? 'active', executionStatus: node.status,
+    attempts: node.attempts, groupId: taskGroup(node.task), producer: node.assignment?.workerId,
     sharing: node.task.sharing ?? 'problem',
     integratedCommit: node.integratedCheck ? null : undefined, checkedSourceDigest: node.integratedCheck ? null : undefined,
     ...(node.task.kind === 'goal' ? { exactFrozenHeader: frozenHeader(problem, node) } : {}),
@@ -536,7 +537,8 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
   if (action) mandatory.push(section('assignment', 'assignment', 'Cooperative assignment:', action));
   if (consumers.length) mandatory.push(section('consumer-interfaces', 'interfaces',
     'Planned consumer interfaces (read-only mathematical purpose; not premises, proof evidence or permission to edit consumers):',
-    consumers.map(consumer => ({ ...consumer.task, taskDigest: consumer.taskDigest, status: consumer.status, uses: consumer.uses,
+    consumers.map(consumer => ({ ...consumer.task, taskDigest: consumer.taskDigest,
+      status: consumer.task.status ?? 'active', executionStatus: consumer.status, uses: consumer.uses,
       ...(consumer.task.kind === 'goal' ? { exactFrozenHeader: frozenHeader(problem, consumer) } : {}) }))));
   if (input.feedback) mandatory.push(section('current-feedback', 'feedback',
     'Current host feedback (preserve the frozen original problem):', input.feedback));
@@ -700,7 +702,7 @@ export function compileTaskContext(input: TaskContextInput): { message: string; 
       savedSource: findingSources.get(node.task.id),
     }), priority: priority + 1 });
     if (!required.has(node.task.id) && !consumerIds.has(node.task.id) && !deferredIds.has(node.task.id)) optional.push({ ...section(`interface:${node.task.id}`, 'interfaces', 'Other visible task (advisory planning context):',
-      { ...node.task, taskDigest: taskVersion(node.task), status: node.status }), priority: priority + 8 });
+      { ...node.task, taskDigest: taskVersion(node.task), status: node.task.status ?? 'active', executionStatus: node.status }), priority: priority + 8 });
   }
   for (const route of input.cooperation?.proofRoutes ?? []) {
     if (route.id === selectedRoute?.id) continue;

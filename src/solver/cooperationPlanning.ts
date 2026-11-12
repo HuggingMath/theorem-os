@@ -15,7 +15,7 @@ import { keepRespacedObjectives, taskGroup, taskVersion, taskProofContractVersio
   type CooperativeAction } from './tasks';
 import { digest, HumanEditRecord, InitialPlanPublication, RETRY_DISPATCH, DispatchResult, bounded, deliveryInputFields, readCooperationPlan,
   type LeadPlan } from './cooperationShared';
-import { formatPlanJson, type PlanPatchBase } from './planPatch';
+import { formatPlanJson, liftNestedPlanPatch, type PlanPatchBase } from './planPatch';
 import { collapseTaskFamilies } from './taskFamilies';
 import { dropLeadWakes, LEAD_MAX_BACKOFF } from './leadWakes';
 import { CooperationIntegration } from './cooperationIntegration';
@@ -162,10 +162,14 @@ export abstract class CooperationPlanning extends CooperationIntegration {
   }
   protected proposedPlanDigest(source?: string) {
     try {
-      const { tasks, groups, proofRoutes, upsert, remove, baseVersion } = source === undefined
-        ? block(this.lead.worktree, 'math-plan') : parseMathResponse(source, 'math-plan');
+      const { tasks, groups, proofRoutes, upsert, remove, baseVersion, goalPath, progressReview,
+        researchDecisions, nextCheckDecisions, guidanceDecisions } = liftNestedPlanPatch(source === undefined
+        ? block(this.lead.worktree, 'math-plan') : parseMathResponse(source, 'math-plan')) as Record<string, unknown>;
       const revision = upsert !== undefined || remove !== undefined;
-      return mathDigest(canonicalMathJson({ tasks, groups, proofRoutes, ...(revision ? { upsert, remove, baseVersion } : {}) }));
+      // A decision-only correction is a changed response even when its task graph stays the same.
+      // Publication nonces and prose are not part of the decision and cannot reopen an unchanged rejection.
+      return mathDigest(canonicalMathJson({ tasks, groups, proofRoutes, ...(revision ? { upsert, remove, baseVersion } : {}),
+        goalPath, progressReview, researchDecisions, nextCheckDecisions, guidanceDecisions }));
     } catch {
       if (source !== undefined) return mathDigest(source);
       // A notes-only commit must not make an identical malformed response new input.

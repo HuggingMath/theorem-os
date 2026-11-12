@@ -9,6 +9,7 @@ import { runInspectionSnapshot } from '../src/solver/inspection';
 import { directSolverModules } from '../src/solver/modules';
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import { captureObligationSnapshot } from '../src/solver/obligationProgress';
+import { TIMED_EXPLORATION_MIN_REMAINING_MS } from '../src/solver/capacityExploration';
 import { commitSolverSources, type SolverProblem } from '../src/solver/problem';
 import { taskVersion, type CooperativeAction } from '../src/solver/tasks';
 import { deferred } from './helpers/async';
@@ -174,19 +175,37 @@ describe('critical-dependency scheduling during host work', () => {
   it.each([
     { name: 'less than thirty minutes idle', idle: 29 * 60_000 },
     { name: 'only one unanswered wake', wakes: 1 },
-    { name: 'a deciding Lead after the wakes', decided: true },
     { name: 'a finite turn budget', maxTurns: 50 },
-    { name: 'less than thirty minutes remaining', remainingMs: 29 * 60_000 },
-    { name: 'a running Lead', leadRunning: true },
+    { name: 'less than the minimum solving time remaining', remainingMs: TIMED_EXPLORATION_MIN_REMAINING_MS - 1 },
   ])('keeps the narrow gate with $name', async scenario => {
     idleFor(first, scenario.idle ?? 31 * 60_000); unanswered(scenario.wakes ?? 2);
-    if (scenario.decided) state.cooperation!.leadDecisionBasisAt = Date.now() - 60_000;
-    if (scenario.leadRunning) {
-      const leadAction = (cooperative as any).leadDecision(lead, problem.baseCommit, (cooperative as any).planningInputDigest());
-      activate(lead, leadAction);
-    }
     await waitFor(first, { maxTurns: scenario.maxTurns ?? Infinity, remainingMs: scenario.remainingMs ?? Infinity });
     expect(overlays()).toHaveLength(0); expect(state.cooperation!.capacityExplorationInputs).toBeUndefined();
+  });
+
+  it.each(['a deciding Lead after the wakes', 'a running Lead'] as const)
+  ('supplies advisory work to the same continuously idle peer alongside %s', async scenario => {
+    idleFor(first); unanswered();
+    const version = state.cooperation!.planVersion,
+      snapshot = captureObligationSnapshot(state.cooperation!.tasks, { groups: state.cooperation!.groups,
+        environmentDigest: state.environmentDigest });
+    let leadAction: CooperativeAction | undefined;
+    if (scenario === 'a deciding Lead after the wakes') state.cooperation!.leadDecisionBasisAt = Date.now() - 60_000;
+    else {
+      leadAction = (cooperative as any).leadDecision(lead, problem.baseCommit, (cooperative as any).planningInputDigest());
+      activate(lead, leadAction!);
+    }
+    const exploration = await cooperative.next(first, budget);
+    if (exploration?.kind !== 'task') throw new Error('fixture_expected_exploration');
+    expect(node(exploration.task.id).capacityExploration).toMatchObject({ focus: 'decomposition', targetTaskId: 'busy_helper' });
+    expect(events.filter(item => item.event === 'capacity_exploration_requested')).toEqual([
+      expect.objectContaining({ details: expect.objectContaining({ gate: 'timed-idle', evidenceStatus: 'advisory' }) }),
+    ]);
+    expect(state.cooperation!.planVersion).toBe(version);
+    expect(captureObligationSnapshot(state.cooperation!.tasks, { groups: state.cooperation!.groups,
+      environmentDigest: state.environmentDigest })).toEqual(snapshot);
+    if (leadAction) expect(cooperative.current(leadAction)).toBe(true);
+    expect(host.verify).not.toHaveBeenCalled();
   });
 
   it('keeps a frozen host proof busy and goal-active, wakes the idle Lead, and releases occupancy on completion', async () => {
@@ -299,7 +318,11 @@ describe('critical-dependency scheduling during host work', () => {
     const decision = await cooperative.next(lead, budget);
     expect(decision?.kind).toBe('lead');
     expect(state.cooperation!.planApproval?.guidanceIds).toEqual(['approval-revision']);
-    await waitFor(lead); await waitFor(first);
+    activate(lead, decision!);
+    await cooperative.pulse(lead.id); await cooperative.pulse(lead.id);
+    await waitFor(first);
+    expect(guidance()[0]).toMatchObject({ status: 'delivered', deliveredTo: [lead.id] });
+    expect(cooperative.current(decision!)).toBe(true);
     expect(record(first).scheduling?.wait?.stage).toBe('plan-approval');
     expect(events.filter(item => item.event === 'plan_approval_revision')).toHaveLength(1);
   });

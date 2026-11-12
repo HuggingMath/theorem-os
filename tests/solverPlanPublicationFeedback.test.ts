@@ -7,7 +7,7 @@ import type { CooperativeResearch } from '../src/solver/cooperation';
 import { directSolverModules } from '../src/solver/modules';
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import type { SolverProblem } from '../src/solver/problem';
-import { leadPlanDeliveryFile, parseCooperationPlan, type CooperativeAction, type CooperativeTask } from '../src/solver/tasks';
+import { leadPlanDeliveryFile, parseCooperationPlan, taskVersion, type CooperativeAction, type CooperativeTask } from '../src/solver/tasks';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 
@@ -179,6 +179,37 @@ describe('live Lead publication correction feedback', () => {
       expect(state.check).toBeUndefined();
       expect(state.cooperation!.tasks.every(node => !node.proof && !node.integratedCheck)).toBe(true);
     });
+
+  it('includes the current research decision template in a rejected event notice and accepts its same-dispatch correction', async () => {
+    prepare();
+    const question = state.cooperation!.tasks.find(node => node.task.id === 'question')!;
+    question.status = 'completed';
+    state.cooperation!.deliveries = [{ id: 'current-research-finding', producer: workers[2].id,
+      taskId: question.task.id, taskDigest: taskVersion(question.task), kind: 'research', status: 'advisory',
+      summary: 'The exact bridge awaits a Lead decision.', statement: '', premises: [], dependencies: [],
+      remainingObligations: [], evidenceRefs: [], createdAt: 1, lemmaRequests: [helper] }];
+    const action = await start();
+    await publish(action, event(action));
+    expect(rejected()).toHaveLength(1);
+    expect(rejected()[0].details!.reason).toContain('math_plan_research_decisions_missing');
+    expect(notify).toHaveBeenCalledOnce();
+    const message = notify.mock.calls[0][0];
+    expect(message).toContain('Current response template');
+    const template = JSON.parse(message.split('the template itself is not a valid submission):\n')[1].split('\n')[0]);
+    expect(template).toMatchObject({ baseVersion: action.planVersion, upsert: [],
+      researchDecisions: [{ deliveryId: 'current-research-finding' }] });
+    expect(state.cooperation!.researchDecisions).toBeUndefined();
+    expect(state.cooperation!.planPublication).toBeUndefined();
+    await publish(action, { ...event(action), researchDecisions: [{ deliveryId: 'current-research-finding',
+      outcome: 'adopt', taskIds: [helper.id], reason: 'This exact helper closes the consumer obligation.' }] });
+    expect(notify).toHaveBeenCalledOnce();
+    expect(rejected()).toHaveLength(1);
+    expect(state.cooperation!.planPublicationRejection).toBeUndefined();
+    expect(state.cooperation!.planPublication).toMatchObject({ nonce: nonce(action) });
+    expect(state.cooperation!.researchDecisions).toContainEqual(expect.objectContaining({
+      deliveryId: 'current-research-finding', outcome: 'adopt' }));
+    expect(state.cooperation!.tasks.every(node => !node.proof && !node.integratedCheck)).toBe(true);
+  });
 
   it('retries a failed notice without rereading the rejected event or changing its saved cursor', async () => {
     prepare();

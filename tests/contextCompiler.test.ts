@@ -3,9 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { COMPACT_CONTEXT_SOURCE_BYTES, compileTaskContext, DEFAULT_OPTIONAL_TASK_CONTEXT_BYTES, DEFAULT_TASK_CONTEXT_BYTES,
   frozenSourceContext, type TaskContextInput } from '../src/solver/contextCompiler';
-import { buildResearchContext } from '../src/solver/modules/context';
+import { buildResearchContext, finalizeResearchDispatch } from '../src/solver/modules/context';
 import { cooperativeWorkContract } from '../src/solver/modules/contracts';
-import { hasTaskAcceptance, markTaskAcceptance, markTaskReferences, taskVersion, type CooperativeAction, type CooperativeTask, type TaskRecord } from '../src/solver/tasks';
+import { hasTaskAcceptance, markTaskAcceptance, markTaskReferences, parseCooperationPlan, taskVersion, type CooperativeAction, type CooperativeTask, type TaskRecord } from '../src/solver/tasks';
 import type { SolverProblem } from '../src/solver/problem';
 import type { SolverRunState } from '../src/solver/archive';
 import type { TaskProof } from '../src/solver/cooperativeProof';
@@ -901,7 +901,7 @@ it('expands shared source metadata for conditional and unconditional proofs with
   expect(graph[0].evidence.verification.targetCommit).toBe('d'.repeat(40));
   expect(expandedProofSource(graph[0]).commit).toBe(proofCommit);
   expect(graph[1].evidence.conditions).toEqual(withoutReferences.conditions);
-  expect(graph[1].status).toBe('conditional');
+  expect(graph[1]).toMatchObject({ status: 'active', executionStatus: 'conditional' });
 });
 
 it('shares identical reference metadata without conflating distinct source commits or changed input digests', () => {
@@ -1010,6 +1010,65 @@ const helperCatalog = (message: string): any[] => contextLine(message,
   'Checked helpers outside the current open-task closure (retrieve before using; recorded, not replayed):').helpers;
 const taskRecordIndex = (message: string): any[] => contextLine(message,
   'Other visible task records outside the current goal and requested-input closure (retrieve exact interfaces before use):').tasks;
+
+it('keeps displayed task policies valid for a plan while preserving independent execution states', () => {
+  const policies = [undefined, 'active', 'paused', 'stopped'] as const,
+    execution = ['pending', 'running', 'blocked', 'integrated'] as const;
+  const records = policies.map((status, index): TaskRecord => {
+    const task = { ...lemma(`policy_${index}`), ...(status ? { status } : {}) };
+    return index === 3 ? freshlyChecked(task) : { ...node(task), status: execution[index] };
+  });
+  records.push(originalGoal(records.map(record => record.task.id)));
+  const before = canonicalMathJson(records), context = compileTaskContext({ ...input(records, lead), maxOptionalContextBytes: 0 }),
+    graph = compiledGraph(context.message);
+  for (const record of records) expect(graph.find(row => row.id === record.task.id)).toMatchObject({
+    status: record.task.status ?? 'active', executionStatus: record.status,
+  });
+  const copied = parseCooperationPlan(problem, { tasks: graph });
+  expect(copied.tasks.map(task => task.status)).toEqual(['active', 'active', 'paused', 'stopped', 'active']);
+  for (const status of execution) expect(() => parseCooperationPlan(problem, {
+    tasks: graph.map(row => row.id === 'policy_0' ? { ...row, status } : row),
+  })).toThrow('Task policy status must be active, paused or stopped');
+  expect(canonicalMathJson(records)).toBe(before);
+});
+
+it('preserves policy and execution status in consumer and optional off-closure task interfaces', () => {
+  const helper = node(lemma('assigned_helper')),
+    consumer: TaskRecord = { ...originalGoal([helper.task.id]), status: 'running' },
+    optional: TaskRecord = { ...node({ ...lemma('other_task'), status: 'stopped' }), status: 'blocked' };
+  consumer.task = { ...consumer.task, status: 'paused' };
+  const context = compileTaskContext(input([helper, consumer, optional], assign(helper.task))),
+    consumers = contextLine(context.message,
+      'Planned consumer interfaces (read-only mathematical purpose; not premises, proof evidence or permission to edit consumers):'),
+    other = contextLine(context.message, 'Other visible task (advisory planning context):');
+  expect(consumers).toEqual([expect.objectContaining({ id: consumer.task.id, status: 'paused', executionStatus: 'running' })]);
+  expect(other).toMatchObject({ id: optional.task.id, status: 'stopped', executionStatus: 'blocked' });
+  expect(context.manifest.included).toContainEqual(expect.objectContaining({ id: 'consumer-interfaces', required: true }));
+  expect(helper).toMatchObject({ status: 'pending' });
+  expect(consumer).toMatchObject({ status: 'running', task: { status: 'paused' } });
+  expect(optional).toMatchObject({ status: 'blocked', task: { status: 'stopped' } });
+});
+
+it('names valid plan policies and separate execution states in full and warm Lead dispatches', () => {
+  const helper: TaskRecord = { ...node({ ...lemma('running_helper'), status: 'paused' }), status: 'running' },
+    goal = originalGoal([helper.task.id]), records = [helper, goal];
+  const context = buildResearchContext(problem, { cooperation: { tasks: records } } as unknown as SolverRunState, {
+    root: '/runtime', worktree: '/proof', environment: {}, taskText: 'Prove the original target',
+    retrievalRoot: '/library', assignment: { ...lead, planVersion: 'current-plan' },
+    frozenContexts: input([]).frozenContexts, maxOptionalContextBytes: 0,
+  });
+  for (const continuation of [false, true]) {
+    const dispatch = finalizeResearchDispatch(context, { continuation });
+    expect(dispatch.instructions).toContain('Plan task.status may be active, paused or stopped; omission means active.');
+    expect(dispatch.instructions).toContain('Never copy executionStatus values into a plan task.status');
+    expect(dispatch.manifest!.optionalBytes).toBe(0);
+    if (continuation) {
+      expect(dispatch.message).toContain('running_helper lemma status=paused executionStatus=running');
+      expect(dispatch.message).toContain('original_goal goal status=active executionStatus=pending');
+    } else expect(compiledGraph(dispatch.message).find(row => row.id === helper.task.id))
+      .toMatchObject({ status: 'paused', executionStatus: 'running' });
+  }
+});
 
 it('keeps the original-goal closure exact and indexes unrelated unfinished work and checked implementation helpers', () => {
   const implementation = freshlyChecked(lemma('implementation', [], '∀ n : Nat, n + 0 = n')),
@@ -1159,10 +1218,11 @@ it('indexes off-closure advisory objectives and leaves worker dependency descrip
     graph = compiledGraph(leadContext.message);
   expect(graph.find(row => row.id === completed.task.id)).toBeUndefined();
   expect(taskRecordIndex(leadContext.message)).toContainEqual(expect.objectContaining({ id: completed.task.id,
-    status: 'completed', recordDigest: mathDigest(canonicalMathJson(completed)) }));
+    status: 'active', executionStatus: 'completed', recordDigest: mathDigest(canonicalMathJson(completed)) }));
   expect(leadContext.message).not.toContain('COMPLETED_RESEARCH_OBJECTIVE');
   expect(leadContext.message).not.toContain('OPEN_RESEARCH_OBJECTIVE');
-  expect(taskRecordIndex(leadContext.message)).toContainEqual(expect.objectContaining({ id: blocked.task.id, status: 'blocked' }));
+  expect(taskRecordIndex(leadContext.message)).toContainEqual(expect.objectContaining({ id: blocked.task.id,
+    status: 'active', executionStatus: 'blocked' }));
   const workerContext = compileTaskContext({ ...input(records, assign(current.task)), maxOptionalContextBytes: 0 });
   expect(compiledGraph(workerContext.message).find(row => row.id === helper.task.id).objective).toBe(helper.task.objective);
   expect(workerContext.manifest.included.some(item => item.id === 'task-objective-reference-encoding')).toBe(false);
@@ -1212,9 +1272,9 @@ it('keeps every off-closure task discoverable with zero optional context, includ
   expect(index.map(row => row.id)).toEqual(records.map(record => record.task.id));
   for (const record of records) expect(index.find(row => row.id === record.task.id)).toMatchObject({
     taskDigest: taskVersion(record.task), recordDigest: mathDigest(canonicalMathJson(record)),
-    kind: record.task.kind, status: record.status, control: record.task.status ?? 'active', dependsOn: record.task.dependsOn,
+    kind: record.task.kind, status: record.task.status ?? 'active', executionStatus: record.status, dependsOn: record.task.dependsOn,
   });
-  expect(index.find(row => row.id === 'running')).toMatchObject({ owner: 'live-worker', status: 'running', control: 'paused' });
+  expect(index.find(row => row.id === 'running')).toMatchObject({ owner: 'live-worker', status: 'paused', executionStatus: 'running' });
   expect(index.find(row => row.id === 'blocked').dependsOn).toEqual(['condition']);
   expect(context.message).not.toContain('RUNNING_EXACT_TYPE');
   expect(context.message).not.toContain('BLOCKED_EXACT_TYPE');

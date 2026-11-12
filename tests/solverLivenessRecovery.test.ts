@@ -36,7 +36,7 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     if (directory) fs.rmSync(directory, { recursive: true, force: true });
   });
 
-  function fixture() {
+  function fixture({ seedDecision = true } = {}) {
     const example = localExample('solver-liveness-recovery-', 'lead');
     directory = example.directory;
     const { problem, workspace } = example;
@@ -48,9 +48,11 @@ describe('Lead planning liveness across checkpoints and restore', () => {
         objective: `Prove ${target.theoremName}`, ...target, dependsOn: ['investigate'] })),
     ] });
     const check = vi.fn(async () => { throw new Error('fixture_unexpected_proof_acceptance'); });
-    // A current decision request is the ordinary planning input that starts these Lead turns.
+    // Decision tests start with an unanswered request; pause and thread-reuse
+    // tests start with an ordinary finding and its real one-shot planning wake.
     const investigate = plan.tasks.find(task => task.id === 'investigate')!;
-    const decision = JSON.stringify({ taskId: investigate.id, summary: SEEDED_DECISION, conclusion: 'inconclusive', needsDecision: true });
+    const summary = seedDecision ? SEEDED_DECISION : 'The saved construction still leaves both original goals unproved.';
+    const decision = JSON.stringify({ taskId: investigate.id, summary, conclusion: 'inconclusive', needsDecision: seedDecision });
     const fixture = {
       state: solverState(problem, workspace, { runId: 'liveness-recovery-fixture', phase: 'prepared',
         environmentDigest: mathDigest('offline-liveness-environment'),
@@ -58,9 +60,11 @@ describe('Lead planning liveness across checkpoints and restore', () => {
         cooperation: { canonicalCommit: problem.baseCommit,
           tasks: plan.tasks.map(task => ({ task, status: 'pending', attempts: 0 })),
           groups: plan.groups.map(group => ({ group, turns: 0 })),
+          ...(!seedDecision ? { leadWakes: { requested: 1, consumed: 0, settled: 0,
+            recent: [{ seq: 1, reason: 'research-finding' as const, at: 1 }] } } : {}),
           deliveries: [{ id: 'route-decision', producer: 'researcher', taskId: investigate.id, taskDigest: taskVersion(investigate),
             kind: 'research' as const, status: 'advisory' as const, finding: decision, findingDigest: mathDigest(decision),
-            summary: SEEDED_DECISION, statement: '', premises: [], dependencies: [], remainingObligations: [], evidenceRefs: [],
+            summary, statement: '', premises: [], dependencies: [], remainingObligations: [], evidenceRefs: [],
             createdAt: 1 }] } }),
       workers, check,
     };
@@ -72,6 +76,7 @@ describe('Lead planning liveness across checkpoints and restore', () => {
       const notifications: { workerId: string; message: string }[] = [];
       const sessionInterrupts: { workerId: string; threadId: string }[] = [], sessionCloses: typeof sessionInterrupts = [];
       const firstLead = deferred(), firstResearch = deferred();
+      const leadReturns = new Map<string, ReturnType<typeof deferred<string>>>();
       let cooperation: CooperativeResearch | undefined;
       const dispatched = new Map<string, CooperativeAction>();
       const actual = (action: CooperativeAction) => action.kind === 'lead'
@@ -110,7 +115,10 @@ describe('Lead planning liveness across checkpoints and restore', () => {
             // The advisory clock measures mathematical work, so a turn arms it once the model produces
             // its first item. This offline writer produces one immediately; only provider latency waits.
             options.onActivity?.({ event: 'reasoning' });
-            if (parsed.assignment.kind === 'lead') firstLead.resolve();
+            if (parsed.assignment.kind === 'lead') {
+              leadReturns.set(parsed.assignment.planNonce ?? parsed.assignment.initialPlanNonce!, active);
+              firstLead.resolve();
+            }
             else if (parsed.assignment.kind === 'task' && parsed.assignment.task.id === 'investigate') firstResearch.resolve();
             else throw new Error('fixture_unexpected_assignment');
             return active.promise;
@@ -161,7 +169,10 @@ describe('Lead planning liveness across checkpoints and restore', () => {
       const waitForLead = async (previousNonce: string | undefined) => {
         for (let tick = 0; tick < 20 && latestLead().assignment.planNonce === previousNonce; tick++)
           await vi.advanceTimersByTimeAsync(1_000);
-        expect(latestLead().assignment.planNonce).not.toBe(previousNonce);
+        expect(latestLead().assignment.planNonce, JSON.stringify({
+          workers: fixture.state.workers?.map(({ id, phase, scheduling, error }) => ({ id, phase, scheduling, error })),
+          error: fixture.state.cooperation?.error, events: events.slice(-12),
+        })).not.toBe(previousNonce);
         expect(cooperation!.current(actual(latestLead().assignment))).toBe(true);
       };
       const publish = async (summary: string, needsDecision = false) => {
@@ -199,24 +210,32 @@ describe('Lead planning liveness across checkpoints and restore', () => {
         await expect(completion).rejects.toThrow('fixture_complete');
         capture.mockRestore();
       };
+      const finishLead = (action = latestLead().assignment) => {
+        const response = leadReturns.get(action.planNonce ?? action.initialPlanNonce!);
+        if (!response) throw new Error('fixture_unknown_lead_turn');
+        response.resolve('completed');
+      };
       return { completion, controller, events, messages, notifications, sessionInterrupts, sessionCloses,
-        leads, expectScheduledLeadTurns, latestLead, waitForLead, publish, answer, stop, open,
+        leads, expectScheduledLeadTurns, latestLead, waitForLead, publish, answer, finishLead, stop, open,
         planningInputDigest: () => (cooperation as unknown as { planningInputDigest: () => string }).planningInputDigest(),
         current: (action: CooperativeAction) => cooperation!.current(actual(action)),
         ready: ({ research = true } = {}) => Promise.race([Promise.all(research
           ? [firstLead.promise, firstResearch.promise] : [firstLead.promise]), completion.then(() => {
-          throw new Error('fixture_finished_before_dispatch');
+          throw new Error('fixture_finished_before_dispatch: ' + JSON.stringify({
+            workers: fixture.state.workers?.map(({ id, phase, error }) => ({ id, phase, error })),
+            events: events.slice(-8),
+          }));
         })]) };
     };
     return { ...fixture, get state() { return fixture.state; }, set state(value) { fixture.state = value; }, start };
   }
 
   it('replaces a legacy coordination thread once, preserves its draft and resumes the planning thread', async () => {
-    const fixtureState = fixture(), lead = fixtureState.state.workers![0];
+    const fixtureState = fixture({ seedDecision: false }), lead = fixtureState.state.workers![0];
     lead.threadId = 'legacy-mathematical-coordination'; lead.sessionRole = 'lead'; lead.sessionLeadMode = 'coordination';
     const draft = path.join(lead.worktree, 'RESEARCH.md');
     fs.writeFileSync(draft, 'Saved mathematical construction and precise unresolved inference.\n');
-    const run = fixtureState.start({ saveLeadProgress: true }); await run.ready();
+    const run = fixtureState.start({ saveLeadProgress: true, saveResearchProgress: true }); await run.ready();
     const first = run.latestLead().threadId;
     expect(first).not.toBe('legacy-mathematical-coordination');
     expect(lead.previousThreadIds).toContain('legacy-mathematical-coordination');
@@ -233,7 +252,7 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     writeSolverRunState(saved, fixtureState.state);
     await run.stop(); fixtureState.state = readSolverRunState(saved);
     expect(fixtureState.state.workers![0].sessionLeadMode).toBe('planning');
-    const resumed = fixtureState.start(); await resumed.ready({ research: false });
+    const resumed = fixtureState.start({ saveResearchProgress: true }); await resumed.ready({ research: false });
     expect(resumed.latestLead().threadId).toBe(first);
     expect(resumed.events.some(item => item.event === 'context_restarted' && item.details?.workerId === lead.id &&
       item.details?.reason === 'responsibility')).toBe(false);
@@ -257,7 +276,7 @@ describe('Lead planning liveness across checkpoints and restore', () => {
   });
 
   it('waits for hours after an unchanged checkpoint, then wakes for new evidence until a plan answers it', async () => {
-    const fixtureState = fixture(), run = fixtureState.start({ saveResearchProgress: true }); await run.ready();
+    const fixtureState = fixture({ seedDecision: false }), run = fixtureState.start({ saveResearchProgress: true }); await run.ready();
     await vi.advanceTimersByTimeAsync(LEAD_REVISION_MS + 60_000);
     const pausedTurns = run.leads().length;
     expect(fixtureState.state.cooperation!.lastLeadPauseInputDigest).toBeTruthy();
@@ -272,13 +291,23 @@ describe('Lead planning liveness across checkpoints and restore', () => {
     expect(fixtureState.state.cooperation!.tasks.find(node => node.task.id === 'investigate')!.status).toBe('running');
     expect(fixtureState.state.cooperation!.researchCheckpoints?.investigate?.paused).not.toBe(true);
 
-    const oldNonce = run.latestLead().assignment.planNonce;
+    const previousLead = run.latestLead().assignment,
+      leadWasWorking = fixtureState.state.workers![0].scheduling?.status === 'working';
     const summary = 'An independent saved construction changes the unanswered planning input.';
-    await run.publish(summary);
-    await run.waitForLead(oldNonce);
+    await run.publish(summary, true);
+    if (leadWasWorking) {
+      // An already dispatched progress review keeps its frozen input. Finish its
+      // valid answer and model response before the later finding gets a turn.
+      await run.answer(previousLead);
+      run.finishLead(previousLead);
+    }
+    await run.waitForLead(previousLead.planNonce);
     expect(run.latestLead().inbox).toContain(summary);
     await run.answer();
     expect(fixtureState.state.cooperation!.lastLeadInputDigest).toBe(run.planningInputDigest());
+    // A real Lead returns after its validated publication; a published plan must
+    // not be kept active forever by this offline session's unresolved promise.
+    run.finishLead();
     const answeredTurns = run.leads().length;
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     const reviews = run.expectScheduledLeadTurns(answeredTurns);
@@ -296,7 +325,7 @@ describe('Lead planning liveness across checkpoints and restore', () => {
   }, 30_000); // Four virtual hours include enough isolated Git snapshots to exceed 15 s under load.
 
   it('wakes as soon as a long Lead turn settles and preserves unresolved peer episodes across unchanged accepted plans', async () => {
-    const fixtureState = fixture(), run = fixtureState.start({ saveResearchProgress: true }); await run.ready();
+    const fixtureState = fixture({ seedDecision: false }), run = fixtureState.start({ saveResearchProgress: true }); await run.ready();
     const cooperation = () => fixtureState.state.cooperation!;
     const idleWakes = () => run.events.filter(item => item.event === 'lead_woken_for_idle_peers');
     const oldNonce = run.latestLead().assignment.planNonce;

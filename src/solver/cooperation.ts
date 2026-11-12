@@ -530,7 +530,7 @@ export class CooperativeResearch extends CooperationInputs {
     return this.waitForDispatch();
   }
   /** Unanswered current inputs survive a notes-only pause; a live publication can already have answered them. */
-  private leadDecisionObligations(action?: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>) {
+  protected leadDecisionObligations(action?: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>) {
     const shown = action ? this.presentedResearchInputs.get(action)?.shown ?? [] : undefined;
     const merging = action ? this.pendingSourceResearchDecisions.get(action) ?? [] : [];
     const researchInputs = leadResearchInputs(this.archive.deliveries ?? [],
@@ -578,8 +578,30 @@ export class CooperativeResearch extends CooperationInputs {
         ' and include the required researchDecisions, progressReview or nextCheckDecisions in that same JSON object. ' +
         'A decision without tasks or upsert/remove is not a plan revision. '
       : ' Include a complete tasks array and the required decisions in the same JSON object; an initial plan cannot use upsert/remove. ';
+    const response = {
+      ...(this.archive.tasks.length && action.planVersion ? { baseVersion: action.planVersion, upsert: [] }
+        : { tasks: ['<complete task definitions covering every original target>'] }),
+      ...(obligations.research ? { researchDecisions: obligations.researchInputs.map(record => ({
+        deliveryId: record.id, outcome: '<choose adopt, source or decline>', reason: '<specific mathematical reason>',
+      })) } : {}),
+      ...(obligations.progressReview ? { progressReview: { id: obligations.progressReview.id,
+        reason: '<evidence for this route or change>', nextChecks: [{
+          action: '<choose feasibility, apply-lemma or construction-check>',
+          objective: '<the next discriminating check>', expectedEvidence: '<the observation that decides it>',
+          targetTaskId: '<active task serving a reviewed goal>',
+        }] } } : {}),
+      ...(obligations.nextCheck ? { nextCheckDecisions: obligations.nextCheckOutcomes.map(record => ({
+        checkId: record.id, outcomeDeliveryId: record.outcome?.deliveryId,
+        action: '<choose continue, revise or stop>', reason: '<specific mathematical reason>',
+      })) } : {}),
+    };
     return 'Save or publish a validated math-plan revision as your instructions describe before returning. ' + required.join(' ') +
-      revision + 'Keep still-unanswered ids and pending decisions in RESEARCH.md when saving an unfinished draft; ' +
+      revision + 'Current response template (replace every angle-bracket placeholder with your own decision; ' +
+      'the template itself is not a valid submission):\n' + JSON.stringify(response) + '\n' +
+      (obligations.research ? 'For research adoption add taskIds naming newly added or substantively changed tasks; ' +
+        'for source add sourcePaths naming changed owned Lean files. ' : '') +
+      (obligations.progress ? 'Choose enough progress nextChecks to cover every reviewed goal. ' : '') +
+      'Keep still-unanswered ids and pending decisions in RESEARCH.md when saving an unfinished draft; ' +
       'notes alone do not answer these requirements. ';
   }
   private leadDecision(worker: ResearchWorker, head: string, inputDigest: string): CooperativeAction {
