@@ -146,6 +146,25 @@ it('builds mandatory Lead focus and task focus only from the supplied scoped gra
   expect(context.message).not.toContain('Original.core');
 });
 
+it('keeps route-strength and implementation obligations visible to initial and continuing Lead and proof work', () => {
+  withoutOptionalContext();
+  const { core, probe, cooperation } = fixture();
+  const contexts = [
+    contextFor({ canonicalCommit: seedCommit, tasks: [] }, { kind: 'lead', seedCommit }),
+    contextFor(cooperation, { kind: 'lead', seedCommit }),
+    contextFor(cooperation, actionFor(core)),
+    contextFor(cooperation, actionFor(probe)),
+  ];
+  for (const context of contexts) {
+    expect(context.manifest).toMatchObject({ maxOptionalBytes: 0, optionalBytes: 0 });
+    expect(context.instructions).toContain('justify its necessity and feasibility before expanding it');
+    expect(context.instructions).toContain('bounded output size alone supplies no running-time proof');
+    expect(context.instructions).toContain('keep its unproved conditions on the frontier');
+  }
+  expect(core.status).toBe('blocked');
+  expect(cooperation.tasks.find(record => record.task.kind === 'goal')!.integratedCheck).toBeUndefined();
+});
+
 it('gives an early feasibility reviewer complete unproved interfaces even with no optional context budget', () => {
   withoutOptionalContext();
   const { core, probe, goal, cooperation } = fixture();
