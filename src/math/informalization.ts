@@ -35,6 +35,12 @@ export const INFORMALIZATION_PROTOCOL = 'lean-proof-informalization-v1';
 /** Opted into by new entry points; absent on requests whose original role contracts must remain unchanged. */
 export const INFORMALIZATION_EXPLANATION_POLICY = 'mathematical-steps-v1';
 /**
+ * Opted into per request: the writer also gives each declaration a one-sentence summary and, in the final batch, a short
+ * route that narrows the target to what the proof checks; auditors judge both against the Lean. Requests without it keep
+ * their inputs, schemas, instructions and digests.
+ */
+export const INFORMALIZATION_OUTLINE_POLICY = 'proof-outline-v1';
+/**
  * Phrase alignment, opted into per request: the writer also pairs phrases of its prose with the Lean text they translate
  * (links), the host checks each pair is verbatim on both sides and inside the Lean the statement or step explains, and
  * auditors judge the pairs and each step against the goals the page shows beside it. Requests without it keep their
@@ -74,6 +80,7 @@ export const informalizationRequestSchema = z.object({
     statementSha256: hash, originalSha256: hash }).strict().optional(),
   alignment: z.enum(INFORMALIZATION_ALIGNMENTS).optional(),
   explanationPolicy: z.literal(INFORMALIZATION_EXPLANATION_POLICY).optional(),
+  outlinePolicy: z.literal(INFORMALIZATION_OUTLINE_POLICY).optional(),
   language: z.enum(['zh', 'en']),
   writer: formalizationModelConfigurationSchema,
   auditors: z.array(auditorSchema).min(1).max(5),
@@ -162,6 +169,7 @@ export function prepareInformalization(directory: string, input: Informalization
       statementSha256: formalization.sourceSha256, originalSha256: formalization.request.statementSha256 } } : {},
     ...input.alignment ? { alignment: input.alignment } : {},
     ...input.explanationPolicy ? { explanationPolicy: input.explanationPolicy } : {},
+    ...input.outlinePolicy ? { outlinePolicy: input.outlinePolicy } : {},
     language: input.language, writer: input.writer, auditors: input.auditors, batching: input.batching,
     maxRoundsPerBatch: input.maxRoundsPerBatch, maxRunSeconds: input.maxRunSeconds, maxTurnSeconds: input.maxTurnSeconds,
     maxCompileSeconds: input.maxCompileSeconds, maxTotalTokens: input.maxTotalTokens,
@@ -278,15 +286,39 @@ export const informalizationAlignedAuditOutputSchema = informalizationAuditOutpu
 export type InformalizationAlignedAuditOutput = z.infer<typeof informalizationAlignedAuditOutputSchema>;
 type Alignment = InformalizationRequest['alignment'];
 type ExplanationPolicy = InformalizationRequest['explanationPolicy'];
-const writerOutputSchema = (alignment: Alignment) => alignment ? informalizationAlignedWriterOutputSchema : informalizationWriterOutputSchema;
-const auditOutputSchema = (alignment: Alignment) => alignment ? informalizationAlignedAuditOutputSchema : informalizationAuditOutputSchema;
+type OutlinePolicy = InformalizationRequest['outlinePolicy'];
+/** The outline policy's additions: a sentence per declaration, and stages from the proof's first results to the target. */
+const summary = prose(600);
+const routeSchema = z.array(z.object({ claim: prose(2000), declarations: z.array(declaration).min(1).max(64) }).strict()).min(2).max(6);
+export type InformalizationRoute = { claim: string; declarations: string[] }[];
+const sections = <Shape extends z.ZodRawShape>(shape: Shape) => z.array(z.object(shape).strict()).min(1).max(64);
+export const informalizationOutlinedWriterOutputSchema = informalizationWriterOutputSchema.extend({
+  sections: sections({ ...informalizationWriterOutputSchema.shape.sections.element.shape, summary }), route: routeSchema.nullable() }).strict();
+export const informalizationOutlinedAlignedWriterOutputSchema = informalizationAlignedWriterOutputSchema.extend({
+  sections: sections({ ...informalizationAlignedWriterOutputSchema.shape.sections.element.shape, summary }), route: routeSchema.nullable() }).strict();
+const summaryVerdict = z.object({ verdict: z.enum(['faithful', 'mismatch']), explanation }).strict();
+const routeVerdict = z.object({ verdict: z.enum(['consistent', 'inconsistent', 'absent']), explanation }).strict();
+export const informalizationOutlinedAuditOutputSchema = informalizationAuditOutputSchema.extend({
+  sections: sections({ ...auditSectionShape, summary: summaryVerdict }), route: routeVerdict }).strict();
+export const informalizationOutlinedAlignedAuditOutputSchema = informalizationAlignedAuditOutputSchema.extend({
+  sections: sections({ ...informalizationAlignedAuditOutputSchema.shape.sections.element.shape, summary: summaryVerdict }), route: routeVerdict }).strict();
+const writerOutputSchema = (alignment: Alignment, outline?: OutlinePolicy) => outline
+  ? alignment ? informalizationOutlinedAlignedWriterOutputSchema : informalizationOutlinedWriterOutputSchema
+  : alignment ? informalizationAlignedWriterOutputSchema : informalizationWriterOutputSchema;
+const auditOutputSchema = (alignment: Alignment, outline?: OutlinePolicy) => outline
+  ? alignment ? informalizationOutlinedAlignedAuditOutputSchema : informalizationOutlinedAuditOutputSchema
+  : alignment ? informalizationAlignedAuditOutputSchema : informalizationAuditOutputSchema;
+const routeOf = (value: object): InformalizationRoute | null => 'route' in value ? value.route as InformalizationRoute | null : null;
+const summaryOf = (value: object): string | undefined => 'summary' in value && typeof value.summary === 'string' ? value.summary : undefined;
+/** The one-sentence summary and the route of an accepted writer output, when its request asked for them. */
+export const informalizationSectionSummary = summaryOf, informalizationOutputRoute = routeOf;
 /** The writer output a request's alignment requires. */
 export const informalizationWriterOutputSchemaFor = writerOutputSchema;
 
 export type InformalizationRole = 'write' | 'audit';
 /** A fresh serializable guide for OUTPUT.schema.json; the host validators and checks remain authoritative. */
-export function informalizationRoleOutputSchema(role: InformalizationRole, alignment?: Alignment) {
-  const schema = deriveFormalizationRoleOutputJsonSchema(role === 'write' ? writerOutputSchema(alignment) : auditOutputSchema(alignment));
+export function informalizationRoleOutputSchema(role: InformalizationRole, alignment?: Alignment, outline?: OutlinePolicy) {
+  const schema = deriveFormalizationRoleOutputJsonSchema(role === 'write' ? writerOutputSchema(alignment, outline) : auditOutputSchema(alignment, outline));
   return { ...schema, $schema: 'https://json-schema.org/draft/2020-12/schema', title: 'TheoremOS informalization ' + role + ' OUTPUT.json',
     $comment: 'The host also checks the input digest, the declaration order, citations and verbatim Lean excerpts' +
       (alignment ? ', and that both sides of each link are verbatim.' : '.') };
@@ -342,12 +374,15 @@ function batchContext({ outline, batch, accepted, sources }: BatchContextInput) 
 export type InformalizationWriterInput = ReturnType<typeof informalizationWriterInput>;
 export type InformalizationAuditInput = ReturnType<typeof informalizationAuditInput>;
 
+/** With the outline policy a role also gets every declaration name, which a route may list. */
+const outlineContext = (context: BatchContextInput & { outlinePolicy?: OutlinePolicy }) => context.outlinePolicy
+  ? { outlinePolicy: context.outlinePolicy, declarations: context.outline.units.map(unit => unit.name) } : {};
 export function informalizationWriterInput(context: BatchContextInput & { language: InformalizationRequest['language'];
-  alignment?: Alignment; explanationPolicy?: ExplanationPolicy; round: number; problemStatement: string | null; feedback: string | null;
+  alignment?: Alignment; explanationPolicy?: ExplanationPolicy; outlinePolicy?: OutlinePolicy; round: number; problemStatement: string | null; feedback: string | null;
   previousOutput: InformalizationWriterOutput | null }) {
   const body = { schema: 'theorem-os.informalization-write-input.v1' as const, protocol: INFORMALIZATION_PROTOCOL,
     ...context.alignment ? { alignment: context.alignment } : {}, language: context.language, round: context.round,
-    ...context.explanationPolicy ? { explanationPolicy: context.explanationPolicy } : {},
+    ...context.explanationPolicy ? { explanationPolicy: context.explanationPolicy } : {}, ...outlineContext(context),
     batch: { index: context.batch.index, count: context.batch.count, final: context.batch.final },
     problemStatement: context.problemStatement, ...batchContext(context),
     feedback: context.feedback, previousOutput: context.previousOutput };
@@ -359,7 +394,7 @@ export function informalizationWriterInput(context: BatchContextInput & { langua
  * they also get, per step, the goals the explanation page shows beside it (null when none are recorded).
  */
 export function informalizationAuditInput(context: BatchContextInput & { language: InformalizationRequest['language'];
-  alignment?: Alignment; explanationPolicy?: ExplanationPolicy; explanation: InformalizationWriterOutput }) {
+  alignment?: Alignment; explanationPolicy?: ExplanationPolicy; outlinePolicy?: OutlinePolicy; explanation: InformalizationWriterOutput }) {
   const byName = new Map(context.outline.units.map(unit => [unit.name, unit]));
   const stepGoals = context.alignment ? { stepGoals: context.explanation.sections.map(section => {
     const unit = byName.get(section.declaration);
@@ -369,9 +404,10 @@ export function informalizationAuditInput(context: BatchContextInput & { languag
   }) } : {};
   const body = { schema: 'theorem-os.informalization-audit-input.v1' as const, protocol: INFORMALIZATION_PROTOCOL,
     ...context.alignment ? { alignment: context.alignment } : {}, language: context.language,
-    ...context.explanationPolicy ? { explanationPolicy: context.explanationPolicy } : {},
+    ...context.explanationPolicy ? { explanationPolicy: context.explanationPolicy } : {}, ...outlineContext(context),
     batch: { index: context.batch.index, count: context.batch.count, final: context.batch.final }, ...batchContext(context),
-    explanation: { sections: context.explanation.sections, overview: context.explanation.overview }, ...stepGoals };
+    explanation: { sections: context.explanation.sections, overview: context.explanation.overview,
+      ...context.outlinePolicy ? { route: routeOf(context.explanation) } : {} }, ...stepGoals };
   return { ...body, inputDigest: informalizationDigest(body) };
 }
 
@@ -379,9 +415,9 @@ const normalized = (value: string) => value.replace(/\s+/gu, ' ').trim();
 const issues = (error: z.ZodError) => error.issues.slice(0, 8).map(issue => (issue.path.join('.') || 'output') + ': ' + issue.message);
 /** Host checks of a writer output; an empty list accepts it for audit. */
 export function informalizationWriterRejections(input: InformalizationWriterInput, value: unknown): string[] {
-  const parsed = writerOutputSchema(input.alignment).safeParse(value);
+  const parsed = writerOutputSchema(input.alignment, input.outlinePolicy).safeParse(value);
   if (!parsed.success) return issues(parsed.error);
-  const output = parsed.data, problems: string[] = [];
+  const output: InformalizationWriterOutput = parsed.data, problems: string[] = [];
   if (output.inputDigest !== input.inputDigest) problems.push('inputDigest must equal INPUT.inputDigest');
   const expected = input.units.map(unit => unit.declaration);
   if (canonicalMathJson(output.sections.map(section => section.declaration)) !== canonicalMathJson(expected))
@@ -409,6 +445,14 @@ export function informalizationWriterRejections(input: InformalizationWriterInpu
   });
   if (input.batch.final !== (output.overview !== null))
     problems.push(input.batch.final ? 'overview is required in the final batch' : 'overview must be null before the final batch');
+  if (input.outlinePolicy) {
+    const route = routeOf(output), known = new Set(input.declarations);
+    if (input.batch.final !== (route !== null))
+      problems.push(input.batch.final ? 'route is required in the final batch' : 'route must be null before the final batch');
+    const unknown = [...new Set((route ?? []).flatMap(step => step.declarations))].filter(name => !known.has(name));
+    if (unknown.length) problems.push(`route: ${unknown.join(', ')} is not a declaration of this proof (see INPUT.declarations)`);
+    if (route && !route.at(-1)!.declarations.includes(input.target)) problems.push(`route: the last step must list the target ${input.target}`);
+  }
   return problems;
 }
 
@@ -479,8 +523,11 @@ function formulaNameRejections(input: InformalizationWriterInput, output: Inform
     check(`${where} title`, section.title, known);
     check(`${where} statement`, section.statement, known);
     section.proof.forEach((step, stepIndex) => check(`${where} step ${stepIndex + 1}`, step.text, new Set([...known, ...lean(step.uses)])));
+    const sentence = summaryOf(section);
+    if (sentence) check(`${where} summary`, sentence, known);
   });
   if (output.overview !== null) check('overview', output.overview, new Set(input.units.flatMap(names)));
+  (routeOf(output) ?? []).forEach((step, index) => check(`route step ${index + 1}`, step.claim, new Set([...input.units.flatMap(names), ...lean(step.declarations)])));
   return problems;
 }
 /**
@@ -494,9 +541,9 @@ export function informalizationWriterSubmissionRejections(input: Informalization
 
 /** Structural checks of an audit; a malformed audit is not a verdict. */
 export function informalizationAuditRejections(input: InformalizationAuditInput, value: unknown): string[] {
-  const parsed = auditOutputSchema(input.alignment).safeParse(value);
+  const parsed = auditOutputSchema(input.alignment, input.outlinePolicy).safeParse(value);
   if (!parsed.success) return issues(parsed.error);
-  const output = parsed.data, problems: string[] = [];
+  const output: InformalizationAuditOutput = parsed.data, problems: string[] = [];
   if (output.inputDigest !== input.inputDigest) problems.push('inputDigest must equal INPUT.inputDigest');
   const sections = input.explanation.sections;
   if (canonicalMathJson(output.sections.map(section => section.declaration)) !== canonicalMathJson(sections.map(section => section.declaration)))
@@ -507,6 +554,8 @@ export function informalizationAuditRejections(input: InformalizationAuditInput,
       problems.push(`${where}: steps must have one verdict per explained step (${explained.proof.length})`);
     if (section.statement.verdict !== 'faithful' && !section.statement.explanation.trim())
       problems.push(`${where}: a ${section.statement.verdict} statement verdict needs an explanation`);
+    const sentence = summaryVerdictOf(section);
+    if (sentence?.verdict === 'mismatch' && !sentence.explanation.trim()) problems.push(`${where}: a mismatch summary verdict needs an explanation`);
     section.steps.forEach((step, stepIndex) => {
       if (step.verdict !== 'justified' && !step.explanation.trim())
         problems.push(`${where} step ${stepIndex + 1}: a ${step.verdict} verdict needs an explanation`);
@@ -525,13 +574,24 @@ export function informalizationAuditRejections(input: InformalizationAuditInput,
     problems.push(input.explanation.overview === null ? 'overview verdict must be absent' : 'overview verdict must be consistent or inconsistent');
   if (output.overview.verdict === 'inconsistent' && !output.overview.explanation.trim())
     problems.push('an inconsistent overview verdict needs an explanation');
+  const route = routeVerdictOf(output);
+  if (route) {
+    const written = 'route' in input.explanation ? input.explanation.route ?? null : null;
+    if ((route.verdict === 'absent') !== (written === null))
+      problems.push(written === null ? 'route verdict must be absent' : 'route verdict must be consistent or inconsistent');
+    if (route.verdict === 'inconsistent' && !route.explanation.trim()) problems.push('an inconsistent route verdict needs an explanation');
+  }
   return problems;
 }
 
+type Verdict<V extends string> = { verdict: V; explanation: string };
+const summaryVerdictOf = (section: object) => 'summary' in section ? section.summary as Verdict<'faithful' | 'mismatch'> : undefined;
+const routeVerdictOf = (audit: object) => 'route' in audit ? audit.route as Verdict<'consistent' | 'inconsistent' | 'absent'> : undefined;
 const goalsInconsistent = (step: InformalizationAuditOutput['sections'][number]['steps'][number]) =>
   'goals' in step && step.goals === 'inconsistent';
 export const informalizationAuditApproved = (audit: InformalizationAuditOutput) => audit.overview.verdict !== 'inconsistent' &&
-  audit.sections.every(section => section.statement.verdict === 'faithful' && !section.omissions.length &&
+  routeVerdictOf(audit)?.verdict !== 'inconsistent' &&
+  audit.sections.every(section => section.statement.verdict === 'faithful' && summaryVerdictOf(section)?.verdict !== 'mismatch' && !section.omissions.length &&
     section.steps.every(step => step.verdict === 'justified' && !goalsInconsistent(step)));
 const clip = (value: string, max: number) => value.length > max ? value.slice(0, max) + '…' : value;
 /** Writer feedback from every non-approving finding, attributed to its auditor. */
@@ -541,6 +601,8 @@ export function informalizationAuditFeedback(audits: readonly { auditorId: strin
     for (const section of output.sections) {
       if (section.statement.verdict !== 'faithful')
         lines.push(`${auditorId}, ${section.declaration}, statement ${section.statement.verdict}: ${section.statement.explanation}`);
+      const sentence = summaryVerdictOf(section);
+      if (sentence?.verdict === 'mismatch') lines.push(`${auditorId}, ${section.declaration}, summary mismatch: ${sentence.explanation}`);
       section.steps.forEach((step, index) => {
         const goals = goalsInconsistent(step) ? step.verdict === 'justified' ? 'goals inconsistent' : `${step.verdict}, goals inconsistent` : '';
         if (step.verdict !== 'justified' || goals)
@@ -550,6 +612,8 @@ export function informalizationAuditFeedback(audits: readonly { auditorId: strin
         lines.push(`${auditorId}, ${section.declaration}, unexplained Lean ${JSON.stringify(omission.lean.slice(0, 400))}: ${omission.explanation}`);
     }
     if (output.overview.verdict === 'inconsistent') lines.push(`${auditorId}, overview inconsistent: ${output.overview.explanation}`);
+    const route = routeVerdictOf(output);
+    if (route?.verdict === 'inconsistent') lines.push(`${auditorId}, route inconsistent: ${route.explanation}`);
   }
   return clip('Independent auditors did not approve this explanation. Check each finding against the Lean source and revise:\n' +
     lines.join('\n'), 16_000);
@@ -575,13 +639,13 @@ export function informalizationExcerptCoverage(units: readonly Pick<Informalizat
 const labels = {
   zh: { title: (name: string) => `证明：${name}`, colon: '：', separator: '，',
     notice: '本文由模型根据 Lean 证明自动撰写，并由独立的模型审核逐步核对它与 Lean 源码的对应关系。Lean 已检查证明本身；这里的自然语言表述没有经过人工审阅。',
-    main: '主定理', statement: '陈述', overview: '证明思路', definitions: '定义与引理', proof: '证明', notes: '说明',
+    main: '主定理', statement: '陈述', summary: '概要', route: '证明主线', overview: '证明思路', definitions: '定义与引理', proof: '证明', notes: '说明',
     mainProof: '主定理的证明', basis: '依据', source: '来源', axioms: '使用的公理', leanName: 'Lean 名称', stop: '。',
     kinds: { theorem: '引理', definition: '定义', instance: '实例', opaque: '定义', axiom: '公理', inductive: '归纳类型',
       structure: '结构', class: '类' } },
   en: { title: (name: string) => `Proof of ${name}`, colon: ': ', separator: ', ',
     notice: 'This text was written by a model from the Lean proof, and independent model auditors checked each step against the Lean source. Lean checked the proof itself; the natural-language text has not been reviewed by a person.',
-    main: 'Main theorem', statement: 'Statement', overview: 'Proof outline', definitions: 'Definitions and lemmas', proof: 'Proof',
+    main: 'Main theorem', statement: 'Statement', summary: 'In short', route: 'Main line', overview: 'Proof outline', definitions: 'Definitions and lemmas', proof: 'Proof',
     notes: 'Notes', mainProof: 'Proof of the main theorem', basis: 'Uses', source: 'Source', axioms: 'Axioms used',
     leanName: 'Lean name', stop: '.',
     kinds: { theorem: 'Lemma', definition: 'Definition', instance: 'Instance', opaque: 'Definition', axiom: 'Axiom',
@@ -599,6 +663,7 @@ const leanBlock = (value: string, indent: string) => {
 const indented = (value: string, indent: string) => value.trim().split('\n').map(line => line.trim() ? indent + line : '').join('\n');
 export type InformalizationRenderInput = { language: InformalizationRequest['language']; outline: InformalizationOutline;
   sections: readonly InformalizationSection[]; overview: string;
+  /** The audited route of an outlined explanation; absent otherwise, and the Markdown is then as before. */ route?: InformalizationRoute | null;
   provenance: { sources: readonly Pick<InformalizationRequest['sources'][number], 'origin' | 'sha256'>[]; toolchain: string;
     mathlibRevision: string | null } };
 
@@ -629,7 +694,9 @@ export function renderInformalization(input: InformalizationRenderInput): string
   const block = (unit: InformalizationUnit) => {
     const section = sections.get(unit.name)!;
     const parts = [`### ${label.kinds[unit.kind]} ${numbers.get(unit.name)}${label.colon}${line(section.title)}`,
-      `${label.leanName}${label.colon}${code(unit.name)}`, `**${label.statement}**${label.colon}${section.statement.trim()}`];
+      `${label.leanName}${label.colon}${code(unit.name)}`,
+      ...summaryOf(section) ? [`**${label.summary}**${label.colon}${line(summaryOf(section)!)}`] : [],
+      `**${label.statement}**${label.colon}${section.statement.trim()}`];
     if (section.proof.length) parts.push(`**${unit.kind === 'theorem' ? label.proof : label.notes}**`, steps(section));
     return parts.join('\n\n');
   };
@@ -641,6 +708,8 @@ export function renderInformalization(input: InformalizationRenderInput): string
   return [`# ${label.title(target.name)}`, `> ${label.notice}`,
     `## ${label.main}${label.colon}${line(main.title)}`, `${label.leanName}${label.colon}${code(target.name)}`, main.statement.trim(),
     `## ${label.overview}`, input.overview.trim(),
+    ...(input.route?.length ? [`## ${label.route}`, input.route.map((step, index) =>
+      `${index + 1}. ${line(step.claim)} (${step.declarations.map(code).join(label.separator)})`).join('\n')] : []),
     ...(ordered.length ? [`## ${label.definitions}`, ...ordered.map(block)] : []),
     `## ${label.mainProof}`, steps(main), '---', footer].join('\n\n') + '\n';
 }
@@ -660,15 +729,17 @@ export const informalizationEvidenceSchema = z.object({
   toolchain: text, mathlibRevision: text.nullable(), statementSha256: hash.nullable(),
   /** The request's records: the approved formalization, phrase alignment and opted-in explanation rules. */
   formalization: informalizationRequestSchema.shape.formalization, alignment: informalizationRequestSchema.shape.alignment,
-  explanationPolicy: informalizationRequestSchema.shape.explanationPolicy,
+  explanationPolicy: informalizationRequestSchema.shape.explanationPolicy, outlinePolicy: informalizationRequestSchema.shape.outlinePolicy,
   sources: informalizationRequestSchema.shape.sources, batching: informalizationRequestSchema.shape.batching,
   writer: formalizationModelConfigurationSchema, auditors: informalizationRequestSchema.shape.auditors,
   outlineDigest: hash, outline: informalizationOutlineSchema,
   batches: z.array(z.object({ index: z.number().int().nonnegative(), declarations: z.array(declaration).min(1),
     rounds: z.number().int().positive(), writerInputDigest: hash,
-    writer: z.union([informalizationAlignedWriterOutputSchema, informalizationWriterOutputSchema]),
+    writer: z.union([informalizationOutlinedAlignedWriterOutputSchema, informalizationOutlinedWriterOutputSchema,
+      informalizationAlignedWriterOutputSchema, informalizationWriterOutputSchema]),
     audits: z.array(z.object({ auditorId: z.string(),
-      output: z.union([informalizationAlignedAuditOutputSchema, informalizationAuditOutputSchema]) }).strict()).min(1) }).strict()).min(1),
+      output: z.union([informalizationOutlinedAlignedAuditOutputSchema, informalizationOutlinedAuditOutputSchema,
+        informalizationAlignedAuditOutputSchema, informalizationAuditOutputSchema]) }).strict()).min(1) }).strict()).min(1),
   sessions: z.array(sessionEvidenceSchema), metrics: metricsSchema, proofMarkdownSha256: hash,
 }).strict();
 export type InformalizationEvidence = z.infer<typeof informalizationEvidenceSchema>;
@@ -693,8 +764,9 @@ export function assertInformalizationEvidence(value: unknown): { evidence: Infor
     if (record.index !== index || canonicalMathJson(record.declarations) !== canonicalMathJson(batch.declarations))
       throw new Error('informalization_evidence_invalid');
     const audit = informalizationAuditInput({ outline, batch, accepted, sources: files, language: evidence.language,
-      alignment: evidence.alignment, explanationPolicy: evidence.explanationPolicy, explanation: record.writer });
-    const writerCheck = { units: audit.units, batch: audit.batch, alignment: evidence.alignment,
+      alignment: evidence.alignment, explanationPolicy: evidence.explanationPolicy, outlinePolicy: evidence.outlinePolicy, explanation: record.writer });
+    const writerCheck = { units: audit.units, batch: audit.batch, alignment: evidence.alignment, target: audit.target,
+      ...audit.outlinePolicy ? { outlinePolicy: audit.outlinePolicy, declarations: audit.declarations } : {},
       inputDigest: record.writerInputDigest } as InformalizationWriterInput;
     if (informalizationWriterRejections(writerCheck, record.writer).length ||
         canonicalMathJson(record.audits.map(item => item.auditorId)) !== canonicalMathJson(evidence.auditors.map(item => item.id)) ||
@@ -706,7 +778,7 @@ export function assertInformalizationEvidence(value: unknown): { evidence: Infor
   if (canonicalMathJson(evidenceMetrics(outline, sections)) !== canonicalMathJson(evidence.metrics))
     throw new Error('informalization_evidence_invalid');
   const markdown = renderInformalization({ language: evidence.language, outline, sections,
-    overview: evidence.batches.at(-1)!.writer.overview!, provenance: { sources: evidence.sources,
+    overview: evidence.batches.at(-1)!.writer.overview!, route: routeOf(evidence.batches.at(-1)!.writer), provenance: { sources: evidence.sources,
       toolchain: evidence.toolchain, mathlibRevision: evidence.mathlibRevision } });
   if (mathDigest(markdown) !== evidence.proofMarkdownSha256) throw new Error('informalization_evidence_invalid');
   return { evidence, markdown };
@@ -716,7 +788,7 @@ export function informalizationEvidence(input: { request: InformalizationRequest
   const { request, outline } = input, overview = input.batches.at(-1)?.writer.overview;
   if (!overview) throw new Error('informalization_evidence_invalid');
   const sections = input.batches.flatMap(batch => batch.writer.sections);
-  const markdown = renderInformalization({ language: request.language, outline, sections, overview,
+  const markdown = renderInformalization({ language: request.language, outline, sections, overview, route: routeOf(input.batches.at(-1)!.writer),
     provenance: { sources: request.sources, toolchain: request.toolchain, mathlibRevision: request.mathlibRevision } });
   const evidence: InformalizationEvidence = { schema: 'theorem-os.informalization-evidence.v1', protocol: INFORMALIZATION_PROTOCOL,
     status: 'approved', authority: 'model', proofCompiledByHost: true, humanReviewed: false,
@@ -724,6 +796,7 @@ export function informalizationEvidence(input: { request: InformalizationRequest
     toolchain: request.toolchain, mathlibRevision: request.mathlibRevision, statementSha256: request.statementSha256,
     ...request.formalization ? { formalization: request.formalization } : {}, ...request.alignment ? { alignment: request.alignment } : {},
     ...request.explanationPolicy ? { explanationPolicy: request.explanationPolicy } : {},
+    ...request.outlinePolicy ? { outlinePolicy: request.outlinePolicy } : {},
     sources: request.sources, batching: request.batching, writer: request.writer, auditors: request.auditors,
     outlineDigest: informalizationDigest(outline), outline, batches: input.batches, sessions: input.sessions,
     metrics: evidenceMetrics(outline, sections), proofMarkdownSha256: mathDigest(markdown) };
@@ -829,13 +902,22 @@ const auditorAlignmentLines = (alignment: NonNullable<Alignment>) => [
     + (alignment === INFORMALIZATION_ALIGNMENTS[0] ? '' : 'When a step quotes only the head of a block tactic, such as `induction n with` or `have h : P := by`, and none of the tactics inside it, the goals after are those the head leaves to the tactics inside, in order, then the goals after the whole block. ')
     + 'Each step verdict also has goals: consistent if what the step says it starts from and shows agrees mathematically with those goals, inconsistent if it does not (explain how), unrecorded exactly when its stepGoals entry is null.',
 ];
-const instructions = (lines: readonly string[], alignment: Alignment, extra: (alignment: NonNullable<Alignment>) => readonly string[]) =>
-  [...lines, ...alignment ? extra(alignment) : [], ...SHARED_INSTRUCTIONS].join('\n');
+const WRITER_OUTLINE_LINES = [
+  'INPUT.outlinePolicy is proof-outline-v1: each section also has summary, one sentence (two at most) for a reader skimming the proof. It says in plain mathematical words what this declaration establishes and what it is used for later. It must be true of the Lean statement and claim nothing beyond it; it does not replace statement.',
+  'In the final batch also write route, 2 to 6 stages that narrow the target to what the proof checks, in the order a reader should follow them. Each stage has claim (what this stage establishes, and why that is enough for the stage after it) and declarations (the exact names from INPUT.declarations that carry it out). The last stage lists the target. route is null before the final batch. Do not add a stage the Lean proof does not have, and do not describe a relation to an informal problem: only what the Lean declarations state.',
+];
+const AUDITOR_OUTLINE_LINES = [
+  'INPUT.outlinePolicy is proof-outline-v1: each section verdict also has summary. It is faithful if the section\'s summary sentence is true of the Lean declaration and claims nothing the declaration does not establish, and mismatch otherwise (explain what is wrong).',
+  'route.verdict is absent when INPUT.explanation.route is null. Otherwise it is consistent if every stage\'s claim is established by the declarations it lists, as Lean states them, and the stages in order lead to the target; it is inconsistent if a claim is unsupported, a listed declaration plays no such part, or the order misdescribes how the declarations depend on each other (explain). INPUT.declarations lists every declaration of the proof; those outside INPUT.units are in proof/.',
+];
+const instructions = (lines: readonly string[], alignment: Alignment, extra: (alignment: NonNullable<Alignment>) => readonly string[],
+  outline: readonly string[] = []) => [...lines, ...alignment ? extra(alignment) : [], ...outline, ...SHARED_INSTRUCTIONS].join('\n');
 export const INFORMALIZATION_WRITER_INSTRUCTIONS = instructions(WRITER_LINES, undefined, writerAlignmentLines);
 export const INFORMALIZATION_AUDITOR_INSTRUCTIONS = instructions(AUDITOR_LINES, undefined, auditorAlignmentLines);
 /** ROLE.md for a role; absent policy preserves legacy bytes, and alignment adds its independent rules. */
-export const informalizationRoleInstructions = (role: InformalizationRole, alignment?: Alignment, explanationPolicy?: ExplanationPolicy) => {
+export const informalizationRoleInstructions = (role: InformalizationRole, alignment?: Alignment, explanationPolicy?: ExplanationPolicy,
+  outlinePolicy?: OutlinePolicy) => {
   const mathematical = explanationPolicy === INFORMALIZATION_EXPLANATION_POLICY;
-  return role === 'write' ? instructions(mathematical ? MATHEMATICAL_WRITER_LINES : WRITER_LINES, alignment, writerAlignmentLines) :
-    instructions(mathematical ? MATHEMATICAL_AUDITOR_LINES : AUDITOR_LINES, alignment, auditorAlignmentLines);
+  return role === 'write' ? instructions(mathematical ? MATHEMATICAL_WRITER_LINES : WRITER_LINES, alignment, writerAlignmentLines, outlinePolicy ? WRITER_OUTLINE_LINES : []) :
+    instructions(mathematical ? MATHEMATICAL_AUDITOR_LINES : AUDITOR_LINES, alignment, auditorAlignmentLines, outlinePolicy ? AUDITOR_OUTLINE_LINES : []);
 };

@@ -322,6 +322,13 @@ export type WebExplanationSection = {
   /** The lines the statement explains: a theorem's signature, or the whole of any other declaration. */ signature: WebExplanationLines;
   /** Proof-body lines with code that no step quotes. */ unexplained: number[];
   statementReviews: string[]; steps: WebExplanationStep[]; statementLinks?: WebExplanationLink[];
+  /** One audited sentence on what the declaration establishes; present when the explanation was written with an outline. */
+  summary?: string;
+  /**
+   * Lean's term for this declaration evaluates a decidable proposition: in the kernel (`of_decide_eq_true`, as `decide`
+   * leaves) or by compiled code the kernel trusts (`Lean.ofReduceBool`, as `native_decide` leaves).
+   */
+  computed?: 'kernel' | 'compiled';
 };
 export const webFormalizationAspects = ['domains', 'assumptions', 'conclusions', 'definitions', 'quantifierScope', 'instanceCoherence'] as const;
 /** Relations from strongest to weakest; merged or grouped correspondences show the weakest. */
@@ -374,6 +381,13 @@ export type WebExplanationDocument = {
   model: string; effort: string; auditors: number; rounds: number; tokens: number | null;
   /** Present when the explanation used phrase alignment. */ alignment?: string;
   /** Present when the proof was bound to an approved formalization. */ problem?: WebExplanationProblem;
+  /** Audited stages from the proof's first results to the target, each with the declarations that carry it out. */
+  route?: { claim: string; declarations: string[] }[];
+  /**
+   * Library theorems in the proof's elaborated terms (tactic internals left out) and the sections using each; at most
+   * 200, the most used first. Present, possibly empty, whenever the page read Lean's terms; then `computed` is from them too.
+   */
+  library?: { name: string; usedBy: string[] }[];
 };
 /** The proof id `informalize` uses when none is given: the target with every other character run as `_`. */
 export const defaultProofId = (target: string) => target.replace(/[^A-Za-z0-9_-]+/gu, '_').slice(0, 128);

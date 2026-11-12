@@ -24,6 +24,10 @@ export type ExplainView = {
   /** An offline report: the Markdown is a blob URL, and nothing can be generated or deleted. */ report?: { href: string; filename: string };
   /** The reader followed a cited lemma and can go back to where they cited it. */ canReturn?: boolean;
   onRouteOpen?: (target: string) => void;
+  /** `outline` shows each declaration's statement only; `opened` are the sections whose steps the reader unfolded. */
+  detail?: 'outline' | 'steps'; opened?: ReadonlySet<number>;
+  /** The route node a link named or the reader chose, and where a choice is reported. */
+  node?: string; onRouteSelect?: (id: string) => void;
 };
 
 const kinds: Record<WebExplanationSection['kind'], string> = { theorem: t('引理'), definition: t('定义'), instance: t('实例'), opaque: t('定义'),
@@ -57,6 +61,9 @@ function ProseHead(view: ExplainView) {
     <div class="explain-head-actions">
       {view.canReturn && <button type="button" class="text-button explain-return" data-action="return" title={t('回到跳转前的位置，和浏览器的后退一样')}>
         {fill(t('{0}回到引用处'), <Icon name="arrow-left" />)}</button>}
+      {view.document && <div class="source-switch explain-detail-switch" role="group" aria-label={t('讲解详略')}>
+        <button type="button" data-action="detail" data-detail="outline" aria-pressed={view.detail === 'outline'}>{t('概要')}</button>
+        <button type="button" data-action="detail" data-detail="steps" aria-pressed={view.detail !== 'outline'}>{t('逐步')}</button></div>}
       {view.document && <label class="explain-sync"><input type="checkbox" id="explain-sync" checked={view.sync} /><span>{t('同步滚动')}</span></label>}
       {view.report ? <a class="icon-button" href={view.report.href} download={view.report.filename}
         aria-label={t('下载 Markdown')} title={t('下载 Markdown')}><Icon name="download" /></a>
@@ -74,7 +81,7 @@ function Prose(view: ExplainView) {
   const declarations = view.overview.targets.find(item => item.name === view.target)?.declarations ?? 1;
   if (explanation?.status === 'approved') {
     if (view.document) return <DocumentView document={view.document} proof={view.overview.run.proof} runId={view.overview.run.id}
-      active={view.active} gap={view.gap} chosen={view.chosen} onRouteOpen={view.onRouteOpen} />;
+      active={view.active} gap={view.gap} chosen={view.chosen} onRouteOpen={view.onRouteOpen} outline={view.detail === 'outline'} opened={view.opened} node={view.node} onRouteSelect={view.onRouteSelect} />;
     return view.documentError ? <div class="inline-error" role="alert">{view.documentError}</div>
       : <p class="explain-state" role="status"><Spinner />{t('正在读取讲解…')}</p>;
   }
@@ -135,8 +142,9 @@ const richLinks = (links: readonly WebExplanationLink[] | undefined, at: Record<
     title: t('在 Lean 中标出') }));
 // Which section explains each declaration, once per document, so a section's props stay the same between draws.
 const ownedBy = new WeakMap<WebExplanationDocument, Map<string, number>>();
-function DocumentView({ document, proof, runId, active, gap, chosen, onRouteOpen }: { document: WebExplanationDocument; proof: string; runId: string;
-  active?: StepRef; gap?: number; chosen?: ReadonlySet<number>; onRouteOpen?: (target: string) => void }) {
+function DocumentView({ document, proof, runId, active, gap, chosen, onRouteOpen, outline, opened, node, onRouteSelect }: { document: WebExplanationDocument; proof: string; runId: string;
+  active?: StepRef; gap?: number; chosen?: ReadonlySet<number>; onRouteOpen?: (target: string) => void; outline?: boolean; opened?: ReadonlySet<number>;
+  node?: string; onRouteSelect?: (id: string) => void }) {
   const route = useMemo(() => explanationSolutionRoute(document, proof, `${runId}:explanation:${document.target}:${document.language}`), [document, proof, runId]);
   let owned = ownedBy.get(document);
   if (!owned) ownedBy.set(document, owned = new Map(document.sections.map((section, index) => [section.name, index])));
@@ -145,21 +153,21 @@ function DocumentView({ document, proof, runId, active, gap, chosen, onRouteOpen
       <p class="explain-notice"><span>{t('这份讲解由模型根据 Lean 证明写成，并由 {0} 个审核模型逐步对照 Lean 检查，未经人工审阅。Lean 只检查了证明本身，没有检查这份讲解。', document.auditors)}</span></p>
       {linkedDocument(document) && <p>{t('讲解中划虚线的短语各对应一段 Lean，点它标出那段 Lean；审核模型核对过每一对。')}</p>}</details>
     {document.problem && <ProblemCard {...document.problem} active={chosen} />}
-    <SolutionRouteGraph model={route} onOpen={onRouteOpen} />
-    {document.sections.map((section, index) => <CachedSection key={section.name} section={section} index={index} owned={owned}
+    <SolutionRouteGraph model={route} onOpen={onRouteOpen} selection={node} onSelect={onRouteSelect} />
+    {document.sections.map((section, index) => <CachedSection key={section.name} section={section} index={index} owned={owned} folded={!!outline && !opened?.has(index)}
       active={active?.section === index ? active : undefined} gap={active?.section === index ? gap : undefined} />)}
     <Footer document={document} />
   </article>;
 }
-type SectionProps = { section: WebExplanationSection; index: number; owned: Map<string, number>; active?: StepRef; gap?: number };
+type SectionProps = { section: WebExplanationSection; index: number; owned: Map<string, number>; active?: StepRef; gap?: number; folded?: boolean };
 /**
  * A section drawn again only when its props change: a click changes the active step, so a long proof redraws the
  * section it leaves and the one it reaches, not all of them.
  */
 class CachedSection extends Component<SectionProps> {
   override shouldComponentUpdate(next: SectionProps) {
-    const { section, index, owned, active, gap } = this.props;
-    return next.section !== section || next.index !== index || next.owned !== owned || next.gap !== gap
+    const { section, index, owned, active, gap, folded } = this.props;
+    return next.folded !== folded || next.section !== section || next.index !== index || next.owned !== owned || next.gap !== gap
       || next.active?.section !== active?.section || next.active?.step !== active?.step || next.active?.statement !== active?.statement;
   }
   override render() { return <SectionView {...this.props} />; }
@@ -177,16 +185,19 @@ function SectionView(props: SectionProps) {
           <button type="button" class="explain-lines" data-action="lines" data-section={index} title={t('在 Lean 中定位')}>{linesLabel([section.lines])}</button></div>
         <h3 id={`explain-section-${index}`} tabIndex={-1}><Rich text={section.title} /></h3>
       </header>
-      <p class="explain-rich explain-statement"><Rich text={section.statement}
-        links={richLinks(section.statementLinks, { 'data-section': index, 'data-statement': '' })} /></p>
-      {split && <div class="explain-step-meta">
+      {section.summary && <p class="explain-rich explain-summary"><Rich text={section.summary} /></p>}
+      {!(props.folded && section.summary) && <p class="explain-rich explain-statement"><Rich text={section.statement}
+        links={richLinks(section.statementLinks, { 'data-section': index, 'data-statement': '' })} /></p>}
+      {split && !(props.folded && section.summary) && <div class="explain-step-meta">
         <button type="button" class="explain-lines" data-action="lines" data-section={index} data-statement="" title={t('在 Lean 中定位定理的陈述')}>
           {t('陈述 · {0}', linesLabel([section.signature]))}</button></div>}
       <Reviews notes={section.statementReviews} />
     </div>
     {props.gap !== undefined && <p class="explain-gap-note" role="status"><Icon name="circle-help" />
       <span>{t('第 {0} 行没有单独的讲解步骤。可对照本声明的前后推导和 Lean 源码；现有记录无法确认这一行是否已被充分解释。', props.gap)}</span></p>}
-    {section.steps.length > 0 && <ol class="explain-steps">{section.steps.map((step, stepIndex) =>
+    {props.folded && (section.steps.length > 0 || section.summary) && <button type="button" class="text-button explain-unfold" data-action="unfold" data-section={index}>
+      {section.steps.length ? fill(t('{0}展开 {1} 步'), <Icon name="chevron-down" />, String(section.steps.length)) : fill(t('{0}展开完整陈述'), <Icon name="chevron-down" />)}</button>}
+    {!props.folded && section.steps.length > 0 && <ol class="explain-steps">{section.steps.map((step, stepIndex) =>
       <li key={stepIndex} class={active?.step === stepIndex ? 'is-active' : undefined} data-anchor={index} data-step={stepIndex}>
         <p class="explain-rich"><Rich text={step.text} links={richLinks(step.links, { 'data-section': index, 'data-step': stepIndex })} /></p>
         <div class="explain-step-meta">

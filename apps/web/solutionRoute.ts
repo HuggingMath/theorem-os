@@ -1,6 +1,11 @@
 /** Recorded work and proof structure share this graph in the workbench and archive. */
 export type SolutionRouteStatus = 'passed' | 'failed' | 'running' | 'pending' | 'conditional' | 'human' | 'recorded';
 export type SolutionRouteKind = 'problem' | 'plan' | 'task' | 'finding' | 'attempt' | 'check' | 'decision' | 'proof' | 'review' | 'acceptance' | 'outcome' | 'declaration' | 'derivation' | 'group';
+/**
+ * Where a declaration of an explained proof comes from. `computation` is read from Lean's term when the page has it and
+ * otherwise from a decision tactic written in the body. `library` nodes are cited library results, hidden until asked for.
+ */
+export type SolutionRouteOrigin = 'target' | 'lemma' | 'definition' | 'computation' | 'given' | 'library';
 export type SolutionRouteSection = { title: string; text: string; code?: boolean; reason?: string; detail?: boolean };
 export type SolutionRouteNode = {
   id: string; kind: SolutionRouteKind; title: string; status: SolutionRouteStatus;
@@ -10,6 +15,7 @@ export type SolutionRouteNode = {
   source?: { name: string; sha256?: string; commit?: string; line?: number; endLine?: number };
   /** Records attached to this node; expanded in the all-steps graph and in its inspector. */
   parentId?: string;
+  origin?: SolutionRouteOrigin;
 };
 export type SolutionRouteEdge = {
   from: string; to: string; kind: 'dependency' | 'sequence' | 'evidence' | 'decision' | 'integration' | 'reference';

@@ -8,7 +8,7 @@ import { formalizationDigest, readFormalizationArtifact } from '../src/math/form
 import { attachInformalizationGoals, informalizationExtractionQuery, informalizationGoalsQuery, informalizationLibraryContext,
   informalizationOutline, informalizationOutlineSchema, leanSourceSlice, type InformalizationGoalsResult,
   type InformalizationOutline } from '../src/math/informalizationExtraction';
-import { INFORMALIZATION_ALIGNMENT, INFORMALIZATION_EXPLANATION_POLICY, INFORMALIZATION_AUDITOR_INSTRUCTIONS, INFORMALIZATION_WRITER_INSTRUCTIONS,
+import { INFORMALIZATION_ALIGNMENT, INFORMALIZATION_EXPLANATION_POLICY, INFORMALIZATION_OUTLINE_POLICY, INFORMALIZATION_AUDITOR_INSTRUCTIONS, INFORMALIZATION_WRITER_INSTRUCTIONS,
   assertInformalizationEvidence, informalizationAuditApproved, informalizationAuditFeedback, informalizationAuditInput,
   informalizationAuditRejections, informalizationBatches, informalizationDigest, informalizationExcerptCoverage, informalizationRoleInstructions,
   informalizationRoleOutputSchema, informalizationWriterInput, informalizationWriterRejections, informalizationWriterSubmissionRejections,
@@ -1003,6 +1003,54 @@ describe('informalization runner', () => {
     const idle = presetAgent();
     expect(await r.run(idle)).toMatchObject({ status: 'approved' });
     expect(idle.calls).toHaveLength(0);
+  });
+
+  it('asks for an audited summary per declaration and a route to the target under the outline policy, and leaves other requests unchanged', async () => {
+    const r = runner({ outlinePolicy: INFORMALIZATION_OUTLINE_POLICY });
+    const route = [{ claim: 'Doubling is multiplication by two.', declarations: ['double', 'double_eq'] },
+      { claim: 'Adding zero changes nothing, so the target follows.', declarations: ['lib_fact', 'double_add_zero'] }];
+    const outlined = (input: InformalizationWriterInput, last = route) => ({ ...explain(input),
+      sections: explain(input).sections.map(section => ({ ...section, summary: 'What ' + section.declaration + ' gives.' })),
+      route: input.batch.final ? last : null });
+    const judged = (input: InformalizationAuditInput, wrong = false) => {
+      const output = review(input);
+      return { ...output, sections: output.sections.map((section, index) => ({ ...section,
+        summary: wrong && index === 0 ? { verdict: 'mismatch', explanation: 'The lemma does not give this.' } : { verdict: 'faithful', explanation: '' } })),
+        route: { verdict: input.batch.final ? 'consistent' : 'absent', explanation: '' } };
+    };
+    // Final batch: a route naming an unknown declaration, then one an auditor's summary verdict sends back, then accepted.
+    const agent = presetAgent({ write: (input, count) => count === 2 ? outlined(input, [route[0]!, { claim: 'Then the target.', declarations: ['nowhere'] }]) : outlined(input),
+      audit: (input, auditorId, count) => judged(input, auditorId === 'auditor-1' && count === 2) });
+    expect(await r.run(agent)).toMatchObject({ status: 'approved' });
+    const writes = agent.calls.filter(call => call.role === 'write');
+    expect(writes.map(call => [call.batch, call.round])).toEqual([[0, 1], [1, 1], [1, 2], [1, 3]]);
+    expect(writes[2]!.input.feedback).toContain('route: nowhere is not a declaration of this proof');
+    expect(writes[2]!.input.feedback).toContain('route: the last step must list the target double_add_zero');
+    expect(writes[3]!.input.feedback).toContain('auditor-1, double_eq, summary mismatch: The lemma does not give this.');
+    for (const call of agent.calls) {
+      expect(call.input).toMatchObject({ outlinePolicy: INFORMALIZATION_OUTLINE_POLICY, declarations: ['lib_fact', 'double', 'double_eq', 'double_add_zero'] });
+      expect(readMathText(path.join(call.workspace, 'ROLE.md'))).toBe(informalizationRoleInstructions(call.role, undefined, undefined, INFORMALIZATION_OUTLINE_POLICY));
+      expect(readMathText(path.join(call.workspace, 'ROLE.md'))).toContain('proof-outline-v1');
+      expect(JSON.parse(readMathText(path.join(call.workspace, 'OUTPUT.schema.json'))))
+        .toEqual(informalizationRoleOutputSchema(call.role, undefined, INFORMALIZATION_OUTLINE_POLICY));
+    }
+    expect((agent.calls.findLast(call => call.role === 'audit')!.input as unknown as { explanation: { route: unknown } }).explanation.route).toEqual(route);
+    const evidence = readInformalizationArtifact(path.join(r.directory, 'artifact'));
+    expect(evidence.outlinePolicy).toBe(INFORMALIZATION_OUTLINE_POLICY);
+    expect(evidence.batches[1]!.writer).toMatchObject({ route });
+    const markdown = readMathText(path.join(r.directory, 'artifact/proof.md'));
+    expect(markdown).toContain('## 证明主线\n\n1. Doubling is multiplication by two. (`double`，`double_eq`)');
+    expect(markdown).toContain('**概要**：What double_eq gives.');
+    const relabelled = structuredClone(evidence);
+    delete relabelled.outlinePolicy;
+    expect(() => assertInformalizationEvidence(relabelled)).toThrow();
+    // A request without the policy keeps its role contracts and rejects the added fields.
+    expect(informalizationRoleInstructions('write')).toBe(INFORMALIZATION_WRITER_INSTRUCTIONS);
+    const legacy = informalizationWriterInput({ outline: outlineOf(), batch: informalizationBatches(outlineOf(), { maxUnits: 2, maxSourceBytes: 60_000 })[1]!,
+      accepted: new Map(), sources: [], language: 'zh', round: 1, problemStatement: null, feedback: null, previousOutput: null });
+    expect(legacy).not.toHaveProperty('outlinePolicy');
+    expect(legacy).not.toHaveProperty('declarations');
+    expect(informalizationWriterRejections(legacy, outlined(legacy)).join('\n')).toMatch(/Unrecognized key/u);
   });
 
   it('returns missing reasons and lemma connections as auditor gaps before accepting a revised mathematical explanation', async () => {

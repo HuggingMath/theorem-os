@@ -72,6 +72,12 @@ An accepted workbench run offers “Lean → 自然语言” in the proof header
 
 ## Limits of the result
 
+## Proof outline (`--outline-policy proof-outline-v1`, the default for new requests)
+
+The writer also gives each declaration a `summary`, one sentence on what it establishes and what it is used for, and in the final batch a `route`: 2 to 6 stages that narrow the target to what the proof checks, each with a claim and the declarations that carry it out (the last stage lists the target). The host checks that the route names only declarations of the proof. Each auditor judges every summary (`faithful` or `mismatch`) and the route (`consistent` or `inconsistent`) against the Lean; a mismatch or an inconsistent route sends the batch back like any other finding. `--outline-policy none` prepares a request without these fields, and requests and evidence made before the policy keep their inputs, role contracts and digests.
+
+The explanation page uses the summaries for its outline reading and the route for the main line of the proof map. For an explanation without them it falls back to the statements and to the longest chain of cited declarations. The page also reads two things from Lean's elaborated terms, not from models: which declarations Lean decided by evaluation (`decide` in the kernel, `native_decide` by compiled code) and which library theorems each declaration's term uses.
+
 Lean establishes that the proof compiles and that the target uses no `sorryAx`. The host establishes that each step quotes real Lean text of its declaration and cites declarations the Lean terms use, and with alignment that each linked phrase and its Lean are verbatim and in the right place. It does not establish that a step's prose is mathematically correct, that a statement translation or a link is faithful, that a step agrees with its goals, or that the explanation is complete. Those are model judgments by auditors that share the writer's model, and the artifact says so. Coverage is reported, not required. A formalization binding establishes only that the proof keeps the formalized declarations; whether those declarations say what the original problem says is the formalization reviewers' judgment.
 
 Current limitations:

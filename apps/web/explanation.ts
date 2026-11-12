@@ -1,6 +1,7 @@
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
-import { assertInformalizationEvidence, informalizationStepGoalsOptions, type InformalizationEvidence } from '../../src/math/informalization';
-import { leanSourceSlice, type InformalizationUnit } from '../../src/math/informalizationExtraction';
+import { assertInformalizationEvidence, informalizationOutputRoute, informalizationSectionSummary, informalizationStepGoalsOptions,
+  type InformalizationEvidence } from '../../src/math/informalization';
+import { incidentalLibraryName, leanSourceSlice, type InformalizationUnit } from '../../src/math/informalizationExtraction';
 import { codeOnly, count, findWithin, identifierChar, lineEnds, lineStart, offsetSpans, placeExcerpts, signatureEnd,
   statementRegion, stepGoals, type SourceOffsets as Offsets } from '../../src/math/informalizationAlignment';
 import { formalizationDigest, type FormalizationEvidence } from '../../src/math/formalization';
@@ -9,6 +10,9 @@ import { reportedTotalTokens } from '../../src/solver/usageBudget';
 import { declarationNames, declarationRegions, formalizationCorrespondences } from './formalizationReport';
 import type { WebEnvironment, WebExplanationDocument, WebExplanationLanguage, WebExplanationLines, WebExplanationLink,
   WebExplanationUse } from './shared';
+
+// What `native_decide` leaves in a term: the kernel trusts the compiler's evaluation.
+const COMPILED = new Set(['Lean.ofReduceBool', 'Lean.ofReduceNat', 'Lean.trustCompiler', 'Lean.reduceBool', 'Lean.reduceNat']);
 
 /** What an explanation must be about: one target of one accepted proof, in one language and environment. */
 export type WebExplanationBinding = { proof: string; target: string; language: WebExplanationLanguage; environment: WebEnvironment };
@@ -153,6 +157,9 @@ export function explanationDocument(evidence: InformalizationEvidence, proof: st
         reviews: reviews(audit => audit.steps[index]?.explanation), ...goals ? { goals } : {},
         ...links.length ? { links } : {}, ...goalsChecked ? { goalsChecked } : {} };
     });
+    const summary = informalizationSectionSummary(section);
+    const computed = unit.kind !== 'theorem' ? undefined : unit.external.some(name => COMPILED.has(name)) ? 'compiled' as const
+      : unit.external.includes('of_decide_eq_true') ? 'kernel' as const : undefined;
     const statementLinks = linked(section.statement, 'statementLinks' in section ? section.statementLinks : undefined, [statementRegion(unit)]);
     // A theorem's statement explains its signature and the steps its body; any other declaration is all statement.
     const split = unit.kind === 'theorem' ? signatureEnd(code) : -1;
@@ -170,12 +177,18 @@ export function explanationDocument(evidence: InformalizationEvidence, proof: st
     }
     return { name: unit.name, kind: unit.kind, target: unit === target, title: section.title, statement: section.statement, lines, signature,
       unexplained, statementReviews: reviews(audit => audit.statement.explanation), steps,
-      ...statementLinks.length ? { statementLinks } : {} };
+      ...statementLinks.length ? { statementLinks } : {}, ...summary ? { summary } : {}, ...computed ? { computed } : {} };
   });
   // The formalization's statement declarations, where the proof keeps them (the host checked it keeps every one).
   const problem = formalization && { problemId: formalization.request.problemId, original: formalization.request.statement,
     correspondences: formalizationCorrespondences(formalization, proof,
       declarationRegions(proof, declarationNames(formalization.candidate.source))) };
+  const route = informalizationOutputRoute(evidence.batches.at(-1)!.writer);
+  // Library declarations by how many of the proof's declarations use them; tactic and metaprogramming internals are left out.
+  const theorems = new Set(evidence.outline.library.flatMap(item => item.kind === 'theorem' ? [item.name] : [])), users = new Map<string, string[]>();
+  for (const unit of units) for (const name of unit.external)
+    if (theorems.has(name) && !incidentalLibraryName(name) && name !== 'of_decide_eq_true') users.set(name, [...users.get(name) ?? [], unit.name]);
+  const library = [...users].sort((a, b) => b[1].length - a[1].length || (a[0] < b[0] ? -1 : 1)).slice(0, 200).map(([name, usedBy]) => ({ name, usedBy }));
   return { schema: 'theorem-os.web-explanation.v1', target: evidence.target, language: evidence.language,
     toolchain: evidence.toolchain, mathlibRevision: evidence.mathlibRevision,
     overview: evidence.batches.at(-1)!.writer.overview!, axioms: evidence.outline.axioms, sections,
@@ -184,7 +197,8 @@ export function explanationDocument(evidence: InformalizationEvidence, proof: st
     model: evidence.writer.model, effort: evidence.writer.effort, auditors: evidence.auditors.length,
     rounds: evidence.batches.reduce((sum, batch) => sum + batch.rounds, 0),
     tokens: totals.length ? totals.reduce((sum, value) => sum + value, 0) : null,
-    ...evidence.alignment ? { alignment: evidence.alignment } : {}, ...problem ? { problem } : {} };
+    ...evidence.alignment ? { alignment: evidence.alignment } : {}, ...problem ? { problem } : {},
+    ...route ? { route } : {}, library };
 }
 
 export function explanationMarkdownFilename(runId: string, target: string, language: WebExplanationLanguage): string {

@@ -49,6 +49,22 @@ describe('web explanation projection', () => {
     expect(JSON.stringify(document)).not.toContain('/preset-only');
   });
 
+  it('carries the audited summaries and route, and reads computed declarations and library theorems from Lean terms', () => {
+    const units: FixtureUnit[] = UNITS.map(unit => unit.name === 'double_eq' ? { ...unit, external: ['of_decide_eq_true', 'Nat.two_mul', 'Lean.Omega.x'] }
+      : unit.name === 'target_thm' ? { ...unit, external: ['Nat.add_zero', 'Nat.two_mul', 'Lean.ofReduceBool'] } : unit);
+    const value = webExplanationEvidence({ proof: PROOF, target: 'target_thm', units, outlined: true });
+    const document = explanationDocument(verifyExplanationEvidence(roundTrip(value), binding).evidence, PROOF);
+    expect(document.sections.map(section => [section.name, section.summary, section.computed])).toEqual([
+      ['double', 'Summary of double.', undefined], ['double_eq', 'Summary of double_eq.', 'kernel'], ['target_thm', 'Summary of target_thm.', 'compiled']]);
+    expect(document.route).toEqual([{ claim: 'First the lemmas.', declarations: ['double', 'double_eq'] },
+      { claim: 'Then the target follows.', declarations: ['target_thm'] }]);
+    expect(document.library).toEqual([{ name: 'Nat.two_mul', usedBy: ['double_eq', 'target_thm'] }, { name: 'Nat.add_zero', usedBy: ['target_thm'] }]);
+    const plain = explanationDocument(verifyExplanationEvidence(roundTrip(evidence()), binding).evidence, PROOF);
+    expect(plain).not.toHaveProperty('route');
+    expect(plain.library).toEqual([]);
+    expect(plain.sections.every(section => section.summary === undefined && section.computed === undefined)).toBe(true);
+  });
+
   it('maps excerpts whose whitespace differs from the source, merging touching ranges', () => {
     const unit = { source: 'theorem t : True := by\n  first\n    | trivial\n  done', range: { line: 10, column: 0, endLine: 13, endColumn: 6 } };
     expect(excerptLines(unit, ['first | trivial'])).toEqual([{ start: 11, end: 12 }]);

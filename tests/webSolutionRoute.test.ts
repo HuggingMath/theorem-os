@@ -251,7 +251,34 @@ describe('complete recorded explanation projection', () => {
     const route = explanationSolutionRoute(document, proof), first = route.nodes.find(node => node.id === 'derivation:target:0')!;
     expect(route.basis).toBe('explanation');
     expect(route.initial).toBe('derivation:target:0');
-    expect(route.overview?.map(section => section.text)).toEqual(['Q follows from P.', document.overview]);
+    expect(route.overview?.map(section => section.text)).toEqual(['Q follows from P.', 'theorem target : Q := by', document.overview,
+      'Lean checked the target theorem. It depends on no sorry and on no axiom.']);
+    expect(route.overview?.[1]?.code).toBe(true);
+    expect(route.nodes.filter(node => node.origin).map(node => [node.id, node.origin])).toEqual([['declaration:helper', 'lemma'], ['declaration:target', 'target']]);
+    expect(route.stages?.map(stage => stage.nodeIds)).toEqual([['declaration:helper'], ['declaration:target']]);
+    const computed = explanationSolutionRoute({ ...document, axioms: ['propext', 'sorryAx'] }, proof.replace('exact hp', 'decide -- exact'));
+    expect(computed.nodes.find(node => node.id === 'declaration:helper')?.origin).toBe('computation');
+    expect(computed.overview?.map(section => section.title)).toEqual(['Goal', 'Lean statement', 'Proof outline', 'Declarations decided by computation', 'Verification']);
+    expect(computed.overview?.at(-1)?.text).toBe('Lean checked the target theorem. It depends on no sorry. Axioms used: propext, sorryAx.');
+    expect(explanationSolutionRoute({ ...document, axioms: undefined }, proof.replace('exact hp', '-- decide')).overview?.map(section => section.title))
+      .toEqual(['Goal', 'Lean statement', 'Proof outline']);
+    // With Lean's terms, the audited outline and a formalization: none of it is guessed from the source text.
+    const piece = (relation: 'direct' | 'equivalent') => ({ aspect: 'conclusions' as const, relation, original: 'Q', originalStart: 0, originalEnd: 1, leanText: 'Q', lean: [], reviewers: 2, explanations: [] });
+    const full = explanationSolutionRoute({ ...document, library: [{ name: 'Lib.fact', usedBy: ['helper', 'target'] }],
+      route: [{ claim: 'P is available.', declarations: ['helper', 'gone'] }, { claim: 'So Q.', declarations: ['target'] }],
+      problem: { problemId: 'p', original: 'Show Q.', correspondences: [piece('direct'), piece('direct'), piece('equivalent')] },
+      sections: [{ ...document.sections[0]!, summary: 'P, used for Q.', computed: 'compiled',
+        steps: [{ ...document.sections[0]!.steps[0]!, uses: [{ name: 'Lib.fact', place: 'implicit', spans: [] }] }] }, document.sections[1]!] }, proof.replace('exact hp', 'decide'));
+    expect(full.stages).toEqual([{ title: 'helper', summary: 'P is available.', nodeIds: ['declaration:helper'] }, { title: 'target', summary: 'So Q.', nodeIds: ['declaration:target'] }]);
+    expect(full.nodes.find(node => node.id === 'declaration:helper')).toMatchObject({ origin: 'computation', summary: 'P, used for Q.' });
+    expect(full.nodes.find(node => node.id === 'library:Lib.fact')).toMatchObject({ origin: 'library', title: 'Lib.fact',
+      sections: [{ title: 'Declarations citing it', text: 'helper' }, { title: 'Other declarations whose Lean terms use it', text: 'target' }] });
+    expect(full.edges).toContainEqual({ from: 'library:Lib.fact', to: 'declaration:helper', kind: 'reference' });
+    expect(full.overview?.find(section => section.title === 'Original problem and Lean statement')?.text)
+      .toBe("The formalization's reviewers compared the original problem with the Lean statement piece by piece: 2 direct, 1 equivalent in meaning.");
+    expect(full.overview?.find(section => section.title === "Declarations decided by computation (from Lean's terms)")?.text).toBe('helper  (native_decide)');
+    // Lean's terms say the helper of the unedited proof is not computed, whatever its text says.
+    expect(explanationSolutionRoute({ ...document, library: [] }, proof.replace('exact hp', 'decide')).nodes[1]?.origin).toBe('lemma');
     expect(route.edges).toEqual(expect.arrayContaining([
       { from: 'declaration:helper', to: 'declaration:target', kind: 'dependency' },
       { from: 'declaration:helper', to: 'derivation:target:0', kind: 'reference' },

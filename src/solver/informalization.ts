@@ -15,6 +15,8 @@ import { allowanceReached, buildTokenBudget, initializeUsageAccounting, modelDis
 import { acquireMathModelSlot, configuredMathModelSlots, type MathModelSlot } from '../math/mathModelSlot';
 import { informalizationOutlineSchema, type InformalizationOutline } from '../math/informalizationExtraction';
 import { informalizationAlignedAuditOutputSchema, informalizationAlignedWriterOutputSchema, informalizationAuditApproved,
+  informalizationOutlinedAlignedAuditOutputSchema, informalizationOutlinedAlignedWriterOutputSchema,
+  informalizationOutlinedAuditOutputSchema, informalizationOutlinedWriterOutputSchema,
   informalizationAuditFeedback, informalizationAuditInput, informalizationAuditOutputSchema, informalizationAuditRejections,
   informalizationBatches, informalizationDigest, informalizationEvidence, informalizationRejectionFeedback,
   informalizationRoleInstructions, informalizationRoleOutputSchema, informalizationWriterInput, informalizationWriterOutputSchema,
@@ -37,8 +39,10 @@ const sessionSchema = z.object({
   usageAccounting: z.object({ startedTurns: z.number().int().nonnegative(), reportedTurns: z.number().int().nonnegative(),
     pending: z.boolean(), incomplete: z.boolean() }).strict(),
 }).strict();
-const writerOutput = z.union([informalizationAlignedWriterOutputSchema, informalizationWriterOutputSchema]);
-const auditOutput = z.union([informalizationAlignedAuditOutputSchema, informalizationAuditOutputSchema]);
+const writerOutput = z.union([informalizationOutlinedAlignedWriterOutputSchema, informalizationOutlinedWriterOutputSchema,
+  informalizationAlignedWriterOutputSchema, informalizationWriterOutputSchema]);
+const auditOutput = z.union([informalizationOutlinedAlignedAuditOutputSchema, informalizationOutlinedAuditOutputSchema,
+  informalizationAlignedAuditOutputSchema, informalizationAuditOutputSchema]);
 const stateSchema = z.object({
   schema: z.literal('theorem-os.informalization-state.v1'), requestDigest: hash, environmentDigest: hash, profileDigest: hash,
   status: z.enum(['running', 'approved', 'exhausted', 'stopped']),
@@ -164,8 +168,8 @@ export async function runInformalization(directory: string, root: string, option
         const config = slot.role === 'write' ? request.writer : request.auditors.find(item => item.id === slot.auditorId)!;
         const inputText = canonicalMathJson(input);
         if (Buffer.byteLength(inputText) > 8_000_000) throw new Error('informalization_role_input_too_large');
-        const instructionsText = informalizationRoleInstructions(slot.role, request.alignment, request.explanationPolicy);
-        const schemaText = canonicalMathJson(informalizationRoleOutputSchema(slot.role, request.alignment));
+        const instructionsText = informalizationRoleInstructions(slot.role, request.alignment, request.explanationPolicy, request.outlinePolicy);
+        const schemaText = canonicalMathJson(informalizationRoleOutputSchema(slot.role, request.alignment, request.outlinePolicy));
         const roleContract = { roleInstructionsSha256: mathDigest(instructionsText), outputSchemaSha256: mathDigest(schemaText) };
         const configurationDigest = formalizationModelConfigurationDigest(config);
         // Only closed sessions whose output was read can be reused; bind the actual input and protocol bytes.
@@ -333,7 +337,7 @@ export async function runInformalization(directory: string, root: string, option
               record.rounds++; record.open = true; save();
             }
             const round = record.rounds, context = { outline, batch, accepted, sources, language: request.language,
-              alignment: request.alignment, explanationPolicy: request.explanationPolicy };
+              alignment: request.alignment, explanationPolicy: request.explanationPolicy, outlinePolicy: request.outlinePolicy };
             const writerInput = informalizationWriterInput({ ...context, round, problemStatement: request.statement,
               feedback: record.feedback ?? null, previousOutput: record.previous ?? null });
             const written = await dispatch({ role: 'write', batch: batch.index, round, attempt: 1 }, writerInput,
@@ -341,7 +345,7 @@ export async function runInformalization(directory: string, root: string, option
             const problems = written === undefined ? ['OUTPUT.json was not written as complete JSON'] :
               informalizationWriterSubmissionRejections(writerInput, written);
             if (problems.length) {
-              const parsed = informalizationWriterOutputSchemaFor(request.alignment).safeParse(written);
+              const parsed = informalizationWriterOutputSchemaFor(request.alignment, request.outlinePolicy).safeParse(written);
               record.feedback = informalizationRejectionFeedback(problems);
               if (parsed.success) record.previous = parsed.data;
               record.open = false; save();

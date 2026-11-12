@@ -25,8 +25,10 @@ const state = {
   language: (params.get('language') === 'en' || params.get('language') === 'zh' ? params.get('language') : locale) as 'zh' | 'en',
   csrf: '', overview: undefined as WebExplanationOverview | undefined, documents: new Map<string, WebExplanationDocument>(),
   loading: new Set<string>(), documentError: undefined as string | undefined, active: undefined as StepRef | undefined,
-  gap: undefined as number | undefined, chosen: new Set<number>(), pane: 'prose' as 'lean' | 'prose', sync: true, dialog: undefined as ExplainView['dialog'], busy: false, error: undefined as string | undefined,
+  gap: undefined as number | undefined, chosen: new Set<number>(), detail: 'steps' as 'outline' | 'steps', opened: new Set<number>(), node: undefined as string | undefined, pane: 'prose' as 'lean' | 'prose', sync: true, dialog: undefined as ExplainView['dialog'], busy: false, error: undefined as string | undefined,
 };
+// A link to one declaration or step and one route node (#at=<declaration>&step=<n>&node=<id>): kept from the address the page was opened with.
+let linked = new URLSearchParams(location.hash.slice(1));
 let toastTimer: ReturnType<typeof setTimeout> | undefined, reportLink: { href: string; filename: string } | undefined;
 
 class RequestError extends Error {
@@ -136,11 +138,13 @@ function draw() {
   const overview = state.overview;
   if (!overview) return;
   const explanation = current(), explained = currentDocument(), step = ladder.step();
+  if (explained && (linked.has('at') || linked.has('node') || linked.has('view'))) { openLinked(explained); return; }
   renderExplain(hosts, { overview, target: state.target, language: state.language, pane: state.pane, sync: state.sync,
     ...(reportLink ? { report: reportLink } : {}),
     ...(explanation ? { explanation } : {}), ...(explained ? { document: explained } : {}), ...(state.documentError ? { documentError: state.documentError } : {}),
     ...(state.active ? { active: state.active } : {}), ...(state.gap !== undefined ? { gap: state.gap } : {}), chosen: state.chosen,
-    ...(step ? { step } : {}),
+    ...(step ? { step } : {}), detail: state.detail, opened: state.opened, ...(state.node ? { node: state.node } : {}),
+    onRouteSelect: id => { if (id !== state.node) { state.node = id; writeLink(); } },
     ...(state.dialog ? { dialog: state.dialog } : {}), busy: state.busy,
     ...(state.error ? { error: state.error } : {}), canReturn: depth > 0 && explained !== undefined, now: Date.now(),
     onRouteOpen: target => {
@@ -222,6 +226,8 @@ function select(ref: StepRef, show: 'lean' | 'prose', options: { gap?: number; s
   const explained = currentDocument();
   if (!explained) return;
   state.active = ref; state.gap = options.gap; state.chosen = new Set(); ladder.reset();
+  if (ref.step !== undefined) state.opened.add(ref.section);
+  writeLink();
   pinned = options.spans ?? [];
   markUse(undefined);
   if (narrow()) state.pane = show;
@@ -233,6 +239,32 @@ function select(ref: StepRef, show: 'lean' | 'prose', options: { gap?: number; s
     else revealStep(ref);
   });
 }
+
+/** The address names the chosen declaration and step, so a copied link opens the same place. The entry's state is kept. */
+function writeLink() {
+  const ref = state.active, name = ref && currentDocument()?.sections[ref.section]?.name;
+  const place = new URLSearchParams({ ...(name ? { at: name, ...(ref.step === undefined ? {} : { step: String(ref.step + 1) }) } : {}),
+    ...(state.detail === 'outline' ? { view: 'outline' } : {}), ...(state.node ? { node: state.node } : {}) });
+  try { history.replaceState(history.state, '', `${location.pathname}${location.search}${place.size ? `#${place}` : ''}`); } catch { /* A copy opened without history keeps working. */ }
+}
+/** Opens the place a link named, once its explanation is read; a name the proof no longer has is ignored. */
+function openLinked(explained: WebExplanationDocument) {
+  const place = linked; linked = new URLSearchParams();
+  if (place.get('view') === 'outline') state.detail = 'outline';
+  if (place.has('node')) state.node = place.get('node')!;
+  const section = explained.sections.findIndex(item => item.name === place.get('at')), step = Number(place.get('step')) - 1;
+  if (section < 0) { writeLink(); draw(); return; }
+  const ref: StepRef = { section, ...(Number.isInteger(step) && explained.sections[section]!.steps[step] ? { step } : {}) };
+  select(ref, 'prose');
+  requestAnimationFrame(() => { const line = refLines(explained, ref)[0]?.start; if (line && !narrow()) revealLine(line); });
+}
+
+// A link pasted into the open page moves to its place too. Going back or forward to a jump's entry is restored by popstate instead.
+window.addEventListener('hashchange', () => {
+  if (entryOf(history.state)) return;
+  linked = new URLSearchParams(location.hash.slice(1));
+  if (linked.has('at') || linked.has('node')) draw();
+});
 
 /**
  * Following a cited lemma is a jump the reader may want to undo: the entry it leaves remembers where the reader was, and
@@ -322,7 +354,7 @@ function alignLean(explained: WebExplanationDocument) {
 function alignProse(explained: WebExplanationDocument) {
   if (leanScroll.scrollTop <= 0) { proseScroll.scrollTop = 0; return; }
   const place = proseAt(explained, (leanScroll.scrollTop + margin - firstRow()) / rowHeight() + 1);
-  const anchor = place && anchorOf(place.ref);
+  const anchor = place && (anchorOf(place.ref) ?? anchorOf({ section: place.ref.section }));
   if (!anchor) return;
   proseScroll.scrollTop = Math.max(0, offsetIn(proseScroll, anchor) + place!.fraction * anchor.offsetHeight - 8);
 }
@@ -376,6 +408,11 @@ document.addEventListener('click', event => {
   else if (name === 'close-dialog') { state.dialog = undefined; draw(); }
   else if (name === 'confirm-cancel') void stop();
   else if (name === 'confirm-delete') void remove();
+  else if (name === 'detail') {
+    state.detail = action.dataset.detail === 'outline' ? 'outline' : 'steps'; state.opened = new Set(state.active?.step === undefined ? [] : [state.active.section]);
+    writeLink(); draw();
+  }
+  else if (name === 'unfold') { state.opened.add(Number(action.dataset.section)); draw(); }
   else if (name === 'pane') { state.pane = action.dataset.pane === 'lean' ? 'lean' : 'prose'; draw(); }
   else if (name === 'language' && action.dataset.language !== state.language) choose(state.target, action.dataset.language === 'en' ? 'en' : 'zh');
 });
@@ -443,7 +480,7 @@ const remove = () => act(async (target, language) => {
 
 /** Shows a target's explanation in a language from the top; `choose` also writes it into the address. */
 function openExplanation(target: string, language: 'zh' | 'en') {
-  state.target = target; state.language = language; state.active = undefined; state.gap = undefined; state.documentError = undefined;
+  state.target = target; state.language = language; state.active = undefined; state.gap = undefined; state.documentError = undefined; state.opened = new Set(); state.node = undefined;
   state.chosen = new Set(); pinned = []; ladder.reset();
   proseScroll.scrollTop = 0;
   draw(); void loadDocument(); schedule();

@@ -1,9 +1,9 @@
-import type { SolutionRoute, SolutionRouteEdge, SolutionRouteNode, SolutionRouteSection } from './solutionRoute';
+import type { SolutionRoute, SolutionRouteEdge, SolutionRouteNode, SolutionRouteOrigin, SolutionRouteSection } from './solutionRoute';
 import { h, render } from 'preact';
 import { Rich, RichProse } from './client/richText';
 
 type Options = { onSelect?: (id: string) => void; onOpen?: (target: string) => void };
-type Memory = { selected: string; zoom: number; left: number; top: number; all: boolean; opened: Set<string>; query: string; reading: boolean; details: Map<string, boolean> };
+type Memory = { selected: string; zoom: number; left: number; top: number; all: boolean; library: boolean; opened: Set<string>; query: string; reading: boolean; details: Map<string, boolean> };
 type Box = { x: number; y: number; width: number; height: number };
 const memories = new Map<string, Memory>();
 const html = (value: unknown) => String(value ?? '').replace(/[&<>"']/gu, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -15,6 +15,12 @@ const kindNames = {
   zh: { problem: '原题', plan: '研究计划', task: '数学任务', finding: '研究推导', attempt: '证明尝试', check: '检查', decision: '人类决策', proof: '完整证明', review: '审阅', acceptance: '独立验收', outcome: '运行结果', declaration: '证明声明', derivation: '推导步骤', group: '源码分组' },
   en: { problem: 'Problem', plan: 'Plan', task: 'Mathematical task', finding: 'Research', attempt: 'Proof attempt', check: 'Check', decision: 'Human decision', proof: 'Complete proof', review: 'Review', acceptance: 'Independent acceptance', outcome: 'Run outcome', declaration: 'Declaration', derivation: 'Derivation step', group: 'Source group' },
 };
+const originNames: Record<'zh' | 'en', Record<SolutionRouteOrigin, string>> = {
+  zh: { target: '主定理', lemma: '本证明的引理', definition: '本证明的定义', computation: '由计算判定', given: '题目给定', library: '库里的结论' },
+  en: { target: 'Main theorem', lemma: 'Lemma of this proof', definition: 'Definition of this proof', computation: 'Decided by computation', given: 'Given by the problem', library: 'Library result' },
+};
+const origins: SolutionRouteOrigin[] = ['target', 'lemma', 'definition', 'computation', 'given', 'library'];
+const edgeKinds: SolutionRouteEdge['kind'][] = ['dependency', 'sequence', 'integration', 'decision', 'evidence', 'reference'];
 
 /** A folded record keeps its place at the nearest ancestor that remains in the graph. */
 export function visibleSolutionRouteSelection(model: SolutionRoute, visible: readonly SolutionRouteNode[], selected: string): string {
@@ -124,7 +130,7 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       const selected = next.initial ?? next.nodes[0]?.id ?? '', opened = new Set<string>();
       let parent = next.nodes.find(node => node.id === selected)?.parentId;
       while (parent && !opened.has(parent)) { opened.add(parent); parent = next.nodes.find(node => node.id === parent)?.parentId; }
-      saved = { selected, zoom: 1, left: 0, top: 0, all: false, opened, query: '', reading: false, details: new Map() }; memories.set(next.id, saved);
+      saved = { selected, zoom: 1, left: 0, top: 0, all: false, library: false, opened, query: '', reading: false, details: new Map() }; memories.set(next.id, saved);
     }
     return saved;
   }
@@ -132,6 +138,8 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
     const query = state.query.trim().toLocaleLowerCase();
     const byId = nodesById();
     if (!query) return model.nodes.filter(node => {
+      // Cited library results stay out of the map until asked for; a selected one is shown.
+      if (node.origin === 'library') return state.library || node.id === state.selected;
       if (state.all) return true;
       const visited = new Set<string>();
       let current = node;
@@ -148,7 +156,7 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       let parent = node.parentId;
       while (parent && byId.has(parent) && !ids.has(parent)) { ids.add(parent); parent = byId.get(parent)!.parentId; }
     }
-    return model.nodes.filter(node => ids.has(node.id));
+    return model.nodes.filter(node => ids.has(node.id) && (node.origin !== 'library' || state.library || node.id === state.selected));
   }
   function inspector() {
     const node = nodesById().get(state.selected) ?? model.nodes[0];
@@ -169,7 +177,7 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
     const sectionContent = (section: SolutionRouteSection, index: number) => `<section class="solution-route-section"><h5 tabindex="-1" data-solution-section-heading="${index}"><span class="solution-route-section-number">${String(index + 1).padStart(2, '0')}</span>${html(section.title)}</h5>${section.code ? `<pre tabindex="0"><code>${html(section.text)}</code></pre>` : `<div data-solution-prose="block">${html(section.text)}</div>`}${section.reason ? `<div class="solution-route-reason" data-solution-prose="block">${html(section.reason)}</div>` : ''}</section>`;
     const evidence = sections.map((section, index) => supporting(section) ? sectionContent(section, index) : '').join('');
     const summary = node.summary && !sections.some(section => !section.code && section.text.trim() === node.summary!.trim()) ? node.summary : '';
-    return `<header class="solution-route-detail-heading"><p>${kindNames[model.locale][node.kind]}<span data-status="${node.status}">${statusNames[model.locale][node.status]}</span></p><h4 tabindex="-1" data-solution-heading="${html(node.id)}" data-solution-prose>${html(node.title)}</h4>
+    return `<header class="solution-route-detail-heading"><p>${node.origin ? originNames[model.locale][node.origin] : kindNames[model.locale][node.kind]}<span data-status="${node.status}">${statusNames[model.locale][node.status]}</span></p><h4 tabindex="-1" data-solution-heading="${html(node.id)}" data-solution-prose>${html(node.title)}</h4>
       ${!state.reading ? `<button type="button" class="solution-route-read" data-solution-view="read">${word('展开阅读', 'Read in full')} ↗</button>` : ''}</header>
       ${summary ? `<div class="solution-route-summary" data-solution-prose="block">${html(summary)}</div>` : ''}
       ${node.at ? `<time>${html(node.at)}</time>` : ''}
@@ -182,6 +190,13 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       ${relation(false)}
       ${node.action ? `<button type="button" class="solution-route-open" data-solution-open="${html(node.id)}">${html(node.action.label)} ↗</button>` : ''}`;
   }
+  /** The kinds of line and of declaration now on the map, so a reader can tell the proof's own lemmas from computed, given or library facts. */
+  function legend(visible: readonly SolutionRouteNode[], ids: ReadonlySet<string>) {
+    const lines = edgeKinds.filter(kind => model.edges.some(edge => edge.kind === kind && ids.has(edge.from) && ids.has(edge.to)));
+    const present = origins.filter(origin => visible.some(node => node.origin === origin));
+    return `<span class="solution-route-legend">${lines.map(kind => `<span><i data-edge="${kind}"></i>${edgeName({ from: '', to: '', kind })}</span>`).join('')}</span>`
+      + (present.length ? `<span class="solution-route-legend">${present.map(origin => `<span><i data-origin="${origin}"></i>${originNames[model.locale][origin]}</span>`).join('')}</span>` : '');
+  }
   function draw() {
     if (destroyed) return;
     const visible = shown(), layout = solutionRouteLayout(model, visible), ids = new Set(visible.map(node => node.id));
@@ -191,10 +206,11 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
     if (expanded) { root.setAttribute('role', 'dialog'); root.setAttribute('aria-modal', 'true'); root.setAttribute('aria-label', model.title); }
     else { root.removeAttribute('role'); root.removeAttribute('aria-modal'); root.removeAttribute('aria-label'); }
     root.innerHTML = `<header class="solution-route-heading"><div><h3 data-solution-prose="inline">${html(model.title)}</h3><p>${model.basis === 'source' ? word('证明声明与源码引用', 'Proof declarations and source references') : model.basis === 'explanation' ? word('推导步骤与所用结论', 'Derivation steps and the results they use') : word('任务依赖、推导、尝试与验收', 'Tasks, reasoning, attempts and acceptance')}</p></div><span data-solution-count>${state.reading ? model.nodes.length : `${visible.length} / ${model.nodes.length}`} ${state.reading ? word('步骤', 'steps') : word('节点', 'nodes')}</span></header>
-      ${model.overview?.length ? `<div class="solution-route-overview">${model.overview.filter(section => section.text.trim()).map(section => `<section><h4>${html(section.title)}</h4><div data-solution-prose="block">${html(section.text)}</div></section>`).join('')}</div>` : ''}
+      ${model.overview?.length ? `<div class="solution-route-overview">${model.overview.filter(section => section.text.trim()).map(section => `<section><h4>${html(section.title)}</h4>${section.code ? `<pre tabindex="0"><code>${html(section.text)}</code></pre>` : `<div data-solution-prose="block">${html(section.text)}</div>`}</section>`).join('')}</div>` : ''}
       ${model.stages?.length ? `<nav class="solution-route-stages" aria-label="${word('证明主线', 'Proof outline')}">${model.stages.map((stage, index) => `<button type="button" data-solution-select="${html(stage.nodeIds[0])}"${stage.nodeIds.includes(state.selected) ? ' aria-current="step"' : ''}><span>${String(index + 1).padStart(2, '0')}</span><strong data-solution-prose>${html(stage.title)}</strong><span data-solution-prose>${html(stage.summary)}</span></button>`).join('')}</nav>` : ''}
       <div class="solution-route-tools"><label class="solution-route-search"><span class="sr-only">${word('查找路线中的步骤', 'Find a route step')}</span><input type="search" data-solution-search placeholder="${word('查找目标、引理或推导', 'Find a goal, lemma or derivation')}" value="${html(state.query)}"></label>
         ${model.nodes.some(node => node.parentId) ? `<button type="button" data-solution-all aria-pressed="${state.all || state.opened.size > 0}">${state.all || state.opened.size ? word('收起步骤', 'Collapse steps') : word('展开全部步骤', 'Expand every step')}</button>` : ''}
+        ${model.nodes.some(node => node.origin === 'library') ? `<button type="button" data-solution-library aria-pressed="${state.library}">${word('库里的结论', 'Library results')} ${model.nodes.filter(node => node.origin === 'library').length}</button>` : ''}
         <div class="solution-route-view-controls" role="group" aria-label="${word('阅读方式', 'Reading view')}"><button type="button" data-solution-view="map" aria-pressed="${!state.reading}">${word('路线图', 'Route map')}</button><button type="button" data-solution-view="read" aria-pressed="${state.reading}">${word('阅读推导', 'Read reasoning')}</button></div>
         ${state.reading ? `<label class="solution-route-step-picker"><span>${word('当前步骤', 'Current step')}</span><select data-solution-reader-select aria-label="${word('跳转到路线中的步骤', 'Jump to a route step')}">${model.nodes.map((node, index) => `<option value="${html(node.id)}"${node.id === state.selected ? ' selected' : ''}>${String(index + 1).padStart(2, '0')} · ${html(node.title)}</option>`).join('')}</select><span>${model.nodes.findIndex(node => node.id === state.selected) + 1} / ${model.nodes.length}</span></label>` : ''}
         <div role="group" aria-label="${word('路线图缩放', 'Route zoom')}"><button type="button" data-solution-zoom="out" aria-label="${word('缩小', 'Zoom out')}">−</button><button type="button" data-solution-zoom="reset" aria-label="${word('恢复原始大小', 'Reset zoom')}"><output>${Math.round(state.zoom * 100)}%</output></button><button type="button" data-solution-zoom="in" aria-label="${word('放大', 'Zoom in')}">＋</button><button type="button" data-solution-zoom="fit">${word('查看全图', 'Fit route')}</button><button type="button" data-solution-expand aria-expanded="${expanded}">${expanded ? word('收起画布', 'Close canvas') : word('展开画布', 'Expand canvas')}</button></div></div>
@@ -208,10 +224,10 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
         const d = vertical ? `M${x1} ${y1} C${x1} ${y1 + 20},${x2} ${y2 - 20},${x2} ${y2}` : `M${x1} ${y1} C${x1 + bend} ${y1},${x2 - bend} ${y2},${x2} ${y2}`;
         return `<path d="${d}" data-solution-edge="${edge.kind}" data-from="${html(edge.from)}" data-to="${html(edge.to)}" data-connected="${edge.from === state.selected || edge.to === state.selected}" marker-end="url(#solution-arrow-${html(model.id.replace(/[^a-zA-Z0-9]/gu, ''))})"/>`;
       }).join('')}</svg>${visible.map((node, index) => {
-        return `<button type="button" class="solution-route-node" data-solution-node="${html(node.id)}" data-roadmap-node="${html(node.id)}" data-status="${node.status}" data-connected="${adjacent.has(node.id)}" aria-pressed="${node.id === state.selected}"><span class="solution-route-node-meta"><span>${String(index + 1).padStart(2, '0')} · ${kindNames[model.locale][node.kind]}</span><span>${statusNames[model.locale][node.status]}</span></span><strong data-solution-prose>${html(node.title)}</strong>${node.summary ? `<span class="solution-route-node-summary" data-solution-prose>${html(node.summary)}</span>` : ''}</button>`;
+        return `<button type="button" class="solution-route-node" data-solution-node="${html(node.id)}" data-roadmap-node="${html(node.id)}" data-status="${node.status}"${node.origin ? ` data-origin="${node.origin}"` : ''} data-connected="${adjacent.has(node.id)}" aria-pressed="${node.id === state.selected}"><span class="solution-route-node-meta"><span>${String(index + 1).padStart(2, '0')} · ${node.origin ? originNames[model.locale][node.origin] : kindNames[model.locale][node.kind]}</span><span>${statusNames[model.locale][node.status]}</span></span><strong data-solution-prose>${html(node.title)}</strong>${node.summary ? `<span class="solution-route-node-summary" data-solution-prose>${html(node.summary)}</span>` : ''}</button>`;
       }).join('')}</div></div>${!visible.length ? `<p class="solution-route-empty">${word('没有匹配的步骤。换一个关键词，或清空搜索。', 'No matching steps. Try another term or clear the search.')}</p>` : ''}</div>
       <aside class="solution-route-detail" data-solution-inspector aria-label="${word('路线步骤详情', 'Route step details')}" aria-live="polite">${inspector()}</aside></div>
-      <footer class="solution-route-footer"><span>${word('实线：依赖或流程 · 虚线：依据或源码引用', 'Solid: dependencies or flow · Dashed: evidence or source references')}</span>${model.partial ? `<span>${word('当前记录尚未全部读取', 'Some records have not been loaded')}</span>` : ''}<div><button type="button" data-solution-step="previous">← ${word('上一步', 'Previous')}</button><button type="button" data-solution-step="next">${word('下一步', 'Next')} →</button></div></footer>`;
+      <footer class="solution-route-footer">${legend(visible, ids)}${model.partial ? `<span>${word('当前记录尚未全部读取', 'Some records have not been loaded')}</span>` : ''}<div><button type="button" data-solution-step="previous">← ${word('上一步', 'Previous')}</button><button type="button" data-solution-step="next">${word('下一步', 'Next')} →</button></div></footer>`;
     // Apply layout through CSSOM: the workbench CSP intentionally disallows HTML style attributes.
     const space = root.querySelector<HTMLElement>('.solution-route-scaled')!;
     space.style.width = `${layout.width * state.zoom}px`; space.style.height = `${layout.height * state.zoom}px`;
@@ -320,6 +336,10 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
     if (target.hasAttribute('data-solution-all')) {
       state.all = !state.all && state.opened.size === 0; state.opened.clear(); drawVisibleSelection();
       root.querySelector<HTMLButtonElement>('[data-solution-all]')?.focus({ preventScroll: true }); return;
+    }
+    if (target.hasAttribute('data-solution-library')) {
+      state.library = !state.library; drawVisibleSelection();
+      root.querySelector<HTMLButtonElement>('[data-solution-library]')?.focus({ preventScroll: true }); return;
     }
     if (target.dataset.solutionChildren) {
       const id = target.dataset.solutionChildren;

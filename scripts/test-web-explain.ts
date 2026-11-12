@@ -232,7 +232,7 @@ try {
   await page.locator('#explain-dialog[open] #explain-api-key').fill(credential);
   await page.locator('#explain-dialog[open] button[type="submit"]').click();
   await until(() => explains.length === 2, 'the second explanation starts');
-  explains[1]!.send({ type: 'result', status: 'approved', evidence: JSON.parse(JSON.stringify(webExplanationEvidence({ proof, target: 'target_thm', units }))) });
+  explains[1]!.send({ type: 'result', status: 'approved', evidence: JSON.parse(JSON.stringify(webExplanationEvidence({ proof, target: 'target_thm', units, outlined: true }))) });
   explains[1]!.resolve();
   await page.locator('#explain-prose .explain-document').waitFor({ timeout: 20_000 });
   const item = `/api/runs/${run.id}/explanations/item?${new URLSearchParams({ target: 'target_thm', language: 'zh' })}`;
@@ -500,6 +500,46 @@ try {
   assert.equal(await scrollTop('#explain-lean'), still, 'with sync off the Lean pane stays put');
   await page.locator('#explain-sync').check();
   mark('the panes scroll together in both directions, and not when sync is off');
+
+  // The route names where each declaration comes from, the overview shows the Lean statement and what Lean checked.
+  assert.deepEqual(await route.locator('.solution-route-legend i[data-origin]').evaluateAll(items => items.map(item => item.getAttribute('data-origin'))), ['target', 'lemma']);
+  assert.ok((await route.locator('.solution-route-legend i[data-edge]').evaluateAll(items => items.map(item => item.getAttribute('data-edge')))).includes('dependency'),
+    'the legend names each kind of line on the map');
+  // Library results the steps cite are nodes of their own, shown on request; choosing one is kept in the address.
+  assert.equal(await route.locator('[data-solution-node^="library:"]').count(), 0, 'library results stay out of the map until asked for');
+  await route.locator('[data-solution-library]').click();
+  assert.equal(await route.locator('[data-solution-node^="library:"]').count(), 2);
+  assert.equal(await route.locator('[data-solution-edge="reference"][data-from="library:Nat.add_comm"]').count(), 6, 'a library result points at each declaration citing it');
+  await route.locator('[data-solution-node="library:Nat.add_comm"]').click();
+  await until(async () => new URLSearchParams(new URL(page.url()).hash.slice(1)).get('node') === 'library:Nat.add_comm', 'the address names the chosen route node');
+  await route.locator('[data-solution-node="declaration:step_1"]').click();
+  await route.locator('[data-solution-library]').click();
+  assert.equal(await route.locator('[data-solution-node^="library:"]').count(), 0);
+  // The audited route gives the main line, and each declaration its one-sentence summary.
+  assert.deepEqual(await route.locator('.solution-route-stages button > span:last-child').allInnerTexts(), ['First the lemmas.', 'Then the target follows.']);
+  assert.equal(await page.locator('.explain-summary').count(), sections.length);
+  assert.equal(await route.locator('[data-solution-node="declaration:step_1"]').getAttribute('data-origin'), 'lemma');
+  assert.match(await route.locator('.solution-route-overview pre').first().innerText(), /^theorem target_thm/u, 'the overview shows the Lean statement of the target');
+  assert.match(await route.locator('.solution-route-overview').innerText(), /目标定理已通过 Lean 检查，不依赖 sorry/u);
+  assert.ok(await route.locator('.solution-route-stages button').count() >= 2, 'the main line of the proof is offered as stages');
+  // The outline keeps one statement per declaration; a section unfolds on request, and the address names the chosen step.
+  await page.locator(`[data-action="lines"][data-section="${last}"][data-step="0"]`).click();
+  await page.locator('[data-action="detail"][data-detail="outline"]').click();
+  await until(async () => await page.locator('.explain-steps').count() === 1, 'the outline folds every step but the chosen one');
+  assert.equal(await page.locator('.explain-unfold').count(), sections.length - 1);
+  await page.locator('.explain-unfold[data-section="1"]').click();
+  await page.locator('.explain-steps > li[data-anchor="1"][data-step="1"] [data-action="lines"]').first().click();
+  await until(async () => new URL(page.url()).hash === '#at=step_2&step=2&view=outline&node=declaration%3Astep_1', 'the address names the declaration, the step, the outline and the route node');
+  assert.equal(await page.locator('.explain-section').nth(3).locator('.explain-statement').count(), 0, 'a folded declaration shows its summary in place of the full statement');
+  await page.reload();
+  await until(async () => await route.locator('[data-solution-node="declaration:step_1"]').getAttribute('aria-pressed') === 'true', 'a link reopens its route node');
+  await page.locator('.explain-steps > li.is-active[data-anchor="1"][data-step="1"]').waitFor();
+  assert.equal(await page.locator('[data-action="detail"][data-detail="outline"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.locator('.explain-steps').count(), 1, 'a link opens the outline with only its own declaration unfolded');
+  await page.locator('[data-action="detail"][data-detail="steps"]').click();
+  await until(async () => await page.locator('.explain-steps').count() === sections.length, 'step by step shows every step again');
+  assert.equal(new URL(page.url()).hash, '#at=step_2&step=2&node=declaration%3Astep_1');
+  mark('the route shows origins, line kinds, library results, the audited main line, the Lean statement and the verification status; the outline folds to summaries; a copied link reopens the same step and route node');
 
   // The Markdown download is the same explanation as a file.
   const download = await page.locator('#explain-prose-head a[download]').getAttribute('href');
