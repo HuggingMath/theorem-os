@@ -3,6 +3,7 @@ import type { WebFormalizationRoleSummary } from '../../formalizationTypes';
 import { formatDuration } from '../../presentation';
 import { t } from '../../i18n';
 import type { RouteItem } from '../agentRoute';
+import { detailLevel, onDetailLevel } from '../detailLevel';
 import type { ProcessDetail, ProcessRow, ProcessTone, SolveProcess } from '../solveProcess';
 import { ItemRow, LeanReport, itemKey, type ItemContext } from './AgentRoute';
 import { Icon, Spinner } from './Icon';
@@ -109,18 +110,21 @@ export type SolveProcessProps = {
   defaultOpen?: boolean;
 };
 /**
- * The solving process under the task's status: open while the task runs, one line once it ended. Each stage lists what
- * was done in it; a row opens to the Agent's or role's actions, Lean's messages and the feedback between rounds.
+ * The solving process under the task's status: one line in 简洁 and once the task ended, open while it runs in 详细.
+ * Each stage lists what was done in it; a row opens to the Agent's or role's actions, Lean's messages and the feedback
+ * between rounds.
  */
 export function SolveProcessView(props: SolveProcessProps) {
   const { process } = props, [, setTick] = useState(0), memory = memoryOf(process.key);
   const refresh = () => setTick(value => value + 1);
-  const open = memory.open ?? props.defaultOpen ?? process.active;
+  useEffect(() => onDetailLevel(() => setTick(value => value + 1)), []);
+  const initial = props.defaultOpen ?? (process.active && detailLevel() === 'full');
+  const open = memory.open ?? initial;
   const ctx: Ctx = { memory, refresh, live: process.active, wide: props.wide, time: props.time, ...(props.onCheck ? { onCheck: props.onCheck } : {}) };
   const facts = [process.counts.checks ? t('Lean 检查 {0} 次', process.counts.checks) : '', process.counts.attempts ? t('尝试 {0} 次', process.counts.attempts) : ''].filter(Boolean);
   return <details class="solve-process" data-solve-process={process.key} open={open} onToggle={event => {
     const now = (event.currentTarget as HTMLDetailsElement).open;
-    if (now === (memory.open ?? props.defaultOpen ?? process.active)) return;
+    if (now === (memory.open ?? initial)) return;
     memory.open = now; refresh();
   }}>
     <summary><span class="solve-process-title">{t('解题过程')}</span>

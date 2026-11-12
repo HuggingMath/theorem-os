@@ -1,8 +1,8 @@
 import { collaborationDetailStorageKey } from './runAwareness';
 
 /**
- * One 简洁/详细 choice for the whole workbench, kept per browser: the collaboration surface and the trajectory both read
- * it, and switching either switches both. New readers start with 简洁.
+ * One 简洁/详细 choice for the whole workbench, kept per browser: the solve conversation, the collaboration surface and
+ * the trajectory all read it, and switching any of them switches all. New readers start with 简洁.
  */
 export type DetailLevel = 'simple' | 'full';
 const listeners = new Set<(level: DetailLevel) => void>();

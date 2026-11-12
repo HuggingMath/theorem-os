@@ -9,6 +9,7 @@ import type { WebInspectedTask, WebInspectedWorker, WebObservation, WebPlanTask 
 import { readWebConfig } from '../apps/web/config';
 import type { WebConversation } from '../apps/web/conversationTypes';
 import { webFormalizationDefaults, webFormalizationLimits } from '../apps/web/formalizationTypes';
+import { collaborationDetailStorageKey } from '../apps/web/client/runAwareness';
 import { localeStorageKey } from '../apps/web/i18n';
 import { createWebService } from '../apps/web/server';
 import { webLimits, type WebAgentAction, type WebAgentActionBody, type WebEventDetails, type WebRun, type WebSession } from '../apps/web/shared';
@@ -16,11 +17,13 @@ import { extendTrajectory, recordedTrajectory, trajectoryPage } from '../apps/we
 import { proofOutline } from '../apps/web/verificationKit';
 import { taskVersion } from '../src/solver/tasks';
 import { audit } from './web-a11y';
-import { freePort, settled } from './web-scenario';
+import { freePort, preferFullCollaboration, settled } from './web-scenario';
 
 const root = path.resolve(import.meta.dirname, '..');
 const completionReadingOnly = process.argv.includes('--completion-reading-only');
-const output = path.join(root, completionReadingOnly ? 'out/web-proof-thinking-completion' : 'out/web-proof-thinking');
+/** The default 简洁 reading of the same replay: one record per task, grouped tools, folded checks. */
+const simpleReadingOnly = process.argv.includes('--simple-reading');
+const output = path.join(root, completionReadingOnly ? 'out/web-proof-thinking-completion' : simpleReadingOnly ? 'out/web-proof-thinking-simple' : 'out/web-proof-thinking');
 const at = new Date().toISOString(), model = 'gpt-6.1-sol';
 const provider = { id: 'fixture', name: 'Proof UI fixture · no model / Lean', baseUrl: 'https://fixture.invalid' };
 const header = `import Mathlib
@@ -145,6 +148,8 @@ try {
       locale: locale === 'zh' ? 'zh-CN' : 'en-US', acceptDownloads: true });
     activeContext = context; context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
     await context.addInitScript(([key, value]) => localStorage.setItem(key, value), [localeStorageKey, locale]);
+    // Every saved record, version and diagnostic is the 详细 reading; --simple-reading covers the default 简洁 one.
+    if (!simpleReadingOnly) await preferFullCollaboration(context);
     await context.addInitScript(() => {
       const copied: string[] = [];
       Object.assign(window, { proofFixtureClipboard: copied });
@@ -511,6 +516,124 @@ try {
       checks.push({ scenario, detailReads, freshRunningTask: true, noManualOuterToggle: true, completionPreservesOpenReading: true,
         beforeCompletion, afterCompletion, completionScrollDelta, completionAnchorDelta, completionThreadAnchorDelta,
         historyFocusReturnsToLog: true, latestFocusReturnsToLog: true, completedProcessContinuesFollowing: true, rootScrollHeights });
+      await context.close(); activeContext = undefined; activePage = undefined;
+      continue;
+    }
+
+    if (simpleReadingOnly) {
+      stage = 'simple-reading';
+      const detail = () => page.evaluate(key => localStorage.getItem(key), collaborationDetailStorageKey);
+      const rows = thinking.locator('.thinking-entries > li'), group = thinking.locator('[data-thinking-kind="actions"]');
+      const failedCheck = thinking.locator('[data-thinking-detail="check:p:engineer:proof-check-1"]');
+      const brief = thinking.locator('[data-thinking-check-brief]'), process = page.locator('[data-solve-process]');
+      const chooseLevel = async (level: 'simple' | 'full') => {
+        await optionsToggle.click(); await settled(page);
+        assert.deepEqual(await options.locator('[data-thinking-level]').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-pressed'))),
+          level === 'full' ? ['true', 'false'] : ['false', 'true'], 'The menu marks the reading in use');
+        await options.locator(`[data-thinking-level="${level}"]`).click();
+        await page.waitForFunction(value => document.querySelector('[data-thinking-process]')?.getAttribute('data-detail') === value, level);
+        await settled(page);
+        assert.equal(await options.getAttribute('open'), null, 'Choosing a reading closes the menu');
+        assert.equal(await detail(), level, 'The reading is saved for this browser');
+      };
+      event('solve_started', 'Synthetic proof run started.');
+      touch(); summary('lead', 'public-summary', copy.first, true);
+      touch();
+      run.observation!.plan = { schema: 'theorem-os.research-plan.v1', baseVersion: 'v1', tasks };
+      run.observation!.inspection.planVersion = 'v1'; run.observation!.inspection.tasks = tasks.map(inspected);
+      run.observation!.inspection.tasks.find(task => task.id === 'left-zero')!.status = 'running';
+      event('plan_updated', copy.plan, { workerId: 'lead', role: 'lead' });
+      touch(); event('task_assigned', copy.left, { workerId: 'engineer', role: 'engineer', taskId: 'left-zero' });
+      touch(); summary('researcher', 'research-summary', copy.researcherSummary, true);
+      for (const [index, command] of ["theorem-os search-lean --query 'Nat.add_zero'", 'rg SyntheticProofFixture Mathlib', "theorem-os search-lean --query 'Nat.zero_add'"].entries()) {
+        touch(); action({ workerId: 'researcher', itemId: `simple-tool-${index}`, kind: 'command', phase: 'completed', status: 'done',
+          command, output: `UI_FIXTURE_PROOF_SIMPLE_TOOL_OUTPUT_${index}` });
+      }
+      touch(); summary('engineer', 'proof-summary', copy.engineerSummary, true);
+      touch(); run.artifact = { source: failedSource, workerId: 'engineer', status: 'candidate', capturedAt: run.updatedAt };
+      action({ workerId: 'engineer', itemId: 'proof-check-1', kind: 'command', phase: 'completed', status: 'failed', exitCode: 1,
+        command: 'theorem-os check-lean --file Submission.lean', output: checkOutput, lean: { passed: false, messages: [
+          { severity: 'warning', line: 4, text: warning }, { severity: 'error', line: 5, column: 9, text: diagnostic },
+        ] } });
+      await page.goto(`${origin}/?chat=${conversation.id}`, { timeout: 0 });
+      await contains(copy.engineerSummary.split('\n')[1]!); await failedCheck.waitFor(); await settled(page);
+      assert.equal(await detail(), null, 'A new browser has made no choice');
+      assert.equal(await thinking.getAttribute('data-detail'), 'simple', 'A new browser reads the conversation in 简洁');
+      assert.equal(await thinking.getAttribute('open'), '', 'The readable log still opens while the task runs');
+      assert.equal(await process.getAttribute('open'), null, 'The step checklist stays one line');
+      assert.equal(await page.locator('[data-chat-outcomes], [data-chat-next-action]').count(), 0, 'A task that needs nothing from the reader says its state once');
+      // One record per task: the running lemma's plan is behind its progress record; tasks not started keep their plan.
+      assert.deepEqual(await thinking.locator('[data-thinking-work="plan"]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-thinking-task')).sort()),
+        ['goal', 'research', 'right-zero']);
+      const lemma = thinking.locator('[data-thinking-task="left-zero"]');
+      assert.equal(await lemma.count(), 1); assert.equal(await lemma.getAttribute('data-thinking-work'), 'proof');
+      assert.ok((await lemma.locator('.thinking-head').innerText()).includes(locale === 'zh' ? '正在证明' : 'Proving'), 'Who, what and its state share one line');
+      assert.ok(!(await lemma.innerText()).includes('UI_FIXTURE_PROOF_BLUEPRINT'), 'The plan details start folded');
+      await lemma.locator('details > summary').first().click(); await settled(page);
+      assert.ok((await lemma.innerText()).includes('UI_FIXTURE_PROOF_BLUEPRINT'), 'The folded plan opens inside the progress record');
+      await lemma.locator('details > summary').first().click(); await settled(page);
+      assert.equal(await thinking.locator('details[data-thinking-version]').count(), 0, 'Version identifiers belong to 详细');
+      assert.equal(await thinking.locator('.thinking-entry-meta').count(), 0, 'No separate line for who and when');
+      // Three searches in a row read as one line.
+      assert.equal(await group.count(), 1); assert.equal(await thinking.locator('[data-thinking-kind="action"]').count(), 0);
+      assert.equal((await group.locator('.thinking-group-count').innerText()).trim(), locale === 'zh' ? '3 项工具操作' : '3 tool actions');
+      assert.ok((await group.locator('.thinking-group-latest').innerText()).includes('Nat.zero_add'), 'The line names the latest action');
+      assert.equal(await group.locator(':scope > details').getAttribute('open'), null);
+      assert.ok(!(await thinking.innerText()).includes('UI_FIXTURE_PROOF_SIMPLE_TOOL_OUTPUT_0'));
+      // A failed check stays one line and still says what Lean objected to first.
+      assert.equal(await failedCheck.getAttribute('open'), null);
+      assert.equal(await brief.count(), 1);
+      assert.ok((await brief.innerText()).includes(diagnostic) && (await brief.innerText()).includes(locale === 'zh' ? '第 5 行出错' : 'Error on line 5'),
+        `The folded check names the first error, not the earlier warning: ${await brief.innerText()}`);
+      assert.equal(await failedCheck.locator('.thinking-source').count(), 0);
+      const question = thinking.locator('[data-thinking-question="prove:lead:public-summary"]');
+      assert.equal((await question.innerText()).trim(), ''); assert.equal(await question.getAttribute('aria-label'), locale === 'zh' ? '追问这一步' : 'Ask about this step');
+      await capture('simple-reading');
+
+      await group.locator(':scope > details > summary').click(); await settled(page);
+      assert.equal(await group.locator('.route-items > li').count(), 3, 'The line opens to each action');
+      await failedCheck.locator(':scope > summary').click(); await failedCheck.locator('.thinking-source').waitFor(); await settled(page);
+      assert.equal(await failedCheck.locator('.thinking-source pre code').textContent(), failedSource, 'The check opens to its saved source');
+      assert.equal(await brief.count(), 0, 'An opened check shows the full report instead of the one-line excerpt');
+      touch(); summary('researcher', 'simple-polling', 'UI_FIXTURE_PROOF_SIMPLE_POLLING', true);
+      await contains('UI_FIXTURE_PROOF_SIMPLE_POLLING');
+      assert.equal(await group.locator(':scope > details').getAttribute('open'), '', 'Polling keeps the opened group');
+      assert.equal(await failedCheck.getAttribute('open'), '', 'Polling keeps the opened check');
+      await capture('simple-reading-opened', '[data-thinking-kind="actions"]');
+      await question.click(); await settled(page);
+      for (const line of copy.first.split('\n')) assert.ok((await composer.inputValue()).includes(`> ${line}`), 'The icon quotes the step into the draft');
+      await composer.fill('');
+
+      await chooseLevel('full');
+      assert.equal(await thinking.locator('[data-thinking-work="plan"]').count(), 4, '详细 lists every saved record');
+      assert.equal(await group.count(), 0); assert.equal(await thinking.locator('[data-thinking-kind="action"]').count(), 3);
+      assert.ok((await thinking.innerText()).includes('UI_FIXTURE_PROOF_SIMPLE_TOOL_OUTPUT_0'), '详细 opens tool output');
+      assert.ok(await thinking.locator('details[data-thinking-version]').count() > 0);
+      assert.equal(await failedCheck.getAttribute('open'), ''); assert.equal(await brief.count(), 0);
+      assert.equal(await question.innerText(), locale === 'zh' ? '追问这一步' : 'Ask about this step');
+      assert.equal(await process.getAttribute('open'), '', '详细 opens the step checklist while the task runs');
+      await capture('simple-switched-to-full');
+      await chooseLevel('simple');
+      assert.equal(await group.count(), 1); assert.equal(await group.locator(':scope > details').getAttribute('open'), null, 'Returning to 简洁 folds again');
+      assert.equal(await failedCheck.getAttribute('open'), null); assert.equal(await brief.count(), 1);
+      assert.equal(await process.getAttribute('open'), null);
+      await page.reload({ timeout: 0 }); await failedCheck.waitFor(); await settled(page);
+      assert.equal(await thinking.getAttribute('data-detail'), 'simple', 'The choice survives a refresh');
+
+      // A long task shows its latest twelve rows; the rest is one click away.
+      for (let index = 0; index < 20; index++) { touch(); summary('researcher', `simple-history-${index}`, `UI_FIXTURE_PROOF_SIMPLE_HISTORY_${index}`, true); }
+      await contains('UI_FIXTURE_PROOF_SIMPLE_HISTORY_19'); await settled(page);
+      assert.equal(await rows.count(), 12);
+      const earlier = thinking.locator('.thinking-earlier'), hidden = Number((await earlier.innerText()).match(/\d+/u)![0]);
+      await scrollBody('top'); await settled(page); await earlier.click();
+      await page.waitForFunction(() => document.querySelector('[data-thinking-entry="prove:lead:public-summary"]'));
+      await settled(page);
+      // The count is in saved records: the folded line of three tools stands for three of them.
+      assert.equal(await rows.count() + 2, 12 + hidden, 'The earlier count matches the records it reveals');
+      await capture('simple-reading-history');
+      assert.deepEqual(errors, []); assert.deepEqual(writes, []); assert.deepEqual(external, []); assert.deepEqual(unexpectedApi, []); assert.deepEqual(runtimeCalls, []);
+      checks.push({ scenario, defaultIsSimple: true, oneRecordPerTask: true, toolRunsGrouped: true, failedCheckFirstError: true,
+        versionsOnlyInFull: true, checklistFoldedWhileRunning: true, levelSwitchBothWaysAndPersisted: true, latestTwelveRows: true, hidden, rootScrollHeights });
       await context.close(); activeContext = undefined; activePage = undefined;
       continue;
     }

@@ -77,13 +77,12 @@ async function fit(page: Page) {
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'actions do not widen the page');
   assert.deepEqual(await audit(page), []);
 }
-async function outcomes(page: Page, language: 'zh' | 'en') {
-  const summary = page.locator('[data-chat-outcomes]');
-  await summary.waitFor({ timeout: 0 });
-  assert.deepEqual(await summary.locator(':scope > p > span').allTextContents(), language === 'zh'
-    ? ['已有成果', '当前进展', '需要你做'] : ['Available work', 'Current progress', 'Your next action']);
-  assert.equal(await summary.locator(':scope > p > strong').count(), 3);
-  for (const text of await summary.locator(':scope > p > strong').allTextContents()) assert.ok(text.trim());
+/** The status says where the task is once; a task that needs nothing from the reader adds no "your next action" line. */
+async function outcomes(page: Page) {
+  const state = page.locator('.research-conversation-state strong');
+  await state.waitFor({ timeout: 0 });
+  assert.ok((await state.innerText()).trim());
+  assert.equal(await page.locator('[data-chat-outcomes], [data-chat-next-action]').count(), 0);
 }
 let active: Page | undefined, failure: unknown;
 try {
@@ -197,7 +196,7 @@ try {
       await mobile.setViewportSize({ width, height: 1000 });
       mobile.on('pageerror', error => errors.push(error.message));
       await mobile.goto(`${origin}/?chat=${chatId}`, { timeout: 0 });
-      await outcomes(mobile, language);
+      await outcomes(mobile);
       const open = mobile.locator('[data-research-artifact="live"]'), draft = `${language}-${width}: keep this unsent question`;
       await open.waitFor({ timeout: 0 });
       assert.equal(await live(mobile).isVisible(), false, 'a cold phone page starts with its conversation');
@@ -213,6 +212,8 @@ try {
       assert.equal(await mobile.locator('#research-conversation-panel').isVisible(), true);
       assert.equal(new URL(mobile.url()).searchParams.get('chat'), chatId);
       assert.equal(await mobile.locator('#formalize-original').inputValue(), draft);
+      const records = mobile.locator('details.solve-process');
+      if (await records.getAttribute('open') === null) await records.locator(':scope > summary').click();
       const firstRound = mobile.locator('[data-solve-row="f:round:1"] > .solve-row-line > .solve-row-head');
       if (await firstRound.getAttribute('aria-expanded') === 'false') await firstRound.click();
       await mobile.locator('[data-solve-check="f:1"]').click();
@@ -224,7 +225,7 @@ try {
       filename = `${language}-${width}-check-code.png`;
       await mobile.screenshot({ path: path.join(output, filename), fullPage: true, timeout: 0 }); screenshots.push(filename);
       await mobile.locator('#close-research-output').click();
-      await mobile.reload({ timeout: 0 }); await outcomes(mobile, language);
+      await mobile.reload({ timeout: 0 }); await outcomes(mobile);
       await open.waitFor({ timeout: 0 });
       assert.equal(await live(mobile).isVisible(), false, 'refresh retains the phone conversation until its code is requested');
       assert.equal(await mobile.locator('#formalize-original').inputValue(), draft);

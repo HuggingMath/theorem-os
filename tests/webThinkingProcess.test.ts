@@ -4,7 +4,7 @@ import type { WebAgentAction, WebRun } from '../apps/web/shared';
 import type { WebInspectedTask, WebObservation } from '../apps/web/collaboration';
 import { agentRoutes } from '../apps/web/client/agentRoute';
 import { buildSolveProcess } from '../apps/web/client/solveProcess';
-import { buildThinkingEntries, quoteThinkingStep, thinkingEntryMatch, thinkingEntryMatches } from '../apps/web/client/thinkingProcess';
+import { buildThinkingEntries, condenseThinking, quoteThinkingStep, thinkingEntryMatch, thinkingEntryMatches } from '../apps/web/client/thinkingProcess';
 
 const at = '2026-11-09T08:00:00.000Z';
 const formalization: WebFormalization = { id: 'f-thinking', original: 'Prove a statement.', status: 'running',
@@ -172,6 +172,23 @@ describe('public thinking process', () => {
     expect(entries).toHaveLength(2);
     expect(entries[0]).toMatchObject({ kind: 'work', task: { version: 'v1', relationship: 'historical' } });
     expect(entries[1]).toMatchObject({ kind: 'work', task: { version: 'v2', relationship: 'current' } });
+  });
+
+  it('keeps one record per task in the simple reading, with the plan behind the progress record', () => {
+    const lemma = task({ status: 'running', feedback: 'Close the remaining branch.' }), waiting = task({ id: 'later', objective: 'Prove the later branch.' });
+    const plan = (item: WebInspectedTask) => ({ id: item.id, kind: 'lemma' as const, objective: item.objective, revision: 2, dependsOn: [],
+      informalStatement: `Statement of ${item.id}.`, informalProof: `Argument for ${item.id}.`, type: '(n : Nat) : n + 0 = n' });
+    const entries = buildThinkingEntries({ run: observedRun([lemma, waiting], { plan: { schema: 'fixture', baseVersion: 'p1', tasks: [plan(lemma), plan(waiting)] } }) }, []);
+    expect(entries.map(entry => entry.id)).toEqual(['work:plan:lemma:v2', 'work:plan:later:v2', 'work:task:lemma:v2']);
+    const simple = condenseThinking(entries);
+    // A task that only has a plan keeps its plan record; a task in progress is said once.
+    expect(simple.map(entry => entry.id)).toEqual(['work:plan:later:v2', 'work:task:lemma:v2']);
+    const progress = simple[1]!;
+    expect(progress).toMatchObject({ kind: 'work', category: 'proof', status: '正在证明', text: lemma.objective });
+    expect(progress.kind === 'work' && progress.sections.map(section => section.label)).toEqual(['反馈', '待证命题', '证明思路', 'Lean 陈述']);
+    expect(JSON.stringify(progress)).toContain('Argument for lemma.');
+    expect(entries).toHaveLength(3);
+    expect(condenseThinking(entries.slice(0, 2))).toEqual(entries.slice(0, 2));
   });
 
   it('shows lemma feedback and candidate review without creating a final acceptance check', () => {

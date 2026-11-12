@@ -111,9 +111,8 @@ try {
     formalization.send({ type: 'activity', activity: { type: 'step', step: { round: 1, step: 'revision', stage: 'round', text: 'Lean 报错：第 2 行 unknown tactic。' } } });
     await process(page).waitFor();
     await page.locator('.solve-process-title').filter({ hasText: '解题过程' }).waitFor();
-    assert.equal(await process(page).getAttribute('open'), '', 'The recorded diagnostic process starts open');
-    await process(page).locator(':scope > summary').click();
-    assert.equal(await process(page).getAttribute('open'), null, 'The reader can fold diagnostic records');
+    // 简洁, the default reading, keeps the diagnostic records to one line while the task runs.
+    assert.equal(await process(page).getAttribute('open'), null, 'The recorded diagnostic process starts folded');
     await process(page).locator(':scope > summary').click();
     await page.waitForFunction(() => document.querySelectorAll('.solve-stage[data-stage]').length >= 3);
     assert.equal(await process(page).getAttribute('open'), '', 'The reader can open the detailed execution records');

@@ -105,10 +105,12 @@ async function blankBudgets(page: Page) {
   assert.match(await page.locator('[data-chat-budget]').innerText(), /形式化[\s\S]*不限[\s\S]*证明[\s\S]*不限/u);
   assert.doesNotMatch(await page.locator('[data-chat-budget]').innerText(), /0 Token|0 分钟|0 轮/u);
 }
+/** The status says where the task is once; a task that needs nothing from the reader adds no "your next action" line. */
 async function outcomes(page: Page) {
-  const summary = page.locator('[data-chat-outcomes]'); await summary.waitFor();
-  assert.deepEqual(await summary.locator(':scope > p > span').allTextContents(), ['已有成果', '当前进展', '需要你做']);
-  for (const text of await summary.locator(':scope > p > strong').allTextContents()) assert.ok(text.trim());
+  const state = page.locator('.research-conversation-state strong'); await state.waitFor();
+  assert.ok((await state.innerText()).trim());
+  assert.equal(await page.locator('[data-chat-outcomes]').count(), 0, 'The status is not repeated as a three-line summary');
+  assert.equal(await page.locator('[data-chat-next-action]').count(), 0, 'An automatic task asks nothing of the reader');
 }
 async function historyMetadata(page: Page, id: string) {
   const row = page.locator(`[data-chat-row="${id}"]`), status = row.locator('[data-chat-history-status]');

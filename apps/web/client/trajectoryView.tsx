@@ -611,7 +611,7 @@ export class TrajectoryView {
     const retry = () => { state.fetchedFor = undefined; state.lastFetch = 0; state.error = undefined; this.update(this.root, this.run, this.overviewAction); };
     const simple = detailLevel() === 'simple';
     // The same 简洁/详细 choice as the collaboration surface (./detailLevel); switching here switches both.
-    const level = <div class="collab-detail-toggle trajectory-detail-toggle" role="group" aria-label={t('信息详略')} title={t('简洁和详细对协作与轨迹同时生效')}>
+    const level = <div class="collab-detail-toggle trajectory-detail-toggle" role="group" aria-label={t('信息详略')} title={t('简洁和详细对对话、协作与轨迹同时生效')}>
       {(['simple', 'full'] as const).map(value => <button key={value} type="button" aria-pressed={(value === 'simple') === simple} data-trajectory-detail={value}
         data-focus-key={`trajectory-detail-${value}`} onClick={() => setDetailLevel(value)}>{value === 'simple' ? t('简洁') : t('详细')}</button>)}</div>;
     const heading = (summary?: string) => <div class="trajectory-heading"><h3>{state.mode === 'roadmap' ? t('解题路线图') : t('解题轨迹')}</h3>

@@ -187,6 +187,9 @@ function TaskMessage(props: ChatThreadProps) {
   const solve = props.solve;
   const hasSource = solve?.process.current !== undefined || solve?.process.checks.some(check => check.source !== undefined);
   const liveAvailable = Boolean(solve && (solve.process.active || hasSource));
+  // The title already says where the task is; this line appears only while the task waits for the reader.
+  const nextAction = !solve ? undefined : statementDecision ? item?.status === 'review' ? t('核对题意并确认继续') : t('继续拟定研究计划')
+    : props.planDecision?.approval && !props.planDecision.approval.busy && !props.planDecision.approval.revising ? t('查看并确认研究计划') : undefined;
   const resultActions = run && !proofActive && <>
     {accepted && <button type="button" class="text-button" data-research-artifact="roadmap" onClick={() => props.onArtifact('roadmap')}><Icon name="network" />{t('路线图')}</button>}
     <button type="button" class="button" data-research-artifact="result" onClick={() => props.onArtifact('result')}>
@@ -213,11 +216,7 @@ function TaskMessage(props: ChatThreadProps) {
       </p>}
       {(!statementDecision || failed) && <p class="research-conversation-description">{description}</p>}
       {!run && item?.status === 'queued' && item.queue && <p class="research-conversation-latest" data-formalization-queue>{t('排队第 {0} 位 · 前方 {1} 项等待 · {2} 项执行中', item.queue.position, item.queue.ahead, item.queue.running)}</p>}
-      {solve && <div class="chat-outcome-summary" data-chat-outcomes>
-        <p><span>{t('已有成果')}</span><strong>{solve.process.current?.kind === 'proof' ? t('已验收证明') : solve.process.current?.kind === 'candidate' ? t('证明候选，可查看和下载') : hasSource ? t('Lean 陈述，可查看和下载') : t('正在准备，尚无代码')}</strong></p>
-        <p><span>{t('当前进展')}</span><strong>{title}</strong></p>
-        <p><span>{t('需要你做')}</span><strong>{statementDecision ? item?.status === 'review' ? t('核对题意并确认继续') : t('继续拟定研究计划') : props.planDecision?.approval && !props.planDecision.approval.busy && !props.planDecision.approval.revising ? t('查看并确认研究计划') : failed ? t('查看失败原因后选择继续方式') : active ? t('无需操作，可以继续浏览已有成果') : t('可阅读结果或继续提问')}</strong></p>
-      </div>}
+      {nextAction && <p class="chat-next-action" data-chat-next-action><span>{t('需要你做')}</span><strong>{nextAction}</strong></p>}
       {item && <FormalizationProgress item={item} process={solve?.process} wide={solve?.wide}
         onCode={() => props.onArtifact('live')} />}
       {item?.compiled && reviewActive && <p class="chat-statement-verdict" data-chat-background-review role="status">

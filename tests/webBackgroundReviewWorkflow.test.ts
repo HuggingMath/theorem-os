@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { WebFormalization, WebFormalizationBackgroundReview } from '../apps/web/formalizationTypes';
 import { webFormalizationDefaults, webFormalizationLimits } from '../apps/web/formalizationTypes';
 import type { WebFormalizationReport } from '../apps/web/shared';
+import { collaborationDetailStorageKey } from '../apps/web/client/runAwareness';
 
 const root = path.resolve(import.meta.dirname, '..');
 const client = path.join(root, 'apps/web/client');
@@ -101,6 +102,8 @@ async function pageFixture(item: WebFormalization, locale: 'zh' | 'en' = 'zh', p
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true });
   context.setDefaultTimeout(5_000); context.setDefaultNavigationTimeout(15_000);
   await context.addInitScript(language => localStorage.setItem('theorem-os.web-locale.v1', language), locale);
+  // These cases read every saved record and diagnostic: the 详细 reading. test-web-proof-thinking --simple-reading covers 简洁.
+  await context.addInitScript(key => localStorage.setItem(key, 'full'), collaborationDetailStorageKey);
   const page = await context.newPage(), errors: string[] = [], writes: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   const conversation = { id: 'chat-fixture', title: 'Galois criterion', createdAt: at, updatedAt: at, formalizationId: item.id, runId: 'proof-fixture', messages: [

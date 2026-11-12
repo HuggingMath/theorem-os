@@ -2,20 +2,22 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from 'preact/hook
 import { t } from '../../i18n';
 import type { SolveProcess } from '../solveProcess';
 import { chatReadingReveal } from '../chatReadingPosition';
-import { thinkingEntryMatch, type ThinkingEntry, type ThinkingMatch, type ThinkingStep } from '../thinkingProcess';
+import { detailLevel, onDetailLevel, setDetailLevel, type DetailLevel } from '../detailLevel';
+import { condenseThinking, thinkingEntryMatch, type ThinkingEntry, type ThinkingMatch, type ThinkingStep } from '../thinkingProcess';
 import { ActionBody, firstLine, ItemRow, LeanReport, summarize, type ItemContext } from './AgentRoute';
 import { ChatCodeBlock, ChatMessageContent } from './ChatMessageContent';
 import { Elapsed, ToneMark } from './SolveProcess';
-import { Icon } from './Icon';
+import { Icon, Spinner } from './Icon';
 
 type Reading = { all?: boolean; following: boolean; top: number; anchor?: { id: string; detail?: boolean; offset: number } };
 type Search = { query: string; reading: Reading; selected?: string };
-type Memory = Reading & { open?: boolean; details: boolean; known: Set<string>; unread: Set<string>; items: Set<string>; checks: Map<string, boolean>;
-  versions: Set<string>; view: 'all' | 'explanations'; search?: Search; searchReturn?: { search: Search; reading: Reading; view: 'all' | 'explanations' } };
+type Memory = Reading & { open?: boolean; level?: DetailLevel; details: boolean; known: Set<string>; unread: Set<string>; items: Set<string>; checks: Map<string, boolean>;
+  groups: Map<string, boolean>; versions: Set<string>; view: 'all' | 'explanations'; search?: Search; searchReturn?: { search: Search; reading: Reading; view: 'all' | 'explanations' } };
 const memories = new Map<string, Memory>();
 const memoryOf = (key: string) => {
   let memory = memories.get(key);
-  if (!memory) memories.set(key, memory = { details: true, known: new Set(), unread: new Set(), items: new Set(), checks: new Map(), versions: new Set(), view: 'all', following: true, top: 0 });
+  if (!memory) memories.set(key, memory = { details: detailLevel() === 'full', known: new Set(), unread: new Set(), items: new Set(), checks: new Map(), groups: new Map(),
+    versions: new Set(), view: 'all', following: true, top: 0 });
   return memory;
 };
 const previewOf = (entry?: ThinkingEntry) => !entry ? '' : entry.kind === 'summary' ? firstLine(entry.text, 140)
@@ -67,25 +69,39 @@ function WorkVersions({ entry, memory, refresh }: {
   </details>;
 }
 
-function Entry({ entry, ctx, memory, onCheck, match, onContext, onQuestion, selected }: {
+/** What Lean objected to first, for a failed check that stays folded to one line. */
+function firstError(check: Extract<ThinkingEntry, { kind: 'check' }>['check']) {
+  const message = check.lean?.messages.find(item => item.severity === 'error');
+  const text = firstLine(message?.text ?? check.text ?? '', 140);
+  return text ? { text, ...(message?.line !== undefined ? { line: message.line } : {}) } : undefined;
+}
+
+function Entry({ entry, ctx, memory, onCheck, match, onContext, onQuestion, selected, simple }: {
   entry: ThinkingEntry; ctx: ItemContext; memory: Memory; onCheck?: (id: string) => void; match?: ThinkingMatch; onContext?(): void;
-  onQuestion?(entry: ThinkingStep): void; selected: boolean;
+  onQuestion?(entry: ThinkingStep): void; selected: boolean; simple: boolean;
 }) {
   const selection = { 'data-thinking-selected': selected ? 'true' : undefined, 'aria-current': selected ? 'true' as const : undefined };
-  const question = onQuestion && (entry.kind === 'summary' || entry.kind === 'work') && <button type="button"
-    class="text-button thinking-question" data-thinking-question={entry.id} title={t('将这一步引用到讨论草稿')}
-    onClick={() => onQuestion(entry)}>{t('追问这一步')}<Icon name="arrow-up-right" /></button>;
-  const meta = <><div class="thinking-entry-meta">{entry.who && <span class="thinking-role">{entry.who}</span>}
-    {entry.kind !== 'action' && <time dateTime={entry.at}>{entry.kind === 'work' && entry.observed ? t('记录更新于 {0}', ctx.time(entry.at)) : ctx.time(entry.at)}</time>}</div>
-    {match && <div class="thinking-match" data-thinking-match>
-      <p translate={false}>{match.before}<mark>{match.match}</mark>{match.after}</p>
-      <button type="button" class="text-button" data-thinking-context={entry.id} onClick={onContext}>{t('查看前后记录')}<Icon name="arrow-up-right" /></button>
-    </div>}</>;
+  // 简洁 keeps the question on the record's own line, shown when the reader points at or focuses the record.
+  const question = onQuestion && (entry.kind === 'summary' || entry.kind === 'work') && (simple
+    ? <button type="button" class="icon-button thinking-question-icon" data-thinking-question={entry.id} aria-label={t('追问这一步')}
+      title={t('将这一步引用到讨论草稿')} onClick={() => onQuestion(entry)}><Icon name="message-circle-question" /></button>
+    : <button type="button" class="text-button thinking-question" data-thinking-question={entry.id} title={t('将这一步引用到讨论草稿')}
+      onClick={() => onQuestion(entry)}>{t('追问这一步')}<Icon name="arrow-up-right" /></button>);
+  const time = entry.kind !== 'action' && <time dateTime={entry.at}>{entry.kind === 'work' && entry.observed ? t('记录更新于 {0}', ctx.time(entry.at)) : ctx.time(entry.at)}</time>;
+  const found = match && <div class="thinking-match" data-thinking-match>
+    <p translate={false}>{match.before}<mark>{match.match}</mark>{match.after}</p>
+    <button type="button" class="text-button" data-thinking-context={entry.id} onClick={onContext}>{t('查看前后记录')}<Icon name="arrow-up-right" /></button>
+  </div>;
+  const meta = simple ? found : <><div class="thinking-entry-meta">{entry.who && <span class="thinking-role">{entry.who}</span>}{time}</div>{found}</>;
+  // 简洁 puts who, what, its state and when on one line.
+  const head = (label?: string, status?: string) => <div class="thinking-head">
+    {entry.who && <span class="thinking-role">{entry.who}</span>}{label && <strong>{label}</strong>}
+    {status && <span class="thinking-head-status">{status}</span>}<span class="thinking-head-end">{question}{time}</span></div>;
   if (entry.kind === 'summary') return <li class="thinking-summary" data-thinking-entry={entry.id} data-thinking-kind="summary" {...selection}>
-    {meta}
+    {meta}{simple && head()}
     <ChatMessageContent text={entry.text} />
     {entry.clipped && <p class="route-item-note">{t('内容较长，后面的部分没有显示。')}</p>}
-    {question}
+    {!simple && question}
   </li>;
   if (entry.kind === 'action') return <li data-thinking-entry={entry.id} data-thinking-kind="action" {...selection}>
     {meta}
@@ -95,9 +111,9 @@ function Entry({ entry, ctx, memory, onCheck, match, onContext, onQuestion, sele
     const open = memory.checks.get(entry.id) ?? memory.details;
     return <li class="thinking-work" data-thinking-entry={entry.id} data-thinking-kind="work" data-thinking-work={entry.category} data-thinking-task={entry.task?.id} {...selection}>
       {meta}
-      <div class="thinking-work-head"><strong>{entry.label}</strong>{entry.status && <span>{entry.status}</span>}</div>
+      {simple ? head(entry.label, entry.status) : <div class="thinking-work-head"><strong>{entry.label}</strong>{entry.status && <span>{entry.status}</span>}</div>}
       {entry.text && <ChatMessageContent text={entry.text} />}
-      <WorkVersions entry={entry} memory={memory} refresh={ctx.refresh} />
+      {!simple && <WorkVersions entry={entry} memory={memory} refresh={ctx.refresh} />}
       {entry.sections.length > 0 && <details open={open} data-thinking-detail={entry.id} onToggle={event => {
         const now = (event.currentTarget as HTMLDetailsElement).open;
         if (now === (memory.checks.get(entry.id) ?? memory.details)) return;
@@ -109,14 +125,17 @@ function Entry({ entry, ctx, memory, onCheck, match, onContext, onQuestion, sele
             : <><h5>{section.label}</h5><ChatMessageContent text={section.text} /></>}
         </section>)}</div>}
       </details>}
-      {question}
+      {!simple && question}
     </li>;
   }
   const { check, action } = entry, open = memory.checks.get(entry.id) ?? memory.details;
   const stopped = check.state === 'running' && !ctx.running || check.state === 'failed' && !check.lean && !check.text;
   const tone = stopped ? 'stopped' : check.state === 'running' ? 'active' : check.state === 'passed' ? 'done' : 'failed';
   const line = <><ToneMark tone={tone} /><span>{check.label}</span>
-    <span class="thinking-check-state">{stopped ? t('未完成') : check.state === 'running' ? t('检查中…') : check.state === 'passed' ? t('通过') : t('未通过')}</span><Icon name="chevron-down" /></>;
+    <span class="thinking-check-state">{stopped ? t('未完成') : check.state === 'running' ? t('检查中…') : check.state === 'passed' ? t('通过') : t('未通过')}</span>
+    {simple && time}<Icon name="chevron-down" /></>;
+  // Folded, a failed check still says what Lean objected to first; the file and the full report open with it.
+  const brief = simple && !open && tone === 'failed' ? firstError(check) : undefined;
   return <li class="thinking-check" data-thinking-entry={entry.id} data-thinking-kind="check" data-tone={tone} {...selection}>
     {meta}
     <details open={open} data-thinking-detail={entry.id} onToggle={event => {
@@ -140,10 +159,33 @@ function Entry({ entry, ctx, memory, onCheck, match, onContext, onQuestion, sele
         </div>}
       </div>}
     </details>
+    {brief && <p class="thinking-check-brief" data-thinking-check-brief>{brief.line !== undefined && <span>{t('第 {0} 行出错', brief.line)}</span>}
+      <code translate={false}>{brief.text}</code></p>}
   </li>;
 }
 
-function RecordOptions({ count, expand }: { count: number; expand(value: boolean): void }) {
+type ActionEntry = Extract<ThinkingEntry, { kind: 'action' }>;
+/** 简洁 only: tool actions between two explanations or checks as one line, opening to each action. */
+function ActionGroup({ id, actions, ctx, memory }: { id: string; actions: ActionEntry[]; ctx: ItemContext; memory: Memory }) {
+  // Folded unless the reader opened everything, or was sent to one of its actions from a search result.
+  const initial = memory.details || actions.some(entry => memory.items.has(entry.id));
+  const open = memory.groups.get(id) ?? initial, latest = summarize(actions.at(-1)!.action);
+  const running = ctx.running && actions.some(entry => entry.action.status === 'running');
+  return <li class="thinking-group" data-thinking-entry={id} data-thinking-kind="actions">
+    <details open={open} data-thinking-detail={id} onToggle={event => {
+      const now = (event.currentTarget as HTMLDetailsElement).open;
+      if (now === (memory.groups.get(id) ?? initial)) return;
+      memory.groups.set(id, now); ctx.refresh();
+    }}>
+      <summary class="thinking-group-head"><span class="route-item-icon">{running ? <Spinner /> : <Icon name="wrench" />}</span>
+        <span class="thinking-group-count">{t('{0} 项工具操作', actions.length)}</span>
+        <span class="thinking-group-latest">{latest.label}{latest.code && <> <code translate={false}>{latest.code}</code></>}</span><Icon name="chevron-down" /></summary>
+      {open && <ol class="route-items">{actions.map(entry => <ItemRow key={entry.id} item={{ type: 'action', action: entry.action }} ctx={ctx} detailId={entry.id} />)}</ol>}
+    </details>
+  </li>;
+}
+
+function RecordOptions({ count, level, expand }: { count: number; level: DetailLevel; expand(value: boolean): void }) {
   const [open, setOpen] = useState(false), menu = useRef<HTMLDetailsElement>(null);
   const close = (focus = false) => {
     setOpen(false); if (focus) menu.current?.querySelector('summary')?.focus({ preventScroll: true });
@@ -160,6 +202,9 @@ function RecordOptions({ count, expand }: { count: number; expand(value: boolean
     <summary aria-label={t('记录选项')} title={t('记录选项')}><Icon name="ellipsis" /></summary>
     <div class="thinking-options-menu">
       <p>{t('{0} 条记录', count)}</p>
+      <div class="collab-detail-toggle thinking-detail-toggle" role="group" aria-label={t('信息详略')} title={t('简洁和详细对对话、协作与轨迹同时生效')}>
+        {(['simple', 'full'] as const).map(value => <button key={value} type="button" data-thinking-level={value} aria-pressed={level === value}
+          onClick={() => { setDetailLevel(value); close(true); }}>{value === 'simple' ? t('简洁') : t('详细')}</button>)}</div>
       <button type="button" data-thinking-expand-all onClick={() => { expand(true); close(true); }}>{t('展开全部')}</button>
       <button type="button" data-thinking-collapse-all onClick={() => { expand(false); close(true); }}>{t('收起详情')}</button>
     </div>
@@ -172,20 +217,43 @@ export function ThinkingProcess({ process, time, onCheck, onQuestion }: {
   onQuestion?(entry: ThinkingStep): void;
 }) {
   const [, update] = useState(0), refresh = () => update(value => value + 1);
+  useEffect(() => onDetailLevel(() => update(value => value + 1)), []);
+  const level = detailLevel(), simple = level === 'simple';
   const memory = memoryOf(process.key), open = memory.open ?? process.active;
   const body = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), controls = useRef<HTMLDivElement>(null);
   const focusContext = useRef(false);
   const applying = useRef(false), focusBody = useRef(false), focusSearch = useRef<'focus' | 'select' | false>(false), searchInput = useRef<HTMLInputElement>(null), frame = useRef(0), bodyId = useId();
   const [overflow, setOverflow] = useState(false);
-  const entries = process.thinking ?? [], filtered = memory.view === 'all' ? entries : entries.filter(entry => entry.kind === 'summary' || entry.kind === 'work');
+  // 简洁 keeps one record per task; 详细 lists every saved record.
+  const entries = simple ? condenseThinking(process.thinking ?? []) : process.thinking ?? [];
+  // Choosing the other reading replaces what was opened one by one under the previous one.
+  if (memory.level !== level) {
+    if (memory.level) {
+      memory.details = !simple; memory.items.clear(); memory.checks.clear(); memory.groups.clear();
+      if (!simple) for (const entry of entries) if (entry.kind === 'action') memory.items.add(entry.id);
+    }
+    memory.level = level;
+  }
+  const filtered = memory.view === 'all' ? entries : entries.filter(entry => entry.kind === 'summary' || entry.kind === 'work');
   const query = memory.search?.query.trim() ?? '';
   const matches = new Map<string, ThinkingMatch>();
   if (query) for (const entry of filtered) { const match = thinkingEntryMatch(entry, query); if (match) matches.set(entry.id, match); }
   const visible = query ? filtered.filter(entry => matches.has(entry.id)) : filtered;
   const selected = query ? visible.findIndex(entry => entry.id === memory.search?.selected) : -1;
-  const anchored = memory.following || !memory.anchor ? -1 : visible.findIndex(entry => entry.id === memory.anchor!.id);
-  const start = memory.all ? 0 : Math.min(Math.max(0, visible.length - 40), anchored < 0 ? visible.length : anchored);
-  const shown = visible.slice(start);
+  // 简洁 folds a run of tool actions into one row; a search lists every match on its own.
+  type Row = { id: string; entry: ThinkingEntry; actions?: ActionEntry[] };
+  const rows: Row[] = [];
+  for (const entry of visible) {
+    const last = rows.at(-1);
+    if (simple && !query && entry.kind === 'action') {
+      if (last?.actions) last.actions.push(entry); else rows.push({ id: entry.id, entry, actions: [entry] });
+    } else rows.push({ id: entry.id, entry });
+  }
+  for (const row of rows) if (row.actions && row.actions.length > 1) row.id = `group:${row.id}`;
+  const anchored = memory.following || !memory.anchor ? -1
+    : rows.findIndex(row => row.id === memory.anchor!.id || row.actions?.some(entry => entry.id === memory.anchor!.id));
+  const start = memory.all ? 0 : Math.min(Math.max(0, rows.length - (simple ? 12 : 40)), anchored < 0 ? rows.length : anchored);
+  const shown = rows.slice(start), earlier = rows.slice(0, start).reduce((count, row) => count + (row.actions?.length ?? 1), 0);
   const proof = ['proving', 'verifying', 'accepted'].includes(process.state) || entries.some(entry => entry.kind === 'work' || entry.id.startsWith('prove:'));
   for (const entry of entries) if (!memory.known.has(entry.id)) {
     memory.known.add(entry.id);
@@ -300,7 +368,7 @@ export function ThinkingProcess({ process, time, onCheck, onQuestion }: {
   };
   const expand = (value: boolean) => {
     save();
-    memory.details = value;
+    memory.details = value; memory.groups.clear();
     for (const entry of entries) {
       if (entry.kind === 'action') { if (value) memory.items.add(entry.id); else memory.items.delete(entry.id); }
       if (entry.kind === 'check' || entry.kind === 'work') memory.checks.set(entry.id, value);
@@ -309,7 +377,7 @@ export function ThinkingProcess({ process, time, onCheck, onQuestion }: {
     if (value) memory.all = true;
     refresh();
   };
-  return <details class="thinking-process" data-thinking-process={process.key} data-active={process.active} data-thinking-following={memory.following} open={open}
+  return <details class="thinking-process" data-thinking-process={process.key} data-active={process.active} data-thinking-following={memory.following} data-detail={level} open={open}
     onKeyDown={event => {
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 'f') {
         event.preventDefault(); event.stopPropagation();
@@ -345,7 +413,7 @@ export function ThinkingProcess({ process, time, onCheck, onQuestion }: {
           onClick={returnSearch}><Icon name="arrow-left" /><span>{t('返回搜索结果')}</span></button>
           : <button type="button" class="thinking-search-toggle" data-thinking-search-toggle aria-label={t('查找记录')} title={t('查找记录')}
             aria-expanded={!!memory.search} aria-controls={memory.search ? `${bodyId}-search` : undefined} onClick={toggleSearch}><Icon name="search" /></button>}
-        <RecordOptions key={process.key} count={visible.length} expand={expand} />
+        <RecordOptions key={process.key} count={visible.length} level={level} expand={expand} />
         </div>
         {memory.search && <div class="thinking-search" id={`${bodyId}-search`}>
           <label class="sr-only" htmlFor={`${bodyId}-query`}>{memory.view === 'all' ? t('查找全部记录') : t('查找解题说明')}</label>
@@ -393,10 +461,12 @@ export function ThinkingProcess({ process, time, onCheck, onQuestion }: {
         <div class="thinking-content" ref={content}>
         {start > 0 && <button type="button" class="text-button thinking-earlier" onClick={() => {
           save(); memory.open = true; memory.following = false; memory.all = true; focusBody.current = true; refresh();
-        }}>{t('查看更早的 {0} 条记录', start)}</button>}
-        {shown.length ? <ol class="thinking-entries">{shown.map(entry => <Entry key={entry.id} entry={entry} ctx={ctx} memory={memory} onCheck={onCheck}
-          onQuestion={onQuestion ? step => { save(); pause(); onQuestion(step); } : undefined}
-          match={matches.get(entry.id)} selected={selected >= 0 && visible[selected]!.id === entry.id} onContext={() => context(entry)} />)}</ol>
+        }}>{t('查看更早的 {0} 条记录', earlier)}</button>}
+        {shown.length ? <ol class="thinking-entries">{shown.map(({ id, entry, actions }) => actions && actions.length > 1
+          ? <ActionGroup key={id} id={id} actions={actions} ctx={ctx} memory={memory} />
+          : <Entry key={id} entry={entry} ctx={ctx} memory={memory} onCheck={onCheck} simple={simple}
+            onQuestion={onQuestion ? step => { save(); pause(); onQuestion(step); } : undefined}
+            match={matches.get(entry.id)} selected={selected >= 0 && visible[selected]!.id === entry.id} onContext={() => context(entry)} />)}</ol>
           : <p class="thinking-empty">{query ? t('没有匹配记录，请换一个关键词。') : memory.view === 'explanations' && entries.length ? t('还没有解题说明，可切换到全部记录查看工具操作。')
             : process.active ? t('等待模型返回公开摘要，工具操作会在这里持续更新。') : t('这次没有记录公开摘要或工具操作。')}</p>}
       {process.dropped > 0 && <p class="route-item-note thinking-dropped">{t('记录超过保存上限，之后的 {0} 条没有保存。', process.dropped)}</p>}

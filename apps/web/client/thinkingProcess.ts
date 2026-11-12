@@ -155,6 +155,23 @@ function proofWork(input: SolveProcessInput, names: Map<string, string>): WorkEn
   return result;
 }
 
+/**
+ * The 简洁 reading keeps one record per task: once a task has a progress record, its plan record folds into it, so the
+ * objective is not said twice. The plan's sections stay behind the progress record's details.
+ */
+export function condenseThinking(entries: readonly ThinkingEntry[]): ThinkingEntry[] {
+  const progress = new Map<string, WorkEntry>(), plans = new Map<string, WorkEntry>();
+  for (const entry of entries) if (entry.kind === 'work' && entry.task && entry.id.startsWith('work:task:')) progress.set(entry.task.id, entry);
+  for (const entry of entries) if (entry.kind === 'work' && entry.task && entry.category === 'plan' && progress.has(entry.task.id)) plans.set(entry.task.id, entry);
+  if (!plans.size) return [...entries];
+  const folded = new Set(plans.values());
+  return entries.filter(entry => !folded.has(entry as WorkEntry)).map(entry => {
+    const plan = entry.kind === 'work' && entry.task && progress.get(entry.task.id) === entry ? plans.get(entry.task.id) : undefined;
+    return plan && entry.kind === 'work' ? { ...entry, sections: [...entry.sections,
+      ...plan.sections.filter(section => !entry.sections.some(own => own.label === section.label))] } : entry;
+  });
+}
+
 /** Only explicitly public summaries and commentary become prose. Old unlabelled reasoning stays out. */
 export function buildThinkingEntries(input: SolveProcessInput, checks: readonly LiveCheck[]): ThinkingEntry[] {
   const entries = new Map<string, ThinkingEntry>();

@@ -14,7 +14,7 @@ import { localeStorageKey } from '../apps/web/i18n';
 import { createWebService } from '../apps/web/server';
 import { webLimits, type WebAgentActionBody, type WebFormalizationReport, type WebSession } from '../apps/web/shared';
 import { audit } from './web-a11y';
-import { freePort, settled } from './web-scenario';
+import { freePort, preferFullCollaboration, settled } from './web-scenario';
 
 const root = path.resolve(import.meta.dirname, '..');
 const output = path.join(root, 'out/web-formalization-progress');
@@ -173,6 +173,8 @@ try {
     activeContext = context;
     context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
     await context.addInitScript(([key, value]) => { localStorage.setItem(key, value); }, [localeStorageKey, locale]);
+    // Every saved record and diagnostic is the 详细 reading; test-web-solve-process covers the default 简洁 one.
+    await preferFullCollaboration(context);
     const page = await context.newPage(); activePage = page;
     page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
     page.on('pageerror', error => errors.push(`${scenario}: ${error.message}`));

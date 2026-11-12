@@ -84,6 +84,8 @@ try {
       await page.goto(origin + '/?run=' + run.id);
       await page.waitForURL(url => url.searchParams.has('chat'));
       await page.locator('[data-chat-plan-decision][data-waiting="true"]').waitFor();
+      // The status adds one line only while the task waits for the reader.
+      assert.equal((await page.locator('[data-chat-next-action] strong').innerText()).trim(), '查看并确认研究计划');
       await openTab(page, 'collaboration');
       await page.locator('[data-collab-observation]').waitFor({ state: 'attached' });
       control = controls.get(run.id)!;
@@ -100,6 +102,7 @@ try {
         Object.assign(control.observation.inspection.planApproval!, { status: 'approved', approvedId: crypto.randomUUID(), approvedVersion: 'fixture-plan-v1', approvedAt: Date.now() });
         control.emit();
         await page.locator('[data-chat-plan-decision][data-waiting="false"]').waitFor({ state: 'attached' });
+        assert.equal(await page.locator('[data-chat-next-action]').count(), 0, 'An approved plan asks nothing more of the reader');
       } else if (kind === 'restart') {
         const before = control.observation.solverRunId, next = before + '-round2';
         control.observation.solverRunId = next;

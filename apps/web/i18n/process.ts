@@ -20,6 +20,7 @@ export const process: Record<string, string> = {
   "过程记录没有读取成功。": "The process record could not be read.",
   "记录超过保存上限，之后的 {0} 条没有保存。": "The record is longer than the saved limit; the {0} after it were not saved.",
   "更早的 {0} 步见「路线图」。": "The earlier {0} steps are in the roadmap.",
+  "{0} 项工具操作": "{0} tool actions",
   // The formalization rounds
   "理解题目": "Understanding the problem",
   "重新理解题目": "Understanding the problem again",
