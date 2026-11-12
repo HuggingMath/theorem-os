@@ -37,6 +37,11 @@ def _arxiv_candidates(url, identity):
     return candidates
 
 
+def _candidate_key(url):
+    identity = arxiv_identity(url)
+    return ('arxiv', identity[0], identity[1].casefold()) if identity else ('url', url)
+
+
 def _open_access_urls(record):
     locations = [record.get('best_oa_location'), record.get('primary_location')]
     locations.extend(record.get('locations') or [])
@@ -79,7 +84,7 @@ def install(research):
         abstract = None
         page = None
         if identity:
-            candidates = _arxiv_candidates(url, identity)
+            candidates = [(target, label, identity) for target, label in _arxiv_candidates(url, identity)]
         else:
             identifier = openalex_id or 'https://doi.org/' + doi
             metadata_url = 'https://api.openalex.org/works/' + quote(identifier, safe='') + '?' + urlencode({
@@ -100,34 +105,47 @@ def install(research):
                 message = str(error)[:1000]
                 attempts.append({'url': metadata_url, 'status': 'error', 'error': message})
                 errors.append(metadata_url + ': ' + message)
-            candidates = [(value, 'openalex_open_access') for value in _open_access_urls(record)]
+            candidates, deferred_abstracts = [], []
+            # Keep the two explicitly recorded OA locations. Each known arXiv
+            # location adds at most PDF, HTML and abstract, bound to its own ID.
+            # Try all body candidates and the DOI before the arXiv abstracts.
+            for value in _open_access_urls(record):
+                oa_identity = arxiv_identity(value)
+                if oa_identity:
+                    for target, label in _arxiv_candidates(value, oa_identity):
+                        destination = deferred_abstracts if label == 'arxiv_abstract' else candidates
+                        destination.append((target, label, oa_identity))
+                else:
+                    candidates.append((value, 'openalex_open_access', None))
             # OpenAlex work pages contain metadata; a DOI may resolve to the actual paper.
             if doi:
-                candidates.append((url, 'direct'))
+                candidates.append((url, 'direct', None))
             else:
                 recorded_doi = record.get('doi')
                 if isinstance(recorded_doi, str) and urlsplit(recorded_doi).hostname in (
                         'doi.org', 'www.doi.org', 'dx.doi.org') and reader._doi_from_url(recorded_doi):
-                    candidates.append((recorded_doi, 'openalex_doi'))
+                    candidates.append((recorded_doi, 'openalex_doi', None))
+            candidates.extend(deferred_abstracts)
         seen = set()
         selected = None
-        for target, label in candidates:
-            if target in seen:
+        for target, label, expected_identity in candidates:
+            key = _candidate_key(target)
+            if key in seen:
                 continue
-            seen.add(target)
+            seen.add(key)
             details = {}
             try:
                 raw, fetched_url, mime = reader._fetch_bytes(target)
                 fetched_identity = arxiv_identity(fetched_url)
-                if identity and fetched_identity:
+                if expected_identity and fetched_identity:
                     # Compare known arXiv identities before extracting any text;
                     # an explicit version cannot admit a moving or different one.
-                    requested_id, resolved_id = identity[1].casefold(), fetched_identity[1].casefold()
+                    requested_id, resolved_id = expected_identity[1].casefold(), fetched_identity[1].casefold()
                     requested_document = re.sub(r'v\d+$', '', requested_id)
                     resolved_document = re.sub(r'v\d+$', '', resolved_id)
                     if requested_document != resolved_document or (
                             requested_id != requested_document and requested_id != resolved_id):
-                        raise RuntimeError('arxiv_source_identity_mismatch: requested ' + url
+                        raise RuntimeError('arxiv_source_identity_mismatch: requested ' + target
                                            + '; resolved ' + fetched_url)
                 if raw.startswith(b'%PDF') or 'application/pdf' in mime.casefold():
                     title, text = reader._pdf_text(raw, details)

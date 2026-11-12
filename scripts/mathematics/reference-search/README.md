@@ -7,6 +7,10 @@ phrase boundaries inform explicitly broader fallbacks, never rewrite the first
 request. If discovery gaps remain, it issues at most four additional academic
 requests (concept-only and subject-only queries). Explicit quotes and `--target`
 help when an unquoted phrase boundary is ambiguous.
+Ordinary literature search accepts `--target` by itself, without `--artifact` or
+`--proof`. The target guides discovery and relevance while the normal search
+cache, provider recovery and budgets remain in use. Supplying an artifact or
+proof still requires the complete specialized-search contract.
 
 Cards are labelled `matching`, `background`, or `low`. A core concept must match
 all its meaningful words. Explicit quoted objects, `--target`, and noun-anchored
@@ -62,12 +66,25 @@ first; PDF failures try the same version's arXiv HTML before its abstract page.
 page text) and `abstract`. A readable page does not establish that the entire
 paper or its proof was read. `academic_read_attempts` and failures remain in the
 saved source metadata. The existing HTTP/response/read budgets still apply.
+When a recorded open-access location identifies arXiv, DOI/OpenAlex reading also
+tries that document's same-version PDF and HTML before its abstract. It still
+selects at most two recorded open-access URLs; expansion permits at most seven
+document candidates plus one metadata lookup before redirect hops, with aliases
+deduplicated. Other publishers' URLs are not expanded. Each known arXiv candidate
+keeps its own document/version check. Previously saved abstracts remain cached;
+use `read REF-... --refresh` to attempt the newly available full-text path while
+retaining earlier source snapshots.
 When a returned URL identifies an arXiv document, the reader rejects a different
 document or a changed/missing explicitly requested version before extraction,
 records the failed attempt, and tries the next same-version candidate. An
 unversioned request can still resolve to a concrete version of that document.
 An unrelated external CDN URL does not provide an arXiv version identity to
 compare, so the adapter does not infer a version from it.
+
+Citation discovery accepts a known arXiv HTML URL or its registered REF, as well
+as the existing abstract/PDF identifiers. It preserves the arXiv ID and explicit
+version when following references or citations. Returned papers remain unread
+leads; graph discovery does not authorize their URLs as citations.
 
 The existing campaign answer-source ban surrounds discovery and reading,
 including encoded URLs, redirect destinations, and source-cache metadata.

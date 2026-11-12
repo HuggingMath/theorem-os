@@ -169,8 +169,30 @@ def install(research):
     if getattr(research, "_campaign_reference_adapter", False):
         return
     research._campaign_reference_adapter = True
-    from academic_read import install as install_academic_reader
+    from academic_read import arxiv_identity, install as install_academic_reader
     install_academic_reader(research)
+    original_search = research.search
+
+    def search(query, limit=8, target=None, artifact=None, proof=None, provider=None, *, _recovery=None):
+        # Ordinary academic discovery accepts an explicit subject independently
+        # of the stricter artifact/proof route owned by the base helper.
+        if target is not None and artifact is None and proof is None:
+            query, target = query.strip(), target.strip()
+            if not query or not target:
+                raise ValueError('query and target must be non-empty')
+            return research._search_base(query, limit, provider=provider, target=target, _recovery=_recovery)
+        return original_search(query, limit, target, artifact, proof, provider, _recovery=_recovery)
+
+    research.search = search
+    original_paper_id = research.citation_graph.paper_id
+
+    def paper_id(value):
+        identity = arxiv_identity(value.strip())
+        if identity and identity[0] == 'html':
+            value = 'https://arxiv.org/abs/' + identity[1]
+        return original_paper_id(value)
+
+    research.citation_graph.paper_id = paper_id
     original_get = research.base._get
 
     def get(url):
