@@ -175,6 +175,46 @@ try {
     } finally { if (c) controls.get(c.runId)?.finish(); await ctx.close(); }
   }
 
+  // The workspace lists the plan next to the conversation; a task there addresses guidance to itself in the composer.
+  for (const [width, locale] of [[1440, 'zh'], [390, 'en']] as const) {
+    phase = `workspace-guidance/${locale}/${width}`; const { ctx, page } = await open(width, locale);
+    let c: Task | undefined;
+    try {
+      c = await task(page, ctx); const live = page.locator('#chat-live-panel');
+      // A wide screen opens the workspace of a running task by itself; a phone opens it from the status line.
+      if (width < 1100) await page.locator('#research-chat-thread [data-research-artifact="live"]').click();
+      await live.locator('[data-live-now]').waitFor();
+      const row = live.locator('[data-live-task="goal"]');
+      assert.equal(await row.getAttribute('data-tone'), 'pending');
+      assert.equal(await live.locator('[data-live-done]').innerText(), locale === 'zh' ? '已完成 0/1' : '0 of 1 done');
+      assert.equal(await live.locator('[data-live-failed]').count(), 0);
+      assert.equal(await page.locator('#research-chat-thread [data-research-guidance]').count(), 1, 'The status line offers guidance while the proof runs');
+      await row.locator('.live-task-head').click();
+      const control = controls.get(c.runId)!;
+      const recordedTask = control.observation.inspection.tasks[0]!;
+      recordedTask.status = 'blocked'; control.emit();
+      await page.waitForFunction(() => document.querySelector('[data-live-task="goal"]')?.getAttribute('data-tone') === 'failed');
+      assert.equal(await row.locator('.live-task-head').getAttribute('aria-expanded'), 'true', 'A newly failed task preserves the reader’s explicit expansion');
+      await row.locator('.live-task-head').click();
+      recordedTask.status = 'running'; control.emit();
+      await page.waitForFunction(() => document.querySelector('[data-live-task="goal"]')?.getAttribute('data-tone') === 'active');
+      assert.equal(await row.locator('.live-task-head').getAttribute('aria-expanded'), 'false', 'A retry preserves the reader’s explicit collapse');
+      await row.locator('.live-task-head').click();
+      await row.locator('[data-live-guide="goal"]').click();
+      await page.locator('[data-chat-guidance-mode-open][aria-pressed="true"]').waitFor();
+      assert.equal(await page.locator('[data-chat-guidance-target]').inputValue(), 'goal');
+      assert.equal(await page.locator('#formalize-original').isVisible(), true, 'Guiding a task leaves the reader at the composer');
+      assert.deepEqual((await draft(page, c)).guidance, { runId: c.runId, taskRef: { id: 'goal', version: 'goal-v1' } });
+      const text = 'Workspace guidance: settle the helper first.';
+      const commandBefore = commands.length, providerBefore = providerCalls.length;
+      await page.locator('#formalize-original').fill(text); await page.locator('#formalize-start:enabled').click();
+      await page.locator('[data-chat-guidance-receipt][data-guidance-status="delivered"]').waitFor();
+      assert.equal(commands.length, commandBefore + 1); assert.equal(providerCalls.length, providerBefore, 'Guidance goes to the running research, not to a discussion model');
+      assert.equal((commands.at(-1) as any).input.text, text); assert.deepEqual((commands.at(-1) as any).input.taskRef, { id: 'goal', version: 'goal-v1' });
+      await privacy(page); mark({ guidedTask: 'goal', delivered: true });
+    } finally { if (c) controls.get(c.runId)?.finish(); await ctx.close(); }
+  }
+
   for (const variant of ['retry-original', 'retry-newer', 'reload-original', 'reload-newer', 'not-accepted-newer'] as const) {
     phase = `message/${variant}`; const { ctx, page } = await open(); let c: Task | undefined;
     try {

@@ -14,7 +14,7 @@ import type { WebRunner } from '../apps/web/runner';
 import { createWebService } from '../apps/web/server';
 import type { WebExplanation, WebExplanationDocument, WebExplanationOverview, WebRun } from '../apps/web/shared';
 import { audit } from './web-a11y';
-import { freePort } from './web-scenario';
+import { freePort, preferFullCollaboration } from './web-scenario';
 
 const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/web-chat-mathematics');
 await fs.access(path.join(root, 'out/web/app.js')).catch(() => { throw new Error('Build the current web client before running the chat mathematics check.'); });
@@ -145,6 +145,8 @@ try {
   for (const width of [1440, 390, 320]) {
     const context = await browser.newContext({ locale: 'zh-CN', viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
     context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
+    // The mathematical progress block and the output buttons of a running proof are the 详细 reading; 简洁 shows them in the workspace.
+    await preferFullCollaboration(context);
     await context.addInitScript(key => { if (!localStorage.getItem(key)) localStorage.setItem(key, 'zh'); }, localeStorageKey);
     const accepted = run('completed'), missing = run('completed'), working = run('running'), unavailable = run('completed'),
       queued = run('completed'), generating = run('completed'), failed = run('completed'), cancelled = run('completed'), exhausted = run('completed');

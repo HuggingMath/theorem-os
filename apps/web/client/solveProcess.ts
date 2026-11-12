@@ -37,6 +37,15 @@ export type LiveCheck = {
   lean?: WebAgentLeanCheck; text?: string; file?: string; source?: string; sourceClipped?: boolean;
   /** `changed`: the file shown was saved after this check, so its lines may have moved. */ sourceNote?: 'changed';
 };
+/** What an Agent or the platform is doing at this moment, one line each, for the workspace beside the conversation. */
+export type LiveNow = { id: string; who?: string; text: string; code?: string; task?: { id: string; label: string } };
+/** One task of the research plan as the workspace lists it: where it stands and, when it did not pass, what was said. */
+export type LiveTask = {
+  id: string; label: string; kind: string; tone: ProcessTone; status: string; statement?: string; who?: string;
+  /** Tried more than once. */ attempts?: number; /** Why it is blocked or failed, as recorded. */ reason?: string;
+  /** What a task that did not fail reported. */ finding?: string;
+  /** The unfinished tasks it waits for. */ waits?: string[];
+};
 export type SolveState = 'queued' | 'formalizing' | 'review' | 'proving' | 'verifying' | 'accepted' | 'failed' | 'stopped' | 'cancelled';
 export type SolveProcess = {
   key: string; state: SolveState; label: string; active: boolean; startedAt?: string; endedAt?: string; tokens?: number;
@@ -46,6 +55,8 @@ export type SolveProcess = {
   /** Records past the stored limit, which no row shows. */ dropped: number;
   /** Public summary/commentary and actual operations, deduplicated across streaming snapshots. */
   thinking?: ThinkingEntry[];
+  /** What runs at this moment; empty once the task ended or between two steps. */ now: LiveNow[];
+  /** The research plan's tasks, in plan order; empty before a plan exists. */ tasks: LiveTask[];
 };
 export type SolveProcessInput = {
   formalization?: WebFormalization; activity?: readonly WebFormalizationActivity[]; activityDropped?: number;
@@ -205,18 +216,75 @@ const taskStatusLabels: Record<string, string> = { pending: t('待调度'), runn
 const taskKindLabels: Record<string, string> = { research: t('研究'), sketch: t('草图'), lemma: t('引理'), goal: t('原始目标') };
 type Task = NonNullable<WebRun['observation']>['inspection']['tasks'][number];
 const taskState = (task: Task) => task.control === 'active' ? task.status : task.control;
+const settledStates = ['integrated', 'completed'];
+const taskTone = (state: string, live: boolean): ProcessTone => settledStates.includes(state) ? 'done' : ['blocked', 'failed'].includes(state) ? 'failed'
+  : ['running', 'delivered', 'conditional'].includes(state) ? live ? 'active' : 'stopped' : live ? 'pending' : 'skipped';
+const taskLabel = (task: Task, names: ReadonlyMap<string, string>) => names.get(task.id) ?? (oneLine(task.objective) || task.id);
+
+/** Structured findings carry solver controls too; the workspace shows only their public mathematical text. */
+function taskFindingText(raw?: string): string {
+  if (!raw?.trim()) return '';
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { return /^[\s]*[\[{]/u.test(raw) ? '' : raw.trim(); }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  const finding = value as Record<string, unknown>;
+  const gap = finding.mathematicalGap && typeof finding.mathematicalGap === 'object' ? finding.mathematicalGap as Record<string, unknown> : {};
+  const obligations = Array.isArray(finding.remainingObligations) ? finding.remainingObligations : [];
+  return [finding.summary, finding.statement, ...obligations, gap.remaining]
+    .filter((text): text is string => typeof text === 'string' && Boolean(text.trim())).join('\n').trim();
+}
+
+/** Every task of the plan for the workspace: its state as the host records it, who holds it, what it waits for, why it failed. */
+function liveTasks(run: WebRun): LiveTask[] {
+  const inspection = run.observation?.inspection, tasks = inspection?.tasks ?? [];
+  const live = run.status === 'queued' || run.status === 'running', names = taskNames(tasks), workers = workerNames(inspection?.workers ?? []);
+  const byId = new Map(tasks.map(task => [task.id, task]));
+  return tasks.map((task): LiveTask => {
+    const state = taskState(task), tone = taskTone(state, live), label = taskLabel(task, names);
+    const holder = tone === 'active' ? task.owner ?? inspection?.workers.find(worker => worker.task === task.id)?.id : undefined;
+    const waits = tone === 'pending' ? task.plannedDependencies.flatMap(id => {
+      const dependency = byId.get(id);
+      return dependency && !settledStates.includes(taskState(dependency)) ? [taskLabel(dependency, names)] : [];
+    }) : [];
+    const publicFinding = taskFindingText(task.finding);
+    const reason = tone === 'failed' ? (task.feedback || publicFinding).trim() : '', finding = tone === 'failed' ? '' : publicFinding;
+    const statement = (task.informalStatement || task.objective || '').trim();
+    return { id: task.id, label, kind: taskKindLabels[task.kind] ?? task.kind, tone, status: taskStatusLabels[state] ?? state,
+      ...(statement && statement !== label && statement !== task.id ? { statement } : {}), ...(holder ? { who: workers.get(holder) ?? holder } : {}),
+      ...(task.attempts > 1 ? { attempts: task.attempts } : {}), ...(reason ? { reason: reason.slice(0, 600) } : {}), ...(finding ? { finding: finding.slice(0, 600) } : {}), ...(waits.length ? { waits } : {}) };
+  });
+}
+/** The rows that are running now: an Agent's lane says what it is on, any other row is its own line. The plan's tasks are listed apart. */
+function liveNow(stages: readonly ProcessStage[], run: WebRun | undefined, tasks: readonly LiveTask[]): LiveNow[] {
+  const items: LiveNow[] = [], workers = run?.observation?.inspection.workers ?? [];
+  const visit = (row: ProcessRow) => {
+    if (row.id === 'p:plan') return;
+    if (row.id.startsWith('p:lane:')) {
+      if (row.tone !== 'active') return;
+      const task = tasks.find(item => item.id === workers.find(worker => worker.id === row.id.slice('p:lane:'.length))?.task);
+      items.push({ id: row.id, who: row.label, text: row.meta ?? '', ...(task ? { task: { id: task.id, label: task.label } } : {}) });
+      return;
+    }
+    const before = items.length;
+    for (const child of row.rows ?? []) visit(child);
+    if (row.tone === 'active' && items.length === before) items.push({ id: row.id, text: row.label, ...(row.code ? { code: row.code } : {}) });
+  };
+  for (const stage of stages) for (const row of stage.rows) visit(row);
+  // A task the host records as running whose Agent has no step on record yet is still named.
+  for (const task of tasks) if (task.tone === 'active' && !items.some(item => item.task?.id === task.id))
+    items.push({ id: `task:${task.id}`, ...(task.who ? { who: task.who } : {}), text: task.status, task: { id: task.id, label: task.label } });
+  return items;
+}
 
 /** The Lead's plan when it has more than one task: each task with its state as the host records it. */
 function planRow(run: WebRun, live: boolean): ProcessRow | undefined {
   const tasks = run.observation?.inspection.tasks ?? [];
   if (tasks.length < 2) return;
   const names = taskNames(tasks), lemmas = tasks.filter(task => task.kind === 'lemma').length;
-  const settled = tasks.filter(task => ['integrated', 'completed'].includes(taskState(task))).length;
+  const settled = tasks.filter(task => settledStates.includes(taskState(task))).length;
   const rows = tasks.map((task): ProcessRow => {
-    const state = taskState(task), done = ['integrated', 'completed'].includes(state);
-    const tone: ProcessTone = done ? 'done' : ['blocked', 'failed'].includes(state) ? 'failed'
-      : ['running', 'delivered', 'conditional'].includes(state) ? live ? 'active' : 'stopped' : live ? 'pending' : 'skipped';
-    return { id: `p:task:${task.id}`, label: names.get(task.id) ?? (oneLine(task.objective) || task.id), tone, meta: taskKindLabels[task.kind] ?? task.kind,
+    const state = taskState(task), done = settledStates.includes(state), tone = taskTone(state, live);
+    return { id: `p:task:${task.id}`, label: taskLabel(task, names), tone, meta: taskKindLabels[task.kind] ?? task.kind,
       outcome: { text: taskStatusLabels[state] ?? state, tone: done ? 'passed' : tone === 'failed' ? 'failed' : 'muted' },
       details: task.objective ? [{ kind: 'note', text: task.objective }] : [] };
   });
@@ -433,9 +501,11 @@ export function buildSolveProcess(input: SolveProcessInput): SolveProcess {
   const tokens = (item?.progress?.tokens ?? 0) + (run ? runTokens(run) ?? 0 : 0);
   const endedAt = active ? undefined : run ? run.finishedAt ?? run.updatedAt : item?.finishedAt ?? item?.updatedAt;
   checks.sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
+  const tasks = run ? liveTasks(run) : [];
   return { key: item?.id ?? run?.formalizationId ?? run?.id ?? '', state, label: stateLabel(state, item, run), active,
     ...(item?.createdAt ?? run?.createdAt ? { startedAt: item?.createdAt ?? run?.createdAt } : {}), ...(endedAt ? { endedAt } : {}), ...(tokens ? { tokens } : {}),
     stages, checks, counts: { checks: checks.length, attempts, agents }, ...(current ? { current } : {}),
-    dropped: (input.activityDropped ?? 0) + (input.actionsDropped ?? 0), thinking: buildThinkingEntries(input, checks) };
+    dropped: (input.activityDropped ?? 0) + (input.actionsDropped ?? 0), thinking: buildThinkingEntries(input, checks),
+    now: active ? liveNow(stages, run, tasks) : [], tasks };
 }
 

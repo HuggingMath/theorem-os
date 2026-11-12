@@ -2,11 +2,12 @@ import { render, type ComponentChildren } from 'preact';
 import { useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { WebAgentLeanCheck } from '../../shared';
 import { t } from '../../i18n';
-import { checkOutcome, type LiveCheck, type ProcessTone, type SolveProcess, type SolveState } from '../solveProcess';
+import { Rich } from '../richText';
+import { checkOutcome, type LiveCheck, type LiveTask, type ProcessTone, type SolveProcess, type SolveState } from '../solveProcess';
 import { leanLines } from './DetailPanel';
 import { LeanReport, base } from './AgentRoute';
 import { Elapsed, ToneMark } from './SolveProcess';
-import { Icon } from './Icon';
+import { Icon, Spinner } from './Icon';
 
 export type LiveWorkspaceProps = {
   process?: SolveProcess;
@@ -14,6 +15,10 @@ export type LiveWorkspaceProps = {
   time: (at: string) => string;
   onSelect(id: string | undefined): void;
   onRoadmap?(): void;
+  /** Opens the full roadmap at one task. */ onTask?(id: string): void;
+  /** Addresses a guidance message to one task in the composer; absent while the research takes no guidance. */ onGuide?(taskId: string): void;
+  /** Opens the plan editor; absent when the reader cannot change the plan. */ onEditPlan?(): void;
+  onOriginal?(): void;
 };
 
 type Mark = { severity: 'error' | 'warning'; text: string };
@@ -129,20 +134,80 @@ function Code({ view, lean }: { view: FileView; lean?: WebAgentLeanCheck }) {
   </>;
 }
 
+/** What runs at this moment: one line per working Agent, or the platform's own step. */
+function Now({ process, onTask }: { process: SolveProcess; onTask?: (id: string) => void }) {
+  if (!process.active) return null;
+  return <section class="live-now" data-live-now aria-labelledby="chat-live-now">
+    <h3 id="chat-live-now">{t('正在执行')}</h3>
+    {process.now.length ? <ul>{process.now.map(item => <li key={item.id} data-live-now-item={item.id}>
+      <Spinner />{item.who && <strong>{item.who}</strong>}
+      <span class="live-now-text">{item.text}{item.code && <> <code translate={false}>{item.code}</code></>}</span>
+      {item.task && (onTask ? <button type="button" class="text-button live-now-task" data-live-now-task={item.task.id} translate={false}
+        title={t('在路线图中查看这项任务')} onClick={() => onTask(item.task!.id)}>{item.task.label}</button>
+        : <span class="live-now-task" translate={false}>{item.task.label}</span>)}
+    </li>)}</ul> : <p class="live-now-idle">{process.label}</p>}
+  </section>;
+}
+
+function TaskRow({ task, open, onToggle, props }: { task: LiveTask; open: boolean; onToggle(): void; props: LiveWorkspaceProps }) {
+  const id = `live-task-${task.id.replace(/[^\w-]/gu, '_')}`;
+  const note = [task.who, task.waits?.length ? t('等待 {0}', task.waits.join(t('、'))) : '', task.attempts ? t('已尝试 {0} 次', task.attempts) : ''].filter(Boolean).join(' · ');
+  const guide = props.onGuide && task.tone !== 'done' && task.tone !== 'skipped';
+  return <li class="live-task" data-live-task={task.id} data-tone={task.tone}>
+    <button type="button" class="live-task-head" aria-expanded={open} aria-controls={open ? id : undefined} onClick={onToggle}>
+      <ToneMark tone={task.tone} /><span class="live-task-label" translate={false}>{task.label}</span><span class="live-task-kind">{task.kind}</span>
+      <span class="route-item-outcome" data-tone={task.tone === 'done' ? 'passed' : task.tone === 'failed' ? 'failed' : 'muted'}>{task.status}</span>
+    </button>
+    {!open && note && task.tone !== 'done' && <p class="live-task-note">{note}</p>}
+    {open && <div class="live-task-body" id={id}>
+      {task.statement && <p class="live-task-statement" translate={false}><Rich text={task.statement} /></p>}
+      {task.reason && <p class="live-task-reason" data-live-task-reason translate={false}>{task.reason}</p>}
+      {task.finding && <p class="live-task-finding" translate={false}>{task.finding}</p>}
+      {note && <p class="live-task-note">{note}</p>}
+      {(guide || props.onTask) && <div class="live-task-actions">
+        {guide && <button type="button" class="text-button" data-live-guide={task.id} onClick={() => props.onGuide!(task.id)}><Icon name="message-square-text" />{t('指导这项任务')}</button>}
+        {props.onTask && <button type="button" class="text-button" data-live-task-roadmap={task.id} onClick={() => props.onTask!(task.id)}><Icon name="network" />{t('在路线图中查看')}</button>}
+      </div>}
+    </div>}
+  </li>;
+}
+
+/** The route of the whole task: its three stages, then the research plan's tasks with where each one stands. */
+function Plan({ process, props }: { process: SolveProcess; props: LiveWorkspaceProps }) {
+  // A task that did not pass shows why without being opened; the reader's own choice replaces that.
+  const [open, setOpen] = useState(true), [expanded, setExpanded] = useState<ReadonlyMap<string, boolean>>(new Map());
+  const tasks = process.tasks, count = (tone: ProcessTone) => tasks.filter(task => task.tone === tone).length;
+  const done = count('done'), running = count('active'), failed = count('failed');
+  const toggle = (task: LiveTask) => setExpanded(current => new Map(current).set(task.id, !(current.get(task.id) ?? (task.tone === 'failed'))));
+  return <details class="live-plan" data-live-plan open={open} onToggle={event => setOpen((event.currentTarget as HTMLDetailsElement).open)}>
+    <summary><h3 id="chat-live-plan">{t('路线图')}</h3>
+      {tasks.length > 0 && <span class="live-plan-facts"><span data-live-done>{t('已完成 {0}/{1}', done, tasks.length)}</span>
+        {running > 0 && <span>{t('{0} 项进行中', running)}</span>}{failed > 0 && <span data-live-failed>{t('{0} 项未通过', failed)}</span>}</span>}</summary>
+    <ol class="live-stages" aria-label={t('阶段')}>{process.stages.map(stage => <li key={stage.id} data-live-stage={stage.id} data-tone={stage.tone}
+      aria-current={stage.tone === 'active' ? 'step' : undefined}><ToneMark tone={stage.tone} /><span>{stage.label}</span></li>)}</ol>
+    {tasks.length > 0 && <ol class="live-tasks" aria-labelledby="chat-live-plan">{tasks.map(task => <TaskRow key={task.id} task={task}
+      open={expanded.get(task.id) ?? (task.tone === 'failed')} onToggle={() => toggle(task)} props={props} />)}</ol>}
+    {props.onEditPlan && tasks.length > 0 && <div class="live-plan-tools"><button type="button" class="text-button" data-live-edit-plan onClick={props.onEditPlan}>
+      <Icon name="square-pen" />{t('修改任务与依赖')}</button></div>}
+  </details>;
+}
+
 const stateTones: Record<SolveState, ProcessTone> = { queued: 'active', formalizing: 'active', proving: 'active', verifying: 'active',
   review: 'done', accepted: 'done', failed: 'failed', stopped: 'stopped', cancelled: 'stopped' };
 const checkTones: Record<LiveCheck['state'], ProcessTone> = { running: 'active', passed: 'done', failed: 'failed' };
 
 /**
- * Beside the chat on a wide screen: the Lean file the task is on, with Lean's messages under the lines they are about,
- * and every Lean check so far, newest first. It follows the latest check until the reader picks one.
+ * Beside the chat on a wide screen: what runs now, the route with where each task passed or failed, then the Lean file the
+ * task is on, with Lean's messages under the lines they are about, and every Lean check so far, newest first. The file
+ * follows the latest check until the reader picks one.
  */
 function LiveWorkspace(props: LiveWorkspaceProps) {
   const { process } = props;
   if (!process) return <div class="live-workspace"><header class="live-head"><h2 id="chat-live-title">{t('实时工作区')}</h2></header>
-    <p class="live-empty">{t('题目开始后，这里显示正在写的 Lean 文件和每次检查。')}</p></div>;
+    <p class="live-empty">{t('题目开始后，这里显示正在执行的任务、路线图和 Lean 文件。')}</p></div>;
   const checks = process.checks, picked = props.selected ? checks.find(check => check.id === props.selected) : undefined;
   const following = !picked, check = picked ?? checks.at(-1), view = fileView(process, check, props.time);
+  const failedChecks = checks.filter(item => item.state === 'failed').length;
   // Messages the file cannot show under its lines are listed above it.
   const listed = check && (check.lean ? !view?.inline && <LeanReport lean={check.lean} />
     : check.text && <pre class="solve-feedback" tabIndex={0} aria-label={t('反馈全文')} translate={false}>{check.text}</pre>);
@@ -151,8 +216,13 @@ function LiveWorkspace(props: LiveWorkspaceProps) {
       <div class="live-heading"><h2 id="chat-live-title" class="sr-only">{t('实时工作区')}</h2>
         <p class="live-state"><ToneMark tone={stateTones[process.state]} /><span>{process.label}</span>
           {process.startedAt && <Elapsed from={process.startedAt} to={process.endedAt} />}</p></div>
-      {props.onRoadmap && <button type="button" class="text-button" data-live-roadmap onClick={props.onRoadmap}><Icon name="network" />{t('完整记录')}</button>}
+      <div class="live-head-tools">
+        {props.onOriginal && <button type="button" class="text-button" data-live-original onClick={props.onOriginal}><Icon name="languages" />{t('原题')}</button>}
+        {props.onRoadmap && <button type="button" class="text-button" data-live-roadmap onClick={props.onRoadmap}><Icon name="network" />{t('完整记录')}</button>}
+      </div>
     </header>
+    <Now process={process} {...(props.onTask ? { onTask: props.onTask } : {})} />
+    <Plan key={process.key} process={process} props={props} />
     <section class="live-file" aria-labelledby="chat-live-file">
       {view ? <div class="live-file-toolbar">
         <p class="live-file-head" id="chat-live-file"><Icon name="file-code-2" /><code translate={false}>{view.file}</code><span>{view.caption}</span>
@@ -165,7 +235,8 @@ function LiveWorkspace(props: LiveWorkspaceProps) {
       {view && <Code view={view} lean={check?.lean} />}
     </section>
     <details class="live-checks" aria-labelledby="chat-live-checks">
-      <summary><h3 id="chat-live-checks">{t('Lean 检查')} <span>{checks.length}</span></h3></summary>
+      <summary><h3 id="chat-live-checks">{t('Lean 检查')} <span>{checks.length}</span></h3>
+        {failedChecks > 0 && <span class="live-checks-failed" data-live-checks-failed>{t('{0} 次未通过', failedChecks)}</span>}</summary>
       {checks.length > 0 && <div class="live-checks-tools"><button type="button" class="text-button" aria-pressed={following} title={t('总是显示最新一次检查')}
         onClick={() => props.onSelect(following ? checks.at(-1)!.id : undefined)}><Icon name="locate-fixed" />{t('跟随最新')}</button></div>}
       {checks.length ? <ol>{[...checks].reverse().map(item => {

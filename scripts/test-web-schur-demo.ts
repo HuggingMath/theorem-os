@@ -12,7 +12,7 @@ import type { WebExplanation, WebExplanationOverview, WorkerInput, WorkerMessage
 import { researchExamples } from '../apps/web/problemExamples';
 import { localeStorageKey } from '../apps/web/i18n';
 import { schurDemoProof, schurDemoExplanation, schurEqualityQuestion, schurEqualityAnswer } from './fixtures/schurDemo';
-import { freePort, settled, startBrowser } from './web-scenario';
+import { freePort, preferFullCollaboration, settled, startBrowser } from './web-scenario';
 import { showExamples, withSettings } from './web-ui-controls';
 import { audit } from './web-a11y';
 
@@ -81,6 +81,8 @@ async function shot(name: string) {
 try {
   browser = await startBrowser(service.server, port);
   context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: 'zh-CN', reducedMotion: 'reduce', permissions: ['clipboard-read', 'clipboard-write'] });
+  // The mathematical progress block and the output buttons of a running proof are the 详细 reading; 简洁 shows them in the workspace.
+  await preferFullCollaboration(context);
   context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0); await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
   await context.addInitScript(key => {
     localStorage.setItem(key, 'zh');

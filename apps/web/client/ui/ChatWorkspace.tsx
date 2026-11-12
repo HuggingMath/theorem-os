@@ -1,5 +1,5 @@
 import { render } from 'preact';
-import { useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { WebConversation, WebConversationMessage, WebConversationSummary } from '../../conversationTypes';
 import type { WebFormalization } from '../../formalizationTypes';
 import type { WebProvider, WebQuotaView, WebRun } from '../../shared';
@@ -8,6 +8,7 @@ import { formatTokens, isAcceptedRun, isFaultedRun, isRejectedRun, resultDescrip
 import { acceptedDescription, acceptedTitle, isStatementReviewed, statementConfirmation } from '../../presentation';
 import type { NextStep } from '../../report';
 import { locale, localizeText, t } from '../../i18n';
+import { detailLevel, onDetailLevel } from '../detailLevel';
 import type { SolveProcess } from '../solveProcess';
 import type { ThinkingStep } from '../thinkingProcess';
 import { formalizationReasonText, formalizationNextStep } from '../formalizationReasons';
@@ -91,12 +92,14 @@ function StatementDecision(props: ChatThreadProps) {
   </section>;
 }
 
-function PlanDecision(props: ChatThreadProps) {
+function PlanDecision(props: ChatThreadProps & { simple: boolean }) {
   const tx = (zh: string, en: string) => locale === 'en' ? en : zh;
   const run = props.run, decision = props.planDecision;
   const previousPlan = usePreviousDecisionPlan(run?.observation?.plan, run?.id ?? '');
   if (!run || !decision) return null;
   const plan = run.observation?.plan, approval = decision.approval;
+  // 简洁 keeps this card for the decision itself; afterwards the plan and its editing live in the workspace's roadmap.
+  if (props.simple && !approval && (plan || !run.planApproval)) return null;
   const approved = run.observation?.inspection.planApproval?.status === 'approved';
   return <section class="chat-decision" data-chat-plan-decision data-waiting={Boolean(approval)} aria-labelledby="chat-plan-decision-heading">
     <header><Icon name="git-branch" /><h3 id="chat-plan-decision-heading">{approval ? approval.revising ? t('正在按你的意见修改计划') : t('研究计划，等你决定')
@@ -151,6 +154,10 @@ function FormalizationFailure({ item }: { item: WebFormalization }) {
 
 function TaskMessage(props: ChatThreadProps) {
   const { run, formalization: item } = props;
+  const [, relevel] = useState(0);
+  useEffect(() => onDetailLevel(() => relevel(value => value + 1)), []);
+  // 简洁 leaves the conversation to what is said and decided; while the task runs, its tasks, route and files are in the workspace.
+  const simple = detailLevel() === 'simple';
   const proofActive = !!run && ['queued', 'running'].includes(run.status);
   const reviewActive = !!item && ['queued', 'running'].includes(item.status);
   const active = proofActive || reviewActive;
@@ -211,7 +218,10 @@ function TaskMessage(props: ChatThreadProps) {
         {solve.process.startedAt && <Elapsed from={solve.process.startedAt} to={solve.process.endedAt} />}
         {solve.process.tokens !== undefined && <span>{t('Token {0}', formatTokens(solve.process.tokens))}</span>}
         {liveAvailable && <button type="button" class="text-button" data-research-artifact="live" onClick={() => props.onArtifact('live')}>
-          <Icon name="file-code-2" />{hasSource ? t('查看当前代码') : t('实时工作区')}</button>}
+          <Icon name="panel-right" />{t('实时工作区')}</button>}
+        {/* 详细 keeps this entry on its plan card below. */}
+        {active && run && props.onGuidance && (simple ? !props.planDecision?.approval : !props.planDecision) && <button type="button" class="text-button" data-research-guidance
+          title={t('不必停止解题：指导会送到正在工作的 Agent')} onClick={() => props.onGuidance?.()}><Icon name="message-square-text" />{t('指导 Agent')}</button>}
         {active && props.onCancelTask && <button type="button" class="text-button" data-research-stop onClick={props.onCancelTask}>{t("停止解题")}</button>}
       </p>}
       {(!statementDecision || failed) && <p class="research-conversation-description">{description}</p>}
@@ -231,13 +241,13 @@ function TaskMessage(props: ChatThreadProps) {
     {solve && <ThinkingProcess process={solve.process} time={solve.time} onCheck={solve.onCheck} onQuestion={props.onQuestion} />}
     {backgroundReview && <BackgroundReview review={backgroundReview} compact />}
     <StatementDecision {...props} />
-    <PlanDecision {...props} />
+    <PlanDecision {...props} simple={simple} />
     {accepted && reviewed && run && <ChatMathematicalAnswer runId={run.id} answer={props.answer} onRetry={() => props.onAnswerRetry?.()} onTarget={target => props.onAnswerTarget?.(target)} onQuestion={props.onAnswerQuestion} />}
-    {!accepted && props.mathematics && <ChatMathematicalProgress work={props.mathematics} onTask={taskId => props.onArtifact('roadmap', { taskId })} />}
+    {!accepted && props.mathematics && !(simple && proofActive) && <ChatMathematicalProgress work={props.mathematics} onTask={taskId => props.onArtifact('roadmap', { taskId })} />}
     {solve && <SolveProcessView process={solve.process} wide={solve.wide} time={solve.time} onCheck={solve.onCheck}
       loading={solve.loading} failed={solve.failed} onRetry={solve.onRetry} />}
     {item && (['error', 'exhausted'].includes(item.status) || item.researchError) && (item.reason || item.researchError) && <FormalizationFailure item={item} />}
-    {!statementDecision && (run || item?.report || item?.compiled) && <div class="research-conversation-artifacts" role="group" aria-label={t('结果')}>
+    {!statementDecision && !(simple && active) && (run || item?.report || item?.compiled) && <div class="research-conversation-artifacts" role="group" aria-label={t('结果')}>
       {accepted && <button type="button" class="chat-result-primary" data-research-artifact="source" disabled={!proof} onClick={() => props.onArtifact('source')}><Icon name="file-code-2" /><span>{t('查看验收证明')}</span><Icon name="arrow-up-right" /></button>}
       {run && !accepted && <button type="button" data-research-artifact="roadmap" onClick={() => props.onArtifact('roadmap')}><Icon name="network" /><span>{t('路线图')}</span><Icon name="arrow-up-right" /></button>}
       <button type="button" data-research-artifact="original" onClick={() => props.onArtifact('original')}><Icon name="languages" /><span>{t('原题')} / Lean</span><Icon name="arrow-up-right" /></button>
@@ -247,7 +257,6 @@ function TaskMessage(props: ChatThreadProps) {
       {accepted ? <details class="chat-result-more" data-chat-result-more><summary>{t('更多结果操作')}</summary><div class="chat-result-more-actions">{resultActions}</div></details> : resultActions}
       {props.onStartResearch && !item?.humanReview && <button type="button" class="button button-primary" data-research-continue disabled={props.startingResearch} onClick={props.onStartResearch}>
         {props.startingResearch ? t('正在进入证明队列…') : t('继续证明')}</button>}
-      {active && run && props.onGuidance && !props.planDecision && <button type="button" class="text-button" data-research-guidance onClick={() => props.onGuidance?.()}>{t('调整研究方向')}</button>}
       {!accepted && !active && !statementDecision && props.onEditProblem && <button type="button" class="text-button" onClick={props.onEditProblem}>{t("修改题目")}</button>}
     </div>
     {run && props.recovery && <RecoveryChoices run={run} {...props.recovery} />}
@@ -434,8 +443,8 @@ function ChatComposer(props: ChatComposerProps) {
         </article>)}
       </div>}
       {props.hasConversation && props.onGuidance && <div class="chat-message-destination" role="group" aria-label={t('消息用途')}>
-        <button type="button" data-chat-discussion-mode aria-pressed={!props.guidance} disabled={props.submitting} onClick={() => props.guidance?.onCancel()}>{t('讨论思路')}</button>
-        <button type="button" data-chat-guidance-mode-open aria-pressed={Boolean(props.guidance)} disabled={props.submitting} onClick={props.onGuidance}>{t('指导研究')}</button>
+        <button type="button" data-chat-discussion-mode aria-pressed={!props.guidance} disabled={props.submitting} title={t('提问和讨论，不会送到 Agent')} onClick={() => props.guidance?.onCancel()}>{t('讨论思路')}</button>
+        <button type="button" data-chat-guidance-mode-open aria-pressed={Boolean(props.guidance)} disabled={props.submitting} title={t('不必停止解题：指导会送到正在工作的 Agent')} onClick={props.onGuidance}>{t('指导研究')}</button>
       </div>}
       {props.guidance && <div class="chat-guidance-target" data-chat-guidance-mode>
         <label>{t('发送研究指导至')}<select data-chat-guidance-target value={props.guidance.target} disabled={props.submitting} onChange={event => props.guidance!.onTarget(event.currentTarget.value)}>

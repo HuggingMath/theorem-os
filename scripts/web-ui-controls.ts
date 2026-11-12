@@ -95,13 +95,18 @@ export async function openSample(page: Page) {
 export async function showArtifacts(page: Page) {
   await closeSettings(page);
   await closeHistory(page);
-  if (await page.locator('body[data-view="run"]').count() && !await page.locator('#runs-panel').isVisible()) {
+  if (await page.locator('body[data-view="run"]').count() && !await page.locator('#run-detail').isVisible()) {
     // The chat's 路线图 link opens the run panel on its trajectory; the tab the run had selected is selected again.
     const tab = await page.evaluate(() => document.querySelector<HTMLElement>('[data-detail-tab][aria-selected="true"]')?.dataset.detailTab);
     const more = page.locator('[data-chat-result-more]:not([open]) > summary');
     if (await more.count()) await more.click();
-    await page.locator('[data-research-artifact="roadmap"]').click();
-    await page.locator('#runs-panel').waitFor();
+    // While a task runs in 简洁, the conversation leaves the roadmap to the live workspace's 完整记录.
+    const roadmap = page.locator('[data-research-artifact="roadmap"]');
+    if (!await roadmap.count()) {
+      if (!await page.locator('#chat-live-panel').isVisible()) await page.locator('[data-research-artifact="live"]').click();
+      await page.locator('[data-live-roadmap]').click();
+    } else await roadmap.click();
+    await page.locator('#run-detail').waitFor();
     if (tab && tab !== 'trajectory') {
       await page.locator(`#detail-tab-${tab}`).click();
       await page.locator(`#detail-panel[data-tab="${tab}"]`).waitFor({ state: 'attached' });

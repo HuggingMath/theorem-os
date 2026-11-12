@@ -14,7 +14,7 @@ import type { WebRun, WorkerInput, WorkerMessage } from '../apps/web/shared';
 import { formalizationCompiledCandidate } from '../src/math/formalization';
 import { webFormalizationEvidence, webFormalizationStatement } from '../tests/helpers/webFormalizationFixture';
 import { localeStorageKey } from '../apps/web/i18n';
-import { deferred, freePort, startBrowser } from './web-scenario';
+import { deferred, freePort, preferFullCollaboration, startBrowser } from './web-scenario';
 import { openAdvancedChatSettings } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -84,6 +84,8 @@ try {
     const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce',
       permissions: ['clipboard-read', 'clipboard-write'] });
     context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
+    // The mathematical progress block and the output buttons of a running proof are the 详细 reading; 简洁 shows them in the workspace.
+    await preferFullCollaboration(context);
     await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
     await context.route(/^https?:\/\//u, async route => {
       const url = new URL(route.request().url());

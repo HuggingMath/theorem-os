@@ -980,14 +980,19 @@ export class ChatSession {
     const formalization = this.formalization ?? this.seed;
     const mathematics = solve ? chatMathematics(this.run, formalization ? this.options.formalizationActivity.activity(formalization.id) : []) : undefined;
     const answer = this.answers.sync(this.run);
-    // A task that just started opens its workspace once; one the reader closed stays closed until they open it again.
-    // A task still waiting for its place only has the checklist: its result panel stays the reader's. The reader's own
-    // results panel is never replaced behind their back, so the workspace only opens while the conversation is shown.
+    // A task that is formalizing or proving opens its workspace once, also when the reader comes back to it; one the
+    // reader closed stays closed until they open it again. A task still waiting for its place only has the checklist.
+    // A panel the reader has open is never replaced behind their back.
     if (solve?.process.active && (solve.process.state === 'formalizing' || solve.process.state === 'proving')
-      && solve.wide && document.body.dataset.view !== 'run' && !this.liveShown.has(solve.process.key)
+      && solve.wide && !this.liveShown.has(solve.process.key)
       && !document.body.dataset.chatArtifact && document.body.dataset.outputOpen !== 'true') {
       this.liveShown.add(solve.process.key);
-      queueMicrotask(() => { if (this.solve()?.process.key === solve.process.key) this.options.onArtifact('live', undefined, true); });
+      queueMicrotask(() => {
+        if (this.solve()?.process.key !== solve.process.key) return;
+        this.options.onArtifact('live', undefined, true);
+        // The workspace narrows the composer and rewraps a long draft: its saved editing position belongs to this layout.
+        this.restoreDraftPosition(this.draftId);
+      });
     }
     const home = {
       onFirstExample: () => this.useExample('add-zero'),
@@ -1118,7 +1123,7 @@ export class ChatSession {
         : guidanceRunChanged ? t('指导关联的研究已变化，请重新选择指导对象。')
         : staleTarget ? t('任务版本已变化，请核对指导内容，再确认当前任务版本。')
           : !canGuide ? t('运行尚未开始或已结束，暂时无法发送指导。')
-            : !this.run?.observation ? t('正在等待当前运行的观察记录，收到后即可发送。') : t('指导会交给研究组参考，送达状态会显示在对话中。')
+            : !this.run?.observation ? t('正在等待当前运行的观察记录，收到后即可发送。') : t('无需停止解题：指导会直接送到正在工作的 Agent，送达和采纳状态显示在对话中。')
         : this.pendingMessage ? t('上一条问题的发送结果尚未确认，重试会先核对原问题；新输入会保留。')
         : this.options.session()?.maintenance ? t('工作台正在维护，暂不开始新任务或回答；已有记录仍可查看和下载。')
         : busyFormalization ? t("当前账号的形式化队列已满，输入内容会保留。")
@@ -1127,7 +1132,10 @@ export class ChatSession {
           : this.options.session()?.runtime.ready
             ? t('当前服务暂不支持自然语言解题，可切换到 Lean 输入。')
             : t('运行环境暂未就绪，原题会保留；恢复后可继续发送。')
-        : newProblem && !this.capabilities ? t("正在连接…") : canGuide ? t('讨论用于交流思路；想调整研究，请切换到「指导研究」。') : undefined,
+        : newProblem && !this.capabilities ? t("正在连接…") : canGuide ? t('讨论用于交流思路；想调整研究，请切换到「指导研究」。')
+        // A running proof that takes no guidance says so, so a message here is not mistaken for an instruction to the Agent.
+        : this.conversation && this.run?.status === 'running' && !this.options.isSample(this.run)
+          ? canDecide ? t('研究计划建立后，可以在这里指导 Agent。') : t('本次由单个 Agent 自动推进，不接收中途指导；这里发送的是讨论。') : undefined,
       onEnvironment: () => { if (!this.submissionIdentity.unresolved && !this.seed && !this.conversation && !this.run) this.environment = webTaskEnvironment; this.rememberDraft(); this.draw(); }, onEffort: value => { this.effort = value; this.researchEffort = value; this.rememberDraft(); this.draw(); },
       onKey: value => { this.apiKey = value; this.keyNotice = ''; this.clearConnection(); this.draw(); },
       onExample: id => this.useExample(id),
@@ -1139,14 +1147,24 @@ export class ChatSession {
       this.restoreDraftPosition(draftId);
     }
     this.reading.rendered();
-    this.drawHistory(); this.drawOriginal(); this.drawLive(solve);
+    this.drawHistory(); this.drawOriginal(); this.drawLive(solve, { guide: canGuide && !unresolvedGuidance,
+      edit: canDecide && !!this.run?.observation?.plan && this.options.connected() && !this.options.planApproval(this.run!)?.busy && !this.options.planApproval(this.run!)?.revising });
   }
   private drawOriginal() { renderChatOriginal(this.originalPanel, { formalization: this.formalization, run: this.run }); }
   /** The panel beside the conversation; it keeps the process it was last drawn with while the task did not change. */
-  private drawLive(solve: ReturnType<ChatSession['solve']>) {
+  private drawLive(solve: ReturnType<ChatSession['solve']>, can: { guide: boolean; edit: boolean }) {
     const process = solve?.process, run = this.run;
     renderLiveWorkspace(this.livePanel, { process, time: clockTime, onSelect: id => this.selectCheck(process, id),
-      ...(run && !this.options.isSample(run) ? { onRoadmap: () => this.options.onArtifact('roadmap') } : {}),
+      ...(this.formalization || run?.formalization ? { onOriginal: () => this.options.onArtifact('original') } : {}),
+      ...(run && !this.options.isSample(run) ? { onRoadmap: () => this.options.onArtifact('roadmap'),
+        onTask: (taskId: string) => this.options.onArtifact('roadmap', { taskId }) } : {}),
+      // A narrow screen shows the workspace in place of the conversation: guiding a task returns to the composer.
+      ...(can.guide ? { onGuide: (taskId: string) => {
+        if (!this.wide.matches) document.querySelector<HTMLElement>('#close-research-output')?.click();
+        else if (document.body.dataset.resultsExpanded === 'true') document.querySelector<HTMLElement>('#expand-research-output')?.click();
+        this.beginGuidance(undefined, taskId);
+      } } : {}),
+      ...(can.edit && run ? { onEditPlan: () => this.options.onPlan(run, true) } : {}),
       ...(process && this.liveSelected.has(process.key) ? { selected: this.liveSelected.get(process.key)! } : {}) });
   }
   private selectCheck(process: SolveProcess | undefined, id: string | undefined) {

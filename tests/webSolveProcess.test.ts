@@ -145,4 +145,53 @@ describe('solving process', () => {
     expect(checkOutcome({ id: 'y', stage: 'prove', label: 'y', at: at(1), state: 'running' }).tone).toBe('muted');
     expect(process.counts.checks).toBeGreaterThanOrEqual(0);
   });
+
+  it('keeps internal finding controls out of the workspace for completed and failed tasks', () => {
+    const task = (id: string, finding: string, status = 'completed') => ({ id, kind: 'research', objective: id, status, control: 'active',
+      version: `${id}-v1`, plannedDependencies: [], attempts: 1, proof: { status: 'none' }, finding });
+    const finding = JSON.stringify({ taskDigest: 'INTERNAL_DIGEST'.repeat(100), privateControl: 'CONTROL_SENTINEL',
+      summary: 'The two branches are available.', statement: 'Combine the conjuncts.', remainingObligations: ['Construct the pair.'],
+      mathematicalGap: { remaining: 'Check the final theorem.', control: 'GAP_CONTROL' } });
+    const observation = { observedAt: at(40), inspection: { workers: [], tasks: [task('done', finding), task('blocked', finding, 'blocked'),
+      task('plain', 'A plain mathematical result.'), task('broken', '{"summary":"unfinished"')] } } as unknown as WebRun['observation'];
+    const result = buildSolveProcess({ run: run({ observation }), routes: [], events: [] });
+    for (const text of [result.tasks[0]!.finding, result.tasks[1]!.reason]) {
+      expect(text).toContain('The two branches are available.');
+      expect(text).toContain('Construct the pair.');
+      expect(text).toContain('Check the final theorem.');
+      expect(text).not.toMatch(/INTERNAL_DIGEST|CONTROL_SENTINEL|GAP_CONTROL|taskDigest/u);
+    }
+    expect(result.tasks[2]!.finding).toBe('A plain mathematical result.');
+    expect(result.tasks[3]!.finding).toBeUndefined();
+  });
+
+  it('lists the plan for the workspace: what passed, what failed and why, what runs and what waits', () => {
+    const task = (id: string, patch: Record<string, unknown> = {}) => ({ id, kind: 'lemma', objective: `Prove ${id}`, status: 'pending', control: 'active',
+      version: `${id}-v1`, theorem: `Fixture.${id}`, plannedDependencies: [], attempts: 0, proof: { status: 'none' }, ...patch });
+    const observation = { observedAt: at(40), sequence: 1, inspection: { workers: [{ id: 'lead', role: 'Lead' }, { id: 'prover', role: 'Engineer', task: 'step' }], tasks: [
+      task('base', { status: 'integrated', attempts: 1 }),
+      task('step', { status: 'running', owner: 'prover', attempts: 2, informalStatement: 'The inductive step.' }),
+      task('bound', { status: 'blocked', feedback: 'The bound needs n > 0.' }),
+      task('goal', { kind: 'goal', plannedDependencies: ['base', 'step'] }),
+      task('aside', { control: 'paused' }),
+    ] } } as unknown as WebRun['observation'];
+    const live = buildSolveProcess({ run: run({ observation }), routes: [], events: run().events });
+    expect(live.tasks.map(item => [item.id, item.label, item.tone])).toEqual([['base', 'base', 'done'], ['step', 'step', 'active'],
+      ['bound', 'bound', 'failed'], ['goal', 'goal', 'pending'], ['aside', 'aside', 'pending']]);
+    expect(live.tasks[1]).toMatchObject({ statement: 'The inductive step.', attempts: 2 });
+    expect(live.tasks[1]!.who).toBeTruthy();
+    expect(live.tasks[2]).toMatchObject({ reason: 'The bound needs n > 0.', status: '受阻' });
+    // A task waits only for the dependencies that are not settled yet.
+    expect(live.tasks[3]!.waits).toEqual(['step']);
+    expect(live.tasks[0]!.reason).toBeUndefined();
+    // Something is always named as running while the task is live, and nothing once it ended.
+    expect(live.now.length).toBeGreaterThan(0);
+    const ended = buildSolveProcess({ run: run({ observation, status: 'failed', phase: 'finished', finishedAt: at(41) }), routes: [], events: run().events });
+    expect(ended.now).toEqual([]);
+    expect(ended.tasks.map(item => item.tone)).toEqual(['done', 'stopped', 'failed', 'skipped', 'skipped']);
+    // A formalization names its running compilation; it has no plan yet.
+    const compiling = buildSolveProcess({ formalization: formalization({ status: 'running', confirmedAt: undefined }), activity: activity().slice(0, 3) });
+    expect(compiling.tasks).toEqual([]);
+    expect(compiling.now.map(item => item.text)).toEqual(['编译检查']);
+  });
 });
