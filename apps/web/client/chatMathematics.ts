@@ -9,6 +9,14 @@ export type ChatMathematics = {
   latest?: { text: string; at?: string; kind: 'statement' | 'finding' };
 };
 
+/** Keep the compact reading useful without removing the original record from the details. */
+export function chatMathematicsSummary(work: ChatMathematics | undefined, statements: readonly string[]): ChatMathematics | undefined {
+  if (!work) return;
+  const repeated = work.latest?.kind === 'statement' && statements.some(statement => statement.trim() === work.latest!.text.trim());
+  const summary = repeated ? { ...work, latest: undefined } : work;
+  return summary.checked.length || summary.working.length || summary.blockers.length || summary.latest ? summary : undefined;
+}
+
 /** A reading of recorded mathematical work; a checked helper never means the whole problem was accepted. */
 export function chatMathematics(run?: WebRun, activity: readonly WebFormalizationActivity[] = []): ChatMathematics {
   const tasks = run?.observation?.inspection.tasks ?? [];

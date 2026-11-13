@@ -3,8 +3,9 @@ import type { WebCheckReceipt, WebDelivery, WebObservation } from '../collaborat
 import { createElement, observedTime } from './collaborationUi';
 import { taskSourceKey } from './taskSourceComparison';
 import { Code, Detail, Facts, renderSection } from './ui/Section';
-import { TermHint } from './ui/TermHint';
-import { localizeText, t } from '../i18n';
+import { locale, localizeText, t } from '../i18n';
+
+const tx = (zh: string, en: string) => locale === 'en' ? en : zh;
 
 export function recordedTask(observation: WebObservation, id: string, version?: string) {
   const task = observation.inspection.tasks.find(task => task.id === id && (!version || task.version === version));
@@ -65,23 +66,23 @@ export class ResearchProgressView {
     const total = route.prerequisiteTaskIds.length, remaining = route.remainingPrerequisiteTaskIds.length;
     const closing = route.closingStatus === 'checked' ? 'done' : route.closingStatus === 'conditional' ? 'partial' : 'waiting';
     const steps: [string, string, string][] = [
-      [total ? remaining ? 'partial' : 'done' : 'done', t('前置'), total ? t('{0} / {1} 已就绪{2}', total - remaining, total, remaining ? t(' · 等待 {0}', route.remainingPrerequisiteTaskIds.join(', ')) : '') : t('无额外前置')],
-      [closing, t('收束 {0}', route.closingTaskId), proofLabels[route.closingStatus] ?? route.closingStatus],
-      [route.connection === 'closed-by-original-check' ? 'done' : 'waiting', t('连通 {0}', route.targetTaskId), route.connection === 'closed-by-original-check' ? t('已由原题检查连通') : t('等待原题检查')],
+      [total ? remaining ? 'partial' : 'done' : 'done', tx('依赖任务', 'Dependencies'), total ? t('{0} / {1} 已就绪{2}', total - remaining, total, remaining ? t(' · 等待 {0}', route.remainingPrerequisiteTaskIds.join(', ')) : '') : tx('无额外依赖', 'No additional dependencies')],
+      [closing, `${closing === 'done' ? tx('证明任务', 'Proof task') : tx('待证明', 'To prove')} ${route.closingTaskId}`, proofLabels[route.closingStatus] ?? route.closingStatus],
+      [route.connection === 'closed-by-original-check' ? 'done' : 'waiting', `${tx('原目标检查', 'Original goal check')} ${route.targetTaskId}`, route.connection === 'closed-by-original-check' ? tx('已记录通过', 'Pass recorded') : tx('尚未记录通过', 'No pass recorded')],
     ];
     return <ol class="collab-route-steps" aria-label={t('路线 {0} 的记录进度', routeId)}>{steps.map(([state, title, detail]) => <li key={title} data-step-state={state}><strong>{title}</strong><span>{detail}</span></li>)}</ol>;
   }
   private frontier(observation: WebObservation) {
     const snapshot = observation.inspection.mathematics.snapshot;
-    const refs = (items: { taskId: string; taskDigest: string | null }[], key: string) => items.length ? items.map((item, index) => this.taskLink(item.taskId, item.taskDigest, `${key}-${index}`)) : <span class="collab-help">{t('未记录开放前沿')}</span>;
-    if (!snapshot.goals.length) return help(snapshot.blockers.length ? t('本次观察尚无原始目标的证明前沿') : t('本次观察尚无原始目标的证明前沿，也没有已记录的数学阻塞'));
+    const refs = (items: { taskId: string; taskDigest: string | null }[], key: string) => items.length ? items.map((item, index) => this.taskLink(item.taskId, item.taskDigest, `${key}-${index}`)) : <span class="collab-help">{tx('未记录待完成任务', 'No remaining tasks recorded')}</span>;
+    if (!snapshot.goals.length) return help(tx('尚无原目标的任务记录', 'No tasks for the original goal recorded yet'));
     return snapshot.goals.map(goal => <article key={goal.taskId} class="collab-frontier-goal" data-frontier-goal={goal.taskId}>
-      <div class="collab-section-heading">{this.taskLink(goal.taskId, goal.taskDigest, `goal-${goal.taskId}`)}<span class="badge">{goal.closed ? t('记录中局部闭合') : t('待推进')}</span></div>
-      {goal.routeCombination === 'any' && goal.alternatives?.length ? <>{help(t('OR：以下路线择一'))}{goal.alternatives.map(route => <div key={route.routeId} class="collab-frontier-route">
+      <div class="collab-section-heading">{this.taskLink(goal.taskId, goal.taskDigest, `goal-${goal.taskId}`)}<span class="badge">{goal.closed ? tx('记录为局部完成', 'Recorded as locally complete') : tx('尚待完成', 'Remaining work')}</span></div>
+      {goal.routeCombination === 'any' && goal.alternatives?.length ? <>{help(tx('以下路线任选一条', 'Any one of these routes'))}{goal.alternatives.map(route => <div key={route.routeId} class="collab-frontier-route">
         <strong>{route.routeId}</strong>{this.routeSteps(route.routeId)}
-        <div class="collab-reference-list"><span class="collab-reference-caption">{t('当前前沿')}</span>{refs(route.frontier, `frontier-${goal.taskId}-${route.routeId}`)}</div>
+        <div class="collab-reference-list"><span class="collab-reference-caption">{tx('尚待完成', 'Remaining work')}</span>{refs(route.frontier, `frontier-${goal.taskId}-${route.routeId}`)}</div>
         {route.missingDependencies.length ? <p>{t('缺失依赖：{0}', route.missingDependencies.join(', '))}</p> : null}
-        {route.parkedBy.length ? <p>{t('停放依据：{0}', route.parkedBy.join(', '))}</p> : null}
+        {route.parkedBy.length ? <p>{tx('暂不继续的原因', 'Paused because')}: {route.parkedBy.join(', ')}</p> : null}
       </div>)}</> : <div class="collab-reference-list">{refs(goal.frontier, `frontier-${goal.taskId}`)}</div>}
       {goal.missingDependencies.length ? help(t('缺失依赖：{0}', goal.missingDependencies.join(', '))) : null}
     </article>);
@@ -104,12 +105,12 @@ export class ResearchProgressView {
     if (snapshot) this.overview.dataset.empty = String(!snapshot.goals.length && !snapshot.blockers.length);
     const openBlockers = snapshot?.blockers.filter(blocker => !['parked', 'superseded'].includes(blocker.status)).length ?? 0;
     renderSection(this.overview, <>
-      <div class="collab-section-heading"><span class="term-heading"><h3>{t('证明前沿')}</h3><TermHint id="frontier" /></span><span class="collab-help">{t('记录的局部闭合不代表原题通过独立验收')}</span></div>
+      <div class="collab-section-heading"><h3>{tx('目标与待办', 'Goals and remaining work')}</h3><span class="collab-help">{tx('局部任务完成不代表原题通过独立验收', 'Completing a local task does not establish acceptance of the original goal')}</span></div>
       <div data-research-frontier class="collab-frontier-list">{observation && this.frontier(observation)}</div>
       <div data-research-waiting>{waiting && <div class="collab-research-waiting"><strong>{t('研究正在等待新的数学输入')}</strong><p>{waiting.reason}</p>
         <Facts facts={[[t('等待任务'), waiting.taskIds.join(', ') || t('未记录')], [t('关联目标'), waiting.goalIds.join(', ') || t('未记录')]]} /></div>}</div>
-      <div class="collab-section-heading collab-research-blocker-heading"><span class="term-heading"><h3>{t('数学阻塞')}</h3><TermHint id="blocker" /></span>
-        <span class="collab-help">{snapshot?.blockers.length ? t('{0} 项生效 · 共 {1} 项记录', openBlockers, snapshot.blockers.length) : t('作用范围与重开条件')}</span></div>
+      <div class="collab-section-heading collab-research-blocker-heading"><h3>{tx('未解决的问题', 'Unresolved issues')}</h3>
+        <span class="collab-help">{snapshot?.blockers.length ? tx(`${openBlockers} 项待处理 · ${snapshot.blockers.length} 条记录`, `${openBlockers} to address · ${snapshot.blockers.length} records`) : t('作用范围与重开条件')}</span></div>
       <div data-research-blockers class="collab-blocker-list">{observation && this.blockers(observation)}</div>
     </>);
   }
@@ -183,14 +184,11 @@ export class ResearchProgressView {
     return <Fragment key={key}>
       <h4 tabIndex={-1}>{kindLabels[delivery.kind] ?? delivery.kind} · {delivery.producer}</h4>
       {help(t('交付状态：{0} · {1}。局部交付与审阅不代表完整原题验收。', label(delivery.status), this.relationship(delivery)))}
-      <Facts facts={[[t('交付 ID'), delivery.id], [t('任务'), delivery.taskId], [t('任务版本'), delivery.taskDigest], [t('创建时间'), observedTime(delivery.createdAt)], ['commit', delivery.commit], [mathematicalSource ? t('记录摘要') : t('声明快照摘要'), delivery.sourceDigest]]} />
-      <div class="collab-reference-list">{delivery.taskId ? this.taskLink(delivery.taskId, delivery.taskDigest, `delivery-task-${key}`) : <span class="collab-help">{t('本交付未绑定任务合同')}</span>}</div>
       <h5>{t('摘要')}</h5><p class="collab-delivery-text">{delivery.summary ? localizeText(delivery.summary) : t('未记录摘要')}</p>
       <h5>{t('声明')}</h5><Code value={delivery.statement} />
       <Detail title={t('前提')} value={delivery.premises} detailKey={`delivery-premises-${key}`} />
-      <h5>{t('版本固定的依赖')}</h5>
+      <h5>{tx('依赖任务', 'Dependencies')}</h5>
       <div class="collab-reference-list">{delivery.dependencies.length ? delivery.dependencies.map((item, index) => this.taskLink(item.taskId, item.taskDigest, `delivery-dependency-${key}-${index}`)) : <span class="collab-help">{t('未记录任务依赖')}</span>}</div>
-      {delivery.dependencies.length ? <Detail title={t('依赖版本')} value={delivery.dependencies} detailKey={`delivery-dependencies-${key}`} /> : null}
       <Detail title={t('未完成义务')} value={delivery.remainingObligations} detailKey={`delivery-obligations-${key}`} />
       {delivery.finding ? <Detail title={t('完整研究发现')} value={delivery.finding} detailKey={`delivery-finding-${key}`} /> : null}
       <h5>{t('对应材料')}</h5>
@@ -200,9 +198,14 @@ export class ResearchProgressView {
       </div>
       {!sources.length && help(t('本次观察中未关联到身份一致的已保存源码。'))}
       {!checks.length && help(t('本次观察中未关联到交付明确引用且身份一致的检查回执。'))}
+      <details class="collab-detail" data-delivery-identity data-detail-key={`delivery-identity-${key}`}><summary>{tx('版本与来源', 'Versions and sources')}</summary>
+      <Facts facts={[[t('交付 ID'), delivery.id], [t('任务'), delivery.taskId], [t('任务版本'), delivery.taskDigest], [t('创建时间'), observedTime(delivery.createdAt)], ['commit', delivery.commit], [mathematicalSource ? t('记录摘要') : t('声明快照摘要'), delivery.sourceDigest]]} />
+      <div class="collab-reference-list">{delivery.taskId ? this.taskLink(delivery.taskId, delivery.taskDigest, `delivery-task-${key}`) : <span class="collab-help">{t('本交付未绑定任务合同')}</span>}</div>
+      {delivery.dependencies.length ? <Detail title={t('依赖版本')} value={delivery.dependencies} detailKey={`delivery-dependencies-${key}`} /> : null}
       {sources.length || checks.length ? <Facts facts={[[t('材料环境'), [...new Set([...sources, ...checks].map(item => item.environmentDigest))].join(', ')]]} /> : null}
       <h5>{t('原始提示引用')}</h5>{help(t('由 Agent 提供的文字引用，未自动解释为检查回执或可访问路径。'))}<Code value={delivery.evidenceRefs} />
       {delivery.evidence ? <Detail title={t('交付附带的检查记录')} value={delivery.evidence} detailKey={`delivery-evidence-${key}`} /> : null}
+      </details>
     </Fragment>;
   }
 }

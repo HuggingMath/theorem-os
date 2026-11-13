@@ -10,7 +10,7 @@ import type { WebRunner } from '../apps/web/runner';
 import type { WebPrecheckOutput } from '../apps/web/precheck';
 import type { WebRunInput, WorkerMessage } from '../apps/web/shared';
 import { freePort, ready, settled } from './web-scenario';
-import { withSettings, showChat, selectHistoryRun, fillConfig } from './web-ui-controls';
+import { clickWorkbenchAction, withSettings, showChat, selectHistoryRun, fillConfig } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-review-regressions');
@@ -206,7 +206,7 @@ try {
   assert.equal(await page.locator('#task').inputValue(), 'alice_private_draft_fixture');
   const otherTab = await client.context.newPage(); await otherTab.goto(serial.origin); await ready(otherTab);
   await form(otherTab, 'alice_other_tab_private');
-  await page.locator('#open-account').click();
+  await clickWorkbenchAction(page, '#open-account');
   await page.locator('#logout').click();
   await page.waitForURL(url => url.origin === serial.origin && url.pathname === '/login.html');
   await otherTab.waitForURL(url => url.origin === serial.origin && url.pathname === '/login.html');
@@ -316,7 +316,7 @@ try {
   const deleted = await harness(1), deletedAlice = await deleted.login();
   const deletedPage = await deletedAlice.context.newPage(); await deletedPage.goto(deleted.origin); await ready(deletedPage);
   await form(deletedPage, 'alice_deleted_private');
-  await deletedPage.locator('#open-account').click();
+  await clickWorkbenchAction(deletedPage, '#open-account');
   await deletedPage.locator('#account-confirm').fill('alice@example.org');
   await deletedPage.locator('#delete-account').click();
   await deletedPage.waitForURL(url => url.origin === deleted.origin && url.pathname === '/login.html');

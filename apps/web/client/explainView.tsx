@@ -28,6 +28,8 @@ export type ExplainView = {
   detail?: 'outline' | 'steps'; opened?: ReadonlySet<number>;
   /** The route node a link named or the reader chose, and where a choice is reported. */
   node?: string; onRouteSelect?: (id: string) => void;
+  /** The optional graph stays mounted while the reader follows the prose. */
+  routeOpen?: boolean; onRouteToggle?: (open: boolean) => void;
 };
 
 const kinds: Record<WebExplanationSection['kind'], string> = { theorem: t('引理'), definition: t('定义'), instance: t('实例'), opaque: t('定义'),
@@ -81,7 +83,8 @@ function Prose(view: ExplainView) {
   const declarations = view.overview.targets.find(item => item.name === view.target)?.declarations ?? 1;
   if (explanation?.status === 'approved') {
     if (view.document) return <DocumentView document={view.document} proof={view.overview.run.proof} runId={view.overview.run.id}
-      active={view.active} gap={view.gap} chosen={view.chosen} onRouteOpen={view.onRouteOpen} outline={view.detail === 'outline'} opened={view.opened} node={view.node} onRouteSelect={view.onRouteSelect} />;
+      active={view.active} gap={view.gap} chosen={view.chosen} onRouteOpen={view.onRouteOpen} outline={view.detail === 'outline'} opened={view.opened} node={view.node} onRouteSelect={view.onRouteSelect}
+      routeOpen={view.routeOpen} onRouteToggle={view.onRouteToggle} />;
     return view.documentError ? <div class="inline-error" role="alert">{view.documentError}</div>
       : <p class="explain-state" role="status"><Spinner />{t('正在读取讲解…')}</p>;
   }
@@ -142,9 +145,9 @@ const richLinks = (links: readonly WebExplanationLink[] | undefined, at: Record<
     title: t('在 Lean 中标出') }));
 // Which section explains each declaration, once per document, so a section's props stay the same between draws.
 const ownedBy = new WeakMap<WebExplanationDocument, Map<string, number>>();
-function DocumentView({ document, proof, runId, active, gap, chosen, onRouteOpen, outline, opened, node, onRouteSelect }: { document: WebExplanationDocument; proof: string; runId: string;
+function DocumentView({ document, proof, runId, active, gap, chosen, onRouteOpen, outline, opened, node, onRouteSelect, routeOpen, onRouteToggle }: { document: WebExplanationDocument; proof: string; runId: string;
   active?: StepRef; gap?: number; chosen?: ReadonlySet<number>; onRouteOpen?: (target: string) => void; outline?: boolean; opened?: ReadonlySet<number>;
-  node?: string; onRouteSelect?: (id: string) => void }) {
+  node?: string; onRouteSelect?: (id: string) => void; routeOpen?: boolean; onRouteToggle?: (open: boolean) => void }) {
   const route = useMemo(() => explanationSolutionRoute(document, proof, `${runId}:explanation:${document.target}:${document.language}`), [document, proof, runId]);
   let owned = ownedBy.get(document);
   if (!owned) ownedBy.set(document, owned = new Map(document.sections.map((section, index) => [section.name, index])));
@@ -153,7 +156,11 @@ function DocumentView({ document, proof, runId, active, gap, chosen, onRouteOpen
       <p class="explain-notice"><span>{t('这份讲解由模型根据 Lean 证明写成，并由 {0} 个审核模型逐步对照 Lean 检查，未经人工审阅。Lean 只检查了证明本身，没有检查这份讲解。', document.auditors)}</span></p>
       {linkedDocument(document) && <p>{t('讲解中划虚线的短语各对应一段 Lean，点它标出那段 Lean；审核模型核对过每一对。')}</p>}</details>
     {document.problem && <ProblemCard {...document.problem} active={chosen} />}
-    <SolutionRouteGraph model={route} onOpen={onRouteOpen} selection={node} onSelect={onRouteSelect} />
+    {document.overview.trim() && <section class="explain-overview"><h3>{t('证明思路')}</h3><p class="explain-rich"><Rich text={document.overview} /></p></section>}
+    <details class="explain-route" data-explain-route open={routeOpen} onToggle={event => onRouteToggle?.(event.currentTarget.open)}>
+      <summary>{t('证明路线')}</summary>
+      <SolutionRouteGraph model={route} onOpen={onRouteOpen} selection={node} onSelect={onRouteSelect} />
+    </details>
     {document.sections.map((section, index) => <CachedSection key={section.name} section={section} index={index} owned={owned} folded={!!outline && !opened?.has(index)}
       active={active?.section === index ? active : undefined} gap={active?.section === index ? gap : undefined} />)}
     <Footer document={document} />

@@ -14,6 +14,7 @@ import type { WebRun } from '../apps/web/shared';
 import type { WebConversation } from '../apps/web/conversationTypes';
 import { localeStorageKey } from '../apps/web/i18n';
 import { freePort, startBrowser, settled } from './web-scenario';
+import { openProblemSection } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..'), output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/product-continuity/problem');
 await fs.mkdir(output, { recursive: true });
@@ -64,7 +65,7 @@ const read = (page: Page, pathname: string) => page.evaluate(async pathname => {
   const response = await fetch(pathname), value = await response.json(); if (!response.ok) throw new Error(value.error); return value;
 }, pathname);
 try {
-  for (const language of ['zh', 'en'] as const) for (const width of [1440, 390]) {
+  for (const language of ['zh', 'en'] as const) for (const width of [1440, 390, 320]) {
     phase = `${language}-${width}`;
     // Each independent browser scenario represents a separate visitor, including its request allowance.
     const context = await browser.newContext({ viewport: { width, height: 1000 }, locale: language === 'zh' ? 'zh-CN' : 'en-US', reducedMotion: 'reduce', extraHTTPHeaders: { 'x-fixture-scenario': `${language}-${width}` } });
@@ -86,10 +87,32 @@ try {
     service.storage.saveRecord(['owners', mathDigest(owner), 'conversations', `${conversation.id}.json`], conversation);
     await page.goto(`${origin}/problem.html?${new URLSearchParams({ run: selected.id, tab: 'route', task: task.id, taskVersion: task.version, commit: task.proof.commit! })}`);
     await page.locator('[data-problem-route-decision] .solution-route-detail h4').filter({ hasText: task.theorem! }).waitFor();
+    assert.equal(await page.locator('[data-problem-route-history]').evaluate(node => (node as HTMLDetailsElement).open), false,
+      'the current route starts with its historical reading controls folded');
     assert.match(await page.locator('[data-problem-route-decision] .solution-route-detail').innerText(), /preceding reduction/);
     await page.waitForFunction(() => document.querySelectorAll('.katex').length > 0);
-    const clickTab = async (tab: string) => { await page.locator(`.problem-tabs a[href*="tab=${tab}"]`).click(); await settled(page); };
+    const primaryTabs = page.locator('.problem-tabs > a');
+    assert.deepEqual(await primaryTabs.evaluateAll(links => links.map(link => new URL((link as HTMLAnchorElement).href).searchParams.get('tab'))),
+      ['overview', 'route', 'discussion'], 'only the three main reading sections remain in the primary navigation');
+    const records = page.locator('[data-problem-records-menu]'), recordsToggle = records.locator(':scope > summary');
+    assert.equal(await records.evaluate(node => (node as HTMLDetailsElement).open), false);
+    for (const link of await page.locator('.problem-tabs a').all()) {
+      const target = new URL((await link.getAttribute('href'))!, origin);
+      assert.equal(target.searchParams.get('task'), task.id); assert.equal(target.searchParams.get('taskVersion'), task.version);
+      assert.equal(target.searchParams.get('commit'), task.proof.commit, 'all section links retain the selected source version');
+    }
+    await recordsToggle.focus(); await page.keyboard.press('Enter');
+    const recordLinks = records.locator('a'); await recordLinks.first().waitFor();
+    assert.deepEqual(await recordLinks.evaluateAll(links => links.map(link => new URL((link as HTMLAnchorElement).href).searchParams.get('tab'))), ['compare', 'stages', 'outcomes', 'brief']);
+    await page.keyboard.press('Tab');
+    assert.equal(await recordLinks.first().evaluate(node => node === document.activeElement), true, 'the first secondary section is reachable from its summary by keyboard');
+    await page.keyboard.press('Escape');
+    assert.equal(await records.evaluate(node => (node as HTMLDetailsElement).open), false);
+    assert.equal(await recordsToggle.evaluate(node => node === document.activeElement), true, 'Escape returns focus to the secondary navigation summary');
+    const clickTab = async (tab: string) => { await openProblemSection(page, tab); await settled(page); };
     await clickTab('outcomes'); assert.equal(new URL(page.url()).searchParams.get('task'), task.id);
+    assert.equal(await records.evaluate(node => (node as HTMLDetailsElement).open), false, 'choosing a secondary section closes its menu');
+    assert.equal(await recordsToggle.evaluate(node => node === document.activeElement), true, 'choosing a secondary section retains focus on its summary');
     await page.reload(); await page.locator('.problem-table').waitFor();
     assert.equal(new URL(page.url()).searchParams.get('commit'), task.proof.commit);
     await clickTab('route'); await page.locator('[data-problem-route-decision] .solution-route-detail h4').filter({ hasText: task.theorem! }).waitFor();
@@ -185,6 +208,7 @@ try {
     await page.screenshot({ path: path.join(output, `attention-${language}-${width}.png`), fullPage: true });
     await attentionIssue.locator('a.button').click(); await page.locator(`[data-collaboration-issue="${routeIssue.id}"]`).waitFor();
     await page.goto(origin + '/');
+    await page.locator('[data-chat-research-overview] > summary').click();
     const primaryEntry = page.locator(`[data-overview-open][href*="project=${project.id}"]`); await primaryEntry.waitFor();
     assert.equal(new URL(await primaryEntry.getAttribute('href') ?? '', origin).pathname, '/problem.html');
     await primaryEntry.click(); await page.locator('[data-problem-run]').waitFor();
@@ -210,7 +234,7 @@ try {
       draft: 'tab/reload recovery; run isolation; stale evidence acknowledgement; ordinary discussion recovery', stage: 'immutable snapshot; saved once; preserved after project attachment',
       entryAndAttention: 'My research primary opens problem; existing open issue links to its real discussion; five items by default and all seven expand/collapse', collaboration: 'unified page submits to the real feedback API' });
   }
-  assert.deepEqual(errors, []); assert.deepEqual(external, []); assert.equal(prohibited, 0); assert.equal(runs, 8);
+  assert.deepEqual(errors, []); assert.deepEqual(external, []); assert.equal(prohibited, 0); assert.equal(runs, 12);
 } catch (error) {
   failure = error; if (active && !active.isClosed()) await active.screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => {});
 } finally {

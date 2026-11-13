@@ -14,6 +14,7 @@ import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { readingRun, readingProof, readingCommit } from '../tests/helpers/shareReadingFixture';
 import { freePort, preferFullCollaboration, settled, startBrowser } from './web-scenario';
+import { openNavigationMenu } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/product-continuity/research-followthrough/reuse');
 await fs.access(path.join(root, 'out/web/library.html')); await fs.mkdir(output, { recursive: true });
@@ -68,6 +69,8 @@ async function json<T>(page: Page, pathname: string): Promise<T> {
   const response = await page.request.get(origin + pathname); assert.equal(response.status(), 200); return response.json();
 }
 async function screenshot(page: Page, name: string) {
+  const accountLayout = name.startsWith('single-reuse') || name.startsWith('combined-reuse');
+  if (accountLayout) await openNavigationMenu(page);
   await settled(page);
   const dimensions = await page.evaluate(() => {
     const account = document.querySelector('#open-account')?.getBoundingClientRect();
@@ -76,10 +79,11 @@ async function screenshot(page: Page, name: string) {
       ...(account ? { account: { left: account.left, right: account.right, width: account.width } } : {}) };
   });
   assert.ok(dimensions.rootWidth <= dimensions.width && dimensions.bodyWidth <= dimensions.width, `${name} overflows`);
-  if (name.startsWith('single-reuse') || name.startsWith('combined-reuse'))
+  if (accountLayout)
     assert.ok(dimensions.account && dimensions.account.left >= 0 && dimensions.account.right <= dimensions.width, 'The account control fits within the viewport');
   if (name.startsWith('member-fixed-source')) assert.ok(Math.abs(dimensions.rootHeight - dimensions.bodyHeight) <= 1, 'The source scroll region does not create empty page space');
   views.push({ name, ...dimensions });
+  if (accountLayout) await page.keyboard.press('Escape');
   await page.screenshot({ path: path.join(output, `${name}-viewport.png`), fullPage: false });
   await page.screenshot({ path: path.join(output, `${name}.png`), fullPage: true });
 }
@@ -152,7 +156,7 @@ try {
     await visitor.getByText(readingProof, { exact: true }).waitFor(); await screenshot(visitor, `published-evidence-${width}-${language}`);
     active = ownerPage; phase = `owner-source-${width}`; await ownerPage.goto(assetUrl); await ownerPage.locator('[data-library-source-link]').click();
     await ownerPage.waitForURL(url => url.pathname === '/' && url.searchParams.get('run') === run.id);
-    await ownerPage.locator('#open-account').waitFor(); assert.equal(await ownerPage.locator('#toast').filter({ hasText: '没有找到链接里的研究记录' }).count(), 0);
+    await ownerPage.locator('#open-account').waitFor({ state: 'attached' }); assert.equal(await ownerPage.locator('#toast').filter({ hasText: '没有找到链接里的研究记录' }).count(), 0);
 
     let project = service.research.projects.create(owner, { requestId: `project-${width}`, title: `Fixed proof project ${width}`, visibility: 'members' });
     project = service.research.projects.setMember(owner, project.id, service.research.projects.identity(readerOwner), { requestId: 'member', expectedRevision: project.revision, role: 'reader' });

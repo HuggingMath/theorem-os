@@ -14,6 +14,7 @@ import type { WebRunner } from '../apps/web/runner';
 import { createWebService } from '../apps/web/server';
 import { audit } from './web-a11y';
 import { freePort } from './web-scenario';
+import { openChatResultDetails } from './web-ui-controls';
 
 type CopyProbe = { clipboard: Clipboard; writes: string[]; release?: () => void };
 type FixtureWindow = Window & { __liveSource: CopyProbe };
@@ -130,6 +131,9 @@ try {
       await route.continue();
     });
     await page.goto(`${origin}/?chat=${chatId}`, { timeout: 0 });
+    await outcomes(page);
+    await openChatResultDetails(page);
+    await page.locator('[data-research-artifact="live"]').click();
     await live(page).waitFor({ timeout: 0 });
     assert.equal(await copy(page).count(), 0, 'no action without a displayed source');
     append({ round: 1, step: 'compile', state: 'started', source: original });
@@ -197,6 +201,7 @@ try {
       mobile.on('pageerror', error => errors.push(error.message));
       await mobile.goto(`${origin}/?chat=${chatId}`, { timeout: 0 });
       await outcomes(mobile);
+      await openChatResultDetails(mobile);
       const open = mobile.locator('[data-research-artifact="live"]'), draft = `${language}-${width}: keep this unsent question`;
       await open.waitFor({ timeout: 0 });
       assert.equal(await live(mobile).isVisible(), false, 'a cold phone page starts with its conversation');
@@ -226,6 +231,7 @@ try {
       await mobile.screenshot({ path: path.join(output, filename), fullPage: true, timeout: 0 }); screenshots.push(filename);
       await mobile.locator('#close-research-output').click();
       await mobile.reload({ timeout: 0 }); await outcomes(mobile);
+      await openChatResultDetails(mobile);
       await open.waitFor({ timeout: 0 });
       assert.equal(await live(mobile).isVisible(), false, 'refresh retains the phone conversation until its code is requested');
       assert.equal(await mobile.locator('#formalize-original').inputValue(), draft);

@@ -10,7 +10,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRunInput } from '../apps/web/shared';
 import { englishAuthoredSample } from './web-i18n-fixture';
-import { newResearch, openHistory, openModulesTab, selectHistoryRun, stageLabelsReadable, enterLean, showExamples, openSample, openSettings } from './web-ui-controls';
+import { newResearch, openHistory, openModulesTab, selectHistoryRun, stageLabelsReadable, enterLean, showExamples, openSample, openSettings, clickWorkbenchAction } from './web-ui-controls';
 import { freePort, postRun, readRun, settled, startBrowser, ready } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -93,7 +93,7 @@ try {
   await page.locator('#natural-research #formalize-original').waitFor();
   await english(page, 'natural-language start');
   assert.equal(await page.locator('#formalize-settings').evaluate(node => (node as HTMLDetailsElement).open), false);
-  await page.locator('#open-settings').click();
+  await clickWorkbenchAction(page, '#open-settings');
   await page.waitForFunction(() => document.activeElement?.id === 'formalize-key');
   assert.equal(await page.locator('#formalize-settings').evaluate(node => (node as HTMLDetailsElement).open), true);
   await english(page, 'natural-language connection settings', '#formalize-settings');
@@ -188,7 +188,7 @@ try {
   // The switch saves the choice, keeps the draft, and the Chinese interface stays after a reload.
   await newResearch(page);
   await page.locator('#task').fill('A draft that must survive the switch');
-  await Promise.all([page.waitForEvent('load'), page.locator('#locale-switch').click()]);
+  await Promise.all([page.waitForEvent('load'), clickWorkbenchAction(page, '#locale-switch')]);
   await page.locator('#natural-research #formalize-original').waitFor();
   assert.equal(await page.evaluate(key => localStorage.getItem(key), localeKey), 'zh');
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'zh-CN');

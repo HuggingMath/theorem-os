@@ -14,6 +14,7 @@ import type { WebRun } from '../apps/web/shared';
 import type { ResearchJourney, ResearchUnreadChanges } from '../apps/web/researchJourneyTypes';
 import { localeStorageKey } from '../apps/web/i18n';
 import { freePort, startBrowser } from './web-scenario';
+import { openProblemHistory, openProblemSection } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..'), output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/product-continuity/research-depth/journey');
 await fs.mkdir(output, { recursive: true });
@@ -82,7 +83,7 @@ try {
     await page.goto(`${origin}/problem.html?run=${parent.id}&tab=overview`);
     await page.locator('[data-research-changes] .research-empty').waitFor();
     assert.equal(await page.locator('[data-research-change]').count(), 0);
-    await page.locator('.problem-tabs a[href*="tab=route"]').click(); await page.locator('[data-problem-map=global]').click(); await page.locator('[data-research-journey]').waitFor();
+    await openProblemSection(page, 'route'); await openProblemHistory(page); await page.locator('[data-problem-map=global]').click(); await page.locator('[data-research-journey]').waitFor();
     const view = page.locator('[data-research-journey]');
     await page.waitForFunction(() => document.querySelectorAll('[data-research-journey] [data-journey-attempt]').length === 3);
     assert.equal(await view.locator('[data-journey-attempt]').count(), 3);
@@ -122,7 +123,7 @@ try {
       text: 'Record the cancellation argument.', observationRef: { sequence: savedParent.observation!.sequence, stateDigest: savedParent.observation!.snapshot.stateDigest },
       status: 'delivered', createdAt: savedParent.createdAt, updatedAt: savedParent.updatedAt });
     savedParent.observation = updated; service.storage.saveObservation(owner, updated); service.storage.saveRun(owner, savedParent);
-    await page.locator('.problem-tabs a[href*="tab=overview"]').click(); await page.locator('[data-research-change=task]').first().waitFor();
+    await openProblemSection(page, 'overview'); await page.locator('[data-research-change=task]').first().waitFor();
     const changes = (await read<{ item: ResearchUnreadChanges }>(page, endpoint + '/changes')).item;
     assert.ok(changes.counts.task > 0); assert.equal(changes.counts.check, 1); assert.equal(changes.counts.human, 1);
     const taskChange = page.locator('[data-research-change=task]').filter({ has: page.locator('a') }).first();

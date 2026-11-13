@@ -9,7 +9,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { localeStorageKey } from '../apps/web/i18n';
 import { deferred, freePort, startBrowser } from './web-scenario';
-import { closeSettings, enterLean, fillConfig, newResearch, openSettings } from './web-ui-controls';
+import { closeSettings, enterLean, fillConfig, newResearch, openSettings, clickWorkbenchAction } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..');
 const output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/web-round8-keys');
@@ -40,7 +40,7 @@ async function naturalSettings(page: Page) {
   if (await page.locator('#run-settings[open]').count()) await closeSettings(page);
   await page.locator('#open-natural-language').click();
   await page.locator('#formalize-original').waitFor();
-  await page.locator('#open-settings').click();
+  await clickWorkbenchAction(page, '#open-settings');
   await page.locator('#formalize-settings[open]').waitFor();
 }
 async function leanSettings(page: Page) { await enterLean(page); await openSettings(page); }
@@ -99,7 +99,7 @@ try {
     });
     try {
       await page.goto(origin); await page.locator('#formalize-original').waitFor();
-      await page.locator('#open-settings').click(); await saveNatural(page, oldKey, savedNotice);
+      await clickWorkbenchAction(page, '#open-settings'); await saveNatural(page, oldKey, savedNotice);
       await leanSettings(page); await note(page, 'K9z4');
 
       phase = label + ': delayed Lean delete followed by natural save preserves the replacement';

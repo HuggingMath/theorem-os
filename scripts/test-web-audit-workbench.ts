@@ -10,6 +10,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { freePort, settled, startBrowser, webScenario, writeScenarioReport,
   type ScenarioHarness, type ScenarioSuite } from './web-scenario';
+import { clickWorkbenchAction, openNavigationMenu } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..');
 const output = path.join(root, 'out/web-audit-workbench');
@@ -56,7 +57,7 @@ async function home(page: Page) {
   await page.goto(origin);
   await page.locator('#formalize-original').waitFor();
   await page.locator('#formalize-provider option').first().waitFor({ state: 'attached' });
-  await page.locator('#open-account').waitFor();
+  await page.locator('#open-account').waitFor({ state: 'attached' });
   assert.equal(await page.locator('body').getAttribute('data-entry'), 'natural');
 }
 async function screenshot(page: Page, name: string) {
@@ -98,6 +99,7 @@ try {
     await page.reload(); await page.locator('#formalize-original').waitFor();
     assert.equal(await page.locator('#formalize-original').inputValue(), original, 'Brand navigation must not overwrite the saved draft');
 
+    await page.locator('[data-chat-examples] > summary').click();
     await page.locator('[data-chat-sample]').click();
     await page.waitForURL(url => url.searchParams.has('sample'));
     await page.locator('#workbench-home').click();
@@ -131,6 +133,7 @@ try {
     await home(page);
     for (const width of [320, 390]) {
       await page.setViewportSize({ width, height: 844 }); await settled(page);
+      await openNavigationMenu(page);
       const bounds = await page.locator('#open-account').boundingBox();
       assert.ok(bounds, `The account button must be visible at ${width}px`);
       assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width + 0.5,
@@ -145,7 +148,7 @@ try {
       });
       assert.equal(reachable, true, `The account button must be unobscured at ${width}px`);
       await screenshot(page, `account-${width}.png`);
-      await page.locator('#open-account').click();
+      await clickWorkbenchAction(page, '#open-account');
       await page.locator('#account-dialog[open]').waitFor();
       await page.keyboard.press('Escape');
       await page.locator('#account-dialog').waitFor({ state: 'hidden' });

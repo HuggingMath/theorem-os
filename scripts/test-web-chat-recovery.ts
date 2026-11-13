@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { openAdvancedChatSettings } from './web-ui-controls';
+import { openAdvancedChatSettings, clickWorkbenchAction, openChatParticipation } from './web-ui-controls';
 // Disposable accounts, recorded formalization evidence and a fake runner; no external model or Lean.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -51,7 +51,7 @@ async function assertNoStoredKey() {
 }
 async function participation(value: 'automatic' | 'guided') {
   const radio = page!.locator(`input[name="chat-participation"][value="${value}"]`);
-  if (!await radio.isVisible()) await page!.locator('[data-chat-participation-control] > summary').click();
+  if (!await radio.isVisible()) await openChatParticipation(page!);
   await radio.check();
 }
 try {
@@ -71,9 +71,9 @@ try {
   await page.locator('#send-code').click(); await page.locator('#code-step:not([hidden])').waitFor();
   await page.locator('#login-code').fill(mail.at(-1)!.text.match(/\b\d{6}\b/u)![0]);
   await page.locator('#verify-code').click(); await page.waitForURL(origin + '/'); await initialized();
-  await page.locator('[data-chat-participation-control] > summary').click();
+  await openChatParticipation(page);
   await page.locator('input[name="chat-participation"][value="automatic"]').check();
-  await page.locator('#open-settings').click();
+  await clickWorkbenchAction(page, '#open-settings');
   await openAdvancedChatSettings(page);
   for (const id of ['formalize-provider', 'formalize-environment', 'formalize-effort'] as const) await page.locator(`#${id}`).selectOption(selected[id]);
   for (const id of ['formalize-model', 'formalize-minutes', 'formalize-tokens', 'research-minutes', 'research-tokens', 'research-turns'] as const) await page.locator(`#${id}`).fill(selected[id]);
@@ -83,6 +83,7 @@ try {
   const draft = await snapshot();
   assert.deepEqual(draft, { fields: selected, original, participation: 'automatic' });
   await page.locator('#formalize-settings > summary').click();
+  await page.locator('[data-chat-examples] > summary').click();
   await page.locator('[data-chat-sample]').click(); await page.waitForURL(url => url.origin === origin && url.searchParams.has('sample'));
   await page.locator('[data-chat-sample-note]').waitFor(); await page.goBack(); await page.waitForURL(origin + '/');
   await page.waitForFunction(text => (document.querySelector('#formalize-original') as HTMLTextAreaElement)?.value === text, original);
@@ -156,7 +157,7 @@ try {
   await defaultsContext.addCookies(cookies);
   page = await defaultsContext.newPage(); await page.goto(origin); await initialized();
   await page.locator('#formalize-original').fill(webFormalizationStatement);
-  await page.locator('#open-settings').click();
+  await clickWorkbenchAction(page, '#open-settings');
   await openAdvancedChatSettings(page);
   await page.locator('#formalize-environment').selectOption('mathlib'); await page.locator('#formalize-key').fill(credential);
   let defaultRequestId = '', defaultDropped = false;
@@ -181,7 +182,7 @@ try {
   await page.unroute('**/api/formalizations');
   await page.reload(); await initialized();
   await page.locator('#topbar-draft').click(); await page.locator('#formalize-original').fill(webFormalizationStatement);
-  await page.locator('#open-settings').click(); await page.locator('#formalize-key').fill(credential);
+  await clickWorkbenchAction(page, '#open-settings'); await page.locator('#formalize-key').fill(credential);
   await page.locator('#formalize-settings > summary').click();
   let releaseConversation!: () => void, conversationHeld = false;
   const gate = new Promise<void>(resolve => { releaseConversation = resolve; });
@@ -191,6 +192,7 @@ try {
   });
   await page.locator('#formalize-start').click();
   while (!conversationHeld) await page.waitForTimeout(30);
+  await page.locator('[data-chat-examples] > summary').click();
   await page.locator('[data-chat-sample]').click(); await page.waitForURL(url => url.origin === origin && url.searchParams.has('sample'));
   const delivered = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/conversations');
   releaseConversation(); await delivered;
@@ -212,6 +214,7 @@ try {
       await sampleContext.close();
       throw new Error('Short viewport needs the authenticated recovery session');
     }
+    await samplePage.locator('[data-chat-examples] > summary').click();
     await samplePage.locator('[data-chat-sample]').click(); await samplePage.waitForURL(url => url.origin === origin && url.searchParams.has('sample'));
     await samplePage.locator('[data-chat-sample-note]').waitFor();
     assert.ok(await samplePage.locator('#research-chat-thread').evaluate(node => node.clientHeight) >= Math.min(100, height * .25));

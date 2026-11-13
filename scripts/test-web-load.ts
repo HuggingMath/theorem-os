@@ -17,7 +17,7 @@ import { showArtifacts } from './web-ui-controls';
  * users get from the origin.
  */
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const output = path.join(root, 'out/web-load');
+const output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/web-load');
 await fs.access(path.join(root, 'out/web/app.js')).catch(() => { throw new Error('Run bun run build:web before the load check.'); });
 await fs.mkdir(output, { recursive: true });
 const reportOnly = process.argv.includes('--report');

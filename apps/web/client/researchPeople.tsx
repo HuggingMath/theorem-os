@@ -89,10 +89,6 @@ export function PeoplePage({ context }: { context: ResearchContext }) {
     </section> : <div class="research-content"><nav class="research-breadcrumb" aria-label={tx('返回目录', 'Back to directory')}><a href={directoryHref}>← {tx('返回数学家目录', 'Back to mathematicians')}</a></nav>
       <ErrorBox message={profile.error} />{own && profile.data && <section id="profile-updates" class="research-own-overview" data-own-research-overview>
         <CollaborationInbox context={context} />
-        <Panel title={tx('继续最近的研究', 'Continue recent research')}>
-          {[...profile.data.item.projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 2).map(project => <a class="research-list-item" key={project.id} href={theoremHref(project.id)}>{project.title}</a>)}
-          {!profile.data.item.projects.length && <p class="research-status">{tx('还没有研究，可以从定理页开始。', 'No projects yet. Start on the theorems page.')}</p>}
-        </Panel>
       </section>}{profile.data ? <Profile key={selected} profile={profile.data.item} own={own} selfId={ownId ?? ''} canFollow={context.session.authenticated} refresh={profile.refresh} />
         : !profile.error && <Panel title={tx('数学家主页', 'Researcher profile')}><Empty>{tx('正在读取资料…', 'Loading profile…')}</Empty></Panel>}
       {own && <Feed />}
@@ -109,6 +105,7 @@ function Profile({ profile, own, selfId, canFollow, refresh }: { profile: Profil
   const [adding, setAdding] = useState(false);
   useEffect(() => { if (own && location.hash === '#profile-management') revealProfileEditor(); }, [own, profile.id]);
   const safeLinks = profile.links.filter(link => /^https?:\/\//iu.test(link));
+  const projects = own ? [...profile.projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) : profile.projects;
   const signIn = loginHref(location.pathname + location.search + location.hash);
   return <><Panel title={tx('研究方向与简介', 'Research interests and biography')} actions={!own && <div class="research-profile-actions">
     {canFollow ? <FollowButton kind="person" id={profile.id} initial={profile.following} /> : <a class="button" href={signIn}>{tx('登录后关注', 'Sign in to follow')}</a>}
@@ -123,7 +120,7 @@ function Profile({ profile, own, selfId, canFollow, refresh }: { profile: Profil
   </Panel><nav class="research-section-nav" aria-label={tx('主页内容', 'Profile sections')}><a href="#research-projects">{tx('参与的研究', 'Research projects')}</a><a href="#research-contributions">{tx('贡献与来源', 'Contributions and sources')}</a>
     {own && <><a href="#profile-management">{tx('资料设置', 'Profile settings')}</a><a href="#profile-updates">{tx('我的更新', 'My updates')}</a></>}</nav>
     <Panel id="research-projects" title={own ? tx('我的研究', 'My research') : tx('参与的研究', 'Research projects')}>
-    <ul class="research-list">{profile.projects.map(project => <li key={project.id}><a class="research-list-item" href={theoremHref(project.id)}>
+    <ul class="research-list">{projects.map(project => <li key={project.id}><a class="research-list-item" href={theoremHref(project.id)}>
       <span class="research-item-title">{project.title}</span><span class="research-item-meta"><span>{project.owner.displayName}</span><span>{nameOf(project.visibility)}</span><span>{stamp(project.updatedAt)}</span></span></a></li>)}</ul>
     {!profile.projects.length && <Empty>{tx('还没有可展示的研究。', 'No research projects to display yet.')}</Empty>}
   </Panel><Panel id="research-contributions" title={tx('贡献与来源', 'Contributions and sources')} note={tx('每条记录都对应实际提交的版本、反馈或产物。', 'Each record points to a submitted version, feedback or artifact.')}>

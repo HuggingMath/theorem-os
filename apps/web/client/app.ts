@@ -16,7 +16,7 @@ import type { WebExplainAnswer } from '../explain';
 import type { WebFormalization } from '../formalizationTypes';
 import type { WebShareLink } from '../shareTypes';
 import type { SharedProofPreparation, SharedProofReading } from '../sharedProofTypes';
-import { acceptedTitle, acceptedDescription, isStatementReviewed, statementConfirmation } from '../presentation';
+import { acceptedTitle, acceptedVerdict, isStatementReviewed, statementConfirmation } from '../presentation';
 import { checkReason, effortLabels, failureGuide, formatDuration, formatTokens, isAcceptedRun, isFaultedRun, isRejectedRun, planAwaitingApproval, planGated, readableDuration, readableMetric, reportReason, resultDescription, runProgress, runTokens, stalledMinutes, stoppedLabel, usageEstimate, type RecoveryAction } from '../presentation';
 import { nextSteps, summarizeGoals, summarizeReport, summarizeStuck } from '../report';
 import { filterRuns, ownerFirst, type RunFilter } from './history';
@@ -78,6 +78,7 @@ import type { TermId } from './glossary';
 import { locale, localeTag, localizeMessage, localizeText, otherLocale, sentences, switchLocale, t } from '../i18n';
 import { tx } from './researchShared';
 import { historyStorageKey, markHistoryCollapsed, readHistoryCollapsed } from './historyPreference';
+import { detailLevel, onDetailLevel } from './detailLevel';
 import { classicLibraryUrl } from './classicLibrary';
 import { loadClassicPreparation, readClassicId } from './classicPreparation';
 import { renderContinuationPreview } from './productFlowView';
@@ -1585,7 +1586,7 @@ function renderRunMonitor() {
   const left = list.scrollLeft;
   drawRunMonitor(list, runs.map((run): MonitorItem => {
     const value = status(run), cancelling = activeRun(run) && state.cancelling.has(run.id), stalled = stalledMinutes(run);
-    const label = cancelling ? t('正在取消') : stalled !== undefined ? t('{0} 分钟无新进展', stalled) : value.label;
+    const label = cancelling ? t('正在取消') : stalled !== undefined ? t('{0} 分钟无新增通过检查或结果集成', stalled) : value.label;
     return { id: run.id, title: run.title, description: state.connected ? label : t('待同步 · {0}', label),
       tone: stalled !== undefined && !cancelling ? 'warning' : value.tone, symbol: stalled !== undefined && !cancelling ? 'hourglass' : value.symbol,
       current: run.id === state.selectedId, cancelling, active: activeRun(run), stages: runProgress(run).steps.map(step => step.state) };
@@ -1730,6 +1731,7 @@ function resultTitle(run: WebRun) {
 /** The result tab of one run: verdict, proof, route, report, then the task and how it was run. */
 function resultProps(run: WebRun): ResultPanelProps {
   const progress = runProgress(run), value = status(run), working = activeRun(run), guide = failureGuide(run);
+  const acceptance = passed(run) && !guide ? acceptedVerdict(run) : undefined;
   const provider = state.session?.providers.find(item => item.id === run.providerId);
   const environment = environmentInfo(run.environment);
   const item = (label: string, value: unknown, mono = false) => ({ label, value: String(value), mono });
@@ -1738,8 +1740,8 @@ function resultProps(run: WebRun): ResultPanelProps {
   const compare = compareProps(run, later);
   return {
     // The plan waiting on its owner has nothing running: no spinner, unless the Lead is revising it from their note.
-    verdict: { run: run.id, tone: value.tone, symbol: value.symbol, title: resultTitle(run), description: passed(run) && !guide ? acceptedDescription(run) : resultDescription(run),
-      ...(run.formalization ? { meaning: statementConfirmation(run.formalization.confirmation, false, run.formalization.reviewMode) } : {}),
+    verdict: { run: run.id, tone: value.tone, symbol: value.symbol, title: resultTitle(run), description: acceptance?.description ?? resultDescription(run),
+      ...(run.formalization ? { meaning: acceptance?.meaning ?? statementConfirmation(run.formalization.confirmation, false, run.formalization.reviewMode) } : {}),
       active: working && (!approval || approval.leadRevising), candidate: Boolean(run.artifact && working),
       ...(latest ? { latest: { at: latest.at, time: timestamp(latest.at, true), message: readableMessage(latest, workerNames(run.observation?.inspection.workers)) } } : {}),
       ...(run.status === 'running' && !planGated(run) && !isSample(run) ? { away: awayNote() } : {}) },
@@ -1755,7 +1757,7 @@ function resultProps(run: WebRun): ResultPanelProps {
     active: working, report: reportProps(run), task: run.formalization?.original ?? run.task,
     // Helpers are declared in the proof, the original targets in both; before a proof exists the problem names them.
     written: writtenNames(headingsOf(run.result?.proof ?? proof ?? run.source)),
-    route: working || (run.observation?.inspection.tasks.length ?? 0) > 0 || Boolean(run.actions?.count) || agentRoutes(run.events).length > 0,
+    route: detailLevel() === 'full' && (working || (run.observation?.inspection.tasks.length ?? 0) > 0 || Boolean(run.actions?.count) || agentRoutes(run.events).length > 0),
     facts: [item(t('证明环境'), environmentName(run.environment)), item(t('模型'), run.model, true),
       run.finishedAt ? item(t('结束时间'), timestamp(run.finishedAt)) : item(t('创建时间'), timestamp(run.createdAt))],
     // Versions, limits and budgets matter for reproducing the run, not for reading its result.
@@ -1908,7 +1910,7 @@ function renderPanel(force = false) {
   if (state.tab === 'result' && state.reportMode === 'summary') loadOutline(run);
   const content = state.tab === 'source' ? sourceContent(run) : undefined;
   const signature = JSON.stringify([run.id, state.tab, content ? [state.foldUnchanged, content.source, content.props]
-    : state.tab === 'result' ? [state.reportMode, run, outlines.get(run.id), notifyState(), state.proofViewer === run.id,
+    : state.tab === 'result' ? [state.reportMode, detailLevel(), run, outlines.get(run.id), notifyState(), state.proofViewer === run.id,
       relatedResearchRuns(state.runs, run).map(item => [item.id, item.updatedAt, status(item), Boolean(candidateSource(item))]),
       state.compare?.runId === run.id ? [state.compare.laterId, state.foldUnchanged, candidateSource(state.runs.find(item => item.id === state.compare!.laterId) ?? run)] : ''] : state.tab === 'events' ? run.events
       : state.tab === 'modules' ? [run, state.connected] : run]);
@@ -1972,6 +1974,7 @@ function renderPanel(force = false) {
   if (navigating) animateEntrance(panel, 'panel', switchingTab);
   updateSourceReader();
 }
+onDetailLevel(() => { if (state.tab === 'result') renderPanel(true); });
 function moduleInput(run?: WebRun): ModuleViewInput {
   return { id: run?.id ?? 'draft', run, model: run?.model ?? field('model').value,
     workers: run?.workers ?? Number(field('workers').value),

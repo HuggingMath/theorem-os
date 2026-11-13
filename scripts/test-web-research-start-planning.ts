@@ -11,8 +11,9 @@ import { WebStorage } from '../apps/web/storage';
 import type { WebRunner } from '../apps/web/runner';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { freePort, startBrowser } from './web-scenario';
+import { openAdvancedChatSettings, openChatBudget } from './web-ui-controls';
 
-const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/product-continuity/research-closure/planning-browser');
+const root = path.resolve(import.meta.dirname, '..'), output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/product-continuity/research-closure/planning-browser');
 const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-start-planning-'));
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;
 await fs.mkdir(output, { recursive: true });
@@ -36,6 +37,7 @@ const fit = async (page: Page) => assert.ok(await page.evaluate(() => document.d
 try {
   for (const [index, language, width] of [[0, 'zh', 1440], [1, 'en', 390]] as const) {
     const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
+    context.setDefaultTimeout(15_000); context.setDefaultNavigationTimeout(15_000);
     await context.addCookies([{ name: 'theoremos_session', value: sessions[index].id, url: origin }]);
     await context.addInitScript(language => localStorage.setItem('theorem-os.web-locale.v1', language), language);
     await context.route(/^https?:\/\//u, async route => {
@@ -50,13 +52,11 @@ try {
     await page.goto(`${origin}/?lang=${language}`); await page.locator('[data-first-research-start]').waitFor();
     const runs = await page.evaluate(async () => (await (await fetch('/api/runs')).json()).runs);
     assert.equal(runs.length, 0, 'Rate entry works before the first run');
-    await page.locator('[data-first-connection]').click();
-    await page.locator('[data-setup-next=credentials]').click();
-    await page.locator('#formalize-model').fill('planned-model');
     await page.locator('#formalize-settings > summary').click();
+    await page.locator('#formalize-model').fill('planned-model');
     const cost = page.locator('#natural-research [data-start-cost]');
     // Quota and cost sit behind one closed line under the limits.
-    await page.locator('[data-first-research-more] > summary').click();
+    await openChatBudget(page);
     await cost.locator('[data-cost-unavailable]').waitFor();
     await cost.locator('[data-start-rate] > summary').click();
     await cost.locator('[data-start-rate-value]').fill('10');
@@ -64,24 +64,23 @@ try {
     await page.locator('[data-first-budget=trial]').click();
     await cost.locator('[data-cost-unavailable]').waitFor();
     assert.equal(await cost.locator('[data-cost-total]').count(), 0, 'Unlimited trial tokens have no finite cost estimate');
-    await page.locator('#formalize-settings > summary').click();
-    await page.locator('[data-chat-advanced-settings] > summary').click();
+    await openAdvancedChatSettings(page);
     await page.locator('#formalize-tokens').fill('60000');
     await page.locator('#research-tokens').fill('60000');
+    await openChatBudget(page);
     assert.match(await cost.locator('[data-cost-stage=formalization]').innerText(), /USD 0\.60/u);
     assert.match(await cost.locator('[data-cost-stage=proof]').innerText(), /USD 0\.60/u);
     assert.match(await cost.locator('[data-cost-total]').innerText(), /USD 1\.20/u);
-    await page.locator('#formalize-settings > summary').click();
     await page.locator('[data-first-budget=standard]').click();
     await cost.locator('[data-cost-unavailable]').waitFor();
     assert.equal(await cost.locator('[data-cost-total]').count(), 0, 'Unlimited standard tokens have no finite cost estimate');
     assert.equal(await page.locator('#formalize-tokens').inputValue(), '');
     assert.equal(await page.locator('#research-tokens').inputValue(), '');
-    await page.locator('#formalize-settings > summary').click();
+    await openAdvancedChatSettings(page);
     await page.locator('#formalize-tokens').fill('400000');
     await page.locator('#research-tokens').fill('200000');
+    await openChatBudget(page);
     assert.match(await cost.locator('[data-cost-total]').innerText(), /USD 6\.00/u);
-    await page.locator('#formalize-settings > summary').click();
     await cost.locator('[data-start-rate-save]').click(); await cost.locator('[data-start-rate-saved]').waitFor();
     const rates = await page.evaluate(async () => (await (await fetch('/api/research/workspace/rates')).json()).items);
     assert.deepEqual(rates, [{ providerId: 'fixture', model: 'planned-model', currency: 'USD', perMillion: 10 }]);
@@ -97,12 +96,12 @@ try {
     assert.equal(await page.locator('#formalize-original').inputValue(), formula);
     await page.waitForFunction(() => document.activeElement?.id === 'formalize-original');
     assert.equal(writes.length, writeCount, 'Preview has no write or model request');
-    await page.reload(); await page.locator('[data-first-research-more] > summary').click(); await cost.locator('[data-cost-total]').waitFor();
+    await page.reload(); await openChatBudget(page); await cost.locator('[data-cost-total]').waitFor();
     assert.match(await cost.locator('[data-cost-total]').innerText(), /USD 6\.00/u);
     assert.equal(await page.locator('#formalize-original').inputValue(), formula);
     phase = `rate-isolation-${language}`;
-    await page.locator('[data-first-connection]').click(); await page.locator('[data-setup-next=credentials]').click();
-    await page.locator('#formalize-model').fill('other-model'); await page.locator('#formalize-settings > summary').click();
+    await page.locator('#formalize-settings > summary').click();
+    await page.locator('#formalize-model').fill('other-model'); await openChatBudget(page);
     await cost.locator('[data-cost-unavailable]').waitFor(); assert.equal(await cost.locator('[data-cost-total]').count(), 0);
     await cost.locator('[data-start-rate] > summary').click(); await cost.locator('[data-start-rate-value]').fill('0');
     assert.match(await cost.locator('[data-cost-total]').innerText(), /CNY 0\.00/u);
@@ -122,7 +121,7 @@ try {
   }
   assert.equal(prohibited, 0); assert.deepEqual(external, []); assert.deepEqual(errors, []);
   assert.ok(writes.every(request => request === 'PUT /api/research/workspace/rates'), JSON.stringify(writes));
-} catch (error) { failure = error; if (active && !active.isClosed()) await active.screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => {}); }
+} catch (error) { failure = error; if (active && !active.isClosed()) await active.screenshot({ path: path.join(output, 'failure.png'), fullPage: true, timeout: 10_000 }).catch(() => {}); }
 finally {
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: failure ? 'failed' : 'passed', phase, checks, writes, errors, external, prohibited,
     ...(failure ? { error: failure instanceof Error ? failure.message : String(failure) } : {}) }, null, 2));

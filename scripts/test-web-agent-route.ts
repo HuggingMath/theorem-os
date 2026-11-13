@@ -16,7 +16,7 @@ import { webAgentActionLimits, webSampleRunId, type WebRunInput, type WorkerMess
 import { agentRoutes, mergeAgentActions } from '../apps/web/client/agentRoute';
 import { audit } from './web-a11y';
 import { openTab } from './web-ui-controls';
-import { deferred, freePort, postRun, ready, settled, startBrowser, waitForRun } from './web-scenario';
+import { deferred, freePort, postRun, preferFullCollaboration, ready, settled, startBrowser, waitForRun } from './web-scenario';
 import { longLane, withAgentActions } from './web-agent-action-fixture';
 import { replaySample } from './web-trajectory-fixture';
 
@@ -101,6 +101,7 @@ let browser: Awaited<ReturnType<typeof startBrowser>> | undefined;
 try {
   browser = await startBrowser(service.server, port);
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce' });
+  await preferFullCollaboration(context);
   const page = await context.newPage();
   page.setDefaultTimeout(10_000);
   const errors: string[] = [];
@@ -114,6 +115,8 @@ try {
   await openTab(page, 'result');
   await page.locator('.result-agent-actions>summary').click();
   await lane(page, 'researcher-1').waitFor();
+  // Progress events draw the lanes before the separate recorded-action read fills their badges.
+  await page.locator(`${map} .agent-route-count`).first().waitFor();
   const expected = agentRoutes(sample.events, { actions: mergeAgentActions(sample.actions!), lead });
   assert.deepEqual(await page.locator(`${map} .agent-route-lane`).evaluateAll(items => items.map(item => item.getAttribute('data-worker-id'))),
     expected.map(route => route.workerId));
@@ -229,6 +232,7 @@ try {
 
   // A phone: the open step and its diffs fit the screen.
   const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce', hasTouch: true, isMobile: true });
+  await preferFullCollaboration(phone);
   const small = await phone.newPage();
   small.on('pageerror', error => errors.push(`390: ${error.message}`));
   await small.goto(`${origin}/?sample`);
@@ -279,6 +283,7 @@ try {
     return (await response.json()).share.url.split('#')[1] as string;
   }, live.id);
   const visitor = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await preferFullCollaboration(visitor);
   const reader = await visitor.newPage();
   reader.on('pageerror', error => errors.push(`share: ${error.message}`));
   await reader.goto(`${origin}/share.html#${token}`);

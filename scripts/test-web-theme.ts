@@ -12,7 +12,7 @@ import { themeStorageKey } from '../apps/web/client/themePreference';
 import { audit } from './web-a11y';
 import { contrastProblems } from './web-contrast';
 import { freePort, settled, startBrowser, ready } from './web-scenario';
-import { openModulesTab, openSample, showExamples } from './web-ui-controls';
+import { openModulesTab, openSample, showExamples, clickWorkbenchAction } from './web-ui-controls';
 
 /**
  * Light and dark interface: without a choice the page follows the system, before the first paint and live when the
@@ -149,7 +149,7 @@ try {
     // At this width the history is the docked left column, checked with the rest of the page above.
     await showExamples(page);
     for (const [trigger, id] of [['#open-settings', 'run-settings'], ['.welcome-glossary', 'glossary-dialog'], ['Control+K', 'command-palette']]) {
-      if (trigger === 'Control+K') await page.keyboard.press(trigger); else await page.locator(trigger).click();
+      if (trigger === 'Control+K') await page.keyboard.press(trigger); else await clickWorkbenchAction(page, trigger);
       await page.locator(`#${id}[open]`).waitFor(); await settled(page);
       await legible(page, `${id} (${scheme}, ${locale})`, `#${id}`);
       await page.keyboard.press('Escape');

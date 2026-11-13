@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Read-only local API records in the real workbench; never runs a model, Lean, or explanation generation.
-// Zero browser/server timeouts and zero fixture budgets mean these checks have no time, token or round limit.
+// Browser waits are bounded; fixture budgets do not invoke any model or proof runner.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -9,14 +9,17 @@ import { chromium, type Page } from 'playwright';
 import type { WebInspectedTask, WebObservation } from '../apps/web/collaboration';
 import { readWebConfig } from '../apps/web/config';
 import type { WebConversation } from '../apps/web/conversationTypes';
+import type { WebFormalization, WebFormalizationActivity } from '../apps/web/formalizationTypes';
 import { localeStorageKey } from '../apps/web/i18n';
+import { collaborationDetailStorageKey } from '../apps/web/client/runAwareness';
 import type { WebRunner } from '../apps/web/runner';
 import { createWebService } from '../apps/web/server';
 import type { WebExplanation, WebExplanationDocument, WebExplanationOverview, WebRun } from '../apps/web/shared';
 import { audit } from './web-a11y';
 import { freePort, preferFullCollaboration } from './web-scenario';
+import { clickWorkbenchAction, openChatResultDetails, openNavigationMenu } from './web-ui-controls';
 
-const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/web-chat-mathematics');
+const root = path.resolve(import.meta.dirname, '..'), output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/web-chat-mathematics');
 await fs.access(path.join(root, 'out/web/app.js')).catch(() => { throw new Error('Build the current web client before running the chat mathematics check.'); });
 await fs.mkdir(output, { recursive: true });
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-chat-mathematics-'));
@@ -32,10 +35,11 @@ const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port
   THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web'), THEOREMOS_WEB_DATA_ROOT: temporary }), runner, { sample: null });
 service.server.requestTimeout = 0; service.server.headersTimeout = 0; service.server.setTimeout(0);
 await new Promise<void>((resolve, reject) => { service.server.once('error', reject); service.server.listen(port, '127.0.0.1', resolve); });
-const browser = await chromium.launch({ headless: true, timeout: 0 });
+const browser = await chromium.launch({ headless: true, timeout: 15_000 });
 const checks: string[] = [], screenshots: string[] = [];
 const mark = (name: string) => { checks.push(name); console.log(`PASS ${name}`); };
 const at = '2026-11-10T07:00:00.000Z';
+const originalTask = '请说明自然数加法的两个性质。';
 const source = 'theorem swap_sum (a b : Nat) : a + b = b + a := by\n  exact Nat.add_comm a b\n\ntheorem identity_sum (a : Nat) : a + 0 = a := by\n  exact Nat.add_zero a\n';
 const budgetInputs = ['#formalize-minutes', '#formalize-tokens', '#research-minutes', '#research-tokens', '#research-turns'];
 
@@ -67,7 +71,7 @@ function observation(webRunId: string): WebObservation {
       evidence: 'recorded-not-replayed', phase: 'running', problem: { id: 'recorded-mathematics', statement: 'Read-only mathematics fixture',
         formalStatement: 'True', assumptions: [], targets: [] },
       configuration: { model: 'fixture', effort: 'high', workers: 1, coordination: 'cooperative', buildDigest: 'fixture-build', environmentDigest: 'fixture-env' },
-      turns: 0, planVersion: 'recorded-plan', scheduling: { evidence: 'recorded-dispatch-state', observedWorkers: 0, working: 0,
+      turns: 0, usage: { totalTokens: 1234 }, planVersion: 'recorded-plan', scheduling: { evidence: 'recorded-dispatch-state', observedWorkers: 0, working: 0,
         proofAssignments: 0, preparing: 0, stopping: 0, idle: 0, stopped: 0 },
       knowledge: { status: 'disabled', evidence: 'recorded-not-replayed', attribution: 'model-reported-origin', retrievalCoverage: 'unknown',
         droppedRetrievals: 0, retrievals: [], originalUses: [], uses: [] }, tokenBudget: {}, continuation: {},
@@ -88,31 +92,37 @@ function run(status: 'running' | 'completed'): WebRun {
 }
 function conversation(value: WebRun): WebConversation {
   return { id: crypto.randomUUID(), title: value.title, runId: value.id, createdAt: at, updatedAt: at,
-    messages: [{ id: crypto.randomUUID(), role: 'user', kind: 'task', text: '请说明自然数加法的两个性质。', createdAt: at, status: 'complete' }] };
+    messages: [{ id: crypto.randomUUID(), role: 'user', kind: 'text', text: originalTask, createdAt: at, status: 'complete' },
+      { id: crypto.randomUUID(), role: 'assistant', kind: 'task', text: '', createdAt: at, status: 'complete' }] };
 }
-function explanationDocument(target: string): WebExplanationDocument {
-  const first = target === 'swap_sum';
-  const statement = first ? '对任意自然数 a、b，a + b = b + a。' : '对任意自然数 a，a + 0 = a。';
-  return { schema: 'theorem-os.web-explanation.v1', target, language: 'zh', toolchain: 'recorded-fixture', mathlibRevision: null,
-    overview: first ? '已有讲解概览：使用自然数加法交换律得到第一个结论。' : '已有讲解概览：零是自然数加法的右单位元。', axioms: [],
-    sections: [{ name: target, kind: 'theorem', target: true, title: first ? '加法交换律' : '加法右单位元', statement,
+function explanationDocument(target: string, language: 'zh' | 'en' = 'zh'): WebExplanationDocument {
+  const first = target === 'swap_sum', english = language === 'en';
+  const statement = english ? first ? 'For any natural numbers a and b, a + b = b + a.' : 'For any natural number a, a + 0 = a.'
+    : first ? '对任意自然数 a、b，a + b = b + a。' : '对任意自然数 a，a + 0 = a。';
+  return { schema: 'theorem-os.web-explanation.v1', target, language, toolchain: 'recorded-fixture', mathlibRevision: null,
+    overview: english ? first ? 'The saved proof uses commutativity of natural number addition.' : 'Zero is a right identity for natural number addition.'
+      : first ? '已有讲解概览：使用自然数加法交换律得到第一个结论。' : '已有讲解概览：零是自然数加法的右单位元。', axioms: [],
+    sections: [{ name: target, kind: 'theorem', target: true,
+      title: english ? first ? 'Commutativity of addition' : 'Right identity for addition' : first ? '加法交换律' : '加法右单位元', statement,
       lines: { start: 1, end: 2 }, signature: { start: 1, end: 1 }, unexplained: [], statementReviews: [],
-      steps: [{ text: first ? '将自然数 a 和 b 代入加法交换律，得到所需等式。' : '应用自然数加零定理，直接得到目标。',
+      steps: [{ text: english ? first ? 'Apply commutativity of addition to the natural numbers a and b.' : 'Apply the natural number addition-by-zero theorem.'
+        : first ? '将自然数 a 和 b 代入加法交换律，得到所需等式。' : '应用自然数加零定理，直接得到目标。',
         uses: [{ name: first ? 'Nat.add_comm' : 'Nat.add_zero', place: 'step', spans: [] },
           ...(first ? [{ name: 'supporting_identity', place: 'declaration' as const, spans: [] }] : [])], lines: [{ start: 2, end: 2 }], reviews: [] }] },
-    { name: 'supporting_identity', kind: 'definition', target: false, title: '辅助定义', statement: '辅助定义保留在展开项中。',
+    { name: 'supporting_identity', kind: 'definition', target: false, title: english ? 'Supporting definition' : '辅助定义',
+      statement: english ? 'The supporting definition remains in the disclosure.' : '辅助定义保留在展开项中。',
       lines: { start: 4, end: 5 }, signature: { start: 4, end: 4 }, unexplained: [], statementReviews: [], steps: [] }],
     metrics: { declarations: 2, steps: 1, citations: 1, excerptCoverage: 1, proofLines: 1, explainedLines: 1, ambiguousExcerpts: 0 },
     model: 'recorded-fixture', effort: 'high', auditors: 2, rounds: 1, tokens: null };
 }
-function explanation(value: WebRun, target: string): WebExplanation {
-  return { id: `${value.id}-${target}`, runId: value.id, target, language: 'zh', status: 'approved', createdAt: at, updatedAt: at,
-    model: 'recorded-fixture', effort: 'high', maxRunSeconds: 0, maxTotalTokens: 0, document: explanationDocument(target) };
+function explanation(value: WebRun, target: string, language: 'zh' | 'en' = 'zh'): WebExplanation {
+  return { id: `${value.id}-${target}`, runId: value.id, target, language, status: 'approved', createdAt: at, updatedAt: at,
+    model: 'recorded-fixture', effort: 'high', maxRunSeconds: 0, maxTotalTokens: 0, document: explanationDocument(target, language) };
 }
-function overview(value: WebRun, available: boolean, entries?: WebExplanation[], canGenerate = false): WebExplanationOverview {
+function overview(value: WebRun, available: boolean, entries?: WebExplanation[], canGenerate = false, language: 'zh' | 'en' = 'zh'): WebExplanationOverview {
   return { run: { id: value.id, title: value.title, environment: value.environment, providerId: value.providerId, model: value.model,
     effort: value.effort, proof: value.result!.proof }, targets: [{ name: 'swap_sum', declarations: 2 }, { name: 'identity_sum', declarations: 2 }],
-    explanations: entries ?? (available ? ['swap_sum', 'identity_sum'].map(target => { const { document: _, ...item } = explanation(value, target); return item; }) : []),
+    explanations: entries ?? (available ? ['swap_sum', 'identity_sum'].map(target => { const { document: _, ...item } = explanation(value, target, language); return item; }) : []),
     generation: canGenerate ? { available: true, model: 'recorded-fixture', effort: 'high', key: 'required', maxRunSeconds: 0,
       maxTotalTokens: 0, reference: { declarations: 2, seconds: 0, tokens: 0 } } : { available: false, reason: 'runtime' } };
 }
@@ -122,17 +132,20 @@ async function fit(page: Page) {
   assert.deepEqual(await audit(page), []);
 }
 async function screenshot(page: Page, name: string) {
-  await page.screenshot({ path: path.join(output, name), fullPage: true, timeout: 0 }); screenshots.push(name);
+  await page.screenshot({ path: path.join(output, name), fullPage: true, timeout: 15_000 }); screenshots.push(name);
 }
 async function visibleNavigation(page: Page, labels: string[]) {
-  const links = page.locator('#topbar .research-space-links a');
-  assert.deepEqual(await links.allTextContents(), labels);
+  await openNavigationMenu(page);
+  const links = page.locator('#topbar .research-space-links a:not(#open-classics)');
+  assert.deepEqual(await links.allTextContents(), labels.slice(1));
+  assert.equal(await page.locator('#workbench-home:visible').count(), 1, 'the brand returns to the workbench');
   const boxes = await links.evaluateAll(items => items.map(item => {
     const box = item.getBoundingClientRect();
     return { width: box.width, height: box.height, left: box.left, right: box.right, top: box.top, bottom: box.bottom, cut: item.scrollWidth > item.clientWidth + 1 };
   }));
   for (const box of boxes) assert(box.width > 0 && box.height >= 24 && !box.cut && box.left >= 0 && box.right <= page.viewportSize()!.width
     && box.top >= 0 && box.bottom <= page.viewportSize()!.height, `navigation label is fully visible: ${JSON.stringify(box)}`);
+  await page.keyboard.press('Escape');
 }
 async function beforeProcess(page: Page, selector: string) {
   assert.equal(await page.locator(selector).evaluate(element => {
@@ -140,18 +153,104 @@ async function beforeProcess(page: Page, selector: string) {
     return !!process && !!(element.compareDocumentPosition(process) & Node.DOCUMENT_POSITION_FOLLOWING);
   }), true, `${selector} precedes the process details`);
 }
+async function answerOrder(page: Page, target: string, language: 'zh' | 'en' = 'zh', hasSelector = true) {
+  const document = page.locator(`[data-chat-answer-document="${target}"]`), saved = explanationDocument(target, language);
+  const title = saved.sections[0]!.title, targetRegion = page.getByRole('region', { name: title, exact: true });
+  assert.equal(await page.getByRole('combobox', { name: language === 'en' ? 'Read target' : '阅读目标', exact: true }).count(), hasSelector ? 1 : 0);
+  assert.equal(await targetRegion.count(), 1, 'the named target remains available to assistive technology');
+  assert.equal(await targetRegion.getByRole('heading', { name: title, exact: true }).count(), hasSelector ? 0 : 1,
+    'the target name stays visible when no selector supplies it');
+  const conclusion = document.locator('[data-chat-answer-conclusion]'), idea = document.locator('[data-chat-answer-idea]'),
+    derivation = document.locator('[data-chat-answer-derivation]');
+  assert.equal(await conclusion.getByRole('heading', { name: language === 'en' ? 'Conclusions' : '结论', exact: true }).count(), 1);
+  assert.equal(await idea.getByRole('heading', { name: language === 'en' ? 'Proof outline' : '证明思路', exact: true }).count(), 1);
+  assert.equal(await derivation.getByRole('heading', { name: language === 'en' ? 'Derivation' : '推导过程', exact: true }).count(), 1);
+  assert.ok((await conclusion.innerText()).includes(saved.sections[0]!.statement));
+  assert.ok((await idea.innerText()).includes(saved.overview));
+  assert.ok((await derivation.innerText()).includes(saved.sections[0]!.steps[0]!.text));
+  assert.equal(await document.getByText(saved.sections[0]!.statement, { exact: true }).count(), 1,
+    'the selected target statement appears once as the conclusion');
+  assert.equal(await document.evaluate(node => {
+    const conclusion = node.querySelector('[data-chat-answer-conclusion]')!, idea = node.querySelector('[data-chat-answer-idea]')!,
+      derivation = node.querySelector('[data-chat-answer-derivation]')!;
+    return !!(conclusion.compareDocumentPosition(idea) & Node.DOCUMENT_POSITION_FOLLOWING)
+      && !!(idea.compareDocumentPosition(derivation) & Node.DOCUMENT_POSITION_FOLLOWING);
+  }), true, 'the saved conclusion precedes the proof idea and derivation');
+}
+async function nextAnswerWithKeyboard(page: Page, language: 'zh' | 'en' = 'zh') {
+  const select = page.getByRole('combobox', { name: language === 'en' ? 'Read target' : '阅读目标', exact: true });
+  await select.focus();
+  await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
+  await page.locator('[data-chat-answer-document="identity_sum"]').waitFor({ timeout: 15_000 });
+  assert.equal(await select.inputValue(), 'identity_sum');
+  assert.equal(await select.evaluate(element => document.activeElement === element), true,
+    'reading another target keeps keyboard focus on the named selector');
+}
+async function mathematicsHeadingInView(page: Page) {
+  const bounds = await page.locator('[data-chat-mathematics] > h3').evaluate(async heading => {
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    const title = heading.getBoundingClientRect(), thread = document.querySelector('#research-chat-thread')!.getBoundingClientRect();
+    return { top: title.top, bottom: title.bottom, height: title.height,
+      visibleTop: Math.max(thread.top, 0), visibleBottom: Math.min(thread.bottom, innerHeight) };
+  });
+  assert.ok(bounds.height > 0 && bounds.top >= bounds.visibleTop - 1 && bounds.bottom <= bounds.visibleBottom + 1,
+    `the revealed mathematical heading stays inside the chat viewport after two frames: ${JSON.stringify(bounds)}`);
+}
+async function runningMetadata(page: Page, simple: boolean, expanded = false, language: 'zh' | 'en' = 'zh') {
+  const status = page.locator('.research-conversation-status'), metadata = page.locator('[data-chat-run-meta]'),
+    workspace = page.locator('[data-research-artifact="live"]'), stop = page.locator('[data-research-stop]');
+  assert.equal(await metadata.count(), 1, 'the recorded run metadata appears once');
+  assert.equal(await metadata.locator('time').count(), 1);
+  assert.equal(await metadata.locator('time').getAttribute('datetime'), at);
+  assert.equal(await metadata.locator(':scope > span').textContent(), language === 'en' ? '1234 tokens' : 'Token 1234');
+  assert.equal(await metadata.locator(':scope > span').isVisible(), !simple || expanded);
+  assert.equal(await workspace.count(), 1, 'the current workspace has one entry');
+  assert.equal(await stop.count(), 1, 'stopping remains a single action');
+  assert.equal(await status.locator('[data-research-stop]').isVisible(), true);
+  assert.equal(await metadata.isVisible(), !simple || expanded);
+  assert.equal(await workspace.isVisible(), !simple || expanded);
+  if (simple) {
+    assert.equal(await status.locator('[data-chat-run-meta], time, [data-research-artifact="live"]').count(), 0);
+    assert.equal(await status.locator('.chat-task-status-line > [data-research-stop]').count(), 1);
+    assert.equal(await metadata.evaluate(element => element.closest('[data-chat-result-more]') !== null), true);
+    assert.equal(await workspace.evaluate(element => element.closest('[data-chat-result-more]') !== null), true);
+  } else {
+    assert.equal(await status.locator('[data-chat-run-meta]').count(), 1);
+    assert.equal(await status.locator('[data-research-artifact="live"]').count(), 1);
+  }
+  assert.equal(await status.locator('.research-conversation-description').isVisible(), true,
+    'the running description stays readable with either detail preference');
+}
 let active: Page | undefined, failure: unknown;
 try {
   for (const width of [1440, 390, 320]) {
     const context = await browser.newContext({ locale: 'zh-CN', viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
-    context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
-    // The mathematical progress block and the output buttons of a running proof are the 详细 reading; 简洁 shows them in the workspace.
+    context.setDefaultTimeout(15_000); context.setDefaultNavigationTimeout(30_000);
+    // Keep the complete recorded-work assertions in 详细, then revisit the same records in the ordinary 简洁 reading.
     await preferFullCollaboration(context);
     await context.addInitScript(key => { if (!localStorage.getItem(key)) localStorage.setItem(key, 'zh'); }, localeStorageKey);
     const accepted = run('completed'), missing = run('completed'), working = run('running'), unavailable = run('completed'),
-      queued = run('completed'), generating = run('completed'), failed = run('completed'), cancelled = run('completed'), exhausted = run('completed');
-    const runs = [accepted, missing, working, unavailable, queued, generating, failed, cancelled, exhausted], conversations = runs.map(conversation);
-    let generated = false, failAcceptedOverview = false;
+      queued = run('completed'), generating = run('completed'), failed = run('completed'), cancelled = run('completed'), exhausted = run('completed'),
+      missingTarget = run('completed'), emptyStatement = run('completed'), unrecorded = run('running'), singleTarget = run('completed'),
+      repeatedStatement = run('running'), refinedStatement = run('running'), findingOnly = run('running');
+    delete unrecorded.observation;
+    delete repeatedStatement.observation; delete refinedStatement.observation;
+    findingOnly.observation!.inspection.tasks = [task('recorded_finding', { kind: 'research', proof: { status: 'not-applicable' }, finding: originalTask })];
+    findingOnly.observation!.inspection.progress = { checkedProofTasks: 0, conditionalProofTasks: 0, completedResearchTasks: 1, openProofTasks: [] };
+    const runs = [accepted, missing, working, unavailable, queued, generating, failed, cancelled, exhausted, missingTarget, emptyStatement, unrecorded, singleTarget, repeatedStatement, refinedStatement, findingOnly],
+      conversations = runs.map(conversation);
+    const statementFixtures = [{ run: repeatedStatement, text: ` \n${originalTask}\n ` },
+      { run: refinedStatement, text: '对任意自然数 a、b，还需要说明 b + a = a + b 的逆向等式。' }].map(({ run: value, text }) => {
+      const item: WebFormalization = { id: crypto.randomUUID(), original: originalTask, environment: 'standard', model: 'recorded-fixture', effort: 'high',
+        status: 'confirmed', workflow: 'solve', confirmation: 'automatic', runId: value.id, createdAt: at, updatedAt: at, confirmedAt: at, activity: { count: 1 } };
+      const activity: WebFormalizationActivity[] = [{ type: 'step', sequence: 1, at, step: { round: 1, step: 'role', workerId: 'recorded-backtranslation', role: 'backtranslate', slot: 'backtranslate',
+        state: 'finished', summary: { sections: [{ kind: 'conclusions', items: [text] }] } } }];
+      conversations[runs.indexOf(value)]!.formalizationId = item.id;
+      if (value === refinedStatement) conversations[runs.indexOf(value)]!.messages.push({ id: crypto.randomUUID(), role: 'user', kind: 'text', text,
+        createdAt: at, status: 'complete' });
+      return { item, activity, run: value, text };
+    });
+    let generated = false, failAcceptedOverview = false, explanationLanguage: 'zh' | 'en' = 'zh';
     let browsingSaved = false;
     await context.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url());
@@ -163,6 +262,12 @@ try {
       const selectedConversation = conversations.find(item => url.pathname === `/api/conversations/${item.id}`);
       if (selectedConversation) { await route.fulfill({ json: { conversation: selectedConversation } }); return; }
       if (url.pathname === '/api/runs') { await route.fulfill({ json: { runs: browsingSaved ? runs : [] } }); return; }
+      const formalization = statementFixtures.find(fixture => url.pathname === `/api/formalizations/${fixture.item.id}` || url.pathname === `/api/formalizations/${fixture.item.id}/activity`);
+      if (formalization) {
+        if (url.pathname.endsWith('/activity')) await route.fulfill({ json: { activity: formalization.activity.filter(entry => entry.sequence > Number(url.searchParams.get('after') ?? 0)), dropped: 0 } });
+        else await route.fulfill({ json: { formalization: formalization.item } });
+        return;
+      }
       const selectedRun = runs.find(item => url.pathname.startsWith(`/api/runs/${item.id}`));
       if (selectedRun) {
         const endpoint = url.pathname.slice(`/api/runs/${selectedRun.id}`.length);
@@ -174,18 +279,31 @@ try {
           }
           const fixtureStatus = selectedRun === queued ? 'queued' : selectedRun === generating && !generated ? 'running'
             : selectedRun === failed ? 'error' : selectedRun === cancelled ? 'cancelled' : selectedRun === exhausted ? 'exhausted' : undefined;
-          const entries = fixtureStatus ? [{ ...explanation(selectedRun, 'swap_sum'), document: undefined, status: fixtureStatus,
+          const entries = fixtureStatus ? [{ ...explanation(selectedRun, 'swap_sum', explanationLanguage), document: undefined, status: fixtureStatus,
             ...(fixtureStatus === 'queued' ? { queue: { position: 3, ahead: 2 } } : fixtureStatus === 'running'
               ? { progress: { phase: 'auditing', batches: 3, approvedBatches: 1, updatedAt: at } }
               : { reason: 'explanation_gateway_unavailable' }) } as WebExplanation] : undefined;
-          await route.fulfill({ json: overview(selectedRun, selectedRun === accepted || selectedRun === generating && generated, entries,
-            selectedRun !== unavailable && selectedRun !== accepted && selectedRun !== working) }); return;
+          const savedOverview = overview(selectedRun, [accepted, missingTarget, emptyStatement, singleTarget].includes(selectedRun) || selectedRun === generating && generated, entries,
+            selectedRun !== unavailable && selectedRun !== accepted && selectedRun !== working, explanationLanguage);
+          if (selectedRun === singleTarget) {
+            savedOverview.targets = savedOverview.targets.filter(target => target.name === 'swap_sum');
+            savedOverview.explanations = savedOverview.explanations.filter(item => item.target === 'swap_sum');
+          }
+          await route.fulfill({ json: savedOverview }); return;
         }
         if (endpoint === '/explanations/item') {
-          reads.push(url.pathname + url.search); assert.ok(selectedRun === accepted || selectedRun === generating && generated);
-          assert.equal(url.searchParams.get('language'), 'zh');
+          reads.push(url.pathname + url.search); assert.ok([accepted, missingTarget, emptyStatement, singleTarget].includes(selectedRun) || selectedRun === generating && generated);
+          assert.equal(url.searchParams.get('language'), explanationLanguage);
           const target = url.searchParams.get('target'); assert.ok(['swap_sum', 'identity_sum'].includes(target!));
-          await route.fulfill({ json: { explanation: explanation(selectedRun, target!) } }); return;
+          const saved = explanation(selectedRun, target!, explanationLanguage);
+          if (selectedRun === missingTarget || selectedRun === emptyStatement) {
+            const selected = saved.document!.sections[0]!;
+            if (selectedRun === missingTarget) saved.document!.sections.shift();
+            else selected.statement = '';
+            saved.document!.sections.unshift({ ...explanationDocument('identity_sum').sections[0]!,
+              statement: '这是另一目标的已保存陈述，不能作为当前目标的结论。' });
+          }
+          await route.fulfill({ json: { explanation: saved } }); return;
         }
         if (endpoint === '/actions') { await route.fulfill({ json: { actions: [], dropped: 0 } }); return; }
         if (endpoint === '/events') { await route.fulfill({ json: { events: [] } }); return; }
@@ -195,18 +313,19 @@ try {
     });
     const page = active = await context.newPage();
     page.on('pageerror', error => errors.push(error.message));
-    await page.goto(origin + '/', { timeout: 0 });
-    await page.locator('#topbar .research-space-links').waitFor({ timeout: 0 });
+    await page.goto(origin + '/', { timeout: 15_000 });
+    await page.locator('[data-navigation-toggle]').waitFor({ timeout: 15_000 });
     await visibleNavigation(page, ['工作台', '我的研究', '定理', '数学家', '数学库']);
-    const participation = page.locator('[data-chat-participation-control]'), input = page.locator('#formalize-original');
-    await participation.waitFor({ timeout: 0 });
-    assert.equal(await participation.evaluate((element: HTMLDetailsElement) => element.open), false);
+    const participation = page.locator('[data-chat-participation]'), input = page.locator('#formalize-original');
+    await participation.waitFor({ state: 'attached', timeout: 15_000 });
+    assert.equal(await participation.isVisible(), false);
     assert.equal(await participation.locator('input[value="guided"]').isChecked(), true);
-    assert.equal((await participation.locator('summary').innerText()).trim(), '共同推进');
-    assert.equal(await input.evaluate(element => !!(element.compareDocumentPosition(document.querySelector('[data-chat-participation-control]')!) & Node.DOCUMENT_POSITION_FOLLOWING)), true);
+    assert.equal(await participation.evaluate(element => element.closest('#formalize-settings') !== null), true);
+    assert.equal(await input.evaluate(element => !!(element.compareDocumentPosition(document.querySelector('[data-chat-participation]')!) & Node.DOCUMENT_POSITION_FOLLOWING)), true);
     const inputBox = await input.boundingBox(); assert.ok(inputBox && inputBox.y >= 0 && inputBox.y < 1000, 'the task input is immediately visible');
     await fit(page); await screenshot(page, `${width}-input-first.png`);
     await page.locator('#formalize-settings > summary').click();
+    assert.equal(await participation.isVisible(), true);
     const advanced = page.locator('[data-chat-advanced-settings]');
     assert.equal(await advanced.evaluate((node: HTMLDetailsElement) => node.open), false, 'optional settings start collapsed');
     for (const selector of ['#formalize-provider', '#formalize-model', '#formalize-key', '#check-model-connection'])
@@ -214,10 +333,10 @@ try {
     for (const selector of ['#formalize-environment', '#formalize-effort', ...budgetInputs])
       assert.equal(await page.locator(selector).isVisible(), false, `${selector} belongs to optional advanced setup`);
     await screenshot(page, `${width}-simple-settings.png`);
-    await advanced.locator(':scope > summary').click({ timeout: 0 });
+    await advanced.locator(':scope > summary').click({ timeout: 15_000 });
     for (const selector of budgetInputs) { assert.equal(await page.locator(selector).inputValue(), ''); assert.equal(await page.locator(selector).getAttribute('placeholder'), '不限'); }
     await fit(page); await screenshot(page, `${width}-unlimited-settings.png`);
-    await advanced.locator(':scope > summary').click({ timeout: 0 });
+    await advanced.locator(':scope > summary').click({ timeout: 15_000 });
     mark(`${width}: visible task input, collapsed guided participation and empty unlimited budgets`);
     await page.locator('#formalize-settings > summary').click();
     const draft = '保留这份题目草稿，在配置 Key 后再发送。';
@@ -234,94 +353,136 @@ try {
     mark(`${width}: missing-key action opens and focuses settings while retaining the unsent draft`);
 
     browsingSaved = true;
-    await page.goto(`${origin}/?chat=${conversations[0].id}`, { timeout: 0 });
+    await page.goto(`${origin}/?chat=${conversations[0].id}`, { timeout: 15_000 });
     const answer = page.locator('[data-chat-answer]');
-    await answer.locator('[data-chat-answer-document="swap_sum"]').waitFor({ timeout: 0 });
+    await answer.locator('[data-chat-answer-document="swap_sum"]').waitFor({ timeout: 15_000 });
+    const more = page.locator('[data-chat-result-more]');
+    const fullAcceptedDescription = await page.locator('.research-conversation-status .research-conversation-description').innerText();
+    assert.equal(await page.locator('.research-conversation-status [data-chat-run-meta]').count(), 1,
+      'full reading keeps accepted run metadata in the status');
+    assert.equal(await page.locator('[data-chat-run-meta]').count(), 1);
+    assert.equal(await more.locator('.research-conversation-description, [data-chat-run-meta]').count(), 0);
+    assert.equal(await answer.locator('[data-chat-explain], [data-chat-answer-refresh]').count(), 0, 'readable answers keep secondary explanation actions in the existing details');
+    assert.equal(await more.evaluate((node: HTMLDetailsElement) => node.open), false);
     assert.match(await answer.innerText(), /已有讲解概览：使用自然数加法交换律/u);
     assert.match(await answer.locator('.chat-answer-steps').innerText(), /将自然数 a 和 b 代入加法交换律/u);
     assert.equal(await answer.locator('.chat-answer-uses code').innerText(), 'Nat.add_comm');
     assert.equal(await answer.locator('.chat-answer-support').evaluate((element: HTMLDetailsElement) => element.open), false);
     assert.equal(await answer.locator('[data-chat-answer-select] option').count(), 2);
     assert.equal(await answer.locator('[data-chat-answer-select] option:checked').innerText(), '加法交换律');
+    await answerOrder(page, 'swap_sum');
+    assert.equal(await answer.locator('[data-chat-answer-target="swap_sum"]').getAttribute('id'), `chat-answer-${accepted.id}-swap_sum-swap_sum`);
     await beforeProcess(page, '[data-chat-answer]');
     await answer.locator('h3').scrollIntoViewIfNeeded();
     await fit(page); await screenshot(page, `${width}-saved-explanation.png`);
     await input.fill('保留已写的独立追问。');
-    await answer.locator('[data-chat-answer-question="swap_sum:0"]').click();
+    await answer.locator('[data-chat-answer-question="swap_sum:0"]').focus();
+    await page.keyboard.press('Enter');
     const followup = await input.inputValue();
     assert.ok(followup.startsWith('保留已写的独立追问。\n\n'));
     for (const text of ['加法交换律', '第 1 步', '对任意自然数', '将自然数 a 和 b', 'Nat.add_comm', accepted.id]) assert.ok(followup.includes(text));
+    assert.ok(followup.includes(`${origin}/explain.html?run=${accepted.id}&target=swap_sum#explain-section-0`));
     assert.deepEqual(writes, [], 'step questioning prepares a draft without sending it');
     await answer.locator('[data-chat-answer-use="supporting_identity"]').click();
     assert.equal(await answer.locator('.chat-answer-support').evaluate((element: HTMLDetailsElement) => element.open), true);
+    assert.equal(await answer.locator('.chat-answer-support').evaluate(element => document.activeElement === element), true);
     assert.match(await answer.locator('.chat-answer-support').innerText(), /辅助定义保留/u);
+    const referenceBounds = await answer.locator('.chat-answer-support > summary').evaluate(async element => {
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      const reference = element.getBoundingClientRect(), thread = document.querySelector('#research-chat-thread')!.getBoundingClientRect();
+      return { top: reference.top, bottom: reference.bottom, height: reference.height,
+        visibleTop: Math.max(thread.top, 0), visibleBottom: Math.min(thread.bottom, innerHeight) };
+    });
+    assert.ok(referenceBounds.height > 0 && referenceBounds.top >= referenceBounds.visibleTop - 1 && referenceBounds.bottom <= referenceBounds.visibleBottom + 1,
+      `following a local citation reveals its named definition in the chat viewport: ${JSON.stringify(referenceBounds)}`);
     await fit(page); await screenshot(page, `${width}-step-question-and-definition.png`);
     mark(`${width}: human target title, selected-step question with precise context, existing follow-up preservation and local definition expansion`);
 
+    await more.locator(':scope > summary').click();
+    const explanationLink = more.locator('[data-chat-explain]');
+    assert.equal(await explanationLink.innerText(), '打开完整讲解');
+    assert.equal(await explanationLink.getAttribute('target'), '_blank');
+    const explanationUrl = new URL(await explanationLink.getAttribute('href') ?? '', page.url());
+    assert.equal(explanationUrl.pathname, '/explain.html');
+    assert.equal(explanationUrl.searchParams.get('run'), accepted.id);
+    assert.equal(explanationUrl.searchParams.get('target'), 'swap_sum');
+    const readsBeforeRefresh = reads.length;
     failAcceptedOverview = true;
-    await answer.locator('[data-chat-answer-refresh]').click();
-    await answer.locator('[data-chat-answer-retry]').waitFor({ timeout: 0 });
+    await more.locator('[data-chat-answer-refresh]').click();
+    await answer.locator('[data-chat-answer-retry]').waitFor({ timeout: 15_000 });
+    assert.ok(reads.slice(readsBeforeRefresh).includes(`/api/runs/${accepted.id}/explanations`), 'the relocated refresh reads the saved explanation overview');
     assert.equal(await answer.locator('[data-chat-answer-document="swap_sum"]').count(), 1);
     assert.match(await answer.innerText(), /刷新失败，下面保留上次读取的解答/u);
+    assert.match(await answer.locator('[data-chat-answer-document="swap_sum"]').innerText(), /将自然数 a 和 b 代入加法交换律/u);
+    assert.equal(await answer.locator('[data-chat-explain], [data-chat-answer-refresh]').count(), 0);
+    assert.equal(await input.inputValue(), followup);
+    assert.deepEqual(writes, []); assert.deepEqual(forbiddenCalls, []);
     await answer.locator('h3').scrollIntoViewIfNeeded();
     await fit(page); await screenshot(page, `${width}-refresh-preserves-explanation.png`);
     failAcceptedOverview = false; await answer.locator('[data-chat-answer-retry]').click();
-    await page.waitForFunction(() => !document.querySelector('[data-chat-answer-retry]'), undefined, { timeout: 0 });
+    await page.waitForFunction(() => !document.querySelector('[data-chat-answer-retry]'), undefined, { timeout: 15_000 });
     assert.equal(await answer.locator('[data-chat-answer-document="swap_sum"]').count(), 1);
+    assert.equal(await input.inputValue(), followup);
+    assert.deepEqual(writes, []); assert.deepEqual(forbiddenCalls, []);
+    await more.locator(':scope > summary').click();
+    assert.equal(await more.evaluate((node: HTMLDetailsElement) => node.open), false);
     mark(`${width}: transient read failure preserves the readable solution and retry recovers in place`);
-    await answer.locator('[data-chat-answer-select]').selectOption('identity_sum');
-    await answer.locator('[data-chat-answer-document="identity_sum"]').waitFor({ timeout: 0 });
+    await nextAnswerWithKeyboard(page);
+    await answer.locator('[data-chat-answer-document="identity_sum"]').waitFor({ timeout: 15_000 });
     assert.match(await answer.innerText(), /零是自然数加法的右单位元/u);
     assert.equal(await answer.locator('.chat-answer-uses code').innerText(), 'Nat.add_zero');
     assert.equal(await answer.locator('[data-chat-answer-document="swap_sum"]').count(), 0);
+    await answerOrder(page, 'identity_sum');
     await answer.locator('h3').scrollIntoViewIfNeeded();
     await fit(page); await screenshot(page, `${width}-second-target.png`);
     mark(`${width}: saved explanation overview, statement, steps and citation are readable directly; target switching reads the selected document`);
-    const more = page.locator('[data-chat-result-more]');
+    assert.equal(await answer.locator('[data-chat-explain], [data-chat-answer-refresh]').count(), 0);
     assert.equal(await more.evaluate((node: HTMLDetailsElement) => node.open), false);
     assert.equal(await page.locator('[data-research-artifact="source"]').isVisible(), true);
     assert.equal(await page.locator('[data-chat-download-kit]').isVisible(), false);
-    await more.locator('summary').click();
+    await more.locator(':scope > summary').click();
+    assert.equal(await more.locator('[data-chat-answer-refresh]').isVisible(), true);
+    const selectedExplanation = new URL(await more.locator('[data-chat-explain]').getAttribute('href') ?? '', page.url());
+    assert.equal(selectedExplanation.pathname, '/explain.html');
+    assert.equal(selectedExplanation.searchParams.get('run'), accepted.id);
+    assert.equal(selectedExplanation.searchParams.get('target'), 'identity_sum', 'the details link follows the current canonical target');
     for (const selector of ['[data-research-artifact="roadmap"]', '[data-research-artifact="result"]', '[data-chat-download-kit]', '[data-chat-share]'])
       assert.equal(await more.locator(selector).isVisible(), true);
     await fit(page); await screenshot(page, `${width}-more-result-actions.png`);
     mark(`${width}: accepted proof stays directly accessible and secondary result actions remain in the collapsed menu`);
 
     await more.getByRole('button', { name: '修改题目', exact: true }).click();
-    await page.locator('[data-chat-editing-problem]').waitFor({ timeout: 0 });
+    await page.locator('[data-chat-editing-problem]').waitFor({ timeout: 15_000 });
     assert.equal(new URL(page.url()).searchParams.get('editProblem'), conversations[0].id);
     assert.equal(await input.inputValue(), conversations[0].messages[0].text);
     const edited = '任务 A 的独立修改：请进一步证明交换律的变体。';
-    await input.fill(edited); await page.reload({ timeout: 0 });
-    await page.waitForFunction(value => document.querySelector<HTMLTextAreaElement>('#formalize-original')?.value === value, edited, { timeout: 0 });
+    await input.fill(edited); await page.reload({ timeout: 15_000 });
+    await page.waitForFunction(value => document.querySelector<HTMLTextAreaElement>('#formalize-original')?.value === value, edited, { timeout: 15_000 });
     assert.equal(await page.locator('[data-chat-editing-problem]').count(), 1);
     await page.locator('[data-chat-return-home]').click();
-    await page.waitForFunction(value => document.querySelector<HTMLTextAreaElement>('#formalize-original')?.value === value, draft, { timeout: 0 });
+    await page.waitForFunction(value => document.querySelector<HTMLTextAreaElement>('#formalize-original')?.value === value, draft, { timeout: 15_000 });
     assert.equal(new URL(page.url()).search, '');
-    await page.goBack({ timeout: 0 });
-    await page.waitForFunction(value => document.querySelector<HTMLTextAreaElement>('#formalize-original')?.value === value, edited, { timeout: 0 });
+    await page.goBack({ timeout: 15_000 });
+    await page.waitForFunction(value => document.querySelector<HTMLTextAreaElement>('#formalize-original')?.value === value, edited, { timeout: 15_000 });
     await fit(page); await screenshot(page, `${width}-separate-problem-edit.png`);
     assert.deepEqual(writes, []);
     mark(`${width}: editing a historical problem preserves the home draft and the separate edit through reload and browser Back`);
-    let libraryLink = page.locator('#topbar a[data-workbench-library]');
-    if (!await libraryLink.isVisible()) {
-      await page.locator('[data-research-mobile-navigation] > summary').click();
-      libraryLink = page.locator('[data-research-mobile-link="library"]');
-    }
+    await openNavigationMenu(page);
+    const libraryLink = page.locator('#topbar a[data-workbench-library]');
     await libraryLink.click();
-    await page.locator('.research-page .topbar').waitFor({ timeout: 0 });
+    await page.locator('.research-page .topbar').waitFor({ timeout: 15_000 });
     assert.equal(new URL(page.url()).searchParams.get('workbenchEdit'), conversations[0].id);
     const editReturn = page.locator('.topbar a').filter({ hasText: '工作台' });
     assert.equal(new URL(await editReturn.getAttribute('href') ?? '', page.url()).searchParams.get('editProblem'), conversations[0].id);
     await editReturn.click();
-    await page.waitForFunction(value => document.querySelector<HTMLTextAreaElement>('#formalize-original')?.value === value, edited, { timeout: 0 });
+    await page.waitForFunction(value => document.querySelector<HTMLTextAreaElement>('#formalize-original')?.value === value, edited, { timeout: 15_000 });
     assert.equal(await page.locator('[data-chat-editing-problem]').count(), 1);
     await page.locator('[data-chat-return-home]').click();
-    await page.waitForFunction(value => document.querySelector<HTMLTextAreaElement>('#formalize-original')?.value === value, draft, { timeout: 0 });
+    await page.waitForFunction(value => document.querySelector<HTMLTextAreaElement>('#formalize-original')?.value === value, draft, { timeout: 15_000 });
     mark(`${width}: Library browsing returns to the separate edited problem and keeps the original home draft intact`);
 
-    await page.goto(`${origin}/?chat=${conversations[1].id}`, { timeout: 0 });
-    await page.waitForFunction(() => document.querySelector('[data-chat-answer]')?.textContent?.includes('这份验收证明还没有可阅读的讲解。'), undefined, { timeout: 0 });
+    await page.goto(`${origin}/?chat=${conversations[1].id}`, { timeout: 15_000 });
+    await page.waitForFunction(() => document.querySelector('[data-chat-answer]')?.textContent?.includes('这份验收证明还没有可阅读的讲解。'), undefined, { timeout: 15_000 });
     const generate = page.locator('[data-chat-answer] [data-chat-explain]');
     assert.equal(await generate.innerText(), '生成详细解答'); assert.equal(await generate.getAttribute('target'), '_blank');
     const generationUrl = new URL(await generate.getAttribute('href') ?? '', page.url());
@@ -337,23 +498,67 @@ try {
       [generating, 'running', '正在核对讲解与证明'], [failed, 'error', '无法连接模型服务，请稍后重试。'],
       [cancelled, 'cancelled', '已停止生成'], [exhausted, 'exhausted', '讲解没有完成'],
     ] as const) {
-      await page.goto(`${origin}/?chat=${conversations[runs.indexOf(value)]!.id}`, { timeout: 0 });
-      const state = page.locator(`[data-chat-answer-status="${status}"]`); await state.waitFor({ timeout: 0 });
+      await page.goto(`${origin}/?chat=${conversations[runs.indexOf(value)]!.id}`, { timeout: 15_000 });
+      const state = page.locator(`[data-chat-answer-status="${status}"]`); await state.waitFor({ timeout: 15_000 });
       assert.ok((await state.innerText()).includes(text));
       if (status === 'unavailable') assert.equal(await state.locator('[data-chat-explain]').count(), 0);
       else assert.equal(await state.locator('[data-chat-explain]').innerText(), ['queued', 'running'].includes(status) ? '查看讲解进度' : '重新生成详细解答');
       if (status === 'running') {
         assert.match(await state.innerText(), /已通过批次\s+1\s*\/\s*3/u);
         generated = true;
-        await page.locator('[data-chat-answer-document="swap_sum"]').waitFor({ timeout: 0 });
+        await page.locator('[data-chat-answer-document="swap_sum"]').waitFor({ timeout: 15_000 });
       }
       await fit(page); await screenshot(page, `${width}-explanation-${status}.png`);
     }
     mark(`${width}: unavailable, queued, running, failed, cancelled and incomplete explanations show accurate states; the finished document appears automatically without generation`);
 
-    await page.goto(`${origin}/?chat=${conversations[2].id}`, { timeout: 0 });
+    for (const [value, kind] of [[missingTarget, 'missing-target'], [emptyStatement, 'empty-statement']] as const) {
+      await page.goto(`${origin}/?chat=${conversations[runs.indexOf(value)]!.id}`, { timeout: 15_000 });
+      const document = answer.locator('[data-chat-answer-document="swap_sum"]');
+      await document.waitFor({ timeout: 15_000 });
+      assert.equal(await document.locator('[data-chat-answer-conclusion]').count(), 0,
+        'a missing selected statement never borrows another target as its conclusion');
+      assert.ok((await document.locator('[data-chat-answer-idea]').innerText()).includes(explanationDocument('swap_sum').overview));
+      assert.equal(await document.locator('[data-chat-answer-idea]').evaluate(element => !!(element.compareDocumentPosition(
+        window.document.querySelector('[data-chat-answer-derivation]')!) & Node.DOCUMENT_POSITION_FOLLOWING)), true);
+      assert.ok((await document.locator('[data-chat-answer-derivation]').innerText()).includes('这是另一目标的已保存陈述，不能作为当前目标的结论。'));
+      assert.equal(await document.getByRole('heading', { name: '加法右单位元', exact: true }).isVisible(), true,
+        'another saved target keeps its visible name even when the selector names the current target');
+      if (value === emptyStatement) {
+        assert.equal(await document.getByRole('heading', { name: '加法交换律', exact: true }).isVisible(), true,
+          'both target titles remain visible in a document with multiple target sections');
+        assert.equal(await document.locator('[data-chat-answer-target="swap_sum"]').getAttribute('id'), `chat-answer-${value.id}-swap_sum-swap_sum`);
+        await answer.locator('[data-chat-answer-question="swap_sum:0"]').click();
+        assert.ok((await input.inputValue()).includes(`${origin}/explain.html?run=${value.id}&target=swap_sum#explain-section-1`),
+          'the selected step retains the original saved section index after other target sections');
+      }
+      assert.deepEqual(writes, []); assert.deepEqual(forbiddenCalls, []);
+      await answer.locator('h3').scrollIntoViewIfNeeded();
+      await fit(page); await screenshot(page, `${width}-${kind}-conclusion.png`);
+    }
+    mark(`${width}: missing target and empty selected statement retain the saved idea and derivation without inventing a conclusion or changing source anchors`);
+
+    await page.goto(`${origin}/?chat=${conversations[runs.indexOf(singleTarget)]!.id}`, { timeout: 15_000 });
+    await answer.locator('[data-chat-answer-document="swap_sum"]').waitFor({ timeout: 15_000 });
+    assert.equal(await answer.locator('[data-chat-answer-select]').count(), 0);
+    await answerOrder(page, 'swap_sum', 'zh', false);
+    assert.equal(await answer.getByRole('heading', { name: '加法交换律', exact: true }).isVisible(), true);
+    await input.fill('保留只有一个阅读目标的追问。');
+    await answer.locator('[data-chat-answer-question="swap_sum:0"]').focus();
+    await page.keyboard.press('Enter');
+    const singleFollowup = await input.inputValue();
+    assert.ok(singleFollowup.startsWith('保留只有一个阅读目标的追问。\n\n'));
+    for (const text of ['加法交换律', '对任意自然数', 'Nat.add_comm', `${origin}/explain.html?run=${singleTarget.id}&target=swap_sum#explain-section-0`])
+      assert.ok(singleFollowup.includes(text));
+    assert.deepEqual(writes, []); assert.deepEqual(forbiddenCalls, []);
+    await answer.locator('h3').scrollIntoViewIfNeeded();
+    await fit(page); await screenshot(page, `${width}-single-target-name.png`);
+    mark(`${width}: a saved answer with one selectable target retains its visible target name and keyboard step questions without a selector`);
+
+    await page.goto(`${origin}/?chat=${conversations[2].id}`, { timeout: 15_000 });
     const mathematics = page.locator('[data-chat-mathematics]');
-    await mathematics.locator('[data-chat-math-checked]').waitFor({ timeout: 0 });
+    await mathematics.locator('[data-chat-math-checked]').waitFor({ timeout: 15_000 });
+    await runningMetadata(page, false);
     for (const selector of ['[data-chat-math-checked]', '[data-chat-math-working]', '[data-chat-math-blockers]', '[data-chat-math-finding]']) await beforeProcess(page, selector);
     assert.equal(await mathematics.locator('[data-chat-math-checked] [data-chat-math-task]').count(), 4);
     assert.equal(await mathematics.locator('[data-chat-math-checked] [data-chat-math-task="conditional_helper"]').count(), 0);
@@ -383,29 +588,220 @@ try {
     assert.equal(await mathematics.locator('[data-chat-math-finding]').isVisible(), true);
     await screenshot(page, `${width}-mathematical-findings.png`);
     mark(`${width}: checked helpers, current work, blocker and untimestamped finding precede technical process details without claiming whole-proof acceptance`);
+
+    await page.evaluate(key => localStorage.setItem(key, 'simple'), collaborationDetailStorageKey);
+    await page.goto(`${origin}/?chat=${conversations[2].id}`, { timeout: 15_000 });
+    const summary = page.locator('[data-chat-math-summary]');
+    await summary.waitFor({ timeout: 15_000 });
+    await runningMetadata(page, true);
+    assert.equal(await page.locator('[data-chat-result-more]').evaluate((element: HTMLDetailsElement) => element.open), false);
+    assert.equal(await mathematics.isVisible(), false, 'full records stay behind the existing closed disclosure in simple reading');
+    const summaryText = await summary.innerText();
+    for (const text of ['主目标的归纳步骤仍缺少一个等式变换。', '正在把辅助引理组合成主目标。', '正在证明', '已检查：自然数加法可以交换次序。'])
+      assert.ok(summaryText.includes(text), `simple reading shows the recorded fact: ${text}`);
+    assert.equal(await summary.locator('[data-chat-math-summary-checked]').getAttribute('data-chat-math-summary-checked'), '4');
+    assert.equal(await summary.locator('[data-chat-math-summary-checked] h4').innerText(), '已检查的引理与目标（4）');
+    assert.equal(await summary.locator('[data-chat-math-summary-status="running"]').innerText(), '正在证明');
+    for (const text of ['已检查：加上零不改变自然数。', '已检查：自然数加法满足结合律。', '已暂停的引理', '先使用结合律，再应用交换律'])
+      assert.ok(!summaryText.includes(text), 'simple reading shows a short selection while the complete records remain reachable');
+    assert.doesNotMatch(summaryText, /%|百分比|预计|ETA/iu);
+    assert.equal(await page.locator('[data-chat-answer]').count(), 0);
+    assert.equal(await page.locator('.research-conversation-status').getAttribute('data-accepted'), 'false');
+    const progressToggle = page.locator('[data-chat-result-more] > summary');
+    assert.equal(await page.locator('[data-chat-math-more]').count(), 0);
+    assert.equal(await progressToggle.count(), 1, 'the existing native disclosure is the only progress entry');
+    await summary.scrollIntoViewIfNeeded();
+    await fit(page); await screenshot(page, `${width}-simple-mathematical-summary.png`);
+    await progressToggle.click();
+    await mathematics.waitFor({ timeout: 15_000 });
+    await page.waitForFunction(() => document.activeElement === document.querySelector('[data-chat-mathematics]'), undefined, { timeout: 15_000 });
+    assert.equal(await page.locator('[data-chat-result-more]').evaluate((element: HTMLDetailsElement) => element.open), true);
+    assert.equal(await mathematics.evaluate(element => element.closest('[data-chat-result-more]') !== null), true,
+      'simple reading opens complete mathematical records inside the existing solving-progress disclosure');
+    assert.equal(await summary.isVisible(), false, 'opening the full records hides the duplicate summary');
+    assert.equal(await mathematics.locator('[data-chat-math-checked] [data-chat-math-task]').count(), 4);
+    assert.equal(await mathematics.locator('[data-chat-math-working] [data-chat-math-task="conditional_helper"]').count(), 1);
+    assert.equal(await mathematics.locator('[data-chat-math-task="paused_helper"]').count(), 0);
+    assert.equal(await mathematics.locator('[data-chat-math-finding] time').count(), 0);
+    await runningMetadata(page, true, true);
+    await fit(page); await mathematicsHeadingInView(page);
+    await screenshot(page, `${width}-simple-mathematical-details.png`);
+    await progressToggle.click();
+    assert.equal(await summary.isVisible(), true);
+    assert.equal(await mathematics.isVisible(), false);
+    assert.equal(await summary.innerText(), summaryText, 'returning to the conversation restores the same saved facts');
+    await runningMetadata(page, true);
+    assert.equal(await progressToggle.evaluate(async element => {
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      return document.activeElement === element;
+    }), true, 'closing the native disclosure keeps focus on its summary');
+    assert.deepEqual(writes, []); assert.deepEqual(forbiddenCalls, []);
+    mark(`${width}: simple running proof shows the recorded blocker, current goal and checked count; one disclosure opens and focuses the full records and folds back without extra work`);
+
+    await page.goto(`${origin}/?chat=${conversations[0].id}`, { timeout: 15_000 });
+    await answer.locator('[data-chat-answer-document="swap_sum"]').waitFor({ timeout: 15_000 });
+    const acceptedStatus = page.locator('.research-conversation-status'), acceptedDescription = page.locator('.research-conversation-description'),
+      acceptedMetadata = page.locator('[data-chat-run-meta]');
+    assert.equal(await acceptedStatus.getAttribute('data-accepted'), 'true');
+    assert.equal(await acceptedStatus.locator('.research-conversation-state strong').innerText(), '完整原题通过');
+    assert.equal(await acceptedStatus.locator('.research-conversation-description, [data-chat-run-meta], time').count(), 0);
+    assert.equal(await acceptedDescription.count(), 1);
+    assert.equal(await more.locator('.research-conversation-description').count(), 1);
+    assert.equal(await acceptedDescription.textContent(), fullAcceptedDescription);
+    assert.equal(await acceptedDescription.isVisible(), false);
+    assert.equal(await acceptedMetadata.count(), 1);
+    assert.equal(await more.locator('[data-chat-run-meta] time').count(), 1);
+    assert.equal(await acceptedMetadata.isVisible(), false);
+    assert.equal(await page.locator('[data-research-stop]').count(), 0);
+    assert.equal(await page.locator('[data-research-artifact="source"]').count(), 1);
+    assert.equal(await answer.isVisible(), true);
+    await answerOrder(page, 'swap_sum');
+    await input.fill('保留简洁模式的独立追问。');
+    await answer.locator('[data-chat-answer-question="swap_sum:0"]').click();
+    const simpleFollowup = await input.inputValue();
+    assert.ok(simpleFollowup.startsWith('保留简洁模式的独立追问。\n\n'));
+    assert.ok(simpleFollowup.includes(`${origin}/explain.html?run=${accepted.id}&target=swap_sum#explain-section-0`));
+    await acceptedStatus.scrollIntoViewIfNeeded();
+    await fit(page); await screenshot(page, `${width}-simple-accepted-solution.png`);
+    await more.locator(':scope > summary').click();
+    assert.equal(await acceptedDescription.isVisible(), true);
+    assert.equal(await acceptedDescription.innerText(), fullAcceptedDescription);
+    assert.equal(await acceptedMetadata.isVisible(), true);
+    assert.equal(await answer.locator('[data-chat-answer-document="swap_sum"]').count(), 1);
+    assert.equal(await input.inputValue(), simpleFollowup);
+    await acceptedDescription.scrollIntoViewIfNeeded();
+    await fit(page); await screenshot(page, `${width}-simple-accepted-details.png`);
+    await more.locator(':scope > summary').click();
+    assert.equal(await acceptedDescription.isVisible(), false);
+    assert.equal(await acceptedMetadata.isVisible(), false);
+    await answer.locator('[data-chat-answer-select]').selectOption('identity_sum');
+    await answer.locator('[data-chat-answer-document="identity_sum"]').waitFor({ timeout: 15_000 });
+    await answerOrder(page, 'identity_sum');
+    assert.equal(await answer.locator('[data-chat-answer-document="swap_sum"]').count(), 0);
+    assert.equal(await input.inputValue(), simpleFollowup);
+    assert.equal(new URL(await more.locator('[data-chat-explain]').getAttribute('href') ?? '', page.url()).searchParams.get('target'), 'identity_sum');
+    assert.equal(await acceptedDescription.count(), 1);
+    assert.equal(await acceptedMetadata.count(), 1);
+    assert.deepEqual(writes, []); assert.deepEqual(forbiddenCalls, []);
+    mark(`${width}: simple accepted solution keeps its verdict and answer visible, retains one technical description and metadata in details, and preserves the follow-up through disclosure and target changes`);
+
+    await page.goto(`${origin}/?chat=${conversations[runs.indexOf(unrecorded)]!.id}`, { timeout: 15_000 });
+    await page.locator('.research-conversation-status').waitFor({ timeout: 15_000 });
+    assert.equal(await page.locator('[data-chat-math-summary]').count(), 0,
+      'a run with no observation or formalization activity has no invented mathematical summary');
+    assert.equal(await page.locator('[data-chat-math-checked], [data-chat-math-working], [data-chat-math-blockers], [data-chat-math-finding]').count(), 0);
+    assert.equal(await mathematics.count(), 0, 'empty full mathematics records do not render a heading or placeholder');
+    await openChatResultDetails(page);
+    assert.equal(await mathematics.count(), 0, 'opening process details does not create an empty mathematics section');
+    await page.evaluate(key => localStorage.setItem(key, 'full'), collaborationDetailStorageKey);
+    await page.reload({ timeout: 15_000 }); await page.locator('.research-conversation-status').waitFor({ timeout: 15_000 });
+    assert.equal(await mathematics.count(), 0, 'detailed reading also omits a progress section without records');
+    await page.evaluate(key => localStorage.setItem(key, 'simple'), collaborationDetailStorageKey);
+    await page.reload({ timeout: 15_000 }); await page.locator('.research-conversation-status').waitFor({ timeout: 15_000 });
+    assert.equal(await page.locator('[data-chat-answer]').count(), 0);
+    assert.equal(await page.locator('.research-conversation-status').getAttribute('data-accepted'), 'false');
+    assert.deepEqual(writes, []); assert.deepEqual(forbiddenCalls, []);
+    await fit(page); await screenshot(page, `${width}-simple-no-mathematical-records.png`);
+    mark(`${width}: simple running proof without recorded mathematics invents no goals, blockers, checked work or conclusion`);
+
+    for (const fixture of statementFixtures) {
+      await page.goto(`${origin}/?chat=${conversations[runs.indexOf(fixture.run)]!.id}`, { timeout: 15_000 });
+      const record = page.locator('[data-chat-math-finding]'); await record.waitFor({ state: 'attached', timeout: 15_000 });
+      const repeated = fixture.run === repeatedStatement;
+      if (repeated) assert.equal(await summary.count(), 0, 'a saved statement identical to the original user task adds no second progress block');
+      else {
+        await summary.waitFor({ timeout: 15_000 });
+        assert.equal(await summary.locator('[data-chat-math-summary-latest="statement"] .chat-message-content').innerText(), fixture.text,
+          'a different mathematical statement remains readable even when a later discussion mentions it');
+      }
+      assert.equal(await record.isVisible(), false, 'the complete statement record starts behind the existing disclosure');
+      await openChatResultDetails(page); assert.ok((await record.innerText()).includes(fixture.text.trim()), 'details retain the recorded statement text');
+      await fit(page); await screenshot(page, `${width}-${repeated ? 'repeated-task-in-details' : 'distinct-recorded-statement'}.png`);
+      await page.locator('[data-chat-result-more] > summary').click();
+      assert.equal(await summary.count(), repeated ? 0 : 1, 'closing the records restores the appropriate compact reading');
+      assert.deepEqual(writes, []); assert.deepEqual(forbiddenCalls, []);
+      mark(`${width}: ${repeated ? 'the repeated original task stays in details without a second summary' : 'a genuinely different recorded statement remains in the summary and details'}`);
+    }
+    await page.goto(`${origin}/?chat=${conversations[runs.indexOf(findingOnly)]!.id}`, { timeout: 15_000 });
+    const finding = summary.locator('[data-chat-math-summary-latest="finding"]'); await finding.waitFor({ timeout: 15_000 });
+    assert.ok((await finding.innerText()).includes(originalTask), 'an actual research finding is retained even when its text matches the user task');
+    await fit(page); await screenshot(page, `${width}-recorded-finding-summary.png`);
+    mark(`${width}: a recorded research finding remains visible when its text matches the original task`);
+    if (width === 390) {
+      explanationLanguage = 'en';
+      await page.evaluate(key => localStorage.setItem(key, 'en'), localeStorageKey);
+      await page.goto(`${origin}/?chat=${conversations[2].id}`, { timeout: 15_000 });
+      await summary.waitFor({ timeout: 15_000 });
+      await runningMetadata(page, true, false, 'en');
+      assert.equal(await summary.locator('h3').innerText(), 'Mathematical progress');
+      assert.equal(await page.locator('[data-chat-math-more]').count(), 0);
+      assert.equal(await progressToggle.count(), 1);
+      assert.equal(await progressToggle.innerText(), 'View solving progress');
+      await summary.scrollIntoViewIfNeeded();
+      await fit(page); await screenshot(page, '390-en-simple-mathematical-summary.png');
+      await progressToggle.focus(); await page.keyboard.press('Enter');
+      await mathematics.waitFor({ timeout: 15_000 });
+      await page.waitForFunction(() => document.activeElement === document.querySelector('[data-chat-mathematics]'), undefined, { timeout: 15_000 });
+      assert.equal(await summary.isVisible(), false);
+      await runningMetadata(page, true, true, 'en');
+      await fit(page); await mathematicsHeadingInView(page);
+      await screenshot(page, '390-en-simple-mathematical-details.png');
+      await progressToggle.focus(); await page.keyboard.press('Enter');
+      assert.equal(await summary.isVisible(), true);
+      assert.equal(await mathematics.isVisible(), false);
+      await runningMetadata(page, true, false, 'en');
+      assert.equal(await progressToggle.evaluate(async element => {
+        await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        return document.activeElement === element;
+      }), true, 'closing with Enter keeps focus on the native summary');
+      await page.goto(`${origin}/?chat=${conversations[0].id}`, { timeout: 15_000 });
+      await answer.locator('[data-chat-answer-document="swap_sum"]').waitFor({ timeout: 15_000 });
+      await answerOrder(page, 'swap_sum', 'en');
+      assert.equal(await acceptedStatus.locator('.research-conversation-state strong').innerText(), 'Original problem accepted');
+      assert.equal(await acceptedStatus.locator('.research-conversation-description, [data-chat-run-meta], time').count(), 0);
+      assert.equal(await acceptedDescription.count(), 1);
+      assert.equal(await acceptedDescription.isVisible(), false);
+      assert.equal(await acceptedMetadata.isVisible(), false);
+      await answer.locator('h3').scrollIntoViewIfNeeded();
+      await fit(page); await screenshot(page, '390-en-saved-explanation.png');
+      const englishFollowup = await input.inputValue(), englishDescription = await acceptedDescription.textContent();
+      await more.locator(':scope > summary').click();
+      assert.equal(await acceptedDescription.isVisible(), true);
+      assert.equal(await acceptedDescription.innerText(), englishDescription);
+      assert.equal(await acceptedMetadata.isVisible(), true);
+      await more.locator(':scope > summary').click();
+      assert.equal(await acceptedDescription.isVisible(), false);
+      assert.equal(await acceptedMetadata.isVisible(), false);
+      assert.equal(await input.inputValue(), englishFollowup);
+      await nextAnswerWithKeyboard(page, 'en');
+      await answerOrder(page, 'identity_sum', 'en');
+      assert.equal(await input.inputValue(), englishFollowup);
+      assert.deepEqual(writes, []); assert.deepEqual(forbiddenCalls, []);
+      mark('390px English: mathematical progress title and disclosure action, then saved conclusions, proof outline and derivation appear in order without overflow');
+    }
     if (width === 320) {
-      await page.goto(origin + '/', { timeout: 0 }); await input.waitFor({ timeout: 0 });
+      await page.goto(origin + '/', { timeout: 15_000 }); await input.waitFor({ timeout: 15_000 });
       await page.setViewportSize({ width: 640, height: 360 });
       await visibleNavigation(page, ['工作台', '我的研究', '定理', '数学家', '数学库']); await fit(page);
       await screenshot(page, '640-360-visible-navigation.png');
       await page.setViewportSize({ width: 320, height: 568 });
-      await Promise.all([page.waitForEvent('domcontentloaded', { timeout: 0 }), page.locator('#locale-switch').click({ timeout: 0 })]);
-      await input.waitFor({ timeout: 0 }); await visibleNavigation(page, ['Workbench', 'My research', 'Theorem', 'Mathematicians', 'Library']); await fit(page);
+      await Promise.all([page.waitForEvent('domcontentloaded', { timeout: 15_000 }), clickWorkbenchAction(page, '#locale-switch')]);
+      await input.waitFor({ timeout: 15_000 }); await visibleNavigation(page, ['Workbench', 'My research', 'Theorem', 'Mathematicians', 'Library']); await fit(page);
       await screenshot(page, '320-en-visible-navigation.png');
-      mark('visible text navigation fits Chinese 640×360 landscape and English 320px without opening a menu');
+      mark('text navigation in the menu fits Chinese 640×360 landscape and English 320px');
     }
     await context.close(); active = undefined;
   }
   assert.deepEqual(forbiddenCalls, []); assert.deepEqual(external, []); assert.deepEqual(errors, []); assert.deepEqual(writes, []);
 } catch (error) {
   failure = error;
-  if (active) await active.screenshot({ path: path.join(output, 'failure.png'), fullPage: true, timeout: 0 }).catch(() => undefined);
+  if (active) await active.screenshot({ path: path.join(output, 'failure.png'), fullPage: true, timeout: 15_000 }).catch(() => undefined);
   throw error;
 } finally {
   await browser.close(); await service.close(); await fs.rm(temporary, { recursive: true, force: true });
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: failure ? 'failed' : 'passed', checkedAt: new Date().toISOString(),
     mode: 'real Chromium and web client with read-only recorded API fixtures; no model, Lean or generation', checks, screenshots,
-    browserTimeouts: 0, deadline: null, tokenLimit: null, roundLimit: null, realModelCalls: 0, realLeanProcesses: 0,
+    browserTimeouts: 15_000, tokenLimit: null, roundLimit: null, realModelCalls: 0, realLeanProcesses: 0,
     paidModelCalls: false, fixturesRemoved: true, forbiddenCalls, errors, external, writes, reads,
     ...(failure ? { error: failure instanceof Error ? failure.stack : String(failure) } : {}) }, null, 2) + '\n');
 }

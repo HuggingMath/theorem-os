@@ -12,6 +12,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunInput, WebSession } from '../apps/web/shared';
 import type { ArchiveCatalog, ArchiveRecord } from '../docs/web/types';
 import { freePort, settled, startBrowser } from './web-scenario';
+import { clickWorkbenchAction, openNavigationMenu } from './web-ui-controls';
 import { checkArchiveReplay, checkStaticArchiveReceipt } from './archive-replay-checks.mjs';
 
 // Real workbench HTTP and email login, with disposable accounts and a runner that never calls a provider or Lean.
@@ -73,9 +74,9 @@ const readRuns = async (page: Page) => {
 async function account(email: string): Promise<{ page: Page; context: BrowserContext }> {
   assert.ok(browser);
   const context = await browser.newContext({ viewport: { width: 1440, height: 960 }, locale: 'zh-CN', reducedMotion: 'reduce' });
-  context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
+  context.setDefaultTimeout(30_000); context.setDefaultNavigationTimeout(30_000);
   context.on('page', page => {
-    page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
+    page.setDefaultTimeout(30_000); page.setDefaultNavigationTimeout(30_000);
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   });
@@ -93,24 +94,25 @@ async function account(email: string): Promise<{ page: Page; context: BrowserCon
   await page.fill('#login-code', sent);
   await page.click('#verify-code');
   await page.waitForURL(`${origin}/`);
-  await page.locator('#open-account').waitFor();
-  assert.equal(await page.locator('#open-account').innerText(), email);
+  await page.locator('#open-account').waitFor({ state: 'attached' });
+  assert.equal(await page.locator('#open-account').getAttribute('title'), email);
   const session = await readSession(page);
   assert.equal(session.account?.email, email);
   assert.notEqual(session.account?.admin, true, 'A classic problem must not require an administrator account');
   assert.deepEqual(await readRuns(page), [], 'A new ordinary account starts without private research runs');
   assert.equal(await page.locator('#api-key').inputValue(), '', 'A classic problem must not require a model key');
+  await openNavigationMenu(page);
   const entry = page.locator('#open-classics');
   assert.equal(await entry.innerText(), '经典题库');
   assert.equal(await entry.getAttribute('href'), 'classics/archive.html#status=verified');
   assert.equal(await entry.getAttribute('target'), '_blank');
-  assert.equal(await entry.isVisible(), true, 'The classic library must remain visible on the natural-language start screen');
+  assert.equal(await entry.isVisible(), true, 'The classic library must be visible in the natural-language start screen menu');
   return { page, context };
 }
 
 async function openClassics(page: Page, english = false) {
   const opened = page.waitForEvent('popup');
-  await page.locator('#open-classics').click();
+  await clickWorkbenchAction(page, '#open-classics');
   const archive = await opened;
   activePage = archive;
   await archive.waitForURL(`${origin}/classics/${english ? 'en/' : ''}archive.html*`);
@@ -259,8 +261,9 @@ try {
   const englishEvidence = aliceArchive.locator('.campaign-evidence a').filter({ hasText: 'verification.json' });
   assert.equal(await englishEvidence.evaluate(link => (link as HTMLAnchorElement).href),
     `${origin}/classics/data/proofs/${example.id}/verification.json`);
-  await alice.page.locator('#locale-switch').click();
+  await clickWorkbenchAction(alice.page, '#locale-switch');
   await alice.page.waitForFunction(() => document.documentElement.lang === 'en-US');
+  await openNavigationMenu(alice.page);
   await alice.page.locator('#open-classics').waitFor();
   assert.equal(await alice.page.locator('#open-classics').innerText(), 'Classic problems');
   assert.equal(await alice.page.locator('#open-classics').getAttribute('href'), 'classics/en/archive.html#status=verified');
@@ -271,11 +274,12 @@ try {
   currentCheck = '320 pixel workbench entry and Chinese/English process layouts';
   for (const page of [alice.page, bob.page]) {
     await page.setViewportSize({ width: 320, height: 760 });
+    await openNavigationMenu(page);
     await noOverflow(page, 'The signed-in workbench at 320 pixels');
     const entry = page.locator('#open-classics');
     assert.equal(await entry.isVisible(), true);
     const box = await entry.boundingBox();
-    assert.ok(box && box.x >= 0 && box.x + box.width <= 320, 'The permanent classic link must stay on screen');
+    assert.ok(box && box.x >= 0 && box.x + box.width <= 320, 'The classic link in the menu must stay on screen');
   }
   await alice.page.screenshot({ path: path.join(output, 'classic-entry-en-320.png') });
   await bob.page.screenshot({ path: path.join(output, 'classic-entry-zh-320.png') });
@@ -310,7 +314,7 @@ try {
   }
   const noScriptContext = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 320, height: 844 },
     storageState: await alice.context.storageState() });
-  noScriptContext.setDefaultTimeout(0); noScriptContext.setDefaultNavigationTimeout(0);
+  noScriptContext.setDefaultTimeout(30_000); noScriptContext.setDefaultNavigationTimeout(30_000);
   noScriptContext.on('page', page => {
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });

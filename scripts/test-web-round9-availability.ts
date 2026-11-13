@@ -10,6 +10,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { localeStorageKey } from '../apps/web/i18n';
 import { freePort, startBrowser } from './web-scenario';
+import { clickWorkbenchAction, enterLean } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..');
 const output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/frontend-round9/availability');
@@ -68,7 +69,7 @@ try {
           await page.goto(origin); const capabilities = (await (await response).json()).generation;
           assert.equal(capabilities.available, false); assert.equal(capabilities.reason, kind === 'provider' ? 'provider' : 'runtime');
           await page.locator('#formalize-original').fill(original);
-          await page.locator('#open-settings').click();
+          await clickWorkbenchAction(page, '#open-settings');
           if (kind !== 'provider') await page.locator('#formalize-key').fill('sk-disposable-availability');
           await page.locator('#formalize-settings > summary').click();
           assert.equal(await page.locator('#formalize-start').isDisabled(), true);
@@ -78,7 +79,7 @@ try {
           assert.equal(await page.locator('#formalize-send-status').innerText(), texts[locale][kind], 'A disabled natural-language send must explain the current blocker');
           assert.ok(!before.includes('API Key 后发送') && !before.includes('Enter your API key'), 'An unavailable capability must not be presented as a missing key');
           if (kind === 'runtime' || kind === 'provider') {
-            await page.locator('.chat-lean-entry').click();
+            await enterLean(page);
             await page.locator('#source').waitFor();
             assert.equal(await page.locator('#submit-run').isEnabled(), true, 'Lean remains available when only natural-language solving is unsupported');
             await page.locator('#open-natural-language').click();

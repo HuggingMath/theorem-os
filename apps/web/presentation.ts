@@ -16,6 +16,21 @@ export const acceptedDescription = (run: Pick<WebRun, 'formalization'>) => run.f
     ? t('冻结的 Lean 陈述已通过独立验收；原题含义请查看形式化记录。')
     : t('冻结的 Lean 陈述已通过独立验收；原文与陈述的对应关系见形式化审核。')
   : t('目标声明没有改动，没有 sorry 或额外公理，Lean 内核在隔离环境中确认通过。');
+/** A card renders proof acceptance and the original-meaning status separately, once each. */
+export function acceptedVerdict(run: Pick<WebRun, 'formalization'>): { description: string; meaning?: string } {
+  const tx = (zh: string, en: string) => locale === 'en' ? en : zh;
+  const formalization = run.formalization;
+  if (!formalization) return { description: acceptedDescription(run) };
+  const recordOnly = formalization.reviewMode === 'direct' && (!formalization.confirmation || formalization.confirmation === 'automatic');
+  return {
+    description: isStatementReviewed(run)
+      ? tx('冻结的 Lean 陈述已通过独立验收。', 'The frozen Lean statement passed independent acceptance.')
+      : t('候选 Lean 陈述已通过独立验收。'),
+    meaning: recordOnly
+      ? tx('原题含义：请查看形式化记录。', 'Original meaning: see the formalization record.')
+      : statementConfirmation(formalization.confirmation, false, formalization.reviewMode),
+  };
+}
 export function statementConfirmation(confirmation: NonNullable<WebRun['formalization']>['confirmation'], shared = false, reviewMode?: 'direct', language?: 'zh' | 'en'): string {
   const t = translator(language ?? locale);
   if (confirmation === 'manual') return shared ? t('原题含义：分享者已确认 Lean 陈述。') : t('原题含义：你已确认 Lean 陈述。');

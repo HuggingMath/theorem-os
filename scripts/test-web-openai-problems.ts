@@ -13,6 +13,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { audit } from './web-a11y';
 import { freePort } from './web-scenario';
+import { clickWorkbenchAction } from './web-ui-controls';
 
 type AcceptedRecord = Pick<ArchiveIndexRecord, 'id' | 'title' | 'subtitle' | 'area' | 'summary' | 'en' | 'status' | 'updatedAt'> & {
   directory: string; files: Record<string, string>; campaign: NonNullable<ArchiveIndexRecord['campaign']>;
@@ -264,9 +265,9 @@ async function researchDraftFlow(page: Page, check: typeof checks[number], recor
   await screenshot(page, check, 'research-draft-included', composer);
   await page.reload({ waitUntil: 'domcontentloaded', timeout: 0 }); await visible(composer);
   assert.equal(await composer.inputValue(), added, 'refresh restores the included draft without duplicating the statement');
-  await Promise.all([page.waitForEvent('domcontentloaded', { timeout: 0 }), page.locator('#locale-switch').click({ timeout: 0 })]); await visible(composer);
+  await Promise.all([page.waitForEvent('domcontentloaded', { timeout: 0 }), clickWorkbenchAction(page, '#locale-switch')]); await visible(composer);
   assert.equal(await composer.inputValue(), added, 'switching locale preserves the new editable question');
-  await Promise.all([page.waitForEvent('domcontentloaded', { timeout: 0 }), page.locator('#locale-switch').click({ timeout: 0 })]); await visible(composer);
+  await Promise.all([page.waitForEvent('domcontentloaded', { timeout: 0 }), clickWorkbenchAction(page, '#locale-switch')]); await visible(composer);
   assert.equal(await composer.inputValue(), added);
   const edited = added + (en ? '\n\nKeep my revised research direction.' : '\n\n保留我修改后的研究方向。');
   await composer.fill(edited, { timeout: 0 });

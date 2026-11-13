@@ -13,9 +13,10 @@ import type { WebRunner } from '../apps/web/runner';
 import type { WebConversation } from '../apps/web/conversationTypes';
 import type { WebFormalization } from '../apps/web/formalizationTypes';
 import { localeStorageKey } from '../apps/web/i18n';
+import { statementConfirmation } from '../apps/web/presentation';
 import { freePort, startBrowser } from './web-scenario';
 
-const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/product-continuity/workspace');
+const root = path.resolve(import.meta.dirname, '..'), output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/product-continuity/workspace');
 await fs.mkdir(output, { recursive: true });
 const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-workspace-'));
 const sample = loadWebSample()!, port = await freePort(), origin = `http://127.0.0.1:${port}`;
@@ -109,6 +110,13 @@ try {
     phase = `brief-${language}-${width}`;
     await page.goto(`${origin}/workspace.html?tab=brief&run=${selected.id}`);
     const brief = page.locator('[data-research-brief]'); await brief.waitFor();
+    const briefRecord = (await read(page, `/api/research/workspace/brief/${selected.id}`)).item;
+    assert.equal(await brief.getByRole('heading', { name: language === 'zh' ? '证明路线与推导' : 'Proof routes and derivations', exact: true }).count(), 0);
+    if (briefRecord.tasks.length || briefRecord.routes.length)
+      await brief.getByRole('heading', { name: language === 'zh' ? '记录的计划与尝试' : 'Recorded plans and attempts', exact: true }).waitFor();
+    if (!briefRecord.decisions.length)
+      assert.equal(await brief.getByRole('heading', { name: language === 'zh' ? '人工决定与处理' : 'Human decisions and responses', exact: true }).count(), 0);
+    assert.equal(await brief.getByText(language === 'zh' ? '尚未关联已发布成果。' : 'No published outcome is linked yet.', { exact: true }).count(), 0);
     const runChoice = page.locator('.workspace-select select');
     await page.waitForFunction(() => document.querySelector('.workspace-select select option:checked')?.textContent?.includes('Accepted attempt'));
     assert.equal(await runChoice.inputValue(), selected.id);
@@ -133,7 +141,52 @@ try {
     const frozen = page.locator('[data-frozen-task]'); await frozen.waitFor(); await frozen.locator('pre').waitFor();
     assert.equal(await frozen.locator('pre code').textContent(), saved.source);
     assert.ok(await frozen.getByRole('link', { name: language === 'zh' ? '收藏这个版本' : 'Save this version', exact: true }).count());
-    await context.close(); checks.push({ language, width, search: 'exact message focus', usage: 'all attempts; null distinct from zero; rates persist', brief: 'math and HTML/Markdown/PDF', source: 'exact frozen commit' });
+
+    phase = `candidate-overview-${language}-${width}`;
+    const savedBinding = selected.formalization;
+    for (const confirmation of ['pending', 'rejected', 'superseded'] as const) {
+      selected.formalization = { id: formalizationId, original: formalization.original, candidateDigest: 'd'.repeat(64), confirmation, reviewMode: 'direct' };
+      service.storage.saveRun(owner, selected);
+      await page.goto(origin); await page.locator('[data-chat-research-overview] > summary').click();
+      const status = page.locator(`[data-overview-run-status="${selected.id}"]`); await status.waitFor();
+      assert.equal(await status.innerText(), language === 'zh' ? '最新尝试 · 候选 Lean 陈述证明通过' : 'Latest attempt · Candidate Lean statement proved');
+      const card = page.locator('[data-overview-card]').filter({ has: status });
+      assert.ok((await card.locator('[data-overview-progress]').innerText()).includes(statementConfirmation(confirmation, false, 'direct', language)));
+      assert.equal(await card.locator('[data-overview-run-status]').count(), 1, 'The latest status appears once together with its progress');
+      assert.equal(await card.locator(`[data-overview-verified-run="${selected.id}"]`).count(), 1, 'Candidate acceptance keeps its readable proof record');
+      const recordLayout = await card.locator('[data-overview-verified]').evaluate(element => ({ width: element.clientWidth, content: element.scrollWidth }));
+      assert.ok(recordLayout.content <= recordLayout.width + 1, `Candidate proof record fits its card: ${JSON.stringify(recordLayout)}`);
+      assert.doesNotMatch(await card.innerText(), /原题已验收|Original problem accepted/u);
+      const filters = page.locator('[data-overview-more-filters]');
+      assert.equal(await filters.getAttribute('open'), null);
+      assert.equal(await page.locator('[data-overview-personal-tools]').isVisible(), false);
+      await filters.locator(':scope > summary').click();
+      assert.equal(await page.locator('[data-overview-personal-tools]').isVisible(), true);
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    }
+    await page.locator('[data-overview-more-filters] > summary').click();
+    const candidateCard = page.locator('[data-overview-card]').filter({ has: page.locator(`[data-overview-run-status="${selected.id}"]`) });
+    await candidateCard.screenshot({ path: path.join(output, `candidate-card-${language}-${width}.png`) });
+    await page.screenshot({ path: path.join(output, `candidate-overview-${language}-${width}.png`), fullPage: true });
+    selected.formalization = savedBinding; service.storage.saveRun(owner, selected);
+
+    if (language === 'zh' && width === 390) {
+      phase = 'brief-without-optional-records';
+      await page.route(`**/api/research/workspace/brief/${selected.id}`, async route => {
+        const response = await route.fetch(), body = await response.json();
+        await route.fulfill({ response, json: { ...body, item: { ...body.item, attempts: [], routes: [], tasks: [], decisions: [], outcomes: [],
+          acceptance: { ...body.item.acceptance, checks: [] } } } });
+      }, { times: 1 });
+      await page.goto(`${origin}/workspace.html?tab=brief&run=${selected.id}`); await brief.waitFor();
+      const headings = await brief.locator('section > h3').allTextContents();
+      assert.deepEqual(headings, ['问题', '独立验收', '用量与成果']);
+      assert.equal(await brief.locator('details').filter({ hasText: '全部任务检查' }).count(), 0);
+      assert.equal(await brief.getByText('这次研究没有保存任务路线。', { exact: true }).count(), 0);
+      await page.screenshot({ path: path.join(output, 'brief-no-empty-sections-390.png'), fullPage: true });
+    }
+    await context.close(); checks.push({ language, width, search: 'exact message focus', usage: 'all attempts; null distinct from zero; rates persist',
+      brief: 'math and HTML/Markdown/PDF; plans labeled and empty sections omitted', source: 'exact frozen commit',
+      overview: 'candidate meaning retained for pending/rejected/superseded; filters disclosed; status not repeated' });
   }
   assert.deepEqual(errors, []); assert.deepEqual(external, []); assert.equal(prohibitedCalls, 0); assert.equal(fixtureRuns, 12);
 } catch (error) {

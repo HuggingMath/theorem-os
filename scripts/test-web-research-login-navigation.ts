@@ -89,12 +89,11 @@ async function fit() {
 }
 const labels = ['工作台', '我的研究', '定理', '数学家', '数学库'];
 async function navigation() {
-  const desktop = page.locator('#topbar .research-space-links');
-  if (await desktop.isVisible()) return desktop;
-  const menu = page.locator('[data-research-mobile-navigation]');
-  await menu.locator('summary').click();
-  await menu.locator('nav').waitFor({ timeout: 0 });
-  return menu.locator('nav');
+  const menu = page.locator('[data-navigation-menu]');
+  if (!await menu.evaluate((element: HTMLDetailsElement) => element.open)) await menu.locator('[data-navigation-toggle]').click();
+  const panel = menu.locator('[data-navigation-panel]');
+  await panel.waitFor({ timeout: 0 });
+  return panel.locator('nav');
 }
 let failure: unknown;
 try {
@@ -150,10 +149,11 @@ try {
     await page.locator('#research-chat-thread').getByText(conversation.messages[0]!.text, { exact: true }).waitFor({ timeout: 0 });
     const draft = `${width}px: retain this unsent draft across the shared navigation`;
     await page.locator('#formalize-original').fill(draft);
-    for (const destination of ['theorems', 'people', 'library'] as const) {
+    for (const destination of ['workspace', 'theorems', 'people', 'library'] as const) {
       const nav = await navigation();
-      assert.deepEqual(await nav.locator('a').allTextContents(), labels);
-      const links = await nav.locator('a').evaluateAll(nodes => nodes.map(node => ({ text: node.textContent, href: (node as HTMLAnchorElement).href })));
+      assert.deepEqual(await nav.locator('a:not(#open-classics)').allTextContents(), labels.slice(1));
+      assert.equal(new URL(await page.locator('#workbench-home').getAttribute('href') ?? '', origin).searchParams.get('chat'), chatId);
+      const links = await nav.locator('a:not(#open-classics)').evaluateAll(nodes => nodes.map(node => ({ text: node.textContent, href: (node as HTMLAnchorElement).href })));
       for (const link of links) {
         const url = new URL(link.href);
         assert.equal(url.origin, origin);
@@ -163,8 +163,12 @@ try {
       await nav.locator(`a[href^="${destination}.html"]`).click();
       await page.waitForURL(url => url.pathname === `/${destination}.html` && url.searchParams.get('workbenchChat') === chatId, { timeout: 0 });
       const shared = page.locator('.research-nav'); await shared.waitFor({ timeout: 0 });
-      assert.deepEqual(await shared.locator('a').allTextContents(), [...labels, '帮助']);
-      for (const link of await shared.locator('a').evaluateAll(nodes => nodes.map(node => ({ text: node.textContent, href: (node as HTMLAnchorElement).href })))) {
+      const currentLabel = { workspace: '我的研究', theorems: '定理', people: '数学家', library: '数学库' }[destination];
+      assert.equal(await page.locator('[data-navigation-current]').innerText(), currentLabel);
+      const otherPages = await navigation();
+      assert.deepEqual(await otherPages.locator('a').allTextContents(), [...labels.slice(1).filter(label => label !== currentLabel), '帮助']);
+      for (const link of [...await shared.locator('a').evaluateAll(nodes => nodes.map(node => ({ text: node.textContent, href: (node as HTMLAnchorElement).href }))),
+        ...await otherPages.locator('a').evaluateAll(nodes => nodes.map(node => ({ text: node.textContent, href: (node as HTMLAnchorElement).href })))]) {
         const url = new URL(link.href);
         assert.equal(url.searchParams.get(link.text === '工作台' ? 'chat' : 'workbenchChat'), chatId);
       }

@@ -67,7 +67,6 @@ async function completed(initial: ResearchPublication) {
     await new Promise(resolve => setTimeout(resolve, 50));
   }
 }
-const panel = (page: Page, name: string) => page.locator('section.research-panel').filter({ has: page.getByRole('heading', { name, exact: true }) });
 async function noReleaseActions(page: Page) {
   assert.equal(await page.getByRole('button', { name: '加入配置选择', exact: true }).count(), 0);
   assert.equal(await page.getByRole('button', { name: '用于新研究', exact: true }).count(), 0);
@@ -120,7 +119,7 @@ try {
   assert.equal(unavailable.status, 404); await viewer.getByText('发布版本不存在或不可访问。', { exact: true }).waitFor();
   assert.equal(await viewer.getByText('WITHDRAWN RELEASE CONTENT', { exact: true }).count(), 0); await noReleaseActions(viewer);
   assert.equal(await viewer.evaluate(() => sessionStorage.getItem('theoremos.research.selection')), null);
-  await panel(viewer, '已发布版本').screenshot({ path: path.join(output, 'withdrawn-release.png') });
+  await viewer.locator('#research-library-asset').screenshot({ path: path.join(output, 'withdrawn-release.png') });
   await viewer.unroute('**' + assetPath);
   checks.push({ name: phase, publicationId: publication.id, unavailable, selectedUnavailableVersion: false }); console.log(`PASS ${phase}`);
 
@@ -135,7 +134,7 @@ try {
       else await route.fulfill({ status: issue, contentType: 'application/json', body: JSON.stringify({ error: `Fixture release ${issue}` }) });
     });
     await viewer.goto(`${origin}/library.html?entry=${available.id}&version=v1`);
-    await panel(viewer, '已发布版本').getByRole('alert').waitFor();
+    await viewer.locator('#research-library-asset').getByRole('alert').waitFor();
     if (issue === 401 || issue === 403) {
       assert.equal(await viewer.getByText('AVAILABLE RELEASE CONTENT', { exact: true }).count(), 0); await noReleaseActions(viewer);
     } else {
@@ -144,7 +143,7 @@ try {
     }
     recover = true;
     const restored = await received(viewer, 'GET', availableRelease, () => viewer.getByRole('button', { name: '重新读取版本', exact: true }).click());
-    assert.equal(restored.status, 200); await panel(viewer, '已发布版本').getByRole('alert').waitFor({ state: 'hidden' });
+    assert.equal(restored.status, 200); await viewer.locator('#research-library-asset').getByRole('alert').waitFor({ state: 'hidden' });
     assert.equal(await viewer.getByText('AVAILABLE RELEASE CONTENT', { exact: true }).isVisible(), true);
     assert.equal(await viewer.getByRole('button', { name: '用于新研究', exact: true }).isEnabled(), true);
     await viewer.unroute('**' + availableRelease);

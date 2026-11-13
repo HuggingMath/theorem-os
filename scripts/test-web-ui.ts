@@ -115,7 +115,7 @@ try {
       && settings.y + settings.height <= height + 1, `settings dialog overflows ${width}x${height}`);
     assert.equal(await page.locator('#run-settings').evaluate(dialog => dialog.scrollWidth <= dialog.clientWidth), true);
     await closeSettings(page);
-    assert.equal(await page.locator('#open-settings').evaluate(node => node === document.activeElement), true);
+    assert.equal(await page.locator('[data-navigation-toggle]').evaluate(node => node === document.activeElement), true);
     await showArtifacts(page);
     await page.locator('#draft-preview').waitFor();
     assert.equal(await page.locator('#compose-panel').isVisible(), false, 'the preview replaces the composer');

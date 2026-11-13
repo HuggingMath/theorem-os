@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chatMathematics } from '../apps/web/client/chatMathematics';
+import { chatMathematics, chatMathematicsSummary } from '../apps/web/client/chatMathematics';
 import type { WebFormalizationActivity, WebFormalizationRoleSummary } from '../apps/web/formalizationTypes';
 import type { WebRun } from '../apps/web/shared';
 
@@ -15,6 +15,24 @@ function role(sequence: number, summary: WebFormalizationRoleSummary, kind: 'pla
 }
 
 describe('mathematical progress from recorded work', () => {
+  it('omits empty summaries and statements already shown without changing the saved records', () => {
+    expect(chatMathematicsSummary(undefined, [])).toBeUndefined();
+    expect(chatMathematicsSummary(chatMathematics(), [])).toBeUndefined();
+    const recorded = { ...chatMathematics(), latest: { kind: 'statement' as const, text: 'For every n, n + 1 = 1 + n.' } };
+    expect(chatMathematicsSummary(recorded, ['  For every n, n + 1 = 1 + n.\n'])).toBeUndefined();
+    expect(recorded.latest.text).toBe('For every n, n + 1 = 1 + n.');
+  });
+
+  it('retains different statements, research findings and actual mathematical work beside a repeated statement', () => {
+    const work = { ...chatMathematics(), latest: { kind: 'statement' as const, text: 'The goal also needs n > 0.' } };
+    expect(chatMathematicsSummary(work, ['For every n, n + 1 = 1 + n.'])).toEqual(work);
+    const finding = { ...work, latest: { kind: 'finding' as const, text: 'The goal also needs n > 0.' } };
+    expect(chatMathematicsSummary(finding, [finding.latest.text])).toEqual(finding);
+    const blocked = { ...work, blockers: [{ id: 'goal', text: 'The induction step is still missing.' }] };
+    expect(chatMathematicsSummary(blocked, [work.latest.text])).toEqual({ ...blocked, latest: undefined });
+    expect(blocked.latest).toEqual(work.latest);
+  });
+
   it('does not invent work, acceptance or timestamps when there are no records', () => {
     expect(chatMathematics()).toEqual({ checked: [], working: [], blockers: [] });
     expect(chatMathematics(recorded([]))).toEqual({ checked: [], working: [], blockers: [] });

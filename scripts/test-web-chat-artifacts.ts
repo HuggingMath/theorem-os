@@ -15,6 +15,7 @@ import { localeStorageKey } from '../apps/web/i18n';
 import { freePort, postRun, startBrowser } from './web-scenario';
 import { withFailedAttempt } from './web-trajectory-fixture';
 import { audit } from './web-a11y';
+import { clickWorkbenchAction } from './web-ui-controls';
 
 declare const Bun: { serve(options: { hostname: string; port: number; idleTimeout?: number; fetch(request: Request): Response | Promise<Response> }): { port: number; stop(force?: boolean): void } };
 
@@ -93,7 +94,7 @@ try {
     await page.goto(`${origin}/?run=${run.id}`); await page.waitForURL(url => url.searchParams.has('chat'));
     const chatId = new URL(page.url()).searchParams.get('chat')!;
     await page.locator('#formalize-original').fill('请讨论 Tutorial.zero_add 的具体证明任务。');
-    await page.locator('#open-settings').click(); await page.locator('#formalize-key').fill('sk-local-chat-artifact-fixture');
+    await clickWorkbenchAction(page, '#open-settings'); await page.locator('#formalize-key').fill('sk-local-chat-artifact-fixture');
     await page.locator('#formalize-start:enabled').click();
     const taskLink = page.locator('.chat-message-assistant [data-chat-task-link="goal_2"]');
     await taskLink.waitFor();
@@ -162,7 +163,7 @@ try {
     await page.locator('[data-chat-guidance-target]').selectOption('goal_2');
     await page.locator('#formalize-original').fill(instruction);
     // Sending proof requirements uses the existing task, not a new model completion.
-    if (!await page.locator('#formalize-key').isVisible()) await page.locator('#open-settings').click();
+    if (!await page.locator('#formalize-key').isVisible()) await clickWorkbenchAction(page, '#open-settings');
     await page.locator('#formalize-key').fill('');
     await page.locator('#formalize-start:enabled').click();
     const receipt = page.locator('[data-chat-guidance-receipt][data-guidance-status="queued"]'); await receipt.waitFor();

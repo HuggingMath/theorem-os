@@ -20,7 +20,7 @@ import { freePort, postRun, readRun, settled, startBrowser, ready } from './web-
 
 // The proof explanation page against a fake runner: preset proof and preset approved evidence, no model or container.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const output = path.join(root, 'out/web-explain');
+const output = path.resolve(process.env.THEOREMOS_TEST_OUTPUT || path.join(root, 'out/web-explain'));
 await fs.access(path.join(root, 'out/web/explain.js')).catch(() => { throw new Error('Run bun run build:web before the explanation check.'); });
 await fs.mkdir(output, { recursive: true });
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;
@@ -264,6 +264,13 @@ try {
   mark('formulas, bold and code render as elements and an unparseable formula shows its source');
 
   const route = page.locator('#explain-prose .solution-route');
+  const routeDisclosure = page.locator('[data-explain-route]');
+  await route.waitFor({ state: 'attached' });
+  assert.equal(await routeDisclosure.getAttribute('open'), null, 'the explanation starts with prose, with the optional route folded');
+  assert.equal(await route.isVisible(), false, 'the graph stays mounted without a second visible reading interface');
+  assert.equal(await page.locator('.explain-overview').isVisible(), true, 'the saved proof outline remains available without opening the graph');
+  assert.equal(await page.locator('.explain-overview .explain-rich').innerText(), explained.overview);
+  await routeDisclosure.locator(':scope > summary').click();
   await route.waitFor();
   assert.equal(await page.locator('.explain-provenance').getAttribute('open'), null, 'source and review context starts folded');
   assert.equal(await route.locator('.solution-route-overview').isVisible(), true, 'the proof outline stays available with the mathematical route');
@@ -280,8 +287,19 @@ try {
   const graphLines = explained.sections.at(-1)!.steps[0]!.lines.flatMap(item => range(item.start, item.end));
   await until(async () => JSON.stringify(await marked(page, 'active')) === JSON.stringify(graphLines), 'the graph selects its exact Lean step');
   assert.equal(await page.locator('.explain-steps > li.is-active[data-step="0"]').getAttribute('data-anchor'), '6');
+  await until(() => page.evaluate(() => document.activeElement?.id === 'explain-section-6'), 'opening a graph step focuses its prose section');
+  await until(() => shown(page, '.explain-steps > li.is-active'), 'opening a graph step reveals its saved prose');
   await route.locator('[data-solution-node="declaration:target_thm"]').click();
-  mark('the same graph displays saved derivations and opens their exact Lean lines in the explanation reader');
+  await route.locator('[data-solution-zoom="in"]').click();
+  const routeZoom = await route.locator('[data-solution-zoom="reset"]').innerText();
+  await routeDisclosure.locator(':scope > summary').click();
+  await page.locator('#explain-sync').uncheck();
+  await page.locator('#explain-sync').check();
+  assert.equal(await routeDisclosure.getAttribute('open'), null, 'a reader redraw keeps the optional route folded');
+  await routeDisclosure.locator(':scope > summary').click();
+  assert.equal(await route.locator('[data-solution-zoom="reset"]').innerText(), routeZoom, 'collapsing and reopening preserves graph zoom');
+  assert.equal(await route.locator('[data-solution-node="declaration:target_thm"]').getAttribute('aria-pressed'), 'true', 'collapsing and reopening preserves graph selection');
+  mark('the explanation starts with saved prose; its optional graph preserves selection and zoom and opens the exact prose section and Lean lines');
 
   // Clicking a step marks its Lean lines and scrolls the proof to them; clicking a Lean line does the reverse.
   const sections = explained.sections, last = sections.length - 1;
@@ -532,6 +550,7 @@ try {
   await until(async () => new URL(page.url()).hash === '#at=step_2&step=2&view=outline&node=declaration%3Astep_1', 'the address names the declaration, the step, the outline and the route node');
   assert.equal(await page.locator('.explain-section').nth(3).locator('.explain-statement').count(), 0, 'a folded declaration shows its summary in place of the full statement');
   await page.reload();
+  assert.equal(await routeDisclosure.getAttribute('open'), '', 'a route-node deep link opens the optional route');
   await until(async () => await route.locator('[data-solution-node="declaration:step_1"]').getAttribute('aria-pressed') === 'true', 'a link reopens its route node');
   await page.locator('.explain-steps > li.is-active[data-anchor="1"][data-step="1"]').waitFor();
   assert.equal(await page.locator('[data-action="detail"][data-detail="outline"]').getAttribute('aria-pressed'), 'true');
@@ -562,7 +581,9 @@ try {
   assert.deepEqual(await contrastProblems(page, '#explain-content'), [], 'explanation contrast below WCAG AA (light)');
   mark('the Markdown download works and the page passes the accessibility and contrast checks');
 
-  const storageState = await owner.context.storageState(), url = page.url();
+  const storageState = await owner.context.storageState(), cleanAddress = new URL(page.url());
+  cleanAddress.hash = '';
+  const url = cleanAddress.href;
   const dark = await open(browser, url, { theme: 'dark', storageState });
   await dark.page.locator('#explain-prose .explain-document').waitFor();
   await mathReady(dark.page);
@@ -590,6 +611,8 @@ try {
   assert.equal(await phone.page.locator('#explain-split').getAttribute('data-pane'), 'prose');
   assert.equal(await phone.page.locator('#explain-lean').isVisible(), false, 'the proof pane waits behind the switch');
   assert.equal(await phone.page.locator('#explain-sync').isVisible(), false, 'sync has no meaning with one pane');
+  assert.equal(await phone.page.locator('[data-explain-route]').getAttribute('open'), null, 'the phone opens directly on prose');
+  assert.equal(await phone.page.locator('.solution-route').isVisible(), false);
   await phone.page.screenshot({ path: path.join(output, 'explain-prose-390.png') });
   // Long formulas stay within the phone pane; an indivisible expression can scroll inside its own box when needed.
   const formulas = await phone.page.locator('#explain-prose').evaluate(pane => {
@@ -650,6 +673,8 @@ try {
   await english.page.locator('#explain-prose .explain-document').waitFor();
   assert.equal(await english.page.locator('#explain-prose-heading').innerText(), 'Natural-language proof');
   assert.equal(await english.page.locator('#explain-lean-heading').innerText(), 'Lean proof');
+  assert.equal(await english.page.locator('[data-explain-route] > summary').innerText(), 'Proof route');
+  assert.equal(await english.page.locator('[data-explain-route]').getAttribute('open'), null);
   const chrome = await english.page.evaluate(() => {
     const han = /\p{Script=Han}/u, found: string[] = [];
     for (const scope of document.querySelectorAll('.explain-topbar, #explain-toolbar, .explain-pane-head, #explain-lean-legend, .explain-notice, .explain-footer, .explain-section-meta'))

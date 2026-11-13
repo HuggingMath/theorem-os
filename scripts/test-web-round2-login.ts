@@ -112,7 +112,7 @@ try {
     await page.locator('#login-code').fill(otp);
     await page.locator('#verify-code').click();
     await page.waitForURL(url => url.pathname === '/');
-    await page.locator('#open-account').waitFor();
+    await page.locator('#open-account').waitFor({ state: 'attached' });
     assert.equal(await page.evaluate(key => sessionStorage.getItem(key), progressKey), null, 'Successful login clears progress.');
     checks.push({ name: 'A02: both language switches preserve the code step and absolute cooldown; the original code signs in', mailCount: count });
     await context.close();

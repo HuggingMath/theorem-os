@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { openAdvancedChatSettings } from './web-ui-controls';
+import { clickWorkbenchAction, openAdvancedChatSettings, openChatParticipation, openChatResultDetails } from './web-ui-controls';
 // The solving process: the checklist under the task's status, and the live workspace beside it on a wide screen.
 // Local fixtures only: a formalization and a run are replayed through a runner. No model, no Lean.
 import assert from 'node:assert/strict';
@@ -18,7 +18,7 @@ import { audit } from './web-a11y';
 import { deferred, freePort, settled, startBrowser } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const output = path.join(root, 'out/web-solve-process');
+const output = globalThis.process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/web-solve-process');
 await fs.access(path.join(root, 'out/web/app.js')).catch(() => { throw new Error('Run bun run build:web before the solve process check.'); });
 await fs.mkdir(output, { recursive: true });
 const original = webFormalizationStatement;
@@ -72,13 +72,13 @@ const service = createWebService(config, runner);
 const checks: string[] = [], errors: string[] = [];
 const mark = (name: string) => { checks.push(name); console.log(`PASS ${name}`); };
 async function eventually(check: () => boolean, _description: string) {
-  while (!check()) await sleep(40);
+  const until = Date.now() + 15_000;
+  while (!check()) { assert.ok(Date.now() < until, _description); await sleep(40); }
 }
 async function credentials(page: Page) {
-  if (!await page.locator('input[name="chat-participation"][value="automatic"]').isVisible())
-    await page.locator('[data-chat-participation-control] > summary').click();
+  await openChatParticipation(page);
   await page.locator('input[name="chat-participation"][value="automatic"]').check();
-  if (!await page.locator('#formalize-key').isVisible()) await page.locator('#open-settings').click();
+  if (!await page.locator('#formalize-key').isVisible()) await clickWorkbenchAction(page, '#open-settings');
   await page.locator('#formalize-key').fill('sk-disposable-browser-fixture');
   await openAdvancedChatSettings(page);
   if (await page.locator('#formalize-environment').isEnabled()) await page.locator('#formalize-environment').selectOption('standard');
@@ -88,27 +88,42 @@ const process = (page: Page) => page.locator('[data-solve-process]');
 const live = (page: Page) => page.locator('#chat-live-panel');
 const artifact = (page: Page) => page.evaluate(() => document.body.dataset.chatArtifact ?? '');
 
-let browser: Browser | undefined;
+let browser: Browser | undefined, activePage: Page | undefined, failure: unknown;
 try {
   browser = await startBrowser(service.server, port);
   for (const width of [1440, 390]) {
     const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
-    context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
+    context.setDefaultTimeout(15_000); context.setDefaultNavigationTimeout(30_000);
     await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
-    const page = await context.newPage(); page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
+    const page = activePage = await context.newPage();
+    const writes: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
+    page.on('request', request => {
+      if (!['GET', 'HEAD'].includes(request.method())) writes.push(`${request.method()} ${new URL(request.url()).pathname}`);
+    });
     pending = undefined; runInput = undefined; releaseRun = undefined;
     await page.goto(origin); await page.locator('#formalize-original').waitFor();
     await page.locator('#formalize-original').fill(original); await credentials(page);
     await page.locator('#formalize-start').click();
     await eventually(() => Boolean(pending), 'The formalization starts');
+    await page.locator('.research-conversation-status').waitFor();
+    await page.locator('.chat-messages[data-conversation]').waitFor();
+    assert.equal(await page.locator('[data-chat-mathematics], [data-chat-math-summary]').count(), 0,
+      'a formalization without mathematical records has no empty progress section');
     const formalization = pending!;
+    formalization.send({ type: 'progress', progress: { phase: 'compiling', round: 1, tokens: 1200 } });
     // Rounds the host recorded: a plan, a statement, a Lean compilation that failed, its feedback, a second try.
     formalization.send({ type: 'activity', activity: { type: 'step', step: { round: 1, step: 'role', workerId: 'r1-plan-1', role: 'plan', slot: 'plan-1', state: 'finished',
       summary: { taskKind: 'prove', sections: [{ kind: 'conclusions', items: [original] }] } } } });
     formalization.send({ type: 'activity', activity: { type: 'step', step: { round: 1, step: 'compile', state: 'started', source: statement } } });
     formalization.send({ type: 'activity', activity: { type: 'step', step: { round: 1, step: 'compile', state: 'failed', source: statement, lean: lean(false, 2) } } });
     formalization.send({ type: 'activity', activity: { type: 'step', step: { round: 1, step: 'revision', stage: 'round', text: 'Lean 报错：第 2 行 unknown tactic。' } } });
+    await page.locator('[data-chat-math-finding]').waitFor({ state: 'attached' });
+    assert.equal(await page.locator('[data-chat-math-summary]').count(), 0, 'the original task is not repeated as a new mathematical update');
+    assert.equal(await page.locator('[data-chat-result-more]').getAttribute('open'), null, 'Detailed progress starts behind one disclosure');
+    await openChatResultDetails(page);
+    assert.ok((await page.locator('[data-chat-math-finding]').innerText()).includes(original),
+      'opening the details retains the original recorded statement');
     await process(page).waitFor();
     await page.locator('.solve-process-title').filter({ hasText: '解题过程' }).waitFor();
     // 简洁, the default reading, keeps the diagnostic records to one line while the task runs.
@@ -127,19 +142,38 @@ try {
     await eventually(() => runInput!.input.source.length > 0, 'The proof receives the statement');
     // A wide screen's check rows open the workspace beside the chat; a phone's open their record in place.
     await page.waitForFunction(wide => document.querySelectorAll(wide ? '[data-solve-check]' : '.solve-row[data-solve-row]').length > 0,
-      width === 1440, { timeout: 0 });
+      width === 1440, { timeout: 15_000 });
     await page.locator('.research-conversation-meta').waitFor();
     assert.match(await page.locator('.research-conversation-meta').innerText(), /\d\d:\d\d/u);
+    assert.match(await page.locator('.research-conversation-meta').innerText(), /Token 1200/u);
     assert.equal(await page.locator('[data-research-stop]').isVisible(), true);
+    const runningDetails = page.locator('[data-chat-result-more]'), status = page.locator('.research-conversation-status');
+    await runningDetails.locator(':scope > summary').click();
+    assert.equal(await runningDetails.getAttribute('open'), null);
+    assert.equal(await status.locator('.research-conversation-meta, [data-research-artifact="live"]').count(), 0,
+      'Simple status leaves timing, token use and the live workspace in the details');
+    assert.doesNotMatch(await status.innerText(), /\d\d:\d\d|Token 1200|实时工作区/u);
+    assert.equal(await page.locator('.research-conversation-meta').isVisible(), false);
+    assert.equal(await page.locator('[data-research-artifact="live"]').isVisible(), false);
+    assert.equal(await status.locator('.chat-task-status-line [data-research-stop]').isVisible(), true,
+      'Stopping remains available beside the running status with details closed');
+    await page.screenshot({ path: path.join(output, `running-status-${width}.png`), fullPage: true });
+    await openChatResultDetails(page);
+    assert.equal(await page.locator('.research-conversation-meta').count(), 1, 'Elapsed time and token use have one place');
+    assert.equal(await runningDetails.locator('.research-conversation-meta').isVisible(), true);
+    assert.match(await runningDetails.locator('.research-conversation-meta').innerText(), /\d\d:\d\d[\s\S]*Token 1200/u);
+    assert.equal(await page.locator('[data-research-artifact="live"]').count(), 1, 'The live workspace has one entry');
+    assert.equal(await runningDetails.locator('[data-research-artifact="live"]').isVisible(), true);
     // The run's own Lean check arrives with its action, a moment after the run starts.
     await page.waitForFunction(() => /自查|Lean 检查/u.test(document.querySelector('.solve-stage[data-stage="prove"]')?.textContent ?? ''),
-      undefined, { timeout: 0 });
+      undefined, { timeout: 15_000 });
     assert.match(await page.locator('.solve-stage[data-stage="prove"]').innerText(), /自查|Lean 检查/u);
     mark(`${width}px: the running proof shows its elapsed time, tokens, stop and its Agent's Lean check`);
     if (width === 1440) {
-      // The live workspace opens by itself beside the conversation, on the file the check was about.
-      await page.waitForFunction(() => document.body.dataset.chatArtifact === 'live', undefined, { timeout: 0 });
-      assert.equal(await artifact(page), 'live', 'A wide screen opens the live workspace by itself');
+      assert.notEqual(await artifact(page), 'live', 'Simple reading keeps the conversation on one surface while the proof runs');
+      assert.equal(await live(page).isVisible(), false);
+      await page.locator('[data-research-artifact="live"]').click();
+      await page.waitForFunction(() => document.body.dataset.chatArtifact === 'live');
       assert.equal(await live(page).isVisible(), true);
       await live(page).locator('.live-code .lean-line').first().waitFor();
       assert.match(await live(page).locator('.live-file-head').innerText(), /Submission\.lean/u);
@@ -183,24 +217,65 @@ try {
     await page.screenshot({ path: path.join(output, `process-${width}.png`), fullPage: true });
     await process(page).locator(':scope > summary').click();
     assert.equal(await process(page).getAttribute('open'), null, 'The reader can fold the detailed records again');
+    if (await page.locator('#close-research-output').isVisible()) await page.locator('#close-research-output').click();
+    await page.locator('[data-chat-result-more] > summary').click();
     releaseRun!();
-    await page.waitForFunction(() => document.querySelector('.research-conversation-status')?.getAttribute('data-accepted') === 'true', undefined, { timeout: 0 });
+    await page.waitForFunction(() => document.querySelector('.research-conversation-status')?.getAttribute('data-accepted') === 'true');
     await page.waitForFunction(() => document.querySelector('details.solve-process')?.hasAttribute('open') === false);
     assert.equal(await process(page).getAttribute('open'), null, 'A finished task folds its checklist to one line');
-    assert.match(await process(page).locator('summary').innerText(), /Lean 检查 \d+ 次|尝试 \d+ 次/u);
     assert.equal(await page.locator('[data-research-stop]').count(), 0, 'A finished task has no stop button');
-    assert.ok(await page.locator('.solve-stage[data-stage="verify"]').count() >= 0);
+    assert.equal(await live(page).isVisible(), false, 'Finishing does not reopen the workspace after the reader closed it');
+    assert.equal(await page.locator('#run-detail').isVisible(), false, 'The result stays in the conversation until requested');
+    const result = page.locator('[data-chat-result-more]');
+    assert.equal(await result.getAttribute('open'), null);
+    assert.equal(await status.locator('.research-conversation-state strong').innerText(), 'Lean 陈述证明通过');
+    assert.equal(await status.locator('[data-statement-verdict]').innerText(),
+      '原题含义：请查看形式化记录。 Lean 验收证明的是这份陈述，不能替代对自然语言原意的核对。');
+    assert.equal(await status.locator('.research-conversation-description').count(), 0,
+      'An accepted simple status keeps its title and original-meaning note without repeating the technical description');
+    const acceptedDescription = result.locator('.research-conversation-description');
+    assert.equal(await acceptedDescription.count(), 1);
+    assert.equal(await acceptedDescription.textContent(), '冻结的 Lean 陈述已通过独立验收。');
+    assert.equal(await acceptedDescription.isVisible(), false, 'The acceptance description stays behind the closed details');
+    await page.screenshot({ path: path.join(output, `accepted-status-${width}.png`), fullPage: true });
+    const savedWorkspace = page.locator('[data-research-artifact="live"]');
+    assert.equal(await savedWorkspace.isVisible(), false, 'An ended task keeps its saved workspace behind the result details');
+    await openChatResultDetails(page);
+    assert.equal(await acceptedDescription.isVisible(), true, 'Opening proof details recovers the complete acceptance description');
+    assert.equal(await page.locator('.research-conversation-meta').count(), 1);
+    assert.equal(await result.locator('.research-conversation-meta').isVisible(), true);
+    assert.equal(await savedWorkspace.isVisible(), true);
+    const previousWrites = [...writes];
+    await savedWorkspace.click();
+    await live(page).waitFor();
+    await live(page).locator('.live-code .lean-line').first().waitFor();
+    assert.match(await live(page).locator('.live-code').innerText(), /theorem addition/u);
+    await page.locator('#close-research-output').click();
+    await page.waitForFunction(() => document.body.dataset.chatArtifact !== 'live');
+    assert.equal(await live(page).isVisible(), false);
+    assert.deepEqual(writes, previousWrites, 'Opening and closing the saved workspace only reads the retained records');
+    assert.match(await process(page).locator('summary').innerText(), /Lean 检查 \d+ 次|尝试 \d+ 次/u);
+    await process(page).locator(':scope > summary').click();
+    await page.locator('.solve-stage[data-stage="verify"]').waitFor();
+    assert.match(await page.locator('.solve-stage[data-stage="verify"]').innerText(), /独立验收|验收通过/u);
+    await page.locator('[data-research-artifact="result"]').click(); await page.locator('.result-verdict').waitFor();
     await page.screenshot({ path: path.join(output, `finished-${width}.png`), fullPage: true });
     mark(`${width}px: the finished task folds to one line and keeps its record`);
     await page.context().close();
+    activePage = undefined;
   }
   assert.deepEqual(errors, []);
   console.log(`PASS solve process: ${checks.length} checks`);
 } catch (error) {
+  failure = error;
+  await activePage?.screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => undefined);
   for (const test of checks) console.log(`passed: ${test}`);
   console.error(error);
   globalThis.process.exitCode = 1;
 } finally {
   await browser?.close();
-  service.server.close();
+  await service.close();
+  await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: failure ? 'failed' : 'passed', checks, errors,
+    paidModelCalls: false, realLeanProcesses: 0,
+    ...(failure ? { error: failure instanceof Error ? failure.stack : String(failure) } : {}) }, null, 2) + '\n');
 }

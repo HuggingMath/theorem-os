@@ -11,18 +11,49 @@ import { bindResearchSession, clearResearchSession, errorText, ErrorBox, readRes
 import { webDraftOwner } from './ownedDrafts';
 import { loginHref, researchContextHref, researchNavigation } from '../shared';
 import { ResearchRunNotifications } from './researchRunNotifications';
+import { Icon } from './ui/Icon';
 
 const page = document.body.dataset.researchPage ?? 'people';
 const pageNames = { workspace: ['我的研究', 'My research'], theorems: ['定理', 'Theorems'], people: ['数学家', 'Mathematicians'], library: ['数学库', 'Library'] } as const;
 function Header() {
   const language = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDetailsElement>(null), [open, setOpen] = useState(false);
   const navigation = researchNavigation(location.search);
+  const label = pageNames[page as keyof typeof pageNames] ?? pageNames.people;
+  const currentLabel = page === 'problem' ? t('题目工作区') : page === 'invite' ? tx('研究邀请', 'Research invitation')
+    : tx(label[0], label[1]);
+  const close = (focus = false) => {
+    setOpen(false);
+    if (menu.current) menu.current.open = false;
+    if (focus) menu.current?.querySelector('summary')?.focus({ preventScroll: true });
+  };
   useEffect(() => { if (language.current) mountLocaleSwitch(language.current); }, []);
-  return <header class="topbar"><a class="brand" href={navigation.workbench} aria-label="TheoremOS"><img src="assets/mark.svg" alt="" width="26" height="26" />
-    <span>Theorem<span class="brand-os">OS</span></span></a><nav class="research-nav" aria-label={tx('研究空间', 'Research space')}>
-    <a href={navigation.workbench}>{tx('工作台', 'Workbench')}</a>
-    {Object.entries(pageNames).map(([id, label]) => <a key={id} href={navigation[id as keyof typeof pageNames]} aria-current={page === id ? 'page' : undefined}>{tx(label[0], label[1])}</a>)}
-    <a href={researchContextHref("workspace.html?tab=help", location.search)}>{tx('帮助', 'Help')}</a></nav><button ref={language} type="button" class="text-button locale-switch" /></header>;
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: PointerEvent) => { if (!menu.current?.contains(event.target as Node)) close(); };
+    document.addEventListener('pointerdown', outside);
+    return () => document.removeEventListener('pointerdown', outside);
+  }, [open]);
+  return <header class="topbar simple-topbar"><a class="brand" href={navigation.workbench} aria-label="TheoremOS"><img src="assets/mark.svg" alt="" width="26" height="26" />
+    <span>Theorem<span class="brand-os">OS</span></span></a>
+    <nav class="topbar-primary research-nav" aria-label={tx('当前位置', 'Current location')}>
+      <a class="topbar-control" href={navigation.workbench}><Icon name="arrow-left" /><span>{tx('工作台', 'Workbench')}</span></a>
+      <span class="navigation-current" data-navigation-current aria-current="page">{currentLabel}</span>
+    </nav>
+    <details class="navigation-menu" data-navigation-menu ref={menu} open={open}
+      onToggle={event => setOpen((event.currentTarget as HTMLDetailsElement).open)}
+      onFocusOut={event => { if (!menu.current?.contains(event.relatedTarget as Node)) close(); }}
+      onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(true); } }}>
+      <summary data-navigation-toggle aria-controls="research-navigation-panel"><Icon name="ellipsis" /><span>{tx('菜单', 'Menu')}</span></summary>
+      <div id="research-navigation-panel" class="navigation-panel" data-navigation-panel>
+        <nav class="navigation-links" aria-label={tx('研究空间', 'Research space')} onClick={() => close()}>
+          {Object.entries(pageNames).filter(([id]) => page !== id).map(([id, label]) => <a key={id} href={navigation[id as keyof typeof pageNames]}>{tx(label[0], label[1])}</a>)}
+          <a href={researchContextHref('workspace.html?tab=help', location.search)}>{tx('帮助', 'Help')}</a>
+        </nav>
+        <div class="navigation-actions"><button ref={language} type="button" class="navigation-item locale-switch" onClick={() => close()} /></div>
+      </div>
+    </details>
+  </header>;
 }
 export function ResearchApp() {
   const [context, setContext] = useState<ResearchContext>(), [error, setError] = useState(''), [attempt, setAttempt] = useState(0);

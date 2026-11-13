@@ -14,7 +14,7 @@ import type { WebRun, WebRunInput, WorkerInput } from '../apps/web/shared';
 import type { ResearchAsset, ResearchAssetPrefill } from '../apps/web/researchAssetTypes';
 import { localeStorageKey } from '../apps/web/i18n';
 import { freePort, preferFullCollaboration, settled, startBrowser } from './web-scenario';
-import { closeSettings, showArtifacts } from './web-ui-controls';
+import { closeSettings, enterLean, showArtifacts } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..');
 const focusedHome = process.env.THEOREMOS_PRODUCT_FLOW_FOCUS === 'home-math';
@@ -131,8 +131,19 @@ async function open(width: number, locale: 'zh' | 'en') {
     const url = new URL(request.url());
     if (url.pathname.startsWith('/api/')) requests.push({ phase, method: request.method(), pathname: url.pathname });
   });
-  await page.goto(origin); await page.locator('[data-start-guide]').waitFor();
+  await page.goto(origin); await page.locator('#natural-research #formalize-original').waitFor();
   return { context, page };
+}
+async function openResearchOverview(page: Page) {
+  // Draft restoration chooses the entry after the session arrives.
+  await page.locator('#refresh-runs:enabled').waitFor({ state: 'attached' });
+  if (await page.locator('#open-natural-language').isVisible()) await page.locator('#open-natural-language').click();
+  const disclosure = page.locator('[data-chat-research-overview]');
+  await disclosure.waitFor();
+  if (!await disclosure.evaluate(node => (node as HTMLDetailsElement).open)) await disclosure.locator(':scope > summary').click();
+  const overview = disclosure.locator('[data-research-overview]');
+  await overview.waitFor();
+  return overview;
 }
 async function run(page: Page, mode: string, changes: Partial<WebRunInput> = {}) {
   const input: WebRunInput = { providerId: 'fixture', apiKey: credential, model: 'fixture', effort: 'low', environment: 'standard',
@@ -180,9 +191,7 @@ try {
         plan = await run(page, 'plan', { task: 'plan| Check $\\forall n \\in \\mathbb{N},\\;n + 0 = n$',
           source: '-- separate mathematical title fixture\n' + sample.run.source, planApproval: true });
         await page.goto(origin);
-        await page.locator('#refresh-runs:enabled').waitFor({ state: 'attached' });
-        if (await page.locator('#open-natural-language').isVisible()) await page.locator('#open-natural-language').click();
-        const overview = page.locator('[data-research-overview]'); await overview.waitFor();
+        const overview = await openResearchOverview(page);
         const inbox = page.locator(`[data-overview-action="plan:${plan.id}"] strong`);
         await inbox.locator('.katex').first().waitFor();
         for (const details of await overview.locator('[data-overview-card] > details:not(.research-overview-statement)').all())
@@ -221,14 +230,13 @@ try {
         continue;
       }
       const initialStarts = starts.length;
-      const guide = page.locator('[data-start-guide]');
-      await guide.locator('[data-start-prepare]').click();
+      const examples = page.locator('[data-chat-examples]');
+      await examples.locator(':scope > summary').click();
+      await examples.locator('[data-start-prepare]').click();
       assert.match(await page.locator('#formalize-original').inputValue(), locale === 'zh' ? /假设与对象：[\s\S]*需要证明：/u : /Objects and assumptions:[\s\S]*Claim to prove:/u);
       assert.equal(starts.length, initialStarts);
       await shot(page, `start-template-${locale}-${width}`);
-      await guide.locator('.research-intents button').nth(1).click();
-      await guide.locator('[data-start-prepare]').click();
-      await page.locator('body[data-entry="lean"]').waitFor({ state: 'attached' });
+      await enterLean(page);
       await page.locator('#edit-draft-source').click();
       await page.locator('#source-editor[open]').waitFor();
       await page.locator('#expanded-source').fill(sample.run.source);
@@ -245,10 +253,7 @@ try {
         continueFrom: { runId: partial.id, taskId: helper.id, commit: helper.proof.commit!, label: 'Changed original statement fixture' } });
       plan = await run(page, 'plan', { source: '-- separate plan-review fixture\n' + sample.run.source, planApproval: true });
       await page.goto(origin);
-      // Draft restoration chooses the entry after the session arrives; wait for initialization to finish before switching it.
-      await page.locator('#refresh-runs:enabled').waitFor({ state: 'attached' });
-      if (await page.locator('#open-natural-language').isVisible()) await page.locator('#open-natural-language').click();
-      await page.locator('[data-research-overview]').waitFor();
+      await openResearchOverview(page);
       await page.locator(`[data-overview-action="plan:${plan.id}"]`).waitFor();
       const group = page.locator('[data-overview-card]').filter({ has: page.locator(`a[href="?run=${partial.id}"]`) });
       assert.equal(await group.count(), 1, 'A single problem card must contain runs with the same frozen statement');

@@ -25,7 +25,7 @@ const state = {
   language: (params.get('language') === 'en' || params.get('language') === 'zh' ? params.get('language') : locale) as 'zh' | 'en',
   csrf: '', overview: undefined as WebExplanationOverview | undefined, documents: new Map<string, WebExplanationDocument>(),
   loading: new Set<string>(), documentError: undefined as string | undefined, active: undefined as StepRef | undefined,
-  gap: undefined as number | undefined, chosen: new Set<number>(), detail: 'steps' as 'outline' | 'steps', opened: new Set<number>(), node: undefined as string | undefined, pane: 'prose' as 'lean' | 'prose', sync: true, dialog: undefined as ExplainView['dialog'], busy: false, error: undefined as string | undefined,
+  gap: undefined as number | undefined, chosen: new Set<number>(), detail: 'steps' as 'outline' | 'steps', opened: new Set<number>(), node: undefined as string | undefined, routeOpen: false, pane: 'prose' as 'lean' | 'prose', sync: true, dialog: undefined as ExplainView['dialog'], busy: false, error: undefined as string | undefined,
 };
 // A link to one declaration or step and one route node (#at=<declaration>&step=<n>&node=<id>): kept from the address the page was opened with.
 let linked = new URLSearchParams(location.hash.slice(1));
@@ -144,6 +144,7 @@ function draw() {
     ...(explanation ? { explanation } : {}), ...(explained ? { document: explained } : {}), ...(state.documentError ? { documentError: state.documentError } : {}),
     ...(state.active ? { active: state.active } : {}), ...(state.gap !== undefined ? { gap: state.gap } : {}), chosen: state.chosen,
     ...(step ? { step } : {}), detail: state.detail, opened: state.opened, ...(state.node ? { node: state.node } : {}),
+    routeOpen: state.routeOpen, onRouteToggle: open => { state.routeOpen = open; },
     onRouteSelect: id => { if (id !== state.node) { state.node = id; writeLink(); } },
     ...(state.dialog ? { dialog: state.dialog } : {}), busy: state.busy,
     ...(state.error ? { error: state.error } : {}), canReturn: depth > 0 && explained !== undefined, now: Date.now(),
@@ -152,7 +153,14 @@ function draw() {
       if (!match || !explained) return;
       const section = Number(match[2]), step = match[3] === undefined ? undefined : Number(match[3]);
       if (!explained.sections[section] || step !== undefined && !explained.sections[section]!.steps[step]) return;
-      select({ section, ...(step === undefined ? {} : { step }) }, 'lean');
+      const ref = { section, ...(step === undefined ? {} : { step }) };
+      state.opened.add(section);
+      select(ref, 'prose');
+      requestAnimationFrame(() => {
+        document.getElementById(`explain-section-${section}`)?.focus({ preventScroll: true });
+        const line = refLines(explained, ref)[0]?.start;
+        if (line && !narrow()) revealLine(line);
+      });
     } });
   $('#explain-split').dataset.pane = state.pane;
   markLean(explained);
@@ -251,7 +259,7 @@ function writeLink() {
 function openLinked(explained: WebExplanationDocument) {
   const place = linked; linked = new URLSearchParams();
   if (place.get('view') === 'outline') state.detail = 'outline';
-  if (place.has('node')) state.node = place.get('node')!;
+  if (place.has('node')) { state.node = place.get('node')!; state.routeOpen = true; }
   const section = explained.sections.findIndex(item => item.name === place.get('at')), step = Number(place.get('step')) - 1;
   if (section < 0) { writeLink(); draw(); return; }
   const ref: StepRef = { section, ...(Number.isInteger(step) && explained.sections[section]!.steps[step] ? { step } : {}) };
@@ -480,7 +488,7 @@ const remove = () => act(async (target, language) => {
 
 /** Shows a target's explanation in a language from the top; `choose` also writes it into the address. */
 function openExplanation(target: string, language: 'zh' | 'en') {
-  state.target = target; state.language = language; state.active = undefined; state.gap = undefined; state.documentError = undefined; state.opened = new Set(); state.node = undefined;
+  state.target = target; state.language = language; state.active = undefined; state.gap = undefined; state.documentError = undefined; state.opened = new Set(); state.node = undefined; state.routeOpen = false;
   state.chosen = new Set(); pinned = []; ladder.reset();
   proseScroll.scrollTop = 0;
   draw(); void loadDocument(); schedule();

@@ -12,7 +12,7 @@ import type { ResearchBudgetView } from '../apps/web/researchBudgetTypes';
 import type { ResearchProjectDetail } from '../apps/web/researchProjectTypes';
 import { readingRun } from '../tests/helpers/shareReadingFixture';
 import { freePort, startBrowser, waitForRun } from './web-scenario';
-import { closeSettings, showArtifacts } from './web-ui-controls';
+import { closeSettings, openProblemSection, showArtifacts } from './web-ui-controls';
 import { localeStorageKey } from '../apps/web/i18n';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -70,7 +70,7 @@ try {
     const creating = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith(`/problem/${first.id}/project`));
     await page.locator('[data-project-from-problem] button[type=submit]').click(); const project = (await (await creating).json()).item as ResearchProjectDetail;
     await page.waitForFunction(id => new URL(location.href).searchParams.get('project') === id, project.id);
-    await page.locator('.problem-tabs a[href*="tab=outcomes"]').click(); await page.locator('[data-budget-inherited]').waitFor();
+    await openProblemSection(page, 'outcomes'); await page.locator('[data-budget-inherited]').waitFor();
     await page.locator('[data-prepare-budget-attempt]').click(); await page.locator('[data-budget-attempt-ready=true]').waitFor(); await closeSettings(page);
     const draft = page.locator('#research-budget-draft'); await draft.locator('[data-budget-project-scope]').waitFor(); await draft.locator('[data-budget-forecast]').waitFor();
     assert.match(await page.locator('[data-budget-attempt-start]').innerText(), language === 'zh' ? /个人尝试.*关联到项目/u : /personal attempt.*(?:attach|link).*project/iu);

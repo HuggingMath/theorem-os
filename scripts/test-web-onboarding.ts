@@ -9,7 +9,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { webSampleRunId } from '../apps/web/shared';
 import { freePort, settled, startBrowser, ready } from './web-scenario';
-import { newResearch, openModulesTab, enterLean, showExamples, openSample, openSettings, showArtifacts } from './web-ui-controls';
+import { newResearch, openModulesTab, enterLean, showExamples, openSample, openSettings, showArtifacts, clickWorkbenchAction, openNavigationMenu } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-ui-smoke');
@@ -50,14 +50,14 @@ try {
   assert.equal(await page.locator('#submit-run').isDisabled(), true);
   assert.equal(await page.locator('#source').isDisabled(), true);
   assert.equal(await page.locator('#settings-submit').isDisabled(), true);
-  await page.locator('#open-settings').click();
+  await clickWorkbenchAction(page, '#open-settings');
   await page.waitForFunction(() => document.activeElement?.id === 'formalize-key');
   assert.equal(await page.locator('#formalize-settings').evaluate(node => (node as HTMLDetailsElement).open), true);
   assert.equal(await page.locator('#formalize-key').isVisible(), true);
   assert.equal(await page.locator('#run-settings').isHidden(), true, 'default settings must stay with the natural-language form');
   await page.locator('#formalize-settings > summary').click();
   await page.locator('#formalize-original').fill('A temporary natural-language problem.');
-  await page.locator('#open-draft').click();
+  await page.locator('#topbar-draft').click();
   await page.waitForFunction(() => (document.querySelector('#formalize-original') as HTMLTextAreaElement).value === '');
   assert.equal(await page.locator('#formalize-settings').evaluate(node => (node as HTMLDetailsElement).open), false);
   mark('default mode starts with a blank composer, opens connection settings on demand, and new research clears the original');
@@ -69,7 +69,7 @@ try {
   await page.locator('#source-validation:not([hidden])').waitFor();
   assert.match(await page.locator('#source-validation').innerText(), /请填写.*Lean 源码/u);
   assert.equal(await page.locator('#source').evaluate(node => node === document.activeElement), true);
-  await page.locator('#open-settings').click();
+  await clickWorkbenchAction(page, '#open-settings');
   await page.locator('#run-settings[open]').waitFor();
   // Invoke the same mode action while the modal is open to verify it closes the obsolete configuration.
   await page.locator('#open-natural-language').evaluate(button => (button as HTMLButtonElement).click());
@@ -267,8 +267,21 @@ try {
   await showExamples(fresh); await fresh.locator('.chat-welcome[data-first-run="true"]').waitFor();
   await settled(fresh);
   assert.ok(await noOverflow(fresh), 'Welcome overflows at 320px');
-  const bar = await fresh.evaluate(() => { const actions = document.querySelector('.topbar-actions')!; return actions.scrollWidth <= actions.clientWidth + 1 && actions.getBoundingClientRect().right <= innerWidth; });
-  assert.ok(bar, 'Top bar actions are clipped at 320px');
+  const bar = await fresh.evaluate(() => [...document.querySelectorAll('#workbench-home, .topbar-primary .topbar-control, [data-navigation-toggle]')].every(control => {
+    const box = control.getBoundingClientRect();
+    return box.width > 0 && box.left >= 0 && box.right <= innerWidth;
+  }));
+  assert.ok(bar, 'Top bar controls are clipped at 320px');
+  const menu = await openNavigationMenu(fresh);
+  const menuFits = await menu.locator('[data-navigation-panel]').evaluate(panel => {
+    const box = panel.getBoundingClientRect();
+    return box.left >= 0 && box.right <= innerWidth && [...panel.querySelectorAll('a, button')].every(control => {
+      const target = control.getBoundingClientRect();
+      return target.left >= 0 && target.right <= innerWidth && target.height >= 44;
+    });
+  });
+  assert.ok(menuFits, 'Navigation menu or its touch targets are clipped at 320px');
+  await fresh.keyboard.press('Escape');
   await fresh.screenshot({ path: path.join(output, 'onboarding-welcome-320.png'), fullPage: true });
   mark('welcome and sample fit 375px and 320px without horizontal overflow');
 

@@ -10,6 +10,7 @@ import { createWebService } from '../apps/web/server';
 import type { ResearcherProfile } from '../apps/web/researchProjectTypes';
 import type { WebRunner } from '../apps/web/runner';
 import { deferred, freePort, startBrowser } from './web-scenario';
+import { clickWorkbenchAction } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..');
 const output = process.env.THEOREMOS_ROUND7_PEOPLE_OUTPUT ?? path.join(root, 'out/web-round7-people');
@@ -43,13 +44,13 @@ type Person = keyof typeof passwords;
 async function newContext(locale: 'zh' | 'en' = 'zh') {
   const context = await browser.newContext({ locale: locale === 'en' ? 'en-US' : 'zh-CN',
     viewport: { width: locale === 'en' ? 390 : 1440, height: 1000 }, reducedMotion: 'reduce' });
-  context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
+  context.setDefaultTimeout(30_000); context.setDefaultNavigationTimeout(30_000);
   await context.addInitScript(locale => { try { localStorage.setItem('theorem-os.locale.v1', locale); } catch { /* about:blank has no storage. */ } }, locale);
   await context.route(/^https?:\/\//u, async route => {
     if (new URL(route.request().url()).origin !== origin) { external.push(route.request().url()); await route.abort(); }
     else await route.continue();
   });
-  context.on('page', page => { page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0); page.on('pageerror', error => pageErrors.push(error.message)); });
+  context.on('page', page => { page.setDefaultTimeout(30_000); page.setDefaultNavigationTimeout(30_000); page.on('pageerror', error => pageErrors.push(error.message)); });
   return context;
 }
 async function call(context: BrowserContext, method: string, pathname: string, input?: unknown) {
@@ -83,8 +84,8 @@ async function screenshot(page: Page, name: string) {
 }
 async function showAccount(page: Page, name: Person) {
   if (await page.locator('#account-dialog').evaluate((dialog: HTMLDialogElement) => dialog.open)) await page.locator('#close-account').click();
-  await page.locator(`#open-account[title="${name.toLowerCase()}@example.org"]`).waitFor();
-  await page.locator('#open-account').click();
+  await page.locator(`#open-account[title="${name.toLowerCase()}@example.org"]`).waitFor({ state: 'attached' });
+  await clickWorkbenchAction(page, '#open-account');
   assert.equal(await page.locator('#account-email').textContent(), `${name.toLowerCase()}@example.org`);
 }
 async function reconnect(page: Page, context: BrowserContext, name: Person) {

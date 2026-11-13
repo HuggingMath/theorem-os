@@ -13,7 +13,7 @@ import { themeStorageKey } from '../apps/web/client/themePreference';
 import { audit } from './web-a11y';
 import { contrastProblems } from './web-contrast';
 import { freePort, settled, startBrowser, ready } from './web-scenario';
-import { closeSettings, fillConfig, newResearch, openSettings } from './web-ui-controls';
+import { closeSettings, fillConfig, newResearch, openSettings, clickWorkbenchAction } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-saved-key');
@@ -88,7 +88,7 @@ try {
   browser = await startBrowser(service.server, port);
 
   const natural = await signedIn(browser, 'alice@example.org', { locale: 'zh', entry: 'natural' });
-  await natural.page.locator('#open-settings').click();
+  await clickWorkbenchAction(natural.page, '#open-settings');
   await natural.page.locator('#formalize-settings[open]').waitFor();
   assert.equal(await natural.page.locator('body').getAttribute('data-entry'), 'natural', 'key management stays in the main chat');
   assert.equal(await natural.page.locator('#chat-save-key').isDisabled(), true);
@@ -121,7 +121,7 @@ try {
   await natural.page.reload();
   await natural.page.locator('#formalize-original').waitFor();
   await natural.page.waitForFunction(() => document.querySelector<HTMLSelectElement>('#formalize-provider')?.value === 'sub2api');
-  await natural.page.locator('#open-settings').click();
+  await clickWorkbenchAction(natural.page, '#open-settings');
   await natural.page.locator('#chat-delete-key').waitFor();
   assert.equal(await natural.page.locator('#formalize-key').inputValue(), '', 'reload never fills a plaintext key');
   assert.match(await natural.page.locator('.chat-key-management').innerText(), /R7m2/u);

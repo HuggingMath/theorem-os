@@ -106,6 +106,9 @@ try {
   assert.equal(conflict.conflict, true); assert.equal(conflict.draft.versions.length, 3);
   await editor.locator('[data-account-draft-notice]').filter({ hasText: '两份版本都已保留' }).waitFor();
   assert.equal(service.research.projects.detail(owner, project.id).feedback.length, 0); await noOverflow(phone);
+  const editorLayout = await phoneEditor.evaluate(element => ({ width: element.clientWidth, content: element.scrollWidth }));
+  assert.ok(editorLayout.content <= editorLayout.width + 1, `Candidate editor and draft identities fit their panel: ${JSON.stringify(editorLayout)}`);
+  await phoneEditor.screenshot({ path: path.join(output, 'phone-candidate-editor.png') });
   await phone.screenshot({ path: path.join(output, 'phone-drafts.png'), fullPage: true });
   checks.push({ name: phase, accountSharedAcrossDevices: true, allThreeVersionsPreserved: true, restoreDoesNotSubmit: true });
 
@@ -128,7 +131,11 @@ try {
   await organization.getByRole('textbox', { name: 'Next time, start here', exact: true }).fill('Complete the final cancellation argument.');
   await organization.locator('[data-save-personal-problem]').click(); await organization.locator('[data-personal-notice]').waitFor();
   assert.equal(run.status, 'running'); assert.equal(service.research.projects.detail(owner, project.id).feedback.length, 0);
-  await desktop.goto(origin); await desktop.locator('[data-overview-personal-tools]').waitFor();
+  await desktop.goto(origin); await desktop.locator('[data-chat-research-overview] > summary').click();
+  const moreFilters = desktop.locator('[data-overview-more-filters]');
+  assert.equal(await moreFilters.getAttribute('open'), null, 'Personal organization filters start behind a disclosure');
+  assert.equal(await desktop.locator('[data-overview-personal-tools]').isVisible(), false);
+  await moreFilters.locator(':scope > summary').click(); await desktop.locator('[data-overview-personal-tools]').waitFor();
   await desktop.locator('[data-overview-organization]').selectOption('parked');
   const card = desktop.locator(`[data-overview-card="project:${project.id}"]`); await card.waitFor();
   await card.getByText('Complete the final cancellation argument.', { exact: false }).waitFor();
@@ -144,7 +151,9 @@ try {
   const archivedHttp = await archivedResponse; assert.equal(archivedHttp.status(), 200);
   assert.equal((await archivedHttp.json()).item.status, 'archived');
   const personalReload = responseTo(desktop, 'GET', '/api/research/personal/problems');
-  await desktop.reload(); assert.equal((await personalReload).status(), 200);
+  await desktop.reload(); await desktop.locator('[data-chat-research-overview] > summary').click();
+  assert.equal((await personalReload).status(), 200);
+  await desktop.locator('[data-overview-more-filters] > summary').click();
   await desktop.locator('[data-overview-personal-tools]').waitFor(); await card.waitFor({ state: 'hidden' });
   assert.equal(await card.count(), 0);
   await desktop.locator('[data-overview-organization]').selectOption('archived'); await card.waitFor();

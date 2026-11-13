@@ -66,7 +66,9 @@ async function http<T>(page: Page, method: string, pathname: string, input?: unk
 }
 async function home(page: Page) {
   const loaded = page.waitForResponse(response => new URL(response.url()).pathname === '/api/research/overview');
-  await page.goto(origin + '/'); await loaded; await page.locator('[data-research-overview]').waitFor(); await settled(page);
+  await page.goto(origin + '/');
+  await page.locator('[data-chat-research-overview] > summary').click();
+  await loaded; await page.locator('[data-research-overview]').waitFor(); await settled(page);
 }
 try {
  for(const [language,width] of [['zh',1440],['en',390]] as const){
@@ -154,7 +156,7 @@ try {
   phase=`clarification-home-${language}-${width}`;
   let current=service.research.projects.detail(peerOwner,project.id).feedback.find(x=>x.id===candidate.id)!;
   current=(await http<{item:ResearchFeedback}>(peer,'POST',`${projectPath}/feedback/${candidate.id}/decision`,{requestId:crypto.randomUUID(),expectedRevision:current.revision,status:'needs-info',reason:'Please explain the last implication.'})).item;
-  await page.goto(origin+'/');const authorAction=page.locator(`[data-overview-action="feedback:${candidate.id}"]`);await authorAction.waitFor();
+  await home(page);const authorAction=page.locator(`[data-overview-action="feedback:${candidate.id}"]`);await authorAction.waitFor();
   await authorAction.click();await page.locator(`#feedback-${candidate.id} [data-resubmit-review]`).waitFor();
   current=(await http<{item:ResearchFeedback}>(page,'POST',`${projectPath}/feedback/${candidate.id}/review`,{requestId:crypto.randomUUID(),expectedRevision:current.revision,action:'resubmit',text:'The last implication expands the definition.'})).item;
   await home(page);
@@ -164,7 +166,7 @@ try {
 
   phase=`reassignment-home-${language}-${width}`;
   project=service.research.projects.detail(owner,project.id);project=service.research.projects.setMember(owner,project.id,peerId,{requestId:crypto.randomUUID(),expectedRevision:project.revision,role:'reader'});
-  await page.goto(origin+'/');await page.locator(`[data-overview-action="feedback:${candidate.id}"]`).waitFor();
+  await home(page);await page.locator(`[data-overview-action="feedback:${candidate.id}"]`).waitFor();
   assert.equal(forCandidate(owner,candidate.id).filter(x=>x.reviewReassignment&&!x.processed).length,1);
   await page.locator(`[data-overview-action="feedback:${candidate.id}"]`).click();const card=page.locator(`#feedback-${candidate.id}`);await card.locator('[data-reviewer-unavailable]').waitFor();
   checks.push({id:'OV1-inactive-reviewer-reassignment-goes-to-owner',language,width,candidateId:candidate.id});

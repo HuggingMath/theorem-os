@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { openAdvancedChatSettings } from './web-ui-controls';
+import { openAdvancedChatSettings, clickWorkbenchAction } from './web-ui-controls';
 // Actual loopback HTTP and Chromium; the formalizer only waits for cancellation. No model or Lean calls.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -44,7 +44,7 @@ try {
     const writes: string[] = [];
     page.on('request', request => { if (request.method() !== 'GET') writes.push(new URL(request.url()).pathname); });
     await page.goto(origin); await page.locator('#formalize-original').fill('Local cancellation fixture: every natural number equals itself.');
-    await page.locator('#open-settings').click();
+    await clickWorkbenchAction(page, '#open-settings');
     await page.locator('#formalize-key').fill('sk-local-cancellation-fixture');
     await openAdvancedChatSettings(page);
     await page.locator('#formalize-environment').selectOption('standard');

@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { openAdvancedChatSettings } from './web-ui-controls';
+import { openAdvancedChatSettings, openChatBudget } from './web-ui-controls';
 // Empty-home and advanced-input regressions. Actual chat/task HTTP flows live in test-web-chat-session.ts.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -9,10 +9,10 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import { localeStorageKey } from '../apps/web/i18n';
 import { researchExamples } from '../apps/web/problemExamples';
-import { freePort, startBrowser } from './web-scenario';
+import { freePort, settled, startBrowser } from './web-scenario';
 import { audit } from './web-a11y';
 
-const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/web-natural-first');
+const root = path.resolve(import.meta.dirname, '..'), output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/web-natural-first');
 await fs.mkdir(output, { recursive: true });
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;
 const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin,
@@ -26,20 +26,34 @@ const checks: string[] = [], errors: string[] = [];
 let browser: Browser | undefined, activePage: Page | undefined;
 const noOverflow = (page: Page) => page.evaluate(() => Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) <= innerWidth + 1);
 const mark = (value: string) => { checks.push(value); console.log(`PASS ${value}`); };
+async function openConnectionSettings(page: Page) {
+  const settings = page.locator('#formalize-settings');
+  if (!await settings.evaluate(node => (node as HTMLDetailsElement).open)) await settings.locator(':scope > summary').click();
+  await page.locator('.chat-settings-fields').waitFor();
+}
+async function openExamples(page: Page) {
+  const examples = page.locator('[data-chat-examples]');
+  if (!await examples.evaluate(node => (node as HTMLDetailsElement).open)) await examples.locator('summary[data-chat-first-example]').click();
+  await page.locator('#formalize-example').waitFor();
+}
 async function lean(page: Page) {
   if (await page.locator('#entry-lean').isVisible()) await page.locator('#entry-lean').click();
-  else await page.locator('.chat-lean-entry').click();
+  else {
+    await openConnectionSettings(page);
+    await page.locator('.chat-lean-entry').click();
+  }
   await page.locator('#source').waitFor();
 }
 try {
   browser = await startBrowser(service.server, port);
   for (const [locale, width] of [['zh', 1440], ['zh', 390], ['en', 320], ['en', 390]] as const) {
     const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
+    context.setDefaultTimeout(30_000); context.setDefaultNavigationTimeout(30_000);
     await context.addInitScript(([key, value]) => {
       localStorage.setItem(key, value);
       if (!sessionStorage.getItem('theorem-os.web-draft-owner.v1')) sessionStorage.setItem('theorem-os.research-entry.v1', 'lean');
     }, [localeStorageKey, locale]);
-    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
+    const page = await context.newPage(); activePage = page;
     page.on('pageerror', error => errors.push(error.message));
     const writes: string[] = [];
     const connectionChecks: { url: string; body: Record<string, unknown> }[] = [];
@@ -75,13 +89,15 @@ try {
     await page.screenshot({ path: path.join(output, `natural-${locale}-${width}.png`), fullPage: true });
     mark(`${locale} ${width}px: blank natural home, centred heading, collapsed choices, visible new chat and no overflow`);
 
-    await page.locator('[data-chat-first-example]').click();
+    await openExamples(page);
     const starter = researchExamples.find(example => example.id === 'add-zero')!;
+    await page.locator('#formalize-example').selectOption(starter.id);
     assert.equal(await page.locator('#formalize-original').inputValue(), locale === 'en' ? starter.originalEn : starter.original);
     assert.equal(await page.locator('#formalize-environment').inputValue(), 'mathlib');
     assert.deepEqual(await page.locator('#formalize-environment option:not([hidden])').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value)), ['mathlib']);
     assert.equal(writes.length, 0, 'The first-use example only fills the draft');
     await page.locator('#topbar-draft').click();
+    await openExamples(page);
     await page.locator('[data-chat-sample]').click();
     await page.locator('[data-chat-sample-note]').waitFor();
     assert.equal(new URL(page.url()).searchParams.has('sample'), true);
@@ -99,21 +115,24 @@ try {
 
     // The composer sits under the heading here, so its settings open below it, and a short screen scrolls them into view.
     if (width === 320) await page.setViewportSize({ width, height: 640 });
-    await page.locator('[data-chat-configure]').click();
-    await page.locator('.chat-settings-fields').waitFor(); await page.waitForTimeout(100);
+    await openConnectionSettings(page);
+    await settled(page);
     assert.equal(await page.locator('#formalize-effort').inputValue(), 'high');
     const placement = await page.evaluate(() => {
       const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
-      return { panel: box('.chat-settings-fields'), form: box('#natural-research #formalize-form'), heading: box('.chat-start h1'), height: innerHeight };
+      return { panel: box('.chat-settings-fields'), toolbar: box('.chat-composer-toolbar'), heading: box('.chat-start h1'), height: innerHeight };
     });
-    assert.ok(placement.panel.top >= placement.form.bottom && placement.panel.top > placement.heading.bottom && placement.panel.bottom <= placement.height + 1,
+    assert.ok(placement.panel.top >= placement.toolbar.bottom && placement.panel.top > placement.heading.bottom && placement.panel.bottom <= placement.height + 1,
       `The home settings must open below the composer and on screen: ${JSON.stringify(placement)}`);
     if (width === 1440) {
       assert.equal(await page.locator('#formalize-provider').inputValue(), 'sub2api');
       assert.equal(await page.locator('#formalize-model').inputValue(), 'deepseek-flash');
       const budgetFields = ['#formalize-minutes', '#formalize-tokens', '#research-minutes', '#research-tokens', '#research-turns'];
+      await openAdvancedChatSettings(page);
       for (const selector of budgetFields) assert.equal(await page.locator(selector).inputValue(), '', `${selector} defaults to unlimited`);
+      await openChatBudget(page);
       assert.match(await page.locator('[data-chat-budget]').innerText(), /形式化[\s\S]*不限[\s\S]*证明[\s\S]*不限/u);
+      await openConnectionSettings(page);
       await page.locator('#formalize-key').fill('gateway-key-to-clear');
       await page.locator('#formalize-provider').selectOption('openai');
       assert.equal(await page.locator('#formalize-key').inputValue(), '', 'A gateway key cannot accidentally be sent to OpenAI');
@@ -130,6 +149,8 @@ try {
       connectionStatus = 'unknown';
       await page.locator('#check-model-connection').click();
       await page.locator('#chat-connection-result[data-status="unknown"]').waitFor();
+      assert.equal(connectionChecks.length, 2);
+      assert.equal(connectionChecks[1]?.body.model, 'fixture-other-model');
       await page.locator('#formalize-key').fill('changed-key');
       assert.equal(await page.locator('#chat-connection-result').count(), 0, 'Changing the key invalidates the prior result');
       await page.locator('#formalize-original').fill(original);
@@ -150,11 +171,13 @@ try {
       await page.locator('#research-turns').fill('4');
       await page.locator('#formalize-effort').selectOption('max');
       assert.equal(await page.locator('#formalize-start').isEnabled(), true);
+      await openChatBudget(page);
       assert.match(await page.locator('[data-chat-budget]').innerText(), /4 分钟[\s\S]*3 分钟/u);
       assert.equal(writes.length, 0, 'Connection checks and budget edits create no paid task');
+      await openConnectionSettings(page);
       await page.locator('#formalize-provider').selectOption('sub2api');
       await page.locator('#formalize-original').fill('');
-      mark('provider-specific key guidance, key clearing, unlimited defaults, optional finite budgets and non-generating connection checks');
+      mark('provider-specific key guidance, key clearing, unlimited defaults, optional finite budgets and two non-generating connection checks');
     }
     await page.locator('#formalize-settings > summary').click();
     await page.locator('.chat-settings-fields').waitFor({ state: 'hidden' });
@@ -162,7 +185,7 @@ try {
     mark(`${locale} ${width}px: the home settings open below the composer, clear of the heading and the input, and on screen`);
 
     await page.locator('#formalize-original').fill(original);
-    await page.locator('#open-settings').click(); await page.locator('#formalize-key').fill('fixture-secret-not-persisted');
+    await openConnectionSettings(page); await page.locator('#formalize-key').fill('fixture-secret-not-persisted');
     await page.reload(); await page.locator('#formalize-original').waitFor();
     assert.equal(await page.locator('#formalize-original').inputValue(), original, 'Original whitespace and line breaks survive reload');
     assert.equal(await page.locator('#formalize-key').inputValue(), '');
@@ -199,10 +222,11 @@ try {
       mark('Empty Lean source cannot prove an example; move-to-natural preserves the user request without launching it');
     }
     await page.locator('#topbar-draft').click(); assert.equal(await page.locator('#formalize-original').inputValue(), '');
-    await page.locator('.chat-examples > summary').click();
+    await openExamples(page);
     assert.equal(await page.locator('#formalize-example option').nth(1).getAttribute('value'), 'add-zero');
     for (const id of ['add-zero', 'schur-cubic']) {
       const example = researchExamples.find(example => example.id === id)!;
+      await openExamples(page);
       await page.locator('#formalize-example').selectOption(example.id);
       assert.equal(await page.locator('#formalize-original').inputValue(), locale === 'en' ? example.originalEn : example.original);
       assert.equal(await page.locator('#formalize-environment').inputValue(), example.environment);
@@ -225,7 +249,7 @@ try {
   assert.deepEqual(errors, []);
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', checks, paidModelCalls: false }, null, 2) + '\n');
 } catch (error) {
-  await activePage?.screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => {});
+  await activePage?.screenshot({ path: path.join(output, 'failure.png'), fullPage: true, timeout: 10_000 }).catch(() => {});
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'failed', checks, paidModelCalls: false,
     error: error instanceof Error ? error.message : String(error) }, null, 2) + '\n');
   throw error;

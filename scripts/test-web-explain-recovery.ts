@@ -12,7 +12,7 @@ import { localeStorageKey } from '../apps/web/i18n';
 import { webExplanationEvidence, type FixtureUnit } from '../tests/helpers/webExplanationFixture';
 import { freePort, settled, startBrowser } from './web-scenario';
 
-const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/web-explain-recovery');
+const root = path.resolve(import.meta.dirname, '..'), output = path.resolve(process.env.THEOREMOS_TEST_OUTPUT || path.join(root, 'out/web-explain-recovery'));
 await fs.mkdir(output, { recursive: true });
 const target = 'recovery_target', helper = 'theorem recovery_helper : True := by trivial';
 const statement = `theorem ${target} : True := by exact recovery_helper`;
@@ -92,6 +92,45 @@ async function scenario(name: string, width: number, both: boolean, work: (h: Ha
 const address = (base: string) => `${origin}/explain.html?${new URLSearchParams({ run: base.split('/')[3]!, target, language: 'zh' })}`;
 try {
   for (const width of [1440, 390]) {
+    await scenario(`${width}px: saved prose opens directly and optional routes preserve reading and deep links in both languages`, width, true, async ({ page, base }) => {
+      await page.goto(address(base)); await page.locator('.explain-document').waitFor();
+      for (const language of ['zh', 'en'] as const) {
+        const url = new URL(address(base)); url.searchParams.set('language', language); url.searchParams.set('lang', language);
+        await page.goto(url.href); await page.locator('.explain-document').waitFor();
+        const disclosure = page.locator('[data-explain-route]'), route = disclosure.locator('.solution-route');
+        assert.equal(await disclosure.getAttribute('open'), null, 'Saved explanations start on the prose');
+        assert.equal(await route.isVisible(), false, 'The route is optional');
+        assert.equal(await route.count(), 1, 'The hidden route stays mounted');
+        assert.equal(await disclosure.locator(':scope > summary').innerText(), language === 'en' ? 'Proof route' : '证明路线');
+        assert.equal(await page.locator('.explain-overview').isVisible(), true, 'The proof outline is available in prose');
+        assert.ok((await page.locator('.explain-section').first().innerText()).includes(`${language}: synthetic helper explanation.`));
+        await page.screenshot({ path: path.join(output, `prose-default-${language}-${width}.png`), fullPage: true });
+        await disclosure.locator(':scope > summary').click();
+        await route.locator('[data-solution-node="declaration:recovery_helper"]').click();
+        await route.locator('[data-solution-zoom="in"]').click();
+        const zoom = await route.locator('[data-solution-zoom="reset"]').innerText();
+        await disclosure.locator(':scope > summary').click();
+        await page.locator('[data-action="detail"][data-detail="outline"]').click();
+        assert.equal(await disclosure.getAttribute('open'), null, 'Changing prose detail does not reopen the graph');
+        await disclosure.locator(':scope > summary').click();
+        assert.equal(await route.locator('[data-solution-zoom="reset"]').innerText(), zoom);
+        assert.equal(await route.locator('[data-solution-node="declaration:recovery_helper"]').getAttribute('aria-pressed'), 'true');
+        await route.locator('[data-solution-open]').click();
+        await until(() => page.evaluate(() => document.activeElement?.id === 'explain-section-0'), 'A route action focuses the matching prose section');
+        assert.equal(await page.locator('.explain-section').first().locator('.explain-steps').isVisible(), true, 'A route action unfolds the section in outline mode');
+        assert.equal(await page.locator('#explain-split').getAttribute('data-pane'), 'prose');
+        const helperLine = page.locator('.lean-row.is-active').first();
+        assert.equal(await helperLine.getAttribute('data-line'), '1', 'The same section remains marked in Lean');
+        await page.evaluate(url => history.replaceState(null, '', url), `${url.href}#at=recovery_helper&step=1`);
+        await page.reload();
+        await page.locator('.explain-steps > li.is-active[data-anchor="0"][data-step="0"]').waitFor();
+        assert.equal(await disclosure.getAttribute('open'), null, 'A prose-only deep link keeps the route folded');
+        await page.goto(`${url.href}#node=declaration%3Arecovery_helper`);
+        await route.locator('[data-solution-node="declaration:recovery_helper"][aria-pressed="true"]').waitFor();
+        assert.equal(await disclosure.getAttribute('open'), '', 'A node deep link opens the graph');
+        await page.screenshot({ path: path.join(output, `route-link-${language}-${width}.png`), fullPage: true });
+      }
+    });
     await scenario(`${width}px: a generation response stays with its requested language after browser Back`, width, false, async ({ page, base, call }) => {
       await page.goto(address(base)); await page.locator('.explain-document').waitFor();
       await page.locator('[data-action="use"][data-target="0"]').click();

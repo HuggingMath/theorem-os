@@ -59,6 +59,7 @@ button.research-directory-card{font-family:var(--sans);cursor:pointer}
 .research-panel>details>summary{cursor:pointer;font-weight:550;font-size:14px;color:var(--ink)}
 .research-panel>details[open]>summary{margin-bottom:20px}
 .research-form{display:grid;gap:15px;max-width:100%}
+.research-form[data-project-proof-draft]{grid-template-columns:minmax(0,1fr);min-width:0}[data-candidate-composer] .research-field-note{overflow-wrap:anywhere}[data-human-drafts] code{white-space:normal;overflow-wrap:anywhere}
 .research-editor-fields{border:0;margin:0;padding:0;min-width:0}
 .research-form label,.research-field{display:grid;gap:6px;font-size:12px;font-weight:500;color:var(--gray-700);min-width:0}
 .research-field-note{font-weight:400;color:var(--muted);font-size:12px;line-height:1.6;margin:0}

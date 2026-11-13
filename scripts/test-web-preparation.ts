@@ -8,7 +8,7 @@ import { readWebConfig, webLimits, webTemplates } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { draftRecoveryStorageKey } from '../apps/web/client/draftRecovery';
-import { closeDialog, closeHistory, closeSettings, discardSourceEditor, historyDocked, openHistory, openSettings, showArtifacts, showChat, withSettings, enterLean } from './web-ui-controls';
+import { closeDialog, closeHistory, closeSettings, discardSourceEditor, historyDocked, openHistory, openSettings, showArtifacts, showChat, withSettings, enterLean, clickWorkbenchAction } from './web-ui-controls';
 import { freePort, type RequestRecord, type ScenarioSuite, startBrowser, webScenario, writeScenarioReport, ready, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -233,7 +233,7 @@ try {
     await page.locator('.settings-content').evaluate(content => { content.scrollTop = 0; });
     await page.waitForFunction(() => document.querySelector('[data-settings-section="settings-connection"]')?.getAttribute('aria-current') === 'location');
     await closeDialog(page, '#run-settings', () => page.keyboard.press('Escape'));
-    assert.equal(await page.locator('#open-settings').evaluate(button => button === document.activeElement), true);
+    assert.equal(await page.locator('[data-navigation-toggle]').evaluate(button => button === document.activeElement), true);
   }, width);
 
   await scenario('Invalid settings identify the exact field, clear on correction and never POST', async h => {
@@ -306,7 +306,7 @@ try {
     for (const value of [' \n\t ', '中'.repeat(Math.floor(webLimits.maxTaskBytes / 3) + 1)]) {
       await page.locator('#task').fill(value);
       await showArtifacts(page);
-      await page.locator('#open-settings').click();
+      await clickWorkbenchAction(page, '#open-settings');
       await closeDialog(page, '#run-settings', () => page.locator('#settings-submit').click());
       assert.equal(await page.locator('body').getAttribute('data-mobile-view'), 'compose',
         'task validation must keep the composer visible after the close event');

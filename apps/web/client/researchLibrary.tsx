@@ -327,18 +327,19 @@ function Asset({ asset, context, refresh, selection, choose }: { asset: Research
   };
   const shown = release ?? asset.release ?? asset, shownTime = release?.createdAt ?? asset.release?.createdAt ?? asset.updatedAt;
   const withdrawn = Boolean(asset.releases.find(item => item.version === version)?.withdrawn);
-  return <><Panel title={shown.name}>
-    <div class="research-item-meta"><span>{nameOf(asset.type)}</span><a href={personHref(asset.authorId)}>{author.data?.item.displayName ?? asset.authorId}</a><State value={shown.visibility} /><span>{shown.area}</span><time dateTime={shownTime}>{stamp(shownTime)}</time></div>
-    <div class="research-description"><RichProse text={shown.description || tx('暂无用途说明。', 'No description yet.')} /></div>
-    <details><summary>{tx('来源与资产身份', 'Source and asset identity')}</summary><dl class="research-facts"><div><dt>{tx('资产 ID', 'Asset ID')}</dt><dd>{asset.id}</dd></div>{asset.derivedFrom && <div><dt>{tx('派生来源', 'Derived from')}</dt><dd><a href={filteredLibraryHref(asset.derivedFrom.assetId, asset.derivedFrom.version)}>{asset.derivedFrom.assetId}@{asset.derivedFrom.version}</a></dd></div>}</dl></details>
-  </Panel>
-    <Panel title={tx('已发布版本', 'Published versions')}>
-      {asset.releases.length > 0 ? <label class="research-field">{tx('查看固定版本', 'View a fixed version')}<select value={version} onChange={event => {
+  const unpublished = asset.editable && !asset.releases.length;
+  const draftActions = <button type="button" class="button" onClick={() => { setEditorMounted(true); setEditing(value => !value); }} aria-expanded={editing}>{editing ? tx('收起编辑器', 'Close editor') : tx('编辑草稿', 'Edit draft')}</button>;
+  return <><Panel id="research-library-asset" title={shown.name} note={unpublished ? tx('个人草稿', 'Personal draft') : undefined} actions={unpublished ? draftActions : undefined}>
+      {asset.releases.length > 0 && <label class="research-field">{tx('查看固定版本', 'View a fixed version')}<select value={version} onChange={event => {
         setVersion(event.currentTarget.value); const next = new URL(location.href); next.searchParams.set('version', event.currentTarget.value); history.replaceState(null, '', next);
-      }}>{asset.releases.filter(item => !item.withdrawn || asset.editable).map(item => <option key={item.version} value={item.version}>{item.version} · {item.license} · {stamp(item.createdAt)}{item.withdrawn ? ` · ${tx('已撤回', 'Withdrawn')}` : ''}</option>)}</select></label>
-      : <Empty>{tx('尚无已发布版本。', 'No published versions yet.')}</Empty>}
+      }}>{asset.releases.filter(item => !item.withdrawn || asset.editable).map(item => <option key={item.version} value={item.version}>{item.version} · {item.license} · {stamp(item.createdAt)}{item.withdrawn ? ` · ${tx('已撤回', 'Withdrawn')}` : ''}</option>)}</select></label>}
+      <div class="research-item-meta"><span>{nameOf(asset.type)}</span><a href={personHref(asset.authorId)}>{author.data?.item.displayName ?? asset.authorId}</a>{release && <span>{release.license}</span>}<State value={shown.visibility} /><span>{shown.area}</span><time dateTime={shownTime}>{stamp(shownTime)}</time></div>
+      <div class="research-description"><RichProse text={shown.description || tx('暂无用途说明。', 'No description yet.')} /></div>
+      <details><summary>{tx('来源与资产身份', 'Source and asset identity')}</summary><dl class="research-facts"><div><dt>{tx('资产 ID', 'Asset ID')}</dt><dd>{asset.id}</dd></div>{asset.derivedFrom && <div><dt>{tx('派生来源', 'Derived from')}</dt><dd><a href={filteredLibraryHref(asset.derivedFrom.assetId, asset.derivedFrom.version)}>{asset.derivedFrom.assetId}@{asset.derivedFrom.version}</a></dd></div>}</dl></details>
+      {unpublished ? <p class="research-status">{tx('发布检查完成后，才能作为固定版本使用。', 'Publish and complete validation before using this as a fixed version.')}</p>
+        : !asset.releases.length && <Empty>{tx('尚无已发布版本。', 'No published versions yet.')}</Empty>}
       <ErrorBox message={releaseResult.error} />{releaseResult.error && <button class="text-button" type="button" onClick={releaseResult.refresh}>{tx('重新读取版本', 'Reload release')}</button>}
-      <ErrorBox message={draftError} />{release && <><div class="research-item-meta"><span>{release.license}</span><State value={release.visibility} /><time dateTime={release.createdAt}>{stamp(release.createdAt)}</time></div>
+      <ErrorBox message={draftError} />{release && <>
         {withdrawn && <p class="research-status">{tx('此版本已撤回，不能加入新的研究配置。', 'This version is withdrawn and cannot be added to a new research configuration.')}</p>}
         <div class="research-actions"><button class="button button-primary" type="button" disabled={withdrawn} onClick={() => useVersion()}>{tx('用于新研究', 'Use in new research')}</button>
           <button class="button" type="button" disabled={withdrawn} aria-pressed={selection.some(ref => ref.assetId === asset.id && ref.version === release.version)} onClick={() => choose({ assetId: asset.id, version: release.version })}>
@@ -357,10 +358,9 @@ function Asset({ asset, context, refresh, selection, choose }: { asset: Research
         <Fork asset={asset} version={forkVersion} />
       </div>)}
     </Panel>
-    {asset.editable && <Panel title={tx('个人草稿', 'Personal draft')} note={tx('草稿用于继续编辑；上方固定版本保留发布时的内容。', 'Continue editing the draft here. Fixed versions above retain their published contents.')} actions={<button type="button" class="button" onClick={() => { setEditorMounted(true); setEditing(value => !value); }} aria-expanded={editing}>{editing ? tx('收起编辑器', 'Close editor') : tx('编辑草稿', 'Edit draft')}</button>}>
-      <p class="research-item-title">{asset.name}</p><div class="research-description"><RichProse text={asset.description || tx('暂无用途说明。', 'No description yet.')} /></div>
+    {asset.editable && !unpublished && <Panel title={tx('个人草稿', 'Personal draft')} note={tx('草稿用于继续编辑；上方固定版本保留发布时的内容。', 'Continue editing the draft here. Fixed versions above retain their published contents.')} actions={draftActions}>
+      <p class="research-item-title">{asset.name}</p>
       <div class="research-item-meta"><State value={asset.visibility} /><span>{asset.area}</span><time dateTime={asset.updatedAt}>{stamp(asset.updatedAt)}</time></div>
-      {!asset.release && <p class="research-status">{tx('发布检查完成后，才能作为固定版本使用。', 'Publish and complete validation before using this as a fixed version.')}</p>}
     </Panel>}
     {editorMounted && <div hidden={!editing}><Panel title={tx('编辑草稿', 'Edit draft')} actions={<button class="text-button" type="button" disabled={loadingDraft} onClick={() => void loadDraft()}>{tx('载入最新草稿', 'Load latest draft')}</button>}>
       <ErrorBox message={draftError} /><AssetEditor key={editorKey} asset={editorAsset} context={context} disabled={loadingDraft}

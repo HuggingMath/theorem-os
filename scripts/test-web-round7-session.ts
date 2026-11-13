@@ -10,6 +10,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebSession } from '../apps/web/shared';
 import { deferred, freePort, startBrowser } from './web-scenario';
+import { clickWorkbenchAction } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..');
 const output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/frontend-round7/session');
@@ -154,7 +155,7 @@ try {
   await page.locator('#use-password').click(); await page.locator('#password-submit:enabled').waitFor();
   await page.locator('#password-email').fill('alice@example.org'); await page.locator('#login-password').fill(password);
   await page.locator('#password-submit').click(); await page.waitForURL(origin + '/');
-  await page.locator('#open-account').click(); await page.locator('#account-email').getByText('alice@example.org', { exact: true }).waitFor();
+  await clickWorkbenchAction(page, '#open-account'); await page.locator('#account-email').getByText('alice@example.org', { exact: true }).waitFor();
   const logged = await session(legacy); assert.equal(logged.account?.email, 'alice@example.org');
   config.auth!.termsVersion = 'round7-session-v2';
   assert.equal((await session(legacy)).termsRequired, true);

@@ -26,7 +26,7 @@ import { printedPages, printLayout } from './web-print';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 for (const file of ['out/web/explain.js', 'out/web-report/formalization.js'])
   if (!fs.existsSync(path.join(root, file))) throw new Error('Run bun run build:web before the report check.');
-const shots = path.join(root, 'out/web-report-check');
+const shots = path.resolve(process.env.THEOREMOS_TEST_OUTPUT || path.join(root, 'out/web-report-check'));
 fs.mkdirSync(shots, { recursive: true });
 const roots: string[] = [];
 const work = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-web-report-'))); roots.push(work);

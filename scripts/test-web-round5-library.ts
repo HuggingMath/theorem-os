@@ -197,7 +197,7 @@ try {
   await consumer.getByText('FIXED V2 CONTENT', { exact: true }).waitFor(); form = await openFork(consumer);
   assert.equal(await form.getByRole('textbox', { name: '新名称（可选）', exact: true }).inputValue(), fixedName);
   await form.getByRole('alert').waitFor();
-  await panel(consumer, '已发布版本').screenshot({ path: path.join(output, 'retained-fork-after-version-browse.png') });
+  await consumer.locator('#research-library-asset').screenshot({ path: path.join(output, 'retained-fork-after-version-browse.png') });
   const replayV2 = await write<{ item: ResearchAsset }>(consumer, forkPath, () => form.getByRole('button', { name: '创建私有派生草稿', exact: true }).click());
   assert.equal(replayV2.status, 201); assert.deepEqual(replayV2.input, firstV2.input); assert.equal(replayV2.output.item.id, firstV2.output.item.id);
   await consumer.waitForURL(url => url.searchParams.get('entry') === firstV2.output.item.id);

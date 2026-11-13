@@ -15,6 +15,7 @@ import type { WebConversation } from '../apps/web/conversationTypes';
 import type { InstalledLibraryDetail, InstalledLibraryDirectory, InstalledLibraryEntry } from '../apps/web/installedLibraryTypes';
 import { audit } from './web-a11y';
 import { freePort } from './web-scenario';
+import { clickWorkbenchAction } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), output = path.join(root, 'out/web-library-reference');
 await fs.mkdir(output, { recursive: true });
@@ -288,7 +289,7 @@ try {
     assert.deepEqual(service.storage.getRecord<WebConversation>(fixtureKey), fixture, 'reference and refresh never send a message or change the recorded conversation');
 
     step('deduplicate the same pinned declaration across a language change and remove only its card');
-    await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 0 }), page.locator('#locale-switch').click({ timeout: 0 })]);
+    await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 0 }), clickWorkbenchAction(page, '#locale-switch')]);
     await visible(composer(page)); await visible(referenceCard(page, entry.name)); await draftEquals(page, chatDraft);
     assert.equal(await page.locator('#locale-switch').getAttribute('lang'), en ? 'en' : 'zh-CN', 'the real language switch changes the interface');
     assert.equal(await referenceCard(page, entry.name).count(), 1, 'switching language preserves a single structured reference');

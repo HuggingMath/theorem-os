@@ -9,9 +9,10 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { audit } from './web-a11y';
 import { freePort, settled, startBrowser, ready } from './web-scenario';
+import { clickWorkbenchAction, openNavigationMenu } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const output = path.join(root, 'out/web-ui-smoke');
+const output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/web-ui-smoke');
 await fs.access(path.join(root, 'out/web/login.js')).catch(() => { throw new Error('Run bun run build:web before the login check.'); });
 await fs.mkdir(output, { recursive: true });
 const data = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-web-login-'));
@@ -31,6 +32,7 @@ let browser: Awaited<ReturnType<typeof startBrowser>> | undefined;
 try {
   browser = await startBrowser(service.server, port);
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, locale: 'zh-CN' });
+  page.setDefaultTimeout(30_000); page.setDefaultNavigationTimeout(30_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error' && !/status of (?:40[013]|428)/u.test(message.text())) errors.push(message.text()); });
@@ -111,10 +113,10 @@ try {
   await page.fill('#login-code', code);
   await page.click('#verify-code');
   await page.waitForURL(workbench);
-  await page.locator('#open-account').waitFor();
-  assert.equal(await page.locator('#open-account').innerText(), 'alice@example.org');
+  await page.locator('#open-account').waitFor({ state: 'attached' });
+  assert.equal(await page.locator('#open-account').getAttribute('title'), 'alice@example.org');
   await ready(page);
-  mark('a wrong code is reported, the right code opens the workbench with the account in the top bar');
+  mark('a wrong code is reported, the right code opens the workbench with the account in its menu');
 
   // A terms change gates an existing session too, and accepting it keeps the same account.
   const accountId = service.auth!.getAccount('alice@example.org')!.id;
@@ -182,10 +184,10 @@ try {
   await page.goto(origin);
   await ready(page);
 
-  // Signed in, the account button joins the top bar; when the bar is full the address truncates, and every other control,
-  // the search button included, keeps a target of at least 24px. Navigation may wrap into another row.
+  // Open the signed-in menu before checking its account, search, settings and language targets alongside the top bar.
   for (const width of [1440, 1150, 850, 768, 561, 560, 414, 390, 375, 360, 320]) {
     await page.setViewportSize({ width, height: 760 });
+    await openNavigationMenu(page);
     await settled(page);
     const bar = await page.locator('#topbar').evaluate(topbar => ({ scroll: topbar.scrollWidth, client: topbar.clientWidth,
       // Closed details can retain descendant rectangles; compare only rendered controls.
@@ -215,7 +217,7 @@ try {
     }
   }
   await page.setViewportSize({ width: 1440, height: 900 });
-  mark('the signed-in top bar keeps the search button, settings, language and account at 24px or more, without overlap, from 1440 to 320 pixels');
+  mark('the signed-in navigation keeps search, settings, language and account at 24px or more, without overlap, from 1440 to 320 pixels');
 
   // The runner here ends every run without a result, so each one ends with an error and mails its link.
   const csrf = (await (await page.request.get(`${origin}/api/session`)).json()).csrfToken as string;
@@ -263,14 +265,14 @@ try {
   await page.waitForURL(url => workbench(url) && url.search === chatAddress);
   mark('a session that ends on an open conversation returns to that conversation after the login page');
 
-  await page.click('#open-account');
+  await clickWorkbenchAction(page, '#open-account');
   await page.locator('#account-dialog[open]').waitFor();
   assert.equal(await page.locator('#completion-email').isChecked(), true, 'Completion mail starts off');
   await page.locator('#completion-email').uncheck();
   await page.locator('#toast').filter({ hasText: '已关闭结束邮件' }).waitFor();
   assert.equal((await (await page.request.get(`${origin}/api/session`)).json()).account.completionEmail, false);
   await page.reload();
-  await page.click('#open-account');
+  await clickWorkbenchAction(page, '#open-account');
   await page.locator('#account-dialog[open]').waitFor();
   assert.equal(await page.locator('#completion-email').isChecked(), false, 'The completion mail choice is lost on reload');
   await page.locator('#completion-email').check();
@@ -278,7 +280,7 @@ try {
   await page.keyboard.press('Escape');
   mark('the account dialog turns the completion mail off and on, and the choice is kept by the server');
 
-  await page.click('#open-account');
+  await clickWorkbenchAction(page, '#open-account');
   await page.locator('#account-dialog[open]').waitFor();
   await settled(page);
   assert.equal(await page.locator('#delete-account').isDisabled(), true);
@@ -312,7 +314,7 @@ try {
   await page.fill('#login-password', password);
   await page.click('#password-submit');
   await page.waitForURL(workbench);
-  await page.click('#open-account');
+  await clickWorkbenchAction(page, '#open-account');
   await page.locator('#account-dialog[open]').waitFor();
   assert.equal(await page.locator('#account-current-wrap').isVisible(), true);
   await page.click('#logout');
@@ -334,7 +336,7 @@ try {
 } catch (error) {
   const page = browser?.contexts()[0]?.pages()[0];
   console.error('Login check failed at', page?.url());
-  await page?.screenshot({ path: path.join(output, 'login-failure.png'), fullPage: true }).catch(() => {});
+  await page?.screenshot({ path: path.join(output, 'login-failure.png'), fullPage: true, timeout: 10_000 }).catch(() => {});
   throw error;
 } finally {
   await browser?.close();

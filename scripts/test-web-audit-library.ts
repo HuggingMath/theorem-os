@@ -12,6 +12,7 @@ import type { WebRunner } from '../apps/web/runner';
 import type { WebSession } from '../apps/web/shared';
 import type { FrozenResearchConfiguration, ResearchAsset, ResearchPublication, ResearchSkillDraft } from '../apps/web/researchAssetTypes';
 import { freePort, ready, startBrowser } from './web-scenario';
+import { clickWorkbenchAction } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-audit-library');
@@ -57,7 +58,7 @@ async function signIn(email: string) {
   await page!.fill('#login-code', code); await page!.click('#verify-code');
   await page!.waitForURL(url => url.origin === origin && url.pathname === '/');
   await ready(page!);
-  assert.equal(await page!.locator('#open-account').innerText(), email);
+  assert.equal(await page!.locator('#open-account').getAttribute('title'), email);
 }
 async function check(name: string, run: () => Promise<void>) {
   currentCheck = name; const started = performance.now();
@@ -152,7 +153,7 @@ try {
   });
 
   await check('C03 the English Library selection panel has English controls', async () => {
-    await page!.locator('#locale-switch').click(); await page!.locator('html[lang^="en"]').waitFor({ state: 'attached' });
+    await clickWorkbenchAction(page!, '#locale-switch'); await page!.locator('html[lang^="en"]').waitFor({ state: 'attached' });
     const panel = page!.locator('.composer-research-selection'); await panel.locator('strong').waitFor();
     assert.ok((await panel.innerText()).includes(asset.name), 'The selected version survives changing language');
     assert.equal(/\p{Script=Han}/u.test(await panel.innerText()), false, 'The English panel has no hardcoded Chinese text');
@@ -163,7 +164,7 @@ try {
   });
 
   await check('C04 UI email logout and login do not inherit another account’s selection', async () => {
-    await page!.locator('#open-account').click(); await page!.locator('#logout').click(); await page!.waitForURL(/\/login\.html/u);
+    await clickWorkbenchAction(page!, '#open-account'); await page!.locator('#logout').click(); await page!.waitForURL(/\/login\.html/u);
     const bobStart = requests.length; await signIn('bob@example.org');
     const bob = await http<{ researcherId: string }>('GET', '/api/research/session');
     assert.notEqual(bob.researcherId, alice.researcherId);

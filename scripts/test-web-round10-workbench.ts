@@ -12,6 +12,7 @@ import type { WebObservation } from '../apps/web/collaboration';
 import { localeStorageKey } from '../apps/web/i18n';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { deferred, freePort, settled, startBrowser } from './web-scenario';
+import { openChatResultDetails } from './web-ui-controls';
 
 declare const Bun: { serve(options: { hostname: string; port: number; fetch(request: Request): Response | Promise<Response> }): { port: number; stop(force?: boolean): void } };
 
@@ -181,8 +182,11 @@ try {
     let c: Task | undefined;
     try {
       c = await task(page, ctx); const live = page.locator('#chat-live-panel');
-      // A wide screen opens the workspace of a running task by itself; a phone opens it from the status line.
-      if (width < 1100) await page.locator('#research-chat-thread [data-research-artifact="live"]').click();
+      // The reader opens the running task's workspace through its progress details on every screen size.
+      if (!await live.isVisible()) {
+        await openChatResultDetails(page);
+        await page.locator('#research-chat-thread [data-research-artifact="live"]').click();
+      }
       await live.locator('[data-live-plan]').waitFor();
       const row = live.locator('[data-live-task="goal"]');
       assert.equal(await row.getAttribute('data-tone'), 'pending');

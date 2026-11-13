@@ -13,7 +13,7 @@ import { researchExamples } from '../apps/web/problemExamples';
 import { localeStorageKey } from '../apps/web/i18n';
 import { schurDemoProof, schurDemoExplanation, schurEqualityQuestion, schurEqualityAnswer } from './fixtures/schurDemo';
 import { freePort, preferFullCollaboration, settled, startBrowser } from './web-scenario';
-import { showExamples, withSettings } from './web-ui-controls';
+import { showExamples, withSettings, clickWorkbenchAction } from './web-ui-controls';
 import { audit } from './web-a11y';
 
 declare const Bun: { serve(options: { hostname: string; port: number; idleTimeout: number;
@@ -177,7 +177,7 @@ try {
 
   phase = '等号条件追问';
   await page.locator('#formalize-original').fill(schurEqualityQuestion);
-  if (!await page.locator('#formalize-key').isVisible()) await page.locator('#open-settings').click();
+  if (!await page.locator('#formalize-key').isVisible()) await clickWorkbenchAction(page, '#open-settings');
   await page.locator('#formalize-key').fill('local-schur-demo-not-a-real-key');
   await page.locator('#formalize-start:enabled').click(); await eventually(() => Boolean(reply)); reply!.delta(answerStart);
   await page.waitForFunction(() => document.querySelector('#research-chat-thread')?.textContent?.includes('【本地模拟回答】'));

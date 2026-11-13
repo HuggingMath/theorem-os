@@ -100,6 +100,8 @@ try {
     const moment = service.jobs.get(owner, parent.id)!.observation!;
     const historicAddress = address + `&at=${moment.sequence}&atState=${moment.snapshot.stateDigest}&compare=${sibling.id}`;
     await page.goto(historicAddress); await page.locator('[data-evolution-selected]').waitFor();
+    assert.equal(await page.locator('[data-problem-route-history]').evaluate(node => (node as HTMLDetailsElement).open), true,
+      'a historical deep link opens its saved-moment controls automatically');
     await page.locator('[data-journey-expand-all]').click();
     const parentTask = journey.attempts.find(item => item.id === parent.id)!.tasks.find(item => item.task.id === inherited.taskId)!.task;
     await page.locator(`[data-solution-node="journey-task:${encodeURIComponent(parent.id)}:${encodeURIComponent(parentTask.id)}"]`).click();
@@ -117,7 +119,7 @@ try {
 
     phase = `verified-old-version-control-${language}-${width}`;
     project = service.research.projects.bindRun(owner, project.id, { requestId: 'attach-accepted-control', expectedRevision: project.revision, runId: child.id, statementVersionId: project.versions[0].id });
-    await page.goto(origin + '/'); await page.locator(`[data-overview-card="project:${project.id}"]`).waitFor();
+    await page.goto(origin + '/'); await page.locator('[data-chat-research-overview] > summary').click(); await page.locator(`[data-overview-card="project:${project.id}"]`).waitFor();
     const filter = page.locator('[data-overview-filter=passed]'); assert.equal(await filter.innerText(), language === 'zh' ? '有通过记录' : 'Has verified runs'); await filter.click();
     const card = page.locator(`[data-overview-card="project:${project.id}"]`); await card.locator(`[data-overview-verified-run="${child.id}"]`).waitFor();
     assert.match(await card.locator('[data-overview-verified]').innerText(), /v1/);
@@ -128,9 +130,9 @@ try {
     project = service.research.projects.addVersion(owner, project.id, { requestId: 'navigation-v2', expectedRevision: project.revision, statement: 'Additional theorem required', source: currentSource, environment: input.environment });
     project = service.research.projects.bindRun(owner, project.id, { requestId: 'bind-current-version', expectedRevision: project.revision, runId: current.id, statementVersionId: project.versions[1].id });
     phase = `verified-record-and-current-state-${language}-${width}`;
-    await page.goto(origin + '/'); await page.locator(`[data-overview-progress="${current.id}"]`).waitFor(); await page.locator('[data-overview-filter=passed]').click();
+    await page.goto(origin + '/'); await page.locator('[data-chat-research-overview] > summary').click(); await page.locator(`[data-overview-progress="${current.id}"]`).waitFor(); await page.locator('[data-overview-filter=passed]').click();
     const acceptedLink = card.locator(`[data-overview-verified-run="${child.id}"]`); await acceptedLink.waitFor();
-    assert.equal(await acceptedLink.innerText(), language === 'zh' ? '陈述 v1 已验收 →' : 'Statement v1 accepted →');
+    assert.equal(await acceptedLink.innerText(), language === 'zh' ? '陈述 v1 · 完整原题通过 →' : 'Statement v1 · Original problem accepted →');
     assert.equal(await card.locator('[data-overview-verified-run]').count(), 1); assert.equal(await card.locator(`[data-overview-verified-run="${current.id}"]`).count(), 0);
     assert.match(await card.locator(`[data-overview-run-status="${current.id}"]`).innerText(), language === 'zh' ? /最新尝试/ : /Latest attempt/);
     const acceptedHref = new URL((await acceptedLink.getAttribute('href'))!, origin), latestHref = new URL((await card.locator('[data-overview-open]').getAttribute('href'))!, origin);

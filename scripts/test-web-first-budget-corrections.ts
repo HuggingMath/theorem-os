@@ -8,6 +8,7 @@ import { createWebService } from '../apps/web/server';
 import { readWebConfig } from '../apps/web/config';
 import { localeStorageKey } from '../apps/web/i18n';
 import { freePort, startBrowser } from './web-scenario';
+import { openAdvancedChatSettings } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..');
 const output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/product-four/onboarding');
@@ -25,6 +26,7 @@ let active: Page | undefined, failure: unknown, phase = 'setup';
 try {
   for (const [language, width] of [['zh', 1440], ['en', 390]] as const) {
     const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
+    context.setDefaultTimeout(15_000); context.setDefaultNavigationTimeout(15_000);
     await context.addInitScript(({ language, key }) => localStorage.setItem(key, language), { language, key: localeStorageKey });
     await context.route(/^https?:\/\//u, async route => {
       const request = route.request(), url = new URL(request.url());
@@ -38,13 +40,10 @@ try {
     await page.goto(`${origin}/?lang=${language}`);
     const original = 'For every natural number n, prove that n + 0 = n.';
     await page.locator('#formalize-original').fill(original);
-    await page.locator('[data-first-connection]').click(); await page.locator('[data-setup-next=credentials]').click();
+    await page.locator('#formalize-settings > summary').click();
     await page.locator('#formalize-model').fill('fixture-model'); await page.locator('#formalize-key').fill('sk-disposable-unused');
     assert.equal(await page.locator('#formalize-start').isEnabled(), true);
-    if (!await page.locator('#formalize-settings').evaluate(node => (node as HTMLDetailsElement).open)) {
-      await page.locator('#formalize-settings > summary').click();
-    }
-    await page.locator('[data-chat-advanced-settings] > summary').click();
+    await openAdvancedChatSettings(page);
     const samples = [
       { field: 'research-tokens', value: '5000', fixed: '10000', range: '10,000', label: language === 'zh' ? '证明 Token 上限' : 'Proof token limit' },
       { field: 'formalize-tokens', value: '2000001', fixed: '2000000', range: '2,000,000', label: language === 'zh' ? '形式化 Token 上限' : 'Statement token limit' },
@@ -93,7 +92,7 @@ try {
     await page.waitForFunction(() => document.activeElement?.id === 'research-tokens');
     assert.equal(await page.locator('#research-tokens').inputValue(), '5000');
     await page.locator('#research-tokens').fill('');
-    await page.locator('[data-first-connection]').click(); await page.locator('[data-setup-next=credentials]').click();
+    await openAdvancedChatSettings(page);
     await page.locator('#formalize-key').fill('sk-disposable-unused');
     assert.equal(await page.locator('#formalize-start').isEnabled(), true);
     assert.equal(await page.locator('#formalize-form').evaluate(node => (node as HTMLFormElement).checkValidity()), true);
@@ -104,7 +103,7 @@ try {
     await context.close(); active = undefined;
   }
   assert.deepEqual(errors, []); assert.deepEqual(external, []); assert.deepEqual(writes, []); assert.equal(prohibited, 0);
-} catch (cause) { failure = cause; if (active && !active.isClosed()) await active.screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => {}); }
+} catch (cause) { failure = cause; if (active && !active.isClosed()) await active.screenshot({ path: path.join(output, 'failure.png'), fullPage: true, timeout: 10_000 }).catch(() => {}); }
 finally {
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: failure ? 'failed' : 'passed', phase, checks, errors, external, writes, prohibited,
     realModelCalls: 0, realLeanCalls: 0, realMailCalls: 0, build: JSON.parse(await fs.readFile(path.join(root, 'out/web/build-info.json'), 'utf8')),

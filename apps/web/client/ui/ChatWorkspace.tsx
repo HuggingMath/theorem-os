@@ -5,7 +5,7 @@ import type { WebFormalization } from '../../formalizationTypes';
 import type { WebProvider, WebQuotaView, WebRun } from '../../shared';
 import { researchExamples } from '../../problemExamples';
 import { formatTokens, isAcceptedRun, isFaultedRun, isRejectedRun, resultDescription, runProgress, stoppedLabel } from '../../presentation';
-import { acceptedDescription, acceptedTitle, isStatementReviewed, statementConfirmation } from '../../presentation';
+import { acceptedTitle, acceptedVerdict, isStatementReviewed, statementConfirmation } from '../../presentation';
 import type { NextStep } from '../../report';
 import { locale, localizeText, t } from '../../i18n';
 import { detailLevel, onDetailLevel } from '../detailLevel';
@@ -18,7 +18,7 @@ import { Rich, RichProse } from '../richText';
 import { Elapsed, SolveProcessView } from './SolveProcess';
 import type { PlanApprovalProps } from './RunHeader';
 import type { ChatArtifactKind } from '../chatArtifactNavigation';
-import { RecoveryChoices, StartGuide } from '../productFlowView';
+import { RecoveryChoices } from '../productFlowView';
 import { ResearchOverview, type ResearchOverviewProps } from '../researchOverview';
 import { DecisionSummary, usePreviousDecisionPlan } from '../decisionSummary';
 import { GuidanceOutcome } from '../guidanceOutcome';
@@ -29,8 +29,9 @@ import { ThinkingProcess } from './ThinkingProcess';
 import { BackgroundReview } from '../backgroundReview';
 import { FirstResearchStart } from './FirstResearchStart';
 import type { ChatAnswer } from '../chatAnswer';
-import type { ChatMathematics } from '../chatMathematics';
-import { ChatMathematicalAnswer, ChatMathematicalProgress } from './ChatMathematicalWork';
+import { chatMathematicsSummary, type ChatMathematics } from '../chatMathematics';
+import { ChatAnswerActions, ChatMathematicalAnswer, ChatMathematicalProgress, ChatMathematicalSummary } from './ChatMathematicalWork';
+import { chatReadingReveal } from '../chatReadingPosition';
 import type { ResearchStartCostProps } from '../researchStartCost';
 import { libraryReferenceId, type ChatLibraryReference } from '../chatReference';
 import { ProblemDraftPanel, type ProblemDraftPanelProps } from '../problemDrafts';
@@ -154,17 +155,25 @@ function FormalizationFailure({ item }: { item: WebFormalization }) {
 
 function TaskMessage(props: ChatThreadProps) {
   const { run, formalization: item } = props;
+  const tx = (zh: string, en: string) => locale === 'en' ? en : zh;
   const [, relevel] = useState(0);
   useEffect(() => onDetailLevel(() => relevel(value => value + 1)), []);
-  // 简洁 leaves the conversation to what is said and decided; while the task runs, its tasks, route and files are in the workspace.
+  // Keep decisions and the mathematical answer in the conversation; open the process and artifacts on demand.
   const simple = detailLevel() === 'simple';
   const proofActive = !!run && ['queued', 'running'].includes(run.status);
   const reviewActive = !!item && ['queued', 'running'].includes(item.status);
   const active = proofActive || reviewActive;
   const accepted = !!run && isAcceptedRun(run);
+  const compactMathematics = simple && !accepted ? props.mathematics : undefined;
+  const acceptance = accepted && run ? acceptedVerdict(run) : undefined;
   const reviewed = !!run && isStatementReviewed(run);
   const natural = !!(item || run?.formalization);
   const statementDecision = !run && !!item?.humanReview && !!item.report && ['review', 'confirmed'].includes(item.status);
+  const openingStatement = props.conversation?.messages.find(message => message.role === 'user' && message.kind === 'text')?.text;
+  const mathematicsSummary = chatMathematicsSummary(compactMathematics, [
+    ...(openingStatement === undefined ? [] : [openingStatement]),
+    ...(statementDecision && item?.report ? [item.report.backtranslation?.mathematics ?? item.report.original] : []),
+  ]);
   const confirmation = run?.formalization?.confirmation ?? item?.confirmation ?? (item?.compiled && reviewActive ? 'pending' : undefined);
   const reviewMode = item?.reviewMode ?? run?.formalization?.reviewMode;
   const direct = reviewMode === 'direct' || item?.report?.semanticReview === 'not-performed';
@@ -184,9 +193,10 @@ function TaskMessage(props: ChatThreadProps) {
       : active ? formalProgress?.revising ? t('根据 Lean 报错修改陈述') : phaseNames[item?.progress?.phase ?? 'queued']
         : item?.status === 'review' ? direct ? t('Lean 代码已就绪') : t("陈述待核对")
           : item?.status === 'confirmed' ? direct ? t('Lean 代码已就绪') : t("陈述已确认") : props.missingTask ? t('关联任务记录已删除') : t("正在读取任务");
-  const description = props.missingTask ? t('原题和对话仍保留，可以修改题目后重新发送。') : run ? accepted ? acceptedDescription(run) : resultDescription(run) : failed
+  const description = props.missingTask ? t('原题和对话仍保留，可以修改题目后重新发送。') : run ? acceptance?.description ?? resultDescription(run) : failed
     ? item?.researchError ? t("Lean 陈述已生成，但证明研究未能启动。")
-      : t("本次未能完成原题形式化，请查看详情中的原因和下一步。")
+      : item?.reason ? `${formalizationReasonText(item.reason)} ${formalizationNextStep(item.reason)}`
+        : t("本次未能完成原题形式化，请查看详情中的原因和下一步。")
     : item?.status === 'cancelled' ? t("任务已停止，已保存的消息仍可查看。")
       : active && item?.compiled ? t('Lean 陈述已编译，可以查看和下载；原题含义正在后台审核。')
         : formalProgress?.description ?? t("陈述检查不代表证明通过，最终结果以 Lean 独立验收为准。");
@@ -194,9 +204,14 @@ function TaskMessage(props: ChatThreadProps) {
   const solve = props.solve;
   const hasSource = solve?.process.current !== undefined || solve?.process.checks.some(check => check.source !== undefined);
   const liveAvailable = Boolean(solve && (solve.process.active || hasSource));
-  // The title already says where the task is; this line appears only while the task waits for the reader.
-  const nextAction = !solve ? undefined : statementDecision ? item?.status === 'review' ? t('核对题意并确认继续') : t('继续拟定研究计划')
-    : props.planDecision?.approval && !props.planDecision.approval.busy && !props.planDecision.approval.revising ? t('查看并确认研究计划') : undefined;
+  const detailedAcceptance = simple && accepted && !props.missingTask;
+  const metadata = solve && <p class="research-conversation-meta" data-chat-run-meta>
+    {solve.process.startedAt && <Elapsed from={solve.process.startedAt} to={solve.process.endedAt} />}
+    {solve.process.tokens !== undefined && <span>{t('Token {0}', formatTokens(solve.process.tokens))}</span>}
+    {liveAvailable && active && <button type="button" class="text-button" data-research-artifact="live" onClick={() => props.onArtifact('live')}>
+      <Icon name="panel-right" />{t('实时工作区')}</button>}
+    {!simple && active && props.onCancelTask && <button type="button" class="text-button" data-research-stop onClick={props.onCancelTask}>{t("停止解题")}</button>}
+  </p>;
   const resultActions = run && !proofActive && <>
     {accepted && <button type="button" class="text-button" data-research-artifact="roadmap" onClick={() => props.onArtifact('roadmap')}><Icon name="network" />{t('路线图')}</button>}
     <button type="button" class="button" data-research-artifact="result" onClick={() => props.onArtifact('result')}>
@@ -212,51 +227,64 @@ function TaskMessage(props: ChatThreadProps) {
   return <div class="chat-task">
     {props.sample && <p class="sample-note" data-chat-sample-note>{t('预设示例 · 附 Lean 验收记录')}</p>}
     <div class="research-conversation-status" data-active={active} data-accepted={accepted} data-failed={failed}>
-      <p class="research-conversation-state" role="status" aria-atomic="true">
+      <div class="chat-task-status-line"><p class="research-conversation-state" role="status" aria-atomic="true">
         <Icon name={accepted ? 'circle-check' : failed ? 'circle-alert' : active ? 'clock-3' : !run && formalProgress?.ready ? 'file-code-2' : 'square'} /><strong>{title}</strong></p>
-      {solve && <p class="research-conversation-meta">
-        {solve.process.startedAt && <Elapsed from={solve.process.startedAt} to={solve.process.endedAt} />}
-        {solve.process.tokens !== undefined && <span>{t('Token {0}', formatTokens(solve.process.tokens))}</span>}
-        {liveAvailable && <button type="button" class="text-button" data-research-artifact="live" onClick={() => props.onArtifact('live')}>
-          <Icon name="panel-right" />{t('实时工作区')}</button>}
-        {active && props.onCancelTask && <button type="button" class="text-button" data-research-stop onClick={props.onCancelTask}>{t("停止解题")}</button>}
-      </p>}
-      {(!statementDecision || failed) && <p class="research-conversation-description">{description}</p>}
+      {simple && solve && active && props.onCancelTask && <button type="button" class="text-button" data-research-stop onClick={props.onCancelTask}>{t("停止解题")}</button>}
+      </div>
+      {!simple && metadata}
+      {(!statementDecision || failed) && !detailedAcceptance && <p class="research-conversation-description">{description}</p>}
       {!run && item?.status === 'queued' && item.queue && <p class="research-conversation-latest" data-formalization-queue>{t('排队第 {0} 位 · 前方 {1} 项等待 · {2} 项执行中', item.queue.position, item.queue.ahead, item.queue.running)}</p>}
-      {nextAction && <p class="chat-next-action" data-chat-next-action><span>{t('需要你做')}</span><strong>{nextAction}</strong></p>}
-      {item && <FormalizationProgress item={item} process={solve?.process} wide={solve?.wide}
-        onCode={() => props.onArtifact('live')} />}
       {item?.compiled && reviewActive && <p class="chat-statement-verdict" data-chat-background-review role="status">
         {accepted ? t('候选 Lean 陈述已证明，原题含义仍在后台审核。') : proofActive ? t('证明与原题含义审核同时进行，已有代码可以立即使用。')
           : t('Lean 陈述已编译，可以查看和下载；原题含义正在后台审核。')}
       </p>}
       {!statementDecision && natural && (item?.report || item?.compiled || run?.formalization) && <p class="chat-statement-verdict" data-statement-verdict>
-        {direct && (!confirmation || ['automatic', 'manual'].includes(confirmation)) ? t('Lean 编译通过') : statementConfirmation(confirmation, false, reviewMode)}
+        {acceptance?.meaning ?? (direct && (!confirmation || confirmation === 'automatic') ? t('Lean 编译通过') : statementConfirmation(confirmation, false, reviewMode))}
         {' '}{t('Lean 验收证明的是这份陈述，不能替代对自然语言原意的核对。')}
       </p>}
     </div>
-    {solve && <ThinkingProcess process={solve.process} time={solve.time} onCheck={solve.onCheck} onQuestion={props.onQuestion} />}
     {backgroundReview && <BackgroundReview review={backgroundReview} compact />}
     <StatementDecision {...props} />
     <PlanDecision {...props} simple={simple} />
     {accepted && reviewed && run && <ChatMathematicalAnswer runId={run.id} answer={props.answer} onRetry={() => props.onAnswerRetry?.()} onTarget={target => props.onAnswerTarget?.(target)} onQuestion={props.onAnswerQuestion} />}
-    {!accepted && props.mathematics && !(simple && proofActive) && <ChatMathematicalProgress work={props.mathematics} onTask={taskId => props.onArtifact('roadmap', { taskId })} />}
-    {solve && <SolveProcessView process={solve.process} wide={solve.wide} time={solve.time} onCheck={solve.onCheck}
-      loading={solve.loading} failed={solve.failed} onRetry={solve.onRetry} />}
-    {item && (['error', 'exhausted'].includes(item.status) || item.researchError) && (item.reason || item.researchError) && <FormalizationFailure item={item} />}
-    {!statementDecision && !(simple && active) && (run || item?.report || item?.compiled) && <div class="research-conversation-artifacts" role="group" aria-label={t('结果')}>
-      {accepted && <button type="button" class="chat-result-primary" data-research-artifact="source" disabled={!proof} onClick={() => props.onArtifact('source')}><Icon name="file-code-2" /><span>{t('查看验收证明')}</span><Icon name="arrow-up-right" /></button>}
+    {mathematicsSummary && <ChatMathematicalSummary work={mathematicsSummary} />}
+    {!accepted && props.mathematics && !compactMathematics && <ChatMathematicalProgress work={props.mathematics} onTask={taskId => props.onArtifact('roadmap', { taskId })} />}
+    {accepted && <div class="research-conversation-artifacts"><button type="button" class="chat-result-primary" data-research-artifact="source" disabled={!proof} onClick={() => props.onArtifact('source')}><Icon name="file-code-2" /><span>{t('查看验收证明')}</span><Icon name="arrow-up-right" /></button></div>}
+    {(solve || run || item) && <details class="chat-result-more" data-chat-result-more open={!simple && !accepted} onToggle={event => {
+      if (!event.currentTarget.open || !compactMathematics) return;
+      const progress = event.currentTarget.querySelector<HTMLElement>('[data-chat-mathematics]');
+      progress?.querySelector('h3')?.scrollIntoView({ block: 'nearest' });
+      progress?.focus({ preventScroll: true });
+      progress?.dispatchEvent(new Event(chatReadingReveal, { bubbles: true }));
+    }}>
+      <summary>{active ? tx('查看解题进展', 'View solving progress') : tx('证明详情与报告', 'Proof details and reports')}</summary>
+      <div class="chat-result-details">
+      {detailedAcceptance && <p class="research-conversation-description">{description}</p>}
+      {simple && metadata}
+      {accepted && reviewed && run && props.answer?.document && <ChatAnswerActions runId={run.id} answer={props.answer} onRetry={() => props.onAnswerRetry?.()} />}
+      {compactMathematics && <ChatMathematicalProgress work={compactMathematics} onTask={taskId => props.onArtifact('roadmap', { taskId })} />}
+      {item && <FormalizationProgress item={item} process={solve?.process} wide={solve?.wide} onCode={() => props.onArtifact('live')} />}
+      {solve && <ThinkingProcess process={solve.process} time={solve.time} onCheck={solve.onCheck} onQuestion={props.onQuestion} />}
+      {solve && <SolveProcessView process={solve.process} wide={solve.wide} time={solve.time} onCheck={solve.onCheck}
+        loading={solve.loading} failed={solve.failed} onRetry={solve.onRetry} />}
+      {item && (['error', 'exhausted'].includes(item.status) || item.researchError) && (item.reason || item.researchError) && <FormalizationFailure item={item} />}
+      {liveAvailable && !active && <button type="button" class="text-button" data-research-artifact="live" onClick={() => props.onArtifact('live')}>
+        <Icon name="panel-right" />{tx('查看工作区', 'View workspace')}</button>}
+      {(run || item?.report || item?.compiled) && <div class="research-conversation-artifacts" role="group" aria-label={t('结果')}>
       {run && !accepted && <button type="button" data-research-artifact="roadmap" onClick={() => props.onArtifact('roadmap')}><Icon name="network" /><span>{t('路线图')}</span><Icon name="arrow-up-right" /></button>}
       <button type="button" data-research-artifact="original" onClick={() => props.onArtifact('original')}><Icon name="languages" /><span>{t('原题')} / Lean</span><Icon name="arrow-up-right" /></button>
       {run && !accepted && <button type="button" data-research-artifact="source" disabled={!proof} onClick={() => props.onArtifact('source')}><Icon name="file-code-2" /><span>{t('候选源码')}</span><Icon name="arrow-up-right" /></button>}
-    </div>}
+      </div>}
+      <div class="chat-result-more-actions">{resultActions}</div>
+      {simple && run && props.recovery && props.recovery.steps.length > 1 && <RecoveryChoices run={run} {...props.recovery} steps={props.recovery.steps.slice(1)} />}
+      </div>
+    </details>}
     <div class="chat-task-actions">
-      {accepted ? <details class="chat-result-more" data-chat-result-more><summary>{t('更多结果操作')}</summary><div class="chat-result-more-actions">{resultActions}</div></details> : resultActions}
       {props.onStartResearch && !item?.humanReview && <button type="button" class="button button-primary" data-research-continue disabled={props.startingResearch} onClick={props.onStartResearch}>
         {props.startingResearch ? t('正在进入证明队列…') : t('继续证明')}</button>}
       {!accepted && !active && !statementDecision && props.onEditProblem && <button type="button" class="text-button" onClick={props.onEditProblem}>{t("修改题目")}</button>}
     </div>
-    {run && props.recovery && <RecoveryChoices run={run} {...props.recovery} />}
+    {run && props.recovery && <RecoveryChoices run={run} {...props.recovery} steps={simple ? props.recovery.steps.slice(0, 1) : props.recovery.steps} />}
   </div>;
 }
 
@@ -359,24 +387,20 @@ export type ChatComposerProps = {
 
 function ChatComposer(props: ChatComposerProps) {
   const textarea = useRef<HTMLTextAreaElement>(null);
-  const [setupStep, setSetupStep] = useState(1);
   const settings = useRef<HTMLDetailsElement>(null);
   const keyInput = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState(false);
+  const [showResearch, setShowResearch] = useState(false);
   const composing = useRef(false);
+  const compactInput = props.hasConversation && !props.newProblem;
   const missingKey = props.keyRequired && !props.apiKey.trim();
+  const needsKey = !!props.input.trim() && missingKey;
   const configureKey = () => {
-    setSetupStep(2);
     if (settings.current) settings.current.open = true;
     keyInput.current?.focus();
   };
   const provider = props.providers.find(item => item.id === props.providerId);
   const tx = (zh: string, en: string) => locale === 'en' ? en : zh;
-  const configure = (step: number, selector: string) => {
-    setSetupStep(step);
-    const settings = document.querySelector<HTMLDetailsElement>('#formalize-settings');
-    if (settings) { settings.open = true; settings.querySelector<HTMLElement>(selector)?.focus(); }
-  };
   const configuration = !props.model.trim() || props.keyRequired && !props.apiKey.trim() ? tx('待配置', 'Setup needed')
     : props.checkingConnection ? tx('正在检查', 'Checking') : props.connection?.status === 'available' ? tx('模型列表可访问', 'Model list accessible')
       : props.connection?.status === 'error' ? tx('连接需处理', 'Connection needs attention')
@@ -418,9 +442,9 @@ function ChatComposer(props: ChatComposerProps) {
     const node = textarea.current;
     if (!node) return;
     node.style.height = 'auto';
-    node.style.height = `${Math.min(Math.max(node.scrollHeight, 92), 260)}px`;
-  }, [props.input]);
-  return <div class="chat-composer">
+    node.style.height = `${Math.min(Math.max(node.scrollHeight, compactInput ? 56 : 92), 260)}px`;
+  }, [props.input, compactInput]);
+  return <div class="chat-composer" data-chat-followup={compactInput || undefined}>
     <form id="formalize-form" onSubmit={event => { event.preventDefault(); if (canSend) props.onSubmit(); }}>
       {props.editedProblem && <div class="chat-editing-problem" data-chat-editing-problem><span>{props.editedProblem.research ? t('独立研究草稿 · 单独保存') : t('正在修改题目 · 草稿单独保存')}</span>
         <button type="button" class="text-button" data-chat-return-home disabled={props.submitting} onClick={props.editedProblem.onReturnHome}>{t('返回首页草稿')}</button></div>}
@@ -454,14 +478,14 @@ function ChatComposer(props: ChatComposerProps) {
         <span role="status" data-chat-quote-count={props.quote.count}>{t('已引用 {0} 条记录', props.quote.count)}</span>
         <button type="button" class="text-button" data-chat-quote-undo disabled={props.submitting} onClick={props.quote.onUndo}>{t('撤回上次引用')}</button>
       </div>}
-      {props.newProblem && <div class="chat-input-view" role="group" aria-label={tx('原题输入视图', 'Problem input view')}>
-        <button type="button" class="text-button" data-input-view="edit" aria-pressed={!preview} onClick={() => { setPreview(false); requestAnimationFrame(() => textarea.current?.focus()); }}>{tx('编辑', 'Edit')}</button>
-        <button type="button" class="text-button" data-input-view="preview" aria-pressed={preview} onClick={() => setPreview(true)}>{tx('预览公式', 'Preview formulas')}</button>
+      {props.newProblem && (props.input.trim() || preview) && <div class="chat-input-view" role="group" aria-label={tx('原题输入视图', 'Problem input view')}>
+        {preview ? <button type="button" class="text-button" data-input-view="edit" onClick={() => { setPreview(false); requestAnimationFrame(() => textarea.current?.focus()); }}>{tx('继续编辑', 'Continue editing')}</button>
+          : <button type="button" class="text-button" data-input-view="preview" onClick={() => setPreview(true)}>{tx('预览公式', 'Preview formulas')}</button>}
       </div>}
       <label class="sr-only" for="formalize-original">{props.hasConversation ? t("继续对话") : t("自然语言或 TeX 原题")}</label>
-      <textarea ref={textarea} id="formalize-original" rows={3} value={props.input} spellcheck={false}
+      <textarea ref={textarea} id="formalize-original" rows={compactInput ? 1 : 3} value={props.input} spellcheck={false}
         hidden={props.newProblem && preview}
-        placeholder={props.guidance ? t('建议证明方法，或指出需要调整的引理…') : props.hasConversation ? t("追问思路、引理或证明细节…") : t("输入你想证明的题目…")}
+        placeholder={props.guidance ? t('建议证明方法，或指出需要调整的引理…') : props.hasConversation ? t('继续提问…') : t("输入你想证明的题目…")}
         onInput={event => props.onInput(event.currentTarget.value)}
         onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
         onKeyDown={event => {
@@ -469,7 +493,7 @@ function ChatComposer(props: ChatComposerProps) {
           if (props.newProblem ? !event.ctrlKey && !event.metaKey : event.ctrlKey || event.metaKey) return;
           event.preventDefault(); if (canSend) props.onSubmit(); else if (missingKey && props.input.trim() && !props.disabled && !props.submitting) configureKey();
         }} />
-      {props.newProblem && <p class="chat-send-status" data-new-problem-shortcut>{tx('Enter 换行；Ctrl / ⌘ + Enter 提交题目。', 'Enter adds a line; Ctrl / ⌘ + Enter submits the problem.')}</p>}
+      {props.newProblem && props.input.trim() && <p class="chat-send-status" data-new-problem-shortcut>{tx('Enter 换行；Ctrl / ⌘ + Enter 提交题目。', 'Enter adds a line; Ctrl / ⌘ + Enter submits the problem.')}</p>}
       {props.draftPersistence && <div class="chat-error" role="alert" data-chat-draft-save-error>
         <p>{tx('草稿尚未保存，刷新或关闭页面会丢失当前输入。请先下载原题，或重试保存。', 'Your draft has not been saved. Reloading or closing this page will lose your input. Download the problem or retry saving first.')}</p>
         <button type="button" class="text-button" data-retry-chat-draft onClick={props.draftPersistence.retry}>{tx('重试保存', 'Retry saving')}</button>{' '}
@@ -480,54 +504,29 @@ function ChatComposer(props: ChatComposerProps) {
       {props.newProblem && preview && <section class="chat-input-preview" data-input-preview tabIndex={0} aria-label={tx('原题公式预览', 'Problem formula preview')}>
         {props.input.trim() ? <RichProse text={props.input} /> : <p>{tx('先在编辑中写下原题，这里会预览文字和公式。', 'Write a problem in Edit to preview its text and formulas here.')}</p>}
       </section>}
-      {props.newProblem && <FirstResearchStart participation={props.participation} budgets={props.budgets} limits={props.budgetLimits}
-        cost={props.cost && { ...props.cost, providerId: props.providerId, model: props.model }}
-        locked={props.submitting || props.participationLocked} quota={props.quota} onBudget={value => {
-          props.onBudget('formalization', 'maxRunSeconds', value.maxRunSeconds); props.onBudget('formalization', 'maxTotalTokens', value.maxTotalTokens);
-          props.onBudget('research', 'maxRunSeconds', value.research.maxRunSeconds); props.onBudget('research', 'maxTotalTokens', value.research.maxTotalTokens);
-          props.onBudget('research', 'maxTurns', value.research.maxTurns);
-        }} />}
-      {props.newProblem && <button type="button" class="first-research-connection" data-first-connection onClick={() => configure(1, '#formalize-provider')}>
-        <span>{provider?.name ?? tx('选择模型服务商', 'Choose a model provider')}{props.model.trim() && <> · <span translate={false}>{props.model}</span></>}</span>
-        <span data-status={props.connection?.status ?? 'unchecked'}>{configuration} <Icon name="chevron-right" /></span>
-      </button>}
       <div class="chat-composer-toolbar">
-        {props.newProblem && <details class="chat-participation-control" data-chat-participation-control onToggle={event => {
-          if (event.currentTarget.open) { const settings = event.currentTarget.parentElement?.querySelector<HTMLDetailsElement>('#formalize-settings'); if (settings) settings.open = false; }
-        }}>
-          <summary><span>{props.participation === 'guided' ? t('共同推进') : t('自动推进')}</span><Icon name="chevron-down" /></summary>
-          <fieldset class="chat-participation" data-chat-participation disabled={props.submitting || props.participationLocked}>
-            <legend>{t('研究方式')}</legend>
-            <label><input type="radio" name="chat-participation" value="guided" checked={props.participation === 'guided'} onChange={event => { props.onParticipation('guided'); event.currentTarget.closest('details')!.open = false; }} />
-              <span><strong>{t('共同推进')}</strong><span>{t('题意和初始计划由你确认 · 2 个 Agent')}</span></span></label>
-            <label><input type="radio" name="chat-participation" value="automatic" checked={props.participation === 'automatic'} onChange={event => { props.onParticipation('automatic'); event.currentTarget.closest('details')!.open = false; }} />
-              <span><strong>{t('自动推进')}</strong><span>{t('自动核对并开始证明 · 1 个 Agent')}</span></span></label>
-          </fieldset>
-        </details>}
         <details ref={settings} id="formalize-settings" class="chat-composer-settings" onToggle={event => {
           // On the empty home the fields open below the composer; a short screen scrolls them into view.
           const details = event.currentTarget;
-          if (details.open) { const participation = details.parentElement?.querySelector<HTMLDetailsElement>('[data-chat-participation-control]'); if (participation) participation.open = false; }
           if (details.open && document.body.dataset.chatEmpty === 'true') details.querySelector('.chat-settings-fields')?.scrollIntoView({ block: 'nearest' });
-        }}><summary title={t("模型设置")}><Icon name="sliders-horizontal" /><span>{t("设置")}</span></summary>
+        }}><summary data-chat-configure-key={needsKey || undefined}
+          onClick={event => { if (needsKey && !settings.current?.open) { event.preventDefault(); configureKey(); } }}
+          title={`${props.newProblem ? tx('研究设置', 'Research settings') : t('模型设置')} · ${provider?.name ?? ''} · ${configuration}`}
+          aria-label={needsKey ? tx('填写 API Key', 'Enter API key') : `${props.newProblem ? tx('研究设置', 'Research settings') : t('模型设置')} · ${configuration}`}>
+          <Icon name="sliders-horizontal" /><span class="chat-model-label" translate={false}>{needsKey ? tx('填写 API Key', 'Enter API key') : !props.model.trim() || missingKey ? t('配置模型') : props.model}</span>
+          <Icon name="chevron-down" /></summary>
           <div class="chat-settings-fields">
-            {props.newProblem && <ol class="first-research-setup-steps" aria-label={tx('配置连接', 'Set up your connection')}>
-              {[[1, tx('选服务商', 'Provider'), '#formalize-provider'], [2, tx('Key 与模型', 'Key and model'), '#formalize-key'], [3, tx('检查连接', 'Check'), '#check-model-connection']].map(([step, label, selector]) => <li key={step}>
-                <button type="button" aria-current={setupStep === step ? 'step' : undefined} onClick={() => configure(Number(step), String(selector))}><span>{step}</span>{label}</button>
-              </li>)}
-            </ol>}
-            <section class="first-research-setup-part" data-setup-part="1" data-current={setupStep === 1}>
+            <div class="chat-connection-fields">
+            <div class="chat-settings-options">
             <label for="formalize-provider">{t('模型服务商')}<select id="formalize-provider" value={props.providerId}
-              onChange={event => { props.onProvider(event.currentTarget.value); setSetupStep(2); }} disabled={props.hasConversation || props.submitting}>
+              onChange={event => props.onProvider(event.currentTarget.value)} disabled={props.hasConversation || props.submitting}>
               {!provider && <option value={props.providerId} disabled>{props.providerId ? `${props.providerId} · ` : ''}{t('请选择可用的服务商')}</option>}
               {props.providers.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select></label>
-            {props.newProblem && <button type="button" class="text-button" data-setup-next="credentials" onClick={() => configure(2, props.keyRequired ? '#formalize-key' : '#formalize-model')}>{tx('使用这个服务商，继续', 'Use this provider and continue')} →</button>}
-            </section>
-            <section class="first-research-setup-part" data-setup-part="2" data-current={setupStep === 2}>
             <label for="formalize-model">{t('模型')}<input id="formalize-model" type="text" value={props.model} spellcheck={false}
               onInput={event => props.onModel(event.currentTarget.value)} disabled={props.hasConversation || props.submitting} required maxlength={160}
               list="chat-model-options" /></label>
+            </div>
             <datalist id="chat-model-options">{provider?.defaultModel && <option value={provider.defaultModel} />}</datalist>
             <label for="formalize-key">API Key {props.keyRequired && <span>{t("（必填）")}</span>}</label>
             <input ref={keyInput} id="formalize-key" type="password" autocomplete="off" spellcheck={false} value={props.apiKey} onInput={event => props.onKey(event.currentTarget.value)} placeholder={t('临时使用的 API Key')} aria-describedby="chat-key-help" />
@@ -545,14 +544,19 @@ function ChatComposer(props: ChatComposerProps) {
               <p class="field-note">{t('保存后加密存入你的账号，可随时删除。')}</p>
               {props.keyManagement.notice && <p class="field-note" id="chat-key-notice" role="status">{props.keyManagement.notice}</p>}
             </div>}
-            </section>
-            <section class="first-research-setup-part" data-setup-part="3" data-current={setupStep === 3}>
-            <div class="chat-connection-check"><button type="button" class="button" id="check-model-connection" onClick={() => { setSetupStep(3); props.onCheckConnection(); }}
+            <div class="chat-connection-check"><button type="button" class="button" id="check-model-connection" onClick={props.onCheckConnection}
               title={t('通过模型列表检查连接')}
               disabled={props.checkingConnection || !props.model.trim() || props.keyRequired && !props.apiKey.trim()}>{props.checkingConnection ? t('正在检查连接…') : t('检查 Key 与模型')}</button></div>
             {props.connection && <p class="field-note" id="chat-connection-result" role="status" data-status={props.connection.status}>{props.connection.message}</p>}
             {props.newProblem && <p class="field-note">{tx('这一步只读取模型列表，不调用模型。', 'This check reads the model list and does not call a model.')}</p>}
-            </section>
+            </div>
+            {props.newProblem && <fieldset class="chat-participation" data-chat-participation disabled={props.submitting || props.participationLocked}>
+              <legend>{t('研究方式')}</legend>
+              <label><input type="radio" name="chat-participation" value="guided" checked={props.participation === 'guided'} onChange={() => props.onParticipation('guided')} />
+                <span><strong>{t('共同推进')}</strong><span>{t('题意和初始计划由你确认 · 2 个 Agent')}</span></span></label>
+              <label><input type="radio" name="chat-participation" value="automatic" checked={props.participation === 'automatic'} onChange={() => props.onParticipation('automatic')} />
+                <span><strong>{t('自动推进')}</strong><span>{t('自动核对并开始证明 · 1 个 Agent')}</span></span></label>
+            </fieldset>}
             <details class="chat-advanced-settings" data-chat-advanced-settings><summary>{t('高级设置')}<span>{t('环境、推理与预算')}</span></summary>
               <div class="chat-advanced-settings-fields">
               <div class="chat-settings-options"><label for="formalize-environment">{t("证明环境")}<select id="formalize-environment" value={props.environment} onChange={event => props.onEnvironment(event.currentTarget.value as ChatComposerProps['environment'])} disabled={props.hasConversation}><option value="mathlib">{t('TheoremOS 数学环境')}</option><option value="standard" hidden>{t('Lean 标准库')}</option></select></label>
@@ -586,15 +590,25 @@ function ChatComposer(props: ChatComposerProps) {
             </>}
               </div>
             </details>
+            {!props.hasConversation && <button class="text-button chat-lean-entry" type="button" onClick={() => {
+              if (settings.current) settings.current.open = false;
+              props.onLean();
+            }}>{tx('已有 Lean 代码？打开编辑器', 'Have Lean code? Open the editor')}<Icon name="chevron-right" /></button>}
           </div>
         </details>
-        {!props.hasConversation && <button class="text-button chat-lean-entry" type="button" onClick={props.onLean}>Lean <Icon name="chevron-right" /></button>}
         <div class="chat-composer-submit">{props.pending ? <button id="chat-stop" type="button" class="chat-send" onClick={props.onStop} aria-label={t("停止回答")} title={t("停止回答")}><Icon name="square" /></button>
           : <button id="formalize-start" type="submit" class={`chat-send${props.newProblem ? ' chat-send-start' : ''}`} disabled={!canSend}
             aria-label={props.guidance ? t('发送研究指导') : !props.newProblem ? t("发送") : props.participation === 'guided' ? tx('开始核对题目', 'Start statement review') : tx('开始解题', 'Start solving')}
             title={props.guidance ? t('发送研究指导') : !props.newProblem ? t("发送") : props.participation === 'guided' ? tx('开始核对题目', 'Start statement review') : tx('开始解题', 'Start solving')}>
             {props.newProblem && <span>{props.participation === 'guided' ? tx('开始核对题目', 'Start statement review') : tx('开始解题', 'Start solving')}</span>}{props.submitting ? <span class="spinner" /> : <Icon name="arrow-up" />}</button>}</div>
       </div>
+      {props.newProblem && <FirstResearchStart participation={props.participation} budgets={props.budgets} limits={props.budgetLimits}
+        cost={props.cost && { ...props.cost, providerId: props.providerId, model: props.model }}
+        locked={props.submitting || props.participationLocked} quota={props.quota} onAdjust={() => focusBudget('formalize-minutes')} onBudget={value => {
+          props.onBudget('formalization', 'maxRunSeconds', value.maxRunSeconds); props.onBudget('formalization', 'maxTotalTokens', value.maxTotalTokens);
+          props.onBudget('research', 'maxRunSeconds', value.research.maxRunSeconds); props.onBudget('research', 'maxTotalTokens', value.research.maxTotalTokens);
+          props.onBudget('research', 'maxTurns', value.research.maxTurns);
+        }} />}
     </form>
     {props.submissionRecovery && <div class="chat-send-status" data-chat-submission-recovery role="status">
       <p>{t('原任务已创建，对话连接尚未恢复。修改后的题目已保留，尚未发送。')}</p>
@@ -608,30 +622,20 @@ function ChatComposer(props: ChatComposerProps) {
       <button type="button" class="text-button" data-chat-fix-budget={issue.field} onClick={() => focusBudget(issue.field)}>{budgetLabel(issue.field)}</button>{' · '}{budgetIssueText(issue)}
     </p>)}</div>}
     {props.sendStatus && <p id="formalize-send-status" class="chat-send-status" role="status">{props.sendStatus}</p>}
-    {props.input.trim() && missingKey && <div class="chat-key-next-step" role="status" data-chat-key-required>
-      <p>{t('题目已保留，填写 API Key 后即可发送。')}</p>
-      <button type="button" class="button" data-chat-configure-key onClick={configureKey}>{t('配置 Key 后开始')}</button>
-    </div>}
-    {props.home && <HomeResearchDetails {...props.home} />}
-    {props.newProblem && <details class="chat-examples"><summary>{t("试试例题")}</summary><label class="sr-only" for="formalize-example">{t("选择自然语言例题")}</label><select id="formalize-example" value="" onChange={event => { props.onExample(event.currentTarget.value); event.currentTarget.value = ''; textarea.current?.focus(); }}><option value="">{t("选择一个题目")}</option>{researchExamples.map(example => <option key={example.id} value={example.id}>{locale === 'en' ? example.nameEn : example.name}</option>)}</select></details>}
-    {props.problemDrafts && <ProblemDraftPanel key={props.problemDrafts.owner} {...props.problemDrafts} />}
-  </div>;
-}
-
-function HomeResearchDetails(props: NonNullable<ChatComposerProps['home']>) {
-  const returning = Boolean(props.overview && (props.overview.runs.length || props.overview.conversations.length || props.overview.formalizations.length));
-  return <div class="chat-home-details">
-      <div class="chat-start-actions">
-        <button type="button" class="button" data-chat-configure onClick={props.onConfigure}><Icon name="sliders-horizontal" />{t('配置模型')}</button>
-        <button type="button" class="button" data-chat-first-example onClick={props.onFirstExample}><Icon name="plus" />{t('试一道简单题')}</button>
-        <a class="button" href="workspace.html">{t('我的研究')}</a>
+    {props.newProblem && <div class="chat-home-options"><details class="chat-examples" data-chat-examples><summary data-chat-first-example>{t("试试例题")}</summary>
+      <div class="chat-examples-content"><label class="sr-only" for="formalize-example">{t("选择自然语言例题")}</label><select id="formalize-example" value="" onChange={event => { props.onExample(event.currentTarget.value); event.currentTarget.value = ''; textarea.current?.focus(); }}><option value="">{t("选择一个题目")}</option>{researchExamples.map(example => <option key={example.id} value={example.id}>{locale === 'en' ? example.nameEn : example.name}</option>)}</select>
+      {props.home?.startGuide && <button type="button" class="text-button" data-start-prepare onClick={props.home.startGuide.onTemplate}>{tx('填写命题模板', 'Use a statement template')}</button>}
+      {props.home?.onSample && <button type="button" class="text-button chat-start-sample" data-chat-sample title={t('无需 API Key')} onClick={props.home.onSample}>{t('查看完整示例')}<Icon name="arrow-up-right" /><span>{t('免费浏览')}</span></button>}
       </div>
-      <p class="chat-start-tools"><a href={`workspace.html?tab=search&lang=${locale}`}>{t('搜索全部研究记录')}</a> · <a href={`practice.html?lang=${locale}`}>{t('体验参与决策')}</a></p>
-      {props.onSample && <button type="button" class="text-button chat-start-sample" data-chat-sample title={t('无需 API Key')} onClick={props.onSample}>{t('查看完整示例')}<Icon name="arrow-up-right" /><span>{t('免费浏览')}</span></button>}
-
-    {props.startGuide && (returning ? <details class="research-returning-guide"><summary>{t('准备一道新题')}</summary><StartGuide {...props.startGuide} onConfigure={props.onConfigure} /></details>
-      : <StartGuide {...props.startGuide} onConfigure={props.onConfigure} />)}
-    {props.overview && <ResearchOverview key={props.overview.owner} {...props.overview} />}
+    </details>
+    {props.home?.overview && <details class="chat-saved-research" data-chat-research-overview onToggle={event => setShowResearch(event.currentTarget.open)}>
+      <summary>{tx('继续已有研究', 'Continue previous research')}</summary>
+      {showResearch && <ResearchOverview key={props.home.overview.owner} {...props.home.overview} />}
+    </details>}
+    </div>}
+    {props.problemDrafts && <div key={props.problemDrafts.owner} hidden={!props.problemDrafts.account && !props.problemDrafts.target}>
+      <ProblemDraftPanel {...props.problemDrafts} />
+    </div>}
   </div>;
 }
 

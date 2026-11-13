@@ -28,6 +28,7 @@ import type { ResearchFeedback } from '../researchProjectTypes';
 import { backgroundReviewPending } from './backgroundReview';
 import { ChatAnswers } from './chatAnswer';
 import { chatMathematics } from './chatMathematics';
+import { detailLevel } from './detailLevel';
 
 const running = (item?: { status: string }) => item?.status === 'queued' || item?.status === 'running';
 const reason = (error: unknown) => localizeMessage(error instanceof Error ? error.message : String(error));
@@ -133,7 +134,7 @@ export class ChatSession {
   private liveRenderer?: typeof import('./ui/LiveWorkspace').renderLiveWorkspace;
   private liveLoading?: Promise<void>;
   private readonly reading: ChatReadingPosition;
-  /** A wide screen can open the workspace automatically beside the conversation. */
+  /** Detailed reading can open the workspace automatically on a wide screen. */
   private readonly wide = matchMedia('(min-width: 1101px)');
   /** The tasks whose live workspace opened by itself, so a redraw does not reopen one the reader closed. */
   private readonly liveShown = new Set<string>();
@@ -981,15 +982,14 @@ export class ChatSession {
     const formalization = this.formalization ?? this.seed;
     const mathematics = solve ? chatMathematics(this.run, formalization ? this.options.formalizationActivity.activity(formalization.id) : []) : undefined;
     const answer = this.answers.sync(this.run);
-    // A task that is formalizing or proving opens its workspace once, also when the reader comes back to it; one the
-    // reader closed stays closed until they open it again. A task still waiting for its place only has the checklist.
-    // A panel the reader has open is never replaced behind their back.
-    if (solve?.process.active && (solve.process.state === 'formalizing' || solve.process.state === 'proving')
+    // Simple reading keeps the conversation until the reader opens a workspace. Detailed reading opens an active
+    // task's workspace once on a wide screen; closing it or choosing another panel remains the reader's choice.
+    if (detailLevel() === 'full' && solve?.process.active && (solve.process.state === 'formalizing' || solve.process.state === 'proving')
       && solve.wide && !this.liveShown.has(solve.process.key)
       && !document.body.dataset.chatArtifact && document.body.dataset.outputOpen !== 'true') {
       this.liveShown.add(solve.process.key);
       queueMicrotask(() => {
-        if (this.solve()?.process.key !== solve.process.key) return;
+        if (detailLevel() !== 'full' || this.solve()?.process.key !== solve.process.key) return;
         this.options.onArtifact('live', undefined, true);
         // The workspace narrows the composer and rewraps a long draft: its saved editing position belongs to this layout.
         this.restoreDraftPosition(this.draftId);
@@ -1136,7 +1136,7 @@ export class ChatSession {
         : newProblem && !this.capabilities ? t("正在连接…") : canGuide ? t('讨论用于交流思路；想调整研究，请切换到「指导 Agent」。')
         // A running proof that takes no guidance says so, so a message here is not mistaken for an instruction to the Agent.
         : this.conversation && this.run?.status === 'running' && !this.options.isSample(this.run)
-          ? canDecide ? t('研究计划建立后，可以在这里指导 Agent。') : t('本次由单个 Agent 自动推进，不接收中途指导；这里发送的是讨论。') : undefined,
+          ? canDecide ? t('研究计划建立后，可以在这里指导 Agent。') : t('这里发送的是讨论，不会调整正在进行的解题。') : undefined,
       onEnvironment: () => { if (!this.submissionIdentity.unresolved && !this.seed && !this.conversation && !this.run) this.environment = webTaskEnvironment; this.rememberDraft(); this.draw(); }, onEffort: value => { this.effort = value; this.researchEffort = value; this.rememberDraft(); this.draw(); },
       onKey: value => { this.apiKey = value; this.keyNotice = ''; this.clearConnection(); this.draw(); },
       onExample: id => this.useExample(id),

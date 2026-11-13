@@ -1,19 +1,67 @@
 import assert from 'node:assert/strict';
 import type { Page } from 'playwright';
 
+/** Secondary workbench actions live in one native disclosure on every screen size. */
+export async function openNavigationMenu(page: Page) {
+  const menu = page.locator('[data-navigation-menu]');
+  if (!await menu.evaluate(node => (node as HTMLDetailsElement).open)) await menu.locator('[data-navigation-toggle]').click();
+  await menu.locator('[data-navigation-panel]').waitFor();
+  return menu;
+}
+
+/** Reveal a secondary action through the navigation menu before using its original control. */
+export async function clickWorkbenchAction(page: Page, selector: string) {
+  const action = page.locator(selector);
+  if (!await action.isVisible()) await openNavigationMenu(page);
+  await action.click();
+}
+
+/** Reveal the optional process, source navigation and reports through their visible disclosure. */
+export async function openChatResultDetails(page: Page) {
+  const details = page.locator('[data-chat-result-more]');
+  await details.waitFor({ state: 'attached' });
+  if (!await details.evaluate(node => (node as HTMLDetailsElement).open)) await details.locator(':scope > summary').click();
+  await details.locator('.chat-result-details').waitFor();
+  return details;
+}
+
+/** The problem page keeps its history, usage and export links in one native menu. */
+export async function openProblemSection(page: Page, section: string) {
+  const link = page.locator(`.problem-tabs a[href*="tab=${section}"]`);
+  if (!await link.isVisible()) await page.locator('[data-problem-records-menu] > summary').click();
+  await link.click();
+}
+
+/** Saved moments and the complete journey are optional within the proof process. */
+export async function openProblemHistory(page: Page) {
+  const history = page.locator('[data-problem-route-history]');
+  if (!await history.evaluate(node => (node as HTMLDetailsElement).open)) await history.locator(':scope > summary').click();
+  return history;
+}
+
+/** The first problem's budget explanation is optional and separate from its editable settings. */
+export async function openChatBudget(page: Page) {
+  const settings = page.locator('#formalize-settings[open]');
+  if (await settings.count()) await settings.locator(':scope > summary').click();
+  const details = page.locator('[data-first-research-start]');
+  await details.waitFor({ state: 'attached' });
+  if (!await details.evaluate(node => (node as HTMLDetailsElement).open)) await details.locator(':scope > summary').click();
+  await page.locator('[data-chat-budget]').waitFor();
+  return details;
+}
+
 /** Open the composer's optional environment, reasoning and budget fields through their visible disclosure. */
 export async function openAdvancedChatSettings(page: Page) {
   const settings = page.locator('#formalize-settings');
-  if (!await settings.evaluate(node => (node as HTMLDetailsElement).open)) await settings.locator(':scope > summary').click({ timeout: 0 });
+  if (!await settings.evaluate(node => (node as HTMLDetailsElement).open)) await settings.locator(':scope > summary').click();
   const advanced = settings.locator('[data-chat-advanced-settings]');
-  if (!await advanced.evaluate(node => (node as HTMLDetailsElement).open)) await advanced.locator(':scope > summary').click({ timeout: 0 });
+  if (!await advanced.evaluate(node => (node as HTMLDetailsElement).open)) await advanced.locator(':scope > summary').click();
 }
 
-/** Participation is optional on a new problem, behind its visible disclosure. */
+/** Research mode lives with the connection fields inside the composer's settings. */
 export async function openChatParticipation(page: Page) {
-  const control = page.locator('[data-chat-participation-control]');
-  await control.waitFor({ state: 'attached' });
-  if (!await control.evaluate(node => (node as HTMLDetailsElement).open)) await control.locator(':scope > summary').click();
+  const settings = page.locator('#formalize-settings');
+  if (!await settings.evaluate(node => (node as HTMLDetailsElement).open)) await settings.locator(':scope > summary').click();
   await page.locator('[data-chat-participation]').waitFor();
 }
 
@@ -60,6 +108,7 @@ export async function closeHistory(page: Page) {
 export async function enterLean(page: Page) {
   if (!await page.locator('body[data-entry="natural"]').count()) return;
   const entry = page.locator('#entry-lean:visible, .chat-lean-entry:visible, body[data-entry="lean"] #source:visible').first();
+  if (!await entry.count()) await clickWorkbenchAction(page, '#open-settings');
   await entry.waitFor();
   if (await page.locator('body[data-entry="natural"]').count()) await entry.click();
   await page.locator('body[data-entry="lean"]').waitFor({ state: 'attached' });
@@ -107,8 +156,7 @@ export async function showArtifacts(page: Page) {
   if (await page.locator('body[data-view="run"]').count() && !await page.locator('#run-detail').isVisible()) {
     // The chat's 路线图 link opens the run panel on its trajectory; the tab the run had selected is selected again.
     const tab = await page.evaluate(() => document.querySelector<HTMLElement>('[data-detail-tab][aria-selected="true"]')?.dataset.detailTab);
-    const more = page.locator('[data-chat-result-more]:not([open]) > summary');
-    if (await more.count()) await more.click();
+    await openChatResultDetails(page);
     // While a task runs in 简洁, the conversation leaves the roadmap to the live workspace's 完整记录.
     const roadmap = page.locator('[data-research-artifact="roadmap"]');
     if (!await roadmap.isVisible()) {
@@ -128,7 +176,7 @@ export async function openSettings(page: Page) {
   if (await page.locator('#run-settings[open]').count()) return;
   await showChat(page);
   if (await page.locator('#run-settings[open]').count()) return;
-  await page.locator('#open-settings').click();
+  await clickWorkbenchAction(page, '#open-settings');
   await page.locator('#run-settings[open]').waitFor();
 }
 

@@ -15,7 +15,7 @@ import { formalizationCompiledCandidate } from '../src/math/formalization';
 import { webFormalizationEvidence, webFormalizationStatement } from '../tests/helpers/webFormalizationFixture';
 import { localeStorageKey } from '../apps/web/i18n';
 import { deferred, freePort, preferFullCollaboration, startBrowser } from './web-scenario';
-import { openAdvancedChatSettings } from './web-ui-controls';
+import { openAdvancedChatSettings, openChatParticipation, clickWorkbenchAction } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.resolve(process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/web-background-review'));
@@ -62,9 +62,9 @@ async function screenshot(page: Page, name: string) {
 async function submit(page: Page) {
   await page.locator('#formalize-original').fill(webFormalizationStatement);
   const automatic = page.locator('input[name="chat-participation"][value="automatic"]');
-  if (!await automatic.isVisible()) await page.locator('[data-chat-participation-control] > summary').click();
+  await openChatParticipation(page);
   await automatic.check();
-  if (!await page.locator('#formalize-key').isVisible()) await page.locator('#open-settings').click();
+  if (!await page.locator('#formalize-key').isVisible()) await clickWorkbenchAction(page, '#open-settings');
   await page.locator('#formalize-key').fill('sk-local-background-review-fixture');
   await openAdvancedChatSettings(page);
   await page.locator('#formalize-environment').selectOption('standard');

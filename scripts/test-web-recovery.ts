@@ -169,7 +169,7 @@ try {
     };
     await h.page.goto(origin);
     // The page opens on the natural-language chat; 提交 belongs to the Lean editor.
-    await h.page.locator('.chat-lean-entry').waitFor();
+    await h.page.locator('.chat-lean-entry').waitFor({ state: 'attached' });
     await enterLean(h.page);
     await disconnected(h.page);
     const values = await draft(h.page);

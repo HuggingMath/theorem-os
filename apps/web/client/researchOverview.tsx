@@ -4,7 +4,7 @@ import type { WebRun } from '../shared';
 import type { WebFormalization } from '../formalizationTypes';
 import type { WebConversationSummary } from '../conversationTypes';
 import type { ResearchOverviewData } from '../researchOverviewTypes';
-import { failureGuide, isAcceptedRun, resultDescription, runProgress, stoppedLabel } from '../presentation';
+import { acceptedTitle, acceptedVerdict, failureGuide, isAcceptedRun, resultDescription, runProgress, stoppedLabel } from '../presentation';
 import { summarizeGoals, summarizeStuck } from '../report';
 import type { WebApi } from './collaborationUi';
 import { locale } from '../i18n';
@@ -24,9 +24,10 @@ const actionLabel = (kind: ResearchOverviewAction['kind']) => ({ statement: tx('
   feedback: tx('处理反馈', 'Review feedback'), update: tx('查看更新', 'View update') })[kind];
 const primary = (event: MouseEvent) => event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
 const date = (value: string) => { const parsed = new Date(value); return Number.isFinite(parsed.getTime()) ? parsed.toLocaleDateString(locale === 'en' ? 'en-US' : 'zh-CN', { month: 'short', day: 'numeric' }) : value; };
-const runLabel = (run: WebRun) => isAcceptedRun(run) ? tx('原题已验收', 'Original problem accepted') : run.status === 'running' ? runProgress(run).phaseLabel
+const runLabel = (run: WebRun) => isAcceptedRun(run) ? acceptedTitle(run) : run.status === 'running' ? runProgress(run).phaseLabel
   : run.status === 'queued' ? tx('排队中', 'Queued') : run.status === 'cancelled' ? tx('已取消', 'Cancelled') : run.status === 'error' ? tx('运行错误', 'Run error') : stoppedLabel(run);
 function progress(run: WebRun): string {
+  if (isAcceptedRun(run)) return acceptedVerdict(run).meaning ?? '';
   const goals = summarizeGoals(run), stuck = summarizeStuck(run)?.tasks[0], guide = failureGuide(run);
   const count = goals ? tx(`${goals.proved + goals.checked}/${goals.goals.length + goals.omitted} 个目标已有证明或检查结果`, `${goals.proved + goals.checked}/${goals.goals.length + goals.omitted} goals have a proof or check result`) : '';
   const blocker = stuck ? `${stuck.theorem || stuck.id}${tx('：', ': ')}${stuck.failure || stuck.blockers[0] || stuck.feedback || stuck.status}` : guide?.title;
@@ -94,14 +95,14 @@ export function ResearchOverview(props: ResearchOverviewProps) {
       placeholder={tx('搜索题目、定理或对话', 'Find a problem, theorem or conversation')} onInput={event => setQuery(event.currentTarget.value)} /></label>
       <div role="group" aria-label={tx('研究状态', 'Research status')}>{(['all', 'waiting', 'active', 'passed'] as const).map(value => <button type="button" key={value}
         aria-pressed={filter === value} data-overview-filter={value} onClick={() => setFilter(value)}>{({ all: tx('全部', 'All'), waiting: tx('待处理', 'Needs attention'), active: tx('进行中', 'Active'), passed: tx('有通过记录', 'Has verified runs') })[value]}</button>)}</div></div>}
-    {model.cards.length > 0 && <div class="research-overview-personal-tools" data-overview-personal-tools>
+    {model.cards.length > 0 && <details data-overview-more-filters><summary>{tx('更多筛选与排序', 'More filters and sorting')}</summary><div class="research-overview-personal-tools" data-overview-personal-tools>
       <label>{tx('个人整理', 'My organization')}<select value={organization} data-overview-organization onChange={event => setOrganization(event.currentTarget.value as typeof organization)}>
         <option value="current">{tx('未归档', 'Unarchived')}</option><option value="all">{tx('全部题目', 'All problems')}</option><option value="active">{tx('持续研究', 'Active research')}</option>
         <option value="parked">{tx('暂放', 'Parked')}</option><option value="archived">{tx('已归档', 'Archived')}</option><option value="pinned">{tx('已置顶', 'Pinned')}</option></select></label>
       <label>{tx('标签', 'Tag')}<select value={tag} data-overview-tag onChange={event => setTag(event.currentTarget.value)}><option value="">{tx('所有标签', 'All tags')}</option>{availableTags.map(value => <option key={value} value={value}>{value}</option>)}</select></label>
       <label>{tx('排序', 'Sort')}<select value={sort} data-overview-sort onChange={event => setSort(event.currentTarget.value as typeof sort)}><option value="recent">{tx('最近研究', 'Recent research')}</option>
         <option value="organization">{tx('最近整理', 'Recently organized')}</option><option value="oldest">{tx('最早研究', 'Oldest research')}</option><option value="title">{tx('题目名称', 'Title')}</option></select></label>
-    </div>}
+    </div></details>}
     {error && <p class="research-overview-error" role="alert">{error} <button type="button" class="text-button" onClick={() => setRevision(value => value + 1)}>{tx('重新读取', 'Try again')}</button></p>}
     {personalError && <p class="research-overview-error" role="alert">{personalError} <button type="button" class="text-button" onClick={() => setRevision(value => value + 1)}>{tx('重新读取个人整理', 'Reload my organization')}</button></p>}
     {loading && !research && <p role="status" class="research-overview-note">{tx('正在读取协作项目…', 'Loading shared projects…')}</p>}
@@ -118,28 +119,28 @@ export function ResearchOverview(props: ResearchOverviewProps) {
         : card.project ? overviewProjectHref(card.project.id, projectRun?.runId, projectRun?.statementVersionId) : card.formalizations[0] ? `formalize.html?id=${encodeURIComponent(card.formalizations[0].id)}` : './');
       const naturalStatement = card.formalizations[0]?.original ?? latest?.formalization?.original ?? card.project?.versions.at(-1)?.statement;
       const statement = naturalStatement ?? latest?.source;
+      const latestProgress = latest ? progress(latest) : '';
+      const historySummary = card.project ? `${card.project.versions.length} ${tx('个陈述版本', 'statement versions')} · ${card.project.runs.length} ${tx('次研究', 'research runs')}`
+        : `${card.runs.length} ${tx('次研究', 'research runs')} · ${card.conversations.length} ${tx('段对话', 'conversations')}`;
       const saved = organizationFor(card), organizeTarget = card.project ? card.project.permissions.member ? { projectId: card.project.id } : undefined : latest ? { runId: latest.id } : undefined;
       return <article class="research-overview-card" key={card.id} data-overview-card={card.id}>
         <div class="research-overview-meta"><span>{card.project ? tx('定理项目', 'Theorem project') : card.runs.length ? tx('研究题目', 'Research problem') : tx('对话与题意', 'Conversation and statement')}</span><time dateTime={card.updatedAt}>{date(card.updatedAt)}</time></div>
         <h3><a href={workspaceHref ?? href} data-overview-primary={card.id} title={card.title} onClick={event => { if (!workspaceHref) open(event, target); }}><Rich text={card.title} /></a></h3>
-        <p class="research-overview-summary">{card.project ? `${card.project.versions.length} ${tx('个陈述版本', 'statement versions')} · ${card.project.runs.length} ${tx('次研究', 'research runs')}`
-          : `${card.runs.length} ${tx('次研究', 'research runs')} · ${card.conversations.length} ${tx('段对话', 'conversations')}`}</p>
-        {latest && <p class="research-overview-progress" data-overview-progress={latest.id}>{tx('最新尝试', 'Latest attempt')} · {progress(latest)}</p>}
+        {latest && <p class="research-overview-progress" data-overview-progress={latest.id}><span data-overview-run-status={latest.id}>{tx('最新尝试', 'Latest attempt')} · {runLabel(latest)}</span>{latestProgress && <> · {latestProgress}</>}</p>}
         {verified.length > 0 && <section data-overview-verified aria-label={tx('通过记录', 'Verified runs')}>
           <ul class="research-overview-records">{verified.map(({ run, version }) => <li key={run.id}>
             <a class="text-button" data-overview-verified-run={run.id} href={problemEntryHref({ runId: run.id, projectId: card.project?.id })}>
-              {version ? tx(`陈述 v${version} 已验收`, `Statement v${version} accepted`) : tx('查看已验收的尝试', 'Open the accepted attempt')} →
-            </a><span>{date(run.updatedAt)}</span>
+              {version ? `${tx('陈述', 'Statement')} v${version} · ` : ''}{runLabel(run)} →
+            </a>{run.formalization && <span>{acceptedVerdict(run).meaning}</span>}<span>{date(run.updatedAt)}</span>
           </li>)}</ul>
         </section>}
         <PersonalNextNote item={saved} />
         <div class="research-overview-card-actions"><a class="button" data-overview-open={card.id} href={workspaceHref ?? href} onClick={event => { if (!workspaceHref) open(event, target); }}>{card.actions.length ? tx('继续处理', 'Continue') : tx('打开研究', 'Open research')} →</a>
           {workspaceHref && <a class="text-button" href={href} onClick={event => open(event, target)}>{action ? actionLabel(action.kind) : tx('研究操作', 'Research controls')}</a>}
-          {latest && <span data-overview-run-status={latest.id}>{tx('最新尝试', 'Latest attempt')}: {runLabel(latest)}</span>}
           {card.project && latest && <a class="text-button" href={overviewProjectHref(card.project.id)}>{tx('协作与版本', 'Collaboration and versions')}</a>}</div>
-        {(card.runs.length > 0 || card.conversations.length > 0 || Boolean(card.project?.runs.length)) && <details><summary>{tx('历次研究与对话', 'Runs and conversations')}</summary><ul class="research-overview-records">
+        {(card.runs.length > 0 || card.conversations.length > 0 || Boolean(card.project?.runs.length)) && <details><summary>{tx('历次研究与对话', 'Runs and conversations')} · {historySummary}</summary><ul class="research-overview-records">
           {card.project?.runs.map(binding => <li key={`bound:${binding.runId}`}><a href={problemEntryHref({ runId: binding.runId, projectId: card.project!.id, href: overviewProjectHref(card.project!.id, binding.runId, binding.statementVersionId) })}><Rich text={binding.title} /></a><span>{`v${card.project!.versions.findIndex(version => version.id === binding.statementVersionId) + 1}`}</span></li>)}
-          {card.runs.filter(run => !card.project?.runs.some(binding => binding.runId === run.id)).map(run => <li key={run.id}><a href={problemEntryHref({ runId: run.id })}><Rich text={run.title} /></a><a href={`?run=${encodeURIComponent(run.id)}`} onClick={event => open(event, { runId: run.id })}>{tx('研究操作', 'Controls')}</a><span>{runLabel(run)}</span></li>)}
+          {card.runs.filter(run => !card.project?.runs.some(binding => binding.runId === run.id)).map(run => <li key={run.id}><a href={problemEntryHref({ runId: run.id })}><Rich text={run.title} /></a><a href={`?run=${encodeURIComponent(run.id)}`} onClick={event => open(event, { runId: run.id })}>{tx('研究操作', 'Controls')}</a><span>{runLabel(run)}{isAcceptedRun(run) && run.formalization && <small>{acceptedVerdict(run).meaning}</small>}</span></li>)}
           {card.conversations.map(item => <li key={item.id}><a href={`?chat=${encodeURIComponent(item.id)}`} onClick={event => open(event, { conversationId: item.id })}><Rich text={item.title} /></a><span>{tx('对话', 'Conversation')}</span></li>)}</ul></details>}
         {statement && <details class="research-overview-statement"><summary>{tx('查看原题', 'Read the original statement')}</summary>{naturalStatement ? <RichProse text={statement} /> : <pre>{statement}</pre>}</details>}
         {organizeTarget && <PersonalProblemControl key={`${card.id}:${personalProblemUrl(organizeTarget)}`} owner={props.owner} target={organizeTarget} item={saved} onSaved={savedOrganization} compact request={props.request} />}

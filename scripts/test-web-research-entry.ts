@@ -11,6 +11,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { readResearchEntry, researchEntryQuery, resolveResearchEntry } from '../apps/web/client/researchEntry';
 import { freePort, startBrowser } from './web-scenario';
+import { clickWorkbenchAction } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..');
 const output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/product-continuity/entry');
@@ -72,7 +73,7 @@ async function login(page: Page, address: string) {
   await page.locator('#send-code').click(); await page.locator('#code-step:visible').waitFor();
   const code = mail.findLast(item => item.to === address)?.text.match(/\b\d{6}\b/u)?.[0]; assert.ok(code);
   await page.locator('#login-code').fill(code); await page.locator('#verify-code').click();
-  await page.waitForURL(url => url.pathname === '/'); await page.locator('#open-account').waitFor();
+  await page.waitForURL(url => url.pathname === '/'); await page.locator('#open-account').waitFor({ state: 'attached' });
 }
 try {
   for (const language of ['zh', 'en'] as const) for (const kind of ['statement', 'lean'] as const) {
@@ -131,9 +132,9 @@ try {
   await scenario('legacy-workbench-locale-switch', 'zh', true, async page => {
     await page.goto(origin); await page.locator('#formalize-original').waitFor();
     await page.locator('#formalize-original').fill('Legacy draft survives a language change.');
-    await page.locator('#locale-switch').click(); await expectLanguage(page, 'en');
+    await clickWorkbenchAction(page, '#locale-switch'); await expectLanguage(page, 'en');
     assert.equal(await page.locator('#formalize-original').inputValue(), 'Legacy draft survives a language change.');
-    await page.locator('#locale-switch').click(); await expectLanguage(page, 'zh');
+    await clickWorkbenchAction(page, '#locale-switch'); await expectLanguage(page, 'zh');
     return { noLinkedLanguage: true, switchedBothWays: true, draftPreserved: true };
   });
   await scenario('linked-login-locale-switch', 'zh', false, async page => {
@@ -146,7 +147,7 @@ try {
   await scenario('linked-workbench-locale-switch', 'zh', true, async page => {
     await page.goto(`${origin}/?entry=statement&template=add-zero&environment=standard&lang=zh`);
     await page.waitForFunction(() => !new URL(location.href).searchParams.has('entry'));
-    await page.locator('#formalize-original').waitFor(); await page.locator('#locale-switch').click();
+    await page.locator('#formalize-original').waitFor(); await clickWorkbenchAction(page, '#locale-switch');
     await expectLanguage(page, 'en'); return { linkedLanguage: true, userCanOverrideAfterEntryConsumed: true };
   });
   await scenario('linked-language-survives-refresh-without-storage', 'zh', true, async (page, context) => {
@@ -157,7 +158,7 @@ try {
     await page.waitForFunction(() => !new URL(location.href).searchParams.has('entry'));
     await page.locator('body[data-entry=lean]').waitFor({ state: 'attached' });
     await expectLanguage(page, 'en');
-    await page.reload(); await page.locator('#open-account').waitFor();
+    await page.reload(); await page.locator('#open-account').waitFor({ state: 'attached' });
     await expectLanguage(page, 'en');
     assert.equal(new URL(page.url()).searchParams.get('lang'), 'en');
     return { localStorageAvailable: false, linkedLanguage: 'en', languageSurvivesRefresh: true };

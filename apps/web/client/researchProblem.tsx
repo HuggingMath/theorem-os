@@ -28,9 +28,11 @@ import { ResearchCheckDetails } from './researchCheckDetails';
 import { ResearchEvolutionPicker } from './researchEvolution';
 import type { ResearchJourneyEvolution, ResearchObservationRef } from '../researchJourneyTypes';
 
-const labels = { overview: ['总览', 'Overview'], route: ['证明路线', 'Proof route'], compare: ['历次尝试', 'Attempts'],
-  discussion: ['讨论与决议', 'Discussion'], outcomes: ['用量与成果', 'Usage and outcomes'], stages: ['阶段结论', 'Stage conclusions'], brief: ['简报', 'Brief'] } as const;
+const labels = { overview: ['题目与结果', 'Problem and result'], route: ['解题过程', 'Proof process'], compare: ['历次尝试', 'Attempts'],
+  discussion: ['讨论', 'Discussion'], outcomes: ['用量与成果', 'Usage and outcomes'], stages: ['研究记录', 'Research notes'], brief: ['预览与导出', 'Preview and export'] } as const;
 type Tab = keyof typeof labels;
+const primarySections: Tab[] = ['overview', 'route', 'discussion'];
+const recordSections: Tab[] = ['compare', 'stages', 'outcomes', 'brief'];
 const initial = () => {
   const query = new URLSearchParams(location.search), tab = query.get('tab') ?? '';
   return { run: query.get('run') ?? '', project: query.get('project') ?? '', tab: tab in labels ? tab as Tab : 'overview' as Tab,
@@ -132,6 +134,13 @@ export function ProblemPage({ context }: { context: ResearchContext }) {
   };
   const revealFeedback = (id: string) => setFocus(previous => ({ id, request: (previous?.request ?? 0) + 1 }));
   const projectCreated = (project: string) => { navigate({ project }); resource.refresh(); ledger.refresh(); };
+  const sectionLink = (id: Tab) => <a key={id} href={problemUrl({ ...selection, tab: id })} aria-current={selection.tab === id ? 'page' : undefined}
+    onClick={event => {
+      if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault(); navigate({ tab: id });
+      const details = event.currentTarget.closest('details');
+      if (details) { details.open = false; details.querySelector('summary')?.focus({ preventScroll: true }); }
+    }}>{tx(labels[id][0], labels[id][1])}</a>;
   if (!context.session.authenticated) return <Panel title={tx('登录后继续这道题', 'Sign in to continue this problem')}><a class="button" href={`login.html?${new URLSearchParams({ returnTo: 'problem', ...selection, lang: locale })}`}>{tx('登录', 'Sign in')}</a></Panel>;
   return <div class="problem-page" data-problem-page>
     <header class="problem-heading"><div><p class="research-eyebrow">TheoremOS</p><h1>{problem ? <Rich text={problem.brief.title} /> : tx('题目工作区', 'Problem workspace')}</h1></div>
@@ -145,8 +154,17 @@ export function ProblemPage({ context }: { context: ResearchContext }) {
         {selected && <code title={selected.version}>{selected.version.slice(0, 12)}</code>}</div>
       <a class="text-button" href={selected?.href ?? problem.brief.runHref}>{selected ? selected.commit ? tx('打开此版本源码', 'Open this source version') : tx('打开任务记录', 'Open task record') : tx('进入研究操作', 'Open research controls')} ↗</a>
     </section>
-    <nav class="problem-tabs" aria-label={tx('题目内容', 'Problem sections')}>{Object.entries(labels).map(([id, label]) => <a key={id} href={problemUrl({ ...selection, tab: id as Tab })} aria-current={selection.tab === id ? 'page' : undefined}
-      onClick={event => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigate({ tab: id as Tab }); }}>{tx(label[0], label[1])}</a>)}</nav>
+    <nav class="problem-tabs" aria-label={tx('题目内容', 'Problem sections')}>
+      {primarySections.map(sectionLink)}
+      <details class="problem-records-menu" data-problem-records-menu onKeyDown={event => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault(); event.currentTarget.open = false; event.currentTarget.querySelector('summary')?.focus({ preventScroll: true });
+      }}>
+        <summary data-current={recordSections.includes(selection.tab) || undefined}>{recordSections.includes(selection.tab)
+          ? tx(labels[selection.tab][0], labels[selection.tab][1]) : tx('记录与导出', 'Records and export')}</summary>
+        <div>{recordSections.map(sectionLink)}</div>
+      </details>
+    </nav>
     <div class="problem-content">
     {selection.task && !selected && <p class="research-status" role="status">{tx('选中的任务或源码版本已不在当前路线中。', 'The selected task or source version is no longer in the current route.')} {savedTaskHref && <a href={savedTaskHref}>{tx('查看所选版本', 'Open the selected version')}</a>} · <button type="button" class="text-button" onClick={() => navigate({ task: '', taskVersion: '', commit: '' }, false)}>{tx('回到当前整条路线', 'Return to the current route')}</button></p>}
     {selection.tab === 'overview' && <><ProblemRunStatus problem={problem} openRoute={() => navigate({ tab: 'route' })} reviewPlan={reviewPlan} />
@@ -161,11 +179,14 @@ export function ProblemPage({ context }: { context: ResearchContext }) {
       <ResearchChangesSinceRead key={`${problem.key}:${selection.run}`} runId={selection.run} projectId={problem.project?.id} />
       <ResearchOutcomeDelivery problem={problem} context={context} onBrief={() => navigate({ tab: 'brief' })} /><ProblemOrganization problem={problem} context={context} /><ProjectFromProblem problem={problem} onCreated={projectCreated} /></>}
     {selection.tab === 'route' && <section class="problem-route-workspace" data-problem-route-workspace>
-      <ResearchEvolutionPicker data={evolution.data?.item} error={evolution.error} loading={evolution.loading} selected={observation} choose={chooseMoment} refresh={evolution.refresh} />
+      <details class="problem-route-history" data-problem-route-history open={historical || selection.map === 'global'}>
+        <summary>{historical ? tx('正在阅读历史记录', 'Reading a historical record') : selection.map === 'global' ? tx('正在查看历次尝试', 'Viewing research attempts') : tx('查看历史记录', 'View history')}</summary>
+        <ResearchEvolutionPicker data={evolution.data?.item} error={evolution.error} loading={evolution.loading} selected={observation} choose={chooseMoment} refresh={evolution.refresh} />
       <div class="problem-map-switch" role="group" aria-label={tx('路线视图', 'Route view')}>
         <button type="button" data-problem-map="attempt" aria-pressed={selection.map === 'attempt'} onClick={() => navigate({ map: 'attempt' })}>{tx('当前尝试', 'Current attempt')}</button>
         <button type="button" data-problem-map="global" aria-pressed={selection.map === 'global'} onClick={() => navigate({ map: 'global' })}>{tx('全局轨迹', 'Research journey')}</button>
       </div>
+      </details>
       {historical && !frozen && <p role="status">{evolution.error ? tx('所选保存时点暂时无法读取，请重试或回到当前记录。', 'The selected saved moment could not be read. Retry or return to the current record.') : tx('正在读取所选保存时点…', 'Loading the selected saved moment…')} <button type="button" class="text-button" onClick={() => chooseMoment()}>{tx('回到当前记录', 'Return to the current record')}</button></p>}
       {routeBrief && routeProblem && (selection.map === 'global' ? <ResearchJourneyView runId={selection.run} projectId={problem.project?.id} focusedTask={selected} frozen={frozen}
         onAttemptSelection={({ runId, projectId }) => { if (runId !== selection.run) runChoice(runId, projectId ?? ''); }}
@@ -266,7 +287,7 @@ function ProblemStages({ problem, context, refresh }: { problem: ResearchProblem
   const [storageNotice, setStorageNotice] = useState(''), action = useMutation();
   useEffect(() => { try { if (draft.title || draft.conclusion || draft.boundaries || draft.unresolved || draft.next) localStorage.setItem(key, JSON.stringify(draft)); else localStorage.removeItem(key); } catch { setStorageNotice(tx('此浏览器无法保存草稿，请在离开前定稿。', 'This browser cannot save drafts. Save the conclusion before leaving.')); } }, [draft, key]);
   const changed = draft.evidenceDigest !== problem.evidenceDigest;
-  return <><Panel title={tx('写下这一阶段的判断', 'Record your judgement at this stage')}><p>{tx('由你定稿，保存当前引用的路线与检查版本。它记录研究判断，证明结果仍读取独立验收。', 'Your conclusion saves the route and check versions you reviewed. Proof status continues to come from independent acceptance.')}</p>
+  return <><Panel title={tx('记录研究判断', 'Record a research note')}><p>{tx('由你定稿，保存当前引用的路线与检查版本。它记录研究判断，证明结果仍读取独立验收。', 'Your conclusion saves the route and check versions you reviewed. Proof status continues to come from independent acceptance.')}</p>
     <form class="research-form" onSubmit={event => { event.preventDefault(); if (changed) return; const submitted = draft;
       void action.run<Item<ResearchStageConclusion>>('POST', `${base}/workspace/problem/${enc(problem.brief.selectedRunId)}/stages${problem.project ? `?project=${enc(problem.project.id)}` : ''}`, submitted,
       () => { setDraft(previous => previous === submitted ? { ...empty, evidenceDigest: problem.evidenceDigest } : previous); refresh(); }); }}>
@@ -275,5 +296,5 @@ function ProblemStages({ problem, context, refresh }: { problem: ResearchProblem
       <p class="research-status" role="status">{storageNotice || (draft.title || draft.conclusion ? tx('草稿已保存在此浏览器', 'Draft saved in this browser') : tx('定稿后保存在你的账号中', 'Saved to your account when finalized'))}</p>
       {changed && <p role="status">{tx('研究证据已有更新，文字草稿已保留。请核对路线与检查后继续。', 'Research evidence changed. Your text is preserved. Review the route and checks before continuing.')} <button type="button" class="text-button" onClick={() => setDraft(previous => ({ ...previous, evidenceDigest: problem.evidenceDigest }))}>{tx('已核对最新证据', 'I reviewed the latest evidence')}</button></p>}
       <MutationState action={action} /><button type="submit" class="button button-primary" disabled={action.busy || changed}>{tx('保存阶段结论', 'Save stage conclusion')}</button>
-    </form></Panel><Panel title={tx('历次阶段结论', 'Stage conclusion history')}>{problem.stages.slice().reverse().map(stage => <StageView key={stage.id} stage={stage} problem={problem} refresh={refresh} />)}{!problem.stages.length && <Empty>{tx('还没有人工定稿的阶段结论。', 'No human stage conclusion has been saved yet.')}</Empty>}</Panel></>;
+    </form></Panel><Panel title={tx('研究记录', 'Research notes')}>{problem.stages.slice().reverse().map(stage => <StageView key={stage.id} stage={stage} problem={problem} refresh={refresh} />)}{!problem.stages.length && <Empty>{tx('还没有人工定稿的阶段结论。', 'No human stage conclusion has been saved yet.')}</Empty>}</Panel></>;
 }

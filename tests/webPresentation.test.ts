@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { acceptedTitle, endedSummary, formatDuration, formatTokens, isAcceptedRun, isRejectedRun, isStatementReviewed, planGated,
+import { acceptedDescription, acceptedTitle, acceptedVerdict, endedSummary, formatDuration, formatTokens, isAcceptedRun, isRejectedRun, isStatementReviewed, planGated,
   readableDuration, readableMetric, resultDescription, runProgress, runTokens, shownLines, stalledMinutes,
   statementConfirmation, stoppedLabel } from '../apps/web/presentation';
 import type { WebRun } from '../apps/web/shared';
@@ -53,6 +53,38 @@ describe('workbench phase and elapsed-time presentation', () => {
     expect(statementConfirmation('automatic', false, 'direct')).toBe('Lean 陈述编译通过；原题含义请查看形式化记录。');
     expect(statementConfirmation('automatic', true, 'direct')).not.toContain('模型审核通过');
     expect(statementConfirmation('automatic')).toContain('模型审核通过');
+  });
+
+  it.each(['automatic', 'manual', 'pending', 'rejected', 'interrupted', 'superseded', undefined] as const)(
+    'keeps one independent acceptance and one actual meaning status in a %s result card', confirmation => {
+      const value = { formalization: { id: 'formalization', original: 'Prove True.', evidenceSha256: 'f'.repeat(64), confirmedAt: at(0), confirmation } };
+      const verdict = acceptedVerdict(value), text = `${verdict.description} ${verdict.meaning}`;
+      expect(text.match(/已通过独立验收/gu)).toHaveLength(1);
+      expect(verdict.meaning).toBe(statementConfirmation(confirmation));
+      expect(verdict.description).not.toContain('原题含义');
+      expect(text.match(/原题含义/gu)).toHaveLength(1);
+      expect(text).not.toContain('完整原题');
+      if (confirmation && ['pending', 'rejected', 'interrupted', 'superseded'].includes(confirmation)) {
+        expect(verdict.description).toContain('候选 Lean 陈述');
+        expect(acceptedDescription(value)).toContain(statementConfirmation(confirmation));
+      }
+    });
+
+  it.each(['automatic', 'manual', 'pending', 'rejected', 'interrupted', 'superseded', undefined] as const)(
+    'preserves the actual %s review state in a direct-formalization result card', confirmation => {
+      const value = { formalization: { id: 'formalization', original: 'Prove True.', evidenceSha256: 'f'.repeat(64), confirmedAt: at(0),
+        confirmation, reviewMode: 'direct' as const } };
+      const verdict = acceptedVerdict(value);
+      if (!confirmation || confirmation === 'automatic') {
+        expect(verdict.meaning).toBe('原题含义：请查看形式化记录。');
+        expect(verdict.meaning).not.toContain('编译通过');
+        expect(verdict.meaning).not.toContain('模型审核通过');
+      } else expect(verdict.meaning).toBe(statementConfirmation(confirmation));
+    });
+
+  it('keeps the original acceptance guarantees for a result entered directly as Lean', () => {
+    expect(acceptedVerdict({})).toEqual({ description: acceptedDescription({}) });
+    expect(acceptedVerdict({}).description).toContain('没有 sorry 或额外公理');
   });
 
   it.each(['pending', 'rejected', 'interrupted', 'superseded'] as const)(

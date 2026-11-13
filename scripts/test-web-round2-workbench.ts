@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { openAdvancedChatSettings } from './web-ui-controls';
+import { openAdvancedChatSettings, clickWorkbenchAction } from './web-ui-controls';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -64,7 +64,7 @@ async function home(page: Page) {
   await page.waitForFunction(() => Boolean((document.querySelector('#formalize-model') as HTMLInputElement)?.value));
 }
 async function credentials(page: Page) {
-  await page.locator('#open-settings').click();
+  await clickWorkbenchAction(page, '#open-settings');
   await openAdvancedChatSettings(page);
   await page.locator('#formalize-environment').selectOption('standard');
   await page.locator('#formalize-model').fill('fixture-model'); await page.locator('#formalize-key').fill(credential);

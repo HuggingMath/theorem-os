@@ -10,7 +10,7 @@ import type { WebRunner } from '../apps/web/runner';
 import type { WebEventDetails, WebRun, WebRunInput } from '../apps/web/shared';
 import type { CustomResearchModule, ResearchModulePlan } from '../src/solver/modules/policy';
 import { modulePlanLibraryStorageKey, type SavedModulePlan } from '../apps/web/client/modulePlanLibrary';
-import { closeDialog, closeSettings, newResearch, openSettings, selectModules, showArtifacts, showChat } from './web-ui-controls';
+import { closeDialog, closeSettings, newResearch, openSettings, selectModules, showArtifacts, showChat, clickWorkbenchAction } from './web-ui-controls';
 import { freePort, postRun, readRun, type RequestRecord, type ScenarioSuite, settled, startBrowser, webScenario, writeScenarioReport, ready, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -1087,13 +1087,13 @@ try {
     assert.deepEqual(await editorPlan(page), plan, 'opening and dismissing a policy must preserve its values');
     assert.ok(Math.abs(await page.locator('#draft-preview').evaluate(panel => panel.scrollTop) - readingTop) <= 1.5,
       'dismissing an unchanged policy must retain the reading position');
-    await page.locator('#open-settings').click();
+    await clickWorkbenchAction(page, '#open-settings');
     await page.locator('#run-settings[open]').waitFor();
     assert.equal(await page.locator('#run-settings').isVisible(), true, 'the global configuration must be visible from the workspace');
     await closeSettings(page);
     if (width <= 850) assert.equal(await page.locator('body').getAttribute('data-mobile-view'), 'runs',
       'closing the global configuration must restore the mobile workspace');
-    assert.equal(await page.locator('#open-settings').evaluate(button => document.activeElement === button), true);
+    assert.equal(await page.locator('[data-navigation-toggle]').evaluate(button => button === document.activeElement), true);
     assert.equal(await page.locator(`[data-module-policy-id="${draftPolicy.id}"]`).getAttribute('open'), '',
       'closing the global configuration must preserve the open policy');
     const editing = await openPolicyEditor(page, draftPolicy.id);

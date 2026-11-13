@@ -16,6 +16,7 @@ import type { WebExplanation, WebSession } from '../apps/web/shared';
 import { readingCommit, readingEvidence, readingRun } from '../tests/helpers/shareReadingFixture';
 import { audit } from './web-a11y';
 import { freePort, postRun, startBrowser, waitForRun } from './web-scenario';
+import { openChatBudget, openChatParticipation } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..');
 const output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/product-continuity/first-research-sharing');
@@ -101,33 +102,34 @@ try {
       });
       await page.goto(origin); await page.locator('[data-first-research-start]').waitFor();
       assert.equal(await page.locator('#formalize-start').isDisabled(), true);
-      assert.match(await page.locator('[data-chat-budget]').innerText(), language === 'zh' ? /不限/u : /Unlimited/u);
-      assert.doesNotMatch(await page.locator('[data-chat-budget]').innerText(), /(?:0 Token|0 min|0 分钟)/u);
       assert.equal(await page.locator('#formalize-settings[open]').count(), 0);
       assert.equal(await page.locator('[data-first-research-more][open]').count(), 0);
-      await page.locator('[data-first-research-more] > summary').click();
+      await openChatBudget(page);
+      assert.match(await page.locator('[data-chat-budget]').innerText(), language === 'zh' ? /不限/u : /Unlimited/u);
+      assert.doesNotMatch(await page.locator('[data-chat-budget]').innerText(), /(?:0 Token|0 min|0 分钟)/u);
       assert.match(await page.locator('[data-first-research-quota]').innerText(), /3[\s\S]*4/u);
       await page.locator('[data-first-research-more] > summary').click();
       await noOverflow(page);
-      await page.locator('[data-first-connection]').click();
-      await page.waitForFunction(() => document.activeElement?.id === 'formalize-provider');
+      await page.locator('#formalize-settings > summary').click();
       await page.locator('#formalize-key').fill(credential);
       await page.locator('#formalize-provider').selectOption('fixture-b');
       assert.equal(await page.locator('#formalize-key').inputValue(), '', 'Changing provider clears a provider-specific key');
-      await page.locator('[data-setup-next=credentials]').click();
-      await page.waitForFunction(() => document.activeElement?.id === 'formalize-key');
       await page.locator('#formalize-key').fill(credential);
       await page.locator('#formalize-model').fill('fixture-model');
       for (const status of ['available', 'unknown', 'error'] as const) {
         connection = status; await page.locator('#check-model-connection').click();
         await page.locator(`#chat-connection-result[data-status=${status}]`).waitFor();
-        assert.equal(await page.locator('[data-first-connection] [data-status]').getAttribute('data-status'), status);
+        assert.match(await page.locator('#formalize-settings > summary').getAttribute('aria-label') ?? '', {
+          available: /模型列表可访问|Model list accessible/u, unknown: /仍需核对|Needs confirmation/u,
+          error: /连接需处理|Connection needs attention/u,
+        }[status]);
       }
       assert.equal(connectionChecks.length, 3);
       assert.equal(connectionChecks[0]!.apiKey, credential); assert.equal(connectionChecks[0]!.model, 'fixture-model');
       await page.locator('#formalize-model').fill('fixture-model-v2');
       assert.equal(await page.locator('#chat-connection-result').count(), 0, 'Editing the model invalidates the check');
       await page.locator('#formalize-settings > summary').click();
+      await openChatBudget(page);
       await page.locator('[data-first-budget=trial]').click();
       assert.equal(await page.locator('#formalize-minutes').inputValue(), '');
       assert.equal(await page.locator('#research-minutes').inputValue(), '');
@@ -141,8 +143,9 @@ try {
       assert.equal(await page.locator('#formalize-tokens').inputValue(), '');
       assert.equal(await page.locator('#research-tokens').inputValue(), '');
       await page.locator('[data-first-budget=trial]').click();
-      await page.locator('[data-chat-participation-control] > summary').click();
+      await openChatParticipation(page);
       await page.locator(`input[name=chat-participation][value=${participation}]`).check();
+      await openChatBudget(page);
       assert.match(await page.locator('[data-first-research-stages]').innerText(), participation === 'guided'
         ? language === 'zh' ? /你确认题意[\s\S]*你批准/u : /your statement review[\s\S]*your approval/u
         : language === 'zh' ? /自动开始证明/u : /automatically/u);

@@ -18,7 +18,7 @@ import { webFormalizationEvidence, webFormalizationStatement } from '../tests/he
 import { localeStorageKey } from '../apps/web/i18n';
 import { collaborationDetailStorageKey } from '../apps/web/client/runAwareness';
 import { deferred, freePort, startBrowser } from './web-scenario';
-import { openAdvancedChatSettings } from './web-ui-controls';
+import { openAdvancedChatSettings, openChatParticipation, clickWorkbenchAction } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const waitTimeout = 15_000;
@@ -96,9 +96,9 @@ try {
     await page.goto(origin);
     await page.locator('#formalize-original').fill(webFormalizationStatement);
     const automatic = page.locator('input[name="chat-participation"][value="automatic"]');
-    if (!await automatic.isVisible()) await page.locator('[data-chat-participation-control] > summary').click();
+    await openChatParticipation(page);
     await automatic.check();
-    if (!await page.locator('#formalize-key').isVisible()) await page.locator('#open-settings').click();
+    if (!await page.locator('#formalize-key').isVisible()) await clickWorkbenchAction(page, '#open-settings');
     await page.locator('#formalize-key').fill('sk-local-candidate-history-fixture');
     await openAdvancedChatSettings(page);
     await page.locator('#formalize-environment').selectOption('standard');

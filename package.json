@@ -111,6 +111,7 @@
     "test:web-chat-artifacts": "bun scripts/test-web-chat-artifacts.ts",
     "test:web-solve-process": "bun scripts/test-web-solve-process.ts",
     "test:web-natural-first": "bun scripts/test-web-natural-first.ts",
+    "test:web-simple-workbench": "bun scripts/test-web-simple-workbench.ts",
     "test:web-admin": "bun scripts/test-web-admin.ts",
     "smoke:web-precheck": "bun scripts/smoke-web-precheck.ts",
     "test": "vitest run",

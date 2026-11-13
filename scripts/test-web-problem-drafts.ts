@@ -98,7 +98,9 @@ try {
   await closeNaturalSettings(page);
   await page.locator('.chat-examples > summary').click(); await page.locator('#formalize-example').selectOption('add-zero');
   const choices = await page.locator('#formalize-example option').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value).filter(Boolean));
-  assert.ok(choices.length > 1); await page.locator('#formalize-example').selectOption(choices.find(value => value !== 'add-zero')!);
+  assert.ok(choices.length > 1);
+  if (!await page.locator('#formalize-example').isVisible()) await page.locator('.chat-examples > summary').click();
+  await page.locator('#formalize-example').selectOption(choices.find(value => value !== 'add-zero')!);
   assert.notEqual(await page.locator('#formalize-original').inputValue(), original);
   await page.reload(); await page.locator('[data-recover-original]').click(); await waitOriginal(page, original); await settings(page);
   assert.equal(await page.locator('#formalize-model').inputValue(), 'original-model'); assert.equal(await page.locator('#formalize-environment').inputValue(), 'mathlib');
@@ -111,12 +113,18 @@ try {
   await page.locator('#formalize-original').fill(original + '还在继续编辑。');
   await panel(page).getByText('新修改尚未保存到账号。', { exact: true }).waitFor();
   const mobile = await context('en', true); await mobile.addCookies(await desktop.cookies(origin));
-  const other = await mobile.newPage(); await other.goto(origin); await other.locator('#formalize-original').waitFor();
+  const other = await mobile.newPage(); active = other; await other.goto(origin); await other.locator('#formalize-original').waitFor();
   assert.equal(await other.locator('#formalize-original').inputValue(), '');
-  await chooseVersion(other, natural); await waitOriginal(other, original); await settings(other);
+  await chooseVersion(other, natural); await waitOriginal(other, original);
+  assert.equal(await panel(other).evaluate(details => (details as HTMLDetailsElement).open), true,
+    'Restoring a draft preserves its already open account panel');
+  await settings(other);
   assert.equal(await other.locator('#formalize-model').inputValue(), 'original-model'); assert.equal(await other.locator('#formalize-environment').inputValue(), 'mathlib');
   assert.equal(await other.locator('#formalize-key').inputValue(), '');
+  await closeNaturalSettings(other);
+  await panel(other).getByText('Restored in the editor. Review it before submitting.', { exact: true }).waitFor();
   assert.equal(await panel(other).locator('[data-problem-draft-notice]').innerText(), 'Restored in the editor. Review it before submitting.');
+  await other.screenshot({ path: path.join(output, 'mobile-en-restored-account-draft.png'), fullPage: true });
   checks.push('Named natural draft restores exact content, environment and model on a second device without an API key.');
 
   phase = 'parallel-versions';
@@ -129,7 +137,7 @@ try {
   checks.push('Parallel edits from the same revision preserve both branches and either exact version can be restored.');
   await noOverflow(other); await other.screenshot({ path: path.join(output, 'mobile-en-account-drafts.png'), fullPage: true });
 
-  phase = 'restore-read-race';
+  phase = 'restore-read-race'; active = page;
   let releaseRead!: () => void, requested!: () => void;
   const held = new Promise<void>(resolve => { releaseRead = resolve; }), received = new Promise<void>(resolve => { requested = resolve; });
   const pattern = `**/api/research/personal/drafts/${natural.draft.id}?version=${natural.version.id}`;

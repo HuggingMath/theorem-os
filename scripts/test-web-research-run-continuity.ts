@@ -12,8 +12,9 @@ import type { WebRun } from '../apps/web/shared';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { readingEnvironment, readingRun } from '../tests/helpers/shareReadingFixture';
 import { freePort, startBrowser, preferFullCollaboration } from './web-scenario';
+import { openProblemHistory } from './web-ui-controls';
 
-const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/product-continuity/research-closure/run-continuity');
+const root = path.resolve(import.meta.dirname, '..'), output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/product-continuity/research-closure/run-continuity');
 const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-run-continuity-')), port = await freePort(), origin = `http://127.0.0.1:${port}`;
 await fs.mkdir(output, { recursive: true });
 const firstDigest = mathDigest('run-continuity-first'), secondDigest = mathDigest('run-continuity-second');
@@ -116,6 +117,7 @@ try {
     assert.match(await reader.locator('[data-check-diff]').innerText(), /rfl[\s\S]*exact missing_lemma|exact missing_lemma[\s\S]*rfl/);
     await page.screenshot({ path: path.join(output, `check-diff-${language}.png`), fullPage: true });
     phase = `frozen-history-${language}`;
+    await openProblemHistory(page);
     await page.locator('[data-evolution-moment]').selectOption(`1:${firstDigest}`); await page.locator('[data-evolution-selected="1"]').waitFor();
     await page.locator('[data-solution-node="task:conclusion"]').waitFor();
     assert.equal(await page.locator('[data-inline-open]').count(), 0, 'Frozen reading has no active decision drawer');
@@ -140,6 +142,7 @@ try {
     await page.screenshot({ path: path.join(output, `frozen-route-${language}.png`), fullPage: true });
     await page.locator('[data-evolution-live]').click(); await page.locator('[data-solution-node="task:normalization"]').waitFor();
     assert.equal(await page.locator('[data-solution-node="task:conclusion"]').count(), 0);
+    await openProblemHistory(page);
     await page.locator('[data-problem-map="global"]').click(); await page.locator('[data-journey-task="normalization"]').click();
     await page.locator('[data-journey-check="second-failed-check"] summary').click();
     await page.locator('[data-research-check="second-failed-check"] .research-check-message').waitFor();

@@ -13,7 +13,7 @@ import type { WebExplanation, WebExplanationDocument, WebExplanationOverview, Wo
 import { localeStorageKey } from '../apps/web/i18n';
 import { webFormalizationEvidence, webFormalizationStatement } from '../tests/helpers/webFormalizationFixture';
 import { freePort, preferFullCollaboration, settled, startBrowser } from './web-scenario';
-import { openAdvancedChatSettings } from './web-ui-controls';
+import { openAdvancedChatSettings, openChatParticipation, clickWorkbenchAction } from './web-ui-controls';
 import { audit } from './web-a11y';
 
 declare const Bun: { serve(options: { hostname: string; port: number; idleTimeout: number;
@@ -134,9 +134,10 @@ try {
   page = await context.newPage(); page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
   page.on('pageerror', error => errors.push(error.message));
   phase = '输入原题与无限制预算'; await page.goto(origin); await page.locator('#formalize-original').fill(original);
-  await page.locator('[data-chat-participation-control] > summary').click();
+  await openChatParticipation(page);
   await page.locator('input[name="chat-participation"][value="automatic"]').check();
-  await page.locator('#open-settings').click(); await page.locator('#formalize-key').fill('local-demo-not-a-real-key');
+  if (!await page.locator('#formalize-key').isVisible()) await clickWorkbenchAction(page, '#open-settings');
+  await page.locator('#formalize-key').fill('local-demo-not-a-real-key');
   await openAdvancedChatSettings(page); await page.locator('#formalize-environment').selectOption('standard');
   for (const selector of ['#formalize-minutes', '#formalize-tokens', '#research-minutes', '#research-tokens', '#research-turns']) assert.equal(await page.locator(selector).inputValue(), '');
   await shot('01-input-unlimited.png'); await page.locator('#formalize-start').click();

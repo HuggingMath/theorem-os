@@ -129,7 +129,7 @@ try {
     await page.locator('#edit-draft-source').click(); await page.locator('#expanded-source').fill(`${snapshot.source}-- recipient edit\n`);
     await page.locator('#apply-editor').click();
     await page.waitForFunction(() => sessionStorage.getItem('theorem-os.web-draft.v1')?.includes('-- recipient edit'));
-    await page.reload(); await page.locator('#open-account').waitFor();
+    await page.reload(); await page.locator('#open-account').waitFor({ state: 'attached' });
     assert.equal(await page.locator('#source').inputValue(), `${snapshot.source}-- recipient edit\n`);
     const savedDraft = await page.evaluate(() => JSON.parse(sessionStorage.getItem('theorem-os.web-draft.v1')!));
     assert.ok(!JSON.stringify(savedDraft).includes(run.id)); assert.ok(!JSON.stringify(savedDraft).includes(snapshot.model));

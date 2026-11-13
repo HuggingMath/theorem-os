@@ -12,7 +12,7 @@ import type { WebFormalization, WebFormalizationActivity } from '../apps/web/for
 import type { WebConversation, WebConversationSummary } from '../apps/web/conversationTypes';
 import type { WebRun, WebSession } from '../apps/web/shared';
 import { demoOriginal } from './fixtures/cantorBernsteinDemo';
-import { openAdvancedChatSettings } from './web-ui-controls';
+import { openAdvancedChatSettings, openChatParticipation } from './web-ui-controls';
 
 /** Opt-in real-model browser run. The fixture contributes only its original problem, never a solution. */
 const { values } = parseArgs({ options: {
@@ -293,8 +293,7 @@ try {
   await page.goto(attempt.conversationId ? new URL(`?chat=${attempt.conversationId}`, base).href : base.href, { timeout: 0 });
   if (!values.resume) {
     await page.locator('#formalize-original').waitFor({ timeout: 0 }); await page.locator('#formalize-original').fill(demoOriginal);
-    const participation = page.locator('[data-chat-participation-control]');
-    if (!await participation.evaluate(node => (node as HTMLDetailsElement).open)) await participation.locator(':scope > summary').click();
+    await openChatParticipation(page);
     await page.locator('input[name="chat-participation"][value="automatic"]').check();
     await openAdvancedChatSettings(page);
     await page.locator('#formalize-provider').selectOption('sub2api'); await page.locator('#formalize-model').fill('deepseek-flash');

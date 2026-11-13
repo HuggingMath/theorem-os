@@ -310,6 +310,10 @@ export function BriefPreview({ brief, context }: { brief: ResearchBrief; context
     finally { setExporting(false); }
   };
   const taskName = (id: string) => brief.tasks.find(task => task.id === id)?.title ?? id;
+  const acceptanceLabel = brief.accepted && brief.formalization
+    ? ['pending', 'rejected', 'interrupted', 'superseded'].includes(brief.formalization.confirmation ?? '')
+      ? tx('候选 Lean 陈述证明通过', 'Candidate Lean statement accepted') : tx('Lean 陈述证明通过', 'Lean statement accepted')
+    : brief.accepted ? tx('完整原题验收通过', 'Full problem accepted') : evidenceStatus(brief.acceptance.status);
   return <article ref={article} class="workspace-brief" data-research-brief>
     <div class="workspace-brief-controls research-actions" data-brief-controls><button class="button" type="button" onClick={() => downloadResearchFile(`theoremos-brief-${brief.selectedRunId}.md`, researchBriefMarkdown(brief, locale, location.origin), 'text/markdown;charset=utf-8')}>Markdown</button>
       <button class="button" type="button" onClick={() => void exportHtml()} disabled={exporting}>{exporting ? tx('正在导出…', 'Exporting…') : 'HTML'}</button>
@@ -318,7 +322,7 @@ export function BriefPreview({ brief, context }: { brief: ResearchBrief; context
       <BookmarkControl context={context} target={{ kind: 'run', runId: brief.selectedRunId, ...(new URL(brief.runHref, location.href).searchParams.get('id') ? { projectId: new URL(brief.runHref, location.href).searchParams.get('id')! } : {}) }} /></div>
     <ErrorBox message={error} />
     <header class="workspace-brief-heading"><p class="research-eyebrow">TheoremOS · {tx('研究简报', 'Research brief')}</p><h2><Rich text={brief.title} /></h2>
-      <p>{stamp(brief.generatedAt)} · {brief.environment}</p><span class="research-state" data-state={brief.accepted ? 'accepted' : 'pending'}>{brief.accepted ? brief.formalization ? tx('Lean 陈述证明通过', 'Lean statement accepted') : tx('完整原题验收通过', 'Full problem accepted') : tx('尚未通过完整原题验收', 'Full problem not accepted')}</span></header>
+      <p>{stamp(brief.generatedAt)} · {brief.environment}</p><span class="research-state" data-state={brief.accepted ? 'accepted' : 'pending'}>{brief.accepted ? acceptanceLabel : tx('尚未通过完整原题验收', 'Full problem not accepted')}</span></header>
     <section><h3>{tx('问题', 'Problem')}</h3><RichProse text={brief.statement} />
       <details><summary>{tx('冻结的 Lean 陈述', 'Frozen Lean statement')}</summary><pre><code>{brief.leanStatement}</code></pre></details>
       {brief.formalization && <p>{statementConfirmation(brief.formalization.confirmation, false, brief.formalization.reviewMode)}</p>}
@@ -326,12 +330,11 @@ export function BriefPreview({ brief, context }: { brief: ResearchBrief; context
         {brief.environmentDigest && <><dt>{tx('环境摘要', 'Environment digest')}</dt><dd><code>{brief.environmentDigest}</code></dd></>}
         {brief.formalization?.evidenceDigest && <><dt>{tx('形式化证据', 'Formalization evidence')}</dt><dd><code>{brief.formalization.evidenceDigest}</code></dd></>}</dl></details>
     </section>
-    <section><h3>{tx('历次尝试', 'Research attempts')}</h3><ol class="workspace-attempts">{brief.attempts.map(attempt => <li key={attempt.id}>
+    {brief.attempts.length > 0 && <section><h3>{tx('历次尝试', 'Research attempts')}</h3><ol class="workspace-attempts">{brief.attempts.map(attempt => <li key={attempt.id}>
       <a href={attempt.href}><Rich text={attempt.title} /></a><span>{attempt.accepted ? tx('验收通过', 'Accepted') : evidenceStatus(attempt.status)}</span><time dateTime={attempt.createdAt}>{stamp(attempt.createdAt)}</time>
-      {attempt.failure && <p>{tx('停止原因', 'Stop reason')}: {attempt.failure}</p>}</li>)}</ol></section>
-    <section><h3>{tx('证明路线与推导', 'Proof routes and derivations')}</h3>
+      {attempt.failure && <p>{tx('停止原因', 'Stop reason')}: {attempt.failure}</p>}</li>)}</ol></section>}
+    {(brief.routes.length > 0 || brief.tasks.length > 0) && <section><h3>{tx('记录的计划与尝试', 'Recorded plans and attempts')}</h3>
       {brief.routes.map(route => <div key={route.id} class="workspace-route"><strong>{route.id}</strong><p>{route.prerequisites.map(taskName).join(' + ') || '∅'} → {taskName(route.closingTaskId)} → {taskName(route.targetTaskId)}</p></div>)}
-      {!brief.tasks.length && <Empty>{tx('这次研究没有保存任务路线。', 'No task route was saved for this run.')}</Empty>}
       <ol class="workspace-brief-steps">{brief.tasks.map(task => <li key={`${task.id}:${task.version}`} id={`brief-task-${task.id}`}>
         <h4><a href={task.href}><Rich text={task.title} /></a></h4><p class="workspace-step-state">{evidenceStatus(task.kind)} · {evidenceStatus(task.proofStatus)}</p>
         <RichProse text={task.objective} />{task.statement && task.statement !== task.objective && <RichProse text={task.statement} />}
@@ -343,19 +346,18 @@ export function BriefPreview({ brief, context }: { brief: ResearchBrief; context
         <details><summary>{tx('版本与检查', 'Version and checks')} · {task.checks.length}</summary><code>{task.version}</code>{task.commit && <p><code>{task.commit}</code></p>}
           {task.checks.map(check => <p key={check.id}>{check.passed ? tx('任务检查通过', 'Task check passed') : tx('任务检查未通过', 'Task check failed')} · <code>{check.id}</code></p>)}</details>
       </li>)}</ol>
-    </section>
-    <section><h3>{tx('人工决定与处理', 'Human decisions and responses')}</h3>{!brief.decisions.length && <p>{tx('本次研究没有保存人工决定。', 'No human decision was recorded for this run.')}</p>}
+    </section>}
+    {brief.decisions.length > 0 && <section><h3>{tx('人工决定与处理', 'Human decisions and responses')}</h3>
       {brief.decisions.map(decision => <div class="workspace-decision" key={decision.id}><RichProse text={decision.kind === 'plan-edit' ? tx('计划修改', 'Plan edit') : decision.kind === 'plan-approval' ? tx('批准研究计划', 'Plan approval') : decision.text} /><p>{tx('投递', 'Delivery')}: <EvidenceState value={decision.delivery} /> · {tx('决定', 'Decision')}: <EvidenceState value={decision.decision} />
         {decision.execution && <> · {tx('执行', 'Execution')}: <State value={decision.execution} /></>}</p>{decision.reason && <RichProse text={decision.reason} />}
         {decision.evidenceRefs.length > 0 && <details><summary>{tx('依据', 'Evidence')}</summary>{decision.evidenceRefs.map(ref => <p key={ref}><code>{ref}</code></p>)}</details>}</div>)}
-    </section>
-    <section><h3>{tx('独立验收', 'Independent acceptance')}</h3><p>{brief.accepted && brief.formalization ? tx('Lean 陈述证明通过', 'Lean statement accepted') : evidenceStatus(brief.acceptance.status)}</p>
+    </section>}
+    <section><h3>{tx('独立验收', 'Independent acceptance')}</h3><p>{acceptanceLabel}</p>
       <p>{tx('任务检查与完整原题的验收分别记录。', 'Task checks and full problem acceptance are recorded separately.')}</p>
-      <details><summary>{tx('全部任务检查', 'All task checks')} · {brief.acceptance.checks.length}</summary>{brief.acceptance.checks.map(check => <p key={check.id}><code>{check.taskId}</code> · {check.passed ? tx('通过', 'Passed') : tx('未通过', 'Failed')} · <code>{check.id}</code></p>)}</details>
+      {brief.acceptance.checks.length > 0 && <details><summary>{tx('全部任务检查', 'All task checks')} · {brief.acceptance.checks.length}</summary>{brief.acceptance.checks.map(check => <p key={check.id}><code>{check.taskId}</code> · {check.passed ? tx('通过', 'Passed') : tx('未通过', 'Failed')} · <code>{check.id}</code></p>)}</details>}
     </section>
     <section><h3>{tx('用量与成果', 'Usage and outcomes')}</h3><p>{formatTokens(brief.usage.knownTokens)} {tx('已记录 Token', 'recorded tokens')} · {brief.usage.missingEntries} {tx('条记录缺少用量', 'records without usage')}</p>
       {brief.outcomes.map(outcome => <p key={outcome.href}><a href={outcome.href}><Rich text={outcome.title} /></a><br /><code>{outcome.detail}</code></p>)}
-      {!brief.outcomes.length && <p>{tx('尚未关联已发布成果。', 'No published outcome is linked yet.')}</p>}
     </section>
   </article>;
 }

@@ -11,8 +11,9 @@ import type { WebRunner } from '../apps/web/runner';
 import type { WebRun } from '../apps/web/shared';
 import { readingEnvironment, readingRun } from '../tests/helpers/shareReadingFixture';
 import { freePort, startBrowser } from './web-scenario';
+import { openProblemHistory, openProblemSection } from './web-ui-controls';
 
-const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/product-continuity/research-completion/browser');
+const root = path.resolve(import.meta.dirname, '..'), output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/product-continuity/research-completion/browser');
 const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-research-completion-')), port = await freePort(), origin = `http://127.0.0.1:${port}`;
 await fs.mkdir(output, { recursive: true });
 let workers = 0, prohibited = 0;
@@ -63,7 +64,7 @@ try {
     await page.goto(`${origin}/problem.html?${new URLSearchParams({ run: run.id, tab: 'route', task: task.id, taskVersion: task.version, commit: task.proof.commit! })}`);
     await page.locator('[data-problem-route-workspace] [data-solution-heading="task:conclusion"]').waitFor();
     assert.equal(await page.locator('[data-problem-route-workspace] .solution-route').count(), 1);
-    await page.locator('[data-problem-map=global]').click(); await page.locator('[data-journey-task="conclusion"][aria-pressed=true]').waitFor();
+    await openProblemHistory(page); await page.locator('[data-problem-map=global]').click(); await page.locator('[data-journey-task="conclusion"][aria-pressed=true]').waitFor();
     assert.equal(await page.locator('[data-problem-route-workspace] .solution-route').count(), 1);
     await page.locator('[data-journey-task="normalization"]').click();
     assert.equal(new URL(page.url()).searchParams.get('task'), 'normalization');
@@ -73,7 +74,7 @@ try {
     await page.waitForFunction(() => document.querySelectorAll('.solution-route-heading .katex').length > 0);
     await page.screenshot({ path: path.join(output, `route-${language}.png`), fullPage: true });
     phase = `outcome-delivery-${language}`;
-    await page.locator('.problem-tabs a[href*="tab=outcomes"]').click(); const delivery = page.locator('[data-outcome-delivery]'); await delivery.waitFor();
+    await openProblemSection(page, 'outcomes'); const delivery = page.locator('[data-outcome-delivery]'); await delivery.waitFor();
     const expected = (zh: string, en: string) => language === 'zh' ? zh : en;
     const explanation = delivery.getByRole('link', { name: expected('阅读或生成证明讲解', 'Read or create a proof explanation'), exact: true });
     assert.equal(new URL((await explanation.getAttribute('href'))!, origin).searchParams.get('run'), run.id);
@@ -89,7 +90,7 @@ try {
     await delivery.getByRole('button', { name: expected('预览与导出研究简报', 'Preview and export the research brief'), exact: true }).click();
     await page.locator('[data-brief-controls]').waitFor(); const briefDownload = page.waitForEvent('download'); await page.getByRole('button', { name: 'Markdown', exact: true }).click(); assert.match((await briefDownload).suggestedFilename(), /\.md$/u);
     phase = `personal-to-project-${language}`;
-    await page.locator('.problem-tabs a[href*="tab=overview"]').click(); const projectStart = page.locator('[data-project-from-problem]'); await projectStart.locator('summary').first().click();
+    await openProblemSection(page, 'overview'); const projectStart = page.locator('[data-project-from-problem]'); await projectStart.locator('summary').first().click();
     await projectStart.locator('input[type=checkbox]').check(); await projectStart.locator('button[type=submit]').click();
     await page.waitForURL(url => Boolean(url.searchParams.get('project'))); const projectId = new URL(page.url()).searchParams.get('project')!;
     await page.waitForFunction(() => !document.querySelector('[data-project-from-problem]'));

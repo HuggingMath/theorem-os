@@ -14,7 +14,7 @@ import { audit } from './web-a11y';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), staticRoot = path.join(root, 'out/web');
 const libraryOnly = process.argv.includes('--library-only');
-const output = path.join(root, libraryOnly ? 'out/web-research-information-library' : 'out/web-research-information');
+const output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, libraryOnly ? 'out/web-research-information-library' : 'out/web-research-information');
 const owner = 'synthetic-research-owner', createdAt = '2026-11-09T09:00:00.000Z';
 const profile = (id: string, displayName: string, fields: string[], bio: string): ResearcherProfile => ({
   id, displayName, fields, bio, links: [], visibility: 'public', revision: 1, createdAt, updatedAt: createdAt,
@@ -44,8 +44,8 @@ const theorem: ResearchProjectDetail = {
 const statementNeeded: ResearchProjectSummary = { ...theorem, id: 'quadratic-extensions', title: '二次扩张与判别式',
   description: '比较二次域扩张的表示与判别式，准备补充完整的研究陈述。', currentStatementVersionId: undefined };
 const managedTheorem: ResearchProjectDetail = { ...theorem, id: 'my-field-theorem', title: '我管理的域扩张题目', owner: self,
-  visibility: 'private', permissions: { manage: true, edit: true, discuss: true, member: true } };
-const laterManagedTheorem: ResearchProjectDetail = { ...managedTheorem, id: 'my-later-theorem', title: '另一项可管理题目' };
+  visibility: 'private', updatedAt: '2026-11-10T09:00:00.000Z', permissions: { manage: true, edit: true, discuss: true, member: true } };
+const laterManagedTheorem: ResearchProjectDetail = { ...managedTheorem, id: 'my-later-theorem', title: '另一项可管理题目', updatedAt: '2026-11-11T09:00:00.000Z' };
 const agentContent: ResearchAgentDraft = { environment: 'mathlib', workers: 1, coordination: 'cooperative',
   modulePlan: { scheduler: 'plan', context: 'essential', custom: [{ id: 'field-tower', name: 'Field tower strategy', slot: 'M1', mode: 'append', enabled: true,
     instructions: 'Fix the base field and prove the extension lemmas before using the solvability argument.' }] }, skills: [], libraries: [] };
@@ -97,7 +97,8 @@ function api(method: string, url: URL) {
       fields: [...new Set(people.flatMap(person => person.fields))].sort(), total: 27, nextOffset: 24 });
   }
   const person = /^\/api\/research\/people\/([^/]+)$/u.exec(pathname);
-  if (person) { const item = people.find(item => item.id === person[1]); if (item) return reply({ item: { ...item, projects: [theorem], contributions: [] } }); }
+  if (person) { const item = people.find(item => item.id === person[1]); if (item) return reply({ item: { ...item,
+    projects: item.id === self.id ? [theorem, managedTheorem, laterManagedTheorem] : [theorem], contributions: [] } }); }
   if (pathname === '/api/research/notifications') return reply({ items: [{ id: 'notice-statement', actor: people[0],
     projectId: theorem.id, type: 'statement', summary: 'Updated field-extension statement', createdAt, read: false }], total: 1 });
   if (pathname === '/api/research/feed') return reply({ items: [], total: 0 });
@@ -259,7 +260,10 @@ async function peopleFlow(page: Page, record: typeof checks[number], en: boolean
   await ownOverview.locator('[data-inbox-filter="progress"]').click();
   await visible(ownOverview.locator('[data-inbox-item="notice-statement"]'));
   assert.equal(requests.filter(request => request.method !== 'GET').length, 0, 'reading progress preserves unread state');
-  assert(await page.evaluate(() => Boolean(document.querySelector('[data-own-research-overview]')!.compareDocumentPosition(document.querySelector('#research-projects')!) & Node.DOCUMENT_POSITION_FOLLOWING)), 'own updates and recent projects precede profile details');
+  assert(await page.evaluate(() => Boolean(document.querySelector('[data-own-research-overview]')!.compareDocumentPosition(document.querySelector('#research-projects')!) & Node.DOCUMENT_POSITION_FOLLOWING)), 'own updates precede profile details');
+  assert.deepEqual(await page.locator('#research-projects .research-list-item').evaluateAll(links => links.map(link => new URL((link as HTMLAnchorElement).href).searchParams.get('id'))),
+    [laterManagedTheorem.id, managedTheorem.id, theorem.id], 'own projects appear once, newest first, even when the profile API returns another order');
+  assert.equal(await ownOverview.locator('.research-list-item').count(), 0, 'the personal inbox does not repeat the project list');
   await capture(page, record, 'people-own-overview');
   await visible(page.locator('#profile-management'));
   await page.getByText(en ? 'Edit my profile' : '编辑我的资料', { exact: true }).click({ timeout: 0 });
@@ -314,6 +318,7 @@ async function theoremFlow(page: Page, record: typeof checks[number], en: boolea
   await page.getByRole('button', { name: en ? 'Back to theorems' : '返回定理目录', exact: true }).click({ timeout: 0 });
   console.log(`CHECK ${record.scenario}: theorem detail`);
   await titleLink.click({ timeout: 0 }); await visible(page.getByRole('heading', { level: 1, name: theorem.title, exact: true }));
+  assert.equal(await page.locator('[data-project-start-research]').count(), 1, 'a theorem without a run offers one start action');
   filters(page, { ...expectedFilters, id: theorem.id });
   const anchors = ['statement-versions', 'research-progress', 'research-discussion', 'research-members', 'research-timeline'];
   for (const id of anchors) { assert.equal(await page.locator(`.research-section-nav a[href="#${id}"]`).count(), 1); assert.equal(await page.locator(`#${id}`).count(), 1); }
@@ -376,8 +381,12 @@ async function libraryFlow(page: Page, record: typeof checks[number], en: boolea
   assert.equal(await use.isEnabled(), true);
   const add = page.getByRole('button', { name: en ? 'Add to configuration' : '加入配置选择', exact: true }); assert.equal(await add.isEnabled(), true);
   const sections = await page.locator('.research-content > .research-panel').evaluateAll(elements => elements.map(element => element.querySelector('h2')?.textContent));
-  assert.deepEqual(sections.slice(0, 4), [agent.release!.name, en ? 'Published versions' : '已发布版本', en ? 'Personal draft' : '个人草稿', en ? 'Publish a fixed version' : '发布固定版本']);
-  assert((await page.locator('.research-content > .research-panel').nth(1).innerText()).includes('Field tower strategy'));
+  assert.deepEqual(sections.slice(0, 3), [agent.release!.name, en ? 'Personal draft' : '个人草稿', en ? 'Publish a fixed version' : '发布固定版本']);
+  const assetDetail = page.locator('#research-library-asset');
+  assert((await assetDetail.innerText()).includes('Field tower strategy'));
+  assert.equal(await assetDetail.getByRole('combobox', { name: en ? 'View a fixed version' : '查看固定版本', exact: true }).inputValue(), 'v1');
+  assert.equal(await assetDetail.locator(':scope > .research-item-meta').count(), 1, 'the fixed version has one metadata row');
+  assert.equal(await assetDetail.locator(':scope > .research-item-meta time').count(), 1, 'the publication timestamp appears once in the fixed-version header');
   const download = page.getByRole('link', { name: en ? 'Download release' : '下载版本', exact: true });
   assert.equal(await download.getAttribute('href'), `/api/research/library/${agent.id}/releases/v1?download=1`);
   filters(page, { type: 'agent', mine: '1', entry: agent.id, version: 'v1' });
@@ -392,7 +401,13 @@ async function libraryFlow(page: Page, record: typeof checks[number], en: boolea
   for (const item of [unpublished, withdrawn, unavailable]) {
     const releaseQuery = item === unpublished ? '' : '&version=v1';
     await visit(page, `library.html?type=agent&collection=shared&mine=1&entry=${item.id}${releaseQuery}`, heading);
-    await visible(page.getByRole('heading', { name: en ? 'Personal draft' : '个人草稿', level: 2, exact: true }));
+    if (item === unpublished) {
+      await visible(page.locator('#research-library-asset').getByRole('heading', { name: item.name, level: 2, exact: true }));
+      assert.equal(await page.getByText(item.description, { exact: true }).count(), 1, 'an unpublished asset presents its draft description once');
+      assert.equal(await page.getByText(en ? 'No published versions yet.' : '尚无已发布版本。', { exact: true }).count(), 0, 'the draft is not separated by an empty release panel');
+      assert.equal(await page.locator('.research-content > .research-panel').count(), 2, 'only the draft and publication panels appear before editing');
+    } else await visible(page.getByRole('heading', { name: en ? 'Personal draft' : '个人草稿', level: 2, exact: true }));
+    await visible(page.getByRole('button', { name: en ? 'Edit draft' : '编辑草稿', exact: true }));
     if (item === unavailable) await visible(page.getByText('Synthetic release is unavailable.', { exact: true }));
     if (item === withdrawn) await visible(page.getByText(en ? 'This version is withdrawn and cannot be added to a new research configuration.' : '此版本已撤回，不能加入新的研究配置。', { exact: true }));
     await noReuse(page, en); await health(page);

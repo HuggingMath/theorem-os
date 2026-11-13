@@ -20,6 +20,8 @@ body[data-view=run][data-output-open=true] .research-output-close{display:block;
 .research-conversation-status p{margin:0}
 .research-conversation-state{display:flex;align-items:center;gap:8px}
 .research-conversation-state svg{width:16px;height:16px;flex-shrink:0}
+.chat-task-status-line{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.chat-task-status-line>[data-research-stop]{flex:none;min-height:40px;padding:4px 0;font-size:12px}
 .research-conversation-status[data-accepted=true] .research-conversation-state{color:var(--green-600)}
 .research-conversation-status[data-failed=true] .research-conversation-state{color:var(--red-600)}
 .research-conversation-description{margin-top:10px!important;overflow-wrap:anywhere}
@@ -47,7 +49,7 @@ body[data-view=run][data-output-open=true] .research-output-close{display:block;
 
 /* One persistent chat shell owns messages and the composer. Artifacts are a separate view. */
 #research-conversation-panel #natural-research{display:block;flex:none;width:100%;max-width:808px;height:auto;max-height:none;margin:0 auto;padding:12px 24px 24px;overflow:visible}
-body[data-chat-empty=true] #research-conversation-panel{justify-content:center;overflow-y:auto;padding-bottom:clamp(24px,12vh,120px)}
+body[data-chat-empty=true] #research-conversation-panel{justify-content:safe center;overflow-y:auto;padding-bottom:clamp(24px,12vh,120px)}
 body[data-chat-empty=true] #research-chat-thread{flex:none;overflow:visible}
 body[data-chat-empty=true] #research-conversation-panel #natural-research{margin:0 auto;padding-top:24px}
 /* Landscape and an open software keyboard leave room to read and reach the saved results. */
@@ -114,7 +116,6 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 .chat-code-copy-error{padding:10px 14px;margin:0!important;color:var(--red-700);font-size:12px;line-height:1.8}
 @media(max-width:480px){.chat-code-header{padding:8px 10px}.chat-code pre{padding:12px}.chat-message-content :is(h2,h3,h4,h5,h6){margin-top:22px}.chat-math:not(.chat-math-display){display:inline-block;max-width:100%;overflow-x:auto;overflow-y:hidden;vertical-align:middle}.chat-markdown-table :is(th,td){padding:8px 10px}}
 .chat-answer-state{display:flex;align-items:center;gap:9px;color:var(--muted);font-size:13px;margin:12px 0 0}
-.chat-answer-lean-name{font:12px/1.7 var(--mono);color:var(--muted);margin:6px 0 12px;overflow-wrap:anywhere}
 .chat-answer-question{font-size:12px;margin-top:4px}
 .chat-answer-uses a{color:var(--blue);text-decoration:underline;text-underline-offset:3px;font-size:12px}
 .chat-task-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:16px}
@@ -153,6 +154,7 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 /* Typing in the composer thickens its outline to 2px at 3.6:1 or more against the resting border, page and fill in both themes. */
 #natural-research .chat-composer #formalize-form:has(#formalize-original:focus){border-color:var(--gray-500);box-shadow:0 0 0 1px var(--gray-500),0 4px 20px #00000006}
 #natural-research .chat-composer #formalize-original{display:block;width:100%;min-width:0;min-height:92px;max-height:260px;margin:0;padding:14px 16px 10px;border:0;border-radius:14px;background:transparent;color:var(--ink);font:inherit;font-size:16px;line-height:1.8;resize:none;box-shadow:none;overflow-y:auto}
+#natural-research .chat-composer[data-chat-followup=true] #formalize-original{min-height:56px}
 #natural-research .chat-composer #formalize-original:focus{outline:none}
 /* The shortcut hint starts where the typed text starts, quieter than the problem itself. */
 #natural-research .chat-composer [data-new-problem-shortcut]{margin:0;padding:0 16px 8px;color:var(--muted);font-size:12px;line-height:1.6}
@@ -160,10 +162,6 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 .chat-quote-notice>span{flex:1;min-width:0;overflow-wrap:anywhere}
 .chat-quote-notice .text-button{flex-shrink:0;min-height:36px;font-size:12px}
 .chat-composer-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:4px 8px 6px;position:relative}
-.chat-participation-control>summary{display:flex;align-items:center;gap:5px;min-height:36px;padding:4px;color:var(--gray-700);font-size:12px;list-style:none;cursor:pointer}
-.chat-participation-control>summary::-webkit-details-marker{display:none}
-.chat-participation-control>summary svg{width:13px;height:13px}
-.chat-participation-control .chat-participation{position:absolute;z-index:13;left:0;right:0;top:calc(100% + 12px);margin:0;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--card);box-shadow:0 8px 28px #00000014}
 .chat-participation{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;min-width:0;margin:2px 4px 6px;padding:0;border:0}
 .chat-participation>legend{padding:4px 6px 8px;font-size:13px;font-weight:600;color:var(--gray-700)}
 .chat-participation>label{display:flex;align-items:flex-start;gap:10px;min-width:0;min-height:64px;margin:0;padding:12px;border:1px solid var(--line);border-radius:12px;cursor:pointer}
@@ -176,6 +174,10 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 .chat-mathematics,.chat-mathematical-answer{margin:22px 0;padding-top:20px;border-top:1px solid var(--line);min-width:0;overflow-wrap:anywhere}
 .chat-mathematics h3,.chat-mathematical-answer h3{font-size:17px;line-height:1.6;margin:0 0 16px}
 .chat-mathematics h4,.chat-mathematical-answer h4{font-size:14px;line-height:1.8;margin:18px 0 10px}
+.chat-mathematics-summary{font-size:14px}
+.chat-mathematics-summary>div{margin:14px 0}
+.chat-mathematics-summary h4{font-size:12px;font-weight:500;color:var(--muted);margin:0 0 6px}
+.chat-task:has(>.chat-result-more[open])>.chat-mathematics-summary{display:none}
 .chat-math-tasks{display:grid;gap:12px;margin:0;padding:0;list-style:none}
 .chat-math-tasks>li{padding-left:14px;border-left:2px solid var(--line)}
 .chat-math-task-status{display:block;margin-bottom:5px;color:var(--muted);font-size:12px}
@@ -187,8 +189,14 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 .chat-mathematics details>summary,.chat-answer-support>summary{padding:9px 0;cursor:pointer;color:var(--muted);font-size:13px}
 .chat-math-finding{margin-top:18px}
 .chat-math-empty{font-size:13px;color:var(--muted);line-height:1.8}
-.chat-answer-selection{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:12px;min-width:0;margin-bottom:18px;font-size:13px;color:var(--muted)}
-.chat-answer-selection select{min-width:0;width:100%;min-height:40px;padding:7px 10px;font:12px/1.6 var(--mono);color:var(--ink);border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.chat-answer-header{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:16px}
+.chat-answer-header>h3{flex:none;margin:0}
+.chat-answer-selection{flex:1 1 180px;min-width:0;max-width:100%;font-size:13px;color:var(--muted)}
+.chat-answer-selection select{min-width:0;width:100%;min-height:40px;padding:7px 10px;font:inherit;line-height:1.6;color:var(--ink);border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.chat-answer-conclusion,.chat-answer-idea{margin:20px 0}
+.chat-answer-conclusion>h4,.chat-answer-idea>h4{font-size:12px;color:var(--muted);margin:0 0 8px}
+.chat-answer-conclusion>.chat-message-content{font-size:16px;color:var(--ink)}
+.chat-answer-derivation>h4{margin:24px 0 12px}
 .chat-answer-target{margin:20px 0}
 .chat-answer-statement{color:var(--gray-700);margin-bottom:14px}
 .chat-answer-steps{margin:0;padding-left:24px}
@@ -203,10 +211,12 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 .research-conversation-artifacts .chat-result-primary{border-color:var(--ink);font-weight:600}
 .chat-result-more{min-width:0;width:100%;font-size:13px}
 .chat-result-more>summary{width:fit-content;min-height:44px;cursor:pointer;color:var(--muted);padding:10px 0}
+.chat-result-more{margin-top:14px;border-top:1px solid var(--line)}
+.chat-result-more[open]>summary{color:var(--ink)}
+.chat-result-details{min-width:0;padding:0 0 12px}
+.chat-result-details>.research-conversation-artifacts{margin-top:16px}
 .chat-result-more-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:10px 0}
 .chat-result-more-actions :is(.button,.text-button){max-width:100%;min-height:40px;white-space:normal;text-align:left}
-.chat-key-next-step{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-top:12px;font-size:13px;line-height:1.8}
-.chat-key-next-step p{margin:0;color:var(--muted)}
 #research-problem-draft:empty{display:none}
 #research-problem-draft{flex:none;max-height:52dvh;overflow:auto;scrollbar-width:thin;width:100%;max-width:808px;margin:0 auto;padding:8px 24px}
 .chat-problem-draft{padding:18px 20px;border:1px solid var(--line);border-radius:14px;background:var(--card);font-size:14px;line-height:1.8;overflow-wrap:anywhere}
@@ -217,7 +227,7 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 .chat-problem-draft-source>summary{min-height:36px;cursor:pointer;padding:5px 0}
 .chat-problem-draft-digest{font:11px/1.8 var(--mono);overflow-wrap:anywhere;margin:8px 0}
 .chat-problem-draft-source pre{max-height:40dvh;overflow:auto;white-space:pre;font:11px/1.8 var(--mono);padding:12px;background:var(--gray-50);border-radius:6px;color:var(--ink)}
-@media(max-width:480px){.chat-composer-toolbar{gap:5px}#research-problem-draft{padding:8px 12px}.chat-problem-draft{padding:16px}.chat-mathematics h3,.chat-mathematical-answer h3{font-size:16px}.chat-answer-selection{grid-template-columns:1fr;gap:6px}}
+@media(max-width:480px){.chat-composer-toolbar{gap:5px}#research-problem-draft{padding:8px 12px}.chat-problem-draft{padding:16px}.chat-mathematics h3,.chat-mathematical-answer h3{font-size:16px}}
 .chat-message-destination{display:flex;flex-wrap:wrap;gap:4px;margin:0 4px 4px;padding:2px;border-bottom:1px solid var(--line)}
 .chat-message-destination button{min-height:44px;padding:8px 12px;border:0;border-radius:8px;background:none;font:inherit;font-size:13px;color:var(--muted);cursor:pointer}
 .chat-message-destination button[aria-pressed=true]{color:var(--ink);background:var(--gray-100);font-weight:600}
@@ -242,12 +252,16 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 #natural-research .chat-composer #formalize-settings>summary::-webkit-details-marker{display:none}
 .chat-composer-settings>summary svg,.chat-lean-entry svg{width:15px;height:15px;flex-shrink:0}
 .chat-composer-settings[open]>summary{color:var(--ink)!important}
+.chat-model-label{min-width:0;max-width:22ch;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#natural-research .chat-composer #formalize-settings>summary{max-width:100%;min-height:40px}
+.chat-composer-toolbar>#formalize-settings{min-width:0;max-width:calc(100% - 100px)}
 .chat-settings-fields{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:12;display:grid;gap:12px;max-height:48dvh;overflow-y:auto;padding:20px;border:1px solid var(--line);border-radius:14px;background:var(--card);box-shadow:0 8px 32px #00000014;font-size:13px}
 /* On the empty home the composer sits mid-page under the heading, so the settings open below it instead of over the input. */
 body[data-chat-empty=true] .chat-settings-fields{top:calc(100% + 17px);bottom:auto}
 .chat-settings-options{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
 .chat-settings-options label{min-width:0}
-#natural-research .chat-settings-fields :is(input,select){display:block;width:100%;min-width:0;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:10px;font-size:13px}
+#natural-research .chat-settings-fields :is(input:not([type=radio]),select){display:block;width:100%;min-width:0;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:10px;font-size:13px}
+.chat-connection-fields{display:grid;gap:8px;min-width:0}
 .chat-settings-options select{margin-top:8px}
 .chat-settings-fields>label span{color:var(--muted);font-weight:400}
 .chat-settings-options input{margin-top:8px}
@@ -259,16 +273,39 @@ body[data-chat-empty=true] .chat-settings-fields{top:calc(100% + 17px);bottom:au
 .chat-connection-check{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.chat-connection-check .button{flex-shrink:0}
 .chat-budget-summary{font-size:12px;line-height:1.65;color:var(--muted);margin:12px 4px 0;max-width:100%}
 .chat-statement-verdict{font-size:13px;line-height:1.7;color:var(--muted);margin:10px 0}
-.chat-lean-entry{display:inline-flex;align-items:center;gap:2px;font-size:12px;color:var(--muted);min-height:36px}
+.chat-lean-entry{display:inline-flex;align-items:center;justify-self:start;gap:6px;font-size:12px;color:var(--muted);min-height:44px;max-width:100%;text-align:left}
 .chat-composer-submit{margin-left:auto;flex-shrink:0}
 #natural-research .chat-composer :is(#formalize-start,#chat-stop){display:flex;align-items:center;justify-content:center;width:38px;height:38px;min-width:38px;padding:0;border:0;border-radius:50%;background:var(--ink);color:var(--card);cursor:pointer}
 #natural-research .chat-composer :is(#formalize-start,#chat-stop) svg{width:20px;height:20px}
 #natural-research .chat-composer #formalize-start:disabled{opacity:.25;cursor:default}
 #natural-research .chat-composer #formalize-send-status{margin:10px 6px 0;padding:0;color:var(--muted);font-size:12px;line-height:1.7}
-.chat-examples{margin:16px auto 0;text-align:center;max-width:360px;color:var(--muted);font-size:12px}
-.chat-examples summary{display:inline-block;cursor:pointer;list-style:none;padding:4px 10px}
+.chat-home-options{display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-start;gap:4px 20px;margin:16px auto 0}
+.chat-examples{margin:0;text-align:center;max-width:360px;color:var(--muted);font-size:12px}
+.chat-home-options:has(.chat-saved-research[open]){display:block}
+.chat-home-options:has(.chat-saved-research[open])>.chat-examples{margin-inline:auto}
+.chat-saved-research{min-width:0;font-size:12px;color:var(--muted);text-align:center}
+.chat-saved-research>summary{display:inline-flex;align-items:center;min-height:44px;padding:8px 12px;cursor:pointer;list-style:none}
+.chat-saved-research>summary::-webkit-details-marker{display:none}
+.chat-saved-research>summary::after{content:'+';margin-left:10px;font-size:15px}
+.chat-saved-research[open]>summary::after{content:'−'}
+.chat-saved-research>.research-overview{text-align:left;color:var(--ink);font-size:14px}
+.chat-examples summary{display:inline-flex;align-items:center;min-height:44px;cursor:pointer;list-style:none;padding:8px 12px}
 .chat-examples summary::-webkit-details-marker{display:none}
+.chat-examples summary::after{content:'+';margin-left:10px;font-size:15px}
+.chat-examples[open] summary::after{content:'−'}
+.chat-examples-content{display:grid;gap:8px;padding:4px 12px 12px;text-align:left}
+.chat-examples-content>.text-button{min-height:44px}
+.chat-examples-content .chat-start-sample{margin:0;justify-content:flex-start}
 #natural-research .chat-examples select{margin-top:10px;display:block;width:100%;max-width:100%;border:1px solid var(--line);border-radius:8px;background:var(--card);padding:10px;font-size:13px;color:var(--ink)}
+/* Keep the current budget visible as one line; expand its two stages and cost before editing. */
+.chat-composer .first-research-start{margin:0 12px;padding:0;border-top:1px solid var(--line);font-size:12px;line-height:1.7}
+.first-research-start>summary{display:flex;align-items:center;gap:12px;min-height:44px;padding:8px 0;cursor:pointer;color:var(--muted);list-style:none}
+.first-research-start>summary::-webkit-details-marker{display:none}
+.first-research-start>summary>span{margin-left:auto;text-align:right}
+.first-research-start>summary::after{content:'+';font-size:15px}
+.first-research-start[open]>summary::after{content:'−'}
+.first-research-content{padding:8px 0 14px}
+.first-research-content .text-button{min-height:44px}
 #chat-history-list{min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
 .run-history:has(.chat-task-history[open]) #chat-history-list{max-height:50%}
 .chat-history{padding:8px 0 16px}
@@ -710,9 +747,6 @@ button.live-now-task{padding:0;text-align:left}
 .live-check-label{min-width:0;overflow-wrap:anywhere}
 .live-check .route-item-outcome{margin-left:auto;flex-shrink:0}
 .live-check time{flex-shrink:0;color:var(--gray-500);font-size:11.5px;font-variant-numeric:tabular-nums}
-.chat-next-action{display:flex;flex-wrap:wrap;gap:2px 10px;margin:10px 0 4px;font-size:12px;line-height:1.7}
-.chat-next-action>span{color:var(--muted)}
-.chat-next-action strong{font-weight:500;overflow-wrap:anywhere}
 .chat-history-status,.chat-history-time{display:block;font-size:11px;line-height:1.7;color:var(--muted)}
 .chat-history-time{font-variant-numeric:tabular-nums;font-size:10px}
 /* A narrow screen shows the workspace in place of the conversation: it scrolls as one column instead of in four small regions. */
@@ -732,4 +766,4 @@ button.live-now-task{padding:0;text-align:left}
   .live-check[aria-current=true]{outline:2px solid Highlight;outline-offset:-2px}
 }
 
-.chat-home-details{margin-top:24px}.chat-home-details>.chat-start-tools{text-align:center}
+@media(max-width:480px){.chat-model-label{max-width:16ch}.chat-settings-options{grid-template-columns:1fr}}

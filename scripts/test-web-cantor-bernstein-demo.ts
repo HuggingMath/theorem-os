@@ -12,7 +12,7 @@ import type { WebExplanation, WebExplanationOverview, WorkerInput, WorkerMessage
 import { localeStorageKey } from '../apps/web/i18n';
 import { demoOriginal, demoSource, demoTask, demoProof, demoExplanation, demoQuestion, demoAnswer } from './fixtures/cantorBernsteinDemo';
 import { freePort, preferFullCollaboration, settled, startBrowser } from './web-scenario';
-import { showChat, withSettings } from './web-ui-controls';
+import { showChat, withSettings, clickWorkbenchAction } from './web-ui-controls';
 import { audit } from './web-a11y';
 
 declare const Bun: { serve(options: { hostname: string; port: number; idleTimeout: number;
@@ -225,7 +225,7 @@ try {
 
   phase = '自然数构造与映射表追问';
   await page.locator('#formalize-original').fill(demoQuestion);
-  if (!await page.locator('#formalize-key').isVisible()) await page.locator('#open-settings').click();
+  if (!await page.locator('#formalize-key').isVisible()) await clickWorkbenchAction(page, '#open-settings');
   await page.locator('#formalize-key').fill('local-cantor-bernstein-demo-not-a-real-key');
   await page.locator('#formalize-start:enabled').click(); await eventually(() => Boolean(reply)); reply!.delta(answerStart);
   await page.waitForFunction(() => document.querySelector('#research-chat-thread')?.textContent?.includes('【本地模拟回答】'));

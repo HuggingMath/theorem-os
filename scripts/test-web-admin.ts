@@ -13,7 +13,7 @@ import { themeStorageKey } from '../apps/web/client/themePreference';
 import { audit } from './web-a11y';
 import { contrastProblems } from './web-contrast';
 import { freePort, settled, startBrowser } from './web-scenario';
-import { openSettings } from './web-ui-controls';
+import { clickWorkbenchAction, openSettings } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'out/web-admin');
@@ -54,12 +54,12 @@ async function signedIn(browser: Browser, email: string, options: { locale?: 'zh
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error' && !/status of 40[03]/u.test(message.text())) errors.push(message.text()); });
   await page.goto(origin);
-  await page.locator('#open-account').waitFor();
+  await page.locator('#open-account').waitFor({ state: 'attached' });
   return { context, page, errors };
 }
 
 async function openAdmin(page: Page) {
-  await page.click('#open-account');
+  await clickWorkbenchAction(page, '#open-account');
   await page.locator('#account-dialog[open]').waitFor();
   await page.click('#open-admin');
   await page.locator('#admin-dialog[open] .admin-funnel').waitFor();
@@ -89,7 +89,7 @@ try {
   browser = await startBrowser(service.server, port);
 
   let bob = await signedIn(browser, 'bob@example.org');
-  await bob.page.click('#open-account');
+  await clickWorkbenchAction(bob.page, '#open-account');
   await bob.page.locator('#account-dialog[open]').waitFor();
   assert.equal(await bob.page.locator('#open-admin').isVisible(), false, 'A tester sees the admin button');
   assert.equal((await bob.context.request.get(`${origin}/api/admin/overview`)).status(), 403);
@@ -115,7 +115,7 @@ try {
   assert.equal(await page.locator('#api-key').evaluate(input => (input as HTMLInputElement).required), true);
   await page.selectOption('#provider', 'sub2api');
   await page.reload();
-  await page.locator('#open-account').waitFor();
+  await page.locator('#open-account').waitFor({ state: 'attached' });
   mark('for the admin, the Sub2API key may stay empty because the server holds it, and the key never reaches the page; OpenAI still needs one');
   await openAdmin(page);
   assert.deepEqual(await listed(page), ['admin@example.org', 'bob@example.org', 'carol@example.org']);

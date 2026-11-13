@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { openAdvancedChatSettings } from './web-ui-controls';
+import { clickWorkbenchAction, openAdvancedChatSettings, openChatBudget, openChatParticipation, openChatResultDetails } from './web-ui-controls';
 // Disposable HTTP services and recorded mathematics evidence only: no external model or Lean process.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -19,7 +19,7 @@ import { freePort, startBrowser } from './web-scenario';
 
 declare const Bun: { serve(options: { hostname: string; port: number; idleTimeout?: number; fetch(request: Request): Response | Promise<Response> }): { port: number; stop(force?: boolean): void } };
 
-const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/web-chat-session');
+const root = path.resolve(import.meta.dirname, '..'), output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/web-chat-session');
 await fs.mkdir(output, { recursive: true });
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-chat-browser-'));
 const original = `  ${webFormalizationStatement}\n\n  `;
@@ -88,11 +88,11 @@ let browser: Browser | undefined, activePage: Page | undefined;
 const checks: string[] = [], errors: string[] = [], requests: string[] = [], screenshots: string[] = [];
 const mark = (name: string) => { checks.push(name); console.log(`PASS ${name}`); };
 async function screenshot(page: Page, filename: string) {
-  await page.screenshot({ path: path.join(output, filename), fullPage: true, timeout: 0 }); screenshots.push(filename);
+  await page.screenshot({ path: path.join(output, filename), fullPage: true }); screenshots.push(filename);
 }
 async function eventually(check: () => boolean, description: string) {
-  if (!check()) console.log(`WAIT ${description}`);
-  while (!check()) await new Promise(resolve => setTimeout(resolve, 40));
+  const until = Date.now() + 15_000;
+  while (!check()) { assert.ok(Date.now() < until, description); await new Promise(resolve => setTimeout(resolve, 40)); }
 }
 const budgetInputs = ['#formalize-minutes', '#formalize-tokens', '#research-minutes', '#research-tokens', '#research-turns'];
 const positiveBudgets = ['4', '120000', '3', '80000', '4'];
@@ -102,8 +102,10 @@ async function blankBudgets(page: Page) {
     assert.equal(await page.locator(selector).inputValue(), '', `${selector} represents unlimited with a blank value`);
     assert.equal(await page.locator(selector).getAttribute('placeholder'), '不限');
   }
+  await openChatBudget(page);
   assert.match(await page.locator('[data-chat-budget]').innerText(), /形式化[\s\S]*不限[\s\S]*证明[\s\S]*不限/u);
   assert.doesNotMatch(await page.locator('[data-chat-budget]').innerText(), /0 Token|0 分钟|0 轮/u);
+  await openAdvancedChatSettings(page);
 }
 /** The status says where the task is once; a task that needs nothing from the reader adds no "your next action" line. */
 async function outcomes(page: Page) {
@@ -123,10 +125,10 @@ async function historyMetadata(page: Page, id: string) {
 async function credentials(page: Page) {
   const automatic = page.locator('input[name="chat-participation"][value="automatic"]');
   if (await automatic.count() && await automatic.isEnabled()) {
-    if (!await automatic.isVisible()) await page.locator('[data-chat-participation-control] > summary').click();
+    await openChatParticipation(page);
     await automatic.check();
   }
-  if (!await page.locator('#formalize-key').isVisible()) await page.locator('#open-settings').click();
+  if (!await page.locator('#formalize-key').isVisible()) await clickWorkbenchAction(page, '#open-settings');
   await page.locator('#formalize-key').fill('sk-disposable-browser-fixture');
   await openAdvancedChatSettings(page);
   if (await page.locator('#formalize-environment').isEnabled()) await page.locator('#formalize-environment').selectOption('mathlib');
@@ -146,6 +148,14 @@ async function expectMessage(page: Page, value: string) {
 async function assertSameComposer(page: Page) {
   assert.equal(await page.evaluate(() => (window as any).__chatComposer === document.querySelector('#formalize-original')), true,
     'The composer is the same DOM node throughout conversation and artifact navigation');
+}
+async function composerSize(page: Page) {
+  return page.locator('#formalize-original').evaluate((input: HTMLTextAreaElement) => {
+    const style = getComputedStyle(input);
+    return { rows: input.rows, height: input.getBoundingClientRect().height,
+      minHeight: Number.parseFloat(style.minHeight), maxHeight: Number.parseFloat(style.maxHeight),
+      scrollHeight: input.scrollHeight, clientHeight: input.clientHeight };
+  });
 }
 async function readingPosition(page: Page) {
   return page.locator('#research-chat-thread').evaluate(thread => {
@@ -212,16 +222,20 @@ try {
   for (const width of [1440, 390, 320]) {
     const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
     await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
-    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000); page.setDefaultNavigationTimeout(30_000);
     page.on('pageerror', error => errors.push(error.message));
     const writes: string[] = [];
     page.on('request', request => { if (!['GET', 'HEAD'].includes(request.method())) writes.push(`${request.method()} ${new URL(request.url()).pathname}`); });
     try {
       const modelCalls = providerCalls.length, statementCount = formalizations.length, proofCount = runs.length;
       await page.goto(origin); await page.locator('#formalize-original').waitFor();
+      const homeSize = await composerSize(page);
+      assert.equal(homeSize.rows, 3, 'A new problem retains a multiline input');
+      assert.equal(homeSize.minHeight, 92, 'The home composer retains its original minimum height');
+      assert.ok(homeSize.height >= 92 && homeSize.height <= 260, 'The home input stays comfortably sized');
+      mark(`${width}px: the new-problem input retains three rows and a 92px minimum`);
       const draft = `${width}px: this unlimited home draft must survive refresh without being sent`;
       await page.locator('#formalize-original').fill(draft);
-      await page.locator('#formalize-settings').evaluate(details => { (details as HTMLDetailsElement).open = true; });
       await blankBudgets(page);
       for (const [index, selector] of budgetInputs.entries()) await page.locator(selector).fill(positiveBudgets[index]);
       for (const selector of budgetInputs) await page.locator(selector).fill('');
@@ -234,7 +248,6 @@ try {
       }));
       await page.reload(); await page.locator('#formalize-original').waitFor();
       assert.equal(await page.locator('#formalize-original').inputValue(), draft);
-      await page.locator('#formalize-settings').evaluate(details => { (details as HTMLDetailsElement).open = true; });
       await blankBudgets(page);
       assert.equal(new URL(page.url()).search, '');
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
@@ -247,7 +260,7 @@ try {
   for (const width of [1440, 390]) {
     const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
     await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
-    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000); page.setDefaultNavigationTimeout(30_000);
     page.on('pageerror', error => errors.push(error.message));
     page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/')) requests.push(`${request.method()} ${new URL(request.url()).pathname}`); });
     const writes: string[] = [];
@@ -256,6 +269,10 @@ try {
     assert.equal(await page.locator('#formalize-original').inputValue(), '');
     await page.evaluate(() => { (window as any).__chatComposer = document.querySelector('#formalize-original'); });
     await page.locator('#formalize-original').fill(original); await credentials(page);
+    const originalSize = await composerSize(page);
+    assert.equal(originalSize.rows, 3);
+    assert.ok(originalSize.height >= 92, 'A multiline original does not inherit the compact follow-up height');
+    assert.equal(await page.locator('#formalize-original').inputValue(), original, 'Multiline input preserves whitespace before submission');
     if (width === 1440) {
       await page.locator('#formalize-minutes').fill('4'); await page.locator('#formalize-tokens').fill('120000');
       await page.locator('#research-minutes').fill('3'); await page.locator('#research-tokens').fill('80000');
@@ -287,6 +304,47 @@ try {
     await eventually(() => formalizations.length === (width === 1440 ? 1 : 2), 'One natural formalization starts');
     assert.equal(await page.locator('#formalize-original').inputValue(), '');
     assert.equal((await conversation(page)).messages[0]?.text, original, 'Server message preserves the exact original');
+    await page.waitForFunction(() => {
+      const input = document.querySelector<HTMLTextAreaElement>('#formalize-original');
+      return input?.rows === 1 && Math.abs(input.getBoundingClientRect().height - 56) <= 1;
+    });
+    const emptySize = await composerSize(page), writesBeforeSizing = writes.length, callsBeforeSizing = providerCalls.length;
+    assert.equal(emptySize.minHeight, 56, 'An empty follow-up leaves more room for reading');
+    await screenshot(page, `compact-followup-${width}.png`);
+    const longDraft = Array.from({ length: 24 }, (_, index) => `第 ${index + 1} 行：请继续解释这个证明步骤及其使用条件。`).join('\n');
+    await page.locator('#formalize-original').fill(longDraft);
+    await page.waitForFunction(() => document.querySelector('#formalize-original')!.getBoundingClientRect().height >= 259);
+    const expandedSize = await composerSize(page);
+    assert.equal(await page.locator('#formalize-original').inputValue(), longDraft);
+    assert.equal(expandedSize.rows, 1);
+    assert.ok(expandedSize.height > emptySize.height && expandedSize.height <= 261, 'A long follow-up grows within the 260px cap');
+    assert.ok(expandedSize.scrollHeight > expandedSize.clientHeight, 'Long follow-ups remain editable by scrolling within the cap');
+    await screenshot(page, `expanded-followup-${width}.png`);
+    await page.locator('#formalize-original').fill('');
+    await page.waitForFunction(() => Math.abs(document.querySelector('#formalize-original')!.getBoundingClientRect().height - 56) <= 1);
+    if (width === 390) {
+      await page.setViewportSize({ width: 320, height: 1000 });
+      const narrowSize = await composerSize(page);
+      assert.ok(Math.abs(narrowSize.height - 56) <= 1, 'A narrow empty follow-up still occupies one line');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+      await screenshot(page, 'compact-followup-320.png');
+      await page.setViewportSize({ width: 320, height: 480 });
+      await page.locator('#formalize-original').fill(longDraft);
+      await page.waitForFunction(() => Math.abs(document.querySelector('#formalize-original')!.getBoundingClientRect().height - 96) <= 1);
+      const shortSize = await composerSize(page);
+      assert.equal(shortSize.maxHeight, 96, 'Short screens retain the 96px input cap');
+      assert.ok(shortSize.height <= 97 && shortSize.scrollHeight > shortSize.clientHeight);
+      assert.equal(await page.locator('#formalize-original').inputValue(), longDraft, 'The short-screen cap preserves all follow-up text');
+      assert.ok((await page.locator('#research-chat-thread').boundingBox())!.height > 0, 'Short screens retain space to read the conversation');
+      await screenshot(page, 'expanded-followup-320x480.png');
+      await page.locator('#formalize-original').fill('');
+      await page.waitForFunction(() => Math.abs(document.querySelector('#formalize-original')!.getBoundingClientRect().height - 56) <= 1);
+      await page.setViewportSize({ width, height: 1000 });
+    }
+    assert.equal(writes.length, writesBeforeSizing, 'Sizing and clearing a follow-up do not submit it');
+    assert.equal(providerCalls.length, callsBeforeSizing, 'Editing a follow-up never invokes a model');
+    await assertSameComposer(page);
+    mark(`${width}px: empty follow-up is 56px, long input grows to 260px, and clearing shrinks it without submitting`);
     const pending = formalizations.at(-1)!;
     assert.equal(pending.input.effort, 'high', 'New formalizations default to high reasoning');
     await outcomes(page);
@@ -297,12 +355,14 @@ try {
       maxRounds: pending.input.maxRounds, maxPlanningRounds: pending.input.maxPlanningRounds },
       { maxRunSeconds: 0, maxTotalTokens: 0, maxRounds: 0, maxPlanningRounds: 0 });
     pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve();
+    await openChatResultDetails(page);
     await page.locator('[data-research-artifact="source"]:enabled').waitFor();
     await eventually(() => runs.length === formalizations.length, 'The approved formalization starts one proof');
     assert.equal(runs.at(-1)?.input.effort, 'high', 'New proof tasks also default to high after formalization');
     assert.equal((runs.at(-1)?.formalization as { request?: { statement?: string } } | undefined)?.request?.statement, original);
     assert.equal(await page.locator('.research-conversation-status').getAttribute('data-accepted'), String(width === 390));
-    assert.match(await page.locator('#research-chat-thread [data-statement-verdict]').innerText(), /Lean 编译通过/u);
+    assert.equal(await page.locator('#research-chat-thread [data-statement-verdict]').innerText(),
+      `${width === 390 ? '原题含义：请查看形式化记录。' : 'Lean 编译通过'} Lean 验收证明的是这份陈述，不能替代对自然语言原意的核对。`);
     if (width === 1440) {
       assert.equal(runs.at(-1)?.input.maxRunSeconds, 180); assert.equal(runs.at(-1)?.input.maxTotalTokens, 80000);
       assert.equal(runs.at(-1)?.input.maxTurns, 4);
@@ -324,6 +384,7 @@ try {
     }
     await page.locator('#close-research-output').click();
     assert.equal(await page.locator('#formalize-original').inputValue(), question); await assertSameComposer(page);
+    await openChatResultDetails(page);
     await page.locator('[data-research-artifact="original"]').click();
     await page.locator('#chat-original-panel').waitFor();
     assert.equal(await page.locator('#chat-original-panel .chat-original-columns .chat-message-text').first().textContent(), original);
@@ -347,7 +408,7 @@ try {
     if (width === 1440) {
       const readGate = new Promise<void>(resolve => { releaseRead = resolve; });
       await page.route(`**/api/conversations/${id}`, async route => {
-        const response = await route.fetch({ timeout: 0 }); readHeld = true;
+        const response = await route.fetch({ timeout: 15_000 }); readHeld = true;
         await readGate; await route.fulfill({ response }); readDelivered = true;
       }, { times: 1 });
       // Returning to the tab reads the conversation at once; that snapshot predates the next send.
@@ -532,11 +593,13 @@ try {
         continueCalls++; resumed = true; return route.fulfill({ json: { formalization: saved } });
       });
       await page.reload(); await page.locator('[data-research-continue]').waitFor();
+      await openChatResultDetails(page);
       assert.match(await page.locator('[data-formalization-failure]').innerText(), /继续证明/u);
       await page.locator('[data-research-continue]').click();
       await page.locator('#formalize-key').waitFor(); await page.locator('#formalize-key').fill('sk-disposable-browser-fixture');
       await page.locator('#formalize-settings > summary').click();
       await page.locator('[data-research-continue]').click();
+      await openChatResultDetails(page);
       await page.locator('[data-research-artifact="source"]:enabled').waitFor();
       assert.equal(continueCalls, 1);
       assert.equal(formalizations.length, formalizationCount, 'Continuing a retained statement does not pay for formalization again');
@@ -549,13 +612,13 @@ try {
   {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' });
     await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
-    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000); page.setDefaultNavigationTimeout(30_000);
     page.on('pageerror', error => errors.push(error.message));
     let releaseResponse: (() => void) | undefined, responseHeld = false;
     const gate = new Promise<void>(resolve => { releaseResponse = resolve; });
     await page.route('**/api/formalizations', async route => {
       if (route.request().method() !== 'POST') return route.continue();
-      const response = await route.fetch({ timeout: 0 }); responseHeld = true;
+      const response = await route.fetch({ timeout: 15_000 }); responseHeld = true;
       await gate; await route.fulfill({ response });
     });
     try {
@@ -577,6 +640,7 @@ try {
       assert.ok(saved.runId, 'History retains the completed task association');
       assert.equal(new URL(page.url()).search, '');
       assert.equal(await page.locator('#formalize-original').inputValue(), nextDraft);
+      await openChatHistory(page);
       await page.locator(`#chat-history-list a[href="?chat=${saved.id}"]`).waitFor();
       await page.locator(`#chat-history-list a[href="?chat=${saved.id}"]`).click();
       await expectMessage(page, webFormalizationStatement);
@@ -587,7 +651,7 @@ try {
   for (const width of [1440, 390]) {
     const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
     await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
-    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000); page.setDefaultNavigationTimeout(30_000);
     page.on('pageerror', error => errors.push(error.message));
     try {
       const started = formalizations.length, proofs = runs.length;
@@ -597,6 +661,7 @@ try {
       const pending = formalizations.at(-1)!;
       pending.send({ type: 'progress', progress: { phase: 'generating', round: 3, tokens: 200_000 } });
       pending.send({ type: 'result', status: 'exhausted', reason: 'formalization_token_limit' }); pending.resolve();
+      await openChatResultDetails(page);
       const details = page.locator('[data-formalization-failure]');
       await details.waitFor();
       const rows = await details.locator('dt').evaluateAll(nodes => nodes.map(node => [node.textContent,
@@ -609,7 +674,7 @@ try {
       const named = [...(await conversation(page)).title];
       const pageTitle = `${named.length > 30 ? `${named.slice(0, 29).join('')}…` : named.join('')} · TheoremOS`;
       assert.equal(await page.title(), pageTitle, 'A conversation without a run names the page');
-      await page.reload(); await details.waitFor();
+      await page.reload(); await openChatResultDetails(page); await details.waitFor();
       assert.equal(await page.title(), pageTitle, 'A reopened conversation names the page');
       if (width === 1440) {
         const id = (await conversation(page)).id, reads: string[] = [];
@@ -623,7 +688,9 @@ try {
         let dropped = false;
         await page.route(`**/api/conversations/${id}`, route => { dropped = true; return route.abort('internetdisconnected'); }, { times: 1 });
         // The refresh started above may still be running, and a refresh never overlaps another; ask until one reaches the network.
+        const readDeadline = Date.now() + 15_000;
         while (!dropped) {
+          assert.ok(Date.now() < readDeadline, 'The next background refresh reaches the network');
           await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await page.waitForTimeout(200);
         }
         await page.locator('#formalize-error').filter({ hasText: '无法连接服务器' }).waitFor();
@@ -639,7 +706,7 @@ try {
   {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' });
     await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
-    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000); page.setDefaultNavigationTimeout(30_000);
     page.on('pageerror', error => errors.push(error.message));
     try {
       await page.route('**/api/conversations', route => route.request().method() === 'GET'
@@ -665,7 +732,7 @@ try {
   for (const width of [1440, 390]) {
     const context = await browser.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
     await context.addInitScript(key => localStorage.setItem(key, 'zh'), localeStorageKey);
-    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
+    const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000); page.setDefaultNavigationTimeout(30_000);
     page.on('pageerror', error => errors.push(error.message));
     page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/')) requests.push(`${request.method()} ${new URL(request.url()).pathname}`); });
     try {
@@ -677,7 +744,7 @@ try {
       const conversationRelease = new Promise<void>(resolve => { releaseConversation = resolve; });
       await page.route('**/api/conversations', async route => {
         if (route.request().method() !== 'POST') { await route.continue(); return; }
-        const response = await route.fetch({ timeout: 0 });
+        const response = await route.fetch({ timeout: 15_000 });
         assert.equal((await response.json()).conversation.runId, undefined, 'The delayed conversation predates proof enqueue');
         capturedConversation(); await conversationRelease;
         await route.fulfill({ response });
@@ -690,6 +757,7 @@ try {
       pending.send({ type: 'result', status: 'approved', evidence: webFormalizationEvidence(pending.input) }); pending.resolve();
       await eventually(() => runs.length > proofCount, 'The held conversation statement starts its proof');
       releaseConversation();
+      await openChatResultDetails(page);
       await page.locator('[data-research-artifact="source"]:enabled').waitFor();
       mark(`${width}px: a delayed conversation response still attaches its completed proof before idle polling`);
       const saved = await conversation(page);
@@ -701,7 +769,7 @@ try {
       let releaseHistory!: () => void, historyHeld = false, historyDelivered = false;
       const historyGate = new Promise<void>(resolve => { releaseHistory = resolve; });
       await page.route('**/api/conversations', async route => {
-        const response = await route.fetch({ timeout: 0 }); historyHeld = true;
+        const response = await route.fetch({ timeout: 15_000 }); historyHeld = true;
         await historyGate; await route.fulfill({ response }); historyDelivered = true;
       }, { times: 1 });
       await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
@@ -739,7 +807,7 @@ try {
       let releaseDeletedHistory!: () => void, deletedHistoryHeld = false, deletedHistoryDelivered = false;
       const deletedHistoryGate = new Promise<void>(resolve => { releaseDeletedHistory = resolve; });
       await page.route('**/api/conversations', async route => {
-        const response = await route.fetch({ timeout: 0 }); deletedHistoryHeld = true;
+        const response = await route.fetch({ timeout: 15_000 }); deletedHistoryHeld = true;
         await deletedHistoryGate; await route.fulfill({ response }); deletedHistoryDelivered = true;
       }, { times: 1 });
       await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
@@ -768,6 +836,7 @@ try {
       await eventually(() => formalizations.length === started + 2, 'The removable statement fixture starts');
       const stopped = formalizations.at(-1)!;
       stopped.send({ type: 'result', status: 'exhausted', reason: 'formalization_token_limit' }); stopped.resolve();
+      await openChatResultDetails(page);
       await page.locator('[data-formalization-failure]').waitFor();
       const unlinked = await conversation(page);
       assert.equal(unlinked.runId, undefined);
@@ -778,7 +847,7 @@ try {
       let releaseRecords!: () => void, recordsHeld = false, recordsDelivered = false;
       const recordsGate = new Promise<void>(resolve => { releaseRecords = resolve; });
       await page.route('**/api/formalizations', async route => {
-        const response = await route.fetch({ timeout: 0 }); recordsHeld = true;
+        const response = await route.fetch({ timeout: 15_000 }); recordsHeld = true;
         await recordsGate; await route.fulfill({ response }); recordsDelivered = true;
       }, { times: 1 });
       await page.locator('#chat-problem-records > summary').click();
@@ -805,6 +874,10 @@ try {
       await page.locator('#research-chat-thread').getByRole('button', { name: '修改题目', exact: true }).click();
       await page.waitForURL(url => url.searchParams.get('editProblem') === unlinked.id);
       assert.equal(await page.locator('#formalize-original').inputValue(), original, 'Editing the retained conversation restores the exact original draft');
+      const editedSize = await composerSize(page);
+      assert.equal(editedSize.rows, 3, 'Editing an original problem restores multiline input');
+      assert.equal(editedSize.minHeight, 92);
+      assert.ok(editedSize.height >= 92, 'An edited original retains room for the complete problem');
       await page.locator('[data-chat-return-home]').click();
       await page.waitForURL(url => !url.search);
       assert.equal(formalizations.length, started + 2, 'Restoring the draft does not create a statement');

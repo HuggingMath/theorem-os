@@ -15,7 +15,7 @@ import { freePort, postRun, settled, startBrowser, webScenario, writeScenarioRep
   type ScenarioHarness, type ScenarioSuite, runtimeWrite } from './web-scenario';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const output = path.join(root, 'out/web-research-progress');
+const output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/web-research-progress');
 await fs.mkdir(output, { recursive: true });
 const environmentDigest = mathDigest('offline browser research progress fixture'), now = () => new Date().toISOString();
 const raw = '<img src=x onerror="globalThis.__researchXss=1"><script>globalThis.__researchXss=2</script>';
@@ -154,6 +154,7 @@ const producer = '[data-delivery-producer]', taskFilter = '[data-delivery-task]'
 const list = '[data-delivery-list]', detail = '[data-delivery-detail]', inspector = '[data-collab-inspector]';
 async function create(h: Harness) {
   const run = await postRun(h, input); h.runIds.push(run.id); await refreshHistory(h.page); await selectHistoryRun(h.page, run.id, 'collaboration');
+  await h.page.locator('[data-collab-detail="full"]').first().click();
   await h.page.locator(frontier).waitFor(); await h.page.locator(`${list} [data-delivery-id="current-proof"]`).waitFor(); return run;
 }
 async function choose(page: Page, id: string) {
@@ -209,13 +210,23 @@ try {
     assert.equal(await page.locator(`${frontier} [data-collab-task="base"]`).count(), 0,
       'missing frontier identity must not link the current same-name task');
     goal.closed = true; goal.frontier = []; goal.alternatives = []; control.emit(); await poll(page);
-    assert.match(await page.locator(frontier).innerText(), /闭合|关闭/);
+    assert.match(await page.locator(frontier).innerText(), /记录为局部完成/);
+    assert.equal(await page.locator('.collab-research-overview').getByRole('heading', { name: '目标与待办', exact: true }).count(), 1);
+    assert.doesNotMatch(await page.locator(frontier).innerText(), /前置|收束|连通|当前前沿/u);
     assert.ok((await page.locator('.collab-metrics').innerText()).includes('尚未验收通过'), 'a closed local frontier does not earn S3 acceptance');
     await page.locator(frontier).scrollIntoViewIfNeeded(); await page.screenshot({ path: path.join(output, 'frontier-desktop.png') });
   });
 
   await scenario('delivery links require full source identities and explicitly claimed check receipts', async h => {
     const { page } = h, run = await create(h); await choose(page, 'current-proof');
+    const identity = page.locator(`${detail} [data-delivery-identity]`);
+    assert.equal(await identity.getAttribute('open'), null, 'Delivery identities start folded behind their content');
+    assert.equal(await identity.locator('.collab-facts').first().isVisible(), false);
+    assert.equal(await page.locator(`${detail} .collab-delivery-text`).isVisible(), true);
+    assert.equal(await page.locator(detail).evaluate(node => {
+      const summary = node.querySelector('.collab-delivery-text')!, identity = node.querySelector('[data-delivery-identity]')!;
+      return Boolean(summary.compareDocumentPosition(identity) & Node.DOCUMENT_POSITION_FOLLOWING);
+    }), true, 'Delivery content precedes identity metadata');
     assert.deepEqual(await linkedSources(page), [sourceKey(current)]);
     assert.deepEqual(await linkedChecks(page), ['check-current']);
     await page.locator(`${detail} [data-collab-source]`).click();
@@ -251,7 +262,9 @@ try {
     assert.equal(await (await openDetail(page, detail, '完整研究发现')).textContent(), `Full advisory finding ${raw}`);
     assert.deepEqual(JSON.parse((await (await openDetail(page, detail, '前提')).textContent())!), [`Untrusted premise ${raw}`]);
     assert.deepEqual(JSON.parse((await (await openDetail(page, detail, '未完成义务')).textContent())!), [`Untrusted remaining obligation ${raw}`]);
-    assert.deepEqual(JSON.parse((await page.locator(`${detail} > pre`).last().textContent())!), ['check-current', `https://example.invalid/${raw}`, raw]);
+    const rawIdentity = page.locator(`${detail} [data-delivery-identity]`);
+    await rawIdentity.locator(':scope > summary').click();
+    assert.deepEqual(JSON.parse((await rawIdentity.locator(':scope > pre').last().textContent())!), ['check-current', `https://example.invalid/${raw}`, raw]);
     assert.equal(await page.locator(`${detail} img,${detail} script,${detail} a[href]`).count(), 0);
     assert.equal(await page.evaluate(() => '__researchXss' in globalThis), false);
   });
@@ -282,7 +295,8 @@ try {
 
   await scenario('a delivery opens its historical task contract after the task is revised', async h => {
     const { page } = h, run = await create(h), control = controls.get(run.id)!;
-    await choose(page, 'historical-proof'); await page.locator(`${detail} [data-collab-task="base"][data-task-version="base-v0"]`).click();
+    await choose(page, 'historical-proof'); await page.locator(`${detail} [data-delivery-identity] > summary`).click();
+    await page.locator(`${detail} [data-collab-task="base"][data-task-version="base-v0"]`).click();
     await page.locator('[data-task-history-notice]').waitFor();
     assert.equal(await page.locator('[data-inspected-task-version]').innerText(), 'base-v0');
     assert.ok((await page.locator(inspector).innerText()).includes('Historical contract before the premise was revised'));
@@ -299,6 +313,7 @@ try {
     const currentTask = control.observation.inspection.tasks.find(task => task.id === 'base')!;
     currentTask.version = 'base-v2'; currentTask.type = 'True ∧ True'; currentTask.objective = 'Revised premise contract';
     control.observation.plan!.baseVersion = 'plan-v2'; control.emit(); await poll(page);
+    await page.locator(`${detail} [data-delivery-identity] > summary`).click();
     await page.locator(`${detail} [data-collab-task="base"][data-task-version="base-v1"]`).click();
     await page.locator('[data-task-history-notice]').waitFor(); assert.equal(await page.locator('[data-inspected-task-version]').innerText(), 'base-v1');
     assert.ok((await page.locator(inspector).innerText()).includes('Current reusable premise contract'));
@@ -315,6 +330,7 @@ try {
     await fit(page, [frontier, blockers, section, producer, taskFilter, query, list, detail]);
     await page.locator(frontier).scrollIntoViewIfNeeded(); await page.screenshot({ path: path.join(output, `frontier-${width}.png`) });
     await page.locator(detail).scrollIntoViewIfNeeded(); await page.screenshot({ path: path.join(output, `deliveries-${width}.png`) });
+    await page.locator(`${detail} [data-delivery-identity] > summary`).click();
     await page.locator(`${detail} [data-collab-task="base"][data-task-version="base-v1"]`).click();
     await fit(page, ['.collab-inspector', '[data-inspected-task-version]']);
     assert.equal(await page.locator('[data-inspected-task-version]').innerText(), 'base-v1');

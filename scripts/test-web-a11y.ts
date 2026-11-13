@@ -10,7 +10,7 @@ import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { audit, tabStops } from './web-a11y';
 import { freePort, settled, startBrowser, ready } from './web-scenario';
-import { showExamples, openSample } from './web-ui-controls';
+import { showExamples, openSample, openHistory } from './web-ui-controls';
 
 /**
  * Keyboard and screen-reader pass over the workbench, in Chinese and English: the static audit (names, labels, ARIA
@@ -34,8 +34,17 @@ const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port
 const mark = (check: string) => console.log(`PASS ${check}`);
 const clean = async (page: Page, where: string, scope?: string) => assert.deepEqual(await audit(page, { scope }), [], `Accessibility problems: ${where}`);
 
-/** Opens a dialog with its trigger, audits it, closes it with Escape and checks focus went back to the trigger. */
+/** Opens a dialog with the keyboard, audits it, and verifies focus returns to its visible navigation control. */
 async function dialog(page: Page, trigger: string, id: string, where: string) {
+  const fromNavigation = await page.locator(trigger).evaluate(element => Boolean(element.closest('[data-navigation-menu]')));
+  if (fromNavigation) {
+    const menu = page.locator('[data-navigation-menu]');
+    if (!await menu.evaluate(node => (node as HTMLDetailsElement).open)) {
+      await menu.locator('[data-navigation-toggle]').focus();
+      await page.keyboard.press('Enter');
+      await menu.locator('[data-navigation-panel]').waitFor();
+    }
+  }
   await page.locator(trigger).focus();
   await page.keyboard.press('Enter');
   await page.locator(`#${id}[open]`).waitFor();
@@ -44,7 +53,8 @@ async function dialog(page: Page, trigger: string, id: string, where: string) {
   assert.ok(await page.evaluate(dialogId => document.getElementById(dialogId)!.contains(document.activeElement), id), `${where}: focus did not move into the dialog`);
   await page.keyboard.press('Escape');
   await page.locator(`#${id}`).waitFor({ state: 'hidden' });
-  assert.ok(await page.locator(trigger).evaluate(element => element === document.activeElement), `${where}: focus did not return to ${trigger}`);
+  const returnFocus = fromNavigation ? '[data-navigation-toggle]' : trigger;
+  assert.ok(await page.locator(returnFocus).evaluate(element => element === document.activeElement), `${where}: focus did not return to ${returnFocus}`);
 }
 
 let browser: Awaited<ReturnType<typeof startBrowser>> | undefined;
@@ -71,7 +81,7 @@ try {
     const stops = await tabStops(page, 12);
     const hidden = stops.filter(stop => !stop.visible || !stop.indicated);
     assert.deepEqual(hidden, [], `Focus stops without a visible focus ring (${locale})`);
-    assert.ok(stops.some(stop => stop.name.startsWith('button#open-history')) && stops.some(stop => stop.name.startsWith('button#open-settings')), `Tab misses the top bar: ${stops.map(stop => stop.name).join(' | ')}`);
+    assert.ok(stops.some(stop => stop.name.startsWith('button#open-history')) && stops.some(stop => /^summary (?:菜单|Menu)$/u.test(stop.name)), `Tab misses the top bar: ${stops.map(stop => stop.name).join(' | ')}`);
     mark(`Tab starts at the skip link and reaches the top bar with a visible focus ring (${locale})`);
 
     await dialog(page, '#open-settings', 'run-settings', `settings (${locale})`);
@@ -79,6 +89,11 @@ try {
     await dialog(page, '.welcome-glossary', 'glossary-dialog', `glossary (${locale})`);
     // Wide screens dock the history beside the workspace; its button folds and unfolds it and keeps focus.
     const history = page.locator('#open-history');
+    if (await history.getAttribute('aria-expanded') === 'false') {
+      await history.focus();
+      await page.keyboard.press('Enter');
+      await page.locator('#history-sidebar .run-history').waitFor();
+    }
     await history.focus();
     await page.keyboard.press('Enter');
     await page.locator('body[data-history-collapsed="true"]').waitFor({ state: 'attached' });
@@ -95,14 +110,14 @@ try {
     await dialog(page, '#open-history', 'history-dialog', `history dialog (${locale})`);
     await page.setViewportSize({ width: 1440, height: 900 });
     await settled(page);
-    // The search button in the top bar opens the palette; so does Ctrl+K from anywhere, and Escape returns focus to where it was.
+    // The menu's search button opens the palette; so does Ctrl+K, and Escape returns focus to the visible menu control.
     await dialog(page, '.topbar .palette-trigger', 'command-palette', `command palette (${locale})`);
-    await page.locator('#open-settings').focus();
+    await page.locator('[data-navigation-toggle]').focus();
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
     await page.locator('#command-palette[open]').waitFor();
     await page.keyboard.press('Escape');
     await page.locator('#command-palette').waitFor({ state: 'hidden' });
-    assert.ok(await page.locator('#open-settings').evaluate(element => element === document.activeElement), 'Palette did not return focus');
+    assert.ok(await page.locator('[data-navigation-toggle]').evaluate(element => element === document.activeElement), 'Palette did not return focus');
     mark(`settings, glossary, the history sidebar and dialog and the palette pass the audit, close on Escape and return focus (${locale})`);
 
     // The sample: each tab is reachable with the arrow keys and every panel passes the audit.
@@ -174,7 +189,8 @@ try {
       const style = getComputedStyle(element); return { style: style.outlineStyle, width: style.outlineWidth, color: style.outlineColor };
     });
     await page.goto(`${origin}/?chat=${ids[0]}`);
-    await page.locator('.chat-message-user').waitFor(); await settled(page);
+    await page.locator('.chat-message-user').waitFor();
+    await openHistory(page); await settled(page);
     const system = await highlight();
     assert.deepEqual(await outline('.chat-history-item[aria-current="page"]'), { style: 'solid', width: '2px', color: system }, 'The current conversation is ringed');
     assert.equal((await outline('.chat-history-item:not([aria-current])')).style, 'none', 'Other conversations are not ringed');

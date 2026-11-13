@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { openAdvancedChatSettings, openChatParticipation } from './web-ui-controls';
+import { clickWorkbenchAction, openAdvancedChatSettings, openChatParticipation, openChatResultDetails } from './web-ui-controls';
 // A disposable HTTP service, saved statement evidence and a controlled runner; no model, Docker or Lean.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -23,7 +23,7 @@ import { freePort, settled, startBrowser } from './web-scenario';
 
 declare const Bun: { serve(options: { hostname: string; port: number; fetch(request: Request): Promise<Response> }):
   { port: number; stop(force?: boolean): void } };
-const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/web-human-decisions');
+const root = path.resolve(import.meta.dirname, '..'), output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/web-human-decisions');
 await fs.access(path.join(root, 'out/web/app.js'));
 await fs.mkdir(output, { recursive: true });
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-human-decisions-'));
@@ -174,7 +174,7 @@ async function closeArtifacts(page: Page) {
   if (await page.locator('#close-research-output').isVisible()) await page.locator('#close-research-output').click();
 }
 async function fillKey(page: Page) {
-  if (!await page.locator('#formalize-key').isVisible()) await page.locator('#open-settings').click();
+  if (!await page.locator('#formalize-key').isVisible()) await clickWorkbenchAction(page, '#open-settings');
   await page.locator('#formalize-key').fill('sk-human-decisions-disposable-fixture');
   if (await page.locator('#formalize-settings').getAttribute('open') !== null) await page.locator('#formalize-settings > summary').click();
 }
@@ -192,7 +192,7 @@ async function fit(page: Page, selector: string, label: string) {
 async function open(width: number, locale: 'zh' | 'en') {
   const context = await browser!.newContext({ viewport: { width, height: 1000 }, reducedMotion: 'reduce' });
   await context.addInitScript(([key, value]) => localStorage.setItem(key, value), [localeStorageKey, locale]);
-  const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000);
+  const page = await context.newPage(); activePage = page; page.setDefaultTimeout(15_000); page.setDefaultNavigationTimeout(30_000);
   page.on('pageerror', error => errors.push(`${locale}/${width}: ${error.message}`));
   page.on('console', message => {
     if (message.type() !== 'error') return;
@@ -213,10 +213,8 @@ async function open(width: number, locale: 'zh' | 'en') {
 async function startStatement(page: Page, automatic = false) {
   const count = formalizations.length;
   if (automatic) await page.locator('input[name="chat-participation"][value="automatic"]').check();
-  const participation = page.locator('[data-chat-participation-control]');
-  if (await participation.evaluate(node => (node as HTMLDetailsElement).open)) await participation.locator(':scope > summary').click();
   await page.locator('#formalize-original').fill(webFormalizationStatement);
-  await page.locator('[data-chat-configure]').click();
+  if (!await page.locator('#formalize-key').isVisible()) await clickWorkbenchAction(page, '#open-settings');
   await page.locator('#formalize-key').fill('sk-human-decisions-disposable-fixture');
   await openAdvancedChatSettings(page);
   await page.locator('#formalize-environment').selectOption('standard');
@@ -225,6 +223,8 @@ async function startStatement(page: Page, automatic = false) {
   await eventually(() => formalizations.length === count + 1, 'One statement is formalized');
   const pending = formalizations.at(-1)!;
   const evidence = webFormalizationEvidence(pending.input);
+  pending.send({ type: 'activity', activity: { type: 'step', step: { round: 1, step: 'role', workerId: 'recorded-backtranslation', role: 'backtranslate', slot: 'backtranslate',
+    state: 'finished', summary: { sections: [{ kind: 'conclusions', items: [pending.input.original] }] } } } });
   pending.send({ type: 'result', status: 'approved', evidence }); pending.finish();
   return { pending, evidence };
 }
@@ -247,6 +247,9 @@ try {
     assert.equal(submitted.solve, true); assert.equal(submitted.humanReview, true);
     await closeArtifacts(page);
     const statement = page.locator('[data-chat-statement-decision]'); await statement.waitFor();
+    await page.locator('[data-chat-math-finding]').waitFor({ state: 'attached' });
+    assert.equal(await page.locator('[data-chat-next-action]').count(), 0, 'the confirmation card supplies its own action without an outer duplicate');
+    assert.equal(await page.locator('[data-chat-math-summary]').count(), 0, 'the recorded statement is not repeated beside the same confirmation text');
     assert.equal(started.length, runCount, 'Without human statement confirmation no research run starts');
     assert.equal((await (await page.request.get(`${origin}/api/formalizations/${pending.input.id}`)).json()).formalization.status, 'review');
     await page.locator('[data-research-artifact="original"]').first().click();
@@ -270,6 +273,7 @@ try {
     assert.equal(writes.find(item => item.path.endsWith('/confirm'))!.body.evidenceSha256, formalizationDigest(evidence));
     await closeArtifacts(page);
     const decision = page.locator('[data-chat-plan-decision]'); await decision.waitFor();
+    assert.equal(await page.locator('[data-chat-next-action]').count(), 0, 'the plan card supplies its own next action');
     assert.ok((await decision.innerText()).includes(initial.tasks[0]!.objective), 'The decision shows actual plan tasks');
     if (releaseWorkspace) {
       currentCheck = `${label}: first task action waits for the workspace module`;
@@ -387,7 +391,10 @@ try {
     control.observation.inspection.scheduling.working = 1; control.emit();
     await decision.waitFor({ state: 'detached' });
     assert.equal(await page.locator('[data-chat-approve-plan]').count(), 0);
-    if (!await page.locator('#chat-live-panel').isVisible()) await page.locator('[data-research-artifact="live"]').click();
+    if (!await page.locator('#chat-live-panel').isVisible()) {
+      await openChatResultDetails(page);
+      await page.locator('[data-research-artifact="live"]').click();
+    }
     await page.locator('[data-live-tab="plan"]').click();
     assert.equal(await page.locator('[data-live-edit-plan]').isEnabled(), true,
       'The person can continue changing the plan after its initial approval');
@@ -439,6 +446,7 @@ try {
     assert.equal(await page.locator('[data-chat-plan-decision]').count(), 0);
     assert.equal(await page.locator('[data-chat-guidance-mode-open], [data-research-guidance]').count(), 0,
       'A single-Agent run never advertises the unsupported cooperative guidance path');
+    await page.getByText('这里发送的是讨论，不会调整正在进行的解题。', { exact: true }).waitFor();
     assert.deepEqual(await audit(page), []);
     controls.get(run.id)!.finish(); await context.close();
     mark('Explicit automatic mode retains the single-Agent flow and exposes no unsupported guidance or approval controls');
