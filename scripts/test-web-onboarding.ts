@@ -35,7 +35,7 @@ try {
   const page = await context.newPage();
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  page.on('console', message => { if (message.type() === 'error') errors.push(`${message.text()} (${message.location().url})`); });
   page.on('request', request => { if (request.method() !== 'GET' && request.url().includes(webSampleRunId)) writes.push(`${request.method()} ${request.url()}`); });
   await page.goto(origin);
   await page.locator('#natural-research #formalize-original').waitFor();
@@ -100,7 +100,7 @@ try {
 
   // The sample opens without a key, says it is read-only, and offers no destructive or sharing action.
   await openSample(page);
-  assert.equal(new URL(page.url()).search, '?sample', 'The sample has its own address');
+  assert.equal(new URL(page.url()).searchParams.has('sample'), true, 'The sample has its own address');
   assert.match(await page.locator('[data-sample-note]').innerText(), /离线脚本[\s\S]*独立验收都是真实执行的/u);
   assert.equal(await page.locator('#detail-tab-result').getAttribute('aria-selected'), 'true');
   for (const action of ['delete-run', 'cancel', 'share-run']) assert.equal(await page.locator(`[data-action="${action}"]`).count(), 0, `Sample offers ${action}`);
@@ -211,7 +211,7 @@ try {
   const [feedbackTab] = await Promise.all([context.waitForEvent('page'), page.locator('#palette-send-feedback').click()]);
   const opened = new URL(feedbackTab.url());
   assert.equal(opened.pathname, '/feedback.html');
-  assert.match(opened.searchParams.get('environment')!, /^TheoremOS workbench · .+ · zh$/u);
+  assert.match(opened.searchParams.get('environment')!, /^TheoremOS workbench · .+ · zh · web [a-f0-9]+$/u);
   await feedbackTab.close();
   mark('the palette opens the glossary, the sample and the feedback form');
 
@@ -220,10 +220,10 @@ try {
   await page.waitForFunction(() => document.body.dataset.view === 'draft' && location.search === '');
   await page.goBack();
   await page.locator('[data-sample-badge]').waitFor({ state: 'attached' });
-  assert.equal(new URL(page.url()).search, '?sample');
+  assert.equal(new URL(page.url()).searchParams.has('sample'), true);
   await page.reload();
   await page.locator('[data-sample-badge]').waitFor({ state: 'attached' });
-  assert.equal(new URL(page.url()).search, '?sample');
+  assert.equal(new URL(page.url()).searchParams.has('sample'), true);
   mark('the sample keeps its ?sample address through Back and a reload');
 
   // A phone turned sideways (812×375): the run page scrolls as a whole with its tabs pinned, and 提交 is reachable on the draft.

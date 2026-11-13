@@ -11,6 +11,7 @@ import type { SolverRunState } from '../src/solver/archive';
 import { familyAssemblyProof, familyType } from '../src/solver/taskFamilies';
 import { taskVersion } from '../src/solver/tasks';
 import { TaskTypePreflightCache } from '../src/solver/taskTypePreflight';
+import { conditionalExpectedType } from '../src/solver/conditionalProjection';
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 import { failedBatch, verifiedBatch } from './helpers/verifier';
@@ -82,9 +83,10 @@ describe('host family assembly before model dispatch', () => {
 
   it('checks the assembled family with every unproved member bound as a hypothesis, before any model turn', async () => {
     expect(await next()).toMatchObject({ kind: 'task', task: { id: 'followup' } });
-    const binders = memberIds.map((id, index) => `(${id} : ${familyType(index * 3, Math.min(7, index * 3 + 3), 'Tutorial.Good')})`).join(' ');
     expect(host.verify).toHaveBeenCalledOnce();
-    expect(host.verify.mock.calls[0][1].expectedDeclarationType).toBe(`∀ ${binders}, ${familyType(0, 7, 'Tutorial.Good')}`);
+    expect(host.verify.mock.calls[0][1].expectedDeclarationType).toBe(conditionalExpectedType('Tutorial.table',
+      familyType(0, 7, 'Tutorial.Good'), memberIds.map((id, index) => ({ theoremName: `Tutorial.${id}`,
+        type: familyType(index * 3, Math.min(7, index * 3 + 3), 'Tutorial.Good') }))));
     expect(node()).toMatchObject({ status: 'conditional', attempts: 0, proof: { passed: true,
       conditions: memberIds.map(taskId => ({ taskId, taskDigest: taskVersion(node(taskId).task) })) } });
     expect(events()).toEqual([expect.objectContaining({ taskId: 'table', workerId: 'proof', status: 'committed', reason: 'family-assembled',

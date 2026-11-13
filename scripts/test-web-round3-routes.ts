@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // Uses only fixed archive bytes and the read-only workbench recording.
 import assert from 'node:assert/strict';
+import { showArtifacts } from './web-ui-controls';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Browser, Locator, Page } from 'playwright';
@@ -109,7 +110,7 @@ try {
     await scenario(`R3-route-02 ${surface} ${locale} ${reading ? 'reading' : 'map'}: close/reopen preserves the paragraph`, locale,
       locale === 'en' ? { width: 390, height: 480 } : { width: 1440, height: 900 }, async page => {
         if (surface === 'classics') await openClassic(page, locale, 'recorded');
-        else { await page.goto(`${origin}/?sample`); await page.locator('[data-research-artifact="roadmap"]').click(); }
+        else { await page.goto(`${origin}/?sample`); await page.locator('[data-sample-badge]').waitFor({ state: 'attached' }); await showArtifacts(page); await page.locator('#detail-tab-trajectory').click(); await page.locator('[data-trajectory-view="roadmap"]').click(); }
         const map = page.locator('.solution-route');
         await map.locator(surface === 'workbench' ? '[data-solution-node="task:goal_2"]' : '[data-solution-node^="task:"]').first().click(); await settled(page);
         const selected = await map.locator('[data-solution-heading]').getAttribute('data-solution-heading');

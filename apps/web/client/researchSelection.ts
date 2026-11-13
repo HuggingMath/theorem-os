@@ -14,6 +14,7 @@ const validRef = (value: unknown): value is ResearchReleaseRef => Boolean(value 
 export class ResearchSelection {
   private refs: ResearchReleaseRef[] = [];
   private releases: ResearchAssetRelease[] = [];
+  private selectedEnvironment?: WebEnvironment;
   private panel = document.createElement('aside');
   private loaded = false;
   // The workbench normalizes its address while loading runs, before it prepares Library choices.
@@ -44,6 +45,7 @@ export class ResearchSelection {
   }
   adopt(prepared: PreparedSelection) {
     this.refs = prepared.refs; this.releases = prepared.releases; this.loaded = true;
+    this.selectedEnvironment = prepared.configuration.environment;
     try { this.drafts.setItem(researchSelectionStorageKey, JSON.stringify(this.refs)); this.drafts.setItem(researchEnvironmentStorageKey, prepared.configuration.environment); }
     catch { /* The explicit selection remains available in this page without browser storage. */ }
     this.panel.hidden = false; this.render(); this.changed();
@@ -83,6 +85,7 @@ export class ResearchSelection {
       const selectedEnvironment = savedEnvironment ?? this.releases.find(release => release.mathematics)?.mathematics?.environment ?? agent?.environment ?? environment;
       const { item } = await this.api<{ item: FrozenResearchConfiguration }>('/api/research/configuration', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ environment: selectedEnvironment, selection: this.value() }) });
+      this.selectedEnvironment = item.environment;
       apply(item, item.libraries.flatMap(library => library.mathematics.pack.modules.map(module => module.file.slice(0, -5).replaceAll('/', '.'))));
       this.render(); this.changed();
     } catch (error) {
@@ -99,7 +102,8 @@ export class ResearchSelection {
       skills: references.filter((_, index) => this.releases[index].type === 'skill'),
       libraries: references.filter((_, index) => this.releases[index].type === 'mathematics') };
   }
-  reset() { this.loaded = false; this.refs = []; this.releases = []; this.panel.hidden = true; this.panel.replaceChildren(); }
+  environment(): WebEnvironment | undefined { return this.selectedEnvironment; }
+  reset() { this.loaded = false; this.refs = []; this.releases = []; this.selectedEnvironment = undefined; this.panel.hidden = true; this.panel.replaceChildren(); }
   clear() {
     this.reset();
     try { this.drafts.removeItem(researchSelectionStorageKey); this.drafts.removeItem(researchEnvironmentStorageKey); } catch { /* Current page state is sufficient. */ }

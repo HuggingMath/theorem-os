@@ -82,9 +82,9 @@ describe('Lead inbox', () => {
         frozenContexts: { 'Submission.lean': 'theorem target : True := /- body omitted -/' }, assignment: action }).continuationMessage!;
     const table = message.slice(message.indexOf('Current tasks (')).split('\n\n')[0];
     expect(table.split('\n').slice(1, 4)).toEqual([
-      'paused_lemma research pending/paused owner=- attempts=2 waitsOn=open_bridge',
-      'open_bridge research running owner=researcher-1 attempts=0 waitsOn=-',
-      'checked_helper research integrated owner=- attempts=0 waitsOn=-']);
+      'paused_lemma research status=paused executionStatus=pending owner=- attempts=2 waitsOn=open_bridge',
+      'open_bridge research status=active executionStatus=running owner=researcher-1 attempts=0 waitsOn=-',
+      'checked_helper research status=active executionStatus=integrated owner=- attempts=0 waitsOn=-']);
     expect(table).not.toContain('overlay');
     expect(message.indexOf('This turn is one planning decision')).toBeLessThan(message.indexOf('Current tasks ('));
   });

@@ -41,7 +41,7 @@ type ProofDeliveryRequest = {
   worker: ResearchWorker; action: Extract<CooperativeAction, { kind: 'task' }>;
   commit: string; summary: string; options: Partial<DeliveryRecord>; record?: DeliveryRecord;
   /** Host-only candidate: validate again, then claim its still-current assignment atomically. */
-  prepared?: { proof: TaskProof; current: () => boolean; claim: () => void };
+  prepared?: { proof: TaskProof; current: () => boolean; claim: () => void; advisorySummary?: string };
 };
 export type ProofDeliveryAnnotation = () => Promise<void>;
 export type ProofDeliveryState = Pick<TaskRecord, 'assignment' | 'proof' | 'integratedCheck' | 'status' | 'feedback'>;
@@ -1153,18 +1153,21 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       if (!verdict) return;
       // A verified publication describes canonical acceptance; artifacts still identify the worker's original submission.
       const evidence = verdict === 'verified' ? integratedProof! : request ? proof : integratedProof ?? proof;
-      const summary = verdict === 'verified' ? 'Checked proof integrated with freshly validated dependencies.' :
-        (verdict === 'failed' ? expectedState.feedback : undefined) ?? request?.summary ??
-        (verdict === 'conditional' ? 'Fixed declaration checked; unresolved lemma assumptions remain obligations.' :
-          'Proof did not pass host acceptance.');
       const options = request?.options ?? {}, assignmentKey = options.assignmentKey ?? assignmentDeliveryFile(assignment);
       let record = this.archive.deliveries?.find(record => record.producer === worker.id && record.kind === 'proof' && record.status === verdict &&
         record.taskId === task.id && record.taskDigest === taskDigest && record.assignmentKey === assignmentKey &&
         (verdict === 'verified' || record.commit === proof.commit));
+      // Preserve host probe findings; a worker's own completion summary is not an acceptance verdict.
+      const hostAdvisorySummary = request?.prepared?.advisorySummary ?? record?.hostAdvisorySummary;
+      const summary = verdict === 'verified' ? 'Checked proof integrated with freshly validated dependencies.' +
+        (hostAdvisorySummary ? ' ' + hostAdvisorySummary : '') :
+        (verdict === 'failed' ? expectedState.feedback : undefined) ?? request?.summary ??
+        (verdict === 'conditional' ? 'Fixed declaration checked; unresolved lemma assumptions remain obligations.' :
+          'Proof did not pass host acceptance.');
       // A passing proof needs this integration's failure state; a replay can only resume its existing record.
       if (verdict === 'failed' && proof.passed && !expected && !record) return;
       if (record && verdict === 'verified' && this.updateProofDeliveryMetadata(record, {
-        commit: evidence.commit, sourceDigest: evidence.sourceDigest, summary, actualReferences: evidence.references,
+        commit: evidence.commit, sourceDigest: evidence.sourceDigest, summary, hostAdvisorySummary, actualReferences: evidence.references,
         evidence: { passed: evidence.passed, verification: { status: evidence.verification.status,
           targetCommit: evidence.verification.targetCommit,
           results: evidence.verification.results.map(({ receiptId }) => ({ receiptId })) } },
@@ -1177,6 +1180,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
         record = this.createDeliveryRecord(worker, task, 'proof', verdict,
           summary,
           { ...options, assignmentKey, commit: evidence.commit, sourceDigest: evidence.sourceDigest,
+            ...(hostAdvisorySummary ? { hostAdvisorySummary } : {}),
             evidence, actualReferences: evidence.references, knowledgeUses: knowledge.uses });
         (this.archive.deliveries ??= []).push(record);
         this.pendingProofDeliveryRecords.add(record);

@@ -89,7 +89,7 @@ try {
     return context;
   };
   const ownerContext = await newContext(); page = await ownerContext.newPage();
-  await page.goto(`${origin}/theorems.html`); await page.getByRole('heading', { name: '围绕同一个定理协作', exact: true }).waitFor();
+  await page.goto(`${origin}/theorems.html`); await page.getByRole('heading', { name: '定理', exact: true }).waitFor();
   let project = (await http<{ item: ResearchProjectDetail }>('POST', '/api/research/theorems', { requestId: crypto.randomUUID(), title: 'Round 3 private collaboration fixture', description: 'Disposable local browser regression', fields: ['logic'], visibility: 'members' })).item;
   const projectPath = `/api/research/theorems/${project.id}`, feedbackPath = `${projectPath}/feedback`;
   project = (await http<{ item: ResearchProjectDetail }>('POST', `${projectPath}/versions`, { requestId: crypto.randomUUID(), expectedRevision: project.revision,

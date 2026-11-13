@@ -42,7 +42,8 @@ const runner: WebRunner = {
   },
 };
 const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin,
-  THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web'), THEOREMOS_WEB_CONCURRENCY: '8', THEOREMOS_WEB_QUEUE_LIMIT: '32' }), runner);
+  THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web'), THEOREMOS_WEB_CONCURRENCY: '8', THEOREMOS_WEB_QUEUE_LIMIT: '32',
+  THEOREMOS_WEB_CLIENT_IP_HEADER: 'x-fixture-scenario' }), runner);
 type Harness = { page: Page; context: BrowserContext; requests: RequestRecord[]; creates: number; removals: number; owner: string; owners: Set<string> };
 type Anchor = { id: string; offset: number; scrollTop: number; scrollable: boolean };
 type HistoryProbe = {
@@ -74,7 +75,8 @@ async function waitForFixture(predicate: () => boolean, description: string) {
   }
 }
 const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440) => webScenario<Harness>(browser!, suite, name, run, {
-  context: { viewport: { width, height: width > 850 ? 900 : 812 }, reducedMotion: 'reduce' },
+  context: { viewport: { width, height: width > 850 ? 900 : 812 }, reducedMotion: 'reduce',
+    extraHTTPHeaders: { 'x-fixture-scenario': `history-${checks.length + 1}` } },
   harness: (page, context) => ({ page, context, requests: [], creates: 0, removals: 0, owner: '', owners: new Set() }),
   routes: { local: 'history checks must not contact an external site or model provider' }, timeout: { label: 'History', seconds: 50 },
   verify: async (h, elapsedMs) => {

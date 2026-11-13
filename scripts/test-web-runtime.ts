@@ -14,6 +14,10 @@ import type { WebEnvironment, WebRun, WebRunInput, WorkerMessage } from '../apps
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+// New templates use Mathlib; historical standard runs must remain independently runnable.
+export const standardRuntimeTemplate = { environment: 'standard' as const,
+  source: 'namespace Tutorial\n\ntheorem add_zero (n : Nat) : n + 0 = n := by sorry\n\ntheorem zero_add (n : Nat) : 0 + n = n := by sorry\n\nend Tutorial\n',
+  task: 'Prove both natural-number addition identities without changing either declaration.' };
 export function assertWebContainerBoundary(inspectJson: string, apiKey: string, environment: WebEnvironment = 'standard') {
   assert.ok(!inspectJson.includes(apiKey), 'Docker metadata must not contain the API key.');
   const container = JSON.parse(inspectJson)[0];
@@ -116,8 +120,8 @@ export async function runWebRuntimeSmoke(argv = process.argv.slice(2)) {
   let builtFixture = false;
   const makeInput = (marker: string): WebRunInput => {
     const environment = marker.includes('WEB_SMOKE_MATHLIB_') ? 'mathlib' : 'standard';
-    const template = webTemplates.find(template => template.id === (environment === 'mathlib' ? 'polynomial' : 'addition'));
-    assert.ok(template && template.environment === environment, 'Smoke source must use the matching published template.');
+    const template = environment === 'standard' ? standardRuntimeTemplate : webTemplates.find(template => template.id === 'polynomial');
+    assert.ok(template && template.environment === environment, 'Smoke source must match its fixed dependency environment.');
     return { providerId: provider.id, apiKey, environment, model: 'offline-fixture', effort: 'xhigh', source: template.source,
       task: `${marker}\n${template.task}`, maxTurns: 1, maxRunSeconds: environment === 'mathlib' ? 180 : 90,
       workers: 1, coordination: 'independent' };

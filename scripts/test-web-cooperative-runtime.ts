@@ -9,10 +9,9 @@ import { parseArgs, promisify } from 'node:util';
 import { WebJobs } from '../apps/web/jobs';
 import { DockerWebRunner } from '../apps/web/runner';
 import { WebStorage } from '../apps/web/storage';
-import { webTemplates } from '../apps/web/config';
 import type { WebGuidanceInput, WebObservation, WebPlanProposal } from '../apps/web/collaboration';
 import type { WebRun, WebRunInput, WorkerMessage } from '../apps/web/shared';
-import { assertWebContainerBoundary, assertWebEnvironmentReport } from './test-web-runtime';
+import { assertWebContainerBoundary, assertWebEnvironmentReport, standardRuntimeTemplate } from './test-web-runtime';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const execute = promisify(execFile);
@@ -91,7 +90,7 @@ export async function runWebCooperativeSmoke(argv = process.argv.slice(2)) {
     const metadata = JSON.parse((await docker(['image', 'inspect', image])).stdout)[0];
     assert.equal(metadata.Config.Labels['org.theoremos.fixture'], 'web-runtime-no-provider');
     const imageId = metadata.Id;
-    const template = webTemplates.find(item => item.id === 'addition')!;
+    const template = standardRuntimeTemplate;
     const input: WebRunInput = { providerId: 'offline-fixture', apiKey: key, model: 'offline-fixture', effort: 'xhigh',
       environment: 'standard', source: template.source, task: `WEB_COOPERATIVE_SMOKE\n${template.task}`,
       workers: 3, coordination: 'cooperative', maxTurns: 12, maxRunSeconds: 300 };

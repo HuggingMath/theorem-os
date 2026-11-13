@@ -7,27 +7,9 @@ import { libraryTrials } from './i18n/libraryTrials';
  * English comes from the dictionary in ./i18n. The locale is fixed once per page load, so module-level labels are safe.
  * On the server there is no browser, so everything stays Chinese.
  */
-export type Locale = 'zh' | 'en';
-export const localeStorageKey = 'theorem-os.web-locale.v1';
+import { locale, localeStorageKey, localeTag, type Locale } from './i18nLocale';
+export { locale, localeStorageKey, localeTag, type Locale } from './i18nLocale';
 const browser = typeof window !== 'undefined' && typeof document !== 'undefined';
-
-function detect(): Locale {
-  if (!browser) return 'zh';
-  const linked = new URLSearchParams(window.location?.search ?? '').get('lang');
-  if (linked === 'zh' || linked === 'en') {
-    try { localStorage.setItem(localeStorageKey, linked); } catch { /* The address still selects this page's language. */ }
-    return linked;
-  }
-  try {
-    const saved = localStorage.getItem(localeStorageKey);
-    if (saved === 'zh' || saved === 'en') return saved;
-  } catch { /* Storage may be blocked; fall back to the browser language. */ }
-  return (navigator.languages?.[0] ?? navigator.language ?? '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
-}
-
-export const locale: Locale = detect();
-/** The tag Intl formatters and the html lang attribute use. */
-export const localeTag = locale === 'en' ? 'en-US' : 'zh-CN';
 
 /**
  * English counts in the dictionary are written plural; a count of exactly 1 takes the singular noun, also after a word

@@ -227,6 +227,8 @@ readline.createInterface({ input: process.stdin }).on('line', async line => {
   fs.writeFileSync(process.env.FIXTURE_TRACE, JSON.stringify({ responses, resumed: settings.threadId,
     upstreamKeyPresent: Boolean(process.env.SUB2API_WESTLAKE_API_KEY), capabilityPresent: Boolean(process.env.THEOREM_OS_MODEL_RELAY_CAPABILITY),
     config: fs.readFileSync(process.env.CODEX_HOME + '/config.toml', 'utf8') }));
+  send({ method: 'item/completed', params: { threadId: 'fixture-thread', turnId: active,
+    item: { id: 'fixture-answer', type: 'agentMessage', text: 'Fixture response received.' } } });
   send({ method: 'turn/completed', params: { threadId: 'fixture-thread', turn: { id: active,
     status: controller.signal.aborted ? 'interrupted' : 'completed' } } });
 });

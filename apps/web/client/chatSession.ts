@@ -6,7 +6,6 @@ import { locale, localizeMessage, t } from '../i18n';
 import { researchExamples } from '../problemExamples';
 import { webTaskEnvironment } from '../environment';
 import { renderChatComposer, renderChatHistory, renderChatOriginal, renderChatThread, type ChatBudgets, type ChatProvider } from './ui/ChatWorkspace';
-import { renderLiveWorkspace } from './ui/LiveWorkspace';
 import { ChatReadingPosition } from './chatReadingPosition';
 import type { AgentActivity } from './agentActivity';
 import type { FormalizationActivityStore } from './formalizationActivityStore';
@@ -131,6 +130,8 @@ export class ChatSession {
   private readonly list = document.querySelector<HTMLElement>('#chat-history-list')!;
   private readonly originalPanel = document.querySelector<HTMLElement>('#chat-original-panel')!;
   private readonly livePanel = document.querySelector<HTMLElement>('#chat-live-panel')!;
+  private liveRenderer?: typeof import('./ui/LiveWorkspace').renderLiveWorkspace;
+  private liveLoading?: Promise<void>;
   private readonly reading: ChatReadingPosition;
   /** A wide screen can open the workspace automatically beside the conversation. */
   private readonly wide = matchMedia('(min-width: 1101px)');
@@ -1154,7 +1155,20 @@ export class ChatSession {
   /** The panel beside the conversation; it keeps the process it was last drawn with while the task did not change. */
   private drawLive(solve: ReturnType<ChatSession['solve']>, can: { guide: boolean; edit: boolean }) {
     const process = solve?.process, run = this.run;
-    renderLiveWorkspace(this.livePanel, { process, time: clockTime, onSelect: id => this.selectCheck(process, id),
+    if (!this.liveRenderer) {
+      if (!process) { this.livePanel.replaceChildren(); return; }
+      if (!this.liveLoading) {
+        this.livePanel.textContent = t('正在连接…');
+        this.liveLoading = import('./runViews').then(views => { this.liveRenderer = views.renderLiveWorkspace; this.draw(); }).catch(error => {
+          const notice = document.createElement('p'); notice.className = 'inline-error'; notice.setAttribute('role', 'alert'); notice.textContent = reason(error);
+          const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'button'; retry.textContent = t('重试');
+          retry.addEventListener('click', () => location.reload());
+          this.livePanel.replaceChildren(notice, retry);
+        });
+      }
+      return;
+    }
+    this.liveRenderer(this.livePanel, { process, time: clockTime, onSelect: id => this.selectCheck(process, id),
       ...(this.formalization || run?.formalization ? { onOriginal: () => this.options.onArtifact('original') } : {}),
       ...(run && !this.options.isSample(run) ? { onRoadmap: () => this.options.onArtifact('roadmap'),
         onTask: (taskId: string) => this.options.onArtifact('roadmap', { taskId }) } : {}),

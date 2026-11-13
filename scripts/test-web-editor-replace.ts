@@ -249,9 +249,10 @@ try {
     await closeDialog(page, '#source-editor', () => page.locator('#close-editor').click());
     assert.equal(await page.locator('#editor-discard-dialog').isVisible(), false);
     await closeSettings(page);
-    const small = `-- ${'a '.repeat(300)}`, replacement = 'x'.repeat(256);
+    const matches = Math.ceil(webLimits.maxSourceBytes / 257) + 1;
+    const small = `-- ${'a '.repeat(matches)}`, replacement = 'x'.repeat(256);
     assert.ok(Buffer.byteLength(small.split('a').join(replacement)) > webLimits.maxSourceBytes);
-    await editSource(page, small); const growthBackup = await recovery(page); await setup(page, 'a', '', '1/300');
+    await editSource(page, small); const growthBackup = await recovery(page); await setup(page, 'a', '', `1/${matches}`);
     assert.equal(await page.locator('#editor-replace-input').getAttribute('maxlength'), '256');
     await page.locator('#editor-replace-input').press('Control+a'); await page.keyboard.insertText('x'.repeat(257));
     assert.equal(await page.locator('#editor-replace-input').inputValue(), replacement, 'the native replacement input must enforce maxlength 256');

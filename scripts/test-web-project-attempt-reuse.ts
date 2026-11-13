@@ -67,6 +67,7 @@ try {
     });
     const page = await context.newPage(); active = page; page.setDefaultTimeout(15000); page.on('pageerror', error => errors.push(error.message));
     phase = `project-fixture-${language}`; await page.goto(origin);
+    await page.locator('#refresh-runs:enabled').waitFor({ state: 'attached' });
     const owner = (await context.cookies(origin)).find(cookie => cookie.name === 'theoremos_session')!.value;
     const provider = (await http(page, 'GET', '/api/session')).providers[0], record = readingRun();
     const first = service.jobs.create(owner, { providerId: provider.id, apiKey: 'sk-disposable-not-sent', model: 'fixture-model', effort: 'high',

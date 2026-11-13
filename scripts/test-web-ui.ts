@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
-import { readWebConfig, webTemplates } from '../apps/web/config';
+import { readWebConfig, webLimits, webTemplates } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebResult, WebRun, WorkerInput } from '../apps/web/shared';
@@ -84,7 +84,7 @@ try {
     assert.ok((await previewValue('environment').innerText()).includes(environment));
     const seconds = await page.locator('#max-seconds').inputValue();
     const budget = await previewValue('budget').innerText();
-    assert.equal(budget, readableDuration(Number(seconds) * 1000), 'preview budget must read the entered seconds as a duration');
+    assert.equal(budget, Number(seconds) === 0 ? '不限' : readableDuration(Number(seconds) * 1000), 'preview budget must read the entered seconds as a duration');
     assert.ok((await previewValue('workers').innerText()).includes(await page.locator('#workers').inputValue()));
   }
   // The Lean editor is one centred column; its preview opens from 预览 in place of the composer.
@@ -204,7 +204,7 @@ try {
     for (const id of ['max-turns', 'max-seconds', 'workers']) await page.locator(`#${id}`).fill('');
   });
   await showArtifacts(page);
-  assert.equal(await previewValue('budget').innerText(), '未设置');
+  assert.equal(await previewValue('budget').innerText(), '不限');
   assert.equal(await previewValue('workers').innerText(), '未设置');
   assert.equal((await page.locator('#draft-preview').innerText()).includes('NaN'), false);
   assert.equal((await page.locator('#draft-preview').innerHTML()).includes(credential), false);
@@ -501,7 +501,7 @@ try {
   await page.locator('#toast').filter({ hasText: 'Lean 文件已载入' }).waitFor();
   assert.equal(await page.locator('#task').inputValue(), '自定义导入任务');
   await openSettings(page);
-  for (const file of [{ name: 'wrong.txt', buffer: Buffer.from('not Lean') }, { name: 'large.lean', buffer: Buffer.alloc(32 * 1024 + 1, 'a') }]) {
+  for (const file of [{ name: 'wrong.txt', buffer: Buffer.from('not Lean') }, { name: 'large.lean', buffer: Buffer.alloc(webLimits.maxSourceBytes + 1, 'a') }]) {
     await page.locator('#source-file').setInputFiles({ ...file, mimeType: 'text/plain' });
     await page.locator('#source-error').waitFor();
     assert.equal(await page.locator('#source').inputValue(), importedDraft);
@@ -541,7 +541,7 @@ try {
   await page.locator('#expanded-source').fill(' ');
   await page.locator('#apply-editor').click();
   await page.locator('#editor-error').waitFor();
-  await page.locator('#expanded-source').fill('a'.repeat(32 * 1024 + 1));
+  await page.locator('#expanded-source').fill('a'.repeat(webLimits.maxSourceBytes + 1));
   await page.locator('#apply-editor').click();
   assert.ok((await page.locator('#editor-error').innerText()).includes('大小'));
   assert.equal(await page.locator('#source').inputValue(), newerDraft);
@@ -559,7 +559,9 @@ try {
   mark('expanded editing applies atomically, validates size and restores focus; Cancel and Escape preserve the composer');
 
   await selectConfig(page, 'environment', 'standard');
-  await selectConfig(page, 'template', 'addition');
+  const standardAddition = webTemplates.find(item => item.id === 'addition')!;
+  await fillConfig(page, 'source', standardAddition.source);
+  await fillConfig(page, 'task', standardAddition.task);
   await openHistory(page);
   await page.locator('#run-filter').selectOption('error');
   await page.locator('#run-search').fill('not-a-current-run');

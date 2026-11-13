@@ -22,7 +22,7 @@ const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, '
 await fs.access(path.join(root, 'out/web/library.html')); await fs.mkdir(output, { recursive: true });
 const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-browser-library-trials-'));
 const original = 'theorem preserved : 1 = 1 := by rfl\nnamespace Research\ntheorem target (n : Nat) : n + 0 = n := by sorry\nend Research';
-const commit = 'a'.repeat(40), environmentDigest = mathDigest('browser-fixture-recorded-runtime-environment');
+const commit = 'a'.repeat(40), environmentDigest = getLeanTaskEnvironment('standard').dependencyDigest;
 let workerCalls = 0, commandCalls = 0, mailCalls = 0;
 const compilerCalls: Parameters<WebPrecheckRunner>[0][] = [];
 const workerInputs: Parameters<WebRunner['run']>[0][] = [];
@@ -238,7 +238,7 @@ try {
     await page.reload(); await ownerFeedback.locator('[data-prepare-library-attempt]').waitFor();
     const workersAtPreparation = workerCalls;
     await ownerFeedback.locator('[data-prepare-library-attempt]').click();
-    await page.locator('[data-library-proposal-start][data-library-proposal-ready="true"]').waitFor();
+    await page.locator('[data-library-proposal-origin][data-library-proposal-ready="true"]').waitFor();
     assert.equal(await page.locator('#source').inputValue(), candidate.payload && 'source' in candidate.payload ? candidate.payload.source : '');
     await page.getByText(`Addition math-${width} · v1`, { exact: false }).first().waitFor();
     assert.equal(workerCalls, workersAtPreparation, 'Preparing the reviewed candidate never starts a worker');

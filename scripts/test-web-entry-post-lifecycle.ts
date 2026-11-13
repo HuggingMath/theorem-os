@@ -109,7 +109,7 @@ try {
     await page.locator('#formalize-original').waitFor();
     assert.equal(await page.locator('#formalize-original').inputValue(), formalization.original);
     const values = await readSettings();
-    assert.deepEqual(values, { 'formalize-provider': provider.id, 'formalize-model': formalization.model, 'formalize-environment': 'standard',
+    assert.deepEqual(values, { 'formalize-provider': provider.id, 'formalize-model': formalization.model, 'formalize-environment': 'mathlib',
       'formalize-effort': 'high', 'formalize-minutes': '2', 'formalize-tokens': '20000', 'research-minutes': '3', 'research-tokens': '30000', 'research-turns': '3' });
     assert.equal(new URL(page.url()).searchParams.get('editProblem'), naturalChat.id);
     await page.reload(); await page.locator('[data-chat-return-home]').waitFor();

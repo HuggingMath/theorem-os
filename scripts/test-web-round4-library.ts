@@ -91,7 +91,9 @@ try {
     else await route.continue();
   });
   const failedRead = await received(owner, 'GET', draftPath, () => owner.getByRole('button', { name: '载入最新草稿', exact: true }).click());
-  assert.equal(failedRead.status, 503); await owner.getByText('Fixture draft reload unavailable', { exact: true }).waitFor();
+  assert.equal(failedRead.status, 503);
+  const editor = owner.locator('.research-panel').filter({ has: owner.getByRole('heading', { name: '编辑草稿', exact: true }) });
+  await editor.getByRole('alert').filter({ hasText: 'Fixture draft reload unavailable' }).waitFor();
   assert.equal(await instructions.inputValue(), 'UNSAVED LOCAL DRAFT', 'a failed reload must keep the editable draft');
   await owner.unroute('**' + draftPath);
   const freshRead = await received(owner, 'GET', draftPath, () => owner.getByRole('button', { name: '载入最新草稿', exact: true }).click());

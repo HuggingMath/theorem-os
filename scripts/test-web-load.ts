@@ -8,6 +8,7 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { freePort, startBrowser } from './web-scenario';
+import { showArtifacts } from './web-ui-controls';
 
 /**
  * First-load cost of the workbench on a slow connection: bytes on the wire per resource, first contentful paint and the
@@ -85,6 +86,38 @@ try {
     assert.ok(repeat.transferred <= 50 * 1024, `repeat visit ${kb(repeat.transferred)} exceeds 50 KB; files must revalidate`);
     assert.ok(repeat.readyMs <= 2000, `repeat visit ready after ${repeat.readyMs} ms, budget 2000 ms`);
     console.log('Load budget checks passed');
+
+    assert.equal(first.resources.some(item => /\/chunks\/(?:runViews|en)-/u.test(item.path)), false,
+      'A blank Chinese composer does not load the run workspace or full English dictionary');
+    const englishContext = await browser.newContext({ locale: 'en-US', viewport: { width: 1440, height: 900 } });
+    const english = await englishContext.newPage(), englishErrors: string[] = [];
+    english.on('pageerror', error => englishErrors.push(error.message));
+    await english.goto(`${origin}/?lang=en`);
+    await english.locator('#formalize-original:enabled').waitFor();
+    assert.equal(await english.locator('html').getAttribute('lang'), 'en-US');
+    assert.equal(await english.locator('#open-natural-language').innerText(), 'Natural language');
+    assert.ok(await english.evaluate(() => performance.getEntriesByType('resource').some(item => /\/chunks\/en-/u.test(item.name))),
+      'English loads its full dictionary before presenting the composer');
+    assert.deepEqual(englishErrors, []);
+    await englishContext.close();
+    console.log('PASS empty Chinese and English composers load the required language modules');
+
+    const retryContext = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } });
+    const retry = await retryContext.newPage();
+    await retry.route('**/chunks/runViews-*.js', route => route.abort('failed'));
+    await retry.goto(`${origin}/?sample`);
+    await retry.locator('[data-chat-result-more]').waitFor({ state: 'attached' });
+    await retry.locator('[data-chat-result-more] > summary').click();
+    await retry.locator('[data-research-artifact="roadmap"]').click();
+    await retry.locator('#detail-panel [role="alert"]').waitFor();
+    await retry.unroute('**/chunks/runViews-*.js');
+    await retry.locator('#detail-panel').getByRole('button', { name: '重试', exact: true }).click();
+    await retry.locator('[data-sample-badge]').waitFor({ state: 'attached' });
+    await showArtifacts(retry);
+    assert.equal(new URL(retry.url()).searchParams.has('sample'), true);
+    assert.equal(await retry.locator('#detail-panel [role="alert"]').count(), 0);
+    await retryContext.close();
+    console.log('PASS a failed workspace module is visible and Retry restores the selected sample');
   }
 } finally {
   await browser.close(); await service.close();

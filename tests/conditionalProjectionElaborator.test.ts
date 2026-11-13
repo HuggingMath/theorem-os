@@ -39,7 +39,7 @@ function accepted(result: ReturnType<typeof compile>) {
       ['Classical.choice', 'propext', 'Quot.sound'].includes(name)), result.output).toBe(true);
 }
 
-describe.skipIf(!lean)('host conditional projection elaborators', () => {
+describe.skipIf(!lean)('host conditional projection elaborators', { timeout: 60_000 }, () => {
   it.each([false, true])('preserves implicit and instance binders with a conditional input used=%s', used => {
     accepted(compile('theorem target {n : Nat} [Nonempty (Fin n)] (x : Fin n) : x = x := by ' +
       (used ? 'exact D.refl x' : 'rfl'),

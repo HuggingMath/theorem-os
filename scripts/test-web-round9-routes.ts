@@ -122,8 +122,9 @@ try {
     await scenario(`classics-ime-${locale}-${viewport.width}`, locale, viewport, async (page, cdp) => {
       await page.goto(`${origin}/classics/${locale === 'en' ? 'en/' : ''}archive.html#proof=openai_hadamard_cube_fiber&tab=process`);
       await page.locator('[data-solution-route-state="ready"]').waitFor();
-      const text = locale === 'zh' ? '原题' : 'problem', sequence = locale === 'zh' ? ['y', 'yuan', '原', text] : ['p', 'pro', text];
-      await query(page).fill(text); const expected = await ids(page); assert.ok(expected.length > 0);
+      const text = (await page.locator('[data-solution-node] strong').first().innerText()).trim();
+      const sequence = locale === 'zh' ? ['y', 'yuan', '原', text] : ['p', 'pro', text];
+      await query(page).fill(text); await settled(page); const expected = await ids(page); assert.ok(expected.length > 0);
       await query(page).fill(''); await query(page).focus();
       for (const value of sequence) { await compose(cdp, value); assert.equal(await query(page).inputValue(), value); }
       await cdp.send('Input.insertText', { text }); assert.equal(await query(page).inputValue(), text); assert.deepEqual(await ids(page), expected);

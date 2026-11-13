@@ -21,7 +21,7 @@ const staticRoot = process.env.THEOREMOS_FRONTEND_TEST_STATIC_ROOT ?? path.join(
 await fs.access(path.join(staticRoot, 'research.js')); await fs.mkdir(output, { recursive: true });
 const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-library-personal-')), port = await freePort(), origin = `http://127.0.0.1:${port}`;
 const original = 'theorem preserved : 1 = 1 := by rfl\nnamespace Research\ntheorem target (n : Nat) : n + 0 = n := by sorry\nend Research';
-const commit = 'a'.repeat(40), environmentDigest = mathDigest('personal-trial-browser-environment');
+const commit = 'a'.repeat(40), environmentDigest = getLeanTaskEnvironment('standard').dependencyDigest;
 let workers = 0, compilerCalls = 0, prohibited = 0, pass = true;
 const inputs: Parameters<WebRunner['run']>[0][] = [];
 const runner: WebRunner = { async readiness() { return { ready: true, message: 'Disposable continuity fixture' }; },

@@ -9,6 +9,7 @@ import { committedSource, commitSolverSources, readSolverProblem } from '../src/
 import type { CooperativeTask } from '../src/solver/tasks';
 import { temporaryDirectory } from './helpers/files';
 import { newestLeanBinary } from './helpers/lean';
+import { conditionalPayloads } from './helpers/conditionalProjection';
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -54,7 +55,8 @@ describe('frozen library imports for host-injected conditions', () => {
     const source = projected.get('Submission.lean')!;
     expect(source).toContain(`import ${module}\n`);
     expect(source).not.toContain('import Submission.Library.Unrelated');
-    expect(source).toContain('(transfer : ∀ n : Nat, _root_.Frozen.maxEntropy n = n)');
+    expect(conditionalPayloads(source)).toEqual([{ declaration: 'theorem consumer : True := by trivial\n',
+      dependencies: [{ theoremName: 'Original.transfer', type: '∀ n : Nat, _root_.Frozen.maxEntropy n = n' }] }]);
     expect(source).not.toContain('theorem target');
     for (const [file, original] of Object.entries(f.sources)) expect(projected.get(file)).toBe(original);
 
@@ -66,7 +68,8 @@ describe('frozen library imports for host-injected conditions', () => {
       expect(compiled.status, `${compiled.stdout}${compiled.stderr}`).toBe(0);
     }
     const output = path.join(f.receipt.projectRoot, 'Projection.lean');
-    fs.writeFileSync(output, source + '\n#print axioms Original.consumer\n');
+    fs.writeFileSync(output, source + '\nexample : True := Original.consumer\n#print axioms Original.consumer\n' +
+      'run_cmd do\n  if (← Lean.getEnv).contains "Original.transfer".toName then throwError "Conditional dependency leaked"\n');
     const checked = spawnSync(lean, [output], { cwd: f.receipt.projectRoot, env, encoding: 'utf8', timeout: 20_000 });
     expect(checked.status, `${checked.stdout}${checked.stderr}`).toBe(0);
     expect(`${checked.stdout}${checked.stderr}`).not.toContain('sorryAx');

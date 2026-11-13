@@ -25,7 +25,7 @@ const source = (first: string, second: string) => `namespace Tutorial\n\ntheorem
 const update = (file: string, diff: string) => ({ path: file, kind: { type: 'update', move_path: null }, diff });
 type Raw = { at: number; workerId: string; session: number; phase: 'started' | 'completed'; item: Record<string, unknown> };
 
-export function withAgentActions(base: WebSampleFile): WebSampleFile {
+export function withAgentActions(base: WebSampleFile, buildOutput = Array.from({ length: 400 }, (_, index) => `✔ [${index + 1}/400] Built Tutorial.Part${index + 1} (${(index % 7) + 1}ms)`).join('\n')): WebSampleFile {
   const sample = structuredClone(base);
   const turn = (workerId: string, number: number) => {
     const found = sample.events.find((event: WebEvent) => event.type === 'turn_started' && event.details?.workerId === workerId && event.details.turn === number);
@@ -96,7 +96,7 @@ export function withAgentActions(base: WebSampleFile): WebSampleFile {
     aggregatedOutput: '直接证明两个固定目标。', exitCode: 0 });
   exec('researcher-1', 1, review + 80, review + 1_010, { id: 'c3', command: checkCommand('researcher-1'), cwd: worktree('researcher-1'), aggregatedOutput: checked('researcher-1', 0, []), exitCode: 0 });
   exec('researcher-1', 1, review + 1_030, release - 30, { id: 'c4', command: `/bin/bash -lc 'lake build 2>&1 | tail -n 400'`, cwd: worktree('researcher-1'),
-    aggregatedOutput: Array.from({ length: 400 }, (_, index) => `✔ [${index + 1}/400] Built Tutorial.Part${index + 1} (${(index % 7) + 1}ms)`).join('\n'), exitCode: 0 });
+    aggregatedOutput: buildOutput, exitCode: 0 });
   add('researcher-1', 1, release + 90, { id: 'e1', type: 'fileChange', changes: [{ path: `${worktree('researcher-1')}/RESEARCH.md`, kind: { type: 'add' }, diff: recorded('researcher-1', 1) }] });
   add('researcher-1', 1, release + 110, { id: 'm1', type: 'agentMessage', text: '审阅完成：同意提交。最终是否通过，以独立的 Lean 验收为准。' });
 

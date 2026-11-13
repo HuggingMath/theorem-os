@@ -2,13 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { bootstrapLeanTask } from '../src/math/leanTask';
-import { inspectLeanDeclarationRegions } from '../src/math/leanSource';
+import { inspectLeanDeclarationRegions, inspectScopedLeanDeclarations } from '../src/math/leanSource';
 import { applyTaskChanges, createTaskSourceProjector, declarationStartWithDoc, omitTaskHelpers, taskChanges } from '../src/solver/cooperativeProof';
 import { assertSolverSources, commitSolverSources, readSolverProblem, type SolverProblem } from '../src/solver/problem';
 import { frozenSourceContext } from '../src/solver/contextCompiler';
 import { captureProofReferences, proofReferencesUnchanged } from '../src/solver/proofReferences';
 import type { CooperativeTask } from '../src/solver/tasks';
 import { temporaryDirectory } from './helpers/files';
+import { conditionalPayloads } from './helpers/conditionalProjection';
 
 describe('punctuation in cooperative declaration identities', () => {
   let directory: string, workspace: string, file: string, problem: SolverProblem;
@@ -63,9 +64,10 @@ describe('punctuation in cooperative declaration identities', () => {
     const projected = createTaskSourceProjector(problem, workspace, commit)(
       { ...helper('consumer'), dependsOn: ['input'], conditional: true }, [], [{ ...helper(input), id: 'input' }])
       .get('Submission.lean')!;
-    expect(projected).toContain(`lemma consumer (${input} : True) : True := ${input}`);
-    expect(projected).not.toContain(`Submission.${input}`);
-    expect(inspectLeanDeclarationRegions(projected).map(item => item.name)).toEqual(['premise', 'independent', 'consumer']);
+    expect(conditionalPayloads(projected)).toEqual([{ declaration: `lemma consumer : True := _root_.Submission.${input}\n`,
+      dependencies: [{ theoremName: `Submission.${input}`, type: 'True' }] }]);
+    expect(inspectScopedLeanDeclarations(projected).filter(item => item.namespace === 'Submission').map(item => item.name))
+      .toEqual(['premise', 'independent', 'consumer']);
     expect(fs.readFileSync(file, 'utf8')).toBe(source);
   });
 
@@ -85,8 +87,10 @@ describe('punctuation in cooperative declaration identities', () => {
       const projected = createTaskSourceProjector(openedProblem, root, commit)(
         { ...helper('consumer'), dependsOn: ['input'], conditional: true }, [], [{ ...helper('premise'), id: 'input' }])
         .get('Submission.lean')!;
-      expect(projected).toContain('lemma consumer (premise : True) : True := premise');
-      expect(inspectLeanDeclarationRegions(projected).map(item => item.name)).toEqual(['consumer', 'independent']);
+      expect(conditionalPayloads(projected)).toEqual([{ declaration: 'lemma consumer : True := _root_.Submission.premise\n',
+        dependencies: [{ theoremName: 'Submission.premise', type: 'True' }] }]);
+      expect(inspectScopedLeanDeclarations(projected).filter(item => item.namespace === 'Submission').map(item => item.name))
+        .toEqual(['consumer', 'independent']);
     });
 
   it.each(['?', '!'])('retains a %s helper wrapper when only the plain-name peer is unfinished', suffix => {

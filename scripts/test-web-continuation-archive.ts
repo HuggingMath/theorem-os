@@ -153,7 +153,8 @@ try {
     assert.equal(starts.length, 2);
     assert.equal(starts[1]!.input.source, source);
     assert.deepEqual(starts[1]!.continuation, { runId: run.id, taskId: helper.id, commit: helper.proof.commit,
-      label: starts[1]!.continuation!.label, file: checkedSource.file, source: checkedSource.source });
+      label: starts[1]!.continuation!.label, taskVersion: archive.sources.find(item => item.taskId === helper.id && item.commit === helper.proof.commit)!.taskVersion, sourceDigest: checkedSource.sourceDigest,
+      environmentDigest: checkedSource.environmentDigest, file: checkedSource.file, source: checkedSource.source });
     assert.match(starts[1]!.continuation!.label, /add_zero/u);
     const continued = await waitForRun(h, starts[1]!.id, item => item.status === 'completed');
     assert.equal(continued.result!.status, 'incomplete', 'carrying a checked result does not grant acceptance');

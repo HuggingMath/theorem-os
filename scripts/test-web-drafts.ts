@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, type BrowserContext, type Page, type Route } from 'playwright';
-import { readWebConfig, webTemplates } from '../apps/web/config';
+import { readWebConfig, webLimits, webTemplates } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebRun } from '../apps/web/shared';
@@ -23,7 +23,7 @@ type Draft = {
 };
 const ids = { providerId: 'provider', model: 'model', effort: 'effort', environment: 'environment', templateId: 'template',
   source: 'source', task: 'task', maxTurns: 'max-turns', maxRunSeconds: 'max-seconds', workers: 'workers' };
-const imported: Draft = { providerId: 'backup', model: 'fixture-import-model', effort: 'medium', environment: 'standard', templateId: '',
+const imported: Draft = { providerId: 'backup', model: 'fixture-import-model', effort: 'medium', environment: 'mathlib', templateId: '',
   source: `-- ${markup}\ntheorem imported_task : True := by trivial\n`, task: `Imported task\n${markup}`,
   maxTurns: '4', maxRunSeconds: '120', workers: '2', coordination: 'independent' };
 const draftFile = (draft: Draft) => ({ schema: storageKey, draft });
@@ -209,7 +209,7 @@ try {
     // A new draft starts with an empty source and no template; the task keeps its standing instruction.
     assert.deepEqual([defaults.templateId, defaults.source], ['', '']);
     const addition = webTemplates.find(template => template.id === 'addition')!;
-    await selectConfig(h.page, 'environment', 'standard');
+    await selectConfig(h.page, 'environment', 'mathlib');
     await selectConfig(h.page, 'template', 'addition');
     const selected = await snapshot(h.page);
     assert.equal(selected.source, addition.source);
@@ -338,8 +338,8 @@ try {
       { name: 'invalid-utf8.json', buffer: Buffer.from([0x7b, 0x22, 0xc3, 0x28, 0x22, 0x7d]) },
       { name: 'broken.json', buffer: Buffer.from('{broken') },
       { name: 'unknown-schema.json', buffer: Buffer.from(JSON.stringify({ schema: 'unknown', draft: imported })) },
-      { name: 'large-source.json', buffer: draftBytes({ ...imported, source: 'x'.repeat(32_769) }) },
-      { name: 'large-task.json', buffer: draftBytes({ ...imported, task: 'x'.repeat(8193) }) },
+      { name: 'large-source.json', buffer: draftBytes({ ...imported, source: 'x'.repeat(webLimits.maxSourceBytes + 1) }) },
+      { name: 'large-task.json', buffer: draftBytes({ ...imported, task: 'x'.repeat(webLimits.maxTaskBytes + 1) }) },
     ];
     for (const file of invalid) {
       await importFile(h.page, file.buffer, file.name);

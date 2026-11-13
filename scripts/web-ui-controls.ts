@@ -9,6 +9,14 @@ export async function openAdvancedChatSettings(page: Page) {
   if (!await advanced.evaluate(node => (node as HTMLDetailsElement).open)) await advanced.locator(':scope > summary').click({ timeout: 0 });
 }
 
+/** Participation is optional on a new problem, behind its visible disclosure. */
+export async function openChatParticipation(page: Page) {
+  const control = page.locator('[data-chat-participation-control]');
+  await control.waitFor({ state: 'attached' });
+  if (!await control.evaluate(node => (node as HTMLDetailsElement).open)) await control.locator(':scope > summary').click();
+  await page.locator('[data-chat-participation]').waitFor();
+}
+
 export async function closeDialog(page: Page, selector: string, action: () => Promise<unknown>) {
   await page.locator(`${selector}[open]`).waitFor();
   await page.evaluate(selector => {
@@ -51,8 +59,9 @@ export async function closeHistory(page: Page) {
  * the input-mode switch above a shown run; the switch is hidden on the new-research page. */
 export async function enterLean(page: Page) {
   if (!await page.locator('body[data-entry="natural"]').count()) return;
-  const toggle = page.locator('#entry-lean');
-  await (await toggle.isVisible() ? toggle : page.locator('.chat-lean-entry')).click();
+  const entry = page.locator('#entry-lean:visible, .chat-lean-entry:visible, body[data-entry="lean"] #source:visible').first();
+  await entry.waitFor();
+  if (await page.locator('body[data-entry="natural"]').count()) await entry.click();
   await page.locator('body[data-entry="lean"]').waitFor({ state: 'attached' });
   // The suites type proof instructions directly; the product keeps them in a collapsed section.
   await page.locator('#proof-instructions').evaluate(node => { (node as HTMLDetailsElement).open = true; });
@@ -102,7 +111,7 @@ export async function showArtifacts(page: Page) {
     if (await more.count()) await more.click();
     // While a task runs in 简洁, the conversation leaves the roadmap to the live workspace's 完整记录.
     const roadmap = page.locator('[data-research-artifact="roadmap"]');
-    if (!await roadmap.count()) {
+    if (!await roadmap.isVisible()) {
       if (!await page.locator('#chat-live-panel').isVisible()) await page.locator('[data-research-artifact="live"]').click();
       await page.locator('[data-live-roadmap]').click();
     } else await roadmap.click();

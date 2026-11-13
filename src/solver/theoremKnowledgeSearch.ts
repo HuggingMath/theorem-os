@@ -129,6 +129,15 @@ function conclusion(value: string): string {
   return shape ? shape.conclusion.replace(/\b_b\d+\b/gu, '') : value;
 }
 
+/** Section parameters omitted from source headers can shift every conclusion binder by the same offset. */
+function conclusionKey(value: string): string | undefined {
+  const key = splitStatement(value)?.conclusion;
+  if (key === undefined) return;
+  const indices = [...key.matchAll(/\b_b(\d+)\b/gu)].map(match => Number(match[1]));
+  const offset = indices.length ? Math.min(...indices) : 0;
+  return offset ? key.replace(/\b_b(\d+)\b/gu, (_name, index: string) => `_b${Number(index) - offset}`) : key;
+}
+
 const equationSides = (value: string) => /^([^=<>:!]+?)\s*=\s*([^=<>]+)$/u.exec(conclusion(value));
 
 function goalShape(value: string) {
@@ -231,7 +240,7 @@ function prepareSearch(base: KnowledgeSearchBase, options: Omit<KnowledgeSearchO
         field(item.description), field(item.provenance.map(origin => origin.problemId).join(' '))],
         nameTerms: field(item.name.split('.').at(-1)!), interfaceTerms: field(interfaceText(type), true),
         conclusionTerms: field(interfaceText(conclusion(type)), true),
-        conclusionKey: splitStatement(type)?.conclusion,
+        conclusionKey: conclusionKey(type),
         reflexiveEquation: (() => { const sides = equationSides(type);
           return Boolean(sides && canonical(sides[1]!) === canonical(sides[2]!)); })(),
         normalizedType: text(type).toLowerCase().replace(/\s+/gu, ''), surfaceShape: includeSurfaceShapes ? knowledgeGoalSurfaceShape(type) : undefined };
@@ -362,7 +371,7 @@ function searchPrepared(prepared: ReturnType<typeof prepareSearch>, evidence: Kn
   const primary = terms(primaryText, goalOnly), primaryGroups = knowledgeRelevanceGroups(primaryText, goalOnly),
     goalTerms = terms(goal, true), normalizedGoal = canonical(goalTarget(goal));
   const genericEquality = goalOnly && !primaryGroups.length && Boolean(equationSides(goalTarget(goal)));
-  const conclusionKey = goalOnly ? splitStatement(goalTarget(goal))?.conclusion : undefined;
+  const targetConclusionKey = goalOnly ? conclusionKey(goalTarget(goal)) : undefined;
   const identifier = query.trim().replace(/^_root_\./u, '').toLowerCase();
   const nameQuery = /^[\p{L}_][\p{L}\p{M}\p{N}_'.]*$/u.test(identifier);
   const relevant = [...new Set([...primary, ...goalTerms])];
@@ -380,7 +389,7 @@ function searchPrepared(prepared: ReturnType<typeof prepareSearch>, evidence: Kn
     const exactGoal = Boolean(normalizedGoal && normalizedGoal === document.normalizedType),
       trailingGoal = Boolean(normalizedGoal.length >= 8 && document.normalizedType.endsWith(normalizedGoal)),
       surfaceMatch = goalSurface !== undefined && goalSurface === document.surfaceShape,
-      conclusionMatch = conclusionKey !== undefined && conclusionKey === document.conclusionKey;
+      conclusionMatch = targetConclusionKey !== undefined && targetConclusionKey === document.conclusionKey;
     const eligible = goalOnly ? Boolean(main.length || primary.some(term => fields[1]!.has(term)) ||
       exactGoal || trailingGoal || surfaceMatch) : Boolean(nameScore || matched.length);
     const specificTypeTerms = goalOnly ? typeTerms : document.interfaceTerms;

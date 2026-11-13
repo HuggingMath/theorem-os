@@ -22,7 +22,7 @@ const root = path.resolve(import.meta.dirname, '..'), output = process.env.THEOR
 await fs.access(path.join(root, 'out/web/library.html')); await fs.mkdir(output, { recursive: true });
 const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-browser-library-trials-'));
 const original = 'theorem preserved : 1 = 1 := by rfl\nnamespace Research\ntheorem target (n : Nat) : n + 0 = n := by sorry\nend Research';
-const commit = 'a'.repeat(40), environmentDigest = mathDigest('browser-fixture-recorded-runtime-environment');
+const commit = 'a'.repeat(40), environmentDigest = getLeanTaskEnvironment('standard').dependencyDigest;
 let workerCalls = 0, commandCalls = 0, mailCalls = 0;
 const compilerCalls: Parameters<WebPrecheckRunner>[0][] = [];
 const workerInputs: Parameters<WebRunner['run']>[0][] = [];
@@ -70,6 +70,7 @@ const fixtures = new WebResearchAssets(service.storage, { identity: owner => ser
 });
 const trials = new WebResearchLibraryTrials({ storage: service.storage, jobs: service.jobs, projects: service.research.projects, assets: fixtures, runner });
 const browser = await startBrowser(service.server, port), errors: string[] = [], external: string[] = [], checks: object[] = [];
+const configurationReads: { status: number; request: unknown }[] = [];
 let active: Page | undefined, phase = 'setup';
 async function publish(owner: string, id: string) {
   const asset = fixtures.create(owner, { requestId: id, type: 'mathematics', name: `Addition ${id}`,
@@ -89,6 +90,10 @@ try {
     await preferFullCollaboration(context); await context.addInitScript(language => localStorage.setItem('theorem-os.web-locale.v1', language), language);
     await context.route(/^https?:\/\//u, async route => { if (new URL(route.request().url()).origin !== origin) { external.push(route.request().url()); await route.abort(); } else await route.continue(); });
     const page = await context.newPage(); active = page; page.setDefaultTimeout(12_000); page.on('pageerror', error => errors.push(error.message));
+    page.on('response', response => {
+      if (response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/research/configuration')
+        configurationReads.push({ status: response.status(), request: response.request().postDataJSON() });
+    });
     phase = `fixture-${language}`; await page.goto(`${origin}/library.html`); await page.locator('main[aria-busy="false"]').waitFor();
     const owner = (await context.cookies(origin)).find(item => item.name === 'theoremos_session')!.value;
     const run = service.jobs.create(owner, { providerId: 'openai', apiKey: 'sk-disposable-not-sent', model: 'fixture-no-model', effort: 'high', environment: 'standard', source: original, task: 'Library undo control', maxTurns: 1, maxRunSeconds: 30, workers: 1, coordination: 'independent' }, { id: 'openai', name: 'Fixture', baseUrl: 'http://127.0.0.1/never-called' });
@@ -149,5 +154,14 @@ try {
   await fs.writeFile(path.join(output, 'undo-report.json'), JSON.stringify({ status: 'passed', build: JSON.parse(await fs.readFile(path.join(root, 'out/web/build-info.json'), 'utf8')), checks, recordedChecks: compilerCalls.length, recordedWorkers: workerCalls, realModelCalls: 0, realLeanCalls: 0, commandCalls, mailCalls, errors, external }, null, 2)); console.log(JSON.stringify({ status: 'passed', checks: checks.length }));
 } catch (error) {
   await active?.screenshot({ path: path.join(output, 'undo-probe-failure.png'), fullPage: true }).catch(() => undefined);
-  await fs.writeFile(path.join(output, 'undo-report.json'), JSON.stringify({ status: 'probe-failed', phase, error: String(error), checks, errors, external }, null, 2)); throw error;
+  const diagnostics = await active?.evaluate(() => ({
+    source: document.querySelector<HTMLTextAreaElement>('#source')?.value.slice(-2048),
+    environment: document.querySelector<HTMLSelectElement>('#environment')?.value,
+    notices: ['#toast', '#form-error', '#draft-recovery-text'].map(selector => ({ selector, text: document.querySelector(selector)?.textContent?.slice(0, 1000) })),
+    selection: document.querySelector('.composer-research-selection')?.textContent?.slice(0, 1000),
+    recovery: Object.fromEntries(Object.keys(sessionStorage).filter(key => key.includes('draft-recovery') || key.includes('research.selection')).slice(0, 8)
+      .map(key => [key, sessionStorage.getItem(key)?.slice(0, 24000)])),
+  })).catch(() => undefined);
+  await fs.writeFile(path.join(output, 'undo-report.json'), JSON.stringify({ status: 'probe-failed', phase, error: String(error), checks, errors, external,
+    diagnostics, configurationReads: configurationReads.slice(-8) }, null, 2)); throw error;
 } finally { await browser.close(); await trials.close(); await fixtures.close(); await service.close(); await fs.rm(dataRoot, { recursive: true, force: true }); }

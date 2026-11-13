@@ -64,7 +64,7 @@ describe('a project budget prepares a private attempt with explicit attachment',
     expect(project.runs.find((binding: { runId: string }) => binding.runId === run.id)).toMatchObject({ exposure: 'members', grants: { guidance: false, edit: false, approve: false, proof: false } });
     expect(budgetAttemptState(run, project).kind).toBe('attached');
     const peer = await client();
-    const memberProject = service.research.projects.setMember(f.owner.owner, project.id, service.research.projects.identity(peer.owner), { requestId: 'peer-read', expectedRevision: project.revision, role: 'reader' });
+    const memberProject = service.research.projects.setMember(f.owner.owner, project.id, service.research.projects.identity(peer.owner), { requestId: 'peer-read', expectedRevision: project.revision, role: 'reader', confirmMembersVisibility: true });
     service.research.projects.update(f.owner.owner, project.id, { requestId: 'share-with-members', expectedRevision: memberProject.revision, visibility: 'members' });
     const shared = await request(peer, `/api/research/theorems/${project.id}/runs/${run.id}`); expect(shared.status).toBe(200);
     expect((await shared.json()).run).not.toHaveProperty('budgetOrigin');
@@ -91,7 +91,7 @@ describe('a project budget prepares a private attempt with explicit attachment',
   it('allows a project reader to retain a personal attempt while keeping attachment permission unchanged', async () => {
     const f = await fixture(), peer = await client();
     const memberProject = service.research.projects.setMember(f.owner.owner, f.project.id, service.research.projects.identity(peer.owner),
-      { requestId: 'reader', expectedRevision: f.project.revision, role: 'reader' });
+      { requestId: 'reader', expectedRevision: f.project.revision, role: 'reader', confirmMembersVisibility: true });
     const project = service.research.projects.update(f.owner.owner, f.project.id, { requestId: 'share-with-members', expectedRevision: memberProject.revision, visibility: 'members' });
     const response = await request(peer, '/api/runs', { ...f.input, budgetOrigin: f.budgetOrigin }); expect(response.status).toBe(201);
     const run = (await response.json()).run as WebRun;

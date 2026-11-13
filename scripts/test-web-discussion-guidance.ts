@@ -249,7 +249,7 @@ try {
       assert.equal(await visitor.locator('.collab-surface').count(), 0); assert.equal(await visitor.locator('[data-forward-discussion]').count(), 0);
       await fit(page, 'forwarding desktop'); await page.screenshot({ path: path.join(output, 'forward-desktop.png'), fullPage: true });
       await visitor.getByRole('button', { name: 'English', exact: true }).click();
-      await visitor.getByRole('heading', { name: 'Work together on a theorem', exact: true }).waitFor();
+      await visitor.getByRole('heading', { name: 'Discussion to fixed run guidance', exact: true }).waitFor();
       await article(visitor, publicDerived).locator('[data-feedback-source]').getByText('View original suggestion', { exact: true }).waitFor();
       await fit(visitor, 'public English mobile'); await visitor.screenshot({ path: path.join(output, 'public-en-mobile.png'), fullPage: true });
       fixture.ownerCookies = await context.cookies(); assert.deepEqual(errors, []); assert.deepEqual(external, []);
@@ -300,7 +300,7 @@ try {
     await form.locator('button[type="submit"]:enabled').waitFor();
     assert.equal((await feedbacks(page)).filter(item => item.sourceFeedbackId === source.id && item.requestId === original.requestId).length, 1);
     await page.setViewportSize({ width: 390, height: 844 }); await page.getByRole('button', { name: 'English', exact: true }).click();
-    await page.getByRole('heading', { name: 'Work together on a theorem', exact: true }).waitFor();
+    await page.getByRole('heading', { name: 'Discussion to fixed run guidance', exact: true }).waitFor();
     const english = await forward(page, source, 'lead');
     await english.getByRole('button', { name: 'Send run guidance', exact: true }).waitFor();
     assert.equal(await article(page, source).locator('[data-forward-discussion] summary').innerText(), 'Forward to a run');

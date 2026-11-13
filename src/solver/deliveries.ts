@@ -117,6 +117,8 @@ export type DeliveryRecord = {
   statement: string; premises: readonly string[];
   dependencies: { taskId: string; taskDigest: string }[]; remainingObligations: readonly string[];
   summary: string; evidenceRefs: readonly string[]; createdAt: number; commit?: string; sourceDigest?: string;
+  /** Host probe finding retained across publication and archive recovery. */
+  hostAdvisorySummary?: string;
   /** Host identity for the complete advisory finding, separate from the short delivery summary. */
   findingDigest?: string;
   /** Each publication retains its own complete finding, including during an active proof. */

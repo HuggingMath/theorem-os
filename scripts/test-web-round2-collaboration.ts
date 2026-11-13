@@ -92,7 +92,7 @@ try {
     if (new URL(route.request().url()).origin !== origin) { external.push(route.request().url()); await route.abort(); } else await route.continue();
   });
   context.on('page', opened => { opened.setDefaultTimeout(10_000); opened.on('pageerror', error => errors.push(error.message)); });
-  page = await context.newPage(); await page.goto(`${origin}/theorems.html`); await page.getByRole('heading', { name: '围绕同一个定理协作', exact: true }).waitFor();
+  page = await context.newPage(); await page.goto(`${origin}/theorems.html`); await page.getByRole('heading', { name: '定理', exact: true }).waitFor();
   let project = (await http<{ item: ResearchProjectDetail }>('POST', '/api/research/theorems', { requestId: crypto.randomUUID(), title: 'Round 2 collaboration fixture', description: 'Disposable local browser regression', fields: ['logic'], visibility: 'private' })).item;
   const projectPath = `/api/research/theorems/${project.id}`, feedbackPath = `${projectPath}/feedback`;
   project = (await http<{ item: ResearchProjectDetail }>('POST', `${projectPath}/versions`, { requestId: crypto.randomUUID(), expectedRevision: project.revision,
@@ -152,6 +152,7 @@ try {
     assert.ok((await select.locator('option:checked').textContent())?.includes('草稿基准已过期'));
     assert.equal(await page!.getByRole('button', { name: '提交检查', exact: true }).isDisabled(), true);
     await rebase.click(); assert.equal(await input.inputValue(), candidate);
+    await page!.locator('[data-confirm-draft-baseline]').click();
     assert.equal(await select.locator('option:checked').textContent(), 'lemma · Main.lean · lemma-v2');
     await page!.screenshot({ path: path.join(output, 'candidate-rebased.png'), fullPage: true });
     const race = async (route: Route) => { update(3); await route.continue(); };
@@ -163,6 +164,7 @@ try {
       assert.equal(await input.inputValue(), candidate);
     } finally { await page!.unroute('**' + feedbackPath, race); }
     await rebase.waitFor({ timeout: 15_000 }); await rebase.click(); assert.equal(await input.inputValue(), candidate);
+    await page!.locator('[data-confirm-draft-baseline]').click();
     const submitted = response('POST', feedbackPath); await page!.getByRole('button', { name: '提交检查', exact: true }).click(); const received = await ok(submitted);
     const payload = received.request().postDataJSON(); assert.equal(payload.target.taskRef.version, 'lemma-v3'); assert.equal(payload.base.commit, '3'.repeat(40)); assert.equal(payload.source, candidate);
     assert.equal(fakeCalls.filter(call => call === 'check').length, 1, 'Only the latest-base submission reaches the fake checker');
@@ -171,9 +173,9 @@ try {
   });
 
   await check('R2-C04 profile conflicts show latest values while preserving drafts until explicit confirmation', async () => {
-    await page!.goto(`${origin}/people.html`); await page!.getByText('编辑我的资料', { exact: true }).click();
+    await page!.goto(`${origin}/people.html?editProfile=1#profile-management`); await page!.getByLabel('显示名', { exact: true }).waitFor();
     await page!.getByLabel('显示名', { exact: true }).fill('My retained name'); await page!.getByLabel('简介', { exact: true }).fill('My retained biography');
-    const other = await context.newPage(); await other.goto(`${origin}/people.html`); await other.getByText('编辑我的资料', { exact: true }).click();
+    const other = await context.newPage(); await other.goto(`${origin}/people.html?editProfile=1#profile-management`); await other.getByLabel('显示名', { exact: true }).waitFor();
     await other.getByLabel('显示名', { exact: true }).fill('Name saved by the second tab'); const saved = response('PUT', '/api/research/profile', other);
     await other.getByRole('button', { name: '保存资料', exact: true }).click(); await ok(saved);
     const rejected = response('PUT', '/api/research/profile'); await page!.getByRole('button', { name: '保存资料', exact: true }).click(); assert.equal((await rejected).status(), 409);

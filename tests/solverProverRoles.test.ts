@@ -114,7 +114,7 @@ describe('proof-writing context', () => {
       assignment: { taskId: helper.task.id, taskDigest: taskVersion(helper.task), workerId: 'prover-1', seedCommit: 'seed' } };
     const context = build(action);
     expect(context.instructions).toContain('You are a Lean Prover.');
-    expect(context.instructions).toContain('return for host checking and integration');
+    expect(context.instructions).toContain('The host freezes the saved sources and independently checks and integrates them');
     expect(context.instructions).not.toContain('You are a Mathematical Researcher.');
     expect(context.message).toContain('Your role: prover');
     expect(context.message).toContain(JSON.stringify(helper.task.type));

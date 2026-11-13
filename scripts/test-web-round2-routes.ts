@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // Recorded route regressions only: this suite never starts a solver or writes business data.
 import assert from 'node:assert/strict';
+import { showArtifacts } from './web-ui-controls';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Browser, Locator, Page } from 'playwright';
@@ -188,7 +189,7 @@ try {
     await scenario(`R2-02 ${surface} ${locale}: collapse retains previous/next context`, locale,
       locale === 'zh' ? { width: 1440, height: 900 } : { width: 390, height: 480 }, async page => {
         if (surface === 'classics') { await openClassic(page, locale); await mode(page, 'recorded'); }
-        else { await page.goto(`${origin}/?sample`); await page.locator('[data-research-artifact="roadmap"]').click(); }
+        else { await page.goto(`${origin}/?sample`); await page.locator('[data-sample-badge]').waitFor({ state: 'attached' }); await showArtifacts(page); await page.locator('#detail-tab-trajectory').click(); await page.locator('[data-trajectory-view="roadmap"]').click(); }
         const map = page.locator('.solution-route');
         const task = map.locator(surface === 'workbench' ? '[data-solution-node="task:goal_2"]' : '[data-solution-node^="task:"]').first();
         const taskId = await task.getAttribute('data-solution-node'); assert.ok(taskId);

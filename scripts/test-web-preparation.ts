@@ -30,7 +30,7 @@ const runner: WebRunner = {
   },
 };
 const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin,
-  THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web') }), runner);
+  THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web'), THEOREMOS_WEB_CLIENT_IP_HEADER: 'x-fixture-scenario' }), runner);
 type Harness = { page: Page; context: BrowserContext; requests: RequestRecord[];
   intercept?: (route: Route) => Promise<boolean>; releases: Array<() => void> };
 const checks: Array<{ name: string; elapsedMs: number; requests: RequestRecord[] }> = [];
@@ -41,7 +41,8 @@ const suite: ScenarioSuite = { origin, output, checks, failedScenario: '' };
 
 const scenario = (name: string, run: (h: Harness) => Promise<void>, width = 1440, expectedPosts = 0) =>
   webScenario<Harness>(browser!, suite, name, run, {
-    context: { viewport: { width, height: width > 850 ? 900 : 812 }, reducedMotion: 'reduce' },
+    context: { viewport: { width, height: width > 850 ? 900 : 812 }, reducedMotion: 'reduce',
+      extraHTTPHeaders: { 'x-fixture-scenario': `preparation-${checks.length + 1}` } },
     harness: (page, context) => ({ page, context, requests: [], releases: [] }),
     routes: { local: 'preparation must not contact a model provider or external site' }, timeout: { label: 'Preparation', seconds: 35 },
     verify: ({ requests }, elapsedMs) => {
@@ -57,7 +58,7 @@ async function open(h: Harness) {
   await enterLean(h.page);
   await showChat(h.page);
   await ready(h.page);
-  await h.page.locator('#environment').selectOption('standard');
+  await h.page.locator('#environment').selectOption('mathlib');
   await h.page.locator('#template').selectOption('addition');
   await h.page.locator('#submission-readiness[data-state="missing"]').waitFor();
 }
@@ -280,7 +281,7 @@ try {
     await open(h);
     await openSettings(page);
     await page.locator('#api-key').fill(credential);
-    for (const { id, value, good } of [{ id: 'max-turns', value: '0', good: '3' }, { id: 'max-seconds', value: '29', good: '90' },
+    for (const { id, value, good } of [{ id: 'max-turns', value: '-1', good: '3' }, { id: 'max-seconds', value: '29', good: '90' },
       { id: 'workers', value: String(webLimits.maxWorkers + 1), good: '1' }]) {
       await page.locator(`#${id}`).fill(value);
       assert.equal(await page.locator(`#${id}-validation`).isVisible(), false, `${id} must not complain while it is being typed`);
@@ -690,7 +691,7 @@ try {
   await scenario('Confirmed imports open the API Key field without a delayed focus override', async h => {
     const { page } = h;
     await open(h);
-    const template = webTemplates.find(template => template.environment === 'standard')!;
+    const template = webTemplates.find(template => template.id === 'addition')!;
     const draft = { providerId: 'openai', model: 'fixture-import-model', effort: 'high', environment: 'standard', templateId: '',
       source: template.source, task: 'Imported preparation task', maxTurns: '3', maxRunSeconds: '90', workers: '1', coordination: 'cooperative' };
     await page.locator('#task-file').setInputFiles({ name: 'preparation.json', mimeType: 'application/json',

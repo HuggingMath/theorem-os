@@ -145,7 +145,7 @@ it('keeps a complete long consumer type, assumptions and intended inference mand
   const context = compileTaskContext(inputFor(active, { tasks: [active], consumerInterfaces }));
   const rows = consumerRows(context.message);
 
-  expect(rows).toEqual([{ ...consumer.task, taskDigest: taskVersion(consumer.task), status: 'pending', uses: [{ kind: 'dependency' }] }]);
+  expect(rows).toEqual([{ ...consumer.task, taskDigest: taskVersion(consumer.task), status: 'active', executionStatus: 'pending', uses: [{ kind: 'dependency' }] }]);
   expect(rows[0].type).toBe(exactType);
   expect(context.manifest).toMatchObject({ maxOptionalBytes: 0, optionalBytes: 0, requiredTaskIds: ['helper'] });
   expect(context.manifest.included).toContainEqual(expect.objectContaining({ id: 'consumer-interfaces', required: true }));
@@ -168,7 +168,7 @@ it('supplies the frozen original header for a goal consuming a route closing lem
   const consumerInterfaces = taskConsumerProjection(active.task, [active, target], [route]);
   const context = compileTaskContext(inputFor(active, { tasks: [active], consumerInterfaces }));
 
-  expect(consumerRows(context.message)).toEqual([{ ...target.task, taskDigest: taskVersion(target.task), status: 'pending',
+  expect(consumerRows(context.message)).toEqual([{ ...target.task, taskDigest: taskVersion(target.task), status: 'active', executionStatus: 'pending',
     uses: [{ kind: 'route-closing', routeId: route.id }], exactFrozenHeader: frozenHeader }]);
   expect(context.manifest.requiredTaskIds).toEqual(['closing']);
 });
@@ -273,7 +273,7 @@ it('preserves correctly bound consumer interfaces after JSON serialization and r
   const context = compileTaskContext(inputFor(active, cooperation));
 
   expect(restored).toEqual(projection);
-  expect(consumerRows(context.message)).toEqual([{ ...consumer.task, taskDigest: taskVersion(consumer.task), status: 'pending', uses: [{ kind: 'dependency' }] }]);
+  expect(consumerRows(context.message)).toEqual([{ ...consumer.task, taskDigest: taskVersion(consumer.task), status: 'active', executionStatus: 'pending', uses: [{ kind: 'dependency' }] }]);
   expect(context.manifest.requiredTaskIds).toEqual([active.task.id]);
   expect(cooperativeWorkContract(actionFor(active), cooperation.tasks, cooperation).plannedConsumers).toEqual([consumer.task.id]);
 });

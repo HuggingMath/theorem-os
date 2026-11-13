@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MathematicsVerifierBatchRequest, MathematicsVerifierBatchResult } from '../src/math/verifier';
+import { maskLeanCommentsAndStrings } from '../src/math/leanSyntax';
 import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from '../src/solver/archive';
 import { parseCooperationPlan, type CooperativeResearch } from '../src/solver/cooperation';
@@ -15,6 +16,7 @@ import { freshlyAccepted, taskVersion, type CooperativeAction, type CooperativeT
 import { cooperativeResearch } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 import { verifiedBatch } from './helpers/verifier';
+import { conditionalPayloads } from './helpers/conditionalProjection';
 
 const host = vi.hoisted(() => ({ verify: vi.fn(), createSession: vi.fn() }));
 vi.mock('../src/math/verifier', async importOriginal => ({
@@ -224,7 +226,9 @@ describe('host consumer connection lifecycle', () => {
       conditions: [{ taskId: 'helper', taskDigest: taskVersion(node('helper').task) }] } });
     expect(node('goal_0').integratedCheck).toBeUndefined(); expect(state.cooperation!.review).toBeUndefined();
     expect(taskVersion(node('goal_0').task)).toBe(digest); expect(node('goal_0').task.conditional).toBeUndefined();
-    expect(checkedSources.some(source => source.includes('theorem add_zero (helper : True)'))).toBe(true);
+    expect(checkedSources.some(source => conditionalPayloads(source).some(payload =>
+      payload.declaration.startsWith('theorem add_zero ') && payload.dependencies.some(dependency =>
+        dependency.theoremName === 'Tutorial.helper' && dependency.type === 'True')))).toBe(true);
     const independent = await assigned(workers[3]); expect(independent.task.id).toBe('independent');
     const context = buildResearchContext(problem, state, { root: directory, worktree: workers[2].worktree, taskText: 'Problem',
       environment: {}, retrievalRoot: directory, assignment: parent, maxOptionalContextBytes: 0 });
@@ -241,7 +245,9 @@ describe('host consumer connection lifecycle', () => {
     const verify = host.verify.getMockImplementation()!;
     host.verify.mockImplementation(async (request: MathematicsVerifierBatchRequest) => {
       const source = fs.readFileSync(path.join(request.projectRoot, 'Submission.lean'), 'utf8');
-      const reference = source.indexOf('Tutorial.helper'), declaration = source.indexOf('lemma helper : True');
+      // Host conditional payloads quote source and premise names; only unquoted Lean references can be forward references.
+      const code = maskLeanCommentsAndStrings(source);
+      const reference = code.indexOf('Tutorial.helper'), declaration = code.indexOf('lemma helper : True');
       const result = await verify(request);
       return reference >= 0 && (declaration < 0 || declaration > reference)
         ? { ...result, status: 'failed', results: result.results.map(item => ({ ...item, status: 'failed',
@@ -282,7 +288,9 @@ describe('host consumer connection lifecycle', () => {
     expect(consumer.proof!.conditions).toEqual([{ taskId: 'helper', taskDigest: taskVersion(node('helper').task) }]);
     expect(consumer.integratedCheck!.conditions ?? []).toEqual([]);
     expect(freshlyAccepted(consumer, taskVersion(consumer.task))).toBe(true);
-    expect(checkedSources.some(source => source.includes(`${mode === 'explicit' ? 'lemma consumer' : 'theorem add_zero'} (helper : True)`))).toBe(true);
+    expect(checkedSources.some(source => conditionalPayloads(source).some(payload =>
+      payload.declaration.startsWith(mode === 'explicit' ? 'lemma consumer ' : 'theorem add_zero ') &&
+      payload.dependencies.some(dependency => dependency.theoremName === 'Tutorial.helper' && dependency.type === 'True')))).toBe(true);
     expect(checkedSources.at(-1)).toContain('lemma helper : True := by trivial');
     expect(checkedSources.at(-1)).not.toContain('(helper : True)');
     expect(state.cooperation!.error).toBeUndefined();
@@ -295,7 +303,7 @@ describe('host consumer connection lifecycle', () => {
     expect(parent.assignment.connectionCheck).toBeUndefined();
     expect(node('goal_0').proof!.conditions).toBeUndefined();
     expect(node('goal_0').integratedCheck!.conditions).toBeUndefined();
-    expect(checkedSources.some(source => source.includes('theorem add_zero (helper : True)'))).toBe(false);
+    expect(checkedSources.every(source => conditionalPayloads(source).length === 0)).toBe(true);
   });
 
   it.each(['goal', 'lemma'] as const)('discharges a conditional %s after a later input declaration and preserves added helper order', async kind => {

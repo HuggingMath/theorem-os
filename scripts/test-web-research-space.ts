@@ -127,7 +127,7 @@ try {
       await request(page, 'POST', '/api/research/theorems', () => page.getByRole('button', { name: '创建定理', exact: true }).click(), false);
       await page.waitForURL(/theorems\.html\?id=/u); created.projectId = new URL(page.url()).searchParams.get('id')!;
       const projectPath = `/api/research/theorems/${created.projectId}`;
-      await page.getByText('添加陈述版本', { exact: true }).click(); await page.getByLabel('自然语言 / TeX 原题', { exact: true }).fill('Prove that True holds.');
+      await page.locator('[data-project-statement-editor]').waitFor(); await page.getByLabel('自然语言 / TeX 原题', { exact: true }).fill('Prove that True holds.');
       await page.getByLabel('完整 Lean 源码', { exact: true }).fill(source); await page.getByRole('combobox', { name: /证明环境/u }).selectOption('standard');
       await page.getByLabel('目标声明，每行：限定名 | 文件').fill('research_fixture | Main.lean');
       await page.getByLabel('我已核对自然语言题意与 Lean 陈述一致').check();

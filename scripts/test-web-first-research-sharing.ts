@@ -104,7 +104,10 @@ try {
       assert.match(await page.locator('[data-chat-budget]').innerText(), language === 'zh' ? /不限/u : /Unlimited/u);
       assert.doesNotMatch(await page.locator('[data-chat-budget]').innerText(), /(?:0 Token|0 min|0 分钟)/u);
       assert.equal(await page.locator('#formalize-settings[open]').count(), 0);
+      assert.equal(await page.locator('[data-first-research-more][open]').count(), 0);
+      await page.locator('[data-first-research-more] > summary').click();
       assert.match(await page.locator('[data-first-research-quota]').innerText(), /3[\s\S]*4/u);
+      await page.locator('[data-first-research-more] > summary').click();
       await noOverflow(page);
       await page.locator('[data-first-connection]').click();
       await page.waitForFunction(() => document.activeElement?.id === 'formalize-provider');
@@ -231,8 +234,11 @@ try {
       const node = page.locator('[data-solution-node]').first(); await node.waitFor();
       await node.focus(); await page.keyboard.press('ArrowRight');
       assert.equal(await page.locator('[data-solution-node][aria-pressed=true]').getAttribute('data-solution-node') === await node.getAttribute('data-solution-node'), false);
-      await page.locator('[data-solution-all]').click();
+      const expandAll = page.locator('[data-solution-all]');
+      if (await expandAll.getAttribute('aria-pressed') === 'true') await expandAll.click();
+      await expandAll.click();
       await page.locator('[data-solution-node="derivation:reading_target:0"]').click();
+      await page.locator('[data-solution-details="evidence:derivation:reading_target:0"] > summary').click();
       assert.match(await page.locator('[data-solution-inspector]').innerText(), /rw \[duplicate_eq\]/u);
       await page.locator('[data-solution-zoom=in]').click();
       assert.match(await page.locator('[data-solution-zoom=reset]').innerText(), /110%/u);

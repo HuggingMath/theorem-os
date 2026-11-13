@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { openAdvancedChatSettings } from './web-ui-controls';
+import { openAdvancedChatSettings, openChatParticipation } from './web-ui-controls';
 // A disposable HTTP service, saved statement evidence and a controlled runner; no model, Docker or Lean.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -207,12 +207,14 @@ async function open(width: number, locale: 'zh' | 'en') {
     if (request.method() === 'POST') writes.push({ path: url.pathname, body: request.postDataJSON() });
     return route.continue();
   });
-  await page.goto(origin); await page.locator('[data-chat-participation]').waitFor();
+  await page.goto(origin); await openChatParticipation(page);
   return { context, page, writes };
 }
 async function startStatement(page: Page, automatic = false) {
   const count = formalizations.length;
   if (automatic) await page.locator('input[name="chat-participation"][value="automatic"]').check();
+  const participation = page.locator('[data-chat-participation-control]');
+  if (await participation.evaluate(node => (node as HTMLDetailsElement).open)) await participation.locator(':scope > summary').click();
   await page.locator('#formalize-original').fill(webFormalizationStatement);
   await page.locator('[data-chat-configure]').click();
   await page.locator('#formalize-key').fill('sk-human-decisions-disposable-fixture');
@@ -230,6 +232,11 @@ try {
   browser = await startBrowser(service.server, port);
   for (const locale of ['zh', 'en'] as const) for (const width of [1440, 390, 320]) {
     const label = `${locale} ${width}px`, { context, page, writes } = await open(width, locale);
+    let releaseWorkspace: (() => void) | undefined;
+    if (locale === 'zh') {
+      const workspace = new Promise<void>(resolve => { releaseWorkspace = resolve; });
+      await page.route('**/chunks/runViews-*.js', async route => { await workspace; await route.continue(); });
+    }
     const runCount = started.length;
     currentCheck = `${label}: visible participation and statement confirmation`;
     assert.equal(await page.locator('input[name="chat-participation"][value="guided"]').isChecked(), true);
@@ -264,6 +271,33 @@ try {
     await closeArtifacts(page);
     const decision = page.locator('[data-chat-plan-decision]'); await decision.waitFor();
     assert.ok((await decision.innerText()).includes(initial.tasks[0]!.objective), 'The decision shows actual plan tasks');
+    if (releaseWorkspace) {
+      currentCheck = `${label}: first task action waits for the workspace module`;
+      if (width === 390) {
+        await decision.locator('[data-decision-summary-details] > summary').click();
+        await decision.locator('.decision-summary-tasks button').first().click();
+        await page.locator('#detail-tab-trajectory[aria-selected="true"]').waitFor();
+        releaseWorkspace();
+        await page.locator('[data-roadmap-node="task:approach"][aria-pressed="true"]').waitFor();
+        mark(`${label}: the first task link selects its roadmap node after the delayed workspace module loads`);
+      } else {
+        await page.locator('[data-chat-edit-plan]').click();
+        await page.locator('#detail-tab-collaboration[aria-selected="true"]').waitFor();
+        assert.equal(await page.locator('.collab-plan-dialog[open]').count(), 0);
+        if (width === 320) await closeArtifacts(page);
+        releaseWorkspace();
+        if (width === 320) {
+          await page.locator('#detail-panel .collab-surface').waitFor({ state: 'attached' });
+          assert.equal(await page.locator('.collab-plan-dialog[open]').count(), 0);
+          mark(`${label}: returning to the conversation cancels a pending first plan edit`);
+        } else {
+          await page.locator('.collab-plan-dialog[open]').waitFor();
+          await page.locator('[data-plan-close]').click();
+          mark(`${label}: the first plan edit opens after its delayed workspace module loads`);
+        }
+      }
+      await closeArtifacts(page);
+    }
     if (locale === 'zh' && width === 1440) {
       currentCheck = `${label}: an observation without a cooperative plan does not advertise guidance`;
       const planned = structuredClone(control.observation);
@@ -340,6 +374,7 @@ try {
     revise(control, 'plan-v3');
     control.observation.inspection.planApproval!.rejections.push({ id: first.id, planVersion: first.planVersion,
       reason: 'math_plan_approval_version_conflict', at: Date.now() }); control.emit();
+    await page.locator('[data-chat-review-current-plan]').click();
     await page.locator('[data-chat-approve-plan]:enabled').waitFor();
     assert.match(await decision.innerText(), locale === 'zh' ? /批准.*没有生效|计划.*改|版本/u : /changed|did not|not.*appl|version/iu);
     await page.locator('[data-chat-approve-plan]').click();
@@ -350,10 +385,13 @@ try {
       approvedVersion: approved.planVersion, approvedAt: Date.now() });
     Object.assign(control.observation.inspection.workers.find(worker => worker.id === 'engineer')!, { phase: 'running', turns: 1 });
     control.observation.inspection.scheduling.working = 1; control.emit();
-    await page.locator('[data-chat-plan-decision][data-waiting="false"]').waitFor();
+    await decision.waitFor({ state: 'detached' });
     assert.equal(await page.locator('[data-chat-approve-plan]').count(), 0);
-    assert.equal(await page.locator('[data-chat-edit-plan]').isEnabled(), true,
+    if (!await page.locator('#chat-live-panel').isVisible()) await page.locator('[data-research-artifact="live"]').click();
+    await page.locator('[data-live-tab="plan"]').click();
+    assert.equal(await page.locator('[data-live-edit-plan]').isEnabled(), true,
       'The person can continue changing the plan after its initial approval');
+    await closeArtifacts(page);
     mark(`${label}: chat opens the real plan editor; preview/apply preserve the gate; queued and rejected approvals recover using the current plan version`);
 
     currentCheck = `${label}: discussion and guidance are separate`;

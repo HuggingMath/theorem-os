@@ -43,6 +43,8 @@ export function useResearchDrafts<T>(owner: string, projectId: string, kind: Res
   const complete = async (item: ResearchDraft<T>, submission: Omit<ResearchDraftSubmission, 'href'>) => {
     const epoch = generation.current;
     setRemoteError('');
+    // The submission is already saved. A reload must not restore it while account archiving is still pending.
+    remove(item, true);
     try {
       if (account || item.accountRevision) {
         const value = await api<{ items: ResearchAccountDraft[] }>(`${base}/personal/drafts?${new URLSearchParams({ ...(projectId ? { projectId } : {}), kind, status: 'all' })}`);
@@ -52,7 +54,6 @@ export function useResearchDrafts<T>(owner: string, projectId: string, kind: Res
         if (draft && version) await api(`${base}/personal/drafts/${enc(draft.id)}`, { method: 'PATCH',
           body: JSON.stringify({ requestId: `complete_${version.id}_${submission.id}`, versionId: version.id, action: 'submitted', submission }) });
       }
-      remove(item, true);
       if (epoch === generation.current) { setCompletion(undefined); setNotice(tx('提交已保存，相关草稿已归档。', 'The submission is saved and its drafts are archived.')); await reloadAccount(); }
     } catch (cause) {
       if (epoch === generation.current) { setCompletion({ item, submission }); setRemoteError(tx('提交已经保存，草稿归档尚未完成。请重试归档。', 'The submission is saved. Draft archiving is incomplete; retry archiving.') + ` ${errorText(cause)}`); }

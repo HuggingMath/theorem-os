@@ -116,6 +116,10 @@ describe('host tactic battery before model dispatch', () => {
     expect(events()).toEqual([expect.objectContaining({ status: 'closed', passed: true, vacuous: true })]);
     expect(state.cooperation!.deliveries!.find(item => item.taskId === 'helper')!.summary)
       .toContain('Host vacuity probe: its hypotheses alone derive False');
+    state.cooperation!.deliveries = JSON.parse(JSON.stringify(state.cooperation!.deliveries));
+    await (cooperative as any).publishProofDelivery(node());
+    expect(state.cooperation!.deliveries!.find(item => item.taskId === 'helper')!.summary)
+      .toContain('Host vacuity probe: its hypotheses alone derive False');
   });
 
   it.each(['crashed', 'admitted'] as const)('does not report vacuity from a %s probe', async outcome => {

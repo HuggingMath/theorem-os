@@ -99,7 +99,7 @@ try {
     assert.equal(await page.locator('#formalize-original').inputValue(), original, 'Brand navigation must not overwrite the saved draft');
 
     await page.locator('[data-chat-sample]').click();
-    await page.waitForURL(url => url.search === '?sample');
+    await page.waitForURL(url => url.searchParams.has('sample'));
     await page.locator('#workbench-home').click();
     await page.locator('#formalize-original').waitFor();
     assert.equal(await page.locator('#formalize-original').inputValue(), original, 'Returning from the read-only sample restores the home draft');

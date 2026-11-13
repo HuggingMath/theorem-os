@@ -72,18 +72,19 @@ try {
   await page.goto(origin);
   await ready(page);
 
-  assert.match(await estimate(page), /最多 5 分钟，全部 Agent 合计 5 轮。/u);
+  assert.match(await estimate(page), /解题时间：不限；研究轮次：不限。/u);
+  await fillConfig(page, 'max-seconds', '300'); await fillConfig(page, 'max-turns', '5');
   assert.equal(await withSettings(page, () => page.locator('#budget-estimate').getAttribute('title')), '');
   // New drafts start without a source; the token cap is then the first thing submission stops at.
   await fillConfig(page, 'source', 'theorem long_run_fixture : True := by\n  sorry\n');
-  await fillConfig(page, 'max-tokens', '0');
+  await fillConfig(page, 'max-tokens', '-1');
   await page.locator('#task').fill('capped');
   await fillConfig(page, 'api-key', credential);
   await page.locator('#submit-run').click();
   await page.locator('#max-tokens-validation:not([hidden])').waitFor();
   assert.match(await page.locator('#max-tokens-validation').innerText(), /留空表示不限/u);
   await page.locator('#max-tokens').fill('50');
-  assert.match(await page.locator('#budget-estimate').innerText(), /最多 5 分钟，全部 Agent 合计 5 轮。.*按已报告用量在 50 万 Token 停止/u);
+  assert.match(await page.locator('#budget-estimate').innerText(), /解题时间：5 分钟；研究轮次：5。.*按已报告用量在 50 万 Token 停止/u);
   await page.screenshot({ path: path.join(output, 'long-run-budget-1440.png') });
   await page.locator('#settings-submit').click();
   await page.locator('body[data-view="run"]').waitFor({ state: 'attached' });

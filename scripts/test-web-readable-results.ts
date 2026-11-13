@@ -274,7 +274,7 @@ try {
 
   await scenario('a run that ended unaccepted offers its checked code and why its latest check failed as next steps, without a model call', async h => {
     const { page } = h; await open(h, 'Stop after a failed check');
-    const actions = page.locator('#detail-panel .result-verdict-actions [data-recovery]');
+    const actions = page.locator('#detail-panel [data-recovery-choices] [data-recovery]');
     assert.deepEqual(await actions.evaluateAll(items => items.map(item => [(item as HTMLElement).dataset.recovery, item.textContent])),
       [['continue-checked', '从已检查的代码继续'], ['ask-failed', '问为什么没通过'], ['budget', '提高解题预算']]);
     await page.locator('#detail-panel .result-verdict').screenshot({ path: path.join(output, 'next-steps.png') }); screenshots.push('next-steps.png');

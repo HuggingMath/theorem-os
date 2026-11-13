@@ -16,6 +16,7 @@ import { collapseTaskFamilies, familyAssemblyProof, familyParent, familyRanges, 
 import { parseCooperationPlan, taskVersion, type CooperativeTask, type TaskRecord } from '../src/solver/tasks';
 import { temporaryDirectory } from './helpers/files';
 import { newestLeanBinary } from './helpers/lean';
+import { conditionalPayloads } from './helpers/conditionalProjection';
 
 const problem = {
   ownedFiles: ['Submission.lean'],
@@ -241,8 +242,10 @@ describe.skipIf(!lean)('host family assembly in Lean', () => {
       const assembly = await assembleFamilyTask({ problem, task: table, worktree: workspace, seedCommit: seed, context: 'Submission.goal' });
       expect(assembly).toMatchObject({ status: 'committed', reason: 'family-assembled' });
       const conditional = createTaskSourceProjector(problem, workspace, assembly.commit!)(table, [], members).get('Submission.lean')!;
-      expect(conditional).toContain(`theorem table (table_c0 : ${members[0]!.type}) (table_c1 : ${members[1]!.type}) (table_c2 : ${members[2]!.type}) : ${table.type}`);
-      expect(conditional).not.toMatch(/theorem (?:table_c\d|goal)\b|Submission\.table_c|\bsorry\b/u);
+      expect(conditionalPayloads(conditional)).toEqual([{ declaration:
+        `theorem table : ${table.type}\n  := ${familyAssemblyProof('Submission.table', table.family!).replaceAll('Submission.table_c', '_root_.Submission.table_c')}\n\n`,
+      dependencies: members.map(task => ({ theoremName: task.theoremName, type: task.type })) }]);
+      expect(conditional).not.toMatch(/theorem (?:table_c\d|goal)\b|\bsorry\b/u);
       const binders = members.map(task => `(${task.theoremName!.slice('Submission.'.length)} : ${task.type})`).join(' ');
       const checked = compile(directory, conditional, `example : ∀ ${binders}, ${table.type} := @Submission.table\n#print axioms Submission.table\n`);
       expect(checked, checked.output).toMatchObject({ status: 0 });

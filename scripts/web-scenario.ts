@@ -27,7 +27,7 @@ export async function startBrowser(server: http.Server, port: number) {
   server.requestTimeout = 0; server.headersTimeout = 0; server.setTimeout(0);
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
   // Chromium takes its UI language from LANG; the scenario suites assert the Chinese interface.
-  return chromium.launch({ headless: true, timeout: 0, env: { ...process.env, LANG: 'zh_CN.UTF-8' } });
+  return chromium.launch({ headless: true, timeout: 30_000, env: { ...process.env, LANG: 'zh_CN.UTF-8' } });
 }
 
 export async function settled(page: Page) {
@@ -56,7 +56,7 @@ export type ScenarioOptions<H extends ScenarioHarness> = {
   routes: { local: string; blockWrites?: true } | 'api' | 'observe';
   /** `true` loads the workbench and waits for an enabled submit button. */
   open?: true | ((h: H) => Promise<void>);
-  /** Kept as legacy suite metadata; scenarios and browser actions have no execution deadline. */
+  /** Deadline for each browser action and navigation; defaults to 30 seconds when no positive limit is supplied. */
   timeout?: { label: string; seconds: number };
   /** Assert scenario invariants and return its check record; the default records name, elapsed time and requests. */
   verify?: (h: H, elapsedMs: () => number) => Promise<object> | object;
@@ -71,11 +71,11 @@ export async function webScenario<H extends ScenarioHarness>(browser: Browser, s
   suite.failedScenario = name;
   const started = performance.now();
   const context = await browser.newContext({ locale: 'zh-CN', ...options.context });
-  context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
+  const timeout = options.timeout && options.timeout.seconds > 0 ? options.timeout.seconds * 1000 : 30_000;
+  context.setDefaultTimeout(timeout); context.setDefaultNavigationTimeout(timeout);
   if (!options.collaborationDetail) await preferFullCollaboration(context);
   await options.init?.(context);
   const page = await context.newPage();
-  page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
   const h = options.harness(page, context); suite.harness = h;
   const errors: string[] = [], external: string[] = [], routes = options.routes;
   page.on('pageerror', error => errors.push(error.message));

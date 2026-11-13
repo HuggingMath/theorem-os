@@ -27,6 +27,8 @@ describe('task draft codecs without credentials or run-result state', () => {
     expect(restored.environment).toBe('standard');
     expect(editableTaskDraft(restored)).toEqual({ ...original, environment: 'mathlib' });
     expect(editableTaskDraft(restored, true)).toBe(restored);
+    expect(editableTaskDraft(restored, false, 'standard')).toBe(restored);
+    expect(editableTaskDraft(draft(), false, 'standard')).toEqual({ ...draft(), environment: 'standard' });
     for (const binding of [
       { formalization: { id: 'a'.repeat(36), evidenceSha256: 'b'.repeat(64) } },
       { continueFrom: { runId: 'a'.repeat(36), taskId: 'goal', commit: 'b'.repeat(40), label: 'Saved version', environmentDigest: 'c'.repeat(64) } },

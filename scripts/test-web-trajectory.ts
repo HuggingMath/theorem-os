@@ -454,10 +454,10 @@ try {
   // The original lists what came of it: the later run, the version it started from, and its own status.
   const later = page.locator('#detail-panel [data-result-later]');
   await later.waitFor();
-  assert.equal(await later.locator('h3').innerText(), '后来的运行\n1');
+  assert.equal(await later.locator('h3').innerText(), '历次研究\n1');
   const row = later.locator('[data-action="open-continued"]');
   assert.equal(await row.getAttribute('data-run-id'), continuedId);
-  assert.match(await row.innerText(), /^基于「zero_add · 第 2 次」\s+\S/u);
+  assert.match(await row.innerText(), /^zero_add · 第 2 次\s+运行结束\s+\S/u);
   assert.deepEqual(await audit(page, { scope: '#detail-panel [data-result-later]' }), [], 'Later runs accessibility');
   await later.scrollIntoViewIfNeeded();
   await shot(page, 'trajectory-later-1440.png');
@@ -468,8 +468,9 @@ try {
   const comparison = page.locator('#result-compare[open]');
   await comparison.waitFor();
   assert.equal(await compare.getAttribute('aria-pressed'), 'true');
-  assert.equal(await comparison.locator('h4').innerText(), '对比代码');
-  assert.match(await comparison.locator('.side-viewer-title>p').innerText(), /基于「zero_add · 第 2 次」的运行/u);
+  assert.equal(await comparison.locator('h4').innerText(), '比较研究');
+  assert.match(await comparison.locator('.side-viewer-title>p').innerText(), /与「zero_add · 第 2 次」的研究记录对照/u);
+  await comparison.locator('details > summary').filter({ hasText: '对比代码' }).click();
   assert.match((await comparison.locator('tr.diff-added').allInnerTexts()).join('\n'), /by simp/u, 'the later run\'s change is shown as added');
   assert.match((await comparison.locator('tr.diff-removed').allInnerTexts()).join('\n'), /exact Nat\.zero_add n/u);
   const folded = comparison.locator('[data-action="compare-folded"]');
@@ -485,10 +486,11 @@ try {
   mark('对比代码 on a later run sets the two runs\' code side by side, folds unchanged lines on request, and Esc returns to its button');
   await row.click();
   await page.locator(`.detail-heading[data-run="${continuedId}"]`).waitFor({ state: 'attached' }); await showArtifacts(page);
-  assert.equal(await page.locator('#detail-panel [data-result-later]').count(), 0, 'the later run has none of its own');
+  assert.deepEqual(await page.locator('#detail-panel [data-result-later] [data-action="open-continued"]').evaluateAll(items =>
+    items.map(item => (item as HTMLElement).dataset.runId)), [run.id], 'the continued research lists its original attempt without listing itself');
   await note.getByRole('button', { name: '看原运行' }).click();
   await page.locator(`.detail-heading[data-run="${run.id}"]`).waitFor({ state: 'attached' }); await showArtifacts(page);
-  mark('从这一版继续 starts a new run on the same problem with that version\'s code for the worker, the new run links back to it, and the original lists it under 后来的运行');
+  mark('从这一版继续 starts a new run on the same problem with that version\'s code for the worker, and both attempts list each other under 历次研究');
 
   await openTab(page, 'trajectory');
   const asking = step(page, '[data-kind="attempt"][data-tone="failed"]');

@@ -30,12 +30,12 @@ import { decodeTaskDraft, editableTaskDraft, encodeTaskDraft, readTaskDraftFile,
 import { compareSources, type SourceComparison } from './sourceDiff';
 import { submissionFields, submissionIssues, tokenCap, type SubmissionField, type SubmissionIssue } from './submission';
 import { SourceReader } from './sourceReader';
-import { ActivityReader, readableMessage } from './activityReader';
-import { ModuleView, type ModuleViewInput } from './moduleView';
+import { readableMessage, type ActivityReader } from './activityReader';
+import type { ModuleView, ModuleViewInput } from './moduleView';
 import { ModulePlanEditor } from './modulePlanEditor';
-import { CollaborationView } from './collaborationView';
+import type { CollaborationView } from './collaborationView';
 import type { CollaborationSection } from './collaborationNavigation';
-import { TrajectoryView, type ExplainKey } from './trajectoryView';
+import type { TrajectoryView, ExplainKey } from './trajectoryView';
 import { RunUpdates } from './runUpdates';
 import { retainLatestRun } from './runSnapshot';
 import type { WebCommandResult, WebObservation } from '../collaboration';
@@ -59,10 +59,10 @@ import { createCommandPalette, type PaletteCommand } from './ui/CommandPalette';
 import { renderFacts, renderGlyph, renderGlyphLabel, renderHistoryEmpty, renderHistoryGroup, renderHistoryRow } from './ui/Controls';
 import { renderConnecting, renderDraftPreview as drawDraftPreview } from './ui/DraftPreview';
 import { renderOptions } from './ui/Section';
-import { renderDetailPanel, type CompareProps, type OutlineState, type ReportPanelProps, type ResultPanelProps, type SourcePanelProps } from './ui/DetailPanel';
+import type { CompareProps, OutlineState, ReportPanelProps, ResultPanelProps, SourcePanelProps } from './ui/DetailPanel';
 import { leanFileName, leanOutline, writtenNames, type LeanHeading } from './leanOutline';
 import { renderConversation as drawConversation } from './ui/Conversation';
-import { renderAgentRoute, unmountAgentRoute } from './ui/AgentRoute';
+import type { renderAgentRoute as RenderAgentRoute, unmountAgentRoute as UnmountAgentRoute } from './ui/AgentRoute';
 import { agentRoutes, taskNames } from './agentRoute';
 import { AgentActivity } from './agentActivity';
 import { FormalizationActivityStore } from './formalizationActivityStore';
@@ -83,7 +83,7 @@ import { loadClassicPreparation, readClassicId } from './classicPreparation';
 import { renderContinuationPreview } from './productFlowView';
 import { relatedResearchRuns, type ContinuationPreview } from './productFlow';
 import type { InstalledLibraryDetail } from '../installedLibraryTypes';
-import { libraryReferenceKeys, libraryReference, readLibraryReference } from './installedLibraryReference';
+import { libraryReferenceKeys, readLibraryReference } from './installedLibraryReference';
 import { readEditedProblemId } from './chatDraft';
 import { clearResearchProblemDraft, loadResearchProblemDraft, readResearchProblemDraft, researchProblemDraftKeys } from './researchProblemDraft';
 import { renderResearchProblemDraft } from './ui/ResearchProblemDraft';
@@ -254,9 +254,10 @@ async function loadNaturalResearch() {
     onGuidance: (run, text?: string, taskId?: string) => openGuidance(run, text, undefined, taskId),
     planApproval: approvalProps,
     onApprovePlan: run => void approvePlan(run),
-    onPlan: (run, edit) => {
-      openChatArtifact('plan');
-      if (edit && !collaborationView.editPlan(run.id)) element('#detail-tab-collaboration').focus({ preventScroll: true });
+    onPlan: async (run, edit) => {
+      await openChatArtifact('plan');
+      if (currentRun()?.id !== run.id || document.body.dataset.chatArtifact !== 'plan') return;
+      if (edit && !collaborationView?.editPlan(run.id)) element('#detail-tab-collaboration').focus({ preventScroll: true });
     },
     onCancelRun: openCancellation,
     isSample,
@@ -268,6 +269,7 @@ async function loadNaturalResearch() {
   if (reference && reference.chat === workspace.id && reference.editedProblem === workspace.editingProblem) {
     try {
       const { item } = await api<{ item: InstalledLibraryDetail }>(`/api/research/library/installed/module?${new URLSearchParams({ file: reference.file, catalogDigest: reference.catalogDigest })}`);
+      const { libraryReference } = await import('./installedLibraryReferenceValue');
       if (!sameSession(session) || workspace !== chatWorkspace || workspace.id !== reference.chat || workspace.editingProblem !== reference.editedProblem) return;
       if (!workspace.includeLibraryReference(libraryReference(item, reference.declaration))) throw new Error(t('暂时无法加入引用，原有输入已保留。请重新打开此接口。'));
       linkedLibraryReference = undefined;
@@ -311,7 +313,7 @@ async function showProblemDraft() {
     if (current()) renderResearchProblemDraft(element('#research-problem-draft'), { ...common, error: message(error) });
   }
 }
-function openChatArtifact(kind: ChatArtifactKind, target?: ChatArtifactTarget, auto = false) {
+async function openChatArtifact(kind: ChatArtifactKind, target?: ChatArtifactTarget, auto = false) {
   const run = currentRun(), task = chatArtifactTask(run, target?.taskId);
   // The live workspace is there for a formalization too, before any run exists.
   if (kind !== 'original' && kind !== 'live' && !run) return;
@@ -325,26 +327,33 @@ function openChatArtifact(kind: ChatArtifactKind, target?: ChatArtifactTarget, a
   if (kind === 'live') { if (!auto) element('#close-research-output').focus({ preventScroll: true }); return; }
   state.tab = kind === 'result' ? 'result' : kind === 'roadmap' ? 'trajectory' : kind === 'plan' ? 'collaboration' : 'source'; state.sourceView = 'proof';
   setMobileView('runs'); renderDetail(true);
-  if (kind === 'plan') { collaborationView.showSection(run!.id, 'tasks'); return; }
+  if (kind === 'plan' || task && kind === 'roadmap') {
+    await loadRunViews();
+    if (currentRun()?.id !== run!.id || document.body.dataset.chatArtifact !== kind) return;
+  }
+  if (kind === 'plan') { collaborationView?.showSection(run!.id, 'tasks'); return; }
   if (task && kind === 'roadmap') {
     element('#detail-tab-trajectory').focus({ preventScroll: true });
-    void trajectoryView.showTask(run!.id, task.id);
+    void trajectoryView?.showTask(run!.id, task.id);
     return;
   }
   if (task && kind === 'source') { openTaskSource(run!, task.id); return; }
   element(`#detail-tab-${state.tab}`).focus({ preventScroll: true });
 }
-function openTaskSource(run: WebRun, taskId: string) {
+async function openTaskSource(run: WebRun, taskId: string) {
   const task = chatArtifactTask(run, taskId);
   if (!task) return;
   document.body.dataset.chatArtifact = 'source';
   state.proofViewer = ''; state.compare = undefined; state.sourceView = 'proof';
   const line = chatArtifactLine(run, taskId, candidateSource(run));
   state.tab = line === undefined ? 'collaboration' : 'source';
+  const tab = state.tab;
   setMobileView('runs'); renderDetail(true);
+  await loadRunViews();
+  if (currentRun()?.id !== run.id || state.tab !== tab || document.body.dataset.chatArtifact !== 'source') return;
   if (line !== undefined) { sourceReader.goToLine(line); return; }
   // A lemma may only have its own recorded file before integration into the candidate.
-  if (collaborationView.showTask(run.id, taskId)) {
+  if (collaborationView?.showTask(run.id, taskId)) {
     document.querySelector<HTMLButtonElement>(`[data-collab-source="${CSS.escape(taskId)}"][data-source-version="${CSS.escape(task.version)}"]`)?.click();
   }
 }
@@ -460,7 +469,7 @@ function clearOwnedDrafts() {
   chatWorkspace?.bindOwner('');
   renderProblemDraftPanel(problemDraftHost); problemDraftHost.hidden = true;
   researchSelection.reset();
-  collaborationView.clearPlanDrafts();
+  collaborationView?.clearPlanDrafts();
   submissionSequence++;
   draftReady = false; draftDirty = false; clearTimeout(draftTimer);
   latestDraft = undefined; pendingImport = undefined; taskImportSequence++;
@@ -502,24 +511,48 @@ let settingsWorkspaceReturn: { focus?: HTMLElement; preview?: boolean } | undefi
 const sourceReader = new SourceReader(() => {
   if (!currentRun() && !draftSourceExpanded) { draftSourceExpanded = true; renderDraftPreview(); }
 });
-const activityReader = new ActivityReader(at => timestamp(at, true),
-  (filename, text) => download(filename, text, 'application/json'));
-const moduleView = new ModuleView();
+let activityReader: ActivityReader | undefined;
+let moduleView: ModuleView | undefined;
+let renderDetailPanel: typeof import('./ui/DetailPanel').renderDetailPanel | undefined;
+let renderAgentRoute: typeof RenderAgentRoute | undefined, unmountAgentRoute: typeof UnmountAgentRoute | undefined;
 const modulePlanEditor = new ModulePlanEditor(element('#module-plan'), icons, () => draftChanged());
 // Each run's events and Agent actions for the route maps of the result and collaboration tabs, read once for both.
 const agentActivity = new AgentActivity(url => api(url));
 const formalizationActivity = new FormalizationActivityStore(url => api(url));
-const collaborationView = new CollaborationView(api, receiveRunObservation, () => {
-  state.tab = 'result'; renderDetail(true);
-  document.querySelector('#detail-panel .result-report')?.scrollIntoView({ block: 'start', behavior: 'instant' });
-  document.getElementById('detail-tab-result')?.focus({ preventScroll: true });
-}, agentActivity);
-// The trajectory's line "+" adds that line to the run's guidance draft, addressed to the attempt's task, in 协作.
-const trajectoryView = new TrajectoryView(api, (run, text, taskId) => openGuidance(run, text, t('代码行已加入本地指导草稿，尚未发送'), taskId),
-  { allowed: run => !isSample(run), start: (run, from) => reuseRun(run, 'retry', from), explain: { key: explainKey,
-    // A model answers in its own time; the server gives up after three minutes.
-    ask: (run, request, signal) => api<WebExplainAnswer>(`/api/runs/${encodeURIComponent(run.id)}/explain`, { method: 'POST', signal, timeoutMs: 200_000,
-      body: JSON.stringify(explainKey(run).source === 'remembered' ? { ...request, apiKey: rememberedKey(keyStorage, run.providerId, providerUrl(run.providerId)) } : request) }) } });
+let collaborationView: CollaborationView | undefined;
+let trajectoryView: TrajectoryView | undefined;
+let runViewsLoading: Promise<void> | undefined;
+let runViewsError = '';
+function loadRunViews() {
+  return runViewsLoading ??= import('./runViews').then(views => {
+    activityReader = new views.ActivityReader(at => timestamp(at, true), (filename, text) => download(filename, text, 'application/json'));
+    moduleView = new views.ModuleView(); renderDetailPanel = views.renderDetailPanel;
+    renderAgentRoute = views.renderAgentRoute; unmountAgentRoute = views.unmountAgentRoute;
+    collaborationView = new views.CollaborationView(api, receiveRunObservation, () => {
+      state.tab = 'result'; renderDetail(true);
+      document.querySelector('#detail-panel .result-report')?.scrollIntoView({ block: 'start', behavior: 'instant' });
+      document.getElementById('detail-tab-result')?.focus({ preventScroll: true });
+    }, agentActivity);
+    // The trajectory's line "+" adds that line to the run's guidance draft, addressed to the attempt's task, in 协作.
+    trajectoryView = new views.TrajectoryView(api, (run, text, taskId) => openGuidance(run, text, t('代码行已加入本地指导草稿，尚未发送'), taskId),
+      { allowed: run => !isSample(run), start: (run, from) => reuseRun(run, 'retry', from), explain: { key: explainKey,
+        // A model answers in its own time; the server gives up after three minutes.
+        ask: (run, request, signal) => api<WebExplainAnswer>(`/api/runs/${encodeURIComponent(run.id)}/explain`, { method: 'POST', signal, timeoutMs: 200_000,
+          body: JSON.stringify(explainKey(run).source === 'remembered' ? { ...request, apiKey: rememberedKey(keyStorage, run.providerId, providerUrl(run.providerId)) } : request) }) } });
+    runViewsError = '';
+    draftPreviewSignature = '';
+    renderDetail(true);
+  }).catch(error => { runViewsError = message(error); renderDetail(true); });
+}
+function renderRunViewsLoading(panel: HTMLElement) {
+  panel.replaceChildren();
+  if (runViewsError) {
+    const error = document.createElement('p'); error.className = 'inline-error'; error.setAttribute('role', 'alert'); error.textContent = runViewsError;
+    const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'button'; retry.textContent = t('重试');
+    retry.addEventListener('click', () => location.reload());
+    panel.append(error, retry);
+  } else { renderConnecting(panel); void loadRunViews(); }
+}
 const runUpdates = new RunUpdates(version => {
   if (pageActive && state.connected && !document.hidden && version !== state.runsEtag) requestRunsRefresh();
 }, schedulePoll);
@@ -543,7 +576,7 @@ const sourceCheck = new SourceCheck({
   message: error => message(error),
   render: () => { renderSourceCheckView(); renderPreparation(); },
 });
-const researchSelection = new ResearchSelection(api, () => { sourceCheck.schedule(); saveDraft(); renderAccountProblemDraft(); }, ownedDrafts);
+const researchSelection = new ResearchSelection(api, () => { draftChanged(); saveDraft(); }, ownedDrafts);
 function renderSourceCheckView() {
   renderSourceCheck(element('#source-check'), element('#source-check-status'), {
     check: sourceCheck, onJump: jumpToSourceDiagnostic, onRecheck: () => { void sourceCheck.run(); },
@@ -666,7 +699,7 @@ function setMobileView(view: 'compose' | 'runs', focus = false) {
   document.body.dataset.chatArtifact = panel;
   document.body.dataset.outputOpen = String(panel === 'live' || panel === 'original' || (view === 'runs' && Boolean(currentRun())));
   rememberConversationScroll();
-  if (changed) { activityReader.remember(); moduleView.update(); }
+  if (changed) { activityReader?.remember(); moduleView?.update(); }
   document.body.dataset.mobileView = view;
   finishHiddenMotion();
   document.querySelectorAll<HTMLButtonElement>('button[data-mobile-view]').forEach(button => {
@@ -901,7 +934,7 @@ function renderComposerSummary() {
   const context: ContinuationPreview | undefined = continuationPreview ? { ...continuationPreview, from: draftContinuation }
     : origin ? { title: origin.title, runId: origin.id, from: draftContinuation, originalSeconds: origin.maxRunSeconds, originalTurns: origin.maxTurns, originalTokens: origin.maxTotalTokens } : undefined;
   renderContinuationPreview(element('#research-continuation-preview'), context, { seconds: Number(field('max-seconds').value), turns: Number(field('max-turns').value), tokens: Number(field('max-tokens').value) * 10_000 || undefined });
-  const budgetOrigin = budgetDraftOrigin ?? (origin ? { runId: origin.id, source: origin.source, environment: origin.environment } : undefined);
+  const budgetOrigin = budgetDraftOrigin ?? (origin && !isSample(origin) ? { runId: origin.id, source: origin.source, environment: origin.environment } : undefined);
   const matchingBudgetOrigin = budgetOrigin && budgetOrigin.source === field('source').value && budgetOrigin.environment === field('environment').value ? budgetOrigin : undefined;
   const budgetTokens = state.session ? tokenCap(field('max-tokens').value, state.session.limits.maxTotalTokens) : undefined;
   renderResearchBudgetDraft(element('#research-budget-draft'), matchingBudgetOrigin
@@ -1100,7 +1133,7 @@ async function restoreProblemDraft(value: ProblemDraftValue, beforeApply: () => 
   if (!state.session || state.submitting) throw new Error(t('编辑器尚未就绪，请重新选择恢复。'));
   const owner = ownerOfSession(state.session), revision = draftRevision, entry = researchEntry;
   const original = JSON.stringify(chatWorkspace?.problemDraft());
-  if (value.mode === 'lean') value = { ...value, draft: editableTaskDraft(value.draft, submissionIdentity.unresolved) };
+  if (value.mode === 'lean') value = { ...value, draft: editableTaskDraft(value.draft, submissionIdentity.unresolved, value.libraries?.length ? value.draft.environment : undefined) };
   const selected = value.mode === 'lean' && value.libraries?.length ? await researchSelection.prepare(value.libraries, value.draft.environment) : undefined;
   if (value.mode === 'natural') { if (!naturalPage) naturalPage = Promise.resolve().then(loadNaturalResearch); await naturalPage; }
   if (!state.session || ownerOfSession(state.session) !== owner || state.submitting || currentRun() || draftRevision !== revision || researchEntry !== entry
@@ -1112,7 +1145,7 @@ async function restoreProblemDraft(value: ProblemDraftValue, beforeApply: () => 
   if (value.mode === 'natural') {
     chooseEntry('natural'); startDraft(false, 'replace'); chatWorkspace!.restoreProblemDraft(value);
   } else {
-    replaceDraft('import', () => applyTaskDraft(value.draft));
+    replaceDraft('import', () => applyTaskDraft(value.draft, selected?.configuration.environment));
     if (selected) researchSelection.adopt(selected); else researchSelection.clear();
     chooseEntry('lean'); startDraft(false, 'replace'); draftChanged(); saveDraft(); renderDraftRecovery();
     field('source').focus({ preventScroll: true });
@@ -1172,7 +1205,7 @@ async function recoverDraft() {
   const fromSettings = element<HTMLDialogElement>('#run-settings').open;
   restoringDraft = true; renderDraftRecovery();
   try {
-    const draft = editableTaskDraft(recovery.draft, submissionIdentity.unresolved);
+    const draft = editableTaskDraft(recovery.draft, submissionIdentity.unresolved, recovery.libraries?.length ? recovery.draft.environment : undefined);
     const selected = recovery.libraries?.length ? await researchSelection.prepare(recovery.libraries, draft.environment) : undefined;
     if (!state.session || ownerOfSession(state.session) !== owner || state.submitting || draftRevision !== revision
       || selectedId !== state.selectedId || composing !== state.composing || librariesBefore !== JSON.stringify(selectedProblemLibraries())
@@ -1182,7 +1215,7 @@ async function recoverDraft() {
     draftRecovery.clear();
     document.querySelector('[data-classic-origin]')?.remove();
     const address = new URL(location.href); address.searchParams.delete('fromClassic'); history.replaceState(null, '', address);
-    applyTaskDraft(draft);
+    applyTaskDraft(draft, selected?.configuration.environment);
     if (recovery.libraries) { if (selected) researchSelection.adopt(selected); else researchSelection.clear(); }
     startDraft(); draftChanged(); saveDraft();
     if (fromSettings) openSettings('source');
@@ -1228,8 +1261,8 @@ function saveDraft() {
     setDraftStatus(t('草稿未保存'), true);
   }
 }
-function applyTaskDraft(draft: TaskDraft) {
-  draft = editableTaskDraft(draft, submissionIdentity.unresolved);
+function applyTaskDraft(draft: TaskDraft, fixedEnvironment?: WebEnvironment) {
+  draft = editableTaskDraft(draft, submissionIdentity.unresolved, fixedEnvironment);
   continuationPreview = undefined;
   draftSharedProofOrigin = draft.sharedProofOrigin ? { ...draft.sharedProofOrigin } : undefined;
   draftClassicOrigin = draft.classicOrigin ? { ...draft.classicOrigin } : undefined;
@@ -1755,20 +1788,20 @@ let resultRouteHost: HTMLElement | undefined;
 /** The result's recorded roadmap shares its reader with the dedicated tab; the Agent action lanes open on demand. */
 function renderResultRoute(run: WebRun) {
   const roadmapHost = document.querySelector<HTMLElement>('#detail-panel [data-result-roadmap]');
-  if (roadmapHost) trajectoryView.update(roadmapHost, run, nodeId => {
-    state.tab = 'trajectory'; renderDetail(true); trajectoryView.showNode(run.id, nodeId);
+  if (roadmapHost) trajectoryView?.update(roadmapHost, run, nodeId => {
+    state.tab = 'trajectory'; renderDetail(true); trajectoryView?.showNode(run.id, nodeId);
   });
-  else trajectoryView.update();
+  else trajectoryView?.update();
   const host = document.querySelector<HTMLElement>('#detail-panel [data-result-route]') ?? undefined;
   // A replaced host takes its map with it; unmounting stops that map's reading.
-  if (resultRouteHost && resultRouteHost !== host) unmountAgentRoute(resultRouteHost);
+  if (resultRouteHost && resultRouteHost !== host) unmountAgentRoute?.(resultRouteHost);
   resultRouteHost = host;
   if (!host) return;
   const details = host.closest<HTMLDetailsElement>('details')!;
   const draw = () => {
-    if (!details.open) { unmountAgentRoute(host); return; }
+    if (!details.open) { unmountAgentRoute?.(host); return; }
     const inspection = run.observation?.inspection;
-    renderAgentRoute(host, { source: { store: agentActivity, run, lead: inspection?.workers.find(worker => worker.role === 'lead')?.id },
+    renderAgentRoute?.(host, { source: { store: agentActivity, run, lead: inspection?.workers.find(worker => worker.role === 'lead')?.id },
       names: workerNames(inspection?.workers), running: run.status === 'running',
       tasks: taskNames(inspection?.tasks ?? []), planned: inspection?.tasks.length ?? 0, graph: 'elsewhere', time: clockTime });
   };
@@ -1868,6 +1901,10 @@ function loadOutline(run: WebRun, retry = false) {
 function renderPanel(force = false) {
   const run = currentRun();
   if (!run || !document.querySelector('#detail-panel')) return;
+  if (!collaborationView || !trajectoryView) {
+    renderRunViewsLoading(element('#detail-panel'));
+    return;
+  }
   if (state.tab === 'result' && state.reportMode === 'summary') loadOutline(run);
   const content = state.tab === 'source' ? sourceContent(run) : undefined;
   const signature = JSON.stringify([run.id, state.tab, content ? [state.foldUnchanged, content.source, content.props]
@@ -1876,8 +1913,8 @@ function renderPanel(force = false) {
       state.compare?.runId === run.id ? [state.compare.laterId, state.foldUnchanged, candidateSource(state.runs.find(item => item.id === state.compare!.laterId) ?? run)] : ''] : state.tab === 'events' ? run.events
       : state.tab === 'modules' ? [run, state.connected] : run]);
   if (!force && signature === state.panelSignature) {
-    if (state.tab === 'collaboration') collaborationView.update(document.querySelector<HTMLElement>('.collaboration-workspace') ?? undefined, run, state.connected, isSample(run));
-    if (state.tab === 'trajectory') trajectoryView.update(document.querySelector<HTMLElement>('.trajectory-workspace') ?? undefined, run);
+    if (state.tab === 'collaboration') collaborationView?.update(document.querySelector<HTMLElement>('.collaboration-workspace') ?? undefined, run, state.connected, isSample(run));
+    if (state.tab === 'trajectory') trajectoryView?.update(document.querySelector<HTMLElement>('.trajectory-workspace') ?? undefined, run);
     return;
   }
   state.panelSignature = signature;
@@ -1902,12 +1939,12 @@ function renderPanel(force = false) {
   const reportMode = focused?.dataset.reportView;
   const focusId = focused?.id;
   // Each tab mounts its own tree, so a workspace host is only reused within the same tab of the same run.
-  if (!samePanel || state.tab !== 'events') activityReader.update(undefined, run);
-  if (!samePanel || state.tab !== 'modules') moduleView.update(undefined, moduleInput(run));
-  if (!samePanel || state.tab !== 'collaboration') collaborationView.update();
-  if (!samePanel || state.tab !== 'trajectory' && state.tab !== 'result') trajectoryView.update();
+  if (!samePanel || state.tab !== 'events') activityReader?.update(undefined, run);
+  if (!samePanel || state.tab !== 'modules') moduleView?.update(undefined, moduleInput(run));
+  if (!samePanel || state.tab !== 'collaboration') collaborationView?.update();
+  if (!samePanel || state.tab !== 'trajectory' && state.tab !== 'result') trajectoryView?.update();
   const tab = state.tab;
-  renderDetailPanel(panel, content ? { tab: 'source', source: content.diff ? { ...content.props, diff: sourceDiff(run) } : content.props }
+  renderDetailPanel!(panel, content ? { tab: 'source', source: content.diff ? { ...content.props, diff: sourceDiff(run) } : content.props }
     : tab === 'result' ? { tab, result: resultProps(run) } : { tab: tab as Exclude<DetailTab, 'source' | 'result'> });
   if (content && !content.diff) {
     patchText(panel.querySelector('.source-line-numbers')!, content.numbers);
@@ -1925,10 +1962,10 @@ function renderPanel(force = false) {
   else if (sameView && reportMode) panel.querySelector<HTMLElement>(`[data-report-view="${reportMode}"]`)?.focus({ preventScroll: true });
   else if (sameView && focused === previousScroll) scroll?.focus({ preventScroll: true });
   else if (samePanel && focusId) document.getElementById(focusId)?.focus({ preventScroll: true });
-  if (state.tab === 'collaboration') collaborationView.update(panel.querySelector<HTMLElement>('.collaboration-workspace')!, run, state.connected, isSample(run));
-  if (state.tab === 'events') activityReader.update(panel.querySelector<HTMLElement>('.activity-workspace')!, run, workerNames(run.observation?.inspection.workers));
-  if (state.tab === 'trajectory') trajectoryView.update(panel.querySelector<HTMLElement>('.trajectory-workspace')!, run);
-  if (state.tab === 'modules') moduleView.update(panel.querySelector<HTMLElement>('.module-workspace')!, moduleInput(run));
+  if (state.tab === 'collaboration') collaborationView?.update(panel.querySelector<HTMLElement>('.collaboration-workspace')!, run, state.connected, isSample(run));
+  if (state.tab === 'events') activityReader?.update(panel.querySelector<HTMLElement>('.activity-workspace')!, run, workerNames(run.observation?.inspection.workers));
+  if (state.tab === 'trajectory') trajectoryView?.update(panel.querySelector<HTMLElement>('.trajectory-workspace')!, run);
+  if (state.tab === 'modules') moduleView?.update(panel.querySelector<HTMLElement>('.module-workspace')!, moduleInput(run));
   if (state.tab === 'result') renderResultRoute(run);
   updateDiffNavigation(0, !sameView);
   // Only on arriving at the result tab: switching the report keeps the reader where they were.
@@ -1969,7 +2006,7 @@ function renderDraftPreview(force = false) {
   const lines = source.replace(/\r\n?/g, '\n').split('\n');
   const shown = draftSourceExpanded && byteSize(source) <= state.session.limits.maxSourceBytes ? lines : lines.slice(0, 160);
   if (!detail.querySelector('#draft-preview')) {
-    moduleView.update();
+    moduleView?.update();
     finishMotion(detail);
     unmountRunHeader(detail);
     detail.textContent = '';
@@ -1980,8 +2017,9 @@ function renderDraftPreview(force = false) {
   patchText(detail.querySelector('.preview-line-numbers')!, shown.map((_, index) => index + 1).join('\n'));
   patchText(detail.querySelector('#draft-preview-code code')!, shown.join('\n'));
   const showingModules = state.draftView === 'modules';
-  if (!showingModules) moduleView.update(undefined, moduleInput());
-  if (showingModules) moduleView.update(detail.querySelector<HTMLElement>('.module-workspace')!, moduleInput());
+  if (showingModules && !moduleView) renderRunViewsLoading(detail.querySelector<HTMLElement>('.module-workspace')!);
+  if (!showingModules) moduleView?.update(undefined, moduleInput());
+  if (showingModules) moduleView?.update(detail.querySelector<HTMLElement>('.module-workspace')!, moduleInput());
   updateSourceReader();
 }
 /**
@@ -2017,9 +2055,9 @@ function renderDetail(force = false) {
   conversation.hidden = !run && researchEntry !== 'natural';
   if (sourceComparison && sourceComparison.runId !== run?.id) sourceComparison = undefined;
   if (!run) {
-    collaborationView.update();
-    trajectoryView.update();
-    activityReader.update();
+    collaborationView?.update();
+    trajectoryView?.update();
+    activityReader?.update();
     state.panelSignature = '';
     if (state.session && !opening()) renderDraftPreview();
     else if (!element('#run-detail').querySelector(':scope > .detail-connecting')) {
@@ -2036,8 +2074,8 @@ function renderDetail(force = false) {
   const focusAction = focused?.dataset.action;
   const newDetail = detail.dataset.renderRunId !== run.id || !detail.querySelector('#detail-panel');
   if (newDetail) {
-    collaborationView.update();
-    moduleView.update();
+    collaborationView?.update();
+    moduleView?.update();
     finishMotion(detail);
     unmountRunHeader(detail);
     detail.textContent = '';
@@ -2206,11 +2244,11 @@ function closeProofViewer() {
 }
 function openGuidance(run: WebRun, text?: string, notice?: string, taskId?: string) {
   state.tab = 'collaboration'; setMobileView('runs'); renderDetail(true);
-  if (!collaborationView.guide(run.id, text, notice, taskId)) element('#detail-tab-collaboration').focus({ preventScroll: true });
+  if (!collaborationView?.guide(run.id, text, notice, taskId)) element('#detail-tab-collaboration').focus({ preventScroll: true });
 }
 function openCollaborationSection(run: WebRun, section: CollaborationSection, taskId?: string) {
   state.tab = 'collaboration'; setMobileView('runs'); renderDetail(true);
-  const shown = section === 'reviews' ? collaborationView.showStatementReview(run.id, taskId) : collaborationView.showSection(run.id, section);
+  const shown = section === 'reviews' ? collaborationView?.showStatementReview(run.id, taskId) : collaborationView?.showSection(run.id, section);
   if (!shown) element('#detail-tab-collaboration').focus({ preventScroll: true });
 }
 /** How the next address change is recorded: a run the reader chose adds a history entry, anything automatic replaces it. */
@@ -2277,7 +2315,7 @@ function startDraft(reset = false, address: 'push' | 'replace' = 'push') {
   state.draftView = 'source';
   document.body.dataset.draftPreview = 'false';
   element('#open-draft-preview').setAttribute('aria-expanded', 'false');
-  moduleView.update(undefined, moduleInput());
+  moduleView?.update(undefined, moduleInput());
   state.panelSignature = ''; draftPreviewSignature = '';
   if (reset) { if (state.session) resetProblemDraftBinding(ownerOfSession(state.session), 'lean'); submissionIdentity.clear(); resetForm(); }
   renderRunList(); renderDetail(true); setMobileView('compose');
@@ -2330,7 +2368,7 @@ async function openLibraryProposalDraft() {
         libraryProposalOrigin: { projectId, feedbackId, trialDigest: item.trialDigest } };
       const contentIssue = submissionIssues(draft, field('api-key').value, state.session).find(issue => issue.field === 'source' || issue.field === 'task');
       if (contentIssue) throw new Error(contentIssue.message);
-      replaceDraft('reuse', () => applyTaskDraft(draft));
+      replaceDraft('reuse', () => applyTaskDraft(draft, selected.configuration.environment));
       researchSelection.adopt(selected);
       chooseEntry('lean'); startDraft(false, 'replace'); draftChanged(); saveDraft(); renderDraftRecovery();
       notice.textContent = t('候选与固定库版本已载入。核对源码、模型和预算后即可开始研究。');
@@ -2537,7 +2575,7 @@ async function openLibraryPersonalAttemptDraft() {
         libraryProposalOrigin: undefined, sharedProofOrigin: undefined, classicOrigin: undefined };
       const contentIssue = submissionIssues(draft, field('api-key').value, state.session).find(issue => issue.field === 'source' || issue.field === 'task');
       if (contentIssue) throw new Error(contentIssue.message);
-      replaceDraft('reuse', () => applyTaskDraft(draft));
+      replaceDraft('reuse', () => applyTaskDraft(draft, selected.configuration.environment));
       researchSelection.adopt(selected); formalizationLink = null;
       chooseEntry('lean'); startDraft(false, 'replace'); draftChanged(); saveDraft(); renderDraftRecovery();
       notice.textContent = t('候选与固定库已载入新尝试草稿。核对模型和预算后，再发送研究任务；原题验收会重新进行。');
@@ -3181,7 +3219,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
     return;
   }
   try {
-    let capturedDraft = editableTaskDraft(captureDraft(), submissionIdentity.unresolved);
+    let capturedDraft = editableTaskDraft(captureDraft(), submissionIdentity.unresolved, researchSelection.environment());
     if (field('environment').value !== capturedDraft.environment) {
       field('environment').value = capturedDraft.environment; renderTemplates(); updateEnvironment();
       capturedDraft = captureDraft();
@@ -3486,7 +3524,7 @@ async function recoverRun(run: WebRun, action: string, button: HTMLButtonElement
   if (step?.id === 'continue-checked') await continueChecked(run, step.tasks, button);
   else if (step?.id === 'ask-failed') {
     openChatArtifact('roadmap');
-    trajectoryView.showStep(run.id, 'failed', step.tasks);
+    trajectoryView?.showStep(run.id, 'failed', step.tasks);
     if (!document.activeElement?.closest('.trajectory-workspace')) element('#detail-tab-trajectory').focus({ preventScroll: true });
   } else if (action in recoveryFields) reuseRun(run, action as keyof typeof recoveryFields);
 }
@@ -3496,7 +3534,7 @@ async function continueChecked(run: WebRun, taskIds: readonly string[], button: 
   if (button.disabled || state.submitting) return;
   button.disabled = true;
   try {
-    const from = await trajectoryView.checkedContinuation(run, taskIds);
+    const from = await trajectoryView?.checkedContinuation(run, taskIds);
     if (state.selectedId !== run.id) return;
     if (!from) { toast(t('已检查版本的源码没有保存，无法带入成果。请在路线图中查看已有记录。')); return; }
     await reuseRun(run, 'retry', from);
@@ -3526,7 +3564,7 @@ function applyReusedRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 're
   chooseEntry('lean');
   if (recovery === 'key') forgetRememberedKey();
   replaceDraft('reuse', () => {
-    budgetDraftOrigin = { ...(run.budgetOrigin ?? { runId: run.id }), source: run.source, environment: run.environment };
+    budgetDraftOrigin = isSample(run) ? undefined : { ...(run.budgetOrigin ?? { runId: run.id }), source: run.source, environment: run.environment };
     draftLibraryProposalOrigin = run.libraryProposalOrigin ? { ...run.libraryProposalOrigin } : undefined;
     renderLibraryProposalOrigin();
     draftContinuation = from;
@@ -3682,21 +3720,21 @@ element('#run-detail').addEventListener('click', event => {
   if (target.dataset.action === 'approve-plan') { void approvePlan(run); return; }
   if (target.dataset.action === 'show-plan' || target.dataset.action === 'edit-plan' || target.dataset.action === 'guide-lead') {
     state.tab = 'collaboration'; renderDetail(true);
-    const shown = target.dataset.action === 'edit-plan' ? collaborationView.editPlan(run.id)
-      : target.dataset.action === 'guide-lead' ? collaborationView.guideLead(run.id) : false;
+    const shown = target.dataset.action === 'edit-plan' ? collaborationView?.editPlan(run.id)
+      : target.dataset.action === 'guide-lead' ? collaborationView?.guideLead(run.id) : false;
     if (!shown) element('#detail-tab-collaboration').focus({ preventScroll: true });
     return;
   }
   if (target.dataset.action === 'show-checked-code' && target.dataset.taskId) {
     state.tab = 'trajectory'; renderDetail(true);
-    trajectoryView.showStep(run.id, 'checked', [target.dataset.taskId]);
+    trajectoryView?.showStep(run.id, 'checked', [target.dataset.taskId]);
     // The step takes focus once the trajectory is read; until then the tab holds it.
     if (!document.activeElement?.closest('.trajectory-workspace')) element('#detail-tab-trajectory').focus({ preventScroll: true });
     return;
   }
   if (target.dataset.action === 'inspect-task' && target.dataset.taskId) {
     state.tab = 'collaboration'; renderDetail(true);
-    if (!collaborationView.showTask(run.id, target.dataset.taskId)) element('#detail-tab-collaboration').focus({ preventScroll: true });
+    if (!collaborationView?.showTask(run.id, target.dataset.taskId)) element('#detail-tab-collaboration').focus({ preventScroll: true });
     return;
   }
   if (target.dataset.action === 'show-task-source' && target.dataset.taskId) {
@@ -4026,7 +4064,7 @@ element('#run-settings').addEventListener('close', () => {
     if (workspace?.preview && !currentRun()) renderDraftPreview(true);
     if (workspace?.focus?.getClientRects().length) workspace.focus.focus({ preventScroll: true });
   }
-  if (policy && !currentRun() && !state.submitting && state.draftView === 'modules') moduleView.focusPolicy(policy);
+  if (policy && !currentRun() && !state.submitting && state.draftView === 'modules') moduleView?.focusPolicy(policy);
 });
 element('#run-settings').addEventListener('keydown', event => {
   if (event.key === 'Enter' && event.target instanceof HTMLInputElement) event.preventDefault();

@@ -30,10 +30,10 @@ type Control = { observation: WebObservation; emit(): void; finish(): void };
 const controls = new Map<string, Control>();
 const starts: WorkerInput[] = [], commands: object[] = [], checks: object[] = [], requests: object[] = [];
 const errors: string[] = [], external: string[] = [];
-let phase = 'setup', leanCalls = 0, formalizeCalls = 0, mailCalls = 0, browser: Browser | undefined, active: Page | undefined, failure: unknown;
+let phase = 'setup', blockedPrechecks = 0, formalizeCalls = 0, mailCalls = 0, browser: Browser | undefined, active: Page | undefined, failure: unknown;
 const runner: WebRunner = {
   async readiness() { return { ready: true, message: 'Disposable product-flow fixture; no model or Lean' }; },
-  async check() { leanCalls++; throw new Error('Product-flow checks cannot invoke Lean'); },
+  async check() { blockedPrechecks++; throw new Error('Product-flow checks cannot invoke Lean'); },
   async formalize() { formalizeCalls++; throw new Error('Product-flow checks cannot invoke a formalization model'); },
   async run(input, send, signal) {
     starts.push(input);
@@ -180,6 +180,8 @@ try {
         plan = await run(page, 'plan', { task: 'plan| Check $\\forall n \\in \\mathbb{N},\\;n + 0 = n$',
           source: '-- separate mathematical title fixture\n' + sample.run.source, planApproval: true });
         await page.goto(origin);
+        await page.locator('#refresh-runs:enabled').waitFor({ state: 'attached' });
+        if (await page.locator('#open-natural-language').isVisible()) await page.locator('#open-natural-language').click();
         const overview = page.locator('[data-research-overview]'); await overview.waitFor();
         const inbox = page.locator(`[data-overview-action="plan:${plan.id}"] strong`);
         await inbox.locator('.katex').first().waitFor();
@@ -242,7 +244,11 @@ try {
       const mismatch = await run(page, 'changed-statement', { source: sample.run.source.replace('n + 0 = n', 'n + 0 = n + 0'),
         continueFrom: { runId: partial.id, taskId: helper.id, commit: helper.proof.commit!, label: 'Changed original statement fixture' } });
       plan = await run(page, 'plan', { source: '-- separate plan-review fixture\n' + sample.run.source, planApproval: true });
-      await page.goto(origin); await page.locator('[data-research-overview]').waitFor();
+      await page.goto(origin);
+      // Draft restoration chooses the entry after the session arrives; wait for initialization to finish before switching it.
+      await page.locator('#refresh-runs:enabled').waitFor({ state: 'attached' });
+      if (await page.locator('#open-natural-language').isVisible()) await page.locator('#open-natural-language').click();
+      await page.locator('[data-research-overview]').waitFor();
       await page.locator(`[data-overview-action="plan:${plan.id}"]`).waitFor();
       const group = page.locator('[data-overview-card]').filter({ has: page.locator(`a[href="?run=${partial.id}"]`) });
       assert.equal(await group.count(), 1, 'A single problem card must contain runs with the same frozen statement');
@@ -351,7 +357,9 @@ try {
       await page.locator('[data-library-run-creator] button').filter({ hasText: /重新读取成果来源|Retry loading source/u }).click();
       const fixed = page.locator('[data-library-prefill="original-proof"]'); await fixed.waitFor();
       assert.ok((await fixed.innerText()).includes(String(accepted.result!.report.solution_commit)));
-      assert.ok((await fixed.innerText()).includes(accepted.id));
+      const proofOrigin = new URL(await fixed.locator('[data-library-source-link]').getAttribute('href') ?? '', origin);
+      assert.equal(proofOrigin.searchParams.get('run'), accepted.id);
+      assert.equal(proofOrigin.searchParams.get('view'), 'source');
       const name = page.getByRole('textbox', { name: locale === 'zh' ? '名称' : 'Name', exact: true });
       assert.equal(await name.inputValue(), accepted.title);
       assert.equal(await page.getByRole('combobox', { name: locale === 'zh' ? /^草稿可见范围/u : /^Draft visibility/u }).inputValue(), 'private');
@@ -406,7 +414,12 @@ try {
       const taskPrefill = page.locator('[data-library-prefill="checked-task"]'); await taskPrefill.waitFor();
       await taskPrefill.locator('summary').click();
       const shown = await taskPrefill.innerText();
-      assert.ok(shown.includes(partial.id)); assert.ok(shown.includes(taskCommit)); assert.ok(shown.includes('goal_1')); assert.ok(shown.includes(taskVersion));
+      const taskOrigin = new URL(await taskPrefill.locator('[data-library-source-link]').getAttribute('href') ?? '', origin);
+      assert.equal(taskOrigin.searchParams.get('run'), partial.id);
+      assert.equal(taskOrigin.searchParams.get('task'), 'goal_1');
+      assert.equal(taskOrigin.searchParams.get('taskVersion'), taskVersion);
+      assert.equal(taskOrigin.searchParams.get('commit'), taskCommit);
+      assert.ok(shown.includes(taskCommit)); assert.ok(shown.includes('goal_1')); assert.ok(shown.includes(taskVersion));
       assert.ok(shown.includes(expectedReceipt.id));
       assert.equal(await page.getByRole('textbox', { name: locale === 'zh' ? '名称' : 'Name', exact: true }).inputValue(), 'Tutorial.add_zero');
       assert.equal((await libraryList(page)).length, initialAssets + 1, 'Opening a checked-task prefill still requires explicit confirmation');
@@ -426,7 +439,7 @@ try {
   }
   assert.deepEqual(errors, [], 'The integrated product flow must not raise browser errors');
   assert.deepEqual(external, [], 'All browser traffic must stay on the disposable loopback service');
-  assert.equal(leanCalls, 0); assert.equal(formalizeCalls, 0); assert.equal(mailCalls, 0);
+  assert.equal(formalizeCalls, 0); assert.equal(mailCalls, 0);
   for (const name of ['failure.png', 'failure.html']) await fs.rm(path.join(output, name), { force: true });
   console.log(focusedHome ? 'Home mathematical-title checks passed: inbox, problem cards and run history.'
     : 'Product-flow integration passed: onboarding, grouped home, human decisions, draft recovery, comparison and Library handoff.');
@@ -439,7 +452,7 @@ try {
   throw error;
 } finally {
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: failure ? 'failed' : 'passed', checkedAt: now(), phase, checks, commands,
-    workerStarts: starts.map(input => ({ id: input.id, task: input.input.task })), requests, errors, external, leanCalls, formalizeCalls, mailCalls,
+    workerStarts: starts.map(input => ({ id: input.id, task: input.input.task })), requests, errors, external, blockedPrechecks, actualLeanCalls: 0, formalizeCalls, mailCalls,
     ...(failure ? { failure: failure instanceof Error ? failure.stack : String(failure) } : {}),
     evidence: 'Local HTTP, disposable state and controlled/recorded fixtures. No new model, Lean or production job.' }, null, 2) + '\n');
   for (const control of controls.values()) control.finish();

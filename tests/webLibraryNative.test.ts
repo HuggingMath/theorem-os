@@ -47,7 +47,7 @@ describe('native Lean library request and Web continuation', () => {
     const original = 'namespace Current\ntheorem target (n : Nat) : n + 1 = 1 + n := by sorry\nend Current\n';
     const request: WorkerInput = { id: 'native-library', provider: { id: 'offline', name: 'Offline', baseUrl: 'http://unused.invalid/v1' }, input: { ...webDefaults,
       providerId: 'offline', apiKey: 'offline-unused', environment: 'standard', source: original,
-      task: 'Prove the original commutation identity.', workers: 1, maxTurns: 3, maxRunSeconds: 60 } };
+      task: 'Use NativeLib.exchange to prove the original commutation identity.', workers: 1, maxTurns: 3, maxRunSeconds: 60 } };
     const seed = prepareWebProblem(directory, request), firstReceipt = fs.readFileSync(seed.activeProblemPath);
     expect(readLeanTaskReceipt(seed.activeProblemPath).libraryPack).toBeUndefined();
     const open = vi.fn(async (options: Parameters<typeof directSolverModules.M1.open>[0]) => ({
@@ -74,7 +74,7 @@ describe('native Lean library request and Web continuation', () => {
           '--prepare-timeout-seconds', '60', '--evaluator-timeout-seconds', '30', '--proof-timeout-seconds', '30',
           ...(round.continuationFile ? ['--continuation-manifest', round.continuationFile] : [])], directory, modules);
         const raw = readMathJson(round.output) as Record<string, unknown>; statuses.push(raw.status);
-        expect(exit).toBe(round.round ? 0 : 1);
+        expect(exit, JSON.stringify(raw)).toBe(round.round ? 0 : 1);
         if (!round.round) expect(raw).toMatchObject({ status: 'library_requested', turns: 1, solveWallMs: expect.any(Number),
           evaluator: { status: 'skipped' } });
       } });

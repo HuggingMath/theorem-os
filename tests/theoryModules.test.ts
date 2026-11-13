@@ -126,19 +126,22 @@ describe('theory module guidance in research prompts', () => {
   it('collapses theory modules, offers them as proof paths and asks for definition sanity lemmas', () => {
     const owned = ['Submission.lean', ...modules, ...certificateSlotFiles(2)].toSorted();
     const lead = build(fixture(owned));
-    expect(lead).toContain('Edit only /proof/Submission.lean, the 3 theory modules /proof/Submission/Theory/T01.lean … ' +
+    expect(lead).toContain('Edit only /proof/RESEARCH.md.');
+    expect(lead).toContain('Leave all Lean source files, imports and environment configuration unchanged.');
+    const worker = build(fixture(owned), lemma);
+    expect(worker).toContain('Edit only /proof/Submission.lean, the 3 theory modules /proof/Submission/Theory/T01.lean … ' +
       '/proof/Submission/Theory/T03.lean, the 2 certificate modules /proof/Submission/Certificates/Part01.lean … ' +
-      '/proof/Submission/Certificates/Part02.lean, /proof/RESEARCH.md.');
+      '/proof/Submission/Certificates/Part02.lean, /proof/RESEARCH.md, ');
     expect(lead).toContain(`Choose proofPath from ${JSON.stringify(['Submission.lean', ...modules])}; workers generate ` +
       'Submission/Certificates modules and import them from these files; place reusable theory in the Submission/Theory modules');
-    expect(lead).toContain('Submission/Theory/T01.lean … Submission/Theory/T03.lean are owned theory-library modules');
-    expect(lead).toContain('a theorem named Foo.bar there is Submission.Theory.Foo.bar');
+    expect(worker).toContain('Submission/Theory/T01.lean … Submission/Theory/T03.lean are owned theory-library modules');
+    expect(worker).toContain('a theorem named Foo.bar there is Submission.Theory.Foo.bar');
     expect(lead).toContain('Pair each definition with a typed sanity lemma');
-    expect(build(fixture(owned), lemma)).toContain(`Its keys must be exactly ${JSON.stringify(owned)}`);
+    expect(worker).toContain(`Its keys must be exactly ${JSON.stringify(owned)}`);
 
     const plain = build(fixture(['Submission.lean']));
     expect(plain).toContain('Choose proofPath from ["Submission.lean"]; goals infer');
     expect(plain).not.toContain('theory-library');
-    expect(build(fixture(['Submission.lean', modules[0]!]))).toContain('Edit only /proof/Submission.lean, /proof/Submission/Theory/T01.lean, /proof/RESEARCH.md.');
+    expect(build(fixture(['Submission.lean', modules[0]!]), lemma)).toContain('Edit only /proof/Submission.lean, /proof/Submission/Theory/T01.lean, /proof/RESEARCH.md, ');
   });
 });

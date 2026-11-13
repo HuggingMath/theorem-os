@@ -38,10 +38,11 @@ export type TaskDraft = {
 };
 
 /** Editable originals use the shared environment; pending requests and saved evidence keep their exact identity. */
-export function editableTaskDraft(draft: TaskDraft, unresolved = false): TaskDraft {
+export function editableTaskDraft(draft: TaskDraft, unresolved = false, fixedEnvironment?: WebEnvironment): TaskDraft {
+  const environment = fixedEnvironment ?? webTaskEnvironment;
   return unresolved || draft.formalization || draft.continueFrom || draft.problemBudget || draft.sharedProofOrigin
-    || draft.classicOrigin || draft.libraryProposalOrigin || draft.environment === webTaskEnvironment
-    ? draft : { ...draft, environment: webTaskEnvironment };
+    || draft.classicOrigin || draft.libraryProposalOrigin || draft.environment === environment
+    ? draft : { ...draft, environment };
 }
 
 const archiveSchemas = ['theorem-os.web-export.v1', 'theorem-os.web-archive.v1'];

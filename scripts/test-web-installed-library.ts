@@ -34,6 +34,7 @@ const runner: WebRunner = {
 const port = await freePort(), origin = `http://127.0.0.1:${port}`;
 const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin,
   THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web'), THEOREMOS_WEB_DATA_ROOT: dataRoot,
+  THEOREMOS_WEB_CLIENT_IP_HEADER: 'x-test-visitor',
   THEOREMOS_WEB_PROVIDERS: '[{"id":"fixture","name":"Local fixture","baseUrl":"https://fixture.invalid/v1"}]' }), runner, { sample: null });
 service.server.requestTimeout = 0; service.server.headersTimeout = 0;
 await new Promise<void>((resolve, reject) => { service.server.once('error', reject); service.server.listen(port, '127.0.0.1', resolve); });
@@ -428,6 +429,8 @@ try {
     scenarioName = scenario.name;
     const en = scenario.locale === 'en', text = (zh: string, english: string) => en ? english : zh;
     const context = await browser.newContext({ viewport: { width: scenario.width, height: scenario.height }, locale: en ? 'en-US' : 'zh-CN',
+      // Each viewport is an independent visitor; keep the real per-visitor request limit enabled.
+      extraHTTPHeaders: { 'x-test-visitor': scenario.name },
       reducedMotion: 'reduce', serviceWorkers: 'block', permissions: ['clipboard-read', 'clipboard-write'] });
     context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
     await context.addInitScript(locale => localStorage.setItem('theorem-os.web-locale.v1', locale), scenario.locale);

@@ -1023,11 +1023,13 @@ export class CooperativeResearch extends CooperationInputs {
                 receiptIds: proof.verification.results.map(result => result.receiptId) } : {}) });
             if (proof?.passed) {
               if (!publishable()) return RETRY_DISPATCH;
+              const advisorySummary = battery.vacuous
+                ? 'Host vacuity probe: its hypotheses alone derive False, so no consumer can discharge them; ' +
+                  'revise the helper unless it is an intended impossible case.' : undefined;
               await this.publishTaskProof(worker, { kind: 'task', task, assignment: dispatchAssignment }, battery.commit!,
-                'Host tactic battery closed this exact helper type before starting a model.' + (battery.vacuous
-                  ? ' Host vacuity probe: its hypotheses alone derive False, so no consumer can discharge them; ' +
-                    'revise the helper unless it is an intended impossible case.' : ''), {}, false,
-                { proof, current: publishable, claim });
+                'Host tactic battery closed this exact helper type before starting a model.' +
+                  (advisorySummary ? ' ' + advisorySummary : ''), {}, false,
+                { proof, current: publishable, claim, ...(advisorySummary ? { advisorySummary } : {}) });
               return RETRY_DISPATCH;
             }
             if (!publishable()) return RETRY_DISPATCH;

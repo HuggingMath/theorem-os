@@ -684,6 +684,7 @@ try {
     plan = await editorPlan(page); await saved(page, plan);
     const exported = await exportDraft(page); assert.deepEqual(exported.draft.modulePlan, plan);
     await showArtifacts(page); await page.locator('#draft-tab-modules').click();
+    await page.locator('[data-module-custom-id]').first().waitFor();
     assert.deepEqual(await page.locator('[data-module-custom-id]').evaluateAll(items => items.map(item => (item as HTMLElement).dataset.moduleCustomId)), plan.custom.map(item => item.id));
     await page.locator('[data-module-id="M1"]').click();
     assert.deepEqual(await page.locator('[data-module-policy-id]').evaluateAll(items => items.map(item => (item as HTMLElement).dataset.modulePolicyId)), [first.id, third.id]);

@@ -201,6 +201,7 @@ try {
     await showArtifacts(page);
     await page.locator('#draft-tab-source').focus(); await page.keyboard.press('ArrowRight');
     await page.locator('#draft-tab-modules[aria-selected="true"]').waitFor();
+    await page.locator('.module-node').first().waitFor();
     assert.equal(await page.locator('#draft-tab-modules').evaluate(element => document.activeElement === element), true);
     assert.equal(await page.locator('.module-node').count(), moduleIds.length);
     assert.equal(await page.locator('.module-observation').innerText(), '草稿');

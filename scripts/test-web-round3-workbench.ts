@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { openAdvancedChatSettings } from './web-ui-controls';
+import { openAdvancedChatSettings, openChatParticipation } from './web-ui-controls';
 // Statement decisions survive navigation; all jobs and evidence are disposable fixtures, with no model or Lean.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -101,7 +101,7 @@ try {
       }
       await route.continue();
     });
-    await page.goto(origin); await page.locator('[data-chat-participation]').waitFor();
+    await page.goto(origin); await openChatParticipation(page);
     const beforeRuns = runs.length;
     const review = await create(page, webFormalizationStatement, true);
     await page.locator('#topbar-draft').click();
@@ -128,7 +128,7 @@ try {
     assert.equal(await reviewRow.locator('[data-chat-awaiting]').innerText(), researchLabel,
       'Confirmed statements offer continuation rather than another statement confirmation');
     await screenshot(page, `confirmed-${locale}-${width}.png`);
-    await page.reload(); await page.locator('[data-chat-participation]').waitFor(); await history(page);
+    await page.reload(); await openChatParticipation(page); await history(page);
     assert.equal(await reviewRow.locator('[data-chat-awaiting]').innerText(), researchLabel, 'The server lifecycle survives reload');
     assert.equal(await failedRow.locator('[data-chat-awaiting]').count(), 0);
     await reviewRow.locator('.chat-history-item').click(); await page.locator('[data-chat-confirm-statement]').waitFor();

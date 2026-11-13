@@ -476,8 +476,8 @@ try {
 
   await scenario('An oversized draft explains that find is limited to the displayed preview', async h => {
     const { page } = h;
-    const lines = Array.from({ length: 250 }, (_, index) => `-- ${'context_'.repeat(20)} ${index + 1}`);
-    lines[199] = `-- outsidePreviewNeedle ${'context_'.repeat(20)}`;
+    const lines = Array.from({ length: 250 }, (_, index) => `-- ${'context_'.repeat(Math.ceil(webLimits.maxSourceBytes / 250 / 8) + 1)} ${index + 1}`);
+    lines[199] = `-- outsidePreviewNeedle ${'context_'.repeat(Math.ceil(webLimits.maxSourceBytes / 250 / 8) + 1)}`;
     const source = lines.join('\n');
     assert.ok(new TextEncoder().encode(source).byteLength > webLimits.maxSourceBytes);
     await fillConfig(page, 'source', source);

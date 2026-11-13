@@ -75,7 +75,7 @@ try {
   page = await context.newPage(); page.setDefaultTimeout(10_000);
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(`${origin}/library.html`);
-  await page.getByRole('heading', { name: '共享成果与研究方法', exact: true }).waitFor();
+  await page.getByRole('heading', { name: '数学库', exact: true }).waitFor();
   const { item: skill } = await http<{ item: ResearchAsset }>('POST', '/api/research/library', { requestId: crypto.randomUUID(),
     type: 'skill', name: 'Navigation Skill', visibility: 'private', content: { instructions: 'Local navigation fixture only.', slots: ['M1'] } });
   const { item: publication } = await http<{ item: ResearchPublication }>('POST', `/api/research/library/${skill.id}/publish`, {
@@ -101,7 +101,7 @@ try {
       await page!.waitForFunction(() => document.body.dataset.view === 'run', undefined, { timeout: 2000 });
       const state = await snapshot();
       if (name === 'sample') {
-        assert.equal(state.search, '?sample');
+        assert.ok(new URLSearchParams(state.search).has('sample'));
         await page!.locator('[data-chat-sample-note]').waitFor();
       } else {
         assert.ok(state.search === `?run=${run.id}` || state.search === `?chat=${conversation.id}`, 'The existing research keeps its address');

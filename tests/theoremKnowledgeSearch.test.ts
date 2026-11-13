@@ -197,6 +197,18 @@ describe('theorem knowledge retrieval', () => {
     expect(searchTheoremKnowledge(base(desired), 'absentproofsymbolzz', { goal: renamed }).total).toBe(0);
   });
 
+  it('recognizes arithmetic conclusions when a source header omits its section type parameter', () => {
+    const header = 'weighted_bound (s : Finset ι) (w x d : ι → ℝ) : ' +
+      '(∑ i ∈ s, w i * x i) ^ 2 ≤ (∑ i ∈ s, w i * d i) * ∑ i ∈ s, w i * x i ^ 2 / d i';
+    const desired = entry('Saved.weighted_bound', header, { typeKind: 'source-header' });
+    const changedOperator = entry('Saved.changed_operator', header.replace(' ^ 2 ≤ ', ' ^ 2 = '), { typeKind: 'source-header' });
+    const changedVariable = entry('Saved.changed_variable', header.replace('x i ^ 2 / d i', 'd i ^ 2 / x i'), { typeKind: 'source-header' });
+    const goal = '∀ {ι : Type*} (s : Finset ι) (w x d : ι → ℝ), ' + header.split(' : ').at(-1)!;
+    const result = searchTheoremKnowledge(base(changedOperator, changedVariable, desired), '', { goal });
+    expect(result.hits[0]).toMatchObject({ id: desired.id, lowInformationMatch: false });
+    expect(result.hits.filter(hit => !hit.lowInformationMatch).map(hit => hit.id)).toEqual([desired.id]);
+  });
+
   it('selects the requested contextual version while exposing all historical alternatives', () => {
     const oldEnv = mathDigest('old environment'), currentEnv = mathDigest('current environment'), receipt = mathDigest('current problem');
     const old = entry(name, normType, { id: '1'.repeat(64), environmentDigest: oldEnv });

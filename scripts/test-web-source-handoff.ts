@@ -330,7 +330,7 @@ try {
 
   await scenario('Switching a template and restoring its backup both invalidate previous source locations', async ({ page }) => {
     await prepare(page, longSource); await find(page, needle, '1/1'); await closeFind(page);
-    await showChat(page); await page.locator('#template').selectOption('logic');
+    await showChat(page); await page.locator('#environment').selectOption('mathlib'); await page.locator('#template').selectOption('logic');
     const template = await page.locator('#source').inputValue(); assert.notEqual(template, longSource);
     await showDraft(page); await locationAvailable(page, false);
     await enter(page, template, 0, 0, previewEdit, 'template replacement'); await closeEditor(page);
@@ -345,12 +345,12 @@ try {
     const release = await delayedLean(h, imported);
     await release();
     await page.waitForFunction(source => (document.querySelector('#source') as HTMLTextAreaElement).value === source, imported);
-    await settled(page); await locationAvailable(page, false);
+    await showDraft(page); await settled(page); await locationAvailable(page, false);
     await enter(page, imported, 0, 0, previewEdit, 'delayed import invalidates handoff'); await closeEditor(page);
   });
 
   await scenario('Oversized drafts hand off only displayed prefix locations and verify the full source snapshot', async ({ page }) => {
-    const lines = Array.from({ length: 220 }, (_, index) => `-- ${String(index + 1).padStart(3, '0')} ${'context '.repeat(27)}`);
+    const lines = Array.from({ length: 220 }, (_, index) => `-- ${String(index + 1).padStart(3, '0')} ${'context '.repeat(Math.ceil(webLimits.maxSourceBytes / 220 / 8) + 1)}`);
     lines[49] = '-- 🙂 prefixNeedle'; lines[174] = '-- outsidePreviewNeedle';
     const source = lines.join('\n'); assert.ok(Buffer.byteLength(source) > webLimits.maxSourceBytes);
     await prepare(page, source); await find(page, 'prefixNeedle', '1/1'); await locationAvailable(page);

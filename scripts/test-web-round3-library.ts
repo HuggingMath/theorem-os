@@ -62,7 +62,7 @@ try {
     if (new URL(route.request().url()).origin !== origin) { external.push(route.request().url()); await route.abort(); } else await route.continue();
   });
   page = await context.newPage(); page.setDefaultTimeout(10_000); page.on('pageerror', error => errors.push(error.message));
-  await page.goto(`${origin}/library.html`); await page.getByRole('heading', { name: '共享成果与研究方法', exact: true }).waitFor();
+  await page.goto(`${origin}/library.html`); await page.getByRole('heading', { name: '数学库', exact: true }).waitFor();
   const first = await skill('First reasoning Skill'), second = await skill('Second reasoning Skill');
   await page.goto(`${origin}/library.html?entry=${first.id}&version=v1`);
   await page.getByRole('button', { name: '加入配置选择', exact: true }).click();

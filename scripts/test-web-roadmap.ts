@@ -11,7 +11,7 @@ import type { WebRunInput, WorkerMessage } from '../apps/web/shared';
 import { audit } from './web-a11y';
 import { contrastProblems } from './web-contrast';
 import { freePort, postRun, settled, startBrowser, waitForRun } from './web-scenario';
-import { openTab, selectHistoryRun } from './web-ui-controls';
+import { openTab, selectHistoryRun, showArtifacts } from './web-ui-controls';
 import { replaySample, withFailedAttempt } from './web-trajectory-fixture';
 
 const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/web-roadmap');
@@ -51,7 +51,7 @@ try {
   await page.route(/\/api\/runs\/[^/]+\/trajectory(?:\?|$)/u,
     route => route.fulfill({ status: 503, json: { error: 'Recorded read failure' } }), { times: 1 });
   await page.goto(`${origin}/?sample`); await page.locator('#research-conversation-panel').waitFor();
-  await page.locator('[data-research-artifact="roadmap"]').click();
+  await page.locator('body[data-view="run"]').waitFor({ state: 'attached' }); await showArtifacts(page);
   await openTab(page, 'result');
   await page.locator('[data-result-roadmap] .trajectory-error').getByRole('button', { name: '重试', exact: true }).click();
   await page.locator('[data-result-roadmap] [data-roadmap-node="evaluation"]').waitFor();
