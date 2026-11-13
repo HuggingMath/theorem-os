@@ -116,6 +116,7 @@ export const app: Record<string, string> = {
   "等你确认题意": "Confirm the statement",
   "回到首页": "Back to home",
   "返回对话": "Back to chat",
+  "收起面板": "Hide panel",
   "正在连接，连接后即可发送。": "Connecting. You can send once connected.",
   "正在发送…": "Sending…",
   "题目输入方式": "Problem input mode",

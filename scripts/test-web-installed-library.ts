@@ -203,13 +203,24 @@ async function fieldPicker(page: Page, check: typeof checks[number], initial: In
   const options = await select.locator('option').evaluateAll(elements => elements.map(element => ({ value: (element as HTMLOptionElement).value, text: element.textContent ?? '' })));
   assert.deepEqual(options.map(option => option.value), ['', ...initial.areas], 'native selector includes every real catalog field in catalog order');
   assert.equal(options[0].text, en ? 'All fields' : '全部领域');
-  assert(options.slice(1).every(option => option.text.includes(option.value)), 'each localized field option retains its catalog identity');
+  const labels: Record<string, [string, string]> = {
+    Algebra: ['代数', 'Algebra'], Analysis: ['分析', 'Analysis'], BooleanCube: ['布尔立方体', 'Boolean cube'], Combinatorics: ['组合数学', 'Combinatorics'],
+    Geometry: ['几何', 'Geometry'], InformationTheory: ['信息论', 'Information theory'], LinearAlgebra: ['线性代数', 'Linear algebra'],
+    NumberTheory: ['数论', 'Number theory'], Probability: ['概率', 'Probability'], RepresentationTheory: ['表示论', 'Representation theory'],
+  };
+  for (const option of options.slice(1)) assert.equal(option.text, labels[option.value]?.[en ? 1 : 0] ?? option.value,
+    'field names are concise Chinese or spaced English while option values retain the catalog identifier');
+  const tabs = await page.locator('.research-library-type-tabs').boundingBox(), collections = await page.locator('.research-library-collections').boundingBox();
+  const controls = await page.locator('.research-library-controls').boundingBox();
+  assert(tabs && collections && controls);
+  assert(collections.y >= tabs.y + tabs.height + 8, 'collection filters occupy a separate row below the primary tabs');
+  assert(Math.abs(tabs.width - controls.width) <= 1, 'the primary tab bar spans the full navigation width');
   assert.equal(await select.inputValue(), '');
   assert.equal(await select.isVisible(), mobile, 'native selector is visible on phone widths');
   assert.equal(await group.isVisible(), !mobile, 'desktop field buttons are hidden on phone widths');
   assert.equal(await group.locator('button').count(), initial.areas.length + 1);
   check.fieldOptions = options.map(option => option.value);
-  check.assertions.push('The native selector lists all catalog fields with their real identities; phones use the labelled native selector and desktop retains field buttons.');
+  check.assertions.push('Primary tabs and secondary collections occupy separate rows; concise Chinese/spaced English labels preserve catalog option values, with native phone selection and desktop field buttons.');
   if (!mobile) return;
   assert.equal(await directory(page).getByRole('combobox', { name: en ? 'Fields of mathematics' : '数学领域', exact: true }).count(), 1);
   const last = initial.areas.at(-1)!; assert(last);

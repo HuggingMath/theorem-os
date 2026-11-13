@@ -16,7 +16,7 @@ export function AssetUpdatesPanel({ context }: { context: ResearchContext }) {
       {update.releaseNotes && <RichProse text={update.releaseNotes} />}<div class="research-actions"><a class="text-button" href={comparisonHref(update)}>{tx('查看版本差异', 'Compare releases')}</a>
         <button type="button" class="text-button" disabled={action.busy} onClick={() => void action.run('POST', `${base}/asset-follows/${enc(update.assetId)}`, { following: true, readVersion: update.toVersion }, data.refresh)}>{tx('标为已读', 'Mark as read')}</button></div>
     </article>)}
-    {data.data && !data.data.updates.length && <Empty>{data.data.items.length ? tx('关注成果暂时没有未读更新。', 'No unread releases from the assets you follow.') : tx('在 Library 版本页关注成果，新版本会显示在这里。', 'Follow an asset in Library to see new releases here.')}</Empty>}
+    {data.data && !data.data.updates.length && <Empty>{data.data.items.length ? tx('关注成果暂时没有未读更新。', 'No unread releases from the assets you follow.') : tx('在数学库版本页关注成果，新版本会显示在这里。', 'Follow an asset in Library to see new releases here.')}</Empty>}
     <MutationState action={action} />{Boolean(data.data?.items.length) && <details><summary>{tx('管理关注', 'Manage followed assets')}</summary>{data.data!.items.map(item => <div class="research-actions" key={item.assetId}>
       {item.available ? <a href={libraryHref(item.assetId)}><Rich text={item.title ?? ''} /></a> : <span>{tx('成果已不可访问', 'Asset is unavailable')}</span>}
       <button class="text-button" type="button" disabled={action.busy} onClick={() => void action.run('POST', `${base}/asset-follows/${enc(item.assetId)}`, { following: false }, data.refresh)}>{tx('取消关注', 'Unfollow')}</button></div>)}</details>}

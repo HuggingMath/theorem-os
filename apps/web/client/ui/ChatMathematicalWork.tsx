@@ -78,12 +78,13 @@ export function ChatAnswerActions({ runId, answer, onRetry }: { runId: string; a
   const document = answer?.document, generation = answer?.overview?.generation;
   const status = answer?.explanation?.status, generating = status === 'queued' || status === 'running';
   const stopped = status && ['error', 'exhausted', 'cancelled'].includes(status);
+  const unavailable = !document && !generating && !stopped && generation && !generation.available;
   const explanationUrl = `explain.html?${new URLSearchParams({ run: runId, ...(answer?.target ? { target: answer.target } : {}) })}`;
   return <div class="chat-task-actions">
     {(document || generating || !answer?.loading && !answer?.error && generation?.available) && <a class={document || generating ? 'text-button' : 'button button-primary'}
       data-chat-explain href={explanationUrl} target="_blank" rel="noopener">{document ? t('打开完整讲解') : generating ? t('查看讲解进度')
         : stopped ? t('重新生成详细解答') : t('生成详细解答')}</a>}
-    {!answer?.error && <button type="button" class="text-button" disabled={answer?.loading} data-chat-answer-refresh onClick={onRetry}>{t('刷新讲解')}</button>}
+    {!answer?.error && !unavailable && <button type="button" class="text-button" disabled={answer?.loading} data-chat-answer-refresh onClick={onRetry}>{t('刷新讲解')}</button>}
   </div>;
 }
 

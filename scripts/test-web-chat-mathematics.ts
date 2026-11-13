@@ -501,8 +501,13 @@ try {
       await page.goto(`${origin}/?chat=${conversations[runs.indexOf(value)]!.id}`, { timeout: 15_000 });
       const state = page.locator(`[data-chat-answer-status="${status}"]`); await state.waitFor({ timeout: 15_000 });
       assert.ok((await state.innerText()).includes(text));
-      if (status === 'unavailable') assert.equal(await state.locator('[data-chat-explain]').count(), 0);
-      else assert.equal(await state.locator('[data-chat-explain]').innerText(), ['queued', 'running'].includes(status) ? '查看讲解进度' : '重新生成详细解答');
+      if (status === 'unavailable') assert.equal(await state.locator('[data-chat-explain], [data-chat-answer-refresh]').count(), 0,
+        'an unavailable service with no saved explanation offers no generation or refresh action');
+      else {
+        assert.equal(await state.locator('[data-chat-explain]').innerText(), ['queued', 'running'].includes(status) ? '查看讲解进度' : '重新生成详细解答');
+        assert.equal(await state.locator('[data-chat-answer-refresh]').isVisible(), true,
+          'queued, running and stopped explanations retain their refresh action');
+      }
       if (status === 'running') {
         assert.match(await state.innerText(), /已通过批次\s+1\s*\/\s*3/u);
         generated = true;

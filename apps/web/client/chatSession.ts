@@ -931,7 +931,8 @@ export class ChatSession {
   }
   /**
    * The task's solving process, rebuilt only when something it reads changed: the run and its events, what the Agents
-   * and the formalization did, the selected task's routes. A sample run has no server to read from, so it keeps none.
+   * and the formalization did, the selected task's routes. A sample builds its read-only process from the embedded
+   * run and run.events, without polling the server for formalization or Agent activity.
    */
   private solve(): { process: SolveProcess; loading?: boolean; failed?: boolean; wide: boolean; time: (at: string) => string; onRetry?(): void; onCheck?(id: string): void } | undefined {
     const item = this.formalization ?? this.seed, run = this.run, sample = run && this.options.isSample(run);
@@ -951,7 +952,7 @@ export class ChatSession {
       item?.id, item?.status, item?.updatedAt, item?.activity?.count ?? 0, activity.length, state?.version ?? 0]);
     if (this.solveCache?.key !== key) this.solveCache = { key, process: buildSolveProcess({
       ...(item ? { formalization: item } : {}), ...(activity.length ? { activity } : {}), ...(state ? { activityDropped: state.dropped } : {}),
-      ...(run && !sample ? { run, events: records.events, routes, actionsDropped: agentState?.dropped ?? 0 } : {}),
+      ...(run ? { run, events: records.events, ...(!sample ? { routes, actionsDropped: agentState?.dropped ?? 0 } : {}) } : {}),
     }) };
     const process = this.solveCache.process;
     const onRetry = () => { if (item && state?.failed) roles.retry(item); if (run && !sample && agents.state(run.id).failed) agents.retry(run); this.draw(); };
@@ -1158,8 +1159,11 @@ export class ChatSession {
     if (!this.liveRenderer) {
       if (!process) { this.livePanel.replaceChildren(); return; }
       if (!this.liveLoading) {
-        this.livePanel.textContent = t('正在连接…');
-        this.liveLoading = import('./runViews').then(views => { this.liveRenderer = views.renderLiveWorkspace; this.draw(); }).catch(error => {
+        const loading = document.createElement('p'); loading.className = 'live-empty'; loading.setAttribute('role', 'status'); loading.textContent = t('正在连接…');
+        this.livePanel.replaceChildren(loading);
+        this.liveLoading = import('./runViews').then(views => {
+          this.livePanel.replaceChildren(); this.liveRenderer = views.renderLiveWorkspace; this.draw();
+        }).catch(error => {
           const notice = document.createElement('p'); notice.className = 'inline-error'; notice.setAttribute('role', 'alert'); notice.textContent = reason(error);
           const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'button'; retry.textContent = t('重试');
           retry.addEventListener('click', () => location.reload());

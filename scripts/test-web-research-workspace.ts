@@ -81,7 +81,20 @@ try {
       ] };
     service.storage.saveRecord(['owners', mathDigest(owner), 'conversations', `${conversation.id}.json`], conversation);
 
+    phase = `inbox-controls-${language}-${width}`;
+    await page.goto(`${origin}/workspace.html?tab=inbox`);
+    await page.locator('#asset-updates').getByText(language === 'zh' ? '在数学库版本页关注成果，新版本会显示在这里。' : 'Follow an asset in Library to see new releases here.', { exact: true }).waitFor();
+    const more = page.getByRole('combobox', { name: language === 'zh' ? '其他消息范围' : 'Other message views', exact: true });
+    assert.equal(await more.inputValue(), '');
+    const inactiveWidth = (await more.boundingBox())!.width;
+    assert.ok(inactiveWidth < 100, `More stays compact: ${inactiveWidth}px`);
+    await more.selectOption('processed');
+    assert.ok((await more.boundingBox())!.width > inactiveWidth + 30, 'The select expands for the selected message range');
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'The inbox filters fit the viewport');
+    await page.screenshot({ path: path.join(output, `inbox-controls-${language}-${width}.png`), fullPage: true });
+
     phase = `search-${language}-${width}`;
+    await page.goto(`${origin}/workspace.html?tab=search`);
     await page.locator('#workspace-query').fill('Searchable telescoping');
     await page.locator('.workspace-search button').click();
     const result = page.locator('.workspace-result').filter({ hasText: conversation.title }); await result.waitFor();

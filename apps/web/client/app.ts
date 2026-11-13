@@ -179,6 +179,11 @@ let linkedProblemDraft = readResearchProblemDraft(new URLSearchParams(location.s
 let problemDraftRevision = 0;
 const chatArtifacts = new ChatArtifactNavigation(element('#research-chat-thread'));
 const chatArtifactIdentity = () => chatWorkspace?.id || currentRun()?.id || 'home';
+const outputWideQuery = window.matchMedia('(min-width:1101px)');
+function syncOutputCloseLabel() {
+  element('#close-research-output').textContent = !outputWideQuery.matches || document.body.dataset.resultsExpanded === 'true'
+    ? t('返回对话') : t('收起面板');
+}
 function placeInputMode() {
   const mode = currentRun() ? 'natural' : researchEntry;
   element('#research-input-mode').hidden = mode === 'natural';
@@ -323,6 +328,7 @@ async function openChatArtifact(kind: ChatArtifactKind, target?: ChatArtifactTar
   if (!auto) chatArtifacts.remember(chatArtifactIdentity(), kind, target);
   document.body.dataset.chatArtifact = kind;
   document.body.dataset.outputOpen = 'true';
+  syncOutputCloseLabel();
   if (kind === 'original') { element('#close-research-output').focus({ preventScroll: true }); return; }
   // The live workspace replaces the run detail for the time it is open, on any screen size.
   if (kind === 'live') { if (!auto) element('#close-research-output').focus({ preventScroll: true }); return; }
@@ -699,6 +705,7 @@ function setMobileView(view: 'compose' | 'runs', focus = false) {
     ? '' : document.body.dataset.chatArtifact;
   document.body.dataset.chatArtifact = panel;
   document.body.dataset.outputOpen = String(panel === 'live' || panel === 'original' || (view === 'runs' && Boolean(currentRun())));
+  syncOutputCloseLabel();
   rememberConversationScroll();
   if (changed) { activityReader?.remember(); moduleView?.update(); }
   document.body.dataset.mobileView = view;
@@ -4106,11 +4113,14 @@ element('#open-draft-preview').addEventListener('click', () => {
   setMobileView('runs'); renderDraftPreview(true);
   element('#close-draft-preview').focus();
 });
+outputWideQuery.addEventListener('change', syncOutputCloseLabel);
+syncOutputCloseLabel();
 element('#expand-research-output').addEventListener('click', () => {
   const expanded = document.body.dataset.resultsExpanded !== 'true';
   document.body.dataset.resultsExpanded = String(expanded);
   element('#expand-research-output').setAttribute('aria-pressed', String(expanded));
   element('#expand-research-output').textContent = expanded ? t('恢复分栏') : t('展开成果');
+  syncOutputCloseLabel();
 });
 element('#close-research-output').addEventListener('click', () => {
   document.body.dataset.resultsExpanded = 'false';

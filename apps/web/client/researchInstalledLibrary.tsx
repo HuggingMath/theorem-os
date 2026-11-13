@@ -9,11 +9,11 @@ import { LeanName, RichProse } from './richText';
 import { base, enc, Empty, ErrorBox, Field, Panel, tx, useResource, type Item } from './researchShared';
 
 const fieldNames: Record<string, string> = {
-  Algebra: tx('代数', 'Algebra'), Analysis: tx('分析', 'Analysis'), BooleanCube: tx('布尔立方体', 'BooleanCube'), Combinatorics: tx('组合数学', 'Combinatorics'),
-  Geometry: tx('几何', 'Geometry'), InformationTheory: tx('信息论', 'InformationTheory'), LinearAlgebra: tx('线性代数', 'LinearAlgebra'),
-  NumberTheory: tx('数论', 'NumberTheory'), Probability: tx('概率', 'Probability'), RepresentationTheory: tx('表示论', 'RepresentationTheory'),
+  Algebra: tx('代数', 'Algebra'), Analysis: tx('分析', 'Analysis'), BooleanCube: tx('布尔立方体', 'Boolean cube'), Combinatorics: tx('组合数学', 'Combinatorics'),
+  Geometry: tx('几何', 'Geometry'), InformationTheory: tx('信息论', 'Information theory'), LinearAlgebra: tx('线性代数', 'Linear algebra'),
+  NumberTheory: tx('数论', 'Number theory'), Probability: tx('概率', 'Probability'), RepresentationTheory: tx('表示论', 'Representation theory'),
 };
-const fieldLabel = (area: string) => fieldNames[area] ? tx(`${fieldNames[area]} · ${area}`, area) : area;
+const fieldLabel = (area: string) => fieldNames[area] ?? area;
 const readableModuleName = (name: string) => (name.split('.').at(-1) ?? name)
   .replace(/([a-z\d])([A-Z])/gu, '$1 $2').replace(/([A-Z])([A-Z][a-z])/gu, '$1 $2');
 function moduleTitle(name: string) {

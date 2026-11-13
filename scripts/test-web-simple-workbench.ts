@@ -27,7 +27,7 @@ const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port
   async run() { workerCalls++; throw new Error('Editing and reading must not start a proof'); },
   async formalize() { workerCalls++; throw new Error('Editing and reading must not start formalization'); },
 });
-const checks: object[] = [], errors: string[] = [], writes: string[] = [], external: string[] = [];
+const checks: object[] = [], errors: string[] = [], writes: string[] = [], external: string[] = [], processPolls: string[] = [];
 const screenshots: string[] = [];
 const original = '  对任意自然数 n，证明 n + 0 = n。\n\nKeep the complete original.  ';
 let browser: Browser | undefined, page: Page | undefined, phase = 'start', failure: unknown;
@@ -76,6 +76,7 @@ try {
     await context.route(/^https?:\/\//u, async route => {
       const request = route.request(), url = new URL(request.url());
       if (url.origin !== origin) { external.push(url.href); await route.abort(); return; }
+      if (/^\/api\/(?:runs\/[^/]+\/(?:events|actions)|formalizations\/[^/]+\/activity)$/u.test(url.pathname)) processPolls.push(url.pathname);
       if (!['GET', 'HEAD'].includes(request.method())) { writes.push(`${request.method()} ${url.pathname}`); await route.abort(); return; }
       await route.continue();
     });
@@ -210,8 +211,75 @@ try {
     assert.equal(await actor.locator('#run-detail').isVisible(), false, 'Simple reading keeps the result detail closed');
     const result = actor.locator('[data-chat-result-more]');
     assert.equal(await result.evaluate(node => (node as HTMLDetailsElement).open), false);
+    await actor.locator('[data-chat-answer-unavailable]').waitFor();
+    assert.equal(await actor.locator('[data-chat-answer-refresh]').count(), 0, 'A read-only sample has no explanation to refresh');
+    await actor.locator('#chat-live-panel .live-workspace').waitFor({ state: 'attached' });
+    assert.equal(await actor.locator('#chat-live-panel').evaluate(node => [...node.childNodes]
+      .some(child => child.nodeType === Node.TEXT_NODE && Boolean(child.textContent?.trim()))), false,
+      'The lazy workspace mount removes the loading placeholder completely');
     await result.locator(':scope > summary').click();
+    const thinking = result.locator('[data-thinking-process]');
+    assert.equal(await thinking.getAttribute('data-active'), 'false', 'A completed sample never shows active thinking');
+    assert.doesNotMatch(await result.innerText(), /正在思考…|等待模型返回公开摘要|Thinking…|Waiting for the model/u);
+    const process = result.locator('[data-solve-process]');
+    await process.locator(':scope > summary').click();
+    await process.locator('[data-solve-row]').first().waitFor({ state: 'attached' });
+    assert.ok(await process.locator('[data-solve-row]').count() > 0, 'The embedded sample provides real process rows');
+    assert.equal(await process.locator('[data-tone="active"]').count(), 0, 'Sample process rows have completed');
+    await actor.locator('#research-chat-thread').evaluate(node => { node.scrollTop = node.scrollHeight; });
+    await settled(actor);
+    const bottomSpace = await actor.locator('#research-chat-thread').evaluate(thread => thread.getBoundingClientRect().bottom
+      - thread.querySelector('.chat-result-more-actions')!.getBoundingClientRect().bottom);
+    assert.ok(bottomSpace >= 28, `Expanded result actions keep breathing room at the bottom: ${bottomSpace}px`);
+    const viewport = actor.viewportSize()!, thread = actor.locator('#research-chat-thread'), latest = actor.locator('[data-chat-latest]');
+    for (const height of [viewport.height, 600]) {
+      await actor.setViewportSize({ width, height });
+      await thread.evaluate(node => { node.scrollTop = node.scrollHeight; node.dispatchEvent(new Event('scroll')); });
+      await settled(actor);
+      assert.equal(await latest.isVisible(), false, 'Latest stays hidden at the bottom of the thread');
+      const hiddenHeight = await thread.evaluate(node => node.clientHeight);
+      await thread.evaluate(node => {
+        node.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -1 }));
+        node.scrollTop = 0; node.dispatchEvent(new Event('scroll'));
+      });
+      await settled(actor);
+      // Samples do not bind a saved reading position, so expose the real control to test both CSS states.
+      await latest.evaluate(button => { (button as HTMLButtonElement).hidden = false; });
+      await latest.waitFor({ state: 'visible' });
+      await settled(actor);
+      assert.equal(await thread.evaluate(node => node.clientHeight), hiddenHeight, 'Showing latest never changes the thread height');
+      assert.equal(await latest.evaluate(button => {
+        const box = button.getBoundingClientRect(), thread = document.querySelector('#research-chat-thread')!.getBoundingClientRect(),
+          composer = document.querySelector('#natural-research')!.getBoundingClientRect();
+        return box.top >= thread.top && box.bottom <= composer.top && button.scrollHeight <= button.clientHeight;
+      }), true, 'The latest pill floats inside the thread above the composer without clipping text');
+      assert.equal((await latest.boundingBox())!.height, height <= 600 ? 30 : 34, 'Latest keeps its compact viewport-specific height');
+      await latest.click();
+      await settled(actor);
+      assert.equal(await latest.isVisible(), false, 'Latest returns to the bottom of the thread');
+      assert.equal(await thread.evaluate(node => node.clientHeight), hiddenHeight, 'Hiding latest never changes the thread height');
+    }
+    await actor.setViewportSize(viewport);
     await actor.locator('[data-research-artifact="result"]').click(); await actor.locator('.result-verdict').waitFor();
+    const closeOutput = actor.locator('#close-research-output'), expandOutput = actor.locator('#expand-research-output');
+    assert.equal(await closeOutput.innerText(), width === 1440 ? locale === 'en' ? 'Hide panel' : '收起面板' : locale === 'en' ? 'Back to chat' : '返回对话');
+    if (width === 1440) {
+      assert.equal(await closeOutput.evaluate(button => {
+        const close = button.getBoundingClientRect(), expand = document.querySelector('#expand-research-output')!.getBoundingClientRect();
+        return Math.abs(close.y + close.height / 2 - expand.y - expand.height / 2) <= 1 && close.right < expand.left;
+      }), true, 'Panel controls share one row without overlapping');
+      await expandOutput.click();
+      assert.equal(await closeOutput.innerText(), locale === 'en' ? 'Back to chat' : '返回对话');
+      assert.equal(await actor.locator('#research-conversation-panel').isVisible(), false);
+      await expandOutput.click();
+      assert.equal(await closeOutput.innerText(), locale === 'en' ? 'Hide panel' : '收起面板');
+      for (const breakpoint of [1100, 1101]) {
+        await actor.setViewportSize({ width: breakpoint, height: 1000 }); await settled(actor);
+        assert.equal(await closeOutput.innerText(), breakpoint === 1100 ? locale === 'en' ? 'Back to chat' : '返回对话' : locale === 'en' ? 'Hide panel' : '收起面板');
+        assert.equal(await actor.locator('#research-conversation-panel').isVisible(), breakpoint === 1101);
+      }
+      await actor.setViewportSize({ width, height: 1000 });
+    }
     assert.equal(await actor.locator('#detail-panel .result-route, #detail-panel [data-result-roadmap]').count(), 0,
       'A simple report leaves detailed routes in their existing workspace tabs');
     assert.equal(await actor.locator('#detail-panel .result-verdict').isVisible(), true);
@@ -223,7 +291,7 @@ try {
     mark(`${phase}: the single examples entry prepares a draft or opens a read-only sample and its report`);
     await context.close();
   }
-  assert.deepEqual(errors, []); assert.deepEqual(writes, []); assert.deepEqual(external, []); assert.equal(workerCalls, 0);
+  assert.deepEqual(errors, []); assert.deepEqual(writes, []); assert.deepEqual(external, []); assert.deepEqual(processPolls, [], 'Samples never poll role or agent activity'); assert.equal(workerCalls, 0);
 } catch (error) {
   failure = error; globalThis.process.exitCode = 1;
   await page?.screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => {});
@@ -231,6 +299,6 @@ try {
 } finally {
   await browser?.close(); await service.close(); await fs.rm(dataRoot, { recursive: true, force: true });
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: failure ? 'failed' : 'passed', checkedAt: new Date().toISOString(),
-    checks, screenshots, errors, writes, external, workerCalls, paidModelCalls: false, leanProcesses: 0, temporaryDataRemoved: true,
+    checks, screenshots, errors, writes, external, processPolls, workerCalls, paidModelCalls: false, leanProcesses: 0, temporaryDataRemoved: true,
     ...(failure ? { phase, error: failure instanceof Error ? failure.stack : String(failure) } : {}) }, null, 2) + '\n');
 }

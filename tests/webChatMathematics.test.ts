@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { isValidElement, toChildArray } from 'preact';
+import type { ChatAnswer } from '../apps/web/client/chatAnswer';
 import { chatMathematics, chatMathematicsSummary } from '../apps/web/client/chatMathematics';
+import { ChatAnswerActions } from '../apps/web/client/ui/ChatMathematicalWork';
 import type { WebFormalizationActivity, WebFormalizationRoleSummary } from '../apps/web/formalizationTypes';
-import type { WebRun } from '../apps/web/shared';
+import type { WebExplanation, WebExplanationDocument, WebExplanationOverview, WebRun } from '../apps/web/shared';
 
 type Task = NonNullable<WebRun['observation']>['inspection']['tasks'][number];
 const task = (id: string, changes: Partial<Task> = {}): Task => ({ id, kind: 'lemma', objective: `Objective ${id}`, group: 'main',
@@ -13,6 +16,47 @@ function role(sequence: number, summary: WebFormalizationRoleSummary, kind: 'pla
   return { type: 'step', sequence, at: `2026-11-10T07:0${sequence}:00.000Z`, step: { step: 'role', state: 'finished', role: kind,
     workerId: `role-${sequence}`, slot: kind, round: 1, summary } };
 }
+
+describe('explanation refresh availability', () => {
+  const overview = (generation: WebExplanationOverview['generation']): WebExplanationOverview => ({
+    run: { id: 'accepted', title: 'Recorded proof', environment: 'standard', providerId: 'fixture', model: 'fixture', effort: 'high', proof: 'theorem goal : True := True.intro' },
+    targets: [{ name: 'goal', declarations: 1 }], explanations: [], generation,
+  });
+  const answer = (patch: Partial<ChatAnswer> = {}): ChatAnswer => ({ runId: 'accepted', target: 'goal', loading: false,
+    overview: overview({ available: false, reason: 'sample' }), ...patch });
+  const refresh = (value?: ChatAnswer) => toChildArray(ChatAnswerActions({ runId: 'accepted', answer: value, onRetry() {} }).props.children)
+    .find(node => isValidElement(node) && node.props['data-chat-answer-refresh'] !== undefined);
+  const explanation = (status: WebExplanation['status']): WebExplanation => ({ id: 'saved-explanation', runId: 'accepted', target: 'goal',
+    language: 'zh', status, createdAt: '2026-11-13T00:00:00Z', updatedAt: '2026-11-13T00:00:00Z',
+    model: 'fixture', effort: 'high', maxRunSeconds: 0, maxTotalTokens: 0 });
+
+  it.each(['sample', 'runtime'] as const)('omits refresh without a document or active/stopped generation when unavailable: %s', reason => {
+    expect(refresh(answer({ overview: overview({ available: false, reason }) }))).toBeUndefined();
+  });
+
+  it('keeps a saved explanation refreshable when generation is unavailable', () => {
+    const document: WebExplanationDocument = { schema: 'theorem-os.web-explanation.v1', target: 'goal', language: 'zh',
+      toolchain: 'fixture', mathlibRevision: null, overview: 'Recorded explanation', sections: [], axioms: [],
+      model: 'fixture', effort: 'high', auditors: 1, rounds: 1, tokens: null,
+      metrics: { declarations: 1, steps: 0, citations: 0, excerptCoverage: 1, proofLines: 1, explainedLines: 1, ambiguousExcerpts: 0 } };
+    expect(refresh(answer({ document }))).toBeDefined();
+  });
+
+  it.each(['queued', 'running', 'error', 'exhausted', 'cancelled'] as const)('keeps refresh for a %s explanation', status => {
+    expect(refresh(answer({ explanation: explanation(status) }))).toBeDefined();
+  });
+
+  it('keeps refresh while overview availability is unknown or generation is available', () => {
+    expect(refresh()).toBeDefined();
+    expect(refresh(answer({ overview: undefined, loading: true }))).toBeDefined();
+    expect(refresh(answer({ overview: overview({ available: true, model: 'fixture', effort: 'high', key: 'server',
+      maxRunSeconds: 0, maxTotalTokens: 0, reference: { declarations: 1, seconds: 0, tokens: 0 } }) }))).toBeDefined();
+  });
+
+  it('uses the existing retry action after a read error', () => {
+    expect(refresh(answer({ overview: undefined, error: 'Read failed' }))).toBeUndefined();
+  });
+});
 
 describe('mathematical progress from recorded work', () => {
   it('omits empty summaries and statements already shown without changing the saved records', () => {

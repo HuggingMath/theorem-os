@@ -3,6 +3,7 @@ import { ChatSession } from '../apps/web/client/chatSession';
 import { setDetailLevel } from '../apps/web/client/detailLevel';
 import { renderChatThread } from '../apps/web/client/ui/ChatWorkspace';
 import type { SolveProcess } from '../apps/web/client/solveProcess';
+import { loadWebSample } from '../apps/web/sample';
 
 vi.mock('../apps/web/client/ui/ChatWorkspace', () => ({
   renderChatThread: vi.fn(), renderChatComposer: vi.fn(), renderChatHistory: vi.fn(), renderChatOriginal: vi.fn(),
@@ -36,6 +37,21 @@ function fixture(state: 'formalizing' | 'proving' = 'proving', wide = true) {
 const settle = () => new Promise<void>(resolve => queueMicrotask(resolve));
 
 describe('conversation workspace opening', () => {
+  it('builds the sample process from its embedded run and events without polling activity', () => {
+    const run = loadWebSample()!.run;
+    const agents = { sync: vi.fn(), records: vi.fn(), state: vi.fn(), routes: vi.fn() };
+    const roles = { sync: vi.fn(), state: vi.fn(), activity: vi.fn() };
+    const session = Object.assign(Object.create(ChatSession.prototype), {
+      run, options: { isSample: () => true, agentActivity: agents, formalizationActivity: roles }, wide: { matches: true },
+    }) as { solve(): { process: SolveProcess } };
+    const { process } = session.solve();
+    expect(process).toMatchObject({ state: 'accepted', active: false, endedAt: run.finishedAt });
+    expect(process.stages.some(stage => stage.rows.length > 0)).toBe(true);
+    expect(process.checks.some(check => check.stage === 'verify' && check.state === 'passed')).toBe(true);
+    expect(process.now).toEqual([]);
+    for (const operation of [...Object.values(agents), ...Object.values(roles)]) expect(operation).not.toHaveBeenCalled();
+  });
+
   it.each(['formalizing', 'proving'] as const)('keeps a wide simple conversation alone while %s', async state => {
     const f = fixture(state);
     f.session.draw(); await settle();

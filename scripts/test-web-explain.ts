@@ -51,6 +51,7 @@ const goalAfter = (count: number) => ['a b : Nat', ...Array.from({ length: count
 units[units.length - 1]!.goals = [...helpers.map((_, index) => ({ snippet: `have k${index + 1} := step_${index + 1} a b`,
   before: [goalAfter(index)], after: [goalAfter(index + 1)] })), { snippet: 'omega', before: [goalAfter(helpers.length)], after: [] }];
 const lineCount = proof.replace(/\n$/u, '').split('\n').length;
+const shortProof = 'theorem viewport_target (n : Nat) : n + 0 = n := by\n  simp\n';
 const input: WebRunInput = { providerId: 'sub2api', apiKey: credential, model: 'deepseek-flash', effort: 'xhigh', environment: 'standard',
   source: 'theorem target_thm (a b : Nat) : a + b + 1 = b + a + 1 := by\n  sorry\n', task: 'Explain fixture',
   maxTurns: 1, maxRunSeconds: 60, workers: 1, coordination: 'cooperative' };
@@ -59,8 +60,15 @@ type Explain = { input: WorkerExplanationInput; send(message: WorkerExplanationM
 const explains: Explain[] = [];
 const runner: WebRunner = {
   async readiness() { return { ready: true, message: '本地讲解验证环境' }; },
-  async run(value, send) { send({ type: 'result', result: { status: value.input.task === 'Unaccepted fixture' ? 'limit_reached' : 'evaluated_passed', proof, report: {} } }); },
+  async run(value, send) { send({ type: 'result', result: { status: value.input.task === 'Unaccepted fixture' ? 'limit_reached' : 'evaluated_passed',
+    proof: value.input.task === 'Short viewport fixture' ? shortProof : proof, report: {} } }); },
   explain(value, send, signal) {
+    if (value.target === 'viewport_target') {
+      send({ type: 'result', status: 'approved', evidence: JSON.parse(JSON.stringify(webExplanationEvidence({ proof: shortProof, target: value.target,
+        units: [{ name: value.target, kind: 'theorem', snippet: shortProof.trim(), steps: [['simp']],
+          statement: '对任意自然数，右侧加零不改变它的值。', texts: ['由自然数加法的定义，$n + 0 = n$。'] }] }))) });
+      return Promise.resolve();
+    }
     return new Promise<void>((resolve, reject) => {
       explains.push({ input: { ...value }, send, resolve });
       signal.addEventListener('abort', () => reject(new Error('explanation_cancelled')), { once: true });
@@ -190,6 +198,10 @@ try {
   assert.equal(await page.locator('#explain-back').getAttribute('href'), `./?run=${run.id}`);
   const card = page.locator('#explain-prose .explain-card');
   await card.locator('[data-action="generate"]').waitFor();
+  assert.deepEqual(await page.locator('#locale-switch').evaluate(node => {
+    const style = getComputedStyle(node); return { decoration: style.textDecorationLine, height: node.getBoundingClientRect().height };
+  }), { decoration: 'none', height: 32 }, 'the locale switch is a compact topbar control');
+  assert.deepEqual(await contrastProblems(page, '.explain-topbar'), [], 'explanation topbar contrast below WCAG AA (light)');
   assert.match(await card.locator('.explain-estimate').innerText(), /^预计约 [\d.]+ 小时，约 [\d.]+ 万 Token。$/u);
   assert.equal(await page.locator('#explain-lean-legend').isVisible(), false, 'no margin legend before there is an explanation');
   assert.equal(await page.locator('#explain-prose .solution-route').count(), 0, 'an unapproved source does not install a mathematical explanation graph');
@@ -586,6 +598,7 @@ try {
   const url = cleanAddress.href;
   const dark = await open(browser, url, { theme: 'dark', storageState });
   await dark.page.locator('#explain-prose .explain-document').waitFor();
+  assert.deepEqual(await contrastProblems(dark.page, '.explain-topbar'), [], 'explanation topbar contrast below WCAG AA (dark)');
   await mathReady(dark.page);
   await dark.page.locator(`[data-action="lines"][data-section="${last}"][data-step="1"]`).click();
   await dark.page.locator('.explain-steps > li[data-anchor="0"][data-step="0"] [data-action="use-lean"]').click();
@@ -716,6 +729,32 @@ try {
   await english.page.screenshot({ path: path.join(output, 'explain-english-empty-1440.png') });
   await english.context.close();
   mark('English chrome is English, a link without a language opens the existing explanation, English is a separate one, and Back after a cited lemma crosses a language switch');
+
+  // A short completed proof keeps its summary facts above the desktop fold; long proofs still scroll normally.
+  const shortRun = await postRun({ page }, { ...input, task: 'Short viewport fixture', source: shortProof.replace('simp', 'sorry') });
+  await until(async () => (await readRun({ page }, shortRun.id)).status === 'completed', 'the short fixture run finishes');
+  const shortPage = await owner.context.newPage();
+  await shortPage.goto(`${origin}/explain.html?run=${shortRun.id}`);
+  await shortPage.locator('.explain-card').waitFor();
+  assert.ok(await shortPage.locator('.explain-card').evaluate(node => node.getBoundingClientRect().bottom <= innerHeight - 16), 'The initial explanation card fits above the desktop fold');
+  await shortPage.locator('#explain-prose [data-action="generate"]').click();
+  await shortPage.locator('#explain-dialog[open] #explain-api-key').fill(credential);
+  await shortPage.locator('#explain-dialog[open] button[type="submit"]').click();
+  await shortPage.locator('#explain-prose .explain-document').waitFor();
+  await mathReady(shortPage);
+  const shortFacts = await shortPage.locator('.explain-footer').evaluate(node => {
+    const box = node.getBoundingClientRect(), pane = node.closest('.explain-scroll')!.getBoundingClientRect();
+    return { bottom: box.bottom, paneBottom: pane.bottom, scrollTop: node.closest('.explain-scroll')!.scrollTop,
+      summaryRows: [...node.children].slice(0, 8).map(item => Math.round(item.getBoundingClientRect().top)) };
+  });
+  assert.equal(shortFacts.scrollTop, 0, 'The short proof needs no scrolling to read its metadata');
+  assert.deepEqual(shortFacts.summaryRows.slice(0, 4), Array(4).fill(shortFacts.summaryRows[0]), 'The desktop summary has four columns');
+  assert.deepEqual(shortFacts.summaryRows.slice(4), Array(4).fill(shortFacts.summaryRows[4]), 'The second summary row fits beneath the first');
+  assert.ok(shortFacts.summaryRows[4]! > shortFacts.summaryRows[0]!, 'The eight summary facts form two rows');
+  assert.ok(shortFacts.bottom <= shortFacts.paneBottom - 16, `Summary facts have breathing room at 1440×900: ${JSON.stringify(shortFacts)}`);
+  await shortPage.screenshot({ path: path.join(output, 'explain-short-metadata-1440.png') });
+  await shortPage.close();
+  mark(`the short completed proof's metadata fits above the 900px fold (${Math.round(shortFacts.bottom)}px, at least 16px of breathing room)`);
 
   // Deleting asks first and leaves the page ready to generate again.
   await page.locator('#explain-prose-head [data-action="delete"]').click();

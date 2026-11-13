@@ -9,8 +9,9 @@ import { localeStorageKey } from '../apps/web/i18n';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import { audit, tabStops } from './web-a11y';
+import { contrastProblems } from './web-contrast';
 import { freePort, settled, startBrowser, ready } from './web-scenario';
-import { showExamples, openSample, openHistory } from './web-ui-controls';
+import { showExamples, openSample, openHistory, enterLean } from './web-ui-controls';
 
 /**
  * Keyboard and screen-reader pass over the workbench, in Chinese and English: the static audit (names, labels, ARIA
@@ -33,6 +34,19 @@ const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port
   THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web') }), runner);
 const mark = (check: string) => console.log(`PASS ${check}`);
 const clean = async (page: Page, where: string, scope?: string) => assert.deepEqual(await audit(page, { scope }), [], `Accessibility problems: ${where}`);
+async function newProblemControl(page: Page, quiet: boolean) {
+  const control = page.locator('#topbar-draft');
+  assert.equal(await control.isVisible(), true);
+  assert.ok((await control.boundingBox())!.height >= 32, 'New problem keeps its visible click target');
+  const colors = await control.evaluate((element, quiet) => {
+    const probe = document.body.appendChild(document.createElement('i'));
+    probe.style.backgroundColor = quiet ? 'var(--card)' : 'var(--ink)';
+    const expected = getComputedStyle(probe).backgroundColor, actual = getComputedStyle(element).backgroundColor;
+    probe.remove(); return { actual, expected, view: document.body.dataset.view, entry: document.body.dataset.entry, empty: document.body.dataset.chatEmpty };
+  }, quiet);
+  assert.equal(colors.actual, colors.expected, `${quiet ? 'New problem is quiet on the empty home view' : 'New problem is prominent beside existing work'}: ${JSON.stringify(colors)}`);
+  assert.deepEqual(await contrastProblems(page, '#topbar-draft'), [], 'New problem meets WCAG AA contrast');
+}
 
 /** Opens a dialog with the keyboard, audits it, and verifies focus returns to its visible navigation control. */
 async function dialog(page: Page, trigger: string, id: string, where: string) {
@@ -66,6 +80,13 @@ try {
     const page = await context.newPage(), errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(origin);
+    await page.locator('body[data-chat-empty="true"][data-entry="natural"]').waitFor({ state: 'attached' });
+    const initialTheme = await page.locator('html').getAttribute('data-theme');
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+      await newProblemControl(page, true);
+    }
+    await page.evaluate(theme => { if (theme) document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme; }, initialTheme);
     await ready(page);
     await showExamples(page); await page.locator('.chat-welcome[data-first-run="true"]').waitFor();
     await settled(page);
@@ -122,6 +143,7 @@ try {
 
     // The sample: each tab is reachable with the arrow keys and every panel passes the audit.
     await openSample(page);
+    await newProblemControl(page, false);
     await page.locator('#detail-tab-result').focus();
     const order = await page.locator('[data-detail-tab]').evaluateAll(tabs => tabs.map(tab => (tab as HTMLElement).dataset.detailTab!));
     for (let step = 0; step < order.length; step++) {
@@ -161,6 +183,9 @@ try {
     await page.locator('#submit-run').or(page.locator('#natural-research #formalize-original')).first().waitFor();
     await settled(page);
     await clean(page, `375px new research (${locale})`);
+    await newProblemControl(page, true);
+    await enterLean(page);
+    await newProblemControl(page, false);
     mark(`the 375px layout passes the audit (${locale})`);
     await page.screenshot({ path: path.join(output, `a11y-${locale}-375.png`) });
     assert.deepEqual(errors, []);
@@ -207,6 +232,10 @@ try {
     mark('forced colours: the current conversation, the focused composer and the palette row are shown in system colours');
 
     await page.goto(origin); await ready(page);
+    await page.locator('#topbar-draft').click();
+    await page.locator('body[data-chat-empty="true"][data-entry="natural"]').waitFor({ state: 'attached' });
+    assert.ok((await page.locator('#topbar-draft').boundingBox())!.height >= 32, 'New problem stays visible in forced colours');
+    assert.deepEqual(await contrastProblems(page, '#topbar-draft'), [], 'New problem keeps contrast in forced colours');
     await openSample(page);
     await page.locator('#detail-tab-source').click();
     await page.locator('#detail-panel[data-tab="source"] .code-scroll code').waitFor(); await settled(page);
