@@ -177,6 +177,29 @@ try {
   const alice = await account('alice@example.org'), bob = await account('bob@example.org');
   mark('Two ordinary accounts have a visible permanent classic link before creating a run or entering a key');
   const aliceArchive = await openClassics(alice.page), bobArchive = await openClassics(bob.page);
+  currentCheck = 'Compact classic navigation at desktop and phone widths';
+  for (const archive of [aliceArchive, bobArchive]) {
+    for (const width of [1440, 390, 320]) {
+      await archive.setViewportSize({ width, height: 900 });
+      await noOverflow(archive, `Classic navigation at ${width} pixels`);
+      const bar = await archive.locator('.topbar').boundingBox();
+      assert.ok(bar && bar.height >= 56 && bar.height <= 60, 'The classic navigation must stay in one compact row');
+      assert.equal(await archive.locator('.topbar > .lang-link').isVisible(), true, 'The language switch stays directly available');
+      const menu = archive.locator('.classics-more');
+      await menu.locator('summary').click();
+      assert.equal(await menu.locator('nav a').count(), 4);
+      const popup = await menu.locator('nav').boundingBox();
+      assert.ok(popup && popup.x >= 0 && popup.x + popup.width <= width, 'The extra page links stay inside the viewport');
+      await archive.keyboard.press('Escape');
+      assert.equal(await menu.getAttribute('open'), null, 'Escape closes the extra page links');
+      assert.equal(await menu.locator('summary').evaluate(element => element === document.activeElement), true);
+      await menu.locator('summary').click();
+      await archive.locator('main').click({ position: { x: 1, y: 1 } });
+      assert.equal(await menu.getAttribute('open'), null, 'Clicking outside closes the extra page links');
+    }
+    await archive.setViewportSize({ width: 1440, height: 960 });
+  }
+  mark('Classic navigation stays compact with a direct language switch and accessible menu at 1440, 390 and 320 pixels');
   await inspectAll(aliceArchive, 'Alice');
   await inspectAll(bobArchive, 'Bob');
   assert.equal(runnerCalls, 0, 'All problem views from both accounts must be read-only');

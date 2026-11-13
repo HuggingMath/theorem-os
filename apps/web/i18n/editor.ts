@@ -133,7 +133,7 @@ export const editor: Record<string, string> = {
   "任务 {0} 的源码差异": "Source diff of task {0}",
   "同一任务两份已保存源码的逐行差异": "Line-by-line diff of two saved sources of the same task",
   "原题第 {0} 行：{1}": "Statement line {0}: {1}",
-  "原题需要先能编译；点击右侧定位到出错位置。": "The statement has to compile first; use the button on the right to go to the error.",
+  "原题需要先能编译；点「查看错误」定位到出错位置。": "The statement has to compile first; use View errors to go to the error.",
   "查看错误": "Show error",
   "这里有控制字符或无法编码的字符，提交时会被拒绝": "A control character or an unencodable character here will be rejected on submission",
   "声明超过 1024 个，请拆分题目": "More than 1024 declarations; split the problem",

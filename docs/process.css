@@ -214,7 +214,11 @@
 .proof-reading-bar > button:hover:enabled { background: #eff2e7; }
 .proof-reading-bar > button:disabled { opacity: .3; cursor: default; }
 .proof-walkthrough-steps { margin: 0 0 48px; padding: 0 0 0 16px; list-style: none; }
-.proof-walkthrough-step { position: relative; padding: 0 0 42px 30px; border-left: 1px solid #c7cfb5; scroll-margin-top: var(--proof-heading-clearance); }
+.proof-walkthrough-step { position: relative; padding: 0 0 42px 30px; scroll-margin-top: var(--proof-heading-clearance); }
+.proof-walkthrough-step::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 1px; background: #c7cfb5; }
+.proof-walkthrough-step:first-child::before { top: 16px; }
+.proof-walkthrough-step:first-child:has(> .proof-walkthrough-stage-label)::before { top: 47px; }
+.proof-walkthrough-step:only-child::before { display: none; }
 .proof-walkthrough-stage-label { font-size: 11px; line-height: 1.8; color: var(--green); margin-bottom: 12px !important; }
 .proof-walkthrough-step > header { position: relative; display: flex; align-items: flex-start; margin-bottom: 18px; }
 .proof-walkthrough-step > header > span { position: absolute; left: -47px; top: -1px; display: flex; width: 33px; height: 33px; align-items: center; justify-content: center; border: 1px solid #a5b18d; border-radius: 50%; background: var(--paper, #faf9f5); color: var(--green); font: 11px var(--mono); }
@@ -521,6 +525,8 @@
 @media (min-width: 1700px) { .reading-process .inspector { max-width: 1240px; } }
 @media (max-width: 1100px) {
   .proof-reading-layout { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .proof-route-sidebar { margin-bottom: 6px; }
+  .proof-reading-content > .proof-walkthrough-route { margin-bottom: 20px; }
   .proof-walkthrough-route { padding-right: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--paper, #faf9f5); }
   .proof-route-panel > summary { height: 64px; padding: 11px 14px; align-items: center; gap: 10px; }
   .proof-route-panel > summary::after { content: '⌄'; color: var(--green); margin-left: auto; font-size: 17px; }
@@ -581,6 +587,8 @@
   .proof-walkthrough-notation { font-size: 12px; }
   .proof-walkthrough-steps { padding-left: 12px; }
   .proof-walkthrough-step { padding-left: 23px; scroll-margin-top: var(--proof-heading-clearance); }
+  .proof-walkthrough-step:first-child:has(> .proof-walkthrough-stage-label)::before { top: 47px; }
+  .reading-proof .proof-walkthrough-step:first-child:has(> .proof-walkthrough-stage-label)::before { top: 41px; }
   .proof-walkthrough-step > header > span { width: 25px; height: 25px; left: -36px; top: 3px; font-size: 9px; }
   .proof-walkthrough-step > header > h5 { font-size: 21px; }
   .proof-walkthrough-inputs { gap: 5px 10px; margin-bottom: 13px; }

@@ -95,21 +95,20 @@ body[data-view=draft] .topbar .model-menu :is(#current-model,svg:last-child){dis
 .topbar #topbar-draft{display:inline-flex;flex-shrink:0}
 body[data-view=draft][data-entry=lean] .workspace{display:flex;justify-content:center;overflow-y:auto}
 body[data-view=draft][data-entry=lean] :is(.runs-workspace,.pane-resizer,.mobile-switch){display:none}
-body[data-view=draft][data-entry=lean] .composer{width:min(832px,100%);flex:none;overflow:visible;padding:clamp(40px,10vh,100px) 36px 48px;background:transparent}
-body[data-view=draft][data-entry=lean] .composer-heading{padding:0 0 20px;min-height:0}
+body[data-view=draft][data-entry=lean] .composer{width:min(832px,100%);flex:none;overflow:visible;padding:clamp(20px,3.5vh,36px) 36px 40px;background:transparent}
+body[data-view=draft][data-entry=lean] .composer-heading{padding:0 0 16px;min-height:0}
 body[data-view=draft][data-entry=lean] .creation-path{display:none}
 body[data-view=draft][data-entry=lean] .chat-scroll{flex:none;padding:0;overflow:visible;mask-image:none}
-body[data-view=draft][data-entry=lean] .inline-problem{padding:0;border:0}
+body[data-view=draft][data-entry=lean] .inline-problem{padding:0;border:0;margin-bottom:12px}
 body[data-view=draft][data-entry=lean] .inline-problem>.section-heading{display:none}
-body[data-view=draft][data-entry=lean] #source{min-height:210px;max-height:420px;border-radius:12px;padding:18px;line-height:1.8}
-body[data-view=draft][data-entry=lean] #run-form{padding:20px 0 0}
+body[data-view=draft][data-entry=lean] #source{max-height:420px;border-radius:12px;padding:18px;line-height:1.8}
+body[data-view=draft][data-entry=lean] #run-form{padding:12px 0 0}
 body[data-view=draft][data-entry=lean] .composer-tools{flex-wrap:wrap;gap:6px}
 body[data-view=draft][data-entry=lean] .composer-tools>.workbench-entrypoints{flex:1 0 auto}
 body[data-view=draft][data-entry=lean] .composer-environment{display:none}
 .lean-input-options{margin-top:12px}
 .lean-input-options summary{cursor:pointer;color:var(--muted);font-size:13px;padding-block:8px}
 .lean-input-options[open]{padding-bottom:12px}
-.draft-preview-toggle{align-self:flex-end;margin-bottom:16px}
 .draft-preview-close{display:none}
 body[data-view=draft][data-entry=lean][data-draft-preview=true] .composer{display:none}
 body[data-view=draft][data-entry=lean][data-draft-preview=true] .runs-workspace{display:flex;flex-direction:column;width:100%;flex:1}

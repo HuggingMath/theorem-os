@@ -126,6 +126,23 @@ try {
     assert.equal(await history.getAttribute('aria-expanded'), 'true');
     assert.ok(await page.evaluate(() => document.activeElement?.id === 'open-history' || Boolean(document.activeElement?.closest('#history-sidebar'))),
       'unfolding the history must leave focus on its button or move it into the list');
+    // Conversation search is visible even with no history; run search stays hidden until there are saved runs.
+    const search = page.locator('#history-sidebar [data-chat-search]');
+    await search.waitFor();
+    await search.fill('escape-search-fixture');
+    await search.press('Escape');
+    assert.equal(await history.getAttribute('aria-expanded'), 'true', 'Escape in a non-empty search keeps history open');
+    await search.fill('');
+    await search.press('Escape');
+    await page.locator('body[data-history-collapsed="true"]').waitFor({ state: 'attached' });
+    assert.equal(await history.evaluate(node => node === document.activeElement), true, 'Escape from an empty history search returns focus to History');
+    await history.press('Enter');
+    const taskHistory = page.locator('#history-sidebar .chat-task-history > summary');
+    await taskHistory.waitFor();
+    await taskHistory.focus();
+    await page.keyboard.press('Escape');
+    await page.locator('body[data-history-collapsed="true"]').waitFor({ state: 'attached' });
+    assert.equal(await history.evaluate(node => node === document.activeElement), true, 'Escape from another sidebar control also collapses history and restores focus');
     await page.setViewportSize({ width: 820, height: 900 });
     await settled(page);
     await dialog(page, '#open-history', 'history-dialog', `history dialog (${locale})`);

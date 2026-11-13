@@ -266,6 +266,7 @@ button.research-directory-card{font-family:var(--sans);cursor:pointer}
 .research-theorem-heading{margin-bottom:22px}
 .research-theorem-heading h1{margin-top:4px;margin-bottom:8px}
 .research-theorem-collections{border-bottom:1px solid var(--line);gap:24px;margin-bottom:0}
+.research-theorem-collections+.research-page-section{margin-top:22px}
 .research-theorem-collections>button:not(.research-directory-card){padding:12px 0;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--muted);font-size:13px}
 .research-theorem-collections>button[aria-pressed=true]{border-bottom-color:var(--blue);color:var(--ink);background:transparent}
 .research-solutions-view{min-width:0}

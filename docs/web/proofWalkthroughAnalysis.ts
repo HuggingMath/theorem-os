@@ -23,7 +23,7 @@ export const analysisProofWalkthroughs: ProofWalkthrough[] = [
       stepIds: ['rational-denominator', 'zero-space'],
     }],
     goal: t('证明四项支撑结论：数值域闭包紧且凸并包含谱；矩阵多项式在给定代数张量上的作用可由有限维压缩精确复现；无极点有理函数的分母在 A 处可逆；零空间上的各类求值和相应范数界成立。', 'Prove four supporting results: compact convex numerical closure containing the spectrum; exact finite compression on a given algebraic tensor; invertibility of pole-free rational denominators at A; and the evaluations and norm bounds in the zero-space case.'),
-    notation: t('W(A)={⟨x,Ax⟩: ‖x‖=1}，K=闭包 W(A)。P(A)=Σ Aᵏ⊗Bₖ；压缩 A_E=P_E A|E，J_E 是张量完成空间间的等距包含。', 'W(A)={⟨x,Ax⟩: ‖x‖=1} and K=closure W(A). Write P(A)=Σ Aᵏ⊗Bₖ, A_E=P_E A|E, and J_E for the isometric inclusion of completed tensor products.'),
+    notation: t('$W(A) = \\{\\langle x,Ax\\rangle : \\|x\\|=1\\}$，K=闭包 W(A)。P(A)=Σ Aᵏ⊗Bₖ；压缩 A_E=P_E A|E，J_E 是张量完成空间间的等距包含。', '$W(A) = \\{\\langle x,Ax\\rangle : \\|x\\|=1\\}$ and K=closure W(A). Write P(A)=Σ Aᵏ⊗Bₖ, A_E=P_E A|E, and J_E for the isometric inclusion of completed tensor products.'),
     steps: [
       {
         id: 'bloch-convexity',
@@ -99,7 +99,7 @@ export const analysisProofWalkthroughs: ProofWalkthrough[] = [
         dependsOn: ["closed-range-geometry"],
         derivation: [
           { statement: t("若 z∈σ(A)，则 z∈K，故每个分母 qᵢⱼ(z)≠0。", "If z∈σ(A), then z∈K, so every denominator qᵢⱼ(z) is nonzero."), reason: t("谱包含关系使 K 上的无极点假设可直接用于谱中的每个点。", "Spectral inclusion lets the pole-free assumption on K apply to every spectral point.") },
-          { statement: t("σ(qᵢⱼ(A))={qᵢⱼ(z):z∈σ(A)}，所以 0∉σ(qᵢⱼ(A))。", "σ(qᵢⱼ(A))={qᵢⱼ(z):z∈σ(A)}, hence 0∉σ(qᵢⱼ(A))."), reason: t("多项式谱映射把新算子的谱点逐个写成旧谱点的分母值，而上一行已排除了值零。", "Polynomial spectral mapping expresses each new spectral point as a denominator value on the old spectrum, and the preceding line excludes zero.") },
+          { statement: t("$\\sigma(q_{ij}(A)) = \\{q_{ij}(z) : z\\in\\sigma(A)\\}$，所以 0∉σ(qᵢⱼ(A))。", "$\\sigma(q_{ij}(A)) = \\{q_{ij}(z) : z\\in\\sigma(A)\\}$, hence 0∉σ(qᵢⱼ(A))."), reason: t("多项式谱映射把新算子的谱点逐个写成旧谱点的分母值，而上一行已排除了值零。", "Polynomial spectral mapping expresses each new spectral point as a denominator value on the old spectrum, and the preceding line excludes zero.") },
           { statement: t("IsUnit(qᵢⱼ(A))；因此有理求值中的 qᵢⱼ(A)⁻¹ 是该分母的真正逆。", "IsUnit(qᵢⱼ(A)); the inverse qᵢⱼ(A)⁻¹ in rational evaluation is therefore a genuine inverse."), reason: t("在算子代数中，零不在谱内等价于可逆。此处仍沿用给定的非平凡 H 假设。", "In the operator algebra, exclusion of zero from the spectrum is equivalent to invertibility. The stated nontriviality assumption on H remains in force.") },
         ],
         next: t('这解释有理求值中取逆的合法性。非平凡假设之外的退化情形由零空间结论单独处理。', 'This justifies the inverse used in rational evaluation. The remaining degenerate case is handled separately on the zero space.'),
@@ -142,7 +142,7 @@ export const analysisProofWalkthroughs: ProofWalkthrough[] = [
       stepIds: ['spectral-lower-bound', 'almost-sure-equality'],
     }],
     goal: t('对 h>0、在 ℤ² 上独立均匀取值于 [−h,h] 的势 v，证明几乎处处存在相应的有界自伴算子 H，其谱恰为实区间 [−4−h,4+h]。', 'For h>0 and independent uniform potentials v(x)∈[−h,h] on ℤ², prove that almost every configuration has a bounded self-adjoint Anderson operator H with spectrum exactly the real interval [−4−h,4+h].'),
-    notation: t('Hᵥu(x)=Σ_{|e|₁=1}u(x+e)+v(x)u(x)，作用于 ℓ²(ℤ²;ℂ)。H_c 表示常势 c 的算子；Bₙ={x: |x₁|,|x₂|≤n}。', 'Hᵥu(x)=Σ_{|e|₁=1}u(x+e)+v(x)u(x) on ℓ²(ℤ²;ℂ). Write H_c for constant potential c and Bₙ={x: |x₁|,|x₂|≤n}.'),
+    notation: t('Hᵥu(x)=Σ_{|e|₁=1}u(x+e)+v(x)u(x)，作用于 ℓ²(ℤ²;ℂ)。H_c 表示常势 c 的算子；$B_n = \\{x : |x_1|,|x_2|\\le n\\}$。', 'Hᵥu(x)=Σ_{|e|₁=1}u(x+e)+v(x)u(x) on ℓ²(ℤ²;ℂ). Write H_c for constant potential c and $B_n = \\{x : |x_1|,|x_2|\\le n\\}$.'),
     steps: [
       {
         id: 'bounded-self-adjoint',
@@ -228,13 +228,13 @@ export const analysisProofWalkthroughs: ProofWalkthrough[] = [
         id: 'almost-sure-equality',
         title: t('在满测度事件上合并两侧包含', 'Combine both inclusions on a full-measure event'),
         given: t('势处处有界和所有近常值方块存在这两个事件均为满测度；它们的交仍为满测度。', 'The bounded-potential event and the simultaneous-box event both have full measure, and so does their intersection.'),
-        claim: t('几乎处处存在 Hᵥ，使 Hᵥ 满足给定格点公式、自伴，并且 σ(Hᵥ)={z∈ℂ: Im z=0，−4−h≤Re z≤4+h}。', 'Almost surely there exists Hᵥ satisfying the lattice formula, self-adjointness and σ(Hᵥ)={z∈ℂ: Im z=0, −4−h≤Re z≤4+h}.'),
+        claim: t('几乎处处存在 Hᵥ，使 Hᵥ 满足给定格点公式、自伴，并且 $\\sigma(H_v) = \\{z\\in\\mathbb{C} : \\operatorname{Im}z=0,\\ -4-h\\le\\operatorname{Re}z\\le 4+h\\}$。', 'Almost surely there exists Hᵥ satisfying the lattice formula, self-adjointness and $\\sigma(H_v) = \\{z\\in\\mathbb{C} : \\operatorname{Im}z=0,\\ -4-h\\le\\operatorname{Re}z\\le 4+h\\}$.'),
         because: t('在交事件中，先用有界势构造第 1 步的 Hᵥ。上界证明给出 σ(Hᵥ)⊆I_h；方块构造给出 I_h⊆σ(Hᵥ)。集合的双向包含得到等式，并把同一个 Hᵥ 的格点公式和自伴性一并保留，最后正好得到原目标的存在量词和几乎处处量词。', 'On the intersection event, construct Hᵥ from the bounded potential as in step 1. The upper argument gives σ(Hᵥ)⊆I_h and the box argument gives I_h⊆σ(Hᵥ). Antisymmetry of set inclusion yields equality while retaining the same operator, its lattice formula and self-adjointness, matching the existential and almost-sure quantifiers of the target.'),
         dependsOn: ["bounded-self-adjoint", "spectral-lower-bound"],
         derivation: [
           { statement: t("令 E=E_bounded∩E_boxes，则 Pr(E)=1。", "Let E=E_bounded∩E_boxes; then Pr(E)=1."), reason: t("两个补集都为零测集，有限并仍为零测集，故可在同一个事件上同时使用两条证明支线。", "Both complements have measure zero, as does their union, so both proof branches hold on the same event.") },
           { statement: t("对 v∈E，用有界势构造同一个 Hᵥ，得到 σ(Hᵥ)⊆I_h 和 I_h⊆σ(Hᵥ)。", "For v∈E, construct one operator Hᵥ from the bounded potential, giving σ(Hᵥ)⊆I_h and I_h⊆σ(Hᵥ)."), reason: t("第一条包含来自算子范数，第二条来自该配置的近常值方块；两者使用同一个格点算子。", "The first inclusion comes from the norm bound, the second from nearly constant boxes of that configuration; both concern the same lattice operator.") },
-          { statement: t("σ(Hᵥ)=I_h={z:Im z=0，−4−h≤Re z≤4+h}。", "σ(Hᵥ)=I_h={z:Im z=0, −4−h≤Re z≤4+h}."), reason: t("由集合双向包含得到相等，并保留构造时的格点公式与自伴性，装入原题的“几乎处处存在 H”结论。", "Two inclusions give set equality. Retain the lattice formula and self-adjointness from the construction to obtain the target almost-sure existence statement.") },
+          { statement: t("$\\sigma(H_v) = I_h = \\{z : \\operatorname{Im}z=0,\\ -4-h\\le\\operatorname{Re}z\\le 4+h\\}$。", "$\\sigma(H_v) = I_h = \\{z : \\operatorname{Im}z=0,\\ -4-h\\le\\operatorname{Re}z\\le 4+h\\}$."), reason: t("由集合双向包含得到相等，并保留构造时的格点公式与自伴性，装入原题的“几乎处处存在 H”结论。", "Two inclusions give set equality. Retain the lattice formula and self-adjointness from the construction to obtain the target almost-sure existence statement.") },
         ],
         next: t('这闭合精确谱区间的证明；h>0 与独立均匀势的分布假设保留在最终结论中。', 'This completes the exact spectral-interval result under the stated h>0 and independent uniform-potential assumptions.'),
         evidence: { theorems: ['OAI.PlanarAnderson.anderson_from_components', 'OAI.PlanarAnderson.anderson_spectrum_ae_sorry_free', 'OAI.PlanarAnderson.anderson_spectrum_ae'], taskIds: ['anderson_from_components', 'anderson_spectrum_ae_sorry_free', 'anderson'], checkIds: ['check-1d66afce6974559d0595'], source: { name: 'Submission.lean', line: 1440, endLine: 1449 } },

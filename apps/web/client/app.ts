@@ -748,10 +748,12 @@ function syncSettingsNavigation() {
   const top = content.getBoundingClientRect().top;
   const buttons = [...document.querySelectorAll<HTMLButtonElement>('[data-settings-section]')];
   let current = buttons[0];
-  for (const button of buttons) {
-    if (element(`#${button.dataset.settingsSection}`).getBoundingClientRect().top <= top + 48) current = button;
+  if (content.scrollTop > 4) {
+    for (const button of buttons) {
+      if (element(`#${button.dataset.settingsSection}`).getBoundingClientRect().top <= top + 88) current = button;
+    }
+    if (content.scrollHeight - content.clientHeight - content.scrollTop < 8) current = buttons.at(-1)!;
   }
-  if (content.scrollTop > 0 && content.scrollHeight - content.clientHeight - content.scrollTop < 8) current = buttons.at(-1)!;
   for (const button of buttons) {
     if (button === current) button.setAttribute('aria-current', 'location');
     else button.removeAttribute('aria-current');
@@ -885,8 +887,8 @@ function renderPreparation(issues?: SubmissionIssue[]) {
       : full ? t('删除一条已结束的记录后才能提交新的研究；需要的档案请先下载。草稿会保留。')
       : firstKey ? '' : issue?.field === 'api-key' ? (state.session?.account?.keyVault ? t('勾选「保存到我的账号」后，下次不用再填。') : t('每次提交后清空，不随草稿保存；可在设置里选择在此标签页记住。'))
         : issue?.field === 'task' ? t('说明要证明的目标与约束。')
-          : issue?.check ? t('原题需要先能编译；点击右侧定位到出错位置。')
-          : issue?.field === 'source' ? t('添加原始 Lean 题目，右侧可预览。')
+          : issue?.check ? t('原题需要先能编译；点「查看错误」定位到出错位置。')
+          : issue?.field === 'source' ? t('添加原始 Lean 题目，可打开「预览」查看。')
             : issue ? t('补全配置后即可提交当前题目。') : settled ? t('提交只会验收现有证明；要让 Agent 研究，把待证部分写成 sorry。') : '');
   patchText(element('#readiness-action'), full ? t('整理研究记录') : issue?.check ? t('查看错误') : issue ? labels[issue.field] : settled ? t('编辑源码') : t('查看配置'));
   element('#readiness-detail').hidden = !element('#readiness-detail').textContent;
@@ -4089,6 +4091,17 @@ document.addEventListener('keydown', event => {
   const menu = event.target instanceof Element ? event.target.closest<HTMLDetailsElement>('[data-run-menu][open]') : null;
   if (event.key !== 'Escape' || !menu) return;
   event.preventDefault(); menu.open = false; menu.querySelector('summary')?.focus();
+});
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape' || event.defaultPrevented || !historyDocked() || historyCollapsed()) return;
+  const active = document.activeElement;
+  if (!active || !element('#history-sidebar').contains(active)
+    || document.querySelector('dialog[open], [data-run-menu][open], [data-navigation-menu][open]')) return;
+  // A search field uses its first Escape to clear its query; an empty search returns to the workspace.
+  if (active instanceof HTMLInputElement && active.type === 'search' && active.value) return;
+  event.preventDefault();
+  setHistoryCollapsed(true);
+  element('#open-history').focus({ preventScroll: true });
 });
 element('#history-dialog').addEventListener('cancel', rememberHistoryScroll);
 element('#run-list').addEventListener('scroll', rememberHistoryScroll, { passive: true });

@@ -26,7 +26,7 @@ export function submissionIssues(draft: TaskDraft, apiKey: string, session: WebS
     ['source', draft.source, t('Lean 源码'), session.limits.maxSourceBytes],
     ['task', draft.task, t('研究任务'), session.limits.maxTaskBytes],
   ] as const) {
-    if (!value.trim()) add(field, t('请填写{0}', label));
+    if (!value.trim()) add(field, field === 'source' ? t('请填写 Lean 源码') : t('请填写研究任务'));
     else if (value.includes('\0')) add(field, t('{0}包含无效字符', label));
     else if (new TextEncoder().encode(value).length > limit) add(field, t('{0}超出允许大小（最多 {1} 字节）', label, limit.toLocaleString(localeTag)));
   }

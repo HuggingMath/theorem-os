@@ -191,6 +191,26 @@ try {
     await enterLean(actor);
     assert.equal(await actor.locator('#formalize-settings').getAttribute('open'), null, 'Entering Lean closes the composer settings');
     assert.equal(await actor.locator('#source').inputValue(), '');
+    assert.equal(await actor.locator('.composer-heading .composer-actions > :first-child').getAttribute('id'), 'open-draft-preview',
+      'Lean preview is the first heading action');
+    assert.equal(await actor.locator('#open-draft-preview').isVisible(), true, 'Lean preview remains reachable at every width');
+    if (width === 1440) {
+      const viewport = actor.viewportSize()!;
+      // enterLean opens instructions for editing; measure the user's collapsed default.
+      const instructionsOpen = await actor.locator('#proof-instructions').evaluate(node => {
+        const details = node as HTMLDetailsElement, open = details.open;
+        details.open = false; return open;
+      });
+      await actor.setViewportSize({ width: 1440, height: 900 });
+      await actor.evaluate(() => document.fonts.ready); await settled(actor);
+      const composer = (await actor.locator('.chat-input-shell').boundingBox())!;
+      const send = (await actor.locator('#submit-run').boundingBox())!;
+      assert.ok(composer.y >= 0 && composer.y + composer.height <= 890, 'The complete Lean composer fits above the fold at 1440 × 900');
+      assert.ok(send.y >= composer.y && send.y + send.height <= 890, 'The Lean send button fits above the fold');
+      await shot(actor, `lean-draft-${locale}-${width}.png`);
+      await actor.setViewportSize(viewport);
+      await actor.locator('#proof-instructions').evaluate((node, open) => { (node as HTMLDetailsElement).open = open; }, instructionsOpen);
+    }
     const lean = 'theorem simple_fixture : True := by\n  sorry\n'; await actor.locator('#source').fill(lean);
     await actor.reload(); await actor.locator('#source:visible').waitFor();
     assert.equal(await actor.locator('#source').inputValue(), lean);

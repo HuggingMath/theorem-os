@@ -44,6 +44,8 @@ export function TheoremsPage({ context }: { context: ResearchContext }) {
   const [creatorMounted, setCreatorMounted] = useState(creating);
   const directory = useResource<Items<ResearchProjectSummary>>(selected || collection !== 'research' ? undefined : `${base}/theorems?q=${enc(query)}&field=${enc(field)}&offset=${offset}&limit=14`);
   const detail = useResource<Item<ResearchProjectDetail>>(selected ? `${base}/theorems/${enc(selected)}` : undefined, 8000);
+  const emptyResearchDirectory = !selected && !creating && collection === 'research'
+    && Boolean(directory.data && !directory.data.items.length && !query && !field && offset === 0);
   const browse = new URLSearchParams({ collection });
   if (collection === 'solved' && sort !== 'newest') browse.set('sort', sort);
   if (query) browse.set('q', query); if (field) browse.set('field', field); if (offset) browse.set('offset', String(offset));
@@ -67,7 +69,7 @@ export function TheoremsPage({ context }: { context: ResearchContext }) {
         : tx('从题目到证明，阅读每一步解题过程。', 'From statement to proof. Explore how each problem was solved.')}</p></div>
     <div class="research-heading-actions">{context.session.authenticated ? selected
       ? <a class="button button-primary" href={createHref}>{tx('新建定理', 'New theorem')}</a>
-      : <button class="button button-primary" type="button" aria-expanded={creating} onClick={() => create(!creating)}>{creating ? tx('返回定理目录', 'Back to theorems') : tx('新建定理', 'New theorem')}</button>
+      : <button class={emptyResearchDirectory ? 'button' : 'button button-primary'} type="button" aria-expanded={creating} onClick={() => create(!creating)}>{creating ? tx('返回定理目录', 'Back to theorems') : tx('新建定理', 'New theorem')}</button>
       : <a class="button" href={loginHref(createHref)}>{tx('登录后创建定理', 'Sign in to create a theorem')}</a>}</div></div>
     {creatorMounted && <div hidden={!creating}><Panel title={tx('研究题目', 'Research question')}><CreateProject addResearcher={addResearcher} /></Panel></div>}
     <div hidden={creating}>{!selected && <nav class="research-section-nav research-theorem-collections" aria-label={tx('定理内容', 'Theorem collections')}>

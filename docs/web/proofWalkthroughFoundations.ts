@@ -53,7 +53,7 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
             reason: text("把题设的局部代数和形式 étale 条件代入 closedChartExpansion_injective；后面延拓到 K 时正是用这份单射性排除非零元具有无限赋值。", "Apply closedChartExpansion_injective with the declared local-algebra and formally étale hypotheses. This injectivity makes the valuation finite on nonzero elements before extension to K."),
           },
           {
-            statement: text("Wₐ={w∈ℝ≥0^σ:Σᵢaᵢwᵢ=1}，且 0≤wᵢ≤1/aᵢ。", "Wₐ={w∈ℝ≥0^σ:Σᵢaᵢwᵢ=1}, with 0≤wᵢ≤1/aᵢ."),
+            statement: text("$W_a = \\{w\\in\\mathbb{R}_{\\ge 0}^{\\sigma} : \\sum_i a_i w_i = 1\\}$，且 0≤wᵢ≤1/aᵢ。", "$W_a = \\{w\\in\\mathbb{R}_{\\ge 0}^{\\sigma} : \\sum_i a_i w_i = 1\\}$, with 0≤wᵢ≤1/aᵢ."),
             reason: text("各项 aᵢwᵢ 都非负，所以每项不超过总和 1；再用 aᵢ>0 除过去。这说明为什么严格正的归一化系数能限制每个权重。", "Every term aᵢwᵢ is nonnegative and therefore at most the sum, one. Divide by aᵢ>0. This explains why strict positivity bounds every coordinate."),
           },
           {
@@ -136,7 +136,7 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
             reason: text("两者再用同一个 fractionValuation 将上一行的局部赋值延拓到 K。最终的 simpa only 只展开这三个定义。", "Both apply the same fractionValuation construction to extend that local valuation to K. The final simpa only unfolds precisely these definitions."),
           },
           {
-            statement: text("F(Wₐ)={V_w:w∈Wₐ}，故 IsCompact(F(Wₐ))。", "F(Wₐ)={V_w:w∈Wₐ}, hence IsCompact(F(Wₐ))."),
+            statement: text("$F(W_a) = \\{V_w : w\\in W_a\\}$，故 IsCompact(F(Wₐ))。", "$F(W_a) = \\{V_w : w\\in W_a\\}$, hence IsCompact(F(Wₐ))."),
             reason: text("逐点相等使两组像集相同，因此上一步的紧致集就是原目标中的集合。", "Pointwise equality identifies the image sets, so the compact set from the preceding step is exactly the set in the target."),
           },
         ],
@@ -963,7 +963,7 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
       stepIds: ['derive-the-first-moment', 'derive-the-second-moment'],
     }, {
       title: text('构造纤维筛选恒等式', 'Build the fiber-selecting identity'),
-      summary: text('单位模长把 v³conj(v)² 化为 v；分别代入立方为 a 或 b，得到只在 a 纤维上保留 (a−b)v 的等式。', 'Unit modulus reduces v³conj(v)² to v. Splitting on cube values a and b gives an identity retaining (a−b)v only on the a-fiber.'),
+      summary: text('单位模长把 $v^3\\overline{v}^2$ 化为 v；分别代入立方为 a 或 b，得到只在 a 纤维上保留 (a−b)v 的等式。', 'Unit modulus reduces $v^3\\overline{v}^2$ to v. Splitting on cube values a and b gives an identity retaining (a−b)v only on the a-fiber.'),
       stepIds: ['reduce-cubes-using-unit-modulus', 'build-the-fiber-indicator'],
     }, {
       title: text('求和并消去非零因子', 'Sum and cancel the nonzero factor'),
@@ -971,35 +971,35 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
       stepIds: ['sum-and-cancel'],
     }],
     goal: {
-      zh: '设 6×6 矩阵 H 和其逐项平方 H² 都是复 Hadamard 矩阵。取不同两行的比值 vₖ=Hᵢₖ·conj(Hⱼₖ)，若每个 vₖ³ 只可能为两个不同值 a、b，证明 ∑_{vₖ³=a}vₖ=0。',
-      en: 'Let H and its entrywise square H² be 6×6 complex Hadamard matrices. For distinct rows let vₖ=Hᵢₖ·conj(Hⱼₖ). If every vₖ³ equals one of two distinct values a,b, prove ∑_{vₖ³=a}vₖ=0.',
+      zh: '设 6×6 矩阵 H 和其逐项平方 $H^2$ 都是复 Hadamard 矩阵。取不同两行的比值 $v_k = H_{ik}\\overline{H_{jk}}$，若每个 vₖ³ 只可能为两个不同值 a、b，证明 ∑_{vₖ³=a}vₖ=0。',
+      en: 'Let H and its entrywise square $H^2$ be 6×6 complex Hadamard matrices. For distinct rows let $v_k = H_{ik}\\overline{H_{jk}}$. If every vₖ³ equals one of two distinct values a,b, prove ∑_{vₖ³=a}vₖ=0.',
     },
     notation: {
-      zh: 'H* 表示共轭转置，H² 在本题始终指逐项平方。cubeFiber(v,a)={k : vₖ³=a}。星号 star 在标量上就是复共轭。',
-      en: 'H* denotes conjugate transpose; H² here always means entrywise squaring. cubeFiber(v,a)={k : vₖ³=a}. Scalar star is complex conjugation.',
+      zh: '$H^*$ 表示共轭转置，$H^2$ 在本题始终指逐项平方。$\\operatorname{cubeFiber}(v,a) = \\{k : v_k^3 = a\\}$。星号 star 在标量上就是复共轭。',
+      en: '$H^*$ denotes conjugate transpose; $H^2$ here always means entrywise squaring. $\\operatorname{cubeFiber}(v,a) = \\{k : v_k^3 = a\\}$. Scalar star is complex conjugation.',
     },
     steps: [
       {
         id: 'derive-the-first-moment',
         title: { zh: '先从列正交得到行正交', en: 'Pass from column orthogonality to row orthogonality' },
-        given: { zh: 'Hadamard 定义给出 H*H=6I，且 i≠j。', en: 'The Hadamard definition gives H*H=6I, with i≠j.' },
-        claim: { zh: 'HH*=6I，因此 ∑ₖvₖ=0。', en: 'Then HH*=6I, and consequently ∑ₖvₖ=0.' },
+        given: { zh: 'Hadamard 定义给出 $H^*H = 6I$，且 i≠j。', en: 'The Hadamard definition gives $H^*H = 6I$, with i≠j.' },
+        claim: { zh: '$HH^* = 6I$，因此 ∑ₖvₖ=0。', en: 'Then $HH^* = 6I$, and consequently ∑ₖvₖ=0.' },
         because: {
-          zh: '(1/6)H* 是方阵 H 的左逆；mul_eq_one_comm 将它转为右逆，乘回 6 得 HH*=6I。取该矩阵等式的 (i,j) 元，右侧因 i≠j 为0，左侧正是 ∑ₖHᵢₖ·conj(Hⱼₖ)。',
-          en: '(1/6)H* is a left inverse of the square matrix H. mul_eq_one_comm makes it a right inverse; multiplying by six gives HH*=6I. Its (i,j) entry is zero on the right because i≠j and is ∑ₖHᵢₖ·conj(Hⱼₖ) on the left.',
+          zh: '$\\frac{1}{6}H^*$ 是方阵 H 的左逆；mul_eq_one_comm 将它转为右逆，乘回 6 得 $HH^* = 6I$。取该矩阵等式的 (i,j) 元，右侧因 i≠j 为0，左侧正是 $\\sum_k H_{ik}\\overline{H_{jk}}$。',
+          en: '$\\frac{1}{6}H^*$ is a left inverse of the square matrix H. mul_eq_one_comm makes it a right inverse; multiplying by six gives $HH^* = 6I$. Its (i,j) entry is zero on the right because i≠j and is $\\sum_k H_{ik}\\overline{H_{jk}}$ on the left.',
         },
         dependsOn: [],
         derivation: [
           {
-            statement: text("L=(1/6)H* ⇒ LH=(1/6)(H*H)=(1/6)·6I=I。", "L=(1/6)H* gives LH=(1/6)(H*H)=(1/6)·6I=I."),
-            reason: text("Hadamard 定义提供的是列正交 H*H=6I；6 在复数域可逆，所以可以构造这个左逆。", "The Hadamard definition supplies column orthogonality H*H=6I. Six is invertible in ℂ, giving this left inverse."),
+            statement: text("$L = \\frac{1}{6}H^* \\Rightarrow LH = \\frac{1}{6}(H^*H) = \\frac{1}{6}\\cdot 6I = I$。", "$L = \\frac{1}{6}H^*$ gives $LH = \\frac{1}{6}(H^*H) = \\frac{1}{6}\\cdot 6I = I$."),
+            reason: text("Hadamard 定义提供的是列正交 $H^*H = 6I$；6 在复数域可逆，所以可以构造这个左逆。", "The Hadamard definition supplies column orthogonality $H^*H = 6I$. Six is invertible in ℂ, giving this left inverse."),
           },
           {
-            statement: text("LH=I ⇒ HL=I ⇒ HH*=6I。", "LH=I implies HL=I, hence HH*=6I."),
+            statement: text("LH=I ⇒ HL=I ⇒ $HH^* = 6I$。", "LH=I implies HL=I, hence $HH^* = 6I$."),
             reason: text("H 是方阵；源码用 mul_eq_one_comm 把左逆等式交换为右逆等式，再乘回非零标量 6。", "H is square. The source uses mul_eq_one_comm to obtain the right-inverse equality, then multiplies back by the nonzero scalar six."),
           },
           {
-            statement: text("i≠j ⇒ (HH*)ᵢⱼ=ΣₖHᵢₖconj(Hⱼₖ)=0，亦即 Σₖvₖ=0。", "i≠j gives (HH*)ᵢⱼ=ΣₖHᵢₖconj(Hⱼₖ)=0, namely Σₖvₖ=0."),
+            statement: text("$i \\ne j \\Rightarrow (HH^*)_{ij} = \\sum_k H_{ik}\\overline{H_{jk}} = 0$，亦即 Σₖvₖ=0。", "i≠j gives $(HH^*)_{ij} = \\sum_k H_{ik}\\overline{H_{jk}} = 0$, namely Σₖvₖ=0."),
             reason: text("取矩阵等式的不同行列位置；右端 6I 的非对角元为 0，左端按矩阵乘法展开。", "Take the off-diagonal (i,j) entry. The right side 6I is zero there; expanding the left side gives the stated sum."),
           },
         ],
@@ -1014,23 +1014,23 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
         id: 'derive-the-second-moment',
         title: { zh: '逐项平方的正交性给出 ∑vₖ²=0', en: 'Orthogonality of the square gives ∑vₖ²=0' },
         given: { zh: '逐项平方矩阵同样满足 Hadamard 条件。', en: 'The entrywise square also satisfies the Hadamard conditions.' },
-        claim: { zh: '∑ₖvₖ²=0，取共轭还得到 ∑ₖconj(vₖ)²=0。', en: 'We obtain ∑ₖvₖ²=0, and conjugation gives ∑ₖconj(vₖ)²=0.' },
+        claim: { zh: '∑ₖvₖ²=0，取共轭还得到 $\\sum_k \\overline{v_k}^2 = 0$。', en: 'We obtain ∑ₖvₖ²=0, and conjugation gives $\\sum_k \\overline{v_k}^2 = 0$.' },
         because: {
-          zh: '平方矩阵的不同行内积为0，而 Hᵢₖ²·conj(Hⱼₖ²)=(Hᵢₖ·conj(Hⱼₖ))²=vₖ²。复共轭保持有限和、平方及0，所以把等式整体取共轭即可得到后一式。',
-          en: 'Distinct rows of the squared matrix have zero inner product, and Hᵢₖ²·conj(Hⱼₖ²)=(Hᵢₖ·conj(Hⱼₖ))²=vₖ². Conjugation preserves finite sums, squares and zero, yielding the conjugated identity.',
+          zh: '平方矩阵的不同行内积为0，而 $H_{ik}^2\\overline{H_{jk}^2} = (H_{ik}\\overline{H_{jk}})^2 = v_k^2$。复共轭保持有限和、平方及0，所以把等式整体取共轭即可得到后一式。',
+          en: 'Distinct rows of the squared matrix have zero inner product, and $H_{ik}^2\\overline{H_{jk}^2} = (H_{ik}\\overline{H_{jk}})^2 = v_k^2$. Conjugation preserves finite sums, squares and zero, yielding the conjugated identity.',
         },
         dependsOn: [],
         derivation: [
           {
-            statement: text("令 Qᵢₖ=Hᵢₖ²。由 Q*Q=6I 得 QQ*=6I。", "Set Qᵢₖ=Hᵢₖ². From Q*Q=6I obtain QQ*=6I."),
+            statement: text("令 $Q_{ik} = H_{ik}^2$。由 $Q^*Q = 6I$ 得 $QQ^* = 6I$。", "Set $Q_{ik} = H_{ik}^2$. From $Q^*Q = 6I$ obtain $QQ^* = 6I$."),
             reason: text("题目对逐项平方矩阵单独给出了 Hadamard 假设；对 Q 使用同样的方阵左右逆论证。", "The entrywise-square matrix has its own Hadamard hypothesis. Apply the same left-to-right inverse argument to Q."),
           },
           {
-            statement: text("ΣₖQᵢₖconj(Qⱼₖ)=Σₖ(Hᵢₖconj(Hⱼₖ))²=Σₖvₖ²=0。", "ΣₖQᵢₖconj(Qⱼₖ)=Σₖ(Hᵢₖconj(Hⱼₖ))²=Σₖvₖ²=0."),
+            statement: text("$\\sum_k Q_{ik}\\overline{Q_{jk}} = \\sum_k (H_{ik}\\overline{H_{jk}})^2 = \\sum_k v_k^2 = 0$。", "$\\sum_k Q_{ik}\\overline{Q_{jk}} = \\sum_k (H_{ik}\\overline{H_{jk}})^2 = \\sum_k v_k^2 = 0$."),
             reason: text("i≠j 使 Q 的不同行内积为 0；复共轭保持平方，普通乘法交换使两个平方并成 vₖ²。", "The distinct rows of Q have zero inner product. Conjugation preserves squares, and commutativity combines the squared factors into vₖ²."),
           },
           {
-            statement: text("取共轭：Σₖconj(vₖ)²=conj(Σₖvₖ²)=0。", "Conjugating gives Σₖconj(vₖ)²=conj(Σₖvₖ²)=0."),
+            statement: text("取共轭：$\\sum_k \\overline{v_k}^2 = \\overline{\\sum_k v_k^2} = 0$。", "Conjugating gives $\\sum_k \\overline{v_k}^2 = \\overline{\\sum_k v_k^2} = 0$."),
             reason: text("复共轭保持有限和并把 0 映为 0；最终求和时需要的是这个共轭平方矩。", "Conjugation preserves finite sums and zero. This conjugate-square moment is the one used in the final sum."),
           },
         ],
@@ -1045,23 +1045,23 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
         id: 'reduce-cubes-using-unit-modulus',
         title: { zh: '模长 1 把三次方和共轭平方联系起来', en: 'Unit modulus links cubes with conjugate squares' },
         given: { zh: 'H 的每个元素模长为1，故 |vₖ|=1。', en: 'Every entry of H has modulus one, hence |vₖ|=1.' },
-        claim: { zh: 'vₖconj(vₖ)=1，进而 vₖ³conj(vₖ)²=vₖ。', en: 'Thus vₖconj(vₖ)=1 and vₖ³conj(vₖ)²=vₖ.' },
+        claim: { zh: '$v_k\\overline{v_k} = 1$，进而 $v_k^3\\overline{v_k}^2 = v_k$。', en: 'Thus $v_k\\overline{v_k} = 1$ and $v_k^3\\overline{v_k}^2 = v_k$.' },
         because: {
-          zh: '|Hᵢₖ·conj(Hⱼₖ)|=|Hᵢₖ||Hⱼₖ|=1，复数乘共轭等于模长平方。因此 v³conj(v)² = v·(vconj(v))² = v。',
-          en: '|Hᵢₖ·conj(Hⱼₖ)|=|Hᵢₖ||Hⱼₖ|=1, and a complex number times its conjugate is its squared modulus. Hence v³conj(v)² = v·(vconj(v))² = v.',
+          zh: '$|H_{ik}\\overline{H_{jk}}| = |H_{ik}||H_{jk}| = 1$，复数乘共轭等于模长平方。因此 $v^3\\overline{v}^2 = v(v\\overline{v})^2 = v$。',
+          en: '$|H_{ik}\\overline{H_{jk}}| = |H_{ik}||H_{jk}| = 1$, and a complex number times its conjugate is its squared modulus. Hence $v^3\\overline{v}^2 = v(v\\overline{v})^2 = v$.',
         },
         dependsOn: [],
         derivation: [
           {
-            statement: text("|vₖ|=|Hᵢₖ|·|conj(Hⱼₖ)|=1·1=1。", "|vₖ|=|Hᵢₖ|·|conj(Hⱼₖ)|=1·1=1."),
+            statement: text("$|v_k| = |H_{ik}|\\,|\\overline{H_{jk}}| = 1\\cdot 1 = 1$。", "$|v_k| = |H_{ik}|\\,|\\overline{H_{jk}}| = 1\\cdot 1 = 1$."),
             reason: text("H 的 Unimodular 条件逐项给出模长 1，且共轭不改变模长。", "The Unimodular hypothesis gives modulus one entrywise, and conjugation preserves modulus."),
           },
           {
-            statement: text("vₖconj(vₖ)=|vₖ|²=1。", "vₖconj(vₖ)=|vₖ|²=1."),
+            statement: text("$v_k\\overline{v_k} = |v_k|^2 = 1$。", "$v_k\\overline{v_k} = |v_k|^2 = 1$."),
             reason: text("复数与其共轭的乘积等于模长平方；这一步不需要 a、b 的立方取值条件。", "A complex number times its conjugate is its squared modulus. This step does not use the two possible cube values a,b."),
           },
           {
-            statement: text("vₖ³conj(vₖ)²=vₖ(vₖconj(vₖ))²=vₖ。", "vₖ³conj(vₖ)²=vₖ(vₖconj(vₖ))²=vₖ."),
+            statement: text("$v_k^3\\overline{v_k}^2 = v_k(v_k\\overline{v_k})^2 = v_k$。", "$v_k^3\\overline{v_k}^2 = v_k(v_k\\overline{v_k})^2 = v_k$."),
             reason: text("先按交换结合律重排，再代入上一行的 1；这为下一阶段的两个立方分支提供相同的代换式。", "Rearrange by commutativity and associativity, then substitute one from the preceding identity. Both cube-value cases will use this same equality."),
           },
         ],
@@ -1077,24 +1077,24 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
         figure: 'hadamard-fiber',
         title: { zh: '构造逐点恒等式，筛出 a 纤维', en: 'Construct a pointwise identity selecting the a-fiber' },
         given: { zh: 'a≠b，且每个 vₖ³ 都等于 a 或 b。', en: 'a≠b and every vₖ³ is a or b.' },
-        claim: { zh: '对每个 k，1_{vₖ³=a}(a−b)vₖ = a(vₖ−b·conj(vₖ)²)。', en: 'For each k, 1_{vₖ³=a}(a−b)vₖ = a(vₖ−b·conj(vₖ)²).' },
+        claim: { zh: '对每个 k，$1_{\\{v_k^3=a\\}}(a-b)v_k = a(v_k-b\\overline{v_k}^2)$。', en: 'For each k, $1_{\\{v_k^3=a\\}}(a-b)v_k = a(v_k-b\\overline{v_k}^2)$.' },
         because: {
-          zh: '若 v³=a，上一步给出 a·conj(v)²=v，右边等于 av−bv=(a−b)v。若 v³=b，则 b·conj(v)²=v，右边为0；a≠b 又保证指示条件为假，左边同为0。',
-          en: 'If v³=a, the preceding identity gives a·conj(v)²=v, so the right side is av−bv=(a−b)v. If v³=b, then b·conj(v)²=v and the right side is zero; a≠b makes the indicator false, so the left side is also zero.',
+          zh: '若 v³=a，上一步给出 $a\\overline{v}^2 = v$，右边等于 av−bv=(a−b)v。若 v³=b，则 $b\\overline{v}^2 = v$，右边为0；a≠b 又保证指示条件为假，左边同为0。',
+          en: 'If v³=a, the preceding identity gives $a\\overline{v}^2 = v$, so the right side is av−bv=(a−b)v. If v³=b, then $b\\overline{v}^2 = v$ and the right side is zero; a≠b makes the indicator false, so the left side is also zero.',
         },
         dependsOn: ["reduce-cubes-using-unit-modulus"],
         derivation: [
           {
-            statement: text("若 vₖ³=a，则 a·conj(vₖ)²=vₖ。", "If vₖ³=a, then a·conj(vₖ)²=vₖ."),
-            reason: text("把 vₖ³=a 代入上一阶段的 vₖ³conj(vₖ)²=vₖ，得到可替换右侧乘积的等式。", "Substitute vₖ³=a into vₖ³conj(vₖ)²=vₖ to obtain the needed replacement."),
+            statement: text("若 vₖ³=a，则 $a\\overline{v_k}^2 = v_k$。", "If vₖ³=a, then $a\\overline{v_k}^2 = v_k$."),
+            reason: text("把 vₖ³=a 代入上一阶段的 $v_k^3\\overline{v_k}^2 = v_k$，得到可替换右侧乘积的等式。", "Substitute vₖ³=a into $v_k^3\\overline{v_k}^2 = v_k$ to obtain the needed replacement."),
           },
           {
-            statement: text("a(vₖ−b·conj(vₖ)²)\n= avₖ−b(a·conj(vₖ)²)\n= avₖ−bvₖ = (a−b)vₖ。", "a(vₖ−b·conj(vₖ)²)\n= avₖ−b(a·conj(vₖ)²)\n= avₖ−bvₖ = (a−b)vₖ."),
-            reason: text("在 a 纤维上，用前一行把 ab·conj(vₖ)² 改写为 bvₖ；指示函数在此处取 1。", "On the a-fiber, replace ab·conj(vₖ)² by bvₖ using the preceding equality. The indicator is one in this case."),
+            statement: text("$a(v_k-b\\overline{v_k}^2)$\n= $av_k-b(a\\overline{v_k}^2)$\n= avₖ−bvₖ = (a−b)vₖ。", "$a(v_k-b\\overline{v_k}^2)$\n= $av_k-b(a\\overline{v_k}^2)$\n= avₖ−bvₖ = (a−b)vₖ."),
+            reason: text("在 a 纤维上，用前一行把 $ab\\overline{v_k}^2$ 改写为 bvₖ；指示函数在此处取 1。", "On the a-fiber, replace $ab\\overline{v_k}^2$ by bvₖ using the preceding equality. The indicator is one in this case."),
           },
           {
-            statement: text("若 vₖ³=b，则 a(vₖ−b·conj(vₖ)²)=a(vₖ−vₖ)=0。", "If vₖ³=b, then a(vₖ−b·conj(vₖ)²)=a(vₖ−vₖ)=0."),
-            reason: text("同一单位模长等式给出 b·conj(vₖ)²=vₖ；a≠b 保证此时不在 a 纤维，所以指示项也为 0。", "The unit-modulus equality now gives b·conj(vₖ)²=vₖ. Since a≠b, this is not the a-fiber, and the indicator term is also zero."),
+            statement: text("若 vₖ³=b，则 $a(v_k-b\\overline{v_k}^2) = a(v_k-v_k) = 0$。", "If vₖ³=b, then $a(v_k-b\\overline{v_k}^2) = a(v_k-v_k) = 0$."),
+            reason: text("同一单位模长等式给出 $b\\overline{v_k}^2 = v_k$；a≠b 保证此时不在 a 纤维，所以指示项也为 0。", "The unit-modulus equality now gives $b\\overline{v_k}^2 = v_k$. Since a≠b, this is not the a-fiber, and the indicator term is also zero."),
           },
         ],
         next: { zh: '对 k 求和，右边将只剩两个已知为零的矩。', en: 'Sum over k; the right side becomes a combination of the two vanishing moments.' },
@@ -1107,20 +1107,20 @@ export const foundationProofWalkthroughs: ProofWalkthrough[] = [
       {
         id: 'sum-and-cancel',
         title: { zh: '求和后消去非零因子 a−b', en: 'Sum and cancel the nonzero factor a−b' },
-        given: { zh: '逐点纤维恒等式、∑vₖ=0 和 ∑conj(vₖ)²=0 都已成立。', en: 'The pointwise fiber identity and both ∑vₖ=0 and ∑conj(vₖ)²=0 are established.' },
-        claim: { zh: '(a−b)∑_{vₖ³=a}vₖ=0，因此 ∑_{vₖ³=a}Hᵢₖ·conj(Hⱼₖ)=0。', en: '(a−b)∑_{vₖ³=a}vₖ=0, hence ∑_{vₖ³=a}Hᵢₖ·conj(Hⱼₖ)=0.' },
+        given: { zh: '逐点纤维恒等式、∑vₖ=0 和 $\\sum_k \\overline{v_k}^2 = 0$ 都已成立。', en: 'The pointwise fiber identity and both ∑vₖ=0 and $\\sum_k \\overline{v_k}^2 = 0$ are established.' },
+        claim: { zh: '(a−b)∑_{vₖ³=a}vₖ=0，因此 $\\sum_{v_k^3=a} H_{ik}\\overline{H_{jk}} = 0$。', en: '(a−b)∑_{vₖ³=a}vₖ=0, hence $\\sum_{v_k^3=a} H_{ik}\\overline{H_{jk}} = 0$.' },
         because: {
-          zh: '有限求和把右边变为 a(∑vₖ−b∑conj(vₖ)²)=0；左边按 Finset.sum_filter 改写为纤维上的和。复数域无零因子，且 a−b≠0，所以只能是纤维和等于0。',
-          en: 'Summation changes the right side into a(∑vₖ−b∑conj(vₖ)²)=0. Finset.sum_filter rewrites the left side as a sum over the fiber. Since ℂ has no zero divisors and a−b≠0, the fiber sum must vanish.',
+          zh: '有限求和把右边变为 $a(\\sum_k v_k-b\\sum_k \\overline{v_k}^2) = 0$；左边按 Finset.sum_filter 改写为纤维上的和。复数域无零因子，且 a−b≠0，所以只能是纤维和等于0。',
+          en: 'Summation changes the right side into $a(\\sum_k v_k-b\\sum_k \\overline{v_k}^2) = 0$. Finset.sum_filter rewrites the left side as a sum over the fiber. Since ℂ has no zero divisors and a−b≠0, the fiber sum must vanish.',
         },
         dependsOn: ["derive-the-first-moment", "derive-the-second-moment", "build-the-fiber-indicator"],
         derivation: [
           {
-            statement: text("(a−b)Σ_{vₖ³=a}vₖ=Σₖ1_{vₖ³=a}(a−b)vₖ。", "(a−b)Σ_{vₖ³=a}vₖ=Σₖ1_{vₖ³=a}(a−b)vₖ."),
+            statement: text("$(a-b)\\sum_{v_k^3=a}v_k = \\sum_k 1_{\\{v_k^3=a\\}}(a-b)v_k$。", "$(a-b)\\sum_{v_k^3=a}v_k = \\sum_k 1_{\\{v_k^3=a\\}}(a-b)v_k$."),
             reason: text("把有限过滤求和改成全指标集上的条件求和，再把公共因子移入；这就是 cubeFiber 与 Finset.sum_filter 的展开。", "Expand cubeFiber using Finset.sum_filter and move the common factor inside, turning the filtered sum into a conditional sum over all indices."),
           },
           {
-            statement: text("Σₖa(vₖ−b·conj(vₖ)²)\n= aΣₖvₖ−abΣₖconj(vₖ)²\n= a·0−ab·0 = 0。", "Σₖa(vₖ−b·conj(vₖ)²)\n= aΣₖvₖ−abΣₖconj(vₖ)²\n= a·0−ab·0 = 0."),
+            statement: text("$\\sum_k a(v_k-b\\overline{v_k}^2)$\n= $a\\sum_k v_k-ab\\sum_k\\overline{v_k}^2$\n= a·0−ab·0 = 0。", "$\\sum_k a(v_k-b\\overline{v_k}^2)$\n= $a\\sum_k v_k-ab\\sum_k\\overline{v_k}^2$\n= a·0−ab·0 = 0."),
             reason: text("逐项使用前一阶段的恒等式，再分配有限和；两个独立得到的消失矩在这里汇合。", "Apply the pointwise identity, distribute the finite sum, and use the two independently established vanishing moments."),
           },
           {

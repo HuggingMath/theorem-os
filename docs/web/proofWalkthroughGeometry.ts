@@ -27,8 +27,8 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
       en: 'Prove that k(z)=z/(1−z)² is normalized and univalent, that ∫_D|k′|⁻² and ∫_D|k′|²ᐟ³ are infinite, and that |g′|⁴ and |g′|⁴ᐟ³ are not integrable on k(D) for its inverse g.',
     },
     notation: {
-      zh: 'D={z∈ℂ:|z|<1}；g=koebeInverse 是 k 在 D 上的逆；面积矩 M(t)=∫_D|k′(z)|ᵗ dA。⊤ 表示非负扩展实数积分为无穷。',
-      en: 'D={z∈ℂ:|z|<1}; g=koebeInverse is the inverse of k on D; M(t)=∫_D|k′(z)|ᵗ dA. The value ⊤ denotes an infinite nonnegative extended-real integral.',
+      zh: '$D = \\{z\\in\\mathbb{C} : |z|<1\\}$；g=koebeInverse 是 k 在 D 上的逆；面积矩 M(t)=∫_D|k′(z)|ᵗ dA。⊤ 表示非负扩展实数积分为无穷。',
+      en: '$D = \\{z\\in\\mathbb{C} : |z|<1\\}$; g=koebeInverse is the inverse of k on D; M(t)=∫_D|k′(z)|ᵗ dA. The value ⊤ denotes an infinite nonnegative extended-real integral.',
     },
     steps: [
       {
@@ -299,7 +299,7 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
       {
         id: 'recover-every-congruence-from-its-pair-colors',
         title: { zh: '取 θ 内全部点对的颜色 join，恢复 θ', en: 'Recover θ from the join of colors of all its pairs' },
-        given: { zh: '任取所构造代数的同余 θ，令 S={(x,y):x θ y}，a=∨_{(x,y)∈S}c(x,y)。n>0 保证 S 含一个对角点对，因而非空。', en: 'For a congruence θ of the constructed algebra, take S={(x,y):x θ y} and a=∨_{(x,y)∈S}c(x,y). Since n>0, S contains a diagonal pair and is nonempty.' },
+        given: { zh: '任取所构造代数的同余 θ，令 $S = \\{(x,y) : x\\mathrel{\\theta} y\\}$，a=∨_{(x,y)∈S}c(x,y)。n>0 保证 S 含一个对角点对，因而非空。', en: 'For a congruence θ of the constructed algebra, take $S = \\{(x,y) : x\\mathrel{\\theta} y\\}$ and a=∨_{(x,y)∈S}c(x,y). Since n>0, S contains a diagonal pair and is nonempty.' },
         claim: { zh: 'x θ y 当且仅当 c(x,y)≤a，所以 θ=ρ(a)，映射 ρ 是满射。', en: 'x θ y iff c(x,y)≤a. Thus θ=ρ(a), and ρ is surjective.' },
         because: {
           zh: '若 x θ y，它的颜色是有限 join 的一项，当然≤a。反之 c(x,y)≤a 时，第五图公理给出由 S 产生的 Marked 连接链。θ 包含所有种子；每条 Marked 边由 admissible 映射得到，而这些映射全是基本操作，故 θ 仍包含其像。θ 的自反、对称、传递性又沿等价闭包传播，最终得到 x θ y。',
@@ -307,7 +307,7 @@ export const geometryProofWalkthroughs: ProofWalkthrough[] = [
         },
         dependsOn: ["construct-the-unary-witness-algebra"],
         derivation: [
-          { statement: t("S={(u,v):u θ v}，a=∨_{(u,v)∈S}c(u,v)；n>0 使 (x,x)∈S，故 S 非空。", "Let S={(u,v):u θ v} and a=∨_{(u,v)∈S}c(u,v). Since n>0, a diagonal pair (x,x) belongs to S, so S is nonempty."), reason: t("顶点集有限使 S 可用有限 join；θ 自反且存在顶点，保证可以使用只针对非空种子的第五图公理。", "Finiteness permits the finite join. Reflexivity of θ and existence of a vertex supply the nonempty-seed hypothesis required by the fifth axiom.") },
+          { statement: t("$S = \\{(u,v) : u\\mathrel{\\theta} v\\}$，a=∨_{(u,v)∈S}c(u,v)；n>0 使 (x,x)∈S，故 S 非空。", "Let $S = \\{(u,v) : u\\mathrel{\\theta} v\\}$ and a=∨_{(u,v)∈S}c(u,v). Since n>0, a diagonal pair (x,x) belongs to S, so S is nonempty."), reason: t("顶点集有限使 S 可用有限 join；θ 自反且存在顶点，保证可以使用只针对非空种子的第五图公理。", "Finiteness permits the finite join. Reflexivity of θ and existence of a vertex supply the nonempty-seed hypothesis required by the fifth axiom.") },
           { statement: t("x θ y ⇒ (x,y)∈S ⇒ c(x,y)≤a，即 θ≤ρ(a)。", "If x θ y, then (x,y)∈S and c(x,y)≤a; thus θ≤ρ(a)."), reason: t("任一有限 join 的项都在该 join 以下，所以 θ 中的每个点对都落入 ρ(a)。", "Every term lies below its finite join, so every pair in θ belongs to ρ(a).") },
           { statement: t("反之 c(x,y)≤a ⇒ Connected c S x y；每条 Marked 边仍在 θ 内。", "Conversely c(x,y)≤a gives Connected c S x y, and every Marked edge remains in θ."), reason: t("种子按定义属于 θ；admissible 映射全被列为基本操作，同余兼容性保证种子的每个允许像仍属于 θ。", "The seeds belong to θ by definition, and every admissible map was included as a basic operation. Congruence compatibility therefore preserves each allowed seed image.") },
           { statement: t("θ 的自反、对称、传递性沿整条连接传播，得 x θ y；所以 θ=ρ(a)。", "Reflexivity, symmetry and transitivity of θ propagate along the connection, yielding x θ y; hence θ=ρ(a)."), reason: t("两侧包含逐点相等，因此任意同余都由某个 a 产生，ρ 是到全部同余的满射。", "The two inclusions give equality pointwise. Every congruence is therefore produced by some a, proving surjectivity of ρ onto all congruences.") },

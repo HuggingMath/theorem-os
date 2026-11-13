@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { renderToString } from 'katex';
+import { proseSegments } from '../apps/web/client/explainText';
 import { triangleMatching } from '../docs/web/proofTriangleFigure';
 import { coveringCase, coveringPlotPoint, coveringRegions, type CoverCorner } from '../docs/web/proofCoverFigure';
 import { convexMassModel } from '../docs/web/proofConvexFigure';
@@ -476,6 +478,27 @@ describe('the original Truffet counterexample and its forced substitutions', () 
 });
 
 describe('the pointwise cubic-fiber selector', () => {
+  it('renders adjoints and the fiber set as complete formulas in both languages', () => {
+    const walkthrough = proofWalkthroughs.find(item => item.recordId === 'openai_hadamard_cube_fiber')!;
+    for (const locale of ['zh', 'en'] as const) {
+      const segments = proseSegments(walkthrough.notation![locale]);
+      const formulas = segments.filter(segment => segment.kind === 'math').map(segment => segment.text);
+      expect(formulas).toEqual(['H^*', 'H^2', '\\operatorname{cubeFiber}(v,a) = \\{k : v_k^3 = a\\}']);
+      expect(segments.filter(segment => segment.kind === 'text').map(segment => segment.text).join('')).not.toMatch(/H\*|cubeFiber|[{}$]/u);
+    }
+    const checkFormulas = (value: unknown): void => {
+      if (typeof value === 'string' && value.includes('$')) {
+        const segments = proseSegments(value);
+        expect(segments.filter(segment => segment.kind === 'text').some(segment => segment.text.includes('$'))).toBe(false);
+        for (const [, formula] of value.matchAll(/\$([^$]+)\$/gu)) {
+          expect(proseSegments(`$${formula}$`)).toEqual([{ kind: 'math', text: formula }]);
+          expect(() => renderToString(formula, { throwOnError: true, strict: 'error' })).not.toThrow();
+        }
+      } else if (value && typeof value === 'object') Object.values(value).forEach(checkFormulas);
+    };
+    proofWalkthroughs.forEach(checkFormulas);
+  });
+
   it('anchors the general symbolic cases and their sum to the accepted proof without prescribing fiber sizes', () => {
     const source = fs.readFileSync(path.join(root, 'research/openai-math/HadamardCubeFiber/Submission.lean'), 'utf8');
     const walkthrough = proofWalkthroughs.find(item => item.recordId === 'openai_hadamard_cube_fiber')!;

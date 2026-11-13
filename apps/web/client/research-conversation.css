@@ -279,7 +279,8 @@ body[data-chat-empty=true] .chat-settings-fields{top:calc(100% + 17px);bottom:au
 .chat-composer-submit{margin-left:auto;flex-shrink:0}
 #natural-research .chat-composer :is(#formalize-start,#chat-stop){display:flex;align-items:center;justify-content:center;width:38px;height:38px;min-width:38px;padding:0;border:0;border-radius:50%;background:var(--ink);color:var(--card);cursor:pointer}
 #natural-research .chat-composer :is(#formalize-start,#chat-stop) svg{width:20px;height:20px}
-#natural-research .chat-composer #formalize-start:disabled{opacity:.25;cursor:default}
+#natural-research .chat-composer #formalize-start:disabled{opacity:1;background:var(--gray-100);color:var(--gray-400);border:1px solid var(--line);box-shadow:none;cursor:not-allowed}
+:root[data-theme=dark] #natural-research .chat-composer #formalize-start:disabled{background:color-mix(in srgb,var(--ink) 10%,var(--card));color:var(--gray-500);border-color:var(--line)}
 #natural-research .chat-composer #formalize-send-status{margin:10px 6px 0;padding:0;color:var(--muted);font-size:12px;line-height:1.7}
 .chat-home-options{display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-start;gap:4px 20px;margin:16px auto 0}
 .chat-examples{margin:0;text-align:center;max-width:360px;color:var(--muted);font-size:12px}

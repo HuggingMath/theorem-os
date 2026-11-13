@@ -10,7 +10,7 @@ document.title = tx('录制研究演练 · TheoremOS', 'Recorded research exerci
 const root = document.getElementById('practice-root');
 if (root) render(h(ResearchPractice, { language }), root);
 const home = document.querySelector<HTMLAnchorElement>('[data-practice-home]');
-if (home) { home.textContent = tx('工作台', 'Workbench'); home.href = `./?lang=${language}`; }
+if (home) { home.textContent = tx('打开工作台', 'Open the workbench'); home.href = `./?lang=${language}`; }
 const languageLink = document.querySelector<HTMLAnchorElement>('[data-practice-language]');
 if (languageLink) { languageLink.textContent = otherLocale.label; languageLink.href = `practice.html?lang=${otherLocale.locale}`; }
 const skip = document.querySelector<HTMLAnchorElement>('.skip-link');
