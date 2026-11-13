@@ -1,16 +1,20 @@
 import { render, type ComponentChildren } from 'preact';
 import { useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { WebAgentLeanCheck } from '../../shared';
+import type { WebFormalization } from '../../formalizationTypes';
+import type { WebAgentLeanCheck, WebRun } from '../../shared';
 import { t } from '../../i18n';
-import { Rich } from '../richText';
+import { buildProofMap, type ProofMapModel } from '../proofMapModel';
 import { checkOutcome, type LiveCheck, type LiveTask, type ProcessTone, type SolveProcess, type SolveState } from '../solveProcess';
 import { leanLines } from './DetailPanel';
 import { LeanReport, base } from './AgentRoute';
 import { Elapsed, ToneMark } from './SolveProcess';
 import { Icon, Spinner } from './Icon';
+import { ProofMap } from './ProofMap';
 
 export type LiveWorkspaceProps = {
   process?: SolveProcess;
+  formalization?: WebFormalization;
+  run?: WebRun;
   /** The check the reader picked; without one the panel follows the latest. */ selected?: string;
   time: (at: string) => string;
   onSelect(id: string | undefined): void;
@@ -149,40 +153,13 @@ function Now({ process, onTask }: { process: SolveProcess; onTask?: (id: string)
   </section>;
 }
 
-function TaskRow({ task, open, onToggle, props }: { task: LiveTask; open: boolean; onToggle(): void; props: LiveWorkspaceProps }) {
-  const id = `live-task-${task.id.replace(/[^\w-]/gu, '_')}`;
-  const note = [task.who, task.waits?.length ? t('等待 {0}', task.waits.join(t('、'))) : '', task.attempts ? t('已尝试 {0} 次', task.attempts) : ''].filter(Boolean).join(' · ');
-  const guide = props.onGuide && task.tone !== 'done' && task.tone !== 'skipped';
-  return <li class="live-task" data-live-task={task.id} data-tone={task.tone}>
-    <button type="button" class="live-task-head" aria-expanded={open} aria-controls={open ? id : undefined} onClick={onToggle}>
-      <ToneMark tone={task.tone} /><span class="live-task-label" translate={false}>{task.label}</span><span class="live-task-kind">{task.kind}</span>
-      <span class="route-item-outcome" data-tone={task.tone === 'done' ? 'passed' : task.tone === 'failed' ? 'failed' : 'muted'}>{task.status}</span>
-    </button>
-    {!open && note && task.tone !== 'done' && <p class="live-task-note">{note}</p>}
-    {open && <div class="live-task-body" id={id}>
-      {task.statement && <p class="live-task-statement" translate={false}><Rich text={task.statement} /></p>}
-      {task.reason && <p class="live-task-reason" data-live-task-reason translate={false}>{task.reason}</p>}
-      {task.finding && <p class="live-task-finding" translate={false}>{task.finding}</p>}
-      {note && <p class="live-task-note">{note}</p>}
-      {(guide || props.onTask) && <div class="live-task-actions">
-        {guide && <button type="button" class="text-button" data-live-guide={task.id} onClick={() => props.onGuide!(task.id)}><Icon name="message-square-text" />{t('指导这项任务')}</button>}
-        {props.onTask && <button type="button" class="text-button" data-live-task-roadmap={task.id} onClick={() => props.onTask!(task.id)}><Icon name="network" />{t('在路线图中查看')}</button>}
-      </div>}
-    </div>}
-  </li>;
-}
-
 /** The research plan's tasks, in plan order, with where each one stands. */
-function Plan({ process, props, hidden }: { process: SolveProcess; props: LiveWorkspaceProps; hidden: boolean }) {
-  // A task that did not pass shows why without being opened; the reader's own choice replaces that.
-  const [expanded, setExpanded] = useState<ReadonlyMap<string, boolean>>(new Map());
-  const tasks = process.tasks;
-  const toggle = (task: LiveTask) => setExpanded(current => new Map(current).set(task.id, !(current.get(task.id) ?? (task.tone === 'failed'))));
+function Plan({ process, proofMap, props, hidden }: { process: SolveProcess; proofMap: ProofMapModel; props: LiveWorkspaceProps; hidden: boolean }) {
+  const planned = process.tasks.length > 0;
   return <section class="live-plan" data-live-plan id="chat-live-plan-panel" role="tabpanel" aria-labelledby="chat-live-tab-plan" hidden={hidden}>
-    {tasks.length > 0 && <ol class="live-tasks" aria-label={t('路线图')}>{tasks.map(task => <TaskRow key={task.id} task={task}
-      open={expanded.get(task.id) ?? (task.tone === 'failed')} onToggle={() => toggle(task)} props={props} />)}</ol>}
-    {props.onEditPlan && tasks.length > 0 && <div class="live-plan-tools"><button type="button" class="text-button" data-live-edit-plan onClick={props.onEditPlan}>
-      <Icon name="square-pen" />{t('修改任务与依赖')}</button></div>}
+    <ProofMap key={process.key} model={proofMap} variant="workspace" idPrefix="live-pm" time={props.time} onCheck={id => props.onSelect(id)}
+      {...(props.onGuide ? { onGuide: props.onGuide } : {})} {...(props.onTask ? { onTask: props.onTask } : {})}
+      {...(props.onEditPlan && planned ? { onEditPlan: props.onEditPlan } : {})} />
   </section>;
 }
 
@@ -210,6 +187,9 @@ const checkTones: Record<LiveCheck['state'], ProcessTone> = { running: 'active',
  */
 function LiveWorkspace(props: LiveWorkspaceProps) {
   const { process } = props;
+  const proofMap = useMemo(() => process ? buildProofMap({ process,
+    ...(props.formalization ? { formalization: props.formalization } : {}), ...(props.run ? { run: props.run } : {}),
+  }) : undefined, [process, props.formalization, props.run]);
   if (!process) return <div class="live-workspace"><header class="live-head"><h2 id="chat-live-title">{t('实时工作区')}</h2></header>
     <p class="live-empty">{t('题目开始后，这里显示正在执行的任务、路线图和 Lean 文件。')}</p></div>;
   const checks = process.checks, picked = props.selected ? checks.find(check => check.id === props.selected) : undefined;
@@ -222,7 +202,7 @@ function LiveWorkspace(props: LiveWorkspaceProps) {
   // first; picking a Lean check brings its file forward, and the reader's own choice of tab stays for this task.
   const planned = process.tasks.length > 0;
   const [chosen, setChosen] = useState<{ key: string; tab: Tab }>();
-  const tab: Tab = !planned ? 'file' : chosen?.key === process.key ? chosen.tab : 'plan';
+  const tab: Tab = chosen?.key === process.key ? chosen.tab : (planned ? 'plan' : 'file');
   const show = (next: Tab) => setChosen({ key: process.key, tab: next });
   const pickedBefore = useRef(props.selected);
   useLayoutEffect(() => {
@@ -245,14 +225,14 @@ function LiveWorkspace(props: LiveWorkspaceProps) {
       aria-current={stage.tone === 'active' ? 'step' : undefined}><ToneMark tone={stage.tone} /><span>{stage.label}</span></li>)}</ol>
     <Progress tasks={process.tasks} />
     <Now process={process} {...(props.onTask ? { onTask: props.onTask } : {})} />
-    {planned && <div class="live-tabs" role="tablist" aria-label={t('实时工作区')}>
+    <div class="live-tabs" role="tablist" aria-label={t('实时工作区')}>
       <button type="button" role="tab" id="chat-live-tab-plan" data-live-tab="plan" aria-selected={tab === 'plan'} aria-controls="chat-live-plan-panel"
-        onClick={() => show('plan')}>{t('路线图')}<span class="live-tab-count">{done}/{process.tasks.length}</span></button>
+        onClick={() => show('plan')}>{t('路线图')}{planned && <span class="live-tab-count">{done}/{process.tasks.length}</span>}</button>
       <button type="button" role="tab" id="chat-live-tab-file" data-live-tab="file" aria-selected={tab === 'file'} aria-controls="chat-live-file-panel"
         onClick={() => show('file')}>{t('Lean 文件')}{outcome && <span class="live-tab-outcome" data-tone={outcome.tone}>{outcome.text}</span>}</button>
-    </div>}
-    {planned && <Plan key={process.key} process={process} props={props} hidden={tab !== 'plan'} />}
-    <div class="live-file-panel" id="chat-live-file-panel" role={planned ? 'tabpanel' : undefined} aria-labelledby={planned ? 'chat-live-tab-file' : undefined} hidden={tab !== 'file'}>
+    </div>
+    {proofMap && <Plan key={process.key} process={process} proofMap={proofMap} props={props} hidden={tab !== 'plan'} />}
+    <div class="live-file-panel" id="chat-live-file-panel" role="tabpanel" aria-labelledby="chat-live-tab-file" hidden={tab !== 'file'}>
     <section class="live-file" aria-labelledby="chat-live-file">
       {view ? <div class="live-file-toolbar">
         <p class="live-file-head" id="chat-live-file"><Icon name="file-code-2" /><code translate={false}>{view.file}</code><span>{view.caption}</span>

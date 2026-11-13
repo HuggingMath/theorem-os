@@ -22,8 +22,8 @@ export const guide: Record<string, string> = {
   "先看示例": "Look at the sample first",
   "在经典题库浏览已有证明，或打开「先看一次完整运行」查看录制回放，都不需要 API Key。「试试例题」只把原题填入输入框，发送后才调用模型。":
     "Browse existing proofs in the classics library, or open “See a complete run first” for a recorded replay. Neither needs an API key. “Try an example” only fills the composer; model calls begin when you send.",
-  "直接在首页输入完整的自然语言或 TeX 原题，包括对象、假设与结论。已有 Lean 文件时，在顶栏「菜单」或题目输入方式栏切换到「Lean 源码」粘贴或导入文件，待证部分用 sorry 留空。":
-    "Enter the complete problem in natural language or TeX, including its objects, assumptions and conclusion. If you already have a Lean file, choose Lean source from the top-bar Menu or the input mode bar, then paste the source or import the file, leaving the proof as sorry.",
+  "直接在首页输入完整的自然语言或 TeX 原题，包括对象、假设与结论。已有 Lean 文件时，在顶栏「导航」或题目输入方式栏切换到「Lean 源码」粘贴或导入文件，待证部分用 sorry 留空。":
+    "Enter the complete problem in natural language or TeX, including its objects, assumptions and conclusion. If you already have a Lean file, choose Lean source from the top-bar navigation menu or the input mode bar, then paste the source or import the file, leaving the proof as sorry.",
   "选择服务商与模型":
     "Choose a provider and model",
   "打开输入框下方的「配置模型」（Lean 模式点「研究配置」）选择模型服务商、模型与证明环境。模型名必须是该服务商为你的账号提供的名称；切换服务商会清空未保存的 Key。":
@@ -33,7 +33,7 @@ export const guide: Record<string, string> = {
   "设定预算并发送": "Set a budget and send",
   "形式化与证明各有时间和 Token 预算，发送前可在「配置模型」或「研究配置」调整。默认「共同推进」由你确认题意，再由 2 个 Agent 拟定初始计划，等你批准后展开证明；「自动推进」由 1 个 Agent 在模型核对后直接开始。费用由模型服务商收取，进行中的请求可能超过设定用量。":
     "Set separate time and token budgets for formalization and proof in Configure model or Research settings before sending. Work together is the default: you confirm the statement, then 2 Agents draft an initial plan and wait for your approval before proving. Run automatically uses 1 Agent and starts after model review. Your model provider bills usage; requests already in progress can exceed the limit.",
-  "顶栏「历史」可展开研究记录。打开一次运行后，对话主栏直接呈现题意确认、研究计划、实时进展与验收结果；展开右侧「研究与证明」分栏可进一步查看结果、路线图、协作、源码和活动五个视图。运行中随时可点「取消运行」停下。":
+  "顶栏「历史」可展开研究记录。打开一次运行后，对话主栏直接展示题意确认、研究计划、实时进展与验收结果；展开右侧「研究与证明」分栏可进一步查看结果、路线图、协作、源码和活动五个视图。运行中随时可点「取消运行」停下。":
     "Open History in the top bar to see your research runs. Once you open a run, the main conversation shows statement confirmation, the research plan, live progress and acceptance results. Expand the Research and proof pane on the right for five views: Result, Roadmap, Collaboration, Source and Activity. Stop a run at any time with Cancel run.",
   "谁在做哪个子任务、在等什么。从分区导航查看任务、原意与 Lean、Agent、指导和知识；详细视图还包含任务合同、交付、变更和归档记录。":
     "Who is working on which subtask and what they are waiting for. Use the section navigation to find tasks, Intent and Lean, Agents, guidance and knowledge. The detailed view also includes task contracts, deliveries, changes and archives.",

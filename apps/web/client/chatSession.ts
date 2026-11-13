@@ -1025,6 +1025,7 @@ export class ChatSession {
       ...(this.options.session()?.sample ? { onSample: this.options.onSample } : {}),
       ...(this.error === t('形式化记录已满，请先删除不需要的记录。') ? { onManageRecords: () => this.openRecords() } : {}),
       onArtifact: (kind, target, auto) => { this.reading.capture(); this.drawOriginal(); this.options.onArtifact(kind, target, auto); },
+      onOpenLivePlan: () => this.openLivePlan(),
       ...(this.run && !this.options.isSample(this.run) ? {
         onShare: () => this.options.onShare(this.run!),
         recovery: { steps: nextSteps(this.run, summarizeGoals(this.run)), limits: this.options.session()?.limits,
@@ -1155,7 +1156,7 @@ export class ChatSession {
   private drawOriginal() { renderChatOriginal(this.originalPanel, { formalization: this.formalization, run: this.run }); }
   /** The panel beside the conversation; it keeps the process it was last drawn with while the task did not change. */
   private drawLive(solve: ReturnType<ChatSession['solve']>, can: { guide: boolean; edit: boolean }) {
-    const process = solve?.process, run = this.run;
+    const process = solve?.process, run = this.run, formalization = this.formalization ?? this.seed;
     if (!this.liveRenderer) {
       if (!process) { this.livePanel.replaceChildren(); return; }
       if (!this.liveLoading) {
@@ -1173,6 +1174,7 @@ export class ChatSession {
       return;
     }
     this.liveRenderer(this.livePanel, { process, time: clockTime, onSelect: id => this.selectCheck(process, id),
+      ...(formalization ? { formalization } : {}), ...(run ? { run } : {}),
       ...(this.formalization || run?.formalization ? { onOriginal: () => this.options.onArtifact('original') } : {}),
       ...(run && !this.options.isSample(run) ? { onRoadmap: () => this.options.onArtifact('roadmap'),
         onTask: (taskId: string) => this.options.onArtifact('roadmap', { taskId }) } : {}),
@@ -1190,6 +1192,15 @@ export class ChatSession {
       if (id) this.liveSelected.set(process.key, id); else this.liveSelected.delete(process.key);
     }
     this.draw();
+  }
+  /** The inline proof map opens the plan even when this task's workspace last showed a Lean file. */
+  private openLivePlan() {
+    const process = this.solve()?.process;
+    if (!process) return;
+    this.reading.capture(); this.options.onArtifact('live'); this.draw();
+    const show = () => this.livePanel.querySelector<HTMLButtonElement>('[data-live-tab="plan"]')?.click();
+    if (this.liveRenderer) show();
+    else void this.liveLoading?.then(() => { if (this.solve()?.process.key === process.key) show(); });
   }
   /** A row's Lean check opens beside the conversation, reading from where the reader was. */
   private openCheck(process: SolveProcess, id: string) {

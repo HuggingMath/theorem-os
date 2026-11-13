@@ -1,5 +1,5 @@
 import { render } from 'preact';
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { WebConversation, WebConversationMessage, WebConversationSummary } from '../../conversationTypes';
 import type { WebFormalization } from '../../formalizationTypes';
 import type { WebProvider, WebQuotaView, WebRun } from '../../shared';
@@ -10,6 +10,7 @@ import type { NextStep } from '../../report';
 import { locale, localizeText, t } from '../../i18n';
 import { detailLevel, onDetailLevel } from '../detailLevel';
 import type { SolveProcess } from '../solveProcess';
+import { buildProofMap } from '../proofMapModel';
 import type { ThinkingStep } from '../thinkingProcess';
 import { formalizationReasonText, formalizationNextStep } from '../formalizationReasons';
 import { Icon } from './Icon';
@@ -36,6 +37,7 @@ import type { ResearchStartCostProps } from '../researchStartCost';
 import { libraryReferenceId, type ChatLibraryReference } from '../chatReference';
 import { ProblemDraftPanel, type ProblemDraftPanelProps } from '../problemDrafts';
 import { firstResearchBudgetIssues, type FirstResearchBudgetField, type FirstResearchBudgetIssue } from '../firstResearchBudgetValidation';
+import { ProofMap } from './ProofMap';
 
 
 export type ChatThreadProps = {
@@ -57,6 +59,7 @@ export type ChatThreadProps = {
   onShare?(): void;
   recovery?: { steps: NextStep[]; limits?: import('../../shared').WebSession['limits']; onAction(id: string, button: HTMLButtonElement): void };
   onGuidance?(text?: string, taskId?: string): void;
+  onOpenLivePlan?(): void;
   onQuestion?(entry: ThinkingStep): void;
   onGuidanceReceipt?(message: WebConversationMessage): void;
   guidanceFeedback?: { records: ResearchFeedback[]; loading: boolean; error?: string; onRetry(): void };
@@ -202,6 +205,11 @@ function TaskMessage(props: ChatThreadProps) {
         : formalProgress?.description ?? t("陈述检查不代表证明通过，最终结果以 Lean 独立验收为准。");
   const proof = run?.result?.proof || run?.artifact?.source;
   const solve = props.solve;
+  const activePlanTasks = run?.observation?.inspection.tasks.filter(task => task.control === 'active') ?? [];
+  const showProofMap = Boolean(solve?.process && activePlanTasks.length >= 2 && !statementDecision && !props.planDecision?.approval);
+  const proofMap = useMemo(() => showProofMap && solve ? buildProofMap({ process: solve.process,
+    ...(item ? { formalization: item } : {}), ...(run ? { run } : {}),
+  }) : undefined, [showProofMap, solve?.process, item, run]);
   const hasSource = solve?.process.current !== undefined || solve?.process.checks.some(check => check.source !== undefined);
   const liveAvailable = Boolean(solve && (solve.process.active || hasSource));
   const detailedAcceptance = simple && accepted && !props.missingTask;
@@ -250,6 +258,11 @@ function TaskMessage(props: ChatThreadProps) {
     {mathematicsSummary && <ChatMathematicalSummary work={mathematicsSummary} />}
     {!accepted && props.mathematics && !compactMathematics && <ChatMathematicalProgress work={props.mathematics} onTask={taskId => props.onArtifact('roadmap', { taskId })} />}
     {accepted && <div class="research-conversation-artifacts"><button type="button" class="chat-result-primary" data-research-artifact="source" disabled={!proof} onClick={() => props.onArtifact('source')}><Icon name="file-code-2" /><span>{t('查看验收证明')}</span><Icon name="arrow-up-right" /></button></div>}
+    {proofMap && <ProofMap model={proofMap} variant="conversation" idPrefix={`chat-pm-${(item?.id ?? run?.id ?? proofMap.key).replace(/[^\w-]/gu, '_')}`} time={solve?.time}
+      onTask={taskId => props.onArtifact('roadmap', { taskId })}
+      {...(props.onGuidance ? { onGuide: (taskId: string) => props.onGuidance!(undefined, taskId) } : {})}
+      {...(solve?.onCheck ? { onCheck: solve.onCheck } : {})}
+      {...(props.onOpenLivePlan ? { onOpenWorkspace: props.onOpenLivePlan } : {})} />}
     {(solve || run || item) && <details class="chat-result-more" data-chat-result-more open={!simple && !accepted} onToggle={event => {
       if (!event.currentTarget.open || !compactMathematics) return;
       const progress = event.currentTarget.querySelector<HTMLElement>('[data-chat-mathematics]');

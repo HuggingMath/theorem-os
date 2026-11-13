@@ -47,6 +47,7 @@ for (const [source, destination] of [['index.html', 'index.html'], ['login.html'
     + '\n' + fs.readFileSync(path.join(root, 'apps/web/client/decisionFlow.css'), 'utf8')
     + '\n' + fs.readFileSync(path.join(root, 'apps/web/client/researchBudget.css'), 'utf8')
     + '\n' + fs.readFileSync(path.join(root, 'apps/web/client/researchPersonal.css'), 'utf8')
+    + '\n' + fs.readFileSync(path.join(root, 'apps/web/client/proofMap.css'), 'utf8')
     + '\n' + fs.readFileSync(path.join(root, 'apps/web/math.css'), 'utf8'));
   else fs.copyFileSync(path.join(root, 'apps/web/client', source), path.join(output, destination));
 fs.mkdirSync(path.join(output, 'assets/fonts'), { recursive: true });
