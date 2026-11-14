@@ -19,7 +19,7 @@ import { readProofReadingPosition } from './proofReadingLocation';
 import { proofSolutionTitle, renderProofSolution, theoremDirectoryReturn } from './proofSolution';
 import { renderAcceptedTargets } from './proofAcceptance';
 import { mountProofFigures } from './proofFigures';
-import { mountArchiveSolutionRoutes, preloadArchiveReading, typesetArchiveProse } from './solutionRouteClient';
+import { mountArchiveSolutionRoutes, prepareArchiveReading, preloadArchiveReading, typesetArchiveProse } from './solutionRouteClient';
 import { readSourceLocation, verifiedSourceLocation, writeSourceLocation, type SourceLocation } from './sourceLocation';
 
 const iconSet = {
@@ -115,7 +115,7 @@ type ArchiveRecord = ArchiveIndexRecord;
 type ArchiveSource = ArchiveIndexSource & { code: string };
 let sourceLocation: SourceLocation | undefined;
 
-declare global { interface Window { theoremosSources?: Record<string, Record<string, string>>; theoremosProcesses?: Record<string, ArchiveProcess> } }
+declare global { interface Window { theoremosSources?: Record<string, Record<string, string>>; theoremosProcesses?: Record<string, ArchiveProcess>; theoremosReadingProcesses?: Record<string, ArchiveProcess> } }
 // Lean sources are most of the archive's weight, so each record's files load on first use.
 const sourceRequests = new Map<string, Promise<Record<string, string>>>();
 const loadedSources = (id: string) => window.theoremosSources?.[id];
@@ -145,6 +145,26 @@ function loadProcess(record: ArchiveRecord): Promise<ArchiveProcess | undefined>
   }));
   return request;
 }
+const readingRequests = new Map<string, Promise<ArchiveProcess>>();
+/** Read-proof needs one accepted run and one file; the route maps and every other source wait for the process tab. */
+function loadReadingProcess(record: ArchiveRecord): Promise<ArchiveProcess | undefined> {
+  const loaded = window.theoremosProcesses?.[record.id] ?? window.theoremosReadingProcesses?.[record.id];
+  if (loaded) return Promise.resolve(loaded);
+  const version = record.processSummary?.readingVersion;
+  if (!record.processSummary || !version) return loadProcess(record);
+  let request = readingRequests.get(record.id);
+  if (!request) readingRequests.set(record.id, request = new Promise<ArchiveProcess>((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = `${rootOf(locale)}data/process/${record.id}-reading.js?v=${version}`;
+    script.onload = () => { script.remove(); const value = window.theoremosReadingProcesses?.[record.id];
+      if (value) resolve(value); else { readingRequests.delete(record.id); reject(new Error('Missing reading process')); } };
+    script.onerror = () => { script.remove(); readingRequests.delete(record.id); reject(new Error('Missing reading process')); };
+    document.head.append(script);
+  }));
+  // An older archive may not carry the projection yet; the complete record still reads correctly.
+  return request.catch(() => loadProcess(record) as Promise<ArchiveProcess>);
+}
+const readingProcessOf = (record: ArchiveRecord) => window.theoremosProcesses?.[record.id] ?? window.theoremosReadingProcesses?.[record.id];
 const icons = () => {
   createIcons({ icons: iconSet, attrs: { 'aria-hidden': 'true' } }); mountArchiveRoadmap();
   const inspector = document.querySelector<HTMLElement>('#inspector');
@@ -421,15 +441,19 @@ function processEvidenceView(run: ArchiveProcess['runs'][number]): string {
 function readingView(record: ArchiveRecord): string {
   // The prose renders before its math renderer is requested; fetching both now keeps raw TeX off the screen.
   preloadArchiveReading(locale);
-  const process = window.theoremosProcesses?.[record.id];
-  if (process) return renderProofSolution(record, process, locale, document.body.classList.contains('shared-classics')
+  const process = readingProcessOf(record);
+  // Typesetting runs right after the panel is written, which is only paint-safe once both renderers are resident.
+  const settlable = Boolean(window.theoremosMath && window.theoremosSolutionRoutes);
+  if (process && settlable) return renderProofSolution(record, process, locale, document.body.classList.contains('shared-classics')
     ? { workbenchHref: locale === 'en' ? '../../' : '../' } : {});
   const refresh = (failed: boolean) => {
     if (state.tab !== 'reading' || selectedRecord() !== record) return;
     element('#detail-panel').innerHTML = failed ? `<p role="status">${strings.readingUnavailable}</p>` : readingView(record);
     icons();
   };
-  void loadProcess(record).then(() => refresh(false), () => refresh(true));
+  // Typesetting starts the moment the panel is written, so both renderers wait with the record and the first paint
+  // already carries finished mathematics rather than a flash of raw TeX.
+  void Promise.all([loadReadingProcess(record), prepareArchiveReading(locale)]).then(() => refresh(false), () => refresh(true));
   return `<p class="source-loading" role="status">${strings.loadingReading}</p>`;
 }
 
@@ -616,7 +640,9 @@ function restoreLocation() {
     const record = selectedRecord();
     const hasReadingPosition = state.tab === 'reading' && Boolean(readProofReadingPosition(new URLSearchParams(location.hash.slice(1))));
     // processView mounts async content before revealing deep links; reading positions are revealed by mountProofReading once typeset settles.
-    const ready = (state.tab === 'process' || state.tab === 'reading') && record ? loadProcess(record).catch(() => undefined) : Promise.resolve();
+    const ready = !record ? Promise.resolve()
+      : state.tab === 'process' ? loadProcess(record).catch(() => undefined)
+        : state.tab === 'reading' ? loadReadingProcess(record).catch(() => undefined) : Promise.resolve();
     void ready.then(() => document.fonts.ready).then(() => {
       if (state.selected === requested) {
         if (!hasReadingPosition && !revealProofReadingLocation()) revealRecord(true);

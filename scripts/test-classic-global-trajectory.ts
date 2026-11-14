@@ -108,7 +108,13 @@ const assetVersions = Object.fromEntries(await Promise.all(['site.js', 'process.
   [file, digest(await fs.readFile(path.join(staticRoot, 'classics', file))).slice(0, 16)])));
 const processAssetVersions = Object.fromEntries(await Promise.all(catalog.records.map(async record =>
   [record.id, digest(await fs.readFile(path.join(staticRoot, 'classics/data/process', record.id + '.js'))).slice(0, 16)])));
+// Read proof loads a projection of one accepted run; the complete record stays with the process tab.
+const readingAssetVersions = Object.fromEntries(await Promise.all(catalog.records.map(async record => {
+  const file = path.join(staticRoot, 'classics/data/process', record.id + '-reading.js');
+  return [record.id, await fs.exists(file) ? digest(await fs.readFile(file)).slice(0, 16) : undefined] as const;
+})));
 const processAssetRequests: string[] = [];
+const readingAssetRequests: string[] = [];
 const figureAssetVersion = digest(await fs.readFile(path.join(staticRoot, 'classics/data/proof-figures.js'))).slice(0, 16);
 const figureAssetRequests: string[] = [];
 const solutionAssetVersion = digest(await fs.readFile(path.join(staticRoot, 'classics/data/solution-route.js'))).slice(0, 16);
@@ -126,7 +132,8 @@ async function observe(context: BrowserContext, label: string, cacheEnabled = fa
     if (url.origin !== origin) external.push(url.href);
     if (!['GET', 'HEAD'].includes(request.method())) writes.push({ method: request.method(), path: url.pathname });
     if (url.pathname.startsWith('/api/')) apiReads.push(url.pathname);
-    if (/\/data\/process\/[^/]+\.js$/u.test(url.pathname)) processAssetRequests.push(url.href);
+    if (/\/data\/process\/[^/]+\.js$/u.test(url.pathname)) (/\/data\/process\/[^/]+-reading\.js$/u.test(url.pathname)
+      ? readingAssetRequests : processAssetRequests).push(url.href);
     if (url.pathname.endsWith('/data/proof-figures.js')) figureAssetRequests.push(url.href);
     if (url.pathname.endsWith('/data/solution-route.js')) solutionAssetRequests.push(url.href);
     if (cacheEnabled && /\/(?:site\.js|process\.css|solution-route\.js)$/u.test(url.pathname)) cacheAssets.push(url.href);
@@ -1162,13 +1169,19 @@ try {
     const url = new URL(value), id = url.pathname.split('/').at(-1)!.slice(0, -3);
     assert.equal(url.searchParams.get('v'), processAssetVersions[id], 'Lazy proof explanations must use the final process content version');
   }
+  assert.ok(readingAssetRequests.length >= 16, 'Read proof must fetch its projection instead of the complete record');
+  for (const value of readingAssetRequests) {
+    const url = new URL(value), id = url.pathname.split('/').at(-1)!.slice(0, -3 - '-reading'.length);
+    assert.equal(url.searchParams.get('v'), readingAssetVersions[id], 'Read proof must use the final reading projection version');
+  }
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', checkedAt: new Date().toISOString(),
     checks, screenshots, viewportEvidence, catalogRecords: catalog.records.length, detailedExplanationRecords: detailedRecords.length,
     figureCount, runs, deliveries, savedChecks, tasks, retained, proseCharacters,
     derivationLines: detailedRecords.reduce((sum, record) => sum + record.process!.walkthrough!.steps.reduce((count, step) => count + step.derivation.length, 0), 0),
     readingStages: detailedRecords.reduce((sum, record) => sum + record.process!.walkthrough!.stages.length, 0),
     proofDependencies: detailedRecords.reduce((sum, record) => sum + record.process!.walkthrough!.steps.reduce((count, step) => count + step.dependsOn.length, 0), 0),
-    assetVersions, cacheAssets, processAssetVersions, processAssetRequests, figureAssetVersion, figureAssetRequests, solutionAssetVersion, solutionAssetRequests,
+    assetVersions, cacheAssets, processAssetVersions, processAssetRequests, readingAssetVersions, readingAssetRequests,
+    figureAssetVersion, figureAssetRequests, solutionAssetVersion, solutionAssetRequests,
     paidModelCalls: false, runnerCalls, leanProcesses: 0, writes, apiReads, external, errors,
     failureExample: { record: failure.record.id, run: failure.run.runId, check: failure.check.id },
     revisionExample: { record: revision.record.id, run: revision.run.runId, before: revision.before.id, after: revision.check.id } }, null, 2) + '\n');

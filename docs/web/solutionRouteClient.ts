@@ -32,6 +32,14 @@ export function preloadArchiveReading(locale: Locale): void {
   void loadMath().catch(() => undefined);
 }
 
+/**
+ * Settle both lazy renderers before the reading panel is written. The panel is typeset right after it is inserted, so
+ * waiting here is the difference between a first paint of finished mathematics and a flash of raw `$…$`.
+ */
+export function prepareArchiveReading(locale: Locale): Promise<void> {
+  return Promise.all([load(locale), loadMath()]).then(() => undefined, () => undefined);
+}
+
 /** Old prose and interactive routes share the same lazy math renderer. */
 export async function typesetArchiveProse(root: HTMLElement, locale: Locale): Promise<void> {
   try {

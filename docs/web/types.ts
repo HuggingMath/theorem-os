@@ -36,7 +36,7 @@ export interface ArchiveRecord {
     attributionEn?: string;
     evidenceUrl: string;
   };
-  processSummary?: { runs: number; tasks: number; version?: string };
+  processSummary?: { runs: number; tasks: number; version?: string; readingVersion?: string };
   process?: ArchiveProcess;
   official?: {
     statementRevision: number;

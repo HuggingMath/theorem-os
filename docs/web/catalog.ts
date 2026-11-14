@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { z } from 'zod';
-import type { ArchiveCatalog, ArchiveIndex, ArchiveRecord, ArchiveSource } from './types';
+import type { ArchiveCatalog, ArchiveIndex, ArchiveProcess, ArchiveRecord, ArchiveSource } from './types';
 import { siteRepository } from './site';
 import { campaignRecords } from './campaignCatalog';
 import { withArchiveSourceRoute } from './archiveSourceRoute';
@@ -345,9 +345,11 @@ export function archiveIndex(catalog: ArchiveCatalog): ArchiveIndex {
     const lines = main.code.split('\n');
     const start = Math.max(0, lines.findIndex(line => record.declaration && line.startsWith(record.declaration)));
     const { process: _process, ...summary } = record;
+    const reading = record.process ? archiveReadingScript(record) : undefined;
     return { ...summary, ...(record.campaign && record.process ? { readingMode: proofSolutionMode(record, record.process) } : {}),
       ...(record.process && record.processSummary ? { processSummary: { ...record.processSummary,
-      version: crypto.createHash('sha256').update(archiveProcessScript(record)).digest('hex').slice(0, 16) } } : {}),
+      version: crypto.createHash('sha256').update(archiveProcessScript(record)).digest('hex').slice(0, 16),
+      ...(reading ? { readingVersion: crypto.createHash('sha256').update(reading).digest('hex').slice(0, 16) } : {}) } } : {}),
       excerpt: lines.slice(start, start + 7).join('\n'), sources: record.sources.map(({ code: _code, ...source }) => source) };
   }) };
 }
@@ -358,4 +360,36 @@ export function archiveSourceScript(record: ArchiveRecord): string {
 
 export function archiveProcessScript(record: ArchiveRecord): string {
   return `(window.theoremosProcesses??={})[${JSON.stringify(record.id)}]=${JSON.stringify(record.process)};\n`;
+}
+
+/**
+ * Reading needs one accepted run, the accepted proof's bytes and that file's declaration positions; route maps, every
+ * historical source and every declaration's proof text belong to the process tab. Projecting those out keeps the
+ * read-proof view on a few dozen kilobytes instead of several megabytes.
+ */
+export type ArchiveReadingProcess = Pick<ArchiveProcess, 'walkthrough' | 'sources' | 'runs' | 'sourceRoute'>;
+
+export function readingProcess(record: ArchiveRecord): ArchiveReadingProcess | undefined {
+  const process = record.process, campaign = record.campaign;
+  if (!process || !campaign) return undefined;
+  const run = process.runs.find(candidate => candidate.runId === campaign.runId && candidate.resultStatus === 'evaluated_passed');
+  const source = process.sources?.[campaign.proofSha256];
+  if (!run || !source) return undefined;
+  const walkthrough = process.walkthrough?.recordId === record.id && process.walkthrough.runId === campaign.runId
+    && process.walkthrough.proofSha256 === campaign.proofSha256 ? process.walkthrough : undefined;
+  const file = process.sourceRoute?.files.find(item => item.sha256 === campaign.proofSha256);
+  // Reading anchors cite declaration ranges only; the proof blocks keep their places with no source text.
+  const marked = file && { ...file, code: '', declarations: file.declarations.map(declaration => ({
+    ...declaration, steps: declaration.steps.map(step => ({ ...step, code: '' })) })) };
+  return {
+    ...(walkthrough ? { walkthrough } : {}),
+    sources: { [campaign.proofSha256]: source },
+    runs: [run],
+    ...(marked ? { sourceRoute: { files: [marked] } } : {}),
+  };
+}
+
+export function archiveReadingScript(record: ArchiveRecord): string | undefined {
+  const reading = readingProcess(record);
+  return reading ? `(window.theoremosReadingProcesses??={})[${JSON.stringify(record.id)}]=${JSON.stringify(reading)};\n` : undefined;
 }

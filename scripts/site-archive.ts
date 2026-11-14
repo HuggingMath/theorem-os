@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { build } from 'esbuild';
-import { archiveIndex, archiveSourceScript, archiveProcessScript } from '../docs/web/catalog';
+import { archiveIndex, archiveReadingScript, archiveSourceScript, archiveProcessScript } from '../docs/web/catalog';
 import type { ArchiveCatalog } from '../docs/web/types';
 import { proofReadingContexts } from '../docs/web/proofReadingContext';
 
@@ -56,9 +56,11 @@ export async function buildArchive(root: string, output: string, catalog: Archiv
   for (const record of catalog.records) {
     fs.writeFileSync(path.join(data, 'sources', `${record.id}.js`), archiveSourceScript(record));
     if (record.process) fs.writeFileSync(path.join(data, 'process', `${record.id}.js`), archiveProcessScript(record));
+    const reading = record.process ? archiveReadingScript(record) : undefined;
+    if (reading) fs.writeFileSync(path.join(data, 'process', `${record.id}-reading.js`), reading);
     if (!record.campaign) continue;
-    const reading = record.process && proofReadingContexts(record, record.process);
-    if (reading) fs.writeFileSync(path.join(data, 'reading', `${record.id}.json`), JSON.stringify(reading) + '\n');
+    const contexts = record.process && proofReadingContexts(record, record.process);
+    if (contexts) fs.writeFileSync(path.join(data, 'reading', `${record.id}.json`), JSON.stringify(contexts) + '\n');
     const proofs = path.join(data, 'proofs', record.id);
     fs.mkdirSync(proofs, { recursive: true });
     for (const source of record.sources) {
