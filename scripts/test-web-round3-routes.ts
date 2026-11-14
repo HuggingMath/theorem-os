@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Uses only fixed archive bytes and the read-only workbench recording.
 import assert from 'node:assert/strict';
-import { showArtifacts } from './web-ui-controls';
+import { revealRouteControls, showArtifacts } from './web-ui-controls';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Browser, Locator, Page } from 'playwright';
@@ -100,7 +100,7 @@ try {
         await map.locator('[data-solution-search]').fill(''); await settled(page);
         const cleared = await selection(map); assert.equal(cleared.id, before.id); assert.ok(cleared.visible, JSON.stringify(cleared));
         assert.equal(await map.locator('[data-solution-search]').evaluate(input => input === document.activeElement), true, 'Search keeps keyboard focus.');
-        await map.locator('[data-solution-expand]').click(); await settled(page);
+        await revealRouteControls(map); await map.locator('[data-solution-expand]').click(); await settled(page);
         const expanded = await selection(map); assert.equal(expanded.id, before.id); assert.ok(expanded.visible, JSON.stringify(expanded));
         await page.screenshot({ path: path.join(output, `clear-search-${locale}.png`) });
         await page.keyboard.press('Escape'); return { before, cleared, expanded };
@@ -114,7 +114,7 @@ try {
         const map = page.locator('.solution-route');
         await map.locator(surface === 'workbench' ? '[data-solution-node="task:goal_2"]' : '[data-solution-node^="task:"]').first().click(); await settled(page);
         const selected = await map.locator('[data-solution-heading]').getAttribute('data-solution-heading');
-        await map.locator('[data-solution-expand]').click();
+        await revealRouteControls(map); await map.locator('[data-solution-expand]').click();
         if (reading) await map.locator('.solution-route-tools [data-solution-view="read"]').click();
         const owner = reading || locale === 'en' ? map.locator('.solution-route-workspace') : map.locator('[data-solution-inspector]');
         for (let gesture = 0; gesture < 10; gesture++) {

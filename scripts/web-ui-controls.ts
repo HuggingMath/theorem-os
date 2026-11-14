@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import type { Page } from 'playwright';
+import type { Locator, Page } from 'playwright';
 
 /** Secondary workbench actions live in one native disclosure on every screen size. */
 export async function openNavigationMenu(page: Page) {
@@ -330,4 +330,10 @@ export async function selectModules(h: { page: Page }, id: string) {
   await h.page.locator('#refresh-runs:enabled').waitFor(); await closeHistory(h.page);
   await selectHistoryRun(h.page, id); await showArtifacts(h.page);
   await openModulesTab(h.page); await h.page.locator('.module-workspace').waitFor();
+}
+
+/** The workbench route folds its secondary controls behind "More options"; the classic pages never fold them. */
+export async function revealRouteControls(route: Locator) {
+  const more = route.locator('button[data-solution-more][aria-expanded="false"]');
+  if (await more.count()) await more.click();
 }

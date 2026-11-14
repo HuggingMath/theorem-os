@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Recorded route regressions only: this suite never starts a solver or writes business data.
 import assert from 'node:assert/strict';
-import { showArtifacts } from './web-ui-controls';
+import { revealRouteControls, showArtifacts } from './web-ui-controls';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Browser, Locator, Page } from 'playwright';
@@ -81,7 +81,7 @@ async function openSource(page: Page, target: SourceTarget, child = false) {
   const node = map.locator(`[data-solution-node=${JSON.stringify(target.id)}]`);
   if (child) await map.locator(`.solution-route-records [data-solution-select=${JSON.stringify(target.id)}]`).click();
   else await node.click();
-  await map.locator('[data-solution-expand]').click();
+  await revealRouteControls(map); await map.locator('[data-solution-expand]').click();
   await map.locator('[data-solution-open]').click();
   const panel = page.locator(`pre[data-source-digest="${target.digest}"]`);
   await panel.waitFor(); await settled(page);
@@ -119,7 +119,7 @@ async function collapseChild(map: Locator, taskId: string) {
   const childId = await child.getAttribute('data-solution-select'); assert.ok(childId);
   await child.click();
   assert.equal(await map.locator('[data-solution-heading]').getAttribute('data-solution-heading'), childId);
-  await map.locator('[data-solution-all]').click();
+  await revealRouteControls(map); await map.locator('[data-solution-all]').click();
   assert.equal(await map.locator('[data-solution-heading]').getAttribute('data-solution-heading'), taskId);
   assert.equal(await map.locator('[data-solution-node][aria-pressed="true"]').count(), 1, 'Keep exactly one visible selection after collapsing.');
   return childId;
@@ -203,7 +203,7 @@ try {
         await map.locator('[data-solution-step="previous"]').click();
         const previous = await map.locator('[data-solution-heading]').getAttribute('data-solution-heading');
         assert.equal(previous, visible[Math.max(0, at - 1)], 'Previous continues from the same task.');
-        await map.locator('[data-solution-expand]').click();
+        await revealRouteControls(map); await map.locator('[data-solution-expand]').click();
         await page.screenshot({ path: path.join(output, `collapse-${surface}-${locale}.png`) });
         await page.keyboard.press('Escape');
         return { taskId, childId, next, previous };

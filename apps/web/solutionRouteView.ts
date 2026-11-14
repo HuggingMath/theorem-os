@@ -2,8 +2,8 @@ import type { SolutionRoute, SolutionRouteEdge, SolutionRouteNode, SolutionRoute
 import { h, render } from 'preact';
 import { Rich, RichProse } from './client/richText';
 
-type Options = { onSelect?: (id: string) => void; onOpen?: (target: string) => void };
-type Memory = { selected: string; zoom: number; left: number; top: number; all: boolean; library: boolean; opened: Set<string>; query: string; reading: boolean; details: Map<string, boolean> };
+type Options = { onSelect?: (id: string) => void; onOpen?: (target: string) => void; /** The workbench panel: secondary controls stay folded until the reader asks for them. */ compact?: boolean };
+type Memory = { selected: string; zoom: number; left: number; top: number; all: boolean; library: boolean; opened: Set<string>; query: string; reading: boolean; more: boolean; details: Map<string, boolean> };
 type Box = { x: number; y: number; width: number; height: number };
 const memories = new Map<string, Memory>();
 const html = (value: unknown) => String(value ?? '').replace(/[&<>"']/gu, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -101,8 +101,14 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
     return document.scrollingElement as HTMLElement;
   };
   const detailAnchors = () => [...root.querySelectorAll<HTMLElement>('[data-solution-heading], [data-solution-section-heading], .solution-route-records li')];
-  const scrollportTop = (scroller: HTMLElement) => scroller === document.scrollingElement ? 0
-    : Math.max(0, scroller.getBoundingClientRect().top + scroller.clientTop);
+  // The visible top of a scroller is also bounded by every clipping ancestor, so a detail pane partly covered by its host still reads the true edge.
+  const scrollportTop = (scroller: HTMLElement) => {
+    if (scroller === document.scrollingElement) return 0;
+    let top = Math.max(0, scroller.getBoundingClientRect().top + scroller.clientTop);
+    for (let parent = scroller.parentElement; parent; parent = parent.parentElement)
+      if (/(auto|scroll|hidden|clip)/u.test(getComputedStyle(parent).overflowY)) top = Math.max(top, parent.getBoundingClientRect().top + parent.clientTop);
+    return top;
+  };
   function detailPosition() {
     const scroller = detailScroller();
     if (!scroller) return;
@@ -130,7 +136,7 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       const selected = next.initial ?? next.nodes[0]?.id ?? '', opened = new Set<string>();
       let parent = next.nodes.find(node => node.id === selected)?.parentId;
       while (parent && !opened.has(parent)) { opened.add(parent); parent = next.nodes.find(node => node.id === parent)?.parentId; }
-      saved = { selected, zoom: 1, left: 0, top: 0, all: false, library: false, opened, query: '', reading: false, details: new Map() }; memories.set(next.id, saved);
+      saved = { selected, zoom: 1, left: 0, top: 0, all: false, library: false, opened, query: '', reading: false, more: false, details: new Map() }; memories.set(next.id, saved);
     }
     return saved;
   }
@@ -203,12 +209,13 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
     const adjacent = new Set([state.selected, ...model.edges.filter(edge => edge.from === state.selected || edge.to === state.selected).flatMap(edge => [edge.from, edge.to])]);
     root.classList.add('solution-route'); root.dataset.solutionRouteId = model.id; root.dataset.solutionRouteBasis = model.basis;
     root.dataset.solutionExpanded = String(expanded); root.dataset.solutionReading = String(state.reading);
+    root.dataset.solutionCompact = String(Boolean(options.compact)); root.dataset.solutionMore = String(state.more);
     if (expanded) { root.setAttribute('role', 'dialog'); root.setAttribute('aria-modal', 'true'); root.setAttribute('aria-label', model.title); }
     else { root.removeAttribute('role'); root.removeAttribute('aria-modal'); root.removeAttribute('aria-label'); }
     root.innerHTML = `<header class="solution-route-heading"><div><h3 data-solution-prose="inline">${html(model.title)}</h3><p>${model.basis === 'source' ? word('证明声明与源码引用', 'Proof declarations and source references') : model.basis === 'explanation' ? word('推导步骤与所用结论', 'Derivation steps and the results they use') : word('任务依赖、推导、尝试与验收', 'Tasks, reasoning, attempts and acceptance')}</p></div><span data-solution-count>${state.reading ? model.nodes.length : `${visible.length} / ${model.nodes.length}`} ${state.reading ? word('步骤', 'steps') : word('节点', 'nodes')}</span></header>
       ${model.overview?.length ? `<div class="solution-route-overview">${model.overview.filter(section => section.text.trim()).map(section => `<section><h4>${html(section.title)}</h4>${section.code ? `<pre tabindex="0"><code>${html(section.text)}</code></pre>` : `<div data-solution-prose="block">${html(section.text)}</div>`}</section>`).join('')}</div>` : ''}
       ${model.stages?.length ? `<nav class="solution-route-stages" aria-label="${word('证明主线', 'Proof outline')}">${model.stages.map((stage, index) => `<button type="button" data-solution-select="${html(stage.nodeIds[0])}"${stage.nodeIds.includes(state.selected) ? ' aria-current="step"' : ''}><span>${String(index + 1).padStart(2, '0')}</span><strong data-solution-prose>${html(stage.title)}</strong><span data-solution-prose>${html(stage.summary)}</span></button>`).join('')}</nav>` : ''}
-      <div class="solution-route-tools"><label class="solution-route-search"><span class="sr-only">${word('查找路线中的步骤', 'Find a route step')}</span><input type="search" data-solution-search placeholder="${word('查找目标、引理或推导', 'Find a goal, lemma or derivation')}" value="${html(state.query)}"></label>
+      <div class="solution-route-tools">${options.compact ? `<button type="button" class="solution-route-more" data-solution-more aria-pressed="${state.more}" aria-expanded="${state.more}">${state.more ? word('收起选项', 'Fewer options') : word('更多选项', 'More options')}</button>` : ''}<label class="solution-route-search"><span class="sr-only">${word('查找路线中的步骤', 'Find a route step')}</span><input type="search" data-solution-search placeholder="${word('查找目标、引理或推导', 'Find a goal, lemma or derivation')}" value="${html(state.query)}"></label>
         ${model.nodes.some(node => node.parentId) ? `<button type="button" data-solution-all aria-pressed="${state.all || state.opened.size > 0}">${state.all || state.opened.size ? word('收起步骤', 'Collapse steps') : word('展开全部步骤', 'Expand every step')}</button>` : ''}
         ${model.nodes.some(node => node.origin === 'library') ? `<button type="button" data-solution-library aria-pressed="${state.library}">${word('库里的结论', 'Library results')} ${model.nodes.filter(node => node.origin === 'library').length}</button>` : ''}
         <div class="solution-route-view-controls" role="group" aria-label="${word('阅读方式', 'Reading view')}"><button type="button" data-solution-view="map" aria-pressed="${!state.reading}">${word('路线图', 'Route map')}</button><button type="button" data-solution-view="read" aria-pressed="${state.reading}">${word('阅读推导', 'Read reasoning')}</button></div>
@@ -319,6 +326,10 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
   root.addEventListener('click', event => {
     const target = (event.target as Element).closest<HTMLElement>('button'); if (!target || !root.contains(target)) return;
     if (target.dataset.solutionNode || target.dataset.solutionSelect) { select(target.dataset.solutionNode ?? target.dataset.solutionSelect!, true); return; }
+    if (target.hasAttribute('data-solution-more')) {
+      state.more = !state.more; draw();
+      root.querySelector<HTMLButtonElement>('[data-solution-more]')?.focus({ preventScroll: true }); return;
+    }
     if (target.dataset.solutionView) { reading(target.dataset.solutionView === 'read'); return; }
     if (target.dataset.solutionSection) {
       const heading = root.querySelector<HTMLElement>(`[data-solution-section-heading="${target.dataset.solutionSection}"]`);

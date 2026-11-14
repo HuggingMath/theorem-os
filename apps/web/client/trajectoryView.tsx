@@ -679,7 +679,7 @@ export class TrajectoryView {
       return <div class="trajectory-layout" data-mode="roadmap" data-viewer-host>
         <section class="trajectory trajectory-roadmap">
           {!this.overviewAction && heading()}{failure}
-          {route ? <SolutionRouteGraph key={run.id} model={route} onSelect={id => { state.mapNode = id; state.panel = undefined; this.render(); }}
+          {route ? <SolutionRouteGraph key={run.id} model={route} compact onSelect={id => { state.mapNode = id; state.panel = undefined; this.render(); }}
             onOpen={target => {
               if (target.startsWith('task:')) { this.showNode(run.id, target); return; }
               const match = /^step:(\d+)$/u.exec(target), index = match ? Number(match[1]) : -1;

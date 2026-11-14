@@ -11,7 +11,7 @@ import type { WebRunInput, WorkerMessage } from '../apps/web/shared';
 import { audit } from './web-a11y';
 import { contrastProblems } from './web-contrast';
 import { freePort, postRun, settled, startBrowser, waitForRun } from './web-scenario';
-import { openTab, selectHistoryRun, showArtifacts } from './web-ui-controls';
+import { openTab, revealRouteControls, selectHistoryRun, showArtifacts } from './web-ui-controls';
 import { replaySample, withFailedAttempt } from './web-trajectory-fixture';
 
 const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/web-roadmap');
@@ -78,7 +78,7 @@ try {
   assert.deepEqual(await attempts().evaluateAll(items => items.map(item => item.getAttribute('data-status'))), ['failed', 'passed']);
   assert.deepEqual(await audit(page, { scope: '#detail-panel' }), [], 'the graph is accessible');
   await shot('roadmap-desktop.png');
-  await map().locator('[data-solution-expand]').click();
+  await revealRouteControls(map()); await map().locator('[data-solution-expand]').click();
   await map().locator('[data-solution-expand][aria-expanded="true"]').waitFor();
   assert.equal(await map().getAttribute('role'), 'dialog');
   assert.equal(await map().getAttribute('aria-modal'), 'true');
@@ -151,7 +151,7 @@ try {
   const before = await map().locator('output').innerText();
   await map().getByRole('button', { name: '放大', exact: true }).click();
   assert.notEqual(await map().locator('output').innerText(), before);
-  await map().locator('[data-solution-zoom="fit"]').click();
+  await revealRouteControls(map()); await map().locator('[data-solution-zoom="fit"]').click();
   console.log('PASS nodes open the saved failed check; keyboard navigation and zoom work');
 
   await page.locator('#expand-research-output').click();
@@ -192,7 +192,7 @@ try {
     return box.top >= viewport.top && box.bottom <= viewport.bottom && box.left >= viewport.left && box.right <= viewport.right;
   }), 'the original problem is visible when the mobile roadmap opens');
   await shot('roadmap-mobile.png');
-  await map().locator('[data-solution-zoom="reset"]').click();
+  await revealRouteControls(map()); await map().locator('[data-solution-zoom="reset"]').click();
   const viewport = page.locator('.solution-route-viewport');
   await viewport.scrollIntoViewIfNeeded();
   assert.ok(await viewport.evaluate(element => element.scrollWidth > element.clientWidth + 200),
@@ -202,7 +202,7 @@ try {
   await page.mouse.move(area.x + 170, area.y + 12); await page.mouse.down();
   await page.mouse.move(area.x + 65, area.y + 12, { steps: 8 }); await page.mouse.up();
   assert.ok(await viewport.evaluate(element => element.scrollLeft) > 150, 'dragging the canvas pans the map');
-  await map().locator('[data-solution-zoom="fit"]').click();
+  await revealRouteControls(map()); await map().locator('[data-solution-zoom="fit"]').click();
   assert.ok(await fits());
   assert.deepEqual(errors, []); assert.deepEqual(writes, []);
   console.log('PASS graph/detail preference survives tab changes; mobile panning, both themes, and read-only interaction work');

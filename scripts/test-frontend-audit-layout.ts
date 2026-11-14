@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 // Browser regressions for the audited layouts, using built assets and a read-only recorded run.
+import { revealRouteControls } from './web-ui-controls';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -189,6 +190,7 @@ try {
         const task = map.locator(surface === 'workbench' ? '[data-solution-node="task:goal_2"]' : '[data-solution-node^="task:"]').first();
         await task.click();
         const selected = await task.getAttribute('data-solution-node');
+        await revealRouteControls(map);
         await map.locator('[data-solution-expand]').click();
         await map.locator('[data-solution-expand][aria-expanded="true"]').waitFor(); await settled(page);
         assert.equal(await map.getAttribute('role'), 'dialog');

@@ -10,7 +10,7 @@ import { readWebConfig } from '../apps/web/config';
 import { loadWebSample } from '../apps/web/sample';
 import { localeStorageKey } from '../apps/web/i18n';
 import { freePort, startBrowser, settled } from './web-scenario';
-import { openTab } from './web-ui-controls';
+import { openTab, revealRouteControls } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..');
 const output = process.env.THEOREMOS_ROUND6_ROUTES_OUTPUT ?? path.join(root, 'out/frontend-round6/routes');
@@ -44,11 +44,11 @@ try {
         await page.goto(`${origin}/?sample`); await openTab(page, 'trajectory');
         if (expandedResults) await page.locator('#expand-research-output').click();
         const map = page.locator('.solution-route'); await map.waitFor();
-        await map.locator('[data-solution-all]').click();
+        await revealRouteControls(map); await map.locator('[data-solution-all]').click();
         await map.locator('[data-solution-node^="record:attempt:"]').first().click();
         const selected = await map.locator('[data-solution-heading]').getAttribute('data-solution-heading');
         const overflow = await page.evaluate(() => document.body.style.overflow);
-        await map.locator('[data-solution-expand]').click();
+        await revealRouteControls(map); await map.locator('[data-solution-expand]').click();
         assert.equal(await map.getAttribute('data-solution-expanded'), 'true');
         await map.locator('[data-solution-open]').click();
         const viewer = page.locator('#trajectory-viewer[open]'); await viewer.waitFor();
