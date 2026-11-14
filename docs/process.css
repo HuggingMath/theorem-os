@@ -496,7 +496,7 @@
 .process-map-edges [data-map-edge] { fill: none; stroke: var(--green-border); stroke-width: 1.5; }
 .process-map-edges [data-kind="flow"] { stroke: var(--muted); stroke-dasharray: 5 5; stroke-width: 1.2; }
 .process-map-edges .is-muted { opacity: .35; }
-.process-map-node { position: absolute; width: 232px; height: 116px; display: flex; flex-direction: column; align-items: stretch; padding: 13px 15px; border: 1px solid var(--line); border-left: 3px solid var(--process-state, var(--muted)); border-radius: 5px; background: var(--card); color: var(--ink); text-align: left; cursor: pointer; }
+.process-map-node { position: absolute; width: 232px; height: 132px; display: flex; flex-direction: column; align-items: stretch; padding: 13px 15px; border: 1px solid var(--line); border-left: 3px solid var(--process-state, var(--muted)); border-radius: 5px; background: var(--card); color: var(--ink); text-align: left; cursor: pointer; }
 .process-map-node:hover { border-color: var(--green-border); background: var(--surface-hover); }
 .process-map-node[aria-pressed="true"] { border-color: var(--green); outline: 2px solid var(--green); outline-offset: 3px; background: var(--green-wash); }
 .process-map-node[data-node-kind="acceptance"] { background: var(--green-wash); border-color: var(--green-border); }
@@ -504,15 +504,34 @@
 .process-map-node-kind { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; line-height: 1.4; }
 .process-map-node-kind > svg { width: 13px; height: 13px; stroke-width: 1.5; }
 .process-map-node-kind em { margin-left: auto; font-size: 12px; color: var(--process-state); font-style: normal; }
-.process-map-node > strong { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 17px; font-weight: 500; line-height: 1.45; letter-spacing: -.015em; margin: 8px 0 0; }
+/* A two-line title may not shrink: it is the only thing that names the node. */
+.process-map-node > strong { flex: none; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 17px; font-weight: 500; line-height: 1.45; letter-spacing: -.015em; margin: 8px 0 0; }
 .process-map-node-note { margin-top: auto; color: var(--muted); font-size: 12px; padding-top: 5px; }
 .process-map-node-note b { color: var(--orange); font-weight: 400; }
-.process-map-controls { position: absolute; bottom: 15px; left: 16px; display: flex; align-items: center; gap: 3px; padding: 4px; border: 1px solid var(--line); border-radius: 5px; background: var(--card); box-shadow: 0 2px 5px var(--shadow); }
+.process-map-node-ordinal { display: none; font: 12px var(--mono); color: var(--muted); font-style: normal; }
+.process-map-node-deps { display: none; font: 12px var(--mono); color: var(--muted); padding-top: 3px; }
+/* The toolbar sits above the canvas; controls over the nodes hid whichever task was underneath. */
+.process-map-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 0 0 12px; }
+.process-map-modes, .process-map-controls { display: flex; align-items: center; gap: 3px; padding: 3px; border: 1px solid var(--line); border-radius: 5px; background: var(--card); }
+.process-map-modes button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 3px 10px; border-radius: 3px; background: transparent; color: var(--muted); font-size: 12px; }
+.process-map-modes button svg { width: 13px; height: 13px; stroke-width: 1.5; }
+.process-map-modes button:hover { background: var(--surface-hover); }
+.process-map-modes button[aria-pressed="true"] { background: var(--green-wash); color: var(--ink); box-shadow: inset 0 0 0 1px var(--green-border); }
 .process-map-controls button { min-width: 32px; min-height: 30px; padding: 3px 8px; border-radius: 3px; background: transparent; color: var(--ink-soft); font-size: 12px; }
+.process-roadmap[data-map-mode="list"] .process-map-controls { display: none; }
 .process-map-controls button:hover { background: var(--surface-hover); }
 .process-map-controls button:first-child, .process-map-controls button:nth-of-type(2) { font-size: 18px; }
 .process-map-controls output { min-width: 38px; color: var(--muted); text-align: center; font: 12px var(--mono); }
 .process-map-controls > span { height: 18px; width: 1px; background: var(--line); margin: 0 3px; }
+/* List mode reflows the same nodes into reading order: same buttons, same handlers, no arrows to misread. */
+.process-roadmap[data-map-mode="list"] .process-map-viewport { height: auto; overflow: visible; cursor: default; background: none; }
+.process-roadmap[data-map-mode="list"] .process-map-space { width: auto !important; height: auto !important; min-height: 0; }
+.process-roadmap[data-map-mode="list"] .process-map-canvas { position: static !important; transform: none !important; width: auto !important; height: auto !important; display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); padding: 2px; }
+.process-roadmap[data-map-mode="list"] .process-map-edges { display: none; }
+.process-roadmap[data-map-mode="list"] .process-map-node { position: static !important; left: auto !important; top: auto !important; width: auto !important; min-height: 0; height: auto; }
+.process-roadmap[data-map-mode="list"] .process-map-node > strong { -webkit-line-clamp: 3; }
+.process-roadmap[data-map-mode="list"] .process-map-node-note { margin-top: 8px; }
+.process-roadmap[data-map-mode="list"] .process-map-node-ordinal, .process-roadmap[data-map-mode="list"] .process-map-node-deps { display: block; }
 .process-map-inspector { display: grid; grid-template-columns: minmax(220px, 30%) minmax(0, 1fr); border: 1px solid var(--line); border-radius: 5px; margin-top: 16px; background: var(--card); overflow: hidden; }
 .process-map-context { min-width: 0; padding: 24px; }
 .process-map-context:only-child { grid-column: 1 / -1; }
@@ -529,6 +548,34 @@
 .process-map-task-records strong { font-size: 12px; font-weight: 500; }
 .process-map-task-records span { font-size: 12px; color: var(--process-state); }
 .process-map-inspector .process-step-detail { min-height: 0; }
+/* A node explains itself: what it established, from what, and why, before any raw record. */
+.process-map-step-note { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 9px; margin: 0 0 12px !important; font-size: 11px !important; letter-spacing: .04em; color: var(--muted) !important; }
+.process-map-step-note i { font-style: normal; color: var(--green); }
+.process-map-claim { margin: 0 0 14px; padding: 13px 14px; border-left: 2px solid var(--green); background: var(--green-wash); border-radius: 0 3px 3px 0; }
+.process-map-claim > span { display: block; font-size: 11px; letter-spacing: .05em; color: var(--muted); margin-bottom: 5px; }
+.process-map-claim > p { margin: 0; font-size: 14px; line-height: 1.85; color: var(--ink); overflow-wrap: anywhere; }
+.process-map-given { margin: 0 0 14px !important; font-size: 12.5px !important; line-height: 1.95 !important; color: var(--ink-soft) !important; overflow-wrap: anywhere; }
+.process-map-given > span { display: inline-block; margin-right: 8px; font-size: 11px; letter-spacing: .05em; color: var(--muted); }
+.process-map-why { margin: 0 0 14px; }
+.process-map-why > summary, .process-map-objective > summary { cursor: pointer; padding: 7px 0; color: var(--muted); font-size: 12px; }
+.process-map-why > p { margin: 0; font-size: 13px; line-height: 1.95; color: var(--ink-soft); overflow-wrap: anywhere; }
+.process-map-read { display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px; margin: 0 0 16px; border: 1px solid var(--line); border-radius: 4px; background: var(--card); color: var(--green); font-size: 12px; text-align: left; }
+.process-map-read:hover { border-color: var(--green); background: var(--green-wash); }
+.process-map-read svg { width: 14px; height: 14px; flex: none; }
+.process-map-objective { margin-top: 12px; border-top: 1px solid var(--line); }
+.process-map-objective > p { margin: 0 0 10px; font-size: 12px; line-height: 1.9; color: var(--muted); overflow-wrap: anywhere; }
+.process-map-goal, .process-map-strategy, .process-map-note { font-size: 13px !important; line-height: 1.95 !important; color: var(--ink-soft) !important; overflow-wrap: anywhere; }
+.process-map-note { font-size: 12px !important; color: var(--muted) !important; }
+.process-map-stages { display: grid; gap: 2px; margin: 14px 0 0; padding: 0; list-style: none; counter-reset: none; }
+.process-map-stages > li { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 1px 9px; padding: 9px 0; border-top: 1px solid var(--line); }
+.process-map-stages > li > span { font: 11px var(--mono); color: var(--muted); padding-top: 2px; }
+.process-map-stages strong { font-size: 12px; font-weight: 500; color: var(--ink); }
+.process-map-stages p { grid-column: 2; margin: 2px 0 0; font-size: 12px; line-height: 1.85; color: var(--muted); overflow-wrap: anywhere; }
+.process-diagnostics .process-verdict { margin: 0 0 10px; font-size: 12.5px; line-height: 1.9; color: var(--ink-soft); }
+.process-raw-output { margin: 0; }
+.process-raw-output > summary { cursor: pointer; padding: 7px 0; color: var(--muted); font-size: 12px; }
+.process-axioms { margin: 8px 0 0 !important; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.process-axioms code { font: 12px var(--mono); color: var(--ink-soft); }
 @media (min-width: 1700px) { .reading-process .inspector { max-width: 1240px; } }
 @media (max-width: 1100px) {
   .proof-reading-layout { grid-template-columns: minmax(0, 1fr); gap: 24px; }
@@ -629,7 +676,10 @@
   .process-map-context { padding: 20px 18px; }
   .process-map-task-records { max-height: 220px; }
   .process-map-inspector .process-step-detail { border-top: 1px solid var(--line); }
-  .process-map-controls { left: 10px; bottom: 12px; }
+  .process-map-bar { justify-content: flex-start; gap: 8px; }
+  .process-map-modes button { padding: 3px 9px; }
+  .process-roadmap[data-map-mode="list"] .process-map-node { padding: 12px 13px; }
+  .process-roadmap[data-map-mode="list"] .process-map-node > strong { font-size: 16px; }
   .shared-classics .header-links a:first-child span { display: none; }
   .reading-process .detail-topline { margin-bottom: 16px; }
   .reading-process .detail-title { font-size: 28px; }

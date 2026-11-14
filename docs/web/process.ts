@@ -5,6 +5,8 @@ import { buildArchiveRoadmap, renderArchiveRoadmap } from './processRoadmap';
 import { archiveRoadmapTaskLabel } from './roadmapLabels';
 import { renderGlobalTrajectory } from './globalTrajectory';
 import { readableProcessText } from './processText';
+import { selectedProofWalkthrough } from './proofWalkthrough';
+import type { Localized, ProofWalkthrough, ProofWalkthroughStage, ProofWalkthroughStep } from './proofWalkthroughTypes';
 
 type Run = ArchiveProcess['runs'][number];
 type Task = Run['tasks'][number];
@@ -57,7 +59,8 @@ function duration(run: Run, locale: Locale): string {
   return minutes >= 60 ? choose(locale, `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`, `${Math.floor(minutes / 60)}h ${minutes % 60}m`)
     : choose(locale, `${minutes} 分 ${seconds} 秒`, `${minutes}m ${seconds}s`);
 }
-export const processTaskName = (task: Task) => task.theorem?.split('.').at(-1) || task.id.replaceAll('_', ' ');
+/** Names state what the task had to establish; identifier-only tasks fall back to their recorded wording. */
+export const processTaskName = (task: Task, locale: Locale) => archiveRoadmapTaskLabel(task, locale);
 export function selectedProcessRun(process: ArchiveProcess, record: ArchiveIndexRecord, selection: ProcessSelection): Run | undefined {
   return process.runs.find(run => run.runId === selection.run)
     ?? process.runs.find(run => run.runId === record.campaign?.runId) ?? process.runs.at(-1);
@@ -142,36 +145,86 @@ function stepDetail(step: Step, run: Run, record: ArchiveIndexRecord, process: A
     <p class="process-eyebrow"><time datetime="${escape(step.at)}">${escape(time(step.at, locale))} UTC</time></p><h3>${escape(step.title)}</h3>
     ${step.status ? `<p class="process-detail-status" data-tone="${tone(step.status)}">${escape(processStatus(step.status, locale))}</p>` : ''}
     ${step.delivery?.workerId ? `<p class="process-actor">${escape(step.delivery.role ? ({ researcher: choose(locale, '研究 Agent', 'Researcher'), engineer: choose(locale, '证明 Agent', 'Engineer'), lead: choose(locale, 'Lead', 'Lead') }[step.delivery.role] ?? step.delivery.role) + ' · ' : '')}${escape(step.delivery.workerId)}</p>` : ''}
-    ${task ? `<p class="process-detail-task">${choose(locale, '关联任务', 'Task')} <button data-process-task="${escape(task.id)}">${escape(processTaskName(task))}</button></p>` : ''}
+    ${task ? `<p class="process-detail-task">${choose(locale, '关联任务', 'Task')} <button data-process-task="${escape(task.id)}">${escape(processTaskName(task, locale))}</button></p>` : ''}
     ${step.kind === 'start' ? `<p>${choose(locale, '从保存的原题和任务计划开始本轮研究。', 'This run starts from the saved original problem and task plan.')}</p>
       <p>${choose(locale, `配置 ${run.workers} 个 Agent · 记录 ${run.turns} 轮`, `${run.workers} configured Agents · ${run.turns} recorded turns`)}</p>` : ''}
     ${step.kind === 'end' && !summary ? `<p>${choose(locale, '本轮任务的状态保存在下方的运行记录中。', 'Task outcomes are preserved in this run’s records.')}</p>` : ''}
     ${summary && step.kind === 'plan' ? `<div class="process-dependencies"><span>${choose(locale, '调整的任务', 'Updated tasks')}</span>${summary.split(',').map(id => {
       const task = run.tasks.find(task => task.id === id.trim());
-      return task ? `<button data-process-task="${escape(task.id)}">${escape(processTaskName(task))}</button>` : `<span>${escape(id.trim())}</span>`;
+      return task ? `<button data-process-task="${escape(task.id)}">${escape(processTaskName(task, locale))}</button>` : `<span>${escape(id.trim())}</span>`;
     }).join('')}</div>` : summary ? `<div class="process-message">${escape(summary)}</div>` : ''}
     ${check ? `<p class="process-check-scope">${check.scope === 'original' ? choose(locale, '完整原题检查', 'Original problem check') : choose(locale, '局部任务检查', 'Task proof check')}</p>
-      ${check.diagnostics ? `<section class="process-diagnostics"><h4>${choose(locale, '检查反馈', 'Check feedback')}</h4><pre tabindex="0">${escape(check.diagnostics)}</pre></section>`
-        : ''}
+      ${check.diagnostics ? checkFeedback(check, locale) : ''}
       ${checkSource(check, run, process, selection, locale)}` : ''}
     ${rawDetails([['Kind', step.delivery?.kind ?? step.kind], ['Status', step.status], ['Task ID', step.taskId], ['Commit', check?.commit ?? step.delivery?.commit],
       ['Lean receipts', check?.receiptIds.join('\n')], ['Worker', step.delivery?.workerId], ['Role', step.delivery?.role]], locale)}`;
 }
+/** A verdict a reader can start from; the raw Lean bytes stay one disclosure away. */
+function checkFeedback(check: Check, locale: Locale): string {
+  const failed = ['failed', 'error'].includes(check.status ?? '');
+  const verdict = failed
+    ? choose(locale, 'Lean 拒绝了这份证明。下面的输出是它给出的原因，逐条对应需要修改的声明。', 'Lean rejected this proof. The output below gives the reasons, clause by clause.')
+    : choose(locale, 'Lean 接受了这份文件：原题目标已由这份证明推出，没有未解决的占位，没有额外的公理。下面保留当时检查的原始输出。', 'Lean accepted this file: the proof establishes the target with no unsolved placeholders and no extra axioms. The original check output is kept below.');
+  const axioms = /depends on axioms:\s*\[([^\]]*)\]/u.exec(check.diagnostics)?.[1];
+  const pre = `<pre tabindex="0">${escape(check.diagnostics)}</pre>`;
+  return `<section class="process-diagnostics" data-tone="${failed ? 'attention' : 'passed'}"><h4>${choose(locale, '检查反馈', 'Check feedback')}</h4><p class="process-verdict">${verdict}</p>
+    ${failed ? pre : `<details class="process-raw-output"><summary>${choose(locale, '原始输出', 'Original output')}</summary>${pre}</details>`}
+    ${axioms ? `<p class="process-axioms">${choose(locale, '内核记录的依赖公理：', 'Axioms recorded by the kernel:')}<code>${escape(axioms)}</code></p>` : ''}</section>`;
+}
 function taskBrowser(run: Run, selection: ProcessSelection, locale: Locale): string {
   const selected = run.tasks.find(task => task.id === selection.task);
-  return `<details class="process-task-browser" ${selected ? 'open' : ''}><summary>${icon('git-branch')}<span>${choose(locale, '任务与依赖', 'Tasks and dependencies')}</span><b>${run.tasks.length}</b>${selected ? `<span>${escape(processTaskName(selected))}</span>` : ''}</summary>
+  return `<details class="process-task-browser" ${selected ? 'open' : ''}><summary>${icon('git-branch')}<span>${choose(locale, '任务与依赖', 'Tasks and dependencies')}</span><b>${run.tasks.length}</b>${selected ? `<span>${escape(processTaskName(selected, locale))}</span>` : ''}</summary>
     <div class="process-task-grid">${run.tasks.map(task => `<button data-process-task="${escape(task.id)}" aria-pressed="${selection.task === task.id}" data-tone="${tone(task.status)}">
-      <strong>${escape(processTaskName(task))}</strong><span>${escape(processStatus(task.status, locale))} · ${choose(locale, `${task.attempts} 次任务尝试`, `${task.attempts} task attempts`)}</span></button>`).join('')}</div>
+      <strong>${escape(processTaskName(task, locale))}</strong><span>${escape(processStatus(task.status, locale))} · ${choose(locale, `${task.attempts} 次任务尝试`, `${task.attempts} task attempts`)}</span></button>`).join('')}</div>
     ${selected ? `<section class="process-task-detail"><div class="process-task-heading"><h4>${escape(selected.theorem ?? selected.id)}</h4><button data-process-task="">${choose(locale, '显示全部任务', 'Show all tasks')}</button></div>
       <p class="process-message">${escape(readableProcessText(selected.objective))}</p>
       ${selected.dependencies.length ? `<div class="process-dependencies"><span>${choose(locale, '依赖', 'Depends on')}</span>${selected.dependencies.map(id => {
         const dependency = run.tasks.find(task => task.id === id);
-        return dependency ? `<button data-process-task="${escape(id)}">${icon('git-branch')}${escape(processTaskName(dependency))}</button>` : `<code>${escape(id)}</code>`;
+        return dependency ? `<button data-process-task="${escape(id)}">${icon('git-branch')}${escape(processTaskName(dependency, locale))}</button>` : `<code>${escape(id)}</code>`;
       }).join('')}</div>` : `<p>${choose(locale, '没有记录任务依赖。', 'No task dependencies were recorded.')}</p>`}
       ${rawDetails([['Task ID', selected.id], ['Proof commit', selected.proofCommit], ['Lean status', selected.checkStatus], ['Lean receipts', selected.receiptIds.join('\n')]], locale)}</section>` : ''}
     <p class="process-task-footnote">${choose(locale, '任务状态来自本轮结束时的记录。原题的最终验收见轨迹终点。', 'Task statuses are recorded at the end of this run. Final acceptance of the original problem appears at the end of the trajectory.')}</p></details>`;
 }
 
+const prose = (value: Localized, locale: Locale) => locale === 'en' ? value.en : value.zh;
+const ordinal = (index: number) => String(index + 1).padStart(2, '0');
+const leaf = (name: string) => name.split('.').filter(Boolean).at(-1) ?? name;
+/** A task's record maps onto the reading's explanation of the same result, when the reading has one. */
+function walkthroughStep(walkthrough: ProofWalkthrough | undefined, task: Task) {
+  if (!walkthrough) return undefined;
+  const theorem = task.theorem ? leaf(task.theorem) : '';
+  const step = walkthrough.steps.find(candidate => candidate.evidence.taskIds?.includes(task.id))
+    ?? (theorem ? walkthrough.steps.find(candidate => candidate.evidence.theorems.some(name => leaf(name) === theorem)) : undefined);
+  if (!step) return undefined;
+  const index = walkthrough.steps.indexOf(step);
+  const stageIndex = Math.max(0, walkthrough.stages.findIndex(stage => stage.stepIds.includes(step.id)));
+  return { step, index, stage: walkthrough.stages[stageIndex]!, stageIndex };
+}
+/** Nodes carry what a reader needs: what was established, from what, and where the reasoning is written out. */
+function taskContext(task: Task, run: Run, walkthrough: ProofWalkthrough | undefined, locale: Locale): string {
+  const found = walkthroughStep(walkthrough, task);
+  const dependencies = task.dependencies.length ? `<div class="process-dependencies"><span>${choose(locale, '依赖', 'Depends on')}</span>${task.dependencies.map(id => {
+    const dependency = run.tasks.find(item => item.id === id);
+    return dependency ? `<button data-process-node="task:${escape(id)}">${escape(archiveRoadmapTaskLabel(dependency, locale))}</button>` : '';
+  }).join('')}</div>` : '';
+  const brief = `<details class="process-map-objective"><summary>${choose(locale, '当时交给 Agent 的任务说明', 'Task brief given to the agent')}</summary><p>${escape(readableProcessText(task.objective, 1600))}</p></details>`;
+  if (found) return `<p class="process-map-step-note">${choose(locale, `第 ${ordinal(found.index)} 步 · 阶段 ${found.stageIndex + 1}`, `Step ${ordinal(found.index)} · Part ${found.stageIndex + 1}`)}<i>${escape(prose(found.stage.title, locale))}</i></p>
+    <div class="process-map-claim"><span>${choose(locale, '这一步推出', 'This step establishes')}</span><p>${escape(prose(found.step.claim, locale))}</p></div>
+    <p class="process-map-given"><span>${choose(locale, '已知', 'Given')}</span>${escape(prose(found.step.given, locale))}</p>
+    ${found.step.because.zh || found.step.because.en ? `<details class="process-map-why"><summary>${choose(locale, '为什么这一步成立', 'Why this step holds')}</summary><p>${escape(prose(found.step.because, locale))}</p></details>` : ''}
+    <button class="process-map-read" data-open-reading-step="proof-derivation-${escape(found.step.id)}" data-open-reading-sha="${escape(walkthrough.proofSha256)}">${icon('book-open')}${choose(locale, `在阅读页读第 ${ordinal(found.index)} 步的逐行推导`, `Read the line-by-line derivation of step ${ordinal(found.index)}`)}${icon('arrow-right')}</button>
+    ${dependencies}${brief}`;
+  const research = /^initial_research_/u.test(task.id);
+  const capacity = /^capacity_/u.test(task.id);
+  const outcome = task.status === 'integrated'
+    ? choose(locale, '它的结论已经并入最终证明。', 'Its result is part of the accepted proof.')
+    : task.status === 'blocked' ? choose(locale, '这条路线中途受阻，没有进入最终证明。', 'This route was blocked and is not part of the final proof.')
+      : choose(locale, '本轮结束时这项工作尚未完成，因此没有并入最终证明。', 'This work was unfinished when the run ended, so it is not part of the final proof.');
+  const nature = research ? choose(locale, '这是一项研究工作：它查证可用的库引理与证明路线，本身不产生一条定理。', 'This is a research task: it checks available library lemmas and routes rather than proving a theorem itself.')
+    : capacity ? choose(locale, '这是一条探索性的备选路线。', 'This is an exploratory alternative route.')
+      : choose(locale, '归档没有为这条任务单列推导段落。', 'The record has no separate derivation section for this task.');
+  return `<p>${outcome}${nature}</p>${dependencies}${brief}`;
+}
 function roadmap(record: ArchiveIndexRecord, process: ArchiveProcess, run: Run, steps: Step[], selection: ProcessSelection, locale: Locale): string {
   const model = buildArchiveRoadmap(record, run, locale);
   const requested = steps.find(step => step.id === selection.step);
@@ -183,14 +236,15 @@ function roadmap(record: ArchiveIndexRecord, process: ArchiveProcess, run: Run, 
   const related = steps.filter(step => task ? step.taskId === task.id : node.kind === 'plan' ? step.kind === 'plan'
     : node.checkIds.includes(step.check?.id ?? '') || node.deliveryIds.includes(step.delivery?.id ?? '') || step.id === node.stepId);
   const selected = related.find(step => step.id === selection.step) ?? related.at(-1);
+  const walkthrough = selectedProofWalkthrough(record, process, run);
+  const stages = walkthrough ? `<ol class="process-map-stages">${walkthrough.stages.map((stage, index) => `<li><span>${ordinal(index)}</span><strong>${escape(prose(stage.title, locale))}</strong><p>${escape(prose(stage.summary, locale))}</p></li>`).join('')}</ol>` : '';
   const context = node.kind === 'problem'
-    ? `<p>${escape(record.summary)}</p><div class="process-targets">${record.campaign?.targets.map(target => `<code>${escape(target)}</code>`).join('') ?? ''}</div>`
-    : task ? `<p class="process-message">${escape(readableProcessText(task.objective, 1600))}</p>
-      ${task.dependencies.length ? `<div class="process-dependencies"><span>${choose(locale, '依赖', 'Depends on')}</span>${task.dependencies.map(id => {
-        const dependency = run.tasks.find(item => item.id === id);
-        return dependency ? `<button data-process-node="task:${escape(id)}">${escape(archiveRoadmapTaskLabel(dependency, locale))}</button>` : '';
-      }).join('')}</div>` : ''}`
-      : node.kind === 'plan' ? `<p>${choose(locale, `本轮有 ${run.tasks.length} 项任务。图中的实线保留归档中的引理依赖。`, `${run.tasks.length} tasks in this run. Solid arrows preserve the recorded lemma dependencies.`)}</p>`
+    ? `<p>${escape(record.summary)}</p>${walkthrough ? `<p class="process-map-goal">${escape(prose(walkthrough.goal, locale))}</p>
+      <p class="process-map-note">${choose(locale, `证明的阅读按 ${walkthrough.stages.length} 个阶段、${walkthrough.steps.length} 步展开；点开任一任务节点可以读这一步推出的结论。`, `The proof reads in ${walkthrough.stages.length} parts and ${walkthrough.steps.length} steps; open any task node to read what it establishes.`)}</p>` : ''}
+      <div class="process-targets">${record.campaign?.targets.map(target => `<code>${escape(target)}</code>`).join('') ?? ''}</div>`
+    : task ? taskContext(task, run, walkthrough, locale)
+      : node.kind === 'plan' ? `${walkthrough ? `<p class="process-map-strategy">${escape(prose(walkthrough.strategy, locale))}</p>${stages}`
+        : `<p>${choose(locale, `本轮有 ${run.tasks.length} 项任务。图中的实线保留归档中的引理依赖。`, `${run.tasks.length} tasks in this run. Solid arrows preserve the recorded lemma dependencies.`)}</p>`}`
         : node.kind === 'review' && run.review?.summary && !related.length ? `<p class="process-message">${escape(readableProcessText(run.review.summary, 1600))}</p>` : '';
   return `${renderArchiveRoadmap(model, run, node.id, locale)}
     <section class="process-map-inspector" id="process-map-inspector" aria-label="${choose(locale, '路线节点详情', 'Roadmap node details')}">
@@ -233,7 +287,7 @@ export function renderArchiveProcess(record: ArchiveIndexRecord, process: Archiv
       ${selection.task ? `<p class="process-filter-note">${choose(locale, '正在查看所选任务的步骤', 'Showing steps for the selected task')} <button data-process-task="">${choose(locale, '显示全部', 'Show all')}</button></p>` : ''}
       <div class="process-reader"><ol class="process-step-list" id="process-step-list" aria-label="${choose(locale, '按时间排列的研究步骤', 'Research steps in time order')}">${filtered.map((step, index) => `<li data-kind="${step.kind}" data-tone="${tone(step.status)}"><button data-process-step="${escape(step.id)}" aria-pressed="${step === selected}" aria-controls="process-step-detail">
         <span class="process-step-count">${String(index + 1).padStart(2, '0')}</span><span><time datetime="${escape(step.at)}">${escape(time(step.at, locale, true))}</time><strong>${escape(step.title)}</strong>
-        ${step.taskId ? `<span class="process-step-task">${escape(processTaskName(run.tasks.find(task => task.id === step.taskId) ?? { id: step.taskId } as Task))}</span>` : ''}
+        ${step.taskId ? `<span class="process-step-task">${escape(processTaskName(run.tasks.find(task => task.id === step.taskId) ?? { id: step.taskId, objective: '' } as Task, locale))}</span>` : ''}
         ${step.status ? `<span class="process-step-status">${escape(processStatus(step.status, locale))}</span>` : ''}</span></button></li>`).join('')}</ol>
       <article class="process-step-detail" id="process-step-detail" tabindex="-1" aria-live="polite">${selected ? stepDetail(selected, run, record, process, selection, locale)
         : `<p class="process-empty">${choose(locale, '这个筛选条件下没有保存的步骤。', 'No saved steps match this filter.')}</p>`}

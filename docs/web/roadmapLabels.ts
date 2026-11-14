@@ -120,6 +120,31 @@ const theoremLabels: Record<string, Label> = {
   cutMass_triangleVertices: ['三角展开的割质量分解', 'Cut-mass decomposition for the triangle expansion'],
   triangle_expansion_face: ['三角展开下的匹配多面体面对应', 'Matching-polytope faces under triangle expansion'],
   minFace_linear_image: ['线性映射下的最小面对应', 'Minimal-face correspondence under a linear map'],
+
+  // Three-state tree clauses: names come from the walkthrough claims, which state what each lemma establishes.
+  channelWeight_nonneg: ['三态信道权重的非负性', 'Nonnegativity of the three-state channel weights'],
+  channelWeight_sum: ['三态信道权重的行和为一', 'Unit row sums of the three-state channel weights'],
+  channelWeight_centred_eigen: ['中心化指示函数的信道特征关系', 'The channel eigenrelation for the centered indicator'],
+  poissonWeight_nonneg: ['Poisson 后代权重的非负性', 'Nonnegativity of the Poisson offspring weights'],
+  poissonWeight_mass: ['Poisson 后代权重的总质量为一', 'The Poisson offspring weights sum to one'],
+  isBroadcastLaw_observationLaw: ['观测分布满足广播律递归结构', 'The observation law has the broadcast-law recursion'],
+  exists_census_pair: ['存在具多项式界的有限叶计数对', 'A polynomial-bounded pair of finite leaf counts exists'],
+  census_finite_le: ['叶计数的多项式上界', 'A polynomial bound on the leaf census'],
+  stateCensus_moment: ['状态计数的一阶矩', 'The first moment of the state census'],
+  totalCensus_moment: ['总叶数的一阶矩', 'The first moment of the total leaf count'],
+  signedCensus_moment_data: ['带号叶计数的一阶矩数据', 'First-moment data for the signed leaf census'],
+  signedCensus_second_moment_succ: ['带号计数二阶矩的精确递推', 'The exact recursion for the signed second moment'],
+  signedCensus_second_moment_le: ['Kesten–Stigum 条件下的一致二阶矩上界', 'A uniform second-moment bound under Kesten–Stigum'],
+  exists_C_of_KS: ['二阶矩上界中的常数存在性', 'Existence of the constant in the second-moment bound'],
+  pmfTV_observationLaw_lower: ['观测分布全变差的常数下界', 'A constant lower bound on the observation-law total variation'],
+  advantage_observationLaw_lower: ['重构优势的常数下界', 'A constant lower bound on reconstruction advantage'],
+  reconstructs_iff_uniform_advantage: ['可重构与一致优势下界的等价', 'Reconstruction is equivalent to a uniform advantage bound'],
+  regular_advantage_uniform_lower: ['正则树上的一致优势下界', 'A uniform advantage bound on regular trees'],
+  poisson_advantage_uniform_lower: ['Poisson 树上的一致优势下界', 'A uniform advantage bound on Poisson trees'],
+  reconstructs_of_uniform_advantage: ['由一致优势下界推出可重构', 'Reconstruction from a uniform advantage bound'],
+  regular_reconstructs_above_KS: ['正则树在 Kesten–Stigum 条件下的可重构性', 'Regular trees reconstruct above Kesten–Stigum'],
+  poisson_reconstructs_above_KS: ['Poisson 树在 Kesten–Stigum 条件下的可重构性', 'Poisson trees reconstruct above Kesten–Stigum'],
+  producedMarkedValues_allSeams: ['粘合图赋值满足全部接缝方程', 'The glued-map assignment satisfies every seam equation'],
 };
 
 const researchLabels: Record<string, Label> = {

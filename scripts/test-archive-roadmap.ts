@@ -162,6 +162,13 @@ try {
       await fits(page, `${label}: selected blocked task`);
       mark(`${label}: a blocked branch opens its own saved evidence and stays selected after refresh`);
 
+      // Narrow screens open the readable list; the zoom controls are graph-only, so switch back to measure them.
+      if (await page.locator('.process-roadmap').getAttribute('data-map-mode') === 'list') {
+        await page.locator('button[data-map-mode="graph"]').click(); await settled(page);
+        assert.equal(await page.locator('button[data-map-mode="graph"]').getAttribute('aria-pressed'), 'true');
+        assert.equal(await page.locator('button[data-map-mode="list"]').getAttribute('aria-pressed'), 'false');
+        await verifyGraph(page, complex.record, complex.run);
+      }
       // Zoom must change the actual diagram; drag must pan the actual scroll viewport.
       await page.locator('[data-map-zoom="actual"]').click(); await settled(page);
       const actualWidth = (await node(page, 'problem').boundingBox())!.width;
@@ -180,7 +187,16 @@ try {
       await page.mouse.move(viewportBox.x + 35, viewportBox.y + 8, { steps: 8 }); await page.mouse.up();
       assert.ok(await viewport.evaluate(element => element.scrollLeft) > 20, 'Dragging the canvas must change its scroll position');
       await page.locator('[data-map-zoom="fit"]').click(); await settled(page);
-      assert.ok((await node(page, 'problem').boundingBox())!.width <= actualWidth + 1, 'Fit must scale the complex graph into the available canvas');
+      // This graph is far wider than any viewport, so a whole-map scale is below the readable floor and hands over to the list.
+      const fitWidth = (await node(page, 'problem').boundingBox())!.width;
+      assert.equal(await page.locator('.process-roadmap').getAttribute('data-map-mode'), 'list', 'Fit must not return an unreadable graph thumbnail');
+      assert.ok(fitWidth >= 200, `The list renders ${fitWidth}px wide nodes, never a shrunk graph`);
+      assert.equal(await page.locator('.process-map-controls').isVisible(), false, 'The list carries no zoom controls');
+      assert.ok((await page.locator('.process-map-node-ordinal').first().innerText()).trim().length >= 2);
+      await page.locator('button[data-map-mode="graph"]').click(); await settled(page);
+      assert.equal(await page.locator('.process-roadmap').getAttribute('data-map-mode'), 'graph');
+      assert.equal(await page.locator('.process-map-controls').isVisible(), true);
+      assert.ok((await node(page, 'problem').boundingBox())!.width > 60, 'Returning to the graph keeps a readable scale');
       await fits(page, `${label}: zoom and pan`);
       mark(`${label}: zoom controls change node size and dragging pans the actual graph canvas`);
 

@@ -75,14 +75,23 @@ export function buildArchiveRoadmap(record: ArchiveIndexRecord, run: Run, locale
   return { nodes, edges };
 }
 
-const card = { width: 232, height: 116, columnGap: 72, rowGap: 24, lane: 14, margin: 30 };
+const card = { width: 232, height: 132, columnGap: 72, rowGap: 24, lane: 14, margin: 30 };
+/**
+ * A whole-map scale below this turns 17px titles into unreadable pixels. The stacked list carries the same nodes,
+ * dependencies and ordinals in reading order, so it is what a reader gets instead of a thumbnail.
+ */
+const readableFloor = () => innerWidth < 701 ? .6 : .45;
+let preferredMode: 'graph' | 'list' | undefined;
+/** Until the reader chooses, a narrow screen opens the list: a 3000px-wide graph is nine screens of panning. */
+export const roadmapMode = (): 'graph' | 'list' => preferredMode ?? (typeof innerWidth === 'number' && innerWidth < 701 ? 'list' : 'graph');
+export const setRoadmapMode = (mode: 'graph' | 'list') => { preferredMode = mode; };
 function arrange(model: ArchiveRoadmap) {
   const tasks = model.nodes.filter(node => node.kind === 'task');
   const graph = layoutTaskGraph(tasks.map(node => node.id), model.edges.filter(edge => edge.kind === 'dependency').map(edge => ({ ...edge, kind: 'and' })),
     { width: card.width, cardHeight: card.height, columnGap: card.columnGap, rowGap: card.rowGap, lane: card.lane, margin: card.margin });
   const before = model.nodes.filter(node => node.kind === 'problem' || node.kind === 'plan');
   const after = model.nodes.filter(node => !['problem', 'plan', 'task'].includes(node.kind));
-  const height = Math.max(graph.height, before.length * 160 + 50, after.length * 160 + 50);
+  const height = Math.max(graph.height, before.length * (card.height + 44) + 50, after.length * (card.height + 44) + 50);
   const positions = new Map<string, { x: number; y: number }>();
   const taskLeft = before.length ? card.width + card.columnGap : 0;
   for (const [id, position] of graph.positions) positions.set(id, { x: position.x + taskLeft, y: position.y + (height - graph.height) / 2 });
@@ -122,8 +131,15 @@ export function renderArchiveRoadmap(model: ArchiveRoadmap, run: Run, selected: 
   const status = (node: ArchiveRoadmapNode) => node.status === 'integrated' ? text(locale, '已集成', 'Integrated')
     : node.status === 'blocked' ? text(locale, '受阻', 'Blocked') : node.status === 'pending' ? text(locale, '待完成', 'Pending')
       : roadmapTone(node.status) === 'passed' ? text(locale, '已通过', 'Passed') : roadmapTone(node.status) === 'attention' ? text(locale, '未通过', 'Not passed') : text(locale, '研究中', 'In progress');
-  return `<section class="process-roadmap" aria-label="${text(locale, '解题路线图', 'Proof roadmap')}">
+  const mode = roadmapMode();
+  const ordinal = new Map(model.nodes.map((node, index) => [node.id, String(index + 1).padStart(2, '0')]));
+  // A stacked list has no room for arrows, so every task carries the ordinals it depends on.
+  const dependencies = new Map<string, string[]>();
+  for (const edge of model.edges) if (edge.kind === 'dependency')
+    dependencies.set(edge.to, [...(dependencies.get(edge.to) ?? []), ordinal.get(edge.from) ?? edge.from]);
+  return `<section class="process-roadmap" aria-label="${text(locale, '解题路线图', 'Proof roadmap')}" data-map-mode="${mode}">
     <div class="process-map-legend"><span><b class="map-line"></b>${text(locale, '引理依赖', 'Lemma dependency')}</span><span><b class="map-line flow"></b>${text(locale, '研究流程', 'Research flow')}</span><span><b class="map-dot passed"></b>${text(locale, '已集成 / 通过', 'Integrated / passed')}</span><span><b class="map-dot attention"></b>${text(locale, '受阻 / 未通过', 'Blocked / failed')}</span></div>
+    <div class="process-map-bar"><div class="process-map-modes" role="group" aria-label="${text(locale, '路线图排布', 'Roadmap layout')}"><button data-map-mode="graph" aria-pressed="${mode === 'graph'}">${glyph('git-branch')}${text(locale, '图示', 'Graph')}</button><button data-map-mode="list" aria-pressed="${mode === 'list'}">${glyph('list-start')}${text(locale, '列表', 'List')}</button></div><div class="process-map-controls" role="group" aria-label="${text(locale, '路线图缩放', 'Roadmap zoom')}"><button data-map-zoom="out" aria-label="${text(locale, '缩小路线图', 'Zoom out')}">−</button><output class="process-map-scale">100%</output><button data-map-zoom="in" aria-label="${text(locale, '放大路线图', 'Zoom in')}">+</button><span></span><button data-map-zoom="fit">${text(locale, '全图', 'Fit')}</button><button data-map-zoom="actual">100%</button></div></div>
     <div class="process-map-shell"><div class="process-map-viewport" tabindex="0" role="region" aria-label="${text(locale, '可缩放、拖动的解题路线图', 'Zoomable, pannable proof roadmap')}" data-map-key="${html(run.runId)}" data-map-width="${layout.width}" data-map-height="${layout.height}" data-map-selected="${html(selected)}">
       <div class="process-map-space"><div class="process-map-canvas">
         <svg class="process-map-edges" width="${layout.width}" height="${layout.height}" aria-hidden="true"><defs><marker id="map-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1 L7 4 L1 7" fill="none" stroke="currentColor"/></marker></defs>
@@ -138,10 +154,11 @@ export function renderArchiveRoadmap(model: ArchiveRoadmap, run: Run, selected: 
                 : node.kind === 'check' ? text(locale, `${node.checkIds.length} 次原题检查`, `${node.checkIds.length} original checks`)
                   : node.kind === 'review' ? text(locale, `${node.deliveryIds.length} 条审阅记录`, `${node.deliveryIds.length} saved reviews`)
                     : node.kind === 'acceptance' ? text(locale, '完整证明与验收回执', 'Final proof and acceptance receipt') : text(locale, '查看本轮结果', 'Inspect this run’s outcome');
-          return `<button type="button" class="process-map-node ${related.size && !related.has(node.id) ? 'is-muted' : ''}" data-process-node="${html(node.id)}" data-node-kind="${node.kind}" data-tone="${roadmapTone(node.status)}" data-map-x="${point.x}" data-map-y="${point.y}" title="${html(node.title)}" aria-pressed="${node.id === selected}"${inspectorId ? ` aria-controls="${html(inspectorId)}"` : ''}><span class="process-map-node-kind">${glyph(iconNames[node.kind])}${names[node.kind]}${node.status ? `<em>${status(node)}</em>` : ''}</span><strong>${html(node.title)}</strong><span class="process-map-node-note">${failed || returned ? `<b>${text(locale, failed ? `${failed} 次检查未通过` : `${returned} 次退回修改`, failed ? `${failed} failed checks` : `${returned} changes requested`)}</b>` : html(detail)}</span></button>`;
+          const needs = dependencies.get(node.id) ?? [];
+          return `<button type="button" class="process-map-node ${related.size && !related.has(node.id) ? 'is-muted' : ''}" data-process-node="${html(node.id)}" data-node-kind="${node.kind}" data-tone="${roadmapTone(node.status)}" data-map-x="${point.x}" data-map-y="${point.y}" title="${html(node.title)}" aria-pressed="${node.id === selected}"${inspectorId ? ` aria-controls="${html(inspectorId)}"` : ''}><span class="process-map-node-kind">${glyph(iconNames[node.kind])}<i class="process-map-node-ordinal">${ordinal.get(node.id)}</i>${names[node.kind]}${node.status ? `<em>${status(node)}</em>` : ''}</span><strong>${html(node.title)}</strong><span class="process-map-node-note">${needs.length ? `<span class="process-map-node-deps">${text(locale, '依赖 ', 'after ')}${needs.join(' · ')}</span>` : ''}${failed || returned ? `<b>${text(locale, failed ? `${failed} 次检查未通过` : `${returned} 次退回修改`, failed ? `${failed} failed checks` : `${returned} changes requested`)}</b>` : html(detail)}</span></button>`;
         }).join('')}
       </div></div>
-    </div><div class="process-map-controls" role="group" aria-label="${text(locale, '路线图缩放', 'Roadmap zoom')}"><button data-map-zoom="out" aria-label="${text(locale, '缩小路线图', 'Zoom out')}">−</button><output class="process-map-scale">100%</output><button data-map-zoom="in" aria-label="${text(locale, '放大路线图', 'Zoom in')}">+</button><span></span><button data-map-zoom="fit">${text(locale, '全图', 'Fit')}</button><button data-map-zoom="actual">100%</button></div></div>
+    </div></div>
   </section>`;
 }
 
@@ -156,20 +173,28 @@ export function mountArchiveRoadmap(): void {
   if (!viewport) return;
   const space = viewport.querySelector<HTMLElement>('.process-map-space')!;
   const canvas = viewport.querySelector<HTMLElement>('.process-map-canvas')!;
-  const shell = viewport.closest<HTMLElement>('.process-map-shell')!;
+  // Toolbar controls live above the shell, so they are found from the section, not from the shell.
+  const section = viewport.closest<HTMLElement>('.process-roadmap') ?? viewport.closest<HTMLElement>('.process-map-shell')!;
+  const scaleLabel = section.querySelector<HTMLElement>('.process-map-scale')!;
   const width = Number(viewport.dataset.mapWidth), height = Number(viewport.dataset.mapHeight), key = viewport.dataset.mapKey!;
   // The workbench's script policy disallows inline style attributes. Position through the CSSOM after mounting.
   canvas.style.width = `${width}px`; canvas.style.height = `${height}px`;
   for (const node of canvas.querySelectorAll<HTMLElement>('[data-process-node]')) {
     node.style.left = `${node.dataset.mapX}px`; node.style.top = `${node.dataset.mapY}px`;
   }
+  const grid = () => (section.dataset.mapMode ?? 'graph') === 'list' ? 'list' : 'graph';
+  const showMode = (mode: 'graph' | 'list') => {
+    for (const button of section.querySelectorAll<HTMLElement>('[data-map-mode]')) button.setAttribute('aria-pressed', String(button.dataset.mapMode === mode));
+    section.dataset.mapMode = mode;
+  };
+  showMode(roadmapMode());
   const same = previous?.key === key;
   const initial = Math.max(innerWidth < 701 ? .8 : .65, Math.min(1, (viewport.clientWidth - 24) / width));
   const selected = viewport.dataset.mapSelected ?? '';
   const view: View = { element: viewport, key, selected, scale: same ? previous.scale : initial, left: 0, top: 0, dispose: () => {} };
   const abort = new AbortController(), options = { signal: abort.signal };
   const resize = () => { canvas.style.transform = `scale(${view.scale})`; space.style.width = `${width * view.scale}px`; space.style.height = `${height * view.scale}px`;
-    shell.querySelector('output')!.textContent = `${Math.round(view.scale * 100)}%`; viewport.dataset.mapScale = String(view.scale); };
+    scaleLabel.textContent = `${Math.round(view.scale * 100)}%`; viewport.dataset.mapScale = String(view.scale); };
   resize();
   if (same) { viewport.scrollLeft = previous.left; viewport.scrollTop = previous.top; }
   else viewport.scrollTop = Math.max(0, (height * view.scale - viewport.clientHeight) / 2);
@@ -180,12 +205,32 @@ export function mountArchiveRoadmap(): void {
   }
   const save = () => { view.left = viewport.scrollLeft; view.top = viewport.scrollTop; };
   save(); viewport.addEventListener('scroll', save, options);
-  shell.addEventListener('click', event => {
-    const control = (event.target as Element).closest<HTMLElement>('[data-map-zoom]');
-    if (!control) return;
+  // One delegated listener for the section: layout toggles and zoom share it, and both live above the canvas.
+  section.addEventListener('click', event => {
+    const target = event.target as Element;
+    // The section itself carries data-map-mode for CSS, so only the buttons may match here.
+    const modeButton = target.closest<HTMLElement>('button[data-map-mode]');
+    if (modeButton) {
+      const mode = modeButton.dataset.mapMode === 'list' ? 'list' : 'graph';
+      if (mode === grid()) return;
+      save(); setRoadmapMode(mode); showMode(mode);
+      if (mode === 'graph') {
+        resize(); viewport.scrollLeft = view.left; viewport.scrollTop = view.top;
+      } else viewport.scrollLeft = viewport.scrollTop = 0;
+      return;
+    }
+    const control = target.closest<HTMLElement>('[data-map-zoom]');
+    if (!control || grid() === 'list') return;
+    // Below this the titles stop being words, so a whole-map fit hands over to the list instead of shrinking further.
+    const floor = readableFloor();
+    const whole = Math.min(1, (viewport.clientWidth - 30) / width, (viewport.clientHeight - 30) / height);
+    if (control.dataset.mapZoom === 'fit' && whole < floor) {
+      save(); setRoadmapMode('list'); showMode('list'); viewport.scrollLeft = viewport.scrollTop = 0;
+      return;
+    }
     const x = (viewport.scrollLeft + viewport.clientWidth / 2) / view.scale, y = (viewport.scrollTop + viewport.clientHeight / 2) / view.scale;
-    view.scale = control.dataset.mapZoom === 'fit' ? Math.max(.15, Math.min(1, (viewport.clientWidth - 30) / width, (viewport.clientHeight - 30) / height))
-      : control.dataset.mapZoom === 'actual' ? 1 : Math.max(.15, Math.min(1.8, view.scale * (control.dataset.mapZoom === 'in' ? 1.2 : 1 / 1.2)));
+    view.scale = control.dataset.mapZoom === 'fit' ? Math.max(floor, whole)
+      : control.dataset.mapZoom === 'actual' ? 1 : Math.max(floor, Math.min(1.8, view.scale * (control.dataset.mapZoom === 'in' ? 1.2 : 1 / 1.2)));
     resize(); viewport.scrollLeft = x * view.scale - viewport.clientWidth / 2; viewport.scrollTop = y * view.scale - viewport.clientHeight / 2;
     if (control.dataset.mapZoom === 'fit') { viewport.scrollLeft = 0; viewport.scrollTop = 0; }
     save();
