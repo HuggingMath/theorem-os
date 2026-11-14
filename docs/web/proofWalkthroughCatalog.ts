@@ -4,9 +4,10 @@ import { coreProofWalkthroughs } from './proofWalkthroughCore';
 import { analysisProofWalkthroughs } from './proofWalkthroughAnalysis';
 import { geometryProofWalkthroughs } from './proofWalkthroughGeometry';
 import { foundationProofWalkthroughs } from './proofWalkthroughFoundations';
+import { additionalProofWalkthroughs } from './proofWalkthroughAdditional';
 import { renderProofFigure } from './proofFigureRender';
 
-export const proofWalkthroughs = [...coreProofWalkthroughs, ...analysisProofWalkthroughs, ...geometryProofWalkthroughs, ...foundationProofWalkthroughs];
+export const proofWalkthroughs = [...coreProofWalkthroughs, ...analysisProofWalkthroughs, ...geometryProofWalkthroughs, ...foundationProofWalkthroughs, ...additionalProofWalkthroughs];
 
 /** Attach mathematical explanations only to the exact accepted source they describe. */
 export function withProofWalkthrough(record: Pick<ArchiveRecord, 'id' | 'campaign'>, process: ArchiveProcess): ArchiveProcess {

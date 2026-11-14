@@ -28,13 +28,13 @@ export function renderProofWalkthrough(walkthrough: ProofWalkthrough, process: A
     <header class="proof-walkthrough-intro"><div class="proof-walkthrough-heading workflow-section-heading"><h5 tabindex="-1">${html(label(walkthrough.title, locale))}</h5></div>
       <p class="proof-walkthrough-strategy">${html(label(walkthrough.strategy, locale))}</p>
       <div class="proof-walkthrough-meta"><span>${text(locale, `${walkthrough.steps.length} 步 · ${walkthrough.steps.reduce((sum, step) => sum + step.derivation.length, 0)} 行推导`, `${walkthrough.steps.length} steps · ${walkthrough.steps.reduce((sum, step) => sum + step.derivation.length, 0)} lines`)}</span>${options.linear ? '<section class="proof-walkthrough-problem">' : `<details class="proof-walkthrough-problem"><summary>${text(locale, '题目与符号', 'Problem and notation')}</summary>`}<p class="proof-walkthrough-goal">${html(label(walkthrough.goal, locale))}</p>${walkthrough.notation ? `<p class="proof-walkthrough-notation">${html(label(walkthrough.notation, locale))}</p>` : ''}${options.linear ? '</section>' : '</details>'}</div>
-      ${options.linear ? `<details class="workflow-full-text"><summary>${text(locale, '证明主线', 'Proof outline')}</summary>` : ''}<ol class="proof-overview" aria-label="${text(locale, '证明主线', 'Proof outline')}">${walkthrough.stages.map((stage, index) => {
+      <ol class="proof-overview" aria-label="${text(locale, '证明主线', 'Proof outline')}">${walkthrough.stages.map((stage, index) => {
         const first = stage.stepIds[0], last = stage.stepIds.at(-1)!;
         const range = [positions.get(first)!.number, positions.get(last)!.number].filter((value, i, values) => i === 0 || value !== values[0]).join('–');
         return `<li><button type="button" data-proof-overview-stage="${index}" data-proof-overview-steps="${stage.stepIds.join(' ')}" data-global-scroll="${stepId(first)}" aria-controls="${stepId(first)}"${index === 0 ? ' aria-current="step"' : ''}><span class="proof-overview-range">${range}</span><span class="proof-overview-copy"><strong>${html(label(stage.title, locale))}</strong><span>${html(label(stage.summary, locale))}</span></span><span class="proof-overview-link" aria-hidden="true">↗</span></button></li>`;
-      }).join('')}</ol>${options.linear ? '</details>' : ''}
+      }).join('')}</ol>
     </header>
-    ${options.linear ? `<div class="proof-reading-content">${renderProofRoute(walkthrough, locale, false)}` : `<div class="proof-reading-layout"><aside class="proof-route-sidebar">${renderProofRoute(walkthrough, locale)}</aside><div class="proof-reading-content">`}
+    <div class="proof-reading-layout"><aside class="proof-route-sidebar">${renderProofRoute(walkthrough, locale, false)}</aside><div class="proof-reading-content">
     <nav class="proof-reading-bar" aria-label="${text(locale, '阅读位置', 'Reading position')}"><button type="button" data-proof-reader="previous" data-global-scroll="" aria-label="${text(locale, '上一步', 'Previous step')}" disabled>←</button><span data-proof-reading-count>01 / ${String(walkthrough.steps.length).padStart(2, '0')}</span><span data-proof-reading-title>${html(label(walkthrough.steps[0].title, locale))}</span><button type="button" data-proof-reader="next" data-global-scroll="${stepId(walkthrough.steps[1]?.id ?? walkthrough.steps[0].id)}" data-next-label="${text(locale, '下一步', 'Next step')}" data-acceptance-label="${text(locale, '查看原题验收', 'Inspect original-problem acceptance')}" aria-label="${text(locale, '下一步', 'Next step')}">→</button></nav>
     <ol class="proof-walkthrough-steps">${walkthrough.steps.map((step, index) => {
       const next = walkthrough.steps[index + 1];
@@ -53,7 +53,7 @@ export function renderProofWalkthrough(walkthrough: ProofWalkthrough, process: A
         }).join('')}</nav>` : ''}
         <p class="proof-walkthrough-given"><span>${text(locale, '已知', 'Given')}</span>${html(label(step.given, locale))}</p>
         <div class="proof-walkthrough-claim"><span>${text(locale, '这一步推出', 'This step establishes')}</span><p>${html(label(step.claim, locale))}</p></div>
-        ${step.figureHtml ? options.linear ? `<details class="workflow-full-text"><summary>${text(locale, '查看图示', 'View figure')}</summary>${label(step.figureHtml, locale)}</details>` : label(step.figureHtml, locale) : ''}
+        ${step.figureHtml ? label(step.figureHtml, locale) : ''}
         <div class="proof-walkthrough-reason"><h6>${text(locale, '怎样推出', 'Derivation')}</h6><ol class="proof-walkthrough-calculation" aria-label="${text(locale, '逐行推导', 'Derivation line by line')}">${step.derivation.map((line, lineIndex) => `<li data-proof-calculation="${html(step.id)}:${lineIndex + 1}"><span aria-hidden="true">${index + 1}.${lineIndex + 1}</span><div><p class="proof-walkthrough-statement">${html(label(line.statement, locale))}</p><p class="proof-walkthrough-justification">${html(label(line.reason, locale))}</p></div></li>`).join('')}</ol><details class="proof-walkthrough-explanation"><summary>${text(locale, '连起来看', 'How these lines fit together')}</summary><p>${html(label(step.because, locale))}</p></details></div>
         <div class="proof-walkthrough-next"><span aria-hidden="true">↓</span><p>${html(label(step.next, locale))}</p>${next ? `<button data-global-scroll="${stepId(next.id)}">${text(locale, '接着读', 'Continue')} ${String(index + 2).padStart(2, '0')} →</button>` : `<button data-global-scroll="global-review">${text(locale, '原题验收', 'Original-problem acceptance')} →</button>`}</div>
         ${consumers.length ? `<nav class="proof-walkthrough-outputs" aria-label="${text(locale, '使用本步结论的后续步骤', 'Later steps that use this result')}"><span>${text(locale, '此结论用于', 'This result is used in')}</span>${consumers.map(consumer => `<button data-proof-consumer="${html(consumer.id)}" data-global-scroll="${stepId(consumer.id)}"><span>${positions.get(consumer.id)!.number}</span>${html(label(consumer.title, locale))} ↗</button>`).join('')}</nav>` : ''}
@@ -64,6 +64,6 @@ export function renderProofWalkthrough(walkthrough: ProofWalkthrough, process: A
         }).join('')}${checkLinks}</footer></details>
         ${options.linear || options.researchHref ? `<footer class="proof-walkthrough-links">${options.linear ? `<button type="button" data-action="copy-link" data-proof-copy-reading="${stepId(step.id)}">${text(locale, '复制此处链接', 'Copy link here')}</button>` : ''}${options.researchHref ? `<a class="proof-reading-research" data-proof-position-research="${stepId(step.id)}" href="${html(focusedProblemHref(options.researchHref, stepId(step.id)))}">${text(locale, '围绕这一步研究', 'Research this step')} ↗</a>` : ''}</footer>` : ''}
       </li>`;
-    }).join('')}</ol></div>${options.linear ? '' : '</div>'}
+    }).join('')}</ol></div></div>
   </div>`;
 }

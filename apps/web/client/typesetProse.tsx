@@ -4,7 +4,7 @@ import { Rich } from './richText';
 
 const excluded = 'pre, code, textarea, script, style, svg, math, .math, .katex, [data-solution-route], [data-typeset-prose]';
 const containsMath = (segments: readonly ProseSegment[]): boolean => segments.some(segment =>
-  segment.kind === 'math' || segment.kind === 'display'
+  segment.kind === 'math' || segment.kind === 'display' || segment.kind === 'code'
   || (segment.kind === 'strong' && containsMath(proseSegments(segment.text))));
 
 /** Typeset prose in existing markup without replacing elements, controls, or their event listeners. */

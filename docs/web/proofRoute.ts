@@ -8,6 +8,11 @@ export function renderProofRoute(walkthrough: ProofWalkthrough, locale: Locale, 
   const text = (zh: string, en: string) => locale === 'en' ? en : zh;
   const label = (value: Localized) => locale === 'en' ? value.en : value.zh;
   const numbers = new Map(walkthrough.steps.map((step, index) => [step.id, String(index + 1).padStart(2, '0')]));
+  const stageStarts = new Map(
+    walkthrough.stages
+      .filter(stage => stage.stepIds.length > 0)
+      .map((stage, index) => [stage.stepIds[0]!, { index, stage }] as const),
+  );
   const edges = walkthrough.steps.flatMap(step => step.dependsOn.map(previous =>
     `<path class="proof-route-edge" data-proof-edge data-from="${html(previous)}" data-to="${html(step.id)}" fill="none" marker-end="url(#proof-route-arrow)"></path>`
   )).join('');
@@ -18,7 +23,11 @@ export function renderProofRoute(walkthrough: ProofWalkthrough, locale: Locale, 
     const dependencies = step.dependsOn.length
       ? `${text('用到', 'Uses')} ${step.dependsOn.map(id => numbers.get(id)!).join(text('、', ', '))}`
       : text('起点', 'Starting point');
-    return `<li data-proof-route-node="${html(step.id)}"><button type="button" data-global-scroll="${html(target)}" data-proof-route-step="${html(step.id)}" data-proof-route-number="${number}" data-proof-route-title="${html(title)}" aria-controls="${html(target)}"${index === 0 ? ' aria-current="step"' : ''}>
+    const stageInfo = walkthrough.stages.length > 0 ? stageStarts.get(step.id) : undefined;
+    const stageHeader = stageInfo
+      ? `<span class="proof-route-stage-tag">${text('阶段', 'Part')} ${stageInfo.index + 1} · ${html(label(stageInfo.stage.title))}</span>`
+      : '';
+    return `<li data-proof-route-node="${html(step.id)}">${stageHeader}<button type="button" data-global-scroll="${html(target)}" data-proof-route-step="${html(step.id)}" data-proof-route-number="${number}" data-proof-route-title="${html(title)}" aria-controls="${html(target)}"${index === 0 ? ' aria-current="step"' : ''}>
       <span class="proof-route-number">${number}</span><span class="proof-route-node-copy"><strong class="proof-route-title">${html(title)}</strong><small class="proof-route-dependencies">${html(dependencies)}${step.figure ? `<span class="proof-route-figure">${text('图示', 'Figure')}</span>` : ''}</small></span>${index === walkthrough.steps.length - 1 ? `<span class="proof-route-finish" role="img" aria-label="${text('证明完成', 'Proof complete')}">✓</span>` : ''}
     </button></li>`;
   }).join('');

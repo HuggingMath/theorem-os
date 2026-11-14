@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { build } from 'esbuild';
 import { campaignRecords } from '../docs/web/campaignCatalog';
 import { siteRepository } from '../docs/web/site';
 import type { ArchiveCatalog } from '../docs/web/types';
@@ -17,7 +18,7 @@ export function classicsNavigation(english: boolean, workbench: string) {
   const help = `<a href="${workbench}workspace.html${language}&amp;tab=help">${english ? 'Help' : '帮助'}</a>`;
   const other = english ? '<a class="lang-link" href="../archive.html" hreflang="zh-CN" lang="zh-CN" aria-label="中文版">中文</a>'
     : '<a class="lang-link" href="en/archive.html" hreflang="en" lang="en" aria-label="English version">English</a>';
-  return `<nav class="classics-nav" aria-label="${english ? 'Research space' : '研究空间'}"><a href="${workbench}${language}">${english ? '← Workbench' : '← 工作台'}</a><a href="${workbench}theorems.html${language}" aria-current="page">${english ? 'Theorems' : '定理'}</a></nav>${other}<details class="classics-more"><summary aria-label="${english ? 'More pages' : '更多页面'}">⋯<span>${english ? 'Menu' : '菜单'}</span></summary><nav aria-label="${english ? 'More pages' : '更多页面'}">${items}${help}</nav></details>`;
+  return `<nav class="classics-nav" aria-label="${english ? 'Research space' : '研究空间'}"><a href="${workbench}${language}">${english ? '← Workbench' : '← 工作台'}</a><a href="${workbench}theorems.html${language}" aria-current="page">${english ? 'Theorems' : '定理'}</a></nav>${other}<button type="button" class="theme-toggle" data-theme-toggle aria-label="${english ? 'Switch theme' : '切换明暗主题'}" title="${english ? 'Switch theme' : '切换明暗主题'}"><span aria-hidden="true">◐</span></button><details class="classics-more"><summary aria-label="${english ? 'More pages' : '更多页面'}">⋯<span>${english ? 'More' : '导航'}</span></summary><nav aria-label="${english ? 'More pages' : '更多页面'}">${items}${help}</nav></details>`;
 }
 
 /** A shared, read-only library shipped with the web image, independent of account-owned runs. */
@@ -28,6 +29,20 @@ export async function buildWorkbenchClassics(root: string, webOutput: string) {
     snapshotAt: campaign.capturedAt!, records: campaign.records.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) };
   const output = path.join(webOutput, 'classics');
   await buildArchive(root, output, catalog);
+  const themeBundle = path.join(output, 'theme.js');
+  if (fs.existsSync(path.join(webOutput, 'theme.js'))) {
+    fs.copyFileSync(path.join(webOutput, 'theme.js'), themeBundle);
+  } else {
+    await build({
+      entryPoints: [path.join(root, 'apps/web/client/theme.ts')],
+      outfile: themeBundle,
+      bundle: true,
+      minify: true,
+      format: 'iife',
+      platform: 'browser',
+      target: ['es2022'],
+    });
+  }
   fs.appendFileSync(path.join(output, 'site.js'), `
 document.addEventListener('click', event => {
   const menu = document.querySelector('.classics-more[open]');
@@ -41,6 +56,23 @@ document.addEventListener('keydown', event => {
     menu.querySelector('summary').focus({ preventScroll: true });
   }
 });
+const themeToggle = document.querySelector('[data-theme-toggle]');
+if (themeToggle) {
+  const syncThemeToggle = () => {
+    const dark = document.documentElement.dataset.theme === 'dark';
+    themeToggle.setAttribute('aria-pressed', String(dark));
+  };
+  syncThemeToggle();
+  themeToggle.addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    document.documentElement.dataset.themePreference = next;
+    try { localStorage.setItem('theorem-os.web-theme.v1', next); } catch {}
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', next === 'dark' ? '#1b1a18' : '#f5f4ee');
+    syncThemeToggle();
+  });
+}
 `);
   fs.writeFileSync(path.join(output, 'process.css'), fs.readFileSync(path.join(root, 'docs/process.css'), 'utf8')
     + '\n' + fs.readFileSync(path.join(root, 'apps/web/solutionRoute.css'), 'utf8')
@@ -50,6 +82,8 @@ document.addEventListener('keydown', event => {
   for (const [locale, directory] of [['zh', ''], ['en', 'en']] as const) {
     const english = locale === 'en', workbench = english ? '../../' : '../', home = `https://theoremos.top/${english ? 'en/' : ''}`;
     let page = archiveCounts(fs.readFileSync(path.join(root, 'docs', directory, 'archive.html'), 'utf8'), catalog)
+      .replace('<meta name="theme-color" content="#fafbfc">', '<meta name="theme-color" content="#f5f4ee">')
+      .replace(`<link rel="stylesheet" href="${english ? '../' : ''}site.css">`, `<script src="${english ? '../' : ''}theme.js"></script>\n  <link rel="stylesheet" href="${english ? '../' : ''}site.css">`)
       .replace('<!-- research-replay -->', researchReplay(LOCAL_EXAMPLE_FAILED_PROOF, LOCAL_EXAMPLE_PROOF, replay, locale, 'archive'))
       .replace('<body>', `<body class="shared-classics" data-workbench-root="${workbench}">`)
       .replaceAll('href="index.html"', `href="${workbench}"`)
@@ -80,24 +114,28 @@ document.addEventListener('keydown', event => {
 .shared-classics .brand { flex-shrink: 0; }
 .shared-classics .classics-nav { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .shared-classics .classics-nav a { padding: 6px 12px; border-radius: 6px; color: var(--muted); font-size: 13px; white-space: nowrap; }
-.shared-classics .classics-nav a[aria-current=page] { color: var(--ink); background: #efede6; }
+.shared-classics .classics-nav a[aria-current=page] { color: var(--ink); background: var(--surface); }
 .shared-classics .classics-nav a:hover { color: var(--ink); background: var(--surface); }
 .shared-classics .topbar > .lang-link, .shared-classics .classics-more > summary { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; min-height: 34px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--ink); font-size: 12px; font-weight: 500; white-space: nowrap; text-decoration: none; }
 .shared-classics .topbar > .lang-link { margin-left: auto; }
-.shared-classics .topbar > .lang-link:hover, .shared-classics .classics-more > summary:hover { background: #efede6; }
+.shared-classics .topbar > .lang-link:hover, .shared-classics .classics-more > summary:hover, .shared-classics .theme-toggle:hover { background: var(--surface); }
+.shared-classics .theme-toggle { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 34px; height: 34px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--ink); font-size: 14px; line-height: 1; }
 .shared-classics .classics-more { position: relative; flex-shrink: 0; }
 .shared-classics .classics-more > summary { gap: 7px; cursor: pointer; list-style: none; }
 .shared-classics .classics-more > summary::-webkit-details-marker { display: none; }
-.shared-classics .classics-more > nav { position: absolute; right: 0; top: calc(100% + 8px); z-index: 20; display: grid; width: 190px; max-width: calc(100vw - 24px); padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: #faf9f5; box-shadow: 0 8px 24px #26252118; }
+.shared-classics .classics-more > nav { position: absolute; right: 0; top: calc(100% + 8px); z-index: 20; display: grid; width: 190px; max-width: calc(100vw - 24px); padding: 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper, #faf9f5); box-shadow: 0 8px 24px var(--shadow, #26252118); }
 .shared-classics .classics-more > nav a { padding: 8px 10px; border-radius: 5px; font-size: 13px; }
-.shared-classics .classics-more > nav a:hover { color: var(--ink); background: #efede6; }
+.shared-classics .classics-more > nav a:hover { color: var(--ink); background: var(--surface); }
 @media (max-width: 740px) { .shared-classics .topbar { padding-inline: 16px; gap: 10px; } .shared-classics .classics-nav { gap: 2px; } .shared-classics .classics-nav a { padding-inline: 8px; } }
 @media (max-width: 420px) {
-  .shared-classics .topbar { padding-inline: 12px; gap: 6px; }
+  .shared-classics .topbar { padding-inline: 10px; gap: 4px; }
+  .shared-classics .brand-mark { width: 26px; height: 26px; }
+  .shared-classics .classics-nav { overflow-x: auto; scrollbar-width: none; }
   .shared-classics .classics-nav a { padding-inline: 4px; font-size: 12px; }
   .shared-classics .brand > span { display: none; }
-  .shared-classics .topbar > .lang-link { padding-inline: 8px; }
-  .shared-classics .classics-more > summary { width: 34px; padding-inline: 0; }
+  .shared-classics .topbar > .lang-link { padding: 4px 7px; min-height: 30px; }
+  .shared-classics .theme-toggle { width: 30px; height: 30px; }
+  .shared-classics .classics-more > summary { width: 30px; min-height: 30px; padding-inline: 0; }
   .shared-classics .classics-more > summary > span { display: none; }
 }
 @media (forced-colors: active) { .shared-classics .classics-nav a[aria-current=page] { outline: 2px solid Highlight; } }

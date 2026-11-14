@@ -24,10 +24,10 @@ describe('mathematical walkthroughs of accepted classic proofs', () => {
   const records = campaignRecords(root).records;
 
   it('covers every walkthrough with unique existing record identities and at least sixty steps', () => {
-    expect(proofWalkthroughs).toHaveLength(16);
-    expect(new Set(proofWalkthroughs.map(item => item.recordId)).size).toBe(16);
+    expect(proofWalkthroughs).toHaveLength(18);
+    expect(new Set(proofWalkthroughs.map(item => item.recordId)).size).toBe(18);
     expect(records.filter(record => record.process?.walkthrough).map(record => record.id).sort()).toEqual(proofWalkthroughs.map(item => item.recordId).sort());
-    expect(records.reduce((steps, record) => steps + (record.process?.walkthrough?.steps.length ?? 0), 0)).toBeGreaterThanOrEqual(60);
+    expect(records.reduce((steps, record) => steps + (record.process?.walkthrough?.steps.length ?? 0), 0)).toBeGreaterThanOrEqual(75);
   });
 
   it.each(records)('binds every step to the accepted proof and existing record identities without altering native archives: $id', record => {
@@ -69,37 +69,24 @@ describe('mathematical walkthroughs of accepted classic proofs', () => {
 
   it.each(records.filter(record => record.process?.walkthrough).flatMap(record =>
     (['zh', 'en'] as const).map(locale => ({ record, locale, id: record.id }))))(
-    'renders the complete derivation before the task map, including exact source excerpts and links: $id / $locale', ({ record, locale }) => {
+    'renders a concise walkthrough digest in global trajectory that deep-links to full step-by-step reading: $id / $locale', ({ record, locale }) => {
       const process = record.process!, walkthrough = process.walkthrough!;
       const index = archiveIndex({ schema: 'theoremos.public-archive.v1', repository: '', archiveRevision: '', snapshotAt: '', records: [record] }).records[0];
       const output = renderGlobalTrajectory(index, process, locale, value => value ?? '');
       expect(output.indexOf('data-workflow-stage="research"')).toBeLessThan(output.indexOf('data-workflow-stage="plan"'));
-      expect((output.match(/data-proof-derivation=/gu) ?? []).length).toBe(walkthrough.steps.length);
+      expect(output).toContain(`data-proof-walkthrough-digest="${walkthrough.recordId}"`);
+      expect(output).toContain(`data-proof-sha="${walkthrough.proofSha256}"`);
       expect(output).toContain(escaped(walkthrough.strategy[locale]));
-      expect(output.indexOf('class="proof-overview"')).toBeLessThan(output.indexOf('class="proof-reading-layout"'));
+      expect(output).toContain('data-tab="reading"');
+      expect(output).not.toContain('data-proof-derivation=');
       for (const [index, stage] of walkthrough.stages.entries()) {
-        expect(output).toContain(`data-proof-overview-stage="${index}" data-proof-overview-steps="${stage.stepIds.join(' ')}" data-global-scroll="proof-derivation-${stage.stepIds[0]}"`);
+        expect(output).toContain(`data-proof-overview-stage="${index}" data-proof-overview-steps="${stage.stepIds.join(' ')}" data-open-reading-step="proof-derivation-${stage.stepIds[0]}" data-open-reading-sha="${walkthrough.proofSha256}"`);
         expect(output).toContain(escaped(stage.summary[locale]));
       }
-      const source = process.sources![walkthrough.proofSha256];
-      for (const step of walkthrough.steps) {
-        for (const field of ['given', 'claim', 'because', 'next'] as const) expect(output).toContain(escaped(step[field][locale]));
-        for (const [index, line] of step.derivation.entries()) {
-          expect(output).toContain('data-proof-calculation="' + step.id + ':' + (index + 1) + '"');
-          expect(output).toContain(escaped(line.statement[locale]));
-          expect(output).toContain(escaped(line.reason[locale]));
-        }
-        for (const dependency of step.dependsOn) expect(output).toContain('data-proof-dependency="' + dependency + '" data-global-scroll="proof-derivation-' + dependency + '"');
-        const excerpt = step.evidence.source;
-        for (const line of source.code.split('\n').slice(excerpt.line - 1, excerpt.endLine)) if (line) expect(output).toContain(escaped(line));
-        expect(output).toContain('data-proof-source-lines="' + excerpt.line + ':' + excerpt.endLine + '"');
-        expect(output).toContain('data-global-scroll="proof-derivation-' + step.id + '"');
-      }
-      expect(output).toContain('data-global-code="source"');
       for (const run of process.runs.filter(run => run.runId !== walkthrough.runId)) {
         const historical = renderGlobalTrajectory(index, process, locale, value => value ?? '', { run: run.runId });
+        expect(historical).not.toContain('data-proof-walkthrough-digest=');
         expect(historical).not.toContain('data-proof-walkthrough=');
-        expect(historical).not.toContain('data-global-code="source"');
       }
   });
 
@@ -194,9 +181,8 @@ describe('direct reading of the current accepted proof', () => {
     const records = campaignRecords(root).records;
     const catalog = { schema: 'theoremos.public-archive.v1' as const, repository: '', archiveRevision: '', snapshotAt: '', records };
     const index = archiveIndex(catalog);
-    expect(index.records.filter(record => record.readingMode === 'derivation')).toHaveLength(16);
-    expect(index.records.filter(record => record.readingMode === 'source').map(record => record.campaign!.target).sort())
-      .toEqual(['CharacterVarietiesAllSeamsSupport', 'ThreeStateTreeClauses']);
+    expect(index.records.filter(record => record.readingMode === 'derivation')).toHaveLength(18);
+    expect(index.records.filter(record => record.readingMode === 'source')).toHaveLength(0);
     for (const record of index.records) {
       expect(record).not.toHaveProperty('process');
       for (const source of record.sources) expect(source).not.toHaveProperty('code');
@@ -231,13 +217,20 @@ describe('direct reading of the current accepted proof', () => {
       expect(output).toContain('data-proof-solution-mode="derivation"');
       expect(output).toContain('data-proof-reading="linear"');
       expect(output).not.toContain('class="proof-reading-intro"');
-      const introduction = output.split('<header class="proof-walkthrough-intro">')[1]!.split('<details class="workflow-full-text">')[0]!;
+      const introduction = output.split('<header class="proof-walkthrough-intro">')[1]!.split('</header>')[0]!;
       expect(introduction).not.toContain('<details');
+      expect(introduction).toContain('class="proof-overview"');
       expect(introduction).toContain(escaped(walkthrough.strategy[locale]));
       expect(introduction).toContain(escaped(walkthrough.goal[locale]));
       if (walkthrough.notation) expect(introduction).toContain(escaped(walkthrough.notation[locale]));
+      for (const [index, stage] of walkthrough.stages.entries()) {
+        expect(introduction).toContain(`data-proof-overview-stage="${index}" data-proof-overview-steps="${stage.stepIds.join(' ')}" data-global-scroll="proof-derivation-${stage.stepIds[0]}"`);
+        expect(introduction).toContain(escaped(stage.summary[locale]));
+      }
       expect(output).toContain('<section class="proof-walkthrough-problem">');
       expect(output).not.toContain('<details class="proof-walkthrough-problem">');
+      expect(output).toContain('class="proof-reading-layout"><aside class="proof-route-sidebar">');
+      expect((output.match(/class="proof-route-stage-tag"/gu) ?? []).length).toBe(walkthrough.stages.length);
       expect(output).toContain(escaped(walkthrough.strategy[locale]));
       expect(output).toContain(escaped(walkthrough.steps[0].given[locale]));
       expect(output).toContain(escaped(walkthrough.steps[0].derivation[0].statement[locale]));
@@ -254,7 +247,10 @@ describe('direct reading of the current accepted proof', () => {
           expect(output).toContain(escaped(line.statement[locale]));
           expect(output).toContain(escaped(line.reason[locale]));
         }
-        if (step.figureHtml) expect(output).toContain(`<summary>${locale === 'en' ? 'View figure' : '查看图示'}</summary>${step.figureHtml[locale]}`);
+        if (step.figureHtml) {
+          expect(output).toContain(step.figureHtml[locale]);
+          expect(output).not.toContain(`<summary>${locale === 'en' ? 'View figure' : '查看图示'}</summary>`);
+        }
         const start = output.indexOf(`data-proof-derivation="${step.id}"`), next = walkthrough.steps[stepIndex + 1];
         const content = output.slice(start, next ? output.indexOf(`data-proof-derivation="${next.id}"`) : output.length);
         const evidence = content.match(/<details class="proof-walkthrough-source"([^>]*)>([\s\S]*?)<\/details>/u)!;
@@ -276,8 +272,10 @@ describe('direct reading of the current accepted proof', () => {
     }
   });
 
-  it('reads the two newly archived proofs from their actual accepted target declarations without inventing derivations', () => {
-    const records = campaignRecords(root).records.filter(record => !record.process?.walkthrough).map(withArchiveSourceRoute);
+  it('falls back to reading accepted target declarations when no walkthrough is attached', () => {
+    const records = campaignRecords(root).records
+      .filter(record => ['CharacterVarietiesAllSeamsSupport', 'ThreeStateTreeClauses'].includes(record.campaign!.target))
+      .map(record => withArchiveSourceRoute({ ...structuredClone(record), process: { ...structuredClone(record.process!), walkthrough: undefined } }));
     expect(records.map(record => record.campaign!.target).sort()).toEqual(['CharacterVarietiesAllSeamsSupport', 'ThreeStateTreeClauses']);
     for (const record of records) for (const locale of ['zh', 'en'] as const) {
       const process = record.process!, accepted = record.campaign!;
@@ -333,7 +331,9 @@ describe('direct reading of the current accepted proof', () => {
   });
 
   it('keeps source mathematical notes bound to the accepted run, statement, proof and target list', () => {
-    const records = campaignRecords(root).records.filter(record => !record.process?.walkthrough);
+    const records = campaignRecords(root).records
+      .filter(record => ['CharacterVarietiesAllSeamsSupport', 'ThreeStateTreeClauses'].includes(record.campaign!.target));
+    expect(records).toHaveLength(2);
     for (const record of records) {
       expect(sourceMathematics(record, record.process!)).toBeDefined();
       for (const change of ['run', 'statement', 'proof', 'targets', 'check'] as const) {
@@ -372,11 +372,19 @@ describe('direct reading of the current accepted proof', () => {
       const record = records.find(record => record.campaign!.target === target)!;
       for (const locale of ['zh', 'en'] as const) {
         const output = renderProofSolution(record, record.process!, locale, { workbenchHref: '../' });
-        expect(output).toContain(locale === 'en' ? target === 'TriangleFace' ? 'Research this step' : 'Research this declaration'
-          : target === 'TriangleFace' ? '围绕这一步研究' : '围绕此处研究');
-        expect(output).toContain('archiveFocus=proof-');
+        expect(output).toContain(locale === 'en' ? 'Research this step' : '围绕这一步研究');
+        expect(output).toContain('archiveFocus=proof-derivation-');
         expect(output).not.toContain(locale === 'en' ? 'Explain this step' : '解释这一步');
       }
+    }
+    const fallback = withArchiveSourceRoute({
+      ...structuredClone(records.find(record => record.campaign!.target === 'ThreeStateTreeClauses')!),
+      process: { ...structuredClone(records.find(record => record.campaign!.target === 'ThreeStateTreeClauses')!.process!), walkthrough: undefined },
+    });
+    for (const locale of ['zh', 'en'] as const) {
+      const output = renderProofSolution(fallback, fallback.process!, locale, { workbenchHref: '../' });
+      expect(output).toContain(locale === 'en' ? 'Research this declaration' : '围绕此处研究');
+      expect(output).toContain('archiveFocus=proof-source-');
     }
   });
 

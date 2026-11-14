@@ -25,6 +25,6 @@ export function localizeRecord<T extends Pick<ArchiveRecord, 'en'>>(record: T, l
 export function keepHashOnLanguageSwitch() {
   for (const link of document.querySelectorAll<HTMLAnchorElement>('a.lang-link')) {
     const sync = () => { link.hash = location.hash; };
-    for (const type of ['click', 'auxclick', 'contextmenu']) link.addEventListener(type, sync);
+    for (const type of ['pointerdown', 'mousedown', 'focus', 'click', 'auxclick', 'contextmenu']) link.addEventListener(type, sync);
   }
 }

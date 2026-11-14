@@ -4,7 +4,8 @@ import { archiveRoadmapTaskLabel } from './roadmapLabels';
 import { buildArchiveRoadmap, renderArchiveRoadmap, roadmapTone } from './processRoadmap';
 import { processMessage, readableProcessText } from './processText';
 import { workflowNote } from './workflowNotes';
-import { renderProofWalkthrough, selectedProofWalkthrough } from './proofWalkthrough';
+import { selectedProofWalkthrough } from './proofWalkthrough';
+import type { ProofWalkthrough } from './proofWalkthroughTypes';
 import { renderArchiveSolutionRoute } from './archiveSolutionRoute';
 
 type Run = ArchiveProcess['runs'][number];
@@ -35,6 +36,23 @@ function checkExcerpt(check: Check): string {
   const lines = (check.diagnostics ?? '').split('\n');
   const first = Math.max(0, lines.findIndex(line => /error:|error\(|unsolved goals|sorry|admit/iu.test(line)));
   return lines.slice(first, first + 8).join('\n').slice(0, 550);
+}
+function renderWalkthroughDigest(walkthrough: ProofWalkthrough, locale: Locale): string {
+  const linesCount = walkthrough.steps.reduce((sum, step) => sum + step.derivation.length, 0);
+  const positions = new Map(walkthrough.steps.map((step, index) => [step.id, String(index + 1).padStart(2, '0')]));
+  return `<div class="proof-walkthrough-digest" data-proof-walkthrough-digest="${html(walkthrough.recordId)}" data-proof-sha="${html(walkthrough.proofSha256)}">
+    <div class="proof-walkthrough-digest-header">
+      <h6>${html(walkthrough.title[locale])}</h6>
+      <span class="proof-walkthrough-digest-meta">${text(locale, `${walkthrough.steps.length} 步 · ${linesCount} 行推导`, `${walkthrough.steps.length} steps · ${linesCount} lines`)}</span>
+      <button type="button" class="button button-primary" data-tab="reading">${text(locale, '阅读完整逐步证明', 'Read full step-by-step proof')} →</button>
+    </div>
+    <p class="proof-walkthrough-strategy">${html(walkthrough.strategy[locale])}</p>
+    <ol class="proof-overview" aria-label="${text(locale, '证明主线', 'Proof outline')}">${walkthrough.stages.map((stage, index) => {
+      const first = stage.stepIds[0]!, last = stage.stepIds.at(-1)!;
+      const range = [positions.get(first)!, positions.get(last)!].filter((value, i, values) => i === 0 || value !== values[0]).join('–');
+      return `<li><button type="button" data-proof-overview-stage="${index}" data-proof-overview-steps="${stage.stepIds.join(' ')}" data-open-reading-step="proof-derivation-${html(first)}" data-open-reading-sha="${html(walkthrough.proofSha256)}"><span class="proof-overview-range">${range}</span><span class="proof-overview-copy"><strong>${html(stage.title[locale])}</strong><span>${html(stage.summary[locale])}</span></span><span class="proof-overview-link" aria-hidden="true">↗</span></button></li>`;
+    }).join('')}</ol>
+  </div>`;
 }
 
 export function renderGlobalTrajectory(record: ArchiveIndexRecord, process: ArchiveProcess, locale: Locale,
@@ -93,8 +111,8 @@ export function renderGlobalTrajectory(record: ArchiveIndexRecord, process: Arch
     ${run.tasks.length ? `<details class="workflow-task-objectives"><summary>${text(locale, '阅读全部任务目标', 'Read every task objective')} (${run.tasks.length})</summary><dl>${run.tasks.map(task => `<div data-workflow-task="${html(task.id)}"><dt><button ${destination(run, `task:${task.id}`)}>${html(archiveRoadmapTaskLabel(task, locale))}</button><span data-tone="${roadmapTone(task.status)}">${html(statusLabel(task.status))}</span></dt><dd>${html(readableProcessText(task.objective, Number.MAX_SAFE_INTEGER))}${task.dependencies.length ? `<div class="workflow-task-dependencies">${text(locale, '依赖：', 'Depends on: ')}${task.dependencies.map(id => `<button ${destination(run, `task:${id}`)}>${html(title(id))}</button>`).join('')}</div>` : ''}</dd></div>`).join('')}</dl></details>` : `<p class="workflow-empty">${text(locale, '本轮没有保存任务拆分。', 'No task decomposition was saved for this run.')}</p>`}
     ${planEdits.length ? `<ol class="workflow-records">${planEdits.map(event => `<li class="workflow-record" data-workflow-entry="event:${event.index}"><div class="workflow-record-meta">${stamp(event.at)}</div><h6>${text(locale, '调整任务计划', 'Revise the task plan')}</h6>${prose(event.message!, locale)}<button class="workflow-record-link" ${destination(run, 'plan', `event:${event.index}`)}>${text(locale, '查看这次计划调整', 'Inspect this plan revision')}${icon('arrow-up-right')}</button></li>`).join('')}</ol>` : ''}
   </section>`;
-  const researchSection = `<section class="workflow-section" id="global-findings" data-workflow-stage="research">${walkthrough ? '' : sectionHeading('02', text(locale, '研究发现与进展', 'Research findings and progress'), research.length)}
-    ${walkthrough ? renderProofWalkthrough(walkthrough, process, run, locale) + `<h6 class="workflow-journal-heading">${text(locale, '研究记录', 'Research journal')}<span>${research.length}</span></h6>` : ''}
+  const researchSection = `<section class="workflow-section" id="global-findings" data-workflow-stage="research">${sectionHeading(walkthrough ? '01' : '02', text(locale, '研究发现与进展', 'Research findings and progress'), research.length)}
+    ${walkthrough ? renderWalkthroughDigest(walkthrough, locale) + `<h6 class="workflow-journal-heading">${text(locale, '研究记录', 'Research journal')}<span>${research.length}</span></h6>` : ''}
     ${research.length ? `<ol class="workflow-records">${research.map(deliveryEntry).join('')}</ol>` : `<p class="workflow-empty">${text(locale, '本轮没有保存研究发现正文。', 'No research finding text was saved for this run.')}</p>`}${other.length ? `<ol class="workflow-records">${other.map(deliveryEntry).join('')}</ol>` : ''}${options.evidence ?? ''}
   </section>`;
   const stages = walkthrough ? [

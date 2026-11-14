@@ -201,7 +201,10 @@ function readLocation() {
   state.returnTo = theoremDirectoryReturn(params.get('return'), location.href);
   const id = params.get('proof');
   state.selected = records.find(record => record.id === id)?.id ?? records.find(accepted)?.id ?? '';
-  if (id && !params.has('tab') && selectedRecord()?.processSummary) state.tab = 'process';
+  if (id && !params.has('tab')) {
+    const rec = selectedRecord();
+    state.tab = rec?.readingMode || rec?.campaign ? 'reading' : rec?.processSummary ? 'process' : 'overview';
+  }
   state.sourceName = '';
   processRecordId = state.selected;
   processSelection = { ...emptyProcessSelection(), run: params.get('run') ?? '', task: params.get('task') ?? '', step: params.get('step') ?? '',
@@ -246,6 +249,7 @@ function writeLocation(push = false) {
   const url = `#${params.toString() || 'view=archive'}`;
   if (push) history.pushState(null, '', url);
   else history.replaceState(null, '', url);
+  for (const link of document.querySelectorAll<HTMLAnchorElement>('a.lang-link')) link.hash = url;
 }
 
 function filteredRecords() {
@@ -263,14 +267,21 @@ function filteredRecords() {
 }
 
 function renderList(shown: ArchiveRecord[]) {
-  element('#proof-list').innerHTML = shown.map(record => `
+  element('#proof-list').innerHTML = shown.map(record => {
+    const readingBadge = record.readingMode === 'derivation'
+      ? `<span class="reading-badge">${locale === 'en' ? 'Step-by-step' : '逐步讲解'}</span>`
+      : record.readingMode === 'source'
+        ? `<span class="reading-badge is-source">${locale === 'en' ? 'Lean source' : '源码导读'}</span>`
+        : '';
+    return `
     <li><button type="button" class="proof-row ${state.selected === record.id ? 'is-selected' : ''}"
       data-proof-id="${record.id}" aria-pressed="${state.selected === record.id}"
       aria-label="${html(record.title + (locale === 'en' ? ', ' : '，') + statusLabel(record))}">
       <span class="row-symbol ${verified(record) ? '' : 'progress'}">${icon(verified(record) ? 'file-check-2' : 'file-clock')}</span>
-      <span><span class="row-title">${html(record.title)}</span><span class="row-subtitle">${html(record.subtitle)}<span class="area-label">${html(record.area)}</span></span></span>
+      <span><span class="row-title">${html(record.title)}</span><span class="row-subtitle">${html(record.subtitle)}<span class="area-label">${html(record.area)}</span>${readingBadge}</span></span>
       <span class="row-end">${statusBadge(record)}<span class="row-date">${date(record.updatedAt)}</span></span>
-    </button>${record.processSummary ? `<button class="row-route-open" data-proof-route="${record.id}" aria-label="${html((locale === 'en' ? 'Open routes and trajectory: ' : '打开路线与轨迹：') + record.title)}">${icon('git-branch')}<span>${locale === 'en' ? 'Routes & trajectory' : '路线图与全局轨迹'}</span>${icon('arrow-right')}</button>` : ''}</li>`).join('');
+    </button>${record.processSummary ? `<button class="row-route-open" data-proof-route="${record.id}" aria-label="${html((locale === 'en' ? 'Open routes and trajectory: ' : '打开路线与轨迹：') + record.title)}">${icon('git-branch')}<span>${locale === 'en' ? 'Routes & trajectory' : '路线图与全局轨迹'}</span>${icon('arrow-right')}</button>` : ''}</li>`;
+  }).join('');
   element('#empty-state').hidden = shown.length > 0;
   element('#result-count').textContent = strings.results(shown.length, state.query);
 }
@@ -291,7 +302,11 @@ function taskChart(record: ArchiveRecord) {
 
 function overview(record: ArchiveRecord) {
   const local = record.local;
+  const primaryActions = record.campaign || record.processSummary
+    ? `<div class="overview-primary-actions">${record.campaign ? `<button type="button" class="button button-primary" data-tab="reading">${icon('book-open')}${locale === 'en' ? 'Read proof explanation' : '阅读证明讲解'}</button>` : ''}${record.processSummary ? `<button type="button" class="button" data-tab="process">${icon('git-branch')}${locale === 'en' ? 'Routes & trajectory' : '路线与轨迹'}</button>` : ''}</div>`
+    : '';
   return `<p class="detail-summary">${html(record.summary)}</p>
+    ${primaryActions}
     ${!verified(record) ? `<div class="draft-note">${icon('info')}<span>${strings.draft}</span></div>` : ''}
     <dl class="record-facts">
       <div><dt>${strings.attribution}</dt><dd>${html(record.model)}</dd></div>
@@ -597,11 +612,12 @@ function restoreLocation() {
   render();
   if (requested) {
     const record = selectedRecord();
-    // processView renders the loaded process or its failure message before revealing it.
+    const hasReadingPosition = state.tab === 'reading' && Boolean(readProofReadingPosition(new URLSearchParams(location.hash.slice(1))));
+    // processView mounts async content before revealing deep links; reading positions are revealed by mountProofReading once typeset settles.
     const ready = (state.tab === 'process' || state.tab === 'reading') && record ? loadProcess(record).catch(() => undefined) : Promise.resolve();
     void ready.then(() => document.fonts.ready).then(() => {
       if (state.selected === requested) {
-        if (!revealProofReadingLocation()) revealRecord(true);
+        if (!hasReadingPosition && !revealProofReadingLocation()) revealRecord(true);
         if (record) revealCheckedSource(record, true);
       }
     });
@@ -684,7 +700,7 @@ document.addEventListener('theoremos-solution-open', event => {
 });
 
 document.addEventListener('click', event => {
-  const target = (event.target as Element).closest<HTMLElement>('[data-proof-id], [data-proof-route], [data-global-run], [data-global-select], [data-global-scroll], [data-tab], [data-action], [data-view-link], [data-process-run], [data-process-task], [data-process-step], [data-process-filter], [data-process-code], [data-process-copy-source], [data-process-download-source], [data-process-open-tab], [data-process-node], [data-process-view]');
+  const target = (event.target as Element).closest<HTMLElement>('[data-proof-id], [data-proof-route], [data-open-reading-step], [data-global-run], [data-global-select], [data-global-scroll], [data-tab], [data-action], [data-view-link], [data-process-run], [data-process-task], [data-process-step], [data-process-filter], [data-process-code], [data-process-copy-source], [data-process-download-source], [data-process-open-tab], [data-process-node], [data-process-view]');
   if (!target) return;
   if (target.dataset.viewLink) {
     event.preventDefault();
@@ -695,24 +711,62 @@ document.addEventListener('click', event => {
     return;
   }
   if (target.dataset.proofId || target.dataset.proofRoute) {
+    const openRoute = Boolean(target.dataset.proofRoute);
     state.selected = target.dataset.proofId ?? target.dataset.proofRoute!;
     state.sourceName = ''; sourceLocation = undefined;
-    if (selectedRecord()?.processSummary) { state.tab = 'process'; processSelection = emptyProcessSelection(); processRecordId = state.selected; revealProcessAfterLoad = true; }
-    else if (state.tab === 'process') state.tab = 'overview';
+    const record = selectedRecord();
+    if (openRoute && record?.processSummary) {
+      state.tab = 'process'; processSelection = emptyProcessSelection(); processRecordId = state.selected; revealProcessAfterLoad = true;
+    } else if (record?.readingMode || record?.campaign) {
+      state.tab = 'reading'; processRecordId = state.selected;
+    } else if (record?.processSummary) {
+      state.tab = 'process'; processSelection = emptyProcessSelection(); processRecordId = state.selected; revealProcessAfterLoad = true;
+    } else if (state.tab === 'process' || state.tab === 'reading') {
+      state.tab = 'overview';
+    }
     render();
     if (state.tab === 'process') {
       if (document.querySelector('.process-view-toolbar')) { revealProcessAfterLoad = false; revealProcessContent(); }
+    } else if (state.tab === 'reading') {
+      if (!revealRecord(true)) window.scrollTo({ top: 0, behavior: 'instant' });
     } else if (!revealRecord()) element(`[data-proof-id="${state.selected}"]`).focus({ preventScroll: true });
+    return;
+  }
+  if (target.dataset.openReadingStep) {
+    state.tab = 'reading';
+    const params = new URLSearchParams(location.hash.slice(1));
+    if (state.selected) params.set('proof', state.selected);
+    params.set('tab', 'reading');
+    params.set('reading', target.dataset.openReadingStep);
+    if (target.dataset.openReadingSha) params.set('readingSha', target.dataset.openReadingSha);
+    history.replaceState(null, '', `#${params.toString()}`);
+    render();
     return;
   }
   if (target.dataset.tab) {
     const enteringProcess = target.dataset.tab === 'process' && state.tab !== 'process';
+    const enteringReading = target.dataset.tab === 'reading' && state.tab !== 'reading';
+    const preservedReading = enteringReading ? readProofReadingPosition(new URLSearchParams(location.hash.slice(1))) : undefined;
     state.tab = target.dataset.tab as Tab;
+    if (enteringProcess) revealProcessAfterLoad = true;
+    if (preservedReading && state.selected) {
+      const params = new URLSearchParams(location.hash.slice(1));
+      params.set('proof', state.selected);
+      params.set('tab', 'reading');
+      params.set('reading', preservedReading.anchor);
+      params.set('readingSha', preservedReading.proofSha);
+      history.replaceState(null, '', `#${params.toString()}`);
+    }
     renderInspector(selectedRecord());
     icons();
     writeLocation();
-    element(`#tab-${state.tab}`).focus({ preventScroll: true });
-    if (enteringProcess) element('#inspector').scrollIntoView({ block: 'start' });
+    if (!preservedReading) {
+      element(`#tab-${state.tab}`).focus({ preventScroll: true });
+    }
+    if (enteringProcess && document.querySelector('.process-view-toolbar')) {
+      revealProcessAfterLoad = false;
+      revealProcessContent();
+    }
     return;
   }
   const record = selectedRecord();

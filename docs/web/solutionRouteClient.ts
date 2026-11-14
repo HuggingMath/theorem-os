@@ -25,7 +25,10 @@ function load(locale: Locale) {
 export async function typesetArchiveProse(root: HTMLElement, locale: Locale): Promise<void> {
   try {
     const runtime = await load(locale);
-    if (root.isConnected) runtime.typeset(root);
+    if (root.isConnected) {
+      runtime.typeset(root);
+      if (window.theoremosMathLoading) await window.theoremosMathLoading.catch(() => undefined);
+    }
   } catch { /* The original prose remains readable if the optional renderer cannot load. */ }
 }
 

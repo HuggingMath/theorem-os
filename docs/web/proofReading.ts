@@ -21,7 +21,7 @@ function mountReadingLocation(ready: Promise<void>) {
   const requested = position?.proofSha === proofSha ? byId.get(position.anchor) : undefined;
   const abort = new AbortController(), options = { signal: abort.signal };
   const definitionOrigins = new Map<string, { section: HTMLElement; trigger: HTMLElement; x: number; y: number }>();
-  let restoring = Boolean(requested), selected = '', frame = 0;
+  let restoring = Boolean(requested), selected = '', frame = 0, ignoreScrollUntil = 0;
 
   function updateResearchLink() {
     const reading = new URL(location.href), parameters = new URLSearchParams(reading.hash.slice(1));
@@ -47,12 +47,13 @@ function mountReadingLocation(ready: Promise<void>) {
     selected = section.id;
     parameters.set('reading', section.id); parameters.set('readingSha', proofSha);
     url.hash = parameters.toString(); history.replaceState(null, '', url);
+    for (const link of document.querySelectorAll<HTMLAnchorElement>('a.lang-link')) link.hash = url.hash;
     updateResearchLink();
   }
 
   function update() {
     frame = 0;
-    if (restoring || !root!.isConnected) return;
+    if (restoring || performance.now() < ignoreScrollUntil || !root!.isConnected) return;
     let active: HTMLElement | undefined;
     for (const section of sections) {
       if (!section.getClientRects().length) continue;
@@ -64,13 +65,31 @@ function mountReadingLocation(ready: Promise<void>) {
   }
   function schedule() { if (!frame) frame = requestAnimationFrame(update); }
 
-  function reveal() {
+  let revealTimer: ReturnType<typeof setTimeout> | undefined;
+  function reveal(finish = true) {
     if (!requested || !root!.isConnected) return false;
     for (let parent: HTMLElement | null = requested; parent && parent !== root; parent = parent.parentElement)
       if (parent instanceof HTMLDetailsElement) parent.open = true;
     requested.scrollIntoView({ block: 'start' });
     requested.querySelector<HTMLElement>('h5, summary')?.focus({ preventScroll: true });
-    restoring = false; remember(requested); schedule();
+    const url = new URL(location.href), currentParams = new URLSearchParams(url.hash.slice(1));
+    if (currentParams.get('proof') === proofId && currentParams.get('tab') === 'reading') {
+      currentParams.set('reading', requested.id); currentParams.set('readingSha', proofSha);
+      url.hash = currentParams.toString(); history.replaceState(null, '', url);
+      for (const link of document.querySelectorAll<HTMLAnchorElement>('a.lang-link')) link.hash = url.hash;
+      updateResearchLink();
+    }
+    if (finish) {
+      clearTimeout(revealTimer);
+      revealTimer = setTimeout(() => {
+        if (abort.signal.aborted || !requested || !root!.isConnected) return;
+        const heading = requested.querySelector<HTMLElement>('h5, summary');
+        const bounds = heading?.getBoundingClientRect();
+        if (bounds && (bounds.top < 0 || bounds.top >= innerHeight)) requested.scrollIntoView({ block: 'start' });
+        if (heading && document.activeElement !== heading) heading.focus({ preventScroll: true });
+        restoring = false; ignoreScrollUntil = performance.now() + 220; remember(requested);
+      }, 60);
+    }
     return true;
   }
 
@@ -102,7 +121,18 @@ function mountReadingLocation(ready: Promise<void>) {
           if (back) back.hidden = false;
         }
       }
-      restoring = false; remember(section);
+      restoring = false; ignoreScrollUntil = performance.now() + 220; remember(section);
+      const keepRemembered = () => {
+        selected = section.id;
+        const url = new URL(location.href), currentParams = new URLSearchParams(url.hash.slice(1));
+        if (currentParams.get('proof') === proofId && currentParams.get('tab') === 'reading' && currentParams.get('reading') !== section.id) {
+          currentParams.set('reading', section.id); currentParams.set('readingSha', proofSha);
+          url.hash = currentParams.toString(); history.replaceState(null, '', url);
+          for (const link of document.querySelectorAll<HTMLAnchorElement>('a.lang-link')) link.hash = url.hash;
+          updateResearchLink();
+        }
+      };
+      requestAnimationFrame(() => requestAnimationFrame(keepRemembered));
     }
   }, options);
   window.addEventListener('scroll', schedule, { ...options, passive: true });
@@ -110,25 +140,30 @@ function mountReadingLocation(ready: Promise<void>) {
   const resize = new ResizeObserver(schedule); sections.forEach(section => resize.observe(section));
   updateResearchLink();
   void Promise.all([ready, document.fonts.ready]).then(() => {
-    if (!abort.signal.aborted) requestAnimationFrame(() => { if (!abort.signal.aborted && !reveal()) schedule(); });
+    if (abort.signal.aborted) return;
+    requestAnimationFrame(() => {
+      if (abort.signal.aborted) return;
+      if (!reveal(false)) { schedule(); return; }
+      requestAnimationFrame(() => { if (!abort.signal.aborted) reveal(true); });
+    });
   });
   locationView = { root, reveal, href: anchor => {
     if (!byId.has(anchor)) return location.href;
     const url = new URL(location.href), parameters = new URLSearchParams(url.hash.slice(1));
     parameters.set('reading', anchor); parameters.set('readingSha', proofSha); url.hash = parameters.toString();
     return url.href;
-  }, dispose: () => { abort.abort(); resize.disconnect(); cancelAnimationFrame(frame); } };
+  }, dispose: () => { clearTimeout(revealTimer); abort.abort(); resize.disconnect(); cancelAnimationFrame(frame); } };
 }
 
 /** Keep the proof outline and its real dependencies in sync with ordinary page reading. */
 export function mountProofReading(ready = Promise.resolve()): void {
-  mountReadingLocation(ready);
   const found = document.querySelector<HTMLElement>('[data-proof-walkthrough]');
-  if (current?.root === found) return;
-  current?.dispose(); current = undefined;
-  if (!found) return;
+  if (!found || current?.root !== found) {
+    current?.dispose(); current = undefined;
+  }
+  if (!found) { mountReadingLocation(ready); return; }
+  if (current?.root === found) { mountReadingLocation(ready); return; }
   const root: HTMLElement = found;
-  const linear = root.dataset.proofReading === 'linear';
 
   const panel = root.querySelector<HTMLDetailsElement>('.proof-route-panel')!;
   const summary = panel.querySelector<HTMLElement>('summary')!;
@@ -203,7 +238,7 @@ export function mountProofReading(ready = Promise.resolve()): void {
     frame = 0;
     if (!root!.isConnected) return;
     const stages = root!.closest('.global-workflow')?.querySelector<HTMLElement>('.global-workflow-stages');
-    const top = stages ? parseFloat(getComputedStyle(stages).top) + stages.getBoundingClientRect().height + 1 : 0;
+    const top = stages ? parseFloat(getComputedStyle(stages).top) + stages.getBoundingClientRect().height + 1 : 12;
     const reader = narrow.matches ? summary : root!.querySelector<HTMLElement>('.proof-reading-bar')!;
     root!.style.setProperty('--proof-reader-top', top + 'px');
     root!.style.setProperty('--proof-heading-clearance', (top + reader.getBoundingClientRect().height + 20) + 'px');
@@ -215,7 +250,7 @@ export function mountProofReading(ready = Promise.resolve()): void {
     select(index); draw();
   }
   function schedule() { if (!frame) frame = requestAnimationFrame(update); }
-  function size() { panel.open = !linear && !narrow.matches; summary.setAttribute('aria-expanded', String(panel.open)); schedule(); }
+  function size() { panel.open = !narrow.matches; summary.setAttribute('aria-expanded', String(panel.open)); schedule(); }
 
   root.addEventListener('click', event => {
     const target = (event.target as Element).closest<HTMLElement>('[data-global-scroll]');
@@ -242,7 +277,10 @@ export function mountProofReading(ready = Promise.resolve()): void {
   narrow.addEventListener('change', size, options);
   const resize = new ResizeObserver(schedule);
   resize.observe(nodes); sections.forEach(section => resize.observe(section));
-  select(0); size();
-  void document.fonts.ready.then(() => { if (!abort.signal.aborted) schedule(); });
+  select(0);
+  panel.open = !narrow.matches; summary.setAttribute('aria-expanded', String(panel.open));
+  update();
+  mountReadingLocation(ready);
+  void Promise.all([ready, document.fonts.ready]).then(() => { if (!abort.signal.aborted) schedule(); });
   current = { root, dispose: () => { abort.abort(); resize.disconnect(); cancelAnimationFrame(frame); } };
 }

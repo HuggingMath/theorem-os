@@ -24,9 +24,9 @@ const catalog = JSON.parse(await fs.readFile(path.join(staticRoot, 'classics/dat
 // Keep the existing reviewed explanations as a fixed regression set. Universal imported-problem coverage lives in
 // test-universal-solution-route.ts; adding a problem must not require adding a hand-authored walkthrough here.
 const detailedRecords = catalog.records.filter(record => record.process?.walkthrough);
-assert.equal(detailedRecords.length, 16, 'Retain all sixteen existing detailed proof explanations');
-assert.equal(detailedRecords.reduce((sum, record) => sum + record.process!.walkthrough!.steps.length, 0), 94,
-  'Retain all ninety-four reviewed derivation steps');
+assert.equal(detailedRecords.length, 18, 'Retain all eighteen detailed proof explanations');
+assert.equal(detailedRecords.reduce((sum, record) => sum + record.process!.walkthrough!.steps.length, 0), 110,
+  'Retain all one hundred and ten reviewed derivation steps');
 const figureCount = detailedRecords.reduce((sum, record) => sum + record.process!.walkthrough!.steps.filter(step => step.figure).length, 0);
 assert.equal(figureCount, 8, 'The built archive must include all eight mathematical figures');
 assert.ok((await fs.readFile(path.join(staticRoot, 'classics/site.js'), 'utf8')).includes('data-workflow-stage'),
@@ -98,7 +98,7 @@ const proseTexts = (locator: Locator) => locator.evaluateAll(elements => element
 const proseText = async (locator: Locator) => (await proseTexts(locator))[0];
 const expectedProse = (text: string): string => {
   const segments = proseSegments(text);
-  const math = (items: readonly ProseSegment[]): boolean => items.some(segment => segment.kind === 'math' || segment.kind === 'display'
+  const math = (items: readonly ProseSegment[]): boolean => items.some(segment => segment.kind === 'math' || segment.kind === 'display' || segment.kind === 'code'
     || segment.kind === 'strong' && math(proseSegments(segment.text)));
   const content = (items: readonly ProseSegment[]): string => items.map(segment =>
     segment.kind === 'strong' ? content(proseSegments(segment.text)) : segment.text).join('');
@@ -165,8 +165,24 @@ async function enter(page: Page, record: ArchiveRecord, locale: string, explicit
   assert.equal(await page.locator('.solution-route').count(), 0, 'The catalog must not mount a problem route before one is opened');
   assert.equal(await page.locator('[data-global-select][aria-pressed="true"], [data-solution-node][aria-pressed="true"]').count(), 0,
     'Loading shared prose typesetting must not select a problem run or route node');
-  await page.locator(explicit ? '.row-route-open' + attr('data-proof-route', record.id) : '.proof-row' + attr('data-proof-id', record.id)).click();
+  if (explicit) {
+    await page.locator('.row-route-open' + attr('data-proof-route', record.id)).click();
+  } else {
+    await page.locator('.proof-row' + attr('data-proof-id', record.id)).click();
+    await page.locator('[data-proof-solution=' + JSON.stringify(record.id) + ']').waitFor();
+    assert.equal(hash(page).get('tab'), 'reading', 'Clicking a classic row opens proof explanation reading first');
+    await page.locator('#tab-process').click();
+  }
   await global(page, record);
+}
+async function openReading(page: Page, record: ArchiveRecord) {
+  await page.locator('#tab-reading').click();
+  await page.locator('[data-proof-solution=' + JSON.stringify(record.id) + ']').waitFor();
+  await page.waitForFunction(() => !document.querySelector('#inspector .math[data-math-state="loading"]'));
+  await settled(page);
+  assert.equal(hash(page).get('proof'), record.id);
+  assert.equal(hash(page).get('tab'), 'reading');
+  assert.equal(await page.locator('#tab-reading').getAttribute('aria-selected'), 'true');
 }
 async function chooseRun(page: Page, record: ArchiveRecord, run: Run, key?: 'Enter' | 'Space') {
   const history = page.locator('.global-history-panel');
@@ -283,15 +299,17 @@ async function verifyProofFigure(page: Page, record: ArchiveRecord, locale: 'zh'
   const walkthrough = record.process!.walkthrough!, steps = walkthrough.steps.filter(step => step.figure);
   assert.ok(steps.length > 0, record.id + ': actual accepted proof steps must own the figures');
   for (const step of steps) {
-    const location = page.url(), row = page.locator(attr('data-proof-derivation', step.id));
+    const baseReadingHash = () => {
+      const params = hash(page); params.delete('reading'); params.delete('readingSha'); return params.toString();
+    };
+    const expectedBase = baseReadingHash(), row = page.locator(attr('data-proof-derivation', step.id));
     const figure = row.locator(attr('data-proof-figure', step.figure!));
     const identity = async () => {
-      assert.equal(page.url(), location, 'A mathematical illustration must retain the exact selected proof and run URL');
+      assert.equal(baseReadingHash(), expectedBase, 'A mathematical illustration must retain the exact selected proof URL');
       const parameters = new URLSearchParams(new URL(page.url()).hash.slice(1));
       assert.equal(parameters.get('proof'), record.id);
-      assert.equal(parameters.get('run') ?? record.campaign!.runId, walkthrough.runId);
-      assert.equal(await page.locator('.archive-process').getAttribute('data-process-run-id'), walkthrough.runId);
-      assert.equal(await page.locator('.global-workflow').getAttribute('data-global-selected-run'), walkthrough.runId);
+      assert.equal(parameters.get('tab'), 'reading');
+      assert.equal(await page.locator('[data-proof-solution]').getAttribute('data-proof-solution-run'), walkthrough.runId);
       assert.equal(await page.locator('[data-proof-walkthrough]').getAttribute('data-proof-sha'), walkthrough.proofSha256);
     };
     await identity();
@@ -768,45 +786,20 @@ async function verifyWorkflow(page: Page, record: ArchiveRecord, run: Run, local
   });
   const walkthrough = record.process?.walkthrough?.runId === run.runId ? record.process.walkthrough : undefined;
   assert.deepEqual(actual.stages, walkthrough ? ['research', 'plan', 'implementation', 'review'] : ['plan', 'research', 'implementation', 'review']);
-  assert.equal(await page.locator('[data-proof-walkthrough]').count(), Number(Boolean(walkthrough)));
+  assert.equal(await page.locator('[data-proof-walkthrough]').count(), 0, 'De-duplicated process tab uses a compact digest instead of repeating the full derivation');
+  assert.equal(await page.locator('[data-proof-walkthrough-digest]').count(), Number(Boolean(walkthrough)));
   if (walkthrough) {
-    assert.equal(await page.locator('[data-proof-walkthrough]').getAttribute('data-proof-sha'), record.campaign!.proofSha256);
-    assert.equal(await page.locator('[data-proof-derivation]').count(), walkthrough.steps.length);
-    assert.equal(await proseText(page.locator('.proof-walkthrough-strategy')), expectedProse(walkthrough.strategy[locale]));
-    assert.deepEqual(await page.locator('[data-proof-overview-stage]').evaluateAll(buttons => buttons.map(button => ({
+    const digestCard = page.locator('[data-proof-walkthrough-digest]');
+    assert.equal(await digestCard.getAttribute('data-proof-sha'), record.campaign!.proofSha256);
+    assert.equal(await proseText(digestCard.locator('.proof-walkthrough-strategy')), expectedProse(walkthrough.strategy[locale]));
+    assert.deepEqual(await digestCard.locator('[data-proof-overview-stage]').evaluateAll(buttons => buttons.map(button => ({
       steps: (button as HTMLElement).dataset.proofOverviewSteps!.split(' '),
-      target: (button as HTMLElement).dataset.globalScroll,
+      target: (button as HTMLElement).dataset.openReadingStep,
     }))), walkthrough.stages.map(stage => ({ steps: stage.stepIds, target: 'proof-derivation-' + stage.stepIds[0] })));
-    assert.deepEqual(await proseTexts(page.locator('[data-proof-overview-stage] strong')),
+    assert.deepEqual(await proseTexts(digestCard.locator('[data-proof-overview-stage] strong')),
       walkthrough.stages.map(stage => expectedProse(stage.title[locale])));
-    assert.deepEqual(await proseTexts(page.locator('[data-proof-overview-stage] .proof-overview-copy > span')),
+    assert.deepEqual(await proseTexts(digestCard.locator('[data-proof-overview-stage] .proof-overview-copy > span')),
       walkthrough.stages.map(stage => expectedProse(stage.summary[locale])));
-    const route = page.locator('.proof-walkthrough-route');
-    assert.deepEqual(await route.locator('[data-proof-route-step]').evaluateAll(buttons => buttons.map(button => ({
-      id: (button as HTMLElement).dataset.proofRouteStep, title: (button as HTMLElement).dataset.proofRouteTitle,
-      controls: button.getAttribute('aria-controls'),
-    }))), walkthrough.steps.map(step => ({ id: step.id, title: step.title[locale], controls: 'proof-derivation-' + step.id })));
-    assert.deepEqual(await route.locator('[data-proof-edge]').evaluateAll(edges => edges.map(edge =>
-      (edge as SVGElement).dataset.from + '->' + (edge as SVGElement).dataset.to).sort()),
-    walkthrough.steps.flatMap(step => step.dependsOn.map(previous => previous + '->' + step.id)).sort(),
-    record.id + ': proof arrows must preserve every actual dependency without adding sequential edges');
-    for (const step of walkthrough.steps) {
-      const row = page.locator(attr('data-proof-derivation', step.id));
-      assert.equal(await proseText(row.locator('.proof-walkthrough-claim > p')), expectedProse(step.claim[locale]));
-      assert.equal(await proseText(row.locator('.proof-walkthrough-explanation > p')), expectedProse(step.because[locale]));
-      assert.equal(await proseText(row.locator('.proof-walkthrough-next > p')), expectedProse(step.next[locale]));
-      assert.deepEqual(await proseTexts(row.locator('.proof-walkthrough-statement')), step.derivation.map(line => expectedProse(line.statement[locale])));
-      assert.deepEqual(await proseTexts(row.locator('.proof-walkthrough-justification')), step.derivation.map(line => expectedProse(line.reason[locale])));
-      assert.deepEqual(await row.locator('[data-proof-dependency]').evaluateAll(buttons => buttons.map(button => (button as HTMLElement).dataset.proofDependency)), step.dependsOn);
-      assert.equal(await row.locator('[data-proof-figure]').count(), Number(Boolean(step.figure)));
-      if (step.figure) assert.equal(await row.locator('[data-proof-figure]').getAttribute('data-proof-figure'), step.figure);
-      assert.deepEqual(await row.locator('[data-proof-consumer]').evaluateAll(buttons => buttons.map(button => (button as HTMLElement).dataset.proofConsumer)),
-        walkthrough.steps.filter(candidate => candidate.dependsOn.includes(step.id)).map(candidate => candidate.id),
-        record.id + '/' + step.id + ': later-result links must be the exact reverse of the dependency relation');
-      const source = record.process!.sources![walkthrough.proofSha256];
-      assert.deepEqual(await row.locator('.proof-walkthrough-source > ol code').allTextContents(),
-        source.code.split('\n').slice(step.evidence.source.line - 1, step.evidence.source.endLine).map(line => line || ' '));
-    }
   }
   const expectedPlan = run.events.flatMap((event, index) => event.kind === 'plan-edit' && event.message?.trim() ? ['event:' + index] : []);
   const expected = [...expectedPlan, ...(run.deliveries ?? []).map(delivery => 'delivery:' + delivery.id), ...(run.checks ?? []).map(check => 'check:' + check.id)].sort();
@@ -853,6 +846,45 @@ async function verifyWorkflow(page: Page, record: ArchiveRecord, run: Run, local
   return { deliveries: run.deliveries?.length ?? 0, checks: run.checks?.length ?? 0, tasks: run.tasks.length,
     retained: actual.entries.filter(row => row.retained).length, proseCharacters: actual.entries.reduce((sum, row) => sum + row.preview.length, 0) };
 }
+async function verifyReadingWalkthrough(page: Page, record: ArchiveRecord, walkthrough: ProofWalkthrough, locale: 'zh' | 'en') {
+  assert.equal(await page.locator('[data-proof-walkthrough]').getAttribute('data-proof-sha'), record.campaign!.proofSha256);
+  assert.equal(await page.locator('[data-proof-derivation]').count(), walkthrough.steps.length);
+  assert.equal(await proseText(page.locator('.proof-walkthrough-strategy')), expectedProse(walkthrough.strategy[locale]));
+  assert.deepEqual(await page.locator('[data-proof-overview-stage]').evaluateAll(buttons => buttons.map(button => ({
+    steps: (button as HTMLElement).dataset.proofOverviewSteps!.split(' '),
+    target: (button as HTMLElement).dataset.globalScroll,
+  }))), walkthrough.stages.map(stage => ({ steps: stage.stepIds, target: 'proof-derivation-' + stage.stepIds[0] })));
+  assert.deepEqual(await proseTexts(page.locator('[data-proof-overview-stage] strong')),
+    walkthrough.stages.map(stage => expectedProse(stage.title[locale])));
+  assert.deepEqual(await proseTexts(page.locator('[data-proof-overview-stage] .proof-overview-copy > span')),
+    walkthrough.stages.map(stage => expectedProse(stage.summary[locale])));
+  const route = page.locator('.proof-walkthrough-route');
+  assert.deepEqual(await route.locator('[data-proof-route-step]').evaluateAll(buttons => buttons.map(button => ({
+    id: (button as HTMLElement).dataset.proofRouteStep, title: (button as HTMLElement).dataset.proofRouteTitle,
+    controls: button.getAttribute('aria-controls'),
+  }))), walkthrough.steps.map(step => ({ id: step.id, title: step.title[locale], controls: 'proof-derivation-' + step.id })));
+  assert.deepEqual(await route.locator('[data-proof-edge]').evaluateAll(edges => edges.map(edge =>
+    (edge as SVGElement).dataset.from + '->' + (edge as SVGElement).dataset.to).sort()),
+  walkthrough.steps.flatMap(step => step.dependsOn.map(previous => previous + '->' + step.id)).sort(),
+  record.id + ': proof arrows must preserve every actual dependency without adding sequential edges');
+  for (const step of walkthrough.steps) {
+    const row = page.locator(attr('data-proof-derivation', step.id));
+    assert.equal(await proseText(row.locator('.proof-walkthrough-claim > p')), expectedProse(step.claim[locale]));
+    assert.equal(await proseText(row.locator('.proof-walkthrough-explanation > p')), expectedProse(step.because[locale]));
+    assert.equal(await proseText(row.locator('.proof-walkthrough-next > p')), expectedProse(step.next[locale]));
+    assert.deepEqual(await proseTexts(row.locator('.proof-walkthrough-statement')), step.derivation.map(line => expectedProse(line.statement[locale])));
+    assert.deepEqual(await proseTexts(row.locator('.proof-walkthrough-justification')), step.derivation.map(line => expectedProse(line.reason[locale])));
+    assert.deepEqual(await row.locator('[data-proof-dependency]').evaluateAll(buttons => buttons.map(button => (button as HTMLElement).dataset.proofDependency)), step.dependsOn);
+    assert.equal(await row.locator('[data-proof-figure]').count(), Number(Boolean(step.figure)));
+    if (step.figure) assert.equal(await row.locator('[data-proof-figure]').getAttribute('data-proof-figure'), step.figure);
+    assert.deepEqual(await row.locator('[data-proof-consumer]').evaluateAll(buttons => buttons.map(button => (button as HTMLElement).dataset.proofConsumer)),
+      walkthrough.steps.filter(candidate => candidate.dependsOn.includes(step.id)).map(candidate => candidate.id),
+      record.id + '/' + step.id + ': later-result links must be the exact reverse of the dependency relation');
+    const source = record.process!.sources![walkthrough.proofSha256];
+    assert.deepEqual(await row.locator('.proof-walkthrough-source > ol code').allTextContents(),
+      source.code.split('\n').slice(step.evidence.source.line - 1, step.evidence.source.endLine).map(line => line || ' '));
+  }
+}
 async function shot(page: Page, filename: string) {
   await settled(page); await page.screenshot({ path: path.join(output, filename) }); screenshots.push(filename);
 }
@@ -886,7 +918,12 @@ try {
       await shot(page, 'workflow-' + locale + '-' + width + '-entry.png');
       mark(label + ': ordinary classics entry defaults to final research with a complete DAG, objectives and actual saved prose');
       const walkthrough = triangle.process!.walkthrough!;
-      const outlineUrl = page.url();
+      await openReading(page, triangle);
+      await verifyReadingWalkthrough(page, triangle, walkthrough, locale);
+      const readingBaseHash = () => {
+        const params = hash(page); params.delete('reading'); params.delete('readingSha'); return params.toString();
+      };
+      const baseReadingParams = readingBaseHash();
       for (const index of [2, 0]) {
         const outline = page.locator('[data-proof-overview-stage="' + index + '"]');
         await outline.focus(); await outline.press('Enter');
@@ -894,11 +931,11 @@ try {
         await reading(page, walkthrough, id, locale);
         assert.equal(await page.locator(attr('data-proof-derivation', id) + ' h5').evaluate(element => element === document.activeElement), true);
         await visible(page, '#' + 'proof-derivation-' + id + ' h5', label + ': outline jump');
-        assert.equal(page.url(), outlineUrl, 'The overview navigates within the same accepted proof and run');
+        assert.equal(readingBaseHash(), baseReadingParams, 'The overview navigates within the same accepted proof');
       }
       const selectedStep = walkthrough.steps[2], followingStep = walkthrough.steps[3];
       const routeStep = page.locator('.proof-walkthrough-route ' + attr('data-global-scroll', 'proof-derivation-' + selectedStep.id));
-      const panel = page.locator('.proof-route-panel'), compact = width <= 1100, beforeStep = page.url();
+      const panel = page.locator('.proof-route-panel'), compact = width <= 1100;
       assert.equal(await panel.evaluate(element => (element as HTMLDetailsElement).open), !compact,
         'The complete route starts open on desktop and collapsed on narrow screens');
       await openProofRoute(page); await shot(page, 'derivation-' + locale + '-' + width + '-route.png');
@@ -913,7 +950,7 @@ try {
       const derivation = page.locator(attr('data-proof-derivation', selectedStep.id));
       assert.equal(await derivation.locator('h5').evaluate(element => element === document.activeElement), true);
       await reading(page, walkthrough, selectedStep.id, locale);
-      assert.equal(page.url(), beforeStep);
+      assert.equal(readingBaseHash(), baseReadingParams);
       assert.equal(await panel.evaluate(element => (element as HTMLDetailsElement).open), !compact);
       if (compact) {
         await openProofRoute(page); await routeStep.focus(); await page.keyboard.press('Escape'); await settled(page);
@@ -928,13 +965,13 @@ try {
       await dependencyButton.focus(); await dependencyButton.press('Enter');
       assert.equal(await page.locator(attr('data-proof-derivation', dependency) + ' h5').evaluate(element => element === document.activeElement), true);
       await reading(page, walkthrough, dependency, locale);
-      assert.equal(page.url(), beforeStep, 'Reading a prerequisite preserves the selected archived run');
+      assert.equal(readingBaseHash(), baseReadingParams, 'Reading a prerequisite preserves the selected proof');
       await page.locator(attr('data-proof-derivation', dependency) + ' ' + attr('data-proof-consumer', selectedStep.id)).press('Space');
       await reading(page, walkthrough, selectedStep.id, locale);
       const scrolledStep = walkthrough.steps[4];
       await page.locator(attr('data-proof-derivation', scrolledStep.id)).evaluate(element => element.scrollIntoView({ block: 'start', behavior: 'instant' }));
       await reading(page, walkthrough, scrolledStep.id, locale);
-      assert.equal(page.url(), beforeStep, 'Ordinary scrolling and result links preserve the selected archived run and URL');
+      assert.equal(readingBaseHash(), baseReadingParams, 'Ordinary scrolling and result links preserve the selected proof');
       await page.locator(attr('data-proof-derivation', walkthrough.steps.at(-1)!.id)).evaluate(element => element.scrollIntoView({ block: 'start', behavior: 'instant' }));
       await reading(page, walkthrough, walkthrough.steps.at(-1)!.id, locale);
       await openProofRoute(page);
@@ -964,7 +1001,7 @@ try {
       await derivation.locator('.proof-walkthrough-next > button').click();
       assert.equal(await page.locator(attr('data-proof-derivation', followingStep.id) + ' h5').evaluate(element => element === document.activeElement), true);
       await reading(page, walkthrough, followingStep.id, locale);
-      assert.equal(page.url(), beforeStep);
+      assert.equal(readingBaseHash(), baseReadingParams);
       const followingEvidence = page.locator(attr('data-proof-derivation', followingStep.id) + ' .proof-walkthrough-source');
       await followingEvidence.locator(':scope > summary').click();
       await followingEvidence.locator('.proof-walkthrough-source-open').click();
@@ -1047,7 +1084,7 @@ try {
       assert.equal(hash(page).get('tab'), 'source');
       await page.locator('#tab-process').click(); await global(page, honeycomb, finalRun(honeycomb));
       for (const record of detailedRecords.filter(record => record.process!.walkthrough!.steps.some(step => step.figure))) {
-        await enter(page, record, locale); await verifyProofFigure(page, record, locale, label);
+        await enter(page, record, locale); await openReading(page, record); await verifyProofFigure(page, record, locale, label);
       }
       mark(label + ': all eight mathematical figures support real pointer or keyboard interaction, update exact objects and calculations, and preserve proof identity and focus');
       const overview = new URL(ordinary(locale)); overview.hash = new URLSearchParams({ proof: triangle.id, status: 'verified', tab: 'overview' }).toString();
@@ -1073,9 +1110,10 @@ try {
       retained += result.retained; proseCharacters += result.proseCharacters;
     }
   }
-  assert.equal(runs, 45); assert.ok(deliveries > 400 && savedChecks > 300 && retained > 0);
+  const expectedTotalRuns = detailedRecords.reduce((sum, record) => sum + record.process!.runs.length, 0);
+  assert.equal(runs, expectedTotalRuns); assert.ok(deliveries > 400 && savedChecks > 300 && retained > 0);
   await context.close(); active = undefined;
-  mark('the 16 existing detailed explanations and their ' + runs + ' saved runs preserve ' + deliveries + ' deliveries, ' + savedChecks
+  mark('the 18 detailed explanations and their ' + runs + ' saved runs preserve ' + deliveries + ' deliveries, ' + savedChecks
     + ' checks, full objectives, true DAGs, chronological stages, inherited markers and run-bound acceptance');
 
   for (const locale of ['zh', 'en'] as const) {
@@ -1087,9 +1125,11 @@ try {
         current = locale + '/320/' + record.id;
         await enter(narrowPage, record, locale);
         await verifyWorkflow(narrowPage, record, finalRun(record), locale);
+        await openReading(narrowPage, record);
+        await verifyReadingWalkthrough(narrowPage, record, record.process!.walkthrough!, locale);
         await fits(narrowPage, current + ': every derivation line and prerequisite');
       }
-      mark(locale + ': the 16 existing proof derivations, line-by-line explanations and dependencies fit a 320px screen');
+      mark(locale + ': all 18 proof derivations, line-by-line explanations and dependencies fit a 320px screen');
     } finally { await narrow.close(); active = undefined; }
   }
 
