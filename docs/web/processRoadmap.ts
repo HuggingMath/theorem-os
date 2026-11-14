@@ -75,7 +75,7 @@ export function buildArchiveRoadmap(record: ArchiveIndexRecord, run: Run, locale
   return { nodes, edges };
 }
 
-const card = { width: 232, height: 132, columnGap: 72, rowGap: 24, lane: 14, margin: 30 };
+const card = { width: 232, height: 140, columnGap: 72, rowGap: 24, lane: 14, margin: 30 };
 /**
  * A whole-map scale below this turns 17px titles into unreadable pixels. The stacked list carries the same nodes,
  * dependencies and ordinals in reading order, so it is what a reader gets instead of a thumbnail.

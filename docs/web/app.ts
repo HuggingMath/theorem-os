@@ -774,6 +774,9 @@ document.addEventListener('click', event => {
   if (target.dataset.tab) {
     const enteringProcess = target.dataset.tab === 'process' && state.tab !== 'process';
     const enteringReading = target.dataset.tab === 'reading' && state.tab !== 'reading';
+    // Reading and process hide the heading, the list and the filters; every other tab brings them back above the
+    // record, which would leave the reader staring at the list they just left.
+    const leavingReader = ['reading', 'process'].includes(state.tab) && !['reading', 'process'].includes(target.dataset.tab);
     const preservedReading = enteringReading ? readProofReadingPosition(new URLSearchParams(location.hash.slice(1))) : undefined;
     state.tab = target.dataset.tab as Tab;
     if (enteringProcess) revealProcessAfterLoad = true;
@@ -788,6 +791,7 @@ document.addEventListener('click', event => {
     renderInspector(selectedRecord());
     icons();
     writeLocation();
+    if (leavingReader) element('#inspector').scrollIntoView({ block: 'start' });
     if (!preservedReading) {
       element(`#tab-${state.tab}`).focus({ preventScroll: true });
     }
