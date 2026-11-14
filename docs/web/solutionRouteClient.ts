@@ -1,4 +1,5 @@
 import version from 'virtual:solution-route';
+import { loadMath } from '../../apps/web/client/mathAssets';
 import { rootOf, type Locale } from './site';
 import type { ArchiveIndexRecord, ArchiveProcess } from './types';
 
@@ -19,6 +20,16 @@ function load(locale: Locale) {
     document.head.append(script);
   });
   return request;
+}
+
+/**
+ * Start the route controls and the math renderer together, before the prose that needs them exists. Typesetting runs
+ * only after the route controls load, so requesting KaTeX at the same time keeps raw TeX from sitting on screen while
+ * the two requests queue up behind each other.
+ */
+export function preloadArchiveReading(locale: Locale): void {
+  void load(locale).catch(() => undefined);
+  void loadMath().catch(() => undefined);
 }
 
 /** Old prose and interactive routes share the same lazy math renderer. */

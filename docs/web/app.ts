@@ -19,7 +19,7 @@ import { readProofReadingPosition } from './proofReadingLocation';
 import { proofSolutionTitle, renderProofSolution, theoremDirectoryReturn } from './proofSolution';
 import { renderAcceptedTargets } from './proofAcceptance';
 import { mountProofFigures } from './proofFigures';
-import { mountArchiveSolutionRoutes, typesetArchiveProse } from './solutionRouteClient';
+import { mountArchiveSolutionRoutes, preloadArchiveReading, typesetArchiveProse } from './solutionRouteClient';
 import { readSourceLocation, verifiedSourceLocation, writeSourceLocation, type SourceLocation } from './sourceLocation';
 
 const iconSet = {
@@ -419,6 +419,8 @@ function processEvidenceView(run: ArchiveProcess['runs'][number]): string {
 }
 
 function readingView(record: ArchiveRecord): string {
+  // The prose renders before its math renderer is requested; fetching both now keeps raw TeX off the screen.
+  preloadArchiveReading(locale);
   const process = window.theoremosProcesses?.[record.id];
   if (process) return renderProofSolution(record, process, locale, document.body.classList.contains('shared-classics')
     ? { workbenchHref: locale === 'en' ? '../../' : '../' } : {});
