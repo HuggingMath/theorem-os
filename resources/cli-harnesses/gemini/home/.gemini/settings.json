@@ -1,0 +1,5 @@
+{
+  "security": {"auth": {"selectedType": "gemini-api-key"}},
+  "telemetry": {"enabled": false},
+  "advanced": {"autoConfigureMemory": false}
+}

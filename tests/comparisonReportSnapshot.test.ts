@@ -90,6 +90,40 @@ describe('comparison report observations', () => {
       error: 'comparison_acceptance_evidence_incomplete' });
   });
 
+  it('retains historical consumption after an environment mismatch without counting it as a comparable run', () => {
+    const f = fixture();
+    f.state.environmentDigest = 'actually-observed-environment';
+    f.state.usage = { inputTokens: 80, outputTokens: 20 };
+    f.state.usageAccounting = { startedTurns: 1, reportedTurns: 1, pending: false, incomplete: false };
+    f.state.tokenBudget = buildTokenBudget(9000, [f.state]); f.save();
+    const report = comparisonReport(f.directory, f.plan);
+    expect(report.runs[0]).toMatchObject({ status: 'invalid', accepted: false, totalTokens: null,
+      comparisonIdentityMatches: false, error: 'comparison_run_identity_mismatch',
+      historicalObservation: { comparisonEligible: false, identityError: 'comparison_run_identity_mismatch',
+        expectedEnvironmentDigest: 'environment', observedEnvironmentDigest: 'actually-observed-environment',
+        turns: 1, workerCount: 1, observedWorkerCount: 1, totalTokens: 100, reportedTotalTokens: 100,
+        usageComplete: true, tokenBudget: { maxTotalTokens: 9000 } } });
+    expect(report.totals.find(total => total.arm === 'cooperative')).toMatchObject({ reportedTokens: 0, missingTokenRuns: 1 });
+  });
+
+  it('keeps unknown historical usage unknown even when another worker has a partial receipt', () => {
+    const f = fixture();
+    f.state.environmentDigest = 'changed'; f.state.workerCount = 2;
+    f.state.workers = [
+      { id: 'solver', role: 'lead', worktree: f.directory, phase: 'finished', turns: 1, usage: { totalTokens: 100 },
+        usageAccounting: { startedTurns: 1, reportedTurns: 1, pending: false, incomplete: false } },
+      { id: 'researcher-1', role: 'researcher', worktree: f.directory, phase: 'finished', turns: 1,
+        usageAccounting: { startedTurns: 1, reportedTurns: 0, pending: false, incomplete: true } },
+    ] as SolverRunState['workers'];
+    f.state.tokenBudget = buildTokenBudget(30000, f.state.workers!); f.save();
+    expect(comparisonReport(f.directory, f.plan).runs[0]).toMatchObject({ accepted: false, totalTokens: null,
+      historicalObservation: { comparisonEligible: false, workerCount: 2, observedWorkerCount: 2,
+        totalTokens: null, reportedTotalTokens: 100, usageComplete: false, missingUsageWorkers: ['researcher-1'] } });
+    delete f.state.workers![0].usage; f.save();
+    expect(comparisonReport(f.directory, f.plan).runs[0].historicalObservation).toMatchObject({
+      totalTokens: null, reportedTotalTokens: null, usageComplete: false });
+  });
+
   it('treats legacy unbound reports as unknown and detects modified bound reports', () => {
     const f = fixture(), report = comparisonReport(f.directory, f.plan);
     const { reportHash: _hash, generatedAt: _at, sourcePlanDigest: _plan, sourceBatchDigest: _batch, ...legacy } = report;

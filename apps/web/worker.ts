@@ -11,7 +11,7 @@ import { readMathBuildManifest } from '../../src/math/mathBuildManifest';
 import { isMathPathWithin } from '../../src/math/paths';
 import { createCodexMathSession } from '../../src/runtime/codexSession';
 import { sub2apiModelCatalog } from '../../src/runtime/sub2api';
-import type { SolverModules } from '../../src/solver/modules';
+import { directSolverModules, type SolverModules } from '../../src/solver/modules';
 import { configurableSolverModules } from '../../src/solver/modules/custom';
 import { solverModuleConfiguration } from '../../src/solver/modules/moduleIdentity';
 import { researchWorkers } from '../../src/solver/modules/organization';
@@ -26,6 +26,7 @@ import { createWebWorkerBridge, freezeWebKnowledge, writeWebActiveRun } from './
 import { webByokModuleIdentity } from './webModuleIdentity';
 import { webAgentLibraryAccess } from './frozenLibrary';
 import { runWebLibraryResearch } from './libraryResearch';
+import { webResearchArguments } from './researchMode';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 type WebWorkerState = {
@@ -187,11 +188,14 @@ Continue the assigned work in this same turn after each update. Updates need no 
 
 export function webSolverModules(request: WorkerInput, actions?: { sink: (action: WebAgentActionBody) => void; hidden: readonly string[] },
   isolation?: WebAgentIsolation): SolverModules {
-  const base = configurableSolverModules(request.input.modulePlan, request.input.coordination, request.input.workers);
+  webResearchArguments(request.input);
+  const base = request.input.researchMode === 'skill' ? directSolverModules
+    : configurableSolverModules(request.input.modulePlan, request.input.coordination, request.input.workers);
   const identity = webByokModuleIdentity(solverModuleConfiguration(base));
   let sessions = 0;
   return { ...base, id: identity.id,
-    ...(isolation ? { M4: { ...base.M4, build: (problem, state, access) => base.M4.build(problem, state, { ...access, tools: isolation.tools }) } } : {}),
+    ...(isolation ? { M4: { ...base.M4, tools: isolation.tools,
+      build: (problem, state, access) => base.M4.build(problem, state, { ...access, tools: isolation.tools }) } } : {}),
     M1: { ...base.M1, version: identity.versions.M1!,
       open: options => {
         const workerId = options.environment?.DEEPSCIENTIST_MATH_WORKER_ID;
@@ -317,6 +321,7 @@ async function main() {
       '--receipt-file', round.seed.activeProblemPath, '--build-manifest', buildIndex.buildManifestRef,
       '--model', request.input.model, '--effort', request.input.effort, '--workers', String(request.input.workers),
       '--coordination', request.input.coordination, '--max-turns', String(round.limits.maxTurns),
+      ...webResearchArguments(request.input),
       ...(request.input.planApproval ? ['--plan-approval'] : []),
       ...(knowledgeFile ? ['--knowledge-base', knowledgeFile] : []),
       ...(round.continuationFile ? ['--continuation-manifest', round.continuationFile] : []),

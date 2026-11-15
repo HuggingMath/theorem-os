@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import type { WebConfig } from './config';
 import type { WebRunner } from './runner';
 import type { WebEvent, WebEventDetails, WebProvider, WebRun, WebRunInput, WorkerInput, WorkerMessage } from './shared';
+import { webResearchModeError } from './researchMode';
 import { isProgressEvent, parseWebFailure, webAgentActionLimits, webLimits } from './shared';
 import { recordWebModuleEvent, sanitizeWebEventDetails } from './moduleTelemetry';
 import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
@@ -112,6 +113,8 @@ export class WebJobs {
   create(owner: string, input: WebRunInput, provider: WebProvider, continuation?: WorkerInput['continuation'], requestId?: string,
     formalization?: { evidence?: unknown; compiled?: unknown; provenance: NonNullable<WebRun['formalization']> },
     researchConfiguration?: WorkerInput['researchConfiguration']): WebRun {
+    const modeError = webResearchModeError(input);
+    if (modeError) throw new WebStorageError(400, modeError);
     const previous = this.replay(owner, input, provider, requestId);
     if (previous) return previous;
     if (this.closing) throw new Error('服务正在停止，请稍后重试。');
@@ -128,7 +131,8 @@ export class WebJobs {
     if (pinnedDigest && !this.knowledge.getCatalog(owner, pinnedDigest))
       throw new WebStorageError(404, '所选知识目录不存在或不属于当前会话。');
     const pinnedInput: WebRunInput = { ...input, environment: input.environment ?? 'standard' };
-    if (researchConfiguration) pinnedInput.modulePlan = structuredClone(researchConfiguration.modulePlan);
+    if (researchConfiguration && input.researchMode !== 'skill') pinnedInput.modulePlan = structuredClone(researchConfiguration.modulePlan);
+    if (input.researchMode === 'skill') pinnedInput.skillLoading ??= 'native';
     if (pinnedDigest) pinnedInput.knowledgeDigest = pinnedDigest;
     else delete pinnedInput.knowledgeDigest;
     const { apiKey, knowledgeDigest: _selectedKnowledgeDigest, ...visible } = pinnedInput;
@@ -144,7 +148,7 @@ export class WebJobs {
     if (formalization) run.formalization = formalization.provenance;
     if (researchConfiguration) run.researchConfiguration = structuredClone(researchConfiguration);
     run.title = (formalization?.provenance.original.trim() || run.task).split('\n')[0].slice(0, 60) || 'Lean 研究';
-    run.moduleConfiguration = freezeModuleConfiguration(run.modulePlan, run.coordination, run.workers);
+    if (input.researchMode !== 'skill') run.moduleConfiguration = freezeModuleConfiguration(run.modulePlan, run.coordination, run.workers);
     const creation = requestId ? this.creation(input, provider, requestId) : undefined;
     this.event(run, 'queued', '任务已进入队列');
     // Persist the identity and initial run atomically before a worker can be queued.
@@ -284,6 +288,14 @@ export class WebJobs {
       solverRunId: job.run.observation.solverRunId, round: 0, sequence: job.run.observation.sequence });
     if (observation.webRunId !== job.run.id || observation.snapshot.runId !== observation.solverRunId ||
         current && (current.solverRunId !== observation.solverRunId || current.sequence >= observation.sequence)) return;
+    const configuration = observation.inspection.configuration;
+    if ((configuration?.researchMode ?? 'legacy') !== (job.run.researchMode ?? 'legacy')) return;
+    if (job.run.researchMode === 'skill') {
+      const skill = configuration?.researchSkill, frozen = job.run.researchSkill;
+      if (!skill || skill.loading !== (job.run.skillLoading ?? 'native') ||
+          frozen && (skill.name !== frozen.name || skill.digest !== frozen.digest || skill.loading !== frozen.loading)) return;
+      job.run.researchSkill = { ...skill };
+    }
     job.run.solverAttempt = { solverRunId: observation.solverRunId, round: current?.round ?? 0, sequence: observation.sequence };
     job.run.observation = observation;
     job.run.updatedAt = observation.observedAt;
@@ -316,6 +328,7 @@ export class WebJobs {
   async command(owner: string, runId: string, command: Exclude<WebCommand, { type: 'capture' }>): Promise<WebCommandResult> {
     const job = this.jobs.get(runId);
     if (!job || job.owner !== owner) throw new Error('运行不存在或不属于当前会话。');
+    if (job.run.researchMode === 'skill') throw new WebStorageError(409, '单研究者模式不支持协作计划、逐题指导或计划审批。');
     const id = command.type === 'guidance' ? command.guidance.id : command.type === 'plan-approval' ? command.approval.id : command.proposal.id;
     const key = `${runId}/${command.type === 'edit-preview' ? 'preview/' : ''}${id}`;
     const digest = crypto.createHash('sha256').update(canonicalMathJson(command)).digest('hex');

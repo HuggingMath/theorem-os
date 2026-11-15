@@ -36,6 +36,8 @@ import { leadPlanningEvidence, leadPlanningEvidenceText } from '../planningEvide
 import { mathematicalGapContextText } from '../mathematicalGaps';
 import { nextCheckContextText } from '../nextChecks';
 import { goalProgressTaskContext } from '../goalProgress';
+import type { MathAgentSkill } from '../../runtime/agentSkills';
+import { buildCommonResearchContext } from '../researchGuidance';
 
 export type ContextAccess = Readonly<{
   root: string;
@@ -62,6 +64,8 @@ export type ContextAccess = Readonly<{
   maxContextBytes?: number;
   maxOptionalContextBytes?: number;
   customModuleRules?: readonly CustomResearchModule[];
+  /** Same mathematical skill for every explicitly controlled comparison arm. */
+  commonResearchSkill?: MathAgentSkill;
   /** Pure fixture context; real frozen problems always load their committed source. */
   frozenContexts?: Readonly<Record<string, string>>;
 }>;
@@ -136,6 +140,8 @@ export function buildStatementReviewContext(review: StatementReview, action: Sta
 
 /** M4 builds prompts from the host's scoped cooperation view; hints remain advisory. */
 export function buildResearchContext(task: SolverProblem, state: Readonly<SolverRunState>, access: ContextAccess): ContextBundle {
+  if (state.commonResearchSkill || access.commonResearchSkill)
+    return buildCommonResearchContext(task, state, access, readFrozenContexts(task, access));
   const command = `bun ${shellArgument(access.tools ?? path.join(access.root, 'bin/math.ts'))}`;
   const fixedReview = access.assignment?.kind === 'review';
   const planningLead = access.assignment?.kind === 'lead';

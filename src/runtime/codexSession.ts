@@ -13,10 +13,11 @@ import { SUB2API_PROVIDER } from './sub2api';
 import type { ModelRequestGate } from './modelRequest';
 import { prepareFormalizationSandbox } from './formalizationSandbox';
 import { startFormalizationRelay } from './formalizationRelay';
-import type { LeanTaskEnvironment } from '../math/leanTaskEnvironment';
 import { mathDigest, readMathText } from '../math/mathRuntimeIo';
 import { scheduleMathTimeout } from '../math/mathTimers';
 import { CodexShellRejectionReader } from './codexShellRejection';
+import { assertMathAgentSkillsCurrent, assertMathAgentSkillsDiscovered } from './codexSkills';
+import { assertNativeDelegationAvailable } from './nativeDelegation';
 import { CODEX_FAILURE_CODES, HTTP_FAILURE_CODES, safeFailureReason, safeHttpStatusCode,
   type MathAgentFailureDiagnostic } from './failureDiagnostic';
 export type { MathAgentFailureDiagnostic, MathAgentFailureReason } from './failureDiagnostic';
@@ -86,68 +87,8 @@ const failureDiagnostic = (error: Json): MathAgentFailureDiagnostic | undefined 
   return { code: code ?? (reason === 'account_concurrency_limit' ? 'rateLimitExceeded' : 'responseStreamDisconnected'),
     ...(httpStatusCode !== undefined ? { httpStatusCode } : {}), ...(reason ? { reason } : {}) };
 };
-export type MathAgentActivity = {
-  event: 'item_started' | 'item_completed' | 'reasoning' | 'message' | 'command_output' | 'lean_lock_waiting' | 'lean_lock_acquired'
-    | 'shell_argument_rejected';
-  itemType?: string;
-};
-export type MathAgentOptions = {
-  executable: string;
-  profile: string;
-  workspace: string;
-  model: string;
-  effort: string;
-  instructions: string;
-  environment?: NodeJS.ProcessEnv;
-  proofProjectRoot?: string;
-  threadId?: string;
-  turnTimeoutMs?: number;
-  /** Native Codex schema for the final assistant response, without a submission tool. */
-  outputSchema?: Record<string, unknown>;
-  onUsage: (usage: Json, context?: { turnId?: string }) => void;
-  onUsageIncomplete?: () => void;
-  /** Used by host-controlled upstream bridges; native thread usage remains observational. */
-  requestGate?: ModelRequestGate;
-  onActivity?: (activity: MathAgentActivity) => void;
-  /**
-   * Each thread item of this session as Codex starts and completes it, unfiltered: commands with their output,
-   * file changes, messages and reasoning. Only for a host that sanitizes it before anyone sees it; it never
-   * changes the session.
-   */
-  onItem?: (phase: 'started' | 'completed', item: Json, context?: { turnId?: string }) => void;
-  /** Public summary/commentary snapshots only. Raw reasoning and final-message deltas are never observed here. */
-  onItemUpdate?: (item: Json, context?: { turnId?: string }) => void;
-  /** Directories this session's shells cannot read; see mathWorkerPermissionConfig. */
-  hiddenRoots?: readonly string[];
-  /** Required OS read boundary for natural-language formalization roles. */
-  readIsolation?: { environment: LeanTaskEnvironment; packages?: 'none' | 'sources'; library?: { file: string; digest: string } };
-  /** The first complete contract-valid file is an explicit submission. */
-  completedOutput?: {
-    file: string;
-    validate: (value: unknown) => void;
-    /** Feedback for complete JSON rejected by validate; incomplete files remain editable. */
-    validationFeedback?: (error: unknown, output: { text: string; turnId: string }) => string;
-  };
-  signal?: AbortSignal;
-};
-export type MathAgentSession = {
-  threadId: string;
-  readonly lastError?: string;
-  readonly lastFailureDiagnostic?: MathAgentFailureDiagnostic;
-  readonly lastInputTokens?: number;
-  /** Final assistant text from the last successful run only, bound to its exact remote turn. */
-  readonly lastCompletedResponse?: Readonly<{ turnId: string; text: string }>;
-  readonly usageSource?: 'upstream-requests' | 'native-thread-totals';
-  readonly isolationReceipt?: Record<string, unknown>;
-  run: (message: string, messageId: string, workspace: string, onStarted: (turnId: string) => void) => Promise<string>;
-  /** Soft input waits for provider settlement; waitForRequest defers until the next admission, after response tools finish. */
-  notify?: (message: string, options?: { waitForRequest?: boolean }) => Promise<void>;
-  interrupt: () => Promise<void>;
-  close: () => Promise<void>;
-  /** After turn settlement, close this writer and confirm its owned process group has exited. */
-  stopForFreeze?: () => Promise<MathProcessStopReceipt | Readonly<{ status: 'unconfirmed';
-    reason: 'turn-not-settled' | 'shutdown-failed' }>>;
-};
+import type { MathAgentActivity, MathAgentOptions, MathAgentSession } from './agentSession';
+export type { MathAgentActivity, MathAgentOptions, MathAgentSession } from './agentSession';
 
 // Isolated formalization already supplies the complete frozen role protocol.
 // Keep the native client's general coding instructions out of these math roles.
@@ -276,12 +217,20 @@ class CodexRpc {
 
 export async function createCodexMathSession(options: MathAgentOptions): Promise<MathAgentSession> {
   options.signal?.throwIfAborted();
+  const skills = options.skills?.map(skill => ({ ...skill })) ?? [];
+  assertMathAgentSkillsCurrent(skills);
+  // Isolated formalization has a distinct read mount and complete role protocol.
+  // Research skill projection must not silently cross that isolation contract.
+  if (skills.length && options.readIsolation) throw new Error('math_codex_skill_read_isolation_unsupported');
   const configFile = path.join(options.profile, 'config.toml');
   const profileConfig = fs.existsSync(configFile) ? parseToml(fs.readFileSync(configFile, 'utf8')) : {};
   const providerId = typeof profileConfig.model_provider === 'string' ? profileConfig.model_provider : undefined;
   const provider = typeof profileConfig.model_provider === 'string' && profileConfig.model_providers
     ? profileConfig.model_providers[profileConfig.model_provider] : undefined;
   const useResponsesRelay = providerId === SUB2API_PROVIDER.id && !options.readIsolation && Boolean(options.requestGate);
+  if (options.delegation && (!skills.length || !useResponsesRelay))
+    throw new Error('math_native_delegation_requires_skill_and_metered_relay');
+  if (options.delegation) assertNativeDelegationAvailable();
   const activeRequests = new Set<object>();
   let requestTurn = 0, turnSettled = true, turnStopping = false;
   type NotificationFence = { promise: Promise<void>; release(): void; steered: boolean };
@@ -289,6 +238,13 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   let requestStateChanged = () => {};
   let cancelNotifications = () => {};
   let drainSubmittedRequests: (() => void) | undefined;
+  const drainRequests = () => new Promise<void>(resolve => {
+    drainSubmittedRequests = () => {
+      if (activeRequests.size) return;
+      drainSubmittedRequests = undefined; resolve();
+    };
+    drainSubmittedRequests();
+  });
   let checkCompletedOutput: (() => void) | undefined;
   let checkShellRejections: ((allowFeedback?: boolean) => void) | undefined;
   let shellRejectionReader: CodexShellRejectionReader | undefined;
@@ -428,6 +384,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   let closing: Promise<void> | undefined;
   const closeSession = () => closing ??= (async () => {
     options.signal?.removeEventListener('abort', aborted);
+    compacting?.reject(new Error('math_codex_compaction_closed'));
     turnStopping = true; cancelNotifications(); publicItems.clear();
     try { await rpc.close(); } finally {
       try { await responsesRelay?.close(); } finally { try { await bridge?.close(); } finally { await isolated?.close(); } }
@@ -438,6 +395,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   let turnHasOutput = false;
   const earlyOutputTurns = new Set<string>();
   let completion: { resolve: (turn: Json) => void; reject: (error: Error) => void } | undefined;
+  let compacting: { resolve: () => void; reject: (error: Error) => void } | undefined;
   const earlyCompletions = new Map<string, Json>();
   const completedMessages = new Map<string, string>();
   let lastCompletedResponse: Readonly<{ turnId: string; text: string }> | undefined;
@@ -591,12 +549,17 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   };
   rpc.onFailure = error => {
     cancelNotifications(); publicItems.clear();
-    transportFailure = error; lastError = error.message; lastFailureDiagnostic = undefined; completion?.reject(error);
-    void bridge?.close().catch(() => {});
-    void responsesRelay?.close().catch(() => {});
+    transportFailure = error; lastError = error.message; lastFailureDiagnostic = undefined;
+    completion?.reject(error); compacting?.reject(error);
+    if (!closing) {
+      void bridge?.close().catch(() => {});
+      void responsesRelay?.close().catch(() => {});
+    }
   };
   rpc.onNotification = (method, params) => {
     if (threadId !== undefined && params.threadId !== undefined && params.threadId !== threadId) return;
+    if (method === 'thread/compacted' || method === 'item/completed' && object(params.item).type === 'contextCompaction')
+      compacting?.resolve();
     if (method === 'item/started' || method === 'item/completed') {
       const item = object(params.item);
       if (isTurnOutputItem(item)) recordTurnOutput(params.turnId);
@@ -647,6 +610,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     }
     if (method === 'turn/completed') {
       const turn = object(params.turn);
+      if (compacting && (turn.status === 'failed' || turn.status === 'interrupted'))
+        compacting.reject(new Error('math_codex_compaction_' + turn.status));
       if (typeof turn.id !== 'string' || typeof turn.status !== 'string' ||
           !['completed', 'interrupted', 'failed'].includes(turn.status)) return;
       if (turn.id === activeTurn && completion) completion.resolve(turn);
@@ -685,6 +650,9 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         'shell_environment_policy.experimental_use_profile': false,
         ...(bridge || responsesRelay || isolated ? { 'features.multi_agent': false, 'features.multi_agent_v2': false,
           'features.goals': false, 'features.view_image': false } : {}),
+        // Native role files cannot narrow inherited writer permissions; profiles cannot enable children implicitly.
+        ...(options.skills?.length ? { 'features.multi_agent': false, 'features.multi_agent_v2': false,
+          'features.goals': false } : {}),
         model_reasoning_effort: options.effort,
         // The formalization sandbox is the OS boundary for isolated roles; every other shell runs the worker profile.
         ...(!isolated ? { ...mathWorkerPermissionConfig(options.workspace, options.hiddenRoots),
@@ -705,6 +673,11 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     // A new thread fixes its sandbox now; one that ignored the profile would keep host network and sockets.
     if (!isolated && !options.threadId && object(result.activePermissionProfile ?? {}).id !== MATH_WORKER_PERMISSION_PROFILE)
       throw new Error('math_codex_sandbox_profile_mismatch');
+    if (skills.some(skill => skill.loading === 'native')) {
+      const discovered = await rpc.request('skills/list', { cwds: [options.workspace], forceReload: true });
+      assertMathAgentSkillsDiscovered(discovered, options.workspace, skills);
+      assertMathAgentSkillsCurrent(skills);
+    }
     const rollout = object(result.thread).path;
     // An isolated app-server reports its in-sandbox /profile path. Only its
     // existing host audit directory is the corresponding readable profile.
@@ -713,6 +686,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       ? path.join(rolloutProfile, path.relative(isolated.profile, rollout)) : rollout;
     shellRejectionReader = CodexShellRejectionReader.create(rolloutProfile, threadId, rolloutPath);
     options.signal?.throwIfAborted();
+    let skillsDispatched = false;
     return {
       threadId,
       ...(isolated ? { isolationReceipt: isolated.receipt } : {}),
@@ -721,11 +695,31 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       get lastFailureDiagnostic() { return lastFailureDiagnostic; },
       get lastInputTokens() { return lastInputTokens; },
       get lastCompletedResponse() { return lastCompletedResponse; },
+      compact: async () => {
+        options.signal?.throwIfAborted();
+        if (closing || transportFailure) throw transportFailure ?? new Error('math_codex_transport_closed:closing');
+        if (completion || activeTurn || compacting) throw new Error('math_codex_turn_already_running');
+        const done = new Promise<void>((resolve, reject) => { compacting = { resolve, reject }; });
+        turnSettled = false; turnStopping = false; requestTurn++;
+        const cancel = scheduleMathTimeout(() => {
+          compacting?.reject(new Error('math_codex_compaction_timeout'));
+          void closeSession();
+        }, options.turnTimeoutMs ?? 120_000);
+        const stop = () => compacting?.reject(new Error('math_codex_compaction_closed'));
+        options.signal?.addEventListener('abort', stop, { once: true });
+        try { await Promise.all([rpc.request('thread/compact/start', { threadId }), done]); }
+        catch (error) { await closeSession(); options.signal?.throwIfAborted(); throw error; }
+        finally {
+          cancel?.(); options.signal?.removeEventListener('abort', stop);
+          compacting = undefined; turnSettled = true;
+        }
+      },
       run: async (message, messageId, workspace, onStarted) => {
         lastCompletedResponse = undefined;
         options.signal?.throwIfAborted();
         if (transportFailure) throw transportFailure;
-        if (completion) throw new Error('math_codex_turn_already_running');
+        if (completion || compacting) throw new Error('math_codex_turn_already_running');
+        assertMathAgentSkillsCurrent(skills);
         if (temporaryDirectory) prepareWorkerTemporaryDirectory(options.workspace);
         lastError = undefined;
         lastFailureDiagnostic = undefined;
@@ -760,8 +754,12 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
             input: [{ type: 'text', text: message, text_elements: [] },
               { type: 'text', text: shellTurnContract + (previousRejections
                 ? ` The previous turn had ${previousRejections} explicitly rejected exec_command call(s). Correct those call arguments; the host has not replayed them.` : ''),
-              text_elements: [] }],
+              text_elements: [] }, ...(!skillsDispatched ? skills.map(skill => skill.loading === 'native'
+                ? { type: 'skill', name: skill.name, path: skill.path }
+                : { type: 'text', text: `Use the frozen ${skill.name} research skill. Read ${JSON.stringify(skill.path)} before research and follow its relevant references on demand. This session uses explicit file loading, not native skill injection.`,
+                  text_elements: [] }) : [])],
           });
+          skillsDispatched = true;
           pendingShellRejections -= previousRejections;
           const turnId = object(started.turn).id;
           if (typeof turnId !== 'string' || !turnId) throw new Error('math_codex_turn_missing');
@@ -841,13 +839,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
               // Stop new paid work first. Interrupting an in-flight request loses its final
               // usage receipt, so let admitted requests settle before stopping the writer.
               turnStopping = true; cancelNotifications(); publicItems.clear();
-              submissionDrain = new Promise<void>(resolve => {
-                drainSubmittedRequests = () => {
-                  if (activeRequests.size) return;
-                  drainSubmittedRequests = undefined; resolve();
-                };
-                drainSubmittedRequests();
-              });
+              submissionDrain = drainRequests();
               void submissionDrain.then(() => {
                 if (activeTurn === turnId && !turnSettled && !closing) requestInterruption();
               });
@@ -913,8 +905,10 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       close: closeSession,
       stopForFreeze: async () => {
         // An interrupt RPC acknowledgement does not settle the active turn.
-        if (completion || activeTurn) return { status: 'unconfirmed', reason: 'turn-not-settled' };
-        try { await closeSession(); }
+        if (completion || activeTurn || compacting) return { status: 'unconfirmed', reason: 'turn-not-settled' };
+        try {
+          await closeSession();
+        }
         catch { return { status: 'unconfirmed', reason: 'shutdown-failed' }; }
         return rpc.confirmStopped();
       },

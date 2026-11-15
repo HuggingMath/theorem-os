@@ -73,6 +73,10 @@ export class ResearchProgressView {
     return <ol class="collab-route-steps" aria-label={t('路线 {0} 的记录进度', routeId)}>{steps.map(([state, title, detail]) => <li key={title} data-step-state={state}><strong>{title}</strong><span>{detail}</span></li>)}</ol>;
   }
   private frontier(observation: WebObservation) {
+    if (observation.inspection.configuration.researchMode === 'skill') return <>
+      {help(tx('研究直接围绕固定原题进行，尚未记录为完整原题验收通过。', 'Research works directly on the frozen original problem; this observation does not establish acceptance.'))}
+      <Facts facts={observation.inspection.problem.targets.map(target => [target.theoremName, target.proofPath] as const)} />
+    </>;
     const snapshot = observation.inspection.mathematics.snapshot;
     const refs = (items: { taskId: string; taskDigest: string | null }[], key: string) => items.length ? items.map((item, index) => this.taskLink(item.taskId, item.taskDigest, `${key}-${index}`)) : <span class="collab-help">{tx('未记录待完成任务', 'No remaining tasks recorded')}</span>;
     if (!snapshot.goals.length) return help(tx('尚无原目标的任务记录', 'No tasks for the original goal recorded yet'));
@@ -102,6 +106,7 @@ export class ResearchProgressView {
 
   private renderOverview() {
     const observation = this.observation, snapshot = observation?.inspection.mathematics.snapshot, waiting = observation?.inspection.waiting;
+    const skill = observation?.inspection.configuration.researchMode === 'skill';
     if (snapshot) this.overview.dataset.empty = String(!snapshot.goals.length && !snapshot.blockers.length);
     const openBlockers = snapshot?.blockers.filter(blocker => !['parked', 'superseded'].includes(blocker.status)).length ?? 0;
     renderSection(this.overview, <>
@@ -112,6 +117,21 @@ export class ResearchProgressView {
       <div class="collab-section-heading collab-research-blocker-heading"><h3>{tx('未解决的问题', 'Unresolved issues')}</h3>
         <span class="collab-help">{snapshot?.blockers.length ? tx(`${openBlockers} 项待处理 · ${snapshot.blockers.length} 条记录`, `${openBlockers} to address · ${snapshot.blockers.length} records`) : t('作用范围与重开条件')}</span></div>
       <div data-research-blockers class="collab-blocker-list">{observation && this.blockers(observation)}</div>
+      {(skill || observation?.declarations?.status === 'recorded') && <section data-independent-declarations>
+        <div class="collab-section-heading"><h3>{tx('独立引理记录', 'Independent declaration records')}</h3></div>
+        {help(tx('以下是已保存的检查证据；复用时须重新检查，完整原题仍单独验收。', 'These are retained check records. Reuse requires a fresh check, and the complete original problem is accepted separately.'))}
+        {observation?.declarations?.status === 'recorded' ? <>
+          {observation.declarations.declarations.length ? observation.declarations.declarations.map(item => <article class="collab-frontier-goal" key={item.id} data-independent-declaration={item.id}>
+            <h4><code>{item.name}</code></h4><Code value={item.elaboratedType ?? item.type} label={tx('完整类型', 'Complete type')} />
+            <Detail title={tx('前提', 'Premises')} value={item.premises} detailKey={`declaration-premises-${item.id}`} />
+            <Detail title={tx('检查来源', 'Check provenance')} value={{ file: item.file, declaredType: item.type,
+              sourceCommit: item.sourceCommit, checkedCommit: item.checkedCommit, environmentDigest: item.environmentDigest, receiptIds: item.receiptIds }} detailKey={`declaration-provenance-${item.id}`} />
+          </article>) : help(tx('尚无独立引理记录。', 'No independent declarations recorded yet.'))}
+          {observation.declarations.omitted > 0 && help(tx(`本页另有 ${observation.declarations.omitted} 条记录未展示。`, `${observation.declarations.omitted} additional records are not shown in this view.`))}
+        </> : help(observation?.declarations?.status === 'unknown'
+          ? tx('独立引理记录暂时无法读取，当前观察不据此确认任何结果。', 'Independent declaration records could not be read; this observation establishes no result from them.')
+          : tx('尚无独立引理记录。', 'No independent declarations recorded yet.'))}
+      </section>}
     </>);
   }
 

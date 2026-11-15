@@ -746,7 +746,7 @@ function showDialog(dialog: HTMLDialogElement) {
 function syncSettingsNavigation() {
   const content = element('.settings-content');
   const top = content.getBoundingClientRect().top;
-  const buttons = [...document.querySelectorAll<HTMLButtonElement>('[data-settings-section]')];
+  const buttons = [...document.querySelectorAll<HTMLButtonElement>('[data-settings-section]')].filter(button => !button.hidden);
   let current = buttons[0];
   if (content.scrollTop > 4) {
     for (const button of buttons) {
@@ -1109,15 +1109,17 @@ function sourceChanged() {
 function captureDraft(): TaskDraft {
   const modulePlan = modulePlanEditor.value();
   const knowledgeDigest = serverModulePlans.knowledgeDigest();
+  const skillMode = field('research-mode').value === 'skill';
   return { providerId: field('provider').value, model: field('model').value,
     effort: field('effort').value as WebEffort, environment: field('environment').value as WebEnvironment,
     source: field('source').value, task: field('task').value, templateId: field('template').value,
     maxTurns: field('max-turns').value, maxRunSeconds: field('max-seconds').value, workers: field('workers').value,
     ...(field('max-tokens').value ? { maxTotalTokens: field('max-tokens').value } : {}),
     coordination: element<HTMLInputElement>('input[name="coordination"]:checked').value as WebCoordination,
+    ...(skillMode ? { researchMode: 'skill' as const, skillLoading: field('skill-loading').value as 'native' | 'file' } : {}),
     ...(element<HTMLInputElement>('#plan-approval').checked ? { planApproval: true as const } : {}),
     ...(knowledgeDigest !== undefined ? { knowledgeDigest } : {}),
-    ...(modulePlan.custom.length || modulePlan.scheduler !== 'plan' || modulePlan.context !== 'full' ? { modulePlan } : {}),
+    ...(!skillMode && (modulePlan.custom.length || modulePlan.scheduler !== 'plan' || modulePlan.context !== 'full') ? { modulePlan } : {}),
     ...(draftContinuation ? { continueFrom: draftContinuation } : {}),
     ...(budgetDraftOrigin && budgetDraftOrigin.source === field('source').value && budgetDraftOrigin.environment === field('environment').value
       ? { problemBudget: { runId: budgetDraftOrigin.runId, ...(budgetDraftOrigin.projectId ? { projectId: budgetDraftOrigin.projectId } : {}) } } : {}),
@@ -1237,7 +1239,23 @@ async function recoverDraft() {
 }
 /** 先审计划 holds the Agents after the Lead's plan, so it needs a Lead and at least one other Agent. */
 const planApprovalAvailable = () => element<HTMLInputElement>('input[name="coordination"]:checked').value === 'cooperative' && Number(field('workers').value) >= 2;
+function syncResearchMode() {
+  const skill = field('research-mode').value === 'skill';
+  if (skill) {
+    field('workers').value = '1';
+    element<HTMLInputElement>('input[name="coordination"][value="independent"]').checked = true;
+    element<HTMLInputElement>('#plan-approval').checked = false;
+  }
+  field('workers').disabled = skill;
+  for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="coordination"]')) radio.disabled = skill;
+  element('#research-mode-note').hidden = !skill;
+  element('#skill-loading-field').hidden = !skill;
+  element('.plan-approval-option').hidden = skill;
+  element('#module-plan').hidden = skill;
+  element('[data-settings-section="module-plan"]').hidden = skill;
+}
 function draftChanged(persist = true) {
+  syncResearchMode();
   if (draftFormalization && (field('source').value !== draftFormalization.source || field('environment').value !== draftFormalization.environment)) {
     draftFormalization = undefined; draftContinuation = undefined;
     toast(t('原题或环境已修改，当前草稿已转为普通 Lean 题目。'));
@@ -1294,6 +1312,8 @@ function applyTaskDraft(draft: TaskDraft, fixedEnvironment?: WebEnvironment) {
     && template.environment === draft.environment && template.source === field('source').value && template.task === field('task').value);
   field('template').value = template?.id ?? '';
   element<HTMLInputElement>(`input[name="coordination"][value="${draft.coordination}"]`).checked = true;
+  field('research-mode').value = draft.researchMode ?? 'legacy';
+  field('skill-loading').value = draft.skillLoading ?? 'native';
   element<HTMLInputElement>('#plan-approval').checked = Boolean(draft.planApproval);
   modulePlanEditor.setValue(draft.modulePlan);
   serverModulePlans.setKnowledgeDigest(draft.knowledgeDigest);
@@ -1771,6 +1791,8 @@ function resultProps(run: WebRun): ResultPanelProps {
       run.finishedAt ? item(t('结束时间'), timestamp(run.finishedAt)) : item(t('创建时间'), timestamp(run.createdAt))],
     // Versions, limits and budgets matter for reproducing the run, not for reading its result.
     config: [item(t('服务商'), provider?.name ?? (isSample(run) ? t('离线示例') : run.providerId)), item(t('推理强度'), effortLabels[run.effort] ?? run.effort),
+      ...(run.researchMode === 'skill' ? [item(t('研究方式'), t('单研究者 · 项目技能')), item(t('技能加载'), run.skillLoading === 'file' ? t('读取固定文件') : t('原生加载')),
+        ...(run.researchSkill ? [item(t('技能版本'), run.researchSkill.digest, true)] : [])] : []),
       item(t('协作模式'), run.coordination === 'cooperative' ? t('任务协作') : t('独立并行')), item(t('Agent 数量'), run.workers),
       ...(run.planApproval ? [item(t('先审计划'), t('开启'))] : []),
       item(t('轮次上限'), run.maxTurns || t('不限')), item(t('解题预算'), run.maxRunSeconds ? readableDuration(run.maxRunSeconds * 1000) : t('不限')),
@@ -1986,6 +2008,7 @@ function renderPanel(force = false) {
 onDetailLevel(() => { if (state.tab === 'result') renderPanel(true); });
 function moduleInput(run?: WebRun): ModuleViewInput {
   return { id: run?.id ?? 'draft', run, model: run?.model ?? field('model').value,
+    researchMode: run ? run.researchMode : field('research-mode').value as 'legacy' | 'skill',
     workers: run?.workers ?? Number(field('workers').value),
     coordination: run?.coordination ?? element<HTMLInputElement>('input[name="coordination"]:checked').value as WebCoordination,
     environment: environmentName(run?.environment ?? field('environment').value), connected: state.connected,
@@ -2012,7 +2035,8 @@ function renderDraftPreview(force = false) {
   ] as const;
   const title = template?.name ?? t('自定义研究');
   const signature = JSON.stringify([title, source, task, facts, draftSourceExpanded, state.draftView, state.connected,
-    element<HTMLInputElement>('input[name="coordination"]:checked').value, captureDraft().modulePlan, state.submitting]);
+    element<HTMLInputElement>('input[name="coordination"]:checked').value, captureDraft().modulePlan,
+    field('research-mode').value, field('skill-loading').value, state.submitting]);
   if (!force && signature === draftPreviewSignature && document.querySelector('#draft-preview')) return;
   draftPreviewSignature = signature;
   const lines = source.replace(/\r\n?/g, '\n').split('\n');
@@ -2115,7 +2139,7 @@ function renderRunHeader(run: WebRun) {
     elapsed: formatDuration(progress.elapsed), tabs: detailTabs(), tab: state.tab,
     active: activeRun(run), cancelling, deleting: state.deleting.has(run.id), connected: state.connected,
     download: run.result || !activeRun(run) ? downloadUrl(run.id) : undefined, shareable: !isSample(run) && isAcceptedRun(run) && isStatementReviewed(run) && Boolean(run.result?.proof),
-    sample: isSample(run), ...(stalledMinutes(run) !== undefined ? { stalled: stalledMinutes(run)! } : {}),
+    sample: isSample(run), guidanceAvailable: run.researchMode !== 'skill', ...(stalledMinutes(run) !== undefined ? { stalled: stalledMinutes(run)! } : {}),
     ...(run.formalizationId ? { formalizationId: run.formalizationId } : {}),
     ...(run.budgetOrigin && !isSample(run) ? { budgetAttempt: { run, request: api } } : {}),
     ...(run.libraryProposalOrigin && !isSample(run) ? { libraryProposalAttempt: { run, request: api } } : {}),
@@ -2212,6 +2236,7 @@ async function checkWorkbenchApproval(run: WebRun, retry = true) {
 }
 /** The banner also stays available to reconcile an older decision after the current plan changes. */
 function approvalProps(run: WebRun): RunHeaderProps['approval'] {
+  if (run.researchMode === 'skill') return;
   const approval = planAwaitingApproval(run), observation = run.observation;
   if (!observation || isSample(run) || !approval && !run.planApproval && !observation.inspection.planApproval?.required) return;
   const identity = personalApprovalOwner(), view = identity?.owner ? personalApprovalView(identity.owner, run) : undefined;
@@ -3171,7 +3196,7 @@ function paletteCommands(): PaletteCommand[] {
         keywords: 'explain proof natural language 讲解 解释 证明 转换 自然语言', run: () => { window.open(`explain.html?run=${encodeURIComponent(run.id)}`, '_blank', 'noopener'); } },
       { id: 'run-knowledge', group: t('当前研究'), label: t('知识检索'), icon: 'search', keywords: 'knowledge search library 知识 检索 知识库', run: () => openCollaborationSection(run, 'knowledge') },
       { id: 'run-records', group: t('当前研究'), label: t('归档记录'), icon: 'archive', keywords: 'archive records 归档 记录', run: () => openCollaborationSection(run, 'records') },
-      { id: 'run-guidance-history', group: t('当前研究'), label: t('指导记录'), icon: 'message-square', keywords: 'guidance feedback history 指导 历史 人工', run: () => openCollaborationSection(run, 'guidance') },
+      run.researchMode !== 'skill' && { id: 'run-guidance-history', group: t('当前研究'), label: t('指导记录'), icon: 'message-square', keywords: 'guidance feedback history 指导 历史 人工', run: () => openCollaborationSection(run, 'guidance') },
       Boolean(proof) && { id: 'run-copy-proof', group: t('当前研究'), label: t('复制{0}', proofLabel), icon: 'copy', keywords: t('copy proof lean 复制 证明 源码'),
         run: () => void copyText(proof, verified ? t('验收证明已复制') : t('候选源码已复制')) },
       Boolean(proof) && { id: 'run-download-proof', group: t('当前研究'), label: t('下载 Lean'), hint: proofFileName(run), icon: 'download', keywords: t('download proof lean file 下载 证明 文件'),
@@ -3245,6 +3270,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
       ...(tokenCap(field('max-tokens').value, session.limits.maxTotalTokens) ? { maxTotalTokens: tokenCap(field('max-tokens').value, session.limits.maxTotalTokens) } : {}),
       workers: Number(field('workers').value),
       coordination: element<HTMLInputElement>('input[name="coordination"]:checked').value as WebCoordination,
+      ...(capturedDraft.researchMode ? { researchMode: capturedDraft.researchMode, skillLoading: capturedDraft.skillLoading } : {}),
       ...(element<HTMLInputElement>('#plan-approval').checked && planApprovalAvailable() ? { planApproval: true } : {}),
       ...(capturedDraft.modulePlan ? { modulePlan: capturedDraft.modulePlan } : {}),
       ...(capturedDraft.knowledgeDigest !== undefined ? { knowledgeDigest: capturedDraft.knowledgeDigest } : {}),
@@ -3598,6 +3624,8 @@ function applyReusedRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 're
     const raise = limit && limit.value > 0 && limit.value < limit.highest ? { ...limit, to: raised(limit.value, limit.highest) } : undefined;
     if (raise) field(raise.id).value = String(raise.to);
     element<HTMLInputElement>(`input[name="coordination"][value="${run.coordination}"]`).checked = true;
+    field('research-mode').value = run.researchMode ?? 'legacy';
+    field('skill-loading').value = run.skillLoading ?? 'native';
     element<HTMLInputElement>('#plan-approval').checked = Boolean(run.planApproval);
     modulePlanLibrary.resetSelection(); modulePlanEditor.setValue(run.modulePlan);
     serverModulePlans.setKnowledgeDigest(run.knowledgeDigest);

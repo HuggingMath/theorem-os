@@ -45,6 +45,7 @@ const values = {
       maxTurns: text(40), maxRunSeconds: text(40), workers: text(40), maxTotalTokens: text(40).optional(),
       effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']), environment: z.enum(['standard', 'mathlib']),
       coordination: z.enum(['cooperative', 'independent']), planApproval: z.literal(true).optional(), templateId: text(64),
+      researchMode: z.enum(['legacy', 'skill']).optional(), skillLoading: z.enum(['native', 'file']).optional(),
       modulePlan: researchModulePlanDraftSchema.optional(), knowledgeDigest: text(256).nullable().optional(),
       sharedProofOrigin: z.object({ readingId: key, title: text(500), digest: hash }).strict().optional(),
       classicOrigin: z.object({ id: key, title: text(500), sourceSha256: hash }).strict().optional(),

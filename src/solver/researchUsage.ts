@@ -1,10 +1,11 @@
-import type { MathAgentOptions, MathAgentSession } from '../runtime/codexSession';
+import type { MathAgentOptions, MathAgentSession } from '../runtime/agentSession';
 import { randomUUID } from 'node:crypto';
 import type { ModelRequestAdmission, ModelRequestIdentity, ModelRequestStopReason } from '../runtime/modelRequest';
 import type { SolverRunState, SolverWorkerState } from './archive';
 import type { CooperativeAction } from './tasks';
 import { attributeTaskUsage, beginRequestUsage, initializeRequestUsageAccounting, modelDispatchAllowed,
-  recordThreadUsage, reportedTotalTokens } from './usageBudget';
+  recordThreadUsage, recordTurnUsage, reportedTotalTokens } from './usageBudget';
+import { normalizeModelRequestUsage, type ModelRequestUsage } from '../runtime/modelRequest';
 
 type UsageCallbacks = Pick<MathAgentOptions, 'onUsage' | 'onUsageIncomplete' | 'requestGate'>;
 
@@ -13,13 +14,14 @@ const assignmentTask = (assignment?: CooperativeAction) =>
     assignment?.kind === 'backtranslate' || assignment?.kind === 'statement-review' ? assignment.taskId : undefined;
 
 type TurnUsageScope = { reported: boolean; incomplete: boolean; initialPlanning: boolean;
-  taskId?: string; turnId?: string; upstreamRequests: boolean; finished: boolean };
+  taskId?: string; turnId?: string; upstreamRequests: boolean; nativeTurnTotals: boolean; finished: boolean;
+  reportedUsage?: ModelRequestUsage };
 
 /** Owns session-scoped usage and request admission; proof and scheduling decisions stay in research. */
 export class ResearchUsage {
   private active?: TurnUsageScope;
   private requestSessionId?: string;
-  private boundSession?: { id: string; upstreamRequests: boolean };
+  private boundSession?: { id: string; upstreamRequests: boolean; nativeTurnTotals: boolean };
   private nativeTurns: TurnUsageScope[] = [];
   sessionId?: string;
   stopReason?: ModelRequestStopReason;
@@ -38,6 +40,7 @@ export class ResearchUsage {
     research.usageAccounting!.pending = true;
     this.active = { reported: false, incomplete: false,
       taskId: assignmentTask(assignment), upstreamRequests: this.requestSessionId === this.sessionId && this.sessionId !== undefined,
+      nativeTurnTotals: this.boundSession?.id === this.sessionId && this.boundSession.nativeTurnTotals,
       finished: false,
       initialPlanning: assignment?.kind === 'lead' && state.cooperation?.tasks.length === 0 && maxTotalTokens > 0 };
     if (!this.active.upstreamRequests) {
@@ -59,7 +62,7 @@ export class ResearchUsage {
     const accounting = research.usageAccounting!, requests = research.requestUsageAccounting;
     accounting.pending = false;
     // Request receipts cover failed turns; native thread totals require a completed turn.
-    if ((turn.upstreamRequests ? requests!.pendingRequests === 0 : turn.reported && completed) && !turn.incomplete)
+    if ((turn.upstreamRequests ? requests!.pendingRequests === 0 : turn.reported && (completed || turn.nativeTurnTotals)) && !turn.incomplete)
       accounting.reportedTurns++;
     else accounting.incomplete = true;
     // A pending request is not a missing receipt until cancellation/recovery settles it.
@@ -69,8 +72,10 @@ export class ResearchUsage {
 
   sessionOpened(session: MathAgentSession) {
     this.requestSessionId = session.usageSource === 'upstream-requests' ? this.sessionId : undefined;
-    if (this.boundSession?.id === this.sessionId)
+    if (this.boundSession?.id === this.sessionId) {
       this.boundSession.upstreamRequests = session.usageSource === 'upstream-requests';
+      this.boundSession.nativeTurnTotals = session.usageSource === 'native-turn-totals';
+    }
     if (!this.requestSessionId) return;
     initializeRequestUsageAccounting(this.input.research);
     this.input.changed();
@@ -83,7 +88,7 @@ export class ResearchUsage {
   bindSession(sessionId: string, inputTokens: () => number | undefined): UsageCallbacks {
     this.sessionId = sessionId;
     // Late callbacks retain the source of their own session after a replacement has opened.
-    const session = this.boundSession = { id: sessionId, upstreamRequests: false };
+    const session = this.boundSession = { id: sessionId, upstreamRequests: false, nativeTurnTotals: false };
     const nativeTurns: TurnUsageScope[] = [];
     this.nativeTurns = nativeTurns;
     const { research, emit, changed } = this.input;
@@ -107,6 +112,30 @@ export class ResearchUsage {
         // Without a turn identity, totals across different tasks cannot be assigned by arrival order.
         if (!context?.turnId && new Set(nativeTurns.map(turn => turn.taskId)).size <= 1)
           scope = this.active ?? nativeTurns.at(-1);
+        if (session.nativeTurnTotals) {
+          // Invocation totals need the actual dispatch identity, not cumulative-thread baselines.
+          if (!context?.turnId || !scope) {
+            research.usageAccounting!.incomplete = true;
+            emit('worker_usage_unscoped', { sessionId, reason: 'native-turn-identity-unavailable',
+              reportedTotalTokens: reportedTotalTokens(usage) });
+            changed(); return;
+          }
+          const normalized = normalizeModelRequestUsage(usage);
+          if (scope.reported) {
+            if (JSON.stringify(scope.reportedUsage) !== JSON.stringify(normalized)) {
+              scope.incomplete = true; research.usageAccounting!.incomplete = true; changed();
+            }
+            return;
+          }
+          const before = research.usage;
+          if (!normalized || !recordTurnUsage(research, normalized)) {
+            scope.incomplete = true; research.usageAccounting!.incomplete = true;
+          } else {
+            scope.reported = true; scope.reportedUsage = normalized;
+            if (scope.taskId) attributeTaskUsage(this.input.state, scope.taskId, before, research.usage);
+          }
+          changed(); return;
+        }
         const before = research.usage;
         const priorTotal = reportedTotalTokens(before), total = reportedTotalTokens(usage), baseline = reportedTotalTokens(research.usageBeforeThread) ?? 0;
         if (scope?.finished && total !== null && priorTotal !== null && total + baseline <= priorTotal) return;

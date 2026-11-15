@@ -183,6 +183,19 @@ describe('host credential relay for isolated formalization roles', () => {
     }
   }
 
+  it('attributes native requests by explicit thread identity and preserves missing attribution', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse()));
+    const gate = vi.fn((_identity?: Parameters<ModelRequestGate>[0]) => ({ allowed: true as const, settle: () => {} }));
+    const relay = await start({ transport: 'loopback-http', requestGate: gate });
+    const metadataBody = { ...body, client_metadata: { session_id: 'child-thread' } };
+    expect((await send(relay, { body: JSON.stringify(metadataBody) })).status).toBe(200);
+    expect(gate.mock.calls[0][0]).toMatchObject({ threadId: 'child-thread', source: 'responses-relay' });
+    expect((await send(relay, { headers: { 'x-codex-thread-id': 'parent-thread' } })).status).toBe(200);
+    expect(gate.mock.calls[1][0]).toMatchObject({ threadId: 'parent-thread' });
+    expect((await send(relay)).status).toBe(200);
+    expect(gate.mock.calls[2][0]).not.toHaveProperty('threadId');
+  });
+
   it.each(['completed', 'incomplete', 'failed', 'cancelled'] as const)(
     'settles a response.%s event and closes its stream without waiting for upstream EOF', async status => {
       let reached!: (boundary: string) => void;

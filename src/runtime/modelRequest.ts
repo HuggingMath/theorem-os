@@ -9,7 +9,9 @@ export type ModelRequestUsage = {
 export type ModelRequestMissingReason = 'provider-usage-missing' | 'provider-usage-invalid' | 'upstream-http-error' |
   'upstream-transport-error' | 'request-cancelled' | 'response-not-terminal' | 'resumed-without-receipt' | 'unknown';
 export type ModelRequestOutcome = 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'unknown';
-export type ModelRequestIdentity = { requestId: string; source?: 'chat-completions-bridge' | 'responses-relay' };
+export type ModelRequestIdentity = { requestId: string; source?: 'chat-completions-bridge' | 'responses-relay';
+  /** Native session metadata/header, when supplied; missing attribution is never inferred from arrival order. */
+  threadId?: string };
 export type ModelRequestReceipt = {
   usage?: ModelRequestUsage;
   /** Complete usage accounting, independently of whether generation succeeded. */

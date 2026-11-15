@@ -57,7 +57,7 @@ export function mathBuildSource(root: string, inputPaths: readonly string[] = MA
       if (entry.isDirectory()) collect(relative); else if (entry.isFile()) paths.add(relative); else throw new Error('math_build_source_invalid');
     }
   };
-  for (const directory of ['src', 'scripts', 'bin', 'resources']) if (fs.existsSync(path.join(root, directory))) collect(directory);
+  for (const directory of ['src', 'scripts', 'bin', 'resources', 'skills']) if (fs.existsSync(path.join(root, directory))) collect(directory);
   const inputs = [...paths].toSorted().map(relative => {
     const file = path.resolve(root, relative);
     if (!isMathPathWithin(root, file) || file === root) throw new Error('math_build_input_invalid');

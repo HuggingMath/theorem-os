@@ -18,6 +18,8 @@ export function leanProblemDraft(value: TaskDraft, libraries?: ResearchReleaseRe
     providerId: value.providerId, model: value.model, source: value.source, task: value.task, maxTurns: value.maxTurns,
     maxRunSeconds: value.maxRunSeconds, workers: value.workers, effort: value.effort, environment: value.environment,
     coordination: value.coordination, templateId: value.templateId,
+    ...(value.researchMode ? { researchMode: value.researchMode } : {}),
+    ...(value.skillLoading ? { skillLoading: value.skillLoading } : {}),
     ...(value.maxTotalTokens !== undefined ? { maxTotalTokens: value.maxTotalTokens } : {}),
     ...(value.planApproval ? { planApproval: true } : {}), ...(value.modulePlan ? { modulePlan: structuredClone(value.modulePlan) } : {}),
     ...(value.knowledgeDigest !== undefined ? { knowledgeDigest: value.knowledgeDigest } : {}),

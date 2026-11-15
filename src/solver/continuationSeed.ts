@@ -819,6 +819,10 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
 
 /** Capture advisory source bytes and history without initializing a run or checking a proof. */
 export { captureSource as captureSolverContinuationSource };
+// The single-researcher importer shares source contracts and draft capture, not the task scheduler.
+export { policyDigest as continuationSourcePolicyDigest, ownershipExtension as continuationOwnershipExtension,
+  capturedTaskDrafts as captureContinuationTaskDrafts };
+export { seedSingleSolverContinuation } from './singleContinuationSeed';
 
 function taskDraftDocuments(drafts: readonly SavedTaskDraft[]) {
   const chunks: string[] = [];

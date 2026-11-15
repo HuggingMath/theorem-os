@@ -1,4 +1,5 @@
 import path from 'node:path';
+import fs from 'node:fs';
 import { mathGitBytes } from '../math/mathGit';
 import { canonicalMathJson, mathDigest, readMathText } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath } from '../math/paths';
@@ -9,6 +10,7 @@ import { allowedKnowledgeFile, locateKnowledgeDeclaration, type KnowledgeCandida
 import { deliveryFinding, type DeliveryRecord } from './deliveries';
 import { prepareResearchDelivery, type ResearchAdmissionScope } from './researchAdmission';
 import { buildKnowledgeRouteFindings, type KnowledgeRouteContract, type KnowledgeRouteFindingCandidate } from './theoremKnowledgeFindings';
+import { DECLARATION_ARTIFACTS_FILE, readDeclarationArtifacts, type DeclarationArtifact } from './declarationArtifacts';
 
 const oid = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
 const digest = /^[a-f0-9]{64}$/u;
@@ -38,6 +40,37 @@ function committedFiles(roots: readonly string[], commit: string, project: strin
     }
   }
   return error('source_unavailable');
+}
+
+function declarationCandidate(state: SolverRunState, artifact: DeclarationArtifact, source: string, sourceDigest: string): KnowledgeCandidate {
+  const { problem } = state, { declaration, proof } = artifact;
+  if (!problem.ownedFiles.includes(declaration.file) || !relativeDirectory(problem.projectRelative) ||
+      problem.ownedFiles.some(file => !allowedKnowledgeFile(file))) return error('forbidden_source');
+  const names = [...new Set([...problem.ownedFiles, ...Object.keys(problem.trustedFiles).filter(allowedKnowledgeFile)])].sort();
+  if (!names.length || names.length > 4096) return error('source_selection_invalid');
+  const roots = [...new Set([problem.workspace, state.worktree, ...(state.workers ?? []).map(worker => worker.worktree)]
+    .filter((root): root is string => typeof root === 'string' && path.isAbsolute(root)))];
+  const files = committedFiles(roots, proof.commit, problem.projectRelative, names);
+  if (mathDigest(canonicalMathJson(problem.ownedFiles.map(file => [file, mathDigest(files[file]!)]))) !== proof.sourceDigest)
+    return error('source_digest_mismatch');
+  for (const file of names) if (Object.hasOwn(problem.trustedFiles, file) && mathDigest(files[file]!) !== problem.trustedFiles[file])
+    return error('trusted_source_mismatch');
+  const location = locateKnowledgeDeclaration(files[declaration.file]!, declaration.name);
+  if (location.kind !== 'theorem' || mathDigest(location.declarationType) !== artifact.declarationHash)
+    return error('declaration_receipt_mismatch');
+  const references = artifact.references;
+  if (references && [...references.statement, ...references.proof].some(reference => !Object.hasOwn(files, reference.file)))
+    return error('reference_mismatch');
+  return { name: declaration.name, file: declaration.file, type: declaration.type, typeKind: 'closed-task-type',
+    kind: problem.targets.some(target => target.proofPath === declaration.file && target.theoremName === declaration.name) ? 'goal' : 'lemma',
+    description: declaration.description ?? `Independently checked declaration ${declaration.name}`,
+    premises: [...(declaration.premises ?? [])],
+    dependencies: { statement: references?.statement ?? [], proof: references?.proof ?? [], tasks: [],
+      coverage: references && !references.scope ? 'recorded' : 'unavailable' }, files,
+    provenance: { kind: 'solver-check', source, sourceDigest, sourceCommit: proof.commit,
+      checkedCommit: proof.verification.targetCommit, runId: state.runId, environmentDigest: state.environmentDigest,
+      problemReceiptDigest: problem.receiptDigest, problemId: problem.contract.problemId,
+      receiptIds: proof.verification.results.map(receipt => receipt.receiptId) } };
 }
 
 function runCandidate(state: SolverRunState, node: TaskRecord, stateFile: string, stateDigest: string,
@@ -219,6 +252,23 @@ export function importKnowledgeRuns(stateFiles: readonly string[], options: { in
       if (mathDigest(readMathText(source, 32 * 1024 * 1024)) !== stateDigest) error('state_changed');
     } catch {
       result.skipped.push({ source, reason: 'math_knowledge_run_state_invalid' }); continue;
+    }
+    const declarationsFile = path.join(path.dirname(source), DECLARATION_ARTIFACTS_FILE);
+    if (fs.existsSync(declarationsFile)) {
+      try {
+        const declarationsDigest = mathDigest(readMathText(declarationsFile, 32 * 1024 * 1024));
+        const artifacts = readDeclarationArtifacts(path.dirname(source), state);
+        if (mathDigest(readMathText(declarationsFile, 32 * 1024 * 1024)) !== declarationsDigest) error('declarations_changed');
+        for (const artifact of artifacts) {
+          try { result.candidates.push(declarationCandidate(state, artifact, declarationsFile, declarationsDigest)); }
+          catch (failure) { result.skipped.push({ source: declarationsFile, name: artifact.declaration.name,
+            reason: failure instanceof Error && /^math_knowledge_/u.test(failure.message) ? failure.message : 'math_knowledge_run_declaration_invalid' }); }
+        }
+      } catch (failure) {
+        result.skipped.push({ source: declarationsFile,
+          reason: failure instanceof Error && /^(?:math_knowledge_|math_declaration_artifact_)/u.test(failure.message)
+            ? failure.message : 'math_knowledge_run_declarations_invalid' });
+      }
     }
     for (const record of [...(state.cooperation?.tasks ?? []), ...(state.cooperation?.history ?? [])]) {
       if (!['lemma', 'goal'].includes(record.task.kind) || (!record.proof && !record.integratedCheck)) continue;

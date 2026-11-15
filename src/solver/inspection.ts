@@ -53,6 +53,7 @@ function dispatchWaitRecord(state: SolverRunState, observation?: DispatchWaitObs
 }
 
 export function buildRunInspection(state: SolverRunState, result?: Record<string, unknown>) {
+  const skillMode = state.researchMode === 'skill';
   const cooperative = state.cooperation;
   const resultMatches = state.phase === 'finished' && result?.runId === state.runId &&
     (result.solution_commit === null || result.solution_commit === state.check?.commit) &&
@@ -74,9 +75,14 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
       targets: state.problem.targets },
     configuration: { model: state.model, effort: state.effort, workers: state.workerCount ?? 1,
       coordination: state.coordination ?? 'cooperative', modules: state.moduleConfiguration,
+      researchMode: state.researchMode ?? 'legacy' as const, researchSkill: state.researchSkill,
+      commonResearchSkill: state.commonResearchSkill, researchDelegation: state.researchDelegation,
       buildDigest: state.buildDigest, environmentDigest: state.environmentDigest, methodDigest: state.methodDigest,
       knowledgeDigest: state.knowledgeDigest },
     turns: state.turns, usage: state.usage, planVersion: cooperative?.planVersion,
+    ...(state.researchDelegation ? { delegation: { evidence: 'recorded-not-replayed',
+      agents: state.nativeAgents ?? [], usageSource: 'shared-upstream-request-receipts',
+      nativeTotals: 'observational-only' } } : {}),
     scheduling: { evidence: 'recorded-dispatch-state', observedWorkers: scheduled.length,
       working: working.length,
       proofAssignments: working.filter(worker => tasks.some(node => node.task.id === worker.scheduling!.taskId &&
@@ -118,7 +124,7 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
       parkedRoutes: node.parkedRoutes ?? {},
       ...(state.taskUsage?.[node.task.id] ? { usage: state.taskUsage[node.task.id] } : {}),
     })),
-    workers: (state.workers ?? [{ id: 'solver', role: 'lead', ...state }]).map(worker => ({
+    workers: (state.workers ?? [{ id: 'solver', role: skillMode ? 'researcher' : 'lead', ...state }]).map(worker => ({
       id: worker.id, role: worker.role, sessionRole: 'sessionRole' in worker ? worker.sessionRole : undefined,
       phase: worker.phase, turns: worker.turns,
       scheduling: 'scheduling' in worker ? worker.scheduling : undefined,
@@ -191,6 +197,17 @@ function renderStoredArtifacts(artifacts: StoredRunInspectionArtifacts): string 
       '. Only frozen provenance is shown; historical execution is not merged into this run.\n';
   } else if (continuation.status === 'unknown') text += section('Frozen continuation source',
     'unknown (' + cell(continuation.reason) + '); snapshot: ' + continuation.snapshotDigest + '.');
+  const declarations = artifacts.declarations;
+  if (declarations?.status === 'recorded') {
+    text += section('Recorded declaration artifacts', table([
+      'Declaration', 'File', 'Requested closed type', 'Source commit', 'Checked commit', 'Lean receipts',
+    ], declarations.declarations.map(item => [item.name, item.file, item.type, item.sourceCommit, item.checkedCommit,
+      item.receiptIds.join(', ')])));
+    text += '\nManifest: ' + cell(declarations.file) + '; digest: ' + declarations.digest +
+      '. Evidence: recorded-not-replayed; acceptance: not-assessed; requires fresh check. ' +
+      'These historical helper receipts do not establish current correctness or original-problem acceptance.\n';
+  } else if (declarations?.status === 'unknown') text += section('Recorded declaration artifacts',
+    'unknown (' + cell(declarations.reason) + '); source: ' + cell(declarations.file) + '.');
   return text;
 }
 
@@ -254,17 +271,19 @@ function renderContributionFlow(flow: ResearchContributionFlow): string {
 }
 
 export function renderRunInspection(report: Inspection): string {
+  const skillMode = report.configuration.researchMode === 'skill';
   let text = '# Mathematics research run\n\nStored evidence only; this report does not rerun Lean or grant proof acceptance.\n';
   text += section('Run', table(['Problem', 'Phase', 'Recorded outcome', 'Model', 'Agents', 'Turns'], [[
     report.problem.id, report.phase, report.recordedOutcome, report.configuration.model, report.configuration.workers, report.turns]]));
   text += `\nObservation: ${report.snapshot.stateDigest}; result: ${report.snapshot.resultDigest ?? 'absent'}.\n`;
-  text += `\n${report.problem.statement}\n\nRun: ${report.runId}\n\nPlan version: ${report.planVersion ?? 'not yet planned'}\n`;
+  text += `\n${report.problem.statement}\n\nRun: ${report.runId}\n`;
+  if (!skillMode) text += `\nPlan version: ${report.planVersion ?? 'not yet planned'}\n`;
   text += section('Model usage', table(['Shared token allowance', 'Reported tokens', 'Complete usage', 'Observed overrun', 'Dispatch status'], [[
     report.tokenBudget.maxTotalTokens || 'unlimited', report.tokenBudget.reportedTotalTokens,
     report.tokenBudget.usageComplete, report.tokenBudget.overrunTokens, report.tokenBudget.status]]));
   text += '\nThe allowance stops new model turns using provider reports. In-flight turns may exceed it; missing reports leave consumption incomplete. No monetary cost is inferred.\n';
   if (report.artifacts) text += renderStoredArtifacts(report.artifacts);
-  if (report.contributionFlow) text += renderContributionFlow(report.contributionFlow);
+  if (report.contributionFlow && !skillMode) text += renderContributionFlow(report.contributionFlow);
   const knowledgeUses = [...report.knowledge.originalUses, ...report.knowledge.uses];
   text += section('Knowledge observations', table(['Catalog', 'Retrieval coverage', 'Included sections', 'Omitted sections', 'Reported attempts', 'Checked references'], [[
     report.knowledge.status, report.knowledge.retrievalCoverage,
@@ -276,6 +295,28 @@ export function renderRunInspection(report: Inspection): string {
     `Dropped retrieval observations: ${report.knowledge.droppedRetrievals}. ` +
     'Usage origins are model-reported; checked references confirm a declaration in a recorded proof, not historical authorship or current acceptance.\n';
   text += section('Original targets', table(['Declaration', 'File'], report.problem.targets.map(target => [target.theoremName, target.proofPath])));
+  if (skillMode) {
+    const skill = report.configuration.researchSkill;
+    text += section('Research execution', 'One Codex researcher with a versioned mathematical research skill. ' +
+      'Research sources, notes, experiments and recorded declaration artifacts describe its work. ' +
+      'This mode has no cooperative task graph or role assignment progress.');
+    if (skill) text += '\nSkill: ' + cell(skill.name) + '; digest: ' + skill.digest + '; loading: ' + skill.loading + '.\n';
+    text += section('Research session', table(['Session', 'Phase', 'Turns', 'Last activity', 'At'],
+      report.workers.map(worker => [worker.id, worker.phase, worker.turns, worker.lastActivity?.event,
+        worker.lastActivity ? new Date(worker.lastActivity.at).toISOString() : undefined]))) +
+      '\nRecorded activity does not establish current process liveness or mathematical progress.\n';
+    const recoveries = report.workers.filter(worker => worker.recovery);
+    if (recoveries.length) text += section('Session recovery', table(['Session', 'Recovery', 'Reason', 'Cycles', 'Waited ms'],
+      recoveries.map(worker => [worker.id, worker.recovery!.phase, worker.recovery!.reason,
+        worker.recovery!.cycles, worker.recovery!.waitedMs])));
+    const failures = report.workers.filter(worker => worker.lastFailure || worker.error);
+    if (failures.length) text += section('Execution failures', table(['Session', 'Category', 'Last failure'],
+      failures.map(worker => [worker.id, worker.failureCategory ?? worker.lastFailure?.category,
+        worker.error ?? worker.lastFailure?.reason])));
+    if (report.error) text += section('Current blocker', report.error);
+    text += section('Evaluation', report.evaluator ? JSON.stringify(report.evaluator, null, 2) : 'No matching final evaluation recorded.');
+    return text;
+  }
   text += section('Recorded progress', `${report.progress.checkedProofTasks} checked proof tasks; ${report.progress.conditionalProofTasks} conditional; ${report.progress.completedResearchTasks} completed research tasks.\n\nOpen proof tasks: ${report.progress.openProofTasks.join(', ') || 'none'}. Dispatch counts include retries and do not measure mathematical progress.`);
   text += section('Proof continuation', table(['Original goal', 'Recorded proof', 'Open dependency frontier', 'Missing tasks'],
     report.continuation.goals.map(goal => [goal.taskId, goal.recordedProof, goal.frontier.join(', ') || 'none', goal.missingDependencies.join(', ') || 'none'])));

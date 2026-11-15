@@ -102,8 +102,9 @@ export class CollaborationView {
   /** Optional per-operation grants support a shared running view as well as the finished sample. */
   update(container?: HTMLElement, run?: WebRun, connected = false, readOnly = false,
     permissions: { guidance?: boolean; edit?: boolean; approve?: boolean; archive?: boolean } = {}) {
-    this.connected = connected; this.readOnly = readOnly; this.permissions = permissions;
-    this.planEditor.updateAccess({ runId: container ? run?.id : undefined, status: run?.status, connected, readOnly, edit: permissions.edit });
+    this.connected = connected; this.readOnly = readOnly;
+    this.permissions = run?.researchMode === 'skill' ? { ...permissions, guidance: false, edit: false, approve: false } : permissions;
+    this.planEditor.updateAccess({ runId: container ? run?.id : undefined, status: run?.status, connected, readOnly, edit: this.permissions.edit });
     if (!container || !run) {
       if (this.current?.viewport?.contains(this.current.element)) { this.current.scrollTop = this.current.viewport.scrollTop; this.current.scrollLeft = this.current.viewport.scrollLeft; this.saveTaskReading(this.current); }
       this.current?.navigation.disconnect();
@@ -129,6 +130,7 @@ export class CollaborationView {
       this.current?.navigation.disconnect();
     }
     this.run = run; this.current = view; view.active = run.status === 'running';
+    view.element.dataset.researchMode = run.researchMode ?? 'legacy';
     view.element.dataset.ended = String(run.status !== 'queued' && run.status !== 'running');
     view.archives = [...new Map([...view.archives, ...(run.archives ?? [])].map(archive => [archive.id, archive])).values()];
     this.renderArchives(view, run.id);
@@ -327,7 +329,7 @@ export class CollaborationView {
   /** Open the plan editor of the shown run, as its 编辑计划 button does; false when that run is not shown or has no plan yet. */
   editPlan(runId: string): boolean {
     const view = this.views.get(runId);
-    if (!view || this.current !== view || !view.observation?.plan) return false;
+    if (!view || this.current !== view || !view.observation?.plan || this.run?.researchMode === 'skill') return false;
     this.planEditor.open(runId, view.observation, view.selectedTask);
     return true;
   }
@@ -764,10 +766,13 @@ export class CollaborationView {
     })));
   }
   private updateCommands(view: ViewState) {
+    const skill = view.element.dataset.researchMode === 'skill';
     const refresh = view.element.querySelector<HTMLButtonElement>('[data-collab-refresh]')!;
     refresh.disabled = !this.connected || view.loading;
     refresh.textContent = view.loading ? t('刷新中…') : t('刷新观察'); refresh.setAttribute('aria-busy', String(view.loading));
     view.element.querySelector<HTMLButtonElement>('[data-collab-plan]')!.disabled=this.readOnly||this.permissions.edit===false||!this.connected||!view.active||!view.observation?.plan;
+    view.element.querySelector<HTMLButtonElement>('[data-collab-plan]')!.hidden=skill;
+    view.guidance.element.hidden=skill;
     const archive = view.element.querySelector<HTMLButtonElement>('[data-collab-archive]')!;
     archive.disabled=!this.connected||!view.observation||view.archiveBusy; archive.hidden=this.readOnly||this.permissions.archive===false;
     archive.textContent = view.archiveBusy ? t('归档中…') : t('归档知识'); archive.setAttribute('aria-busy', String(view.archiveBusy));
@@ -777,8 +782,9 @@ export class CollaborationView {
     view.element.querySelector<HTMLElement>('.collab-observation-line')!.hidden = !observationText;
     view.guidance.update(view.observation, view.active&&!this.readOnly&&this.permissions.guidance!==false, this.connected);
     const canGuide=!this.readOnly&&this.permissions.guidance!==false;
-    for(const button of view.element.querySelectorAll<HTMLButtonElement>('[data-collab-guide-worker],[data-collab-nav-guide]')) button.disabled=!canGuide||!this.connected||!view.active;
+    for(const button of view.element.querySelectorAll<HTMLButtonElement>('[data-collab-guide-worker],[data-collab-nav-guide]')) { button.disabled=!canGuide||!this.connected||!view.active; button.hidden=skill; }
     view.element.querySelector<HTMLButtonElement>('[data-collab-guide-task]')!.disabled = !this.canGuideTask(view);
+    view.element.querySelector<HTMLButtonElement>('[data-collab-guide-task]')!.hidden = skill;
     view.navigation.update(view.observation, this.connected, view.archives.length);
   }
   /** One artifact at a time; keyed by request, so a new read remounts the heading for focus. */

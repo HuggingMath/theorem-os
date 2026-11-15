@@ -1,0 +1,9 @@
+{
+  "schema": "theorem-os.cli-harness.v1",
+  "executable": "/absolute/path/to/your-agent",
+  "args": ["--model", "{model}"],
+  "prompt": "stdin",
+  "session": { "mode": "fresh" },
+  "output": { "format": "text" },
+  "efforts": ["none"]
+}

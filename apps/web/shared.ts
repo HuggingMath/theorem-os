@@ -6,6 +6,8 @@ import { webTaskEnvironment } from './environment';
 
 export type WebEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type WebCoordination = 'cooperative' | 'independent';
+export type WebResearchMode = 'legacy' | 'skill';
+export type WebSkillLoading = 'native' | 'file';
 export type WebRunStatus = 'queued' | 'running' | 'completed' | 'cancelled' | 'error';
 export type WebEnvironment = 'standard' | 'mathlib';
 /** What one web run may ask for; the server enforces these, and the workbench reads them to know when a limit is already at its highest. */
@@ -60,6 +62,9 @@ export type WebRunInput = {
   maxTotalTokens?: number;
   workers: number;
   coordination: WebCoordination;
+  /** Omitted on older runs: retain the existing research engine. */
+  researchMode?: WebResearchMode;
+  skillLoading?: WebSkillLoading;
   /** Hold every Agent after the first plan until the person who started the run approves it. */
   planApproval?: boolean;
   modulePlan?: ResearchModulePlan;
@@ -139,6 +144,9 @@ export type WebRun = {
   maxTotalTokens?: number;
   workers: number;
   coordination: WebCoordination;
+  researchMode?: WebResearchMode;
+  skillLoading?: WebSkillLoading;
+  researchSkill?: { name: string; digest: string; loading: WebSkillLoading };
   planApproval?: boolean;
   modulePlan?: ResearchModulePlan;
   knowledgeDigest?: string;

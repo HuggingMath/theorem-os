@@ -22,7 +22,7 @@ const proofIdentity = (check: ProofCheck) => mathDigest(canonicalMathJson({
 export const hasFreshSolverCheck = (check: ProofCheck): boolean =>
   check.passed && checkedProofs.get(check) === proofIdentity(check);
 
-const solverSourceDigest = (problem: SolverProblem, worktree: string) => mathDigest(canonicalMathJson(problem.ownedFiles
+export const solverSourceDigest = (problem: SolverProblem, worktree: string) => mathDigest(canonicalMathJson(problem.ownedFiles
   .map(file => [file, mathDigest(fs.readFileSync(path.join(worktree, problem.projectRelative, file)))])));
 
 /** Reuse binds a recorded check to the current files as well as its committed tree. */

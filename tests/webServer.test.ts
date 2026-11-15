@@ -98,6 +98,37 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     const replay = await request('/api/runs', alice, { body: { ...input(), apiKey: '' }, headers: { 'Idempotency-Key': 'http-retry' } });
     expect(replay.status).toBe(200); expect((await replay.json()).run.id).toBe(runs[0].id);
   });
+  it('creates and replays a frozen skill run, forwards loading and rejects incompatible cooperation', async () => {
+    const client = await session(), submitted = { ...input(), requestId: 'skill-http', researchMode: 'skill', coordination: 'independent' };
+    const response = await request('/api/runs', client, { body: submitted });
+    expect(response.status).toBe(201);
+    const run = (await response.json()).run;
+    expect(run).toMatchObject({ researchMode: 'skill', skillLoading: 'native', workers: 1, coordination: 'independent' });
+    expect(run.moduleConfiguration).toBeUndefined();
+    await tick(); expect(runner.calls[0].value.input).toMatchObject({ researchMode: 'skill', skillLoading: 'native' });
+    const replay = await request('/api/runs', client, { body: { ...submitted, skillLoading: 'native' } });
+    expect(replay.status).toBe(200); expect((await replay.json()).run.id).toBe(run.id);
+    expect((await request('/api/runs', client, { body: { ...submitted, skillLoading: 'file' } })).status).toBe(409);
+    expect((await request('/api/runs', client, { body: { ...submitted, requestId: 'invalid-skill', workers: 2 } })).status).toBe(400);
+    expect((await request('/api/runs', client, { body: { ...submitted, requestId: 'invalid-plan', planApproval: true } })).status).toBe(400);
+    expect((await request('/api/runs', client, { body: { ...input(), requestId: 'invalid-loading', skillLoading: 'file' } })).status).toBe(400);
+    const controls = [
+      ['guidance', { id: 'unsupported-guidance', recipient: { kind: 'lead' }, text: 'An unsupported control.', observationRef: { sequence: 1, stateDigest: 'a'.repeat(64) } }],
+      ['plan-approval', { id: 'unsupported-approval', planVersion: 'plan-v1' }],
+      ['edits/preview', { schema: 'deepscientist.math.plan-edit.v1', id: 'unsupported-edit', baseVersion: 'plan-v1', tasks: [{ id: 'goal' }] }],
+      ['edits', { schema: 'deepscientist.math.plan-edit.v1', id: 'unsupported-edit', baseVersion: 'plan-v1', tasks: [{ id: 'goal' }] }],
+    ] as const;
+    for (const [operation, body] of controls) {
+      const rejected = await request(`/api/runs/${run.id}/${operation}`, client, { body });
+      expect(rejected.status).toBe(409); expect((await rejected.json()).error).toMatch(/单研究者模式不支持/);
+    }
+    expect((await request(`/api/runs/${run.id}`, client)).status).toBe(200);
+    const conversation = (await (await request('/api/conversations', client, { body: { runId: run.id } })).json()).conversation;
+    const blockedDiscussionGuidance = await request(`/api/conversations/${conversation.id}/guidance`, client, { body: controls[0][1] });
+    expect(blockedDiscussionGuidance.status).toBe(409);
+    const retained = (await (await request(`/api/conversations/${conversation.id}`, client)).json()).conversation;
+    expect(retained.messages).toHaveLength(conversation.messages.length);
+  });
   function rawStatus(route: string, headers: Record<string, string>, body = '', method = body ? 'POST' : 'GET') {
     return new Promise<number>((resolve, reject) => {
       const socket = net.createConnection({ host: '127.0.0.1', port: config.port });

@@ -382,7 +382,11 @@ export async function startFormalizationRelay(input: {
       const key = await loadCredential();
       await input.requestGate?.beforeRequest?.(controller.signal);
       controller.signal.throwIfAborted();
-      admission = input.requestGate?.({ requestId: randomUUID(), source: 'responses-relay' });
+      const metadata = body.client_metadata && typeof body.client_metadata === 'object'
+        ? body.client_metadata as Record<string, unknown> : undefined;
+      const nativeThread = metadata?.session_id ?? request.headers.session_id ?? request.headers['x-codex-thread-id'];
+      admission = input.requestGate?.({ requestId: randomUUID(), source: 'responses-relay',
+        ...(typeof nativeThread === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/u.test(nativeThread) ? { threadId: nativeThread } : {}) });
       if (admission?.allowed === false) throw new RelayError(403, admission.reason);
       // Never copy caller headers, URL components, cookies or proxy settings upstream.
       // Bun's implicit fetch socket timeout must not impose a model deadline.

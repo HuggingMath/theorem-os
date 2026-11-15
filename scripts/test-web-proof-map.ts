@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type { Browser, BrowserContext, Page } from 'playwright';
+import type { Browser, Page } from 'playwright';
 import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
@@ -29,7 +29,7 @@ const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-proof-map-')
 const credential = 'sk-local-proof-map-fixture';
 const now = () => new Date().toISOString();
 const checks: object[] = [], errors: string[] = [], external: string[] = [], commands: object[] = [];
-let phase = 'setup', mode: 'dag' | 'unplanned' = 'dag', browser: Browser | undefined, failure: unknown;
+let phase = 'setup', mode: 'dag' | 'unplanned' = 'dag', browser: Browser | undefined;
 
 type Control = { observation: WebObservation; emit(): void; finish(): void };
 const controls = new Map<string, Control>();
@@ -257,7 +257,7 @@ function dagObservation(id: string): WebObservation {
       } as any,
     ],
     guidance: [],
-    coverage: { sources: 'complete', checks: 'complete' },
+    coverage: { sources: 'recorded', checks: 'recorded' },
   };
 }
 
@@ -357,7 +357,7 @@ async function http(page: Page, method: string, pathname: string, input?: unknow
   }, { method, pathname, input });
 }
 
-async function startRun(page: Page, ctx: BrowserContext) {
+async function startRun(page: Page) {
   const run = (await http(page, 'POST', '/api/runs', {
     requestId: crypto.randomUUID(),
     providerId: 'local',
@@ -419,7 +419,7 @@ try {
     const { ctx, page } = await openPage(width, locale, theme);
     let runId: string | undefined;
     try {
-      const started = await startRun(page, ctx);
+      const started = await startRun(page);
       runId = started.runId;
 
       // Inline conversation ProofMap is visible right in the thread!
@@ -509,7 +509,7 @@ try {
     const { ctx, page } = await openPage(1440, 'zh', 'light');
     let runId: string | undefined;
     try {
-      const started = await startRun(page, ctx);
+      const started = await startRun(page);
       runId = started.runId;
       assert.equal(await page.locator('#research-chat-thread [data-proof-map="conversation"]').count(), 0,
         'Unplanned single-task run keeps conversation thread compact without DAG map');
@@ -537,7 +537,6 @@ try {
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ ok: true, checks }, null, 2));
   console.log(`ALL PROOF MAP CHECKS PASSED (${checks.length} scenarios)`);
 } catch (err) {
-  failure = err;
   console.error(`FAILED at phase ${phase}:`, err);
   process.exitCode = 1;
 } finally {

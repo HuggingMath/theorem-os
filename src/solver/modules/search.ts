@@ -1,5 +1,5 @@
 import type { SolverRunState } from '../archive';
-import type { MathAgentFailureDiagnostic } from '../../runtime/codexSession';
+import type { MathAgentFailureDiagnostic } from '../../runtime/failureDiagnostic';
 import type { ModelRequestStopReason } from '../../runtime/modelRequest';
 import { canonicalMathJson, mathDigest } from '../../math/mathRuntimeIo';
 import type { ResearchOperation } from './value';

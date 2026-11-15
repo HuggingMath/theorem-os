@@ -1,0 +1,12 @@
+{
+  "schema": "theorem-os.cli-harness.v1",
+  "executable": "aider",
+  "args": ["--model", "{model}", "--message-file", "{promptFile}", "--read", "{workspace}/.agents/skills/theoremos-research/SKILL.md", "--config", "{profile}/aider.conf.yml", "--env-file", "{profile}/empty.env", "--yes-always", "--no-pretty", "--no-stream", "--no-auto-commits", "--no-dirty-commits", "--no-gitignore", "--no-check-update", "--no-analytics", "--no-fancy-input", "--no-restore-chat-history", "--chat-history-file", "{profile}/state/aider-history-{turnId}.md", "--llm-history-file", "{profile}/state/aider-llm-{turnId}.txt"],
+  "prompt": "file",
+  "session": {"mode": "fresh"},
+  "output": {"format": "text"},
+  "efforts": ["none"],
+  "environment": {"NO_COLOR": "1"},
+  "inheritEnvironment": ["OPENAI_API_KEY", "OPENAI_API_BASE", "ANTHROPIC_API_KEY"],
+  "configurationFiles": ["aider.conf.yml", "empty.env"]
+}

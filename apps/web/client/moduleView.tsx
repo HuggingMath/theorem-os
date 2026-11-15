@@ -1,12 +1,15 @@
-import type { WebCoordination, WebEvent, WebModuleId, WebModuleSnapshot, WebRun } from '../shared';
+import type { WebCoordination, WebEvent, WebModuleId, WebModuleSnapshot, WebResearchMode, WebRun } from '../shared';
 import { webCustomModuleSnapshots, webEventModule, webModuleSnapshots } from '../moduleTelemetry';
 import { isAcceptedRun, runProgress } from '../presentation';
 import { defaultResearchModulePlan, type CustomResearchModule, type ResearchModulePlan } from '../../../src/solver/modules/policy';
 import { render, type ComponentChildren } from 'preact';
 import { Icon } from './ui/Icon';
-import { localeTag, t } from '../i18n';
+import { locale, localeTag, t } from '../i18n';
 import { readableMessage } from './activityReader';
 import { workerNames } from './collaborationUi';
+import { Facts } from './ui/Section';
+
+const tx = (zh: string, en: string) => locale === 'en' ? en : zh;
 
 const modules = [
   { id: 'M5', name: t('协作与复用'), subject: t('任务分配 · 审阅 · 集成'), icon: 'network' },
@@ -30,6 +33,7 @@ export type ModuleViewInput = {
   connected: boolean;
   editable?: boolean;
   modulePlan?: ResearchModulePlan;
+  researchMode?: WebResearchMode;
 };
 
 const schedulers: Record<string, string> = { plan: t('按计划'), 'critical-path': t('关键路径优先'), continuation: t('延续已有进展') };
@@ -120,7 +124,7 @@ function skeleton<K extends keyof HTMLElementTagNameMap>(tag: K, view: Component
 /** The module graph and inspector. Rendered once per host; ModuleView then updates the nodes in place. */
 function Scaffold() {
   return <>
-    <header class="module-view-heading"><div><h3><span>{t('研究模块')}</span><button type="button" class="icon-button module-configure" data-module-configure title={t('编辑模块方案')} aria-label={t('编辑模块方案')}><Icon name="sliders-horizontal" /></button></h3><p data-module-configuration /></div>
+    <header class="module-view-heading"><div><h3><span data-module-heading>{t('研究模块')}</span><button type="button" class="icon-button module-configure" data-module-configure title={t('编辑模块方案')} aria-label={t('编辑模块方案')}><Icon name="sliders-horizontal" /></button></h3><p data-module-configuration /></div>
       <span class="module-observation" role="status" aria-atomic="true" /></header>
     <section class="module-live" aria-label={t('最近模块活动')} hidden>
       <div class="module-live-heading"><span>{t('最近活动')}</span><time class="mono" /></div>
@@ -128,6 +132,7 @@ function Scaffold() {
         <button type="button" class="icon-button" data-module-latest title={t('定位最近活动')} aria-label={t('定位最近活动')} aria-controls="module-inspector"><Icon name="locate-fixed" /></button></div>
       <p class="module-live-event"><strong data-module-live-name /><span data-module-live-message /></p>
     </section>
+    <section class="module-skill-mode" hidden />
     <div class="module-layout">
       <div class="module-graph" role="group" aria-label={t('搜索决策、上下文选择、证明构造、检查与反馈组成研究循环，协作与复用负责协调，最后独立验收')}>
         <Node id="M5" /><Edge from="M5" to="research" direction="down" class="module-coordination-edge" />
@@ -238,6 +243,29 @@ export class ModuleView {
 
   private render() {
     const root = this.root!, input = this.input!, run = input.run;
+    const skillMode = input.researchMode === 'skill';
+    text(root.querySelector('[data-module-heading]')!, skillMode ? t('研究方式') : t('研究模块'));
+    root.querySelector<HTMLElement>('.module-layout')!.hidden = skillMode;
+    const skillView = root.querySelector<HTMLElement>('.module-skill-mode')!;
+    skillView.hidden = !skillMode;
+    root.dataset.stale = String(!input.connected);
+    text(root.querySelector('.module-observation')!, !input.connected ? t('连接中断 · 最近状态') : !run ? t('草稿')
+      : `${runProgress(run).phaseLabel} · ${timestamp(run.updatedAt)}`);
+    if (skillMode) {
+      root.querySelector<HTMLElement>('.module-live')!.hidden = true;
+      root.querySelector<HTMLButtonElement>('[data-module-configure]')!.hidden = true;
+      text(root.querySelector('[data-module-configuration]')!, tx('1 名研究者 · 项目技能 · 独立验收', '1 researcher · Project skill · Independent acceptance'));
+      const identity = run?.researchSkill;
+      render(<>
+        <p class="collab-help">{tx('研究者自行检索、推理和调用工具；完整原题由独立 Lean 验收。', 'The researcher searches, reasons and uses tools autonomously; the complete original problem is checked independently in Lean.')}</p>
+        <Facts facts={[[t('模型'), input.model || t('未设置')], [t('证明环境'), input.environment],
+          [tx('项目技能', 'Project skill'), identity?.name ?? tx('运行后记录实际技能', 'Actual skill recorded when the run starts')],
+          ...(identity ? [[tx('技能版本', 'Skill digest'), identity.digest], [tx('技能加载', 'Skill loading'), identity.loading === 'native' ? tx('原生加载', 'Native loading') : tx('读取固定文件', 'Frozen file')]] as [string, string][] : []),
+          [t('独立验收'), run && isAcceptedRun(run) ? t('验收通过') : tx('完整原题尚未验收通过', 'The complete original problem has not passed acceptance')]]} />
+        <p class="collab-help">{tx('独立引理记录保留类型、前提与检查来源，复用时仍须重新检查。', 'Independent declarations retain their types, premises and check provenance, and require a fresh check when reused.')}</p>
+      </>, skillView);
+      return;
+    }
     const plan = input.modulePlan ?? defaultResearchModulePlan();
     const selectedRule = plan.custom.find(rule => rule.id === this.selectedPolicy);
     if (selectedRule) this.selected = selectedRule.slot;

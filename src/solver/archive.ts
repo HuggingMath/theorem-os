@@ -5,7 +5,8 @@ import type { SolverFailure } from './feedback';
 import type { ResearchCandidate } from './modules/execution';
 import type { ResearchRole } from './modules/organization';
 import type { CooperationState } from './cooperation';
-import type { MathAgentActivity } from '../runtime/codexSession';
+import type { MathAgentActivity } from '../runtime/agentSession';
+import type { ResearchHarnessIdentity } from '../runtime/researchHarness';
 import { safeFailureDiagnostic, type MathAgentFailureDiagnostic } from '../runtime/failureDiagnostic';
 import { safeVerifierFailureDiagnostic, type VerifierFailureDiagnostic } from './verifierFailure';
 import type { TokenBudget, UsageAccounting, RequestUsageAccounting } from './usageBudget';
@@ -69,8 +70,20 @@ export type SolverRunState = {
   evaluatorDigest: string;
   providerProfile?: string;
   providerProfileDigest?: string;
+  /** Absent means the historical Codex adapter; native sessions never transfer between harnesses. */
+  agentHarness?: ResearchHarnessIdentity;
   methodDigest?: string;
   coordination?: 'cooperative' | 'independent';
+  /** Absent for legacy runs; strategy changes require a new run and native thread. */
+  researchMode?: 'skill';
+  researchSkill?: { name: string; digest: string; loading: 'native' | 'file' };
+  commonResearchSkill?: { name: string; digest: string; loading: 'native' | 'file' };
+  researchDelegation?: { mode: 'read-only'; maxAgents: number };
+  nativeAgents?: import('../runtime/nativeDelegation').NativeResearchAgent[];
+  /** A stopped writer's check/consumption resumes before any new model dispatch. */
+  pendingDeclarationCheck?: { commit: string; requestDigest: string; phase?: 'completed' };
+  /** Independent acceptance of a frozen whole-proof candidate does not need another model turn. */
+  pendingProofCheck?: { commit: string; sourceDigest: string; problemReceiptDigest: string; environmentDigest: string };
   /** Workers wait after the first accepted plan until a human approves that exact version. */
   planApproval?: boolean;
   moduleConfiguration?: { id: string; versions: Record<string, string> };
@@ -155,7 +168,7 @@ export const requestUsageAccountingSchema = z.object({ startedRequests: safeCoun
   pendingRequests: safeCount, incomplete: z.boolean(), nativeUsageObserved: z.boolean().optional(),
   receipts: z.array(z.object({ requestId: z.string().min(1),
     source: z.enum(['chat-completions-bridge', 'responses-relay']).optional(),
-    runId: z.string().optional(), sessionId: z.string().optional(), taskId: z.string().optional(),
+    runId: z.string().optional(), sessionId: z.string().optional(), taskId: z.string().optional(), threadId: z.string().optional(),
     startedAt: safeCount, settledAt: safeCount.optional(), status: z.enum(['pending', 'reported', 'missing']),
     outcome: z.enum(['completed', 'failed', 'cancelled', 'interrupted', 'unknown']).optional(),
     missingReason: z.enum(['provider-usage-missing', 'provider-usage-invalid', 'upstream-http-error',
@@ -300,6 +313,9 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
   taskDigest: z.string(), buildDigest: z.string(), environmentDigest: z.string(), evaluatorDigest: z.string(),
   continuationDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
   providerProfile: z.string().optional(), providerProfileDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
+  agentHarness: z.object({ id: z.enum(['codex', 'claude-code', 'opencode', 'cli']), executable: z.string().min(1),
+    executableDigest: z.string().regex(/^[a-f0-9]{64}$/u), profile: z.string().min(1),
+    configurationDigest: z.string().regex(/^[a-f0-9]{64}$/u) }).strict().optional(),
   model: z.string(), effort: z.string(), workerCount: z.number().int().positive().optional(),
   taskUsage: z.record(z.record(safeCount)).optional(),
   verificationCheckpoints: z.array(z.object({ key: z.string().regex(/^[a-f0-9]{64}$/u), timeoutMs: safeCount,
@@ -323,6 +339,21 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
   })) }).optional(),
   knowledgeUses: z.array(knowledgeUse.extend({ workerId: z.string(), commit: z.string() })).optional(),
   coordination: z.enum(['cooperative', 'independent']).optional(),
+  researchMode: z.literal('skill').optional(),
+  researchSkill: z.object({ name: z.string().min(1), digest: z.string().regex(/^[a-f0-9]{64}$/u),
+    loading: z.enum(['native', 'file']) }).strict().optional(),
+  commonResearchSkill: z.object({ name: z.string().min(1), digest: z.string().regex(/^[a-f0-9]{64}$/u),
+    loading: z.enum(['native', 'file']) }).strict().optional(),
+  researchDelegation: z.object({ mode: z.literal('read-only'), maxAgents: z.number().int().min(2).max(4) }).strict().optional(),
+  nativeAgents: z.array(z.object({ threadId: z.string().min(1), parentThreadId: z.string().min(1),
+    startedAt: safeCount, updatedAt: safeCount, status: z.enum(['running', 'completed', 'errored', 'interrupted', 'stopped', 'unknown']),
+    usage: record.optional(), message: z.string().optional(), stoppedAt: safeCount.optional(),
+    permissionProfile: z.literal('math-investigator').optional() })).optional(),
+  pendingDeclarationCheck: z.object({ commit: z.string().regex(/^[a-f0-9]{40,64}$/u),
+    requestDigest: z.string().regex(/^[a-f0-9]{64}$/u), phase: z.literal('completed').optional() }).strict().optional(),
+  pendingProofCheck: z.object({ commit: z.string().regex(/^[a-f0-9]{40,64}$/u),
+    sourceDigest: z.string().regex(/^[a-f0-9]{64}$/u), problemReceiptDigest: z.string().min(1),
+    environmentDigest: z.string().min(1) }).strict().optional(),
   planApproval: z.boolean().optional(),
   workers: z.array(research.extend({ id: z.string(), role, sessionRole: role.optional(),
     sessionLeadMode: z.enum(['planning', 'coordination']).optional(),

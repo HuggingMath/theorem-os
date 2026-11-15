@@ -22,6 +22,8 @@ export type TaskDraft = {
   effort: WebEffort;
   environment: WebEnvironment;
   coordination: WebCoordination;
+  researchMode?: 'legacy' | 'skill';
+  skillLoading?: 'native' | 'file';
   /** 先审计划: hold the Agents until the plan is approved. Only `true` is stored; it applies to cooperative runs of 2+ Agents. */
   planApproval?: true;
   templateId: string;
@@ -153,6 +155,8 @@ function validatedDraft(value: unknown): TaskDraft {
     effort: enumeration(draft, 'effort', ['low', 'medium', 'high', 'xhigh', 'max']),
     environment: enumeration(draft, 'environment', ['standard', 'mathlib']),
     coordination: enumeration(draft, 'coordination', ['cooperative', 'independent']),
+    ...(Object.hasOwn(draft, 'researchMode') ? { researchMode: enumeration(draft, 'researchMode', ['legacy', 'skill'] as const) } : {}),
+    ...(Object.hasOwn(draft, 'skillLoading') ? { skillLoading: enumeration(draft, 'skillLoading', ['native', 'file'] as const) } : {}),
     ...flag(draft, 'planApproval'),
     templateId: text(draft, 'templateId', 64),
     ...(Object.hasOwn(draft, 'knowledgeDigest') ? { knowledgeDigest: draft.knowledgeDigest === null ? null : text(draft, 'knowledgeDigest', 256) } : {}),
@@ -188,6 +192,8 @@ export function decodeTaskDraft(value: unknown): TaskDraft {
       maxTurns: archiveBudget(run, 'maxTurns'), maxRunSeconds: archiveBudget(run, 'maxRunSeconds'), workers: archiveBudget(run, 'workers'),
       ...(Object.hasOwn(run, 'maxTotalTokens') ? { maxTotalTokens: archiveBudget(run, 'maxTotalTokens', 10_000) } : {}),
       effort: own(run, 'effort'), environment: own(run, 'environment'), coordination: own(run, 'coordination'), templateId: '',
+      ...(Object.hasOwn(run, 'researchMode') ? { researchMode: run.researchMode } : {}),
+      ...(Object.hasOwn(run, 'skillLoading') ? { skillLoading: run.skillLoading } : {}),
       ...(Object.hasOwn(run, 'planApproval') ? { planApproval: run.planApproval } : {}),
       ...(Object.hasOwn(run, 'knowledgeDigest') ? { knowledgeDigest: run.knowledgeDigest } : {}),
       ...(Object.hasOwn(run, 'modulePlan') ? { modulePlan: run.modulePlan } : {}),

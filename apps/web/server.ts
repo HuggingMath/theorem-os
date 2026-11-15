@@ -47,6 +47,7 @@ import { selectWebLibraryPack } from './frozenLibrary';
 import type { ResearchConfigurationSelection, ResearchLibraryPack } from './researchAssetTypes';
 import { canonicalMathJson, mathDigest } from '../../src/math/mathRuntimeIo';
 import { researchLibraryProposalOriginSchema } from './researchLibraryProposalOrigin';
+import { webResearchModeError } from './researchMode';
 
 const inputSchema = z.object({
   requestId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u).optional(),
@@ -62,6 +63,8 @@ const inputSchema = z.object({
   maxTotalTokens: z.union([z.literal(0), z.number().int().min(10_000).max(webLimits.maxTotalTokens)]).default(0),
   workers: z.number().int().min(1).max(webLimits.maxWorkers),
   coordination: z.enum(['cooperative', 'independent']),
+  researchMode: z.enum(['legacy', 'skill']).optional(),
+  skillLoading: z.enum(['native', 'file']).optional(),
   planApproval: z.boolean().optional(),
   modulePlan: researchModulePlanSchema.optional(),
   researchSelection: researchSelectionSchema.optional(),
@@ -916,6 +919,9 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const requestId = bodyRequestId ?? (typeof headerId === 'string' ? headerId : undefined);
           // Confirmed statements retain their exact artifact bytes; ordinary Lean drafts keep the existing normalization.
           if (!input.formalizationId) input.source = input.source.trim();
+          const researchModeError = webResearchModeError(input as WebRunInput);
+          if (researchModeError) throw new HttpError(400, researchModeError);
+          if (input.researchMode === 'skill') input.skillLoading ??= 'native';
           if (input.planApproval && (input.coordination !== 'cooperative' || input.workers < 2))
             throw new HttpError(400, '先审计划需要协作模式和至少 2 个 Agent。');
           if (!input.planApproval) delete input.planApproval;

@@ -89,6 +89,7 @@ export type WebInspection = {
   problem: { id: string; statement: string; formalStatement: string; assumptions: readonly string[];
     targets: readonly { proofPath: string; theoremName: string; declarationHash?: string }[] };
   configuration: { model: string; effort: string; workers: number; coordination: string;
+    researchMode?: 'legacy' | 'skill'; researchSkill?: { name: string; digest: string; loading: 'native' | 'file' };
     modules?: { id: string; versions: Record<string, string> }; buildDigest: string; environmentDigest: string;
     methodDigest?: string; knowledgeDigest?: string };
   turns: number; usage?: Record<string, unknown>; planVersion?: string;
@@ -153,6 +154,15 @@ export type WebGuidanceRecord = WebGuidanceInput & {
     workerId: string; decidedAt: string; sourceTaskRef?: { id: string; version: string }; sourcePlanVersion?: string;
   };
 };
+export type WebDeclarationArtifacts = {
+  evidence: 'recorded-not-replayed'; acceptance: 'not-assessed'; requiresFreshCheck: true;
+} & (
+  | { status: 'absent' }
+  | { status: 'unknown'; reason: string }
+  | { status: 'recorded'; digest: string; omitted: number; declarations: {
+      id: string; file: string; name: string; type: string; elaboratedType?: string; premises: string[];
+      sourceCommit: string; checkedCommit: string; environmentDigest: string; receiptIds: string[];
+    }[] });
 export type WebObservation = {
   schema: 'theorem-os.web-observation.v1';
   webRunId: string; solverRunId: string; observedAt: string; sequence: number;
@@ -162,6 +172,8 @@ export type WebObservation = {
   sources: WebTaskSource[]; checks: WebCheckReceipt[]; guidance: WebGuidanceRecord[];
   deliveries?: WebDelivery[];
   history?: WebInspection['tasks'];
+  /** Immutable declaration evidence; reading it never replays the check or accepts the original problem. */
+  declarations?: WebDeclarationArtifacts;
   coverage: { sources: 'recorded' | 'partial'; checks: 'recorded' | 'partial' };
 };
 export type WebCommand =

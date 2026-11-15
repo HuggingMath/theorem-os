@@ -1,5 +1,10 @@
 /** Error messages from the server: request checks, session and login, runs, the run environment, explanations, plans and knowledge. */
 export const errors: Record<string, string> = {
+  '单研究者模式不支持协作计划、逐题指导或计划审批。': 'Single researcher mode does not support collaboration plans, per-task guidance or plan approval.',
+  '研究方式无效。': 'Invalid research mode.',
+  '技能加载方式无效。': 'Invalid skill loading mode.',
+  '技能加载选项需要单研究者模式。': 'Skill loading requires single researcher mode.',
+  '单研究者模式需要 1 个 Agent 和独立研究，不能同时使用协作计划或自定义研究策略。': 'Single researcher mode requires one independent agent and cannot use a collaboration plan or custom research strategies.',
   "当前账号的形式化队列已满，请等待已有任务结束。": "Your formalization queue is full. Wait for an existing task to finish.",
   '提交的原题记录不存在。': 'The submitted problem record was not found.',
   '提交记录与草稿内容不一致。': 'The submission does not match the draft contents.',
