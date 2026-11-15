@@ -51,9 +51,6 @@
         <div class="section-heading"><h2 id="workflow-title">Start with your own problem</h2><p class="heading-description">State the problem, check its meaning, then follow the proof. Keep the original question, candidates and Lean feedback in one workspace.</p></div>
         <div class="workbench-layout">
           <ol class="workflow-steps"><li><h3>Start with your question</h3><p>Write the assumptions and goal in natural language, TeX or Lean. Check that the statement says what you mean.</p></li><li><h3>Follow each attempt</h3><p>Read candidates, diagnostics and repairs as they happen. Set the time and token budget for your research.</p></li><li><h3>Keep the whole result</h3><p>Download Lean source and verification reports, or return to the record to continue an unfinished proof.</p></li></ol>
-          <figure class="workbench-preview">
-            <a class="workbench-image-link" href="../assets/workbench-full-desktop-en.png" aria-label="Enlarge the workbench"><picture class="workbench-picture"><source media="(max-width: 900px)" srcset="../assets/workbench-mobile-en.png" width="350" height="520"><img src="../assets/workbench-desktop-en.png" alt="TheoremOS natural-language problem input with an addition-by-zero question, not yet submitted." width="900" height="520" loading="lazy"></picture><span class="preview-expand"><i data-lucide="maximize-2"></i></span></a>
-          </figure>
         </div>
         <section class="research-scenarios" id="research-entry" aria-labelledby="research-entry-title">
           <div class="scenario-intro"><h3 id="research-entry-title">Bring a claim or a Lean draft</h3><p>The web workspace suits single-file problems with clear assumptions and goals.</p></div>
@@ -75,10 +72,6 @@
             <noscript><p class="decision-fallback">The workbench proceeds to proof after you confirm the statement. If it needs changes, statement review continues first.<a class="text-link" href="archive.html#view=quickstart">Explore the recorded tutorial replay<i data-lucide="arrow-up-right"></i></a></p></noscript>
           </div>
         </section>
-        <figure class="product-fragment source-fragment">
-          <figcaption><h3>Keep the source in sight</h3><p>Open the statement, proof draft and Lean diagnostics. Inspect each change in the unified TheoremOS mathematics environment.</p></figcaption>
-          <a href="../assets/workbench-source-detail-en.png" target="_blank" rel="noreferrer" aria-label="Enlarge the Lean workspace"><picture><source media="(max-width: 600px)" srcset="../assets/workbench-source-mobile-en.png" width="360" height="450"><img src="../assets/workbench-source-detail-en.png" alt="An addition-by-zero proof draft in the Lean workspace, not yet submitted for verification." width="850" height="450" loading="lazy"></picture><span class="preview-expand"><i data-lucide="maximize-2"></i></span></a>
-        </figure>
       </div>
     </section>
 
@@ -106,8 +99,8 @@
         </div>
 
       </div><div class="module-media"><figure class="module-showcase" aria-labelledby="module-preview-heading">
-        <div class="module-preview-toolbar"><h3 id="module-preview-heading" class="sr-only">Module map and strategy library</h3><div class="module-preview-tabs" role="tablist" aria-label="Module views" hidden><button type="button" id="module-preview-tab-modules" role="tab" aria-selected="true" aria-controls="module-preview-panel" data-module-preview="modules"><i data-lucide="network"></i>Module map</button><button type="button" id="module-preview-tab-library" role="tab" aria-selected="false" aria-controls="module-preview-panel" tabindex="-1" data-module-preview="library"><i data-lucide="folder-open"></i>Strategy library</button></div></div>
-        <div id="module-preview-panel" role="tabpanel" aria-labelledby="module-preview-tab-modules" tabindex="0">
+        <h3 id="module-preview-heading" class="sr-only">Module map</h3>
+        <div id="module-preview-panel" role="group" aria-labelledby="module-preview-heading">
           <div class="module-graph" data-ui role="group" aria-label="Interactive module map" aria-describedby="module-graph-description">
             <p class="sr-only" id="module-graph-description">M5 organizes collaboration. The research loop follows M3 search, M4 context, M1 construction and M2 feedback, returning to M3. S3 independently verifies the integrated proof against the complete original statement.</p>
             <div class="module-graph-canvas">
@@ -135,7 +128,6 @@
             </div>
             <p class="module-graph-route" id="module-graph-route" aria-live="polite" aria-atomic="true">M3 → M4 · Ready tasks guide the context selection.</p>
           </div>
-          <div class="module-library" hidden><a class="module-preview-link" href="../assets/workbench-library-desktop-en.png" target="_blank" rel="noreferrer" aria-label="View the full-size strategy library screenshot" title="View full-size screenshot"><picture><source media="(max-width: 600px)" srcset="../assets/workbench-library-mobile-en.png" width="360" height="650"><img src="../assets/workbench-library-desktop-en.png" alt="Strategy library: a saved Mathlib algebra study with two custom strategies enabled." width="848" height="530" loading="lazy"></picture><span class="preview-expand"><i data-lucide="maximize-2"></i></span></a></div>
         </div>
         <figcaption class="sr-only"><span id="module-preview-caption" aria-live="polite">Research modules and independent verification</span></figcaption>
       </figure></div>
@@ -158,10 +150,6 @@
     </div></section>
   </main>
   <footer class="site-footer wrap"><div class="footer-brand"><a class="brand" href="index.html">TheoremOS</a><p>A workspace for mathematical research</p></div><nav aria-label="Footer links"><a href="archive.html">Browse the proof archive</a><a href="feedback.html">Feedback</a><a href="privacy.html">Privacy and terms</a><a href="https://github.com/LikC1606/TheoremOS" target="_blank" rel="noreferrer">GitHub</a></nav><span>© 2026 TheoremOS contributors</span></footer>
-  <dialog class="preview-dialog" id="workbench-dialog" aria-labelledby="preview-title" aria-describedby="preview-description">
-    <div class="preview-dialog-header"><div><strong id="preview-title">TheoremOS <span>Research workbench</span></strong><p id="preview-description">Natural-language entry</p></div><div class="preview-dialog-actions"><button type="button" class="preview-zoom" aria-label="Zoom in" aria-pressed="false" title="Zoom in"><i data-lucide="zoom-in"></i><i data-lucide="zoom-out"></i></button><a class="preview-original" href="../assets/workbench-full-desktop-en.png" target="_blank" rel="noreferrer" aria-label="Open the original screenshot" title="Open the original screenshot"><i data-lucide="external-link"></i></a><button type="button" class="preview-close" aria-label="Close the screenshot preview" title="Close" autofocus><i data-lucide="x"></i></button></div></div>
-    <div class="preview-dialog-media" role="region" aria-label="Research workbench screenshot" tabindex="0"><picture><source media="(max-width: 600px)" srcset="../assets/workbench-full-mobile-en.png" width="390" height="844"><img src="../assets/workbench-full-desktop-en.png" alt="The natural-language entry with problem input and research settings." width="1440" height="900" loading="lazy"></picture></div>
-  </dialog>
   <script src="../landing.js" defer></script>
 </body>
 </html>

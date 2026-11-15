@@ -7,7 +7,7 @@ import { gsap } from 'gsap';
 import { createSelectionIndicator } from './selectionIndicator';
 import { initializeReplay } from './replay';
 import { initializeHumanDecision } from './humanDecision';
-import { keepHashOnLanguageSwitch, localeOf, rootOf } from './site';
+import { keepHashOnLanguageSwitch, localeOf } from './site';
 
 const iconSet = { ArrowDown, ArrowDownRight, ArrowRight, ArrowUpRight, Blocks, Check, ChevronLeft, ChevronRight, Clock, Code2,
   ChevronDown, Download, ExternalLink, FileCheck2, FileCode2, FileJson2, Files, FlaskConical, FolderOpen, GitFork, Globe, History, Info, KeyRound, Maximize2, Menu, Network, Pause, Play, Plus,
@@ -19,15 +19,12 @@ const element = <T extends HTMLElement = HTMLElement>(selector: string): T => {
   return result;
 };
 const locale = localeOf(document.documentElement.lang);
-const root = rootOf(locale);
 const text = {
   zh: {
-    previewLabel: (label: string) => `查看${label}原始截图`,
-    fit: '适应窗口', zoom: '放大截图', closeMenu: '关闭导航', openMenu: '打开导航',
+    closeMenu: '关闭导航', openMenu: '打开导航',
   },
   en: {
-    previewLabel: (label: string) => `View the full-size ${label.toLowerCase()} screenshot`,
-    fit: 'Fit to window', zoom: 'Zoom in', closeMenu: 'Close navigation', openMenu: 'Open navigation',
+    closeMenu: 'Close navigation', openMenu: 'Open navigation',
   },
 }[locale];
 icons();
@@ -59,12 +56,10 @@ entranceMotion.add('(prefers-reduced-motion: no-preference)', context => {
     gsap.set('.hero-name', { yPercent: 110 });
     gsap.set('.hero-category, .hero-description', { opacity: 0, y: 12 });
     gsap.set('.hero-actions', { opacity: 0, y: 10 });
-    gsap.set('.workbench-preview', { opacity: 0, y: 20 });
     gsap.timeline({ defaults: { duration: .65, ease: 'power3.out', clearProps: 'opacity,transform' } })
       .to('.hero-name', { yPercent: 0, duration: .85, stagger: .1 }, 0)
       .to('.hero-category, .hero-description', { opacity: 1, y: 0, stagger: .06 }, .16)
-      .to('.hero-actions', { opacity: 1, y: 0 }, .28)
-      .to('.workbench-preview', { opacity: 1, y: 0, duration: .8 }, .32);
+      .to('.hero-actions', { opacity: 1, y: 0 }, .28);
   }
   const observer = new IntersectionObserver(entries => {
     for (const entry of entries) {
@@ -79,11 +74,6 @@ entranceMotion.add('(prefers-reduced-motion: no-preference)', context => {
         } else if (target.matches('.component-explorer')) {
           gsap.fromTo(target.querySelectorAll('.component-tab'), { opacity: .35, x: -20 },
             { ...settle, opacity: 1, x: 0, stagger: .07 });
-        } else if (target.matches('.product-fragment')) {
-          gsap.fromTo(target.querySelector('img'), { opacity: .5, scale: .98 },
-            { ...settle, opacity: 1, scale: 1, duration: .8 });
-          gsap.fromTo(target.querySelector('figcaption'), { opacity: .4, y: 12 },
-            { ...settle, opacity: 1, y: 0, delay: .15 });
         } else if (target.matches('.faq-list')) {
           gsap.fromTo(target.children, { opacity: .4, x: 20 },
             { ...settle, opacity: 1, x: 0, stagger: .08 });
@@ -96,7 +86,7 @@ entranceMotion.add('(prefers-reduced-motion: no-preference)', context => {
       });
     }
   }, { rootMargin: '0px 0px -35px 0px', threshold: .08 });
-  document.querySelectorAll('.section-heading, .workflow-steps li, .workbench-preview, .replay-window, .proof-row, .featured-proof, .component-explorer, .component-panel, .product-fragment, .module-media, .archive-footer, .start-copy, .faq-list')
+  document.querySelectorAll('.section-heading, .workflow-steps li, .replay-window, .proof-row, .featured-proof, .component-explorer, .component-panel, .module-media, .archive-footer, .start-copy, .faq-list')
     .forEach(target => observer.observe(target));
   return () => observer.disconnect();
 });
@@ -138,7 +128,6 @@ const components = {
   },
 }[locale];
 type Component = keyof typeof components;
-const narrow = matchMedia('(max-width: 600px)');
 const componentTabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-component]'));
 const componentIndicator = createSelectionIndicator(element('.component-tabs'), reducedMotion);
 const graphNodes = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-graph-component]'));
@@ -243,54 +232,7 @@ new ResizeObserver(drawGraphEdges).observe(graphCanvas);
 document.fonts.ready.then(drawGraphEdges);
 selectComponent('m3');
 
-const modulePreviews = {
-  zh: {
-  modules: {
-    label: '模块图谱', caption: '研究模块与独立验收',
-  },
-  library: {
-    label: '方案库', caption: 'Mathlib 代数研究 · 2 项自定义策略',
-  },
-  },
-  en: {
-  modules: {
-    label: 'Module map', caption: 'Research modules and independent verification',
-  },
-  library: {
-    label: 'Strategy library', caption: 'Mathlib algebra study · 2 custom strategies',
-  },
-  },
-}[locale];
-type ModulePreview = keyof typeof modulePreviews;
-const modulePreviewTabs = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-module-preview]'));
-const modulePreviewPanel = element('#module-preview-panel');
-const modulePreviewLink = element<HTMLAnchorElement>('.module-preview-link');
-let modulePreview: ModulePreview = 'modules';
-function selectModulePreview(id: ModulePreview, focus = false) {
-  const content = modulePreviews[id];
-  const changed = modulePreview !== id;
-  modulePreview = id;
-  for (const tab of modulePreviewTabs) {
-    const selected = tab.dataset.modulePreview === id;
-    tab.setAttribute('aria-selected', String(selected));
-    tab.tabIndex = selected ? 0 : -1;
-    if (selected && focus) tab.focus({ preventScroll: true });
-  }
-  modulePreviewPanel.setAttribute('aria-labelledby', `module-preview-tab-${id}`);
-  element('.module-graph').hidden = id !== 'modules';
-  element('.module-library').hidden = id !== 'library';
-  const suffix = locale === 'en' ? '-en' : '';
-  modulePreviewLink.href = `${root}assets/workbench-library-${narrow.matches ? 'mobile' : 'desktop'}${suffix}.png`;
-  element('#module-preview-caption').textContent = content.caption;
-  if (id === 'modules') drawGraphEdges();
-  if (changed) animateSelection([element(id === 'modules' ? '.module-graph' : '.module-library')], 6);
-}
-element('.module-preview-tabs').hidden = false;
-modulePreviewTabs.forEach(tab => tab.addEventListener('click', () => selectModulePreview(tab.dataset.modulePreview as ModulePreview)));
-element('.module-preview-tabs').addEventListener('keydown', event => handleTabKeys(event, modulePreviewTabs,
-  tab => selectModulePreview(tab.dataset.modulePreview as ModulePreview, true)));
-narrow.addEventListener('change', () => selectModulePreview(modulePreview));
-selectModulePreview(modulePreview);
+drawGraphEdges();
 
 initializeReplay(locale);
 initializeHumanDecision(locale);
@@ -308,64 +250,6 @@ const orientComponents = () => {
 };
 orientComponents();
 componentGrid.addEventListener('change', orientComponents);
-
-const previewLink = element<HTMLAnchorElement>('.workbench-image-link');
-const previewDialog = element<HTMLDialogElement>('#workbench-dialog');
-const previewMedia = element('.preview-dialog-media');
-const previewZoom = element<HTMLButtonElement>('.preview-zoom');
-const updatePreviewSource = () => {
-  const source = `${root}assets/workbench-full-${narrow.matches ? 'mobile' : 'desktop'}${locale === 'en' ? '-en' : ''}.png`;
-  previewLink.href = source;
-  element<HTMLAnchorElement>('.preview-original').href = source;
-};
-updatePreviewSource();
-narrow.addEventListener('change', updatePreviewSource);
-function zoomPreview(zoomed: boolean) {
-  const factor = zoomed ? 2 : .5;
-  const left = (previewMedia.scrollLeft + previewMedia.clientWidth / 2) * factor - previewMedia.clientWidth / 2;
-  const top = (previewMedia.scrollTop + previewMedia.clientHeight / 2) * factor - previewMedia.clientHeight / 2;
-  previewMedia.classList.toggle('is-zoomed', zoomed);
-  previewZoom.setAttribute('aria-pressed', String(zoomed));
-  previewZoom.setAttribute('aria-label', zoomed ? text.fit : text.zoom);
-  previewZoom.title = zoomed ? text.fit : text.zoom;
-  requestAnimationFrame(() => previewMedia.scrollTo({ left: zoomed ? left : 0, top: zoomed ? top : 0 }));
-}
-previewLink.addEventListener('click', event => {
-  if (!previewDialog.showModal || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-  event.preventDefault();
-  zoomPreview(false);
-  previewDialog.showModal();
-  previewMedia.scrollTo({ left: 0, top: 0 });
-  document.documentElement.classList.add('preview-open');
-});
-previewZoom.addEventListener('click', () => zoomPreview(previewZoom.getAttribute('aria-pressed') !== 'true'));
-element('.preview-close').addEventListener('click', () => previewDialog.close());
-previewDialog.addEventListener('close', () => document.documentElement.classList.remove('preview-open'));
-previewDialog.addEventListener('click', event => {
-  if (event.target !== previewDialog) return;
-  const bounds = previewDialog.getBoundingClientRect();
-  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) previewDialog.close();
-});
-let pan: { pointer: number; x: number; y: number; left: number; top: number } | undefined;
-previewMedia.addEventListener('pointerdown', event => {
-  if (event.pointerType !== 'mouse' || event.button !== 0 || !previewMedia.classList.contains('is-zoomed')) return;
-  event.preventDefault();
-  pan = { pointer: event.pointerId, x: event.clientX, y: event.clientY, left: previewMedia.scrollLeft, top: previewMedia.scrollTop };
-  previewMedia.setPointerCapture(event.pointerId);
-  previewMedia.classList.add('is-panning');
-});
-previewMedia.addEventListener('pointermove', event => {
-  if (!pan || pan.pointer !== event.pointerId) return;
-  previewMedia.scrollLeft = pan.left + pan.x - event.clientX;
-  previewMedia.scrollTop = pan.top + pan.y - event.clientY;
-});
-previewMedia.addEventListener('pointerup', event => {
-  if (previewMedia.hasPointerCapture(event.pointerId)) previewMedia.releasePointerCapture(event.pointerId);
-});
-previewMedia.addEventListener('lostpointercapture', () => {
-  pan = undefined;
-  previewMedia.classList.remove('is-panning');
-});
 
 
 const menuButton = element<HTMLButtonElement>('.menu-toggle');

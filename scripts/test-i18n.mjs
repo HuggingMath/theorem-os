@@ -79,42 +79,11 @@ const reveal = async locator => {
     assert.notEqual(await ancestor.getAttribute('open'), null, 'The disclosure must expose its content');
   }
 };
-const checkRetinaImage = async (image, label) => {
-  await image.scrollIntoViewIfNeeded();
-  const picture = await image.evaluate(async node => {
-    await node.decode();
-    const bounds = node.getBoundingClientRect();
-    return { source: node.currentSrc, width: node.naturalWidth, height: node.naturalHeight,
-      renderedWidth: bounds.width, renderedHeight: bounds.height };
-  });
-  const asset = path.basename(new URL(picture.source).pathname);
-  const png = fs.readFileSync(path.join(site, 'assets', asset));
-  assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
-  assert.deepEqual([picture.width, picture.height], [png.readUInt32BE(16), png.readUInt32BE(20)],
-    `The browser must load the original PNG dimensions: ${asset}, ${label}`);
-  assert.ok(picture.renderedWidth > 0 && picture.renderedHeight > 0, `Product picture must be visible: ${asset}, ${label}`);
-  assert.ok(picture.width + 1 >= picture.renderedWidth * 2 && picture.height + 1 >= picture.renderedHeight * 2,
-    `Product picture must supply two image pixels per CSS pixel: ${asset}, ${label}; PNG ${picture.width}×${picture.height}, CSS ${picture.renderedWidth}×${picture.renderedHeight}`);
-  assert.ok(Math.abs(picture.width / picture.height - picture.renderedWidth / picture.renderedHeight) < .01,
-    `Product picture must preserve its actual proportions: ${asset}, ${label}`);
-  return picture;
-};
 const checkEnglishWorkbench = async (page, width) => {
-  const image = page.locator('.workbench-image-link img');
-  const picture = await checkRetinaImage(image, `${width}px English entry`);
-  assert.equal(path.basename(new URL(picture.source).pathname), `workbench-${width <= 900 ? 'mobile' : 'desktop'}-en.png`);
-  assert.equal(await page.locator('.workbench-image-link source').getAttribute('media'), '(max-width: 900px)');
-  assert.match(await image.getAttribute('alt'), /natural.language|problem.*input|workbench/i);
-  const dialog = page.locator('#workbench-dialog');
-  await page.locator('.workbench-image-link').click();
-  assert.equal(await dialog.isVisible(), true);
-  const full = await checkRetinaImage(dialog.locator('img'), `${width}px English full preview`);
-  const expected = `workbench-full-${width <= 600 ? 'mobile' : 'desktop'}-en.png`;
-  assert.equal(path.basename(new URL(full.source).pathname), expected);
-  for (const selector of ['.workbench-image-link', '.preview-original'])
-    assert.equal(path.basename(new URL(await page.locator(selector).getAttribute('href'), page.url()).pathname), expected);
-  await page.keyboard.press('Escape');
-  await page.waitForFunction(() => !document.querySelector('#workbench-dialog').open);
+  const section = page.locator('#workbench-preview');
+  assert.equal(await section.count(), 1, `The English workbench anchor remains at ${width}px`);
+  assert.ok(await section.locator('.workflow-steps li').count() > 0, `The English workflow steps remain at ${width}px`);
+  assert.equal(await page.locator('.workbench-image-link, #workbench-dialog').count(), 0, `No screenshot zoom dialog remains at ${width}px`);
 };
 const componentMeaning = {
   m1: /proof|candidate|construct|build/i, m2: /check|diagnos|feedback/i, m3: /search|task|next|budget/i,
@@ -247,45 +216,14 @@ const checkEnglishAdvancedWorkbench = async (page, width) => {
   };
   page.on('request', trackRequest);
   try {
-    const device = width <= 600 ? 'mobile' : 'desktop';
     assert.equal(await page.locator('.module-media').isVisible(), true);
-    assert.equal(await page.locator('#module-preview-tab-modules').getAttribute('aria-selected'), 'true');
+    assert.equal(await page.locator('[data-module-preview], .module-preview-tabs, .module-library').count(), 0);
     await checkEnglishProductImages(page, width);
     await checkModuleGraph(page, width);
-    for (const id of ['modules', 'library']) {
-      const tab = page.locator(`[data-module-preview="${id}"]`);
-      await tab.click();
-      assert.equal(await tab.getAttribute('aria-selected'), 'true');
-      assert.equal(await tab.getAttribute('tabindex'), '0');
-      assert.equal(await page.locator('#module-preview-panel').getAttribute('aria-labelledby'), `module-preview-tab-${id}`);
-      assert.equal(await page.locator('[data-module-preview][aria-selected="true"]').count(), 1);
-      assert.equal(await page.locator('.module-graph').isVisible(), id === 'modules');
-      assert.equal(await page.locator('.module-library').isVisible(), id === 'library');
-      assert.deepEqual(await cjkIn(page), [], `${width}px English ${id} view`);
-      await checkGraphSelection(page, 'm3');
-      if (id === 'library') {
-        const image = page.locator('.module-library img');
-        const picture = await checkRetinaImage(image, `${width}px English strategy library`);
-        const expected = `workbench-library-${device}-en.png`;
-        assert.equal(path.basename(new URL(picture.source).pathname), expected);
-        assert.equal(await image.getAttribute('src'), '../assets/workbench-library-desktop-en.png');
-        assert.equal(path.basename(new URL(await page.locator('.module-preview-link').getAttribute('href'), page.url()).pathname), expected);
-        assert.match(await image.getAttribute('alt'), /module|strateg|Mathlib/i);
-      }
-      await checkEnglishProductImages(page, width);
-    }
-    assert.ok((await page.locator('#module-preview-caption').innerText()).trim(), 'The selected module view retains its caption');
+    assert.deepEqual(await cjkIn(page), [], `${width}px English module map`);
+    await checkGraphSelection(page, 'm3');
     await page.locator('[data-component="m4"]').click();
     await checkGraphSelection(page, 'm4');
-    await page.locator('#module-preview-tab-library').focus();
-    for (const [key, id] of [['ArrowRight', 'modules'], ['End', 'library'], ['Home', 'modules']]) {
-      await page.keyboard.press(key);
-      assert.equal(await page.locator(`#module-preview-tab-${id}`).getAttribute('aria-selected'), 'true');
-      assert.equal(await page.locator(`#module-preview-tab-${id}`).evaluate(node => node === document.activeElement), true);
-      assert.equal(await page.locator('.module-graph').isVisible(), id === 'modules');
-      assert.equal(await page.locator('.module-library').isVisible(), id === 'library');
-      await checkGraphSelection(page, 'm4');
-    }
     await page.locator('[data-component="m3"]').click();
   } finally {
     page.off('request', trackRequest);
@@ -294,23 +232,7 @@ const checkEnglishAdvancedWorkbench = async (page, width) => {
   console.log(`Module graph ${width}px: synchronized selection, keyboard focus, related edges and zero fetch/XHR/mutation requests.`);
 };
 const checkEnglishProductImages = async (page, width) => {
-  const device = width <= 600 ? 'mobile' : 'desktop';
-  const source = page.locator('.source-fragment img');
-  const picture = await checkRetinaImage(source, `${width}px English Lean workspace`);
-  assert.equal(path.basename(new URL(picture.source).pathname), `workbench-source-${device === 'mobile' ? 'mobile' : 'detail'}-en.png`);
-  assert.equal(await page.locator('.source-fragment source').getAttribute('media'), '(max-width: 600px)');
-  assert.equal(await page.locator('.source-fragment a').getAttribute('href'), '../assets/workbench-source-detail-en.png');
-  const expectedCount = await page.locator('.module-library').isVisible() ? 3 : 2;
-  const images = page.locator('.workbench-image-link img:visible, .source-fragment img:visible, .module-library img:visible');
-  assert.equal(await images.count(), expectedCount, 'The English homepage shows only the entry, source and visible strategy library pictures');
-  const sources = new Set();
-  for (const image of await images.all()) {
-    const picture = await checkRetinaImage(image, `${width}px English product picture`);
-    assert.ok((await image.getAttribute('alt')).trim(), 'English product pictures retain descriptive alternatives');
-    assert.ok(picture.source.startsWith(new URL('../assets/', page.url()).href), 'English product pictures use local assets');
-    sources.add(picture.source);
-  }
-  assert.equal(sources.size, expectedCount, 'The visible English product pictures show distinct real views');
+  assert.equal(await page.locator('.workbench-image-link, .source-fragment, .module-library, main img[src*="workbench-"]').count(), 0, `The English homepage carries no product screenshots at ${width}px`);
 };
 const checkEnglishArchiveEntry = async page => {
   const footer = page.locator('.archive-footer');
@@ -394,13 +316,11 @@ try {
     await checkEnglishAdvancedWorkbench(page, width);
     await checkEnglishArchiveEntry(page);
     for (const id of ['m1', 'm2', 'm4', 'm5']) await page.locator(`[data-component="${id}"]`).click();
-    await page.locator('[data-module-preview="library"]').click();
     await page.locator('#replay-next').scrollIntoViewIfNeeded();
     await page.locator('[data-replay-stage]').first().click();
     await page.locator('.faq-list summary').first().click();
     if (width < 900) await page.locator('.menu-toggle').click();
     assert.deepEqual(await cjkIn(page), [], `English homepage at ${width}px`);
-    assert.equal(await page.locator('#module-preview-panel img').getAttribute('src'), '../assets/workbench-library-desktop-en.png');
     assert.equal(await page.locator('[data-umami-event="request-access-hero"]').getAttribute('href'), '#start');
     assert.equal(await page.locator('[data-umami-event="open-workbench-hero"]').getAttribute('href'), 'https://app.theoremos.top/');
     assert.equal(await page.locator('[data-umami-event="open-workbench-hero"]').isVisible(), true);
@@ -544,8 +464,7 @@ try {
   await checkEnglishProductImages(noScript, 320);
   await checkGraphReadability(noScript, '320px English JavaScript-disabled module map', false);
   await checkGraphVerification(noScript);
-  assert.equal(await noScript.locator('.module-preview-tabs').isVisible(), false);
-  assert.equal(await noScript.locator('.module-library').isVisible(), false);
+  assert.equal(await noScript.locator('.module-preview-tabs, .module-library').count(), 0);
   assert.equal(await noScript.locator('[data-accepted-proof]').count(), catalog.records.filter(record => record.status === 'official_accepted').length);
   assert.equal(await noScript.locator('.menu-toggle').isVisible(), false);
   const noScriptApply = noScript.locator('a[href="#start"]:visible').first();

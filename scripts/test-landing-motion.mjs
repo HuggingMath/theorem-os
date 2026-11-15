@@ -319,10 +319,8 @@ try {
     assert.equal(await page.locator('#stage-verified').isVisible(), true);
     assert.match(await page.locator('.receipt-status').innerText(), /evaluated_passed/);
     assert.equal(await page.locator('.receipt-evidence').getAttribute('href'), 'assets/replay.json');
-    const workbench = page.locator('.workbench-image-link img');
-    await workbench.scrollIntoViewIfNeeded();
-    await workbench.evaluate(image => image.decode());
-    assert.ok(await page.locator('.workbench-image-link img').evaluate(image => image.complete && image.naturalWidth > 0));
+    assert.ok(await page.locator('#workbench-preview .workflow-steps li').count() > 0, 'The workflow steps remain without screenshots');
+    assert.equal(await page.locator('.workbench-image-link, #workbench-dialog').count(), 0, 'No screenshot or zoom dialog remains');
     checks.push(currentCheck);
     await context.close();
     currentPage = undefined;
