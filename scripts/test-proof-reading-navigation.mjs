@@ -108,6 +108,69 @@ try {
     await page.close(); active = undefined;
     console.log(`PASS ${label}: single-step navigation, acceptance, reload and mobile route`);
   }
+  // The published website's linear reader puts the route directly in the content.
+  // Exercise that supported layout as well as the current sidebar with real touch input.
+  for (const layout of ['inline', 'sidebar']) for (const locale of ['zh', 'en']) for (const width of [390, 768, 1100]) {
+    const label = `touch-${layout}-${locale}-${width}`;
+    const page = await browser.newPage({ viewport: { width, height: 844 }, isMobile: true, hasTouch: true, reducedMotion: 'reduce' });
+    active = page;
+    page.setDefaultTimeout(5000);
+    page.on('pageerror', error => errors.push(`${label}: ${error.message}`));
+    await page.route('**/*', route => {
+      const request = route.request();
+      if (request.method() !== 'GET') { writes.push(`${request.method()} ${request.url()}`); return route.abort(); }
+      return new URL(request.url()).origin === origin ? route.continue()
+        : route.fulfill({ contentType: 'text/javascript', body: '' });
+    });
+    await page.goto(`${origin}/site/${locale === 'en' ? 'en/' : ''}archive.html#proof=openai_triangle_face&tab=reading`);
+    const walkthrough = page.locator('[data-proof-walkthrough="openai_triangle_face"]');
+    await walkthrough.waitFor();
+    await page.evaluate(() => document.fonts.ready);
+    if (layout === 'inline') await walkthrough.evaluate(root => {
+      const content = root.querySelector('.proof-reading-content');
+      content.prepend(root.querySelector('.proof-walkthrough-route'));
+      root.querySelector('.proof-reading-layout').replaceWith(content);
+    });
+    const panel = walkthrough.locator('.proof-route-panel');
+    const steps = await walkthrough.locator('[data-proof-derivation]').evaluateAll(elements => elements.map(element => element.dataset.proofDerivation));
+    await page.locator(`#proof-derivation-${steps[0]}`).evaluate(element => element.scrollIntoView({ block: 'start' }));
+    await settle(page);
+    const moves = [];
+    for (const index of [1, steps.length - 1, 0]) {
+      await panel.locator('summary').tap();
+      assert.equal(await panel.evaluate(element => element.open), true);
+      if (index === 1) await page.screenshot({ path: path.join(output, `${label}-expanded.png`) });
+      await panel.locator(`[data-proof-route-step="${steps[index]}"]`).tap();
+      await settle(page);
+      assert.equal(await panel.evaluate(element => element.open), false);
+      assert.equal(await panel.locator('summary').getAttribute('aria-expanded'), 'false');
+      assert.equal(await walkthrough.getAttribute('data-proof-active'), steps[index]);
+      const count = `${String(index + 1).padStart(2, '0')} / ${String(steps.length).padStart(2, '0')}`;
+      assert.ok((await walkthrough.locator('[data-proof-reading-count]').allTextContents()).every(text => text === count));
+      assert.equal(await walkthrough.locator('[data-proof-route-step][aria-current="step"]').getAttribute('data-proof-route-step'), steps[index]);
+      const heading = page.locator(`#proof-derivation-${steps[index]} h5`);
+      assert.equal(await heading.evaluate(element => element === document.activeElement), true);
+      assert.equal(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('reading'), `proof-derivation-${steps[index]}`);
+      assert.ok(await heading.evaluate(element => { const box = element.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight; }));
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      moves.push(index + 1);
+    }
+    await panel.locator('summary').tap();
+    await page.keyboard.press('Escape');
+    assert.equal(await panel.evaluate(element => element.open), false);
+    assert.equal(await panel.locator('summary').evaluate(element => element === document.activeElement), true);
+    if (layout === 'sidebar' && width === 1100) {
+      await page.setViewportSize({ width: 1101, height: 844 });
+      await settle(page);
+      assert.equal(await panel.evaluate(element => element.open), true);
+      assert.equal(await walkthrough.locator('[data-proof-reader="next"]').isVisible(), true);
+      await page.setViewportSize({ width: 1100, height: 844 });
+      await settle(page);
+      assert.equal(await panel.evaluate(element => element.open), false);
+    }
+    results.push({ layout, locale, width, touchRoute: true, moves, autoCollapse: true, focusAndLocation: true, escape: true });
+    await page.close(); active = undefined;
+  }
   assert.deepEqual(errors, []);
   assert.deepEqual(writes, []);
 } catch (error) {
@@ -120,4 +183,4 @@ try {
     ...(failure ? { failure: String(failure) } : {}) }, null, 2) + '\n');
 }
 if (failure) throw failure;
-console.log(`Proof reading navigation passed ${results.length} archive/language combinations without models or writes.`);
+console.log(`Proof reading navigation passed ${results.length} archive/language/layout scenarios without models or writes.`);
