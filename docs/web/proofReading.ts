@@ -255,8 +255,8 @@ export function mountProofReading(ready = Promise.resolve()): void {
   root.addEventListener('click', event => {
     const target = (event.target as Element).closest<HTMLElement>('[data-global-scroll]');
     if (!target?.dataset.globalScroll?.startsWith('proof-derivation-')) return;
-    const id = target.dataset.globalScroll.slice('proof-derivation-'.length);
-    select(buttons.findIndex(button => button.dataset.proofRouteStep === id));
+    // Let the page consume the clicked target before selection updates the reader buttons.
+    schedule();
     if (narrow.matches) panel.open = false;
   }, options);
   panel.addEventListener('toggle', () => { summary.setAttribute('aria-expanded', String(panel.open)); revealSelection(); schedule(); }, options);

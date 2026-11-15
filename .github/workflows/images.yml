@@ -97,6 +97,8 @@ jobs:
         run: bun run test:frontend-research-unit
       - run: bun run build:web && bun run build:site
       - run: bunx playwright install --with-deps chromium
+      - name: Verify single-step proof reading in the website and workbench archives
+        run: bun run test:proof-reading-navigation
       - name: Verify the problem workspace, collaboration, library trials and public reading with disposable fixtures
         run: bun run test:frontend-product-continuity
       - name: Verify installed libraries, archived problems, mathematical reading and login returns with disposable fixtures
