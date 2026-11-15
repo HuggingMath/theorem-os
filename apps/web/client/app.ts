@@ -621,6 +621,19 @@ let historyCriteria = '';
 const arrivals = new Set<string>();
 let historyReading: { top: number; anchors: Array<{ id: string; offset: number }> } = { top: 0, anchors: [] };
 
+const edgeThrottled = (response: Response, method?: string) => (!method || method === 'GET')
+  && (response.status === 429 || response.status === 503) && !response.headers.get('Content-Type')?.includes('json');
+/** Retry-After in seconds when the edge gives one, otherwise 1.5 s then 3 s; never more than 6 s inside the 15 s request budget. */
+const retryDelay = (header: string | null, attempt: number) => {
+  const seconds = Number(header);
+  return Math.min(6_000, Number.isFinite(seconds) && seconds > 0 ? seconds * 1_000 : 1_500 * attempt);
+};
+const pause = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
+  if (signal.aborted) { reject(signal.reason); return; }
+  const timer = setTimeout(() => { signal.removeEventListener('abort', stop); resolve(); }, ms);
+  const stop = () => { clearTimeout(timer); reject(signal.reason); };
+  signal.addEventListener('abort', stop, { once: true });
+});
 /** `message` is what the reader sees; `reason` keeps the server's own text for checks such as sessionFailure. */
 class ApiError extends Error {
   constructor(readonly reason: string, readonly status: number) { super(localizeMessage(reason)); }
@@ -653,10 +666,19 @@ async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}
     // A queued change still belongs to the identity that requested it, even after another tab logs in.
     if (keyChange && !sameSession(requestSession)) throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
     // fetch rejects with a TypeError when the server cannot be reached; its text ("Failed to fetch") means nothing to a reader.
-    const response = await fetch(url, { ...init, credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.any(signals),
+    const signal = AbortSignal.any(signals);
+    const send = () => fetch(url, { ...init, credentials: 'same-origin', cache: 'no-store', signal,
       headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}),
         ...(init.method && init.method !== 'GET' ? { 'X-CSRF-Token': state.session?.csrfToken ?? '' } : {}), ...init.headers } })
       .catch((error: unknown) => { throw error instanceof TypeError ? new Error(t('无法连接服务器')) : error; });
+    let response = await send();
+    // The edge throttles bursts (opening a chat reads several records at once) with a 429/503 that has no JSON body.
+    // A read waits briefly and asks again before the reader sees an error; the server's own limits carry JSON and still surface.
+    for (let attempt = 1; attempt <= 2 && edgeThrottled(response, init.method); attempt++) {
+      await response.body?.cancel().catch(() => undefined);
+      await pause(retryDelay(response.headers.get('Retry-After'), attempt), signal);
+      response = await send();
+    }
     const responseOwner = response.headers.get('X-Theoremos-Owner');
     if (!url.startsWith('/api/session') && responseOwner && state.session?.draftOwner && responseOwner !== state.session.draftOwner) {
       if (requestOwner === state.session.draftOwner) { clearOwnedDrafts(); state.submitting = false; void initialize(); }

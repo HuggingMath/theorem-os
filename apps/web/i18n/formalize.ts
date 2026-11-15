@@ -124,6 +124,8 @@ export const formalize: Record<string, string> = {
   '后台审核排队中': 'Background review queued',
   '后台审核中': 'Background review in progress',
   '后台审核通过': 'Background review passed',
+  '英文原文': 'In English',
+  '中文原文': 'In Chinese',
   '后台审核：需修改': 'Background review: changes needed',
   '后台审核：不确定': 'Background review: uncertain',
   '后台审核失败': 'Background review failed',

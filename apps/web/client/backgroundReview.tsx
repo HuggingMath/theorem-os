@@ -1,5 +1,5 @@
 import type { WebFormalization } from '../formalizationTypes';
-import { t } from '../i18n';
+import { locale, t } from '../i18n';
 
 export type BackgroundReviewState = NonNullable<WebFormalization['backgroundReview']>;
 
@@ -31,21 +31,32 @@ function reasonText(reason: string) {
   return t('后台审核未完成，已编译代码仍可使用。');
 }
 
+/** The review model may answer in another language than the interface; say so instead of mixing languages silently. */
+export function foreignLanguage(text: string): 'en' | 'zh' | undefined {
+  const han = text.match(/\p{Script=Han}/gu)?.length ?? 0, latin = text.match(/[A-Za-z]/g)?.length ?? 0;
+  if (locale !== 'en' && latin >= 40 && han * 20 < latin) return 'en';
+  if (locale === 'en' && han >= 20 && han > latin) return 'zh';
+  return undefined;
+}
+const languageNote = (language?: 'en' | 'zh') => language
+  && <span class="source-language" data-source-language={language}>{language === 'en' ? t('英文原文') : t('中文原文')}</span>;
+
 /** One independent review of the frozen statement; it never replaces compiler evidence. */
 export function BackgroundReview({ review, compact = false }: { review?: BackgroundReviewState; compact?: boolean }) {
   if (!review) return null;
   const result = review.result?.review;
+  const language = foreignLanguage([result?.summary, ...(result?.issues ?? []).map(issue => issue.explanation)].filter(Boolean).join(' '));
   const status = <p role="status" aria-live="polite" aria-atomic="true" class="background-review-status">
-    <strong class={`badge ${tone(review.status)}`}>{backgroundReviewLabel(review)}</strong></p>;
+    <strong class={`badge ${tone(review.status)}`}>{backgroundReviewLabel(review)}</strong>{languageNote(language)}</p>;
   if (compact) return <div class="background-review" data-background-review={review.status}>
     {status}{backgroundReviewPending(review) && <p>{t('代码已可使用，审核在后台同步进行。')}</p>}
     {review.reason && <p>{reasonText(review.reason)}</p>}
-    {result?.summary && <p translate={false}>{result.summary}</p>}
+    {result?.summary && <p translate={false} lang={language}>{result.summary}</p>}
   </div>;
   return <section class="explain-section background-review" data-background-review={review.status}>
     <header class="explain-section-head"><h3>{t('后台单次审核')}</h3>{status}
       <p class="formal-lead">{t('一个独立会话核对原题与已编译的 Lean 陈述，代码下载和证明可继续使用。')}</p></header>
-    {result?.summary && <p class="explain-rich" translate={false}>{result.summary}</p>}
+    {result?.summary && <p class="explain-rich" translate={false} lang={language}>{result.summary}</p>}
     {review.reason && <p class="formal-note">{reasonText(review.reason)}</p>}
     {result && <>
       <ul class="formal-checks">{Object.entries(result.checks).map(([aspect, value]) => <li key={aspect}>
@@ -55,7 +66,7 @@ export function BackgroundReview({ review, compact = false }: { review?: Backgro
         <h4>{aspectLabels[issue.aspect] ?? issue.aspect}</h4>
         <p class="formal-label">{t('原题片段')}</p><blockquote translate={false}>{issue.originalFragment}</blockquote>
         <p class="formal-label">{t('Lean 片段')}</p><pre tabIndex={0} translate={false}><code>{issue.leanFragment}</code></pre>
-        <p class="explain-rich" translate={false}>{issue.explanation}</p>
+        <p class="explain-rich" translate={false} lang={language}>{issue.explanation}</p>
       </article>)}
     </>}
   </section>;

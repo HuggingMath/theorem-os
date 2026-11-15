@@ -385,6 +385,35 @@ describe('conversation guidance persists the original command and its real recei
     expect(again.messages.at(-1)?.id).toBe(saved.id);
   });
 
+  it('withdraws a queued note through the run, keeps a delivered one, and reports a finished run as a conflict', async () => {
+    const { service, run, storage, receipts } = fixture();
+    const conversation = service.create('alice', { runId: run.id }), input = guidanceInput();
+    await service.guide('alice', conversation.id, input, async () => ({ id: input.id, status: 'queued' }));
+    const at = new Date().toISOString(), record = { ...input, status: 'failed' as const, reason: 'math_guidance_withdrawn', createdAt: at, updatedAt: at };
+    const send = vi.fn(async (_runId: string, command: { id: string; guidanceId: string }) => {
+      receipts.set(input.id, { id: input.id, status: 'failed', reason: record.reason, guidance: record });
+      return { id: command.id, status: 'withdrawn', guidance: record };
+    });
+    const result = await service.withdrawGuidance('alice', conversation.id, { id: 'withdraw-1', guidanceId: input.id }, send);
+    expect(send).toHaveBeenCalledExactlyOnceWith(run.id, { type: 'guidance-withdraw', id: 'withdraw-1', guidanceId: input.id });
+    expect(result.withdrawal).toEqual({ status: 'withdrawn', reason: undefined });
+    const expected = { kind: 'guidance', status: 'complete', guidance: { receipt: { status: 'failed', reason: 'math_guidance_withdrawn' } } };
+    expect(result.conversation.messages.at(-1)).toMatchObject(expected);
+    expect(storedConversation(storage, conversation.id).messages.at(-1)).toMatchObject(expected);
+    expect(storedConversation(storage, conversation.id).messages.at(-1)?.error).toBeUndefined();
+    const other = guidanceInput(); other.id = 'delivered-note';
+    await service.guide('alice', conversation.id, other, async () => ({ id: other.id, status: 'delivered' }));
+    const refused = await service.withdrawGuidance('alice', conversation.id, { id: 'withdraw-2', guidanceId: other.id },
+      async command => ({ id: command.id, status: 'rejected', reason: 'math_guidance_already_delivered' }));
+    expect(refused.withdrawal).toEqual({ status: 'rejected', reason: 'math_guidance_already_delivered' });
+    expect(refused.conversation.messages.at(-1)).toMatchObject({ status: 'complete', guidance: { receipt: { status: 'delivered' } } });
+    await expect(service.withdrawGuidance('alice', conversation.id, { id: 'withdraw-3', guidanceId: other.id },
+      async () => { throw new Error('仅可干预正在执行且已建立计划的运行。'); })).rejects.toMatchObject({ status: 409, message: '仅可干预正在执行且已建立计划的运行。' });
+    await expect(service.withdrawGuidance('alice', conversation.id, { id: 'withdraw-4', guidanceId: 'never-sent' }, send)).rejects.toThrow('不存在');
+    await expect(service.withdrawGuidance('bob', conversation.id, { id: 'withdraw-5', guidanceId: input.id }, send)).rejects.toThrow('不存在');
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it('refreshes an unknown receipt to delivered after restart and keeps its recorded recipients', async () => {
     const { service, run, storage, resources, receipts } = fixture();
     const conversation = service.create('alice', { runId: run.id }), input = guidanceInput();

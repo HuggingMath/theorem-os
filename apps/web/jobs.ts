@@ -323,7 +323,8 @@ export class WebJobs {
   async command(owner: string, runId: string, command: Exclude<WebCommand, { type: 'capture' }>): Promise<WebCommandResult> {
     const job = this.jobs.get(runId);
     if (!job || job.owner !== owner) throw new Error('运行不存在或不属于当前会话。');
-    const id = command.type === 'guidance' ? command.guidance.id : command.type === 'plan-approval' ? command.approval.id : command.proposal.id;
+    const id = command.type === 'guidance' ? command.guidance.id : command.type === 'guidance-withdraw' ? command.id
+      : command.type === 'plan-approval' ? command.approval.id : command.proposal.id;
     const key = `${runId}/${command.type === 'edit-preview' ? 'preview/' : ''}${id}`;
     const digest = crypto.createHash('sha256').update(canonicalMathJson(command)).digest('hex');
     const previous = this.commandReceipt(owner, runId, id);
@@ -354,6 +355,8 @@ export class WebJobs {
           try {
             if (command.type === 'plan-approval') {
               if (receipt.status === 'queued') this.event(job.run, 'plan_approval_queued', '计划批准已提交；运行确认后 Agent 才开始工作，未生效会另行记录。');
+            } else if (command.type === 'guidance-withdraw') {
+              if (receipt.status === 'withdrawn') this.event(job.run, 'guidance_withdrawn', '一条尚未送达的数学指导已撤回，Agent 不会收到它。');
             } else this.event(job.run, command.type === 'guidance' ? 'guidance_queued' : 'human_edit_queued',
               command.type === 'guidance' ? '数学指导已提交；投递和采纳结果另行记录。' : '计划修改已提交；应用与证明重查结果另行记录。');
           } catch { job.run.error = '运行状态未能保存；服务恢复后请重新查看。'; this.changed(owner); }

@@ -255,6 +255,8 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 .chat-composer-settings>summary svg,.chat-lean-entry svg{width:15px;height:15px;flex-shrink:0}
 .chat-composer-settings[open]>summary{color:var(--ink)!important}
 .chat-model-label{min-width:0;max-width:22ch;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chat-model-effort{flex:none;color:var(--muted);white-space:nowrap}
+.chat-model-effort::before{content:'·';margin-right:4px}
 #natural-research .chat-composer #formalize-settings>summary{max-width:100%;min-height:40px}
 .chat-composer-toolbar>#formalize-settings{min-width:0;max-width:calc(100% - 100px)}
 .chat-settings-fields{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:12;display:grid;gap:12px;max-height:48dvh;overflow-y:auto;padding:20px;border:1px solid var(--line);border-radius:14px;background:var(--card);box-shadow:0 8px 32px #00000014;font-size:13px}
@@ -317,9 +319,12 @@ body[data-chat-empty=true] .chat-settings-fields{top:calc(100% + 17px);bottom:au
 .chat-history-item>span:first-child{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .chat-history-copy{display:grid;gap:3px;flex:1}
 .chat-history-copy>span:first-child{overflow:hidden;text-overflow:ellipsis}
+/* Titles render TeX; KaTeX boxes are atomic and clip mid-glyph under nowrap, so clamp one wrapped line instead. */
+.chat-history-copy>.chat-history-title{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;white-space:normal;overflow-wrap:anywhere}
 .chat-history-decision{color:var(--blue-700);font-size:11px;line-height:1.6;white-space:normal}
 .chat-history-waiting{margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--line)}
 .chat-history-waiting>.chat-history-heading{color:var(--blue-700)}
+.chat-history-running{margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--line)}
 .chat-history-item .spinner{flex-shrink:0;width:13px;height:13px;margin-left:auto}
 .chat-history-item:hover,.chat-history-item[aria-current=page]{background:var(--gray-100)}
 .chat-history-empty{padding:8px 12px;margin:0;color:var(--muted);font-size:12px;line-height:1.7}
@@ -406,6 +411,7 @@ body[data-view=draft][data-entry=natural][data-output-open=true] .runs-workspace
 .chat-guidance-receipt p{margin:0 0 4px}
 .chat-guidance-receipt[data-guidance-status=delivered]{color:var(--green-600)}
 .chat-guidance-receipt:is([data-guidance-status=rejected],[data-guidance-status=failed]){color:var(--red-700)}
+.chat-guidance-receipt .chat-guidance-withdrawal-note{color:var(--ink)}
 @media(max-width:480px){.chat-guidance-target label{flex-basis:100%}.chat-composer-toolbar{gap:6px}.chat-composer-toolbar>[data-chat-guidance-mode-open]{font-size:12px}}
 /* Forced colours drop the bubble fills, the round send button and the composer's focus border; draw them as lines. */
 @media(forced-colors:active){

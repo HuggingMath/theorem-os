@@ -260,8 +260,10 @@ export class WebConversations {
     if (!message.guidance || receipt.id !== message.guidance.input.id) throw new WebStorageError(409, '指导回执身份不匹配。');
     const record = receipt.guidance, status = record?.status ?? receipt.status;
     message.guidance.receipt = { id: receipt.id, status, reason: record?.reason ?? receipt.reason, deliveredTo: record?.deliveredTo };
-    message.status = ['failed', 'rejected'].includes(status) ? 'error' : status === 'unknown' ? 'pending' : 'complete';
-    message.error = ['failed', 'rejected'].includes(status) ? message.guidance.receipt.reason : undefined;
+    // A withdrawal is the person's own choice, not a failure to report or retry.
+    const failed = ['failed', 'rejected'].includes(status) && message.guidance.receipt.reason !== 'math_guidance_withdrawn';
+    message.status = failed ? 'error' : status === 'unknown' ? 'pending' : 'complete';
+    message.error = failed ? message.guidance.receipt.reason : undefined;
   }
   async guide(owner: string, id: string, input: WebGuidanceInput, send: (runId: string, input: WebGuidanceInput) => Promise<WebCommandResult>) {
     const conversation = this.read(owner, id), runId = conversation.runId;
@@ -282,6 +284,24 @@ export class WebConversations {
     this.applyGuidanceReceipt(message, this.resources.commandReceipt?.(owner, runId, input.id) ?? receipt);
     latest.updatedAt = now(); this.save(owner, latest);
     return latest;
+  }
+  /** Takes back a note no agent has received. The run decides under its delivery lock; a delivered note stays delivered. */
+  async withdrawGuidance(owner: string, id: string, input: { id: string; guidanceId: string },
+    send: (runId: string, command: { type: 'guidance-withdraw'; id: string; guidanceId: string }) => Promise<WebCommandResult>) {
+    const conversation = this.read(owner, id), message = conversation.messages.find(item => item.guidance?.input.id === input.guidanceId);
+    if (!message?.guidance || message.guidance.runId !== conversation.runId || !this.resources.run(owner, message.guidance.runId))
+      throw new WebStorageError(404, '这条指导或它关联的证明任务不存在。');
+    const runId = message.guidance.runId;
+    let result: WebCommandResult;
+    // jobs.command explains a finished run or a missing channel in user-facing words; keep them instead of a 500.
+    try { result = await send(runId, { type: 'guidance-withdraw', id: input.id, guidanceId: input.guidanceId }); }
+    catch (error) { throw error instanceof WebStorageError ? error : new WebStorageError(409, error instanceof Error ? error.message : '撤回未能提交。'); }
+    const latest = this.read(owner, id), current = latest.messages.find(item => item.guidance?.input.id === input.guidanceId)!;
+    const receipt = this.resources.commandReceipt?.(owner, runId, input.guidanceId);
+    if (result.status === 'withdrawn' && result.guidance) this.applyGuidanceReceipt(current, { ...receipt ?? { id: input.guidanceId, status: 'failed' }, guidance: result.guidance });
+    else if (receipt) this.applyGuidanceReceipt(current, receipt);
+    latest.updatedAt = now(); this.save(owner, latest);
+    return { conversation: latest, withdrawal: { status: result.status, reason: result.reason } };
   }
   forget(owner: string) {
     this.forgotten.add(owner);

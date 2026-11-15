@@ -9,7 +9,7 @@ import type { SolverRunState } from '../../src/solver/archive';
 import { buildRunInspection, exportRunPlan, readRunInspection } from '../../src/solver/inspection';
 import { queuePlanApproval, queueRunEdit } from '../../src/solver/humanEdit';
 import { planApprovalInputSchema } from '../../src/solver/planApproval';
-import { humanGuidanceInputSchema, queueHumanGuidance, readHumanGuidance } from '../../src/solver/humanGuidance';
+import { humanGuidanceInputSchema, queueHumanGuidance, readHumanGuidance, withdrawHumanGuidance } from '../../src/solver/humanGuidance';
 import { parseCooperationPlan, taskGroup, taskVersion, type TaskRecord } from '../../src/solver/tasks';
 import { allowedKnowledgeFile, buildTheoremKnowledge, validateTheoremKnowledge, type TheoremKnowledgeBase } from '../../src/solver/theoremKnowledge';
 import { importKnowledgeRuns } from '../../src/solver/theoremKnowledgeRuns';
@@ -299,6 +299,8 @@ const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('edit-preview'), proposal: z.record(z.unknown()) }).strict(),
   z.object({ type: z.literal('edit'), proposal: z.record(z.unknown()) }).strict(),
   z.object({ type: z.literal('guidance'), guidance: humanGuidanceInputSchema }).strict(),
+  z.object({ type: z.literal('guidance-withdraw'), id: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/u),
+    guidanceId: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/u) }).strict(),
   z.object({ type: z.literal('plan-approval'), approval: planApprovalInputSchema }).strict(),
   z.object({ type: z.literal('capture') }).strict(),
 ]);
@@ -325,6 +327,23 @@ export async function handleWebWorkerCommand(value: unknown, options: { activeRu
         'math_guidance_lead_missing', 'math_guidance_limit', 'math_guidance_candidate_environment_changed',
         'math_guidance_candidate_file_mismatch', 'math_guidance_candidate_base_mismatch'].includes(reason))
         return { id: command.guidance.id, status: 'rejected', reason };
+      throw error;
+    }
+  }
+  if (command.type === 'guidance-withdraw') {
+    try {
+      const guidance = await withdrawHumanGuidance(active.output, command.guidanceId);
+      // A fresh observation carries the settled note so readers see it at once; the withdrawal itself is already durable.
+      const observation = await bridge.capture({ force: true }).then(result => result.observation, () => undefined);
+      return { id: command.id, status: 'withdrawn', guidance, ...(observation ? { observation } : {}) };
+    } catch (error) {
+      // Decided under the delivery lock before anything is written.
+      const reason = error instanceof Error ? error.message : '';
+      if (['math_guidance_invalid', 'math_guidance_unknown', 'math_guidance_already_delivered', 'math_guidance_already_failed'].includes(reason)) {
+        // A note delivered first should read as delivered now, not after the next periodic capture.
+        const observation = await bridge.capture({ force: true }).then(result => result.observation, () => undefined);
+        return { id: command.id, status: 'rejected', reason, ...(observation ? { observation } : {}) };
+      }
       throw error;
     }
   }

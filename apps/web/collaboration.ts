@@ -167,6 +167,8 @@ export type WebObservation = {
 export type WebCommand =
   | { type: 'edit-preview' | 'edit'; proposal: WebPlanProposal }
   | { type: 'guidance'; guidance: WebGuidanceInput }
+  /** Takes back a queued or deferred note before any agent receives it; `id` is this command's own identity. */
+  | { type: 'guidance-withdraw'; id: string; guidanceId: string }
   | { type: 'plan-approval'; approval: WebPlanApprovalInput }
   | { type: 'capture' };
 export type WebCommandResult = {

@@ -227,6 +227,23 @@ describe('isolated Web worker bridge', () => {
     expect((await handleWebWorkerCommand({ type: 'capture' }, options)).observation!.guidance).toHaveLength(1);
   });
 
+  it('withdraws a queued note with a fresh observation and rejects unknown notes without writing', async () => {
+    const f = fixture(), options = { activeRunFile: f.activeRunFile };
+    const observation = (await handleWebWorkerCommand({ type: 'capture' }, options)).observation!;
+    const guidance = { id: 'queued-direction', recipient: { kind: 'task', id: 'goal' },
+      taskRef: { id: 'goal', version: taskVersion(f.goal) }, text: 'Check the base case first.',
+      observationRef: { sequence: observation.sequence, stateDigest: observation.snapshot.stateDigest } };
+    expect(await handleWebWorkerCommand({ type: 'guidance', guidance }, options)).toMatchObject({ status: 'queued' });
+    const withdrawn = await handleWebWorkerCommand({ type: 'guidance-withdraw', id: 'withdraw-1', guidanceId: guidance.id }, options);
+    expect(withdrawn).toMatchObject({ id: 'withdraw-1', status: 'withdrawn', guidance: { id: guidance.id, status: 'failed', reason: 'math_guidance_withdrawn' } });
+    expect(withdrawn.observation!.guidance).toEqual([expect.objectContaining({ id: guidance.id, status: 'failed', reason: 'math_guidance_withdrawn' })]);
+    const before = fs.readFileSync(path.join(path.dirname(f.stateFile), 'human-guidance.json'));
+    expect(await handleWebWorkerCommand({ type: 'guidance-withdraw', id: 'withdraw-2', guidanceId: 'never-sent' }, options))
+      .toMatchObject({ id: 'withdraw-2', status: 'rejected', reason: 'math_guidance_unknown', observation: { guidance: [expect.objectContaining({ id: guidance.id })] } });
+    expect(fs.readFileSync(path.join(path.dirname(f.stateFile), 'human-guidance.json'))).toEqual(before);
+    await expect(handleWebWorkerCommand({ type: 'guidance-withdraw', id: 'withdraw-3', guidanceId: '../escape' }, options)).rejects.toThrow();
+  });
+
   it('keeps a known guidance rejection distinct from an uncertain queue write', async () => {
     const f = fixture(), options = { activeRunFile: f.activeRunFile };
     const observation = (await handleWebWorkerCommand({ type: 'capture' }, options)).observation!;

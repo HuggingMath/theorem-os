@@ -62,6 +62,8 @@ export type ChatThreadProps = {
   onOpenLivePlan?(): void;
   onQuestion?(entry: ThinkingStep): void;
   onGuidanceReceipt?(message: WebConversationMessage): void;
+  /** Offered only while the run still holds the note in its queue. */
+  onWithdrawGuidance?(message: WebConversationMessage): void; withdrawingGuidance?: readonly string[]; withdrawalNotes?: Record<string, string>;
   guidanceFeedback?: { records: ResearchFeedback[]; loading: boolean; error?: string; onRetry(): void };
   onEditProblem?(): void;
   onCancelTask?(): void;
@@ -307,15 +309,20 @@ function MessageTaskLinks({ message, ...props }: ChatThreadProps & { message: We
     onClick={() => props.onArtifact('roadmap', { taskId: task.id, messageId: message.id })}><Icon name="network" />{task.theorem || task.objective || task.id}</button>)}</div> : null;
 }
 
-function GuidanceReceipt({ message, onGuidanceReceipt, feedback, record, onOpenRunTask }: { message: WebConversationMessage; onGuidanceReceipt?: ChatThreadProps['onGuidanceReceipt']; feedback?: ChatThreadProps['guidanceFeedback']; record?: WebGuidanceRecord; onOpenRunTask?:(task:{ id:string; version:string })=>void }) {
+function GuidanceReceipt({ message, onGuidanceReceipt, onWithdraw, withdrawing, withdrawalNote, feedback, record, onOpenRunTask }: { message: WebConversationMessage; onGuidanceReceipt?: ChatThreadProps['onGuidanceReceipt'];
+  onWithdraw?: ChatThreadProps['onWithdrawGuidance']; withdrawing?: boolean; withdrawalNote?: string; feedback?: ChatThreadProps['guidanceFeedback']; record?: WebGuidanceRecord; onOpenRunTask?:(task:{ id:string; version:string })=>void }) {
   const guidance = message.guidance!;
   const labels: Record<string, string> = { queued: t('排队中'), deferred: t('暂缓'), delivered: t('已送达'), failed: t('失败'), rejected: t('已拒绝'), unknown: t('结果尚未确认') };
-  const receipt = guidance.receipt;
-  return <div class="chat-guidance-receipt" data-chat-guidance-receipt={guidance.input.id} data-guidance-status={receipt?.status ?? 'pending'} role="status">
-    <p><strong>{t('研究指导')}</strong> · {guidance.input.recipient.kind === 'lead' ? t('证明任务负责人') : guidance.input.recipient.id} · {receipt ? labels[receipt.status] ?? receipt.status : t('正在核对回执…')}</p>
-    {receipt?.reason && <p>{localizeText(receipt.reason)}</p>}
+  const receipt = guidance.receipt, withdrawn = receipt?.status === 'failed' && receipt.reason === 'math_guidance_withdrawn';
+  const waiting = receipt && ['queued', 'deferred'].includes(receipt.status);
+  return <div class="chat-guidance-receipt" data-chat-guidance-receipt={guidance.input.id} data-guidance-status={withdrawn ? 'withdrawn' : receipt?.status ?? 'pending'} role="status">
+    <p><strong>{t('研究指导')}</strong> · {guidance.input.recipient.kind === 'lead' ? t('证明任务负责人') : guidance.input.recipient.id} · {withdrawn ? t('已撤回') : receipt ? labels[receipt.status] ?? receipt.status : t('正在核对回执…')}</p>
+    {withdrawn ? <p>{t('Agent 不会收到这条指导。')}</p> : receipt?.reason && <p>{localizeText(receipt.reason)}</p>}
+    {waiting && onWithdraw && <button class="text-button" type="button" data-chat-guidance-withdraw disabled={withdrawing}
+      title={t('还没有 Agent 收到时可以撤回')} onClick={() => onWithdraw(message)}>{withdrawing ? t('正在撤回…') : t('撤回')}</button>}
+    {withdrawalNote && <p class="chat-guidance-withdrawal-note" data-chat-withdrawal-note>{withdrawalNote}</p>}
     {(!receipt || receipt.status === 'unknown') && onGuidanceReceipt && <button class="text-button" type="button" data-chat-guidance-recover onClick={() => onGuidanceReceipt(message)}>{t('核对并重试原提交')}</button>}
-    <GuidanceOutcome guidance={record} onOpenRunTask={onOpenRunTask} feedback={feedback?.records.find(item => item.target?.runId === guidance.runId && (item.id === guidance.input.id || item.requestId === guidance.input.id))} />
+    {!withdrawn && <GuidanceOutcome guidance={record} onOpenRunTask={onOpenRunTask} feedback={feedback?.records.find(item => item.target?.runId === guidance.runId && (item.id === guidance.input.id || item.requestId === guidance.input.id))} />}
     {feedback?.error && <details><summary>{t('后续记录读取失败')}</summary><p role="alert">{feedback.error} <button type="button" class="text-button" onClick={feedback.onRetry}>{t('重新读取')}</button></p></details>}
   </div>;
 }
@@ -353,6 +360,7 @@ function ChatThread(props: ChatThreadProps) {
       {message.kind === 'task' ? <TaskMessage {...props} /> : <>
         {message.text && <ChatMessageContent text={message.text} />}
         {message.kind === 'guidance' && message.guidance && <GuidanceReceipt message={message} onGuidanceReceipt={props.onGuidanceReceipt} feedback={props.guidanceFeedback}
+          onWithdraw={props.onWithdrawGuidance} withdrawing={props.withdrawingGuidance?.includes(message.guidance.input.id)} withdrawalNote={props.withdrawalNotes?.[message.guidance.input.id]}
           record={props.run?.observation?.guidance.find(record => record.id === message.guidance!.input.id)}
           {...(props.run?.observation?.guidance.find(record => record.id === message.guidance!.input.id)?.decision?.evidenceRefs.every(ref => ref.kind !== 'task' || props.run!.observation!.inspection.tasks.some(task => task.id === ref.id && task.version === ref.version))
             ? { onOpenRunTask: (task:{id:string;version:string}) => props.onArtifact('roadmap', { taskId: task.id, messageId: message.id }) } : {})} />}
@@ -527,6 +535,7 @@ function ChatComposer(props: ChatComposerProps) {
           title={`${props.newProblem ? tx('研究设置', 'Research settings') : t('模型设置')} · ${provider?.name ?? ''} · ${configuration}`}
           aria-label={needsKey ? tx('填写 API Key', 'Enter API key') : `${props.newProblem ? tx('研究设置', 'Research settings') : t('模型设置')} · ${configuration}`}>
           <Icon name="sliders-horizontal" /><span class="chat-model-label" translate={false}>{needsKey ? tx('填写 API Key', 'Enter API key') : !props.model.trim() || missingKey ? t('配置模型') : props.model}</span>
+          {!needsKey && props.model.trim() && !missingKey && <span class="chat-model-effort" data-chat-model-effort={props.effort}>{props.effort === 'max' ? t('推理 最高') : props.effort === 'low' ? t('推理 低') : t('推理 高')}</span>}
           <Icon name="chevron-down" /></summary>
           <div class="chat-settings-fields">
             <div class="chat-connection-fields">
@@ -671,6 +680,14 @@ function ChatHistory(props: ChatHistoryProps) {
     if (record.status === 'review') decisions.set(item.id, t('等你确认题意'));
     else if (record.status === 'confirmed') decisions.set(item.id, t('继续拟定研究计划'));
   }
+  // Work still moving is pinned below decisions, so it is found without scanning the dated list.
+  const running = new Set(matching.filter(item => {
+    if (decisions.has(item.id)) return false;
+    const run = props.runs?.find(run => run.id === item.runId);
+    if (run) return ['queued', 'running'].includes(run.status);
+    const record = props.records.find(record => record.id === item.formalizationId);
+    return record ? ['queued', 'running'].includes(record.status) : item.answering;
+  }).map(item => item.id));
   const edit = (id: string, action: 'rename' | 'delete' | 'record', title: string) => { setEditing({ id, action, title }); setError(''); setNotice(''); };
   const apply = async () => {
     if (!editing || busy) return;
@@ -694,7 +711,7 @@ function ChatHistory(props: ChatHistoryProps) {
   const rows = (entries: WebConversationSummary[]) => entries.map(item => <div key={item.id} class="chat-history-row" data-chat-row={item.id}>
     <div class="chat-history-line"><a href={`?chat=${encodeURIComponent(item.id)}`} class="chat-history-item" aria-current={item.id === selectedId ? 'page' : undefined}
       onClick={event => { if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); onOpen(item.id); }}>
-      <span class="chat-history-copy"><span translate={false}>{item.title}</span>{decisions.has(item.id) ? <span class="chat-history-decision" data-chat-awaiting>{decisions.get(item.id)}</span> : <span class="chat-history-status" data-chat-history-status>{(() => {
+      <span class="chat-history-copy"><span class="chat-history-title" translate={false}><Rich text={item.title} /></span>{decisions.has(item.id) ? <span class="chat-history-decision" data-chat-awaiting>{decisions.get(item.id)}</span> : <span class="chat-history-status" data-chat-history-status>{(() => {
         const run = props.runs?.find(run => run.id === item.runId), record = props.records.find(record => record.id === item.formalizationId);
         if (run) return isAcceptedRun(run) ? t('证明已验收') : isFaultedRun(run) || isRejectedRun(run) ? t('研究未完成，查看原因') : ['queued', 'running'].includes(run.status) ? runProgress(run).phaseLabel : stoppedLabel(run);
         if (record) return record.status === 'error' || record.status === 'exhausted' ? t('形式化未完成') : record.status === 'cancelled' ? t('已停止') : record.status === 'confirmed' ? t('陈述已确认') : record.status === 'review' ? t('陈述待核对') : t('形式化进行中');
@@ -713,7 +730,12 @@ function ChatHistory(props: ChatHistoryProps) {
         <p class="chat-history-heading">{t('等你处理')} <span>{decisions.size}</span></p>
         {rows(matching.filter(item => decisions.has(item.id)))}
       </section>}
-      {rows(matching.filter(item => !decisions.has(item.id)))}
+      {!!running.size && <section class="chat-history-running" data-chat-running aria-label={t('运行中')}>
+        <p class="chat-history-heading">{t('运行中')} <span>{running.size}</span></p>
+        {rows(matching.filter(item => running.has(item.id)))}
+      </section>}
+      {!!(decisions.size || running.size) && matching.length > decisions.size + running.size && <p class="chat-history-heading" data-chat-recent>{t('最近')}</p>}
+      {rows(matching.filter(item => !decisions.has(item.id) && !running.has(item.id)))}
     </> : <p class="chat-history-empty">{t('没有匹配的对话')}</p>
       : failed ? <p class="chat-history-empty" role="alert">{t("对话列表暂时没有加载出来。")}<button type="button" class="text-button" data-chat-history-retry onClick={onRetry}>{t("重试")}</button></p>
       : <p class="chat-history-empty">{t("新对话会保存在这里")}</p>}

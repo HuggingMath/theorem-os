@@ -723,10 +723,19 @@ try {
       await page.getByText('新对话会保存在这里').waitFor();
       assert.equal(await failed.count(), 0);
       const missing = '00000000-0000-4000-8000-000000000000';
-      await page.route(`**/api/conversations/${missing}`, route => route.fulfill({ status: 429, body: '' }), { times: 1 });
+      // A bodiless 429 is the edge throttling a burst: reads retry it twice, and only a persistent limit is shown.
+      let throttled = 0;
+      await page.route(`**/api/conversations/${missing}`, route => { throttled++; return route.fulfill({ status: 429, body: '' }); }, { times: 3 });
       await page.goto(`${origin}/?chat=${missing}`);
       await page.getByText('请求太频繁，请稍后再试。').first().waitFor();
-      mark('a failed history load says so and retries; a rate-limited read names the limit');
+      assert.equal(throttled, 3, 'An edge 429 without a reason is retried twice before the limit is named');
+      // A server quota answer carries its reason and is shown at once, without retrying.
+      let quota = 0;
+      await page.route(`**/api/conversations/${missing}`, route => { quota++; return route.fulfill({ status: 429, json: { error: '本地测试：额度已用完' } }); }, { times: 3 });
+      await page.reload();
+      await page.getByText('本地测试：额度已用完').first().waitFor();
+      assert.equal(quota, 1, 'A quota 429 with a reason is not retried');
+      mark('a failed history load says so and retries; a rate-limited read retries edge throttling and names a persistent limit');
     } finally { await context.close(); }
   }
   for (const width of [1440, 390]) {

@@ -18,7 +18,7 @@ export function classicsNavigation(english: boolean, workbench: string) {
   const help = `<a href="${workbench}workspace.html${language}&amp;tab=help">${english ? 'Help' : '帮助'}</a>`;
   const other = english ? '<a class="lang-link" href="../archive.html" hreflang="zh-CN" lang="zh-CN" aria-label="中文版">中文</a>'
     : '<a class="lang-link" href="en/archive.html" hreflang="en" lang="en" aria-label="English version">English</a>';
-  return `<nav class="classics-nav" aria-label="${english ? 'Research space' : '研究空间'}"><a href="${workbench}${language}">${english ? '← Workbench' : '← 工作台'}</a><a href="${workbench}theorems.html${language}" aria-current="page">${english ? 'Theorems' : '定理'}</a></nav>${other}<button type="button" class="theme-toggle" data-theme-toggle aria-label="${english ? 'Switch theme' : '切换明暗主题'}" title="${english ? 'Switch theme' : '切换明暗主题'}"><span aria-hidden="true">◐</span></button><details class="classics-more"><summary aria-label="${english ? 'More pages' : '更多页面'}">⋯<span>${english ? 'More' : '导航'}</span></summary><nav aria-label="${english ? 'More pages' : '更多页面'}">${items}${help}</nav></details>`;
+  return `<nav class="classics-nav" aria-label="${english ? 'Research space' : '研究空间'}"><a href="${workbench}${language}">${english ? '← Workbench' : '← 工作台'}</a><a href="${workbench}theorems.html${language}" aria-current="page">${english ? 'Theorems' : '定理'}</a></nav>${other}<button type="button" class="theme-toggle" data-theme-toggle aria-label="${english ? 'Switch theme' : '切换明暗主题'}" title="${english ? 'Switch theme' : '切换明暗主题'}"><span aria-hidden="true">◐</span></button><details class="classics-more"><summary aria-label="${english ? 'More pages' : '更多页面'}">⋯<span>${english ? 'Menu' : '菜单'}</span></summary><nav aria-label="${english ? 'More pages' : '更多页面'}">${items}${help}</nav></details>`;
 }
 
 /** A shared, read-only library shipped with the web image, independent of account-owned runs. */
@@ -110,6 +110,10 @@ if (themeToggle) {
 .shared-classics .metric:has(#accepted-count), .shared-classics .metric:has(#progress-count),
 .shared-classics .status-filter label:has(input[value="accepted"]), .shared-classics .status-filter label:has(input[value="progress"]) { display: none; }
 .shared-classics .metric:has(#verified-count) { padding-left: 0; }
+/* Inside the workbench a primary action is ink, as on every other page; green stays the verified-status colour. */
+.shared-classics .button-primary { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+.shared-classics .button-primary:hover { background: var(--ink-soft); border-color: var(--ink-soft); color: var(--paper); }
+.shared-classics .button:not(.button-primary):hover, .shared-classics .icon-button:hover { color: var(--ink); }
 .shared-classics .topbar { height: 56px; justify-content: flex-start; flex-wrap: nowrap; gap: 16px; }
 .shared-classics .brand { flex-shrink: 0; }
 .shared-classics .classics-nav { display: flex; align-items: center; gap: 6px; min-width: 0; }

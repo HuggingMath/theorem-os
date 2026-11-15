@@ -687,7 +687,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           }
           throw new HttpError(405, '请求方法不受支持。');
         }
-        const conversationMatch = /^\/api\/conversations\/([a-f0-9-]{36})(?:\/(messages|stop|guidance))?$/u.exec(url.pathname);
+        const conversationMatch = /^\/api\/conversations\/([a-f0-9-]{36})(?:\/(messages|stop|guidance|guidance-withdraw))?$/u.exec(url.pathname);
         if (conversationMatch) {
           const [, id, action] = conversationMatch;
           if (!action && request.method === 'GET') { json(response, 200, { conversation: conversations.read(owner, id) }); return; }
@@ -706,6 +706,12 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             if (!parsed.success) throw new HttpError(400, '请检查指导对象、任务版本与内容。');
             const conversation = await conversations.guide(owner, id, parsed.data, (runId, guidance) => jobs.command(owner, runId, { type: 'guidance', guidance }));
             json(response, 200, { conversation }); return;
+          }
+          if (action === 'guidance-withdraw' && request.method === 'POST') {
+            const commandId = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/u);
+            const parsed = z.object({ id: commandId, guidanceId: commandId }).strict().safeParse(await readBody());
+            if (!parsed.success) throw new HttpError(400, '请检查要撤回的指导。');
+            json(response, 200, await conversations.withdrawGuidance(owner, id, parsed.data, (runId, command) => jobs.command(owner, runId, command))); return;
           }
           if (action === 'messages' && request.method === 'POST') {
             const conversation = conversations.read(owner, id);

@@ -816,6 +816,25 @@ export class ChatSession {
     finally { if (generation === this.generation) { this.submitting = false; this.draw(); this.schedule(); } }
   }
   private recoverGuidance(message: WebConversationMessage) { if (message.guidance) void this.sendGuidance(message.guidance.input); }
+  /** Takes back a queued note. The run settles it under its delivery lock, so a note already handed to an agent stays delivered. */
+  private withdrawing = new Set<string>();
+  /** Why a withdrawal did not happen, shown on that note rather than as a retryable thread error. */
+  private withdrawalNotes = new Map<string, string>();
+  private async withdrawGuidance(message: WebConversationMessage) {
+    const conversation = this.conversation, generation = this.generation, owner = this.ownerRevision, guidanceId = message.guidance?.input.id;
+    if (!conversation || !guidanceId || this.withdrawing.has(guidanceId)) return;
+    this.withdrawing.add(guidanceId); this.withdrawalNotes.delete(guidanceId); this.readRevision++; this.draw();
+    try {
+      const { conversation: next, withdrawal } = await this.post<{ conversation: WebConversation; withdrawal: { status: string; reason?: string } }>(
+        `/api/conversations/${conversation.id}/guidance-withdraw`, { id: crypto.randomUUID(), guidanceId });
+      if (owner !== this.ownerRevision || generation !== this.generation) return;
+      if (withdrawal.status === 'rejected') this.withdrawalNotes.set(guidanceId, withdrawal.reason === 'math_guidance_already_delivered'
+        ? t('这条指导已经送达 Agent，无法撤回。') : t('这条指导现在不能撤回。'));
+      else if (withdrawal.status !== 'withdrawn') this.withdrawalNotes.set(guidanceId, t('撤回结果尚未确认，可以稍后再试一次。'));
+      this.setConversation(next);
+    } catch (error) { if (generation === this.generation) this.withdrawalNotes.set(guidanceId, reason(error)); }
+    finally { this.withdrawing.delete(guidanceId); if (generation === this.generation) { this.readRevision++; this.draw(); } }
+  }
   private async cancelTask() {
     if (this.run && !running(this.formalization)) { this.options.onCancelRun(this.run); return; }
     const id = this.formalization?.id, generation = this.generation;
@@ -1050,6 +1069,8 @@ export class ChatSession {
       ...(this.conversation && !this.loading && !this.submitting && !this.guidanceMode && !(this.run && this.options.isSample(this.run))
         ? { onQuestion: (entry: ThinkingStep) => this.questionStep(entry) } : {}),
       onGuidanceReceipt: message => this.recoverGuidance(message),
+      onWithdrawGuidance: message => void this.withdrawGuidance(message), withdrawingGuidance: [...this.withdrawing],
+      withdrawalNotes: Object.fromEntries(this.withdrawalNotes),
       guidanceFeedback: { ...this.guidanceFeedback, records: this.guidanceFeedback.runId === this.run?.id ? this.guidanceFeedback.records : [],
         onRetry: () => { this.refreshGuidanceFeedback(true); this.draw(); } },
       ...(this.formalization?.humanReview && this.formalization.status === 'review'

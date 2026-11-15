@@ -151,6 +151,29 @@ export async function queueHumanGuidance(run: string, value: unknown): Promise<H
   });
 }
 
+/**
+ * A person may take back a note that no agent has received. It shares the delivery lock, so a note is either delivered or
+ * withdrawn, never both. Withdrawal reuses the `failed` status that every existing reader already skips, so runs started by
+ * older hosts keep reading the store.
+ */
+export const GUIDANCE_WITHDRAWN = 'math_guidance_withdrawn';
+export async function withdrawHumanGuidance(run: string, guidanceId: string): Promise<HumanGuidanceRecord> {
+  if (!identity.safeParse(guidanceId).success) throw new Error('math_guidance_invalid');
+  const initial = readRunInspection(run);
+  return withMathRuntimeLease({ lockPath: path.join(path.dirname(initial.stateFile), 'human-guidance.lock'),
+    flockExecutable: '/usr/bin/flock' }, async lease => {
+    const { state, stateFile } = readRunInspection(run), records = readHumanGuidance(stateFile, state.runId);
+    const record = records.find(item => item.id === guidanceId);
+    if (!record) throw new Error('math_guidance_unknown');
+    if (record.status === 'failed' && record.reason === GUIDANCE_WITHDRAWN) return record;
+    if (record.status === 'delivered') throw new Error('math_guidance_already_delivered');
+    if (record.status === 'failed') throw new Error('math_guidance_already_failed');
+    record.status = 'failed'; record.reason = GUIDANCE_WITHDRAWN; record.updatedAt = new Date().toISOString();
+    lease.assertHeld(); save(stateFile, state.runId, records);
+    return record;
+  });
+}
+
 export type HumanGuidanceRecipient = {
   workerId: string; role: string; taskRef?: { id: string; version: string };
   planVersion?: string;

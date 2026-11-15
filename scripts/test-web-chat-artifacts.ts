@@ -35,6 +35,7 @@ const provider = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request
   providerCalls.push(await request.json());
   return Response.json({ output: [{ type: 'message', content: [{ type: 'output_text', text: reply }] }] });
 } });
+const withdrawals: string[] = [];
 const runner: WebRunner = {
   async readiness() { return { ready: true, message: 'Local recorded task fixture' }; },
   run(input, send, signal) {
@@ -55,6 +56,15 @@ const runner: WebRunner = {
   async command(runId, command) {
     const control = controls.get(runId)!;
     if (command.type === 'capture') return { id: 'capture', status: 'captured', observation: control.observation };
+    if (command.type === 'guidance-withdraw') {
+      // The runtime decides under its delivery lock: a queued note is withdrawn, a delivered one stays delivered.
+      withdrawals.push(command.guidanceId);
+      const record = control.observation.guidance.find(item => item.id === command.guidanceId);
+      if (!record) return { id: command.id, status: 'rejected', reason: 'math_guidance_unknown' };
+      if (record.status === 'delivered') { control.emit(); return { id: command.id, status: 'rejected', reason: 'math_guidance_already_delivered', observation: control.observation }; }
+      Object.assign(record, { status: 'failed', reason: 'math_guidance_withdrawn', updatedAt: new Date().toISOString() }); control.emit();
+      return { id: command.id, status: 'withdrawn', guidance: record, observation: control.observation };
+    }
     assert.equal(command.type, 'guidance', 'This fixture only accepts proof requirements');
     if (command.type !== 'guidance') throw new Error('Unexpected fixture command');
     commands.push({ runId, input: structuredClone(command.guidance) });
@@ -218,6 +228,33 @@ try {
     assert.equal(writes.filter(path => path === '/api/runs').length, 1);
     await page.screenshot({ path: path.join(output, `guidance-recovered-${width}.png`), fullPage: true });
     mark(`${width}px: an uncertain receipt reconciles to delivered, preserves a newer draft and permits the next requirement without resending`);
+
+    const queuedId = commands.at(-1)!.input.id, queued = page.locator(`[data-chat-guidance-receipt="${queuedId}"]`);
+    assert.equal(await page.locator(`[data-chat-guidance-receipt="${command.input.id}"] [data-chat-guidance-withdraw]`).count(), 0,
+      'A delivered note offers no withdrawal');
+    await queued.locator('[data-chat-guidance-withdraw]').click();
+    await page.locator(`[data-chat-guidance-receipt="${queuedId}"][data-guidance-status="withdrawn"]`).waitFor();
+    assert.match(await queued.innerText(), /已撤回/u);
+    assert.equal(await queued.locator('[data-chat-guidance-withdraw]').count(), 0);
+    await page.reload();
+    await page.locator(`[data-chat-guidance-receipt="${queuedId}"][data-guidance-status="withdrawn"]`).waitFor();
+    assert.deepEqual(withdrawals.splice(0), [queuedId], 'One click sends one withdrawal; reload only reads it');
+    // Delivery can win the race between drawing the button and clicking it: the note stays delivered and the reader is told.
+    const raceText = '这一条会在撤回前送达。';
+    await page.locator('[data-chat-guidance-mode-open]').click();
+    await page.locator('[data-chat-guidance-target]').selectOption('goal_2');
+    await page.locator('#formalize-original').fill(raceText);
+    await page.locator('#formalize-start:enabled').click();
+    await page.locator('[data-chat-guidance-receipt][data-guidance-status="queued"]').waitFor();
+    const raceId = commands.at(-1)!.input.id; assert.equal(commands.at(-1)!.input.text, raceText);
+    Object.assign(control.observation.guidance.find(item => item.id === raceId)!, { status: 'delivered', deliveredTo: ['prover-2'], updatedAt: new Date().toISOString() });
+    await page.locator(`[data-chat-guidance-receipt="${raceId}"] [data-chat-guidance-withdraw]`).click();
+    await page.getByText('这条指导已经送达 Agent，无法撤回。').first().waitFor();
+    await page.locator(`[data-chat-guidance-receipt="${raceId}"][data-guidance-status="delivered"]`).waitFor();
+    assert.deepEqual(withdrawals.splice(0), [raceId]);
+    assert.equal(providerCalls.length, callsBefore, 'Withdrawal never calls a model');
+    await page.screenshot({ path: path.join(output, `guidance-withdrawn-${width}.png`), fullPage: true });
+    mark(`${width}px: a queued note can be withdrawn once and stays withdrawn; a note delivered first stays delivered and says why`);
     control.finish(); await context.close();
   }
   assert.deepEqual(errors, []);

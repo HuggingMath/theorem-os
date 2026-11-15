@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { queueHumanGuidance, deliverHumanGuidance, readHumanGuidance, recordHumanGuidanceDecisions,
+import { queueHumanGuidance, deliverHumanGuidance, readHumanGuidance, recordHumanGuidanceDecisions, withdrawHumanGuidance,
   humanGuidanceInputSchema, type HumanGuidanceCandidate, type HumanGuidanceInput, type HumanGuidanceDecisionInput } from '../src/solver/humanGuidance';
 import { webGuidanceSchema } from '../apps/web/collaborationValidation';
 import { mathDigest } from '../src/math/mathRuntimeIo';
@@ -57,6 +57,26 @@ describe('independent host guidance input', () => {
     expect(notify).toHaveBeenCalledOnce(); expect(notify.mock.calls[0]![0]).toContain('advisory input');
     expect(readHumanGuidance(f.stateFile, f.state.runId)[0]).toMatchObject({ status: 'delivered', deliveredTo: ['engineer'] });
     expect(JSON.stringify(f.state.cooperation)).toBe(before);
+  });
+
+  it('withdraws a queued or deferred note before any agent receives it, and never a delivered one', async () => {
+    const f = fixture(), input = guidanceFor(f), notify = vi.fn(async () => {}), before = fs.readFileSync(f.stateFile);
+    await queueHumanGuidance(f.output, input);
+    await deliverHumanGuidance({ stateFile: f.stateFile, state: f.state, recipients: () => [] });
+    expect(readHumanGuidance(f.stateFile, f.state.runId)[0]).toMatchObject({ status: 'deferred' });
+    // Existing readers already skip `failed`, so an older running host keeps parsing the store.
+    expect(await withdrawHumanGuidance(f.output, input.id)).toMatchObject({ status: 'failed', reason: 'math_guidance_withdrawn' });
+    expect(await withdrawHumanGuidance(f.output, input.id)).toMatchObject({ status: 'failed', reason: 'math_guidance_withdrawn' });
+    await deliverHumanGuidance({ stateFile: f.stateFile, state: f.state, recipients: () => [{ workerId: 'engineer', role: 'engineer',
+      taskRef: input.taskRef, current: () => true, notify }] });
+    expect(notify).not.toHaveBeenCalled();
+    expect(readHumanGuidance(f.stateFile, f.state.runId)).toEqual([expect.objectContaining({ id: input.id, status: 'failed', reason: 'math_guidance_withdrawn' })]);
+    expect(fs.readFileSync(f.stateFile)).toEqual(before);
+    const delivered = await deliver(f, { ...input, id: 'delivered-note' });
+    await expect(withdrawHumanGuidance(f.output, delivered.id)).rejects.toThrow('math_guidance_already_delivered');
+    expect(readHumanGuidance(f.stateFile, f.state.runId).find(record => record.id === delivered.id)).toMatchObject({ status: 'delivered' });
+    await expect(withdrawHumanGuidance(f.output, 'missing-note')).rejects.toThrow('math_guidance_unknown');
+    await expect(withdrawHumanGuidance(f.output, '../escape')).rejects.toThrow('math_guidance_invalid');
   });
 
   it('keeps unmatched worker tasks deferred and rejects guidance superseded before delivery', async () => {
