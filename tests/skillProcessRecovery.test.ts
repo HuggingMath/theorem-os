@@ -11,6 +11,7 @@ import { mathBuildFile, mathBuildSource, MATH_BUILD_INPUTS, MATH_RUNTIME_BUNDLES
 import { mathDigest, writeMathJsonDurable } from '../src/math/mathRuntimeIo';
 import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
 import { git, readSolverProblem } from '../src/solver/problem';
+import { solverSourceDigest } from '../src/solver/modules/evidence';
 import { prepareResearchSkill, researchSkillIdentity } from '../src/solver/researchSkill';
 import { readMathAgentSkill } from '../src/runtime/codexSkills';
 import { solverState } from './helpers/solver';
@@ -58,6 +59,7 @@ import { withMathRuntimeLease,writeMathJsonDurable } from './src/math/mathRuntim
 import { readSolverRunState,writeSolverRunState } from './src/solver/archive';
 import { prepareResearchSkill } from './src/solver/researchSkill';
 import { runResearchWorkers } from './src/solver/research';
+import { git } from './src/solver/problem';
 import { directSolverModules } from './src/solver/modules';
 const config=JSON.parse(fs.readFileSync(process.argv[2],'utf8')),recovery=process.argv[3]==='resume';
 const stateFile=path.join(config.root,'state.json'),lockPath=path.join(config.root,'run.lock');
@@ -68,6 +70,17 @@ if(!recovery&&config.phase==='declaration-consumed'){
 }
 await withMathRuntimeLease({lockPath,flockExecutable:'/usr/bin/flock'},async lease=>{
  const state=readSolverRunState(stateFile),skill=prepareResearchSkill(config.repo,state.worktree,state.researchSkill,state.problem);
+ if(!recovery&&config.phase==='whole-proof-after-freeze'){
+  const read=fs.readFileSync;
+  fs.readFileSync=(file,...args)=>{
+   const value=read(file,...args);
+   // Hold after the stopped writer's source is committed, before readiness is
+   // journaled. No production hook or pending-check marker is used by this window.
+   if(String(file)===path.join(state.worktree,state.problem.projectRelative,'Submission.lean')&&
+     !state.pendingProofCheck&&git(state.worktree,['rev-parse','HEAD'])!==state.problem.baseCommit)hold();
+   return value;
+  };
+ }
  const save=()=>{lease.assertOwned();writeSolverRunState(stateFile,state);
   if(!recovery&&config.phase==='pending-verifier'&&state.pendingDeclarationCheck)hold();
   if(!recovery&&config.phase==='declaration-completed'&&state.pendingDeclarationCheck?.phase==='completed')hold();
@@ -87,7 +100,8 @@ await withMathRuntimeLease({lockPath,flockExecutable:'/usr/bin/flock'},async lea
 
 const roots: string[] = [], children: ChildProcess[] = [], observations: Record<string, unknown>[] = [];
 const recoveryPhases = ['prepared', 'request-before-ack', 'request-after-ack', 'tool-write', 'frozen',
-  'pending-verifier', 'declaration-completed', 'declaration-consumed', 'whole-proof-pending', 'whole-proof-accepted'] as const;
+  'pending-verifier', 'declaration-completed', 'declaration-consumed', 'whole-proof-after-freeze',
+  'whole-proof-pending', 'whole-proof-accepted'] as const;
 let runtimeRoot: string, runtimeManifest: string;
 beforeAll(() => {
   // The mutable development worktree is never built into or used as a fake manifest.
@@ -190,6 +204,10 @@ describe.skipIf(process.platform !== 'linux')('skill mode across actual owner pr
       expect(lockStatus(root)).toBe(73);
       const inode = fs.statSync(path.join(root, 'run.lock')).ino;
       const before = readSolverRunState(path.join(root, 'state.json'));
+      const frozenCommit = git(state.worktree, ['rev-parse', 'HEAD']);
+      const frozenSourceDigest = solverSourceDigest(problem, state.worktree);
+      const peerIdentity = fs.existsSync(path.join(root, 'peer.pid'))
+        ? fs.readFileSync(path.join(root, 'peer.pid'), 'utf8') : undefined;
       const declarationsFile = path.join(root, 'declarations.json');
       const artifactsBefore = fs.existsSync(declarationsFile) ? fs.readFileSync(declarationsFile, 'utf8') : undefined;
       const requestFile = path.join(state.worktree, '.scratch/declaration-submission.json');
@@ -199,8 +217,23 @@ describe.skipIf(process.platform !== 'linux')('skill mode across actual owner pr
         expect(artifactsBefore).toBeDefined();
       }
       if (phase.startsWith('whole-proof-')) {
-        expect(before.pendingProofCheck?.commit).toBe(git(state.worktree, ['rev-parse', 'HEAD']));
-        expect(before.pendingProofCheck?.problemReceiptDigest).toBe(problem.receiptDigest);
+        expect(before.turns).toBe(1);
+        expect(before.writerStopUnconfirmed).toBeUndefined();
+        expect(peerIdentity).toBeDefined();
+        expect(alive(Number(peerIdentity))).toBe(false);
+        if (phase === 'whole-proof-after-freeze') {
+          expect(before.pendingProofCheck).toBeUndefined();
+          expect(before.pendingResearchFreeze).toEqual({ commit: problem.baseCommit,
+            sourceDigest: frozenSourceDigest, problemReceiptDigest: problem.receiptDigest,
+            environmentDigest: state.environmentDigest });
+          expect(frozenCommit).not.toBe(problem.baseCommit);
+          expect(git(state.worktree, ['status', '--porcelain', '--untracked-files=no'])).toBe('');
+          expect(fs.readFileSync(path.join(state.worktree, problem.projectRelative, 'Submission.lean'), 'utf8'))
+            .toBe('theorem original : True := by trivial\n');
+        } else {
+          expect(before.pendingProofCheck?.commit).toBe(frozenCommit);
+          expect(before.pendingProofCheck?.problemReceiptDigest).toBe(problem.receiptDigest);
+        }
         expect(before.check?.passed).toBe(phase === 'whole-proof-accepted' ? true : undefined);
       }
       const bytes = fs.existsSync(path.join(state.worktree, 'RESEARCH.md'))
@@ -231,8 +264,15 @@ describe.skipIf(process.platform !== 'linux')('skill mode across actual owner pr
         expect(after.threadId).toBe(before.threadId); expect(after.turns).toBe(2);
       } else if (phase.startsWith('whole-proof-')) {
         expect(turns).toHaveLength(1); expect(after.turns).toBe(1);
+        expect(calls.filter(call => call.method === 'initialize')).toHaveLength(1);
+        expect(calls.filter(call => call.method === 'thread/resume')).toHaveLength(0);
+        expect(fs.readFileSync(path.join(root, 'peer.pid'), 'utf8')).toBe(peerIdentity);
+        expect(after.writerStopUnconfirmed).toBeUndefined();
+        expect(after.pendingResearchFreeze).toBeUndefined();
         expect(after.pendingProofCheck).toBeUndefined(); expect(after.check?.passed).toBe(true);
-        expect(after.check?.commit).toBe(before.pendingProofCheck?.commit);
+        expect(after.check?.commit).toBe(frozenCommit);
+        expect(after.check?.sourceDigest).toBe(frozenSourceDigest);
+        expect(solverSourceDigest(problem, state.worktree)).toBe(frozenSourceDigest);
         expect(after.check?.verification.status).toBe('kernel_verified');
         expect(after.check?.verification.results.every(receipt => receipt.status === 'kernel_verified')).toBe(true);
         expect(JSON.parse(fs.readFileSync(path.join(root, 'completed.json'), 'utf8')).result).toBe(true);
@@ -247,11 +287,15 @@ describe.skipIf(process.platform !== 'linux')('skill mode across actual owner pr
         if (artifactsBefore) expect(fs.readFileSync(declarationsFile, 'utf8')).toBe(artifactsBefore);
       }
       observations.push({ phase, stateBefore: { turns: before.turns, threadId: before.threadId,
-        pendingDeclarationCheck: before.pendingDeclarationCheck, pendingProofCheck: before.pendingProofCheck,
+        pendingDeclarationCheck: before.pendingDeclarationCheck, pendingResearchFreeze: before.pendingResearchFreeze,
+        pendingProofCheck: before.pendingProofCheck,
         proofAccepted: before.check?.passed, usageAccounting: before.usageAccounting },
         stateAfter: { turns: after.turns, threadId: after.threadId, tokenBudget: after.tokenBudget,
+          pendingResearchFreeze: after.pendingResearchFreeze,
           pendingProofCheck: after.pendingProofCheck, proofAccepted: after.check?.passed,
           usageAccounting: after.usageAccounting }, requestIds: turns.map(call => call.turnId),
-        lockInodeRetained: true, existingNotesRetained: bytes !== undefined });
+        lockInodeRetained: true, existingNotesRetained: bytes !== undefined,
+        ...(phase.startsWith('whole-proof-') ? { frozenCommit, frozenSourceDigest, writerStoppedBeforeFreeze: true,
+          writerNotReopened: true } : {}) });
     }, 30_000);
 });

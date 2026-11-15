@@ -48,8 +48,9 @@ import { assertMathAgentSkillsCurrent, type MathAgentSkill } from '../runtime/ag
 import { buildSkillResearchContext } from './skillResearchContext';
 import { stopProofWriter } from './proofWriter';
 import { checkDeclarationArtifacts, readDeclarationSubmission, writeDeclarationArtifacts,
-  DECLARATION_SUBMISSION_FILE, DeclarationArtifactCheckError } from './declarationArtifacts';
+  DECLARATION_SUBMISSION_FILE, DeclarationArtifactCheckError, DeclarationSubmissionError } from './declarationArtifacts';
 import { inspectLeanSource } from '../math/leanSource';
+import { hasDeterministicLeanFailure } from './proofReuse';
 
 // Scheduling checkpoints preserve unlimited solving budgets and resume the same assignment/thread.
 const advisoryCheckpointNoticeMs = 90_000;
@@ -150,6 +151,9 @@ export async function runResearchWorkers(input: {
   if (state.pendingProofCheck && (!skillMode || state.pendingProofCheck.environmentDigest !== state.environmentDigest ||
       state.pendingProofCheck.problemReceiptDigest !== state.problem.receiptDigest))
     throw new Error('math_proof_checkpoint_identity_changed');
+  if (state.pendingResearchFreeze && (!skillMode || state.pendingResearchFreeze.environmentDigest !== state.environmentDigest ||
+      state.pendingResearchFreeze.problemReceiptDigest !== state.problem.receiptDigest))
+    throw new Error('math_research_freeze_identity_changed');
   if (state.researchDelegation && !skillMode) throw new Error('math_native_delegation_requires_skill');
   if (skillMode || state.commonResearchSkill) for (const worker of input.workers) {
     const access = input.access.get(worker.id);
@@ -169,7 +173,7 @@ export async function runResearchWorkers(input: {
   state.tokenBudget = buildTokenBudget(input.maxTotalTokens, records.map(record => record.research), enforcement);
   const dispatchAllowed = () => modelDispatchAllowed(state.tokenBudget!);
   const accepted = records.find(({ worker }) => worker.id === (state.winningWorker ?? 'solver'));
-  if (accepted && state.check?.passed && ['running', 'checking', 'evaluating', 'finished'].includes(state.phase) &&
+  if (accepted && !state.pendingResearchFreeze && state.check?.passed && ['running', 'checking', 'evaluating', 'finished'].includes(state.phase) &&
       !solverSourceFeedback(state.problem, accepted.worker.worktree) &&
       solverProofIsCurrent(state.problem, accepted.worker.worktree, state.check)) {
     if (state.pendingProofCheck) {
@@ -533,8 +537,10 @@ export async function runResearchWorkers(input: {
               if (!toolsRunning) cutAtRequestBoundary?.();
             }
           }
+          // Native context maintenance applies to Skill sessions without cooperative assignments too.
+          if (live() && activity.itemType === 'contextCompaction' &&
+              (activity.event === 'item_started' || activity.event === 'item_completed')) dispatchedContexts.clear();
           if (current() && activity.itemType === 'contextCompaction') {
-            if (activity.event === 'item_started' || activity.event === 'item_completed') dispatchedContexts.clear();
             if (activity.event === 'item_started' && compactionStartedAt === undefined) {
               compactionStartedAt = Date.now();
               if (sliceStartedAt !== undefined) activeSliceMs += Date.now() - sliceStartedAt;
@@ -1203,8 +1209,9 @@ export async function runResearchWorkers(input: {
             } catch (error) {
               signal.throwIfAborted();
               if (error instanceof VerificationCheckpointError) throw error;
-              if (error instanceof DeclarationArtifactCheckError && ['blocked', 'unavailable'].includes(error.verification.status))
-                throw new VerifierFailureError({ stage: 'declaration-check', sourceCommit: commit, verification: error.verification });
+              if (error instanceof DeclarationArtifactCheckError && !hasDeterministicLeanFailure(error.verification))
+                throw new VerifierFailureError({ stage: 'declaration-check', sourceCommit: commit, verification: error.verification }, error);
+              if (!(error instanceof DeclarationSubmissionError) && !(error instanceof DeclarationArtifactCheckError)) throw error;
               const reason = error instanceof Error ? error.message : String(error);
               writeMathJsonDurable(path.join(worker.worktree, '.scratch/declaration-feedback.json'), {
                 status: 'rejected', commit, reason, originalProblemAcceptance: 'not-assessed' });
@@ -1231,6 +1238,30 @@ export async function runResearchWorkers(input: {
           }
         }
       };
+      const freezeResearchSources = async () => {
+        if (session || research.writerStopUnconfirmed) throw new Error('math_writer_stop_unconfirmed');
+        if (!state.pendingResearchFreeze) {
+          state.pendingResearchFreeze = { commit: git(worker.worktree, ['rev-parse', 'HEAD']),
+            sourceDigest: solverSourceDigest(state.problem, worker.worktree),
+            problemReceiptDigest: state.problem.receiptDigest, environmentDigest: state.environmentDigest };
+          save();
+        }
+        const pending = state.pendingResearchFreeze;
+        const head = git(worker.worktree, ['rev-parse', 'HEAD']);
+        // A crash can leave either the original HEAD or the one host checkpoint it produced.
+        if (pending.problemReceiptDigest !== state.problem.receiptDigest || pending.environmentDigest !== state.environmentDigest ||
+            sourceFeedback() || solverSourceDigest(state.problem, worker.worktree) !== pending.sourceDigest ||
+            head !== pending.commit && (git(worker.worktree, ['rev-list', '--parents', '-n', '1', 'HEAD']) !== `${head} ${pending.commit}` ||
+              git(worker.worktree, ['status', '--porcelain', '--untracked-files=no'])))
+          throw new Error('math_research_freeze_identity_changed');
+        if (access.researchSkill) assertMathAgentSkillsCurrent([access.researchSkill]);
+        const commit = commitSolverSources(state.problem, worker.worktree);
+        const wholeProofReady = !originalProofHasHoles();
+        if (wholeProofReady) rememberWholeProof(commit);
+        await checkDeclarations(commit);
+        state.pendingResearchFreeze = undefined; save();
+        return { commit, wholeProofReady };
+      };
       const proofLifecycle = cooperation && new WorkerProofLifecycle({ state, research, worker, cooperation,
         close, save, emit, checked: () => { retries = 0; } });
       try {
@@ -1256,6 +1287,7 @@ export async function runResearchWorkers(input: {
           if ((closed || research.phase === 'checking') && !signal.aborted) await exclusiveCheck(() => checkWhole());
         }
         while (!signal.aborted) {
+          if (skillMode && state.pendingResearchFreeze) await freezeResearchSources();
           if (skillMode && state.pendingDeclarationCheck) {
             const pending = state.pendingDeclarationCheck;
             if (session || research.writerStopUnconfirmed || sourceFeedback() ||
@@ -1580,10 +1612,7 @@ export async function runResearchWorkers(input: {
             continue;
           }
           if (skillMode) {
-            const commit = commitSolverSources(state.problem, worker.worktree);
-            const wholeProofReady = !originalProofHasHoles();
-            if (wholeProofReady) rememberWholeProof(commit);
-            await checkDeclarations(commit);
+            const { commit, wholeProofReady } = await freezeResearchSources();
             // An unfinished research turn can publish useful helpers without repeatedly
             // compiling every original hole. Ordinary diagnostics remain advisory.
             if (!wholeProofReady) {

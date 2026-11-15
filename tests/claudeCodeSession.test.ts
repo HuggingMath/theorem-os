@@ -100,6 +100,19 @@ describe('Claude Code stream-json adapter without provider calls', () => {
     else expect(options.onUsageIncomplete).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['ordinary', 'delayed-write'])('stops %s when required turn-start handling fails', async prompt => {
+    const session = await open(), started = vi.fn(() => { throw new Error('private host start failure'); });
+    expect(await session.run(prompt, 'turn-start-failure', workspace, started)).toBe('failed');
+    expect(started).toHaveBeenCalledExactlyOnceWith('turn-start-failure');
+    expect(session.lastError).toBe('math_claude_turn_start_failed');
+    expect(session.lastFailureDiagnostic).toEqual({ code: 'other' });
+    expect(session.lastCompletedResponse).toBeUndefined();
+    expect(options.onUsage).not.toHaveBeenCalled();
+    expect(options.onUsageIncomplete).toHaveBeenCalledExactlyOnceWith();
+    expect(await session.stopForFreeze!()).toEqual({ status: 'stopped' });
+    expect(fs.existsSync(path.join(workspace, 'claude-peer-delayed-write.txt'))).toBe(false);
+  });
+
   it.each([
     ['failure-auth-enum', 'math_model_authentication_failed', { code: 'unauthorized' }],
     ['failure-context-structured', 'math_model_context_window_exceeded', { code: 'contextWindowExceeded' }],

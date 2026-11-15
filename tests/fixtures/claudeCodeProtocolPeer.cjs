@@ -19,6 +19,14 @@ process.stdin.on('end', () => {
   if (prompt === 'oversized') { process.stdout.write('x'.repeat(9 * 1024 * 1024)); return; }
   send({ type: 'system', subtype: 'init', session_id: prompt === 'foreign' ? 'foreign-session' : session,
     model: argument('--model'), tools: ['Bash', 'Read'], mcp_servers: [], agents: [], skills: [] });
+  if (prompt === 'delayed-write') {
+    setTimeout(() => {
+      fs.writeFileSync(path.join(process.cwd(), 'claude-peer-delayed-write.txt'), 'late native write');
+      send({ type: 'assistant', message: { content: [], usage } });
+      send({ type: 'result', subtype: 'success', is_error: false, result: 'Saved delayed write.', usage });
+    }, 200);
+    return;
+  }
   const failures = {
     'failure-auth-enum': { assistantError: 'authentication_failed' },
     'failure-context-structured': { terminal_reason: 'prompt_too_long', api_error_status: 400 },

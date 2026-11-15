@@ -11,6 +11,7 @@ import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
 import { runResearchWorkers, type WorkerAccess } from '../src/solver/research';
 import { DeclarationArtifactCheckError } from '../src/solver/declarationArtifacts';
 import { VerificationCheckpointError, withVerificationCheckpoints } from '../src/solver/verificationCheckpoint';
+import { VerifierFailureError } from '../src/solver/verifierFailure';
 import { deferred } from './helpers/async';
 import { leadWorker, localExample, solverState } from './helpers/solver';
 import { failedBatch, receiptBatch } from './helpers/verifier';
@@ -174,6 +175,28 @@ describe('skill research runtime', () => {
     expect(current.messages[1]).toContain('RESEARCH.md');
   });
 
+  it.each([false, true])('restores full task context after native compaction and then resumes concise continuation (shared guidance: %s)', async common => {
+    const current = fixture([
+      (_f, options) => {
+        options.onActivity?.({ event: 'item_started', itemType: 'contextCompaction' });
+        options.onActivity?.({ event: 'item_completed', itemType: 'contextCompaction' });
+      },
+      () => {},
+      () => {},
+    ], 'confirmed', undefined, common);
+    expect(await current.completion).toBeUndefined();
+    expect(current.events.filter(item => item.event === 'context_dispatched').map(item => item.details?.mode))
+      .toEqual(['full', 'full', 'continuation']);
+    expect(current.messages[1]).toContain('Prove both original addition targets.');
+    expect(current.messages[1]).toContain(current.problem.receiptDigest);
+    expect(current.messages[2]).not.toContain('Prove both original addition targets.');
+    expect(current.opened.slice(1).map(options => options.threadId))
+      .toEqual(['persistent-native-research-thread', 'persistent-native-research-thread']);
+    expect(current.state.previousThreadIds).toBeUndefined();
+    expect(current.state.cooperation).toBeUndefined();
+    expect(host.verify).not.toHaveBeenCalled();
+  });
+
   it('sends the full frozen task on the first dispatch after a host restart even with a saved native thread', async () => {
     const current = fixture([f => { fs.writeFileSync(f.notes, 'Unfinished research saved.\n'); }]);
     expect(await current.completion).toBeUndefined();
@@ -247,6 +270,36 @@ describe('skill research runtime', () => {
     expect(host.declarations).toHaveBeenCalledTimes(1);
     expect(host.writeDeclarations).toHaveBeenCalledTimes(1);
     expect(current.events.filter(item => item.event === 'declarations_checked').map(item => item.details?.passed)).toEqual([false, true]);
+  });
+
+  it.each([
+    Object.assign(new Error('fixture host checkout read EIO'), { code: 'EIO' }),
+    Object.assign(new Error('fixture host checkout write ENOSPC'), { code: 'ENOSPC' }),
+    new VerifierFailureError({ stage: 'fixture-declaration-check' }, new Error('fixture verifier initialization failed')),
+  ])('retains a declaration request after infrastructure failure $message and retries before model admission', async error => {
+    host.declarations.mockRejectedValueOnce(error);
+    const current = fixture([f => { requestHelper(f); }, () => { throw new Error('must-not-dispatch-after-host-failure'); }]);
+    await expect(current.completion).rejects.toThrow(error.message);
+    const pending = { commit: git(current.workspace, ['rev-parse', 'HEAD']),
+      requestDigest: mathDigest(fs.readFileSync(current.requestFile)) };
+    expect(current.state.pendingDeclarationCheck).toEqual(pending);
+    expect(current.savedStates.at(-1)?.pendingDeclarationCheck).toEqual(pending);
+    expect(current.state.pendingResearchFreeze).toBeDefined();
+    expect(fs.existsSync(path.join(current.workspace, '.scratch/declaration-feedback.json'))).toBe(false);
+    expect(current.events.some(item => item.event === 'declarations_checked')).toBe(false);
+    expect(host.writeDeclarations).not.toHaveBeenCalled();
+    expect(current.open).toHaveBeenCalledTimes(1);
+    expect(await resumeDeclarations(current)).toBeUndefined();
+    expect(current.state.pendingDeclarationCheck).toBeUndefined();
+    expect(current.state.pendingResearchFreeze).toBeUndefined();
+    expect(fs.existsSync(current.requestFile)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(path.join(current.workspace, '.scratch/declaration-feedback.json'), 'utf8')))
+      .toMatchObject({ status: 'checked', commit: pending.commit });
+    expect(host.declarations).toHaveBeenCalledTimes(2);
+    expect(host.writeDeclarations).toHaveBeenCalledTimes(1);
+    expect(current.open).toHaveBeenCalledTimes(1);
+    expect(current.state.turns).toBe(1);
+    expect(host.verify).not.toHaveBeenCalled();
   });
 
   it.each(['write-error', 'corrupt-manifest'] as const)('retains a checked declaration after host artifact %s and resumes without a model turn', async failure => {
@@ -364,6 +417,40 @@ describe('skill research runtime', () => {
     expect(current.stops).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['mathematical', 'invocation', 'cleanup'] as const)('classifies a failed helper receipt with %s diagnostics before consuming it', async failure => {
+    host.declarations.mockImplementationOnce(async input => {
+      throw new DeclarationArtifactCheckError(input.declarations[0], {
+        schema: 'deepscientist.mathematics.verification-batch/v1', status: 'failed', targetCommit: input.commit,
+        sessionId: 'failed-helper-verifier', events: [], startedAt: 1, checkedAt: 2, durationMs: 1,
+        results: [{ status: 'failed', targetCommit: input.commit, proofPath: 'Submission.lean', theoremName: 'Tutorial.helper',
+          receiptId: 'failed-helper', error: failure === 'invocation' ? 'Process exited without Lean diagnostics' : 'Lean exited with status 1.',
+          ...(failure === 'invocation' ? {} : { stdoutPreview: 'Submission.lean:1:1: error: unsolved goals' }),
+          ...(failure === 'cleanup' ? { cleanupError: 'fixture checkout cleanup failed' } : {}) }],
+      });
+    });
+    const current = fixture([f => { requestHelper(f); }, (f, _options, message) => {
+      expect(message).toContain('Declaration check feedback');
+      expect(fs.existsSync(f.requestFile)).toBe(false);
+    }]);
+    if (failure === 'mathematical') {
+      expect(await current.completion).toBeUndefined();
+      expect(current.state.pendingDeclarationCheck).toBeUndefined();
+      expect(JSON.parse(fs.readFileSync(path.join(current.workspace, '.scratch/declaration-feedback.json'), 'utf8')))
+        .toMatchObject({ status: 'rejected', originalProblemAcceptance: 'not-assessed' });
+      expect(current.open).toHaveBeenCalledTimes(2);
+    } else {
+      await expect(current.completion).rejects.toThrow('math_verifier_unavailable');
+      expect(current.state.pendingDeclarationCheck).toBeDefined();
+      expect(fs.existsSync(current.requestFile)).toBe(true);
+      expect(fs.existsSync(path.join(current.workspace, '.scratch/declaration-feedback.json'))).toBe(false);
+      expect(current.state.verifierFailure).toMatchObject({ stage: 'declaration-check', verification: { status: 'failed' } });
+      expect(await resumeDeclarations(current)).toBeUndefined();
+      expect(current.state.pendingDeclarationCheck).toBeUndefined();
+      expect(current.open).toHaveBeenCalledTimes(1);
+      expect(current.state.turns).toBe(1);
+    }
+  });
+
   it.each(['turns', 'tokens'] as const)('retries a frozen helper checkpoint before exhausted %s admission without another model turn', async exhausted => {
     checkpointHelper();
     const current = fixture([f => { requestHelper(f); }]);
@@ -435,7 +522,8 @@ describe('skill research runtime', () => {
     Object.assign(current.state, completed);
     if (changed === 'source') fs.appendFileSync(current.source, '\n-- changed after completion\n');
     else { requestHelper(current); fs.appendFileSync(current.requestFile, '\n '); }
-    await expect(resumeDeclarations(current)).rejects.toThrow('math_declaration_checkpoint_identity_changed');
+    await expect(resumeDeclarations(current)).rejects.toThrow(changed === 'source'
+      ? 'math_research_freeze_identity_changed' : 'math_declaration_checkpoint_identity_changed');
     expect(current.state.pendingDeclarationCheck?.phase).toBe('completed');
     expect(host.declarations).toHaveBeenCalledTimes(1);
     expect(current.open).toHaveBeenCalledTimes(1);
@@ -523,6 +611,31 @@ describe('skill research runtime', () => {
     await expect(resumeDeclarations(current)).rejects.toThrow('math_proof_checkpoint_identity_changed');
     expect(current.state.pendingProofCheck).toEqual(pending);
     expect(host.verify).toHaveBeenCalledTimes(1); expect(current.open).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['source', 'commit', 'environment', 'problem', 'source-digest'] as const)('rejects changed stopped-source freeze %s before checking or opening a writer', async changed => {
+    const current = fixture([f => { fs.writeFileSync(f.source, LOCAL_EXAMPLE_PROOF); }]);
+    expect((await current.completion)?.check.passed).toBe(true);
+    const frozen = current.savedStates.find(saved => saved.pendingResearchFreeze && !saved.pendingProofCheck)!;
+    expect(frozen).toBeDefined();
+    Object.assign(current.state, JSON.parse(JSON.stringify(frozen)), { check: undefined, pendingProofCheck: undefined });
+    const stateFile = path.join(current.directory, 'freeze-state.json');
+    writeSolverRunState(stateFile, current.state);
+    expect(readSolverRunState(stateFile).pendingResearchFreeze).toEqual(current.state.pendingResearchFreeze);
+    if (changed === 'source') fs.appendFileSync(current.source, '\n-- changed after stopped-source freeze\n');
+    else if (changed === 'commit') {
+      fs.writeFileSync(current.notes, 'Unexpected commit after the host checkpoint.\n');
+      git(current.workspace, ['add', 'RESEARCH.md']);
+      git(current.workspace, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+        'commit', '--quiet', '-m', 'Unexpected extra commit']);
+    } else if (changed === 'environment') current.state.environmentDigest += '-changed';
+    else if (changed === 'problem') current.state.problem.receiptDigest += '-changed';
+    else current.state.pendingResearchFreeze!.sourceDigest = '0'.repeat(64);
+    const pending = { ...current.state.pendingResearchFreeze! };
+    await expect(resumeDeclarations(current)).rejects.toThrow('math_research_freeze_identity_changed');
+    expect(current.state.pendingResearchFreeze).toEqual(pending);
+    expect(host.verify).toHaveBeenCalledTimes(1);
+    expect(current.open).toHaveBeenCalledTimes(1);
   });
 
   it('finishes persisted whole-proof acceptance cleanup without repeating verification or opening a writer', async () => {

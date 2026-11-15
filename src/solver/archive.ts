@@ -82,6 +82,8 @@ export type SolverRunState = {
   nativeAgents?: import('../runtime/nativeDelegation').NativeResearchAgent[];
   /** A stopped writer's check/consumption resumes before any new model dispatch. */
   pendingDeclarationCheck?: { commit: string; requestDigest: string; phase?: 'completed' };
+  /** Stopped research sources must finish freezing even if the host exits before journaling their checks. */
+  pendingResearchFreeze?: { commit: string; sourceDigest: string; problemReceiptDigest: string; environmentDigest: string };
   /** Independent acceptance of a frozen whole-proof candidate does not need another model turn. */
   pendingProofCheck?: { commit: string; sourceDigest: string; problemReceiptDigest: string; environmentDigest: string };
   /** Workers wait after the first accepted plan until a human approves that exact version. */
@@ -351,6 +353,9 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
     permissionProfile: z.literal('math-investigator').optional() })).optional(),
   pendingDeclarationCheck: z.object({ commit: z.string().regex(/^[a-f0-9]{40,64}$/u),
     requestDigest: z.string().regex(/^[a-f0-9]{64}$/u), phase: z.literal('completed').optional() }).strict().optional(),
+  pendingResearchFreeze: z.object({ commit: z.string().regex(/^[a-f0-9]{40,64}$/u),
+    sourceDigest: z.string().regex(/^[a-f0-9]{64}$/u), problemReceiptDigest: z.string().min(1),
+    environmentDigest: z.string().min(1) }).strict().optional(),
   pendingProofCheck: z.object({ commit: z.string().regex(/^[a-f0-9]{40,64}$/u),
     sourceDigest: z.string().regex(/^[a-f0-9]{64}$/u), problemReceiptDigest: z.string().min(1),
     environmentDigest: z.string().min(1) }).strict().optional(),

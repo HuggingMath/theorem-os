@@ -182,7 +182,8 @@ export async function createClaudeCodeMathSession(options: MathAgentOptions): Pr
           if (terminal) { failed('math_claude_protocol_after_result'); return; }
           if (event.type === 'system' && event.subtype === 'init') {
             if (started || event.session_id !== threadId) { failed('math_claude_session_binding_mismatch'); return; }
-            started = true; resume = true; observe(() => onStarted(messageId));
+            started = true; resume = true;
+            try { onStarted(messageId); } catch { failed('math_claude_turn_start_failed'); }
           } else if (event.type === 'stream_event') {
             const stream = object(event.event);
             if (!started || !stream) { failed('math_claude_protocol_invalid'); return; }
