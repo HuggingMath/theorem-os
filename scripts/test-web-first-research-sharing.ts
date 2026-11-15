@@ -130,19 +130,12 @@ try {
       assert.equal(await page.locator('#chat-connection-result').count(), 0, 'Editing the model invalidates the check');
       await page.locator('#formalize-settings > summary').click();
       await openChatBudget(page);
-      await page.locator('[data-first-budget=trial]').click();
+      assert.equal(await page.locator('[data-first-budget]:not([data-first-budget=custom])').count(), 0, 'No preset budgets');
       assert.equal(await page.locator('#formalize-minutes').inputValue(), '');
       assert.equal(await page.locator('#research-minutes').inputValue(), '');
-      assert.equal(await page.locator('#research-turns').inputValue(), '3');
+      assert.equal(await page.locator('#research-turns').inputValue(), '');
       assert.equal(await page.locator('#formalize-tokens').inputValue(), '');
       assert.equal(await page.locator('#research-tokens').inputValue(), '');
-      await page.locator('[data-first-budget=standard]').click();
-      assert.equal(await page.locator('#formalize-minutes').inputValue(), '');
-      assert.equal(await page.locator('#research-minutes').inputValue(), '');
-      assert.equal(await page.locator('#research-turns').inputValue(), '5');
-      assert.equal(await page.locator('#formalize-tokens').inputValue(), '');
-      assert.equal(await page.locator('#research-tokens').inputValue(), '');
-      await page.locator('[data-first-budget=trial]').click();
       await openChatParticipation(page);
       await page.locator(`input[name=chat-participation][value=${participation}]`).check();
       await openChatBudget(page);
@@ -163,7 +156,7 @@ try {
       assert.equal(payload.solve, true); assert.equal(payload.humanReview, participation === 'guided' ? true : undefined);
       assert.equal(payload.providerId, 'fixture-b'); assert.equal(payload.model, 'fixture-model-v2');
       assert.equal(payload.maxRunSeconds, 0); assert.equal(payload.maxTotalTokens, 0);
-      assert.deepEqual(payload.research, { maxRunSeconds: 0, maxTotalTokens: 0, maxTurns: 3 });
+      assert.deepEqual(payload.research, { maxRunSeconds: 0, maxTotalTokens: 0, maxTurns: 0 });
       assert.equal(await page.locator('#formalize-original').inputValue(), payload.original);
       return { participation, capturedSubmissions: submissions.length, connectionStates: ['available', 'unknown', 'error'],
         setupOnlyUntilSubmit: true, exactBudgets: true, rejectedDraftKept: true };

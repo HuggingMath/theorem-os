@@ -615,13 +615,9 @@ function ChatComposer(props: ChatComposerProps) {
             title={props.guidance ? t('发送研究指导') : !props.newProblem ? t("发送") : props.participation === 'guided' ? tx('开始核对题目', 'Start statement review') : tx('开始解题', 'Start solving')}>
             {props.newProblem && <span>{props.participation === 'guided' ? tx('开始核对题目', 'Start statement review') : tx('开始解题', 'Start solving')}</span>}{props.submitting ? <span class="spinner" /> : <Icon name="arrow-up" />}</button>}</div>
       </div>
-      {props.newProblem && <FirstResearchStart participation={props.participation} budgets={props.budgets} limits={props.budgetLimits}
+      {props.newProblem && <FirstResearchStart participation={props.participation} budgets={props.budgets}
         cost={props.cost && { ...props.cost, providerId: props.providerId, model: props.model }}
-        locked={props.submitting || props.participationLocked} quota={props.quota} onAdjust={() => focusBudget('formalize-minutes')} onBudget={value => {
-          props.onBudget('formalization', 'maxRunSeconds', value.maxRunSeconds); props.onBudget('formalization', 'maxTotalTokens', value.maxTotalTokens);
-          props.onBudget('research', 'maxRunSeconds', value.research.maxRunSeconds); props.onBudget('research', 'maxTotalTokens', value.research.maxTotalTokens);
-          props.onBudget('research', 'maxTurns', value.research.maxTurns);
-        }} />}
+        locked={props.submitting || props.participationLocked} quota={props.quota} onAdjust={() => focusBudget('formalize-minutes')} />}
     </form>
     {props.submissionRecovery && <div class="chat-send-status" data-chat-submission-recovery role="status">
       <p>{t('原任务已创建，对话连接尚未恢复。修改后的题目已保留，尚未发送。')}</p>

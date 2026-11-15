@@ -1,12 +1,12 @@
 import type { WebQuotaView } from '../../shared';
 import { locale } from '../../i18n';
 import { formatDateTime, formatTokens } from '../../presentation';
-import { firstResearchBudget, firstResearchRemaining, type FirstResearchBudget } from '../firstResearchModel';
+import { firstResearchRemaining, type FirstResearchBudget } from '../firstResearchModel';
 import { ResearchStartCost, type ResearchStartCostProps } from '../researchStartCost';
 
 const tx = (zh: string, en: string) => locale === 'en' ? en : zh;
 export function FirstResearchStart(props: { participation: 'guided' | 'automatic'; budgets: FirstResearchBudget;
-  limits: FirstResearchBudget; locked: boolean; quota?: WebQuotaView; cost?: Omit<ResearchStartCostProps, 'stages'>; onBudget(value: FirstResearchBudget): void; onAdjust(): void }) {
+  locked: boolean; quota?: WebQuotaView; cost?: Omit<ResearchStartCostProps, 'stages'>; onAdjust(): void }) {
   const remaining = firstResearchRemaining(props.quota);
   const minutes = (seconds: number) => seconds ? `${seconds / 60} ${tx('分钟', 'min')}` : tx('不限', 'Unlimited');
   const tokens = (value: number) => value ? `${formatTokens(value)} Token` : tx('不限', 'Unlimited');
@@ -20,10 +20,6 @@ export function FirstResearchStart(props: { participation: 'guided' | 'automatic
       ? tx('生成 Lean 陈述 → 你确认题意 → 拟定计划 → 你批准后证明', 'Lean statement → your statement review → plan → proof after your approval')
       : tx('生成并核对 Lean 陈述 → 自动开始证明', 'Generate and check the Lean statement → start proving automatically')}</p>
     <div class="first-research-budget-top"><span>{tx('本次上限', 'Limits for this run')}</span><div>
-      <button type="button" class="text-button" data-first-budget="trial" disabled={props.locked}
-        onClick={() => props.onBudget(firstResearchBudget('trial', props.limits))}>{tx('先小试一次', 'Small trial')}</button>
-      <button type="button" class="text-button" data-first-budget="standard" disabled={props.locked}
-        onClick={() => props.onBudget(firstResearchBudget('standard', props.limits))}>{tx('常规研究', 'Standard run')}</button>
       <button type="button" class="text-button" data-first-budget="custom" disabled={props.locked}
         onClick={props.onAdjust}>{tx('自定上限', 'Custom limits')}</button>
     </div></div>

@@ -61,9 +61,9 @@ try {
     await cost.locator('[data-start-rate] > summary').click();
     await cost.locator('[data-start-rate-value]').fill('10');
     await cost.locator('[data-start-rate-currency]').selectOption('USD');
-    await page.locator('[data-first-budget=trial]').click();
+    assert.equal(await page.locator('[data-first-budget]:not([data-first-budget=custom])').count(), 0, 'No preset budgets');
     await cost.locator('[data-cost-unavailable]').waitFor();
-    assert.equal(await cost.locator('[data-cost-total]').count(), 0, 'Unlimited trial tokens have no finite cost estimate');
+    assert.equal(await cost.locator('[data-cost-total]').count(), 0, 'Unlimited tokens have no finite cost estimate');
     await openAdvancedChatSettings(page);
     await page.locator('#formalize-tokens').fill('60000');
     await page.locator('#research-tokens').fill('60000');
@@ -71,11 +71,12 @@ try {
     assert.match(await cost.locator('[data-cost-stage=formalization]').innerText(), /USD 0\.60/u);
     assert.match(await cost.locator('[data-cost-stage=proof]').innerText(), /USD 0\.60/u);
     assert.match(await cost.locator('[data-cost-total]').innerText(), /USD 1\.20/u);
-    await page.locator('[data-first-budget=standard]').click();
+    await openAdvancedChatSettings(page);
+    await page.locator('#formalize-tokens').fill('');
+    await page.locator('#research-tokens').fill('');
+    await openChatBudget(page);
     await cost.locator('[data-cost-unavailable]').waitFor();
-    assert.equal(await cost.locator('[data-cost-total]').count(), 0, 'Unlimited standard tokens have no finite cost estimate');
-    assert.equal(await page.locator('#formalize-tokens').inputValue(), '');
-    assert.equal(await page.locator('#research-tokens').inputValue(), '');
+    assert.equal(await cost.locator('[data-cost-total]').count(), 0, 'Clearing the token limits restores the unlimited estimate');
     await openAdvancedChatSettings(page);
     await page.locator('#formalize-tokens').fill('400000');
     await page.locator('#research-tokens').fill('200000');
