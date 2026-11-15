@@ -14,6 +14,12 @@ const reasons: Record<string, string> = {
   explanation_worker_exited: t('讲解运行环境异常退出，请稍后重试。'), explanation_worker_no_result: t('讲解运行环境异常退出，请稍后重试。'),
   explanation_gateway_unavailable: t('无法连接模型服务，请稍后重试。'), explanation_provider_unsupported: t('证明讲解目前只支持 Sub2API 模型服务。'),
   explanation_input_too_large: t('证明太大，无法生成讲解。'), explanation_output_too_large: t('讲解结果太大，没有保存。'),
+  explanation_queue_full: t('讲解队列已满，可稍后重新生成。'),
+  explanation_quota_exhausted: t('讲解额度已用完，可在额度恢复后重新生成。'),
+  explanation_key_required: t('缺少可用的 API Key，请补充后生成讲解。'),
+  explanation_statement_unreviewed: t('原题含义审核尚未通过，暂未生成讲解。'),
+  explanation_service_unavailable: t('当前服务不提供证明讲解。'),
+  explanation_account_unavailable: t('当前账户不可用，暂未生成讲解。'),
 };
 export const explanationReasonText = (reason?: string) => reason && reasons[reason] ? reasons[reason] : t('生成失败，可以重新生成。');
 

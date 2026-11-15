@@ -103,19 +103,22 @@ function Prose(view: ExplainView) {
 }
 
 const phases = [
+  { id: 'waiting_review', label: t('等待原题含义审核'), phases: ['waiting_review'] },
   { id: 'queued', label: t('排队'), phases: ['queued'] }, { id: 'preparing', label: t('准备环境'), phases: ['preparing'] },
   { id: 'extracting', label: t('提取证明结构'), phases: ['extracting'] },
   { id: 'writing', label: t('写作与审核'), phases: ['writing', 'auditing', 'revising', 'retrying'] }, { id: 'finishing', label: t('整理结果'), phases: ['finishing'] },
 ];
 const phaseDetail: Record<string, string> = { writing: t('正在写作'), auditing: t('正在审核'), revising: t('按审核意见修改'), retrying: t('模型调用失败，正在重试') };
 function ProgressView({ explanation, now }: { explanation: WebExplanation; now: number }) {
-  const progress = explanation.progress, phase = explanation.status === 'queued' ? 'queued' : progress?.phase ?? 'preparing';
-  const current = Math.max(0, phases.findIndex(item => item.phases.includes(phase)));
+  const progress = explanation.progress, phase = progress?.phase ?? (explanation.status === 'queued' ? 'queued' : 'preparing');
+  const waiting = phase === 'waiting_review';
+  const visiblePhases = waiting ? phases : phases.filter(item => item.id !== 'waiting_review');
+  const current = Math.max(0, visiblePhases.findIndex(item => item.phases.includes(phase)));
   const elapsed = now - Date.parse(explanation.createdAt);
   return <div class="explain-card explain-progress" aria-live="polite">
-    <div class="result-banner running"><Spinner /><div><h3>{explanation.status === 'queued' ? t('排队等待生成') : t('正在生成讲解')}</h3>
+    <div class="result-banner running"><Spinner /><div><h3>{waiting ? t('等待原题含义审核') : explanation.status === 'queued' ? t('排队等待生成') : t('正在生成讲解')}</h3>
       <p>{t('生成在服务器上进行，可以关闭页面，稍后回来查看。')}</p></div></div>
-    <ol class="explain-phases">{phases.map((item, index) => <li key={item.id} class={index < current ? 'done' : index === current ? 'active' : undefined}
+    <ol class="explain-phases">{visiblePhases.map((item, index) => <li key={item.id} class={index < current ? 'done' : index === current ? 'active' : undefined}
       aria-current={index === current ? 'step' : undefined}>{index < current ? <Icon name="check" /> : <span class="explain-phase-dot" />}<span>{item.label}</span>
       {index === current && phaseDetail[phase] && <span class="explain-phase-detail">{phaseDetail[phase]}</span>}</li>)}</ol>
     <dl class="facts explain-facts">

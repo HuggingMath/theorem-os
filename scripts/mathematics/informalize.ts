@@ -70,7 +70,8 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
   const proofFile = path.resolve(required(flags, 'proof-file'));
   const target = required(flags, 'target');
   const environment = flags.get('environment') ?? 'mathlib';
-  if (environment !== 'mathlib' && environment !== 'standard') throw new Error('--environment must be mathlib or standard');
+  if (!['standard', 'mathlib', 'mathlib-4.8', 'openai-math', 'openai-math-cartier-reviewed-v1',
+    'openai-math-character-reviewed-v1'].includes(environment)) throw new Error('--environment must be a pinned Lean task environment');
   const language = flags.get('language') ?? 'zh';
   if (language !== 'zh' && language !== 'en') throw new Error('--language must be zh or en');
   let statement: string | null = null;
@@ -99,7 +100,7 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
   const request = prepareInformalization(directory, {
     proofId: flags.get('proof-id') ?? defaultProofId(target),
     proofFile, projectRoot: path.resolve(flags.get('project-root') ?? path.dirname(proofFile)),
-    target, environment, statement, language, writer,
+    target, environment: environment as InformalizationRequest['environment'], statement, language, writer,
     ...explanationPolicy === 'none' ? {} : { explanationPolicy },
     ...outlinePolicy === 'none' ? {} : { outlinePolicy },
     ...flags.has('formalization') ? { formalizationArtifact: formalizationArtifact(required(flags, 'formalization')) } : {},
@@ -157,6 +158,8 @@ function writeReport(directory: string, output: string) {
   if (!fs.existsSync(artifactDirectory)) throw new Error('informalization_artifact_missing');
   const evidence = readInformalizationArtifact(artifactDirectory);
   if (evidence.requestDigest !== requestDigest) throw new Error('informalization_artifact_request_mismatch');
+  const environment = request.environment;
+  if (environment !== 'standard' && environment !== 'mathlib') throw new Error('informalization_report_environment_unsupported');
   const proof = sources.at(-1)!;
   for (const unit of evidence.outline.units) {
     if (unit.file !== proof.file) throw new Error('informalization_report_multiple_files: ' + unit.name);
@@ -164,7 +167,7 @@ function writeReport(directory: string, output: string) {
   }
   const markdown = readMathText(path.join(artifactDirectory, 'proof.md'), 32_000_000);
   const file = writeStaticReport(root, output, { page: 'explain', data: { schema: 'theorem-os.web-explanation-report.v1',
-    title: request.proofId, environment: request.environment, proof: proof.text,
+    title: request.proofId, environment, proof: proof.text,
     document: explanationDocument(evidence, proof.text, formalization), markdown,
     filename: path.basename(output).replace(/\.html$/u, '.md') } });
   return { schema: 'theorem-os.informalization-cli.v1', phase: 'report', directory, modelInvoked: false, requestDigest,

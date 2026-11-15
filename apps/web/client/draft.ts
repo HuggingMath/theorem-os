@@ -21,6 +21,8 @@ export type TaskDraft = {
   workers: string;
   effort: WebEffort;
   environment: WebEnvironment;
+  autoExplain?: boolean;
+  explanationLanguage?: 'zh' | 'en';
   coordination: WebCoordination;
   /** 先审计划: hold the Agents until the plan is approved. Only `true` is stored; it applies to cooperative runs of 2+ Agents. */
   planApproval?: true;
@@ -113,6 +115,7 @@ function continuation(value: unknown): WebContinuation {
 
 function validatedDraft(value: unknown): TaskDraft {
   const draft = object(value);
+  if (Object.hasOwn(draft, 'autoExplain') && typeof draft.autoExplain !== 'boolean') invalid();
   let formalization: TaskDraft['formalization'];
   let problemBudget: TaskDraft['problemBudget'];
   let sharedProofOrigin: TaskDraft['sharedProofOrigin'];
@@ -152,6 +155,8 @@ function validatedDraft(value: unknown): TaskDraft {
     ...(Object.hasOwn(draft, 'maxTotalTokens') ? { maxTotalTokens: budget(draft, 'maxTotalTokens') } : {}),
     effort: enumeration(draft, 'effort', ['low', 'medium', 'high', 'xhigh', 'max']),
     environment: enumeration(draft, 'environment', ['standard', 'mathlib']),
+    ...(Object.hasOwn(draft, 'autoExplain') ? { autoExplain: draft.autoExplain as boolean } : {}),
+    ...(Object.hasOwn(draft, 'explanationLanguage') ? { explanationLanguage: enumeration(draft, 'explanationLanguage', ['zh', 'en'] as const) } : {}),
     coordination: enumeration(draft, 'coordination', ['cooperative', 'independent']),
     ...flag(draft, 'planApproval'),
     templateId: text(draft, 'templateId', 64),
@@ -188,6 +193,8 @@ export function decodeTaskDraft(value: unknown): TaskDraft {
       maxTurns: archiveBudget(run, 'maxTurns'), maxRunSeconds: archiveBudget(run, 'maxRunSeconds'), workers: archiveBudget(run, 'workers'),
       ...(Object.hasOwn(run, 'maxTotalTokens') ? { maxTotalTokens: archiveBudget(run, 'maxTotalTokens', 10_000) } : {}),
       effort: own(run, 'effort'), environment: own(run, 'environment'), coordination: own(run, 'coordination'), templateId: '',
+      ...(Object.hasOwn(run, 'autoExplain') ? { autoExplain: run.autoExplain } : {}),
+      ...(Object.hasOwn(run, 'explanationLanguage') ? { explanationLanguage: run.explanationLanguage } : {}),
       ...(Object.hasOwn(run, 'planApproval') ? { planApproval: run.planApproval } : {}),
       ...(Object.hasOwn(run, 'knowledgeDigest') ? { knowledgeDigest: run.knowledgeDigest } : {}),
       ...(Object.hasOwn(run, 'modulePlan') ? { modulePlan: run.modulePlan } : {}),

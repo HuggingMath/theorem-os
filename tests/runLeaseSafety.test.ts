@@ -42,7 +42,7 @@ function fixture() {
   fs.writeFileSync(taskFile, 'Keep the original tutorial statements.');
   fs.writeFileSync(buildFile, '{}');
   const args = ['--workspace', workspace, '--task-file', taskFile, '--build-manifest', buildFile, '--output', output,
-    '--workers', '1', '--model', 'fixture', '--max-turns', '0', '--max-run-seconds', '0', '--max-turn-seconds', '0'];
+    '--workers', '1', '--model', 'fixture', '--max-turns', '0', '--max-run-seconds', '0', '--max-turn-seconds', '0', '--no-explanations'];
   return { directory, output, stateFile, lockPath: path.join(path.dirname(stateFile), 'run.lock'), args };
 }
 

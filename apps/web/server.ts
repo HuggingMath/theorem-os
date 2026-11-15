@@ -62,6 +62,8 @@ const inputSchema = z.object({
   maxTotalTokens: z.union([z.literal(0), z.number().int().min(10_000).max(webLimits.maxTotalTokens)]).default(0),
   workers: z.number().int().min(1).max(webLimits.maxWorkers),
   coordination: z.enum(['cooperative', 'independent']),
+  autoExplain: z.boolean().optional(),
+  explanationLanguage: z.enum(['zh', 'en']).optional(),
   planApproval: z.boolean().optional(),
   modulePlan: researchModulePlanSchema.optional(),
   researchSelection: researchSelectionSchema.optional(),
@@ -101,6 +103,8 @@ const formalizationSchema = z.object({
   original: z.string().min(1).refine(value => value.trim().length > 0 && Buffer.byteLength(value) <= webFormalizationLimits.maxOriginalBytes),
   environment: z.enum(['standard', 'mathlib']).default(webDefaults.environment), effort: z.enum(['low', 'high', 'max']).optional(),
   researchEffort: z.enum(['low', 'high', 'max']).optional(),
+  autoExplain: inputSchema.shape.autoExplain,
+  explanationLanguage: inputSchema.shape.explanationLanguage,
   apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default(''),
   solve: z.boolean().optional(), humanReview: z.boolean().optional(),
   providerId: inputSchema.shape.providerId.optional(), model: inputSchema.shape.model.optional(),
@@ -259,12 +263,26 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
       operations.mailFailed(); console.error(`[${kind} mail] run ${run.id}: delivery failed`);
     });
   };
+  const explanations = new WebExplanations(runner, storage, webExplanationLimits, owner => {
+    if (!auth || !quota || !owner.startsWith('account:')) return;
+    const account = auth.listAccounts().find(item => item.id === owner.slice(8));
+    if (!account) throw new Error('explanation_account_unavailable');
+    if (auth.isAdmin(account.email)) return;
+    try { quota.take(account.id, 'explanations'); }
+    catch (error) { throw error instanceof WebQuotaError ? new Error('explanation_quota_exhausted') : error; }
+  });
   const jobs = new WebJobs(runner, config, { storage, knowledge, onAccepted: owner => milestone(owner, 'firstAcceptedAt'),
+    onProofAccepted: (owner, run, credentials) => {
+      if (run.autoExplain === false || !runner.explain || !gatewayProvider(credentials.provider)
+        || run.model !== SUB2API_PROVIDER.defaultModel) return;
+      explanations.createAutomatic(owner, run, { ...credentials, targets: explanationTargets(run).map(target => target.name),
+        language: run.explanationLanguage ?? 'zh', model: run.model, effort: explanationEffort(run.effort) });
+    },
+    onStatementReview: (owner, run) => explanations.review(owner, run),
     onFinished: (owner, run) => { if (mailsCompletion(run)) mailOwner(owner, run, 'completion', completionMail); },
     onPlanWaiting: (owner, run) => mailOwner(owner, run, 'plan approval', planApprovalMail) });
   const trajectories = new WebTrajectories(storage);
   const research = new WebResearchApi(storage, jobs, knowledge, runner);
-  const explanations = new WebExplanations(runner, storage);
   const formalizations = new WebFormalizations(runner, storage, webFormalizationLimits, (owner, formalization, evidence, input) => {
     const digest = formalizationCompiledCandidateDigest(formalizationCompiledCandidate(evidence));
     const existing = jobs.list(owner).find(run => run.formalizationId === formalization.id && !run.continueFrom &&
@@ -275,6 +293,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     const run = jobs.create(owner, { ...webDefaults, ...webFormalizationDefaults.research, ...formalization.research,
       ...(formalization.humanReview ? { workers: 2, coordination: 'cooperative' as const, planApproval: true } : {}),
       providerId: input.provider.id, apiKey: input.apiKey,
+      autoExplain: formalization.autoExplain, explanationLanguage: formalization.explanationLanguage,
       model: input.model, effort: formalization.researchEffort ?? input.effort, source: evidence.candidate.source, environment: evidence.request.environment,
       task: '依据自然语言原题及其 Lean 陈述，证明全部目标，保留所有定义、假设与声明。', formalizationId: formalization.id }, input.provider, undefined, undefined,
     { evidence, provenance: { id: formalization.id, evidenceSha256: formalizationDigest(evidence), original: formalization.original,
@@ -290,6 +309,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
       if (existing) return existing.id;
       const run = jobs.create(owner, { ...webDefaults, ...webFormalizationDefaults.research, ...formalization.research,
         providerId: input.provider.id, apiKey: input.apiKey, model: input.model, effort: formalization.researchEffort ?? input.effort,
+        autoExplain: formalization.autoExplain, explanationLanguage: formalization.explanationLanguage,
         source: compiled.candidate.source, environment: compiled.request.environment, formalizationId: formalization.id,
         task: '证明编译通过的固定候选陈述的全部目标，保留所有定义、假设与声明。原题含义审核正在后台进行。' }, input.provider, undefined, undefined,
       { compiled, provenance: { id: formalization.id, original: formalization.original, candidateDigest: digest, confirmation: 'pending' } });

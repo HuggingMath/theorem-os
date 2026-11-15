@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ChatAnswers, explanationStepQuestion } from '../apps/web/client/chatAnswer';
-import type { WebExplanation, WebExplanationDocument, WebExplanationOverview, WebRun } from '../apps/web/shared';
+import type { WebExplanation, WebExplanationDocument, WebExplanationLanguage, WebExplanationOverview, WebRun } from '../apps/web/shared';
 
 const at = '2026-11-10T07:00:00.000Z';
 const run = (changes: Partial<WebRun> = {}): WebRun => ({ id: 'accepted-run', title: 'Recorded accepted proof',
@@ -28,9 +28,9 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
-function fixture(read: (url: string) => unknown | Promise<unknown>) {
+function fixture(read: (url: string) => unknown | Promise<unknown>, language: WebExplanationLanguage = 'zh') {
   const request = vi.fn(async <T>(url: string): Promise<T> => await read(url) as T), changed = vi.fn();
-  return { answers: new ChatAnswers(request, 'zh', changed), request, changed };
+  return { answers: new ChatAnswers(request, language, changed), request, changed };
 }
 
 describe('chat reads existing approved explanations without model or generation requests', () => {
@@ -45,21 +45,33 @@ describe('chat reads existing approved explanations without model or generation 
     expect(request).not.toHaveBeenCalled();
   });
 
-  it.each(['pending', 'rejected', 'interrupted', 'superseded'] as const)('keeps %s candidates usable as Lean proofs without reading an original-problem explanation', async confirmation => {
+  it.each(['rejected', 'interrupted', 'superseded'] as const)('keeps %s candidates usable as Lean proofs without reading an original-problem explanation', async confirmation => {
     const { answers, request } = fixture(() => { throw new Error('No original-problem explanation request is allowed'); });
     const candidate = run({ formalization: { id: 'formalization', original: 'Original problem', candidateDigest: 'a'.repeat(64), confirmation } });
     expect(answers.sync(candidate)).toBeUndefined(); answers.refresh(candidate); await settle();
     expect(request).not.toHaveBeenCalled();
   });
 
-  it('reads the same accepted proof after background review binds its approval', async () => {
+  it('shows waiting-review progress without reading a document before the original problem is reviewed', async () => {
+    const saved = explanation('first', { status: 'queued', progress: { phase: 'waiting_review', updatedAt: at } });
+    const { answers, request } = fixture(() => overview(run(), [saved]));
+    const candidate = run({ formalization: { id: 'formalization', original: 'Original problem', candidateDigest: 'a'.repeat(64), confirmation: 'pending' } });
+    const answer = answers.sync(candidate)!; await settle();
+    expect(answer.explanation?.progress?.phase).toBe('waiting_review');
+    expect(answer.document).toBeUndefined(); expect(answers.generating(candidate.id)).toBe(true);
+    expect(request.mock.calls).toEqual([['/api/runs/accepted-run/explanations']]);
+  });
+
+  it('does not read an approved document until background review binds its approval to the same accepted proof', async () => {
     const { answers, request } = fixture(url => url.endsWith('/explanations') ? overview() : { explanation: explanation('first') });
     const candidate = run({ formalization: { id: 'formalization', original: 'Original problem', candidateDigest: 'a'.repeat(64), confirmation: 'pending' } });
-    expect(answers.sync(candidate)).toBeUndefined(); expect(request).not.toHaveBeenCalled();
+    const pending = answers.sync(candidate)!; await settle(); expect(pending.document).toBeUndefined();
+    expect(request.mock.calls).toEqual([['/api/runs/accepted-run/explanations']]);
     const reviewed = run({ formalization: { ...candidate.formalization!, confirmation: 'automatic', evidenceSha256: 'b'.repeat(64), confirmedAt: at } });
     const answer = answers.sync(reviewed)!; await settle();
     expect(answer.document).toEqual(document('first'));
-    expect(request.mock.calls).toEqual([['/api/runs/accepted-run/explanations'], ['/api/runs/accepted-run/explanations/item?target=first&language=zh']]);
+    expect(request.mock.calls).toEqual([['/api/runs/accepted-run/explanations'], ['/api/runs/accepted-run/explanations'],
+      ['/api/runs/accepted-run/explanations/item?target=first&language=zh']]);
   });
 
   it('prefers an approved target in the current language and only reads its saved document', async () => {
@@ -71,6 +83,36 @@ describe('chat reads existing approved explanations without model or generation 
       ['/api/runs/accepted-run/explanations/item?target=second&language=zh']]);
     answers.sync(run()); answers.select('accepted-run', 'missing'); answers.select('accepted-run', 'second');
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads an existing automatic explanation in another language and switches to the interface language when available', async () => {
+    const english = explanation('first', { id: 'english', language: 'en', document: { ...document('first'), language: 'en' } });
+    let entries = [explanation('first')];
+    const { answers, request } = fixture(url => url.endsWith('/explanations') ? overview(run(), entries)
+      : { explanation: url.endsWith('language=en') ? english : entries[0] }, 'en');
+    const value = answers.sync(run())!; await settle();
+    expect(value.document?.language).toBe('zh'); expect(request.mock.calls.at(-1)?.[0]).toContain('language=zh');
+    entries = [...entries, english]; answers.refresh(run()); await settle();
+    expect(value.document?.language).toBe('en'); expect(request.mock.calls.at(-1)?.[0]).toContain('language=en');
+  });
+
+  it('drops a fallback-language document when reading the newly selected language fails', async () => {
+    let englishAvailable = false;
+    const { answers } = fixture(url => {
+      if (url.endsWith('/explanations')) return overview(run(), [explanation('first'), ...(englishAvailable
+        ? [explanation('first', { id: 'english', language: 'en' })] : [])]);
+      if (url.endsWith('language=en')) throw new Error('English document is temporarily unavailable');
+      return { explanation: explanation('first') };
+    }, 'en');
+    const value = answers.sync(run())!; await settle(); expect(value.document?.language).toBe('zh');
+    englishAvailable = true; answers.refresh(run()); await settle();
+    expect(value.document).toBeUndefined(); expect(value.explanation?.language).toBe('en'); expect(value.error).toBeTruthy();
+  });
+
+  it('validates the language of a fallback document against its saved record', async () => {
+    const { answers } = fixture(url => url.endsWith('/explanations') ? overview(run(), [explanation('first')])
+      : { explanation: explanation('first', { document: { ...document('first'), language: 'en' } }) }, 'en');
+    const value = answers.sync(run())!; await settle(); expect(value.document).toBeUndefined(); expect(value.error).toBeTruthy();
   });
 
   it.each(['queued', 'running', 'exhausted', 'cancelled', 'error'] as const)('shows no document and never starts generation for an existing %s explanation', async status => {

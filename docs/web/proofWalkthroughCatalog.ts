@@ -13,6 +13,11 @@ export const proofWalkthroughs = [...coreProofWalkthroughs, ...analysisProofWalk
 export function withProofWalkthrough(record: Pick<ArchiveRecord, 'id' | 'campaign'>, process: ArchiveProcess): ArchiveProcess {
   const walkthrough = proofWalkthroughs.find(item => item.recordId === record.id);
   if (!walkthrough) return process;
+  // A later accepted proof can carry its own audited explanation. An older curated reading belongs only to its
+  // original proof and must not prevent importing the newly generated one.
+  if (process.explanations?.some(item => item.runId === record.campaign?.runId
+    && item.proofCommit === record.campaign.proofCommit && item.proofSha256 === record.campaign.proofSha256)
+    && (walkthrough.runId !== record.campaign?.runId || walkthrough.proofSha256 !== record.campaign.proofSha256)) return process;
   const fail = (detail: string): never => { throw new Error(`Proof walkthrough mismatch: ${record.id}/${detail}`); };
   if (walkthrough.runId !== record.campaign?.runId || walkthrough.proofSha256 !== record.campaign.proofSha256) fail('accepted identity');
   const run = process.runs.find(item => item.runId === walkthrough.runId);

@@ -328,9 +328,14 @@ Lead 的普通规划和初始规划执行 90 秒后收到保存提醒，120 秒�
 | `<output>` | 最终结果、评测状态、证明提交、轮次与用量 |
 | `<output>.runtime/state.json` | 可恢复状态，包括任务图、负责人、固定版本、检查反馈和审阅 |
 | `<output>.runtime/worktree*` | 各 Agent 的独立求解工作区 |
+| `<output>.runtime/explanations/<language>/*/artifact/` | 每个原始目标的自动讲解 `proof.md` 与审核证据 `informalization.json` |
 | 标准输出 | JSON 进度事件 |
 
 最终 `status` 包括 `evaluated_passed`、`evaluated_failed`、`incomplete`、`limit_reached` 和 `runtime_error`；仅做启动预检时为 `prepared`。报告实验结果时，应注明题目版本、预算、评测方式，以及是否从已有成果续跑。
+
+`run` 在独立验收通过后自动生成每个原始目标的自然语言讲解，包括证明引用的项目内引理。它直接冻结已验收的证明与本地导入，自动执行 Lean 提取、逐步写作和两名独立审核者检查；无需先运行 `informalize prepare` 或准备静态题库讲解。`result.explanations` 持续记录各目标的状态、输出目录和 Markdown 路径。默认语言为中文，可用 `--explanation-language en` 改为英文；`--no-explanations` 跳过生成，预设回放始终跳过。
+
+讲解使用求解时的模型配置，单独计算时间和 Token，不消耗求解预算的剩余额度，目前不设默认上限。证明验收结果会先落盘；讲解失败或取消时，`evaluated_passed` 和退出码 0 保留，讲解状态单独报告。以相同参数加 `--resume` 会验证已验收证明未变并恢复讲解断点，不再派发求解轮次；省略语言选项时沿用上次语言。讲解需使用运行时已有的固定 Lean／Mathlib 环境；不支持的历史环境会记录 `informalization_environment_unsupported`，不会改用其他版本。
 
 ## 配置与命令
 

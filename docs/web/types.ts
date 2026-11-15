@@ -131,6 +131,8 @@ export interface ArchiveSourceRoute {
 
 export interface ArchiveProcess {
   walkthrough?: ProofWalkthrough;
+  /** Audited explanations exported directly from the accepted CLI run. */
+  explanations?: ArchiveProofExplanation[];
   sourceRoute?: ArchiveSourceRoute;
   /** Exact checked files recovered from immutable archived commits, keyed by their SHA-256. */
   sources?: Record<string, { path: string; code: string; sha256: string }>;
@@ -156,6 +158,29 @@ export interface ArchiveProcess {
       theorem?: string; type?: string; proofPath?: string; dependencies: string[] }[];
     knowledgeApplications?: ArchiveKnowledgeApplication[];
     libraryUsage?: ArchiveLibraryUsage;
+  }[];
+}
+
+export interface ArchiveProofExplanation {
+  runId: string;
+  proofCommit: string;
+  proofSha256: string;
+  target: string;
+  language: 'zh' | 'en';
+  overview: string;
+  auditors: number;
+  sources: { name: string; sha256: string }[];
+  route: { claim: string; declarations: string[] }[];
+  sections: {
+    name: string;
+    title: string;
+    statement: string;
+    summary?: string;
+    file: string;
+    sha256: string;
+    line: number;
+    endLine: number;
+    steps: { text: string; uses: string[]; lean: string[] }[];
   }[];
 }
 

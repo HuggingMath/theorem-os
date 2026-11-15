@@ -47,6 +47,7 @@
     "test:web-roadmap": "bun scripts/test-web-roadmap.ts",
     "test:web-agent-route": "bun scripts/test-web-agent-route.ts",
     "test:web-explain": "bun scripts/test-web-explain.ts",
+    "test:web-automatic-explanations": "bun scripts/test-web-automatic-explanations.ts",
     "test:web-explain-recovery": "bun scripts/test-web-explain-recovery.ts",
     "test:web-report": "bun scripts/test-web-report.ts",
     "test:web-onboarding": "bun scripts/test-web-onboarding.ts",

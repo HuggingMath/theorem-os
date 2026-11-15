@@ -231,6 +231,8 @@ export class WebFormalizations {
     return { schema: 'theorem-os.web-creation.v1', requestId: request.requestId, digest: mathDigest(canonicalMathJson({
       original: request.original, environment: request.environment, effort: request.effort, model,
       ...(request.researchEffort && request.researchEffort !== request.effort ? { researchEffort: request.researchEffort } : {}),
+      ...(request.autoExplain !== undefined ? { autoExplain: request.autoExplain } : {}),
+      ...(request.explanationLanguage ? { explanationLanguage: request.explanationLanguage } : {}),
       provider: { id: provider.id, baseUrl: provider.baseUrl }, solve: Boolean(request.solve), humanReview: Boolean(request.humanReview),
       maxRunSeconds: request.maxRunSeconds ?? webFormalizationDefaults.maxRunSeconds,
       maxTotalTokens: request.maxTotalTokens ?? webFormalizationDefaults.maxTotalTokens,
@@ -268,6 +270,7 @@ export class WebFormalizations {
       maxRounds: 0, maxPlanningRounds: 0,
       research: { ...webFormalizationDefaults.research, ...request.research },
       researchEffort: request.researchEffort ?? request.effort,
+      autoExplain: request.autoExplain ?? true, explanationLanguage: request.explanationLanguage ?? 'zh',
       effort: request.effort, status: 'queued', createdAt: now, updatedAt: now, progress: { phase: 'queued', updatedAt: now },
       ...(request.solve ? { workflow: 'solve' } : {}), ...(request.humanReview ? { humanReview: true } : {}) };
     const input: WorkerFormalizationInput = { original: request.original, environment: request.environment, effort: request.effort,

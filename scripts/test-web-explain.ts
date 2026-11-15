@@ -53,6 +53,7 @@ units[units.length - 1]!.goals = [...helpers.map((_, index) => ({ snippet: `have
 const lineCount = proof.replace(/\n$/u, '').split('\n').length;
 const shortProof = 'theorem viewport_target (n : Nat) : n + 0 = n := by\n  simp\n';
 const input: WebRunInput = { providerId: 'sub2api', apiKey: credential, model: 'deepseek-flash', effort: 'xhigh', environment: 'standard',
+  autoExplain: false,
   source: 'theorem target_thm (a b : Nat) : a + b + 1 = b + a + 1 := by\n  sorry\n', task: 'Explain fixture',
   maxTurns: 1, maxRunSeconds: 60, workers: 1, coordination: 'cooperative' };
 

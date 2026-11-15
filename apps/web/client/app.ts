@@ -45,6 +45,7 @@ import { ModulePlanLibraryView } from './modulePlanLibraryView';
 import type { ResearchModuleSlot } from '../../../src/solver/modules/policy';
 import { draftOwnerStorageKey, OwnedDrafts, researchEntryStorageKey, webDraftOwner } from './ownedDrafts';
 import { SubmissionIdentity } from './submissionIdentity';
+import { automaticExplanationSettings } from './automaticExplanation';
 import { DraftRecovery, type ReplacementReason } from './draftRecovery';
 import { animateEntrance, arriveRow, finishHiddenMotion, finishMotion, glideSelection, revealTheme, selectionBox } from './motion';
 import { renderTopbar } from './ui/Topbar';
@@ -451,6 +452,8 @@ let draftDirty = false;
 let draftRevision = 0;
 let draftTimer: ReturnType<typeof setTimeout> | undefined;
 let latestDraft: TaskDraft | undefined;
+let draftAutoExplain: TaskDraft['autoExplain'] = true;
+let draftExplanationLanguage: TaskDraft['explanationLanguage'] = locale;
 let replacingDraft = false;
 let restoringDraft = false;
 const ownedDrafts = new OwnedDrafts(() => sessionStorage);
@@ -480,6 +483,7 @@ function clearOwnedDrafts() {
   submissionSequence++;
   draftReady = false; draftDirty = false; clearTimeout(draftTimer);
   latestDraft = undefined; pendingImport = undefined; taskImportSequence++;
+  draftAutoExplain = true; draftExplanationLanguage = locale;
   draftContinuation = undefined; submissionIdentity.clear(); draftRecovery.clear(); ownedDrafts.clear();
   forgetRememberedKey(); clearProblemDraftTabMemory();
   try {
@@ -1110,6 +1114,8 @@ function captureDraft(): TaskDraft {
   const modulePlan = modulePlanEditor.value();
   const knowledgeDigest = serverModulePlans.knowledgeDigest();
   return { providerId: field('provider').value, model: field('model').value,
+    ...(draftAutoExplain === undefined ? {} : { autoExplain: draftAutoExplain }),
+    ...(draftExplanationLanguage === undefined ? {} : { explanationLanguage: draftExplanationLanguage }),
     effort: field('effort').value as WebEffort, environment: field('environment').value as WebEnvironment,
     source: field('source').value, task: field('task').value, templateId: field('template').value,
     maxTurns: field('max-turns').value, maxRunSeconds: field('max-seconds').value, workers: field('workers').value,
@@ -1273,6 +1279,8 @@ function saveDraft() {
 }
 function applyTaskDraft(draft: TaskDraft, fixedEnvironment?: WebEnvironment) {
   draft = editableTaskDraft(draft, submissionIdentity.unresolved, fixedEnvironment);
+  const explanation = automaticExplanationSettings(draft, locale, submissionIdentity.unresolved);
+  draftAutoExplain = explanation.autoExplain; draftExplanationLanguage = explanation.explanationLanguage;
   continuationPreview = undefined;
   draftSharedProofOrigin = draft.sharedProofOrigin ? { ...draft.sharedProofOrigin } : undefined;
   draftClassicOrigin = draft.classicOrigin ? { ...draft.classicOrigin } : undefined;
@@ -1380,6 +1388,7 @@ function resetForm() {
     draftReady = false;
     clearTimeout(draftTimer); draftDirty = false;
     element<HTMLFormElement>('#run-form').reset();
+    draftAutoExplain = true; draftExplanationLanguage = locale;
     modulePlanLibrary.resetSelection(); modulePlanEditor.setValue(); serverModulePlans.setKnowledgeDigest();
     field('api-key').value = '';
     element<HTMLInputElement>('#api-key').type = 'password';
@@ -2341,6 +2350,7 @@ async function openFormalizedDraft(id: string) {
     if (draftRevision !== revision) throw new Error(t('草稿已变化，未载入形式化原题。请从形式化页面重新打开。'));
     const report = formalization.report;
     const draft: TaskDraft = { ...captureDraft(), source: report.statement, environment: report.environment, templateId: '',
+      ...automaticExplanationSettings(formalization, locale),
       problemBudget: undefined, sharedProofOrigin: undefined, classicOrigin: undefined, libraryProposalOrigin: undefined,
       task: t('证明已确认原题中的全部目标，保留所有定义、假设与声明。'),
       formalization: { id: formalization.id, evidenceSha256: report.evidenceSha256 } };
@@ -3241,6 +3251,7 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
       providerId: field('provider').value, apiKey: field('api-key').value.trim(), model: field('model').value.trim(),
       effort: field('effort').value as WebEffort, environment: field('environment').value as WebEnvironment,
       source: field('source').value, task: field('task').value,
+      autoExplain: capturedDraft.autoExplain, explanationLanguage: capturedDraft.explanationLanguage,
       maxTurns: Number(field('max-turns').value), maxRunSeconds: Number(field('max-seconds').value),
       ...(tokenCap(field('max-tokens').value, session.limits.maxTotalTokens) ? { maxTotalTokens: tokenCap(field('max-tokens').value, session.limits.maxTotalTokens) } : {}),
       workers: Number(field('workers').value),
@@ -3576,6 +3587,7 @@ function applyReusedRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 're
   chooseEntry('lean');
   if (recovery === 'key') forgetRememberedKey();
   replaceDraft('reuse', () => {
+    draftAutoExplain = run.autoExplain ?? true; draftExplanationLanguage = run.explanationLanguage ?? locale;
     budgetDraftOrigin = isSample(run) ? undefined : { ...(run.budgetOrigin ?? { runId: run.id }), source: run.source, environment: run.environment };
     draftLibraryProposalOrigin = run.libraryProposalOrigin ? { ...run.libraryProposalOrigin } : undefined;
     renderLibraryProposalOrigin();

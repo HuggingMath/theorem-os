@@ -8,6 +8,7 @@ const schema = 'theorem-os.chat-draft.v1';
 export type ChatDraftSettings = Required<Pick<WebFormalizationRequest,
   'providerId' | 'model' | 'environment' | 'effort' | 'maxRunSeconds' | 'maxTotalTokens' | 'research'>> & {
     participation: 'guided' | 'automatic'; research: WebResearchBudget; researchEffort?: WebFormalizationRequest['effort'];
+    autoExplain?: boolean; explanationLanguage?: 'zh' | 'en';
   };
 export type ChatGuidanceDraft = { runId: string; taskRef?: { id: string; version: string } };
 export type ChatPendingMessage = { requestId: string; text: string };
@@ -32,10 +33,13 @@ export function historicalChatSettings(formalization: WebFormalization | undefin
   const effort = formalization?.effort ?? (run && ['low', 'high', 'max'].includes(run.effort) ? run.effort as ChatDraftSettings['effort'] : fallback.effort);
   const researchEffort = formalization?.researchEffort ?? formalization?.effort
     ?? (run && ['low', 'high', 'max'].includes(run.effort) ? run.effort as ChatDraftSettings['effort'] : fallback.researchEffort ?? fallback.effort);
+  const autoExplain = formalization?.autoExplain ?? run?.autoExplain ?? fallback.autoExplain;
+  const explanationLanguage = formalization?.explanationLanguage ?? run?.explanationLanguage ?? fallback.explanationLanguage;
   return { providerId: formalization?.providerId ?? run?.providerId ?? fallback.providerId,
     model: formalization?.model ?? run?.model ?? fallback.model,
     environment: formalization?.environment ?? run?.environment ?? fallback.environment,
     effort, ...(researchEffort !== effort ? { researchEffort } : {}),
+    ...(autoExplain === undefined ? {} : { autoExplain }), ...(explanationLanguage ? { explanationLanguage } : {}),
     participation: formalization ? formalization.humanReview ? 'guided' : 'automatic' : run ? run.planApproval ? 'guided' : 'automatic' : fallback.participation,
     maxRunSeconds: formalization?.maxRunSeconds ?? fallback.maxRunSeconds,
     maxTotalTokens: formalization?.maxTotalTokens ?? fallback.maxTotalTokens, research: { ...research } };
@@ -57,12 +61,16 @@ function settings(value: unknown): ChatDraftSettings | undefined {
   if (!record(value) || typeof value.providerId !== 'string' || typeof value.model !== 'string'
     || !['standard', 'mathlib'].includes(String(value.environment)) || !['low', 'high', 'max'].includes(String(value.effort))
     || value.researchEffort !== undefined && !['low', 'high', 'max'].includes(String(value.researchEffort))
+    || value.autoExplain !== undefined && typeof value.autoExplain !== 'boolean'
+    || value.explanationLanguage !== undefined && !['zh', 'en'].includes(String(value.explanationLanguage))
     || !['guided', 'automatic'].includes(String(value.participation)) || !budget(value.maxRunSeconds) || !budget(value.maxTotalTokens)
     || !record(value.research) || !budget(value.research.maxRunSeconds) || !budget(value.research.maxTotalTokens) || !budget(value.research.maxTurns)) return;
   // Pick the nonsecret fields even when an older or extended object supplies extra properties.
   return { providerId: value.providerId, model: value.model, environment: value.environment as ChatDraftSettings['environment'],
     effort: value.effort as ChatDraftSettings['effort'], participation: value.participation as ChatDraftSettings['participation'],
     ...(value.researchEffort === undefined ? {} : { researchEffort: value.researchEffort as ChatDraftSettings['effort'] }),
+    ...(value.autoExplain === undefined ? {} : { autoExplain: value.autoExplain as boolean }),
+    ...(value.explanationLanguage === undefined ? {} : { explanationLanguage: value.explanationLanguage as 'zh' | 'en' }),
     maxRunSeconds: value.maxRunSeconds, maxTotalTokens: value.maxTotalTokens,
     research: { maxRunSeconds: value.research.maxRunSeconds, maxTotalTokens: value.research.maxTotalTokens, maxTurns: value.research.maxTurns } };
 }

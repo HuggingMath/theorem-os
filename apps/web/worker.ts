@@ -315,7 +315,7 @@ async function main() {
         message: `已装入请求的库依赖，保留原题与研究材料，开始第 ${round.round + 1} 轮。` });
       await runSolver(['--workspace', round.seed.workspaceRoot, '--task-file', round.seed.taskFile, '--output', output,
       '--receipt-file', round.seed.activeProblemPath, '--build-manifest', buildIndex.buildManifestRef,
-      '--model', request.input.model, '--effort', request.input.effort, '--workers', String(request.input.workers),
+      '--model', request.input.model, '--effort', request.input.effort, '--workers', String(request.input.workers), '--no-explanations',
       '--coordination', request.input.coordination, '--max-turns', String(round.limits.maxTurns),
       ...(request.input.planApproval ? ['--plan-approval'] : []),
       ...(knowledgeFile ? ['--knowledge-base', knowledgeFile] : []),

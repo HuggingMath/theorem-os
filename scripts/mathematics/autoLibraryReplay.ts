@@ -135,7 +135,7 @@ export async function replayAutoLibrary(directory: string, root: string) {
     prover: { model: 'preset-replay', effort: 'none', executable: 'preset-replay', workers: 1, coordination: 'cooperative',
       maxRunSeconds: 300, maxTurns: 3, maxTurnSeconds: 120, maxTotalTokens: 0, prepareTimeoutSeconds: 600 },
     maxModules: 2, maxRounds: 4, maxRunSeconds: 0, maxTotalTokens: 0, plannerTurnSeconds: 0 });
-  const options = { openSession: replayPlanner(seen, opened), solve: (args: string[]) => runSolver(args, root, prover) };
+  const options = { openSession: replayPlanner(seen, opened), solve: (args: string[]) => runSolver([...args, '--no-explanations'], root, prover) };
   const summary = await runAutoLibraryBuild(buildDirectory, root, options);
   const outcomes = summary.modules.map(item => item.rounds.map(round => round.outcome).join(','));
   expect(summary.status === 'built' && summary.published.join() === 'Quadruple', `build ${summary.status} ${summary.error ?? ''}`);
@@ -174,7 +174,7 @@ export async function replayAutoLibrary(directory: string, root: string) {
   const output = path.join(destination, 'result.json');
   const code = await runSolver(['--workspace', path.join(destination, 'workspace'), '--task-file', path.join(destination, 'task.md'),
     '--output', output, '--build-manifest', buildManifestRef, '--workers', '1', '--max-turns', '3', '--max-run-seconds', '300',
-    '--model', 'preset-replay', '--effort', 'none'], root, prover);
+    '--model', 'preset-replay', '--effort', 'none', '--no-explanations'], root, prover);
   const result = JSON.parse(readMathText(output, 64 * 1024 * 1024)) as { status: string };
   expect(code === 0 && result.status === 'evaluated_passed', `destination ${result.status}`);
   const usage = autoLibraryRunUsage({ records: readAutoLibraryPool(pool), stateFile: path.join(`${output}.runtime`, 'state.json') });

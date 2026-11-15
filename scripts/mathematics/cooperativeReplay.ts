@@ -224,7 +224,7 @@ async function replayScenario(directory: string, root: string, buildManifestRef:
     code = await runSolver(['--workspace', workspace, '--task-file', task, '--output', output,
       '--build-manifest', buildManifestRef, '--workers', '4', '--coordination', 'cooperative',
       '--max-turns', '24', '--max-run-seconds', '600', '--max-turn-seconds', '120',
-      '--model', 'scripted-zero-model', '--effort', 'none', '--codex', 'scripted-zero-model'], root, actors.modules);
+      '--model', 'scripted-zero-model', '--effort', 'none', '--codex', 'scripted-zero-model', '--no-explanations'], root, actors.modules);
   } finally { console.log = previousLog; }
   const stateFile = path.join(output + '.runtime', 'state.json');
   const state = readSolverRunState(stateFile), result = JSON.parse(readMathText(output)) as Record<string, unknown>;

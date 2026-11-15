@@ -7,9 +7,12 @@ import type { WebExplanation, WebExplanationLanguage, WebExplanationProgress, We
   WorkerExplanationMessage } from './shared';
 import { webExplanationReason } from './shared';
 import { WebStorage, WebStorageError } from './storage';
+import { isStatementReviewed } from './presentation';
 
 type Job = { owner: string; key: string; run: WebRun; explanation: WebExplanation; input: WorkerExplanationInput;
-  controller: AbortController; persistedAt: number };
+  controller: AbortController; persistedAt: number; group: string; waitingReview?: boolean };
+type ExplanationRequest = { target: string; language: WebExplanationLanguage; apiKey: string; provider: WebProvider;
+  model: string; effort: 'low' | 'high' | 'max' };
 const active = (explanation: WebExplanation) => explanation.status === 'queued' || explanation.status === 'running';
 /** Storage key of one explanation of a run: its target and language. */
 export const explanationKey = (target: string, language: WebExplanationLanguage) => mathDigest(`${language}\n${target}`);
@@ -22,7 +25,8 @@ export class WebExplanations {
   private closing = false;
 
   constructor(private readonly runner: WebRunner, private readonly storage: WebStorage,
-    private readonly limits: Pick<typeof webExplanationLimits, 'concurrency' | 'queueLimit' | 'perOwner'> = webExplanationLimits) {
+    private readonly limits: Pick<typeof webExplanationLimits, 'concurrency' | 'queueLimit' | 'perOwner'> = webExplanationLimits,
+    private readonly beforeAutomaticStart?: (owner: string) => void) {
     for (const { owner, run } of this.storage.loadRuns())
       for (const { key, explanation } of this.storage.listExplanations(owner, run.id)) if (active(explanation)) {
         const now = new Date().toISOString();
@@ -72,30 +76,77 @@ export class WebExplanations {
   active(owner: string, runId: string): boolean {
     return [...this.jobs.values()].some(job => job.owner === owner && job.run.id === runId);
   }
-  create(owner: string, run: WebRun, request: { target: string; language: WebExplanationLanguage; apiKey: string; provider: WebProvider;
-    model: string; effort: 'low' | 'high' | 'max' }): WebExplanation {
+  create(owner: string, run: WebRun, request: ExplanationRequest): WebExplanation {
+    return this.enqueue(owner, run, request);
+  }
+  /** One solve reserves one admission slot; all original targets are saved now and execute in sequence. Credentials
+   * stay only in these live inputs, including when the same frozen statement is still being reviewed. */
+  createAutomatic(owner: string, run: WebRun, request: Omit<ExplanationRequest, 'target'> & { targets: string[] }): WebExplanation[] {
+    const targets = [...new Set(request.targets)].filter(target => !this.get(owner, run.id, target, request.language));
+    if (!targets.length) return this.list(owner, run.id);
+    let failure: string | undefined;
+    try { this.capacity(owner); }
+    catch (error) { if (!(error instanceof WebStorageError)) throw error; failure = 'explanation_queue_full'; }
+    if (!request.apiKey) failure = 'explanation_key_required';
+    if (!isStatementReviewed(run) && run.formalization?.confirmation !== 'pending') failure = 'explanation_statement_unreviewed';
+    for (const target of targets) {
+      this.enqueue(owner, run, { ...request, target }, { automatic: true, failure });
+    }
+    return this.list(owner, run.id);
+  }
+  /** Statement review may finish after Lean acceptance. It releases the existing queue, without resubmitting work. */
+  review(owner: string, run: WebRun) {
+    const reviewed = isStatementReviewed(run);
+    for (const job of [...this.jobs.values()]) {
+      if (job.owner !== owner || job.run.id !== run.id || !job.explanation.automatic) continue;
+      if (reviewed && job.waitingReview) {
+        delete job.waitingReview;
+        const now = new Date().toISOString();
+        job.explanation.progress = { phase: 'queued', updatedAt: now }; job.explanation.updatedAt = now;
+        this.persist(job, true);
+      } else if (!reviewed && run.formalization?.confirmation !== 'pending') {
+        try { this.finish(job, { status: 'cancelled', reason: 'explanation_statement_unreviewed' }); }
+        finally { this.release(job); job.controller.abort(); }
+      }
+    }
+    queueMicrotask(() => this.pump());
+  }
+  private capacity(owner: string) {
     if (this.closing) throw new WebStorageError(503, '服务正在停止，请稍后重试。');
+    const jobs = [...this.jobs.values()];
+    const groups = new Set(jobs.map(job => job.group));
+    if (groups.size >= this.limits.queueLimit) throw new WebStorageError(429, `讲解队列已满：${groups.size} 项正在生成或排队，请稍后再试。`);
+    if (new Set(jobs.filter(job => job.owner === owner).map(job => job.group)).size >= this.limits.perOwner)
+      throw new WebStorageError(429, `每个账号最多同时生成 ${this.limits.perOwner} 项讲解，请等其中一项结束。`);
+  }
+  private enqueue(owner: string, run: WebRun, request: ExplanationRequest, automatic?: { automatic: true; failure?: string }): WebExplanation {
     const key = explanationKey(request.target, request.language), id = this.id(owner, run.id, key);
     const existingJob = this.jobs.get(id);
     const existing = existingJob?.explanation ?? this.storage.getExplanation(owner, run.id, key);
     if (existingJob && active(existingJob.explanation)) throw new WebStorageError(409, '这份讲解正在生成。');
     if (existing?.status === 'approved') throw new WebStorageError(409, '这份讲解已经生成；如需重新生成，请先删除它。');
-    const jobs = [...this.jobs.values()];
-    if (jobs.length >= this.limits.queueLimit) throw new WebStorageError(429, `讲解队列已满：${jobs.length} 份正在生成或排队，请稍后再试。`);
-    if (jobs.filter(job => job.owner === owner).length >= this.limits.perOwner)
-      throw new WebStorageError(429, `每个账号最多同时生成 ${this.limits.perOwner} 份讲解，请等其中一份结束。`);
+    if (!automatic) this.capacity(owner);
     // A record without a live job can remain after a failed save; an explicit retry replaces it.
     if (existing) this.storage.deleteExplanation(owner, run.id, key);
     const now = new Date().toISOString();
+    const waitingReview = automatic && !isStatementReviewed(run);
     const explanation: WebExplanation = { id: crypto.randomUUID(), runId: run.id, target: request.target, language: request.language,
       status: 'queued', createdAt: now, updatedAt: now, model: request.model, effort: request.effort,
+      ...(automatic ? { automatic: true } : {}),
       maxRunSeconds: webExplanationLimits.maxRunSeconds, maxTotalTokens: webExplanationLimits.maxTotalTokens,
-      progress: { phase: 'queued', updatedAt: now } };
+      progress: { phase: waitingReview ? 'waiting_review' : 'queued', updatedAt: now } };
+    if (automatic?.failure) {
+      Object.assign(explanation, { status: 'error', reason: automatic.failure, finishedAt: now });
+      delete explanation.progress;
+      this.storage.saveExplanation(owner, key, explanation);
+      return explanation;
+    }
     const input: WorkerExplanationInput = { id: explanation.id, proof: run.result!.proof, target: request.target, language: request.language,
       environment: run.environment, model: request.model, effort: request.effort, apiKey: request.apiKey, provider: request.provider,
       maxRunSeconds: explanation.maxRunSeconds, maxTotalTokens: explanation.maxTotalTokens,
       maxRoundsPerBatch: webExplanationLimits.maxRoundsPerBatch, auditors: webExplanationLimits.auditors };
-    const job: Job = { owner, key, run, explanation, input, controller: new AbortController(), persistedAt: 0 };
+    const job: Job = { owner, key, run, explanation, input, controller: new AbortController(), persistedAt: 0,
+      group: automatic ? this.id(owner, run.id, 'automatic') : id, ...(waitingReview ? { waitingReview: true } : {}) };
     this.jobs.set(id, job);
     try { this.persist(job, true); }
     catch (error) { this.release(job); throw error; }
@@ -141,8 +192,8 @@ export class WebExplanations {
   }
   /** Queue positions count every explanation generating or waiting before this one, across owners; never who they are. */
   private view(job: Job): WebExplanation {
-    if (job.explanation.status !== 'queued') return job.explanation;
-    const queued = [...this.jobs.values()].filter(item => item.explanation.status === 'queued');
+    if (job.explanation.status !== 'queued' || job.waitingReview) return job.explanation;
+    const queued = [...this.jobs.values()].filter(item => item.explanation.status === 'queued' && !item.waitingReview);
     const index = queued.indexOf(job);
     return { ...job.explanation, queue: { position: index + 1, ahead: this.running + index } };
   }
@@ -162,7 +213,9 @@ export class WebExplanations {
   }
   private pump() {
     while (!this.closing && this.running < this.limits.concurrency) {
-      const job = [...this.jobs.values()].find(item => item.explanation.status === 'queued');
+      const jobs = [...this.jobs.values()];
+      const job = jobs.find(item => item.explanation.status === 'queued' && !item.waitingReview
+        && !jobs.some(other => other.group === item.group && other.explanation.status === 'running'));
       if (!job) break;
       this.running++;
       const now = new Date().toISOString();
@@ -186,6 +239,7 @@ export class WebExplanations {
     try {
       this.persist(job, true);
       if (!this.runner.explain) throw new Error('explanation_runtime_unavailable');
+      if (job.explanation.automatic) this.beforeAutomaticStart?.(job.owner);
       await this.runner.explain(job.input, handle, job.controller.signal);
       if (messageError) throw messageError;
       if (!this.current(job) || !active(job.explanation)) return;

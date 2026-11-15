@@ -79,7 +79,8 @@ export function ChatAnswerActions({ runId, answer, onRetry }: { runId: string; a
   const status = answer?.explanation?.status, generating = status === 'queued' || status === 'running';
   const stopped = status && ['error', 'exhausted', 'cancelled'].includes(status);
   const unavailable = !document && !generating && !stopped && generation && !generation.available;
-  const explanationUrl = `explain.html?${new URLSearchParams({ run: runId, ...(answer?.target ? { target: answer.target } : {}) })}`;
+  const explanationUrl = `explain.html?${new URLSearchParams({ run: runId, ...(answer?.target ? { target: answer.target } : {}),
+    ...(answer?.explanation ? { language: answer.explanation.language } : {}) })}`;
   return <div class="chat-task-actions">
     {(document || generating || !answer?.loading && !answer?.error && generation?.available) && <a class={document || generating ? 'text-button' : 'button button-primary'}
       data-chat-explain href={explanationUrl} target="_blank" rel="noopener">{document ? t('打开完整讲解') : generating ? t('查看讲解进度')
@@ -95,10 +96,11 @@ export function ChatMathematicalAnswer({ runId, answer, onRetry, onTarget, onQue
   const explanation = answer?.explanation, generation = answer?.overview?.generation;
   const generating = explanation?.status === 'queued' || explanation?.status === 'running';
   const stopped = explanation && ['error', 'exhausted', 'cancelled'].includes(explanation.status);
-  const phases: Record<WebExplanationPhase, string> = { queued: t('讲解正在排队'), preparing: t('正在准备讲解'),
+  const phases: Record<WebExplanationPhase, string> = { queued: t('讲解正在排队'), waiting_review: t('等待原题含义审核'), preparing: t('正在准备讲解'),
     extracting: t('正在提取证明结构'), writing: t('正在撰写详细解答'), auditing: t('正在核对讲解与证明'),
     revising: t('正在修订讲解'), retrying: t('正在重试生成讲解'), finishing: t('正在保存讲解') };
-  const explanationUrl = `explain.html?${new URLSearchParams({ run: runId, ...(answer?.target ? { target: answer.target } : {}) })}`;
+  const explanationUrl = `explain.html?${new URLSearchParams({ run: runId, ...(answer?.target ? { target: answer.target } : {}),
+    ...(explanation ? { language: explanation.language } : {}) })}`;
   const anchor = (name: string) => `chat-answer-${encodeURIComponent(runId)}-${encodeURIComponent(answer?.target ?? '')}-${encodeURIComponent(name)}`;
   const targetSection = document?.sections.find(section => section.target && section.name === document.target);
   const conclusion = targetSection?.statement.trim() ? targetSection : undefined;
@@ -124,8 +126,7 @@ export function ChatMathematicalAnswer({ runId, answer, onRetry, onTarget, onQue
       </div>}
     </div>}
     {!document && !answer?.loading && !answer?.error && <>
-      {generating ? <div class="chat-answer-generation" role="status"><p class="chat-answer-state"><span class="spinner" />{explanation.status === 'queued'
-        ? t('讲解正在排队') : phases[explanation.progress?.phase ?? 'writing']}</p>
+      {generating ? <div class="chat-answer-generation" role="status"><p class="chat-answer-state"><span class="spinner" />{phases[explanation.progress?.phase ?? (explanation.status === 'queued' ? 'queued' : 'writing')]}</p>
         {explanation.queue && <p>{t('前面 {0} 份', explanation.queue.ahead)}</p>}
         {explanation.progress?.batches !== undefined && <p>{t('已通过批次')} {explanation.progress.approvedBatches ?? 0} / {explanation.progress.batches}</p>}
         <p>{t('讲解会在后台继续，完成后自动显示。')}</p></div>

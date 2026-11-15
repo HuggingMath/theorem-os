@@ -54,6 +54,16 @@ describe('task draft codecs without credentials or run-result state', () => {
     const original = draft({ knowledgeDigest: null });
     expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(original)))).toEqual(original);
   });
+
+  it.each([true, false])('preserves automatic explanation %s and its language in drafts and imported execution settings', autoExplain => {
+    const selected = { autoExplain, explanationLanguage: 'en' as const };
+    const original = draft(selected);
+    expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(original)))).toEqual(original);
+    expect(decodeTaskDraft({ ...archive(), run: { ...archive().run, ...selected } })).toEqual(draft({ ...selected, templateId: '' }));
+    expect(decodeTaskDraft(envelope(draft()))).not.toHaveProperty('autoExplain');
+    expect(() => decodeTaskDraft(envelope(draft({ autoExplain: 'yes' as unknown as boolean })))).toThrow('任务草稿格式无效');
+    expect(() => decodeTaskDraft(envelope(draft({ explanationLanguage: 'fr' as 'en' })))).toThrow('任务草稿格式无效');
+  });
   it('retains recipient-owned shared-proof provenance across reload without a share capability', () => {
     const sharedProofOrigin = { readingId: 'reading-one', title: 'A shared original theorem', digest: 'a'.repeat(64) };
     const original = draft({ sharedProofOrigin });

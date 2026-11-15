@@ -29,6 +29,7 @@ export const server: Record<string, string> = {
   "原题含义审核已停止；现有代码与 Lean 验收结果保留。": "Review of the original problem's meaning has stopped. Existing code and Lean acceptance results are retained.",
   "候选 Lean 陈述通过独立验收；原题含义尚未审核通过。": "The candidate Lean statement passed independent acceptance. Its correspondence to the original problem has not yet passed review.",
   "运行结束，请查看验收状态": "Run finished; check the acceptance status",
+  "证明已验收，自动讲解未能保存；请稍后重试。": "The proof was accepted, but the automatic explanation could not be saved. Try again later.",
   "原题与运行环境已固定": "Problem and run environment pinned",
   "正在检查 Lean 依赖": "Checking Lean dependencies",
   "正在准备只读数学依赖": "Preparing read-only math dependencies",

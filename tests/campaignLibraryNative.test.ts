@@ -68,7 +68,7 @@ describe('campaign library native continuation', () => {
     const exit = await runSolver(['--workspace', next.workspace, '--receipt-file', next.activeProblemPath, '--task-file', next.taskFile,
       '--output', next.output, '--build-manifest', build, '--workers', '2', '--coordination', 'cooperative',
       '--library-catalog', access.file, '--library-catalog-sha256', access.digest,
-      '--continuation-source-run', oldOutput, '--startup-only', '--prepare-timeout-seconds', '60',
+      '--continuation-source-run', oldOutput, '--startup-only', '--no-explanations', '--prepare-timeout-seconds', '60',
       '--evaluator-timeout-seconds', '30', '--proof-timeout-seconds', '30'], root,
       { ...directSolverModules, M1: { ...directSolverModules.M1, open } });
     expect(exit, JSON.stringify(readMathJson(next.output), null, 2)).toBe(0); expect(open).not.toHaveBeenCalled();

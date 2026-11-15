@@ -4,6 +4,8 @@ import { taskDraftStorageKey } from '../apps/web/client/draft';
 import { draftRecoveryStorageKey } from '../apps/web/client/draftRecovery';
 import { SubmissionIdentity } from '../apps/web/client/submissionIdentity';
 import type { WebRunRequest } from '../apps/web/shared';
+import { decodeTaskDraft, encodeTaskDraft, type TaskDraft } from '../apps/web/client/draft';
+import { automaticExplanationSettings } from '../apps/web/client/automaticExplanation';
 const storage = () => { const values = new Map<string, string>(); return {
   getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); },
   removeItem: (key: string) => { values.delete(key); }, values,
@@ -32,6 +34,19 @@ it('retains uncertain submission identity through refresh and credential changes
   expect(await refreshed.prepare({ ...input, apiKey: '', saveKey: true })).toBe(id);
   expect(await refreshed.prepare({ ...input, task: 'new task' })).not.toBe(id);
   refreshed.clear(); expect(await refreshed.prepare(input)).not.toBe(id);
+});
+
+it('retains Lean request identity with restored explanation settings, including older omitted fields', async () => {
+  const raw = storage();
+  const draft: TaskDraft = { providerId: 'sub2api', model: 'deepseek-flash', source: 'theorem target : True := by sorry',
+    task: 'Read the saved original', maxTurns: '1', maxRunSeconds: '60', workers: '1', effort: 'high', environment: 'mathlib',
+    coordination: 'cooperative', templateId: '' };
+  for (const explanation of [{}, { autoExplain: false, explanationLanguage: 'zh' as const }]) {
+    const input = { ...draft, ...explanation, apiKey: 'never-save-this-key' };
+    const id = await new SubmissionIdentity(raw).prepare(input);
+    const replay = new SubmissionIdentity(raw), restored = decodeTaskDraft(JSON.parse(encodeTaskDraft({ ...draft, ...explanation })));
+    expect(await replay.prepare({ ...input, ...automaticExplanationSettings(restored, 'en', replay.unresolved), apiKey: '' })).toBe(id);
+  }
 });
 it('separates creation identities by owner and surface and protects newer work from a late response', async () => {
   const raw = storage(), chat = new SubmissionIdentity(raw, 'chat:alice');

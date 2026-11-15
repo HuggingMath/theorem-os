@@ -4,7 +4,7 @@ import { t } from '../i18n';
 
 export type ChatAnswer = { runId: string; target: string; loading: boolean; overview?: WebExplanationOverview;
   explanation?: WebExplanation; document?: WebExplanationDocument; error?: string; targetTitles?: Record<string, string> };
-type Entry = { proof: string; value: ChatAnswer; revision: number; documentVersion?: string };
+type Entry = { proof: string; reviewed: boolean; value: ChatAnswer; revision: number; documentVersion?: string };
 type Request = <T>(url: string) => Promise<T>;
 
 export function explanationStepQuestion(section: WebExplanationSection, index: number, source: string, language: WebExplanationLanguage): string {
@@ -18,7 +18,7 @@ export function explanationStepQuestion(section: WebExplanationSection, index: n
     `${tx('讲解来源', 'Explanation source')}: ${source}`].filter(Boolean).join('\n\n');
 }
 
-/** Reads existing verified explanations only. Generation stays an explicit action on the explanation page. */
+/** Reads saved explanations, including automatic jobs. Reading a result never starts generation. */
 export class ChatAnswers {
   private entries = new Map<string, Entry>();
   constructor(private readonly request: Request, private readonly language: WebExplanationLanguage, private readonly changed: () => void) {}
@@ -28,13 +28,19 @@ export class ChatAnswers {
     return status === 'queued' || status === 'running';
   }
   sync(run?: WebRun): ChatAnswer | undefined {
-    if (!run || !isAcceptedRun(run) || !isStatementReviewed(run) || !run.result?.proof) return;
+    if (!run || !isAcceptedRun(run) || !run.result?.proof) return;
+    const reviewed = isStatementReviewed(run);
+    if (!reviewed && run.formalization?.confirmation !== 'pending') return;
     let entry = this.entries.get(run.id);
     if (!entry || entry.proof !== run.result.proof) {
       const targetTitles = Object.fromEntries((run.observation?.inspection.tasks ?? [])
         .filter(task => task.theorem && task.informalStatement).map(task => [task.theorem!, task.informalStatement!]));
-      entry = { proof: run.result.proof, value: { runId: run.id, target: '', loading: true, targetTitles }, revision: 0 };
+      entry = { proof: run.result.proof, reviewed, value: { runId: run.id, target: '', loading: true, targetTitles }, revision: 0 };
       this.entries.set(run.id, entry);
+      void this.load(entry, true);
+    } else if (entry.reviewed !== reviewed) {
+      entry.reviewed = reviewed;
+      entry.value.document = undefined; entry.documentVersion = undefined;
       void this.load(entry, true);
     }
     return entry.value;
@@ -61,21 +67,26 @@ export class ChatAnswers {
         if (overview.run.id !== state.runId || overview.run.proof !== entry.proof) { discard(); throw new Error(t('讲解与当前验收证明不一致。')); }
         state.overview = overview;
         if (!overview.targets.some(item => item.name === state.target)) {
-          discard(); state.target = overview.explanations
-            .find(item => item.status === 'approved' && item.language === this.language && overview.targets.some(target => target.name === item.target))?.target
+          const available = overview.explanations.filter(item => overview.targets.some(target => target.name === item.target));
+          discard(); state.target = available.find(item => item.status === 'approved' && item.language === this.language)?.target
+            ?? available.find(item => item.status === 'approved')?.target
             ?? overview.targets[0]?.name ?? '';
         }
       }
-      const item = state.overview?.explanations.find(item => item.target === state.target && item.language === this.language);
+      const candidates = state.overview?.explanations.filter(item => item.target === state.target) ?? [];
+      const item = candidates.find(item => item.language === this.language)
+        ?? candidates.find(item => item.status === 'approved')
+        ?? candidates.find(item => item.status === 'queued' || item.status === 'running') ?? candidates[0];
       state.explanation = item;
-      if (item?.status !== 'approved') { state.document = undefined; entry.documentVersion = undefined; return; }
+      if (!entry.reviewed || item?.status !== 'approved') { discard(); return; }
+      if (state.document && (state.document.target !== item.target || state.document.language !== item.language)) discard();
       const version = `${item.id}:${item.updatedAt}`;
       if (entry.documentVersion === version && state.document) return;
-      const { explanation } = await this.request<{ explanation: WebExplanation }>(`${base}/item?${new URLSearchParams({ target: state.target, language: this.language })}`);
+      const { explanation } = await this.request<{ explanation: WebExplanation }>(`${base}/item?${new URLSearchParams({ target: state.target, language: item.language })}`);
       if (!current()) return;
       if (explanation.runId !== state.runId || explanation.status !== 'approved' || explanation.id !== item.id
-        || explanation.target !== state.target || explanation.language !== this.language
-        || explanation.document?.target !== state.target || explanation.document.language !== this.language) {
+        || explanation.target !== state.target || explanation.language !== item.language
+        || explanation.document?.target !== state.target || explanation.document.language !== item.language) {
         discard(); throw new Error(t('这份讲解尚不可用，请重新读取。'));
       }
       state.document = explanation.document; entry.documentVersion = version;

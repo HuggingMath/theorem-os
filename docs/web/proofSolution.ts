@@ -5,6 +5,7 @@ import { archiveProblemDraftHref } from '../../apps/web/client/researchProblemDr
 import { acceptedReadingProof } from './proofReadingContext';
 import { focusedProblemHref } from './proofReadingLocation';
 import { renderSourceMathematics } from './proofSourceMathematics';
+import { renderGeneratedProofExplanations, selectedGeneratedExplanations } from './generatedProofExplanation';
 export { theoremDirectoryReturn } from './proofReadingLocation';
 
 const html = (value: string) => value.replace(/[&<>"']/gu, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]!));
@@ -15,7 +16,7 @@ type ProofRecord = Pick<ArchiveIndexRecord, 'id' | 'campaign' | 'sources'>;
 /** A small directory label, derived from the same accepted identity as the full reader. */
 export function proofSolutionMode(record: ProofRecord, process: ArchiveProcess): ArchiveIndexRecord['readingMode'] {
   const proof = acceptedReadingProof(record, process);
-  return proof ? selectedProofWalkthrough(record, process, proof.run) ? 'derivation' : 'source' : undefined;
+  return proof ? selectedGeneratedExplanations(record, process, 'zh').length || selectedProofWalkthrough(record, process, proof.run) ? 'derivation' : 'source' : undefined;
 }
 
 export function proofSolutionTitle(record: ArchiveIndexRecord, locale: Locale): string {
@@ -33,9 +34,11 @@ export function renderProofSolution(record: ArchiveIndexRecord, process: Archive
   const startResearch = researchHref ? `<a class="button proof-research-start" data-proof-start-research href="${html(researchHref)}">${text(locale, '以此题开始研究', 'Research this problem')}</a>` : '';
 
   const walkthrough = selectedProofWalkthrough(record, process, run);
+  const generated = selectedGeneratedExplanations(record, process, locale);
   const summary = locale === 'en' ? record.en?.summary ?? record.summary : record.summary;
   let body: string;
-  if (walkthrough) body = renderProofWalkthrough(walkthrough, process, run, locale, { linear: true, researchHref });
+  if (generated.length) body = renderGeneratedProofExplanations(generated, process, locale);
+  else if (walkthrough) body = renderProofWalkthrough(walkthrough, process, run, locale, { linear: true, researchHref });
   else {
     const mathematics = renderSourceMathematics(record, process, locale);
     const file = process.sourceRoute?.files.find(file => file.sha256 === campaign.proofSha256);
@@ -57,7 +60,7 @@ export function renderProofSolution(record: ArchiveIndexRecord, process: Archive
       ${helpers.length ? `<details class="workflow-full-text"><summary>${text(locale, `辅助声明与定义（${helpers.length}）`, `Supporting declarations and definitions (${helpers.length})`)}</summary>${helpers.map((item, index) => `<details class="proof-walkthrough-source" id="${helperId(index)}"><summary><code>${shortName(item.name)}</code><span>Submission.lean:${item.line}–${item.endLine}</span></summary><div class="proof-walkthrough-links"><button type="button" data-proof-definition-return="${helperId(index)}" hidden>← ${text(locale, '返回刚才的目标', 'Return to the previous target')}</button></div>${declaration(item, helperId(index))}</details>`).join('')}</details>` : ''}
     </section>`;
   }
-  return `<article class="archive-process" data-proof-solution="${html(record.id)}" data-proof-solution-run="${html(run.runId)}" data-proof-solution-sha="${html(source.sha256)}" data-proof-solution-mode="${walkthrough ? 'derivation' : 'source'}">
+  return `<article class="archive-process" data-proof-solution="${html(record.id)}" data-proof-solution-run="${html(run.runId)}" data-proof-solution-sha="${html(source.sha256)}" data-proof-solution-mode="${walkthrough || generated.length ? 'derivation' : 'source'}">
     <section class="workflow-section proof-solution-summary"><div class="proof-solution-summary-heading"><h4>${text(locale, '问题与结论', 'Problem and result')}</h4>${startResearch}</div><p class="workflow-prose" data-proof-solution-summary>${html(summary)}</p></section>
     ${body}
     <section class="workflow-section" id="global-review"><h4>${text(locale, '证明与验收', 'Proof and acceptance')}</h4><p class="workflow-prose">${text(locale, '以上内容对应当前归档的本地验收通过证明。', 'This reading corresponds to the locally accepted proof in this archive.')}</p>${links}</section>

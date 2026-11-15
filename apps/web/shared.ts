@@ -60,6 +60,9 @@ export type WebRunInput = {
   maxTotalTokens?: number;
   workers: number;
   coordination: WebCoordination;
+  /** Generate audited explanations after acceptance; omitted means enabled for new runs. */
+  autoExplain?: boolean;
+  explanationLanguage?: WebExplanationLanguage;
   /** Hold every Agent after the first plan until the person who started the run approves it. */
   planApproval?: boolean;
   modulePlan?: ResearchModulePlan;
@@ -139,6 +142,8 @@ export type WebRun = {
   maxTotalTokens?: number;
   workers: number;
   coordination: WebCoordination;
+  autoExplain?: boolean;
+  explanationLanguage?: WebExplanationLanguage;
   planApproval?: boolean;
   modulePlan?: ResearchModulePlan;
   knowledgeDigest?: string;
@@ -289,7 +294,7 @@ export type WorkerMessage =
  */
 export type WebExplanationLanguage = 'zh' | 'en';
 export type WebExplanationStatus = 'queued' | 'running' | 'approved' | 'exhausted' | 'cancelled' | 'error';
-export const webExplanationPhases = ['queued', 'preparing', 'extracting', 'writing', 'auditing', 'revising', 'retrying', 'finishing'] as const;
+export const webExplanationPhases = ['queued', 'waiting_review', 'preparing', 'extracting', 'writing', 'auditing', 'revising', 'retrying', 'finishing'] as const;
 export type WebExplanationPhase = typeof webExplanationPhases[number];
 export type WebExplanationLines = { start: number; end: number };
 /** Where in the proof file a cited name is written: a line and its UTF-16 columns, end exclusive. */
@@ -398,6 +403,8 @@ export type WebExplanationProgress = { phase: WebExplanationPhase; batches?: num
   tokens?: number; updatedAt: string };
 export type WebExplanation = {
   id: string; runId: string; target: string; language: WebExplanationLanguage; status: WebExplanationStatus;
+  /** Created as part of the solve workflow, without a separate generation request. */
+  automatic?: boolean;
   createdAt: string; updatedAt: string; finishedAt?: string; model: string; effort: 'low' | 'high' | 'max';
   maxRunSeconds: number; maxTotalTokens: number; progress?: WebExplanationProgress;
   /** An `explanation_*` or `informalization_*` code, never model or provider text. */ reason?: string;

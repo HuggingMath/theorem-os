@@ -67,6 +67,7 @@ async function scenario(name: string, width: number, both: boolean, work: (h: Ha
   try {
     holdEnglish = !both;
     const input: WebRunInput = { providerId: 'sub2api', apiKey: 'sk-local-explanation-recovery', model: 'deepseek-flash', effort: 'low',
+      autoExplain: false,
       environment: 'standard', source: `${helper}\n\ntheorem ${target} : True := by sorry\n`, task: 'Synthetic explanation recovery fixture',
       maxTurns: 1, maxRunSeconds: 60, workers: 1, coordination: 'cooperative' };
     const { run } = await call('/api/runs', 'POST', input);

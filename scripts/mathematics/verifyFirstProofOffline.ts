@@ -66,7 +66,7 @@ export async function verifyFirstProofOffline(argv: string[]): Promise<number> {
   const exitCode = await runSolver(['--workspace', receipt.workspaceRoot, '--receipt-file', receipt.activeProblemPath,
     '--task-file', taskFile, '--output', output, '--build-manifest', buildManifest,
     '--model', 'offline-preset-no-model', '--effort', 'max', '--workers', '1', '--coordination', 'independent',
-    '--max-turns', '3', '--max-run-seconds', '300'], root, modules);
+    '--max-turns', '3', '--max-run-seconds', '300', '--no-explanations'], root, modules);
   writeMathFrozen(path.join(directory, 'candidate-checks.json'), JSON.stringify(checks, null, 2) + '\n');
   const { state, result } = readRunInspection(output);
   const evaluation = result?.evaluator as { status?: string; method?: string; official?: boolean; verification?: ProofCheck } | undefined;

@@ -104,6 +104,7 @@ async function main(): Promise<number> {
   const stateFile = `${output}.runtime/state.json`;
   const previousTurns = fs.existsSync(stateFile) ? (readMathJson(stateFile) as { turns: number }).turns : 0;
   const previousResult = fs.existsSync(output) ? fs.readFileSync(output, 'utf8') : undefined;
+  if (config.mode === 'replay') args.push('--no-explanations');
   const code = await runSolver(args, root, config.mode === 'replay' ? replayModules(custom) : custom);
   if (code !== 0 && previousResult !== undefined && fs.readFileSync(output, 'utf8') === previousResult) {
     console.error('Run rejected or stopped without a new result; the previous result has been preserved.');

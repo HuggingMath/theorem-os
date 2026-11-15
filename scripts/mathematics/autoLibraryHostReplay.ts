@@ -80,7 +80,7 @@ export async function replayHostAutoLibrary(directory: string, host?: { configPa
     const proofCache = process.env.THEOREMOS_AUTO_REPLAY_PROOF_CACHE ?? path.join(directory, 'proof-cache');
     let interrupted = false;
     const solve = async (args: string[], purpose: { phase: string }) => {
-      const code = await runSolver([...args, '--proof-environment-cache-dir', proofCache], root, prover);
+      const code = await runSolver([...args, '--proof-environment-cache-dir', proofCache, '--no-explanations'], root, prover);
       if (!interrupted && purpose.phase === 'check') { interrupted = true; throw new Error('preset interruption after statement check'); }
       return code;
     };
@@ -101,7 +101,7 @@ export async function replayHostAutoLibrary(directory: string, host?: { configPa
     const output = path.join(destination, 'result.json');
     const code = await runSolver(['--workspace', receipt.workspaceRoot, '--task-file', taskFile, '--output', output,
       '--build-manifest', buildManifestRef, '--workers', '1', '--max-turns', '3', '--max-run-seconds', '300',
-      '--model', 'preset', '--effort', 'none', '--proof-environment-cache-dir', proofCache], root, prover);
+      '--model', 'preset', '--effort', 'none', '--proof-environment-cache-dir', proofCache, '--no-explanations'], root, prover);
     const evaluated = JSON.parse(readMathText(output));
     expect(code === 0 && evaluated.status === 'evaluated_passed', JSON.stringify(evaluated));
     expect(readLeanTaskReceipt(receipt.activeProblemPath).libraryBinding?.autoComposition, 'authorized receipt recovery');

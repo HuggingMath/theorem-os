@@ -46,6 +46,7 @@ import { copyContinuationSnapshot, freezeContinuationInput, readContinuationInpu
 import { seedSolverContinuation } from './continuationSeed';
 import type { TaskProof } from './cooperativeProof';
 import { verifierFailureDiagnostic } from './verifierFailure';
+import { generateSolverExplanations, type SolverExplanations } from './automaticExplanations';
 
 const runSummary = (state: SolverRunState | undefined) => ({ turns: state?.turns, dispatchCounts: state?.dispatchCounts,
   ...(state?.verifierFailure ? { verifierFailure: state.verifierFailure } : {}),
@@ -62,6 +63,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
     'prepare-timeout-seconds': { type: 'string', default: '0' }, 'max-turn-seconds': { type: 'string', default: '0' },
     'evaluator-command': { type: 'string' }, 'evaluator-timeout-seconds': { type: 'string', default: '0' },
     'proof-timeout-seconds': { type: 'string', default: '0' },
+    'no-explanations': { type: 'boolean' }, 'explanation-language': { type: 'string' },
     'proof-environment-cache-dir': { type: 'string' }, 'startup-only': { type: 'boolean' }, 'check-statement': { type: 'boolean' },
     help: { type: 'boolean' },
     'knowledge-base': { type: 'string' }, 'continuation-manifest': { type: 'string' },
@@ -76,6 +78,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
     console.log(`Usage: theorem-os run --workspace DIR --task-file FILE --output FILE --build-manifest FILE [--receipt-file FILE] [--resume] [--method direct] [--scheduler plan|critical-path|continuation] [--module-plan FILE] [--coordination cooperative|independent] [--workers 1..${MAX_RESEARCH_WORKERS}] [--plan-approval] [--model MODEL --effort LEVEL] [--max-run-seconds N --max-turns N --max-turn-seconds N] [--max-total-tokens N] [--prepare-timeout-seconds N] [--proof-timeout-seconds N] [--evaluator-command CMD --evaluator-timeout-seconds N] [--proof-environment-cache-dir DIR] [--startup-only] [--check-statement]\n--module-plan loads the shared research-module plan JSON; use --scheduler plan.\nUse 0 for --prepare-timeout-seconds, --max-run-seconds, --max-turns, --max-turn-seconds, --proof-timeout-seconds or --evaluator-timeout-seconds to disable that limit. All time, turn and token limits default to 0 (unlimited). With an explicit proof-check timeout, an expired check saves a resumable checkpoint and the identical candidate gets more time on its next check.\n--max-total-tokens defaults to 0 (unlimited). A finite value stops new model turns after provider-reported consumption reaches it; in-flight turns finish and may exceed it. Resume retains cumulative usage and the saved allowance unless explicitly changed.`);
     console.log('--knowledge-base FILE attaches an immutable saved-theorem catalog. Resume requires the same catalog digest. Historical knowledge never grants proof acceptance.');
     console.log('New proof runs default to --effort high. Resume retains the saved effort when --effort is omitted; an explicit effort must match the frozen run.');
+    console.log('Accepted proofs automatically generate audited explanations of every original target. --explanation-language zh|en selects the language (default zh; resume keeps the previous language). --no-explanations skips generation. The result.explanations field records progress and artifact/proof.md paths. Explanation failures preserve proof acceptance and exit code; --resume retries them without solving again. Explanation time and tokens are separate from solving limits.');
     console.log('--library-catalog FILE --library-catalog-sha256 DIGEST enables agent search/get/request against one pinned release. Installation requests end this frozen run for host-controlled continuation.');
     console.log('--continuation-manifest FILE attaches explicit historical sources and notes without changing the verbatim task file. Resume retains the frozen attachment identity; historical material remains advisory.');
     console.log('--continuation-source-run OLD_RESULT_OR_STATE initializes a new cooperative run from the old run, freshly checks its saved helpers, and starts solving in the same process. Use --resume to retry an interrupted zero-turn initialization; combine with --startup-only to retain a prepared checkpoint.');
@@ -113,6 +116,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
   const tokenLimitSpecified = args.some(arg => arg === '--max-total-tokens' || arg.startsWith('--max-total-tokens='));
   const effortSpecified = args.some(arg => arg === '--effort' || arg.startsWith('--effort='));
   const evaluatorMs = limit('evaluator-timeout-seconds', true) * 1000;
+  if (values['explanation-language'] !== undefined && !['zh', 'en'].includes(values['explanation-language']))
+    throw new Error('invalid --explanation-language');
   const workerCount = limit('workers');
   if (workerCount > MAX_RESEARCH_WORKERS) throw new Error('invalid --workers');
   if (values['continuation-source-run'] && (coordination !== 'cooperative' || workerCount < 2))
@@ -220,6 +225,42 @@ export async function runSolver(args: string[], root: string, customModules?: So
         effort: resumedState && !effortSpecified ? resumedState.effort : values.effort!,
         methodDigest: solverMethodDigest(modules, coordination), knowledgeDigest: knowledge?.digest,
         libraryCatalogDigest: libraryCatalog ? libraryCatalog.identity.catalogDigest : undefined };
+      // Generation prepares its own proof environment; do not freeze solver worktree mounts into its resumable identity.
+      const explanationEnv = env;
+      const explainAccepted = async (state: SolverRunState, result: Record<string, unknown>, worktree: string) => {
+        const previous = result.explanations as SolverExplanations | undefined;
+        const language = (values['explanation-language'] as 'zh' | 'en' | undefined) ??
+          (previous?.language === 'en' ? 'en' : 'zh');
+        if (values['no-explanations']) {
+          if (!previous) {
+            result.explanations = { status: 'disabled', language, directory: path.join(directory, 'explanations', language), targets: [] };
+            try { lease.assertOwned(); writeMathJsonDurable(output, result); }
+            catch { emit('explanation_failed', { reason: 'automatic_explanation_failed', output }); }
+          }
+          return;
+        }
+        clearTimeout(timer); timer = undefined;
+        try {
+          await disposeProofEnvironment();
+          await generateSolverExplanations({ problem: state.problem, worktree, directory, root, buildManifest: buildFile,
+            language, writer: { model: state.model, effort: state.effort, profile,
+              executable: values.codex || process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex' },
+            env: explanationEnv, signal, onEvent: emit,
+            onUpdate: summary => { lease.assertOwned(); result.explanations = summary; writeMathJsonDurable(output, result); } });
+        } catch {
+          // The accepted result was saved first. A generation or persistence error never invalidates that proof.
+          const failed = result.explanations as SolverExplanations | undefined;
+          if (!failed || failed.status === 'running') {
+            result.explanations = { status: signal.aborted ? 'stopped' : 'error', language,
+              directory: path.join(directory, 'explanations', language),
+              targets: (failed?.targets ?? []).map(target => target.status === 'pending' || target.status === 'running'
+                ? { ...target, status: signal.aborted ? 'stopped' : 'error', reason: 'automatic_explanation_failed' } : target) };
+            try { lease.assertOwned(); writeMathJsonDurable(output, result); }
+            catch { /* Keep the already-persisted accepted proof result. */ }
+          }
+          emit('explanation_failed', { reason: 'automatic_explanation_failed', output });
+        }
+      };
       const moduleConfiguration = solverModuleConfiguration(modules);
       let state: SolverRunState;
       let sourceFeedback: string | undefined;
@@ -252,13 +293,14 @@ export async function runSolver(args: string[], root: string, customModules?: So
         sourceFeedback = solverSourceFeedback(state.problem, state.worktree);
         assertSolverSources(state.problem, workspace);
         if (state.phase === 'finished' && fs.existsSync(output)) {
-          const result = readMathJson(output) as { status: string; runId: string; solution_commit: string };
+          const result = readMathJson(output) as Record<string, unknown> & { status: string; runId: string; solution_commit: string };
           if (result.status === 'evaluated_passed' || result.status === 'evaluated_failed') {
             const winningWorktree = state.workers?.find(worker => worker.id === state.winningWorker)?.worktree ?? state.worktree;
             assertSolverSources(state.problem, winningWorktree);
             if (!state.check?.passed || result.runId !== state.runId || result.solution_commit !== state.check.commit ||
                 !solverProofIsCurrent(state.problem, winningWorktree, state.check) ||
                 !solverProofIsCurrent(state.problem, workspace, state.check)) throw new Error('math_resume_completed_proof_changed');
+            if (result.status === 'evaluated_passed') await explainAccepted(state, result, winningWorktree);
             return result.status === 'evaluated_passed' ? 0 : 2;
           }
         }
@@ -523,6 +565,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
         solveWallMs: state.solveFinishedAt - state.solveStartedAt, solveExecutionMs: executionClock.executionMs(),
         solveWaitingMs: state.solveWaitingMs, stateFile, winningWorker: state.winningWorker };
       writeMathJsonDurable(output, result);
+      if (status === 'evaluated_passed') await explainAccepted(state, result, winner!.worktree);
       emit('finished', { status, output });
       return status === 'evaluated_passed' ? 0 : status === 'evaluated_failed' ? 2 : status === 'runtime_error' ? 1 : 4;
     };

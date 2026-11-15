@@ -367,7 +367,7 @@ export function archiveProcessScript(record: ArchiveRecord): string {
  * historical source and every declaration's proof text belong to the process tab. Projecting those out keeps the
  * read-proof view on a few dozen kilobytes instead of several megabytes.
  */
-export type ArchiveReadingProcess = Pick<ArchiveProcess, 'walkthrough' | 'sources' | 'runs' | 'sourceRoute'>;
+export type ArchiveReadingProcess = Pick<ArchiveProcess, 'walkthrough' | 'explanations' | 'sources' | 'runs' | 'sourceRoute'>;
 
 export function readingProcess(record: ArchiveRecord): ArchiveReadingProcess | undefined {
   const process = record.process, campaign = record.campaign;
@@ -383,7 +383,9 @@ export function readingProcess(record: ArchiveRecord): ArchiveReadingProcess | u
     ...declaration, steps: declaration.steps.map(step => ({ ...step, code: '' })) })) };
   return {
     ...(walkthrough ? { walkthrough } : {}),
-    sources: { [campaign.proofSha256]: source },
+    ...(process.explanations?.length ? { explanations: process.explanations } : {}),
+    sources: { [campaign.proofSha256]: source, ...Object.fromEntries((process.explanations ?? []).flatMap(item => item.sources)
+      .flatMap(item => process.sources?.[item.sha256] ? [[item.sha256, process.sources[item.sha256]]] : [])) },
     runs: [run],
     ...(marked ? { sourceRoute: { files: [marked] } } : {}),
   };

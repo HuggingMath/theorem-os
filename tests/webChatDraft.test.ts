@@ -3,6 +3,7 @@ import { decodeChatDraft, editableChatSettings, encodeChatDraft, historicalChatS
 import { decodeLibraryReferences, libraryReferenceId, withLibraryReferences, type ChatLibraryReference } from '../apps/web/client/chatReference';
 import type { WebFormalization } from '../apps/web/formalizationTypes';
 import { SubmissionIdentity } from '../apps/web/client/submissionIdentity';
+import { automaticExplanationSettings } from '../apps/web/client/automaticExplanation';
 
 const settings: ChatDraftSettings = { providerId: 'openai', model: 'chosen-model', environment: 'standard', effort: 'low',
   participation: 'automatic', maxRunSeconds: 120, maxTotalTokens: 20_000,
@@ -37,6 +38,35 @@ it('preserves separate proof effort in new drafts and retains legacy effort when
   const { researchEffort: _proof, ...legacy } = formalization;
   expect(historicalChatSettings(legacy, undefined, separate)).toMatchObject({ effort: 'high' });
   expect(historicalChatSettings(legacy, undefined, separate)).not.toHaveProperty('researchEffort');
+});
+
+it('preserves an explicit automatic-explanation choice and language through draft and historical replay', () => {
+  const selected = { ...settings, autoExplain: false, explanationLanguage: 'en' as const };
+  expect(decodeChatDraft(encodeChatDraft({ text: 'Saved original', settings: selected })))
+    .toEqual({ text: 'Saved original', settings: selected });
+  const formalization: WebFormalization = { id: 'original', original: 'Saved original', model: settings.model, environment: 'standard',
+    effort: settings.effort, autoExplain: false, explanationLanguage: 'en', status: 'confirmed', createdAt: '', updatedAt: '' };
+  expect(historicalChatSettings(formalization, undefined, { ...settings, autoExplain: true, explanationLanguage: 'zh' }))
+    .toMatchObject({ autoExplain: false, explanationLanguage: 'en' });
+  for (const invalid of [{ autoExplain: 'false' }, { explanationLanguage: 'fr' }]) {
+    expect(decodeChatDraft(JSON.stringify({ schema: 'theorem-os.chat-draft.v1', text: 'Keep original', settings: { ...settings, ...invalid } })))
+      .toEqual({ text: 'Keep original' });
+  }
+});
+
+it('uses the interface language for new work and preserves omitted fields in an uncertain older request', async () => {
+  const values = new Map<string, string>();
+  const storage = { getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
+  expect(automaticExplanationSettings({}, 'en')).toEqual({ autoExplain: true, explanationLanguage: 'en' });
+  const old = { ...settings, original: 'Pending original', solve: true, apiKey: 'not-saved' };
+  const first = new SubmissionIdentity(storage, 'legacy'), id = await first.prepare(old);
+  const replay = new SubmissionIdentity(storage, 'legacy');
+  const restored = decodeChatDraft(encodeChatDraft({ text: old.original, settings })).settings!;
+  expect(await replay.prepare({ ...old, ...automaticExplanationSettings(restored, 'en', replay.unresolved), apiKey: '' })).toBe(id);
+  const explicit = { ...old, autoExplain: false, explanationLanguage: 'zh' as const };
+  const explicitId = await first.prepare(explicit);
+  expect(await new SubmissionIdentity(storage, 'legacy').prepare({ ...explicit, ...automaticExplanationSettings(explicit, 'en', true), apiKey: '' })).toBe(explicitId);
 });
 
 it('retains exact draft text and selected budgets while projecting out credentials', () => {

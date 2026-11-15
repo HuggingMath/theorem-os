@@ -65,7 +65,9 @@ const auditorSchema = formalizationModelConfigurationSchema.extend({ id: z.strin
 export const informalizationRequestSchema = z.object({
   schema: z.literal('theorem-os.informalization-request.v1'), protocol: z.literal(INFORMALIZATION_PROTOCOL),
   proofId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u), target: leanName,
-  environment: z.enum(['standard', 'mathlib']), environmentDigest: hash, toolchain: text, mathlibRevision: text.nullable(),
+  environment: z.enum(['standard', 'mathlib', 'mathlib-4.8', 'openai-math',
+    'openai-math-cartier-reviewed-v1', 'openai-math-character-reviewed-v1']),
+  environmentDigest: hash, toolchain: text, mathlibRevision: text.nullable(),
   rootModule: leanName,
   /** Dependency first, root module last. file is the frozen harness path; origin is the path in the source project. */
   sources: z.array(z.object({ module: leanName, file: text, origin: text, sha256: hash,

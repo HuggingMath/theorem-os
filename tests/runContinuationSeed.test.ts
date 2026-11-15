@@ -79,7 +79,7 @@ function fixture() {
   host.packages = path.join(directory, 'packages'); fs.mkdirSync(host.packages);
   const args = ['--workspace', workspace, '--task-file', taskFile, '--build-manifest', buildFile, '--output', output,
     '--workers', '2', '--model', 'fixture', '--continuation-source-run', sourceStateFile,
-    '--max-turns', '0', '--max-run-seconds', '0', '--max-turn-seconds', '0'];
+    '--max-turns', '0', '--max-run-seconds', '0', '--max-turn-seconds', '0', '--no-explanations'];
   return { directory, output, stateFile, sourceStateFile, sourceWorkers, problem, args };
 }
 

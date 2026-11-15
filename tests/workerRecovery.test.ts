@@ -111,7 +111,8 @@ describe('bounded role session recovery', () => {
     const task = path.join(directory, 'task.md'), build = path.join(directory, 'build.json');
     fs.writeFileSync(task, 'Prove the original claim'); fs.writeFileSync(build, '{}');
     args = ['--workspace', workspace, '--task-file', task, '--build-manifest', build, '--output', output,
-      '--workers', '1', '--max-turns', '0', '--max-run-seconds', '0', '--max-turn-seconds', '0', '--evaluator-timeout-seconds', '0'];
+      '--workers', '1', '--max-turns', '0', '--max-run-seconds', '0', '--max-turn-seconds', '0', '--evaluator-timeout-seconds', '0',
+      '--no-explanations'];
   });
   afterEach(() => { vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true }); });
 

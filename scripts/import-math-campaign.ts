@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { ArchiveKnowledgeApplication, ArchiveLibraryUsage, ArchiveProcess, ArchiveRecord } from '../docs/web/types';
 import { archivedSourceReader, extractProcessEvidence } from './enrich-archive-process';
+import { importCampaignExplanations } from './campaign-explanations';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (file: string) => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -169,11 +170,15 @@ export function importMathCampaign(campaign: string, destination = path.join(roo
     const directory = path.join(destination, job.id);
     fs.mkdirSync(directory, { recursive: true });
     const files: Record<string, string> = {};
+    const acceptedSources = new Map<string, string>();
     const write = (name: string, data: Buffer | string) => {
       const target = path.join(directory, name);
       fs.mkdirSync(path.dirname(target), { recursive: true });fs.writeFileSync(target, data);files[name] = hash(data);
     };
-    for (const file of proofFiles) write(file.slice(project.length + 1), git('show', `${job.solutionCommit}:${file}`));
+    for (const file of proofFiles) {
+      const name = file.slice(project.length + 1), bytes = git('show', `${job.solutionCommit}:${file}`);
+      write(name, bytes); acceptedSources.set(name, bytes.toString('utf8'));
+    }
     if (!files['Submission.lean'] || !files['Challenge.lean']) throw new Error(`Missing proof or statement: ${job.id}`);
     if (native.check.commit !== job.solutionCommit || !native.check.verification.results?.some((receipt: any) =>
       receipt.status === 'kernel_verified' && receipt.proofHash === files['Submission.lean'])) throw new Error(`Unbound kernel source: ${job.id}`);
@@ -199,8 +204,11 @@ export function importMathCampaign(campaign: string, destination = path.join(roo
     runs.set(job.runId, recordedRun(native, result, job.autoLibraryUsage));
     const usedSources = new Set([...runs.values()].flatMap(run => run.checks?.flatMap(check => check.sourceDigest ? [check.sourceDigest] : []) ?? []));
     const sources = Object.fromEntries(Object.entries(processSources).filter(([digest]) => usedSources.has(digest)));
+    const generated = importCampaignExplanations(result, { runId: job.runId, proofCommit: job.solutionCommit,
+      proofSha256: files['Submission.lean'], targets: native.problem.targets, sources: acceptedSources });
     const process: ArchiveProcess = { runs: [...runs.values()].sort((a, b) => (a.startedAt ?? '').localeCompare(b.startedAt ?? '')),
-      ...(Object.keys(sources).length ? { sources } : {}) };
+      ...(generated.explanations.length ? { explanations: generated.explanations } : {}),
+      ...(Object.keys(sources).length || generated.explanations.length ? { sources: { ...sources, ...generated.sources } } : {}) };
     write('process.json', JSON.stringify(process, null, 2) + '\n');
     const assisted = job.externalMathematicalAssistance || (native.cooperation?.edits ?? []).some((edit: any) => /candidate|independent|reference/u.test(edit.id));
     const attribution = historical && (native.cooperation?.edits ?? []).length

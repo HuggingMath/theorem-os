@@ -46,7 +46,8 @@ import { prepareLibraryKnowledge } from '../src/solver/theoremKnowledgeLibrary';
 import { planApprovalLog } from '../src/solver/planApproval';
 
 const host = vi.hoisted(() => ({ verify: vi.fn(), createSession: vi.fn(), officialGate: vi.fn(), build: vi.fn(), delay: vi.fn(),
-  prepare: vi.fn(), freeze: vi.fn(), readiness: vi.fn(), connectivity: vi.fn(), packages: undefined as string | undefined }));
+  prepare: vi.fn(), freeze: vi.fn(), readiness: vi.fn(), connectivity: vi.fn(), explain: vi.fn(), packages: undefined as string | undefined }));
+vi.mock('../src/solver/automaticExplanations', () => ({ generateSolverExplanations: host.explain }));
 vi.mock('../src/math/leanDiagnostics', async importOriginal => ({
   ...await importOriginal<typeof import('../src/math/leanDiagnostics')>(), runLeanDiagnostics: host.prepare,
 }));
@@ -121,6 +122,7 @@ describe('isolated solver and host acceptance', () => {
   const original = 'namespace Submission\ndef fixed : Nat := 2\ntheorem first : True := by sorry\ntheorem second : True := by sorry\nend Submission\n';
   beforeEach(() => {
     vi.clearAllMocks();
+    host.explain.mockReset().mockResolvedValue({ status: 'approved', targets: [] });
     host.packages = undefined;
     host.prepare.mockReset().mockImplementation(async input => {
       for (const file of input.files) if (/^StatementContext[0-9a-f]+\.lean$/u.test(file)) {
@@ -201,6 +203,48 @@ describe('isolated solver and host acceptance', () => {
     expect(readSolverRunState(`${output}.runtime/state.json`).effort).toBe(effort ?? 'high');
     expect(host.createSession).toHaveBeenCalled();
     for (const [options] of host.createSession.mock.calls) expect(options.effort).toBe(effort ?? 'high');
+  });
+
+  it('automatically starts explanations after independent acceptance and persists live progress', async () => {
+    host.explain.mockImplementationOnce(async input => {
+      expect(JSON.parse(fs.readFileSync(output, 'utf8')).status).toBe('evaluated_passed');
+      const summary = { status: 'approved', language: input.language, directory: input.directory,
+        targets: input.problem.targets.map(target => ({ target: target.theoremName, status: 'approved',
+          proof: path.join(input.directory, 'explanations', target.theoremName, 'artifact/proof.md') })) };
+      input.onUpdate(summary);
+      return summary;
+    });
+    expect(await runSolver([...args, '--explanation-language', 'en'], directory)).toBe(0);
+    expect(host.explain).toHaveBeenCalledOnce();
+    expect(host.explain.mock.calls[0][0]).toMatchObject({ language: 'en', writer: { effort: 'high' },
+      problem: { targets: [{ theoremName: 'Submission.first' }, { theoremName: 'Submission.second' }] } });
+    expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ status: 'evaluated_passed',
+      explanations: { status: 'approved', language: 'en', targets: [{ status: 'approved' }, { status: 'approved' }] } });
+  });
+
+  it('keeps proof acceptance when explanation generation fails and resumes only explanation work', async () => {
+    host.explain.mockRejectedValueOnce(new Error('provider fixture failure'));
+    expect(await runSolver(args, directory)).toBe(0);
+    const accepted = JSON.parse(fs.readFileSync(output, 'utf8'));
+    expect(accepted).toMatchObject({ status: 'evaluated_passed', evaluator: { status: 'passed' }, explanations: { status: 'error' } });
+    host.createSession.mockClear(); host.explain.mockClear();
+    expect(await runSolver([...args, '--resume'], directory)).toBe(0);
+    expect(host.createSession).not.toHaveBeenCalled();
+    expect(host.explain).toHaveBeenCalledOnce();
+    expect(JSON.parse(fs.readFileSync(output, 'utf8')).solution_commit).toBe(accepted.solution_commit);
+  });
+
+  it('allows accepted CLI runs to opt out of explanation model calls', async () => {
+    expect(await runSolver([...args, '--no-explanations'], directory)).toBe(0);
+    expect(host.explain).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ status: 'evaluated_passed', explanations: { status: 'disabled' } });
+  });
+
+  it('does not generate explanations for failed acceptance', async () => {
+    host.officialGate.mockResolvedValue({ comparison: { status: 'failed' } });
+    expect(await runSolver(args, directory)).toBe(2);
+    expect(host.explain).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(output, 'utf8'))).not.toHaveProperty('explanations');
   });
 
   it.each([{ flags: [] }, { flags: ['--effort', 'max'] }, { flags: ['--effort=max'] }])('resumes frozen max effort with matching or omitted flags $flags', async ({ flags }) => {

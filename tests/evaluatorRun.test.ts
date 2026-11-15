@@ -34,7 +34,8 @@ describe('evaluator failure attribution in persisted run results', () => {
     fs.writeFileSync(task, 'Prove the fixture.'); fs.writeFileSync(build, '{}');
     output = path.join(directory, 'result.json');
     args = ['--workspace', receipt.workspaceRoot, '--task-file', task, '--build-manifest', build, '--output', output,
-      '--workers', '1', '--max-run-seconds', '0', '--max-turns', '0', '--max-turn-seconds', '0', '--evaluator-timeout-seconds', '0'];
+      '--workers', '1', '--max-run-seconds', '0', '--max-turns', '0', '--max-turn-seconds', '0', '--evaluator-timeout-seconds', '0',
+      '--no-explanations'];
     // This fixture tests persistence and dispatch only. It grants no Lean or model evidence.
     host.research.mockImplementation(async ({ state }) => {
       const check = { passed: true, commit: git(state.worktree, ['rev-parse', 'HEAD']), sourceDigest: 'fixture', verification: {} };

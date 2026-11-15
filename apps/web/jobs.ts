@@ -39,12 +39,17 @@ export class WebJobs {
   private readonly onAccepted?: (owner: string) => void;
   private readonly onFinished?: (owner: string, run: WebRun) => void;
   private readonly onPlanWaiting?: (owner: string, run: WebRun) => void;
+  private readonly onProofAccepted?: (owner: string, run: WebRun, credentials: { apiKey: string; provider: WebProvider }) => void;
+  private readonly onStatementReview?: (owner: string, run: WebRun) => void;
   constructor(private readonly runner: WebRunner, private readonly config: Pick<WebConfig, 'concurrency' | 'queueLimit'>,
     options: { storage?: WebStorage; knowledge?: WebKnowledgeService; onAccepted?: (owner: string) => void;
-      onFinished?: (owner: string, run: WebRun) => void; onPlanWaiting?: (owner: string, run: WebRun) => void } = {}) {
+      onFinished?: (owner: string, run: WebRun) => void; onPlanWaiting?: (owner: string, run: WebRun) => void;
+      onProofAccepted?: WebJobs['onProofAccepted']; onStatementReview?: WebJobs['onStatementReview'] } = {}) {
     this.onAccepted = options.onAccepted;
     this.onFinished = options.onFinished;
     this.onPlanWaiting = options.onPlanWaiting;
+    this.onProofAccepted = options.onProofAccepted;
+    this.onStatementReview = options.onStatementReview;
     this.storage = options.storage ?? new WebStorage();
     this.knowledge = options.knowledge ?? new WebKnowledgeService(this.storage);
     for (const { owner, run, creation } of this.storage.loadRuns()) {
@@ -127,7 +132,8 @@ export class WebJobs {
       : input.knowledgeDigest ?? undefined;
     if (pinnedDigest && !this.knowledge.getCatalog(owner, pinnedDigest))
       throw new WebStorageError(404, '所选知识目录不存在或不属于当前会话。');
-    const pinnedInput: WebRunInput = { ...input, environment: input.environment ?? 'standard' };
+    const pinnedInput: WebRunInput = { ...input, environment: input.environment ?? 'standard',
+      autoExplain: input.autoExplain ?? true, explanationLanguage: input.explanationLanguage ?? 'zh' };
     if (researchConfiguration) pinnedInput.modulePlan = structuredClone(researchConfiguration.modulePlan);
     if (pinnedDigest) pinnedInput.knowledgeDigest = pinnedDigest;
     else delete pinnedInput.knowledgeDigest;
@@ -171,6 +177,7 @@ export class WebJobs {
     if (approved && (crypto.createHash('sha256').update(job.run.source).digest('hex') !== approved.sourceSha256 ||
         job.run.environment !== approved.environment)) throw new Error('formalization_binding_changed');
     Object.assign(provenance, { confirmation }, approved ? { evidenceSha256: approved.evidenceSha256, confirmedAt: approved.confirmedAt } : {});
+    try { this.onStatementReview?.(owner, job.run); } catch { /* Explanation failures never change proof acceptance. */ }
     const message = confirmation === 'automatic' ? '后台审核通过，已关联同一份固定 Lean 陈述。'
       : confirmation === 'rejected' ? '后台审核要求修改陈述，已停止旧候选的证明。'
         : confirmation === 'superseded' ? '陈述已更新，旧候选的证明与新版本分开保留。'
@@ -484,6 +491,10 @@ export class WebJobs {
         if (!job.run.result) throw new Error(job.run.error || '没有收到运行结果。');
         job.run.status = job.run.result.status === 'runtime_error' ? 'error' : 'completed';
         const accepted = job.run.result.status === 'evaluated_passed';
+        // Transfer credentials only to the explanation queue, before the solver releases them. The queue saves its
+        // initial records before the finished notification; proof acceptance never depends on explanation success.
+        if (accepted) try { this.onProofAccepted?.(job.owner, job.run, { apiKey: job.input.apiKey, provider: job.provider }); }
+        catch { this.event(job.run, 'explanation_queue_failed', '证明已验收，自动讲解未能保存；请稍后重试。'); }
         const acceptance = !job.run.formalization ? '完整原题通过独立 Lean 验收'
           : !isStatementReviewed(job.run) ? '候选 Lean 陈述通过独立验收；原题含义尚未审核通过。'
           : job.run.formalization.confirmation === 'manual' ? 'Lean 陈述通过独立 Lean 验收；原题含义已由你确认。Lean 验收不能替代自然语言原意核对。'

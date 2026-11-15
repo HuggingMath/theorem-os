@@ -1,5 +1,11 @@
 /** The proof explanation page (explain.html) and its workbench links. */
 export const explain: Record<string, string> = {
+  "等待原题含义审核": "Waiting for the problem statement review",
+  "讲解队列已满，可稍后重新生成。": "The explanation queue is full. Try generating it again shortly.",
+  "讲解额度已用完，可在额度恢复后重新生成。": "The explanation allowance is used up. Generate it again when the allowance renews.",
+  "缺少可用的 API Key，请补充后生成讲解。": "No API key is available. Add one to generate the explanation.",
+  "原题含义审核尚未通过，暂未生成讲解。": "The problem statement review has not passed, so the explanation has not been generated.",
+  "当前账户不可用，暂未生成讲解。": "The current account is unavailable, so the explanation has not been generated.",
   "讲解来源与审阅": "Explanation source and review",
   "要证明什么": "Goal",
   "第 {0} 行没有单独的讲解步骤。可对照本声明的前后推导和 Lean 源码；现有记录无法确认这一行是否已被充分解释。": "Line {0} has no explanation step of its own. Compare the surrounding reasoning and Lean source; the saved record does not establish whether this line is sufficiently explained.",

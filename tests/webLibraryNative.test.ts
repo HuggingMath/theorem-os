@@ -68,7 +68,7 @@ describe('native Lean library request and Web continuation', () => {
     const completed = await runWebLibraryResearch({ directory, request, seed, output: path.join(directory, 'result.json'), libraryCatalog: catalog,
       run: async round => {
         const exit = await runSolver(['--workspace', round.seed.workspaceRoot, '--receipt-file', round.seed.activeProblemPath,
-          '--task-file', round.seed.taskFile, '--output', round.output, '--build-manifest', build, '--workers', '1',
+          '--task-file', round.seed.taskFile, '--output', round.output, '--build-manifest', build, '--workers', '1', '--no-explanations',
           '--library-catalog', catalog.file, '--library-catalog-sha256', catalog.digest,
           '--max-turns', String(round.limits.maxTurns), '--max-run-seconds', String(round.limits.maxRunSeconds),
           '--prepare-timeout-seconds', '60', '--evaluator-timeout-seconds', '30', '--proof-timeout-seconds', '30',

@@ -11,6 +11,7 @@ import { correspondenceSpans, fragmentLadder } from './correspondence';
 import { buildLeanRows, highlightSpans } from './leanPane';
 import { backgroundReviewPending } from './backgroundReview';
 import { SubmissionIdentity } from './submissionIdentity';
+import { automaticExplanationSettings } from './automaticExplanation';
 import { webDraftOwner } from './ownedDrafts';
 
 let submission: SubmissionIdentity | undefined, recoveringSubmission = false;
@@ -33,6 +34,8 @@ if (embedded) {
 const original = $<HTMLTextAreaElement>('#formalize-original'), key = $<HTMLInputElement>('#formalize-key');
 const environment = $<HTMLSelectElement>('#formalize-environment'), effort = $<HTMLSelectElement>('#formalize-effort');
 let researchEffort: WebFormalizationRequest['effort'] = 'high';
+let autoExplain: WebFormalizationRequest['autoExplain'] = true;
+let explanationLanguage: WebFormalizationRequest['explanationLanguage'] = locale;
 environment.value = webTaskEnvironment;
 if (embedded) effort.value = 'high';
 const exampleSelect = $<HTMLSelectElement>('#formalize-example');
@@ -44,6 +47,7 @@ function saveDraft() {
   if (!draftStorageKey) return;
   try {
     sessionStorage.setItem(draftStorageKey, JSON.stringify({ original: original.value, environment: environment.value,
+      autoExplain, explanationLanguage,
       effort: effort.value, ...(researchEffort !== effort.value ? { researchEffort } : {}), selected: state.selected, example: selectedExample }));
   } catch { /* The editable draft remains usable when browser storage is unavailable. */ }
 }
@@ -59,6 +63,9 @@ function restoreDraft(session: WebSession) {
     if (!saved || typeof saved.original !== 'string') return;
     draftEdited = true;
     original.value = saved.original;
+    const explanation = automaticExplanationSettings({ autoExplain: typeof saved.autoExplain === 'boolean' ? saved.autoExplain : undefined,
+      explanationLanguage: saved.explanationLanguage === 'en' || saved.explanationLanguage === 'zh' ? saved.explanationLanguage : undefined }, locale, submission.unresolved);
+    autoExplain = explanation.autoExplain; explanationLanguage = explanation.explanationLanguage;
     environment.value = saved.environment === 'standard' && (submission.unresolved || typeof saved.selected === 'string' && !!saved.selected)
       ? 'standard' : webTaskEnvironment;
     effort.value = ['low', 'high', 'max'].includes(String(saved.effort)) ? String(saved.effort) : 'high';
@@ -82,6 +89,7 @@ function loadExample(id: string) {
   const example = researchExamples.find(item => item.id === id);
   if (!example) { selectedExample = ''; return; }
   original.value = locale === 'en' ? example.originalEn : example.original;
+  autoExplain = true; explanationLanguage = locale;
   environment.value = webTaskEnvironment;
   exampleSelect.value = selectedExample = id;
   $('#formalize-example-note').textContent = locale === 'en' ? example.summaryEn : example.summary;
@@ -130,6 +138,8 @@ const matchesInput = (item: WebFormalization) => environment.value === item.envi
 function loadOriginal(item: WebFormalization) {
   original.value = item.original; environment.value = item.environment; effort.value = item.effort;
   researchEffort = item.researchEffort ?? item.effort;
+  const explanation = automaticExplanationSettings(item, locale);
+  autoExplain = explanation.autoExplain; explanationLanguage = explanation.explanationLanguage;
   clearExample(); saveDraft(); controls();
 }
 function mayReplaceOriginal(item: WebFormalization) {
@@ -378,6 +388,7 @@ $('#formalize-form').addEventListener('submit', async event => {
   if (!(recoveringSubmission && submission?.unresolved)) environment.value = webTaskEnvironment;
   state.busy = true; controls(); error();
   const input: WebFormalizationRequest = { original: original.value, environment: environment.value === 'mathlib' ? 'mathlib' : 'standard',
+    autoExplain, explanationLanguage,
     effort: effort.value as WebFormalizationRequest['effort'], apiKey: key.value,
     ...(researchEffort !== effort.value ? { researchEffort } : {}), ...(embedded ? { solve: true } : {}) };
   key.value = '';
@@ -458,7 +469,7 @@ if (embedded) window.addEventListener('theoremos:natural-original', event => {
 if (embedded) window.addEventListener('theoremos:new-natural', () => {
   conversationGeneration++; submission?.clear();
   autoOpen = ''; original.value = ''; key.value = ''; environment.value = 'mathlib'; effort.value = 'high';
-  researchEffort = 'high';
+  researchEffort = 'high'; autoExplain = true; explanationLanguage = locale;
   state.selected = ''; state.item = undefined; report = undefined;
   clearExample(); saveDraft(); error(); drawCurrent(); drawList(); controls();
   $<HTMLDetailsElement>('#formalize-settings').open = false;
