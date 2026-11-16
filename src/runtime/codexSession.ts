@@ -3,6 +3,7 @@ import { closeMathProcess, confirmMathProcessStopped, type MathProcessStopReceip
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { mathProofEnvironmentWorkerEnvironment } from '../math/mathProofEnvironment';
 import { assertMathCanonicalPath } from '../math/paths';
@@ -20,6 +21,8 @@ import { assertMathAgentSkillsCurrent, assertMathAgentSkillsDiscovered } from '.
 import { INVESTIGATION_TOOL, INVESTIGATOR_PERMISSION_PROFILE, NativeInvestigations,
   nativeInvestigationTool, validateNativeDelegation } from './nativeDelegation';
 import { planMathAgentSession } from './agentSessionPlan';
+import { MathAgentToolDispatcher } from './agentTeamTools';
+import { confirmHarnessProcessStopped, prepareHarnessProcess, readHarnessProcessIdentity, type HarnessProcessIdentity } from './harnessProcess';
 import { CODEX_FAILURE_CODES, HTTP_FAILURE_CODES, safeFailureReason, safeHttpStatusCode,
   type MathAgentFailureDiagnostic } from './failureDiagnostic';
 export type { MathAgentFailureDiagnostic, MathAgentFailureReason } from './failureDiagnostic';
@@ -121,17 +124,47 @@ class CodexRpc {
   private pending = new Map<number, { method: string; resolve: (result: Json) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
   private failure?: Error;
   private closing?: Promise<void>;
+  readonly processIdentity: Promise<HarnessProcessIdentity | undefined>;
   onNotification: (method: string, params: Json) => void = () => {};
   onRequest: (method: string, params: Json) => Promise<Json | undefined> = async () => undefined;
   onFailure: (error: Error) => void = () => {};
 
   constructor(executable: string, profile: string, environment: NodeJS.ProcessEnv = process.env,
-    launch?: { command: string; args: string[]; inheritedFds?: readonly number[] }) {
+    launch?: { command: string; args: string[]; inheritedFds?: readonly number[]; infoDescriptor?: number }) {
+    const extras: ('pipe' | number)[] = [...(launch?.inheritedFds ?? [])];
+    if (launch?.infoDescriptor !== undefined) {
+      if (launch.infoDescriptor !== extras.length + 3) throw new Error('math_harness_info_descriptor_invalid');
+      extras.push('pipe');
+    }
     this.child = spawn(launch?.command ?? executable, launch?.args ?? ['app-server', '--listen', 'stdio://'], {
       env: { ...environment, CODEX_HOME: profile },
-      stdio: launch?.inheritedFds?.length ? ['pipe', 'pipe', 'pipe', ...launch.inheritedFds] : 'pipe',
+      stdio: extras.length ? ['pipe', 'pipe', 'pipe', ...extras] : 'pipe',
       detached: process.platform !== 'win32',
     }) as ChildProcessWithoutNullStreams; // All three protocol streams are pipes, including launches with extra inherited FDs.
+    this.processIdentity = launch?.infoDescriptor === undefined ? Promise.resolve(undefined) : new Promise((resolve, reject) => {
+      const pipe = this.child.stdio[launch.infoDescriptor] as NodeJS.ReadableStream;
+      let bytes = '', finished = false;
+      const timer = setTimeout(() => finish(new Error('math_harness_process_identity_unavailable')), 10_000);
+      const finish = (error?: Error, identity?: HarnessProcessIdentity) => {
+        if (finished) return;
+        finished = true; clearTimeout(timer);
+        if (error) reject(error); else resolve(identity);
+      };
+      this.child.once('error', () => finish(new Error('math_harness_process_identity_unavailable')));
+      this.child.once('exit', () => finish(new Error('math_harness_process_identity_unavailable')));
+      pipe.on('data', chunk => {
+        if (finished) return;
+        bytes += chunk.toString();
+        if (bytes.length > 4096) { finish(new Error('math_harness_process_identity_invalid')); return; }
+        let info: unknown;
+        try { info = JSON.parse(bytes); } catch { return; }
+        try { finish(undefined, readHarnessProcessIdentity(object(info))); }
+        catch { finish(new Error('math_harness_process_identity_invalid')); }
+      });
+      pipe.once('end', () => { if (!finished) finish(new Error('math_harness_process_identity_unavailable')); });
+      pipe.once('error', () => finish(new Error('math_harness_process_identity_unavailable')));
+    });
+    void this.processIdentity.catch(() => {});
     // Do not forward provider diagnostics, which can contain credentials or task text.
     this.child.stderr.resume();
     const fail = (reason: string) => this.fail(new Error(`math_codex_transport_closed:${reason}`));
@@ -150,8 +183,8 @@ class CodexRpc {
         const message = object(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(line)));
         if (message.method !== undefined && typeof message.method !== 'string') throw new Error();
         if (message.method && message.id !== undefined) {
-          // Only the explicit read-only investigation tool is handled. Permission
-          // requests and all other interactive calls still receive no grant.
+          // Only explicitly registered host tools are handled. Permission requests
+          // and all other interactive calls still receive no grant.
           void Promise.resolve().then(() => this.onRequest(message.method as string, object(message.params ?? {})))
             .then(result => this.write(result === undefined ? { id: message.id,
               error: { code: -32601, message: 'Interactive requests are unavailable in headless mathematics' } }
@@ -228,7 +261,25 @@ class CodexRpc {
   }
 
   close(): Promise<void> { return this.closing ??= closeMathProcess(this.child); }
-  confirmStopped(): Promise<MathProcessStopReceipt> { return confirmMathProcessStopped(this.child); }
+  async confirmStopped(): Promise<MathProcessStopReceipt> {
+    const receipt = await confirmMathProcessStopped(this.child);
+    if (receipt.status !== 'stopped') return receipt;
+    try {
+      const identity = await this.processIdentity;
+      if (!identity) return receipt;
+      // The outer bwrap process can close its pipes before its namespace init
+      // exits. Confirm that final exit instead of quarantining a stopped writer
+      // on one observation during concurrent team shutdown.
+      const deadline = Date.now() + 1000;
+      for (;;) {
+        const namespace = confirmHarnessProcessStopped(identity);
+        const remaining = deadline - Date.now();
+        if (namespace.status === 'stopped' || namespace.reason !== 'process-group-active' || remaining <= 0)
+          return namespace;
+        await delay(Math.min(25, remaining));
+      }
+    } catch { return { status: 'unconfirmed', reason: 'process-identity-unavailable' }; }
+  }
 }
 
 export async function createCodexMathSession(options: MathAgentOptions): Promise<MathAgentSession> {
@@ -238,6 +289,11 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   // Isolated formalization has a distinct read mount and complete role protocol.
   // Research skill projection must not silently cross that isolation contract.
   if (skills.length && options.readIsolation) throw new Error('math_codex_skill_read_isolation_unsupported');
+  if (options.tools && options.readIsolation) throw new Error('math_codex_tools_read_isolation_unsupported');
+  if (options.isolateProcess && options.readIsolation) throw new Error('math_codex_process_isolation_role_conflict');
+  const tools = options.tools ? new MathAgentToolDispatcher(options.tools,
+    (calledThread, calledTurn) => calledThread === threadId && activeTurn === calledTurn &&
+      !turnSettled && !turnStopping && !closing, options.delegation ? [INVESTIGATION_TOOL] : []) : undefined;
   const configFile = path.join(options.profile, 'config.toml');
   const profileConfig = fs.existsSync(configFile) ? parseToml(fs.readFileSync(configFile, 'utf8')) : {};
   const providerId = typeof profileConfig.model_provider === 'string' ? profileConfig.model_provider : undefined;
@@ -399,7 +455,14 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   let rpc: CodexRpc;
   environment = { ...(environment ?? process.env) };
   delete environment.THEOREMOS_LIBRARY_HOST_CONFIG;
-  try { options.signal?.throwIfAborted(); rpc = new CodexRpc(options.executable, nativeProfile, environment, isolated); }
+  let processLaunch: ReturnType<typeof prepareHarnessProcess> | undefined;
+  try {
+    options.signal?.throwIfAborted();
+    processLaunch = options.isolateProcess ? prepareHarnessProcess({ ...options, profile: nativeProfile, environment },
+      options.executable, ['app-server', '--listen', 'stdio://'], 3) : undefined;
+    rpc = new CodexRpc(options.executable, nativeProfile,
+      processLaunch?.env ?? environment, processLaunch ? { ...processLaunch, infoDescriptor: 3 } : isolated);
+  }
   catch (error) { await responsesRelay?.close(); await bridge?.close(); await isolated?.close(); throw error; }
   let closing: Promise<void> | undefined;
   let investigations: NativeInvestigations | undefined;
@@ -409,7 +472,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     options.signal?.removeEventListener('abort', aborted);
     compacting?.reject(new Error('math_codex_compaction_closed'));
     turnStopping = true; cancelNotifications(); publicItems.clear();
-    bindTurn?.(); investigations?.stop();
+    bindTurn?.(); investigations?.stop(); tools?.stop();
     try { await rpc.close(); } finally {
       try { await responsesRelay?.close(); } finally { try { await bridge?.close(); } finally { await isolated?.close(); } }
       if (investigations) {
@@ -417,6 +480,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         const receipt = await rpc.confirmStopped();
         investigations.confirmStopped(receipt.status === 'stopped');
       }
+      await tools?.settled();
     }
   })();
   const aborted = () => { void closeSession().catch(() => {}); };
@@ -448,7 +512,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     notices.clear(); releaseFence();
   };
   const flushNotifications = (atRequest = false): NotificationFence | undefined => {
-    if (!notices.size || activeRequests.size || investigations?.busy || notificationFence || !activeTurn || turnSettled || turnStopping || closing) return;
+    if (!notices.size || activeRequests.size || investigations?.busy || tools?.busy || notificationFence || !activeTurn || turnSettled || turnStopping || closing) return;
     if (![...notices].some(notice => !notice.waitForRequest || atRequest)) return;
     const turnId = activeTurn, turn = requestTurn;
     let release!: () => void;
@@ -580,7 +644,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     cancelNotifications(); publicItems.clear();
     transportFailure = error; lastError = error.message; lastFailureDiagnostic = undefined;
     completion?.reject(error); compacting?.reject(error);
-    investigations?.stop(); bindTurn?.();
+    investigations?.stop(); tools?.stop(); bindTurn?.();
     if (!closing) {
       void closeSession().catch(() => {});
     }
@@ -654,7 +718,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   options.signal?.addEventListener('abort', aborted, { once: true });
   try {
     options.signal?.throwIfAborted();
-    await rpc.initialize(Boolean(options.delegation));
+    const processIdentity = await rpc.processIdentity;
+    await rpc.initialize(Boolean(options.delegation || options.tools));
     const inherited = profileConfig.mcp_servers;
     const disabled = Object.fromEntries(Object.keys(inherited ?? {}).map(name => [name, { enabled: false }]));
     const settings = {
@@ -681,7 +746,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         ...(bridge || responsesRelay || isolated ? { 'features.multi_agent': false, 'features.multi_agent_v2': false,
           'features.goals': false, 'features.view_image': false } : {}),
         // Native role files cannot narrow inherited writer permissions; profiles cannot enable children implicitly.
-        ...(options.skills?.length ? { 'features.multi_agent': false, 'features.multi_agent_v2': false,
+        ...(options.skills?.length || options.tools ? { 'features.multi_agent': false, 'features.multi_agent_v2': false,
           'agents.enabled': false, 'features.goals': false } : {}),
         model_reasoning_effort: options.effort,
         // The formalization sandbox is the OS boundary for isolated roles; every other shell runs the worker profile.
@@ -693,7 +758,9 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     };
     const result = await rpc.request(options.threadId ? 'thread/resume' : 'thread/start', {
       ...settings, ...(options.threadId ? { threadId: options.threadId } : {}),
-      ...(!options.threadId && options.delegation ? { dynamicTools: [nativeInvestigationTool(options.delegation.maxAgents)] } : {}),
+      ...(!options.threadId && (options.delegation || tools?.definitions.length) ? { dynamicTools: [
+        ...(options.delegation ? [nativeInvestigationTool(options.delegation.maxAgents)] : []), ...(tools?.definitions ?? []),
+      ] } : {}),
     });
     const startedThreadId = object(result.thread).id;
     if (typeof startedThreadId !== 'string' || !startedThreadId) throw new Error('math_codex_thread_missing');
@@ -715,12 +782,19 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         changed: agent => { try { options.onNativeAgent?.(agent); } catch { /* Observation cannot grant permissions. */ } },
         activity: (event, itemType) => activity(event, itemType, true, activeTurn),
         fail: error => { completion?.reject(error); void closeSession().catch(() => {}); } });
+    }
+    if (investigations || tools) {
       rpc.onRequest = async (method, params) => {
-        if (method !== 'item/tool/call' || params.tool !== INVESTIGATION_TOOL) return;
+        if (method !== 'item/tool/call') return;
         const turnId = await boundTurn;
         if (!turnId || params.turnId !== turnId) return { contentItems: [{ type: 'inputText',
-          text: 'math_native_investigation_turn_mismatch' }], success: false };
-        return investigations!.call(params);
+          text: 'math_agent_tool_turn_mismatch' }], success: false };
+        if (investigations && params.tool === INVESTIGATION_TOOL) return investigations.call(params);
+        if (tools) {
+          const result = await tools.call(params);
+          flushNotifications();
+          return result;
+        }
       };
     }
     if (skills.some(skill => skill.loading === 'native')) {
@@ -740,7 +814,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     return {
       threadId,
       executionPlan,
-      ...(isolated ? { isolationReceipt: isolated.receipt } : {}),
+      ...(isolated ? { isolationReceipt: isolated.receipt } : processLaunch ? { isolationReceipt: processLaunch.isolationReceipt } : {}),
+      ...(processIdentity ? { processIdentity } : {}),
       usageSource: (bridge || responsesRelay || isolated) && options.requestGate ? 'upstream-requests' as const : 'native-thread-totals' as const,
       get lastError() { return lastError; },
       get lastFailureDiagnostic() { return lastFailureDiagnostic; },
@@ -771,6 +846,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         if (transportFailure) throw transportFailure;
         if (completion || compacting) throw new Error('math_codex_turn_already_running');
         investigations?.beginTurn();
+        tools?.beginTurn();
         assertMathAgentSkillsCurrent(skills);
         if (temporaryDirectory) prepareWorkerTemporaryDirectory(options.workspace);
         lastError = undefined;
@@ -784,8 +860,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         requestTurn++; turnSettled = false; turnStopping = false;
         boundTurn = new Promise(resolve => { bindTurn = resolve; });
         completion = {
-          resolve: turn => { turnSettled = true; cancelNotifications(); publicItems.clear(); resolve(turn); },
-          reject: error => { turnSettled = true; cancelNotifications(); publicItems.clear(); reject(error); },
+          resolve: turn => { turnSettled = true; tools?.cancel(); cancelNotifications(); publicItems.clear(); resolve(turn); },
+          reject: error => { turnSettled = true; tools?.cancel(); cancelNotifications(); publicItems.clear(); reject(error); },
         };
         lastStreamActivityAt = 0; outputTails.clear(); publicItems.clear(); earlyActivities.clear();
         let checkpoint = false;
@@ -842,7 +918,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           const requestInterruption = () => {
             if (interruptionRequested) return;
             interruptionRequested = true;
-            turnStopping = true; cancelNotifications(); publicItems.clear();
+            turnStopping = true; tools?.cancel(); cancelNotifications(); publicItems.clear();
             // A cleanup deadline after submission/cancellation is independent of solving budgets.
             interruptDeadline = setTimeout(() => { void closeSession(); }, 10_000);
             void rpc.request('turn/interrupt', { threadId, turnId: activeTurn }).catch(() => {
@@ -892,7 +968,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
               submitted = true;
               // Stop new paid work first. Interrupting an in-flight request loses its final
               // usage receipt, so let admitted requests settle before stopping the writer.
-              turnStopping = true; cancelNotifications(); publicItems.clear();
+              turnStopping = true; tools?.cancel(); cancelNotifications(); publicItems.clear();
               submissionDrain = drainRequests();
               void submissionDrain.then(() => {
                 if (activeTurn === turnId && !turnSettled && !closing) requestInterruption();
@@ -912,6 +988,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
             requestInterruption();
           }, options.turnTimeoutMs);
           const finished = await done;
+          await tools?.settled();
           await submissionDrain;
           if (investigations?.busy) {
             await closeSession();
@@ -949,7 +1026,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           cancelTimer?.(); clearTimeout(interruptDeadline); clearInterval(outputWatcher); clearInterval(shellWatcher);
           checkCompletedOutput = undefined;
           drainSubmittedRequests = undefined;
-          turnSettled = true; cancelNotifications();
+          turnSettled = true; tools?.cancel(); await tools?.settled(); cancelNotifications();
           bindTurn?.(); bindTurn = undefined;
           activeTurn = undefined; completion = undefined;
           earlyCompletions.clear();
@@ -958,7 +1035,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         }
       },
       interrupt: async () => {
-        turnStopping = true; cancelNotifications(); publicItems.clear();
+        turnStopping = true; tools?.cancel(); cancelNotifications(); publicItems.clear();
         // Native turn/interrupt does not reap investigator background commands.
         if (investigations?.busy) { await closeSession(); return; }
         if (activeTurn && !turnSettled && !closing) await rpc.request('turn/interrupt', { threadId, turnId: activeTurn });
@@ -967,7 +1044,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       close: closeSession,
       stopForFreeze: async () => {
         // An interrupt RPC acknowledgement does not settle the active turn.
-        if (completion || activeTurn || compacting || investigations?.busy) return { status: 'unconfirmed', reason: 'turn-not-settled' };
+        if (completion || activeTurn || compacting || investigations?.busy || tools?.busy) return { status: 'unconfirmed', reason: 'turn-not-settled' };
         try {
           await closeSession();
         }

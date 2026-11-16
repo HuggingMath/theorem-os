@@ -37,9 +37,132 @@ function fixture() {
   writeSolverRunState(stateFile, state);
   return { root, run, stateFile, state };
 }
+
+function agentTeamFixture() {
+  const f = fixture(), { state } = f;
+  state.workers = undefined; state.cooperation = undefined;
+  state.workerCount = 1; state.coordination = 'independent';
+  state.researchMode = 'skill'; state.researchSkillWorkflow = 'full';
+  state.researchSkill = { name: 'theoremos-research', digest: 'c'.repeat(64), loading: 'native' };
+  state.researchDelegation = { mode: 'team', maxAgents: 3 };
+  state.threadId = 'native-lead'; state.turns = 5;
+  state.usage = { inputTokens: 8, outputTokens: 2, totalTokens: 10 };
+  state.usageAccounting = { startedTurns: 2, reportedTurns: 2, pending: false, incomplete: false };
+  state.requestUsageAccounting = { startedRequests: 2, reportedRequests: 2, pendingRequests: 0, incomplete: false };
+  state.agentTeam = { schema: 'theorem-os.agent-team.v1', operations: [], workers: [
+    { id: 'child-a', role: 'researcher', worktree: path.join(f.root, 'team-workspaces/child-a'),
+      phase: 'prepared', status: 'idle', turns: 1, threadId: 'native-child-a', cursor: 0, seedCommit: 'a'.repeat(40),
+      tasks: [{ id: 'proved-helper', message: 'Prove the selected helper.', status: 'completed', summary: 'Helper checked.', deliveryId: 'd'.repeat(64) },
+        { id: 'queued-follow-up', message: 'Investigate its next use.', status: 'queued' }],
+      usage: { inputTokens: 18, outputTokens: 2, totalTokens: 20 },
+      usageAccounting: { startedTurns: 1, reportedTurns: 1, pending: false, incomplete: false },
+      requestUsageAccounting: { startedRequests: 1, reportedRequests: 1, pendingRequests: 0, incomplete: false } },
+    { id: 'child-b', role: 'researcher', worktree: path.join(f.root, 'team-workspaces/child-b'),
+      phase: 'running', status: 'running', turns: 2, threadId: 'native-child-b', cursor: 0, seedCommit: 'a'.repeat(40),
+      tasks: [{ id: 'ongoing-investigation', message: 'Study a separate route.', status: 'running' }],
+      usage: { inputTokens: 28, outputTokens: 2, totalTokens: 30 },
+      usageAccounting: { startedTurns: 2, reportedTurns: 1, pending: true, incomplete: false },
+      requestUsageAccounting: { startedRequests: 2, reportedRequests: 1, pendingRequests: 1, incomplete: false } },
+  ], events: [{ sequence: 1, from: 'child-a', to: 'lead', kind: 'delivery', at: 1234,
+    text: 'Helper checked.', taskId: 'proved-helper', deliveryId: 'd'.repeat(64) }],
+  deliveries: [{ id: 'd'.repeat(64), agentId: 'child-a', taskId: 'proved-helper',
+    path: path.join(f.root, 'agent-team/proofs/deliveries', 'd'.repeat(64) + '.json') }],
+  adoptions: [{ id: 'lead-adoption', deliveryId: 'd'.repeat(64), targetId: 'lead', status: 'completed', commit: 'b'.repeat(40) },
+    { id: 'queued-adoption', deliveryId: 'd'.repeat(64), targetId: 'child-b', status: 'queued' }] };
+  // These aggregate caches are deliberately stale. Inspection must derive totals
+  // from the Lead and child records, rather than count either cache a second time.
+  state.teamUsage = { totalTokens: 999 };
+  state.tokenBudget = { maxTotalTokens: 100, enforcement: 'provider-observed-upstream-request-limit',
+    status: 'exhausted', reportedTotalTokens: 999, usageComplete: true, overrunTokens: 899, reason: 'math_total_token_limit' };
+  return f;
+}
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 
 describe('run inspection', () => {
+  it('restores real Lead and child observations, queues and checked deliveries without treating local adoption as final acceptance', () => {
+    const f = agentTeamFixture(); writeSolverRunState(f.stateFile, f.state);
+    const before = fs.readFileSync(f.stateFile), { state } = readRunInspection(f.run);
+    const report = buildRunInspection(state, { runId: state.runId, status: 'evaluated_passed', solution_commit: 'b'.repeat(40) });
+    expect(report.workers.map(worker => [worker.id, worker.role, worker.turns])).toEqual([
+      ['lead', 'lead', 2], ['child-a', 'researcher', 1], ['child-b', 'researcher', 2],
+    ]);
+    expect(report.turns).toBe(5);
+    expect(report.usage).toEqual({ inputTokens: 54, outputTokens: 6, totalTokens: 60 });
+    expect(report.tokenBudget).toEqual({ maxTotalTokens: 100, enforcement: 'provider-observed-upstream-request-limit',
+      status: 'available', reportedTotalTokens: 60, usageComplete: false, overrunTokens: 0 });
+    expect(report.agentTeam).toMatchObject({ evidence: 'recorded-not-replayed', control: 'agent-organized', maxAgents: 3,
+      originalProblemAcceptance: 'see-final-evaluation',
+      workers: [{ id: 'child-a', status: 'idle', threadId: 'native-child-a',
+        tasks: [{ id: 'proved-helper', status: 'completed', deliveryId: 'd'.repeat(64) }, { id: 'queued-follow-up', status: 'queued' }] },
+      { id: 'child-b', status: 'running', tasks: [{ id: 'ongoing-investigation', status: 'running' }] }],
+      deliveries: [{ id: 'd'.repeat(64), agentId: 'child-a', taskId: 'proved-helper' }],
+      adoptions: [{ targetId: 'lead', status: 'completed' }, { targetId: 'child-b', status: 'queued' }] });
+    expect(report.agentTeam!.deliveries[0]).not.toHaveProperty('path');
+    expect(report.recordedOutcome).toBeUndefined(); expect(report.evaluator).toBeUndefined();
+    expect(report.progress).toMatchObject({ checkedProofTasks: 0, completedResearchTasks: 0 });
+    const markdown = renderRunInspection(report);
+    expect(markdown.toLowerCase()).not.toContain('one researcher');
+    expect(markdown).toContain('Lead organizes persistent proof writers');
+    expect(markdown).toContain('queued-follow-up: queued'); expect(markdown).toContain('ongoing-investigation: running');
+    expect(markdown).toContain('## Selected integrations');
+    expect(markdown).toContain('| ' + 'd'.repeat(64) + ' | child-b | queued |');
+    expect(markdown).toContain('Local delivery and integration records do not grant original-problem acceptance.');
+    expect(markdown).toContain('No matching final evaluation recorded.');
+    expect(markdown).not.toContain('evaluated_passed');
+    expect(fs.readFileSync(f.stateFile)).toEqual(before);
+  });
+
+  it('blocks finite team dispatch on missing child receipts even when the saved aggregate budget claims complete usage', () => {
+    const f = agentTeamFixture(), child = f.state.agentTeam!.workers[1]!;
+    child.usageAccounting!.pending = false;
+    child.requestUsageAccounting!.pendingRequests = 0;
+    writeSolverRunState(f.stateFile, f.state);
+    const report = buildRunInspection(readRunInspection(f.run).state);
+    expect(report.tokenBudget).toMatchObject({ reportedTotalTokens: 60, status: 'usage-unavailable', usageComplete: false,
+      reason: 'math_model_usage_unavailable' });
+    expect(report.usage).toMatchObject({ totalTokens: 60 });
+    expect(report.progress.checkedProofTasks).toBe(0); expect(report.recordedOutcome).toBeUndefined();
+    expect(renderRunInspection(report)).toContain('| 100 | 60 | false | 0 | usage-unavailable |');
+  });
+
+  it('reports paused task allowances, pending checks and message provenance from the saved team without trusting aggregate caches', () => {
+    const f = agentTeamFixture(), team = f.state.agentTeam!, worker = team.workers[0], task = worker.tasks[1];
+    team.hostLimits = { maxTurns: 20, maxTotalTokens: 100 };
+    team.leadReserve = { tokens: 15, turns: 3 };
+    worker.status = 'paused'; worker.activity = 'checking'; worker.phase = 'checking';
+    worker.lastActivity = { at: 2000, event: 'request-completed' };
+    Object.assign(task, { status: 'paused', budget: { tokens: 30, turns: 2 }, turns: 1,
+      startedAt: 1500, lastStartedAt: 1600, pausedAt: 1900,
+      pauseRequested: { at: 1850, kind: 'budget', reason: 'math_team_task_token_limit' } });
+    f.state.taskUsage = { [task.id]: { totalTokens: 12 } };
+    worker.pendingDelivery = { taskId: task.id, seedCommit: worker.seedCommit,
+      commit: 'e'.repeat(40), sourceDigest: 'f'.repeat(64),
+      declarations: [{ file: 'Submission.lean', name: 'Original.helper', type: 'True' }] };
+    team.events.push({ sequence: 2, from: worker.id, to: 'lead', kind: 'message', at: 2100,
+      text: 'Awaiting integration.', sourceTaskId: task.id, relatedTaskId: 'ongoing-investigation',
+      dispatchResearchRevision: 1, researchRevision: 2 });
+    writeSolverRunState(f.stateFile, f.state);
+    const before = fs.readFileSync(f.stateFile), report = buildRunInspection(readRunInspection(f.run).state);
+    expect(report.agentTeam!.budget).toMatchObject({ reportedTotalTokens: 60, turns: 5,
+      leadReserve: { tokens: 15, turns: 3 }, remaining: { tokens: 40, turns: 15 },
+      childRemaining: { tokens: 25, turns: 12 }, turnLimitKnown: true });
+    expect(report.agentTeam!.overview.workers[0]).toMatchObject({ id: worker.id, activity: 'checking',
+      lastActivity: worker.lastActivity,
+      usage: { reportedTotalTokens: 20, usageComplete: true, pendingRequests: 0 },
+      pendingDelivery: { taskId: task.id, commit: 'e'.repeat(40), sourceDigest: 'f'.repeat(64), declarationCount: 1 } });
+    expect(report.agentTeam!.overview.workers[0].pendingDelivery).not.toHaveProperty('declarations');
+    expect(report.agentTeam!.overview.workers[0].tasks[1]).toMatchObject({ id: task.id, status: 'paused',
+      pausedAt: 1900, lastStartedAt: 1600,
+      budget: { tokens: 30, turns: 2, used: { tokens: 12, turns: 1 }, remaining: { tokens: 18, turns: 1 } } });
+    expect(report.agentTeam!.events.at(-1)).toMatchObject({ sourceTaskId: task.id,
+      relatedTaskId: 'ongoing-investigation', dispatchResearchRevision: 1, researchRevision: 2 });
+    const markdown = renderRunInspection(report);
+    expect(markdown).toContain('| Tokens | 40 | 15 | 25 |');
+    expect(markdown).toContain('| Turns | 15 | 3 | 12 |');
+    expect(markdown).toContain('| child-a | checking | 20 | true | 0 | queued-follow-up |');
+    expect(fs.readFileSync(f.stateFile)).toEqual(before);
+  });
+
   it('keeps statement review identities distinct from task versions and hides snapshot workspaces', () => {
     const { state, stateFile } = fixture(), task = state.cooperation!.tasks[0].task;
     const original = { id: 'review-original', taskId: task.id, taskDigest: taskVersion(task), snapshotDigest: 'snapshot-original',

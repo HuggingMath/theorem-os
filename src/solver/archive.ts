@@ -1,4 +1,5 @@
 import { readMathJson, writeMathJsonDurable } from '../math/mathRuntimeIo';
+import { agentTeamStateSchema, writerProcessSchema, type AgentTeamState } from './agentTeamState';
 import type { SolverProblem } from './problem';
 import type { ProofCheck } from './modules/evidence';
 import type { SolverFailure } from './feedback';
@@ -81,7 +82,10 @@ export type SolverRunState = {
   agentSessionPlan?: import('../runtime/agentSession').MathAgentSessionPlan;
   researchSkill?: { name: string; digest: string; loading: 'native' | 'file' };
   commonResearchSkill?: { name: string; digest: string; loading: 'native' | 'file' };
-  researchDelegation?: { mode: 'read-only'; maxAgents: number };
+  researchDelegation?: { mode: 'read-only' | 'team'; maxAgents: number };
+  agentTeam?: AgentTeamState;
+  teamUsage?: Record<string, unknown>;
+  writerProcess?: import('../runtime/harnessProcess').HarnessProcessIdentity;
   nativeAgents?: import('../runtime/nativeDelegation').NativeResearchAgent[];
   /** A stopped writer's check/consumption resumes before any new model dispatch. */
   pendingDeclarationCheck?: { commit: string; requestDigest: string; phase?: 'completed' };
@@ -355,7 +359,8 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
     loading: z.enum(['native', 'file']) }).strict().optional(),
   commonResearchSkill: z.object({ name: z.string().min(1), digest: z.string().regex(/^[a-f0-9]{64}$/u),
     loading: z.enum(['native', 'file']) }).strict().optional(),
-  researchDelegation: z.object({ mode: z.literal('read-only'), maxAgents: z.number().int().min(2).max(4) }).strict().optional(),
+  researchDelegation: z.object({ mode: z.enum(['read-only', 'team']), maxAgents: z.number().int().min(2).max(4) }).strict().optional(),
+  agentTeam: agentTeamStateSchema.optional(), teamUsage: record.optional(), writerProcess: writerProcessSchema.optional(),
   nativeAgents: z.array(z.object({ threadId: z.string().min(1), parentThreadId: z.string().min(1),
     startedAt: safeCount, updatedAt: safeCount, status: z.enum(['running', 'completed', 'errored', 'interrupted', 'stopped', 'unknown']),
     usage: record.optional(), message: z.string().optional(), stoppedAt: safeCount.optional(),

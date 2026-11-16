@@ -28,8 +28,33 @@ function fixture(common: boolean) {
     const current = { ...access, sourceFeedback: feedback, maxContextBytes };
     return common ? buildResearchContext(base.problem, state, current) : buildSkillResearchContext(base.problem, state, current);
   };
-  return { ...base, state, taskText, build };
+  return { ...base, state, taskText, access, build };
 }
+
+it('compiles the current child assignment and inbox inside both full and continuation context budgets', () => {
+  const f = fixture(false), sourceCommit = 'a'.repeat(40), deliveryBaseCommit = 'b'.repeat(40);
+  const objective = '研究当前不等式并独立验证假设；明确报告反例或可复用的 Lean 声明。';
+  f.state.researchDelegation = { mode: 'team', maxAgents: 3 };
+  f.state.agentTeam = { schema: 'theorem-os.agent-team.v1', deliveries: [], adoptions: [], operations: [],
+    events: [{ sequence: 1, from: 'lead', to: 'child', kind: 'message', at: 1, text: 'An additional boundary case to inspect.' }],
+    workers: [{ id: 'child', role: 'researcher', worktree: f.workspace, phase: 'running', status: 'running',
+      turns: 1, cursor: 0, seedCommit: sourceCommit,
+      tasks: [{ id: 'current-task', message: objective, status: 'running', seedCommit: deliveryBaseCommit }] }] };
+  const context = buildSkillResearchContext(f.problem, f.state, { ...f.access,
+    teamRole: { id: 'child', role: 'worker' }, teamAssignment: { taskId: 'current-task', message: objective, sourceCommit } });
+  for (const continuation of [false, true]) {
+    const dispatch = finalizeResearchDispatch(context, { continuation });
+    expect(dispatch.manifest!.included.find(item => item.id === 'agent-team-assignment'))
+      .toMatchObject({ kind: 'assignment', required: true });
+    expect(dispatch.manifest!.usedBytes).toBe(Buffer.byteLength(dispatch.instructions) + Buffer.byteLength(dispatch.message));
+    const envelope = JSON.parse(dispatch.message.split('\n')[1]!);
+    expect(envelope).toMatchObject({ agentId: 'child', coordinator: 'lead', taskId: 'current-task', objective,
+      sourceCommit, deliveryBaseCommit, inbox: { through: 1, events: [{ text: 'An additional boundary case to inspect.' }] } });
+  }
+  expect(() => buildSkillResearchContext(f.problem, f.state, { ...f.access,
+    teamRole: { id: 'child', role: 'worker' }, teamAssignment: { taskId: 'other-task', message: objective, sourceCommit } }))
+    .toThrow('math_team_assignment_changed');
+});
 
 describe.each([{ common: false, mode: 'standalone skill' }, { common: true, mode: 'shared-guidance skill' }])
   ('$mode same-thread context', ({ common }) => {
@@ -75,5 +100,24 @@ describe.each([{ common: false, mode: 'standalone skill' }, { common: true, mode
       })));
       expect(continued.manifest?.maxBytes).toBe(full.manifest?.maxBytes);
       expect(finalizeResearchDispatch(context, { continuation: false }).message).toBe(full.message);
+    });
+
+    it('delivers team state and messages in both restart and continuation contexts', () => {
+      const f = fixture(common);
+      f.state.researchSkillWorkflow = 'full';
+      f.state.researchDelegation = { mode: 'team', maxAgents: 3 };
+      f.state.agentTeam = { schema: 'theorem-os.agent-team.v1', workers: [], deliveries: [], adoptions: [], operations: [],
+        events: [{ sequence: 1, from: 'child', to: 'lead', kind: 'message', at: 1,
+          text: 'A durable question sent between native turns.' }] };
+      const context = buildResearchContext(f.problem, f.state, { ...f.access, teamRole: { id: 'lead', role: 'lead' } });
+      for (const continuation of [false, true]) {
+        const dispatch = finalizeResearchDispatch(context, { continuation });
+        expect(dispatch.instructions).toContain('the Lead of an Agent-organized research team');
+        expect(dispatch.instructions).toContain('theoremos_team');
+        expect(dispatch.instructions).not.toContain('native child agents are not enabled');
+        expect(dispatch.message).toContain('A durable question sent between native turns.');
+        expect(dispatch.message).toContain('latestSequence is not an acknowledgment');
+        if (!continuation) expect(dispatch.manifest?.included.map(item => item.id)).toContain('agent-team');
+      }
     });
   });

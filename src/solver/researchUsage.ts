@@ -34,12 +34,12 @@ export class ResearchUsage {
 
   resetTurn() { this.stopReason = undefined; }
 
-  begin(assignment?: CooperativeAction) {
+  begin(assignment?: CooperativeAction, taskId = assignmentTask(assignment)) {
     const { state, research, maxTotalTokens } = this.input;
     research.usageAccounting!.startedTurns++;
     research.usageAccounting!.pending = true;
     this.active = { reported: false, incomplete: false,
-      taskId: assignmentTask(assignment), upstreamRequests: this.requestSessionId === this.sessionId && this.sessionId !== undefined,
+      taskId, upstreamRequests: this.requestSessionId === this.sessionId && this.sessionId !== undefined,
       nativeTurnTotals: Boolean(this.boundSession && this.boundSession.id === this.sessionId && this.boundSession.nativeTurnTotals),
       finished: false,
       initialPlanning: assignment?.kind === 'lead' && state.cooperation?.tasks.length === 0 && maxTotalTokens > 0 };

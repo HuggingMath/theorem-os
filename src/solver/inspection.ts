@@ -5,12 +5,14 @@ import { canonicalMathJson, mathDigest, readMathJson } from '../math/mathRuntime
 import { taskGroup, taskVersion, type TaskRecord } from './tasks';
 import { researchFailureCategory } from './modules/search';
 import { buildProofContinuation, recordedTaskProofStatus } from './progress';
-import { buildTokenBudget } from './usageBudget';
+import { aggregateUsage, buildTokenBudget } from './usageBudget';
 import { captureObligationSnapshot } from './obligationProgress';
 import { contributionExecutionAttempts, type ContributionObservation, type ResearchContributionFlow } from './contributionFlow';
 import type { StoredRunInspectionArtifacts } from './storedRunInspection';
 import { safeFailureDiagnostic } from '../runtime/failureDiagnostic';
 import { planApprovalInspection } from './planApproval';
+import { agentTeamOverview } from './agentTeamViews';
+import { projectAgentTeamBudget } from './agentTeamBudget';
 
 /** Binds a report to the stored observation; this does not replay or accept its proof evidence. */
 export function runInspectionSnapshot(state: SolverRunState, result?: Record<string, unknown>) {
@@ -54,6 +56,17 @@ function dispatchWaitRecord(state: SolverRunState, observation?: DispatchWaitObs
 
 export function buildRunInspection(state: SolverRunState, result?: Record<string, unknown>) {
   const skillMode = state.researchMode === 'skill' && !state.workers;
+  const teamMode = state.researchDelegation?.mode === 'team';
+  const usageRecords = [...(state.workers ?? [state]), ...(state.agentTeam?.workers ?? [])];
+  const tokenBudget = buildTokenBudget(state.tokenBudget?.maxTotalTokens ?? state.agentTeam?.hostLimits?.maxTotalTokens ?? 0,
+    usageRecords, state.tokenBudget?.enforcement);
+  const teamBudget = teamMode ? { ...projectAgentTeamBudget({ tokenBudget,
+    maxTurns: state.agentTeam?.hostLimits?.maxTurns ?? Infinity, turns: state.turns,
+    leadReserve: state.agentTeam?.leadReserve }), turnLimitKnown: Boolean(state.agentTeam?.hostLimits) } : undefined;
+  const researchers = state.workers ?? (teamMode ? [
+    { ...state, id: 'lead', role: 'lead', turns: state.usageAccounting?.startedTurns ?? 0 },
+    ...(state.agentTeam?.workers ?? []),
+  ] : [{ id: 'solver', role: skillMode ? 'researcher' : 'lead', ...state }]);
   const cooperative = state.cooperation;
   const resultMatches = state.phase === 'finished' && result?.runId === state.runId &&
     (result.solution_commit === null || result.solution_commit === state.check?.commit) &&
@@ -82,11 +95,22 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
       commonResearchSkill: state.commonResearchSkill, researchDelegation: state.researchDelegation,
       buildDigest: state.buildDigest, environmentDigest: state.environmentDigest, methodDigest: state.methodDigest,
       knowledgeDigest: state.knowledgeDigest },
-    turns: state.turns, usage: state.usage, planVersion: cooperative?.planVersion,
-    ...(state.researchDelegation ? { delegation: { evidence: 'recorded-agent-observations',
+    turns: state.turns, usage: teamMode ? aggregateUsage(usageRecords) : state.usage, planVersion: cooperative?.planVersion,
+    ...(state.researchDelegation?.mode === 'read-only' ? { delegation: { evidence: 'recorded-agent-observations',
       dispatch: 'host-mediated-native-threads', builtinMultiAgent: false,
       agents: state.nativeAgents ?? [], usageSource: 'shared-upstream-request-receipts',
       nativeTotals: 'observational-only' } } : {}),
+    ...(teamMode ? { agentTeam: { evidence: 'recorded-not-replayed', control: 'agent-organized',
+      maxAgents: state.researchDelegation!.maxAgents,
+      budget: teamBudget,
+      overview: agentTeamOverview({ ...state, tokenBudget }, { budget: teamBudget }),
+      workers: (state.agentTeam?.workers ?? []).map(worker => ({ id: worker.id, status: worker.status,
+        turns: worker.turns, threadId: worker.threadId, writerStopUnconfirmed: worker.writerStopUnconfirmed,
+        tasks: worker.tasks.map(task => ({ id: task.id, message: task.message, status: task.status,
+          summary: task.summary, error: task.error, deliveryId: task.deliveryId })) })),
+      events: state.agentTeam?.events ?? [],
+      deliveries: (state.agentTeam?.deliveries ?? []).map(({ id, agentId, taskId }) => ({ id, agentId, taskId })),
+      adoptions: state.agentTeam?.adoptions ?? [], originalProblemAcceptance: 'see-final-evaluation' } } : {}),
     scheduling: { evidence: 'recorded-dispatch-state', observedWorkers: scheduled.length,
       working: working.length,
       proofAssignments: working.filter(worker => tasks.some(node => node.task.id === worker.scheduling!.taskId &&
@@ -103,7 +127,7 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
       uses: (cooperative?.deliveries ?? []).filter(delivery => delivery.status !== 'superseded').flatMap(delivery =>
         (delivery.knowledgeUses ?? []).map(use => ({ ...use, deliveryId: delivery.id, commit: delivery.commit,
           currentTaskVersion: tasks.some(node => node.task.id === use.consumer.taskId && taskVersion(node.task) === use.consumer.taskDigest) }))) },
-    tokenBudget: buildTokenBudget(state.tokenBudget?.maxTotalTokens ?? 0, state.workers ?? [state], state.tokenBudget?.enforcement),
+    tokenBudget,
     continuation: buildProofContinuation(tasks, { groups: cooperative?.groups, environmentDigest: state.environmentDigest,
       proofRoutes: cooperative?.proofRoutes }),
     mathematics: { snapshot: captureObligationSnapshot(tasks, { groups: cooperative?.groups, environmentDigest: state.environmentDigest,
@@ -128,7 +152,7 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
       parkedRoutes: node.parkedRoutes ?? {},
       ...(state.taskUsage?.[node.task.id] ? { usage: state.taskUsage[node.task.id] } : {}),
     })),
-    workers: (state.workers ?? [{ id: 'solver', role: skillMode ? 'researcher' : 'lead', ...state }]).map(worker => ({
+    workers: researchers.map(worker => ({
       id: worker.id, role: worker.role, sessionRole: 'sessionRole' in worker ? worker.sessionRole : undefined,
       phase: worker.phase, turns: worker.turns,
       scheduling: 'scheduling' in worker ? worker.scheduling : undefined,
@@ -278,7 +302,8 @@ export function renderRunInspection(report: Inspection): string {
   const skillMode = report.configuration.researchMode === 'skill' && report.configuration.workers === 1;
   let text = '# Mathematics research run\n\nStored evidence only; this report does not rerun Lean or grant proof acceptance.\n';
   text += section('Run', table(['Problem', 'Phase', 'Recorded outcome', 'Model', 'Agents', 'Turns'], [[
-    report.problem.id, report.phase, report.recordedOutcome, report.configuration.model, report.configuration.workers, report.turns]]));
+    report.problem.id, report.phase, report.recordedOutcome, report.configuration.model,
+    report.agentTeam ? 1 + report.agentTeam.workers.length : report.configuration.workers, report.turns]]));
   text += `\nObservation: ${report.snapshot.stateDigest}; result: ${report.snapshot.resultDigest ?? 'absent'}.\n`;
   text += `\n${report.problem.statement}\n\nRun: ${report.runId}\n`;
   if (!skillMode) text += `\nPlan version: ${report.planVersion ?? 'not yet planned'}\n`;
@@ -301,7 +326,9 @@ export function renderRunInspection(report: Inspection): string {
   text += section('Original targets', table(['Declaration', 'File'], report.problem.targets.map(target => [target.theoremName, target.proofPath])));
   if (skillMode) {
     const skill = report.configuration.researchSkill;
-    text += section('Research execution', 'One Codex researcher with a versioned mathematical research skill. ' +
+    text += section('Research execution', (report.agentTeam
+      ? 'Lead organizes persistent proof writers through the shared mathematical research skill. '
+      : 'One researcher with a versioned mathematical research skill. ') +
       'Research sources, notes, experiments and recorded declaration artifacts describe its work. ' +
       'This mode has no cooperative task graph or role assignment progress.');
     if (skill) text += '\nSkill: ' + cell(skill.name) + '; digest: ' + skill.digest + '; loading: ' + skill.loading + '.\n';
@@ -309,6 +336,25 @@ export function renderRunInspection(report: Inspection): string {
       report.workers.map(worker => [worker.id, worker.phase, worker.turns, worker.lastActivity?.event,
         worker.lastActivity ? new Date(worker.lastActivity.at).toISOString() : undefined]))) +
       '\nRecorded activity does not establish current process liveness or mathematical progress.\n';
+    if (report.agentTeam) {
+      const team = report.agentTeam, budget = team.budget!;
+      text += section('Team budget', table(['Dimension', 'Remaining', 'Lead reserve', 'Child allowance'], [
+        ['Tokens', budget.remaining.tokens ?? 'unlimited', budget.leadReserve.tokens, budget.childRemaining.tokens ?? 'unlimited'],
+        ['Turns', budget.remaining.turns ?? (budget.turnLimitKnown ? 'unlimited' : 'unknown'),
+          budget.leadReserve.turns, budget.childRemaining.turns ?? (budget.turnLimitKnown ? 'unlimited' : 'unknown')],
+      ])) + '\nProvider-observed request admission: already admitted requests can exceed these allowances.\n';
+      text += section('Team runtime overview', table(['Agent', 'Activity', 'Reported tokens', 'Usage complete', 'Pending requests', 'Pending delivery'],
+        team.overview.workers.map(worker => [worker.id, worker.activity, worker.usage.reportedTotalTokens,
+          worker.usage.usageComplete, worker.usage.pendingRequests ?? 'unknown', worker.pendingDelivery?.taskId]))) +
+        `\nBounded overview: ${team.overview.omissions.workers} members and ${team.overview.omissions.tasks} tasks omitted; complete recorded tasks follow.\n`;
+      text += section('Agent collaboration', table(['Agent', 'Saved status', 'Tasks', 'Checked deliveries'],
+        report.agentTeam.workers.map(worker => [worker.id, worker.status,
+          worker.tasks.map(task => task.id + ': ' + task.status).join(', '),
+          report.agentTeam!.deliveries.filter(delivery => delivery.agentId === worker.id).map(delivery => delivery.id).join(', ')])));
+      text += section('Selected integrations', table(['Delivery', 'Recipient', 'Saved status', 'Commit', 'Error'],
+        report.agentTeam.adoptions.map(adoption => [adoption.deliveryId, adoption.targetId, adoption.status, adoption.commit, adoption.error]))) +
+        '\nLocal delivery and integration records do not grant original-problem acceptance.\n';
+    }
     const recoveries = report.workers.filter(worker => worker.recovery);
     if (recoveries.length) text += section('Session recovery', table(['Session', 'Recovery', 'Reason', 'Cycles', 'Waited ms'],
       recoveries.map(worker => [worker.id, worker.recovery!.phase, worker.recovery!.reason,

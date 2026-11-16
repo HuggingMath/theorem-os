@@ -53,11 +53,18 @@ import { assertResearchHarnessCurrent, bindResearchHarness, researchHarness, res
 import { readCliConfiguration } from '../runtime/cliConfiguration';
 import { planMathAgentSession } from '../runtime/agentSessionPlan';
 import { SingleSolverProofHandoff } from './singleSolverProofHandoff';
+import { assertAgentTeamProcessesStopped } from './agentTeam';
 
-const runSummary = (state: SolverRunState | undefined) => ({ turns: state?.turns, dispatchCounts: state?.dispatchCounts,
-  ...(state?.verifierFailure ? { verifierFailure: state.verifierFailure } : {}),
-  usage: state?.usage, tokenBudget: state?.tokenBudget, workers: state?.workers?.map(worker => ({ id: worker.id, role: worker.role,
-    turns: worker.turns, dispatchCounts: worker.dispatchCounts, usage: worker.usage, error: worker.error })) });
+const runSummary = (state: SolverRunState | undefined) => {
+  const workers = state?.workers ?? (state?.agentTeam ? [
+    { ...state, id: 'lead', role: 'lead', turns: state.usageAccounting?.startedTurns ?? 0 }, ...state.agentTeam.workers,
+  ] : undefined);
+  return { turns: state?.turns, dispatchCounts: state?.dispatchCounts,
+    ...(state?.verifierFailure ? { verifierFailure: state.verifierFailure } : {}),
+    usage: state?.teamUsage ?? state?.usage, tokenBudget: state?.tokenBudget,
+    workers: workers?.map(worker => ({ id: worker.id, role: worker.role, turns: worker.turns,
+      dispatchCounts: worker.dispatchCounts, usage: worker.usage, error: worker.error })) };
+};
 
 export async function runSolver(args: string[], root: string, customModules?: SolverModules): Promise<number> {
   const { values } = parseArgs({ args, options: {
@@ -97,7 +104,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
     console.log('--research-mode skill loads pinned research methods in single, independent or cooperative workflows. New Skill runs default to one independent researcher; explicit --workers above 1 defaults to cooperative, and explicit --coordination cooperative defaults to 4 workers. Schedulers, module plans, plan approval and host acceptance retain their existing contracts. --skill-loading native|file selects native skill input or the same frozen file. Resume inherits saved mode, loading, workers and coordination; historical single-only Skill checkpoints retain their original semantics.');
     console.log('--harness codex|claude-code|opencode|cli selects the native agent independently of research method and --model. Additional harnesses default to Skill/file loading, require an explicit --model and dedicated --harness-profile DIR, and support host-managed single, independent and cooperative execution. Explicit legacy mode remains available. --harness-executable overrides the native binary; --codex remains a Codex-only alias. Resume retains the backend, model, executable, profile and session plan; changed executable/configuration bytes require a new run. New backends require Linux bubblewrap. Native turn usage stops subsequent dispatches; it does not enforce individual provider-request admission.');
     console.log('--harness cli runs any configured headless command using DEDICATED_PROFILE/cli.json: argv, stdin/file/argument input, text/JSON/JSONL output, optional exact native session resume and usage fields. Use --harness-profile DIR and an explicit --model; --harness-executable optionally overrides the configured executable. CLIs without reasoning control require explicit --effort none. Commands without native resume receive full context on every turn and continue from saved sources/notes. Missing or partial usage blocks further finite-budget dispatches. See docs/generic-cli.md.');
-    console.log('--common-research-skill native|file gives every research worker the same pinned mathematical skill and minimal host contracts for controlled strategy comparisons. Resume retains this identity. --skill-delegation read-only adds a host-mediated native investigation tool to Codex Skill single research. Independent read-only threads share the primary budget and are archived before returning results. --skill-max-agents 2..4 includes the primary researcher. Built-in spawn/fork remains disabled.');
+    console.log('--common-research-skill native|file gives every research worker the same pinned mathematical skill and minimal host contracts for controlled strategy comparisons. Resume retains this identity. --research-mode skill --skill-delegation team --skill-max-agents 3 enables a Codex Lead to organize persistent proof writers through theoremos_team (single host Lead, --workers 1 --coordination independent). --skill-delegation read-only retains bounded native investigations. --skill-max-agents 2..4 includes the Lead. Both modes share the run budget; built-in spawn/fork remains disabled.');
     return 0;
   }
   const specified = (key: string) => args.some(arg => arg === '--' + key || arg.startsWith('--' + key + '='));
@@ -123,12 +130,13 @@ export async function runSolver(args: string[], root: string, customModules?: So
   if (commonLoading && (!['native', 'file'].includes(commonLoading) || skillMode && commonLoading !== skillLoading))
     throw new Error('invalid --common-research-skill');
   const delegationMode = values['skill-delegation'] ?? savedConfiguration?.researchDelegation?.mode;
-  if (delegationMode && (!skillMode || delegationMode !== 'read-only') || values['skill-max-agents'] && !delegationMode)
+  if (delegationMode && (!skillMode || !['read-only', 'team'].includes(delegationMode)) || values['skill-max-agents'] && !delegationMode)
     throw new Error('invalid --skill-delegation');
   const maxAgents = Number(values['skill-max-agents'] ?? savedConfiguration?.researchDelegation?.maxAgents ?? 4);
   if (delegationMode && (!Number.isSafeInteger(maxAgents) || maxAgents < 2 || maxAgents > 4)) throw new Error('invalid --skill-max-agents');
-  if (delegationMode) validateNativeDelegation({ mode: 'read-only', maxAgents });
-  const researchDelegation = delegationMode ? { mode: 'read-only' as const, maxAgents } : undefined;
+  if (delegationMode === 'read-only') validateNativeDelegation({ mode: 'read-only', maxAgents });
+  if (delegationMode === 'team' && harness.id !== 'codex') throw new Error('math_team_requires_codex_dynamic_tools');
+  const researchDelegation = delegationMode ? { mode: delegationMode as 'read-only' | 'team', maxAgents } : undefined;
   if (skillMode) {
     if (!specified('workers')) values.workers = String(savedConfiguration?.workerCount ??
       (specified('coordination') && values.coordination === 'cooperative' ? 4 : 1));
@@ -139,6 +147,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
           values.scheduler !== 'plan' || values['module-plan'] || values['plan-approval']))
       throw new Error('math_skill_research_requires_single_independent_direct');
   }
+  if (delegationMode === 'team' && (values.workers !== '1' || values.coordination !== 'independent' || values['plan-approval'] || values['module-plan']))
+    throw new Error('math_team_requires_single_lead');
   const configured = configuredSolverModules(values.method!, values.scheduler!);
   if (customModules && values.scheduler !== 'plan') throw new Error('custom modules cannot combine with --scheduler');
   if (!['cooperative', 'independent'].includes(values.coordination!)) throw new Error('invalid --coordination');
@@ -285,7 +295,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
       const plannedSession = planMathAgentSession(harness.id, { ...(skill ? { skills: [readMathAgentSkill(
         path.join(root, 'skills/theoremos-research/SKILL.md'), skill.loading)] } : {}),
         ...(workerCount === 1 ? { completedOutput: new SingleSolverProofHandoff(problem, slots[0].worktree, () => {}).output } : {}),
-        ...(researchDelegation ? { delegation: researchDelegation } : {}) }, cli);
+        ...(researchDelegation?.mode === 'read-only' ? { delegation: { ...researchDelegation, mode: 'read-only' as const } } : {}) }, cli);
       const identity = { taskDigest: mathDigest(task), buildDigest: mathDigest(fs.readFileSync(buildFile)),
         providerProfile: providerProfile?.profile, providerProfileDigest: providerProfile?.digest,
         environmentDigest: preparedEnvironment.environmentDigest,
@@ -334,6 +344,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
       let sourceFeedback: string | undefined;
       if (values.resume) {
         state = resumedState!;
+        assertAgentTeamProcessesStopped(state);
         if (canonicalMathJson(state.agentHarness ?? null) !== canonicalMathJson(agentHarness ?? null))
           throw new Error('math_resume_harness_identity_changed');
         if ((state.researchMode ?? 'legacy') !== researchMode ||
@@ -406,7 +417,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
         (state.researchSkill ?? state.commonResearchSkill)!, problem);
       ownsRun = true;
       ownedState = state;
-      state.tokenBudget = buildTokenBudget(maxTotalTokens, state.workers ?? [state], state.tokenBudget?.enforcement);
+      state.tokenBudget = buildTokenBudget(maxTotalTokens,
+        [...(state.workers ?? [state]), ...(state.agentTeam?.workers ?? [])], state.tokenBudget?.enforcement);
       const save = () => { lease.assertOwned(); writeSolverRunState(stateFile, state); };
       for (const worker of workers.slice(1)) {
         signal.throwIfAborted();
@@ -459,11 +471,12 @@ export async function runSolver(args: string[], root: string, customModules?: So
           onProgress: phase => emit('proof_environment', { phase }) });
         env = { ...env, [MATH_PROOF_ENVIRONMENT_ENV]: proofEnvironment.environmentValue };
       }
-      const checkDependencies = async (workerId: string, projectRoot: string) => {
+      const checkDependencies = async (workerId: string, projectRoot: string,
+        timeoutMs = preparationMs - (Date.now() - preparationStarted)) => {
         if (sourcePackages) prepareLeanDiagnosticOverrides(projectRoot);
         const diagnostics = await runLeanDiagnostics({ projectRoot, files: [...new Set(problem.targets.map(target => target.proofPath))],
           dependenciesOnly: true, excludedFiles: problem.ownedFiles, env, signal,
-          timeoutMs: preparationMs - (Date.now() - preparationStarted),
+          timeoutMs,
           onProgress: file => emit('dependency_check', { workerId, file }) });
         writeMathJsonDurable(path.join(directory, workerId === 'solver' ? 'preparation-diagnostics.json' : `preparation-${workerId}.json`), diagnostics);
         if (diagnostics.exitCode !== 0 || diagnostics.timedOut) {
@@ -566,11 +579,13 @@ export async function runSolver(args: string[], root: string, customModules?: So
             knowledgeSnapshot } : {}) });
       };
       prepareAccess('solver', state.worktree, project, corpusFile);
-      const peerPreparation = await Promise.allSettled(workers.slice(1).map(async worker => {
+      const prepareTeamWorker = async (workerId: string, workerWorktree: string): Promise<WorkerAccess> => {
         signal.throwIfAborted();
-        const workerProject = prepareProject(worker.worktree);
+        const accessId = state.researchDelegation?.mode === 'team' ? 'team-' + workerId : workerId;
+        const workerProject = prepareProject(workerWorktree);
         const lake = path.join(workerProject, '.lake');
-        await checkDependencies(worker.id, workerProject);
+        await checkDependencies(accessId, workerProject, preparing ? preparationMs - (Date.now() - preparationStarted) :
+          Math.min(preparationMs, executionClock!.remainingMs()));
         let workerCorpusFile: string | undefined;
         if (corpusFile) {
           workerCorpusFile = path.join(lake, 'retrieval-corpus.json');
@@ -580,8 +595,10 @@ export async function runSolver(args: string[], root: string, customModules?: So
               throw new Error('math_corpus_identity_changed');
           } else fs.writeFileSync(workerCorpusFile, corpusBytes!, { mode: 0o400, flag: 'wx' });
         }
-        prepareAccess(worker.id, worker.worktree, workerProject, workerCorpusFile);
-      }));
+        prepareAccess(accessId, workerWorktree, workerProject, workerCorpusFile);
+        return workerAccess.get(accessId)!;
+      };
+      const peerPreparation = await Promise.allSettled(workers.slice(1).map(worker => prepareTeamWorker(worker.id, worker.worktree)));
       const failedPreparation = peerPreparation.find(result => result.status === 'rejected');
       if (failedPreparation?.status === 'rejected') throw failedPreparation.reason;
       let freshContinuationChecks: readonly TaskProof[] | undefined;
@@ -631,7 +648,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
         executable: agentHarness?.executable ?? executable,
         profile,
         signal, deadline, executionBudget, maxTurns, maxTurnMs, maxTotalTokens, proofTimeoutMs,
-        freshContinuationChecks, save, emit }));
+        freshContinuationChecks, prepareTeamWorker, save, emit }));
       clearTimeout(timer);
       timer = undefined;
       executionClock.stop();

@@ -5,6 +5,9 @@ import type { MathAgentFailureDiagnostic } from './failureDiagnostic';
 export type { MathAgentFailureDiagnostic } from './failureDiagnostic';
 import type { ModelRequestGate } from './modelRequest';
 import type { NativeDelegationOptions, NativeResearchAgent } from './nativeDelegation';
+import type { MathAgentTools } from './agentTeamTools';
+export type { MathAgentTools, MathAgentToolDefinition, MathAgentToolContext } from './agentTeamTools';
+import type { HarnessProcessIdentity } from './harnessProcess';
 
 type Json = Record<string, unknown>;
 
@@ -26,6 +29,9 @@ export type MathAgentOptions = {
   skills?: readonly MathAgentSkill[];
   delegation?: NativeDelegationOptions;
   onNativeAgent?: (agent: NativeResearchAgent) => void;
+  tools?: MathAgentTools;
+  /** Tie the complete native writer tree to this host with a dedicated PID namespace. */
+  isolateProcess?: boolean;
   environment?: NodeJS.ProcessEnv;
   proofProjectRoot?: string;
   threadId?: string;
@@ -57,6 +63,7 @@ export type MathAgentSession = {
   /** Turn totals must be emitted once for that turn, rather than passed off as thread totals. */
   readonly usageSource?: 'upstream-requests' | 'native-thread-totals' | 'native-turn-totals';
   readonly isolationReceipt?: Record<string, unknown>;
+  readonly processIdentity?: HarnessProcessIdentity;
   /** Selected execution contracts, not a claim of mathematical acceptance or complete usage. */
   readonly executionPlan?: MathAgentSessionPlan;
   run: (message: string, messageId: string, workspace: string, onStarted: (turnId: string) => void) => Promise<string>;
