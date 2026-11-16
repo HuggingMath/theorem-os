@@ -2,8 +2,8 @@
 export const app: Record<string, string> = {
   '经典协作': 'Classic coordination',
   '项目技能': 'Project skill',
-  '单研究者 · 项目技能': 'Single researcher · Project skill',
-  '由一名研究者持续研究，独立引理与完整原题分别验收。自定义模块方案不参与此方式。': 'One researcher continues the research. Independent declarations and the complete original problem are checked separately. Custom module plans do not apply.',
+  '使用固定项目技能研究；可选择独立或协作安排，独立引理与完整原题分别验收。': 'Research with the frozen project skill. Choose independent or cooperative work; independent lemmas and the complete original problem are checked separately.',
+  '不设置': 'Not set',
   '技能加载': 'Skill loading',
   '技能版本': 'Skill digest',
   '原生加载': 'Native loading',

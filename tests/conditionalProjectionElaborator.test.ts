@@ -7,6 +7,7 @@ import { temporaryDirectory } from './helpers/files';
 import { newestLeanBinary } from './helpers/lean';
 
 const roots: string[] = [], lean = newestLeanBinary();
+const mathlibProject = process.env.THEOREMOS_TEST_MATHLIB_PROJECT?.trim();
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 function compile(declaration: string, dependencies: readonly ConditionalDependency[], options: {
   name?: string; before?: string; after?: string; expectedType?: string; mathlib?: boolean;
@@ -22,7 +23,6 @@ function compile(declaration: string, dependencies: readonly ConditionalDependen
     (options.before ?? '') + projection.source + (options.after ?? '') + mirror + '\n#print axioms ' + name + '\nrun_cmd do\n' +
     dependencies.map(dependency => '  if (← Lean.getEnv).contains ' + JSON.stringify(dependency.theoremName) +
       '.toName then throwError "Conditional dependency leaked"').join('\n') + '\n');
-  const mathlibProject = process.env.THEOREMOS_TEST_MATHLIB_PROJECT?.trim();
   const packages = mathlibProject && path.join(mathlibProject, '.lake', 'packages');
   const libraries = options.mathlib && packages ? fs.readdirSync(packages).map(name =>
     path.join(packages, name, '.lake', 'build', 'lib', 'lean')).filter(directory => fs.existsSync(directory)) : undefined;
@@ -47,13 +47,13 @@ describe.skipIf(!lean)('host conditional projection elaborators', { timeout: 60_
     { expectedType: '∀ {n : Nat} [Nonempty (Fin n)] (x : Fin n), x = x' }));
   });
 
-  it.each(['theorem', 'lemma'])('normalizes Mathlib %s without leaking its conditional proof assumptions', kind => {
+  it.skipIf(!mathlibProject).each(['theorem', 'lemma'])('normalizes Mathlib %s without leaking its conditional proof assumptions', kind => {
     accepted(compile(kind + ' target (n : Nat) : n = n := by exact D.refl n',
       [{ theoremName: 'D.refl', type: '∀ n : Nat, n = n' }],
       { mathlib: true, expectedType: '∀ n : Nat, n = n' }));
   });
 
-  it('normalizes a qualified Mathlib lemma while retaining section variables and different universe uses', () => {
+  it.skipIf(!mathlibProject)('normalizes a qualified Mathlib lemma while retaining section variables and different universe uses', () => {
     accepted(compile('lemma target (x : α) (y : β) : x = x ∧ y = y := by exact ⟨D.refl x, D.refl y⟩',
       [{ theoremName: 'Demo.D.refl', type: '∀ {γ : Type _} (a : γ), a = a' }],
       { mathlib: true, name: 'Demo.target',
@@ -61,7 +61,7 @@ describe.skipIf(!lean)('host conditional projection elaborators', { timeout: 60_
         expectedType: '∀ {α β : Type _} (x : α) (y : β), x = x ∧ y = y' }));
   });
 
-  it('still rejects a wrong host contract after normalizing a Mathlib lemma', () => {
+  it.skipIf(!mathlibProject)('still rejects a wrong host contract after normalizing a Mathlib lemma', () => {
     const result = compile('lemma target (n : Nat) : n = n := by exact D.refl n',
       [{ theoremName: 'D.refl', type: '∀ n : Nat, n = n' }], { mathlib: true, expectedType: 'False' });
     expect(result.status, result.output).toBe(1);

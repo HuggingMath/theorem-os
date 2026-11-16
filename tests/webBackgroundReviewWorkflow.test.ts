@@ -137,6 +137,11 @@ async function downloadedStatement(page: Page, selector: string) {
   expect(download.suggestedFilename()).toMatch(/\.lean$/u);
   expect(await fs.readFile((await download.path())!, 'utf8')).toBe(statement);
 }
+async function openOriginalArtifact(page: Page) {
+  const details = page.locator('#research-chat-thread [data-chat-result-more]');
+  if (await details.getAttribute('open') === null) await details.locator(':scope > summary').click();
+  await details.locator('[data-research-artifact="original"]').click();
+}
 async function close(context: BrowserContext, errors: string[]) { await context.close(); expect(errors).toEqual([]); }
 
 describe('background review browser workflow', () => {
@@ -258,7 +263,7 @@ describe('background review browser workflow', () => {
     try {
       await page.goto(`${origin}/chat-fixture.html?chat=chat-fixture`);
       await page.locator('#research-chat-thread [data-background-review="running"]').waitFor();
-      await page.locator('#research-chat-thread [data-research-artifact="original"]').click();
+      await openOriginalArtifact(page);
       await page.locator('#chat-original-panel [data-background-review="running"]').waitFor();
       const code = await page.locator('#chat-original-panel .chat-original-columns pre code').innerText();
       await downloadedStatement(page, '#chat-original-panel [data-download-statement]');
@@ -266,7 +271,7 @@ describe('background review browser workflow', () => {
       expect(await page.locator('#formalize-start').isEnabled()).toBe(true);
       await page.evaluate(() => (window as unknown as { fixtureSession: { open(id: string): Promise<void> } }).fixtureSession.open('chat-fixture'));
       await page.locator('#research-chat-thread [data-background-review="running"]').waitFor();
-      await page.locator('#research-chat-thread [data-research-artifact="original"]').click();
+      await openOriginalArtifact(page);
       item.backgroundReview = background('changes_requested'); item.report!.backgroundReview = item.backgroundReview;
       await page.locator('#research-chat-thread [data-background-review="changes_requested"]').waitFor();
       await page.locator('#chat-original-panel [data-background-review="changes_requested"]').waitFor();
