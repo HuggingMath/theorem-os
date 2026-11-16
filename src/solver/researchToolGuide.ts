@@ -19,6 +19,10 @@ export function buildResearchToolGuide(problem: Pick<SolverProblem, 'receiptDige
     `${command} declarations search --index ${quote(path.join(access.worktree, DECLARATION_INDEX_FILE))} --query 'KEYWORDS'\n` +
     `${command} declarations get --index ${quote(path.join(access.worktree, DECLARATION_INDEX_FILE))} --name 'QUALIFIED_NAME'\n` +
     'Read the saved source for complete scopes, imports and types; the index is a bounded lexical aid.', '');
+  help.section('cooperation', `${command} research-observe --worktree ${quote(access.worktree)} --finding '.scratch/finding.json' ` +
+    '[--probe LEAN_FILE] [--snapshot-sources]\n' +
+    'For cooperative task assignments only. The finding file contains the finding object, not the outer delivery event. ' +
+    'This validates and appends to the current assignment log; it never supplies proof acceptance. Read the result for correction feedback.', '');
   if (access.corpusFile) help.section('lean-search', `${command} search-lean --workspace ${quote(access.retrievalRoot)} ` +
     `--corpus ${quote(access.corpusFile)} --query 'SHORT_LIBRARY_KEYWORDS' --goal 'EXACT_LEAN_GOAL_AND_CONTEXT'\n` +
     'Up to eight --query arguments share one scan. Hits are lexical hints; inspect source and test applicability.', '');

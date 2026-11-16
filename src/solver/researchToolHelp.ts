@@ -12,10 +12,7 @@ export class ResearchToolHelpBuilder {
 
   instruction(worktree: string): string {
     const file = "'" + path.join(worktree, RESEARCH_TOOL_HELP_FILE).replaceAll("'", "'\\''") + "'";
-    return 'Local tool help is in ' + file + '. Leave it unchanged. ' +
-      'Find the named section with rg -n \'^## \' ' + file +
-      ', then read that section before first use. It contains the complete command formats and examples; ' +
-      'the mandatory frozen-source, role, evidence and delivery rules here still apply.\n';
+    return 'Run-specific commands and delivery formats: ' + file + '. Read relevant sections as needed; leave it unchanged.\n';
   }
 
   section(id: string, detail: string, summary: string): string {
