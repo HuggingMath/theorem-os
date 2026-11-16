@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseFlags, required } from './arguments';
+import { withWorkflowHarness, workflowHarnessFlags } from './workflowHarness';
 import { INFORMALIZATION_ALIGNMENT, INFORMALIZATION_EXPLANATION_POLICY, INFORMALIZATION_OUTLINE_POLICY, informalizationDigest, prepareInformalization, readInformalizationArtifact,
   readInformalizationRequest, type InformalizationRequest } from '../../src/math/informalization';
 import { leanSourceSlice } from '../../src/math/informalizationExtraction';
@@ -19,7 +20,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
 const configurationFlags = ['proof-file', 'project-root', 'target', 'proof-id', 'environment', 'statement-file', 'formalization',
   'alignment', 'explanation-policy', 'outline-policy', 'language',
-  'model', 'effort', 'profile', 'codex', 'auditors', 'max-rounds-per-batch', 'max-units-per-batch', 'max-batch-source-bytes',
+  'model', 'effort', 'profile', 'codex', ...workflowHarnessFlags, 'auditors', 'max-rounds-per-batch', 'max-units-per-batch', 'max-batch-source-bytes',
   'max-run-seconds', 'max-turn-seconds', 'max-compile-seconds', 'max-total-tokens', 'build-manifest'] as const;
 
 function externalDirectory(value: string): string {
@@ -88,12 +89,12 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
   const outlinePolicy = flags.get('outline-policy') ?? INFORMALIZATION_OUTLINE_POLICY;
   if (outlinePolicy !== INFORMALIZATION_OUTLINE_POLICY && outlinePolicy !== 'none')
     throw new Error('--outline-policy must be ' + INFORMALIZATION_OUTLINE_POLICY + ' or none');
-  const writer = {
+  const writer = withWorkflowHarness(flags, {
     model: flags.has('model') ? required(flags, 'model') : 'deepseek-flash',
     effort: flags.has('effort') ? required(flags, 'effort') : 'max',
     profile: path.resolve(flags.has('profile') ? required(flags, 'profile') :
       process.env.CODEX_HOME || path.join(os.homedir(), '.config/deepscientist/math-sol-codex')),
-    executable: flags.has('codex') ? required(flags, 'codex') : process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex' };
+    executable: flags.has('codex') ? required(flags, 'codex') : process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex' }, { environment });
   const auditorCount = integerFlag(flags, 'auditors', 2);
   if (auditorCount < 1 || auditorCount > 5) throw new Error('--auditors must be between 1 and 5');
   const request = prepareInformalization(directory, {
@@ -182,7 +183,7 @@ export async function informalize(argv: string[]): Promise<number> {
       + '  [--formalization DIR] (an approved formalization run or its artifact; its original problem becomes the statement and\n'
       + '    the proof must keep its declarations; excludes --statement-file)\n'
       + `  [--alignment ${INFORMALIZATION_ALIGNMENT}|none] (default ${INFORMALIZATION_ALIGNMENT}: phrases paired with Lean, steps checked against goals)\n`
-      + '  [--language zh|en] [--model deepseek-flash] [--effort max] [--profile DIR] [--codex FILE] [--auditors 2]\n'
+      + '  [--language zh|en] [--model deepseek-flash] [--effort max] [--profile DIR] [--codex FILE] [--harness codex|claude-code|opencode|cli --harness-profile DIR --harness-executable FILE] [--auditors 2]\n'
       + '  [--explanation-policy mathematical-steps-v1|none] (default mathematical-steps-v1: reasons, conditions and connected mathematical steps)\n'
       + '  [--outline-policy proof-outline-v1|none] (default proof-outline-v1: a one-sentence summary per declaration and a short route to the target, both audited)\n'
       + '  [--max-rounds-per-batch 6] [--max-units-per-batch 12] [--max-batch-source-bytes 60000]\n'

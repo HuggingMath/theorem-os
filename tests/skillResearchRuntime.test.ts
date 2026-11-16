@@ -58,7 +58,7 @@ describe('skill research runtime', () => {
   });
 
   function fixture(plans: Plan[], stop: 'confirmed' | 'missing' | 'unconfirmed' | 'throw' = 'confirmed', tools?: string,
-    common = false) {
+    common = false, fullWorkflow = false) {
     const base = localExample('skill-research-runtime-');
     const { directory, workspace, problem } = base;
     const projected = path.join(workspace, '.agents/skills/theoremos-research');
@@ -67,6 +67,7 @@ describe('skill research runtime', () => {
     const skill = readMathAgentSkill(path.join(projected, 'SKILL.md'));
     const state = solverState(problem, workspace, { runId: 'skill-runtime', phase: 'prepared', researchMode: 'skill',
       researchSkill: { name: skill.name, digest: skill.digest, loading: skill.loading },
+      ...(fullWorkflow ? { researchSkillWorkflow: 'full' } : {}),
       ...(common ? { commonResearchSkill: { name: skill.name, digest: skill.digest, loading: skill.loading } } : {}) });
     const workers = [leadWorker(problem, workspace)], controller = new AbortController();
     const opened: MathAgentOptions[] = [], messages: string[] = [], events: { event: string; details?: Record<string, unknown> }[] = [];
@@ -75,12 +76,18 @@ describe('skill research runtime', () => {
       return stop === 'unconfirmed' ? { status: 'unconfirmed' as const, reason: 'turn-not-settled' as const }
         : { status: 'stopped' as const };
     });
-    const close = vi.fn(async () => {}), select = vi.fn(() => { throw new Error('skill-must-not-use-M3'); });
+    const close = vi.fn(async () => {}), select = vi.fn((...args: Parameters<typeof directSolverModules.M3.select>) => {
+      if (fullWorkflow) return directSolverModules.M3.select(...args);
+      throw new Error('skill-must-not-use-M3');
+    });
     const build = vi.fn((...args: Parameters<typeof directSolverModules.M4.build>) => {
-      if (common) return directSolverModules.M4.build(...args);
+      if (common || fullWorkflow) return directSolverModules.M4.build(...args);
       throw new Error('skill-must-not-use-M4');
     });
-    const applyLibrary = vi.fn(async () => { throw new Error('skill-must-not-auto-apply-library'); });
+    const applyLibrary = vi.fn(async () => {
+      if (fullWorkflow) return { status: 'skipped' as const, reason: 'no-fixture-candidate', candidates: [] };
+      throw new Error('skill-must-not-auto-apply-library');
+    });
     const open = vi.fn(async (options: MathAgentOptions): Promise<MathAgentSession> => {
       const index = opened.push(options) - 1;
       return { threadId: options.threadId ?? 'persistent-native-research-thread', close,
@@ -138,6 +145,38 @@ describe('skill research runtime', () => {
   const checkpointHelper = () => host.declarations.mockImplementationOnce(async input => {
     throw new VerificationCheckpointError({ key: 'helper-checkpoint', targetCommit: input.commit,
       timeoutMs: 1000, attempts: 1, at: Date.now(), receiptIds: ['pending-helper'] });
+  });
+
+  it('retains library automation, configurable host modules and compact continuation in the full Skill workflow', async () => {
+    const current = fixture([f => { fs.writeFileSync(f.notes, 'First distinct attempt saved.'); },
+      f => { fs.appendFileSync(f.notes, '\nA new experiment follows.'); }], 'confirmed', undefined, false, true);
+    expect(await current.completion).toBeUndefined();
+    expect(current.select).toHaveBeenCalledTimes(2);
+    expect(current.build).toHaveBeenCalledTimes(2);
+    expect(current.applyLibrary).toHaveBeenCalledTimes(current.problem.targets.length);
+    expect(current.events.filter(item => item.event === 'context_dispatched').map(item => item.details?.mode))
+      .toEqual(['full', 'continuation']);
+    expect(current.messages[1]).not.toContain('Prove both original addition targets.');
+    expect(current.stops).toHaveBeenCalledTimes(2);
+    expect(current.state.cooperation).toBeUndefined();
+  });
+
+  it('finishes a full Skill whole-proof checkpoint before model admission without rerunning host automation', async () => {
+    host.verify.mockImplementationOnce(async request => {
+      const batch = verified(request);
+      return { ...batch, status: 'blocked', results: batch.results.map(receipt => ({
+        ...receipt, status: 'blocked', error: 'Lean verification timed out.',
+      })) };
+    });
+    const current = fixture([f => { fs.writeFileSync(f.source, LOCAL_EXAMPLE_PROOF); }], 'confirmed', undefined, false, true);
+    await expect(current.completion).rejects.toThrow('math_verification_checkpoint');
+    expect(current.state.pendingProofCheck).toBeDefined();
+    const before = current.applyLibrary.mock.calls.length;
+    const result = await resumeDeclarations(current, { maxTurns: 1, maxTotalTokens: 0 });
+    expect(result?.check.passed).toBe(true);
+    expect(current.state.pendingProofCheck).toBeUndefined();
+    expect(current.open).toHaveBeenCalledTimes(1);
+    expect(current.applyLibrary).toHaveBeenCalledTimes(before);
   });
 
   it.each([false, true])('saves natural turns and continues the same thread without cooperation (shared guidance: %s)', async common => {
@@ -206,6 +245,33 @@ describe('skill research runtime', () => {
     for (const message of current.messages) expect(message).toContain('Prove both original addition targets.');
     expect(current.events.filter(item => item.event === 'context_dispatched').map(item => item.details?.mode))
       .toEqual(['full', 'full']);
+  });
+
+  it('retains child observations on disk and records uncertain recovery without replaying investigations', async () => {
+    const plans: Plan[] = [f => { fs.writeFileSync(f.notes, 'Initial research saved.\n'); }];
+    const current = fixture(plans);
+    await current.completion;
+    current.state.researchDelegation = { mode: 'read-only', maxAgents: 2 };
+    current.state.nativeAgents = [{ threadId: 'previous-child', parentThreadId: 'previous-parent',
+      startedAt: 1, updatedAt: 1, status: 'running', dispatch: 'host-mediated-native-threads' }];
+    plans.push((f, options) => {
+      expect(f.state.nativeAgents![0].status).toBe('unknown');
+      expect(options.delegation).toEqual(f.state.researchDelegation);
+      options.onNativeAgent!({ threadId: 'current-child', parentThreadId: 'persistent-native-research-thread',
+        startedAt: 2, updatedAt: 3, stoppedAt: 4, status: 'completed', permissionProfile: 'math-investigator',
+        dispatch: 'host-mediated-native-threads', parentTurnId: 'parent-turn', callId: 'call', turnId: 'child-turn',
+        question: 'Bounded question', message: 'Advisory source reference.' });
+      fs.appendFileSync(f.notes, 'Only the primary researcher updates notes.\n');
+    });
+    await resumeDeclarations(current, { maxTurns: 2, maxTotalTokens: 0 });
+    const stateFile = path.join(current.directory, 'delegation-state.json');
+    writeSolverRunState(stateFile, current.state);
+    expect(readSolverRunState(stateFile).nativeAgents).toEqual(current.state.nativeAgents);
+    expect(current.events.filter(item => item.event === 'investigator_recovery_recorded')).toEqual([
+      { event: 'investigator_recovery_recorded', details: { threadId: 'previous-child', replayed: false } },
+    ]);
+    expect(current.state.nativeAgents).toHaveLength(2);
+    expect(host.verify).not.toHaveBeenCalled();
   });
 
   it('uses the host-projected tool bundle when the application source is hidden', async () => {
@@ -663,6 +729,37 @@ describe('skill research runtime', () => {
       deadline: Infinity, maxTurns: 1, maxTurnMs: Infinity, maxTotalTokens: 0, save: () => {}, emit: () => {} }))
       .rejects.toThrow('math_writer_stop_unconfirmed');
     expect(current.open).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['turn', 'resume'] as const)('cleans up successful whole-proof acceptance from %s despite its abort and a spare model turn', async entry => {
+    if (entry === 'resume') host.verify.mockRejectedValueOnce(
+      Object.assign(new Error('fixture pending whole-proof receipt EIO'), { code: 'EIO' }));
+    const current = fixture([
+      f => { fs.writeFileSync(f.source, LOCAL_EXAMPLE_PROOF); },
+      () => { throw new Error('must-not-dispatch-after-whole-proof-acceptance'); },
+    ]);
+    let result: Awaited<Fixture['completion']>;
+    if (entry === 'resume') {
+      await expect(current.completion).rejects.toThrow('fixture pending whole-proof receipt EIO');
+      expect(current.state.pendingProofCheck).toBeDefined();
+      result = await resumeDeclarations(current, { maxTurns: 2, maxTotalTokens: 0 });
+    } else result = await current.completion;
+    expect(result?.check.passed).toBe(true);
+    expect(current.state.check).toEqual(result?.check);
+    expect(current.state.turns).toBe(1);
+    expect(current.open).toHaveBeenCalledTimes(1); expect(current.messages).toHaveLength(1);
+    expect(current.stops).toHaveBeenCalledTimes(1);
+    expect(host.verify).toHaveBeenCalledTimes(entry === 'resume' ? 2 : 1);
+    expect(host.verify.mock.calls.at(-1)?.[1]?.signal.aborted).toBe(true);
+    expect(current.controller.signal.aborted).toBe(false);
+    expect(current.events.filter(item => item.event === 'candidate_selected')).toHaveLength(1);
+    expect(current.state.phase).toBe('running');
+    expect(current.state.pendingResearchFreeze).toBeUndefined();
+    expect(current.state.pendingProofCheck).toBeUndefined();
+    expect(current.state.pendingDeclarationCheck).toBeUndefined();
+    expect(current.savedStates.at(-1)).toMatchObject({ phase: 'running', check: { passed: true } });
+    for (const pending of ['pendingResearchFreeze', 'pendingProofCheck', 'pendingDeclarationCheck'])
+      expect(current.savedStates.at(-1)).not.toHaveProperty(pending);
   });
 
   it('requires an independent host check of all original targets and repairs its rejected candidate', async () => {

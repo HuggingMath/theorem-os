@@ -4,7 +4,7 @@ import { configuredResearchModuleIdentity, directSolverModuleIdentity, solverIde
 import { defaultResearchModulePlan, researchModulePlanSchema, type ResearchModulePlan } from '../../src/solver/modules/policy';
 import { WebStorage, WebStorageError } from './storage';
 import { mathDigest } from '../../src/math/mathRuntimeIo';
-import type { WebFrozenModuleConfiguration } from './shared';
+import type { WebFrozenModuleConfiguration, WebHarness } from './shared';
 import { webByokModuleIdentity } from './webModuleIdentity';
 export type { WebFrozenModuleConfiguration } from './shared';
 
@@ -46,9 +46,10 @@ export function registeredWebModules() {
 }
 
 export function freezeModuleConfiguration(plan?: ResearchModulePlan, coordination: 'cooperative' | 'independent' = 'cooperative',
-  workers = 4): WebFrozenModuleConfiguration {
+  workers = 4, harness: WebHarness = 'codex'): WebFrozenModuleConfiguration {
   const selected = plan === undefined ? defaultResearchModulePlan() : researchModulePlanSchema.parse(plan) as ResearchModulePlan;
   const configuration = webByokModuleIdentity(configuredResearchModuleIdentity(plan, coordination, workers).identity);
+  if (harness !== 'codex') configuration.versions.M1 += ':' + harness + ':v1';
   const ids = new Set(['M1:direct', 'M2:lean-kernel', `M3:${selected.scheduler}`, `M4:${selected.context}`, 'M5:cooperation', 'S3:independent-final']);
   return { registryVersion: webModuleRegistryVersion, ...configuration, methodDigest: solverIdentityMethodDigest(configuration, coordination),
     coordination, workers, selection: { scheduler: selected.scheduler, context: selected.context,

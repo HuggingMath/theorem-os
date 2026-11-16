@@ -1,3 +1,4 @@
+import { webSkillWithoutCooperation } from '../researchMode';
 import type { WebRun } from '../shared';
 import type { WebObservation, WebTaskSource, WebCheckReceipt, WebArchive } from '../collaboration';
 import { endedSummary, formatTokens, isAcceptedRun, isRejectedRun } from '../presentation';
@@ -103,7 +104,7 @@ export class CollaborationView {
   update(container?: HTMLElement, run?: WebRun, connected = false, readOnly = false,
     permissions: { guidance?: boolean; edit?: boolean; approve?: boolean; archive?: boolean } = {}) {
     this.connected = connected; this.readOnly = readOnly;
-    this.permissions = run?.researchMode === 'skill' ? { ...permissions, guidance: false, edit: false, approve: false } : permissions;
+    this.permissions = run && webSkillWithoutCooperation(run) ? { ...permissions, guidance: false, edit: false, approve: false } : permissions;
     this.planEditor.updateAccess({ runId: container ? run?.id : undefined, status: run?.status, connected, readOnly, edit: this.permissions.edit });
     if (!container || !run) {
       if (this.current?.viewport?.contains(this.current.element)) { this.current.scrollTop = this.current.viewport.scrollTop; this.current.scrollLeft = this.current.viewport.scrollLeft; this.saveTaskReading(this.current); }
@@ -131,6 +132,7 @@ export class CollaborationView {
     }
     this.run = run; this.current = view; view.active = run.status === 'running';
     view.element.dataset.researchMode = run.researchMode ?? 'legacy';
+    view.element.dataset.withoutCooperation = String(webSkillWithoutCooperation(run));
     view.element.dataset.ended = String(run.status !== 'queued' && run.status !== 'running');
     view.archives = [...new Map([...view.archives, ...(run.archives ?? [])].map(archive => [archive.id, archive])).values()];
     this.renderArchives(view, run.id);
@@ -329,7 +331,7 @@ export class CollaborationView {
   /** Open the plan editor of the shown run, as its 编辑计划 button does; false when that run is not shown or has no plan yet. */
   editPlan(runId: string): boolean {
     const view = this.views.get(runId);
-    if (!view || this.current !== view || !view.observation?.plan || this.run?.researchMode === 'skill') return false;
+    if (!view || this.current !== view || !view.observation?.plan || this.run && webSkillWithoutCooperation(this.run)) return false;
     this.planEditor.open(runId, view.observation, view.selectedTask);
     return true;
   }
@@ -766,7 +768,7 @@ export class CollaborationView {
     })));
   }
   private updateCommands(view: ViewState) {
-    const skill = view.element.dataset.researchMode === 'skill';
+    const skill = view.element.dataset.withoutCooperation === 'true';
     const refresh = view.element.querySelector<HTMLButtonElement>('[data-collab-refresh]')!;
     refresh.disabled = !this.connected || view.loading;
     refresh.textContent = view.loading ? t('刷新中…') : t('刷新观察'); refresh.setAttribute('aria-busy', String(view.loading));

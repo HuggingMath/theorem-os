@@ -40,6 +40,7 @@ process.stdin.on('end', () => {
   }
   if (scenario.startsWith('failure-')) {
     send({ kind: 'failure', reason: scenario.slice('failure-'.length), message: 'private provider secret' });
+    process.exitCode = Number(argument('--failure-exit-code') || '0');
     return;
   }
   const final = { kind: 'final', ...(scenario !== 'missing-id' ? { session: { id: returnedId } } : {}),

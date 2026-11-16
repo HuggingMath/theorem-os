@@ -19,6 +19,19 @@ describe('provider connection check', () => {
       expect((await checkWebProvider(provider, 'synthetic-key', 'gpt-6.1-sol')).status).toBe('unknown');
     }
   });
+  it('uses the selected native provider protocol and leaves an arbitrary CLI to its declared protocol', async () => {
+    const fetcher = vi.fn(async () => Response.json({ data: [{ id: 'fixture-model' }] }));
+    vi.stubGlobal('fetch', fetcher);
+    for (const baseUrl of ['https://models.example.test/v1', 'https://models.example.test/v1/', 'https://models.example.test']) {
+      const result = await checkWebProvider({ ...provider, harness: 'claude-code', baseUrl }, 'synthetic-key', 'fixture-model');
+      expect(result.status).toBe('available'); expect(result.message).toContain('Messages API');
+      expect(fetcher).toHaveBeenLastCalledWith('https://models.example.test/v1/models', expect.objectContaining({
+        redirect: 'error', headers: { 'x-api-key': 'synthetic-key', 'anthropic-version': '2023-06-01', Accept: 'application/json' } }));
+    }
+    fetcher.mockClear();
+    expect((await checkWebProvider({ ...provider, harness: 'cli' }, 'synthetic-key', 'fixture-model')).status).toBe('unknown');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
   it('returns useful status errors without exposing upstream bodies or credentials', async () => {
     for (const [status, expected] of [[401, 400], [403, 400], [429, 429]]) {
       vi.stubGlobal('fetch', vi.fn(async () => new Response('upstream-secret-detail', { status })));

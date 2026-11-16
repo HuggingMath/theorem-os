@@ -1,11 +1,12 @@
 import { z } from 'zod';
+import { agentHarnessIdentitySchema } from './agentHarnessIdentity';
 import { canonicalMathJson, mathDigest } from './mathRuntimeIo';
 import { formalizationTargets } from './formalizationSource';
 
 const text = z.string().min(1).max(32_000).refine(value => value.trim().length > 0);
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,80}$/u);
 export const formalizationModelConfigurationSchema = z.object({
-  model: text, effort: text, profile: text, executable: text,
+  model: text, effort: text, profile: text, executable: text, agentHarness: agentHarnessIdentitySchema.optional(),
 }).strict();
 export type FormalizationModelConfiguration = z.infer<typeof formalizationModelConfigurationSchema>;
 export const formalizationReviewConfigurationSchema = z.object({
@@ -56,9 +57,11 @@ export function formalizationModelConfigurations(author: FormalizationModelConfi
 // This counts configurations, not statistically independent models or model families.
 export function distinctFormalizationModelConfigurations(author: FormalizationModelConfiguration, workflow: FormalizationWorkflow): number {
   return new Set(formalizationModelConfigurations(author, workflow).map(item =>
-    canonicalMathJson({ model: item.model, effort: item.effort, profile: item.profile, executable: item.executable }))).size;
+    canonicalMathJson({ model: item.model, effort: item.effort, profile: item.profile, executable: item.executable,
+      ...(item.agentHarness ? { agentHarness: item.agentHarness } : {}) }))).size;
 }
 
 export function formalizationModelConfigurationDigest(config: FormalizationModelConfiguration): string {
-  return mathDigest(canonicalMathJson({ model: config.model, effort: config.effort, profile: config.profile, executable: config.executable }));
+  return mathDigest(canonicalMathJson({ model: config.model, effort: config.effort, profile: config.profile, executable: config.executable,
+    ...(config.agentHarness ? { agentHarness: config.agentHarness } : {}) }));
 }

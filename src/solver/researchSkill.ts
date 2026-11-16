@@ -27,7 +27,10 @@ export function prepareResearchSkill(root: string, worktree: string,
     const scratch = path.join(worktree, '.scratch', 'tmp');
     assertMathCanonicalPath(scratch);
     fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
-    const staging = fs.mkdtempSync(path.join(scratch, 'theoremos-skill-'));
+    const stagingRoot = fs.mkdtempSync(path.join(scratch, 'theoremos-skill-'));
+    // Bun rejects errorOnExist when the destination is the already-created
+    // mkdtemp directory. Copy into its absent child on both supported runtimes.
+    const staging = path.join(stagingRoot, 'skill');
     try {
       fs.cpSync(path.dirname(source), staging, { recursive: true, errorOnExist: true, force: false });
       const staged = readMathAgentSkill(path.join(staging, 'SKILL.md'), expected.loading);
@@ -42,7 +45,7 @@ export function prepareResearchSkill(root: string, worktree: string,
       freeze(staging);
       fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
       fs.renameSync(staging, target);
-    } finally { fs.rmSync(staging, { recursive: true, force: true }); }
+    } finally { fs.rmSync(stagingRoot, { recursive: true, force: true }); }
   }
   const copied = readMathAgentSkill(file, expected.loading);
   if (copied.name !== expected.name || copied.digest !== expected.digest) throw new Error('math_research_skill_changed');

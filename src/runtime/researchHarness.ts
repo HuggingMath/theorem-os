@@ -8,6 +8,8 @@ import { createClaudeCodeMathSession } from './claudeCodeSession';
 import { createOpenCodeMathSession } from './openCodeSession';
 import { createCliMathSession } from './cliSession';
 import { readCliConfiguration, CLI_CONFIGURATION_FILE } from './cliConfiguration';
+import { sealedRuntimeIdentity } from './sealedHarness';
+export { planMathAgentSession } from './agentSessionPlan';
 
 export type ResearchHarnessIdentity = {
   id: MathAgentHarnessId;
@@ -61,11 +63,12 @@ export function bindResearchHarness(id: ResearchHarnessIdentity['id'], command: 
     assertMathCanonicalPath(file);
     return { name, sha256: fs.existsSync(file) ? mathDigest(fs.readFileSync(file)) : null };
   });
-  const endpoints = cli ? cli.inheritEnvironment.filter(key => !secretKey.test(key)) : id === 'codex' ? [] : id === 'claude-code' ? ['ANTHROPIC_BASE_URL'] :
+  const endpoints = cli ? cli.inheritEnvironment.filter(key => key !== cli.sealedRole?.provider.apiKeyEnvironment && !secretKey.test(key)) : id === 'codex' ? [] : id === 'claude-code' ? ['ANTHROPIC_BASE_URL'] :
     [...new Set(['OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL', ...openCodeEnvironmentReferences(profile, model).filter(key => !secretKey.test(key))])];
   return { id, executable: binary, executableDigest: mathDigest(fs.readFileSync(binary)), profile,
     configurationDigest: mathDigest(canonicalMathJson({ configuration,
-      endpoints: Object.fromEntries(endpoints.map(key => [key, environment[key] ?? null])) })) };
+      endpoints: Object.fromEntries(endpoints.map(key => [key, environment[key] ?? null])),
+      ...(cli?.sealedRole?.runtime ? { sealedRuntime: sealedRuntimeIdentity(binary, environment, cli.sealedRole.runtime) } : {}) })) };
 }
 
 /** Native state is writable, so validate immutable launch inputs on every dispatch and freeze. */
@@ -74,10 +77,32 @@ export function assertResearchHarnessCurrent(identity: ResearchHarnessIdentity, 
   if (canonicalMathJson(identity) !== canonicalMathJson(current)) throw new Error('math_harness_identity_changed');
 }
 
+/** Fresh comparison attempts copy only explicitly frozen configuration, never sessions or credential stores. */
+export function projectResearchHarnessProfile(identity: ResearchHarnessIdentity, target: string,
+  environment: NodeJS.ProcessEnv = process.env, model?: string): ResearchHarnessIdentity {
+  assertResearchHarnessCurrent(identity, environment, model);
+  assertMathCanonicalPath(target);
+  const files = [...new Set(identity.id === 'codex' ? ['config.toml'] : identity.id === 'claude-code' ? ['settings.json'] :
+    identity.id === 'opencode' ? ['opencode.json'] : [CLI_CONFIGURATION_FILE, ...readCliConfiguration(identity.profile).configurationFiles])];
+  fs.mkdirSync(target, { mode: 0o700 });
+  for (const name of files) {
+    const source = path.join(identity.profile, name), destination = path.join(target, name);
+    if (!fs.existsSync(source)) continue;
+    assertMathCanonicalPath(source); assertMathCanonicalPath(destination);
+    fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(destination, fs.readFileSync(source), { mode: 0o400, flag: 'wx' });
+  }
+  assertResearchHarnessCurrent(identity, environment, model);
+  const projected = bindResearchHarness(identity.id, identity.executable, target, environment, model);
+  if (projected.configurationDigest !== identity.configurationDigest) throw new Error('math_harness_identity_changed');
+  return projected;
+}
+
 /** Selected credentials stay out of host Lean environments and persisted environment snapshots. */
 export function researchHarnessEnvironment(id: ResearchHarnessIdentity['id'], source: NodeJS.ProcessEnv = process.env,
   configuration?: { profile: string; model: string }): NodeJS.ProcessEnv {
-  const keys = id === 'cli' ? configuration ? readCliConfiguration(configuration.profile).inheritEnvironment : [] : id === 'codex' ? [] : id === 'claude-code'
+  const cli = id === 'cli' && configuration ? readCliConfiguration(configuration.profile) : undefined;
+  const keys = id === 'cli' ? cli ? [...cli.inheritEnvironment, ...(cli.sealedRole ? [cli.sealedRole.provider.apiKeyEnvironment] : [])] : [] : id === 'codex' ? [] : id === 'claude-code'
     ? ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL']
     : ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENCODE_API_KEY', 'OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL',
       ...(configuration ? openCodeEnvironmentReferences(configuration.profile, configuration.model) : [])];

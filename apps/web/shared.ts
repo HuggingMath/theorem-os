@@ -4,7 +4,7 @@ import type { WebFormalizationBackgroundReview } from './formalizationTypes';
 import type { ResearchLibraryProposalOrigin } from './researchLibraryProposalOrigin';
 import { webTaskEnvironment } from './environment';
 
-export type WebEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type WebEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type WebCoordination = 'cooperative' | 'independent';
 export type WebResearchMode = 'legacy' | 'skill';
 export type WebSkillLoading = 'native' | 'file';
@@ -38,7 +38,12 @@ export type WebFrozenModuleConfiguration = {
     implementations: { slot: string; id: string; version: string }[] };
 };
 
-export type WebProvider = { id: string; name: string; baseUrl: string };
+export type WebHarness = 'codex' | 'claude-code' | 'opencode' | 'cli';
+export type WebProvider = { id: string; name: string; baseUrl: string; harness?: WebHarness; efforts?: WebEffort[] };
+/** Operator-owned launch settings. Public provider responses omit these fields. */
+export type WebWorkerProvider = WebProvider & { execution?: { executable?: string;
+  cli?: Record<string, unknown>; files?: Record<string, string>;
+  apiKeyEnvironment?: string; baseUrlEnvironment?: string } };
 export type WebEnvironmentOption = { id: WebEnvironment; name: string; description: string;
   toolchain: string; mathlibRevision?: string };
 export type WebTemplate = { id: string; name: string; environment: WebEnvironment; source: string; task: string };
@@ -147,6 +152,10 @@ export type WebRun = {
   researchMode?: WebResearchMode;
   skillLoading?: WebSkillLoading;
   researchSkill?: { name: string; digest: string; loading: WebSkillLoading };
+  /** Frozen server-selected execution backend; old runs without a value used Codex. */
+  harness?: WebHarness;
+  harnessConfigurationDigest?: string;
+  agentHarness?: NonNullable<WebObservation['inspection']['configuration']['agentHarness']>;
   planApproval?: boolean;
   modulePlan?: ResearchModulePlan;
   knowledgeDigest?: string;
@@ -230,7 +239,7 @@ export type WebProofOutlineDeclaration = {
 };
 export type WebProofOutline = { references: 'recorded' | 'unrecorded'; declarations: WebProofOutlineDeclaration[]; omitted: number };
 /** Catalog payloads are opaque on the Web transport; worker/service consumers validate the full knowledge schema. */
-export type WorkerInput = { id: string; input: WebRunInput; provider: WebProvider; knowledgeCatalog?: unknown;
+export type WorkerInput = { id: string; input: WebRunInput; provider: WebWorkerProvider; knowledgeCatalog?: unknown;
   researchConfiguration?: import('./researchAssetTypes').FrozenResearchConfiguration;
   /** Validated server-side artifact; never supplied directly by the browser. */
   formalization?: unknown;
@@ -424,7 +433,7 @@ export type WebExplanationOverview = {
     | { available: false; reason: 'sample' | 'not_accepted' | 'provider' | 'model' | 'runtime' };
 };
 export type WorkerExplanationInput = { id: string; proof: string; target: string; language: WebExplanationLanguage;
-  environment: WebEnvironment; model: string; effort: 'low' | 'high' | 'max'; apiKey: string; provider: WebProvider;
+  environment: WebEnvironment; model: string; effort: 'low' | 'high' | 'max'; apiKey: string; provider: WebWorkerProvider;
   maxRunSeconds: number; maxTotalTokens: number; maxRoundsPerBatch: number; auditors: number };
 export type WorkerExplanationMessage =
   | { type: 'progress'; progress: Omit<WebExplanationProgress, 'updatedAt'> }

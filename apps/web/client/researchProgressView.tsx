@@ -73,7 +73,7 @@ export class ResearchProgressView {
     return <ol class="collab-route-steps" aria-label={t('路线 {0} 的记录进度', routeId)}>{steps.map(([state, title, detail]) => <li key={title} data-step-state={state}><strong>{title}</strong><span>{detail}</span></li>)}</ol>;
   }
   private frontier(observation: WebObservation) {
-    if (observation.inspection.configuration.researchMode === 'skill') return <>
+    if (observation.inspection.configuration.researchMode === 'skill' && !observation.inspection.tasks.length) return <>
       {help(tx('研究直接围绕固定原题进行，尚未记录为完整原题验收通过。', 'Research works directly on the frozen original problem; this observation does not establish acceptance.'))}
       <Facts facts={observation.inspection.problem.targets.map(target => [target.theoremName, target.proofPath] as const)} />
     </>;

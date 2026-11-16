@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseFlags, required } from './arguments';
+import { withWorkflowHarness, workflowHarnessFlags } from './workflowHarness';
 import { autoLibraryLiveUsage, autoLibraryPackFor, autoLibraryRunUsage, readAutoLibraryPool } from '../../src/math/autoLibrary';
 import { getLeanTaskEnvironment, type LeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { autoLibraryHostTarget, resolveAutoLibraryBase } from '../../src/math/autoLibraryHost';
@@ -21,7 +22,7 @@ import { readSolverRunState } from '../../src/solver/archive';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
 const prepareFlags = ['challenge-file', 'task-file', 'challenge-id', 'environment', 'pool', 'base-pack', 'build-manifest',
-  'model', 'effort', 'profile', 'codex', 'prover-model', 'prover-effort', 'workers', 'coordination', 'max-modules', 'max-rounds',
+  'model', 'effort', 'profile', 'codex', ...workflowHarnessFlags, ...workflowHarnessFlags.map(name => 'prover-' + name), 'prover-model', 'prover-effort', 'workers', 'coordination', 'max-modules', 'max-rounds',
   'max-run-seconds', 'max-total-tokens', 'planner-turn-seconds', 'prover-max-run-seconds', 'prover-max-turns',
   'prover-max-turn-seconds', 'prover-max-total-tokens', 'prepare-timeout-seconds', 'demand-file', 'definition-targets'] as const;
 
@@ -46,16 +47,20 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
   const buildManifestRef = path.resolve(required(flags, 'build-manifest'));
   readMathBuildManifest(buildManifestRef, root, path.join(root, 'out/main'));
   const codex = flags.get('codex') ?? process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE ?? 'codex';
+  const environment = getLeanTaskEnvironment((flags.get('environment') ?? 'mathlib') as LeanTaskEnvironment).id;
+  const planner = withWorkflowHarness(flags, { model: flags.get('model') ?? 'deepseek-flash', effort: flags.get('effort') ?? 'high',
+    executable: codex, profile: path.resolve(flags.get('profile') ?? (process.env.CODEX_HOME || path.join(os.homedir(), '.config/deepscientist/math-sol-codex'))) }, { environment });
+  const prover = withWorkflowHarness(flags, { model: flags.get('prover-model') ?? flags.get('model') ?? 'deepseek-flash',
+    effort: flags.get('prover-effort') ?? flags.get('effort') ?? 'high', executable: codex, profile: planner.profile }, undefined, 'prover-');
   const coordination = flags.get('coordination') ?? 'independent';
   if (coordination !== 'cooperative' && coordination !== 'independent') throw new Error('--coordination must be cooperative or independent');
   const request = prepareAutoLibraryBuild(directory, root, {
     challengeId: required(flags, 'challenge-id'), challengeSource: readFile(required(flags, 'challenge-file'), LEAN_TASK_SOURCE_MAX_BYTES),
     task: flags.has('task-file') ? readFile(required(flags, 'task-file'), 64 * 1024).trim() : '',
     environment: flags.get('environment') ?? 'mathlib', pool: externalPath(required(flags, 'pool')), buildManifestRef,
-    planner: { model: flags.get('model') ?? 'deepseek-flash', effort: flags.get('effort') ?? 'high', executable: codex,
-      profile: path.resolve(flags.get('profile') ?? (process.env.CODEX_HOME || path.join(os.homedir(), '.config/deepscientist/math-sol-codex'))) },
-    prover: { model: flags.get('prover-model') ?? flags.get('model') ?? 'deepseek-flash', effort: flags.get('prover-effort') ?? flags.get('effort') ?? 'high',
-      executable: codex, workers: integerFlag(flags, 'workers', 1), coordination,
+    planner,
+    prover: { model: prover.model, effort: prover.effort, executable: prover.executable,
+      ...(prover.agentHarness ? { agentHarness: prover.agentHarness } : {}), workers: integerFlag(flags, 'workers', 1), coordination,
       maxRunSeconds: integerFlag(flags, 'prover-max-run-seconds', 3600), maxTurns: integerFlag(flags, 'prover-max-turns', 200),
       maxTurnSeconds: integerFlag(flags, 'prover-max-turn-seconds', 180), maxTotalTokens: integerFlag(flags, 'prover-max-total-tokens', 0),
       prepareTimeoutSeconds: integerFlag(flags, 'prepare-timeout-seconds', 1800) },
@@ -108,7 +113,8 @@ export async function autoLibrary(argv: string[]): Promise<number> {
       + '  [--task-file FILE] [--environment mathlib|standard|mathlib-4.8|openai-math] [--base-pack PACK.json] (the hand library after its exclusions)\n'
       + '  [--demand-file FILE] (a frozen source-bound gap from the demand phase)\n'
       + '  [--definition-targets Qualified.name,Other.name] (original definitions to solve)\n'
-      + '  [--model deepseek-flash --effort high] (planner) [--prover-model M --prover-effort E] [--profile DIR] [--codex FILE]\n'
+      + '  [--prover-harness ID --prover-harness-profile DIR --prover-harness-executable FILE] selects a separate proof backend. Sealed planner roles currently require Codex.\n'
+      + '  [--model deepseek-flash --effort high] (planner) [--prover-model M --prover-effort E] [--profile DIR] [--codex FILE] [--harness ID --harness-profile DIR --harness-executable FILE]\n'
       + '  [--workers 1] [--coordination independent|cooperative] [--max-modules 1] [--max-rounds 3]\n'
       + '  [--max-run-seconds 7200] [--max-total-tokens 0] [--planner-turn-seconds 1800]\n'
       + '  [--prover-max-run-seconds 3600] [--prover-max-turns 200] [--prover-max-turn-seconds 180] [--prover-max-total-tokens 0]\n'

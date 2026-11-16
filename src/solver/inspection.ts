@@ -53,7 +53,7 @@ function dispatchWaitRecord(state: SolverRunState, observation?: DispatchWaitObs
 }
 
 export function buildRunInspection(state: SolverRunState, result?: Record<string, unknown>) {
-  const skillMode = state.researchMode === 'skill';
+  const skillMode = state.researchMode === 'skill' && !state.workers;
   const cooperative = state.cooperation;
   const resultMatches = state.phase === 'finished' && result?.runId === state.runId &&
     (result.solution_commit === null || result.solution_commit === state.check?.commit) &&
@@ -76,11 +76,15 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
     configuration: { model: state.model, effort: state.effort, workers: state.workerCount ?? 1,
       coordination: state.coordination ?? 'cooperative', modules: state.moduleConfiguration,
       researchMode: state.researchMode ?? 'legacy' as const, researchSkill: state.researchSkill,
+      researchSkillWorkflow: state.researchSkillWorkflow, agentSessionPlan: state.agentSessionPlan,
+      ...(state.agentHarness ? { agentHarness: { id: state.agentHarness.id,
+        executableDigest: state.agentHarness.executableDigest, configurationDigest: state.agentHarness.configurationDigest } } : {}),
       commonResearchSkill: state.commonResearchSkill, researchDelegation: state.researchDelegation,
       buildDigest: state.buildDigest, environmentDigest: state.environmentDigest, methodDigest: state.methodDigest,
       knowledgeDigest: state.knowledgeDigest },
     turns: state.turns, usage: state.usage, planVersion: cooperative?.planVersion,
-    ...(state.researchDelegation ? { delegation: { evidence: 'recorded-not-replayed',
+    ...(state.researchDelegation ? { delegation: { evidence: 'recorded-agent-observations',
+      dispatch: 'host-mediated-native-threads', builtinMultiAgent: false,
       agents: state.nativeAgents ?? [], usageSource: 'shared-upstream-request-receipts',
       nativeTotals: 'observational-only' } } : {}),
     scheduling: { evidence: 'recorded-dispatch-state', observedWorkers: scheduled.length,
@@ -271,7 +275,7 @@ function renderContributionFlow(flow: ResearchContributionFlow): string {
 }
 
 export function renderRunInspection(report: Inspection): string {
-  const skillMode = report.configuration.researchMode === 'skill';
+  const skillMode = report.configuration.researchMode === 'skill' && report.configuration.workers === 1;
   let text = '# Mathematics research run\n\nStored evidence only; this report does not rerun Lean or grant proof acceptance.\n';
   text += section('Run', table(['Problem', 'Phase', 'Recorded outcome', 'Model', 'Agents', 'Turns'], [[
     report.problem.id, report.phase, report.recordedOutcome, report.configuration.model, report.configuration.workers, report.turns]]));
@@ -406,8 +410,8 @@ export function renderRunInspection(report: Inspection): string {
       text += `\nAlternative branch ${cell(routeId)} parked by local blockers: ${blockers.map(cell).join(', ')}\n`;
     if (task.finding) text += `\nResearch finding: ${task.finding}\n`;
     if ('commit' in task.proof) {
-      text += `\nRecorded commit: ${task.proof.commit}\n\nReceipt IDs: ${task.proof.receiptIds.join(', ') || 'none'}\n`;
-      if (task.proof.conditions.length) text += `\nOpen conditions: ${task.proof.conditions.map(item => item.taskId).join(', ')}\n`;
+      text += `\nRecorded commit: ${task.proof.commit}\n\nReceipt IDs: ${task.proof.receiptIds?.join(', ') || 'none'}\n`;
+      if (task.proof.conditions?.length) text += `\nOpen conditions: ${task.proof.conditions.map(item => item.taskId).join(', ')}\n`;
       const references = task.proof.actualReferences;
       text += '\nActual Lean references: ' + (references ? JSON.stringify(references) : 'not recorded') + '\n';
     }

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createCliMathSession } from '../src/runtime/cliSession';
+import { recoverableResearchFailure, researchFailureReason } from '../src/solver/modules/search';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/agentSession';
 import { readMathAgentSkill } from '../src/runtime/agentSkills';
 import { temporaryDirectory } from './helpers/files';
@@ -200,16 +201,27 @@ describe('configured headless CLI sessions with isolated local children', () => 
   });
 
   it.each(['authentication', 'context', 'rate-limit', 'request', 'invalid-request'] as const)
-    ('maps only configured %s failures to safe recovery metadata', async reason => {
-      scenario('failure-' + reason);
-      configuration.output = { ...structured(), failures: [{ when: { field: '/reason', value: reason }, reason }] };
-      const session = await open();
-      expect(await session.run('Safe error fixture.', 'failure-turn', workspace, vi.fn())).toBe('failed');
-      const codes = { authentication: 'unauthorized', context: 'contextWindowExceeded', 'rate-limit': 'rateLimitExceeded',
-        request: 'httpConnectionFailed', 'invalid-request': 'badRequest' };
-      expect(session.lastFailureDiagnostic?.code).toBe(codes[reason]);
-      expect(JSON.stringify([session.lastError, session.lastFailureDiagnostic, session.lastCompletedResponse,
-        vi.mocked(options.onActivity!).mock.calls])).not.toMatch(/private|secret/u);
+    ('maps configured %s failures consistently for successful and failed process exits', async reason => {
+      const args = configuration.args as string[];
+      for (const exitCode of [0, 19]) {
+        configuration.args = [...args, '--scenario', 'failure-' + reason, '--failure-exit-code', String(exitCode)];
+        configuration.output = { ...structured(), failures: [{ when: { field: '/reason', value: reason }, reason }] };
+        const session = await open();
+        expect(await session.run('Safe error fixture.', 'failure-turn', workspace, vi.fn())).toBe('failed');
+        const codes = { authentication: 'unauthorized', context: 'contextWindowExceeded', 'rate-limit': 'rateLimitExceeded',
+          request: 'httpConnectionFailed', 'invalid-request': 'badRequest' };
+        const errors = { authentication: 'math_model_authentication_failed', context: 'math_model_context_window_exceeded',
+          'rate-limit': 'math_model_concurrency_limit', request: 'math_model_request_failed', 'invalid-request': 'math_model_turn_failed' };
+        expect(session.lastFailureDiagnostic?.code).toBe(codes[reason]);
+        expect(session.lastError).toBe(errors[reason]);
+        expect(researchFailureReason(session.lastError, session.lastFailureDiagnostic)).toBe(errors[reason]);
+        expect(recoverableResearchFailure(session.lastError)).toBe(['context', 'rate-limit', 'request'].includes(reason));
+        expect(session.lastCompletedResponse).toBeUndefined();
+        expect(JSON.stringify([session.lastError, session.lastFailureDiagnostic,
+          vi.mocked(options.onActivity!).mock.calls])).not.toMatch(/private|secret/u);
+        expect(await session.stopForFreeze!()).toEqual({ status: 'stopped' });
+        await session.close();
+      }
     });
 
   it.each(['nonzero', 'signal'])('makes %s exit a command failure and drains private stderr', async name => {
@@ -275,6 +287,26 @@ describe('configured headless CLI sessions with isolated local children', () => 
     expect(fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '').toBe(content);
   });
 
+  it('uses the host-validated file fallback for a requested output schema without claiming native structured output', async () => {
+    scenario('hang'); const file = path.join(workspace, 'OUTPUT.json');
+    const schema = { type: 'object', properties: { current: { const: true } }, required: ['current'], additionalProperties: false };
+    const validate = vi.fn((value: unknown) => {
+      if (!value || typeof value !== 'object' || Object.keys(value).length !== 1 || (value as { current?: unknown }).current !== true)
+        throw new Error('wrong output');
+    });
+    const session = await open({ ...options, outputSchema: schema, completedOutput: { file, validate } });
+    expect(session.executionPlan).toMatchObject({ structuredOutput: 'validated-output-file', continuation: 'source-context' });
+    const run = session.run('Structured completion fixture.', 'schema-turn', workspace, vi.fn());
+    fs.writeFileSync(file, '{"current":false}');
+    await expect.poll(() => validate.mock.calls.length).toBeGreaterThan(0);
+    expect(await session.stopForFreeze!()).toEqual({ status: 'unconfirmed', reason: 'turn-not-settled' });
+    expect(calls()[0].prompt).toContain(JSON.stringify(schema));
+    expect(calls()[0].prompt).toContain(JSON.stringify(file));
+    fs.writeFileSync(file, '{"current":true}');
+    expect(await run).toBe('submitted'); expect(await session.stopForFreeze!()).toEqual({ status: 'stopped' });
+    expect(options.onUsageIncomplete).toHaveBeenCalledOnce();
+  });
+
   it('shares actual filesystem isolation for arbitrary shell-capable CLI children', async () => {
     scenario('isolation'); const hidden = path.join(root, 'hidden'); fs.mkdirSync(hidden);
     const secret = path.join(hidden, 'secret'), outside = path.join(root, 'outside'); fs.writeFileSync(secret, 'private fixture');
@@ -286,7 +318,7 @@ describe('configured headless CLI sessions with isolated local children', () => 
   });
 
   it('rejects unsupported responsibility contracts and effort before launching a process', async () => {
-    await expect(open({ ...options, readIsolation: { environment: {} as never } })).rejects.toThrow('math_cli_read_isolation_unsupported');
+    await expect(open({ ...options, readIsolation: { environment: 'standard' } })).rejects.toThrow('math_cli_sealed_role_configuration_required');
     await expect(open({ ...options, delegation: { mode: 'read-only', maxAgents: 2 } })).rejects.toThrow('math_cli_delegation_unsupported');
     await expect(open({ ...options, outputSchema: {} })).rejects.toThrow('math_cli_output_schema_unsupported');
     await expect(open({ ...options, skills: [{ name: 'fixture', path: '/never/SKILL.md', digest: 'a'.repeat(64), loading: 'native' }] }))

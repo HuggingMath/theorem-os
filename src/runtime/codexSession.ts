@@ -17,7 +17,9 @@ import { mathDigest, readMathText } from '../math/mathRuntimeIo';
 import { scheduleMathTimeout } from '../math/mathTimers';
 import { CodexShellRejectionReader } from './codexShellRejection';
 import { assertMathAgentSkillsCurrent, assertMathAgentSkillsDiscovered } from './codexSkills';
-import { assertNativeDelegationAvailable } from './nativeDelegation';
+import { INVESTIGATION_TOOL, INVESTIGATOR_PERMISSION_PROFILE, NativeInvestigations,
+  nativeInvestigationTool, validateNativeDelegation } from './nativeDelegation';
+import { planMathAgentSession } from './agentSessionPlan';
 import { CODEX_FAILURE_CODES, HTTP_FAILURE_CODES, safeFailureReason, safeHttpStatusCode,
   type MathAgentFailureDiagnostic } from './failureDiagnostic';
 export type { MathAgentFailureDiagnostic, MathAgentFailureReason } from './failureDiagnostic';
@@ -68,6 +70,13 @@ export function mathWorkerPermissionConfig(workspace: string, hiddenRoots: reado
   };
 }
 
+function investigatorPermissionConfig(workspace: string, hiddenRoots: readonly string[] = []): Json {
+  const hidden = ['/run', '/tmp', ...hiddenRoots].filter(root => workspace !== root && !workspace.startsWith(`${root}/`));
+  return { [`permissions.${INVESTIGATOR_PERMISSION_PROFILE}.filesystem`]: {
+    '/': 'read', [workspace]: 'read', ...Object.fromEntries(hidden.map(root => [root, 'none'])),
+  }, [`permissions.${INVESTIGATOR_PERMISSION_PROFILE}.network.enabled`]: false };
+}
+
 const object = (value: unknown): Json => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('math_codex_invalid_message');
   return value as Json;
@@ -113,6 +122,7 @@ class CodexRpc {
   private failure?: Error;
   private closing?: Promise<void>;
   onNotification: (method: string, params: Json) => void = () => {};
+  onRequest: (method: string, params: Json) => Promise<Json | undefined> = async () => undefined;
   onFailure: (error: Error) => void = () => {};
 
   constructor(executable: string, profile: string, environment: NodeJS.ProcessEnv = process.env,
@@ -121,7 +131,7 @@ class CodexRpc {
       env: { ...environment, CODEX_HOME: profile },
       stdio: launch?.inheritedFds?.length ? ['pipe', 'pipe', 'pipe', ...launch.inheritedFds] : 'pipe',
       detached: process.platform !== 'win32',
-    });
+    }) as ChildProcessWithoutNullStreams; // All three protocol streams are pipes, including launches with extra inherited FDs.
     // Do not forward provider diagnostics, which can contain credentials or task text.
     this.child.stderr.resume();
     const fail = (reason: string) => this.fail(new Error(`math_codex_transport_closed:${reason}`));
@@ -140,8 +150,13 @@ class CodexRpc {
         const message = object(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(line)));
         if (message.method !== undefined && typeof message.method !== 'string') throw new Error();
         if (message.method && message.id !== undefined) {
-          // Headless math never grants an interactive permission request.
-          this.write({ id: message.id, error: { code: -32601, message: 'Interactive requests are unavailable in headless mathematics' } });
+          // Only the explicit read-only investigation tool is handled. Permission
+          // requests and all other interactive calls still receive no grant.
+          void Promise.resolve().then(() => this.onRequest(message.method as string, object(message.params ?? {})))
+            .then(result => this.write(result === undefined ? { id: message.id,
+              error: { code: -32601, message: 'Interactive requests are unavailable in headless mathematics' } }
+              : { id: message.id, result }), () => this.write({ id: message.id,
+              error: { code: -32603, message: 'Headless tool request failed' } })).catch(() => {});
         } else if (message.method) {
           this.onNotification(message.method as string, object(message.params ?? {}));
         } else {
@@ -206,8 +221,9 @@ class CodexRpc {
     });
   }
 
-  async initialize(): Promise<void> {
-    await this.request('initialize', { clientInfo: { name: 'deepscientist-math', version: '0.1.0' }, capabilities: null });
+  async initialize(experimental = false): Promise<void> {
+    await this.request('initialize', { clientInfo: { name: 'deepscientist-math', version: '0.1.0' },
+      capabilities: experimental ? { experimentalApi: true } : null });
     this.write({ method: 'initialized' });
   }
 
@@ -225,12 +241,16 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   const configFile = path.join(options.profile, 'config.toml');
   const profileConfig = fs.existsSync(configFile) ? parseToml(fs.readFileSync(configFile, 'utf8')) : {};
   const providerId = typeof profileConfig.model_provider === 'string' ? profileConfig.model_provider : undefined;
-  const provider = typeof profileConfig.model_provider === 'string' && profileConfig.model_providers
-    ? profileConfig.model_providers[profileConfig.model_provider] : undefined;
+  const providers = profileConfig.model_providers;
+  const selectedProvider = providerId && providers && typeof providers === 'object' && !Array.isArray(providers)
+    ? (providers as Record<string, unknown>)[providerId] : undefined;
+  const provider = selectedProvider && typeof selectedProvider === 'object' && !Array.isArray(selectedProvider)
+    ? selectedProvider as Json : undefined;
   const useResponsesRelay = providerId === SUB2API_PROVIDER.id && !options.readIsolation && Boolean(options.requestGate);
   if (options.delegation && (!skills.length || !useResponsesRelay))
     throw new Error('math_native_delegation_requires_skill_and_metered_relay');
-  if (options.delegation) assertNativeDelegationAvailable();
+  if (options.delegation) validateNativeDelegation(options.delegation);
+  const executionPlan = planMathAgentSession('codex', options);
   const activeRequests = new Set<object>();
   let requestTurn = 0, turnSettled = true, turnStopping = false;
   type NotificationFence = { promise: Promise<void>; release(): void; steered: boolean };
@@ -310,7 +330,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     ? { 'shell_environment_policy.filters': { ...filters, [credentialEnvKey]: 'exclude' } }
     : { 'shell_environment_policy.exclude': [...new Set([...exclude, credentialEnvKey])] };
   if (providerId === WESTLAKE_PROVIDER.id) {
-    if (envKey !== WESTLAKE_PROVIDER.apiKeyEnvironment || provider.base_url !== WESTLAKE_PROVIDER.baseUrl)
+    if (envKey !== WESTLAKE_PROVIDER.apiKeyEnvironment || provider?.base_url !== WESTLAKE_PROVIDER.baseUrl)
       throw new Error('math_westlake_profile_invalid');
     validateWestlakeModel(options.model, options.effort);
   }
@@ -362,7 +382,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     // Codex receives only a disposable loopback credential, including outside proof projections.
     environment = Object.fromEntries(Object.entries(environment ?? process.env)
       .filter(([name]) => !name.startsWith('WESTLAKEHPC_API_KEY')));
-    environment[envKey] = bridge.apiKey;
+    environment[WESTLAKE_PROVIDER.apiKeyEnvironment] = bridge.apiKey;
   }
   const providerSettings = isolated ? {
     model_provider: isolated.providerId,
@@ -382,12 +402,21 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   try { options.signal?.throwIfAborted(); rpc = new CodexRpc(options.executable, nativeProfile, environment, isolated); }
   catch (error) { await responsesRelay?.close(); await bridge?.close(); await isolated?.close(); throw error; }
   let closing: Promise<void> | undefined;
+  let investigations: NativeInvestigations | undefined;
+  let boundTurn: Promise<string | undefined> = Promise.resolve(undefined);
+  let bindTurn: ((turnId?: string) => void) | undefined;
   const closeSession = () => closing ??= (async () => {
     options.signal?.removeEventListener('abort', aborted);
     compacting?.reject(new Error('math_codex_compaction_closed'));
     turnStopping = true; cancelNotifications(); publicItems.clear();
+    bindTurn?.(); investigations?.stop();
     try { await rpc.close(); } finally {
       try { await responsesRelay?.close(); } finally { try { await bridge?.close(); } finally { await isolated?.close(); } }
+      if (investigations) {
+        await investigations.settled();
+        const receipt = await rpc.confirmStopped();
+        investigations.confirmStopped(receipt.status === 'stopped');
+      }
     }
   })();
   const aborted = () => { void closeSession().catch(() => {}); };
@@ -419,7 +448,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     notices.clear(); releaseFence();
   };
   const flushNotifications = (atRequest = false): NotificationFence | undefined => {
-    if (!notices.size || activeRequests.size || notificationFence || !activeTurn || turnSettled || turnStopping || closing) return;
+    if (!notices.size || activeRequests.size || investigations?.busy || notificationFence || !activeTurn || turnSettled || turnStopping || closing) return;
     if (![...notices].some(notice => !notice.waitForRequest || atRequest)) return;
     const turnId = activeTurn, turn = requestTurn;
     let release!: () => void;
@@ -551,12 +580,13 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     cancelNotifications(); publicItems.clear();
     transportFailure = error; lastError = error.message; lastFailureDiagnostic = undefined;
     completion?.reject(error); compacting?.reject(error);
+    investigations?.stop(); bindTurn?.();
     if (!closing) {
-      void bridge?.close().catch(() => {});
-      void responsesRelay?.close().catch(() => {});
+      void closeSession().catch(() => {});
     }
   };
   rpc.onNotification = (method, params) => {
+    investigations?.observe(method, params);
     if (threadId !== undefined && params.threadId !== undefined && params.threadId !== threadId) return;
     if (method === 'thread/compacted' || method === 'item/completed' && object(params.item).type === 'contextCompaction')
       compacting?.resolve();
@@ -624,7 +654,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   options.signal?.addEventListener('abort', aborted, { once: true });
   try {
     options.signal?.throwIfAborted();
-    await rpc.initialize();
+    await rpc.initialize(Boolean(options.delegation));
     const inherited = profileConfig.mcp_servers;
     const disabled = Object.fromEntries(Object.keys(inherited ?? {}).map(name => [name, { enabled: false }]));
     const settings = {
@@ -652,16 +682,18 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           'features.goals': false, 'features.view_image': false } : {}),
         // Native role files cannot narrow inherited writer permissions; profiles cannot enable children implicitly.
         ...(options.skills?.length ? { 'features.multi_agent': false, 'features.multi_agent_v2': false,
-          'features.goals': false } : {}),
+          'agents.enabled': false, 'features.goals': false } : {}),
         model_reasoning_effort: options.effort,
         // The formalization sandbox is the OS boundary for isolated roles; every other shell runs the worker profile.
         ...(!isolated ? { ...mathWorkerPermissionConfig(options.workspace, options.hiddenRoots),
+          ...(options.delegation ? investigatorPermissionConfig(options.workspace, options.hiddenRoots) : {}),
           ...shellCredentialPolicy, ...shellTemporaryPolicy } : {}),
         ...providerSettings,
       },
     };
     const result = await rpc.request(options.threadId ? 'thread/resume' : 'thread/start', {
       ...settings, ...(options.threadId ? { threadId: options.threadId } : {}),
+      ...(!options.threadId && options.delegation ? { dynamicTools: [nativeInvestigationTool(options.delegation.maxAgents)] } : {}),
     });
     const startedThreadId = object(result.thread).id;
     if (typeof startedThreadId !== 'string' || !startedThreadId) throw new Error('math_codex_thread_missing');
@@ -673,6 +705,24 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     // A new thread fixes its sandbox now; one that ignored the profile would keep host network and sockets.
     if (!isolated && !options.threadId && object(result.activePermissionProfile ?? {}).id !== MATH_WORKER_PERMISSION_PROFILE)
       throw new Error('math_codex_sandbox_profile_mismatch');
+    if (options.delegation) {
+      if (object(result.activePermissionProfile ?? {}).id !== MATH_WORKER_PERMISSION_PROFILE)
+        throw new Error('math_codex_sandbox_profile_mismatch');
+      investigations = new NativeInvestigations({ parentThreadId: threadId, maxAgents: options.delegation.maxAgents,
+        workspace: options.workspace, model: options.model, effort: options.effort, settings,
+        request: (method, params) => rpc.request(method, params),
+        active: turnId => activeTurn === turnId && !turnSettled && !turnStopping && !closing,
+        changed: agent => { try { options.onNativeAgent?.(agent); } catch { /* Observation cannot grant permissions. */ } },
+        activity: (event, itemType) => activity(event, itemType, true, activeTurn),
+        fail: error => { completion?.reject(error); void closeSession().catch(() => {}); } });
+      rpc.onRequest = async (method, params) => {
+        if (method !== 'item/tool/call' || params.tool !== INVESTIGATION_TOOL) return;
+        const turnId = await boundTurn;
+        if (!turnId || params.turnId !== turnId) return { contentItems: [{ type: 'inputText',
+          text: 'math_native_investigation_turn_mismatch' }], success: false };
+        return investigations!.call(params);
+      };
+    }
     if (skills.some(skill => skill.loading === 'native')) {
       const discovered = await rpc.request('skills/list', { cwds: [options.workspace], forceReload: true });
       assertMathAgentSkillsDiscovered(discovered, options.workspace, skills);
@@ -689,6 +739,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     let skillsDispatched = false;
     return {
       threadId,
+      executionPlan,
       ...(isolated ? { isolationReceipt: isolated.receipt } : {}),
       usageSource: (bridge || responsesRelay || isolated) && options.requestGate ? 'upstream-requests' as const : 'native-thread-totals' as const,
       get lastError() { return lastError; },
@@ -719,6 +770,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         options.signal?.throwIfAborted();
         if (transportFailure) throw transportFailure;
         if (completion || compacting) throw new Error('math_codex_turn_already_running');
+        investigations?.beginTurn();
         assertMathAgentSkillsCurrent(skills);
         if (temporaryDirectory) prepareWorkerTemporaryDirectory(options.workspace);
         lastError = undefined;
@@ -730,6 +782,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         // Attach immediately so a transport failure during turn/start is handled.
         void done.catch(() => {});
         requestTurn++; turnSettled = false; turnStopping = false;
+        boundTurn = new Promise(resolve => { bindTurn = resolve; });
         completion = {
           resolve: turn => { turnSettled = true; cancelNotifications(); publicItems.clear(); resolve(turn); },
           reject: error => { turnSettled = true; cancelNotifications(); publicItems.clear(); reject(error); },
@@ -764,6 +817,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           const turnId = object(started.turn).id;
           if (typeof turnId !== 'string' || !turnId) throw new Error('math_codex_turn_missing');
           activeTurn = turnId;
+          bindTurn?.(turnId);
           // Replay pre-terminal activity before applying an early completion below.
           for (const entry of earlyActivities.get(turnId) ?? []) emitActivity(entry);
           earlyActivities.clear();
@@ -859,6 +913,11 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           }, options.turnTimeoutMs);
           const finished = await done;
           await submissionDrain;
+          if (investigations?.busy) {
+            await closeSession();
+            if (finished.status === 'completed' && !submitted)
+              throw new Error('math_codex_transport_closed:investigations_unsettled');
+          }
           options.signal?.throwIfAborted();
           if (typeof finished.status !== 'string') throw new Error('math_codex_turn_status_missing');
           if (finished.status === 'completed' && !submitted && !turnHasOutput &&
@@ -891,6 +950,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           checkCompletedOutput = undefined;
           drainSubmittedRequests = undefined;
           turnSettled = true; cancelNotifications();
+          bindTurn?.(); bindTurn = undefined;
           activeTurn = undefined; completion = undefined;
           earlyCompletions.clear();
           earlyOutputTurns.clear();
@@ -899,13 +959,15 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       },
       interrupt: async () => {
         turnStopping = true; cancelNotifications(); publicItems.clear();
+        // Native turn/interrupt does not reap investigator background commands.
+        if (investigations?.busy) { await closeSession(); return; }
         if (activeTurn && !turnSettled && !closing) await rpc.request('turn/interrupt', { threadId, turnId: activeTurn });
       },
       notify,
       close: closeSession,
       stopForFreeze: async () => {
         // An interrupt RPC acknowledgement does not settle the active turn.
-        if (completion || activeTurn || compacting) return { status: 'unconfirmed', reason: 'turn-not-settled' };
+        if (completion || activeTurn || compacting || investigations?.busy) return { status: 'unconfirmed', reason: 'turn-not-settled' };
         try {
           await closeSession();
         }

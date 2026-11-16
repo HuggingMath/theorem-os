@@ -1,3 +1,4 @@
+import { webSkillWithoutCooperation } from '../researchMode';
 import {
   createIcons, ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, BookOpen, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
   Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
@@ -1018,6 +1019,7 @@ function providerAddress() {
   const host = baseUrl ? new URL(baseUrl).hostname : '', gateway = host === 'host.docker.internal';
   address.textContent = !baseUrl ? '' : gateway ? t('经工作台服务器转发') : host;
   address.title = baseUrl && !gateway ? baseUrl : '';
+  syncResearchMode();
   restoreKey();
   // A key this account saved, or for an admin one the server holds, lets the field stay empty.
   const account = state.session?.account, providerId = field('provider').value, key = element<HTMLInputElement>('#api-key');
@@ -1119,7 +1121,7 @@ function captureDraft(): TaskDraft {
     ...(skillMode ? { researchMode: 'skill' as const, skillLoading: field('skill-loading').value as 'native' | 'file' } : {}),
     ...(element<HTMLInputElement>('#plan-approval').checked ? { planApproval: true as const } : {}),
     ...(knowledgeDigest !== undefined ? { knowledgeDigest } : {}),
-    ...(!skillMode && (modulePlan.custom.length || modulePlan.scheduler !== 'plan' || modulePlan.context !== 'full') ? { modulePlan } : {}),
+    ...((modulePlan.custom.length || modulePlan.scheduler !== 'plan' || modulePlan.context !== 'full') ? { modulePlan } : {}),
     ...(draftContinuation ? { continueFrom: draftContinuation } : {}),
     ...(budgetDraftOrigin && budgetDraftOrigin.source === field('source').value && budgetDraftOrigin.environment === field('environment').value
       ? { problemBudget: { runId: budgetDraftOrigin.runId, ...(budgetDraftOrigin.projectId ? { projectId: budgetDraftOrigin.projectId } : {}) } } : {}),
@@ -1240,19 +1242,27 @@ async function recoverDraft() {
 /** 先审计划 holds the Agents after the Lead's plan, so it needs a Lead and at least one other Agent. */
 const planApprovalAvailable = () => element<HTMLInputElement>('input[name="coordination"]:checked').value === 'cooperative' && Number(field('workers').value) >= 2;
 function syncResearchMode() {
-  const skill = field('research-mode').value === 'skill';
-  if (skill) {
-    field('workers').value = '1';
-    element<HTMLInputElement>('input[name="coordination"][value="independent"]').checked = true;
-    element<HTMLInputElement>('#plan-approval').checked = false;
+  const provider = state.session?.providers.find(item => item.id === field('provider').value);
+  const portable = Boolean(provider?.harness && provider.harness !== 'codex');
+  const mode = field('research-mode') as HTMLSelectElement, loading = field('skill-loading') as HTMLSelectElement;
+  for (const option of mode.options) option.disabled = portable && option.value === 'legacy';
+  for (const option of loading.options) option.disabled = portable && option.value === 'native';
+  if (portable) { mode.value = 'skill'; loading.value = 'file'; }
+  const efforts = field('effort') as HTMLSelectElement;
+  for (const option of efforts.options) {
+    const supported = provider?.harness === 'cli' ? Boolean(provider.efforts?.includes(option.value as WebEffort)) : option.value !== 'none';
+    option.hidden = !supported; option.disabled = !supported;
   }
-  field('workers').disabled = skill;
-  for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="coordination"]')) radio.disabled = skill;
+  if (Array.from(efforts.options).find(option => option.value === efforts.value)?.disabled)
+    efforts.value = provider?.efforts?.[0] ?? 'high';
+  const skill = mode.value === 'skill';
+  field('workers').disabled = false;
+  for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="coordination"]')) radio.disabled = false;
   element('#research-mode-note').hidden = !skill;
   element('#skill-loading-field').hidden = !skill;
-  element('.plan-approval-option').hidden = skill;
-  element('#module-plan').hidden = skill;
-  element('[data-settings-section="module-plan"]').hidden = skill;
+  element('.plan-approval-option').hidden = false;
+  element('#module-plan').hidden = false;
+  element('[data-settings-section="module-plan"]').hidden = false;
 }
 function draftChanged(persist = true) {
   syncResearchMode();
@@ -1791,7 +1801,7 @@ function resultProps(run: WebRun): ResultPanelProps {
       run.finishedAt ? item(t('结束时间'), timestamp(run.finishedAt)) : item(t('创建时间'), timestamp(run.createdAt))],
     // Versions, limits and budgets matter for reproducing the run, not for reading its result.
     config: [item(t('服务商'), provider?.name ?? (isSample(run) ? t('离线示例') : run.providerId)), item(t('推理强度'), effortLabels[run.effort] ?? run.effort),
-      ...(run.researchMode === 'skill' ? [item(t('研究方式'), t('单研究者 · 项目技能')), item(t('技能加载'), run.skillLoading === 'file' ? t('读取固定文件') : t('原生加载')),
+      ...(run.researchMode === 'skill' ? [item(t('研究方式'), t('项目技能')), item(t('技能加载'), run.skillLoading === 'file' ? t('读取固定文件') : t('原生加载')),
         ...(run.researchSkill ? [item(t('技能版本'), run.researchSkill.digest, true)] : [])] : []),
       item(t('协作模式'), run.coordination === 'cooperative' ? t('任务协作') : t('独立并行')), item(t('Agent 数量'), run.workers),
       ...(run.planApproval ? [item(t('先审计划'), t('开启'))] : []),
@@ -2139,7 +2149,7 @@ function renderRunHeader(run: WebRun) {
     elapsed: formatDuration(progress.elapsed), tabs: detailTabs(), tab: state.tab,
     active: activeRun(run), cancelling, deleting: state.deleting.has(run.id), connected: state.connected,
     download: run.result || !activeRun(run) ? downloadUrl(run.id) : undefined, shareable: !isSample(run) && isAcceptedRun(run) && isStatementReviewed(run) && Boolean(run.result?.proof),
-    sample: isSample(run), guidanceAvailable: run.researchMode !== 'skill', ...(stalledMinutes(run) !== undefined ? { stalled: stalledMinutes(run)! } : {}),
+    sample: isSample(run), guidanceAvailable: !webSkillWithoutCooperation(run), ...(stalledMinutes(run) !== undefined ? { stalled: stalledMinutes(run)! } : {}),
     ...(run.formalizationId ? { formalizationId: run.formalizationId } : {}),
     ...(run.budgetOrigin && !isSample(run) ? { budgetAttempt: { run, request: api } } : {}),
     ...(run.libraryProposalOrigin && !isSample(run) ? { libraryProposalAttempt: { run, request: api } } : {}),
@@ -2236,7 +2246,7 @@ async function checkWorkbenchApproval(run: WebRun, retry = true) {
 }
 /** The banner also stays available to reconcile an older decision after the current plan changes. */
 function approvalProps(run: WebRun): RunHeaderProps['approval'] {
-  if (run.researchMode === 'skill') return;
+  if (webSkillWithoutCooperation(run)) return;
   const approval = planAwaitingApproval(run), observation = run.observation;
   if (!observation || isSample(run) || !approval && !run.planApproval && !observation.inspection.planApproval?.required) return;
   const identity = personalApprovalOwner(), view = identity?.owner ? personalApprovalView(identity.owner, run) : undefined;
@@ -3196,7 +3206,7 @@ function paletteCommands(): PaletteCommand[] {
         keywords: 'explain proof natural language 讲解 解释 证明 转换 自然语言', run: () => { window.open(`explain.html?run=${encodeURIComponent(run.id)}`, '_blank', 'noopener'); } },
       { id: 'run-knowledge', group: t('当前研究'), label: t('知识检索'), icon: 'search', keywords: 'knowledge search library 知识 检索 知识库', run: () => openCollaborationSection(run, 'knowledge') },
       { id: 'run-records', group: t('当前研究'), label: t('归档记录'), icon: 'archive', keywords: 'archive records 归档 记录', run: () => openCollaborationSection(run, 'records') },
-      run.researchMode !== 'skill' && { id: 'run-guidance-history', group: t('当前研究'), label: t('指导记录'), icon: 'message-square', keywords: 'guidance feedback history 指导 历史 人工', run: () => openCollaborationSection(run, 'guidance') },
+      !webSkillWithoutCooperation(run) && { id: 'run-guidance-history', group: t('当前研究'), label: t('指导记录'), icon: 'message-square', keywords: 'guidance feedback history 指导 历史 人工', run: () => openCollaborationSection(run, 'guidance') },
       Boolean(proof) && { id: 'run-copy-proof', group: t('当前研究'), label: t('复制{0}', proofLabel), icon: 'copy', keywords: t('copy proof lean 复制 证明 源码'),
         run: () => void copyText(proof, verified ? t('验收证明已复制') : t('候选源码已复制')) },
       Boolean(proof) && { id: 'run-download-proof', group: t('当前研究'), label: t('下载 Lean'), hint: proofFileName(run), icon: 'download', keywords: t('download proof lean file 下载 证明 文件'),

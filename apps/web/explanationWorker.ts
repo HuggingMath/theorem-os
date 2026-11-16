@@ -19,7 +19,8 @@ const inputSchema = z.object({
   id: z.string().uuid(), proof: z.string().min(1).max(512 * 1024), target: z.string().min(1).max(512),
   language: z.enum(['zh', 'en']), environment: z.enum(['standard', 'mathlib']), model: z.literal(SUB2API_PROVIDER.defaultModel),
   effort: z.enum(['low', 'high', 'max']), apiKey: z.string().regex(/^[\x21-\x7e]{8,4096}$/u),
-  provider: z.object({ id: z.literal(SUB2API_PROVIDER.id), name: z.string().max(200), baseUrl: z.string().url().max(512) }).strict(),
+  provider: z.object({ id: z.literal(SUB2API_PROVIDER.id), name: z.string().max(200), baseUrl: z.string().url().max(512), harness: z.literal('codex').optional(),
+    execution: z.object({ executable: z.string().min(1).max(4096).optional() }).strict().optional() }).strict(),
   maxRunSeconds: z.number().int().nonnegative().max(24 * 60 * 60), maxTotalTokens: z.number().int().nonnegative(),
   maxRoundsPerBatch: z.number().int().min(0).max(20), auditors: z.number().int().min(1).max(5),
 }).strict();
@@ -116,7 +117,7 @@ async function main() {
     const buildIndex = readMathJson(process.env.THEOREMOS_WORKER_BUILD || '/opt/theoremos-build.json') as { buildManifestRef: string };
     readMathBuildManifest(buildIndex.buildManifestRef, root, path.join(root, 'out/main'));
     const writer = { model: input.model, effort: input.effort, profile,
-      executable: process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex' };
+      executable: input.provider.execution?.executable ?? process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE ?? 'codex' };
     prepareInformalization(directory, {
       proofId: input.target.replace(/[^A-Za-z0-9_-]+/gu, '_').slice(0, 128), proofFile, projectRoot: project,
       target: input.target, environment: input.environment, statement: null, alignment: INFORMALIZATION_ALIGNMENT,

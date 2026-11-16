@@ -76,7 +76,7 @@ export class CollaborationNavigation {
     const picker = this.element.querySelector<HTMLSelectElement>('[data-collab-section-picker]')!;
     for (const [id, title] of sections) {
       const count = counts[id];
-      const unsupported = id === 'guidance' && this.surface.dataset.researchMode === 'skill';
+      const unsupported = id === 'guidance' && this.surface.dataset.withoutCooperation === 'true';
       this.element.querySelector<HTMLButtonElement>(`[data-collab-jump="${id}"]`)!.hidden = unsupported;
       const option = picker.querySelector<HTMLOptionElement>(`option[value="${id}"]`)!;
       option.hidden = unsupported; option.disabled = unsupported;
@@ -90,7 +90,7 @@ export class CollaborationNavigation {
   }
 
   go(id: CollaborationSection) {
-    if (!this.mounted() || id === 'guidance' && this.surface.dataset.researchMode === 'skill') return;
+    if (!this.mounted() || id === 'guidance' && this.surface.dataset.withoutCooperation === 'true') return;
     const section = this.section(id);
     const heading = section.querySelector<HTMLElement>('[data-collab-section-heading]')!;
     this.reveal(heading); heading.focus({ preventScroll: true }); this.activate(id);

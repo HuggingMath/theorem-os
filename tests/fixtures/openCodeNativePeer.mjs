@@ -3,6 +3,8 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 const cwd = process.cwd(), config = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT);
+const [providerID, selectedProvider] = Object.entries(config.provider)[0];
+const [modelID, selectedModel] = Object.entries(selectedProvider.models)[0];
 const data = process.env.XDG_DATA_HOME, file = path.join(data, 'opencode-peer-state.json');
 const mode = process.env.THEOREMOS_OPENCODE_FIXTURE_MODE;
 const read = () => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { sessions: {}, requests: [] };
@@ -19,7 +21,7 @@ const server = http.createServer(async (request, response) => {
   body = body ? JSON.parse(body) : undefined;
   const state = read(); state.requests.push({ route, method: request.method, body }); write(state);
   const json = (value, code = 200) => { response.writeHead(code, { 'content-type': 'application/json' }); response.end(JSON.stringify(value)); };
-  if (route === '/provider') return json({ all: [{ id: 'fixture', models: { model: { id: 'model', providerID: 'fixture', variants: { high: {} } } } }] });
+  if (route === '/provider') return json({ all: [{ id: providerID, models: { [modelID]: { ...selectedModel, id: modelID, providerID } } }] });
   if (route === '/event') {
     response.writeHead(200, { 'content-type': 'text/event-stream' }); response.write('data: {"type":"server.connected","properties":{}}\n\n');
     events.add(response); response.on('close', () => events.delete(response)); return;
@@ -34,7 +36,7 @@ const server = http.createServer(async (request, response) => {
   if (!match[2]) return json(mode === 'wrong-session' ? { ...session, id: 'ses_wrong' } : session);
   if (match[2] === '/abort') {
     if (pending) { pending.end(JSON.stringify({ info: { id: 'msg_aborted', role: 'assistant', parentID: pending.nativeId,
-      sessionID: session.id, modelID: 'model', providerID: 'fixture',
+      sessionID: session.id, modelID, providerID,
       error: { name: 'MessageAbortedError', data: { message: 'aborted' } } }, parts: [] })); pending = undefined; }
     return json(true);
   }
@@ -43,7 +45,7 @@ const server = http.createServer(async (request, response) => {
   if (mode === 'http-error') return json({}, 503);
   if (mode === 'hang') { response.writeHead(200, { 'content-type': 'application/json' }); pending = response; pending.nativeId = body.messageID; return; }
   const info = (suffix, tokens) => ({ id: body.messageID + suffix, sessionID: session.id, role: 'assistant',
-    parentID: body.messageID, providerID: 'fixture', modelID: 'model', time: { created: 1, completed: 2 }, tokens });
+    parentID: body.messageID, providerID, modelID, time: { created: 1, completed: 2 }, tokens });
   const first = info('-1', { input: 8, output: 2, reasoning: 1, cache: { read: 2, write: 0 } });
   const second = info('-2', { input: 11, output: 4, reasoning: 0, cache: { read: 3, write: 1 } });
   const tool = { id: body.messageID + '-tool', sessionID: session.id, messageID: first.id, type: 'tool', tool: 'bash',

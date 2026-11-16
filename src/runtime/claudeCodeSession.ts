@@ -10,6 +10,8 @@ import { assertMathAgentSkillsCurrent } from './agentSkills';
 import type { MathAgentOptions, MathAgentSession } from './agentSession';
 import { safeHttpStatusCode, type MathAgentFailureDiagnostic } from './failureDiagnostic';
 import { prepareHarnessProcess } from './harnessProcess';
+import { planMathAgentSession } from './agentSessionPlan';
+import { prepareSealedHarness, sealedRoleText } from './sealedHarness';
 
 type Json = Record<string, unknown>;
 const object = (value: unknown): Json | undefined => value && typeof value === 'object' && !Array.isArray(value)
@@ -83,17 +85,16 @@ function observe(callback: (() => void) | undefined): void {
 
 /** Claude Code print mode persists one native conversation; every invocation reports one turn's totals. */
 export async function createClaudeCodeMathSession(options: MathAgentOptions): Promise<MathAgentSession> {
-  if (options.readIsolation) throw new Error('math_claude_read_isolation_unsupported');
-  if (options.delegation) throw new Error('math_claude_delegation_unsupported');
-  if (options.skills?.some(skill => skill.loading !== 'file')) throw new Error('math_claude_native_skill_loading_unsupported');
+  const executionPlan = planMathAgentSession('claude-code', options);
   if (options.threadId && !sessionId.test(options.threadId)) throw new Error('math_claude_session_id_invalid');
   if (!['low', 'medium', 'high', 'xhigh', 'max'].includes(options.effort)) throw new Error('math_claude_effort_unsupported');
   if (options.signal?.aborted) throw new Error('math_model_request_stopped');
   assertMathAgentSkillsCurrent(options.skills ?? []);
+  const sealed = options.readIsolation ? await prepareSealedHarness('claude-code', options) : undefined;
   const threadId = options.threadId ?? crypto.randomUUID();
   const temporary = path.join(options.profile, 'runtime-tmp');
-  fs.mkdirSync(temporary, { recursive: true, mode: 0o700 });
-  const instructions = options.instructions + (options.skills?.length ? '\n\nPinned research skills (read each file before researching):\n' +
+  if (!sealed) fs.mkdirSync(temporary, { recursive: true, mode: 0o700 });
+  const instructions = (sealed ? sealedRoleText(options.instructions, options) : options.instructions) + (options.skills?.length ? '\n\nPinned research skills (read each file before researching):\n' +
     options.skills.map(skill => `${skill.name}: ${JSON.stringify(skill.path)}; directory SHA256 ${skill.digest}`).join('\n') : '');
   const args = ['--print', '--input-format', 'text', '--output-format', 'stream-json', '--verbose',
     '--include-partial-messages', '--bare', '--safe-mode', '--restricted', '--disable-slash-commands',
@@ -109,19 +110,20 @@ export async function createClaudeCodeMathSession(options: MathAgentOptions): Pr
   let active: { interrupt: () => void } | undefined;
   let lastError: string | undefined, diagnostic: MathAgentFailureDiagnostic | undefined, lastInputTokens: number | undefined;
   let completedResponse: Readonly<{ turnId: string; text: string }> | undefined;
-  let isolationReceipt: Json | undefined;
+  let isolationReceipt: Json | undefined = sealed?.receipt;
 
   const stop = async () => {
     const owned = child;
     if (owned) await (closing ??= closeMathProcess(owned));
   };
   const interrupt = async () => { active?.interrupt(); await stop(); };
-  const close = async () => { closed = true; await interrupt(); };
+  const close = async () => { closed = true; try { await interrupt(); } finally { await sealed?.close(); } };
   const abort = () => { void interrupt(); };
   options.signal?.addEventListener('abort', abort);
 
   return {
-    threadId, usageSource: 'native-turn-totals',
+    executionPlan,
+    threadId, usageSource: sealed ? 'upstream-requests' : 'native-turn-totals',
     get lastError() { return lastError; },
     get lastFailureDiagnostic() { return diagnostic; },
     get lastInputTokens() { return lastInputTokens; },
@@ -136,14 +138,15 @@ export async function createClaudeCodeMathSession(options: MathAgentOptions): Pr
       if (child) { await stop(); const receipt = await confirmMathProcessStopped(child);
         if (receipt.status !== 'stopped') throw new Error('math_claude_writer_stop_unconfirmed'); }
       lastError = undefined; diagnostic = undefined; lastInputTokens = undefined; completedResponse = undefined; closing = undefined;
-      const invocation = prepareHarnessProcess({ ...options, environment: { ...(options.environment ?? process.env),
+      const invocation = sealed ? sealed.launch([...args, resume ? '--resume' : '--session-id', threadId]) : prepareHarnessProcess({ ...options, environment: { ...(options.environment ?? process.env),
         CLAUDE_CONFIG_DIR: options.profile, TMPDIR: temporary, TMP: temporary, TEMP: temporary,
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1',
         CLAUDE_CODE_SIMPLE: '1', CLAUDE_CODE_SAFE_MODE: '1' } }, options.executable,
       [...args, resume ? '--resume' : '--session-id', threadId]);
-      isolationReceipt = invocation.isolationReceipt;
+      isolationReceipt = sealed?.receipt ?? ('isolationReceipt' in invocation ? invocation.isolationReceipt as Json : undefined);
       const owned = child = spawn(invocation.command, invocation.args, {
-        cwd: options.workspace, env: invocation.env, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
+        cwd: options.workspace, env: invocation.env, detached: process.platform !== 'win32',
+        stdio: ['pipe', 'pipe', 'pipe', ...('inheritedFds' in invocation ? invocation.inheritedFds ?? [] : [])],
       });
       return await new Promise<string>(resolve => {
         let settled = false, started = false, terminal: Json | undefined, usageReported = false;
@@ -154,7 +157,7 @@ export async function createClaudeCodeMathSession(options: MathAgentOptions): Pr
         const partial = new Map<number, { id: string; type: string; text?: string }>();
         const incomplete = () => {
           if (usageReported) return;
-          usageReported = true; observe(() => options.onUsageIncomplete?.());
+          usageReported = true; if (!sealed) observe(() => options.onUsageIncomplete?.());
         };
         const failed = (reason: string, code: MathAgentFailureDiagnostic['code'] = 'other') => {
           invalid = true; lastError = reason; diagnostic = { code };
@@ -228,7 +231,7 @@ export async function createClaudeCodeMathSession(options: MathAgentOptions): Pr
             terminal = event;
             const usage = turnUsage(event.usage);
             if (usage) {
-              try { options.onUsage(usage, { turnId: messageId }); usageReported = true; }
+              try { if (!sealed) options.onUsage(usage, { turnId: messageId }); usageReported = true; }
               catch { failed('math_claude_usage_callback_failed'); incomplete(); }
             } else incomplete();
             if (event.is_error || event.subtype !== 'success') {
@@ -272,7 +275,7 @@ export async function createClaudeCodeMathSession(options: MathAgentOptions): Pr
         owned.stdin!.on('error', () => {});
         owned.once('error', () => { failed('math_claude_process_start_failed'); finish(null); });
         owned.once('close', finish);
-        owned.stdin!.end(message);
+        owned.stdin!.end(sealed ? sealedRoleText(message, options) : message);
         if (options.completedOutput) {
           outputWatcher = setInterval(checkOutput, 100);
           outputWatcher.unref();

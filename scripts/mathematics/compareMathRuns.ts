@@ -15,7 +15,8 @@ import { prepareSolverRuntimeEnvironment } from '../../src/solver/environment';
 import { readSolverProblem } from '../../src/solver/problem';
 import { readRunInspection, runInspectionSnapshot } from '../../src/solver/inspection';
 import { runMathBatch } from './runMathBatch';
-import { configuredSolverModules, solverMethodDigest } from '../../src/solver/modules';
+import { configuredSolverModules, solverMethodDigest, type SolverModules } from '../../src/solver/modules';
+import { configurableSolverModules } from '../../src/solver/modules/custom';
 import { moduleExperimentSchema, describeModuleExperiment, moduleExperimentPairs, type ModuleExperiment } from './moduleExperiment';
 import { proofReceiptsMatch, type ProofCheck } from '../../src/solver/modules/evidence';
 import type { SolverRunState } from '../../src/solver/archive';
@@ -33,6 +34,9 @@ import { assertExperimentKnowledge, experimentKnowledgeMode, freezeExperimentKno
   type ExperimentKnowledge } from './experimentKnowledge';
 import { readMathAgentSkill } from '../../src/runtime/codexSkills';
 import { researchSkillIdentity, type ResearchSkillIdentity } from '../../src/solver/researchSkill';
+import { assertResearchHarnessCurrent, bindResearchHarness, projectResearchHarnessProfile, researchHarness,
+  type ResearchHarnessIdentity } from '../../src/runtime/researchHarness';
+import { readCliConfiguration } from '../../src/runtime/cliConfiguration';
 
 const providerProfiles = {
   deepseek: { metadata: DEEPSEEK_PROVIDER, validate: validateDeepSeekModel, prepare: prepareDeepSeekProfile,
@@ -50,7 +54,7 @@ const skillArms = ['skill', 'independent', 'cooperative'] as const;
 type Job = { arm: string; repetition: number; launch: string; launchDigest: string; output: string;
   receiptDigest: string; methodDigest: string; modulePlan?: string; modulePlanDigest?: string;
   codexProfile?: string; codexProfileDigest?: string; researchSkill?: ResearchSkillIdentity;
-  commonResearchSkill?: ResearchSkillIdentity };
+  commonResearchSkill?: ResearchSkillIdentity; agentHarness?: ResearchHarnessIdentity };
 type Plan = {
   schema: 'deepscientist.math.comparison.v1'; problem: string; sourceCommit: string;
   dataset?: 'imo2026' | 'putnambench' | 'lean-task';
@@ -63,6 +67,7 @@ type Plan = {
   configuration: { model: string; effort: string; method: string; scheduler: string; workers: number; repetitions?: number;
     maxTurns: number; maxRunSeconds: number; maxTurnSeconds: number; maxTotalTokens?: number;
     evaluatorTimeoutSeconds?: number; provider?: PreparedProvider };
+  agentHarness?: ResearchHarnessIdentity;
   moduleExperiment?: ModuleExperiment;
   skillBaseline?: ResearchSkillIdentity;
   commonResearchSkill?: ResearchSkillIdentity;
@@ -75,13 +80,20 @@ const json = (file: string) => JSON.parse(readMathText(file));
 const writeNew = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
 const environmentDigest = () => prepareSolverRuntimeEnvironment().environmentDigest;
 
+function harnessMethodDigest(modules: SolverModules, coordination: 'cooperative' | 'independent',
+  harness?: ResearchHarnessIdentity): string {
+  const selected = harness && harness.id !== 'codex' ? { ...modules,
+    M1: { ...modules.M1, version: modules.M1.version + ':' + harness.id + ':v1' } } : modules;
+  return solverMethodDigest(selected, coordination);
+}
+
 function assertSkillBaseline(plan: Plan, checkFiles: boolean): void {
   const skill = plan.skillBaseline;
   if (plan.commonResearchSkill && canonicalMathJson(plan.commonResearchSkill) !== canonicalMathJson(skill ?? null))
     throw new Error('comparison_common_guidance_identity_mismatch');
   if (plan.jobs.some(job => canonicalMathJson(job.commonResearchSkill ?? null) !== canonicalMathJson(plan.commonResearchSkill ?? null)))
     throw new Error('comparison_common_guidance_identity_mismatch');
-  if (plan.commonResearchSkill && !plan.configuration.provider && !plan.commonProviderProfile)
+  if (plan.commonResearchSkill && !plan.configuration.provider && !plan.commonProviderProfile && !plan.agentHarness)
     throw new Error('comparison_common_provider_identity_missing');
   if (plan.commonProviderProfile && (!plan.commonResearchSkill || plan.configuration.provider))
     throw new Error('comparison_common_provider_identity_mismatch');
@@ -103,6 +115,22 @@ function assertSkillBaseline(plan: Plan, checkFiles: boolean): void {
   if (checkFiles && canonicalMathJson(researchSkillIdentity(readMathAgentSkill(
     path.join(root, 'skills/theoremos-research/SKILL.md'), skill.loading))) !== canonicalMathJson(skill))
     throw new Error('comparison_skill_changed');
+}
+
+function assertComparisonHarnesses(plan: Plan, checkFiles: boolean): void {
+  if (!plan.agentHarness) {
+    if (plan.jobs.some(job => job.agentHarness)) throw new Error('comparison_harness_identity_mismatch');
+    return;
+  }
+  if (plan.configuration.provider || plan.commonProviderProfile) throw new Error('comparison_harness_provider_conflict');
+  const expected = plan.agentHarness;
+  if (checkFiles) assertResearchHarnessCurrent(expected, process.env, plan.configuration.model);
+  for (const job of plan.jobs) {
+    if (!job.agentHarness || canonicalMathJson({ ...job.agentHarness, profile: expected.profile }) !== canonicalMathJson(expected) ||
+        job.agentHarness.profile !== path.join(path.dirname(job.launch), 'harness'))
+      throw new Error('comparison_harness_identity_mismatch');
+    if (checkFiles) assertResearchHarnessCurrent(job.agentHarness, process.env, plan.configuration.model);
+  }
 }
 
 function currentProviderProfile(profile = process.env.CODEX_HOME || path.join(os.homedir(), '.config/deepscientist/math-sol-codex')) {
@@ -140,7 +168,9 @@ function experimentDefinitions(plan: Plan) {
   const expected = comparisonOrder(repetitions, variants.map(variant => variant.id));
   if (plan.jobs.length !== expected.length || plan.jobs.some((job, index) =>
     job.arm !== expected[index].arm || job.repetition !== expected[index].repetition ||
-    job.methodDigest !== variants.find(variant => variant.id === job.arm)?.methodDigest || !job.modulePlan || !job.modulePlanDigest))
+    job.methodDigest !== harnessMethodDigest(configurableSolverModules(
+      variants.find(variant => variant.id === job.arm)!.plan, 'cooperative', plan.configuration.workers),
+      'cooperative', plan.agentHarness) || !job.modulePlan || !job.modulePlanDigest))
     throw new Error('comparison_module_plan_identity_mismatch');
   return { experiment, variants };
 }
@@ -233,6 +263,7 @@ export function comparisonReport(directory: string, plan: Plan) {
   assertDataset(plan);
   assertLeanTaskSnapshot(directory, plan);
   assertSkillBaseline(plan, false);
+  assertComparisonHarnesses(plan, false);
   const knowledge = assertExperimentKnowledge(directory, plan.knowledge, plan.problem, plan.knowledgeTargetNames ?? [plan.problem]);
   const { experiment, variants } = experimentDefinitions(plan) ?? {};
   assertProviderProfiles(plan, false);
@@ -282,6 +313,8 @@ export function comparisonReport(directory: string, plan: Plan) {
           state.providerProfileDigest !== job.codexProfileDigest)) throw new Error('comparison_provider_identity_mismatch');
       if (plan.commonProviderProfile && (state.providerProfile !== plan.commonProviderProfile.profile ||
           state.providerProfileDigest !== plan.commonProviderProfile.digest)) throw new Error('comparison_common_provider_identity_mismatch');
+      if (canonicalMathJson(state.agentHarness ?? null) !== canonicalMathJson(job.agentHarness ?? null))
+        throw new Error('comparison_harness_identity_mismatch');
       const expectedWorkers = !experiment && ['single', 'skill'].includes(job.arm) ? 1 : plan.configuration.workers;
       const coordination = experiment || job.arm === 'cooperative' ? 'cooperative' : 'independent';
       if (state.problem.receiptDigest !== job.receiptDigest || state.taskDigest !== plan.taskDigest ||
@@ -353,6 +386,7 @@ export function comparisonReport(directory: string, plan: Plan) {
           note: 'The skill researcher and legacy coordination arms receive different research instructions and protocols. This compares complete system modes under shared model, tool, environment and total-token settings; it does not isolate a coordination algorithm. A strategy experiment still requires equal frozen mathematical guidance and matched capability checks.' } } : {}),
     ...(plan.configuration.provider ? { provider: providerProfiles[plan.configuration.provider].metadata } : {}),
     ...(plan.commonProviderProfile ? { commonProviderProfile: plan.commonProviderProfile } : {}),
+    ...(plan.agentHarness ? { agentHarness: plan.agentHarness } : {}),
     sourceCommit: plan.sourceCommit, taskDigest: plan.taskDigest, buildDigest: plan.buildDigest, environmentDigest: plan.environmentDigest,
     ...(knowledge ? { knowledge: knowledge.observation } : {}),
     ...(experiment ? { moduleExperiment: { baseline: experiment.baseline, variants },
@@ -420,7 +454,8 @@ export async function compareMathRuns(argv: string[]): Promise<number> {
   const flags = parseFlags(argv, ['phase', 'directory', 'repo', 'problem', 'task-file', 'build-manifest',
     'repetitions', 'model', 'effort', 'method', 'scheduler', 'workers', 'max-turns', 'max-run-seconds', 'max-turn-seconds',
     'max-total-tokens', 'evaluator-timeout-seconds', 'proof-environment-cache-dir', 'module-experiment', 'provider', 'dataset',
-    'knowledge-base', 'knowledge-mode', 'skill-baseline', 'common-research-skill', 'source-file']);
+    'knowledge-base', 'knowledge-mode', 'skill-baseline', 'common-research-skill', 'source-file',
+    'harness', 'harness-profile', 'harness-executable']);
   if (flags.has('help')) {
     console.log('Usage: theorem-os compare --phase prepare|run|report|check-report --directory DIR\n'
       + 'prepare also requires --problem ID --task-file FILE --build-manifest FILE\n'
@@ -435,6 +470,8 @@ export async function compareMathRuns(argv: string[]): Promise<number> {
       + '          --common-research-skill native|file (all arms use one pinned skill and common mathematical guidance; implies the skill baseline)\n'
       + `          --module-experiment FILE (compare module plans with 3 to ${MAX_RESEARCH_WORKERS} cooperative workers instead of coordination arms)\n`
       + '          --provider profile|sub2api|deepseek|westlake (private per-attempt profiles; Sub2API deepseek-flash/high)\n'
+      + '          --harness codex|claude-code|opencode|cli --harness-profile CONFIG_TEMPLATE --harness-executable COMMAND\n'
+      + '          Explicit harnesses use a fresh configuration-only profile per attempt; sessions and credential stores are not copied. Supply --model and compatible Skill loading.\n'
       + 'prepare never invokes a model. run executes every planned attempt sequentially. Every arm receives the same token allowance.\n'
       + '--skill-baseline alone compares system modes with different guidance; --common-research-skill freezes guidance and compares host policies and protocols.\n'
       + 'Prepared identities alone are not provider execution evidence or evidence of a speedup.\n'
@@ -447,6 +484,8 @@ export async function compareMathRuns(argv: string[]): Promise<number> {
   if (!['prepare', 'run', 'report', 'check-report'].includes(phase)) throw new Error('invalid --phase');
   const directory = path.resolve(required(flags, 'directory'));
   const planFile = path.join(directory, 'comparison.json');
+  for (const name of ['harness', 'harness-profile', 'harness-executable']) if (phase !== 'prepare' && flags.has(name))
+    throw new Error(`--${name} is frozen during prepare; run and report use comparison.json`);
   if (phase !== 'prepare' && flags.has('module-experiment'))
     throw new Error('--module-experiment is frozen during prepare; run and report use comparison.json');
   if (phase !== 'prepare' && flags.has('skill-baseline'))
@@ -494,9 +533,22 @@ export async function compareMathRuns(argv: string[]): Promise<number> {
     if (provider !== 'profile' && !Object.hasOwn(providerProfiles, provider)) throw new Error('invalid --provider');
     const preparedProvider = provider === 'profile' ? undefined : provider as PreparedProvider;
     const profileApi = preparedProvider ? providerProfiles[preparedProvider] : undefined;
-    const commonProviderProfile = commonLoading && !profileApi ? currentProviderProfile() : undefined;
+    const explicitHarness = ['harness', 'harness-profile', 'harness-executable'].some(name => flags.has(name));
+    const selectedHarness = explicitHarness ? researchHarness(flags.get('harness') ?? 'codex') : undefined;
+    if (selectedHarness && preparedProvider) throw new Error('comparison_harness_provider_conflict');
+    if (selectedHarness && !flags.has('model')) throw new Error('--model is required for an explicit --harness');
+    if (selectedHarness && !flags.has('harness-profile')) throw new Error('--harness-profile is required for an explicit --harness');
+    if (selectedHarness && !selectedHarness.nativeSkills && skillBaseline?.loading === 'native')
+      throw new Error('math_harness_native_skill_loading_unsupported');
+    const commonProviderProfile = commonLoading && !profileApi && !selectedHarness ? currentProviderProfile() : undefined;
     const model = flags.get('model') ?? profileApi?.metadata.defaultModel ?? 'deepseek-flash';
     const effort = flags.get('effort') ?? profileApi?.metadata.defaultEffort ?? 'high';
+    const template = selectedHarness ? fs.realpathSync(required(flags, 'harness-profile')) : undefined;
+    const cli = selectedHarness?.id === 'cli' ? readCliConfiguration(template!) : undefined;
+    if (cli && !cli.efforts.includes(effort)) throw new Error('math_cli_effort_unsupported');
+    const agentHarness = selectedHarness ? bindResearchHarness(selectedHarness.id,
+      flags.get('harness-executable') ?? cli?.executable ?? (selectedHarness.id === 'codex' ? 'codex' : selectedHarness.id === 'claude-code' ? 'claude' : 'opencode'),
+      template!, process.env, model) : undefined;
     profileApi?.validate(model, effort);
     const configuration: Plan['configuration'] = { model, effort, method, scheduler,
       ...(preparedProvider ? { provider: preparedProvider } : {}),
@@ -545,6 +597,7 @@ export async function compareMathRuns(argv: string[]): Promise<number> {
       ...(skillBaseline ? { skillBaseline } : {}),
       ...(commonLoading ? { commonResearchSkill: skillBaseline } : {}),
       ...(commonProviderProfile ? { commonProviderProfile } : {}),
+      ...(agentHarness ? { agentHarness } : {}),
       ...(experiment ? { moduleExperiment: experiment } : {}), jobs: [] };
     for (const item of comparisonOrder(repetitions, variants?.map(variant => variant.id) ?? (skillBaseline ? skillArms : undefined))) {
       const jobRoot = path.join(directory, `${item.repetition}-${item.arm}`);
@@ -563,6 +616,7 @@ export async function compareMathRuns(argv: string[]): Promise<number> {
       if (modulePlan) { writeNew(modulePlan, variant!.plan); fs.chmodSync(modulePlan, 0o400); }
       const codexProfile = profileApi ? path.join(jobRoot, 'codex') : undefined;
       const codexProfileDigest = codexProfile ? profileApi!.prepare(codexProfile, model, effort) : undefined;
+      const jobHarness = agentHarness && projectResearchHarnessProfile(agentHarness, path.join(jobRoot, 'harness'), process.env, model);
       const coordination = experiment || item.arm === 'cooperative' ? 'cooperative' : 'independent';
       const researchSkill = item.arm === 'skill' ? skillBaseline : undefined;
       const launch = path.join(jobRoot, 'launch.json');
@@ -573,6 +627,8 @@ export async function compareMathRuns(argv: string[]): Promise<number> {
         ...(process.env.DEEPSCIENTIST_MATH_ENV_FILE ? { envFile: path.resolve(process.env.DEEPSCIENTIST_MATH_ENV_FILE) } : {}),
         args: [process.execPath, path.join(root, 'bin/math.ts'), 'run', '--workspace', workspace, '--task-file', taskFile,
           '--output', output, '--build-manifest', build, '--model', configuration.model, '--effort', configuration.effort,
+          ...(jobHarness ? ['--harness', jobHarness.id, '--harness-profile', jobHarness.profile, '--harness-executable', jobHarness.executable,
+            ...(!researchSkill ? ['--research-mode', 'legacy'] : [])] : []),
           '--method', method, '--scheduler', scheduler, '--workers', String(!experiment && ['single', 'skill'].includes(item.arm) ? 1 : workers),
           '--coordination', coordination, ...(modulePlan ? ['--module-plan', modulePlan] : []),
           ...(researchSkill ? ['--research-mode', 'skill', '--skill-loading', researchSkill.loading] : []),
@@ -583,7 +639,9 @@ export async function compareMathRuns(argv: string[]): Promise<number> {
           ...(knowledge ? ['--knowledge-base', knowledge.file] : []),
           ...(proofCache ? ['--proof-environment-cache-dir', proofCache] : [])] });
       plan.jobs.push({ ...item, launch, launchDigest: mathDigest(fs.readFileSync(launch)), output, receiptDigest: receipt.receiptDigest,
-        methodDigest: variant?.methodDigest ?? solverMethodDigest(configuredSolverModules(method, scheduler), coordination),
+        methodDigest: harnessMethodDigest(variant ? configurableSolverModules(variant.plan, coordination, workers)
+          : configuredSolverModules(method, scheduler), coordination, jobHarness),
+        ...(jobHarness ? { agentHarness: jobHarness } : {}),
         ...(modulePlan ? { modulePlan, modulePlanDigest: mathDigest(fs.readFileSync(modulePlan)) } : {}),
         ...(researchSkill ? { researchSkill } : {}),
         ...(plan.commonResearchSkill ? { commonResearchSkill: plan.commonResearchSkill } : {}),
@@ -599,6 +657,7 @@ export async function compareMathRuns(argv: string[]): Promise<number> {
   assertDataset(plan);
   assertLeanTaskSnapshot(directory, plan);
   assertSkillBaseline(plan, phase === 'run');
+  assertComparisonHarnesses(plan, phase === 'run');
   experimentDefinitions(plan);
   assertExperimentKnowledge(directory, plan.knowledge, plan.problem, plan.knowledgeTargetNames ?? [plan.problem]);
   if (phase === 'check-report') {

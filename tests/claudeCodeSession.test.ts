@@ -224,7 +224,7 @@ describe('Claude Code stream-json adapter without provider calls', () => {
 
   it('rejects unsupported responsibility contracts before starting a native process', async () => {
     await expect(open({ ...options, delegation: { mode: 'read-only', maxAgents: 2 } })).rejects.toThrow('math_claude_delegation_unsupported');
-    await expect(open({ ...options, readIsolation: { environment: {} as never } })).rejects.toThrow('math_claude_read_isolation_unsupported');
+    await expect(open({ ...options, readIsolation: { environment: 'standard' } })).rejects.toThrow('math_sealed_provider_credential_unavailable');
     await expect(open({ ...options, skills: [{ name: 'fixture', path: '/never/SKILL.md', digest: 'a'.repeat(64), loading: 'native' }] }))
       .rejects.toThrow('math_claude_native_skill_loading_unsupported');
     await expect(open({ ...options, effort: 'none' })).rejects.toThrow('math_claude_effort_unsupported');

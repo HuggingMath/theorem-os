@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { readMathAgentSkill } from '../src/runtime/codexSkills';
 import { buildResearchContext, finalizeResearchDispatch } from '../src/solver/modules/context';
 import { researchSkillIdentity } from '../src/solver/researchSkill';
+import { buildSkillResearchContext } from '../src/solver/skillResearchContext';
 import { assignmentDeliveryFile, leadPlanDeliveryFile, taskVersion, type CooperativeTask } from '../src/solver/tasks';
 import { localExample, solverState } from './helpers/solver';
 
@@ -24,6 +25,38 @@ function fixture() {
 }
 
 describe('common mathematical guidance across research strategies', () => {
+  it.each([false, true])('shares available tool commands with standalone skill when optional resources are %s', resources => {
+    const f = fixture(), digest = 'a'.repeat(64);
+    const tools = path.join(f.directory, "agent tools'", 'math.mjs');
+    const access = { ...f.access, tools, researchSkill: f.skill, ...(resources ? {
+      corpusFile: path.join(f.directory, 'corpus.json'), knowledgeFile: path.join(f.directory, 'knowledge.json'),
+      knowledgeDigest: digest, libraryCatalog: { file: path.join(f.directory, 'library.json'), digest },
+    } : {}) };
+    const state = { ...f.state, researchMode: 'skill' as const, researchSkill: researchSkillIdentity(f.skill),
+      ...(resources ? { knowledgeDigest: digest } : {}) };
+    const helpFile = path.join(f.workspace, '.scratch/theoremos-help.md');
+    buildSkillResearchContext(f.problem, state, access);
+    const sections = (text: string) => Object.fromEntries(text.split(/^## /mu).slice(1).map(section => {
+      const end = section.indexOf('\n');
+      return [section.slice(0, end), section.slice(end).trim()];
+    }));
+    const { delivery, ...standalone } = sections(fs.readFileSync(helpFile, 'utf8'));
+    expect(delivery).toContain('.scratch/declaration-submission.json');
+    buildResearchContext(f.problem, state, access);
+    const shared = sections(fs.readFileSync(helpFile, 'utf8'));
+    expect(shared).toEqual(standalone);
+    expect(shared).not.toHaveProperty('delivery');
+    expect(shared.lean).toContain("bun '" + tools.replaceAll("'", "'\\''") + "' declarations get");
+    expect(JSON.stringify(shared)).not.toContain(path.join(f.access.root, 'bin/math.ts'));
+    for (const name of ['lean-search', 'knowledge', 'library'])
+      expect(Object.hasOwn(shared, name)).toBe(resources);
+    if (resources) {
+      expect(shared.knowledge).toContain(digest);
+      expect(shared.knowledge).toContain(f.problem.receiptDigest);
+      expect(shared.knowledge).toContain(state.environmentDigest);
+    }
+  });
+
   it('uses one mathematical instruction and help body for skill and independent arms', () => {
     const f = fixture();
     const independent = buildResearchContext(f.problem, f.state, f.access);
@@ -34,6 +67,8 @@ describe('common mathematical guidance across research strategies', () => {
       .toBe(independent.instructions.split('\nExecution and delivery protocol:')[0]);
     expect(fs.readFileSync(path.join(f.workspace, '.scratch/theoremos-help.md'), 'utf8')).toBe(help);
     expect(help).toContain('DECLARATIONS.jsonl');
+    expect(help).toContain('## huggingmath\n');
+    expect(help).toContain("bun '" + path.resolve('bin/math.ts') + "' hub --help");
     for (const text of ['a uniformly bounded sequence', 'singular integral construction', 'quantitative moment or L² estimate',
       'Use installed library lemmas and test uncertain bridges early', 'Repair the earliest error']) {
       expect(independent.instructions).not.toContain(text); expect(skill.instructions).not.toContain(text);

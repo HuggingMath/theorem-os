@@ -36,8 +36,10 @@ import { leadPlanningEvidence, leadPlanningEvidenceText } from '../planningEvide
 import { mathematicalGapContextText } from '../mathematicalGaps';
 import { nextCheckContextText } from '../nextChecks';
 import { goalProgressTaskContext } from '../goalProgress';
-import type { MathAgentSkill } from '../../runtime/agentSkills';
-import { buildCommonResearchContext } from '../researchGuidance';
+import { assertMathAgentSkillsCurrent, type MathAgentSkill } from '../../runtime/agentSkills';
+import { buildCommonResearchContext, buildCommonResearchGuide } from '../researchGuidance';
+import { buildSkillResearchContext } from '../skillResearchContext';
+import { researchSkillIdentity } from '../researchSkill';
 
 export type ContextAccess = Readonly<{
   root: string;
@@ -66,6 +68,7 @@ export type ContextAccess = Readonly<{
   customModuleRules?: readonly CustomResearchModule[];
   /** Same mathematical skill for every explicitly controlled comparison arm. */
   commonResearchSkill?: MathAgentSkill;
+  researchSkill?: MathAgentSkill;
   /** Pure fixture context; real frozen problems always load their committed source. */
   frozenContexts?: Readonly<Record<string, string>>;
 }>;
@@ -142,6 +145,14 @@ export function buildStatementReviewContext(review: StatementReview, action: Sta
 export function buildResearchContext(task: SolverProblem, state: Readonly<SolverRunState>, access: ContextAccess): ContextBundle {
   if (state.commonResearchSkill || access.commonResearchSkill)
     return buildCommonResearchContext(task, state, access, readFrozenContexts(task, access));
+  const skillWorkflow = state.researchMode === 'skill' && state.researchSkillWorkflow === 'full';
+  if (skillWorkflow) {
+    if (!access.researchSkill || canonicalMathJson(researchSkillIdentity(access.researchSkill)) !== canonicalMathJson(state.researchSkill))
+      throw new Error('math_research_skill_changed');
+    assertMathAgentSkillsCurrent([access.researchSkill]);
+  }
+  const singleSkill = skillWorkflow && !state.workers && !state.cooperation && !access.assignment
+    ? buildSkillResearchContext(task, state, { ...access, researchSkill: access.researchSkill! }) : undefined;
   const command = `bun ${shellArgument(access.tools ?? path.join(access.root, 'bin/math.ts'))}`;
   const fixedReview = access.assignment?.kind === 'review';
   const planningLead = access.assignment?.kind === 'lead';
@@ -204,7 +215,12 @@ export function buildResearchContext(task: SolverProblem, state: Readonly<Solver
   const diagnosticExecutionRules = planningLead ? '' :
     `Use this entry point for saved-file checks and temporary #check/#synth probes: ${command} check-lean --worktree ${shellArgument(access.worktree)} --file 'OWNED_FILE.lean' --timeout-seconds 0. ` +
     'It prepares local dependency artifacts without writing shared package caches. Direct lake build or lake env lean can attempt writes to read-only packages or miss local module artifacts. Remove temporary probe commands before proof delivery. ';
-  const instructions = `${responsibility} Work only in this isolated worktree.
+  const instructions = skillWorkflow ? (singleSkill?.instructions ??
+    buildCommonResearchGuide(task, access, state.environmentDigest, 'workflow').instructions + '\n' + responsibility + '\n' +
+    `Editable paths: ${JSON.stringify([...(readOnlySources ? [] : task.ownedFiles.filter(file => !Object.hasOwn(task.frozenFiles ?? {}, file))), 'RESEARCH.md', ...(deliveryFile ? [deliveryFile] : [])])}. ` +
+    (readOnlySources ? 'Leave every Lean source unchanged. ' : '') + taskRules) +
+    '\n' + (['M1', 'M3', 'M4', 'M5'] as const).map(slot => strategyAdvice(access, slot, '', slot !== 'M5' || cooperative)).join('\n')
+    : `${responsibility} Work only in this isolated worktree.
 Edit only ${[...(readOnlySources ? [] : editableOwnedFiles(task.ownedFiles, file => path.join(access.worktree, task.projectRelative, file), task.frozenFiles)), path.join(access.worktree, 'RESEARCH.md'), ...(deliveryFile ? [path.join(access.worktree, deliveryFile)] : [])].join(', ')}.
 ${access.assignment ? 'Save RESEARCH.md and delivery logs at these exact worktree-root paths' : 'Save RESEARCH.md at its exact worktree-root path'}, including when a diagnostic command runs inside the Lean project subdirectory.
 Temporary ${planningLead ? 'mathematical notes and tool output' : 'probes, backups and diagnostic output'} may be written under ${path.join(access.worktree, '.scratch', 'tmp')} or the Lean project's .scratch/tmp directory. The shell's TMPDIR points to the worktree-local directory; run mkdir -p "$TMPDIR" before creating temporary files. /tmp is read-only. Untracked regular scratch files stay advisory and remain outside formal proof checkpoints. Do not git add scratch files or use symlinks there. ${planningLead ? 'Retain useful mathematical findings in RESEARCH.md before returning.' : 'Retain reusable proof code and findings in RESEARCH.md or owned Lean files before returning.'}
@@ -273,13 +289,25 @@ ${access.corpusFile ? `For library lookup, run ${command} search-lean --workspac
     frozenContexts: readFrozenContexts(task, access),
     maxContextBytes: access.maxContextBytes, maxOptionalContextBytes: access.maxOptionalContextBytes,
     environmentDigest: state.environmentDigest,
-    ...(continuation ? { mandatory: [continuationContextSection(continuation, command, task.projectRelative)] } : {}),
+    mandatory: [...(continuation ? [continuationContextSection(continuation, command, task.projectRelative)] : []),
+      ...(skillWorkflow ? [{ id: 'research-skill-identity', kind: 'assignment' as const,
+        text: 'Frozen research skill:\n' + canonicalMathJson(state.researchSkill) }] : []),
+      ...(singleSkill && fs.existsSync(path.join(access.worktree, '.scratch/declaration-feedback.json'))
+        ? [{ id: 'declaration-feedback', kind: 'feedback' as const,
+          text: 'Read current host declaration feedback at ' + path.join(access.worktree, '.scratch/declaration-feedback.json') + ' before resubmitting.' }] : [])],
     optional: [...residualSections, ...librarySections, ...knowledgeSections, ...applicationSections, ...(reference ? [reference] : [])] };
   const compileFull = (checkpointInstruction?: string) => compileTaskContext({ ...compilation, instructions,
     mandatory: [...dispatchPrefix(checkpointInstruction), ...(compilation.mandatory ?? [])] });
+  const compileSingleContinuation = (checkpointInstruction?: string) => compileContextSections({ instructions,
+    mandatory: [...dispatchPrefix(checkpointInstruction), { id: 'same-thread-skill-workflow', kind: 'continuation',
+      text: singleSkill!.continuationMessage! }], optional: compilation.optional,
+    maxContextBytes: access.maxContextBytes, maxOptionalContextBytes: access.maxOptionalContextBytes, inlineManifest: false });
+  const continued = singleSkill ? compileSingleContinuation() : undefined;
   const compiled = access.assignment && cooperation ? buildCooperativeContext(task, cooperation, bundle, access.assignment,
-    compilation, state.workers, [diagnosticExecutionRules, access.mathTools ? mathToolsUsageInstruction(access.mathTools, access.worktree) : ''].filter(Boolean).join('\n')) : { ...bundle, ...compileFull(),
-      compileDispatch: (options: ResearchDispatchOptions) => compileFull(options.checkpointInstruction) };
+    compilation, state.workers, [diagnosticExecutionRules, access.mathTools ? mathToolsUsageInstruction(access.mathTools, access.worktree) : ''].filter(Boolean).join('\n'), skillWorkflow) : { ...bundle, ...compileFull(),
+      ...(continued ? { continuationMessage: continued.message, continuationManifest: continued.manifest } : {}),
+      compileDispatch: (options: ResearchDispatchOptions) => options.continuation && continued
+        ? compileSingleContinuation(options.checkpointInstruction) : compileFull(options.checkpointInstruction) };
   const result: ContextBundle = { ...compiled, ...(access.knowledgeSnapshot ? { knowledgeRetrievals: knowledgeSections.map(section => ({
     ...section.knowledge, included: compiled.manifest?.included.some(item => item.id === section.id) ?? false,
     omissionReason: compiled.manifest?.omitted.find(item => item.id === section.id)?.reason })) } : {}) };
@@ -405,8 +433,10 @@ function leadTaskTable(cooperation: CooperationState): string {
 /** Add role rules; the compiler selects a scoped, versioned mathematical context for dispatch. */
 function buildCooperativeContext(problem: SolverProblem, cooperation: CooperationState, context: ContextBundle,
   action: CooperativeAction, compilation: Omit<TaskContextInput, 'instructions'>,
-  workers: readonly Pick<ResearchWorker, 'id' | 'role'>[] = [], toolGuidance = ''): ContextBundle {
-  const workContract = cooperativeWorkContract(action, cooperation.tasks, cooperation);
+  workers: readonly Pick<ResearchWorker, 'id' | 'role'>[] = [], toolGuidance = '', skillWorkflow = false): ContextBundle {
+  const contract = cooperativeWorkContract(action, cooperation.tasks, cooperation);
+  const workContract = skillWorkflow ? Object.fromEntries(Object.entries(contract)
+    .filter(([key]) => key !== 'deliveryGuidance')) as typeof contract : contract;
   const capacityExploration = action.kind === 'task'
     ? cooperation.tasks.find(node => node.task.id === action.task.id)?.capacityExploration : undefined;
   const organizationRules = action.kind === 'lead' && workers.some(worker => worker.role === 'prover')
@@ -417,10 +447,10 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
       'The host may use spare slots for distinct advisory capacity explorations. These execution overlays appear in COOPERATION.json; omit them from your math-plan because the host preserves their ownership and drafts separately. Never depend on an exploration ID as a proof premise; adopt its exact interface under a new typed task ID using the actual typed inputs. Consume useful findings through the usual plan. ' +
       `An unspecified route maxConcurrent uses ${defaultResearchRouteConcurrency(workers)} task slots; an explicit limit is respected.\n`
     : '';
-  const feasibilityRules = action.kind === 'task' && isFeasibilityReview(action.task)
+  const feasibilityRules = !skillWorkflow && action.kind === 'task' && isFeasibilityReview(action.task)
     ? 'This is an early mathematical feasibility review. Independently challenge the exact dependency interfaces and their proposed original-goal application before their proofs are complete. Identify the hardest missing construction or estimate and whether its difficulty has merely moved into a helper or assumption. Check quantifier order, uniform constants, quantitative strength, boundary cases and applicability of cited results. First test whether the proposed inputs would actually suffice for the consumer; then test the most doubtful input with a counterexample, tractable special case, weaker statement or alternative construction. Choose a discriminating check that can change the route decision, rather than repeating an unchanged search. Keep a complete useful argument, exact remaining gap and reproducible evidence in RESEARCH.md. Use the existing research response with conclusion supporting, refuted or inconclusive; distinguish an invalid route from a false original theorem. Supporting evidence and local Lean probes remain advisory. Leave Lean sources unchanged on delivery.\n'
     : '';
-  const earlyRouteRules = action.kind === 'lead'
+  const earlyRouteRules = !skillWorkflow && action.kind === 'lead'
     ? 'Before expanding an uncertain decomposition, identify its hardest substantive inference and test that the proposed inputs suffice for their actual consumer. For a typed consumer with unproved lemma inputs, arrange an early conditional:true proof using those fixed inputs; for proofRoutes, do this on the route closing lemma while the original target still waits for a checked route. A conditional receipt checks sufficiency only, not the truth or feasibility of its premises. Request a distinct untyped research/sketch task with reviewScope:"feasibility" to challenge a doubtful core input, with dependsOn naming the consumer and core tasks it must inspect. Advisory dependencies are inspection inputs and do not wait for proofs. Keep the consumer independent of the advisory review in its proof dependencies to avoid a cycle. Give the review a specific mathematical question and discriminating check; an ordinary direct proof does not require a review task. A fresh reviewer session and author exclusion support an independent check; if no independent peer is eligible, keep useful proof work executable and state the missing review.\n'
     : '';
   const connectionRules = action.kind === 'task' && action.assignment.connectionCheck
@@ -433,7 +463,7 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     ? `This lemma is one member of family task ${action.task.familyMember}. Prove only its own index range; the host proves the family from its members, so leave the family theorem and sibling members alone.\n`
     : '';
   const initialPlanning = action.kind === 'lead' && cooperation.tasks.length === 0;
-  const initialPlanningRules = initialPlanning
+  const initialPlanningRules = initialPlanning && !skillWorkflow
     ? 'Initial planning shares the proof budget. After one focused inspection of the exact targets and definitions, publish the smallest useful executable task graph before further literature searches or proof exploration. ' +
       'The first graph must cover every original target exactly once; it does not need a complete proof decomposition. Direct original-goal tasks plus distinct research tasks for specific uncertain inferences are a valid first plan and let peers work in parallel. ' +
       'Add a helper only when its full closed Lean type and intended consumer are known; never invent a proposition to fill the graph. Keep original goals independent of advisory research in proof dependencies. ' +
@@ -512,7 +542,7 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
   const localFrontier = new Set(routeContext.routes.flatMap(route => route.frontierTaskIds).filter(id => focus.frontier.has(id)));
   if (action.kind === 'task' && focus.frontier.has(action.task.id)) localFrontier.add(action.task.id);
   const boundedFrontier = action.kind === 'task' && proofRoutes.length > 0;
-  const focusRules = action.kind === 'lead' || action.kind === 'task' ?
+  const focusRules = skillWorkflow ? '' : action.kind === 'lead' || action.kind === 'task' ?
     'Prioritize a ready typed step proving a substantive missing construction or quantitative estimate on the original-goal frontier. First check the key mathematical premise and structural bridge against the exact definitions; a normed space alone does not supply inner-product identities. Choose genuinely weaker, independently Lean-checkable sublemmas with closed types. If a route requires a stronger result than the target, such as an exact construction for an approximation claim, justify its necessity and feasibility before expanding it; otherwise investigate a weaker sufficient construction. For an algorithmic target, separate the mathematical output bound, correctness of the concrete implementation and its running-time bound; bounded output size alone supplies no running-time proof. Record the actual consumer with explicit dependsOn or proofRoutes and show the concrete application, discharged inference and remaining premises. A checked conditional wrapper establishes sufficiency under its explicit conditions; keep its unproved conditions on the frontier. Pairing or renaming the original branches, or assuming the unresolved core result, does not close the original goal. Advisory dependencies identify questions, not proved premises. Preserve checked contracts and independent investigations. Let consumers do short glue; add helpers only for useful reusable results. Split independent core proof, strength/counterexample audit and library adaptation questions.\n' : '';
   const nextCheckRules = ['lead', 'task'].includes(action.kind) ?
     'To test one unresolved inference, add mathematicalGap.nextCheck:{action:"feasibility"|"apply-lemma"|"construction-check",objective:"one discriminating check",expectedEvidence:"the exact evidence that would support or challenge this step",targetTaskId:"OPTIONAL_VISIBLE_TASK"}. The host schedules an independent feasibility task, binds its parent/target/original consumer and retains it in COOPERATION.json.nextChecks. Shared unproved definition interfaces on the original-goal path may also receive one host-origin definition-contract check; it needs no invented research delivery. This checks a method; it supplies no proved premise. A check worker must finish with checkOutcome:{checkId:"HOST_CHECK_ID",conclusion:"supporting"|"refuted"|"inconclusive",summary:"scoped result",evidenceRefs:["retained evidence"]}. Unknown remains inconclusive. An outcome publication ends this check. Lead answers each presented outcome in nextCheckDecisions:[{checkId,outcomeDeliveryId,action:"continue"|"revise"|"stop",reason}]. Continuing after a refuted outcome additionally requires counterEvidenceDeliveryId naming another current supporting host check of the same target and consumer with retained evidence. Otherwise revise the actual target argument, dependencies or route, assign a new active independent feasibility check inspecting the target in the same plan, or stop the target. An objective rewrite is not a revision. These decisions remain advisory; they never establish truth or acceptance. Host check IDs cannot become proof dependencies.\n' : '';
@@ -560,7 +590,7 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     'Before continuing, read task feedback and saved results; identify the unresolved inference, consumer and cheapest new discriminating check. Reuse checked declarations and exact signatures. Do not rescan the same negatively searched library scope under unchanged inputs. Reopen only for a new relevant version, assumption, theorem candidate or mathematical method; record the trigger. A renamed query alone is not a new mathematical direction. Without new evidence or a useful check, report the missing input instead of identical work. Before any checkpoint, recovery decision or context rotation, save in RESEARCH.md: attempted methods, exact results and evidence locations, scoped negative searches, reusable code, precise unresolved next inference and retry trigger. Distinguish checked unconditional facts from conditional sufficiency and unverified drafts. Preserve useful prior evidence.\n' : '';
   const checkpointRules = action.kind === 'lead' ?
     'For idleWorkers with m3-no-ready, dependency-blocked or m5-no-selection, publish a small executable plan revision promptly. Confirm M3 readiness, role/owner and saved-assignment pins; name a concrete running dependency if waiting, or explicitly pause the route. An unchanged accepted plan leaves their continuous idle episode unresolved. Before any checkpoint, recovery decision or context rotation, update worktree-root RESEARCH.md with attempted methods, exact results and evidence locations, scoped negative searches, reusable steps, the precise unresolved next inference and retry trigger. Distinguish checked unconditional facts from conditional sufficiency and unverified drafts; preserve useful prior evidence rather than status-only recaps.\n' : '';
-  const mathematicalInterfaceRules = action.kind === 'review' ? '' :
+  const mathematicalInterfaceRules = action.kind === 'review' || skillWorkflow ? '' :
     'Before using an input or proposing a helper, read its complete Lean type and match its exact output to the consumer: preserve quantifier order, uniform constants, parameter dependence and membership claims. A vector construction does not supply an operator in a specified algebra; a uniformly bounded sequence need not be one fixed object. Expand notation, coercions and semilinear scalar maps before claiming inconsistent assumptions. ' +
     'For transport along a map or equivalence, check which structure its actual type preserves before searching for an API: linearity and continuity do not imply norm preservation. Transport of unit spheres or exact infimum/supremum values needs the corresponding preservation proof; operator norm bounds alone do not supply equality. Test a doubtful transport on a concrete instance. Strengthening the map to an isometry does not discharge a consumer quantified over every continuous linear equivalence or every equivalent norm. If a required preservation property is unsupported, record the exact missing premise and its consumer for a Lead route decision instead of repeatedly guessing names or silently weakening the original target. ' +
     'For a singular integral construction, check integrability of its local model and the measure of its singular set. A function taking an infinite value on a null set does not by itself have an infinite integral. ' +
@@ -710,7 +740,7 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
             text: 'Current in-flight questions (scope-visible assignments; advisory, retrieve exact interfaces from COOPERATION.json):\n' +
               JSON.stringify(parallelQuestions),
           }] : []),
-        ...(focusRules ? [{ id: 'frontier-focus', kind: 'continuation' as const,
+        ...((focusRules || skillWorkflow && ['lead', 'task'].includes(action.kind)) ? [{ id: 'frontier-focus', kind: 'continuation' as const,
           text: 'Original-goal focus (advisory, not proof acceptance):\n' + JSON.stringify(focusPacket) }] : [])] });
   const full = compileFull();
   const researchInputs = action.kind === 'lead' ? leadResearchInputSection(compilation) : undefined;

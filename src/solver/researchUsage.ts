@@ -40,7 +40,7 @@ export class ResearchUsage {
     research.usageAccounting!.pending = true;
     this.active = { reported: false, incomplete: false,
       taskId: assignmentTask(assignment), upstreamRequests: this.requestSessionId === this.sessionId && this.sessionId !== undefined,
-      nativeTurnTotals: this.boundSession?.id === this.sessionId && this.boundSession.nativeTurnTotals,
+      nativeTurnTotals: Boolean(this.boundSession && this.boundSession.id === this.sessionId && this.boundSession.nativeTurnTotals),
       finished: false,
       initialPlanning: assignment?.kind === 'lead' && state.cooperation?.tasks.length === 0 && maxTotalTokens > 0 };
     if (!this.active.upstreamRequests) {
@@ -72,7 +72,7 @@ export class ResearchUsage {
 
   sessionOpened(session: MathAgentSession) {
     this.requestSessionId = session.usageSource === 'upstream-requests' ? this.sessionId : undefined;
-    if (this.boundSession?.id === this.sessionId) {
+    if (this.boundSession && this.boundSession.id === this.sessionId) {
       this.boundSession.upstreamRequests = session.usageSource === 'upstream-requests';
       this.boundSession.nativeTurnTotals = session.usageSource === 'native-turn-totals';
     }

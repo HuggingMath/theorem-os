@@ -47,8 +47,8 @@ function observation(id: string, sequence: number): WebObservation {
   return record;
 }
 
-describe('Web single researcher creation and frozen skill identity', () => {
-  it('forwards explicit skill CLI arguments while preserving the legacy default and rejecting conflicting module choices', () => {
+describe('Web Skill research arrangement and frozen identity', () => {
+  it('forwards explicit skill CLI arguments while preserving the legacy default and cooperative module choices', () => {
     expect(webResearchArguments(input())).toEqual(['--research-mode', 'skill', '--skill-loading', 'native']);
     expect(webResearchArguments(input({ skillLoading: 'file' }))).toEqual(['--research-mode', 'skill', '--skill-loading', 'file']);
     expect(webResearchArguments(input({ researchMode: undefined }))).toEqual([]);
@@ -56,8 +56,9 @@ describe('Web single researcher creation and frozen skill identity', () => {
     for (const change of [{ workers: 2 }, { coordination: 'cooperative' }, { planApproval: true },
       { modulePlan: { scheduler: 'plan', context: 'full', custom: [] } },
       { researchSelection: { skills: [{ assetId: 'custom-strategy', version: '1.0.0' }] } }])
-      expect(webResearchModeError(input(change as Partial<WebRunInput>))).toMatch(/单研究者/);
-    expect(webResearchModeError(input({ researchMode: undefined, skillLoading: 'native' }))).toMatch(/单研究者/);
+      expect(webResearchModeError(input(change as Partial<WebRunInput>))).toBeUndefined();
+    expect(webResearchModeError(input({ researchMode: undefined, skillLoading: 'native' }))).toMatch(/Skill/);
+    expect(webResearchModeError(input({ workers: 4, coordination: 'cooperative', planApproval: true }))).toBeUndefined();
     const modules = webSolverModules({ id: 'fixture', input: input(), provider });
     expect(modules.M3).toBe(directSolverModules.M3); expect(modules.M5).toBe(directSolverModules.M5);
     expect(webSolverModules({ id: 'fixture', input: input(), provider }, undefined,

@@ -16,6 +16,7 @@ Use these references when the work calls for them:
 - [Literature](references/literature.md): when a proof idea or missing result may be found in external sources.
 - [Lean work](references/lean.md): when finding, testing or delivering formal declarations.
 - [Continuation](references/continuation.md): when starting from saved work or preparing durable research artifacts.
+- [HuggingMath](references/huggingmath.md): when asked to export a completed result or transfer it into private Hub drafts.
 - [Parallel work](references/parallel-work.md): when an independent investigation can usefully run alongside the current task.
 
 Keep reproducible source, useful experiments, source citations and concise public research notes. Record what was established, the actual assumptions, what failed and what remains uncertain. Preserve a direct path from a claimed result to the source and check that support it. These artifacts should let a later session continue without reconstructing a private conversation or requiring internal chain of thought.

@@ -453,7 +453,7 @@ export const prepareLeanEvalProblemBinding = (request: LeanEvalProblemBindingReq
     publicObligations: Object.freeze(holes.map(hole => Object.freeze({
       name: hole.name,
       kind: hole.kind,
-      declarationHash: hashMathFormalSourceDeclaration(hole.body, hole.basename),
+      declarationHash: hashMathFormalSourceDeclaration(hole.body, hole.basename)!, // validateLeanEvalHoleDeclarations checked these exact bytes.
     }))),
     solverOwnedPaths: Object.freeze(sortedSolverOwnedPaths),
     officialManifestPath: LEAN_EVAL_MANIFEST_PATH,

@@ -196,6 +196,28 @@ describe('host credential relay for isolated formalization roles', () => {
     expect(gate.mock.calls[2][0]).not.toHaveProperty('threadId');
   });
 
+  it.each(['session-id', 'thread-id', 'session_id', 'x-codex-thread-id'])('attributes the native %s header', async header => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse()));
+    const gate = vi.fn((_identity?: Parameters<ModelRequestGate>[0]) => ({ allowed: true as const, settle: () => {} }));
+    const relay = await start({ transport: 'loopback-http', requestGate: gate });
+    expect((await send(relay, { headers: { [header]: 'child-thread',
+      'x-codex-turn-metadata': JSON.stringify({ thread_id: 'child-thread' }) } })).status).toBe(200);
+    expect(gate.mock.calls[0][0]?.threadId).toBe('child-thread');
+  });
+
+  it.each([
+    { 'thread-id': 'child-one', 'session-id': 'child-two' },
+    { 'thread-id': 'child-one', 'x-codex-turn-metadata': JSON.stringify({ thread_id: 'child-two' }) },
+    { 'x-codex-turn-metadata': 'invalid-json' },
+  ])('keeps inconsistent native identities unattributed while accounting for the request: %j', async headers => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse()));
+    const settle = vi.fn(), gate = vi.fn((_identity?: Parameters<ModelRequestGate>[0]) => ({ allowed: true as const, settle }));
+    const relay = await start({ transport: 'loopback-http', requestGate: gate });
+    expect((await send(relay, { headers })).status).toBe(200);
+    expect(gate.mock.calls[0][0]).not.toHaveProperty('threadId');
+    expect(settle).toHaveBeenCalledOnce();
+  });
+
   it.each(['completed', 'incomplete', 'failed', 'cancelled'] as const)(
     'settles a response.%s event and closes its stream without waiting for upstream EOF', async status => {
       let reached!: (boundary: string) => void;

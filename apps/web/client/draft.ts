@@ -152,7 +152,7 @@ function validatedDraft(value: unknown): TaskDraft {
     source: utf8Text(draft, 'source', webLimits.maxSourceBytes), task: utf8Text(draft, 'task', webLimits.maxTaskBytes),
     maxTurns: budget(draft, 'maxTurns'), maxRunSeconds: budget(draft, 'maxRunSeconds'), workers: budget(draft, 'workers'),
     ...(Object.hasOwn(draft, 'maxTotalTokens') ? { maxTotalTokens: budget(draft, 'maxTotalTokens') } : {}),
-    effort: enumeration(draft, 'effort', ['low', 'medium', 'high', 'xhigh', 'max']),
+    effort: enumeration(draft, 'effort', ['none', 'low', 'medium', 'high', 'xhigh', 'max']),
     environment: enumeration(draft, 'environment', ['standard', 'mathlib']),
     coordination: enumeration(draft, 'coordination', ['cooperative', 'independent']),
     ...(Object.hasOwn(draft, 'researchMode') ? { researchMode: enumeration(draft, 'researchMode', ['legacy', 'skill'] as const) } : {}),

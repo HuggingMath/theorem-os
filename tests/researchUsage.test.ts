@@ -7,6 +7,7 @@ import type { SolverModules } from '../src/solver/modules';
 import type { ProofCheck } from '../src/solver/modules/evidence';
 import { commitSolverSources } from '../src/solver/problem';
 import { runResearchWorkers } from '../src/solver/research';
+import { ResearchUsage } from '../src/solver/researchUsage';
 import { workerAccess } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 
@@ -51,6 +52,19 @@ function fixture(cooperative = false) {
 }
 
 describe('research usage at the real research worker boundary', () => {
+  it('keeps usage incomplete when a turn starts without a bound native session', () => {
+    const { state, emit, save } = fixture();
+    state.usageAccounting = { startedTurns: 0, reportedTurns: 0, pending: false, incomplete: false };
+    const usage = new ResearchUsage({ state, research: state, maxTotalTokens: 0,
+      signal: new AbortController().signal, remainingMs: () => Infinity, emit, changed: save });
+    const session: MathAgentSession = { usageSource: 'native-turn-totals',
+      run: async () => 'completed', interrupt: async () => {}, close: async () => {} };
+    // An unbound identity cannot establish which native invocation owns any usage.
+    expect(() => { usage.sessionOpened(session); usage.begin(); usage.finish(true); }).not.toThrow();
+    expect(state.usageAccounting).toEqual({ startedTurns: 1, reportedTurns: 0, pending: false, incomplete: true });
+    expect(state.usage).toBeUndefined();
+  });
+
   it('checks each model call and preserves complete usage totals', async () => {
     const { state, run, modules, check, emit } = fixture(); let calls = 0;
     const open = vi.fn(async (options: MathAgentOptions): Promise<MathAgentSession> => ({ threadId: 'fixture-thread',

@@ -184,11 +184,11 @@ export function refreshRouteBlockers(records: RouteBlocker[], tasks: readonly Ta
     if (reason) {
       record.status = 'reopened'; record.reopenedReason = reason; record.updatedAt = at; reopened.push(record);
     } else if (record.status === 'parked') {
-      if (record.routeId) (node.parkedRoutes[record.routeId] ??= []).push(record.id);
-      else node.routeParking.push(record.id);
+      if (record.routeId) ((node.parkedRoutes ??= Object.create(null))[record.routeId] ??= []).push(record.id);
+      else (node.routeParking ??= []).push(record.id);
     }
   }
-  for (const node of tasks) if (node.status === 'pending' && node.assignment?.routeId && node.parkedRoutes[node.assignment.routeId]?.length)
+  for (const node of tasks) if (node.status === 'pending' && node.assignment?.routeId && node.parkedRoutes?.[node.assignment.routeId]?.length)
     node.assignment = undefined;
   return reopened;
 }

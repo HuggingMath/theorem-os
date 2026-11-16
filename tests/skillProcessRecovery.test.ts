@@ -82,6 +82,7 @@ await withMathRuntimeLease({lockPath,flockExecutable:'/usr/bin/flock'},async lea
   };
  }
  const save=()=>{lease.assertOwned();writeSolverRunState(stateFile,state);
+  if(!recovery&&config.phase==='whole-proof-before-freeze'&&state.pendingResearchFreeze&&!state.pendingProofCheck)hold();
   if(!recovery&&config.phase==='pending-verifier'&&state.pendingDeclarationCheck)hold();
   if(!recovery&&config.phase==='declaration-completed'&&state.pendingDeclarationCheck?.phase==='completed')hold();
   if(!recovery&&config.phase==='whole-proof-pending'&&state.pendingProofCheck)hold();
@@ -100,7 +101,8 @@ await withMathRuntimeLease({lockPath,flockExecutable:'/usr/bin/flock'},async lea
 
 const roots: string[] = [], children: ChildProcess[] = [], observations: Record<string, unknown>[] = [];
 const recoveryPhases = ['prepared', 'request-before-ack', 'request-after-ack', 'tool-write', 'frozen',
-  'pending-verifier', 'declaration-completed', 'declaration-consumed', 'whole-proof-after-freeze',
+  'pending-verifier', 'declaration-completed', 'declaration-consumed',
+  'whole-proof-before-freeze', 'whole-proof-after-freeze',
   'whole-proof-pending', 'whole-proof-accepted'] as const;
 let runtimeRoot: string, runtimeManifest: string;
 beforeAll(() => {
@@ -221,13 +223,18 @@ describe.skipIf(process.platform !== 'linux')('skill mode across actual owner pr
         expect(before.writerStopUnconfirmed).toBeUndefined();
         expect(peerIdentity).toBeDefined();
         expect(alive(Number(peerIdentity))).toBe(false);
-        if (phase === 'whole-proof-after-freeze') {
+        if (phase === 'whole-proof-before-freeze' || phase === 'whole-proof-after-freeze') {
           expect(before.pendingProofCheck).toBeUndefined();
           expect(before.pendingResearchFreeze).toEqual({ commit: problem.baseCommit,
             sourceDigest: frozenSourceDigest, problemReceiptDigest: problem.receiptDigest,
             environmentDigest: state.environmentDigest });
-          expect(frozenCommit).not.toBe(problem.baseCommit);
-          expect(git(state.worktree, ['status', '--porcelain', '--untracked-files=no'])).toBe('');
+          if (phase === 'whole-proof-before-freeze') {
+            expect(frozenCommit).toBe(problem.baseCommit);
+            expect(git(state.worktree, ['status', '--porcelain', '--untracked-files=no'])).not.toBe('');
+          } else {
+            expect(frozenCommit).not.toBe(problem.baseCommit);
+            expect(git(state.worktree, ['status', '--porcelain', '--untracked-files=no'])).toBe('');
+          }
           expect(fs.readFileSync(path.join(state.worktree, problem.projectRelative, 'Submission.lean'), 'utf8'))
             .toBe('theorem original : True := by trivial\n');
         } else {
@@ -270,7 +277,13 @@ describe.skipIf(process.platform !== 'linux')('skill mode across actual owner pr
         expect(after.writerStopUnconfirmed).toBeUndefined();
         expect(after.pendingResearchFreeze).toBeUndefined();
         expect(after.pendingProofCheck).toBeUndefined(); expect(after.check?.passed).toBe(true);
-        expect(after.check?.commit).toBe(frozenCommit);
+        if (phase === 'whole-proof-before-freeze') {
+          const checkedCommit = git(state.worktree, ['rev-parse', 'HEAD']);
+          expect(checkedCommit).not.toBe(frozenCommit);
+          expect(after.check?.commit).toBe(checkedCommit);
+          expect(git(state.worktree, ['rev-list', '--parents', '-n', '1', 'HEAD']))
+            .toBe(`${checkedCommit} ${frozenCommit}`);
+        } else expect(after.check?.commit).toBe(frozenCommit);
         expect(after.check?.sourceDigest).toBe(frozenSourceDigest);
         expect(solverSourceDigest(problem, state.worktree)).toBe(frozenSourceDigest);
         expect(after.check?.verification.status).toBe('kernel_verified');
@@ -295,7 +308,8 @@ describe.skipIf(process.platform !== 'linux')('skill mode across actual owner pr
           pendingProofCheck: after.pendingProofCheck, proofAccepted: after.check?.passed,
           usageAccounting: after.usageAccounting }, requestIds: turns.map(call => call.turnId),
         lockInodeRetained: true, existingNotesRetained: bytes !== undefined,
-        ...(phase.startsWith('whole-proof-') ? { frozenCommit, frozenSourceDigest, writerStoppedBeforeFreeze: true,
+        ...(phase.startsWith('whole-proof-') ? { frozenCommit, checkedCommit: after.check?.commit,
+          frozenSourceDigest, writerStoppedBeforeFreeze: true,
           writerNotReopened: true } : {}) });
     }, 30_000);
 });

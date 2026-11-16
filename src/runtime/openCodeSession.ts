@@ -9,7 +9,9 @@ import { scheduleMathTimeout } from '../math/mathTimers';
 import { assertMathAgentSkillsCurrent } from './agentSkills';
 import type { MathAgentOptions, MathAgentSession } from './agentSession';
 import { prepareHarnessProcess } from './harnessProcess';
+import { planMathAgentSession } from './agentSessionPlan';
 import { safeHttpStatusCode, type MathAgentFailureDiagnostic } from './failureDiagnostic';
+import { prepareSealedHarness, sealedControlFetch, sealedOpenCodeProvider, sealedRoleText } from './sealedHarness';
 
 type Json = Record<string, unknown>;
 const object = (value: unknown): Json => value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {};
@@ -28,9 +30,7 @@ const providerFailure = (value: Json): MathAgentFailureDiagnostic => {
 /** OpenCode 1.x native HTTP/SSE adapter. Provider definitions come only from this frozen profile. */
 export async function createOpenCodeMathSession(options: MathAgentOptions): Promise<MathAgentSession> {
   options.signal?.throwIfAborted();
-  if (options.readIsolation) throw new Error('math_opencode_read_isolation_unsupported');
-  if (options.delegation) throw new Error('math_opencode_delegation_unsupported');
-  if (options.skills?.some(skill => skill.loading !== 'file')) throw new Error('math_opencode_requires_file_skill');
+  const executionPlan = planMathAgentSession('opencode', options);
   assertMathAgentSkillsCurrent(options.skills ?? []);
   const separator = options.model.indexOf('/');
   if (separator < 1 || separator === options.model.length - 1) throw new Error('math_opencode_requires_provider_model');
@@ -45,11 +45,13 @@ export async function createOpenCodeMathSession(options: MathAgentOptions): Prom
   const permission = { '*': 'deny', read: 'allow', edit: 'allow', glob: 'allow', grep: 'allow', list: 'allow',
     bash: 'allow', external_directory: 'allow', webfetch: 'allow', websearch: 'allow', task: 'deny',
     question: 'deny', skill: 'deny', doom_loop: 'deny' };
-  const config = { provider: { [providerID]: provider[providerID] }, enabled_providers: [providerID],
+  const sealedProvider = options.readIsolation ? sealedOpenCodeProvider(options) : undefined;
+  const instructions = options.readIsolation ? sealedRoleText(options.instructions, options) : options.instructions;
+  const config = { provider: { [providerID]: sealedProvider?.provider ?? provider[providerID] }, enabled_providers: [providerID],
     model: options.model, small_model: options.model, default_agent: agent, plugin: [], mcp: {},
     lsp: false, formatter: false, snapshot: false, autoupdate: false, share: 'disabled', instructions: [],
     compaction: { auto: false, prune: false }, permission,
-    agent: { [agent]: { mode: 'primary', model: options.model, prompt: options.instructions, permission },
+    agent: { [agent]: { mode: 'primary', model: options.model, prompt: instructions, permission },
       ...Object.fromEntries(['build', 'plan', 'general', 'explore', 'title', 'summary'].map(name => [name, { disable: true }])) } };
   const port = await new Promise<number>((resolve, reject) => {
     const server = net.createServer(); server.once('error', reject);
@@ -57,17 +59,24 @@ export async function createOpenCodeMathSession(options: MathAgentOptions): Prom
       server.close(error => error ? reject(error) : resolve((address as net.AddressInfo).port)); });
   });
   const password = randomUUID();
-  const launch = prepareHarnessProcess({ ...options, profile, workspace,
-    environment: { ...options.environment, OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
-      OPENCODE_CONFIG: '', OPENCODE_CONFIG_DIR: path.join(profile, 'config'), OPENCODE_TEST_HOME: profile,
+  const nativeProfile = options.readIsolation ? '/profile' : profile;
+  const nativeWorkspace = options.readIsolation ? '/workspace' : workspace;
+  const nativeEnvironment = { OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
+      OPENCODE_CONFIG: '', OPENCODE_CONFIG_DIR: path.posix.join(nativeProfile, 'config'), OPENCODE_TEST_HOME: nativeProfile,
       OPENCODE_SERVER_PASSWORD: password, OPENCODE_SERVER_USERNAME: agent,
       OPENCODE_DISABLE_PROJECT_CONFIG: 'true', OPENCODE_DISABLE_DEFAULT_PLUGINS: 'true',
       OPENCODE_DISABLE_EXTERNAL_SKILLS: 'true', OPENCODE_DISABLE_MODELS_FETCH: 'true',
       OPENCODE_DISABLE_CLAUDE_CODE: 'true', OPENCODE_DISABLE_AUTOUPDATE: 'true',
-      OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true' } }, options.executable,
-  ['serve', '--pure', '--hostname=127.0.0.1', `--port=${port}`]);
+      OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: 'true',
+      ...(options.readIsolation ? { XDG_CONFIG_HOME: '/profile/xdg/config', XDG_DATA_HOME: '/profile/xdg/data',
+        XDG_STATE_HOME: '/profile/xdg/state', XDG_CACHE_HOME: '/profile/xdg/cache' } : {}) };
+  const sealed = options.readIsolation ? await prepareSealedHarness('opencode', options,
+    { environment: nativeEnvironment, controlPort: port, openCode: sealedProvider }) : undefined;
+  const arguments_ = ['serve', '--pure', '--hostname=127.0.0.1', `--port=${port}`];
+  const launch = sealed ? sealed.launch(arguments_) : prepareHarnessProcess({ ...options, profile, workspace,
+    environment: { ...options.environment, ...nativeEnvironment } }, options.executable, arguments_);
   const child = spawn(launch.command, launch.args, { cwd: workspace, env: launch.env, detached: true,
-    stdio: ['ignore', 'pipe', 'pipe'] });
+    stdio: ['ignore', 'pipe', 'pipe', ...('inheritedFds' in launch ? launch.inheritedFds ?? [] : [])] });
   const lifetime = new AbortController();
   let closing: Promise<void> | undefined, running = false, settled = true, threadId = '';
   let lastError: string | undefined, lastInputTokens: number | undefined;
@@ -76,21 +85,23 @@ export async function createOpenCodeMathSession(options: MathAgentOptions): Prom
   let active: { abort: () => void } | undefined;
   const close = () => closing ??= (async () => {
     lifetime.abort(); active?.abort();
-    try { await closeMathProcess(child); } finally { options.signal?.removeEventListener('abort', aborted); }
+    try { await closeMathProcess(child); } finally { options.signal?.removeEventListener('abort', aborted); await sealed?.close(); }
   })();
   const aborted = () => { void close(); };
   options.signal?.addEventListener('abort', aborted, { once: true });
   child.once('error', () => { lifetime.abort(); });
   child.once('exit', () => { lifetime.abort(); });
   // Always drain stderr, but do not expose profile credentials or provider response bodies.
-  child.stderr.resume();
+  child.stderr!.resume();
   const endpoint = `http://127.0.0.1:${port}`;
   const headers = { authorization: 'Basic ' + Buffer.from(`${agent}:${password}`).toString('base64'),
     'content-type': 'application/json' };
   const url = (route: string) => endpoint + route + (route.includes('?') ? '&' : '?') +
-    'directory=' + encodeURIComponent(workspace);
+    'directory=' + encodeURIComponent(nativeWorkspace);
+  const nativeFetch = (url: string, init: RequestInit = {}) => sealed?.controlSocket
+    ? sealedControlFetch(sealed.controlSocket, url, init) : fetch(url, init);
   const request = async (route: string, body?: unknown, signal = lifetime.signal, method = body === undefined ? 'GET' : 'POST') => {
-    const response = await fetch(url(route), { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal });
+    const response = await nativeFetch(url(route), { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal });
     if (!response.ok) throw new Error(`math_opencode_http_error:${response.status}`);
     return response.status === 204 ? undefined : response.json();
   };
@@ -98,7 +109,7 @@ export async function createOpenCodeMathSession(options: MathAgentOptions): Prom
     await new Promise<void>((resolve, reject) => {
       let output = '';
       const done = (error?: Error) => {
-        clearTimeout(timer); child.stdout.off('data', read); child.off('error', failed); child.off('exit', exited);
+        clearTimeout(timer); child.stdout!.off('data', read); child.off('error', failed); child.off('exit', exited);
         lifetime.signal.removeEventListener('abort', interrupted);
         error ? reject(error) : resolve();
       };
@@ -114,11 +125,11 @@ export async function createOpenCodeMathSession(options: MathAgentOptions): Prom
       const exited = () => done(new Error('math_opencode_transport_closed'));
       const interrupted = () => done(new Error('math_opencode_start_cancelled'));
       const timer = setTimeout(() => done(new Error('math_opencode_start_timeout')), 15_000);
-      child.stdout.on('data', read); child.once('error', failed); child.once('exit', exited);
+      child.stdout!.on('data', read); child.once('error', failed); child.once('exit', exited);
       lifetime.signal.addEventListener('abort', interrupted, { once: true });
       if (lifetime.signal.aborted) interrupted();
     });
-    child.stdout.resume();
+    child.stdout!.resume();
     const providers = object(await request('/provider'));
     const selected = (Array.isArray(providers.all) ? providers.all : []).map(object).find(item => item.id === providerID);
     const model = object(object(selected?.models)[modelID]);
@@ -130,13 +141,14 @@ export async function createOpenCodeMathSession(options: MathAgentOptions): Prom
       : await request('/session', { title: 'TheoremOS research', agent,
         model: { providerID, id: modelID, variant: options.effort } }));
     if (typeof session.id !== 'string' || !session.id || options.threadId && session.id !== options.threadId ||
-        session.directory !== workspace || session.parentID) throw new Error('math_opencode_session_binding_mismatch');
+        session.directory !== nativeWorkspace || session.parentID) throw new Error('math_opencode_session_binding_mismatch');
     const boundModel = object(session.model);
     if (boundModel.providerID !== providerID || boundModel.id !== modelID || boundModel.variant !== options.effort || session.agent !== agent)
       throw new Error('math_opencode_session_binding_mismatch');
     threadId = session.id;
     const sessionRoute = '/session/' + encodeURIComponent(threadId);
-    return { threadId, usageSource: 'native-turn-totals', isolationReceipt: launch.isolationReceipt,
+    return { threadId, usageSource: sealed ? 'upstream-requests' : 'native-turn-totals', isolationReceipt: sealed?.receipt ??
+      ('isolationReceipt' in launch ? launch.isolationReceipt as Json : undefined), executionPlan,
       get lastError() { return lastError; }, get lastInputTokens() { return lastInputTokens; },
       get lastFailureDiagnostic() { return lastFailureDiagnostic; },
       get lastCompletedResponse() { return lastCompletedResponse; },
@@ -231,11 +243,11 @@ export async function createOpenCodeMathSession(options: MathAgentOptions): Prom
             known++;
           }
           if (!Number.isSafeInteger(inputTokens + outputTokens)) complete = false;
-          if (known && Number.isSafeInteger(inputTokens + outputTokens)) {
+          if (!sealed && known && Number.isSafeInteger(inputTokens + outputTokens)) {
             options.onUsage({ inputTokens, outputTokens, totalTokens: inputTokens + outputTokens,
               cachedInputTokens, reasoningOutputTokens }, { turnId: messageId });
           }
-          if (!complete) options.onUsageIncomplete?.();
+          if (!complete && !sealed) options.onUsageIncomplete?.();
           accounted = true;
           if (info.error) {
             const interrupted = object(info.error).name === 'MessageAbortedError';
@@ -257,7 +269,7 @@ export async function createOpenCodeMathSession(options: MathAgentOptions): Prom
           return submitted ? 'submitted' : 'completed';
         };
         try {
-          const response = await fetch(url('/event'), { headers, signal: stream.signal });
+          const response = await nativeFetch(url('/event'), { headers, signal: stream.signal });
           if (!response.ok || !response.body || !response.headers.get('content-type')?.startsWith('text/event-stream'))
             throw new Error('math_opencode_event_stream_unavailable');
           consume = (async () => {
@@ -284,9 +296,9 @@ export async function createOpenCodeMathSession(options: MathAgentOptions): Prom
             outputWatcher.unref();
           }
           const final = object(await request(sessionRoute + '/message', { messageID: nativeMessageId,
-            model: { providerID, modelID }, agent, variant: options.effort, system: options.instructions,
+            model: { providerID, modelID }, agent, variant: options.effort, system: instructions,
             ...(options.outputSchema ? { format: { type: 'json_schema', schema: options.outputSchema } } : {}),
-            parts: [{ type: 'text', text: [message, skillInstruction].filter(Boolean).join('\n\n') }] }, turn.signal));
+            parts: [{ type: 'text', text: [sealed ? sealedRoleText(message, options) : message, skillInstruction].filter(Boolean).join('\n\n') }] }, turn.signal));
           const history = await request(sessionRoute + '/message', undefined, turn.signal);
           if (streamFailure) throw streamFailure;
           const status = account(history, final);
@@ -294,14 +306,16 @@ export async function createOpenCodeMathSession(options: MathAgentOptions): Prom
           settled = true;
           return status;
         } catch (error) {
-          if (!accounted) options.onUsageIncomplete?.();
+          if (!accounted && !sealed) options.onUsageIncomplete?.();
           await close();
           settled = true;
           if (timedOut) throw new Error('math_model_request_timeout');
           options.signal?.throwIfAborted();
           lastError = error instanceof Error && /^math_[A-Za-z0-9_:.-]{1,180}$/u.test(error.message)
             ? error.message : 'math_model_request_failed';
-          const failure = streamFailure?.message ?? lastError;
+          // Closing the owned server also closes SSE. Keep a concrete HTTP failure
+          // instead of replacing its status with that secondary stream shutdown.
+          const failure = /^math_opencode_http_error:\d+$/u.test(lastError) ? lastError : streamFailure?.message ?? lastError;
           const http = failure.match(/^math_opencode_http_error:(\d+)$/u);
           if (http || failure === 'math_opencode_event_stream_closed' || lifetime.signal.aborted && !failure.startsWith('math_opencode_')) {
             lastFailureDiagnostic = providerFailure({ name: 'APIError', data: { statusCode: http ? Number(http[1]) : undefined } });

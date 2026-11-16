@@ -76,6 +76,9 @@ export type SolverRunState = {
   coordination?: 'cooperative' | 'independent';
   /** Absent for legacy runs; strategy changes require a new run and native thread. */
   researchMode?: 'skill';
+  /** New Skill runs retain host workflows; absent preserves historical single-researcher semantics. */
+  researchSkillWorkflow?: 'full';
+  agentSessionPlan?: import('../runtime/agentSession').MathAgentSessionPlan;
   researchSkill?: { name: string; digest: string; loading: 'native' | 'file' };
   commonResearchSkill?: { name: string; digest: string; loading: 'native' | 'file' };
   researchDelegation?: { mode: 'read-only'; maxAgents: number };
@@ -169,7 +172,7 @@ const usageAccounting = z.object({ startedTurns: safeCount, reportedTurns: safeC
 export const requestUsageAccountingSchema = z.object({ startedRequests: safeCount, reportedRequests: safeCount,
   pendingRequests: safeCount, incomplete: z.boolean(), nativeUsageObserved: z.boolean().optional(),
   receipts: z.array(z.object({ requestId: z.string().min(1),
-    source: z.enum(['chat-completions-bridge', 'responses-relay']).optional(),
+    source: z.enum(['chat-completions-bridge', 'responses-relay', 'native-model-relay']).optional(),
     runId: z.string().optional(), sessionId: z.string().optional(), taskId: z.string().optional(), threadId: z.string().optional(),
     startedAt: safeCount, settledAt: safeCount.optional(), status: z.enum(['pending', 'reported', 'missing']),
     outcome: z.enum(['completed', 'failed', 'cancelled', 'interrupted', 'unknown']).optional(),
@@ -342,6 +345,12 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
   knowledgeUses: z.array(knowledgeUse.extend({ workerId: z.string(), commit: z.string() })).optional(),
   coordination: z.enum(['cooperative', 'independent']).optional(),
   researchMode: z.literal('skill').optional(),
+  researchSkillWorkflow: z.literal('full').optional(),
+  agentSessionPlan: z.object({ schema: z.literal('theorem-os.agent-session-plan.v1'),
+    harness: z.enum(['codex', 'claude-code', 'opencode', 'cli']),
+    skillLoading: z.enum(['none', 'file', 'native', 'mixed']), roleIsolation: z.enum(['run-workspace', 'sealed-role']),
+    structuredOutput: z.enum(['none', 'native-schema', 'validated-output-file']),
+    continuation: z.enum(['native-session', 'source-context']) }).strict().optional(),
   researchSkill: z.object({ name: z.string().min(1), digest: z.string().regex(/^[a-f0-9]{64}$/u),
     loading: z.enum(['native', 'file']) }).strict().optional(),
   commonResearchSkill: z.object({ name: z.string().min(1), digest: z.string().regex(/^[a-f0-9]{64}$/u),
@@ -350,6 +359,8 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
   nativeAgents: z.array(z.object({ threadId: z.string().min(1), parentThreadId: z.string().min(1),
     startedAt: safeCount, updatedAt: safeCount, status: z.enum(['running', 'completed', 'errored', 'interrupted', 'stopped', 'unknown']),
     usage: record.optional(), message: z.string().optional(), stoppedAt: safeCount.optional(),
+    dispatch: z.literal('host-mediated-native-threads').optional(), callId: z.string().optional(),
+    parentTurnId: z.string().optional(), turnId: z.string().optional(), question: z.string().optional(),
     permissionProfile: z.literal('math-investigator').optional() })).optional(),
   pendingDeclarationCheck: z.object({ commit: z.string().regex(/^[a-f0-9]{40,64}$/u),
     requestDigest: z.string().regex(/^[a-f0-9]{64}$/u), phase: z.literal('completed').optional() }).strict().optional(),

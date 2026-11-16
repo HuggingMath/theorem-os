@@ -89,6 +89,8 @@ export type WebInspection = {
   problem: { id: string; statement: string; formalStatement: string; assumptions: readonly string[];
     targets: readonly { proofPath: string; theoremName: string; declarationHash?: string }[] };
   configuration: { model: string; effort: string; workers: number; coordination: string;
+    agentHarness?: { id: 'codex' | 'claude-code' | 'opencode' | 'cli'; executableDigest: string; configurationDigest: string };
+    researchSkillWorkflow?: 'full'; agentSessionPlan?: unknown;
     researchMode?: 'legacy' | 'skill'; researchSkill?: { name: string; digest: string; loading: 'native' | 'file' };
     modules?: { id: string; versions: Record<string, string> }; buildDigest: string; environmentDigest: string;
     methodDigest?: string; knowledgeDigest?: string };

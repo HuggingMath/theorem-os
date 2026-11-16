@@ -26,7 +26,7 @@ function stableConfiguration(prepared: Prepared) {
     if (!source) return [file, null];
     if (file !== '.lake/package-overrides.json') return [file, source.digest];
     const manifest = JSON.parse(prepared.snapshot.find(item => item.file === 'lake-manifest.json')!.source);
-    const packages = manifest.packages.map((entry: { name: string }) => {
+    const packages = (manifest.packages as { name: string }[]).map(entry => {
       const name = entry.name.replace(/^«(.+)»$/u, '$1');
       if (!name || /[/\\\0]/u.test(name) || name === '.' || name === '..') throw new Error('invalid-package-name');
       const directory = path.join(prepared.project, '.lake', 'packages', name);

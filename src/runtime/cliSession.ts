@@ -12,6 +12,8 @@ import { cliFieldMatches, cliFieldValue, expandCliTemplate, readCliConfiguration
   type CliFailureReason, type CliTemplateValues } from './cliConfiguration';
 import type { MathAgentFailureDiagnostic } from './failureDiagnostic';
 import { prepareHarnessProcess } from './harnessProcess';
+import { planMathAgentSession } from './agentSessionPlan';
+import { prepareSealedHarness, sealedRolePath, sealedRoleText } from './sealedHarness';
 
 type Json = Record<string, unknown>;
 const maxBytes = 8 * 1024 * 1024;
@@ -29,30 +31,37 @@ const observe = (callback: (() => void) | undefined) => { try { callback?.(); } 
 
 /** One configured headless command per turn. It never treats output as mathematical acceptance. */
 export async function createCliMathSession(options: MathAgentOptions): Promise<MathAgentSession> {
-  if (options.readIsolation) throw new Error('math_cli_read_isolation_unsupported');
   if (options.delegation) throw new Error('math_cli_delegation_unsupported');
-  if (options.outputSchema) throw new Error('math_cli_output_schema_unsupported');
+  if (options.outputSchema && !options.completedOutput) throw new Error('math_cli_output_schema_unsupported');
   if (options.skills?.some(skill => skill.loading !== 'file')) throw new Error('math_cli_requires_file_skill');
   if (options.signal?.aborted) throw new Error('math_model_request_stopped');
   assertMathAgentSkillsCurrent(options.skills ?? []);
   const configuration = readCliConfiguration(options.profile), output = configuration.output;
+  const executionPlan = planMathAgentSession('cli', options, configuration);
   if (!configuration.efforts.includes(options.effort)) throw new Error('math_cli_effort_unsupported');
   if (options.threadId !== undefined && !validSessionId(options.threadId)) throw new Error('math_cli_session_id_invalid');
   let threadId = configuration.session.mode === 'fresh' ? crypto.randomUUID() : options.threadId ??
     (configuration.session.mode === 'generated' ? crypto.randomUUID() : '');
+  if (options.readIsolation && Object.values(configuration.environment).some(value => /\{(?:prompt|promptFile|sessionId|turnId)\}/u.test(value)))
+    throw new Error('math_cli_sealed_dynamic_environment_unsupported');
+  const sealedValues: CliTemplateValues = { model: options.model, effort: options.effort, profile: '/profile',
+    workspace: '/workspace', prompt: '', promptFile: '', sessionId: threadId, turnId: '' };
+  const sealed = options.readIsolation ? await prepareSealedHarness('cli', options, { environment:
+    Object.fromEntries(Object.entries(configuration.environment).map(([name, value]) => [name, expandCliTemplate(value, sealedValues)])) }) : undefined;
   let resume = configuration.session.mode !== 'fresh' && Boolean(options.threadId), closed = false;
   let child: ChildProcess | undefined, closing: Promise<void> | undefined;
   let active: { interrupt: () => void } | undefined;
   let lastError: string | undefined, diagnostic: MathAgentFailureDiagnostic | undefined, lastInputTokens: number | undefined;
-  let completedResponse: MathAgentSession['lastCompletedResponse'], isolationReceipt: Json | undefined;
+  let completedResponse: MathAgentSession['lastCompletedResponse'], isolationReceipt: Json | undefined = sealed?.receipt;
   const stop = async () => { if (child) await (closing ??= closeMathProcess(child)); };
   const interrupt = async () => { active?.interrupt(); await stop(); };
   const abort = () => { void interrupt(); };
   options.signal?.addEventListener('abort', abort);
 
   return {
+    executionPlan,
     get threadId() { return threadId; },
-    usageSource: output.format !== 'text' && output.usage?.scope === 'session' ? 'native-thread-totals' : 'native-turn-totals',
+    usageSource: sealed ? 'upstream-requests' : output.format !== 'text' && output.usage?.scope === 'session' ? 'native-thread-totals' : 'native-turn-totals',
     get lastError() { return lastError; }, get lastFailureDiagnostic() { return diagnostic; },
     get lastInputTokens() { return lastInputTokens; }, get lastCompletedResponse() { return completedResponse; },
     get isolationReceipt() { return isolationReceipt; },
@@ -71,9 +80,12 @@ export async function createCliMathSession(options: MathAgentOptions): Promise<M
         }
         if (closed || interrupted || options.signal?.aborted) throw new Error('math_model_request_stopped');
         lastError = undefined; diagnostic = undefined; lastInputTokens = undefined; completedResponse = undefined; closing = undefined;
-        const prompt = options.instructions + (options.skills?.length ? '\n\nPinned research skills (read each before researching):\n' +
+        const hostPrompt = options.instructions + (options.outputSchema ? '\n\nWrite the completed JSON result to ' +
+          JSON.stringify(options.completedOutput!.file) + ' using this schema. The host validates the file; stdout is not acceptance.\n' +
+          JSON.stringify(options.outputSchema) : '') + (options.skills?.length ? '\n\nPinned research skills (read each before researching):\n' +
           options.skills.map(skill => `${skill.name}: ${JSON.stringify(skill.path)}; directory SHA256 ${skill.digest}`).join('\n') : '') +
           '\n\nResearch request:\n' + message;
+        const prompt = sealed ? sealedRoleText(hostPrompt, options) : hostPrompt;
         if (Buffer.byteLength(prompt) > maxBytes) throw new Error('math_cli_prompt_too_large');
         let promptFile = '';
         if (configuration.prompt === 'file') {
@@ -82,18 +94,21 @@ export async function createCliMathSession(options: MathAgentOptions): Promise<M
           promptFile = path.join(directory, crypto.randomUUID() + '.txt');
           writeMathFrozen(promptFile, prompt);
         }
-        const values: CliTemplateValues = { model: options.model, effort: options.effort, profile: options.profile,
-          workspace, prompt: configuration.prompt === 'argument' ? prompt : '', promptFile, sessionId: threadId, turnId: messageId };
+        const values: CliTemplateValues = { model: options.model, effort: options.effort, profile: sealed ? '/profile' : options.profile,
+          workspace: sealed ? '/workspace' : workspace, prompt: configuration.prompt === 'argument' ? prompt : '',
+          promptFile: sealed && promptFile ? sealedRolePath(promptFile, workspace) : promptFile, sessionId: threadId, turnId: messageId };
         const sessionArgs = configuration.session.mode === 'fresh' ? [] : resume
           ? configuration.session.resumeArgs : configuration.session.startArgs;
-        const invocation = prepareHarnessProcess({ ...options, environment: {
+        const arguments_ = [...configuration.args, ...sessionArgs].map(argument => expandCliTemplate(argument, values));
+        const invocation = sealed ? sealed.launch(arguments_) : prepareHarnessProcess({ ...options, environment: {
           ...(options.environment ?? process.env), HOME: options.profile,
           ...Object.fromEntries(Object.entries(configuration.environment).map(([key, value]) => [key, expandCliTemplate(value, values)])),
-        } }, options.executable, [...configuration.args, ...sessionArgs].map(argument => expandCliTemplate(argument, values)));
-        isolationReceipt = invocation.isolationReceipt;
+        } }, options.executable, arguments_);
+        isolationReceipt = sealed?.receipt ?? ('isolationReceipt' in invocation ? invocation.isolationReceipt as Json : undefined);
         let owned: ChildProcess;
         try { owned = child = spawn(invocation.command, invocation.args, { cwd: workspace, env: invocation.env,
-          detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] }); }
+          detached: process.platform !== 'win32',
+          stdio: ['pipe', 'pipe', 'pipe', ...('inheritedFds' in invocation ? invocation.inheritedFds ?? [] : [])] }); }
         catch {
           lastError = 'math_cli_process_start_failed'; diagnostic = { code: 'other' };
           observe(() => options.onUsageIncomplete?.()); return 'failed';
@@ -140,6 +155,7 @@ export async function createCliMathSession(options: MathAgentOptions): Promise<M
             }
           };
           const account = () => {
+            if (sealed) return; // Only the host relay establishes sealed provider usage.
             const mapping = output.format === 'text' ? undefined : output.usage;
             let complete = false;
             if (started && !invalid && mapping && usageMatched) {
@@ -189,7 +205,7 @@ export async function createCliMathSession(options: MathAgentOptions): Promise<M
             account();
             if (timedOut) lastError = 'math_model_request_timeout';
             else if (interrupted) lastError = 'math_model_request_stopped';
-            else if (!submitted && exitCode !== 0 && !invalid) lastError = 'math_cli_command_failed';
+            else if (!submitted && exitCode !== 0 && !invalid && !lastError) lastError = 'math_cli_command_failed';
             if (lastError && !diagnostic) diagnostic = { code: 'other' };
             if (!lastError && !submitted && text.trim()) completedResponse = { turnId: messageId, text };
             resolve(interrupted ? 'interrupted' : lastError ? 'failed' : submitted ? 'submitted' : 'completed');
@@ -218,7 +234,8 @@ export async function createCliMathSession(options: MathAgentOptions): Promise<M
       } finally { active = undefined; }
     },
     interrupt,
-    async close() { closed = true; options.signal?.removeEventListener('abort', abort); await interrupt(); },
+    async close() { closed = true; options.signal?.removeEventListener('abort', abort);
+      try { await interrupt(); } finally { await sealed?.close(); } },
     async stopForFreeze() {
       if (active) return { status: 'unconfirmed', reason: 'turn-not-settled' };
       try { await stop(); } catch { return { status: 'unconfirmed', reason: 'shutdown-failed' }; }

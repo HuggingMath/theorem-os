@@ -14,7 +14,7 @@ import { DECLARATION_ARTIFACTS_FILE, readDeclarationArtifacts, type DeclarationA
 
 const oid = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
 const digest = /^[a-f0-9]{64}$/u;
-const error = (reason: string): never => { throw new Error(`math_knowledge_run_${reason}`); };
+function error(reason: string): never { throw new Error(`math_knowledge_run_${reason}`); }
 const relativeDirectory = (value: string) => typeof value === 'string' && value && !path.posix.isAbsolute(value) &&
   !value.includes('\\') && !value.includes('\0') && value.split('/').every(part => part && part !== '.' && part !== '..' && !part.startsWith('.'));
 type Snapshot = { files: Record<string, string>; ownedDigest: string };

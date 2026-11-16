@@ -4,12 +4,13 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readMathAgentSkill } from '../src/runtime/codexSkills';
-import { readSolverRunState } from '../src/solver/archive';
+import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
 import { directSolverModules } from '../src/solver/modules';
 import { prepareResearchSkill, researchSkillIdentity } from '../src/solver/researchSkill';
 import { runSolver } from '../src/solver/run';
 import { assertSolverSources, git } from '../src/solver/problem';
 import { localExample } from './helpers/solver';
+import { researchHarness } from '../src/runtime/researchHarness';
 
 vi.mock('../src/math/mathBuildManifest', async original => ({
   ...await original<typeof import('../src/math/mathBuildManifest')>(), readMathBuildManifest: vi.fn(),
@@ -112,7 +113,8 @@ describe('opt-in skill research CLI and pinned identity', () => {
   it.each(['claude-code', 'opencode'] as const)('executes an actual %s protocol process through the shared Skill solver', async id => {
     const h = harnessArguments(id);
     const execution = [...args.filter(arg => arg !== '--startup-only'), ...h.flags, '--max-turns', '1'];
-    expect(await runSolver(execution, root, modules)).toBe(4);
+    const native = { ...modules, M1: { ...modules.M1, open: researchHarness(id).open } };
+    expect(await runSolver(execution, root, native)).toBe(4);
     const saved = state();
     expect(saved.threadId).toBeTruthy(); expect(saved.turns).toBe(1);
     expect(saved.usage!.totalTokens).toBe(id === 'claude-code' ? 36 : 32);
@@ -121,7 +123,7 @@ describe('opt-in skill research CLI and pinned identity', () => {
     expect(saved.check?.passed).not.toBe(true); expect(saved.pendingProofCheck).toBeUndefined();
     expect(saved.workers).toBeUndefined(); expect(saved.cooperation).toBeUndefined();
     // Reopening the same native conversation charges the new invocation, rather than taking a maximum.
-    expect(await runSolver([...execution, '--resume', '--max-turns', '2'], root, modules)).toBe(4);
+    expect(await runSolver([...execution, '--resume', '--max-turns', '2'], root, native)).toBe(4);
     expect(state().threadId).toBe(saved.threadId);
     expect(state().usage!.totalTokens).toBe(id === 'claude-code' ? 72 : 64);
     expect(state().usageAccounting!.reportedTurns).toBe(2);
@@ -144,7 +146,8 @@ describe('opt-in skill research CLI and pinned identity', () => {
       if (JSON.parse(String(line)).event === 'research_saved')
         fs.writeFileSync(path.join(h.profile, 'settings.json'), '{"model":"changed between dispatches"}');
     });
-    expect(await runSolver([...args.filter(arg => arg !== '--startup-only'), ...h.flags, '--max-turns', '2'], root, modules)).toBe(1);
+    const native = { ...modules, M1: { ...modules.M1, open: researchHarness('claude-code').open } };
+    expect(await runSolver([...args.filter(arg => arg !== '--startup-only'), ...h.flags, '--max-turns', '2'], root, native)).toBe(1);
     expect(state()).toMatchObject({ turns: 1, error: 'math_harness_identity_changed' });
   });
 
@@ -153,8 +156,6 @@ describe('opt-in skill research CLI and pinned identity', () => {
     const h = harnessArguments('claude-code');
     await expect(runSolver([...args, ...h.flags, '--skill-loading', 'native'], root, modules))
       .rejects.toThrow('math_harness_native_skill_loading_unsupported');
-    await expect(runSolver([...args, ...h.flags, '--research-mode', 'legacy'], root, modules))
-      .rejects.toThrow('math_harness_requires_skill_mode');
     await expect(runSolver([...args, ...h.flags, '--codex', 'codex'], root, modules)).rejects.toThrow('--codex requires');
     expect(open).not.toHaveBeenCalled();
   });
@@ -173,10 +174,12 @@ describe('opt-in skill research CLI and pinned identity', () => {
     rejected('math_resume_research_strategy_changed'); expect(open).not.toHaveBeenCalled();
   });
 
-  it('rejects native delegation before starting a run when children cannot enforce read-only permissions', async () => {
-    await expect(runSolver([...args, '--research-mode', 'skill', '--skill-delegation', 'read-only',
-      '--skill-max-agents', '2'], root, modules)).rejects.toThrow('math_native_read_only_delegation_unsupported');
-    expect(fs.existsSync(output + '.runtime/state.json')).toBe(false);
+  it('freezes explicit host-mediated read-only delegation and retains it on resume', async () => {
+    const flags=[...args, '--research-mode', 'skill', '--skill-delegation', 'read-only', '--skill-max-agents', '2'];
+    expect(await runSolver(flags, root, modules)).toBe(0);
+    expect(state().researchDelegation).toEqual({mode:'read-only',maxAgents:2});
+    expect(await runSolver([...args,'--resume'],root,modules)).toBe(0);
+    expect(state().researchDelegation).toEqual({mode:'read-only',maxAgents:2});
     expect(open).not.toHaveBeenCalled();
   });
 
@@ -196,12 +199,60 @@ describe('opt-in skill research CLI and pinned identity', () => {
     rejected('math_resume_research_strategy_changed');
   });
 
-  it.each([['--workers', '4'], ['--coordination', 'cooperative'], ['--scheduler', 'continuation'], ['--plan-approval']])
-    ('rejects conflicting host strategy arguments %j', async (...flags) => {
-      await expect(runSolver([...args, '--research-mode', 'skill', ...flags], root, modules))
-        .rejects.toThrow('math_skill_research_requires_single_independent_direct');
-      expect(fs.existsSync(output + '.runtime/state.json')).toBe(false);
-    });
+  it.each(['codex', 'claude-code', 'opencode'] as const)('prepares and resumes full Skill cooperation through %s', async id => {
+    const flags = id === 'codex' ? [] : harnessArguments(id).flags;
+    expect(await runSolver([...args, ...flags, '--research-mode', 'skill', '--workers', '4', '--plan-approval'], root, modules)).toBe(0);
+    const before = state();
+    expect(before).toMatchObject({ researchMode: 'skill', researchSkillWorkflow: 'full', workerCount: 4,
+      coordination: 'cooperative', planApproval: true, agentSessionPlan: { harness: id, structuredOutput: 'none' } });
+    expect(before.workers).toHaveLength(4);
+    for (const worker of before.workers!) expect(researchSkillIdentity(readMathAgentSkill(
+      path.join(worker.worktree, '.agents/skills/theoremos-research/SKILL.md'), before.researchSkill!.loading))).toEqual(before.researchSkill);
+    expect(await runSolver([...args, '--resume', '--plan-approval'], root, modules)).toBe(0);
+    expect(state()).toMatchObject({ runId: before.runId, workerCount: 4, coordination: 'cooperative',
+      researchSkillWorkflow: 'full', agentSessionPlan: before.agentSessionPlan });
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('allows full independent Skill workers and retains the existing scheduler implementation', async () => {
+    expect(await runSolver([...args, '--research-mode', 'skill', '--workers', '2', '--coordination', 'independent',
+      '--scheduler', 'continuation'], root)).toBe(0);
+    expect(state()).toMatchObject({ researchSkillWorkflow: 'full', workerCount: 2, coordination: 'independent' });
+    expect(state().workers).toHaveLength(2);
+    expect(state().moduleConfiguration!.versions.M3).toContain('continuation');
+  });
+
+  it('allows full legacy host guidance on a non-Codex adapter', async () => {
+    const h = harnessArguments('claude-code');
+    expect(await runSolver([...args, ...h.flags, '--research-mode', 'legacy'], root, modules)).toBe(0);
+    expect(state().researchSkill).toBeUndefined();
+    expect(state()).toMatchObject({ workerCount: 4, coordination: 'cooperative',
+      agentSessionPlan: { harness: 'claude-code', skillLoading: 'none' } });
+  });
+
+  it('keeps old Skill checkpoints on their frozen single-researcher workflow', async () => {
+    expect(await runSolver([...args, '--research-mode', 'skill'], root, modules)).toBe(0);
+    const historical = state(); delete historical.researchSkillWorkflow; delete historical.agentSessionPlan;
+    writeSolverRunState(output + '.runtime/state.json', historical);
+    expect(await runSolver([...args, '--resume'], root, modules)).toBe(0);
+    expect(state().researchSkillWorkflow).toBeUndefined(); expect(state().agentSessionPlan).toBeUndefined();
+    await expect(runSolver([...args, '--resume', '--workers', '2'], root, modules))
+      .rejects.toThrow('math_skill_research_requires_single_independent_direct');
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('rejects a changed frozen execution plan instead of silently selecting another fallback on resume', async () => {
+    expect(await runSolver([...args, '--research-mode', 'skill'], root, modules)).toBe(0);
+    const changed = state(); changed.agentSessionPlan!.continuation = 'source-context';
+    writeSolverRunState(output + '.runtime/state.json', changed);
+    expect(await runSolver([...args, '--resume'], root, modules)).toBe(1);
+    rejected('math_resume_session_plan_changed'); expect(open).not.toHaveBeenCalled();
+  });
+
+  it('still rejects approval without a cooperative team', async () => {
+    await expect(runSolver([...args, '--research-mode', 'skill', '--plan-approval'], root, modules))
+      .rejects.toThrow('--plan-approval requires cooperative coordination and at least 2 workers');
+  });
 
   it('rejects modified references on resume rather than silently refreshing a live strategy', async () => {
     expect(await runSolver([...args, '--research-mode', 'skill'], root, modules)).toBe(0);
@@ -233,6 +284,22 @@ describe('opt-in skill research CLI and pinned identity', () => {
     expect(fs.existsSync(path.join(example.workspace, '.agents/skills/theoremos-research'))).toBe(false);
     const projected = prepareResearchSkill(root, example.workspace, researchSkillIdentity(skill), example.problem);
     expect(researchSkillIdentity(projected)).toEqual(researchSkillIdentity(skill));
+    expect(() => assertSolverSources(example.problem, example.workspace)).not.toThrow();
+  });
+
+  it('projects and reuses the complete pinned skill in an actual Bun process', () => {
+    const skill = readMathAgentSkill(path.join(root, 'skills/theoremos-research/SKILL.md'));
+    const child = spawnSync('bun', ['--eval', `
+      import { prepareResearchSkill, researchSkillIdentity } from ${JSON.stringify(path.join(repository, 'src/solver/researchSkill.ts'))};
+      const root=${JSON.stringify(root)}, worktree=${JSON.stringify(example.workspace)}, expected=${JSON.stringify(researchSkillIdentity(skill))};
+      const first=prepareResearchSkill(root,worktree,expected);
+      const second=prepareResearchSkill(root,worktree,expected);
+      console.log(JSON.stringify({first:researchSkillIdentity(first),second:researchSkillIdentity(second)}));
+    `], { encoding: 'utf8', timeout: 10_000 });
+    expect(child.error).toBeUndefined(); expect(child.status, child.stderr).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual({ first: researchSkillIdentity(skill), second: researchSkillIdentity(skill) });
+    const projected = prepareResearchSkill(root, example.workspace, researchSkillIdentity(skill), example.problem);
+    expect(fs.statSync(projected.path).mode & 0o777).toBe(0o400);
     expect(() => assertSolverSources(example.problem, example.workspace)).not.toThrow();
   });
 

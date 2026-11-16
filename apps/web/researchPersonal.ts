@@ -43,7 +43,7 @@ const values = {
       research: z.object({ maxRunSeconds: z.number().finite().nonnegative(), maxTotalTokens: z.number().finite().nonnegative(), maxTurns: z.number().finite().nonnegative() }).strict() }).strict() }).strict(),
     z.object({ mode: z.literal('lean'), draft: z.object({ providerId: text(64), model: text(128), source: text(webLimits.maxSourceBytes).refine(value => Buffer.byteLength(value) <= webLimits.maxSourceBytes), task: text(8000),
       maxTurns: text(40), maxRunSeconds: text(40), workers: text(40), maxTotalTokens: text(40).optional(),
-      effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']), environment: z.enum(['standard', 'mathlib']),
+      effort: z.enum(['none', 'low', 'medium', 'high', 'xhigh', 'max']), environment: z.enum(['standard', 'mathlib']),
       coordination: z.enum(['cooperative', 'independent']), planApproval: z.literal(true).optional(), templateId: text(64),
       researchMode: z.enum(['legacy', 'skill']).optional(), skillLoading: z.enum(['native', 'file']).optional(),
       modulePlan: researchModulePlanDraftSchema.optional(), knowledgeDigest: text(256).nullable().optional(),

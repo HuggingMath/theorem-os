@@ -4,7 +4,7 @@ import type { MathAgentSkill } from './agentSkills';
 import type { MathAgentFailureDiagnostic } from './failureDiagnostic';
 export type { MathAgentFailureDiagnostic } from './failureDiagnostic';
 import type { ModelRequestGate } from './modelRequest';
-import type { NativeDelegationOptions } from './nativeDelegation';
+import type { NativeDelegationOptions, NativeResearchAgent } from './nativeDelegation';
 
 type Json = Record<string, unknown>;
 
@@ -25,6 +25,7 @@ export type MathAgentOptions = {
   instructions: string;
   skills?: readonly MathAgentSkill[];
   delegation?: NativeDelegationOptions;
+  onNativeAgent?: (agent: NativeResearchAgent) => void;
   environment?: NodeJS.ProcessEnv;
   proofProjectRoot?: string;
   threadId?: string;
@@ -56,6 +57,8 @@ export type MathAgentSession = {
   /** Turn totals must be emitted once for that turn, rather than passed off as thread totals. */
   readonly usageSource?: 'upstream-requests' | 'native-thread-totals' | 'native-turn-totals';
   readonly isolationReceipt?: Record<string, unknown>;
+  /** Selected execution contracts, not a claim of mathematical acceptance or complete usage. */
+  readonly executionPlan?: MathAgentSessionPlan;
   run: (message: string, messageId: string, workspace: string, onStarted: (turnId: string) => void) => Promise<string>;
   notify?: (message: string, options?: { waitForRequest?: boolean }) => Promise<void>;
   compact?: () => Promise<void>;
@@ -66,3 +69,14 @@ export type MathAgentSession = {
 };
 
 export type MathAgentHarnessId = 'codex' | 'claude-code' | 'opencode' | 'cli';
+
+/** Only contracts consumed by current workflows belong here. Native accounting and
+ * optional notify/compact remain the actual session's observations and methods. */
+export type MathAgentSessionPlan = Readonly<{
+  schema: 'theorem-os.agent-session-plan.v1';
+  harness: MathAgentHarnessId;
+  skillLoading: 'none' | 'file' | 'native' | 'mixed';
+  roleIsolation: 'run-workspace' | 'sealed-role';
+  structuredOutput: 'none' | 'native-schema' | 'validated-output-file';
+  continuation: 'native-session' | 'source-context';
+}>;

@@ -243,7 +243,7 @@ export class ModuleView {
 
   private render() {
     const root = this.root!, input = this.input!, run = input.run;
-    const skillMode = input.researchMode === 'skill';
+    const skillMode = input.researchMode === 'skill' && input.workers === 1 && !input.modulePlan;
     text(root.querySelector('[data-module-heading]')!, skillMode ? t('研究方式') : t('研究模块'));
     root.querySelector<HTMLElement>('.module-layout')!.hidden = skillMode;
     const skillView = root.querySelector<HTMLElement>('.module-skill-mode')!;

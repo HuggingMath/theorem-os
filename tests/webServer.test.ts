@@ -98,7 +98,7 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     const replay = await request('/api/runs', alice, { body: { ...input(), apiKey: '' }, headers: { 'Idempotency-Key': 'http-retry' } });
     expect(replay.status).toBe(200); expect((await replay.json()).run.id).toBe(runs[0].id);
   });
-  it('creates and replays a frozen skill run, forwards loading and rejects incompatible cooperation', async () => {
+  it('creates and replays Skill research, preserving cooperation and single-run control limits', async () => {
     const client = await session(), submitted = { ...input(), requestId: 'skill-http', researchMode: 'skill', coordination: 'independent' };
     const response = await request('/api/runs', client, { body: submitted });
     expect(response.status).toBe(201);
@@ -109,7 +109,12 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     const replay = await request('/api/runs', client, { body: { ...submitted, skillLoading: 'native' } });
     expect(replay.status).toBe(200); expect((await replay.json()).run.id).toBe(run.id);
     expect((await request('/api/runs', client, { body: { ...submitted, skillLoading: 'file' } })).status).toBe(409);
-    expect((await request('/api/runs', client, { body: { ...submitted, requestId: 'invalid-skill', workers: 2 } })).status).toBe(400);
+    const cooperative = await request('/api/runs', client, { body: { ...submitted, requestId: 'cooperative-skill', workers: 3,
+      coordination: 'cooperative', planApproval: true, modulePlan: { scheduler: 'critical-path', context: 'essential', custom: [] } } });
+    expect(cooperative.status).toBe(201);
+    const cooperating = (await cooperative.json()).run;
+    expect(cooperating).toMatchObject({ researchMode: 'skill', workers: 3, coordination: 'cooperative', planApproval: true,
+      moduleConfiguration: { selection: { scheduler: 'critical-path', context: 'essential' } } });
     expect((await request('/api/runs', client, { body: { ...submitted, requestId: 'invalid-plan', planApproval: true } })).status).toBe(400);
     expect((await request('/api/runs', client, { body: { ...input(), requestId: 'invalid-loading', skillLoading: 'file' } })).status).toBe(400);
     const controls = [
@@ -120,7 +125,7 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     ] as const;
     for (const [operation, body] of controls) {
       const rejected = await request(`/api/runs/${run.id}/${operation}`, client, { body });
-      expect(rejected.status).toBe(409); expect((await rejected.json()).error).toMatch(/单研究者模式不支持/);
+      expect(rejected.status).toBe(409); expect((await rejected.json()).error).toMatch(/此研究安排不支持/);
     }
     expect((await request(`/api/runs/${run.id}`, client)).status).toBe(200);
     const conversation = (await (await request('/api/conversations', client, { body: { runId: run.id } })).json()).conversation;
@@ -129,6 +134,42 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
     const retained = (await (await request(`/api/conversations/${conversation.id}`, client)).json()).conversation;
     expect(retained.messages).toHaveLength(conversation.messages.length);
   });
+  it('selects only an operator-configured native harness and omits private launch configuration from HTTP records', async () => {
+    const provider = { id: 'claude', name: 'Native Claude', baseUrl: 'https://anthropic.example.test/v1',
+      harness: 'claude-code' as const, execution: { executable: '/opt/private-bin/claude' } };
+    config.providers.push(provider);
+    const client = await session();
+    expect(client.session.providers.find(item => item.id === provider.id)).toEqual({
+      id: provider.id, name: provider.name, baseUrl: provider.baseUrl, harness: provider.harness });
+    const submitted = { ...input(), providerId: provider.id, model: 'claude-fixture', effort: 'high',
+      workers: 3, coordination: 'cooperative', requestId: 'native-http' };
+    const response = await request('/api/runs', client, { body: submitted });
+    expect(response.status).toBe(201);
+    const created = (await response.json()).run;
+    expect(created).toMatchObject({ harness: 'claude-code', researchMode: 'skill', skillLoading: 'file', workers: 3 });
+    expect(created.harnessConfigurationDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(JSON.stringify(created)).not.toContain(provider.execution.executable);
+    expect((await request('/api/runs', client, { body: submitted })).status).toBe(200);
+    expect((await request('/api/runs', client, { body: { ...submitted, requestId: 'browser-command',
+      execution: { executable: '/untrusted/command' } } })).status).toBe(400);
+    expect((await request('/api/runs', client, { body: { ...submitted, requestId: 'unsupported-native-loading', skillLoading: 'native' } })).status).toBe(400);
+    const formalizations = await request('/api/formalizations', client);
+    expect((await formalizations.json()).generation.providers.some((item: { id: string }) => item.id === provider.id)).toBe(false);
+  });
+
+  it('accepts no-effort execution only for an operator CLI that declares it', async () => {
+    config.providers.push({ id: 'generic-cli', name: 'Generic CLI', baseUrl: 'https://models.example.test/v1', harness: 'cli',
+      execution: { cli: { schema: 'theorem-os.cli-harness.v1', executable: '/opt/operator-cli', args: ['--model', '{model}'],
+        inheritEnvironment: ['OPENAI_API_KEY', 'OPENAI_BASE_URL'], efforts: ['none'], output: { format: 'text' } } } });
+    const client = await session();
+    expect(client.session.providers.find(item => item.id === 'generic-cli')?.efforts).toEqual(['none']);
+    const submitted = { ...input(), providerId: 'generic-cli', effort: 'none', requestId: 'generic-no-effort' };
+    const response = await request('/api/runs', client, { body: submitted });
+    expect(response.status).toBe(201); expect((await response.json()).run).toMatchObject({ harness: 'cli', effort: 'none' });
+    expect((await request('/api/runs', client, { body: { ...submitted, effort: 'high', requestId: 'generic-unsupported-effort' } })).status).toBe(400);
+    expect((await request('/api/runs', client, { body: { ...input(), effort: 'none', requestId: 'codex-no-effort' } })).status).toBe(400);
+  });
+
   function rawStatus(route: string, headers: Record<string, string>, body = '', method = body ? 'POST' : 'GET') {
     return new Promise<number>((resolve, reject) => {
       const socket = net.createConnection({ host: '127.0.0.1', port: config.port });

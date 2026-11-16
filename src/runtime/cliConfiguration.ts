@@ -3,6 +3,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { assertMathCanonicalPath, isMathPathWithin } from '../math/paths';
 import { readMathText } from '../math/mathRuntimeIo';
+import { sealedRoleProviderSchema } from './sealedRoleProtocol';
 
 const pointer = z.string().max(512).refine(value => value === '' || value.startsWith('/') && !/~[^01]|~$/u.test(value));
 const environmentName = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/u);
@@ -26,6 +27,10 @@ const session = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('generated'), startArgs: arguments_, resumeArgs: arguments_ }).strict(),
   z.object({ mode: z.literal('reported'), startArgs: arguments_, resumeArgs: arguments_ }).strict(),
 ]);
+const sealedRuntime = z.object({
+  interpreter: z.string().min(1).max(4096).optional(),
+  resources: z.array(z.object({ source: z.string().min(1).max(4096), target: z.string().min(1).max(4096) }).strict()).max(128).default([]),
+}).strict();
 
 export const cliConfigurationSchema = z.object({
   schema: z.literal('theorem-os.cli-harness.v1'), executable: z.string().min(1).max(4096),
@@ -38,6 +43,10 @@ export const cliConfigurationSchema = z.object({
   environment: z.record(environmentName, argument).default({}),
   inheritEnvironment: z.array(environmentName).max(64).default([]),
   configurationFiles: z.array(z.string().min(1).max(4096)).max(64).default([]),
+  sealedRole: z.object({ provider: sealedRoleProviderSchema,
+    client: z.object({ baseUrlEnvironment: environmentName, apiKeyEnvironment: environmentName }).strict(),
+    profileFiles: z.record(argument).default({}),
+    runtime: sealedRuntime.optional() }).strict().optional(),
 }).strict();
 
 export type CliConfiguration = z.infer<typeof cliConfigurationSchema>;

@@ -1,3 +1,4 @@
+import { webSkillWithoutCooperation } from './researchMode';
 import crypto from 'node:crypto';
 import { canonicalMathJson, mathDigest } from '../../src/math/mathRuntimeIo';
 import { WebStorage, WebStorageError } from './storage';
@@ -45,7 +46,7 @@ export function conversationInput(conversation: WebConversation, run?: WebRun, f
       semanticReview: formalization.report?.semanticReview,
       backtranslation: formalization.report?.backtranslation },
     run: run && { status: run.status, phase: run.phase, task: clip(run.task, 4_000), source: clip(run.source, 16_000),
-      researchMode: run.researchMode ?? 'legacy', supportsGuidance: run.researchMode !== 'skill' && run.coordination === 'cooperative' && run.workers > 1,
+      researchMode: run.researchMode ?? 'legacy', supportsGuidance: !webSkillWithoutCooperation(run) && run.coordination === 'cooperative' && run.workers > 1,
       accepted: run.status === 'completed' && run.result?.status === 'evaluated_passed',
       statementReview: run.formalization?.confirmation,
       resultStatus: run.result?.status, proof: clip(run.result?.proof ?? '', 24_000),
@@ -268,7 +269,7 @@ export class WebConversations {
     const conversation = this.read(owner, id), runId = conversation.runId;
     const run = runId ? this.resources.run(owner, runId) : undefined;
     if (!runId || !run) throw new WebStorageError(404, '关联的证明任务不存在。');
-    if (run.researchMode === 'skill') throw new WebStorageError(409, '单研究者模式不支持协作计划、逐题指导或计划审批。');
+    if (webSkillWithoutCooperation(run)) throw new WebStorageError(409, '此研究安排不支持协作计划、逐题指导或计划审批。');
     const existing = conversation.messages.find(message => message.guidance?.input.id === input.id);
     if (existing && canonicalMathJson(existing.guidance!.input) !== canonicalMathJson(input)) throw new WebStorageError(409, '命令 ID 已用于另一份内容，请使用新的 ID。');
     if (!existing && conversation.messages.length >= webConversationLimits.messages) throw new WebStorageError(429, '这段对话已达到消息上限，请新建对话。');

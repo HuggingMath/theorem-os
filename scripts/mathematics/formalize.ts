@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseFlags, required } from './arguments';
+import { withWorkflowHarness, workflowHarnessFlags } from './workflowHarness';
+import { assertWorkflowSessionSupported } from '../../src/solver/workflowSession';
 import { readFirstProofCatalog } from '../../src/math/firstProof';
 import { formalizationDigest, prepareFormalization, readFormalizationArtifact,
   readFormalizationRequest, type FormalizationRequest } from '../../src/math/formalization';
@@ -18,7 +20,7 @@ import { writeStaticReport } from '../../apps/web/staticReport';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
 const configurationFlags = ['problem', 'task-file', 'first-proof-problem', 'source-root', 'build-manifest',
-  'environment', 'model', 'effort', 'profile', 'codex', 'max-rounds', 'max-run-seconds', 'max-turn-seconds',
+  'environment', 'model', 'effort', 'profile', 'codex', ...workflowHarnessFlags, 'max-rounds', 'max-run-seconds', 'max-turn-seconds',
   'max-compile-seconds', 'max-total-tokens', 'review-mode', 'review-config', 'max-planning-rounds',
   'reference-file', 'reference-pairs', 'reference-provenance', 'max-reference-seconds',
   'retrieval-workspace', 'retrieval-corpus', 'retrieval-symbols', 'retrieval-queries',
@@ -51,7 +53,7 @@ function requestSummary(request: FormalizationRequest) {
   return { schema: request.schema, problemId: request.problemId, statementSha256: request.statementSha256,
     statementBytes: Buffer.byteLength(request.statement, 'utf8'), environment: request.environment,
     environmentDigest: request.environmentDigest, execution: request.execution, model: request.model,
-    effort: request.effort, profile: request.profile, executable: request.executable,
+    effort: request.effort, profile: request.profile, executable: request.executable, ...(request.agentHarness ? { agentHarness: request.agentHarness } : {}),
     buildManifestRef: request.buildManifestRef, buildDigest: request.buildDigest,
     maxRounds: request.maxRounds, maxRunSeconds: request.maxRunSeconds, maxTurnSeconds: request.maxTurnSeconds,
     maxCompileSeconds: request.maxCompileSeconds, maxTotalTokens: request.maxTotalTokens,
@@ -117,12 +119,12 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
     throw new Error('--compatibility-names and --compatibility-provenance are required together');
   const compatibility = flags.has('compatibility-names') ? { namesFile: path.resolve(required(flags, 'compatibility-names')),
     provenance: required(flags, 'compatibility-provenance') } : undefined;
-  const author = {
+  const author = withWorkflowHarness(flags, {
     model: flags.has('model') ? required(flags, 'model') : 'deepseek-flash',
     effort: flags.has('effort') ? required(flags, 'effort') : 'high',
     profile: path.resolve(flags.has('profile') ? required(flags, 'profile') :
       process.env.CODEX_HOME || path.join(os.homedir(), '.config/deepscientist/math-sol-codex')),
-    executable: flags.has('codex') ? required(flags, 'codex') : process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex' };
+    executable: flags.has('codex') ? required(flags, 'codex') : process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex' }, { environment });
   const reviewOptions = ['review-config', 'max-planning-rounds', 'reference-file', 'retrieval-workspace', 'exemplar-corpus', 'first-proof-problem'];
   const reviewMode = flags.get('review-mode') ?? (reviewOptions.some(name => flags.has(name)) ? 'independent' : 'direct');
   if (reviewMode !== 'direct' && reviewMode !== 'independent') throw new Error('--review-mode must be direct or independent');
@@ -134,7 +136,9 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
   if (flags.has('review-config')) {
     const file = path.resolve(required(flags, 'review-config')); assertMathCanonicalPath(file);
     const config = formalizationReviewConfigurationSchema.parse(JSON.parse(readMathText(file, 256 * 1024)));
-    for (const role of [config.planner, config.backtranslator, ...config.reviewers]) role.profile = path.resolve(role.profile);
+    for (const role of [config.planner, config.backtranslator, ...config.reviewers]) {
+      role.profile = path.resolve(role.profile); assertWorkflowSessionSupported(role, { environment });
+    }
     Object.assign(workflow, config);
   }
   if (flags.has('reference-file') !== flags.has('reference-pairs'))
@@ -234,7 +238,7 @@ export async function formalize(argv: string[]): Promise<number> {
     console.log('Usage: theorem-os formalize --phase prepare|run|inspect|replay|report --directory DIR [options]\n'
       + 'prepare (offline): --problem ID --task-file FILE --build-manifest FILE\n'
       + '  or --first-proof-problem first_proof_batch3_01 [--source-root DIR] --build-manifest FILE\n'
-      + '  [--environment mathlib|standard] [--model deepseek-flash] [--effort high] [--profile DIR] [--codex FILE]\n'
+      + '  [--environment mathlib|standard] [--model deepseek-flash] [--effort high] [--profile DIR] [--codex FILE] [--harness codex|claude-code|opencode|cli --harness-profile DIR --harness-executable FILE]\n'
       + '  [--max-rounds 0] [--max-run-seconds 0] [--max-turn-seconds 0] [--max-compile-seconds 0] [--max-total-tokens 0]\n'
       + '  [--review-mode direct|independent] (default: direct generation and Lean compilation, without model review)\n'
       + '  [--review-config FILE] [--max-planning-rounds 0] (opt in to independent planning, backtranslation and review)\n'

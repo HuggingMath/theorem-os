@@ -954,28 +954,29 @@ export async function seedSolverContinuation(options: {
       return node.status === (record ? 'completed' : paused ? 'blocked' : 'pending') && node.finding === record?.finding &&
         canonicalMathJson(node.researchCompletion ?? null) === canonicalMathJson(record?.record ?? null);
     };
-    if (seeded && state.cooperation && (state.cooperation.planVersion !== planVersion ||
-        canonicalMathJson(plannedTaskRecords(state.cooperation.tasks).map(node => node.task)) !== canonicalMathJson(plan.tasks) ||
+    const priorCooperation = state.cooperation;
+    if (seeded && priorCooperation && (priorCooperation.planVersion !== planVersion ||
+        canonicalMathJson(plannedTaskRecords(priorCooperation.tasks).map(node => node.task)) !== canonicalMathJson(plan.tasks) ||
         canonicalMathJson(capacityOrigin(capturedCapacityRecords(state))) !==
           canonicalMathJson(capacityOrigin(source.capacityExplorations?.records ?? [])) ||
-        canonicalMathJson(state.cooperation.capacityExplorationInputs ?? []) !==
+        canonicalMathJson(priorCooperation.capacityExplorationInputs ?? []) !==
           canonicalMathJson(source.capacityExplorations?.inputs ?? []) ||
-        canonicalMathJson(state.cooperation.nextChecks ?? []) !== canonicalMathJson(source.nextChecks?.records ?? []) ||
-        source.researchContext && canonicalMathJson(state.cooperation.deliveries ?? []) !==
+        canonicalMathJson(priorCooperation.nextChecks ?? []) !== canonicalMathJson(source.nextChecks?.records ?? []) ||
+        source.researchContext && canonicalMathJson(priorCooperation.deliveries ?? []) !==
           canonicalMathJson(restoredResearchDeliveries(source, state)) ||
         (source.completedResearch || source.researchCheckpoints) && ![pendingResearch, restoredResearch].some(records =>
-          state.cooperation.tasks.filter(node => isAdvisoryTask(node.task) && !node.capacityExploration && !node.nextCheckId)
+          priorCooperation.tasks.filter(node => isAdvisoryTask(node.task) && !node.capacityExploration && !node.nextCheckId)
             .every(node => matchesResearch(node, records))) ||
-        source.researchCheckpoints && Object.entries(state.cooperation.researchCheckpoints ?? [])
+        source.researchCheckpoints && Object.entries(priorCooperation.researchCheckpoints ?? [])
           .some(([taskId, checkpoint]) => !matchesCheckpoint(taskId, checkpoint)) ||
-        state.cooperation.tasks.some(node => node.assignment && !conditional.some(candidate =>
+        priorCooperation.tasks.some(node => node.assignment && !conditional.some(candidate =>
           candidate.taskId === node.task.id && node.status === 'conditional' &&
           node.assignment!.taskDigest === candidate.taskDigest && node.assignment!.workerId === 'continuation') &&
           !(source.frozenCandidates ?? []).some(candidate => candidate.taskId === node.task.id && node.status === 'pending' &&
-            canonicalMathJson(node.assignment) === canonicalMathJson(frozenAssignment(candidate, state.cooperation!.canonicalCommit!))) &&
+            canonicalMathJson(node.assignment) === canonicalMathJson(frozenAssignment(candidate, priorCooperation.canonicalCommit!))) &&
           !(source.taskDrafts ?? []).some(draft => !source.ownershipExtension && restorableTaskDraft(draft, node, state) &&
             canonicalMathJson(node.assignment) === canonicalMathJson(taskDraftAssignment(draft, node.task,
-              state.cooperation!.tasks, state))))))
+              priorCooperation.tasks, state))))))
       throw new Error('math_continuation_seed_destination_changed');
     if (seeded && state.cooperation) {
       const previous = fs.existsSync(reportFile) ? readMathJson(reportFile) as Partial<ContinuationSeedReport> : undefined;
@@ -1045,7 +1046,7 @@ export async function seedSolverContinuation(options: {
         targetCommit: record.targetCommit, receiptIds: [...record.receiptIds],
       }));
       state.continuationDigest = snapshot.digest;
-      state.cooperation = { tasks, groups: plan.groups.map(group => ({ group, turns: 0 })), proofRoutes: plan.proofRoutes,
+      const cooperation: NonNullable<SolverRunState['cooperation']> = state.cooperation = { tasks, groups: plan.groups.map(group => ({ group, turns: 0 })), proofRoutes: plan.proofRoutes,
         canonicalCommit: canonical, leadSeedCommit: canonical, planVersion, planEdited: !source.initialPlanning,
         ...(source.capacityExplorations?.inputs === undefined ? {} : {
           capacityExplorationInputs: source.capacityExplorations.inputs.map(entry => ({ ...entry })) }),
@@ -1092,7 +1093,8 @@ export async function seedSolverContinuation(options: {
         onProgress: phase => emit('continuation_seed_proof_environment', { phase }) });
       const env = proofEnvironment ? { ...staticEnv, [MATH_PROOF_ENVIRONMENT_ENV]: proofEnvironment.environmentValue } : staticEnv;
       report.stage = 'checking'; saveReport();
-      state.cooperation.recheck = { canonicalCommit: canonical, total: candidateIds.length, completed: 0 };
+      const recheck: NonNullable<typeof cooperation.recheck> = cooperation.recheck = {
+        canonicalCommit: canonical, total: candidateIds.length, completed: 0 };
       writeSolverRunState(stateFile, state);
       const freshChecks: TaskProof[] = [];
       // These receipts belong only to this immutable canonical/environment/task
@@ -1198,9 +1200,9 @@ export async function seedSolverContinuation(options: {
         report.failed = report.failed.filter(id => id !== taskId);
         if (node.status === 'blocked') report.failed.push(taskId);
         if (node.status === 'integrated') report.evidence = 'fresh-helper-receipts';
-        if (first) state.cooperation.recheck.completed++;
-        state.cooperation.recheck.taskId = undefined;
-        state.cooperation.deliveries = restoredResearchDeliveries(source, state);
+        if (first) recheck.completed++;
+        recheck.taskId = undefined;
+        cooperation.deliveries = restoredResearchDeliveries(source, state);
         writeSolverRunState(stateFile, state); saveReport();
         emit('continuation_seed_checked', { taskId, passed: node.status === 'integrated' || node.status === 'conditional' });
       };
@@ -1284,7 +1286,7 @@ export async function seedSolverContinuation(options: {
         for (const batch of batches) {
           lease.signal.throwIfAborted(); lease.assertHeld();
           const nodes = Array.isArray(batch) ? batch.map(candidate => candidate.node) : [batch.node];
-          state.cooperation.recheck.taskId = nodes[0].task.id; writeSolverRunState(stateFile, state);
+          recheck.taskId = nodes[0].task.id; writeSolverRunState(stateFile, state);
           for (const node of nodes) emit('continuation_seed_check', { taskId: node.task.id, batchSize: nodes.length, restoreContext });
           if (Array.isArray(batch)) await checkBatch(batch);
           else { blockCandidate(batch.node, batch.error); completeCandidate(batch.node); }

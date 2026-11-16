@@ -3,6 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { parseFlags, required } from './arguments';
+import { withWorkflowHarness, workflowHarnessFlags } from './workflowHarness';
 import { formalizationEvaluationProvenanceSchema, prepareFormalizationEvaluation,
   scoreFormalizationEvaluation } from '../../src/math/formalizationEvaluation';
 import { readMathText, writeMathFrozen } from '../../src/math/mathRuntimeIo';
@@ -17,7 +18,7 @@ const errorText = (cause: unknown) => cause instanceof Error ? cause.message : S
 export async function evaluateFormalization(argv: string[]): Promise<number> {
   const flags = parseFlags(argv, ['phase', 'directory', 'input', 'format', 'provenance',
     'validation-percent', 'split-seed', 'source-split', 'decisions', 'output', 'run-directory',
-    'execution', 'replay', 'environment', 'protocol', 'model', 'effort', 'profile', 'codex', 'build-manifest', 'adjudications']);
+    'execution', 'replay', 'environment', 'protocol', 'model', 'effort', 'profile', 'codex', ...workflowHarnessFlags, 'build-manifest', 'adjudications']);
   if (flags.has('help')) {
     console.log('Usage: theorem-os evaluate-formalization --phase prepare|review|score --directory DIR [options]\n'
       + 'prepare, score and replay: no model, Lean compiler, provider or credentials are accessed.\n'
@@ -33,7 +34,7 @@ export async function evaluateFormalization(argv: string[]): Promise<number> {
       + '  New model reviews also freeze task-preserving-v1: whole-claim scope evidence and guarded Lean correspondence before approval.\n'
       + '  replay requires --replay JSON; runs saved preset outputs, not a model accuracy test.\n'
       + '  model requires --build-manifest FILE and invokes real models in isolated fresh sessions.\n'
-      + '  Model options: --model deepseek-flash --effort max --profile DIR --codex FILE.\n'
+      + '  Model options: --model deepseek-flash --effort max --profile DIR --codex FILE; explicit --harness ID --harness-profile DIR --harness-executable FILE freezes the backend. Sealed roles currently require Codex.\n'
       + '  Direct semantic review; resume reuses completed receipts, including explicit unknown. No run or turn time limit.\n'
       + 'score: --decisions JSON; missing decisions remain unknown, invalid or duplicate records are rejected.\n'
       + '  [--adjudications JSON] adds saved candidate-refutation evidence separately; labels and scores remain unchanged.\n'
@@ -44,7 +45,7 @@ export async function evaluateFormalization(argv: string[]): Promise<number> {
     return 0;
   }
   const phase = required(flags, 'phase');
-  const modelFlags = ['model', 'effort', 'profile', 'codex', 'build-manifest'];
+  const modelFlags = ['model', 'effort', 'profile', 'codex', ...workflowHarnessFlags, 'build-manifest'];
   const allowed: Record<string, string[]> = {
     prepare: ['input', 'format', 'provenance', 'validation-percent', 'split-seed', 'source-split'],
     review: ['run-directory', 'execution', 'replay', 'environment', 'protocol', ...modelFlags], score: ['decisions', 'adjudications'],
@@ -89,7 +90,9 @@ export async function evaluateFormalization(argv: string[]): Promise<number> {
     if (protocol !== undefined && protocol !== 'v1' && protocol !== 'v2') throw new Error('--protocol must be v1 or v2');
     // An omitted flag resumes the existing frozen protocol; it never upgrades old evidence.
     const savedRequest = path.join(runDirectory!, 'request.json');
-    let saved: { schema?: string; configuration?: { contextProtocol?: unknown; fidelityPolicy?: unknown } } | undefined;
+    let saved: { schema?: string; configuration?: { contextProtocol?: unknown; fidelityPolicy?: unknown;
+      model?: string; effort?: string; profile?: string; executable?: string;
+      agentHarness?: import('../../src/math/agentHarnessIdentity').AgentHarnessIdentity } } | undefined;
     if (fs.existsSync(savedRequest)) {
       assertMathCanonicalPath(savedRequest);
       saved = JSON.parse(readMathText(savedRequest, 32_000_000));
@@ -106,6 +109,7 @@ export async function evaluateFormalization(argv: string[]): Promise<number> {
       saved.configuration?.contextProtocol : undefined : execution === 'model' && protocol === 'v2' ? LEAN_STATEMENT_CONTEXT_PROTOCOL : undefined;
     const fidelityPolicy = saved ? saved.schema === 'theorem-os.formalization-review-run.v2' ?
       saved.configuration?.fidelityPolicy : undefined : execution === 'model' && protocol === 'v2' ? 'task-preserving-v2' : undefined;
+    const savedModel = saved?.configuration?.agentHarness ? saved.configuration : undefined;
     const common = { environment, ...(protocol === 'v2' ? { protocol: 'v2',
       ...(contextProtocol === undefined ? {} : { contextProtocol }),
       ...(fidelityPolicy === undefined ? {} : { fidelityPolicy }) } : {}) };
@@ -113,11 +117,14 @@ export async function evaluateFormalization(argv: string[]): Promise<number> {
       execution, replayFile: path.resolve(required(flags, 'replay')), ...common,
     } : {
       execution, ...common, buildManifestRef: path.resolve(required(flags, 'build-manifest')),
-      model: flags.has('model') ? required(flags, 'model') : 'deepseek-flash',
-      effort: flags.has('effort') ? required(flags, 'effort') : 'max',
-      profile: path.resolve(flags.has('profile') ? required(flags, 'profile') :
-        process.env.CODEX_HOME || path.join(os.homedir(), '.config/deepscientist/math-sol-codex')),
-      executable: flags.has('codex') ? required(flags, 'codex') : process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex',
+      ...withWorkflowHarness(flags, {
+        model: flags.has('model') ? required(flags, 'model') : savedModel?.model ?? 'deepseek-flash',
+        effort: flags.has('effort') ? required(flags, 'effort') : savedModel?.effort ?? 'max',
+        profile: path.resolve(flags.has('profile') ? required(flags, 'profile') :
+          savedModel?.profile || process.env.CODEX_HOME || path.join(os.homedir(), '.config/deepscientist/math-sol-codex')),
+        executable: flags.has('codex') ? required(flags, 'codex') : savedModel?.executable || process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex',
+        ...(savedModel?.agentHarness ? { agentHarness: savedModel.agentHarness } : {}),
+      }, { environment: environment === 'auto' ? 'mathlib' : environment as 'mathlib' | 'standard' }),
     });
     const controller = new AbortController(), interrupt = () => controller.abort();
     process.once('SIGINT', interrupt); process.once('SIGTERM', interrupt);
