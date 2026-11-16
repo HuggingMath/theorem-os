@@ -16,6 +16,7 @@ import { importKnowledgeRuns } from '../../src/solver/theoremKnowledgeRuns';
 import type { ProofCheck } from '../../src/solver/modules/evidence';
 import type { WebCheckReceipt, WebCommand, WebCommandResult, WebObservation, WebTaskSource } from './collaboration';
 import type { WorkerMessage } from './shared';
+import { projectWebDeclarationArtifacts } from './declarationArtifacts';
 
 export const webActiveRunFile = '/work/active-run.json';
 const activeRunSchema = z.object({ schema: z.literal('theorem-os.web-active-run.v1'),
@@ -174,10 +175,11 @@ function sourceProjection(state: SolverRunState, directory: string) {
     checks: checkPartial ? 'partial' as const : 'recorded' as const } };
 }
 
-const catalogKey = (state: SolverRunState) => mathDigest(canonicalMathJson({
+const catalogKey = (state: SolverRunState, declarations: ReturnType<typeof projectWebDeclarationArtifacts>) => mathDigest(canonicalMathJson({
   records: [...(state.cooperation?.tasks ?? []), ...(state.cooperation?.history ?? [])].map(node =>
     ({ task: node.task, proof: node.proof, integratedCheck: node.integratedCheck, finding: node.finding })),
   deliveries: state.cooperation?.deliveries,
+  declarations,
 }));
 
 export function createWebWorkerBridge(options: {
@@ -198,11 +200,12 @@ export function createWebWorkerBridge(options: {
       const inspection = buildRunInspection(state, stored.result), previous = bridgeMeta(metaFile, options.webRunId, state.runId, options.libraryRestart);
       const restarted = Boolean(previous && previous.solverRunId !== state.runId);
       const projection = sourceProjection(state, directory);
+      const declarations = projectWebDeclarationArtifacts(stateFile, state);
       const history = state.cooperation?.history?.length ? buildRunInspection({ ...state,
         cooperation: { ...state.cooperation, tasks: state.cooperation.history.map(node => ({ status: 'pending', attempts: 0, ...node })) as TaskRecord[] } }).tasks : [];
       let plan: ReturnType<typeof exportRunPlan> | null = null;
       if (state.cooperation?.planVersion && state.cooperation.tasks.length) plan = exportRunPlan(state);
-      const payload = { inspection, snapshot: inspection.snapshot, plan, ...projection,
+      const payload = { inspection, snapshot: inspection.snapshot, plan, ...projection, declarations,
         guidance: readHumanGuidance(stateFile, state.runId), deliveries: state.cooperation?.deliveries ?? [], history };
       const contentDigest = mathDigest(canonicalMathJson(payload));
       const changed = restarted || previous?.contentDigest !== contentDigest;
@@ -224,7 +227,7 @@ export function createWebWorkerBridge(options: {
         ...(previous?.catalogKey ? { catalogKey: previous.catalogKey } : {}),
         ...(previous?.catalogDigest ? { catalogDigest: previous.catalogDigest } : {}) };
       let catalog: TheoremKnowledgeBase | undefined;
-      const key = catalogKey(state), catalogFile = path.join(directory, 'web-catalog.json');
+      const key = catalogKey(state, declarations), catalogFile = path.join(directory, 'web-catalog.json');
       if (restarted || key !== previous?.catalogKey) {
         try {
           const imported = importKnowledgeRuns([stateFile], { includeFindings: true });

@@ -55,8 +55,12 @@ describe('task draft codecs without credentials or run-result state', () => {
     expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(original)))).toEqual(original);
   });
 
-  it.each([true, false])('preserves automatic explanation %s and its language in drafts and imported execution settings', autoExplain => {
-    const selected = { autoExplain, explanationLanguage: 'en' as const };
+  it.each([
+    { autoExplain: true }, { autoExplain: false },
+    { autoExplain: true, researchMode: 'skill' as const, skillLoading: 'file' as const },
+    { autoExplain: false, researchMode: 'skill' as const, skillLoading: 'file' as const },
+  ])('preserves explanation and research settings %j in drafts and imported execution settings', settings => {
+    const selected = { ...settings, explanationLanguage: 'en' as const };
     const original = draft(selected);
     expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(original)))).toEqual(original);
     expect(decodeTaskDraft({ ...archive(), run: { ...archive().run, ...selected } })).toEqual(draft({ ...selected, templateId: '' }));

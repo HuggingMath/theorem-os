@@ -9,9 +9,9 @@ import { PANTOGRAPH_DIGEST_ENV, PANTOGRAPH_MANIFEST_ENV } from '../../src/math/p
 import { mathDigest, readMathJson, readMathText } from '../../src/math/mathRuntimeIo';
 import { readMathBuildManifest } from '../../src/math/mathBuildManifest';
 import { isMathPathWithin } from '../../src/math/paths';
-import { createCodexMathSession } from '../../src/runtime/codexSession';
+import { researchHarness } from '../../src/runtime/researchHarness';
 import { sub2apiModelCatalog } from '../../src/runtime/sub2api';
-import type { SolverModules } from '../../src/solver/modules';
+import { type SolverModules } from '../../src/solver/modules';
 import { configurableSolverModules } from '../../src/solver/modules/custom';
 import { solverModuleConfiguration } from '../../src/solver/modules/moduleIdentity';
 import { researchWorkers } from '../../src/solver/modules/organization';
@@ -26,6 +26,9 @@ import { createWebWorkerBridge, freezeWebKnowledge, writeWebActiveRun } from './
 import { webByokModuleIdentity } from './webModuleIdentity';
 import { webAgentLibraryAccess } from './frozenLibrary';
 import { runWebLibraryResearch } from './libraryResearch';
+import { webResearchArguments } from './researchMode';
+import { bindWebWorkerProfile, pinWebWorkerSession, prepareWebNativeProfile, webHarnessEnvironment,
+  webHarnessExecutable, webHarnessModel, webProviderHarness } from './harness';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 type WebWorkerState = {
@@ -187,18 +190,20 @@ Continue the assigned work in this same turn after each update. Updates need no 
 
 export function webSolverModules(request: WorkerInput, actions?: { sink: (action: WebAgentActionBody) => void; hidden: readonly string[] },
   isolation?: WebAgentIsolation): SolverModules {
+  webResearchArguments(request.input, request.provider);
   const base = configurableSolverModules(request.input.modulePlan, request.input.coordination, request.input.workers);
   const identity = webByokModuleIdentity(solverModuleConfiguration(base));
   let sessions = 0;
   return { ...base, id: identity.id,
-    ...(isolation ? { M4: { ...base.M4, build: (problem, state, access) => base.M4.build(problem, state, { ...access, tools: isolation.tools }) } } : {}),
+    ...(isolation ? { M4: { ...base.M4, tools: isolation.tools,
+      build: (problem, state, access) => base.M4.build(problem, state, { ...access, tools: isolation.tools }) } } : {}),
     M1: { ...base.M1, version: identity.versions.M1!,
       open: options => {
         const workerId = options.environment?.DEEPSCIENTIST_MATH_WORKER_ID;
         // Each item is sanitized here, inside the container, before it is written to the host.
         const context = actions && workerId ? { workerId, worktree: options.workspace, hidden: actions.hidden,
           tool: isolation?.tools ?? path.join(root, 'bin/math.ts'), apiKey: request.input.apiKey } : undefined;
-        // Item ids are only unique within one Codex thread; a restarted session numbers its own.
+        // Native item ids are scoped to one session; a restarted session may number its own.
         const session = ++sessions;
         const stream = context ? createAgentActionStream(actions!.sink) : undefined;
         if (stream) { options.signal?.addEventListener('abort', stream.stop, { once: true }); if (options.signal?.aborted) stream.stop(); }
@@ -207,12 +212,15 @@ export function webSolverModules(request: WorkerInput, actions?: { sink: (action
           const action = sanitizeAgentItem(phase, { ...item, id }, context!);
           if (typeof id === 'string') stream!.write(phase, id, action, incremental);
         };
-        return createCodexMathSession({ ...options,
+        const harness = researchHarness(webProviderHarness(request.provider));
+        const binding = harness.id === 'codex' ? undefined : bindWebWorkerProfile(options, request.provider);
+        return harness.open({ ...options, ...(binding ? { profile: binding.profile } : {}),
           ...(isolation ? { hiddenRoots: [...(options.hiddenRoots ?? []), ...isolation.hiddenRoots] } : {}),
-          environment: { ...options.environment, THEOREMOS_PROVIDER_API_KEY: request.input.apiKey },
+          environment: { ...options.environment, ...webHarnessEnvironment(request.provider, request.input.apiKey) },
           ...(context ? { onItem: (phase, item) => show(phase, item),
             onItemUpdate: (item, context) => { options.onItemUpdate?.(item, context); show('started', item, true); } } : {}) })
           .then(opened => {
+            if (binding) pinWebWorkerSession(opened, binding);
             if (!stream) return opened;
             const run = opened.run, interrupt = opened.interrupt, close = opened.close;
             opened.run = async (...args) => {
@@ -244,11 +252,13 @@ async function main() {
   let output = path.join(directory, 'result.json');
   writeWebActiveRun({ webRunId: request.id, directory, output }, path.join(workspaceRoot, 'active-run.json'));
   let bridge = createWebWorkerBridge({ webRunId: request.id, directory, output, apiKey: key, onMessage: send });
-  const profile = path.join(directory, 'codex');
-  prepareWebProviderProfile(profile, request);
+  const harness = webProviderHarness(request.provider);
+  const profile = path.join(directory, harness === 'codex' ? 'codex' : 'harness');
+  if (harness === 'codex') prepareWebProviderProfile(profile, request);
+  else prepareWebNativeProfile(profile, request.provider, request.input);
   fs.mkdirSync(process.env.HOME || '/work/home', { recursive: true, mode: 0o700 });
   // Each container owns this profile. No machine profile or authentication file is read.
-  process.env.CODEX_HOME = profile;
+  if (harness === 'codex') process.env.CODEX_HOME = profile;
   process.env.DEEPSCIENTIST_MATH_ENV_FILE = path.join(directory, 'math.env');
   fs.writeFileSync(process.env.DEEPSCIENTIST_MATH_ENV_FILE, '', { mode: 0o400, flag: 'wx' });
   const originalLog = console.log;
@@ -315,8 +325,10 @@ async function main() {
         message: `已装入请求的库依赖，保留原题与研究材料，开始第 ${round.round + 1} 轮。` });
       await runSolver(['--workspace', round.seed.workspaceRoot, '--task-file', round.seed.taskFile, '--output', output,
       '--receipt-file', round.seed.activeProblemPath, '--build-manifest', buildIndex.buildManifestRef,
-      '--model', request.input.model, '--effort', request.input.effort, '--workers', String(request.input.workers), '--no-explanations',
+      '--model', webHarnessModel(request.provider, request.input.model), '--effort', request.input.effort, '--workers', String(request.input.workers), '--no-explanations',
       '--coordination', request.input.coordination, '--max-turns', String(round.limits.maxTurns),
+      ...webResearchArguments(request.input, request.provider),
+      ...(harness !== 'codex' || request.provider.execution?.executable ? ['--harness', harness, '--harness-profile', profile, '--harness-executable', webHarnessExecutable(request.provider)] : []),
       ...(request.input.planApproval ? ['--plan-approval'] : []),
       ...(knowledgeFile ? ['--knowledge-base', knowledgeFile] : []),
       ...(round.continuationFile ? ['--continuation-manifest', round.continuationFile] : []),

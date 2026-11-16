@@ -8,7 +8,7 @@ import { readAutoLibraryRequest, readAutoLibraryState } from './autoLibrary';
 import { knowledgeApplicationHintSchema, type KnowledgeApplicationHint } from './theoremKnowledgeApplicationHints';
 
 type InputIdentity = { directory: string; files: Record<string, string> };
-const error = (reason: string): never => { throw new Error('math_library_application_' + reason); };
+function error(reason: string): never { throw new Error('math_library_application_' + reason); }
 const reason = (cause: unknown) => {
   if (cause instanceof Error) {
     if (cause.message.startsWith('math_library_application_')) return cause.message;

@@ -111,6 +111,19 @@ function syntheticModel(behavior?: Behavior) {
 }
 
 describe('direct semantic review CLI with disposable offline evidence', () => {
+  it('freezes a production harness separately from presets and inherits it on resume', async () => {
+    const f = modelFixture(1), seen = syntheticModel(), executable = path.join(f.base, 'native');
+    fs.writeFileSync(executable, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    const first = await invoke([...f.modelArgs, '--harness', 'codex', '--harness-executable', executable]);
+    expect(first.report).toMatchObject({ adapter: 'codex', modelInvoked: true });
+    expect(read(path.join(f.run, 'request.json')).configuration.agentHarness).toMatchObject({ id: 'codex', executable });
+    const second = await invoke(f.modelArgs);
+    expect(second.code).toBe(0); expect(seen).toHaveLength(1);
+    fs.appendFileSync(executable, '# changed\n');
+    await expect(invoke(f.modelArgs)).rejects.toThrow('math_harness_identity_changed');
+    expect(seen).toHaveLength(1);
+  });
+
   it('replays strict blind outputs, scores presets honestly and resumes completed unknown receipts without new attempts', async () => {
     const f = fixture(), output = path.join(f.base, 'review-result.json');
     const reviewed = await invoke([...f.replayArgs, '--output', output]);

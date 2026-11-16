@@ -41,6 +41,30 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true }); });
 
 describe('auto-library CLI entry points', () => {
+  it('selects a separate portable prover while retaining the existing Codex planner', async () => {
+    const challenge = path.join(directory, 'Challenge.lean'), profile = path.join(directory, 'native-profile'), executable = path.join(directory, 'native');
+    fs.writeFileSync(challenge, 'theorem target : True := by sorry\n'); fs.mkdirSync(profile);
+    fs.writeFileSync(path.join(profile, 'settings.json'), '{}'); fs.writeFileSync(executable, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    expect(await autoLibrary(['--phase', 'prepare', '--directory', path.join(directory, 'build'), '--challenge-id', 'fixture',
+      '--challenge-file', challenge, '--pool', path.join(directory, 'pool'), '--build-manifest', path.join(directory, 'manifest.json'),
+      '--prover-model', 'fixture', '--prover-harness', 'claude-code', '--prover-harness-profile', profile,
+      '--prover-harness-executable', executable])).toBe(0);
+    const input = host.prepare.mock.calls[0][2];
+    expect(input.planner).not.toHaveProperty('agentHarness');
+    expect(input.prover.agentHarness).toMatchObject({ id: 'claude-code', profile, executable });
+  });
+
+  it('freezes a portable sealed planner independently from its default prover', async () => {
+    const profile = path.join(directory, 'planner-profile'), executable = path.join(directory, 'native');
+    fs.mkdirSync(profile); fs.writeFileSync(path.join(profile, 'settings.json'), '{}'); fs.writeFileSync(executable, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    const challenge = path.join(directory, 'Challenge.lean'); fs.writeFileSync(challenge, 'theorem target : True := by sorry\n');
+    expect(await autoLibrary(['--phase', 'prepare', '--directory', path.join(directory, 'build'), '--harness', 'claude-code',
+      '--model', 'fixture', '--harness-profile', profile, '--harness-executable', executable,
+      '--challenge-file', challenge, '--challenge-id', 'fixture', '--pool', path.join(directory, 'pool'), '--build-manifest', path.join(directory, 'manifest.json')])).toBe(0);
+    expect(host.prepare.mock.calls[0][2].planner.agentHarness).toMatchObject({ id: 'claude-code', executable, profile });
+    expect(host.prepare.mock.calls[0][2].prover).not.toHaveProperty('agentHarness');
+  });
+
   it.each([
     { flags: [], planner: 'high', prover: 'high' },
     { flags: ['--effort', 'max'], planner: 'max', prover: 'max' },

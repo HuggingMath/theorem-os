@@ -48,7 +48,7 @@ const skillSchema = z.object({ instructions: instructions.default(''), steps: te
 }).strict();
 const agentSchema = z.object({ environment: environment.optional(), providerId: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/u).optional(),
   model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u).optional(),
-  effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(), workers: z.number().int().min(1).max(4).optional(),
+  effort: z.enum(['none', 'low', 'medium', 'high', 'xhigh', 'max']).optional(), workers: z.number().int().min(1).max(4).optional(),
   coordination: z.enum(['cooperative', 'independent']).optional(), modulePlan: researchModulePlanSchema.default(defaultResearchModulePlan()),
   skills: refs.default([]), libraries: refs.default([]),
 }).strict();

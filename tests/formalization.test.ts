@@ -500,13 +500,14 @@ describe('formalization generation and independent statement review', () => {
     }
   });
 
-  it('charges provider receipts once and ignores delayed native totals for a relayed role', async () => {
+  it.each(['responses-relay', 'native-model-relay'] as const)(
+    'charges %s receipts once, persists them and retains the budget on resume', async source => {
     const f = fixture({ maxTotalTokens: 20 }), agent = preset({ tokens: 9999, submitted: true });
     let requests = 0;
     const openSession = async (config: MathAgentOptions): Promise<MathAgentSession> => {
       const session = await agent.open(config);
       return { ...session, usageSource: 'upstream-requests', run: async (...args) => {
-        const admission = config.requestGate!({ requestId: 'request-' + ++requests, source: 'responses-relay' });
+        const admission = config.requestGate!({ requestId: 'request-' + ++requests, source });
         expect(admission.allowed).toBe(true);
         if (admission.allowed) {
           const receipt = { complete: true, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };

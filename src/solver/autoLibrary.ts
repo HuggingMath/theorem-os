@@ -1,9 +1,11 @@
+import { assertWorkflowSessionSupported, openWorkflowSession, workflowProfileFiles } from './workflowSession';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { setTimeout as wait } from 'node:timers/promises';
 import { z } from 'zod';
-import { createCodexMathSession, type MathAgentFailureDiagnostic, type MathAgentOptions, type MathAgentSession } from '../runtime/codexSession';
+import { agentHarnessIdentitySchema } from '../math/agentHarnessIdentity';
+import type { MathAgentFailureDiagnostic, MathAgentOptions, MathAgentSession } from '../runtime/agentSession';
 import { AUTO_LIBRARY_RECORD_SCHEMA, autoLibraryFile, autoLibraryPackFor, autoLibraryTheorems, inspectAutoLibrarySource,
   libraryImportClosure, parseAutoLibraryRecord, publishAutoLibraryRecord, readAutoLibraryPool, reserveAutoLibraryName,
   takenAutoLibraryNames, withAutoLibraryHeader, type AutoLibraryRecord } from '../math/autoLibrary';
@@ -47,8 +49,9 @@ const requestSchema = z.object({
   libraryBinding: effectiveLibraryBindingSchema.optional(),
   buildManifestRef: z.string().min(1).max(4096), buildDigest: hash,
   planner: z.object({ model: z.string().min(1).max(128), effort: z.string().min(1).max(32), profile: z.string().min(1).max(4096),
-    executable: z.string().min(1).max(4096) }).strict(),
+    executable: z.string().min(1).max(4096), agentHarness: agentHarnessIdentitySchema.optional() }).strict(),
   prover: z.object({ model: z.string().min(1).max(128), effort: z.string().min(1).max(32), executable: z.string().min(1).max(4096),
+    agentHarness: agentHarnessIdentitySchema.optional(),
     workers: z.number().int().min(1).max(MAX_RESEARCH_WORKERS), coordination: z.enum(['cooperative', 'independent']),
     maxRunSeconds: limit, maxTurns: limit, maxTurnSeconds: limit, maxTotalTokens: limit, prepareTimeoutSeconds: z.number().int().positive() }).strict(),
   maxModules: z.number().int().min(1).max(8), maxRounds: z.number().int().min(1).max(8),
@@ -65,6 +68,9 @@ export function prepareAutoLibraryBuild(directoryInput: string, rootInput: strin
   if (isMathPathWithin(root, directory) || isMathPathWithin(directory, root)) throw new Error('auto_library_directory_must_be_external');
   if (fs.existsSync(directory)) throw new Error('auto_library_directory_exists: use a new directory');
   const environment = getLeanTaskEnvironment(input.environment as LeanTaskEnvironment);
+  assertWorkflowSessionSupported(input.planner, { environment: environment.id });
+  workflowProfileFiles(input.planner, () => null, process.env);
+  workflowProfileFiles({ ...input.prover, profile: input.prover.agentHarness?.profile ?? input.planner.profile }, () => null, process.env);
   const buildManifestRef = path.resolve(input.buildManifestRef), pool = path.resolve(input.pool);
   readMathBuildManifest(buildManifestRef, root, path.join(root, 'out/main'));
   assertMathCanonicalPath(pool);
@@ -236,7 +242,18 @@ export async function runAutoLibraryBuild(directoryInput: string, rootInput: str
   readMathBuildManifest(request.buildManifestRef, root, path.join(root, 'out/main'));
   if (mathDigest(readMathText(request.buildManifestRef, 8_000_000)) !== request.buildDigest) throw new Error('auto_library_build_changed');
   const env = resolveMathematicsRuntimeEnvironment(options.env ?? process.env);
-  const solve = options.solve ?? (args => runSolver(args, root));
+  assertWorkflowSessionSupported(request.planner, { environment: request.environment as LeanTaskEnvironment });
+  workflowProfileFiles(request.planner, () => null, options.env ?? process.env);
+  const proverBinding = () => workflowProfileFiles({ ...request.prover,
+    profile: request.prover.agentHarness?.profile ?? request.planner.profile }, () => null, options.env ?? process.env);
+  proverBinding();
+  const solver = options.solve ?? ((args: string[]) => runSolver(args, root));
+  const solve: AutoLibrarySolve = async (args, purpose) => {
+    proverBinding();
+    const code = await solver(args, purpose);
+    proverBinding();
+    return code;
+  };
   const controller = new AbortController(), externalAbort = () => controller.abort();
   options.signal?.addEventListener('abort', externalAbort, { once: true });
   if (options.signal?.aborted) controller.abort();
@@ -324,7 +341,10 @@ async function build(context: { directory: string; request: AutoLibraryRequest; 
     '--workspace', path.join(directoryOf, 'workspace'), '--task-file', path.join(directoryOf, 'task.md'),
     '--output', path.join(directoryOf, 'result.json'), '--build-manifest', request.buildManifestRef,
     '--workers', String(phase === 'verify' ? 1 : request.prover.workers), '--coordination', request.prover.coordination,
-    '--model', request.prover.model, '--effort', request.prover.effort, '--codex', request.prover.executable,
+    '--model', request.prover.model, '--effort', request.prover.effort,
+    ...(request.prover.agentHarness ? ['--harness', request.prover.agentHarness.id,
+      '--harness-profile', request.prover.agentHarness.profile, '--harness-executable', request.prover.agentHarness.executable]
+      : ['--codex', request.prover.executable]),
     '--max-turns', String(request.prover.maxTurns), '--max-turn-seconds', String(request.prover.maxTurnSeconds),
     '--prepare-timeout-seconds', String(request.prover.prepareTimeoutSeconds), ...extra];
   const resumeFlag = (directoryOf: string) => fs.existsSync(path.join(directoryOf, 'result.json.runtime', 'state.json')) ? ['--resume'] : [];
@@ -360,7 +380,7 @@ async function build(context: { directory: string; request: AutoLibraryRequest; 
       const slots = options.openSession ? undefined : configuredMathModelSlots();
       if (slots) slot = await acquireMathModelSlot(slots, { signal: lease.signal });
       const turnMs = Math.min(request.plannerTurnSeconds ? request.plannerTurnSeconds * 1000 : Infinity, Math.max(1, remainingMs()));
-      session = await (options.openSession ?? createCodexMathSession)({
+      session = await openWorkflowSession(request.planner, {
         executable: request.planner.executable, profile: request.planner.profile, workspace, model: request.planner.model,
         effort: request.planner.effort, instructions: AUTO_LIBRARY_PLANNER_INSTRUCTIONS, environment: context.env, signal: lease.signal,
         turnTimeoutMs: Number.isFinite(turnMs) ? turnMs : undefined,
@@ -370,7 +390,7 @@ async function build(context: { directory: string; request: AutoLibraryRequest; 
             if (problems.length) throw new OutputRejected(problems); },
           validationFeedback: error => autoLibraryRejectionFeedback(error instanceof OutputRejected ? error.problems : [errorText(error)]) },
         onUsage: usage => { record.usage = usage; save(); }, onUsageIncomplete: () => { incomplete = true; },
-      });
+      }, options.openSession);
       if (lease.signal.aborted) { await session.close(); lease.signal.throwIfAborted(); }
       record.threadId = session.threadId;
       for (let turn = 0; turn < PLANNER_TURNS_PER_ATTEMPT; turn++) {

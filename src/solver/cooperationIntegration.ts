@@ -552,18 +552,19 @@ export abstract class CooperationIntegration extends CooperationTaskProofs {
         this.input.emit('task_integration_batch_fallback', { taskIds: snapshots.map(snapshot => snapshot.task.id), reason: fallback });
         return 'fallback' as const;
       }
-      if (!merged || receipts?.length !== snapshots.length) throw new Error('math_task_integration_missing_receipt');
-      if (receipts.some(receipt => receipt.references && canonicalMathJson(receipt.references.tasks) !==
+      const checkedReceipts = receipts;
+      if (!merged || !checkedReceipts || checkedReceipts.length !== snapshots.length) throw new Error('math_task_integration_missing_receipt');
+      if (checkedReceipts.some(receipt => receipt.references && canonicalMathJson(receipt.references.tasks) !==
           canonicalMathJson(attributeTaskReferences(receipt.references, this.archive.tasks)))) return 'retry' as const;
       this.archive.canonicalCommit = merged;
       snapshots.forEach((snapshot, index) => {
-        snapshot.node.integratedCheck = receipts[index]; snapshot.node.feedback = undefined;
+        snapshot.node.integratedCheck = checkedReceipts[index]; snapshot.node.feedback = undefined;
         this.moveTask(snapshot.node, 'integrated', 'integrated');
       });
       snapshots.forEach((snapshot, index) => this.input.emit('task_integrated', { taskId: snapshot.task.id,
         taskDigest: snapshot.taskDigest, assignmentKey: assignmentDeliveryFile(snapshot.assignment),
         workerId: snapshot.assignment.workerId, seedCommit: snapshot.assignment.seedCommit,
-        sourceDigest: receipts[index].sourceDigest, receiptIds: receipts[index].verification.results.map(result => result.receiptId),
+        sourceDigest: checkedReceipts[index].sourceDigest, receiptIds: checkedReceipts[index].verification.results.map(result => result.receiptId),
         groupId: taskGroup(snapshot.task), sharing: snapshot.task.sharing ?? 'problem', commit: merged, batchSize: snapshots.length }));
       this.changed();
       return this.proofDeliveryState(node);

@@ -1,7 +1,9 @@
+import { webProviderExecutionDigest, webProviderHarness, webHarnessResearchError } from './harness';
 import crypto from 'node:crypto';
 import type { WebConfig } from './config';
 import type { WebRunner } from './runner';
-import type { WebEvent, WebEventDetails, WebProvider, WebRun, WebRunInput, WorkerInput, WorkerMessage } from './shared';
+import type { WebEvent, WebEventDetails, WebProvider, WebWorkerProvider, WebRun, WebRunInput, WorkerInput, WorkerMessage } from './shared';
+import { webResearchModeError, webSkillWithoutCooperation, webDefaultSkillLoading } from './researchMode';
 import { isProgressEvent, parseWebFailure, webAgentActionLimits, webLimits } from './shared';
 import { recordWebModuleEvent, sanitizeWebEventDetails } from './moduleTelemetry';
 import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
@@ -12,7 +14,7 @@ import { freezeModuleConfiguration } from './moduleRegistry';
 import { WebStorageError } from './storage';
 import { isAcceptedRun, isStatementReviewed } from './presentation';
 
-type Job = { owner: string; run: WebRun; input: WebRunInput; provider: WebProvider; controller: AbortController;
+type Job = { owner: string; run: WebRun; input: WebRunInput; provider: WebWorkerProvider; controller: AbortController;
   formalization?: WorkerInput['formalization'];
   compiledFormalization?: WorkerInput['compiledFormalization'];
   researchConfiguration?: WorkerInput['researchConfiguration'];
@@ -54,7 +56,7 @@ export class WebJobs {
     this.knowledge = options.knowledge ?? new WebKnowledgeService(this.storage);
     for (const { owner, run, creation } of this.storage.loadRuns()) {
       if (creation) this.creations.set(JSON.stringify([owner, creation.requestId]), { ...creation, runId: run.id });
-      const provider: WebProvider = { id: run.providerId, name: run.providerId, baseUrl: '' };
+      const provider: WebWorkerProvider = { id: run.providerId, name: run.providerId, baseUrl: '' };
       this.jobs.set(run.id, { owner, run, provider, input: { ...run, apiKey: '' }, controller: new AbortController() });
       if (!terminal(run)) {
         run.status = 'error'; run.phase = 'interrupted'; run.finishedAt = new Date().toISOString();
@@ -91,14 +93,17 @@ export class WebJobs {
       if (!listeners.size && this.listeners.get(owner) === listeners) this.listeners.delete(owner);
     };
   }
-  private creation(input: WebRunInput, provider: WebProvider, requestId: string): WebCreation {
+  private creation(input: WebRunInput, provider: WebWorkerProvider, requestId: string): WebCreation {
     if (!/^[A-Za-z0-9_-]{1,128}$/u.test(requestId)) throw new WebStorageError(400, '提交请求标识无效。');
-    const { apiKey: _key, ...visible } = input;
+    const normalized = webProviderHarness(provider) === 'codex' ? input : { ...input, researchMode: input.researchMode ?? 'skill',
+      skillLoading: input.skillLoading ?? 'file' };
+    const { apiKey: _key, ...visible } = normalized;
     return { schema: 'theorem-os.web-creation.v1', requestId, digest: crypto.createHash('sha256').update(canonicalMathJson({
-      input: { ...visible, environment: input.environment ?? 'standard' }, provider: { id: provider.id, baseUrl: provider.baseUrl },
+      input: { ...visible, environment: input.environment ?? 'standard' }, provider: { id: provider.id, baseUrl: provider.baseUrl,
+        ...(provider.harness || provider.execution ? { executionDigest: webProviderExecutionDigest(provider) } : {}) },
     })).digest('hex') };
   }
-  replay(owner: string, input: WebRunInput, provider: WebProvider, requestId?: string, legacyEnvironmentOmitted = false): WebRun | undefined {
+  replay(owner: string, input: WebRunInput, provider: WebWorkerProvider, requestId?: string, legacyEnvironmentOmitted = false): WebRun | undefined {
     if (!requestId) return;
     const expected = this.creation(input, provider, requestId);
     const stored = this.creations.get(JSON.stringify([owner, requestId]));
@@ -114,9 +119,15 @@ export class WebJobs {
     return run;
   }
   /** The source goes only to the worker; its exact host-resolved identity stays with the visible run. */
-  create(owner: string, input: WebRunInput, provider: WebProvider, continuation?: WorkerInput['continuation'], requestId?: string,
+  create(owner: string, input: WebRunInput, provider: WebWorkerProvider, continuation?: WorkerInput['continuation'], requestId?: string,
     formalization?: { evidence?: unknown; compiled?: unknown; provenance: NonNullable<WebRun['formalization']> },
     researchConfiguration?: WorkerInput['researchConfiguration']): WebRun {
+    if (webProviderHarness(provider) !== 'codex') input = { ...input, researchMode: input.researchMode ?? 'skill',
+      skillLoading: input.skillLoading ?? 'file' };
+    const modeError = webResearchModeError(input);
+    const harnessError = webHarnessResearchError(provider, input);
+    if (harnessError) throw new WebStorageError(400, harnessError);
+    if (modeError) throw new WebStorageError(400, modeError);
     const previous = this.replay(owner, input, provider, requestId);
     if (previous) return previous;
     if (this.closing) throw new Error('服务正在停止，请稍后重试。');
@@ -135,6 +146,7 @@ export class WebJobs {
     const pinnedInput: WebRunInput = { ...input, environment: input.environment ?? 'standard',
       autoExplain: input.autoExplain ?? true, explanationLanguage: input.explanationLanguage ?? 'zh' };
     if (researchConfiguration) pinnedInput.modulePlan = structuredClone(researchConfiguration.modulePlan);
+    if (input.researchMode === 'skill') pinnedInput.skillLoading ??= webDefaultSkillLoading(provider);
     if (pinnedDigest) pinnedInput.knowledgeDigest = pinnedDigest;
     else delete pinnedInput.knowledgeDigest;
     const { apiKey, knowledgeDigest: _selectedKnowledgeDigest, ...visible } = pinnedInput;
@@ -150,13 +162,14 @@ export class WebJobs {
     if (formalization) run.formalization = formalization.provenance;
     if (researchConfiguration) run.researchConfiguration = structuredClone(researchConfiguration);
     run.title = (formalization?.provenance.original.trim() || run.task).split('\n')[0].slice(0, 60) || 'Lean 研究';
-    run.moduleConfiguration = freezeModuleConfiguration(run.modulePlan, run.coordination, run.workers);
+    if (provider.harness || provider.execution) { run.harness = webProviderHarness(provider); run.harnessConfigurationDigest = webProviderExecutionDigest(provider); }
+    if (input.researchMode !== 'skill' || input.workers > 1 || input.modulePlan) run.moduleConfiguration = freezeModuleConfiguration(run.modulePlan, run.coordination, run.workers, provider.harness);
     const creation = requestId ? this.creation(input, provider, requestId) : undefined;
     this.event(run, 'queued', '任务已进入队列');
     // Persist the identity and initial run atomically before a worker can be queued.
     this.storage.saveRun(owner, run, creation);
     if (creation) this.creations.set(JSON.stringify([owner, requestId]), { ...creation, runId: run.id });
-    this.jobs.set(run.id, { owner, input: pinnedInput, provider, run, controller: new AbortController(),
+    this.jobs.set(run.id, { owner, input: pinnedInput, provider: structuredClone(provider), run, controller: new AbortController(),
       ...(researchConfiguration ? { researchConfiguration: structuredClone(researchConfiguration) } : {}),
       ...(formalization ? { formalization: formalization.evidence } : {}),
       ...(formalization?.compiled ? { compiledFormalization: formalization.compiled } : {}),
@@ -291,6 +304,18 @@ export class WebJobs {
       solverRunId: job.run.observation.solverRunId, round: 0, sequence: job.run.observation.sequence });
     if (observation.webRunId !== job.run.id || observation.snapshot.runId !== observation.solverRunId ||
         current && (current.solverRunId !== observation.solverRunId || current.sequence >= observation.sequence)) return;
+    const configuration = observation.inspection.configuration;
+    const actualHarness = configuration?.agentHarness, expectedHarness = job.run.harness ?? 'codex';
+    if (actualHarness && actualHarness.id !== expectedHarness || expectedHarness !== 'codex' && !actualHarness ||
+        job.run.agentHarness && canonicalMathJson(job.run.agentHarness) !== canonicalMathJson(actualHarness)) return;
+    if ((configuration?.researchMode ?? 'legacy') !== (job.run.researchMode ?? 'legacy')) return;
+    if (job.run.researchMode === 'skill') {
+      const skill = configuration?.researchSkill, frozen = job.run.researchSkill;
+      if (!skill || skill.loading !== (job.run.skillLoading ?? 'native') ||
+          frozen && (skill.name !== frozen.name || skill.digest !== frozen.digest || skill.loading !== frozen.loading)) return;
+      job.run.researchSkill = { ...skill };
+    }
+    if (actualHarness) job.run.agentHarness = { ...actualHarness };
     job.run.solverAttempt = { solverRunId: observation.solverRunId, round: current?.round ?? 0, sequence: observation.sequence };
     job.run.observation = observation;
     job.run.updatedAt = observation.observedAt;
@@ -323,6 +348,7 @@ export class WebJobs {
   async command(owner: string, runId: string, command: Exclude<WebCommand, { type: 'capture' }>): Promise<WebCommandResult> {
     const job = this.jobs.get(runId);
     if (!job || job.owner !== owner) throw new Error('运行不存在或不属于当前会话。');
+    if (webSkillWithoutCooperation(job.run)) throw new WebStorageError(409, '此研究安排不支持协作计划、逐题指导或计划审批。');
     const id = command.type === 'guidance' ? command.guidance.id : command.type === 'guidance-withdraw' ? command.id
       : command.type === 'plan-approval' ? command.approval.id : command.proposal.id;
     const key = `${runId}/${command.type === 'edit-preview' ? 'preview/' : ''}${id}`;

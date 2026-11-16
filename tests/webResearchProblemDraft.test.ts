@@ -7,6 +7,7 @@ import { archiveIndex } from '../docs/web/catalog';
 import type { ResearchProjectDetail } from '../apps/web/researchProjectTypes';
 import { archiveReadingReturn, readProofReadingPosition } from '../docs/web/proofReadingLocation';
 import { proofReadingContexts } from '../docs/web/proofReadingContext';
+import { renderProofSolution } from '../docs/web/proofSolution';
 import {
   archiveProblemDraftHref, clearResearchProblemDraft, loadResearchProblemDraft, projectProblemDraftHref,
   readResearchProblemDraft, researchProblemDraftHref,
@@ -74,7 +75,11 @@ describe('explicit problem-to-draft handoff', () => {
     const records = campaignRecords(root).records;
     const record = records.find(record => record.campaign!.target === 'ThreeStateTreeClauses')!, original = record.sources.find(source => source.name === 'Challenge.lean')!;
     const index = archiveIndex({ schema: 'theoremos.public-archive.v1', repository: '', archiveRevision: '', snapshotAt: '', records });
-    const context = proofReadingContexts(record, record.process!)!, anchor = 'proof-source-target-1';
+    // Source declarations are the fallback layout; a curated walkthrough publishes different anchors.
+    const process = { ...structuredClone(record.process!), walkthrough: undefined };
+    const context = proofReadingContexts(record, process)!, anchor = 'proof-source-target-1';
+    expect(renderProofSolution(record, process, 'en')).toContain(`id="${anchor}"`);
+    expect(context.positions[anchor]).toBeDefined();
     const reading = new URL('/classics/archive.html', currentHref);
     reading.hash = new URLSearchParams({ proof: record.id, tab: 'reading', reading: anchor, readingSha: context.proofSha256 }).toString();
     const candidate = await loadResearchProblemDraft({ kind: 'archive', id: record.id, sourceDigest: original.sha256, readingUrl: reading.href, focusAnchor: anchor }, {

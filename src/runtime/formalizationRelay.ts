@@ -22,8 +22,29 @@ const MAX_CREDENTIAL_BYTES = 8192;
 const MAX_ACTIVE_REQUESTS = 8;
 const MAX_USAGE_EVENT_BYTES = 2 * 1024 * 1024;
 
+/** Native metadata/header spellings vary by Codex version. Conflicting or invalid
+ * identities remain unattributed; provider usage is still accounted for once. */
+function nativeRequestThread(body: Record<string, unknown>, request: IncomingMessage): string | undefined {
+  const metadata = body.client_metadata && typeof body.client_metadata === 'object' && !Array.isArray(body.client_metadata)
+    ? body.client_metadata as Record<string, unknown> : {};
+  const values: unknown[] = [metadata.session_id, request.headers.session_id, request.headers['session-id'],
+    request.headers['thread-id'], request.headers['x-codex-thread-id']].filter(value => value !== undefined && value !== null);
+  for (const raw of [metadata['x-codex-turn-metadata'], request.headers['x-codex-turn-metadata']]) {
+    if (raw === undefined) continue;
+    if (typeof raw !== 'string' || raw.length > 16_384) return;
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'thread_id' in parsed)
+        values.push(parsed.thread_id);
+    } catch { return; }
+  }
+  if (!values.length || values.some(value => typeof value !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/u.test(value)) ||
+      new Set(values).size !== 1) return;
+  return values[0] as string;
+}
+
 /** Observe the existing Responses wire stream without changing its bytes or accepting model claims. */
-function responseUsageObserver(streaming: boolean) {
+export function responseUsageObserver(streaming: boolean) {
   let usage: ModelRequestReceipt['usage'], outcome: ModelRequestReceipt['outcome'], providerRequestId: string | undefined;
   let terminal = false, invalid = false, limited = false, pendingBytes = 0;
   const chunks: Uint8Array[] = [], decoder = new TextDecoder('utf-8', { fatal: true });
@@ -80,7 +101,7 @@ function responseUsageObserver(streaming: boolean) {
   return { accept, finish, get terminal() { return terminal; } };
 }
 
-class RelayError extends Error {
+export class RelayError extends Error {
   constructor(readonly status: number, readonly code: string) { super(code); }
 }
 type AuthCommand = { command: string; args: string[]; timeoutMs: number; refreshMs: number };
@@ -150,7 +171,7 @@ const statelessResponsesRequest = z.object({
   metadata: z.record(z.string()).optional(), client_metadata: z.record(z.string()).optional(),
 }).strict();
 
-function admitRequest(body: Record<string, unknown>, model: string, effort: string, outputSchema?: Record<string, unknown>): void {
+export function admitResponsesRequest(body: Record<string, unknown>, model: string, effort: string, outputSchema?: Record<string, unknown>): void {
   if (body.model !== model) throw new RelayError(400, 'relay_model_mismatch');
   const reasoning = body.reasoning as Record<string, unknown> | undefined;
   if (!reasoning || typeof reasoning !== 'object' || Array.isArray(reasoning) || reasoning.effort !== effort)
@@ -182,7 +203,7 @@ function admitRequest(body: Record<string, unknown>, model: string, effort: stri
 }
 
 export type FormalizationRelayReceipt = Readonly<{
-  schema: 'theoremos.formalization-relay.v1'; providerId: 'sub2api' | 'web_provider'; wireApi: 'responses';
+  schema: 'theoremos.formalization-relay.v1'; providerId: 'sub2api' | 'web_provider'; wireApi: 'responses' | 'anthropic-messages' | 'chat-completions';
   endpoint: string; model: string; effort: string; transport: 'unix-http' | 'loopback-http'; httpHost: string;
   credentialLocation: 'host-only'; credentialSource: 'environment' | 'auth-command';
 }>;
@@ -192,9 +213,20 @@ export type FormalizationRelay = Readonly<{
   /** Disposable role capability; this is never the upstream credential. */
   apiKey: string;
   httpHost: string;
-  route: typeof ROUTE;
+  route: string;
   receipt: FormalizationRelayReceipt;
   close: () => Promise<void>;
+}>;
+
+/** Trusted native dialect policy. Authentication, transport, redaction and settlement
+ * remain in this relay; adapters only select a frozen endpoint and inline protocol. */
+export type NativeRelayProtocol = Readonly<{
+  endpoint: string; envKey: string; wireApi: FormalizationRelayReceipt['wireApi'];
+  route: string; routes?: readonly string[]; authHeader?: 'x-api-key';
+  upstreamAuthHeader?: 'authorization' | 'x-api-key';
+  headers?: Readonly<Record<string, string>>;
+  admit: (body: Record<string, unknown>, route: string) => Record<string, unknown>;
+  observe: (streaming: boolean) => ReturnType<typeof responseUsageObserver>;
 }>;
 
 function readProfile(directory: string, model: string): Profile {
@@ -297,9 +329,12 @@ export async function startFormalizationRelay(input: {
   outputSchema?: Record<string, unknown>;
   env?: NodeJS.ProcessEnv; signal?: AbortSignal; timeoutMs?: number;
   requestGate?: ModelRequestGate; onUsageIncomplete?: () => void;
+  native?: NativeRelayProtocol;
 }): Promise<FormalizationRelay> {
-  const profile = readProfile(input.profile, input.model);
-  if (!['low', 'high', 'max'].includes(input.effort)) throw new Error('formalization_relay_effort_invalid');
+  const profile: Profile = input.native ? { providerId: 'web_provider', endpoint: input.native.endpoint, envKey: input.native.envKey }
+    : readProfile(input.profile, input.model);
+  if (!(input.native ? ['none', 'low', 'medium', 'high', 'xhigh', 'max'] : ['low', 'high', 'max']).includes(input.effort))
+    throw new Error('formalization_relay_effort_invalid');
   if (input.timeoutMs !== undefined && (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs <= 0))
     throw new Error('formalization_relay_timeout_invalid');
   input.signal?.throwIfAborted();
@@ -346,8 +381,9 @@ export async function startFormalizationRelay(input: {
   };
   const handle = async (request: IncomingMessage, response: ServerResponse) => {
     response.setHeader('X-Content-Type-Options', 'nosniff');
-    const auth = Buffer.from(request.headers.authorization ?? '');
-    const sensitive = new Set(['host', 'authorization', 'content-type', 'content-length', 'transfer-encoding']);
+    const auth = Buffer.from(input.native?.authHeader === 'x-api-key' ? 'Bearer ' + (request.headers['x-api-key'] ?? '')
+      : request.headers.authorization ?? '');
+    const sensitive = new Set(['host', 'authorization', 'x-api-key', 'content-type', 'content-length', 'transfer-encoding']);
     const seen = new Set<string>();
     for (let i = 0; i < request.rawHeaders.length; i += 2) {
       const name = request.rawHeaders[i].toLowerCase();
@@ -359,7 +395,8 @@ export async function startFormalizationRelay(input: {
       return errorResponse(response, 403, 'invalid_relay_host');
     if (auth.length !== expectedAuth.length || !timingSafeEqual(auth, expectedAuth))
       return errorResponse(response, 401, 'invalid_relay_authorization');
-    if (request.url !== ROUTE) return errorResponse(response, 404, 'unknown_relay_route');
+    const route = input.native?.route ?? ROUTE;
+    if (!(input.native?.routes ?? [route]).includes(request.url ?? '')) return errorResponse(response, 404, 'unknown_relay_route');
     if (request.method !== 'POST') return errorResponse(response, 405, 'unsupported_relay_method');
     if (closed || active.size >= MAX_ACTIVE_REQUESTS) return errorResponse(response, 429, 'relay_unavailable');
     const controller = new AbortController(); active.add(controller);
@@ -376,19 +413,23 @@ export async function startFormalizationRelay(input: {
     const timer = input.timeoutMs === undefined ? undefined : setTimeout(() => controller.abort(), input.timeoutMs);
     timer?.unref();
     try {
-      const body = await readRequest(request);
-      admitRequest(body, input.model, input.effort, input.outputSchema);
+      let body = await readRequest(request);
+      if (input.native) body = input.native.admit(body, request.url!);
+      else admitResponsesRequest(body, input.model, input.effort, input.outputSchema);
       controller.signal.throwIfAborted();
       const key = await loadCredential();
       await input.requestGate?.beforeRequest?.(controller.signal);
       controller.signal.throwIfAborted();
-      admission = input.requestGate?.({ requestId: randomUUID(), source: 'responses-relay' });
+      const nativeThread = nativeRequestThread(body, request);
+      admission = input.requestGate?.({ requestId: randomUUID(), source: input.native ? 'native-model-relay' : 'responses-relay',
+        ...(nativeThread ? { threadId: nativeThread } : {}) });
       if (admission?.allowed === false) throw new RelayError(403, admission.reason);
       // Never copy caller headers, URL components, cookies or proxy settings upstream.
       // Bun's implicit fetch socket timeout must not impose a model deadline.
       const upstreamInit: RequestInit & { timeout: false } = {
         method: 'POST', redirect: 'error', signal: controller.signal, timeout: false,
-        headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json',
+        headers: { ...((input.native?.upstreamAuthHeader ?? input.native?.authHeader) === 'x-api-key' ? { 'x-api-key': key } : { Authorization: 'Bearer ' + key }),
+          ...input.native?.headers, 'Content-Type': 'application/json',
           Accept: body.stream === true ? 'text/event-stream' : 'application/json' }, body: JSON.stringify(body) };
       upstreamAttempted = true;
       const upstream = await globalThis.fetch(profile.endpoint, upstreamInit);
@@ -405,7 +446,7 @@ export async function startFormalizationRelay(input: {
       }
       response.writeHead(200, { 'Content-Type': contentType!, 'Cache-Control': 'no-store', Connection: 'close' });
       response.flushHeaders();
-      observer = responseUsageObserver(contentType === 'text/event-stream');
+      observer = (input.native?.observe ?? responseUsageObserver)(contentType === 'text/event-stream');
       const filter = redactor(key);
       reader = upstream.body.getReader();
       while (true) {
@@ -473,8 +514,8 @@ export async function startFormalizationRelay(input: {
   })();
   input.signal?.addEventListener('abort', stop, { once: true });
   if (input.signal?.aborted) { await close(); throw new Error('formalization_relay_cancelled'); }
-  return { socketPath, ...(loopback ? { baseUrl: 'http://' + httpHost + '/v1' } : {}), apiKey, httpHost, route: ROUTE,
-    receipt: { schema: 'theoremos.formalization-relay.v1', providerId: profile.providerId, wireApi: 'responses',
+  return { socketPath, ...(loopback ? { baseUrl: 'http://' + httpHost + '/v1' } : {}), apiKey, httpHost, route: input.native?.route ?? ROUTE,
+    receipt: { schema: 'theoremos.formalization-relay.v1', providerId: profile.providerId, wireApi: input.native?.wireApi ?? 'responses',
       endpoint: profile.endpoint, model: input.model, effort: input.effort, transport: loopback ? 'loopback-http' : 'unix-http', httpHost,
       credentialLocation: 'host-only', credentialSource: profile.envKey ? 'environment' : 'auth-command' }, close };
 }

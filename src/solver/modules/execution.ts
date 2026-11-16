@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { MathAgentSession } from '../../runtime/codexSession';
+import type { MathAgentSession } from '../../runtime/agentSession';
 import type { SolverProblem } from '../problem';
 import type { ContextBundle } from './context';
 import type { ResearchOperation } from './value';

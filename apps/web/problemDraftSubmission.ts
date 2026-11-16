@@ -22,6 +22,8 @@ export function matchesProblemRun(value: ProblemDraftValue, run: WebRun): boolea
   const submittedSource = run.formalization ? draft.source : draft.source.trim();
   if (run.source !== submittedSource || run.task !== draft.task.trim() || run.providerId !== draft.providerId || run.model !== draft.model.trim()
     || run.environment !== draft.environment || run.effort !== draft.effort || run.coordination !== draft.coordination
+    || (run.researchMode ?? 'legacy') !== (draft.researchMode ?? 'legacy')
+    || (run.researchMode === 'skill' && (run.skillLoading ?? 'native') !== (draft.skillLoading ?? 'native'))
     || run.maxTurns !== Number(draft.maxTurns) || run.maxRunSeconds !== Number(draft.maxRunSeconds) || run.workers !== Number(draft.workers)
     || (run.maxTotalTokens ?? 0) !== Math.round(Number(draft.maxTotalTokens ?? '') * 10_000)
     || Boolean(run.planApproval) !== Boolean(draft.planApproval && draft.coordination === 'cooperative' && Number(draft.workers) >= 2)

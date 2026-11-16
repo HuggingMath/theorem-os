@@ -1,3 +1,4 @@
+import { assertWorkflowSessionSupported, openWorkflowSession, workflowProfileFiles } from './workflowSession';
 import fs from 'node:fs';
 import { scheduleMathTimeout } from '../math/mathTimers';
 import { getFormalizationRoleOutputSchema, getFormalizationRoleOutputValidator,
@@ -7,7 +8,7 @@ import crypto from 'node:crypto';
 import { setTimeout as wait } from 'node:timers/promises';
 import { z } from 'zod';
 import { parse as parseToml } from 'smol-toml';
-import { createCodexMathSession, type MathAgentFailureDiagnostic, type MathAgentOptions, type MathAgentSession } from '../runtime/codexSession';
+import type { MathAgentFailureDiagnostic, MathAgentOptions, MathAgentSession } from '../runtime/agentSession';
 import { warmFormalizationPackages } from '../runtime/formalizationSandbox';
 import { DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT } from '../math/mathProofEnvironmentCache';
 import { readMathBuildManifest } from '../math/mathBuildManifest';
@@ -314,8 +315,11 @@ export async function runFormalization(directory: string, root: string, options:
   };
   const currentProfileDigest = () => request.execution === 'replay' ? formalizationDigest('preset-replay') : request.workflow ?
     formalizationDigest(formalizationModelConfigurations(request, request.workflow).map(config => ({
-      configurationDigest: formalizationModelConfigurationDigest(config), files: profileFiles(config.profile) }))) :
-    formalizationDigest(profileFiles(request.profile));
+      configurationDigest: formalizationModelConfigurationDigest(config),
+      files: workflowProfileFiles(config, () => profileFiles(config.profile), options.env ?? process.env) }))) :
+    formalizationDigest(workflowProfileFiles(request, () => profileFiles(request.profile), options.env ?? process.env));
+  if (request.execution === 'model') for (const config of formalizationModelConfigurations(request, request.workflow))
+    assertWorkflowSessionSupported(config, { environment: request.environment });
   const profileDigest = currentProfileDigest();
   const controller = new AbortController(), externalAbort = () => controller.abort();
   options.signal?.addEventListener('abort', externalAbort, { once: true });
@@ -585,7 +589,7 @@ export async function runFormalization(directory: string, root: string, options:
             modelSlot = await acquireMathModelSlot(slotConfiguration, { signal: lease.signal });
             event('formalization_model_slot_acquired', role);
           }
-          session = await (options.openSession ?? createCodexMathSession)({
+          session = await openWorkflowSession(config, {
             executable: config.executable, profile: config.profile, workspace, model: config.model, effort: config.effort,
             instructions: instructionsText,
             environment: env, signal: lease.signal,
@@ -619,7 +623,7 @@ export async function runFormalization(directory: string, root: string, options:
                 else remindSubmission();
               } };
             },
-          });
+          }, options.openSession);
           if (session.usageSource === 'upstream-requests') initializeRequestUsageAccounting(record);
           if (session.isolationReceipt) record.isolationReceipt = session.isolationReceipt;
           if (lease.signal.aborted) { await session.close(); lease.signal.throwIfAborted(); }

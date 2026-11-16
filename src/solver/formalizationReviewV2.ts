@@ -1,10 +1,11 @@
+import { assertWorkflowSessionSupported, openWorkflowSession, workflowProfileFiles } from './workflowSession';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { parse as parseToml } from 'smol-toml';
 import { z } from 'zod';
-import { createCodexMathSession, type MathAgentOptions, type MathAgentSession } from '../runtime/codexSession';
+import type { MathAgentOptions, MathAgentSession } from '../runtime/agentSession';
 import { formalizationEvaluationDecisionFileSchema, formalizationEvaluationInputDigest,
   formalizationEvaluationLeanSource, readFormalizationEvaluationBundle, MAX_FORMALIZATION_EVALUATION_BYTES,
   type FormalizationEvaluationReviewerInput } from '../math/formalizationEvaluation';
@@ -133,11 +134,13 @@ export async function runStructuredFormalizationReview(bundleDirectory: string, 
   const reviewInstructions = formalizationReviewInstructions('review', semanticContext, structureContext, config.fidelityPolicy);
   const backtranslationInstructions = formalizationReviewInstructions('backtranslate', semanticContext, structureContext);
   const production = config.execution === 'model' && !options.openSession;
-  const adapter = options.openSession ? 'injected-preset' : production ? 'codex' : 'saved-preset';
+  const adapter = options.openSession ? 'injected-preset' : config.execution === 'model' ? config.agentHarness?.id ?? 'codex' : 'saved-preset';
   const inputs = [...prepared.inputs.values()].sort((a, b) => a.caseId.localeCompare(b.caseId));
   const inputById = new Map(inputs.map(input => [input.caseId, input]));
   const environment = resolveReviewEnvironment({ sourceToolchain: prepared.bundle.provenance.sourceToolchain,
     sourceMathlibRevision: prepared.bundle.provenance.sourceMathlibRevision }, config.environment);
+  if (config.execution === 'model' && config.agentHarness && options.openSession) throw new Error('math_workflow_harness_injection_conflict');
+  if (config.execution === 'model') assertWorkflowSessionSupported(config, { environment: environment.environment });
   const presetRoles = new Map<string, unknown>(), presetObservations = new Map<string, ReviewStatementObservation>();
   let replaySha256: string | undefined;
   if (config.execution === 'replay') {
@@ -166,7 +169,8 @@ export async function runStructuredFormalizationReview(bundleDirectory: string, 
       if (!path.isAbsolute(profile.model_catalog_json)) throw new Error('formalization_review_catalog_path_invalid');
       assertMathCanonicalPath(profile.model_catalog_json); catalog = mathDigest(readMathText(profile.model_catalog_json, 2_000_000));
     }
-    return digest({ build, profileSha256: mathDigest(profileText), catalog });
+    return digest({ build, profileSha256: mathDigest(profileText), catalog,
+      ...(config.agentHarness ? { harness: workflowProfileFiles(config, () => null, options.env ?? process.env) } : {}) });
   };
   const binding = executionBinding();
   const request = { schema: 'theorem-os.formalization-review-run.v2', protocol: STRUCTURED_REVIEW_PROTOCOL,
@@ -319,8 +323,8 @@ export async function runStructuredFormalizationReview(bundleDirectory: string, 
           onUsageIncomplete: () => {
             attempt.usageIncomplete = true; if (currentTurn) currentTurn.usageIncomplete = true; save();
           } };
-        session = options.openSession ? await options.openSession(sessionOptions) : production ?
-          await createCodexMathSession(sessionOptions) : {
+        session = options.openSession ? await options.openSession(sessionOptions) : config.execution === 'model' ?
+          await openWorkflowSession(config, sessionOptions) : {
             threadId: 'preset-' + id, run: async (_message, _id, _workspace, started) => {
               started('preset-turn-' + id);
               if (presetRoles.has(key)) writeMathFrozen(outputFile, canonicalMathJson(presetRoles.get(key)) + '\n');

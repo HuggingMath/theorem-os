@@ -82,6 +82,7 @@ const runner: WebRunner = {
     commands.push({ runId, command: structuredClone(command) });
     const control = controls.get(runId)!;
     if (command.type === 'capture') return { id: 'capture', status: 'captured', observation: control.observation };
+    if (command.type === 'guidance-withdraw') return { id: command.id, status: 'rejected', reason: 'fixture_guidance_withdraw_not_simulated' };
     if (command.type === 'guidance') throw new Error('Plan recovery must not send guidance');
     if (command.type === 'plan-approval') throw new Error('Plan recovery must not approve a plan');
     if (command.proposal.baseVersion !== control.observation.plan!.baseVersion) throw new Error('math_edit_version_conflict');

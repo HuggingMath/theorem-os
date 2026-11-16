@@ -1,0 +1,42 @@
+{
+  "schema": "theorem-os.cli-harness.v1",
+  "executable": "gemini",
+  "args": ["--model", "{model}", "--output-format", "stream-json", "--skip-trust", "--approval-mode", "yolo", "--prompt", "{prompt}"],
+  "prompt": "argument",
+  "session": {
+    "mode": "generated",
+    "startArgs": ["--session-id", "{sessionId}"],
+    "resumeArgs": ["--resume", "{sessionId}"]
+  },
+  "output": {
+    "format": "jsonl",
+    "text": {
+      "field": "/content",
+      "when": [{"field": "/type", "value": "message"}, {"field": "/role", "value": "assistant"}],
+      "mode": "append"
+    },
+    "sessionId": {"field": "/session_id", "when": {"field": "/type", "value": "init"}},
+    "usage": {
+      "when": {"field": "/type", "value": "result"},
+      "inputTokens": "/stats/input_tokens",
+      "outputTokens": "/stats/output_tokens",
+      "cachedInputTokens": "/stats/cached",
+      "scope": "turn",
+      "completeness": "partial"
+    },
+    "failures": [{
+      "when": [{"field": "/type", "value": "result"}, {"field": "/status", "value": "error"}],
+      "reason": "invalid-request"
+    }]
+  },
+  "efforts": ["none"],
+  "environment": {
+    "GEMINI_CLI_HOME": "{profile}/home",
+    "GEMINI_CLI_NO_RELAUNCH": "1",
+    "GEMINI_CLI_SYSTEM_DEFAULTS_PATH": "{profile}/system-defaults.json",
+    "GEMINI_CLI_SYSTEM_SETTINGS_PATH": "{profile}/system-settings.json",
+    "NO_COLOR": "1"
+  },
+  "inheritEnvironment": ["GEMINI_API_KEY", "GOOGLE_GEMINI_BASE_URL"],
+  "configurationFiles": ["home/.gemini/settings.json", "system-defaults.json", "system-settings.json"]
+}

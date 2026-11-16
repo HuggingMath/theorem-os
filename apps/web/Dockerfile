@@ -14,6 +14,7 @@ FROM base AS source
 COPY bin ./bin
 COPY src ./src
 COPY scripts ./scripts
+COPY skills ./skills
 COPY resources ./resources
 COPY apps ./apps
 COPY docs/assets ./docs/assets

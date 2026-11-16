@@ -13,7 +13,7 @@ import { acquireMathProofEnvironmentLease, MATH_PROOF_ENVIRONMENT_ENV, prepareMa
 import { DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT } from '../math/mathProofEnvironmentCache';
 import { projectMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnvironment';
 import { resolveMathematicsLakePackagesCache } from '../math/verifier';
-import { startFormalizationRelay } from './formalizationRelay';
+import { startFormalizationRelay, type NativeRelayProtocol } from './formalizationRelay';
 import type { ModelRequestGate } from './modelRequest';
 import { sub2apiModelCatalog } from './sub2api';
 import { FORMALIZATION_LIBRARY_ROOT, readFormalizationLibraryRelease, snapshotFormalizationLibrary,
@@ -33,7 +33,8 @@ const PROTOCOL_FILES = [
 
 // This helper owns the private loopback transport and forwards only the model route over
 // the one socket mounted into this role. It never receives a real provider credential.
-const LAUNCHER = String.raw`import os, select, signal, socket, socketserver, subprocess, sys, threading
+const LAUNCHER = String.raw`import json, os, select, signal, socket, socketserver, subprocess, sys, threading
+allowed = json.loads(os.environ.get('FORMALIZATION_MODEL_ROUTES', '["/v1/responses"]'))
 class Relay(socketserver.BaseRequestHandler):
     def handle(self):
         upstream = None
@@ -46,7 +47,7 @@ class Relay(socketserver.BaseRequestHandler):
                 data += chunk
             head, body = data.split(b'\r\n\r\n', 1)
             lines = head.split(b'\r\n')
-            if lines[0] != b'POST /v1/responses HTTP/1.1':
+            if lines[0] not in [b'POST ' + route.encode() + b' HTTP/1.1' for route in allowed]:
                 self.request.sendall(b'HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
                 return
             headers = [line for line in lines[1:] if line.split(b':', 1)[0].lower() not in (b'host', b'connection', b'proxy-connection')]
@@ -76,6 +77,34 @@ class Server(socketserver.ThreadingTCPServer):
     def handle_error(self, request, address): pass
 server = Server(('127.0.0.1', 18888), Relay)
 threading.Thread(target=server.serve_forever, daemon=True).start()
+control = None
+if os.environ.get('FORMALIZATION_CONTROL_PORT'):
+    class Control(socketserver.BaseRequestHandler):
+        def handle(self):
+            upstream = None
+            try:
+                upstream = socket.create_connection(('127.0.0.1', int(os.environ['FORMALIZATION_CONTROL_PORT'])), timeout=10)
+                upstream.settimeout(None)
+                readers = [self.request, upstream]
+                while upstream in readers:
+                    ready, _, _ = select.select(readers, [], [])
+                    for source in ready:
+                        chunk = source.recv(65536)
+                        if not chunk:
+                            readers.remove(source)
+                            if source is self.request:
+                                try: upstream.shutdown(socket.SHUT_WR)
+                                except OSError: pass
+                        else: (upstream if source is self.request else self.request).sendall(chunk)
+            except OSError: pass
+            finally:
+                if upstream is not None: upstream.close()
+    class ControlServer(socketserver.ThreadingUnixStreamServer):
+        daemon_threads = True
+        def handle_error(self, request, address): pass
+    control = ControlServer('/control/native.sock', Control)
+    os.chmod('/control/native.sock', 0o600)
+    threading.Thread(target=control.serve_forever, daemon=True).start()
 child = subprocess.Popen(sys.argv[1:], close_fds=True)
 def interrupt(signum, frame):
     try: child.send_signal(signum)
@@ -86,6 +115,9 @@ try: status = child.wait()
 finally:
     server.shutdown()
     server.server_close()
+    if control is not None:
+        control.shutdown()
+        control.server_close()
 sys.exit(status if status >= 0 else 128 - status)
 `;
 
@@ -100,11 +132,24 @@ export type FormalizationSandboxReceipt = Readonly<{
   libraryApi?: Readonly<{ scriptSha256: string; programSha256: string }>;
   library?: Readonly<{ root: typeof FORMALIZATION_LIBRARY_ROOT; catalogDigest: string; buildReceiptSha256: string }>;
   auditDirectory: string; canary: 'passed';
+  harness?: string; runtimeResources?: readonly Readonly<{ target: string; sha256: string }>[];
+  wireApi?: NativeRelayProtocol['wireApi']; control?: 'private-native-unix-socket';
 }>;
 export type FormalizationSandbox = Readonly<{
   command: string; args: string[]; env: NodeJS.ProcessEnv; inheritedFds?: readonly number[];
   workspace: '/workspace'; profile: '/profile'; providerId: 'sub2api' | 'web_provider'; providerBaseUrl: string; modelCatalog?: string;
   receipt: FormalizationSandboxReceipt; close: () => Promise<void>;
+  controlSocket?: string;
+  launch: (arguments_: readonly string[]) => { command: string; args: string[]; env: NodeJS.ProcessEnv; inheritedFds?: readonly number[] };
+}>;
+export type SealedRuntimeProjection = Readonly<{
+  harness: 'claude-code' | 'opencode' | 'cli';
+  executable: string; command: string; prefixArgs?: readonly string[];
+  mounts?: readonly Readonly<{ source: string; target: string }>[];
+  profileFiles: Readonly<Record<string, string>>;
+  environment: Readonly<Record<string, string>>;
+  relay: NativeRelayProtocol;
+  controlPort?: number;
 }>;
 type Input = Readonly<{
   workspace: string; executable: string; profile: string; model: string; effort: string;
@@ -113,6 +158,7 @@ type Input = Readonly<{
   library?: FormalizationLibraryAccess;
   outputSchema?: Record<string, unknown>;
   requestGate?: ModelRequestGate; onUsageIncomplete?: () => void;
+  runtime?: SealedRuntimeProjection;
 }>;
 
 function nativeFile(file: string): string {
@@ -203,7 +249,8 @@ export async function warmFormalizationPackages(environment: LeanTaskEnvironment
 export async function prepareFormalizationSandbox(input: Input): Promise<FormalizationSandbox> {
   if (process.platform !== 'linux') throw new Error('formalization_sandbox_requires_linux');
   input.signal?.throwIfAborted();
-  if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u.test(input.model) || !['low', 'high', 'max'].includes(input.effort))
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u.test(input.model) ||
+      !(input.runtime ? ['none', 'low', 'medium', 'high', 'xhigh', 'max'] : ['low', 'high', 'max']).includes(input.effort))
     throw new Error('formalization_sandbox_model_invalid');
   const workspace = path.resolve(input.workspace); assertMathCanonicalPath(workspace);
   if (!fs.statSync(workspace).isDirectory()) throw new Error('formalization_sandbox_input_unavailable');
@@ -216,7 +263,8 @@ export async function prepareFormalizationSandbox(input: Input): Promise<Formali
   const environment = input.env ?? process.env, config = getLeanTaskEnvironment(input.environment);
   if (input.outputSchema && canonicalMathJson(input.outputSchema) !== canonicalMathJson(JSON.parse(protocol[2].bytes.toString('utf8'))))
     throw new Error('formalization_sandbox_output_schema_mismatch');
-  const executable = codexExecutable(input.executable, environment), toolchain = leanToolchain(config.toolchain, environment);
+  const executable = input.runtime ? { file: nativeFile(input.runtime.executable), vendor: undefined }
+    : codexExecutable(input.executable, environment), toolchain = leanToolchain(config.toolchain, environment);
   const command = nativeFile('/usr/bin/bwrap');
   const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'theorem-os-formalization-role-')));
   fs.chmodSync(temporary, 0o700);
@@ -282,8 +330,8 @@ export async function prepareFormalizationSandbox(input: Input): Promise<Formali
     relay = await startFormalizationRelay({ socketPath: path.join(temporary, 'model.sock'), profile: input.profile,
       model: input.model, effort: input.effort, env: environment, signal: input.signal,
       outputSchema: input.outputSchema,
-      requestGate: input.requestGate, onUsageIncomplete: input.onUsageIncomplete });
-    const providerId = relay.receipt.providerId, modelCatalog = providerId === 'sub2api' ? '/profile/models.json' : undefined;
+      requestGate: input.requestGate, onUsageIncomplete: input.onUsageIncomplete, ...(input.runtime ? { native: input.runtime.relay } : {}) });
+    const providerId = relay.receipt.providerId, modelCatalog = !input.runtime && providerId === 'sub2api' ? '/profile/models.json' : undefined;
     const profileConfig = stringifyToml({ model: input.model, model_provider: providerId,
       model_reasoning_effort: input.effort, ...(modelCatalog ? { model_catalog_json: modelCatalog } : {}), web_search: 'disabled',
       approval_policy: 'never', sandbox_mode: 'danger-full-access',
@@ -294,8 +342,13 @@ export async function prepareFormalizationSandbox(input: Input): Promise<Formali
       shell_environment_policy: { inherit: 'all', exclude: [CAPABILITY_ENV] },
       history: { persistence: 'none' }, analytics: { enabled: false }, allow_login_shell: false });
     const catalog = canonicalMathJson(providerId === 'sub2api' ? sub2apiModelCatalog() : { models: [] });
-    fs.writeFileSync(path.join(profile, 'config.toml'), profileConfig, { flag: 'wx', mode: 0o400 });
-    fs.writeFileSync(path.join(profile, 'models.json'), catalog, { flag: 'wx', mode: 0o400 });
+    const profileFiles = input.runtime?.profileFiles ?? { 'config.toml': profileConfig, 'models.json': catalog };
+    for (const [name, contents] of Object.entries(profileFiles)) {
+      if (path.isAbsolute(name) || name.split(/[\\/]/u).includes('..') || !name || name.includes('\0'))
+        throw new Error('formalization_sandbox_profile_projection_invalid');
+      const selected = path.join(profile, name); fs.mkdirSync(path.dirname(selected), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(selected, contents.replaceAll('__ROLE_MODEL_CAPABILITY__', relay.apiKey), { flag: 'wx', mode: 0o400 });
+    }
     for (const { name, bytes } of protocol)
       fs.writeFileSync(path.join(temporary, name), bytes, { flag: 'wx', mode: 0o400 });
     fs.writeFileSync(path.join(temporary, 'launch.py'), LAUNCHER, { flag: 'wx', mode: 0o400 });
@@ -305,22 +358,29 @@ export async function prepareFormalizationSandbox(input: Input): Promise<Formali
       '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--dir', '/home/role', '--dir', '/run', '--dir', '/opt/formalization',
       '--bind', workspace, '/workspace',
       ...protocol.flatMap(({ name }) => ['--ro-bind', path.join(temporary, name), '/workspace/' + name]),
-      '--bind', profile, '/profile', '--ro-bind', path.join(profile, 'config.toml'), '/profile/config.toml',
-      '--ro-bind', path.join(profile, 'models.json'), '/profile/models.json',
+      '--bind', profile, '/profile', ...Object.keys(profileFiles).flatMap(name => ['--ro-bind', path.join(profile, name), '/profile/' + name]),
       '--ro-bind', relay.socketPath!, SOCKET, '--ro-bind', path.join(temporary, 'launch.py'), HELPER,
       '--ro-bind', path.join(temporary, 'library-api.py'), '/opt/formalization/library-api.py',
       '--ro-bind', path.join(temporary, 'library-api.lean'), '/opt/formalization/library-api.lean',
       '--ro-bind', toolchain, '/opt/lean'];
     if (executable.vendor) args.push('--ro-bind', executable.vendor, '/opt/codex');
     // Also support a directly supplied native executable without exposing its host parent.
-    args.push('--ro-bind', executable.file, COMMAND);
+    args.push('--ro-bind', executable.file, input.runtime?.command ?? COMMAND);
+    for (const mount of input.runtime?.mounts ?? []) args.push('--ro-bind', mount.source, mount.target);
+    const controlDirectory = input.runtime?.controlPort ? path.join(temporary, 'control') : undefined;
+    if (controlDirectory) { fs.mkdirSync(controlDirectory, { mode: 0o700 }); args.push('--bind', controlDirectory, '/control'); }
     if (packagesFd !== undefined) args.push('--ro-bind-fd', '3', '/opt/lean-packages');
     if (library) args.push('--ro-bind', librarySnapshot, FORMALIZATION_LIBRARY_ROOT);
-    const variables = { PATH: '/opt/codex/codex-path:/opt/codex/path:/opt/lean/bin:/usr/bin:/bin', HOME: '/home/role',
+    const variables: Record<string, string> = { PATH: '/opt/codex/codex-path:/opt/codex/path:/opt/lean/bin:/usr/bin:/bin', HOME: '/home/role',
       CODEX_HOME: '/profile', TMPDIR: '/tmp', LANG: 'C.UTF-8', LAKE_HOME: '/tmp/lake', ELAN_HOME: '/tmp/elan',
       LEAN_NUM_THREADS: '1', LEAN_PATH: ['/opt/lean/lib/lean', ...(library ? [`${FORMALIZATION_LIBRARY_ROOT}/${library.buildDirectory}`] : []), ...packageNames.map(name =>
         `/opt/lean-packages/${name}/${config.packageLibraryDirectory ?? '.lake/build/lib/lean'}`)].join(':'),
-      ...(packageNames.includes('mathlib') ? { MATHLIB_ROOT: '/opt/lean-packages/mathlib' } : {}), [CAPABILITY_ENV]: relay.apiKey };
+      ...(packageNames.includes('mathlib') ? { MATHLIB_ROOT: '/opt/lean-packages/mathlib' } : {}),
+      ...input.runtime?.environment, [CAPABILITY_ENV]: relay.apiKey,
+      ...(input.runtime ? { FORMALIZATION_MODEL_ROUTES: JSON.stringify(input.runtime.relay.routes ?? [input.runtime.relay.route]) } : {}),
+      ...(input.runtime?.controlPort ? { FORMALIZATION_CONTROL_PORT: String(input.runtime.controlPort) } : {}) };
+    // The only credential projected to a native process is this disposable role capability.
+    for (const name of Object.keys(variables)) if (variables[name] === '__ROLE_MODEL_CAPABILITY__') variables[name] = relay.apiKey;
     args.push('--chdir', '/workspace', ...Object.entries(variables).flatMap(([name, value]) => ['--setenv', name, value]));
     const expectedVersion = config.toolchain.replace(/^leanprover\/lean4:v/u, '');
     const canary = spawnSync(command, [...args, '--', '/usr/bin/python3', '-I', '-c', String.raw`import hashlib, os, subprocess
@@ -344,18 +404,27 @@ assert 'Lean (version ${expectedVersion},' in result.stdout
       workspace: '/workspace', profile: '/profile', providerId, namespaces: ['user', 'mount', 'pid', 'ipc', 'uts', 'net'],
       network: 'role-model-relay-only', credentials: 'host-only', input: 'read-only', toolchain: config.toolchain,
       environmentDigest: config.dependencyDigest, executableSha256: mathDigest(fs.readFileSync(executable.file)),
-      profileDigest: mathDigest(canonicalMathJson({ config: profileConfig, catalog })),
+      profileDigest: mathDigest(canonicalMathJson(input.runtime ? { files: profileFiles, environment: input.runtime.environment,
+        endpoint: input.runtime.relay.endpoint } : { config: profileConfig, catalog })),
       inputSha256: mathDigest(protocol[0].bytes), roleInstructionsSha256: mathDigest(protocol[1].bytes),
       outputSchemaSha256: mathDigest(protocol[2].bytes),
       libraryApi: { scriptSha256: mathDigest(libraryApiScript), programSha256: mathDigest(apiProgram) },
       ...(library ? { library: { root: FORMALIZATION_LIBRARY_ROOT, catalogDigest: input.library!.digest,
         buildReceiptSha256: library.buildReceiptSha256 } } : {}),
-      packages, auditDirectory: profile, canary: 'passed' };
+      packages, auditDirectory: profile, canary: 'passed',
+      ...(input.runtime ? { harness: input.runtime.harness, wireApi: input.runtime.relay.wireApi,
+        runtimeResources: (input.runtime.mounts ?? []).map(mount => ({ target: mount.target, sha256: mathDigest(fs.readFileSync(mount.source)) })),
+        ...(controlDirectory ? { control: 'private-native-unix-socket' as const } : {}) } : {}) };
     fs.writeFileSync(path.join(temporary, 'receipt.json'), canonicalMathJson(receipt), { mode: 0o400, flag: 'wx' });
     audit = true;
     input.signal?.addEventListener('abort', aborted, { once: true });
-    return { command, args: [...args, '--', '/usr/bin/python3', '-I', HELPER, COMMAND, 'app-server', '--listen', 'stdio://'],
+    const launch = (arguments_: readonly string[]) => ({ command,
+      args: [...args, '--', '/usr/bin/python3', '-I', HELPER, input.runtime?.command ?? COMMAND,
+        ...(input.runtime?.prefixArgs ?? []), ...arguments_], env: { ...SPAWN_ENV },
+      ...(packagesFd === undefined ? {} : { inheritedFds: [packagesFd] }) });
+    return { ...launch(input.runtime ? [] : ['app-server', '--listen', 'stdio://']),
       env: { ...SPAWN_ENV }, ...(packagesFd === undefined ? {} : { inheritedFds: [packagesFd] }),
-      workspace: '/workspace', profile: '/profile', providerId, providerBaseUrl: BASE_URL, ...(modelCatalog ? { modelCatalog } : {}), receipt, close };
+      workspace: '/workspace', profile: '/profile', providerId, providerBaseUrl: BASE_URL, ...(modelCatalog ? { modelCatalog } : {}), receipt, close, launch,
+      ...(controlDirectory ? { controlSocket: path.join(controlDirectory, 'native.sock') } : {}) };
   } catch (cause) { await close(); throw cause; }
 }

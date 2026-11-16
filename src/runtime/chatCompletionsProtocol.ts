@@ -116,10 +116,11 @@ export function translateChatBridgeRequest(value: unknown, model: string, effort
         entry.format?.type === 'grammar' ? `The input must follow this ${entry.format.syntax} grammar:\n${entry.format.definition}` : undefined]
         .filter(Boolean).join('\n\n'), parameters: { type: 'object', properties: { input: { type: 'string' } }, required: ['input'], additionalProperties: false } } };
   });
-  let choice: unknown = request.tool_choice;
-  if (choice && typeof choice === 'object') {
-    if (tools.get(request.tool_choice['name']) !== request.tool_choice['type']) throw new ChatBridgeError('unknown_tool_choice');
-    choice = { type: 'function', function: { name: request.tool_choice['name'] } };
+  const requestedChoice = request.tool_choice;
+  let choice: unknown = requestedChoice;
+  if (requestedChoice && typeof requestedChoice === 'object') {
+    if (tools.get(requestedChoice.name) !== requestedChoice.type) throw new ChatBridgeError('unknown_tool_choice');
+    choice = { type: 'function', function: { name: requestedChoice.name } };
   }
   if (choice === 'required' && !chatTools.length) throw new ChatBridgeError('unknown_tool_choice');
   return { tools, body: {

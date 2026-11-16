@@ -140,9 +140,9 @@ function evidence(node: TaskRecord, environmentDigest?: string) {
       statement: proof.references.statement, proof: proof.references.proof }, imports: proof.imports };
 }
 
-type EvidenceReferenceEntry = NonNullable<ReturnType<typeof evidence>>['references']['inputs'][number] |
-  NonNullable<ReturnType<typeof evidence>>['references']['proof'][number] |
-  NonNullable<ReturnType<typeof evidence>>['references']['tasks'][number];
+type EvidenceReferences = NonNullable<NonNullable<ReturnType<typeof evidence>>['references']>;
+type EvidenceReferenceEntry = EvidenceReferences['inputs'][number] | EvidenceReferences['proof'][number] |
+  NonNullable<EvidenceReferences['tasks']>[number];
 
 /** First-seen index of each distinct key. */
 function interner<T>(key: (value: T) => string) {

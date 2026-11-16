@@ -62,6 +62,7 @@ const runner: WebRunner = {
   async command(id, command) {
     const control = controls.get(id)!;
     if (command.type === 'capture') return { id: 'capture', status: 'captured', observation: structuredClone(control.observation) };
+    if (command.type === 'guidance-withdraw') return { id: command.id, status: 'rejected', reason: 'fixture_guidance_withdraw_not_simulated' };
     commands.push(structuredClone(command));
     if (command.type === 'plan-approval') {
       const approval = control.observation.inspection.planApproval!;

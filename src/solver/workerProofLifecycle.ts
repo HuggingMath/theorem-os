@@ -1,4 +1,4 @@
-import type { MathAgentSession } from '../runtime/codexSession';
+import type { MathAgentSession } from '../runtime/agentSession';
 import type { SolverRunState } from './archive';
 import type { CooperativeResearch } from './cooperation';
 import { solverSourceFeedback } from './feedback';
@@ -8,6 +8,7 @@ import type { ResearchOperation } from './modules/value';
 import { commitSolverSources } from './problem';
 import type { ProofReadyRecord } from './proofReady';
 import type { CooperativeAction } from './tasks';
+import { stopProofWriter } from './proofWriter';
 
 type TaskAction = Extract<CooperativeAction, { kind: 'task' }>;
 
@@ -52,21 +53,11 @@ export class WorkerProofLifecycle {
         candidate.operation !== operation || candidate.provenance.workerId !== worker.id)
       throw new Error('math_candidate_identity_changed');
     if (!ready.snapshotCommit) {
-      let stopped: Awaited<ReturnType<NonNullable<MathAgentSession['stopForFreeze']>>> | undefined;
-      try { stopped = await session.stopForFreeze?.(); }
-      catch { stopped = { status: 'unconfirmed', reason: 'shutdown-failed' }; }
-      if (stopped?.status !== 'stopped') {
-        const reason = stopped?.reason ?? 'writer-stop-confirmation-unavailable';
-        // Persist quarantine before ordinary close: that close can itself fail or stall.
-        research.writerStopUnconfirmed = { at: Date.now(), reason };
+      await stopProofWriter({ session, record: research, workerId: worker.id, close, save, deferred: reason => {
         cooperation.proofReadyFailedFreeze(worker, assignment, reason);
         cooperation.interrupted(worker, assignment);
         emit('proof_ready_freeze_deferred', { receiptId: ready.id, reason });
-        save();
-        try { await close(); } catch { /* Quarantine, not ordinary close, controls reuse. */ }
-        throw new Error('math_writer_stop_unconfirmed:' + worker.id + ':' + reason);
-      }
-      await close();
+      } });
       // The assignment and environment may have changed while the writer was stopping.
       if (!cooperation.pendingProofReady(worker, assignment)) return true;
       const sourceError = solverSourceFeedback(state.problem, worker.worktree, paths =>

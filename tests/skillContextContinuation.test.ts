@@ -1,0 +1,79 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { mathDigest } from '../src/math/mathRuntimeIo';
+import { readMathAgentSkill } from '../src/runtime/codexSkills';
+import { buildResearchContext, finalizeResearchDispatch, type ContextBundle } from '../src/solver/modules/context';
+import { researchSkillIdentity } from '../src/solver/researchSkill';
+import { buildSkillResearchContext } from '../src/solver/skillResearchContext';
+import { localExample, solverState } from './helpers/solver';
+
+const roots: string[] = [];
+afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+
+function fixture(common: boolean) {
+  const base = localExample('skill-context-continuation-'); roots.push(base.directory);
+  const projected = path.join(base.workspace, '.agents/skills/theoremos-research');
+  fs.mkdirSync(path.join(base.workspace, '.scratch'), { recursive: true });
+  fs.mkdirSync(path.dirname(projected), { recursive: true });
+  fs.cpSync(path.resolve('skills/theoremos-research'), projected, { recursive: true });
+  const skill = readMathAgentSkill(path.join(projected, 'SKILL.md'));
+  const state = solverState(base.problem, base.workspace, { runId: 'skill-context', phase: 'prepared',
+    researchMode: 'skill', researchSkill: researchSkillIdentity(skill),
+    ...(common ? { commonResearchSkill: researchSkillIdentity(skill) } : {}) });
+  const taskText = 'Frozen task contract: prove every original target with exactly its original assumptions.';
+  const access = { root: path.resolve('.'), worktree: base.workspace, environment: {}, taskText,
+    retrievalRoot: base.workspace, researchSkill: skill, ...(common ? { commonResearchSkill: skill } : {}) };
+  const build = (feedback?: string, maxContextBytes?: number): ContextBundle => {
+    const current = { ...access, sourceFeedback: feedback, maxContextBytes };
+    return common ? buildResearchContext(base.problem, state, current) : buildSkillResearchContext(base.problem, state, current);
+  };
+  return { ...base, state, taskText, build };
+}
+
+describe.each([{ common: false, mode: 'standalone skill' }, { common: true, mode: 'shared-guidance skill' }])
+  ('$mode same-thread context', ({ common }) => {
+    it('sends the full frozen problem initially and current feedback without repeating it on continuation', () => {
+      const f = fixture(common);
+      fs.writeFileSync(path.join(f.workspace, '.scratch/declaration-feedback.json'), JSON.stringify({ status: 'rejected' }));
+      const context = f.build('Restore the frozen source scope before resubmitting.');
+      const full = finalizeResearchDispatch(context);
+      const continued = finalizeResearchDispatch(context, { continuation: true });
+      expect(full.message).toContain(f.taskText);
+      expect(full.message).toContain(f.problem.targets[0]!.theoremName);
+      expect(continued.message).not.toContain(f.taskText);
+      expect(continued.message).toContain(f.problem.receiptDigest);
+      expect(continued.message).toContain(f.state.environmentDigest);
+      expect(continued.message).toContain('Restore the frozen source scope before resubmitting.');
+      expect(continued.message).toContain('declaration-feedback.json');
+      expect(continued.message).toContain('RESEARCH.md');
+      expect(continued.instructions).toBe(full.instructions);
+      expect(continued.instructions).toContain('Accepted proofs cannot use sorry');
+      expect(Buffer.byteLength(continued.message)).toBeLessThan(Buffer.byteLength(full.message));
+      expect(continued.manifest?.included.some(item => item.id === 'original-problem')).toBe(false);
+      expect(continued.manifest?.included.some(item => item.kind === 'feedback')).toBe(true);
+      const evidenceRoot = process.env.THEOREMOS_SKILL_EFFICIENCY_EVIDENCE_DIR;
+      if (evidenceRoot) {
+        fs.mkdirSync(evidenceRoot, { recursive: true });
+        fs.writeFileSync(path.join(evidenceRoot, common ? 'common-context.json' : 'standalone-context.json'),
+          JSON.stringify({ schema: 'theoremos.skill-context-measurement.v1', fixture: 'disposable-local-example',
+            actualModelCalls: 0, fullMessageBytes: Buffer.byteLength(full.message),
+            continuationMessageBytes: Buffer.byteLength(continued.message),
+            instructionsBytes: Buffer.byteLength(full.instructions), full, continued }, null, 2));
+      }
+    });
+
+    it('accounts for the actual continuation and checkpoint under the existing context limit', () => {
+      const f = fixture(common), checkpointInstruction = 'Save the current exact unresolved inference before returning.';
+      const context = f.build();
+      const full = finalizeResearchDispatch(context);
+      const continued = finalizeResearchDispatch(context, { continuation: true, checkpointInstruction });
+      expect(continued.message).toContain(checkpointInstruction);
+      expect(continued.manifest?.usedBytes).toBe(Buffer.byteLength(continued.instructions) + Buffer.byteLength(continued.message));
+      expect(continued.manifest?.contentDigest).toBe(mathDigest(JSON.stringify({
+        instructions: continued.instructions, message: continued.message,
+      })));
+      expect(continued.manifest?.maxBytes).toBe(full.manifest?.maxBytes);
+      expect(finalizeResearchDispatch(context, { continuation: false }).message).toBe(full.message);
+    });
+  });

@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createServer, type Server } from 'node:http';
+import { once } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { formalizationDigest, formalizationInputDigest, prepareFormalization, type DirectFormalizationEvidence } from '../src/math/formalization';
 import { assertFormalizationAuditResult, assertFormalizationAuditReview, formalizationAuditInput,
@@ -10,10 +12,21 @@ import { canonicalMathJson, mathDigest, readMathText } from '../src/math/mathRun
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/codexSession';
 import { FORMALIZATION_AUDIT_READING_PROTOCOL, formalizationAuditReadingView, runFormalizationAudit } from '../src/solver/formalizationAudit';
 import { buildFixture, candidateFixture, fixtureStatement, syntheticElaboration } from './helpers/formalizationFixture';
+import { bindResearchHarness } from '../src/runtime/researchHarness';
+import * as workflowSession from '../src/solver/workflowSession';
 
-// Synthetic compiler/model receipts exercise the contract only; no model or Lean process runs.
+// Compiler evidence is synthetic. Native fixtures below use only fixed local provider
+// replies; they establish transport/lifecycle contracts, never mathematical accuracy.
 const temporary: string[] = [];
-afterEach(() => { for (const directory of temporary.splice(0)) fs.rmSync(directory, { recursive: true, force: true }); });
+const servers: Server[] = [];
+const auditToolchain = getLeanTaskEnvironment('standard').toolchain.replaceAll('/', '--').replaceAll(':', '---');
+const nativeAuditAvailable = process.platform === 'linux' && fs.existsSync('/usr/bin/bwrap') &&
+  fs.existsSync(path.join(os.homedir(), '.elan', 'toolchains', auditToolchain, 'bin/lean'));
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); })));
+  for (const directory of temporary.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
+  vi.restoreAllMocks(); vi.unstubAllEnvs();
+});
 function fixture(padding = 0) {
   const parent = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'formalization-audit-'))); temporary.push(parent);
   const { root, manifest } = buildFixture(parent);
@@ -47,6 +60,7 @@ function objection(): FormalizationAuditReview {
 }
 function reviewer(behavior: { output?: FormalizationAuditReview; threadId?: string; status?: string;
   finalText?: string; noFinal?: boolean;
+  isolated?: boolean;
   upstream?: boolean; missingUsage?: boolean; onRun?: (options: MathAgentOptions) => void;
   onClose?: (options: MathAgentOptions) => void } = {}) {
   const seen: { options: MathAgentOptions; input: ReturnType<typeof formalizationAuditInput>; message: string }[] = [];
@@ -74,11 +88,124 @@ function reviewer(behavior: { output?: FormalizationAuditReview; threadId?: stri
   const open = vi.fn(async (options: MathAgentOptions): Promise<MathAgentSession> => {
     current = options;
     return { threadId: behavior.threadId ?? 'independent-audit-thread', run, close, interrupt,
+      ...(behavior.isolated ? { isolationReceipt: { schema: 'theorem-os.formalization-sandbox.v2', backend: 'bwrap',
+        workspace: '/workspace', profile: '/profile', providerId: 'web_provider',
+        namespaces: ['user', 'mount', 'pid', 'ipc', 'uts', 'net'], network: 'role-model-relay-only', credentials: 'host-only',
+        input: 'read-only', canary: 'passed', toolchain: getLeanTaskEnvironment('standard').toolchain,
+        environmentDigest: getLeanTaskEnvironment('standard').dependencyDigest, executableSha256: 'a'.repeat(64), profileDigest: 'b'.repeat(64),
+        inputSha256: mathDigest(readMathText(path.join(options.workspace, 'INPUT.json'))),
+        roleInstructionsSha256: mathDigest(readMathText(path.join(options.workspace, 'ROLE.md'))),
+        outputSchemaSha256: mathDigest(readMathText(path.join(options.workspace, 'OUTPUT.schema.json'))), packages: { kind: 'none' } } } : {}),
       ...(behavior.upstream ? { usageSource: 'upstream-requests' as const } : {}) };
   });
   return { open, run, close, interrupt, seen };
 }
 const readState = (directory: string) => JSON.parse(readMathText(path.join(directory, 'state.json')));
+
+function portableAuditor(f: ReturnType<typeof fixture>, id: 'codex' | 'claude-code' | 'opencode' | 'cli', baseUrl = 'https://example.test/v1') {
+  const profile = path.join(f.parent, 'auditor-profile'); fs.mkdirSync(profile);
+  let executable = '/usr/bin/python3';
+  if (id === 'cli') {
+    executable = path.join(f.parent, 'auditor-cli.py');
+    fs.copyFileSync(path.resolve('tests/fixtures/sealedCliPeer.py'), executable); fs.chmodSync(executable, 0o700);
+    fs.writeFileSync(path.join(profile, 'cli.json'), JSON.stringify({ schema: 'theorem-os.cli-harness.v1', executable,
+      args: ['--model', '{model}', '--effort', '{effort}'], efforts: ['high'],
+      output: { format: 'json', text: { field: '/text' } },
+      sealedRole: { provider: { wireApi: 'chat-completions', baseUrl, apiKeyEnvironment: 'AUDIT_CLI_FIXTURE_API_KEY' },
+        client: { baseUrlEnvironment: 'FIXTURE_MODEL_URL', apiKeyEnvironment: 'FIXTURE_MODEL_KEY' }, runtime: { interpreter: '/usr/bin/python3' } } }));
+  } else fs.writeFileSync(path.join(profile, id === 'codex' ? 'config.toml' : id === 'claude-code' ? 'settings.json' : 'opencode.json'),
+    id === 'codex' ? 'model="audit-model"\n' : id === 'opencode' ? '{"provider":{"audit-model":{}}}' : '{}');
+  const agentHarness = bindResearchHarness(id, executable, profile, process.env, 'audit-model');
+  return { ...f.configuration, profile, executable: agentHarness.executable, model: 'audit-model', effort: 'high', agentHarness };
+}
+
+describe('portable independent audit delivery', () => {
+  it.each(['codex', 'claude-code', 'opencode'] as const)('keeps %s on the native final-response contract without a completed-output file', async id => {
+    const f = fixture(), configuration = portableAuditor(f, id), model = reviewer({ upstream: true, isolated: true });
+    vi.spyOn(workflowSession, 'openWorkflowSession').mockImplementation(async (_configuration, options) => model.open(options));
+    const result = await runFormalizationAudit(f.directory, f.root, f.evidence, configuration);
+    expect(result.review).toEqual(approved());
+    const { options, message } = model.seen[0];
+    expect(options.outputSchema).toEqual(formalizationAuditOutputSchema); expect(options.completedOutput).toBeUndefined();
+    expect(options.instructions).toContain('no shell call or output file is needed');
+    expect(message).toContain('Return only the final review JSON matching the native output schema');
+    expect(fs.existsSync(path.join(options.workspace, 'AUDIT-REVIEW.json'))).toBe(false);
+  });
+
+  it('rereads and validates a CLI handoff after closing the writer, before the host writes OUTPUT.json', async () => {
+    const f = fixture(), configuration = portableAuditor(f, 'cli');
+    const model = reviewer({ upstream: true, isolated: true, status: 'submitted', onRun: options => {
+      expect(options.completedOutput!.file).toBe(path.join(options.workspace, 'AUDIT-REVIEW.json'));
+      options.completedOutput!.validate(approved());
+      fs.writeFileSync(options.completedOutput!.file, JSON.stringify(approved()));
+    }, onClose: options => {
+      expect(fs.existsSync(path.join(options.workspace, 'OUTPUT.json'))).toBe(false);
+      fs.writeFileSync(options.completedOutput!.file, JSON.stringify({ ...approved(), checks: { ...approved().checks, domains: false } }));
+    } });
+    vi.spyOn(workflowSession, 'openWorkflowSession').mockImplementation(async (_configuration, options) => model.open(options));
+    await expect(runFormalizationAudit(f.directory, f.root, f.evidence, configuration)).rejects.toThrow('formalization_audit_approval_invalid');
+    expect(model.close).toHaveBeenCalledOnce();
+    expect(fs.existsSync(path.join(f.directory, 'session/OUTPUT.json'))).toBe(false);
+    expect(fs.existsSync(path.join(f.directory, 'result.json'))).toBe(false);
+  });
+
+  it.skipIf(!nativeAuditAvailable).each(['valid', 'invalid-review', 'invalid-json'] as const)(
+    'runs a real generic CLI audit with %s handoff through a fixed local relay', async mode => {
+    const f = fixture(), hostKey = 'audit-local-fixture-host-key'; let requests = 0;
+    const reviewText = mode === 'invalid-json' ? '{"verdict":' : JSON.stringify(mode === 'invalid-review'
+      ? { ...approved(), checks: { ...approved().checks, domains: false } } : approved());
+    const python = "from pathlib import Path; Path('/workspace/AUDIT-REVIEW.json').write_text(" + JSON.stringify(reviewText) + ')';
+    const command = '/usr/bin/python3 -c ' + "'" + python.replaceAll("'", "'\\''") + "'" + (mode === 'valid' ? '; sleep 30' : '');
+    const server = createServer((request, response) => {
+      let text = ''; request.on('data', chunk => text += chunk); request.on('end', () => {
+        requests++;
+        expect(request.url).toBe('/v1/chat/completions'); expect(request.headers.authorization).toBe('Bearer ' + hostKey);
+        const body = JSON.parse(text);
+        if (requests === 1) {
+          const prompt = body.messages[0].content;
+          expect(prompt).toContain('/workspace/AUDIT-REVIEW.json');
+          expect(prompt).toContain('Do not write OUTPUT.json');
+          expect(prompt).not.toContain('no shell call or output file is needed');
+          expect(prompt).not.toContain('Return only the review JSON in your final response matching the native output schema');
+        }
+        const call = requests === 1;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ id: 'audit-local-' + requests, model: body.model,
+          choices: [{ index: 0, finish_reason: call ? 'tool_calls' : 'stop', message: { role: 'assistant', content: call ? null : JSON.stringify(approved()),
+            ...(call ? { tool_calls: [{ id: 'audit-write', type: 'function', function: { name: 'bash', arguments: JSON.stringify({ command }) } }] } : {}) } }],
+          usage: { prompt_tokens: 17, completion_tokens: 4, total_tokens: 21 } }));
+      });
+    });
+    servers.push(server); server.listen(0, '127.0.0.1'); await once(server, 'listening');
+    const baseUrl = `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`;
+    vi.stubEnv('AUDIT_CLI_FIXTURE_API_KEY', hostKey);
+    const configuration = portableAuditor(f, 'cli', baseUrl), before = structuredClone(f.evidence);
+    const run = runFormalizationAudit(f.directory, f.root, f.evidence, configuration, { maxRunSeconds: 15, maxTotalTokens: 1000 });
+    if (mode === 'valid') {
+      const result = await run;
+      expect(result.review).toEqual(approved()); expect(result.session.status).toBe('submitted');
+      expect(result.session.completionReason).toBe('validated-output'); expect(requests).toBe(1);
+      expect(JSON.parse(readMathText(path.join(f.directory, 'session/OUTPUT.json')))).toEqual(approved());
+      expect(fs.statSync(path.join(f.directory, 'session/OUTPUT.json')).mode & 0o222).toBe(0);
+      expect(await runFormalizationAudit(f.directory, f.root, f.evidence, configuration, { maxTotalTokens: 1000 })).toEqual(result);
+      expect(requests).toBe(1);
+    } else {
+      if (mode === 'invalid-review') await expect(run).rejects.toThrow('formalization_audit_approval_invalid');
+      else await expect(run).rejects.toThrow();
+      expect(requests).toBe(2);
+      expect(fs.existsSync(path.join(f.directory, 'session/OUTPUT.json'))).toBe(false);
+      expect(fs.existsSync(path.join(f.directory, 'result.json'))).toBe(false);
+    }
+    const state = readState(f.directory);
+    expect(state.status).toBe(mode === 'valid' ? 'completed' : 'error');
+    expect(state.isolationReceipt).toMatchObject({ harness: 'cli', input: 'read-only', credentials: 'host-only', canary: 'passed' });
+    expect(state.session.requestUsageAccounting.pendingRequests).toBe(0);
+    expect(state.session.requestUsageAccounting.receipts.every((entry: { source: string; status: string }) => entry.source === 'native-model-relay')).toBe(true);
+    expect(state.tokenBudget).toMatchObject({ usageComplete: true, reportedTotalTokens: 21 * requests });
+    expect(readMathText(path.join(f.directory, 'session/ROLE.md'))).not.toContain('no shell call or output file is needed');
+    expect(f.evidence).toEqual(before);
+  }, 30_000);
+});
 
 describe('background formalization audit', () => {
   it('audits only the original and frozen compiled statement in one isolated unlimited session and reuses its completed result', async () => {

@@ -13,6 +13,7 @@ import { mathDigest } from '../src/math/mathRuntimeIo';
 import { getLeanTaskEnvironment } from '../src/math/leanTaskEnvironment';
 import { createMathRetrievalCorpus } from '../src/math/mathRetrievalCorpus';
 import { approvedFormalization } from './helpers/approvedFormalizationFixture';
+import { workflowHarnessFixture } from './helpers/workflowHarnessFixture';
 
 // Build identity is tested separately by mathBuildManifest tests. These CLI tests use a disposable
 // stand-in, create no providers or Lean processes, and never claim semantic or benchmark success.
@@ -67,6 +68,36 @@ async function invoke(args: string[]) {
 }
 
 describe('formalize offline CLI', () => {
+  it.each(['claude-code', 'opencode', 'cli'] as const)('freezes %s for sealed formalization without launching a process', async harness => {
+    const f = fixture(), selected = workflowHarnessFixture(f.base, harness);
+    expect((await invoke([...f.args, ...selected.flags, '--review-mode', 'independent'])).code).toBe(0);
+    const request = readFormalizationRequest(f.directory);
+    expect(request.agentHarness).toMatchObject(selected.binding);
+    for (const role of [request.workflow!.planner, request.workflow!.backtranslator, ...request.workflow!.reviewers])
+      expect(role.agentHarness).toEqual(request.agentHarness);
+    expect(fs.readdirSync(f.directory)).toEqual(['request.json']);
+  });
+
+  it('rejects generic CLI sealed formalization without an explicit role projection', async () => {
+    const f = fixture(), selected = workflowHarnessFixture(f.base, 'cli', false);
+    await expect(invoke([...f.args, ...selected.flags])).rejects.toThrow('math_cli_sealed_role_configuration_required');
+    expect(fs.existsSync(f.directory)).toBe(false);
+  });
+
+  it('freezes an explicit Codex binding for every independent role', async () => {
+    const f = fixture(), profile = path.join(f.base, 'profile'), executable = path.join(f.base, 'native');
+    fs.mkdirSync(profile); fs.writeFileSync(path.join(profile, 'config.toml'), 'model = "fixture"\n');
+    fs.writeFileSync(executable, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try { expect(await formalize([...f.args, '--harness', 'codex', '--harness-profile', profile,
+      '--harness-executable', executable, '--review-mode', 'independent'])).toBe(0); } finally { log.mockRestore(); }
+    const request = readFormalizationRequest(f.directory);
+    expect(request.agentHarness).toMatchObject({ id: 'codex', executable, profile,
+      executableDigest: mathDigest(fs.readFileSync(executable)) });
+    for (const role of [request.workflow!.planner, request.workflow!.backtranslator, ...request.workflow!.reviewers])
+      expect(role.agentHarness).toEqual(request.agentHarness);
+  });
+
   it('prepares an immutable request without a model, preserving the complete original and default unlimited execution', async () => {
     const f = fixture();
     const original = 'Prove every assertion below.\n' + 'A long informal problem statement.\n'.repeat(400);

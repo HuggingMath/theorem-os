@@ -21,7 +21,11 @@ export const directSolverModules = {
   M5: { version: directSolverModuleIdentity.versions.M5!, workers: researchWorkers, reviewer: assignResearchReviewer, assign: assignSharedResearchTask },
 };
 
-export type SolverModules = Omit<typeof directSolverModules, 'M2' | 'M5'> & {
+export type SolverModules = Omit<typeof directSolverModules, 'M2' | 'M4' | 'M5'> & {
+  M4: typeof directSolverModules.M4 & {
+    /** Host-projected CLI shared by legacy, common-guidance and skill contexts. */
+    tools?: string;
+  };
   M2: Omit<typeof directSolverModules.M2, 'checkTask' | 'closeTask' | 'assembleFamily' | 'applyLibrary'> & { checkTask?: typeof checkTaskProof;
     /** Bounded applications of selected installed theorems; only checkTask may establish acceptance. */
     applyLibrary?: typeof prepareLibraryApplication;
