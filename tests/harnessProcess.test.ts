@@ -1,8 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { prepareHarnessProcess } from '../src/runtime/harnessProcess';
+import { spawn, spawnSync } from 'node:child_process';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { confirmHarnessProcessStopped, prepareHarnessProcess, type HarnessProcessIdentity } from '../src/runtime/harnessProcess';
+
+function processIdentity(pid: number): HarnessProcessIdentity {
+  const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+  return { schema: 'theorem-os.harness-process-identity.v1', pid,
+    startTime: stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/u)[19]!,
+    bootId: fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(),
+    pidNamespace: fs.readlinkSync(`/proc/${pid}/ns/pid`) };
+}
 
 describe('shared native harness process isolation', () => {
   let root: string, workspace: string, profile: string, outside: string;
@@ -11,7 +19,7 @@ describe('shared native harness process isolation', () => {
     [workspace, profile, outside] = ['work', 'profile', 'outside'].map(name => path.join(root, name));
     for (const directory of [workspace, profile, outside]) fs.mkdirSync(directory);
   });
-  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+  afterEach(() => { vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true }); });
   function run(code: string, hiddenRoots: string[] = [], environment: NodeJS.ProcessEnv = process.env) {
     const launch = prepareHarnessProcess({ workspace, profile, hiddenRoots, environment }, process.execPath, ['-e', code]);
     return { ...spawnSync(launch.command, launch.args, { env: launch.env, encoding: 'utf8', timeout: 10_000 }), launch };
@@ -60,5 +68,54 @@ describe('shared native harness process isolation', () => {
     expect(result.status, result.stderr).toBe(0); expect(fs.readFileSync(lock, 'utf8')).toBe('locked');
     expect(() => run('', [outside], { ...process.env, DEEPSCIENTIST_MATH_LEAN_LOCK: lock }))
       .toThrow('math_harness_lean_lock_invalid');
+  });
+
+  it('confirms an actual writer that exits between reading its status and namespace', async () => {
+    // This supervisor reaps the writer independently of the observing host.
+    const supervisor = spawn('/bin/sh', ['-c', 'sleep 30 & task_writer=$!; printf "%s\\n" "$task_writer"; wait "$task_writer"'],
+      { stdio: ['ignore', 'pipe', 'ignore'] });
+    const exited = new Promise<void>(resolve => supervisor.once('close', () => resolve()));
+    const writerPid = Number(await new Promise<string>(resolve => supervisor.stdout.once('data', bytes => resolve(String(bytes).trim()))));
+    const identity = processIdentity(writerPid);
+    const readlink = fs.readlinkSync.bind(fs);
+    let stoppedInWindow = false;
+    let killed: ReturnType<typeof spawnSync> | undefined;
+    const spy = vi.spyOn(fs, 'readlinkSync').mockImplementation((...args) => {
+      if (args[0] === `/proc/${writerPid}/ns/pid` && !stoppedInWindow) {
+        stoppedInWindow = true;
+        killed = spawnSync(process.execPath, ['-e', `
+          const fs = require('node:fs'), pid = Number(process.argv[1]);
+          process.kill(pid, 'SIGKILL');
+          const deadline = Date.now() + 1000;
+          for (;;) {
+            try { fs.readlinkSync('/proc/' + pid + '/ns/pid'); }
+            catch (error) { if (error.code === 'ENOENT' || error.code === 'ESRCH') break; throw error; }
+            if (Date.now() >= deadline) process.exit(1);
+          }
+        `, String(writerPid)], { encoding: 'utf8', timeout: 3000 });
+      }
+      return readlink(...args);
+    });
+    try {
+      const result = confirmHarnessProcessStopped(identity);
+      expect(killed?.status, String(killed?.stderr)).toBe(0);
+      expect(result).toEqual({ status: 'stopped' });
+      expect(stoppedInWindow).toBe(true);
+    } finally {
+      spy.mockRestore();
+      try { process.kill(writerPid, 'SIGKILL'); } catch { /* The disposable writer was already reaped. */ }
+      supervisor.kill('SIGKILL'); await exited;
+    }
+  });
+
+  it.each(['ENOENT', 'ESRCH'])('keeps a live process unconfirmed when its namespace returns %s', code => {
+    const identity = processIdentity(process.pid);
+    const readlink = fs.readlinkSync.bind(fs);
+    vi.spyOn(fs, 'readlinkSync').mockImplementation((...args) => {
+      if (args[0] === `/proc/${process.pid}/ns/pid`)
+        throw Object.assign(new Error('temporarily unavailable namespace'), { code });
+      return readlink(...args);
+    });
+    expect(confirmHarnessProcessStopped(identity)).toMatchObject({ status: 'unconfirmed' });
   });
 });

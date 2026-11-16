@@ -38,10 +38,13 @@ import { nextCheckContextText } from '../nextChecks';
 import { goalProgressTaskContext } from '../goalProgress';
 import { assertMathAgentSkillsCurrent, type MathAgentSkill } from '../../runtime/agentSkills';
 import { buildCommonResearchContext, buildCommonResearchGuide, cooperativeDeliveryProtocol } from '../researchGuidance';
-import { buildSkillResearchContext } from '../skillResearchContext';
+import { agentTeamContextSection, buildSkillResearchContext } from '../skillResearchContext';
+import type { AgentTeamAssignment, AgentTeamRole } from '../agentTeamContext';
 import { researchSkillIdentity } from '../researchSkill';
 
 export type ContextAccess = Readonly<{
+  teamRole?: AgentTeamRole;
+  teamAssignment?: AgentTeamAssignment;
   root: string;
   /** The bundled Agent commands (scripts/build-agent-tools.ts) for shells that cannot read `root`; default `root`/bin/math.ts. */
   tools?: string;
@@ -143,7 +146,7 @@ export function buildStatementReviewContext(review: StatementReview, action: Sta
 
 /** M4 builds prompts from the host's scoped cooperation view; hints remain advisory. */
 export function buildResearchContext(task: SolverProblem, state: Readonly<SolverRunState>, access: ContextAccess): ContextBundle {
-  if (state.commonResearchSkill || access.commonResearchSkill)
+  if ((state.commonResearchSkill || access.commonResearchSkill) && state.researchDelegation?.mode !== 'team')
     return buildCommonResearchContext(task, state, access, readFrozenContexts(task, access));
   const skillWorkflow = state.researchMode === 'skill' && state.researchSkillWorkflow === 'full';
   if (skillWorkflow) {
@@ -290,6 +293,7 @@ ${access.corpusFile ? `For library lookup, run ${command} search-lean --workspac
     maxContextBytes: access.maxContextBytes, maxOptionalContextBytes: access.maxOptionalContextBytes,
     environmentDigest: state.environmentDigest,
     mandatory: [...(continuation ? [continuationContextSection(continuation, command, task.projectRelative)] : []),
+      ...(singleSkill && state.researchDelegation?.mode === 'team' ? [agentTeamContextSection(state)] : []),
       ...(skillWorkflow ? [{ id: 'research-skill-identity', kind: 'assignment' as const,
         text: 'Frozen research skill:\n' + canonicalMathJson(state.researchSkill) }] : []),
       ...(singleSkill && fs.existsSync(path.join(access.worktree, '.scratch/declaration-feedback.json'))

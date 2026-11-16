@@ -183,6 +183,52 @@ describe('opt-in skill research CLI and pinned identity', () => {
     expect(open).not.toHaveBeenCalled();
   });
 
+  it('pins Agent-led team capacity with one host Lead and inherits that configuration on resume', async () => {
+    const flags = [...args, '--research-mode', 'skill', '--skill-delegation', 'team', '--skill-max-agents', '3'];
+    expect(await runSolver(flags, root, modules)).toBe(0);
+    const before = state();
+    expect(before).toMatchObject({ researchMode: 'skill', researchSkillWorkflow: 'full',
+      researchDelegation: { mode: 'team', maxAgents: 3 }, workerCount: 1, coordination: 'independent',
+      researchSkill: { name: 'theoremos-research', loading: 'native' }, turns: 0 });
+    expect(before.workers).toBeUndefined(); expect(before.cooperation).toBeUndefined();
+    expect(before.nativeAgents).toBeUndefined(); expect(before.threadId).toBeUndefined();
+    expect(await runSolver([...args, '--resume'], root, modules)).toBe(0);
+    expect(state()).toMatchObject({ runId: before.runId, researchDelegation: before.researchDelegation,
+      researchSkill: before.researchSkill, agentSessionPlan: before.agentSessionPlan, methodDigest: before.methodDigest,
+      workerCount: 1, coordination: 'independent', turns: 0 });
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { initial: 'team', changes: ['--skill-delegation', 'read-only'] },
+    { initial: 'read-only', changes: ['--skill-delegation', 'team'] },
+    { initial: 'team', changes: ['--skill-max-agents', '2'] },
+  ])('rejects changing frozen $initial delegation through $changes on resume', async ({ initial, changes }) => {
+    expect(await runSolver([...args, '--research-mode', 'skill', '--skill-delegation', initial, '--skill-max-agents', '3'], root, modules)).toBe(0);
+    const before = state();
+    expect(await runSolver([...args, '--resume', ...changes], root, modules)).toBe(1);
+    rejected('math_resume_research_strategy_changed');
+    expect(state()).toMatchObject({ runId: before.runId, researchDelegation: before.researchDelegation, turns: 0 });
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['--workers', '2'], ['--coordination', 'cooperative'], ['--module-plan', 'unused-team-plan.json'], ['--plan-approval'],
+  ].map(flags => ({ flags })))('rejects host-controlled team configuration $flags before opening any session', async ({ flags }) => {
+    await expect(runSolver([...args, '--research-mode', 'skill', '--skill-delegation', 'team',
+      '--skill-max-agents', '3', ...flags], root, modules)).rejects.toThrow('math_team_requires_single_lead');
+    expect(open).not.toHaveBeenCalled();
+    expect(fs.existsSync(output + '.runtime/state.json')).toBe(false);
+  });
+
+  it.each(['claude-code', 'opencode', 'cli'] as const)('clearly rejects Agent-led team tools on the %s adapter', async id => {
+    await expect(runSolver([...args, '--harness', id, '--model', 'offline-fixture', '--research-mode', 'skill',
+      '--skill-delegation', 'team', '--skill-max-agents', '3'], root, modules))
+      .rejects.toThrow('math_team_requires_codex_dynamic_tools');
+    expect(open).not.toHaveBeenCalled();
+    expect(fs.existsSync(output + '.runtime/state.json')).toBe(false);
+  });
+
   it.each([['--skill-delegation', 'read-only'], ['--skill-max-agents', '3'],
     ['--research-mode', 'skill', '--skill-delegation', 'read-only', '--skill-max-agents', '5'],
     ['--research-mode', 'skill', '--skill-loading', 'file', '--common-research-skill', 'native']].map(flags => ({ flags })))

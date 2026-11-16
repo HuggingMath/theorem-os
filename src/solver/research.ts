@@ -12,6 +12,7 @@ import { canonicalMathJson, mathDigest, writeMathJsonDurable } from '../math/mat
 import type { SolverRunState, SolverWorkerState } from './archive';
 import { commitSolverSources, git, solverScratchDigest, pinSolverResearchSkill } from './problem';
 import { CooperativeResearch } from './cooperation';
+import { AgentResearchTeam, assertAgentTeamProcessesStopped } from './agentTeam';
 import { assignmentDeliveryFile, leadPlanDeliveryFile, isFeasibilityReview, isFinalCandidateReview, taskGroup, type CooperativeAction } from './tasks';
 import { isStatementAction } from './statementReview';
 import { rememberSolverFailure, solverSourceFeedback } from './feedback';
@@ -137,10 +138,12 @@ export async function runResearchWorkers(input: {
   modules: SolverModules; root: string; buildFile: string; taskText: string; executable: string; profile: string;
   signal: AbortSignal; deadline: number; maxTurns: number; maxTurnMs: number; maxTotalTokens: number; proofTimeoutMs?: number;
   executionBudget?: { remainingMs(): number; setWaiting(waiting: boolean): void };
+  prepareTeamWorker?: (id: string, worktree: string) => Promise<WorkerAccess>;
   freshContinuationChecks?: readonly TaskProof[]; goalProgressReviewMs?: number;
   save: () => void; emit: (event: string, details?: Record<string, unknown>) => void;
 }): Promise<{ worktree: string; check: ProofCheck } | undefined> {
   const { state, modules, save } = input;
+  assertAgentTeamProcessesStopped(state);
   const parallel = Boolean(state.workers);
   const skillResearch = state.researchMode === 'skill';
   const fullSkillWorkflow = skillResearch && state.researchSkillWorkflow === 'full';
@@ -174,7 +177,7 @@ export async function runResearchWorkers(input: {
     ': recover into a new isolated workspace before starting another writer.');
   for (const { research } of records) initializeUsageAccounting(research);
   const enforcement = state.tokenBudget?.enforcement;
-  state.tokenBudget = buildTokenBudget(input.maxTotalTokens, records.map(record => record.research), enforcement);
+  state.tokenBudget = buildTokenBudget(input.maxTotalTokens, [...records.map(record => record.research), ...(state.agentTeam?.workers ?? [])], enforcement);
   const dispatchAllowed = () => modelDispatchAllowed(state.tokenBudget!);
   const accepted = records.find(({ worker }) => worker.id === (state.winningWorker ?? 'solver'));
   if (accepted && !state.pendingResearchFreeze && state.check?.passed && ['running', 'checking', 'evaluating', 'finished'].includes(state.phase) &&
@@ -215,10 +218,19 @@ export async function runResearchWorkers(input: {
       continuousResearch: input.maxTurns === Infinity,
       onPlanApprovalWaiting: waiting => input.executionBudget?.setWaiting(waiting),
       modelDispatchAllowed: dispatchAllowed }) : undefined;
+  const team = state.researchDelegation?.mode === 'team' ? new AgentResearchTeam({
+    state, root: input.root, taskText: input.taskText, leadAccess: input.access.get(input.workers[0].id)!,
+    modules, executable: input.executable, profile: input.profile, signal,
+    maxAgents: state.researchDelegation.maxAgents, maxTurns: input.maxTurns, maxTurnMs: input.maxTurnMs,
+    maxTotalTokens: input.maxTotalTokens, proofTimeoutMs: input.proofTimeoutMs, remainingMs: () => budget().remainingMs,
+    prepareWorker: input.prepareTeamWorker, save, emit: input.emit, exclusiveCheck,
+  }) : undefined;
   const updateUsage = () => {
     if (parallel) state.usage = aggregateUsage(state.workers!);
     const previous = state.tokenBudget!.status;
-    state.tokenBudget = buildTokenBudget(input.maxTotalTokens, records.map(record => record.research), enforcement);
+    const usageRecords = [...records.map(record => record.research), ...(team?.usageRecords ?? [])];
+    state.tokenBudget = buildTokenBudget(input.maxTotalTokens, usageRecords, enforcement);
+    if (team) state.teamUsage = aggregateUsage(usageRecords);
     if (state.tokenBudget.status !== previous && !dispatchAllowed()) input.emit('model_budget_stopped', { ...state.tokenBudget });
     cooperation?.modelBudgetChanged();
   };
@@ -226,6 +238,7 @@ export async function runResearchWorkers(input: {
   const cleanupErrors: unknown[] = [];
   state.error = undefined;
   try {
+    await team?.restore();
     await cooperation?.restore();
     cooperation?.start();
     await Promise.all(records.map(async ({ worker, research }) => {
@@ -280,6 +293,7 @@ export async function runResearchWorkers(input: {
           ...(modules.M4.tools ? { tools: modules.M4.tools } : {}),
           sourceFeedback: feedback, previousCheck, previousFailures, assignment: promptAction(assignment),
           maxOptionalContextBytes: research.contextOverflow?.maxOptionalContextBytes,
+          ...(team ? { teamRole: { id: 'lead', role: 'lead' as const } } : {}),
           ...(access.researchSkill ? { researchSkill: access.researchSkill } : {}),
         };
         const currentContext = { ...(skillMode && !fullSkillWorkflow && !access.commonResearchSkill
@@ -950,6 +964,7 @@ export async function runResearchWorkers(input: {
       const close = async () => {
         if (!session) { await closing; return; }
         const current = session, closingSessionId = usage.sessionId; session = undefined;
+        team?.setLeadSession(undefined);
         try { closing = current.close(); await closing; } catch (error) { cleanupErrors.push(error); throw error; }
         finally { usage.sessionClosed(closingSessionId); }
       };
@@ -1014,13 +1029,14 @@ export async function runResearchWorkers(input: {
               access.assertHarnessCurrent?.();
               session = await modules.M1.open({ executable: input.executable, profile: input.profile,
                 ...((access.commonResearchSkill ?? access.researchSkill) ? { skills: [(access.commonResearchSkill ?? access.researchSkill)!] } : {}),
-                ...(state.researchDelegation ? { delegation: state.researchDelegation } : {}),
-                ...(state.researchDelegation ? { onNativeAgent: (agent: import('../runtime/nativeDelegation').NativeResearchAgent) => {
+                ...(state.researchDelegation?.mode === 'read-only' ? { delegation: { ...state.researchDelegation, mode: 'read-only' as const } } : {}),
+                ...(team ? { tools: team.tools(), isolateProcess: true } : {}),
+                ...(state.researchDelegation?.mode === 'read-only' ? { onNativeAgent: (agent: import('../runtime/nativeDelegation').NativeResearchAgent) => {
                   const agents = state.nativeAgents ??= [], index = agents.findIndex(item => item.threadId === agent.threadId);
                   if (index < 0) agents.push(agent); else agents[index] = agent;
                   emit('investigator_observed', { ...agent }); save();
                 } } : {}),
-                hiddenRoots: [DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT],
+                hiddenRoots: [DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT, ...(team?.hiddenRoots ?? [])],
                 ...(!statement ? { proofProjectRoot: path.join(worker.worktree, state.problem.projectRelative) } : {}),
                 ...(singleHandoff ? { completedOutput: singleHandoff.output } : {}),
                 workspace, environment: { ...environment, ...access.harnessEnvironment,
@@ -1036,6 +1052,8 @@ export async function runResearchWorkers(input: {
                   canonicalMathJson(state.agentSessionPlan) !== canonicalMathJson(session.executionPlan))
                 throw new Error('math_agent_session_plan_changed');
               usage.sessionOpened(session);
+              team?.setLeadSession(session);
+              if (team && session.processIdentity) { state.writerProcess = session.processIdentity; save(); }
             } catch (error) {
               signal.throwIfAborted();
               if (assignment && !cooperation!.current(assignment)) return false;
@@ -1176,7 +1194,7 @@ export async function runResearchWorkers(input: {
         await skillProofLifecycle?.resumePending();
         if (winner) return;
         access.assertKnowledgeCurrent?.();
-        if ((!skillMode || fullSkillWorkflow) && !access.commonResearchSkill && !cooperation && !research.turns && access.installedLibrary && modules.M2.applyLibrary && budget().remainingMs > 0) {
+        if ((!skillMode || fullSkillWorkflow) && !team && !access.commonResearchSkill && !cooperation && !research.turns && access.installedLibrary && modules.M2.applyLibrary && budget().remainingMs > 0) {
           const closed = await applyOriginalLibraryTasks({ problem: state.problem, library: access.installedLibrary,
             taskText: input.taskText, environmentDigest: state.environmentDigest, worktree: worker.worktree, workerId: worker.id,
             env: access.environment, signal, timeoutMs: Math.min(input.proofTimeoutMs ?? Infinity, budget().remainingMs),
@@ -1473,6 +1491,7 @@ export async function runResearchWorkers(input: {
             // writer processes before the ordinary source freeze and independent host check.
             await stopProofWriter({ session: turnSession, record: research, workerId: worker.id, close, save,
               deferred: reason => emit('proof_ready_freeze_deferred', { ...singleSubmission, reason }) });
+            if (team) { state.writerProcess = undefined; save(); }
             access.assertHarnessCurrent?.();
             if (access.researchSkill) assertMathAgentSkillsCurrent([access.researchSkill]);
             // submitted is a delivery status, never proof acceptance. The usual M2 check below
@@ -1508,6 +1527,7 @@ export async function runResearchWorkers(input: {
             continue;
           }
           if (skillMode) {
+            await team?.flushAdoptions();
             const { commit, wholeProofReady } = await skillProofLifecycle!.freezeSources();
             // An unfinished research turn can publish useful helpers without repeatedly
             // compiling every original hole. Ordinary diagnostics remain advisory.
@@ -1618,6 +1638,6 @@ export async function runResearchWorkers(input: {
       errors.find(error => error instanceof VerificationCheckpointError) ?? errors[0];
     return winner;
   } finally {
-    try { await cooperation?.stop(); } finally { input.signal.removeEventListener('abort', abort); }
+    try { await team?.close(); await cooperation?.stop(); } finally { input.signal.removeEventListener('abort', abort); }
   }
 }
