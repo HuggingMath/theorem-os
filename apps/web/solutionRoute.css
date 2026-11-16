@@ -100,7 +100,7 @@
 .solution-route-modes button { padding:8px 12px; min-height:40px; background:transparent; color:var(--solution-green,#3c5229); border:1px solid var(--line,#deded4); border-radius:3px; font:inherit; font-size:12px; cursor:pointer; }
 .solution-route-modes button[aria-pressed=true] { border-color:var(--solution-green,#3c5229); background:var(--green-50,#eff2e7); }
 .solution-route-loading { padding:22px 0; font-size:13px; color:var(--muted,#777568); }
-.solution-route[data-solution-expanded=true] { position:fixed; inset:14px; z-index:1300; margin:0; padding:20px; background:var(--solution-card); border:1px solid var(--solution-line); border-radius:6px; box-shadow:0 0 0 30px #23291c80; display:flex; flex-direction:column; }
+.solution-route[data-solution-expanded=true] { position:fixed; inset:14px; z-index:1300; margin:0; padding:20px; background:var(--solution-card); border:1px solid var(--solution-line); border-radius:4px; box-shadow:0 0 0 30px #23291c80; display:flex; flex-direction:column; }
 .solution-route[data-solution-expanded=true] .solution-route-workspace { flex:1; min-height:0; }
 .solution-route[data-solution-expanded=true] .solution-route-overview,.solution-route[data-solution-expanded=true] .solution-route-stages { max-height:16dvh; overflow:auto; min-height:0; flex-shrink:1; scrollbar-width:thin; }
 .solution-route[data-solution-expanded=true] .solution-route-viewport,.solution-route[data-solution-expanded=true] .solution-route-detail { height:100%; }

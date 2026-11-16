@@ -13,8 +13,8 @@ const page = (name: string, extra = '') => ['<!doctype html>', '<html lang="zh-C
   '  <link rel="stylesheet" href="app.css">', '</head>', '<body>', '  <a class="brand" href="./"><img src="assets/mark.svg" alt=""></a>',
   `  <main id="main"></main>${extra}`, `  <script src="${name}.js" defer></script>`, '</body>', '</html>', ''].join('\n');
 const face = (family: string, file: string) => `@font-face{font-family:${family};src:url("assets/fonts/${file}") format("woff2")}`;
-const CSS = [face('Inter', 'InterVariable-latin.woff2'), face('"TheoremOS Sans SC"', 'NotoSansSC-ui.woff2'),
-  face('"TheoremOS Serif Latin"', 'TheoremOSSerif-latin.woff2'), face('"TheoremOS Serif SC"', 'NotoSerifSC-common.woff2'),
+const CSS = [face('Geist', 'Geist-latin.woff2'), face('"TheoremOS Sans SC"', 'NotoSansSC-ui.woff2'),
+  face('"Instrument Serif"', 'InstrumentSerif-latin.woff2'), face('"TheoremOS Serif SC"', 'NotoSerifSC-common.woff2'),
   face('"JetBrains Mono"', 'JetBrainsMono.woff2'), 'body{background:url(data:image/png;base64,AA==)}.lean{font-family:"JetBrains Mono"}', ''].join('\n');
 
 function build(edit: Record<string, string | null> = {}) {
@@ -25,7 +25,7 @@ function build(edit: Record<string, string | null> = {}) {
     'out/web/assets/katex/katex.min.css': '@font-face{font-family:KaTeX_Main;src:url(fonts/KaTeX_Main-Regular.woff2) format("woff2"),url(fonts/KaTeX_Main-Regular.woff) format("woff"),url(fonts/KaTeX_Main-Regular.ttf) format("truetype")}',
     'out/web/assets/katex/fonts/KaTeX_Main-Regular.woff2': 'math-font',
     'out/web/assets/mark.svg': '<svg xmlns="http://www.w3.org/2000/svg"/>',
-    'out/web/assets/fonts/InterVariable-latin.woff2': 'inter', 'out/web/assets/fonts/TheoremOSSerif-latin.woff2': 'serif',
+    'out/web/assets/fonts/Geist-latin.woff2': 'inter', 'out/web/assets/fonts/InstrumentSerif-latin.woff2': 'serif',
     'out/web/assets/fonts/JetBrainsMono.woff2': 'mono', 'out/web/assets/fonts/NotoSansSC-ui.woff2': 'noto',
     'out/web/explain.html': page('explain'), 'out/web/explain.js': 'window.explainBundle = 1;',
     'out/web-report/formalization.html': page('formalization'), 'out/web-report/formalization.js': 'window.formalizationBundle = 1;',
@@ -50,7 +50,7 @@ describe('static report pages', () => {
     expect(html).toContain('<script>document.documentElement.dataset.theme = "light";</script>');
     expect(html).toContain(`<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,${base64('<svg xmlns="http://www.w3.org/2000/svg"/>')}">`);
     expect(html).toContain('<img src="data:image/svg+xml;base64,');
-    for (const [file, body] of [['InterVariable-latin', 'inter'], ['TheoremOSSerif-latin', 'serif'], ['JetBrainsMono', 'mono']]) {
+    for (const [file, body] of [['Geist-latin', 'inter'], ['InstrumentSerif-latin', 'serif'], ['JetBrainsMono', 'mono']]) {
       expect(html).toContain(`url("data:font/woff2;base64,${base64(body!)}")`);
       expect(html).not.toContain(file);
     }
@@ -94,8 +94,8 @@ describe('static report pages', () => {
     ['a theme script that opens a comment', { 'out/web/theme.js': 'if (a <!-- b) {}' }, 'static_report_script_unsafe'],
     ['a stylesheet asset', { 'out/web/app.css': CSS + '.x{background:url(assets/grain.png)}' }, 'static_report_stylesheet_reference'],
     ['a quoted stylesheet asset', { 'out/web/app.css': CSS + '.x{background:url( "assets/grain.png")}' }, 'static_report_stylesheet_reference'],
-    ['a font referenced twice', { 'out/web/app.css': CSS + face('Inter', 'InterVariable-latin.woff2') },
-      'static_report_template_changed: url("assets/fonts/InterVariable-latin.woff2")'],
+    ['a font referenced twice', { 'out/web/app.css': CSS + face('Geist', 'Geist-latin.woff2') },
+      'static_report_template_changed: url("assets/fonts/Geist-latin.woff2")'],
     ['a stylesheet that closes its element', { 'out/web/app.css': CSS + '/* </style> */' }, 'static_report_stylesheet_unsafe'],
   ])('refuses to build a page with %s', (_name, edit, error) => {
     expect(() => staticReportHtml(build(edit), formalization)).toThrow(error);

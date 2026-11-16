@@ -14,7 +14,7 @@
 
 三选一选择 `type-only-statement`，seed **6632587**。大字、整章色场和不同位置的正文，适合以名称及研究输出组织页面；没有采用卡片密铺方向。
 
-采用 Hanken Grotesk，自托管字体与 OFL 许可证，中文使用系统字体（2026-10-26 起标题改用衬线，配色改为暖纸色，见 [design-references.md](design-references.md)）；Fira Code 仅用于字面代码。字体来自 Google Fonts 的版本化字体 URL，随仓库保留各自许可证。所有字距为 0，字号使用固定值与断点，优先遵守项目约束。
+首页正文采用 Geist，标题采用 Instrument Serif，均自托管并随仓库保留 OFL 许可证；中文使用系统字体（2026-10-26 起标题改用衬线，配色改为暖纸色，见 [design-references.md](design-references.md)；2026-11-16 起首页字体由 Hanken Grotesk 换为 Geist，标题字体换为 Instrument Serif）；Fira Code 仅用于字面代码。字体来自 Google Fonts 的版本化字体 URL，随仓库保留各自许可证。所有字距为 0，字号使用固定值与断点，优先遵守项目约束。
 
 保留抽取的章节色场比例，将糖果色映射到现有品牌的白、墨色、蓝与验收绿，并使用浅青与薄荷区分章节。首屏保留大字主导，同时放入真实工作台并露出下一章，适配产品必须第一屏可见的要求。没有采用天空气氛图、虚构客户或虚构指标。
 

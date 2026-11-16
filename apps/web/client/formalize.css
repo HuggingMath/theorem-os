@@ -6,7 +6,7 @@ body.formalize-page{height:auto;min-height:100dvh;overflow:visible}
 .formalize-shell{width:min(1440px,100%);margin:0 auto;padding:48px 36px 80px}
 .formalize-intro{max-width:760px;margin-bottom:36px}
 .formalize-eyebrow{color:var(--blue);font-size:13px;margin-bottom:8px}
-.formalize-intro h1{font-family:var(--serif);font-size:36px;line-height:1.3;margin-bottom:16px}
+.formalize-intro h1{font-family:var(--serif);font-weight:400;font-size:36px;line-height:1.3;margin-bottom:16px}
 .formalize-intro>p:last-child{color:var(--muted);line-height:1.9}
 .formalize-workspace{display:grid;grid-template-columns:minmax(0,2fr) minmax(260px,1fr);gap:40px}
 .formalize-compose,.formalize-history{min-width:0}
@@ -19,7 +19,7 @@ body.formalize-page{height:auto;min-height:100dvh;overflow:visible}
 .formalize-examples{padding-bottom:20px;border-bottom:1px solid var(--line)}
 .formalize-examples select{margin-top:10px}
 .formalize-examples .field-note{margin-top:10px;line-height:1.8}
-:is(.formalize-page,.formalize-embedded) input:not([type=checkbox]),:is(.formalize-page,.formalize-embedded) select,:is(.formalize-page,.formalize-embedded) textarea{display:block;width:100%;min-width:0;border:1px solid var(--line);border-radius:8px;background:var(--card);padding:12px}
+:is(.formalize-page,.formalize-embedded) input:not([type=checkbox]),:is(.formalize-page,.formalize-embedded) select,:is(.formalize-page,.formalize-embedded) textarea{display:block;width:100%;min-width:0;border:1px solid var(--line);border-radius:4px;background:var(--card);padding:12px}
 :is(.formalize-page,.formalize-embedded) textarea{resize:vertical;min-height:220px;line-height:1.85}
 :is(.formalize-page,.formalize-embedded) label{display:block;font-weight:500}
 :is(.formalize-page,.formalize-embedded) label .field-note{display:block;font-weight:400;margin-top:6px}
@@ -31,7 +31,7 @@ body.formalize-page{height:auto;min-height:100dvh;overflow:visible}
 .formalize-section-head h2{margin-bottom:8px}
 .formalize-history{border-left:1px solid var(--line);padding-left:28px}
 #formalize-list{display:grid;gap:8px;margin-top:20px;max-height:440px;overflow:auto;padding:2px}
-.formalize-record{display:block;width:100%;text-align:left;background:transparent;border:1px solid transparent;border-radius:8px;padding:12px;min-width:0}
+.formalize-record{display:block;width:100%;text-align:left;background:transparent;border:1px solid transparent;border-radius:4px;padding:12px;min-width:0}
 .formalize-record[aria-pressed=true]{border-color:var(--line);background:var(--card)}
 .formalize-record:hover{background:var(--gray-50)}
 .formalize-record-title{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
@@ -39,16 +39,16 @@ body.formalize-page{height:auto;min-height:100dvh;overflow:visible}
 .formalize-current{margin-top:48px;border-top:1px solid var(--line);padding-top:28px;scroll-margin-top:24px}
 #formalize-progress{color:var(--muted);font-size:13px}
 #formalize-source{margin-top:20px}#formalize-source summary{cursor:pointer;color:var(--muted);font-size:13px}
-#formalize-source-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto;margin-top:16px;padding:16px;background:var(--card);border:1px solid var(--line);border-radius:8px}
+#formalize-source-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto;margin-top:16px;padding:16px;background:var(--card);border:1px solid var(--line);border-radius:4px}
 .formalize-review-note{margin:24px 0;color:var(--muted);line-height:1.9;max-width:900px}
-:is(.formalize-page,.formalize-embedded) .explain-split{height:680px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+:is(.formalize-page,.formalize-embedded) .explain-split{height:680px;border:1px solid var(--line);border-radius:4px;overflow:hidden}
 :is(.formalize-page,.formalize-embedded) .explain-toolbar{margin-top:24px}
 :is(.formalize-page,.formalize-embedded) .explain-pane{min-height:0;min-width:0}
 .formalize-confirmation{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:20px;padding:24px 0}
 .formalize-confirmation label{font-weight:400;line-height:1.9;max-width:800px}
 .formalize-confirmation input[type=checkbox]{display:inline-block;width:16px;height:16px;min-width:16px;margin:0 8px 0 0;padding:0;vertical-align:middle;accent-color:var(--blue)}
 #formalize-confirmed{display:flex;align-items:center;flex-wrap:wrap;gap:16px;padding:24px 0}
-.formalize-error{padding:14px 16px;margin-bottom:24px;border:1px solid var(--red-200);border-radius:8px;color:var(--red-700);background:var(--red-50);overflow-wrap:anywhere}
+.formalize-error{padding:14px 16px;margin-bottom:24px;border:1px solid var(--red-200);border-radius:4px;color:var(--red-700);background:var(--red-50);overflow-wrap:anywhere}
 #formalize-reason{margin-top:12px;overflow-wrap:anywhere}
 .formalize-stages{display:flex;flex-wrap:wrap;gap:16px 28px;list-style:none;padding:0;margin:24px 0 16px;color:var(--muted);font-size:13px}
 .formalize-stages li{border-bottom:2px solid var(--line);padding-bottom:8px}
@@ -67,13 +67,13 @@ body.formalize-page{height:auto;min-height:100dvh;overflow:visible}
 .formalize-embedded :is(.formalize-intro,.formalize-examples,#formalize-compose-heading,#formalize-original-note,.formalize-options,.formalize-submit>.field-note){display:none}
 .formalize-embedded #formalize-settings:not([open]){display:none}
 .formalize-embedded .formalize-workspace{display:block;max-width:760px;margin-inline:auto}
-.formalize-embedded #formalize-form{gap:0;border:1px solid var(--gray-200);border-radius:20px;background:var(--card);padding:8px;box-shadow:0 4px 20px #00000006}
+.formalize-embedded #formalize-form{gap:0;border:1px solid var(--gray-200);border-radius:4px;background:var(--card);padding:8px;box-shadow:0 4px 20px #00000006}
 .formalize-embedded #formalize-form:focus-within{border-color:var(--gray-400)}
 .formalize-embedded #formalize-form:has(#formalize-original:focus){border-color:var(--gray-500);box-shadow:0 0 0 1px var(--gray-500),0 4px 20px #00000006}
-.formalize-embedded #formalize-original{min-height:116px;max-height:320px;border:0;background:transparent;border-radius:12px;padding:18px 18px 12px;resize:none;font-size:16px;line-height:1.85;box-shadow:none}
+.formalize-embedded #formalize-original{min-height:116px;max-height:320px;border:0;background:transparent;border-radius:4px;padding:18px 18px 12px;resize:none;font-size:16px;line-height:1.85;box-shadow:none}
 .formalize-embedded #formalize-original:focus{outline:0;box-shadow:none}
 .formalize-embedded .formalize-submit{justify-content:flex-end;flex-wrap:nowrap;padding:8px;gap:12px}
-.formalize-embedded #formalize-start{min-width:64px;border-radius:12px;padding:9px 16px;flex-shrink:0}
+.formalize-embedded #formalize-start{min-width:64px;border-radius:4px;padding:9px 16px;flex-shrink:0}
 .formalize-embedded #formalize-settings[open]{margin:12px 20px;padding:20px 0;border-top:1px solid var(--line)}
 .formalize-embedded .formalize-history{border:0;padding:0;margin-top:28px}
 .formalize-embedded .formalize-current{margin:44px auto 0;max-width:960px}
@@ -83,7 +83,7 @@ body.formalize-page{height:auto;min-height:100dvh;overflow:visible}
 .formalize-embedded:has(.formalize-current:not([hidden])) .formalize-current{order:1;flex:1;min-height:0;width:100%;max-width:760px;margin:0 auto 24px;padding:0 12px 24px;border:0;overflow:auto;display:flex;flex-direction:column}
 .formalize-embedded #formalize-source{order:-1;margin:0 0 28px;flex:none}
 .formalize-embedded #formalize-source>summary{display:none}
-.formalize-embedded #formalize-source-text{margin:0 0 0 auto;max-width:90%;max-height:none;background:var(--gray-100);border:0;border-radius:20px;padding:16px 22px;font-family:inherit;font-size:15px;line-height:1.9}
+.formalize-embedded #formalize-source-text{margin:0 0 0 auto;max-width:90%;max-height:none;background:var(--gray-100);border:0;border-radius:4px;padding:16px 22px;font-family:inherit;font-size:15px;line-height:1.9}
 .formalize-embedded #formalize-send-status{padding:4px 14px 10px;margin:0;font-size:12px;line-height:1.7}
 body[data-view=draft] .topbar .model-menu{border:0;background:transparent}
 body[data-view=draft] .topbar .model-menu :is(#current-model,svg:last-child){display:none}
@@ -101,7 +101,7 @@ body[data-view=draft][data-entry=lean] .creation-path{display:none}
 body[data-view=draft][data-entry=lean] .chat-scroll{flex:none;padding:0;overflow:visible;mask-image:none}
 body[data-view=draft][data-entry=lean] .inline-problem{padding:0;border:0;margin-bottom:12px}
 body[data-view=draft][data-entry=lean] .inline-problem>.section-heading{display:none}
-body[data-view=draft][data-entry=lean] #source{max-height:420px;border-radius:12px;padding:18px;line-height:1.8}
+body[data-view=draft][data-entry=lean] #source{max-height:420px;border-radius:4px;padding:18px;line-height:1.8}
 body[data-view=draft][data-entry=lean] #run-form{padding:12px 0 0}
 body[data-view=draft][data-entry=lean] .composer-tools{flex-wrap:wrap;gap:6px}
 body[data-view=draft][data-entry=lean] .composer-tools>.workbench-entrypoints{flex:1 0 auto}

@@ -15,7 +15,7 @@ export type StaticReportPage =
   | { page: 'formalization'; data: WebFormalizationReport };
 
 const templates = { explain: 'out/web', formalization: 'out/web-report' } as const;
-const fonts = ['InterVariable-latin.woff2', 'TheoremOSSerif-latin.woff2', 'JetBrainsMono.woff2'] as const;
+const fonts = ['Geist-latin.woff2', 'InstrumentSerif-latin.woff2', 'JetBrainsMono.woff2'] as const;
 /** Nothing loads from outside the file; the Markdown download of the explanation page is a blob: link. */
 const policy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; font-src data:; img-src data:; base-uri 'none'; form-action 'none'";
 

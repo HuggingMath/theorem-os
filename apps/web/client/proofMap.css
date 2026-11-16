@@ -24,7 +24,7 @@
   margin-block: 20px;
   padding: 14px;
   border: 1px solid var(--pm-line);
-  border-radius: 10px;
+  border-radius: 4px;
   background: var(--pm-bg);
   color: var(--pm-ink-2);
   font: 400 13px/1.65 var(--sans);
@@ -43,9 +43,9 @@
 .pm-header { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; padding-bottom: 14px; }
 .pm-heading { flex: 1 1 170px; }
 .pm-eyebrow { display: block; color: var(--pm-muted); font-size: 12px; font-weight: 500; }
-.pm-root .pm-heading h3 { margin-top: 3px; color: var(--pm-ink); font: 500 20px/1.4 var(--serif); }
+.pm-root .pm-heading h3 { margin-top: 3px; color: var(--pm-ink); font: 400 20px/1.4 var(--serif); }
 .pm-mode { padding: 3px 8px; border: 1px solid var(--pm-line); border-radius: 4px; color: var(--pm-muted); font-size: 12px; }
-.pm-root .pm-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 6px 9px; border: 1px solid var(--pm-line-strong); border-radius: 5px; background: var(--pm-paper); color: var(--pm-ink-2); font-size: 12px; text-align: left; white-space: normal; }
+.pm-root .pm-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 6px 9px; border: 1px solid var(--pm-line-strong); border-radius: 4px; background: var(--pm-paper); color: var(--pm-ink-2); font-size: 12px; text-align: left; white-space: normal; }
 .pm-root .pm-action:hover { border-color: var(--pm-accent); color: var(--pm-accent); background: var(--pm-accent-soft); }
 .pm-root .pm-action svg { width: 14px; height: 14px; flex: none; }
 
@@ -58,7 +58,7 @@
 .pm-formal-target code { display: block; }
 .pm-bridge-link { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; }
 .pm-bridge-symbol { color: var(--pm-accent); font: 400 20px/1 var(--sans); transform: rotate(90deg); }
-.pm-bridge-pill { display: grid; gap: 5px; width: fit-content; max-width: 100%; padding: 9px 11px; border: 1px solid var(--pm-line-strong); border-radius: 6px; background: var(--pm-paper); text-align: center; }
+.pm-bridge-pill { display: grid; gap: 5px; width: fit-content; max-width: 100%; padding: 9px 11px; border: 1px solid var(--pm-line-strong); border-radius: 4px; background: var(--pm-paper); text-align: center; }
 .pm-bridge-status { display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--pm-ink); font-size: 12px; font-weight: 500; }
 .pm-bridge-note { color: var(--pm-muted); font-size: 12px; }
 .pm-theorem-names { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
@@ -107,14 +107,14 @@
 .pm-stage-head p { color: var(--pm-muted); font-size: 12px; line-height: 1.5; }
 .pm-stage-grid { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 26px 20px; }
 .pm-channel { height: 36px; }
-.pm-node { position: relative; z-index: 1; min-width: 0; border: 1px solid var(--pm-line-strong); border-radius: 6px; background: var(--pm-paper); scroll-margin-block: 12px; transition: border-color 120ms ease; }
+.pm-node { position: relative; z-index: 1; min-width: 0; border: 1px solid var(--pm-line-strong); border-radius: 4px; background: var(--pm-paper); scroll-margin-block: 12px; transition: border-color 120ms ease; }
 .pm-node:hover, .pm-node[data-highlighted=true] { border-color: var(--pm-accent); }
 .pm-node[data-pm-origin=conditional] { border-top: 2px dashed var(--pm-warn); }
 .pm-node[data-pm-tone=done] { border-top: 2px solid var(--pm-ok); }
 .pm-node[data-pm-tone=active] { border-top: 2px solid var(--pm-accent); }
 .pm-node[data-pm-tone=failed] { border-top: 2px solid var(--pm-danger); }
 .pm-node[data-open=true] { grid-column: 1 / -1; border-color: var(--pm-accent); }
-.pm-root .pm-node-head { display: flex; flex-direction: column; align-items: stretch; gap: 7px; width: 100%; min-height: 142px; padding: 12px; border: 0; border-radius: 5px; background: transparent; color: var(--pm-ink-2); text-align: left; font: 400 13px/1.6 var(--sans); }
+.pm-root .pm-node-head { display: flex; flex-direction: column; align-items: stretch; gap: 7px; width: 100%; min-height: 142px; padding: 12px; border: 0; border-radius: 4px; background: transparent; color: var(--pm-ink-2); text-align: left; font: 400 13px/1.6 var(--sans); }
 .pm-root .pm-node-head:hover { background: var(--pm-surface); }
 .pm-root .pm-node-head:focus-visible { outline-offset: -3px; }
 .pm-root .pm-node[data-open=true] .pm-node-head { min-height: 0; }
@@ -164,7 +164,7 @@
 .pm-detail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 
 /* Activity is adjacent evidence, separated from the mathematical dependency graph. */
-.pm-external { min-width: 0; padding: 14px; border: 1px solid var(--pm-line); border-radius: 6px; background: var(--pm-paper); }
+.pm-external { min-width: 0; padding: 14px; border: 1px solid var(--pm-line); border-radius: 4px; background: var(--pm-paper); }
 .pm-external-heading { padding-bottom: 12px; border-bottom: 1px solid var(--pm-line); }
 .pm-root .pm-external-heading h4 { margin-top: 3px; color: var(--pm-ink); font-size: 14px; font-weight: 500; }
 .pm-external-block { padding-top: 13px; }

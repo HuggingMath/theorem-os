@@ -55,7 +55,7 @@ for (const file of ['people.html', 'theorems.html', 'library.html', 'workspace.h
   fs.copyFileSync(path.join(root, 'apps/web/client', file), path.join(output, file));
 fs.writeFileSync(path.join(output, 'research.css'), ['research.css', 'collaborationFlow.css', 'researchCollections.css', 'researchWorkspace.css', 'researchProblem.css', 'researchLibraryTrials.css', 'researchCandidateContinuity.css', 'researchJourney.css', 'researchInlineActions.css', 'researchPersonal.css', 'researchBudget.css']
   .map(file => fs.readFileSync(path.join(root, 'apps/web/client', file), 'utf8')).join('\n'));
-const fonts = ['InterVariable-latin.woff2', 'Inter-LICENSE.txt', 'TheoremOSSerif-latin.woff2', 'Lora-OFL.txt', 'JetBrainsMono.woff2', 'JetBrainsMono-OFL.txt',
+const fonts = ['Geist-latin.woff2', 'Geist-OFL.txt', 'InstrumentSerif-latin.woff2', 'InstrumentSerif-OFL.txt', 'JetBrainsMono.woff2', 'JetBrainsMono-OFL.txt',
   'NotoSerifSC-ui.woff2', 'NotoSerifSC-ui-extra.woff2', 'NotoSerifSC-common.woff2', 'NotoSerifSC-OFL.txt', 'NotoSansSC-ui.woff2', 'NotoSansSC-ui-extra.woff2', 'NotoSansSC-common.woff2', 'NotoSansSC-OFL.txt'];
 for (const file of ['mark.svg', ...fonts.map(font => `fonts/${font}`)])
   fs.copyFileSync(path.join(root, 'docs/assets', file), path.join(output, 'assets', file));
