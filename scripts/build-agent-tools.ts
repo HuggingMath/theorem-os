@@ -14,6 +14,7 @@ const output = path.resolve(index > 0 ? process.argv[index + 1]! : path.join(roo
 const agentToolCommands = {
   'check-lean': 'checkLean.ts', 'search-lean': 'searchLean.ts', knowledge: 'theoremKnowledge.ts', library: 'library.ts',
   declarations: 'readDeclarations.ts',
+  hub: 'huggingMath.ts',
   'research-observe': 'researchObserve.ts', 'proof-search': 'proofSearch.ts',
   'check-finite': 'checkFinite.ts', 'kernel-certificate': 'kernelCertificate.ts', continuation: 'readContinuation.ts',
 } as const;

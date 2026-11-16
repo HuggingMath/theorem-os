@@ -1,0 +1,12 @@
+{
+  "general": {"chatRecording": true},
+  "telemetry": {"enabled": false},
+  "memory": {
+    "enableManagedAutoMemory": false,
+    "enableManagedAutoDream": false,
+    "enableAutoSkill": false,
+    "enableTeamMemory": false,
+    "enableTeamMemorySync": false,
+    "enableStructuredRecall": false
+  }
+}

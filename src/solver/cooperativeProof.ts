@@ -258,7 +258,7 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
     });
   const byOffset = new Map(declarations.map(item => [`${item.file}\0${item.startOffset}`, item]));
   const byId = new Map(declarations.map(item => [item.id, item]));
-  const notationDeclarations = declarations.filter(item => item.notation);
+  const notationDeclarations = declarations.filter((item): item is typeof item & { notation: NonNullable<typeof item.notation> } => Boolean(item.notation));
   const notationById = new Map(notationDeclarations.map(item => [item.id, item.notation!]));
   const masked = new Map([...sourceSnapshot].filter(([file]) => file.endsWith('.lean')).map(([file, source]) => {
     const text = maskLeanComments(source);
@@ -673,7 +673,7 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
           }
           for (const candidates of notationGroups(current)) {
             const id = candidates.length === 1 ? candidates[0] : undefined;
-            const notation = id && notationById.get(id);
+            const notation = id ? notationById.get(id) : undefined;
             // Multi-token and externally activated scoped syntax remain conservative.
             // Source hints cannot establish which overloaded parser branch Lean selected.
             if (id && notation?.tokens.length === 1 && (!notation.scoped ||
@@ -746,7 +746,7 @@ export function createTaskSourceProjector(problem: SolverProblem, worktree: stri
         if (conditions.length && declaration.id === target) {
           const header = source.slice(region.startOffset, region.bodyOffset - 2);
           const name = (originalDefinition ? /^def\s+[^\s(\[{:]+/u : /^(?:theorem|lemma)\s+[^\s(\[{:]+/u).exec(header);
-          if (!name || source.slice(region.bodyOffset - 2, region.bodyOffset) !== ':=') throw new Error('math_task_conditional_header_unsupported');
+          if (!name || !region.name || source.slice(region.bodyOffset - 2, region.bodyOffset) !== ':=') throw new Error('math_task_conditional_header_unsupported');
           let body = source.slice(region.bodyOffset, region.endOffset);
           // Keep original lookup identities while the helper elaborates polymorphic dependencies.
           for (const reference of sourceReferences(body, region.bodyOffset).reverse()) {

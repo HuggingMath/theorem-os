@@ -44,6 +44,7 @@ const runner:WebRunner={async readiness(){return{ready:true,message:'Local colla
 },async command(runId,command){
   commands.push({runId,type:command.type,body:command});const control=controls.get(runId)!;
   if(command.type==='capture')return{id:'capture',status:'captured',observation:control.observation,catalog:control.catalog};
+  if(command.type==='guidance-withdraw')return{id:command.id,status:'rejected',reason:'fixture_guidance_withdraw_not_simulated'};
   if(command.type==='guidance'){
     if (command.guidance.text === 'Uncertain fixture guidance') return { id: command.guidance.id, status: 'unknown', reason: 'fixture transport uncertainty' };
     const guidance={...command.guidance,status:'queued' as const,createdAt:now(),updatedAt:now()};control.observation.guidance.push(guidance);control.emit();

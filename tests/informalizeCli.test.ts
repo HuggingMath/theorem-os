@@ -9,6 +9,7 @@ import { mathDigest } from '../src/math/mathRuntimeIo';
 import { ADDITION_PROOF, approvedFormalization } from './helpers/approvedFormalizationFixture';
 import { fixtureStatement } from './helpers/formalizationFixture';
 import { LIB_SOURCE, PROOF_SOURCE, informalizationFixture } from './helpers/informalizationFixture';
+import { workflowHarnessFixture } from './helpers/workflowHarnessFixture';
 
 // Build identity is tested by mathBuildManifest tests; these offline CLI tests use the fixture's stand-in build and open no model.
 vi.mock('../src/math/mathBuildManifest', async importOriginal => ({
@@ -41,6 +42,30 @@ async function invoke(args: string[]) {
 }
 
 describe('informalize offline CLI', () => {
+  it.each(['claude-code', 'opencode', 'cli'] as const)('freezes %s for the sealed explanation writer and auditors', async harness => {
+    const f = fixture(), selected = workflowHarnessFixture(f.base, harness);
+    expect((await invoke([...f.args, ...selected.flags])).code).toBe(0);
+    const { request } = readInformalizationRequest(f.directory);
+    expect(request.writer.agentHarness).toMatchObject(selected.binding);
+    for (const role of request.auditors) expect(role.agentHarness).toEqual(request.writer.agentHarness);
+  });
+
+  it('rejects a generic CLI without sealed projection before copying proof sources', async () => {
+    const f = fixture(), selected = workflowHarnessFixture(f.base, 'cli', false);
+    await expect(invoke([...f.args, ...selected.flags])).rejects.toThrow('math_cli_sealed_role_configuration_required');
+    expect(fs.existsSync(f.directory)).toBe(false);
+  });
+
+  it('freezes an explicit Codex binding for the writer and each auditor', async () => {
+    const f = fixture(), profile = path.join(f.base, 'profile'), executable = path.join(f.base, 'native');
+    fs.mkdirSync(profile); fs.writeFileSync(path.join(profile, 'config.toml'), 'model = "fixture"\n');
+    fs.writeFileSync(executable, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    expect((await invoke([...f.args, '--harness', 'codex', '--harness-profile', profile, '--harness-executable', executable])).code).toBe(0);
+    const { request } = readInformalizationRequest(f.directory);
+    expect(request.writer.agentHarness).toMatchObject({ id: 'codex', executable, profile });
+    for (const role of request.auditors) expect(role.agentHarness).toEqual(request.writer.agentHarness);
+  });
+
   it('prepares a frozen request with the documented defaults and inspects it without a model', async () => {
     const f = fixture(), profile = path.join(f.base, 'codex-home');
     vi.stubEnv('CODEX_HOME', profile); vi.stubEnv('DEEPSCIENTIST_MATH_CODEX_EXECUTABLE', '');

@@ -10,7 +10,7 @@ import { LIBRARY_REQUEST_FILE, writeLibraryAccess } from '../src/solver/libraryA
 import { writeLibraryCatalog } from '../src/solver/libraryCatalog';
 import { readSolverProblem } from '../src/solver/problem';
 
-const commands = ['check-finite', 'check-lean', 'continuation', 'declarations', 'kernel-certificate', 'knowledge', 'library',
+const commands = ['check-finite', 'check-lean', 'continuation', 'declarations', 'hub', 'kernel-certificate', 'knowledge', 'library',
   'proof-search', 'research-observe', 'search-lean'];
 const fixture = path.resolve('examples/finite/old-b1-nine-constraints.json');
 let directory = '';

@@ -148,6 +148,20 @@ export function recordThreadUsage(record: UsageRecord, reported: Record<string, 
   return reportedTotal !== null;
 }
 
+/** A native invocation total is additive, even when the same conversation is resumed. */
+export function recordTurnUsage(record: UsageRecord, reported: Record<string, unknown>): boolean {
+  const usage = normalizeModelRequestUsage(reported);
+  if (!usage) return false;
+  const merged = { ...record.usage };
+  for (const [key, value] of Object.entries(usage)) {
+    const previous = merged[key] ?? 0;
+    if (!count(previous) || !count(previous + value)) return false;
+    merged[key] = previous + value;
+  }
+  record.usage = merged;
+  return true;
+}
+
 /** Add the growth of a worker's reported usage to one task; regressions are accounting gaps, not refunds. */
 export function attributeTaskUsage(state: { taskUsage?: Record<string, Record<string, number>> }, taskId: string,
   before: Record<string, unknown> | undefined, after: Record<string, unknown> | undefined): void {

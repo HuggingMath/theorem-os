@@ -24,6 +24,8 @@ export type TaskDraft = {
   autoExplain?: boolean;
   explanationLanguage?: 'zh' | 'en';
   coordination: WebCoordination;
+  researchMode?: 'legacy' | 'skill';
+  skillLoading?: 'native' | 'file';
   /** 先审计划: hold the Agents until the plan is approved. Only `true` is stored; it applies to cooperative runs of 2+ Agents. */
   planApproval?: true;
   templateId: string;
@@ -153,11 +155,13 @@ function validatedDraft(value: unknown): TaskDraft {
     source: utf8Text(draft, 'source', webLimits.maxSourceBytes), task: utf8Text(draft, 'task', webLimits.maxTaskBytes),
     maxTurns: budget(draft, 'maxTurns'), maxRunSeconds: budget(draft, 'maxRunSeconds'), workers: budget(draft, 'workers'),
     ...(Object.hasOwn(draft, 'maxTotalTokens') ? { maxTotalTokens: budget(draft, 'maxTotalTokens') } : {}),
-    effort: enumeration(draft, 'effort', ['low', 'medium', 'high', 'xhigh', 'max']),
+    effort: enumeration(draft, 'effort', ['none', 'low', 'medium', 'high', 'xhigh', 'max']),
     environment: enumeration(draft, 'environment', ['standard', 'mathlib']),
     ...(Object.hasOwn(draft, 'autoExplain') ? { autoExplain: draft.autoExplain as boolean } : {}),
     ...(Object.hasOwn(draft, 'explanationLanguage') ? { explanationLanguage: enumeration(draft, 'explanationLanguage', ['zh', 'en'] as const) } : {}),
     coordination: enumeration(draft, 'coordination', ['cooperative', 'independent']),
+    ...(Object.hasOwn(draft, 'researchMode') ? { researchMode: enumeration(draft, 'researchMode', ['legacy', 'skill'] as const) } : {}),
+    ...(Object.hasOwn(draft, 'skillLoading') ? { skillLoading: enumeration(draft, 'skillLoading', ['native', 'file'] as const) } : {}),
     ...flag(draft, 'planApproval'),
     templateId: text(draft, 'templateId', 64),
     ...(Object.hasOwn(draft, 'knowledgeDigest') ? { knowledgeDigest: draft.knowledgeDigest === null ? null : text(draft, 'knowledgeDigest', 256) } : {}),
@@ -195,6 +199,8 @@ export function decodeTaskDraft(value: unknown): TaskDraft {
       effort: own(run, 'effort'), environment: own(run, 'environment'), coordination: own(run, 'coordination'), templateId: '',
       ...(Object.hasOwn(run, 'autoExplain') ? { autoExplain: run.autoExplain } : {}),
       ...(Object.hasOwn(run, 'explanationLanguage') ? { explanationLanguage: run.explanationLanguage } : {}),
+      ...(Object.hasOwn(run, 'researchMode') ? { researchMode: run.researchMode } : {}),
+      ...(Object.hasOwn(run, 'skillLoading') ? { skillLoading: run.skillLoading } : {}),
       ...(Object.hasOwn(run, 'planApproval') ? { planApproval: run.planApproval } : {}),
       ...(Object.hasOwn(run, 'knowledgeDigest') ? { knowledgeDigest: run.knowledgeDigest } : {}),
       ...(Object.hasOwn(run, 'modulePlan') ? { modulePlan: run.modulePlan } : {}),

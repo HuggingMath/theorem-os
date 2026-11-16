@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { agentHarnessIdentitySchema } from './agentHarnessIdentity';
 import { formalizationEvaluationInputDigest, type FormalizationEvaluationReviewerInput } from './formalizationEvaluation';
 import { structuredReviewConfigurationSchema } from './formalizationReviewV2';
 
@@ -37,7 +38,7 @@ const legacyReviewConfigurationSchema = z.discriminatedUnion('execution', [
   z.object({ execution: z.literal('replay'), replayFile: z.string().min(1),
     environment: z.enum(['standard', 'mathlib']) }).strict(),
   z.object({ execution: z.literal('model'), model: text, effort: text, profile: z.string().min(1),
-    executable: z.string().min(1), buildManifestRef: z.string().min(1),
+    executable: z.string().min(1), agentHarness: agentHarnessIdentitySchema.optional(), buildManifestRef: z.string().min(1),
     environment: z.enum(['standard', 'mathlib']) }).strict(),
 ]);
 export type LegacyFormalizationReviewConfiguration = z.infer<typeof legacyReviewConfigurationSchema>;

@@ -51,7 +51,7 @@ export type ResearchAgentDraft = {
   environment?: 'standard' | 'mathlib';
   providerId?: string;
   model?: string;
-  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  effort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   workers?: number;
   coordination?: 'cooperative' | 'independent';
   modulePlan: ResearchModulePlan;

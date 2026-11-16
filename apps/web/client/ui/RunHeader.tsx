@@ -23,6 +23,7 @@ export type RunHeaderProps = {
   /** Set while the run's first plan waits for its owner (先审计划); no Agent works on it until they approve it. */
   approval?: PlanApprovalProps;
   budgetAttempt?: ResearchBudgetAttemptProps;
+  guidanceAvailable?: boolean;
   libraryProposalAttempt?: ResearchLibraryProposalAttemptProps;
 };
 export type PlanApprovalProps = {
@@ -210,7 +211,7 @@ function RunHeader(props: RunHeaderProps) {
     {props.approval && <ApprovalBanner approval={props.approval} connected={props.connected} />}
     {props.stalled !== undefined && <div class="run-stall" role="status" data-run-stall>
       <Icon name="hourglass" /><p>{t('近 {0} 分钟没有新进展：没有新的 Lean 检查通过，也没有新的结果集成。', props.stalled)}</p>
-      <button type="button" class="text-button" data-action="guide-run"><Icon name="message-square" />{t('提供指导')}</button></div>}
+      {props.guidanceAvailable !== false && <button type="button" class="text-button" data-action="guide-run"><Icon name="message-square" />{t('提供指导')}</button>}</div>}
     <div class="inline-error" data-detail-error role="alert" hidden={!props.error}>{props.error}</div>
     <Tabs tabs={props.tabs} tab={props.tab} />
   </>;

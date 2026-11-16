@@ -14,6 +14,7 @@ import type { WebEventDetails } from './shared';
 import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
 import type { WebPrecheckOutput, WebPrecheckRunner } from './precheck';
 import { candidateTargetQuery, candidateTargetWasChecked } from './candidateTargetCheck';
+import { webDeclarationArtifactsSchema } from './declarationArtifacts';
 import { ExecutionDeadline } from '../../src/runtime/executionDeadline';
 import { allowedKnowledgeFile, validateTheoremKnowledge } from '../../src/solver/theoremKnowledge';
 import { MAX_LIBRARY_PACK_BYTES, MAX_LIBRARY_PACK_MODULES, MAX_LIBRARY_MODULE_BYTES, parseLibraryPack } from '../../src/math/libraryPacks';
@@ -54,7 +55,15 @@ export function isWebObservation(value: unknown): value is WebObservation {
       !/^[a-f0-9]{64}$/u.test(String(value.snapshot.stateDigest)) ||
       !Array.isArray(value.inspection.tasks) || !Array.isArray(value.inspection.workers) ||
       !Array.isArray(value.sources) || !Array.isArray(value.checks) || !Array.isArray(value.guidance) ||
-      !object(value.coverage)) return false;
+      !object(value.coverage) || value.declarations !== undefined && !webDeclarationArtifactsSchema.safeParse(value.declarations).success) return false;
+  const configuration = value.inspection.configuration;
+  if (object(configuration)) {
+    if (configuration.agentHarness !== undefined && !z.object({ id: z.enum(['codex', 'claude-code', 'opencode', 'cli']),
+      executableDigest: z.string().regex(/^[a-f0-9]{64}$/u), configurationDigest: z.string().regex(/^[a-f0-9]{64}$/u) }).strict().safeParse(configuration.agentHarness).success) return false;
+    if (configuration.researchMode !== undefined && configuration.researchMode !== 'legacy' && configuration.researchMode !== 'skill') return false;
+    if (configuration.researchMode === 'skill' && !z.object({ name: z.string().min(1), digest: z.string().regex(/^[a-f0-9]{64}$/u),
+      loading: z.enum(['native', 'file']) }).strict().safeParse(configuration.researchSkill).success) return false;
+  }
   return value.sources.every(source => object(source) && source.scope === 'owned-file' &&
     ['taskId', 'taskVersion', 'commit', 'sourceDigest', 'environmentDigest', 'file', 'source'].every(field => typeof source[field] === 'string')) &&
     value.checks.every(check => object(check) && object(check.record) &&

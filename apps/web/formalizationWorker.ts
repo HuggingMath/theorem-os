@@ -18,6 +18,7 @@ import { elaborateFormalization } from '../../src/solver/formalizationElaboratio
 import { reportedTotalTokens } from '../../src/solver/usageBudget';
 import { startGatewayForwarder } from './explanationWorker';
 import { createFormalizationActivity } from './formalizationActivity';
+import { webHarnessExecutable } from './harness';
 import { prepareWebProviderProfile } from './worker';
 import { webAgentLibraryAccess } from './frozenLibrary';
 import { webFormalizationLimits, webFormalizationReason, type WorkerFormalizationInput,
@@ -30,7 +31,8 @@ const formalizationWorkerInputObject = z.object({
     .refine(value => value.trim().length > 0 && Buffer.byteLength(value) <= webFormalizationLimits.maxOriginalBytes),
   environment: z.enum(['standard', 'mathlib']), model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u),
   effort: z.enum(['low', 'high', 'max']), apiKey: z.string().regex(/^[\x21-\x7e]{8,4096}$/u),
-  provider: z.object({ id: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/u), name: z.string().max(200), baseUrl: z.string().url().max(512) }).strict(),
+  provider: z.object({ id: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/u), name: z.string().max(200), baseUrl: z.string().url().max(512), harness: z.literal('codex').optional(),
+    execution: z.object({ executable: z.string().min(1).max(4096).optional() }).strict().optional() }).strict(),
   maxRunSeconds: z.number().int().nonnegative().max(webFormalizationLimits.maxRunSeconds).default(0),
   maxTotalTokens: z.union([z.literal(0), z.number().int().min(10_000).max(webFormalizationLimits.maxTotalTokens)]).default(0),
   maxRounds: z.number().int().nonnegative().max(webFormalizationLimits.maxRounds).default(0),
@@ -148,7 +150,7 @@ async function main() {
     if ('operation' in input) {
       assertWebFormalizationAuditInput(input);
       const result = await runFormalizationAudit(path.join(scratch, 'audit'), root, input.evidence,
-        { profile, executable: process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex', model: input.model,
+        { profile, executable: input.provider.execution?.executable ?? process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE ?? webHarnessExecutable(input.provider), model: input.model,
           effort: input.effort, buildManifestRef: buildIndex.buildManifestRef },
         { openSession,
           maxRunSeconds: input.maxRunSeconds, maxTotalTokens: input.maxTotalTokens,
@@ -158,7 +160,7 @@ async function main() {
     }
     const libraryCatalog = webAgentLibraryAccess(input.environment);
     prepareFormalization(directory, { ...webFormalizationPreparation(input, profile, buildIndex.buildManifestRef,
-      process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex'), ...(libraryCatalog ? { libraryCatalog } : {}) });
+      input.provider.execution?.executable ?? process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE ?? webHarnessExecutable(input.provider)), ...(libraryCatalog ? { libraryCatalog } : {}) });
     poll = setInterval(() => { refresh(); report(); }, 10_000);
     const activity = createFormalizationActivity({ scratch, directory, root, apiKey: key, redact: [input.provider.baseUrl],
       send: entry => { void send({ type: 'activity', activity: entry }); } });

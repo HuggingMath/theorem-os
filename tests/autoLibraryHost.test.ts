@@ -8,10 +8,11 @@ import { bootstrapLeanTask, leanTaskId, readLeanTaskReceipt } from '../src/math/
 import { libraryPackDigest } from '../src/math/libraryPacks';
 import { canonicalLibraryJson } from '../src/math/libraryRelease';
 import { mathDigest, canonicalMathJson } from '../src/math/mathRuntimeIo';
-import { prepareAutoLibraryBuild, readAutoLibraryRequest, runAutoLibraryBuild } from '../src/solver/autoLibrary';
+import { prepareAutoLibraryBuild, readAutoLibraryRequest, runAutoLibraryBuild, type AutoLibraryRequest } from '../src/solver/autoLibrary';
 import { autoLibrary } from '../scripts/mathematics/autoLibrary';
 import { writeLibraryHostFixture } from './helpers/libraryHostFixture';
 import { temporaryDirectory } from './helpers/files';
+import { bindResearchHarness } from '../src/runtime/researchHarness';
 import { prepareLibraryKnowledge } from '../src/solver/theoremKnowledgeLibrary';
 import { readAuthorizedKnowledgeCatalog } from '../src/solver/theoremKnowledgeAuthorization';
 
@@ -52,14 +53,14 @@ function approve(item: AutoLibraryRecord) {
   hostAutoEvidence('records', mathDigest(canonicalLibraryJson(item)), item, workspace(), true);
   return item;
 }
-function prepare() {
+function prepare(prover: Partial<AutoLibraryRequest['prover']> = {}) {
   const manifest = path.join(directory, 'manifest.json'); fs.writeFileSync(manifest, '{}');
   const build = path.join(directory, 'build'), root = path.join(directory, 'runtime');
   const input = { challengeId: 'parent', challengeSource: challenge, task: 'Prove target.', environment: 'openai-math',
     pool: path.join(directory, 'pool'), buildManifestRef: manifest,
     planner: { model: 'preset', effort: 'low', executable: 'unused', profile: 'unused' },
     prover: { model: 'preset', effort: 'low', executable: 'unused', workers: 1, coordination: 'independent' as const,
-      maxRunSeconds: 1, maxTurns: 1, maxTurnSeconds: 1, maxTotalTokens: 0, prepareTimeoutSeconds: 1 },
+      maxRunSeconds: 1, maxTurns: 1, maxTurnSeconds: 1, maxTotalTokens: 0, prepareTimeoutSeconds: 1, ...prover },
     maxModules: 1, maxRounds: 1, maxRunSeconds: 60, maxTotalTokens: 0, plannerTurnSeconds: 1 };
   const request = prepareAutoLibraryBuild(build, root, input);
   return { build, root, input, request };
@@ -243,6 +244,35 @@ describe('Auto request and recovery', () => {
     vi.stubEnv('THEOREMOS_LIBRARY_HOST_CONFIG', undefined);
     expect(() => readAutoLibraryRequest(build)).toThrow('auto_library_host_binding_changed');
   });
+  it('forwards the frozen portable prover and rejects configuration changes before consuming its result', async () => {
+    const profile = path.join(directory, 'native-profile'), executable = path.join(directory, 'native');
+    fs.mkdirSync(profile); fs.writeFileSync(path.join(profile, 'settings.json'), '{}');
+    fs.writeFileSync(executable, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    const agentHarness = bindResearchHarness('claude-code', executable, profile, process.env, 'fixture');
+    const { build, root } = prepare({ model: 'fixture', executable, agentHarness });
+    const openSession = vi.fn(async (options: any) => ({ threadId: 'preset', close: async () => {}, interrupt: async () => {},
+      run: async (_message: string, _id: string, workspace: string, started: (id: string) => void) => {
+        started('preset-turn'); options.onUsage({ totalTokens: 0 });
+        const input = JSON.parse(fs.readFileSync(path.join(workspace, 'INPUT.json'), 'utf8'));
+        fs.writeFileSync(path.join(workspace, 'OUTPUT.json'), JSON.stringify({ inputDigest: input.inputDigest,
+          decision: 'module', reason: 'Disposable protocol fixture.', name: 'Portable', summary: 'Portable true lemma.', sources: [],
+          lean: 'namespace TheoremOS.Auto.Portable\ntheorem portable : True := by sorry\nend TheoremOS.Auto.Portable\n',
+          target: 'target', application: 'Apply TheoremOS.Auto.Portable.portable', remaining: [] }));
+        return 'completed';
+      } }));
+    const solve = vi.fn(async (args: string[]) => {
+      expect(args).toContain('--harness'); expect(args[args.indexOf('--harness') + 1]).toBe('claude-code');
+      expect(args[args.indexOf('--harness-profile') + 1]).toBe(profile);
+      expect(args[args.indexOf('--harness-executable') + 1]).toBe(executable);
+      expect(args).not.toContain('--codex');
+      fs.appendFileSync(path.join(profile, 'settings.json'), '\n');
+      return 0;
+    });
+    const result = await runAutoLibraryBuild(build, root, { openSession, solve });
+    expect(result.status).toBe('stopped'); expect(solve).toHaveBeenCalledOnce();
+    expect(JSON.parse(fs.readFileSync(path.join(build, 'state.json'), 'utf8')).error).toBe('math_harness_identity_changed');
+  });
+
   it('supports a no-model planner run, frozen pool digests and completed recovery', async () => {
     const { build, root } = prepare();
     const openSession = vi.fn(async (options: any) => ({ threadId: 'preset', close: async () => {}, interrupt: async () => {},

@@ -229,7 +229,7 @@ export class CooperativeResearch extends CooperationInputs {
       this.moveTask(node, 'pending', 'reassigned'); node.assignment = undefined;
       node.feedback = 'math_feasibility_review_independence_lost: Reassign this advisory review to a peer who does not own or produce the inspected inputs.';
       const draft = this.archive.researchDrafts?.[node.task.id];
-      if (draft?.assignmentId === assignment.assignmentId && draft.workerId === assignment.workerId) draft.suspended = true;
+      if (draft && draft.assignmentId === assignment.assignmentId && draft.workerId === assignment.workerId) draft.suspended = true;
       const active = this.active.get(assignment.workerId);
       if (active?.action.kind === 'task' && active.action.assignment === assignment && !active.cancelled) {
         active.cancelled = true; void active.interrupt().catch(() => {});
@@ -1511,6 +1511,7 @@ export class CooperativeResearch extends CooperationInputs {
         { commit, artifacts, remainingObligations: [node.task.id] });
       if (error instanceof ResearchAdmissionError) {
         // A malformed report is corrected by the same writer, not a mathematical route failure.
+        if (!artifacts) throw error;
         this.preserveResearchDraft(worker, action, commit, artifacts);
         this.interrupted(worker, action);
         return { checkWhole: false };

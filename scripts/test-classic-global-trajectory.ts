@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -111,7 +112,7 @@ const processAssetVersions = Object.fromEntries(await Promise.all(catalog.record
 // Read proof loads a projection of one accepted run; the complete record stays with the process tab.
 const readingAssetVersions = Object.fromEntries(await Promise.all(catalog.records.map(async record => {
   const file = path.join(staticRoot, 'classics/data/process', record.id + '-reading.js');
-  return [record.id, await fs.exists(file) ? digest(await fs.readFile(file)).slice(0, 16) : undefined] as const;
+  return [record.id, existsSync(file) ? digest(await fs.readFile(file)).slice(0, 16) : undefined] as const;
 })));
 const processAssetRequests: string[] = [];
 const readingAssetRequests: string[] = [];

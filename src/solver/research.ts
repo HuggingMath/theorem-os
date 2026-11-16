@@ -3,14 +3,14 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { VerificationCheckpointError } from './verificationCheckpoint';
-import type { MathAgentActivity, MathAgentFailureDiagnostic, MathAgentSession } from '../runtime/codexSession';
+import type { MathAgentActivity, MathAgentFailureDiagnostic, MathAgentSession } from '../runtime/agentSession';
 import { safeFailureDiagnostic } from '../runtime/failureDiagnostic';
 import { VerifierFailureError, verifierFailureDiagnostic } from './verifierFailure';
 import { readMathBuildManifest } from '../math/mathBuildManifest';
 import { MathGitError } from '../math/mathGit';
 import { canonicalMathJson, mathDigest, writeMathJsonDurable } from '../math/mathRuntimeIo';
 import type { SolverRunState, SolverWorkerState } from './archive';
-import { commitSolverSources, git, solverScratchDigest } from './problem';
+import { commitSolverSources, git, solverScratchDigest, pinSolverResearchSkill } from './problem';
 import { CooperativeResearch } from './cooperation';
 import { assignmentDeliveryFile, leadPlanDeliveryFile, isFeasibilityReview, isFinalCandidateReview, taskGroup, type CooperativeAction } from './tasks';
 import { isStatementAction } from './statementReview';
@@ -44,6 +44,10 @@ import { hasTaskConnectionCheck } from './taskConnections';
 import { DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT } from './tacticBatteryFailureCache';
 import { committedResearchNotesDigest, researchHandoffNotesDigest } from './researchCheckpoints';
 import { SingleSolverProofHandoff } from './singleSolverProofHandoff';
+import { assertMathAgentSkillsCurrent, type MathAgentSkill } from '../runtime/agentSkills';
+import { buildSkillResearchContext } from './skillResearchContext';
+import { stopProofWriter } from './proofWriter';
+import { createSkillProofLifecycle } from './skillProofLifecycle';
 
 // Scheduling checkpoints preserve unlimited solving budgets and resume the same assignment/thread.
 const advisoryCheckpointNoticeMs = 90_000;
@@ -114,6 +118,13 @@ export function advisoryCheckpointNoticeOnly(assignment: CooperativeAction | und
 }
 
 export type WorkerAccess = { environment: NodeJS.ProcessEnv; corpusFile?: string; retrievalRoot: string;
+  /** Execution-only credentials are never projected into host Lean or saved environment records. */
+  harnessEnvironment?: NodeJS.ProcessEnv;
+  assertHarnessCurrent?: () => void;
+  /** Commands with no native conversation must receive the full original task on every invocation. */
+  nativeContinuity?: boolean;
+  researchSkill?: MathAgentSkill;
+  commonResearchSkill?: MathAgentSkill;
   continuation?: ContinuationSnapshot; mathTools?: MathTools;
   assertKnowledgeCurrent?: () => void;
   installedLibrary?: KnowledgeContextSnapshot;
@@ -131,6 +142,31 @@ export async function runResearchWorkers(input: {
 }): Promise<{ worktree: string; check: ProofCheck } | undefined> {
   const { state, modules, save } = input;
   const parallel = Boolean(state.workers);
+  const skillResearch = state.researchMode === 'skill';
+  const fullSkillWorkflow = skillResearch && state.researchSkillWorkflow === 'full';
+  const skillMode = skillResearch && !parallel;
+  if (skillResearch && (!state.researchSkill || !fullSkillWorkflow &&
+      (parallel || state.cooperation || input.workers.length !== 1)))
+    throw new Error('math_skill_research_state_invalid');
+  if (state.pendingProofCheck && (!skillMode || state.pendingProofCheck.environmentDigest !== state.environmentDigest ||
+      state.pendingProofCheck.problemReceiptDigest !== state.problem.receiptDigest))
+    throw new Error('math_proof_checkpoint_identity_changed');
+  if (state.pendingResearchFreeze && (!skillMode || state.pendingResearchFreeze.environmentDigest !== state.environmentDigest ||
+      state.pendingResearchFreeze.problemReceiptDigest !== state.problem.receiptDigest))
+    throw new Error('math_research_freeze_identity_changed');
+  if (state.researchDelegation && !skillMode) throw new Error('math_native_delegation_requires_skill');
+  for (const agent of state.nativeAgents ?? []) if (agent.status === 'running' && !agent.stoppedAt) {
+    agent.status = 'unknown'; agent.updatedAt = Date.now();
+    input.emit('investigator_recovery_recorded', { threadId: agent.threadId, replayed: false }); save();
+  }
+  if (skillResearch || state.commonResearchSkill) for (const worker of input.workers) {
+    const access = input.access.get(worker.id);
+    const skill = access?.commonResearchSkill ?? access?.researchSkill;
+    const identity = state.commonResearchSkill ?? state.researchSkill;
+    if (!skill || !identity || skill.digest !== identity.digest || skill.loading !== identity.loading)
+      throw new Error('math_research_skill_changed');
+    pinSolverResearchSkill(state.problem, worker.worktree, skill);
+  }
   const records = input.workers.map(worker => ({ worker,
     research: parallel ? state.workers!.find(item => item.id === worker.id)! : state }));
   const quarantined = records.find(({ research }) => research.writerStopUnconfirmed);
@@ -141,9 +177,14 @@ export async function runResearchWorkers(input: {
   state.tokenBudget = buildTokenBudget(input.maxTotalTokens, records.map(record => record.research), enforcement);
   const dispatchAllowed = () => modelDispatchAllowed(state.tokenBudget!);
   const accepted = records.find(({ worker }) => worker.id === (state.winningWorker ?? 'solver'));
-  if (accepted && state.check?.passed && ['running', 'checking', 'evaluating', 'finished'].includes(state.phase) &&
+  if (accepted && !state.pendingResearchFreeze && state.check?.passed && ['running', 'checking', 'evaluating', 'finished'].includes(state.phase) &&
       !solverSourceFeedback(state.problem, accepted.worker.worktree) &&
       solverProofIsCurrent(state.problem, accepted.worker.worktree, state.check)) {
+    if (state.pendingProofCheck) {
+      if (state.pendingProofCheck.commit !== state.check.commit || state.pendingProofCheck.sourceDigest !== state.check.sourceDigest)
+        throw new Error('math_proof_checkpoint_identity_changed');
+      state.pendingProofCheck = undefined; save();
+    }
     return { worktree: accepted.worker.worktree, check: state.check };
   }
   if (state.check?.passed) {
@@ -195,6 +236,7 @@ export async function runResearchWorkers(input: {
       let lastCheck: ProofCheck | undefined;
       research.error = undefined;
       const access = input.access.get(worker.id)!;
+      if (skillResearch && !access.researchSkill) throw new Error('math_research_skill_missing');
       const view = (): SolverRunState => ({ ...state, ...research, turns: state.turns });
       const emit = (event: string, details = {}) => input.emit(event, { workerId: worker.id, ...details });
       const singleHandoff = !parallel ? new SingleSolverProofHandoff(state.problem, worker.worktree,
@@ -232,12 +274,17 @@ export async function runResearchWorkers(input: {
         access.assertKnowledgeCurrent?.();
         if (access.libraryCatalog) writeLibraryAccess(state.problem, worker.worktree, access.libraryCatalog);
         const scoped = cooperation?.contextState(assignment, worker);
-        const currentContext = { ...modules.M4.build(state.problem,
-          { ...view(), ...(scoped ? { cooperation: scoped } : {}) }, {
+        const contextState = { ...view(), ...(scoped ? { cooperation: scoped } : {}) };
+        const contextAccess = {
           root: input.root, worktree: worker.worktree, taskText: input.taskText, ...access,
+          ...(modules.M4.tools ? { tools: modules.M4.tools } : {}),
           sourceFeedback: feedback, previousCheck, previousFailures, assignment: promptAction(assignment),
           maxOptionalContextBytes: research.contextOverflow?.maxOptionalContextBytes,
-        }), ...(assignment ? { assignment } : {}) };
+          ...(access.researchSkill ? { researchSkill: access.researchSkill } : {}),
+        };
+        const currentContext = { ...(skillMode && !fullSkillWorkflow && !access.commonResearchSkill
+          ? buildSkillResearchContext(state.problem, contextState, { ...contextAccess, researchSkill: access.researchSkill! })
+          : modules.M4.build(state.problem, contextState, contextAccess)), ...(assignment ? { assignment } : {}) };
         if (assignment?.kind === 'task' && scoped) {
           const basis = captureResearchBasis(assignment.task, {
             problemReceiptDigest: state.problem.receiptDigest, environmentDigest: state.environmentDigest,
@@ -254,12 +301,12 @@ export async function runResearchWorkers(input: {
             if (input.findingDigest && !included.has(`finding:${input.taskId}`)) return true;
             return scoped.deliveries?.some(delivery => delivery.kind === 'research' && delivery.status !== 'superseded' &&
               delivery.taskId === input.taskId && delivery.taskDigest === input.taskDigest &&
-              (!included.has(`delivery:${delivery.id}`) || delivery.finding &&
+              (!included.has(`delivery:${delivery.id}`) || Boolean(delivery.finding) &&
                 !included.has(`finding:delivery:${delivery.id}`) && !included.has(`finding:${input.taskId}`)));
           });
           const dependencyIds = new Set(basis.dependencies.map(input => input.taskId));
           const dependencySections = new Set(basis.dependencies.map(input => `finding:${input.taskId}`));
-          for (const delivery of scoped.deliveries ?? []) if (delivery.kind === 'research' && dependencyIds.has(delivery.taskId)) {
+          for (const delivery of scoped.deliveries ?? []) if (delivery.kind === 'research' && delivery.taskId && dependencyIds.has(delivery.taskId)) {
             dependencySections.add(`delivery:${delivery.id}`);
             dependencySections.add(`finding:delivery:${delivery.id}`);
           }
@@ -496,8 +543,10 @@ export async function runResearchWorkers(input: {
               if (!toolsRunning) cutAtRequestBoundary?.();
             }
           }
+          // Native context maintenance applies to Skill sessions without cooperative assignments too.
+          if (live() && activity.itemType === 'contextCompaction' &&
+              (activity.event === 'item_started' || activity.event === 'item_completed')) dispatchedContexts.clear();
           if (current() && activity.itemType === 'contextCompaction') {
-            if (activity.event === 'item_started' || activity.event === 'item_completed') dispatchedContexts.clear();
             if (activity.event === 'item_started' && compactionStartedAt === undefined) {
               compactionStartedAt = Date.now();
               if (sliceStartedAt !== undefined) activeSliceMs += Date.now() - sliceStartedAt;
@@ -907,6 +956,7 @@ export async function runResearchWorkers(input: {
       const cancel = () => { void close().catch(() => {}); };
       signal.addEventListener('abort', cancel, { once: true });
       const beginTurn = async (currentContext: ContextBundle, assignment?: CooperativeAction, operation: ResearchOperation = 'direct') => {
+        access.assertHarnessCurrent?.();
         usage.resetTurn(); planningCheckpoint = false; cooperativeCheckpoint = false;
         rebuildContext = false;
         while ((pendingTurn = waitForTurn())) await pendingTurn;
@@ -921,7 +971,7 @@ export async function runResearchWorkers(input: {
           optionalBytes: research.contextOverflow?.maxOptionalContextBytes ?? currentContext.manifest?.maxOptionalBytes,
           sources: state.problem.ownedFiles.map(file => [file, mathDigest(fs.readFileSync(path.join(worker.worktree,
             state.problem.projectRelative, file)))]),
-        })), fresh: !research.threadId };
+        })), fresh: access.nativeContinuity === false || !research.threadId };
         if (turnContext.fresh && research.contextOverflow?.failedFreshContextDigests.includes(turnContext.digest))
           throw new Error('math_model_context_capacity_blocked');
         // Statement reviews work in their own fixed-statement workspace; proof turns get a current owned-declaration index.
@@ -961,11 +1011,19 @@ export async function runResearchWorkers(input: {
             try {
               const sessionId = crypto.randomUUID();
               const usageCallbacks = usage.bindSession(sessionId, () => session?.lastInputTokens);
+              access.assertHarnessCurrent?.();
               session = await modules.M1.open({ executable: input.executable, profile: input.profile,
+                ...((access.commonResearchSkill ?? access.researchSkill) ? { skills: [(access.commonResearchSkill ?? access.researchSkill)!] } : {}),
+                ...(state.researchDelegation ? { delegation: state.researchDelegation } : {}),
+                ...(state.researchDelegation ? { onNativeAgent: (agent: import('../runtime/nativeDelegation').NativeResearchAgent) => {
+                  const agents = state.nativeAgents ??= [], index = agents.findIndex(item => item.threadId === agent.threadId);
+                  if (index < 0) agents.push(agent); else agents[index] = agent;
+                  emit('investigator_observed', { ...agent }); save();
+                } } : {}),
                 hiddenRoots: [DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT],
                 ...(!statement ? { proofProjectRoot: path.join(worker.worktree, state.problem.projectRelative) } : {}),
                 ...(singleHandoff ? { completedOutput: singleHandoff.output } : {}),
-                workspace, environment: { ...environment,
+                workspace, environment: { ...environment, ...access.harnessEnvironment,
                   DEEPSCIENTIST_MATH_WORKER_ID: worker.id, DEEPSCIENTIST_MATH_WORKER_WORKTREE: workspace },
                 model: state.model, effort: state.effort, threadId: research.threadId,
                 turnTimeoutMs: Number.isFinite(input.maxTurnMs) ? input.maxTurnMs : undefined,
@@ -974,6 +1032,9 @@ export async function runResearchWorkers(input: {
                   emit('worker_activity', { activity: activity.event, itemType: activity.itemType }); save();
                   turnActivity?.(activity);
                 }, ...usageCallbacks });
+              if (state.agentSessionPlan && session.executionPlan &&
+                  canonicalMathJson(state.agentSessionPlan) !== canonicalMathJson(session.executionPlan))
+                throw new Error('math_agent_session_plan_changed');
               usage.sessionOpened(session);
             } catch (error) {
               signal.throwIfAborted();
@@ -991,9 +1052,11 @@ export async function runResearchWorkers(input: {
           if (signal.aborted) { await close(); signal.throwIfAborted(); }
           if (assignment && !cooperation!.current(assignment)) return false;
           sessionInstructions = currentContext.instructions;
-          if (!research.threadId || research.threadId !== session.threadId)
-            research.contextCheckpointBaseline = { threadId: session.threadId, notesDigest: checkpointNotesDigest() };
-          research.threadId = session.threadId; save();
+          if (session.threadId) {
+            if (!research.threadId || research.threadId !== session.threadId)
+              research.contextCheckpointBaseline = { threadId: session.threadId, notesDigest: checkpointNotesDigest() };
+            research.threadId = session.threadId; save();
+          }
         }
         // Opening a session can await while another worker exhausts the shared allowance.
         return dispatchAllowed();
@@ -1075,7 +1138,7 @@ export async function runResearchWorkers(input: {
               const observed = inspectKnowledgeUses(claims, access.knowledgeSnapshot, task, research.check, access.installedLibrary);
               const checked = await checkKnowledgeApplications(observed.uses, { task, projectRoot: path.join(worker.worktree, state.problem.projectRelative),
                 env: access.environment, environmentDigest: state.environmentDigest, commit: research.check.commit,
-                signal, timeoutMs: input.proofTimeoutMs, originalContexts: state.problem.targets, previous: records,
+                signal, timeoutMs: input.proofTimeoutMs ?? Infinity, originalContexts: state.problem.targets, previous: records,
                 sourceAtCommit: file => committedSource(worker.worktree, research.check!.commit, path.posix.join(state.problem.projectRelative, file)) });
               for (const use of checked) {
                 const record = { ...use, workerId: worker.id, commit: research.check!.commit };
@@ -1102,12 +1165,18 @@ export async function runResearchWorkers(input: {
           throw new VerifierFailureError({ stage: 'solver-proof-check', sourceCommit: research.check.commit,
             verification: research.check.verification });
       };
+      const skillProofLifecycle = skillMode ? createSkillProofLifecycle({ state, worktree: worker.worktree,
+        environment: access.environment, skill: access.researchSkill!, signal, proofTimeoutMs: input.proofTimeoutMs,
+        writerStopped: () => !session && !research.writerStopUnconfirmed, sourceFeedback,
+        exclusiveCheck, checkWhole, save, emit }) : undefined;
       const proofLifecycle = cooperation && new WorkerProofLifecycle({ state, research, worker, cooperation,
         close, save, emit, checked: () => { retries = 0; } });
       try {
         await waitForRecovery(true);
+        await skillProofLifecycle?.resumePending();
+        if (winner) return;
         access.assertKnowledgeCurrent?.();
-        if (!cooperation && !research.turns && access.installedLibrary && modules.M2.applyLibrary && budget().remainingMs > 0) {
+        if ((!skillMode || fullSkillWorkflow) && !access.commonResearchSkill && !cooperation && !research.turns && access.installedLibrary && modules.M2.applyLibrary && budget().remainingMs > 0) {
           const closed = await applyOriginalLibraryTasks({ problem: state.problem, library: access.installedLibrary,
             taskText: input.taskText, environmentDigest: state.environmentDigest, worktree: worker.worktree, workerId: worker.id,
             env: access.environment, signal, timeoutMs: Math.min(input.proofTimeoutMs ?? Infinity, budget().remainingMs),
@@ -1127,6 +1196,8 @@ export async function runResearchWorkers(input: {
           if ((closed || research.phase === 'checking') && !signal.aborted) await exclusiveCheck(() => checkWhole());
         }
         while (!signal.aborted) {
+          await skillProofLifecycle?.resumePending();
+          if (winner) break;
           if (research.phase === 'checking') { setWorkerResearchPhase(state, research, 'running'); save(); }
           if (compactionRestart) {
             await rotateSession('context');
@@ -1188,9 +1259,9 @@ export async function runResearchWorkers(input: {
             record.sessionAssignmentId = sessionAssignmentId;
             record.sessionStatementReview = isStatementAction(assignment);
           }
-          if (research.threadId && research.contextCheckpoint?.threadId === research.threadId && !research.contextCheckpoint.requestId)
+          if (!skillMode && research.threadId && research.contextCheckpoint?.threadId === research.threadId && !research.contextCheckpoint.requestId)
             requestContextCheckpoint(Math.max(session?.lastInputTokens ?? 0, research.lastInputTokens ?? 0));
-          if (research.threadId && (Math.max(session?.lastInputTokens ?? 0, research.lastInputTokens ?? 0) >= 96_000 ||
+          if (!skillMode && research.threadId && (Math.max(session?.lastInputTokens ?? 0, research.lastInputTokens ?? 0) >= 96_000 ||
               research.contextCheckpoint?.threadId === research.threadId && currentCheckpointNotesDigest())) {
             const threadId = research.threadId, lastInputTokens = Math.max(session?.lastInputTokens ?? 0, research.lastInputTokens ?? 0);
             const notesDigest = currentCheckpointNotesDigest();
@@ -1213,13 +1284,21 @@ export async function runResearchWorkers(input: {
           }
           const options: readonly ResearchOperation[] = ['direct'];
           while ((pendingTurn = waitForTurn())) await pendingTurn;
-          const action = modules.M3.select(view(), options, budget(), assignment);
+          const action = skillMode && !fullSkillWorkflow ? { operation: 'direct' as const, reason: 'continue' as const }
+            : modules.M3.select(view(), options, budget(), assignment);
           if (action.operation === 'stop') break;
           const operation = action.operation;
           if (!options.includes(action.operation)) throw new Error('math_research_operation_unavailable');
           emit('research_action', { operation: action.operation, reason: action.reason });
           readMathBuildManifest(input.buildFile, input.root, path.join(input.root, 'out', 'main'));
           const onStarted = (turnId: string) => {
+            // Some headless CLIs report a native ID only after starting. Persist that exact
+            // identity before publishing a turn; an empty ID cannot stand for a saved thread.
+            if (!session?.threadId) throw new Error('math_agent_session_binding_missing');
+            if (research.threadId !== session.threadId) {
+              research.contextCheckpointBaseline = { threadId: session.threadId, notesDigest: checkpointNotesDigest() };
+              research.threadId = session.threadId; save();
+            }
             emit('turn_started', { turnId, threadId: session?.threadId, turn: research.turns, totalTurns: state.turns,
               ...(assignment?.kind === 'task' ? { taskId: assignment.task.id, taskDigest: assignment.assignment.taskDigest,
                 assignmentKey: assignmentDeliveryFile(assignment.assignment), seedCommit: assignment.assignment.seedCommit }
@@ -1280,7 +1359,11 @@ export async function runResearchWorkers(input: {
           const repair = sourceFeedback();
           if (repair) research.check = undefined;
           const currentContext = context(repair, feedbackCheck, feedbackFailures, assignment);
-          const responsibility = assignment?.kind === 'lead' ? canonicalMathJson({ planVersion: assignment.planVersion,
+          const responsibility = skillMode ? canonicalMathJson({ kind: 'skill', taskDigest: state.taskDigest,
+            problemReceiptDigest: state.problem.receiptDigest, environmentDigest: state.environmentDigest,
+            researchSkill: state.researchSkill, commonResearchSkill: state.commonResearchSkill,
+            instructions: currentContext.instructions })
+            : assignment?.kind === 'lead' ? canonicalMathJson({ planVersion: assignment.planVersion,
             initial: Boolean(assignment.initialPlanNonce),
             problemReceiptDigest: state.problem.receiptDigest, environmentDigest: state.environmentDigest })
             : assignment?.kind === 'task' && !isFeasibilityReview(assignment.task) ? canonicalMathJson({
@@ -1290,7 +1373,7 @@ export async function runResearchWorkers(input: {
           const contextBasis = contextResearchBases.get(currentContext);
           const dispatchedContext = responsibility === undefined ? undefined : dispatchedContexts.get(responsibility);
           const researchInputsChanged = contextBasis && dispatchedContext?.researchInputDigest !== contextBasis.dispatchDigest;
-          const continuation = !researchInputsChanged && responsibility !== undefined && Boolean(research.threadId) &&
+          const continuation = access.nativeContinuity !== false && !researchInputsChanged && responsibility !== undefined && Boolean(research.threadId) &&
             currentContext.continuationMessage !== undefined &&
             dispatchedContext?.threadId === research.threadId;
           Object.assign(currentContext, finalizeResearchDispatch(currentContext, {
@@ -1367,7 +1450,11 @@ export async function runResearchWorkers(input: {
               fs.rmSync(path.join(worker.worktree, 'LIBRARY_REQUEST.json'), { force: true });
             }
             if (request) {
-              await close();
+              if (skillMode) await stopProofWriter({ session: turnSession, record: research, workerId: worker.id,
+                close, save, deferred: reason => emit('proof_ready_freeze_deferred', { reason }) });
+              else await close();
+              access.assertHarnessCurrent?.();
+              if (access.researchSkill) assertMathAgentSkillsCurrent([access.researchSkill]);
               if (!sourceFeedback()) commitSolverSources(state.problem, worker.worktree);
               emit('library_installation_requested', { names: request.request.names, catalogDigest: request.request.catalogDigest });
               throw request;
@@ -1381,23 +1468,16 @@ export async function runResearchWorkers(input: {
               completedGuidanceDecisions(turnSession, executedTurnId, candidate.status));
           if (await proofLifecycle?.settleTurn(assignment, candidate, operation, turnSession)) continue;
           const singleSubmission = singleHandoff?.takeSubmission();
-          if (singleSubmission) {
+          if (singleSubmission || skillMode) {
             // The runtime has settled the turn and stopped new requests. Reap all remaining
             // writer processes before the ordinary source freeze and independent host check.
-            let stopped: Awaited<ReturnType<NonNullable<MathAgentSession['stopForFreeze']>>> | undefined;
-            try { stopped = await turnSession.stopForFreeze?.(); }
-            catch { stopped = { status: 'unconfirmed', reason: 'shutdown-failed' }; }
-            if (stopped?.status !== 'stopped') {
-              const reason = stopped?.reason ?? 'writer-stop-confirmation-unavailable';
-              research.writerStopUnconfirmed = { at: Date.now(), reason };
-              save(); emit('proof_ready_freeze_deferred', { ...singleSubmission, reason });
-              try { await close(); } catch { /* Persisted quarantine controls whether this writer may be reopened. */ }
-              throw new Error('math_writer_stop_unconfirmed:' + worker.id + ':' + reason);
-            }
-            await close();
+            await stopProofWriter({ session: turnSession, record: research, workerId: worker.id, close, save,
+              deferred: reason => emit('proof_ready_freeze_deferred', { ...singleSubmission, reason }) });
+            access.assertHarnessCurrent?.();
+            if (access.researchSkill) assertMathAgentSkillsCurrent([access.researchSkill]);
             // submitted is a delivery status, never proof acceptance. The usual M2 check below
             // fingerprints the stopped writer's actual sources and verifies every original target.
-            candidate = { ...candidate, status: 'completed' };
+            if (singleSubmission) candidate = { ...candidate, status: 'completed' };
           }
           // Closing can yield to a plan edit; check ownership after the writer has stopped.
           if (candidate.status === 'failed' || planningCheckpoint) await close();
@@ -1426,6 +1506,17 @@ export async function runResearchWorkers(input: {
             save(); emit('source_rejected');
             if (turn === 'failed' || planningCheckpoint) throw new Error(sourceError);
             continue;
+          }
+          if (skillMode) {
+            const { commit, wholeProofReady } = await skillProofLifecycle!.freezeSources();
+            // An unfinished research turn can publish useful helpers without repeatedly
+            // compiling every original hole. Ordinary diagnostics remain advisory.
+            if (!wholeProofReady) {
+              research.check = undefined;
+              save(); emit('research_saved', { commit, originalProblemAcceptance: 'not-assessed' });
+              if (turn === 'failed') await retryFailedTurn(turnError, diagnostic);
+              continue;
+            }
           }
           if (cooperation && assignment?.kind === 'task' && turn === 'checkpoint' &&
               !['research', 'sketch'].includes(assignment.task.kind) && (contextSchedulingCheckpoint ||
@@ -1472,7 +1563,10 @@ export async function runResearchWorkers(input: {
               checkWholeRequired = delivery.checkWhole;
               if (!checkWholeRequired) save();
             }
-            if (checkWholeRequired) await exclusiveCheck(() => checkWhole(candidate));
+            if (checkWholeRequired) {
+              if (skillProofLifecycle) await skillProofLifecycle.checkFrozenWholeProof(candidate);
+              else await exclusiveCheck(() => checkWhole(candidate));
+            }
           } finally { setWorkerResearchPhase(state, research, 'running'); save(); }
           feedbackCheck = previousCheck; feedbackFailures = previousFailures;
           if (!winner && turn === 'failed') {

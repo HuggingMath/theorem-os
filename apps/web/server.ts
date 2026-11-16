@@ -1,3 +1,5 @@
+import { publicWebProvider, webProviderHarness, webHarnessResearchError } from './harness';
+import { webDefaultSkillLoading } from './researchMode';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -47,13 +49,14 @@ import { selectWebLibraryPack } from './frozenLibrary';
 import type { ResearchConfigurationSelection, ResearchLibraryPack } from './researchAssetTypes';
 import { canonicalMathJson, mathDigest } from '../../src/math/mathRuntimeIo';
 import { researchLibraryProposalOriginSchema } from './researchLibraryProposalOrigin';
+import { webResearchModeError } from './researchMode';
 
 const inputSchema = z.object({
   requestId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u).optional(),
   // Empty asks for the key this account saved, then the one the server holds for admins (THEOREMOS_WEB_ADMIN_KEYS).
   providerId: z.string().min(1).max(40), apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/), saveKey: z.boolean().optional(),
   model: z.string().trim().min(1).max(128).regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/),
-  effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']),
+  effort: z.enum(['none', 'low', 'medium', 'high', 'xhigh', 'max']),
   environment: z.enum(['standard', 'mathlib']).optional(),
   source: z.string().min(1).refine(value => value.trim().length > 0 && Buffer.byteLength(value) <= webLimits.maxSourceBytes),
   task: z.string().trim().min(1).refine(value => Buffer.byteLength(value) <= webLimits.maxTaskBytes),
@@ -64,6 +67,8 @@ const inputSchema = z.object({
   coordination: z.enum(['cooperative', 'independent']),
   autoExplain: z.boolean().optional(),
   explanationLanguage: z.enum(['zh', 'en']).optional(),
+  researchMode: z.enum(['legacy', 'skill']).optional(),
+  skillLoading: z.enum(['native', 'file']).optional(),
   planApproval: z.boolean().optional(),
   modulePlan: researchModulePlanSchema.optional(),
   researchSelection: researchSelectionSchema.optional(),
@@ -122,11 +127,11 @@ const conversationMessageSchema = z.object({ text: z.string().trim().min(1).max(
 const explanationEffort = (effort: WebEffort): 'low' | 'high' | 'max' =>
   effort === 'low' ? 'low' : effort === 'medium' || effort === 'high' ? 'high' : 'max';
 const gatewayProvider = (provider: WebProvider | undefined) => {
-  if (provider?.id !== SUB2API_PROVIDER.id) return false;
+  if (provider?.id !== SUB2API_PROVIDER.id || webProviderHarness(provider) !== 'codex') return false;
   const url = new URL(provider.baseUrl);
   return url.protocol === 'http:' && url.pathname.replace(/\/$/u, '') === '/v1';
 };
-const formalizationProvider = (provider: WebProvider | undefined) => !!provider &&
+const formalizationProvider = (provider: WebProvider | undefined) => !!provider && webProviderHarness(provider) === 'codex' &&
   (gatewayProvider(provider) || provider.id !== SUB2API_PROVIDER.id && new URL(provider.baseUrl).protocol === 'https:');
 const providerModel = (provider: WebProvider) => provider.id === SUB2API_PROVIDER.id ? SUB2API_PROVIDER.defaultModel : 'gpt-6.1-sol';
 
@@ -477,7 +482,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
               ...(auth ? { passwordSet: auth.hasPassword(session.account.email), passwordResetAllowed: Boolean(session.passwordResetUntil && session.passwordResetUntil > Date.now()) } : {}),
               ...(serverKeysFor(session) ? { serverKeys: serverKeysFor(session) } : {}),
               ...(vault ? { keyVault: true, ...(savedKeysFor(session).length ? { savedKeys: savedKeysFor(session) } : {}) } : {}),
-              ...(auth?.getAccount(session.account.email)?.completionEmail === false ? { completionEmail: false } : {}) } } : {}), providers: config.providers, environments: getWebEnvironments(),
+              ...(auth?.getAccount(session.account.email)?.completionEmail === false ? { completionEmail: false } : {}) } } : {}), providers: config.providers.map(publicWebProvider), environments: getWebEnvironments(),
             templates: webTemplates, defaults: webDefaults, limits: webLimits, runtime: await runner.readiness(),
             ...(sample ? { sample: { id: sample.run.id, title: sample.run.title } } : {}), ...(prechecker ? { precheck: true } : {}) };
           const owner = url.searchParams.has('runs') ? ownerOf(session) : undefined;
@@ -711,7 +716,8 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             const commandId = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/u);
             const parsed = z.object({ id: commandId, guidanceId: commandId }).strict().safeParse(await readBody());
             if (!parsed.success) throw new HttpError(400, '请检查要撤回的指导。');
-            json(response, 200, await conversations.withdrawGuidance(owner, id, parsed.data, (runId, command) => jobs.command(owner, runId, command))); return;
+            json(response, 200, await conversations.withdrawGuidance(owner, id,
+              { id: parsed.data.id, guidanceId: parsed.data.guidanceId }, (runId, command) => jobs.command(owner, runId, command))); return;
           }
           if (action === 'messages' && request.method === 'POST') {
             const conversation = conversations.read(owner, id);
@@ -744,7 +750,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
               ...(defaultProvider ? { providerId: defaultProvider.id } : {}), model: defaultProvider ? providerModel(defaultProvider) : SUB2API_PROVIDER.defaultModel,
               key: defaultProvider ? keyKind(defaultProvider) : 'required', limits: webFormalizationLimits,
               defaults: webFormalizationDefaults,
-              providers: providers.map(provider => ({ ...provider, defaultModel: providerModel(provider), key: keyKind(provider),
+              providers: providers.map(provider => ({ ...publicWebProvider(provider), defaultModel: providerModel(provider), key: keyKind(provider),
                 ...(provider.id === 'openai' && new URL(provider.baseUrl).origin === 'https://api.openai.com'
                   ? { keyUrl: 'https://platform.openai.com/api-keys' } : {}) })) };
             json(response, 200, { formalizations: formalizations.list(owner), generation }); return;
@@ -942,6 +948,14 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const requestId = bodyRequestId ?? (typeof headerId === 'string' ? headerId : undefined);
           // Confirmed statements retain their exact artifact bytes; ordinary Lean drafts keep the existing normalization.
           if (!input.formalizationId) input.source = input.source.trim();
+          if (webProviderHarness(provider) !== 'codex') {
+            input.researchMode ??= 'skill'; input.skillLoading ??= 'file';
+          }
+          const harnessError = webHarnessResearchError(provider, input as WebRunInput);
+          if (harnessError) throw new HttpError(400, harnessError);
+          const researchModeError = webResearchModeError(input as WebRunInput);
+          if (researchModeError) throw new HttpError(400, researchModeError);
+          if (input.researchMode === 'skill') input.skillLoading ??= webDefaultSkillLoading(provider);
           if (input.planApproval && (input.coordination !== 'cooperative' || input.workers < 2))
             throw new HttpError(400, '先审计划需要协作模式和至少 2 个 Agent。');
           if (!input.planApproval) delete input.planApproval;

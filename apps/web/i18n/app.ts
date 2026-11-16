@@ -1,5 +1,13 @@
 /** The workbench shell: composer, settings, run list, overview, source and report views, dialogs and toasts. */
 export const app: Record<string, string> = {
+  '经典协作': 'Classic coordination',
+  '项目技能': 'Project skill',
+  '使用固定项目技能研究；可选择独立或协作安排，独立引理与完整原题分别验收。': 'Research with the frozen project skill. Choose independent or cooperative work; independent lemmas and the complete original problem are checked separately.',
+  '不设置': 'Not set',
+  '技能加载': 'Skill loading',
+  '技能版本': 'Skill digest',
+  '原生加载': 'Native loading',
+  '读取固定文件': 'Frozen file',
   "围绕所选步骤研究": "Research the selected step",
   '研究已提交，草稿归档待同步。': 'Research submitted. Draft archiving is waiting to sync.',
   '任务已创建，草稿归档待同步。': 'The task was created. Draft archiving is waiting to sync.',

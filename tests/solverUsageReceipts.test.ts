@@ -70,11 +70,12 @@ describe('persistent provider request receipts', () => {
     expect(buildTokenBudget(0, [legacy]).usageComplete).toBe(false);
   });
 
-  it('retains the request identities and reasons through the checkpoint schema', () => {
+  it.each(['responses-relay', 'chat-completions-bridge', 'native-model-relay'] as const)(
+    'retains %s request identities and reasons through the checkpoint schema', source => {
     const fixture = localExample('usage-checkpoint-'); directories.push(fixture.directory);
     const state = solverState(fixture.problem, fixture.workspace, { runId: 'checkpoint', phase: 'prepared' });
     initializeUsageAccounting(state); initializeRequestUsageAccounting(state);
-    beginRequestUsage(state, { requestId: 'persisted', sessionId: 'session', taskId: 'task', source: 'responses-relay' })
+    beginRequestUsage(state, { requestId: 'persisted', sessionId: 'session', taskId: 'task', source })
       ({ complete: false, outcome: 'cancelled', missingReason: 'request-cancelled' });
     const file = path.join(fixture.directory, 'state.json'); writeSolverRunState(file, state);
     expect(readSolverRunState(file).requestUsageAccounting).toEqual(state.requestUsageAccounting);

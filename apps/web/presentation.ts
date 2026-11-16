@@ -78,7 +78,7 @@ export function endedSummary(run: WebRun): string {
   const cause = stopCause(run);
   return cause ? endedSummaries[cause] : t('研究已结束，没有得到通过验收的完整证明。');
 }
-export const effortLabels: Record<WebEffort, string> = { low: t('低'), medium: t('中'), high: t('高'), xhigh: t('很高'), max: t('最高') };
+export const effortLabels: Record<WebEffort, string> = { none: t('不设置'), low: t('低'), medium: t('中'), high: t('高'), xhigh: t('很高'), max: t('最高') };
 /** A full local date and time, e.g. 2026年10月26日 14:05. Unparseable input is shown as is. */
 export function formatDateTime(value: string): string {
   const date = new Date(value);

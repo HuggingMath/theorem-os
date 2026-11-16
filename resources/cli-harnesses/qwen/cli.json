@@ -1,0 +1,41 @@
+{
+  "schema": "theorem-os.cli-harness.v1",
+  "executable": "qwen",
+  "args": ["--bare", "--auth-type", "openai", "--model", "{model}", "--advisor", "off", "--workflow-mode", "off", "--chat-recording", "true", "--output-format", "stream-json", "--approval-mode", "yolo", "--prompt", "{prompt}"],
+  "prompt": "argument",
+  "session": {
+    "mode": "generated",
+    "startArgs": ["--session-id", "{sessionId}"],
+    "resumeArgs": ["--resume", "{sessionId}"]
+  },
+  "output": {
+    "format": "jsonl",
+    "text": {"field": "/result", "when": {"field": "/type", "value": "result"}, "mode": "replace"},
+    "sessionId": {
+      "field": "/session_id",
+      "when": [{"field": "/type", "value": "system"}, {"field": "/subtype", "value": "init"}]
+    },
+    "usage": {
+      "when": {"field": "/type", "value": "result"},
+      "inputTokens": "/usage/input_tokens",
+      "outputTokens": "/usage/output_tokens",
+      "cachedInputTokens": "/usage/cache_read_input_tokens",
+      "scope": "session",
+      "completeness": "partial"
+    },
+    "failures": [{
+      "when": [{"field": "/type", "value": "result"}, {"field": "/is_error", "value": true}],
+      "reason": "invalid-request"
+    }]
+  },
+  "efforts": ["none"],
+  "environment": {
+    "QWEN_HOME": "{profile}/qwen-home",
+    "QWEN_CODE_SYSTEM_DEFAULTS_PATH": "{profile}/system-defaults.json",
+    "QWEN_CODE_SYSTEM_SETTINGS_PATH": "{profile}/system-settings.json",
+    "QWEN_CODE_MODELS_DEV_REFRESH": "off",
+    "NO_COLOR": "1"
+  },
+  "inheritEnvironment": ["OPENAI_API_KEY", "OPENAI_BASE_URL"],
+  "configurationFiles": ["qwen-home/settings.json", "system-defaults.json", "system-settings.json"]
+}

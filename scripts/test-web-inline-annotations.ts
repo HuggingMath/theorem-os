@@ -47,6 +47,7 @@ const runner: WebRunner = {
   },
   async command(runId, command) {
     if (command.type === 'capture') return { id: 'capture', status: 'captured' };
+    if (command.type === 'guidance-withdraw') return { id: command.id, status: 'rejected', reason: 'fixture_guidance_withdraw_not_simulated' };
     const id = command.type === 'guidance' ? command.guidance.id : command.type === 'plan-approval' ? command.approval.id : command.proposal.id;
     commands.push({ id, type: command.type });
     const control = controls.get(runId)!;

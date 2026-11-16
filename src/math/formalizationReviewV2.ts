@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { agentHarnessIdentitySchema } from './agentHarnessIdentity';
 import { formalizationEvaluationInputDigest, formalizationEvaluationLeanSource, type FormalizationEvaluationReviewerInput } from './formalizationEvaluation';
 import { formalizationTranslationSchema, type FormalizationTranslation } from './formalization';
 import { getStructuredFormalizationReviewOutputSchema } from './formalizationRoleContract';
@@ -21,7 +22,7 @@ export const structuredReviewConfigurationSchema = z.discriminatedUnion('executi
   z.object({ execution: z.literal('replay'), protocol: z.literal('v2'), replayFile: text, environment,
     contextProtocol: leanStatementContextProtocolSchema.optional(), fidelityPolicy: fidelityPolicySchema.optional() }).strict(),
   z.object({ execution: z.literal('model'), protocol: z.literal('v2'), model: text, effort: text,
-    profile: text, executable: text, buildManifestRef: text, environment,
+    profile: text, executable: text, agentHarness: agentHarnessIdentitySchema.optional(), buildManifestRef: text, environment,
     contextProtocol: leanStatementContextProtocolSchema.optional(), fidelityPolicy: fidelityPolicySchema.optional() }).strict(),
 ]);
 export type StructuredReviewConfiguration = z.infer<typeof structuredReviewConfigurationSchema>;

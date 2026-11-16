@@ -1,5 +1,9 @@
 /** Error messages from the server: request checks, session and login, runs, the run environment, explanations, plans and knowledge. */
 export const errors: Record<string, string> = {
+  '此研究安排不支持协作计划、逐题指导或计划审批。': 'This research arrangement does not support collaboration plans, per-task guidance or plan approval.',
+  '研究方式无效。': 'Invalid research mode.',
+  '技能加载方式无效。': 'Invalid skill loading mode.',
+  '技能加载选项需要 Skill 研究方式。': 'Skill loading requires Skill research mode.',
   "当前账号的形式化队列已满，请等待已有任务结束。": "Your formalization queue is full. Wait for an existing task to finish.",
   '提交的原题记录不存在。': 'The submitted problem record was not found.',
   '提交记录与草稿内容不一致。': 'The submission does not match the draft contents.',
@@ -91,9 +95,10 @@ export const errors: Record<string, string> = {
   "暂时无法连接模型服务，请检查服务状态后重试。": "The model service cannot be reached. Check its status and try again.",
   "模型服务拒绝了这个 API Key，请检查所属服务商与权限。": "The provider rejected this API key. Check its provider and permissions.",
   "模型服务暂时限流，请稍后再检查。": "The provider is rate limiting requests. Check again shortly.",
-  "服务未提供可查询的模型列表；Key、模型与 Responses API 兼容性将在发送时验证。": "The service did not provide a model list. The key, model and Responses API compatibility will be checked when you submit.",
+  "此服务通过配置的 CLI 调用；本次没有调用模型，连接将在执行时验证。": "This service uses the configured CLI. No model was called; the connection will be checked when it runs.",
+  "服务未提供可查询的模型列表；Key、模型与 {0} 兼容性将在发送时验证。": "The service did not provide a model list. The key, model and {0} compatibility will be checked when you submit.",
   "模型列表中没有找到这个名称，请核对服务商的模型名；本次没有调用模型。": "This name was not found in the model list. Check the provider's model name. No model was called.",
-  "Key 可访问模型列表，所选模型在列表中。本次没有调用模型；实际发送仍需服务支持 Responses API。": "The key can access the model list and the selected model is listed. No model was called; submission still requires Responses API support.",
+  "Key 可访问模型列表，所选模型在列表中。本次没有调用模型；实际发送仍需服务支持 {0}。": "The key can access the model list and the selected model is listed. No model was called; submission still requires {0} support.",
   "提交请求标识无效。": "The submission request ID is invalid.",
   "提交请求标识无效或不一致。": "The submission request IDs are invalid or do not match.",
   "同一提交请求不能使用不同的题目或配置。": "The same submission request cannot use a different problem or configuration.",

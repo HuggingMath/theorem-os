@@ -150,7 +150,7 @@ export function errorKeys() {
   const files = ['apps/web/conversations.ts', 'apps/web/formalizations.ts', 'apps/web/server.ts', 'apps/web/jobs.ts', 'apps/web/storage.ts', 'apps/web/auth.ts', 'apps/web/explain.ts', 'apps/web/quota.ts', 'apps/web/admission.ts', 'apps/web/providerCheck.ts',
     'apps/web/runner.ts', 'apps/web/worker.ts', 'apps/web/moduleRegistry.ts', 'apps/web/knowledgeService.ts', 'apps/web/researchProjects.ts', 'apps/web/researchAssets.ts', 'apps/web/researchApi.ts', 'apps/web/researchMathematics.ts', 'apps/web/researchCandidateScope.ts', 'apps/web/researchAssetPrefill.ts', 'apps/web/researchLibraryTrials.ts', 'apps/web/researchProblems.ts', 'apps/web/researchMathExamples.ts',
     'apps/web/researchBudgets.ts', 'apps/web/researchPersonal.ts', 'apps/web/researchJourney.ts', 'apps/web/researchProjectStart.ts',
-    'apps/web/sharedProofs.ts', 'apps/web/researchCollections.ts', 'apps/web/researchCollaborationApi.ts'];
+    'apps/web/sharedProofs.ts', 'apps/web/researchCollections.ts', 'apps/web/researchCollaborationApi.ts', 'apps/web/researchMode.ts'];
   for (const relative of files) {
     const source = parse(path.join(root, relative));
     const add = (node: ts.Node, text: string) => {
@@ -173,6 +173,7 @@ export function errorKeys() {
       else if (relative === 'apps/web/researchApi.ts' && ts.isBinaryExpression(node) && node.left.getText(source) === 'reason') collect(node.right);
       else if (relative === 'apps/web/researchApi.ts' && ts.isVariableDeclaration(node) && node.name.getText(source) === 'reason' && node.initializer) collect(node.initializer);
       else if (relative === 'apps/web/researchCandidateScope.ts' && ts.isReturnStatement(node) && node.expression) collect(node.expression);
+      else if (relative === 'apps/web/researchMode.ts' && ts.isReturnStatement(node) && node.expression) collect(node.expression);
       else if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && /\.error$/u.test(node.left.getText(source))) collect(node.right);
       else if (ts.isPropertyAssignment(node) && node.name.getText(source) === 'error') collect(node.initializer);
       else if (relative === 'apps/web/providerCheck.ts' && ts.isPropertyAssignment(node) && node.name.getText(source) === 'message') collect(node.initializer);

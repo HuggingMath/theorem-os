@@ -1,3 +1,4 @@
+import { assertWorkflowSessionSupported, openWorkflowSession, workflowProfileFiles } from './workflowSession';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -12,13 +13,14 @@ import { resolveMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnviron
 import { scheduleMathTimeout } from '../math/mathTimers';
 import { assertMathCanonicalPath, isMathPathWithin } from '../math/paths';
 import { acquireMathModelSlot, configuredMathModelSlots, type MathModelSlot } from '../math/mathModelSlot';
-import { createCodexMathSession, type MathAgentOptions, type MathAgentSession } from '../runtime/codexSession';
+import type { MathAgentOptions, MathAgentSession } from '../runtime/agentSession';
 import { assertFormalizationReviewIsolation } from './formalizationReviewIsolation';
 import { shareFormalizationContext } from './formalizationContext';
 import { allowanceReached, beginRequestUsage, buildTokenBudget, initializeRequestUsageAccounting,
   modelDispatchAllowed, recordThreadUsage, reportedTotalTokens, type RequestUsageAccounting, type UsageAccounting } from './usageBudget';
 
-export type FormalizationAuditConfiguration = { profile: string; executable: string; model: string; effort: string; buildManifestRef: string };
+export type FormalizationAuditConfiguration = { profile: string; executable: string; model: string; effort: string; buildManifestRef: string;
+  agentHarness?: import('../math/formalizationWorkflow').FormalizationModelConfiguration['agentHarness'] };
 export type FormalizationAuditOptions = { env?: NodeJS.ProcessEnv; signal?: AbortSignal;
   openSession?: (options: MathAgentOptions) => Promise<MathAgentSession>;
   maxRunSeconds?: number; maxTotalTokens?: number; onUsage?: (tokens: number) => void };
@@ -72,6 +74,8 @@ export async function runFormalizationAudit(directory: string, root: string, evi
   // The audit's own worker build is current; the generation manifest may belong to a different container.
   readMathBuildManifest(config.buildManifestRef, root, path.join(root, 'out/main'));
   const buildDigest = mathDigest(readMathText(config.buildManifestRef, 8_000_000));
+  assertWorkflowSessionSupported(config, { environment: evidence.request.environment });
+  workflowProfileFiles(config, () => null, options.env ?? process.env);
   const configurationDigest = formalizationModelConfigurationDigest(config), bindings = formalizationAuditBindings(evidence);
   const resultFile = path.join(directory, 'result.json'), stateFile = path.join(directory, 'state.json');
   if (fs.existsSync(resultFile)) {
@@ -91,7 +95,17 @@ export async function runFormalizationAudit(directory: string, root: string, evi
   const view = formalizationAuditReadingView(inputText);
   const inlineView = view && Buffer.byteLength(view) + Buffer.byteLength(schemaText) +
     Buffer.byteLength(FORMALIZATION_AUDIT_READING_PROTOCOL) <= 128 * 1024 ? view : undefined;
-  const instructions = formalizationAuditInstructions + (inlineView ? '\n' + FORMALIZATION_AUDIT_READING_PROTOCOL : '');
+  const cliHandoff = config.agentHarness?.id === 'cli';
+  const handoffFile = path.join(workspace, 'AUDIT-REVIEW.json');
+  const handoffRolePath = '/workspace/AUDIT-REVIEW.json';
+  const submissionInstructions = cliHandoff ? formalizationAuditInstructions.split('\n').map(line =>
+    line.startsWith('Return only the review JSON in your final response matching the native output schema:')
+      ? line.replace('Return only the review JSON in your final response matching the native output schema:',
+        'Write only the review JSON to ' + handoffRolePath + ' matching OUTPUT.schema.json:')
+      : line.startsWith('Return the final JSON directly and stop;')
+        ? 'Write the completed review to ' + handoffRolePath + ' and stop. Do not write OUTPUT.json; the host owns it. The host closes this session, checks the frozen inputs and then validates this handoff before binding the review. This review does not change the frozen statement or establish a proof.'
+        : line).join('\n') : formalizationAuditInstructions;
+  const instructions = submissionInstructions + (inlineView ? '\n' + FORMALIZATION_AUDIT_READING_PROTOCOL : '');
   const frozen = { 'INPUT.json': inputText, 'ROLE.md': instructions, 'OUTPUT.schema.json': schemaText };
   for (const [file, text] of Object.entries(frozen)) writeMathFrozen(path.join(workspace, file), text);
   const outputFile = path.join(workspace, 'OUTPUT.json');
@@ -125,12 +139,14 @@ export async function runFormalizationAudit(directory: string, root: string, evi
     controller.signal.throwIfAborted();
     const slots = options.openSession ? undefined : configuredMathModelSlots();
     if (slots) modelSlot = await acquireMathModelSlot(slots, { signal: controller.signal });
-    session = await (options.openSession ?? createCodexMathSession)({ ...config, workspace,
+    session = await openWorkflowSession(config, { ...config, workspace,
       instructions, environment: resolveMathematicsRuntimeEnvironment(options.env ?? process.env),
       signal: controller.signal, turnTimeoutMs: maxRunSeconds ? Math.max(1, maxRunSeconds * 1000 - (Date.now() - Date.parse(state.startedAt))) : undefined,
       readIsolation: { environment: evidence.request.environment, packages: 'sources',
         ...(evidence.request.library ? { library: { file: evidence.request.library.file, digest: evidence.request.library.digest } } : {}) },
       outputSchema: formalizationAuditOutputSchema,
+      ...(cliHandoff ? { completedOutput: { file: handoffFile,
+        validate: (value: unknown) => { assertFormalizationAuditReview(evidence, value); } } } : {}),
       onItem: (phase, item, context) => {
         if (phase === 'completed' && item.type === 'agentMessage' && typeof item.text === 'string' &&
             context?.turnId && (item.phase === undefined || item.phase === null || item.phase === 'final_answer'))
@@ -151,7 +167,7 @@ export async function runFormalizationAudit(directory: string, root: string, evi
         const settle = beginRequestUsage(record, identity); save();
         return { allowed: true, settle: receipt => { settle(receipt); observeUsage(); } };
       },
-    });
+    }, options.openSession);
     controller.signal.throwIfAborted();
     record.threadId = session.threadId;
     if (evidence.sessions.some(author => author.threadId === record.threadId)) throw new Error('formalization_audit_generation_thread_reused');
@@ -161,14 +177,20 @@ export async function runFormalizationAudit(directory: string, root: string, evi
         evidence.request.library ? { digest: evidence.request.library.digest } : undefined);
     if (session.usageSource === 'upstream-requests') initializeRequestUsageAccounting(record);
     record.usageAccounting.startedTurns = 1; record.usageAccounting.pending = true; record.status = 'running'; save();
+    const submission = cliHandoff ? 'Write only the final review JSON to ' + handoffRolePath + ' matching OUTPUT.schema.json.'
+      : 'Return only the final review JSON matching the native output schema.';
     const message = inlineView
-      ? 'Perform the independent audit using the complete original, source and actual types in the reading view below and the developer protocol. Resolve shared references as observations; query only specific unresolved expanded meanings in INPUT.json. Once all six checks are settled, return only the final review JSON matching the native output schema.\nBEGIN AUDIT READING VIEW\n'
+      ? 'Perform the independent audit using the complete original, source and actual types in the reading view below and the developer protocol. Resolve shared references as observations; query only specific unresolved expanded meanings in INPUT.json. Once all six checks are settled, '
+        + submission[0].toLowerCase() + submission.slice(1) + '\nBEGIN AUDIT READING VIEW\n'
         + inlineView + '\nEND AUDIT READING VIEW\nBEGIN OUTPUT.schema.json\n' + schemaText + '\nEND OUTPUT.schema.json'
       : Buffer.byteLength(inputText) + Buffer.byteLength(schemaText) <= 128 * 1024
-      ? 'Perform the independent audit using the complete frozen input and schema below. Follow the developer protocol; do not reread these files. Return only the final review JSON matching the native output schema.\nBEGIN INPUT.json\n'
+      ? 'Perform the independent audit using the complete frozen input and schema below. Follow the developer protocol; do not reread these files. ' + submission + '\nBEGIN INPUT.json\n'
         + inputText + '\nEND INPUT.json\nBEGIN OUTPUT.schema.json\n' + schemaText + '\nEND OUTPUT.schema.json'
-      : 'Perform the independent audit using INPUT.json and OUTPUT.schema.json. The complete protocol is in the developer instructions; ROLE.md is its frozen copy. Return only the final review JSON matching the native output schema.';
-    record.status = await session.run(message, crypto.randomUUID(), workspace, turnId => { record.turnId = turnId; record.turns = 1; save(); });
+      : 'Perform the independent audit using INPUT.json and OUTPUT.schema.json. The complete protocol is in the developer instructions; ROLE.md is its frozen copy. ' + submission;
+    const submissionMessage = cliHandoff
+      ? message + '\nSubmit through ' + handoffRolePath + '. Do not write OUTPUT.json. The final stdout response is not the audit handoff.'
+      : message;
+    record.status = await session.run(submissionMessage, crypto.randomUUID(), workspace, turnId => { record.turnId = turnId; record.turns = 1; save(); });
     // The writer must be closed even for normal completion before any output is read and accepted.
     await closeWriter(); controller.signal.throwIfAborted();
     record.usageAccounting.pending = false;
@@ -183,7 +205,8 @@ export async function runFormalizationAudit(directory: string, root: string, evi
       const filename = path.join(workspace, file); assertMathCanonicalPath(filename);
       if (readMathText(filename) !== text) throw new Error('formalization_audit_contract_changed');
     }
-    const finalResponse = finalResponses.get(record.turnId);
+    if (cliHandoff) assertMathCanonicalPath(handoffFile);
+    const finalResponse = cliHandoff ? readMathText(handoffFile, 4_000_000) : finalResponses.get(record.turnId);
     if (finalResponse === undefined) throw new Error('formalization_audit_final_response_missing');
     const review = assertFormalizationAuditReview(evidence, JSON.parse(finalResponse));
     writeMathFrozen(outputFile, canonicalMathJson(review) + '\n');

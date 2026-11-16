@@ -487,7 +487,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       'Saved research draft transferred to an available peer. The original snapshot remains advisory and requires independent checking.',
       { commit: draft.commit, artifacts: draft.artifacts, assignmentKey: assignmentDeliveryFile(assignment),
         remainingObligations: [node.task.id] });
-    if (sameCheckpointInput && this.archive.researchCheckpoints?.[node.task.id] === checkpoint &&
+    if (checkpoint && sameCheckpointInput && this.archive.researchCheckpoints?.[node.task.id] === checkpoint &&
         checkpoint.outputDigest === this.checkpointOutputDigest(worker.worktree, commit)) {
       // Changing the writer and emitting handoff provenance is not mathematical
       // progress. Keep the task's unchanged-count and backoff across the transfer.
@@ -907,8 +907,10 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     if (previous) {
       const request = this.proofDeliveryRequests.get(key);
       if (request) {
-        for (const [field, value] of Object.entries(options)) if (value !== undefined && request.options[field] === undefined)
-          request.options[field] = value;
+        for (const field of Object.keys(options) as (keyof DeliveryRecord)[]) {
+          const value = options[field];
+          if (value !== undefined && request.options[field] === undefined) Object.assign(request.options, { [field]: value });
+        }
         if (options.evidenceRefs) request.options.evidenceRefs = [...new Set([...(request.options.evidenceRefs ?? []), ...options.evidenceRefs])];
         if (request.record) await this.input.exclusiveCheck(async () => this.mergeProofDeliveryMetadata(request));
       }
@@ -1099,10 +1101,11 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     return result!;
   }
   private updateProofDeliveryMetadata(record: DeliveryRecord, metadata: Partial<DeliveryRecord>) {
-    if (Object.entries(metadata).every(([field, value]) => record[field] === value ||
-      record[field] !== undefined && value !== undefined && canonicalMathJson(record[field]) === canonicalMathJson(value))) return false;
+    const fields = Object.keys(metadata) as (keyof DeliveryRecord)[];
+    if (fields.every(field => record[field] === metadata[field] ||
+      record[field] !== undefined && metadata[field] !== undefined && canonicalMathJson(record[field]) === canonicalMathJson(metadata[field]))) return false;
     this.pin(metadata.commit); this.pin(metadata.artifacts?.commit); this.pin(metadata.evidence?.verification.targetCommit);
-    const previous = Object.fromEntries(Object.keys(metadata).map(field => [field, record[field]]));
+    const previous = Object.fromEntries(fields.map(field => [field, record[field]]));
     Object.assign(record, metadata);
     try { this.changed(); }
     catch (error) { Object.assign(record, previous); throw error; }
@@ -1148,7 +1151,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       if (this.node(action.task.id) !== node || node.assignment !== action.assignment || digest(node.task) !== action.assignment.taskDigest) return;
       const task = structuredClone(node.task), taskDigest = digest(task), integratedProof = node.integratedCheck, status = node.status;
       const environmentDigest = this.input.state.environmentDigest, problemReceiptDigest = this.input.state.problem.receiptDigest;
-      const verdict: DeliveryRecord['status'] = status === 'integrated' ? 'verified' : status === 'conditional' ? 'conditional' :
+      const verdict: DeliveryRecord['status'] | undefined = status === 'integrated' ? 'verified' : status === 'conditional' ? 'conditional' :
         !proof.passed || status === 'blocked' ? 'failed' : undefined;
       if (!verdict) return;
       // A verified publication describes canonical acceptance; artifacts still identify the worker's original submission.
@@ -1249,7 +1252,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
     const worktree = worker.worktree, projectRelative = this.input.state.problem.projectRelative;
     return { uses, rejected, input: { task, projectRoot: path.join(worktree, projectRelative),
       env: { ...this.input.access.get(worker.id)?.environment }, environmentDigest: this.input.state.environmentDigest,
-      commit, signal: this.input.signal, timeoutMs: this.input.timeoutMs,
+      commit, signal: this.input.signal, timeoutMs: this.input.timeoutMs ?? Infinity,
       originalContexts: this.input.state.problem.targets.map(({ proofPath, theoremName }) => ({ proofPath, theoremName })),
       sourceAtCommit: (file: string) => committedSource(worktree, commit, path.posix.join(projectRelative, file)),
       previous: uses.some(use => use.application)

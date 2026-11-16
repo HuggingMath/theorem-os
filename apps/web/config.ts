@@ -1,9 +1,10 @@
 import path from 'node:path';
 import { z } from 'zod';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
-import { webLimits, type WebEnvironment, type WebEnvironmentOption, type WebProvider, type WebTemplate } from './shared';
+import { webLimits, type WebEnvironment, type WebEnvironmentOption, type WebWorkerProvider, type WebTemplate } from './shared';
 import { allowlistFile, normalizeEmail, type WebAuthConfig, type WebSignupMode } from './auth';
 import { webQuotaDefaults, type WebQuotaLimits } from './quota';
+import { cliConfigurationSchema } from '../../src/runtime/cliConfiguration';
 import { researchExamples } from './problemExamples';
 import { webTaskEnvironment, webTaskEnvironmentName, webTaskEnvironmentDescription } from './environment';
 
@@ -11,7 +12,22 @@ const providerSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/),
   name: z.string().trim().min(1).max(80),
   baseUrl: z.string().url().max(512),
-}).strict();
+  harness: z.enum(['codex', 'claude-code', 'opencode', 'cli']).optional(),
+  execution: z.object({ executable: z.string().min(1).max(4096).optional(), cli: cliConfigurationSchema.optional(),
+    files: z.record(z.string().min(1).max(4096), z.string().max(256 * 1024)).refine(files => Object.keys(files).length <= 64).optional(),
+    apiKeyEnvironment: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/u).optional(),
+    baseUrlEnvironment: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/u).optional(),
+  }).strict().optional(),
+}).strict().superRefine((provider, ctx) => {
+  if (provider.harness === 'cli' ? !provider.execution?.cli : provider.execution?.cli || provider.execution?.files ||
+      provider.execution?.apiKeyEnvironment || provider.execution?.baseUrlEnvironment)
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'CLI launch configuration requires a CLI provider.' });
+  for (const name of Object.keys(provider.execution?.files ?? {})) if (path.isAbsolute(name) || name.split(/[\\/]/u).some(part => !part || part === '..' || part === '.') || name === 'cli.json')
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'CLI configuration file paths must be relative ordinary files.' });
+  for (const name of [provider.execution?.apiKeyEnvironment, provider.execution?.baseUrlEnvironment].filter(Boolean))
+    if (/^(?:HOME|PATH|TMPDIR|TMP|TEMP|ELAN_HOME|LAKE_HOME|LEAN_.+|XDG_.+|DEEPSCIENTIST_.+|THEOREMOS_.+)$/u.test(name!))
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Runtime environment names are reserved.' });
+});
 
 export type WebConfig = {
   host: string;
@@ -25,7 +41,7 @@ export type WebConfig = {
   concurrency: number;
   queueLimit: number;
   sessionTtlMs: number;
-  providers: WebProvider[];
+  providers: WebWorkerProvider[];
   /** Present when every workbench request needs an email login; see `auth.signup` for who may register. */
   auth?: WebAuthConfig;
   /** What one account may start per window; absent when accounts do not exist (loopback preview). */
@@ -51,7 +67,7 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
       publicUrl.hash || publicUrl.username || publicUrl.password) throw new Error('Use an HTTP(S) origin for THEOREMOS_WEB_PUBLIC_URL.');
   const providers = z.array(providerSchema).min(1).max(20).parse(JSON.parse(env.THEOREMOS_WEB_PROVIDERS ||
     '[{"id":"sub2api","name":"Sub2API · DeepSeek","baseUrl":"http://host.docker.internal:8080/v1"},'
-    + '{"id":"openai","name":"OpenAI","baseUrl":"https://api.openai.com/v1"}]')) as WebProvider[];
+    + '{"id":"openai","name":"OpenAI","baseUrl":"https://api.openai.com/v1"}]')) as WebWorkerProvider[];
   if (new Set(providers.map(provider => provider.id)).size !== providers.length) throw new Error('Provider IDs must be unique.');
   for (const provider of providers) {
     const url = new URL(provider.baseUrl);

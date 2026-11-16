@@ -1,4 +1,4 @@
-import { webAgentActionLimits, type WebAgentActionBody, type WebAgentLeanCheck, type WebEnvironment, type WebFormalizationReport, type WebProvider } from './shared';
+import { webAgentActionLimits, type WebAgentActionBody, type WebAgentLeanCheck, type WebEnvironment, type WebFormalizationReport, type WebProvider, type WebWorkerProvider } from './shared';
 import type { LeanStatementContextProtocol } from '../../src/math/leanStatementSemantic';
 import type { FormalizationAuditResult } from '../../src/math/formalizationAuditProtocol';
 
@@ -47,7 +47,7 @@ export type WebFormalizationCapabilities = { available: boolean; reason?: 'provi
 export type WebFormalizationRequest = { original: string; environment: WebEnvironment; apiKey: string; effort: 'low' | 'high' | 'max'; solve?: boolean; humanReview?: boolean;
   autoExplain?: boolean; explanationLanguage?: 'zh' | 'en';
   requestId?: string; providerId?: string; model?: string; researchEffort?: 'low' | 'high' | 'max'; maxRunSeconds?: number; maxTotalTokens?: number; research?: Partial<WebResearchBudget> };
-export type WorkerFormalizationInput = Omit<WebFormalizationRequest, 'solve' | 'humanReview' | 'requestId' | 'providerId' | 'research' | 'researchEffort' | 'autoExplain' | 'explanationLanguage'> & { id: string; model: string; provider: WebProvider;
+export type WorkerFormalizationInput = Omit<WebFormalizationRequest, 'solve' | 'humanReview' | 'requestId' | 'providerId' | 'research' | 'researchEffort' | 'autoExplain' | 'explanationLanguage'> & { id: string; model: string; provider: WebWorkerProvider;
   maxRunSeconds: number; maxTotalTokens: number; maxRounds: number; maxPlanningRounds: number; reviewers: number;
   contextProtocol?: LeanStatementContextProtocol; reviewMode?: 'direct' };
 export type WorkerFormalizationAuditMessage = { type: 'audit-progress'; tokens: number }

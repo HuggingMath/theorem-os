@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { z } from 'zod';
+import { agentHarnessIdentitySchema } from './agentHarnessIdentity';
 import { canonicalMathJson, mathDigest, readMathText, syncMathDirectory, writeMathFrozen, writeMathJsonDurable } from './mathRuntimeIo';
 import { assertMathCanonicalPath } from './paths';
 import { getLeanTaskEnvironment } from './leanTaskEnvironment';
@@ -59,6 +60,7 @@ export const formalizationRequestSchema = z.object({
   schema: z.enum(['theorem-os.formalization-request.v1', 'theorem-os.formalization-request.v2', 'theorem-os.formalization-request.v3']), problemId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u),
   statement: original, statementSha256: hash, environment: z.enum(['standard', 'mathlib']), environmentDigest: hash,
   execution: z.enum(['model', 'replay']), model: text, effort: text, profile: text, executable: text,
+  agentHarness: agentHarnessIdentitySchema.optional(),
   buildManifestRef: text, buildDigest: hash, maxRounds: executionLimit,
   maxRunSeconds: executionLimit, maxTurnSeconds: executionLimit,
   maxCompileSeconds: executionLimit, maxTotalTokens: executionLimit,
@@ -434,7 +436,7 @@ function assertWorkflowEvidence(e: ReviewedFormalizationEvidence): void {
   assertFormalizationPlanCandidate(observed.plan.output, e.candidate.source, e.candidate.coverage);
   const planInput = observed.plan.input;
   const { model, effort, profile, executable } = r;
-  const author = { model, effort, profile, executable };
+  const author = { model, effort, profile, executable, ...(r.agentHarness ? { agentHarness: r.agentHarness } : {}) };
   const configs = [w.planner, author, w.backtranslator, ...w.reviewers];
   if (observed.plan.digest !== formalizationDigest(observed.plan.output) ||
       planInput.problemId !== r.problemId || planInput.statement !== r.statement || planInput.environment !== r.environment ||

@@ -6,6 +6,9 @@ import { buildRunInspection, readRunInspection } from './inspection';
 import { buildResearchContributionFlow } from './contributionFlow';
 import { readContinuationSnapshot } from './continuationInput';
 import type { SolverRunState } from './archive';
+import { DECLARATION_ARTIFACTS_FILE, readDeclarationArtifacts } from './declarationArtifacts';
+import { continuationSourcePolicyDigest } from './continuationSeed';
+import { assertMathCanonicalPath } from '../math/paths';
 
 export type StoredRunInspectionOptions = {
   journal?: { batchFile: string } | { logFile: string };
@@ -35,6 +38,17 @@ const seedHistorySchema = z.object({
     planVersion: z.string().optional() }),
   capturedAt: z.number().int().nonnegative(), capture: z.string().min(1),
 });
+const singleSourceInspectionSchema = z.object({ schema: z.literal('theorem-os.single-continuation-source.v1'),
+  taskDigest: z.string(), problemReceiptDigest: z.string(), sourcePolicyDigest: z.string(),
+  destination: z.object({ runId: z.string(), stateFile: z.string() }),
+  source: z.object({ runId: z.string(), stateFile: z.string(), stateDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+    canonicalCommit: z.string().regex(/^[a-f0-9]{40,64}$/u), environmentDigest: z.string(),
+    capturedAt: z.number().int().nonnegative() }),
+});
+const archivedSingleHistorySchema = z.object({ schema: z.literal('deepscientist.math.solver.v1'),
+  runId: z.string().min(1), taskDigest: z.string(), buildDigest: z.string(), environmentDigest: z.string(),
+  methodDigest: z.string().optional(), cooperation: z.object({ canonicalCommit: z.string().optional(), planVersion: z.string().optional() }).optional(),
+});
 
 export type StoredInspectionContinuation =
   | { status: 'absent' }
@@ -48,7 +62,40 @@ export type StoredRunInspectionArtifacts = {
   resultFile?: string;
   journal: StoredInspectionJournal;
   continuation: StoredInspectionContinuation;
+  declarations?: StoredInspectionDeclarations;
 };
+
+export type StoredInspectionDeclarations = {
+  evidence: 'recorded-not-replayed'; acceptance: 'not-assessed'; requiresFreshCheck: true;
+} & (
+  | { status: 'absent' }
+  | { status: 'unknown'; file: string; reason: string }
+  | { status: 'recorded'; file: string; digest: string; declarations: {
+      id: string; file: string; name: string; type: string; elaboratedType?: string; premises: string[];
+      sourceCommit: string; checkedCommit: string; environmentDigest: string; receiptIds: string[];
+    }[] });
+
+function readInspectionDeclarations(stateFile: string, state: SolverRunState): StoredInspectionDeclarations {
+  const directory = path.dirname(stateFile), file = path.join(directory, DECLARATION_ARTIFACTS_FILE);
+  const evidence = { evidence: 'recorded-not-replayed', acceptance: 'not-assessed', requiresFreshCheck: true } as const;
+  if (!fs.existsSync(file)) return { ...evidence, status: 'absent' };
+  try {
+    const digest = mathDigest(readMathText(file, 32 * 1024 * 1024));
+    const artifacts = readDeclarationArtifacts(directory, state);
+    if (mathDigest(readMathText(file, 32 * 1024 * 1024)) !== digest)
+      throw new Error('math_inspect_declarations_changed');
+    return { ...evidence, status: 'recorded', file, digest, declarations: artifacts.map(artifact => ({
+      id: artifact.id, file: artifact.declaration.file, name: artifact.declaration.name, type: artifact.declaration.type,
+      elaboratedType: artifact.proof.verification.results[0]?.elaboratedDeclarationType,
+      premises: [...(artifact.declaration.premises ?? [])], sourceCommit: artifact.proof.commit,
+      checkedCommit: artifact.proof.verification.targetCommit, environmentDigest: artifact.environmentDigest,
+      receiptIds: artifact.proof.verification.results.map(receipt => receipt.receiptId),
+    })) };
+  } catch (error) {
+    return { ...evidence, status: 'unknown', file,
+      reason: error instanceof Error ? error.message : 'math_inspect_declarations_unreadable' };
+  }
+}
 
 const maxJournalBytes = 16 * 1024 * 1024;
 const maxBatchBytes = 4 * 1024 * 1024;
@@ -72,7 +119,33 @@ function readInspectionContinuation(stateFile: string, state: SolverRunState): S
     if (bytes.length !== item.bytes || mathDigest(bytes) !== item.sha256)
       return unknown('math_continuation_content_changed');
     const history = seedHistorySchema.safeParse(parseMathJson(bytes, 'math_inspect_seed_history_invalid'));
-    if (!history.success) return unknown('math_inspect_seed_history_source_invalid');
+    if (!history.success) {
+      if (state.researchMode !== 'skill') return unknown('math_inspect_seed_history_source_invalid');
+      const sourceFile = path.join(path.dirname(stateFile), 'continuation-single-source.json');
+      assertMathCanonicalPath(sourceFile);
+      if ((fs.lstatSync(sourceFile).mode & 0o777) !== 0o400)
+        return unknown('math_inspect_single_source_not_frozen');
+      const sourceText = readMathText(sourceFile), description = singleSourceInspectionSchema.safeParse(
+        parseMathJson(sourceText, 'math_inspect_single_source_invalid'));
+      const archived = archivedSingleHistorySchema.safeParse(parseMathJson(bytes, 'math_inspect_seed_history_invalid'));
+      if (!description.success || !archived.success) return unknown('math_inspect_single_source_invalid');
+      const record = description.data, source = record.source;
+      if (record.taskDigest !== state.taskDigest || record.problemReceiptDigest !== state.problem.receiptDigest ||
+          record.sourcePolicyDigest !== continuationSourcePolicyDigest(state.problem) ||
+          record.destination.runId !== state.runId || record.destination.stateFile !== stateFile ||
+          source.runId === state.runId || source.runId !== archived.data.runId || source.stateDigest !== item.sha256 ||
+          archived.data.taskDigest !== state.taskDigest || source.environmentDigest !== archived.data.environmentDigest ||
+          item.provenance.runId !== source.runId || item.provenance.source !== source.stateFile ||
+          archived.data.cooperation?.canonicalCommit && archived.data.cooperation.canonicalCommit !== source.canonicalCommit)
+        return unknown('math_inspect_single_source_identity_mismatch');
+      if (mathDigest(readMathText(sourceFile)) !== mathDigest(sourceText)) return unknown('math_inspect_single_source_changed');
+      return { status: 'recorded', file, snapshotDigest, evidence: 'recorded-not-replayed',
+        attachment: { id: 'seed-history', sha256: item.sha256, bytes: item.bytes },
+        source: { runId: source.runId, stateFile: source.stateFile, stateDigest: source.stateDigest,
+          buildDigest: archived.data.buildDigest, methodDigest: archived.data.methodDigest,
+          canonicalCommit: source.canonicalCommit, planVersion: archived.data.cooperation?.planVersion },
+        capturedAt: source.capturedAt, capture: 'single-researcher-frozen-source-and-advisory-history' };
+    }
     return { status: 'recorded', file, snapshotDigest, evidence: 'recorded-not-replayed',
       attachment: { id: 'seed-history', sha256: item.sha256, bytes: item.bytes },
       source: history.data.source, capturedAt: history.data.capturedAt, capture: history.data.capture };
@@ -187,7 +260,8 @@ export async function inspectStoredRun(run: string, options?: StoredRunInspectio
   const outputFile = resultFile ?? outputForState(stored.stateFile);
   const { journal, events } = readInspectionJournal(stored.state.runId, outputFile, options);
   const artifacts: StoredRunInspectionArtifacts = { stateFile: stored.stateFile,
-    ...(resultFile ? { resultFile } : {}), journal, continuation: readInspectionContinuation(stored.stateFile, stored.state) };
+    ...(resultFile ? { resultFile } : {}), journal, continuation: readInspectionContinuation(stored.stateFile, stored.state),
+    declarations: readInspectionDeclarations(stored.stateFile, stored.state) };
   return { ...buildRunInspection(stored.state, stored.result),
     artifacts,
     contributionFlow: buildResearchContributionFlow(stored.state, journal.status === 'read'

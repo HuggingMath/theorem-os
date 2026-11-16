@@ -60,6 +60,7 @@ const runner: WebRunner = {
   },
   async command(id, command) {
     if (command.type === 'capture') return { id: 'capture', status: 'captured', observation: structuredClone(controls.get(id)!.observation) };
+    if (command.type === 'guidance-withdraw') return { id: command.id, status: 'rejected', reason: 'fixture_guidance_withdraw_not_simulated' };
     return { id: command.type === 'guidance' ? command.guidance.id : command.type === 'plan-approval' ? command.approval.id : command.proposal.id, status: 'queued' };
   },
 };

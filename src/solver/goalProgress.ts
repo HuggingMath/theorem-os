@@ -198,11 +198,11 @@ export function observeGoalProgress(previous: GoalProgressState | undefined, inp
     goal.closed = Boolean(node && closed.has(node.task.id));
     goal.taskId = node?.task.id;
     goal.active = !goal.closed && Boolean(node && (node.task.status ?? 'active') === 'active' &&
-      (input.groups?.find(group => group.group.id === taskGroup(node.task))?.group.status ?? 'active') === 'active') &&
+      (input.groups?.find(group => group.group.id === taskGroup(node.task))?.group.status ?? 'active') === 'active' &&
       ([...path].some(id => input.activeTaskIds.has(id)) || [...nodes.values()].some(candidate =>
         input.activeTaskIds.has(candidate.task.id) && (candidate.task.status ?? 'active') === 'active' &&
         (input.groups?.find(group => group.group.id === taskGroup(candidate.task))?.group.status ?? 'active') === 'active' &&
-        researchServesGoal(candidate.task, node.task.id, path, input.nextChecks ?? [])));
+        researchServesGoal(candidate.task, node.task.id, path, input.nextChecks ?? []))));
     goal.observedAt = now;
     return goal;
   });

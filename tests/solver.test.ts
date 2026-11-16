@@ -44,6 +44,7 @@ import { bootstrapLeanTask, leanTaskId } from '../src/math/leanTask';
 import { writeLibraryHostFixture } from './helpers/libraryHostFixture';
 import { prepareLibraryKnowledge } from '../src/solver/theoremKnowledgeLibrary';
 import { planApprovalLog } from '../src/solver/planApproval';
+import { workflowHarnessFixture } from './helpers/workflowHarnessFixture';
 
 const host = vi.hoisted(() => ({ verify: vi.fn(), createSession: vi.fn(), officialGate: vi.fn(), build: vi.fn(), delay: vi.fn(),
   prepare: vi.fn(), freeze: vi.fn(), readiness: vi.fn(), connectivity: vi.fn(), explain: vi.fn(), packages: undefined as string | undefined }));
@@ -221,6 +222,31 @@ describe('isolated solver and host acceptance', () => {
     expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ status: 'evaluated_passed',
       explanations: { status: 'approved', language: 'en', targets: [{ status: 'approved' }, { status: 'approved' }] } });
   });
+
+  it.each(['codex', 'claude-code', 'opencode', 'cli'] as const)(
+    'keeps the selected %s binding for automatic explanations and accepted-run resume', async id => {
+      let flags: string[];
+      if (id === 'codex') {
+        const profile = path.join(directory, 'codex-profile'); fs.mkdirSync(profile);
+        fs.writeFileSync(path.join(profile, 'config.toml'), 'model="fixture"\n');
+        flags = ['--harness', id, '--harness-profile', profile, '--harness-executable', '/usr/bin/true', '--model', 'fixture'];
+      } else flags = workflowHarnessFixture(directory, id).flags;
+      const modules = { ...directSolverModules, M1: { ...directSolverModules.M1,
+        open: async (options: MathAgentOptions) => host.createSession(options) } };
+      const selected = [...args, ...flags, '--research-mode', 'legacy'];
+      expect(await runSolver(selected, directory, modules)).toBe(0);
+      const binding = readSolverRunState(`${output}.runtime/state.json`).agentHarness!;
+      expect(binding.id).toBe(id);
+      expect(host.explain).toHaveBeenCalledOnce();
+      expect(host.explain.mock.calls[0][0].writer).toMatchObject({
+        model: id === 'opencode' ? 'fixture/model' : 'fixture', effort: 'high',
+        profile: binding.profile, executable: binding.executable, agentHarness: binding,
+      });
+      host.createSession.mockClear(); host.explain.mockClear();
+      expect(await runSolver([...selected, '--resume'], directory, modules)).toBe(0);
+      expect(host.createSession).not.toHaveBeenCalled();
+      expect(host.explain.mock.calls[0][0].writer.agentHarness).toEqual(binding);
+    });
 
   it('keeps proof acceptance when explanation generation fails and resumes only explanation work', async () => {
     host.explain.mockRejectedValueOnce(new Error('provider fixture failure'));

@@ -9,9 +9,11 @@ export async function checkCodexProviderConnectivity(input: {
 }): Promise<{ status: 'reachable' | 'unavailable'; httpStatus?: number; diagnostics?: string }> {
   const configFile = path.join(input.profile, 'config.toml');
   const config = fs.existsSync(configFile) ? parseToml(fs.readFileSync(configFile, 'utf8')) : {};
-  const provider = config.model_providers && typeof config.model_providers === 'object' &&
-    typeof config.model_provider === 'string' ? config.model_providers[config.model_provider] : undefined;
-  const base = provider && typeof provider === 'object' && typeof provider.base_url === 'string'
+  const providers = config.model_providers;
+  const selected = providers && typeof providers === 'object' && !Array.isArray(providers) &&
+    typeof config.model_provider === 'string' ? (providers as Record<string, unknown>)[config.model_provider] : undefined;
+  const provider = selected && typeof selected === 'object' && !Array.isArray(selected) ? selected as Record<string, unknown> : undefined;
+  const base = provider && typeof provider.base_url === 'string'
     ? provider.base_url : 'https://api.openai.com/v1';
   const endpoint = new URL(base);
   if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search)

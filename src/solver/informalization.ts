@@ -1,10 +1,11 @@
+import { assertWorkflowSessionSupported, openWorkflowSession, workflowProfileFiles } from './workflowSession';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { setTimeout as wait } from 'node:timers/promises';
 import { z } from 'zod';
 import { parse as parseToml } from 'smol-toml';
-import { createCodexMathSession, type MathAgentFailureDiagnostic, type MathAgentOptions, type MathAgentSession } from '../runtime/codexSession';
+import type { MathAgentFailureDiagnostic, MathAgentOptions, MathAgentSession } from '../runtime/agentSession';
 import { readMathBuildManifest } from '../math/mathBuildManifest';
 import { canonicalMathJson, mathDigest, readMathText, withMathRuntimeLease, writeMathJsonDurable } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath, isMathPathWithin, repositoryRelativePath } from '../math/paths';
@@ -126,8 +127,10 @@ export async function runInformalization(directory: string, root: string, option
   const env = resolveMathematicsRuntimeEnvironment(options.env ?? process.env);
   const environmentDigest = informalizationDigest(projectMathematicsRuntimeEnvironment(env));
   const configurations = [request.writer, ...request.auditors];
+  for (const config of configurations) assertWorkflowSessionSupported(config, { environment: request.environment });
   const currentProfileDigest = () => informalizationDigest(configurations.map(config => ({
-    configurationDigest: formalizationModelConfigurationDigest(config), files: profileFiles(config.profile) })));
+    configurationDigest: formalizationModelConfigurationDigest(config),
+    files: workflowProfileFiles(config, () => profileFiles(config.profile), options.env ?? process.env) })));
   const profileDigest = currentProfileDigest();
   const controller = new AbortController(), externalAbort = () => controller.abort();
   options.signal?.addEventListener('abort', externalAbort, { once: true });
@@ -227,7 +230,7 @@ export async function runInformalization(directory: string, root: string, option
             event('informalization_model_slot_waiting', slot);
             modelSlot = await acquireMathModelSlot(slotConfiguration, { signal: lease.signal });
           }
-          session = await (options.openSession ?? createCodexMathSession)({
+          session = await openWorkflowSession(config, {
             executable: config.executable, profile: config.profile, workspace, model: config.model, effort: config.effort,
             instructions: instructionsText, environment: env, signal: lease.signal,
             turnTimeoutMs: Number.isFinite(turnTimeout) ? turnTimeout : undefined,
@@ -239,7 +242,7 @@ export async function runInformalization(directory: string, root: string, option
               record.usage = usage; save();
               if (spent()) for (const stopRole of running) stopRole();
             }, onUsageIncomplete: () => { incomplete = true; },
-          });
+          }, options.openSession);
           if (lease.signal.aborted) { await session.close(); lease.signal.throwIfAborted(); }
           if (stopped || spent()) throw new Error('math_total_token_limit');
           record.threadId = session.threadId;

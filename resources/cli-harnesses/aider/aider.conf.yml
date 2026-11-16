@@ -1,0 +1,3 @@
+# Explicit config has precedence; Aider still reads default config locations.
+# The host must supply an isolated process home and frozen cwd/git config.
+{}

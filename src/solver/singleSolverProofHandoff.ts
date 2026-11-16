@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import type { MathAgentOptions } from '../runtime/codexSession';
+import type { MathAgentOptions } from '../runtime/agentSession';
 import { LAKE_CONFIGURATION_FILES, mathLocalModuleBuildOrder } from '../math/mathConstructionSources';
 import { inspectLeanSource } from '../math/leanSource';
 import { mathDigest, readMathFile, readMathText } from '../math/mathRuntimeIo';

@@ -20,7 +20,19 @@ import { maskLeanComments } from '../math/leanSyntax';
 import type { EffectiveLibraryBinding } from '../math/libraryEffectivePack';
 import type { LibraryHostTaskIdentity } from '../math/libraryHostConfig';
 import { originalDeclarationRegions, solverSourceContext as sourceContext } from './sourceContext';
+import { assertMathAgentSkillsCurrent, type MathAgentSkill } from '../runtime/agentSkills';
 export { originalDeclarationRegions, solverMathlibImports } from './sourceContext';
+
+// Host-only metadata permissions are scoped to this exact problem object and checkout.
+// Loading an archive or running legacy mode does not grant a new editable source path.
+const researchSkills = new WeakMap<SolverProblem, Map<string, MathAgentSkill>>();
+export function pinSolverResearchSkill(problem: SolverProblem, worktree: string, skill: MathAgentSkill): void {
+  if (skill.name !== 'theoremos-research' || skill.path !== path.join(worktree, '.agents/skills/theoremos-research/SKILL.md'))
+    throw new Error('math_research_skill_path_changed');
+  assertMathAgentSkillsCurrent([skill]);
+  if (!researchSkills.has(problem)) researchSkills.set(problem, new Map());
+  researchSkills.get(problem)!.set(worktree, skill);
+}
 
 export function committedSource(worktree: string, commit: string, file: string): string {
   // Matches the Lean-Eval per-file limit so generated certificate modules remain readable.
@@ -295,9 +307,14 @@ const solverScratch = (problem: SolverProblem, relative: string) => {
 };
 function isUntrackedSolverScratch(problem: SolverProblem, worktree: string, relative: string,
   untracked: ReadonlySet<string>): boolean {
-  if (!untracked.has(relative) || !solverScratch(problem, relative)) return false;
+  // This exact host skill projection is never committed as proof source. Its full identity
+  // is checked independently before dispatch and after writer shutdown in skill mode.
+  const skill = researchSkills.get(problem)?.get(worktree);
+  const projectedSkill = Boolean(skill && relative.startsWith('.agents/skills/theoremos-research/'));
+  if (!untracked.has(relative) || !solverScratch(problem, relative) && !projectedSkill) return false;
   const file = path.join(worktree, relative);
   try {
+    if (projectedSkill) assertMathAgentSkillsCurrent([skill!]);
     assertMathCanonicalPath(file);
     return fs.lstatSync(file).isFile();
   } catch { return false; }
