@@ -109,7 +109,7 @@ export function buildCommonResearchContext(problem: SolverProblem, state: Readon
     scope: 'original-problem-and-allowed-library', sources: { problemReceiptDigest: problem.receiptDigest } };
 }
 
-function cooperativeDeliveryProtocol(action: NonNullable<ContextAccess['assignment']>): string {
+export function cooperativeDeliveryProtocol(action: NonNullable<ContextAccess['assignment']>): string {
   if (action.kind === 'review') return 'Review the fixed candidate and matching evidence without editing it. ' +
     'Save one JSON object in RESEARCH.md: {"verdict":"accepted|changes_requested","summary":"...","evidenceRefs":[]}, then return. ';
   if (action.kind === 'lead') {

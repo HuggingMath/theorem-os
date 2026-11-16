@@ -37,7 +37,7 @@ import { mathematicalGapContextText } from '../mathematicalGaps';
 import { nextCheckContextText } from '../nextChecks';
 import { goalProgressTaskContext } from '../goalProgress';
 import { assertMathAgentSkillsCurrent, type MathAgentSkill } from '../../runtime/agentSkills';
-import { buildCommonResearchContext, buildCommonResearchGuide } from '../researchGuidance';
+import { buildCommonResearchContext, buildCommonResearchGuide, cooperativeDeliveryProtocol } from '../researchGuidance';
 import { buildSkillResearchContext } from '../skillResearchContext';
 import { researchSkillIdentity } from '../researchSkill';
 
@@ -304,7 +304,7 @@ ${access.corpusFile ? `For library lookup, run ${command} search-lean --workspac
     maxContextBytes: access.maxContextBytes, maxOptionalContextBytes: access.maxOptionalContextBytes, inlineManifest: false });
   const continued = singleSkill ? compileSingleContinuation() : undefined;
   const compiled = access.assignment && cooperation ? buildCooperativeContext(task, cooperation, bundle, access.assignment,
-    compilation, state.workers, [diagnosticExecutionRules, access.mathTools ? mathToolsUsageInstruction(access.mathTools, access.worktree) : ''].filter(Boolean).join('\n'), skillWorkflow) : { ...bundle, ...compileFull(),
+    compilation, state.workers, [diagnosticExecutionRules, access.mathTools ? mathToolsUsageInstruction(access.mathTools, access.worktree) : ''].filter(Boolean).join('\n'), skillWorkflow ? access.researchSkill : undefined) : { ...bundle, ...compileFull(),
       ...(continued ? { continuationMessage: continued.message, continuationManifest: continued.manifest } : {}),
       compileDispatch: (options: ResearchDispatchOptions) => options.continuation && continued
         ? compileSingleContinuation(options.checkpointInstruction) : compileFull(options.checkpointInstruction) };
@@ -433,7 +433,8 @@ function leadTaskTable(cooperation: CooperationState): string {
 /** Add role rules; the compiler selects a scoped, versioned mathematical context for dispatch. */
 function buildCooperativeContext(problem: SolverProblem, cooperation: CooperationState, context: ContextBundle,
   action: CooperativeAction, compilation: Omit<TaskContextInput, 'instructions'>,
-  workers: readonly Pick<ResearchWorker, 'id' | 'role'>[] = [], toolGuidance = '', skillWorkflow = false): ContextBundle {
+  workers: readonly Pick<ResearchWorker, 'id' | 'role'>[] = [], toolGuidance = '', researchSkill?: MathAgentSkill): ContextBundle {
+  const skillWorkflow = Boolean(researchSkill);
   const contract = cooperativeWorkContract(action, cooperation.tasks, cooperation);
   const workContract = skillWorkflow ? Object.fromEntries(Object.entries(contract)
     .filter(([key]) => key !== 'deliveryGuidance')) as typeof contract : contract;
@@ -605,7 +606,16 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     'The assignment canonicalProbe records a check of the existing declaration at its sourceCommit in the recorded environment, before a model started. ' +
     'Compare its full type and additional assumptions with the assigned type before choosing a repair, and recheck the current saved file after editing. ' +
     'This is a historical source diagnostic, not a model failure or a mathematical refutation; it grants no proof acceptance.\n' : '';
-  const instructions = context.instructions + '\n' + initialPlanningRules + rules + organizationRules + leadDeliveryRules + planRevisionRules + familyRules + feasibilityRules + earlyRouteRules + connectionRules + familyMemberRules + attemptRules + focusRules + gapRules + nextCheckRules + observationRules + checkpointRules + mathematicalInterfaceRules + inheritedFindingRules + researchSourcesRules + canonicalProbeRules +
+  const instructions = researchSkill ? context.instructions + '\n' + roleText + cooperativeDeliveryProtocol(action) + '\n' +
+    `Cooperation reference: ${path.join(path.dirname(researchSkill.path), 'references/cooperation.md')}. ` +
+    'Read shared rules and your role section once per session; consult other sections for current decisions or feedback. ' +
+    'Current assignments, contracts and feedback supply the exact runtime values; examples are placeholders.\n' +
+    (action.kind === 'lead' ? 'Available worker responsibilities: ' + JSON.stringify(workers.map(({ id, role }) => ({ id, role }))) +
+      `. Unspecified route maxConcurrent: ${defaultResearchRouteConcurrency(workers)}. Leave every Lean source unchanged.\n` : '') +
+    (action.kind === 'task' && ['lemma', 'goal'].includes(action.task.kind)
+      ? 'Source-bound research findings require sources with exactly these Lean file keys: ' + JSON.stringify(leanFiles) + '.\n' : '') +
+    connectionRules + familyMemberRules + canonicalProbeRules
+    : context.instructions + '\n' + initialPlanningRules + rules + organizationRules + leadDeliveryRules + planRevisionRules + familyRules + feasibilityRules + earlyRouteRules + connectionRules + familyMemberRules + attemptRules + focusRules + gapRules + nextCheckRules + observationRules + checkpointRules + mathematicalInterfaceRules + inheritedFindingRules + researchSourcesRules + canonicalProbeRules +
     (action.kind === 'lead' || action.kind === 'task' && !isFeasibilityReview(action.task)
       ? 'For parallel work, assign distinct proof, feasibility/counterexample, library-connection or consumer questions. Inspect in-flight work and reuse saved results; do not duplicate an unchanged question. Keep backup routes testing different inferences. Leave a slot waiting for input when no independent useful work exists. Do not manufacture helpers. Route priority reflects recorded inputs and obstructions, not predicted ease.\n' : '') +
     (action.kind === 'lead' ? 'Use the proof-continuation snapshot to identify the original goal\'s current mathematical frontier. Prefer consuming relevant checked lemmas before creating more auxiliary work; give each new helper an intended consumer and explicitly assign every substantive missing premise. Keep useful alternative routes visible. A lemma without a recorded consumer may still be useful; investigate its connection rather than deleting it. Planned dependencies, actual Lean proof references and conditional references are reported separately. Do not count auxiliary lemma totals as completion of the original problem. The host obtains fixed-candidate review after the complete proof is checked; mark any advisory final-candidate task with reviewScope:"final-candidate" so it waits for freshly checked original goals. Use a distinct task with reviewScope:"feasibility" for independent mathematical route checks before a complete candidate exists. Inspect validated lemmaRequests in deliveries and adopt useful exact proposals as separate lemma tasks; proposals and their local checks are advisory. Advisory research may start before its planned dependencies are proved; use typed proof tasks when a consumer must wait for checked premises. Set consumerGoalIds on advisory tasks to the original goals their effort serves; these attribution links never add proof premises or dependency waits.\n' : '') +
@@ -681,39 +691,41 @@ function buildCooperativeContext(problem: SolverProblem, cooperation: Cooperatio
     initialPlanning
       ? 'Continue the initial Lead responsibility in this saved thread. No task graph has been accepted; peers are waiting for the first published plan.'
       : 'Continue the current Lead responsibility in this saved thread. The original problem and unchanged task graph are already in its history.',
-    initialPlanning ? initialPlanningRules
+    skillWorkflow ? '' : initialPlanning ? initialPlanningRules
       : 'This turn is one planning decision: from the changes and task table below, revise the accepted graph or return it unchanged. Read COOPERATION.json only for the specific records you need, and delegate open searches as research tasks. Record the current argument and precise unresolved inference in worktree-root RESEARCH.md together with the decision.',
     'Current cooperative assignment (replaces every previous dispatch nonce and receipt):\n' + JSON.stringify(action),
+    skillWorkflow ? 'Current delivery log: ' + leadPlanDeliveryFile(action) : '',
     leadInboxText,
     leadTaskTable(cooperation),
     'Current host work contract:\n' + JSON.stringify(workContract),
     gapContext,
-    nextCheckContext, nextCheckRules,
+    nextCheckContext, skillWorkflow ? '' : nextCheckRules,
     planningEvidence ? leadPlanningEvidenceText(planningEvidence) : '',
     compilation.feedback ? 'Current host feedback:\n' + compilation.feedback : '',
     leadPlanPublicationFeedback(action, cooperation),
     contextCheckpointRejectionFeedback(cooperation.contextCheckpointRejection, leadPlanDeliveryFile(action)),
-    checkpointRules, mathematicalInterfaceRules, inheritedFindingRules, toolGuidance,
-    leadDeliveryRules, planRevisionRules, sharing, proposalRules,
-    'Review new findings and proposals, then publish a useful plan or revision promptly; retain the exact mathematical gap if it is unresolved. A checkpoint, unchanged control plan, or activity report does not establish decision progress or proof acceptance.',
+    ...(skillWorkflow ? [] : [checkpointRules, mathematicalInterfaceRules, inheritedFindingRules, toolGuidance,
+      leadDeliveryRules, planRevisionRules, sharing, proposalRules,
+      'Review new findings and proposals, then publish a useful plan or revision promptly; retain the exact mathematical gap if it is unresolved. A checkpoint, unchanged control plan, or activity report does not establish decision progress or proof acceptance.']),
   ].filter(Boolean).join('\n\n') : taskContinuation ? [
     'Continue the current task responsibility in this saved thread. Its frozen problem, exact interfaces, and unchanged source rules are already in the thread history.',
     'Current cooperative assignment:\n' + JSON.stringify(action),
+    skillWorkflow && action.kind === 'task' ? 'Current delivery log: ' + assignmentDeliveryFile(action.assignment) : '',
     'Current host work contract:\n' + JSON.stringify(workContract),
     gapContext,
-    nextCheckContext, progressCheckContext, nextCheckRules, observationRules,
-    canonicalProbeRules, mathematicalInterfaceRules, inheritedFindingRules, toolGuidance,
+    nextCheckContext, progressCheckContext,
+    ...(skillWorkflow ? [] : [nextCheckRules, observationRules, canonicalProbeRules, mathematicalInterfaceRules, inheritedFindingRules, toolGuidance]),
     compilation.feedback ? 'Current host feedback:\n' + compilation.feedback : '',
     contextCheckpointRejectionFeedback(cooperation.contextCheckpointRejection,
       action.kind === 'task' ? assignmentDeliveryFile(action.assignment) : undefined),
     assignedNode?.feedback ? 'Current task feedback:\n' + assignedNode.feedback : '',
     'Current scoped inbox references (retrieve full records before using them):\n' + JSON.stringify(taskInbox),
-    'Read the latest worktree-root COOPERATION.json before continuing. Inspect referenced deliveries, mathematicalGaps, blockers, peers and their saved source references for new scoped input. A matching task digest does not mean its feedback or inbox is unchanged. Missing or unavailable referenced evidence supplies no premise.',
-    'Correct every needs-correction receipt by appending a new complete event to ' +
+    skillWorkflow ? '' : 'Read the latest worktree-root COOPERATION.json before continuing. Inspect referenced deliveries, mathematicalGaps, blockers, peers and their saved source references for new scoped input. A matching task digest does not mean its feedback or inbox is unchanged. Missing or unavailable referenced evidence supplies no premise.',
+    skillWorkflow ? '' : 'Correct every needs-correction receipt by appending a new complete event to ' +
       (action.kind === 'task' ? assignmentDeliveryFile(action.assignment) : '') +
       '; include replacesReceipt with the receipt id inside the corrected finding, and preserve the log and earlier valid work. If a correction is rejected again, replace its new receipt; acceptance resolves its verified chain of attempts, while independent rejected submissions still require their own corrections. Read RESEARCH.md and resume the saved argument, exact unresolved inference and retry trigger. Do not repeat an unchanged negative search without new input or a different mathematical method.',
-    'Save useful progress and use the current assignment delivery protocol. A progress report, retained draft or intake receipt is advisory; only independent host checking can establish proof acceptance.',
-    proofDeliverableRules, researchSourcesRules, sharing,
+    ...(skillWorkflow ? [] : ['Save useful progress and use the current assignment delivery protocol. A progress report, retained draft or intake receipt is advisory; only independent host checking can establish proof acceptance.',
+      proofDeliverableRules, researchSourcesRules, sharing]),
   ].filter(Boolean).join('\n\n') : undefined;
   const leadDecision = action.kind === 'lead' && cooperation.leadDecisionInstruction
     ? { id: 'lead-decision-requirements', kind: 'assignment' as const,

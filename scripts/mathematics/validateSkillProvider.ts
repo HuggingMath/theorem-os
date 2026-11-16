@@ -87,7 +87,6 @@ export async function validateSkillProvider(args: string[]) {
     const reference = path.join(path.dirname(skill.path), 'references/continuation.md');
     const skillHash = mathDigest(fs.readFileSync(skill.path)), referenceBytes = fs.readFileSync(reference, 'utf8');
     const referenceHash = mathDigest(referenceBytes), tag = crypto.randomUUID();
-    fs.mkdirSync(path.join(workspace, '.scratch'), { mode: 0o700 });
     let session: MathAgentSession | undefined, threadId: string | undefined, phase = 'initial';
     const result: Json = { loading, skillDigest: skill.digest, workspace, passed: false };
     const output = (name: string) => path.join(workspace, '.scratch', name + '.json');
