@@ -9,11 +9,11 @@ export function initializeReplay(locale: Locale) {
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   const text = {
     zh: {
-      pause: '暂停回放', resume: '继续播放', play: '播放预设回放', playing: '播放中', ended: '回放结束', paused: '已暂停',
+      pause: '暂停回放', resume: '继续播放', play: '播放回放', playing: '播放中', ended: '回放结束', paused: '已暂停',
       step: (step: number, label: string) => `第 ${step} 步，共 4 步：${label}`,
     },
     en: {
-      pause: 'Pause replay', resume: 'Resume replay', play: 'Play the recorded replay', playing: 'Playing', ended: 'Replay finished', paused: 'Paused',
+      pause: 'Pause replay', resume: 'Resume replay', play: 'Play the replay', playing: 'Playing', ended: 'Replay finished', paused: 'Paused',
       step: (step: number, label: string) => `Step ${step} of 4: ${label}`,
     },
   }[locale];

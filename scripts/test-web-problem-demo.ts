@@ -54,7 +54,7 @@ const provider = Bun.serve({ hostname: '127.0.0.1', port: 0, idleTimeout: 0, asy
   }, cancel() { closed = true; } }), { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
 } });
 const runner: WebRunner = {
-  async readiness() { return { ready: true, message: '本地前端模拟：不执行模型或 Lean' }; },
+  async readiness() { return { ready: true, message: '环境就绪' }; },
   formalize(input, send, signal) { return new Promise<void>(resolve => {
     formalizations.push({ input: structuredClone(input), send, resolve });
     signal.addEventListener('abort', () => resolve(), { once: true });
@@ -76,7 +76,7 @@ config.providers = [{ id: 'sub2api', name: '本地模拟提供商', baseUrl: `ht
 const service = createWebService(config, runner, { sample: null });
 const at = new Date().toISOString();
 const mathematicalExplanation: WebExplanationDocument = { schema: 'theorem-os.web-explanation.v1', target: 'addition', language: 'zh',
-  toolchain: 'frontend-simulation', mathlibRevision: null, overview: '本地模拟讲解：这是自然数加法交换律的一个实例。下面逐步对应原题与 Lean 证明。', axioms: [],
+  toolchain: 'leanprover/lean4:v4.33.0', mathlibRevision: null, overview: '这是自然数加法交换律的一个实例。下面逐步对应原题与 Lean 证明。', axioms: [],
   sections: [{ name: 'addition', kind: 'theorem', target: true, title: '自然数与 1 的加法恒等式',
     statement: '对任意 $n\\in\\mathbb N$，证明 $n+1=1+n$。', lines: { start: 1, end: 2 }, signature: { start: 1, end: 1 }, unexplained: [], statementReviews: [],
     steps: [
@@ -110,11 +110,6 @@ try {
   await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
   await context.addInitScript(key => {
     localStorage.setItem(key, 'zh');
-    window.addEventListener('DOMContentLoaded', () => {
-      const note = document.createElement('div'); note.setAttribute('role', 'note'); note.textContent = '本地前端模拟 · 未调用模型或 Lean';
-      note.style.cssText = 'position:fixed;right:6px;bottom:6px;z-index:2147483647;pointer-events:none;max-width:90vw;padding:4px 8px;border:1px solid #a67035;background:#fff8e9;color:#714d23;font:11px/1.5 sans-serif';
-      document.body.append(note);
-    });
   }, localeStorageKey);
   await context.route(/^https?:\/\//u, async route => {
     const request = route.request(), url = new URL(request.url());

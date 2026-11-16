@@ -381,7 +381,7 @@ try {
   await page.goto(new URL('archive.html#view=quickstart', url).href);
   await page.waitForSelector('#quickstart-view .replay-window');
   assert.equal(await page.locator('#quickstart-view').isVisible(), true);
-  assert.equal(await page.locator('.replay-badge').innerText(), '示例证明回放');
+  assert.equal(await page.locator('.replay-badge').innerText(), '证明回放');
   assert.match(await page.locator('.receipt-status').innerText(), new RegExp(replayEvidence.status));
   await reveal(page.locator('.receipt-targets'));
   for (const target of replayEvidence.targets) assert.ok((await page.locator('.receipt-targets').innerText()).includes(target.theorem));

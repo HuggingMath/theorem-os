@@ -64,7 +64,7 @@ export const release: Record<string, string> = {
   '观察 / 动作 / 命令覆盖': 'Observation / action / command coverage',
   '带入成果：{0}。原题保持不变，新运行仍需重新通过 Lean 检查与独立验收。': 'Carry forward: {0}. The original problem is unchanged; the new run must pass fresh Lean checks and independent acceptance.',
   '已检查版本的源码没有保存，无法带入成果。请在路线图中查看已有记录。': 'The checked version has no saved source to carry forward. View its records in the roadmap.',
-  '预设示例 · 附 Lean 验收记录': 'Preset example · Lean verification records included',
+  '附 Lean 验收记录': 'Lean verification records included',
   '用自然语言或 TeX 写下题目。': 'Write your problem in natural language or TeX.',
   '免费浏览': 'Free to explore',
   '临时使用的 API Key': 'API key for this session',

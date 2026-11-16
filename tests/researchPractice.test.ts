@@ -5,7 +5,7 @@ import { approvePracticePlan, changePracticePlan, currentPracticeGuidance, expor
   savePracticeReceipt, sendPracticeGuidance } from '../apps/web/client/researchPracticeModel';
 
 const at = '2026-11-10T12:00:00.000Z';
-describe('a recorded exercise keeps local decisions separate from original verification', () => {
+describe('an exercise keeps local decisions separate from original verification', () => {
   it('uses the canonical recorded tutorial sources and retains the original receipt identities and date', () => {
     expect(practiceFailedSource).toBe(LOCAL_EXAMPLE_FAILED_PROOF);
     expect(practiceAcceptedSource).toBe(LOCAL_EXAMPLE_PROOF);

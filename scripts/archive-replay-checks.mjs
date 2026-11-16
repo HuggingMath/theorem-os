@@ -106,7 +106,7 @@ export async function checkArchiveReplay(page, archiveUrl, { english = false, ev
     await showReplay(page);
     await assertStage(page, 'verified');
     assert.equal(await page.locator('.replay-playback').isVisible(), true);
-    assert.equal(await page.locator('.replay-badge').innerText(), english ? 'Recorded example' : '示例证明回放');
+    assert.equal(await page.locator('.replay-badge').innerText(), english ? 'Proof replay' : '证明回放');
     receipt = await assertReceipt(page, archiveUrl, english, evidence);
     await showReplay(page);
     await assertLayout(page, label);

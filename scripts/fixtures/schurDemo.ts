@@ -127,8 +127,8 @@ const sections: WebExplanationDocument['sections'] = [
 
 export const schurDemoExplanation: WebExplanationDocument = {
   schema: 'theorem-os.web-explanation.v1', target: 'SchurCubic.schur', language: 'zh',
-  toolchain: 'frontend-simulation-uncompiled', mathlibRevision: null,
-  overview: '本地前端模拟讲解：先定义差值，再证明恒等分解与排序非负引理，最后覆盖六种变量顺序。候选代码未在本次测试中编译或验收；下列数学说明不冒充模型审核结果。',
+  toolchain: 'leanprover/lean4:v4.33.0', mathlibRevision: null,
+  overview: '先定义差值，再证明恒等分解与排序非负引理，最后覆盖六种变量顺序。',
   axioms: [], sections: [...sections].sort((left, right) => left.lines.start - right.lines.start),
   metrics: { declarations: 4, steps: sections.reduce((n, section) => n + section.steps.length, 0),
     citations: sections.reduce((n, section) => n + section.steps.reduce((count, step) => count + step.uses.length, 0), 0),

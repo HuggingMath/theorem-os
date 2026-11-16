@@ -3359,7 +3359,7 @@ function renderCancelState() {
     : !state.connected ? t('连接中断，恢复后可取消。')
       : !run ? t('记录已不存在。') : !activeRun(run) ? t('这次研究已经结束，无需取消。') : '';
   if (run && activeRun(run)) element('#cancel-run-description').textContent = run.status === 'queued'
-    ? t('任务还在排队，取消后不会开始，也不会调用模型。之后可以用「复用任务配置」重新提交。')
+    ? t('任务还在排队，取消后不会开始。之后可以用「复用任务配置」重新提交。')
     : t('Agent 会立即停止，这道题不会完成验收。已通过 Lean 检查的代码、解题轨迹和活动日志都会保留，之后可以从已检查的代码继续。');
   element('#cancel-run-notice').textContent = notice;
   element('#cancel-run-notice').hidden = !notice;

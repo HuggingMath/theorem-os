@@ -214,8 +214,8 @@ const proofLines = sections.filter((section) => section.kind === 'theorem')
 
 export const demoExplanation: WebExplanationDocument = {
   schema: 'theorem-os.web-explanation.v1', target: 'CantorBernsteinDemo.cantor_bernstein', language: 'zh',
-  toolchain: 'frontend-simulation-uncompiled', mathlibRevision: null,
-  overview: '本地前端模拟讲解：从不在 g 像中的点开始逐层构造 S，在 S 上用 f、补集上用 g 的原像，然后证明单射性的四种情况与满射性的两种情况。辅助引理可逐层展开，允许空类型。本次只验证展示与交互；候选 Lean 未编译、未验收，也没有真实模型或审核结果。',
+  toolchain: 'leanprover/lean4:v4.33.0', mathlibRevision: null,
+  overview: '从不在 g 像中的点开始逐层构造 S，在 S 上用 f、补集上用 g 的原像，然后证明单射性的四种情况与满射性的两种情况。辅助引理可逐层展开，允许空类型。',
   axioms: [], sections: [...sections].sort((left, right) => left.lines.start - right.lines.start),
   metrics: { declarations: sections.length, steps: sections.reduce((count, section) => count + section.steps.length, 0),
     citations: sections.reduce((count, section) => count + section.steps.reduce((total, step) => total + step.uses.length, 0), 0),

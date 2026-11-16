@@ -273,5 +273,108 @@ window.addEventListener('pagehide', event => indicators.forEach(indicator => {
   else indicator.destroy();
 }));
 window.addEventListener('pageshow', () => indicators.forEach(indicator => indicator.update(false)));
+// Proof stage: a fixed 686px canvas of real HTML, scaled to its container. The markup is the finished state, so
+// it reads fully without scripts; this function only sets the starting state and plays the steps while visible.
+function initializeProofStage() {
+  const stage = document.querySelector<HTMLElement>('[data-proof-stage]');
+  if (!stage) return;
+  const canvas = stage.querySelector<HTMLElement>('.proof-stage-canvas');
+  if (!canvas) return;
+  const setScale = (width: number) => stage.style.setProperty('--stage-scale', String(width / 686));
+  setScale(stage.getBoundingClientRect().width);
+  if ('ResizeObserver' in window) {
+    new ResizeObserver(entries => entries.forEach(entry => setScale(entry.contentRect.width))).observe(stage);
+  } else {
+    window.addEventListener('resize', () => setScale(stage.getBoundingClientRect().width));
+  }
+  const attempt = canvas.querySelector<HTMLElement>('[data-attempt]')!;
+  const checkLine = canvas.querySelector<HTMLElement>('[data-lean-check]')!;
+  const stages = Array.from(canvas.querySelectorAll<HTMLElement>('[data-stage]'));
+  const targets = Array.from(canvas.querySelectorAll<HTMLElement>('[data-target]'));
+  const verdict = canvas.querySelector<HTMLElement>('[data-verdict]')!;
+  const setStage = (index: number) => stages.forEach((item, position) => {
+    item.classList.toggle('is-done', position < index);
+    item.classList.toggle('is-current', position === index);
+  });
+  // The markup holds the finished proof body; before the proof step the body reads as the original statement's sorry.
+  const proofBody = canvas.querySelector<HTMLElement>('[data-proof-body]')!;
+  const repaired = proofBody.textContent ?? '';
+  const lastStage = stages.length - 1;
+  // Each target row keeps its verified wording in the markup; before the kernel check it reads as waiting.
+  const labels = targets.map(target => target.querySelector<HTMLElement>('span')!);
+  const verifiedText = labels.map(label => label.textContent ?? '');
+  const markVerified = (index: number) => {
+    targets[index]?.classList.add('is-verified');
+    if (labels[index]) labels[index]!.textContent = verifiedText[index]!;
+  };
+  const markPending = () => targets.forEach((target, index) => {
+    target.classList.remove('is-verified');
+    labels[index]!.textContent = labels[index]!.dataset.pending ?? '';
+  });
+  const finalState = () => {
+    stage.classList.remove('is-prepared');
+    attempt.dataset.attempt = 'proved';
+    proofBody.textContent = repaired;
+    checkLine.hidden = false;
+    setStage(lastStage);
+    targets.forEach((_, index) => markVerified(index));
+    verdict.hidden = false;
+  };
+  const initialState = () => {
+    stage.classList.add('is-prepared');
+    attempt.dataset.attempt = 'statement';
+    proofBody.textContent = '\n  sorry';
+    checkLine.hidden = true;
+    setStage(0);
+    markPending();
+    verdict.hidden = true;
+  };
+  // [delay before the step, action]: original statement, proof written, task check, kernel check of the original, verdict.
+  const steps: Array<[number, () => void]> = [
+    [900, () => { setStage(1); proofBody.textContent = repaired; attempt.dataset.attempt = 'proved'; }],
+    [1500, () => { setStage(2); checkLine.hidden = false; }],
+    [1300, () => { setStage(lastStage); markVerified(0); }],
+    [700, () => { verdict.hidden = false; }],
+  ];
+  let timer = 0;
+  let next = 0;
+  let visible = false;
+  let finished = false;
+  const run = () => {
+    timer = 0;
+    steps[next++]![1]();
+    if (next < steps.length) timer = window.setTimeout(run, steps[next]![0]);
+    else finished = true;
+  };
+  const sync = () => {
+    clearTimeout(timer);
+    timer = 0;
+    if (reducedMotion.matches) {
+      finalState();
+      next = steps.length;
+      finished = true;
+      return;
+    }
+    if (finished) return;
+    if (next === 0) initialState();
+    if (visible && !document.hidden && next < steps.length) timer = window.setTimeout(run, steps[next]![0]);
+  };
+  reducedMotion.addEventListener('change', () => {
+    if (!reducedMotion.matches) { finished = false; next = 0; }
+    sync();
+  });
+  document.addEventListener('visibilitychange', sync);
+  if ('IntersectionObserver' in window) {
+    new IntersectionObserver(entries => {
+      const now = entries[0]!.isIntersecting && entries[0]!.intersectionRatio >= .25;
+      if (now !== visible) { visible = now; sync(); }
+    }, { threshold: .25 }).observe(stage);
+  } else {
+    visible = true;
+  }
+  sync();
+}
+initializeProofStage();
+
 keepHashOnLanguageSwitch();
 document.documentElement.dataset.landingReady = 'true';

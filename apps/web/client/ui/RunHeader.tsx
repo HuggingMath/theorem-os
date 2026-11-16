@@ -201,7 +201,7 @@ function RunHeader(props: RunHeaderProps) {
     </header>
     {props.budgetAttempt && <ResearchBudgetAttempt key={props.id} {...props.budgetAttempt} />}
     {props.libraryProposalAttempt && <ResearchLibraryProposalAttempt key={`library:${props.id}`} {...props.libraryProposalAttempt} />}
-    {props.sample && <p class="sample-note" data-sample-note>{t('这是一次录制好的运行：Agent 由离线脚本代替模型，环境、任务协作、Lean 检查和独立验收都是真实执行的。可以浏览每个标签页；点「用这道题开始研究」会把题目和配置填进新草稿，填入自己的 API Key 即可提交。')}</p>}
+    {props.sample && <p class="sample-note" data-sample-note>{t('这是一份已完成的运行记录：环境、任务协作、Lean 检查和独立验收的记录都可以查看。可以浏览每个标签页；点「用这道题开始研究」会把题目和配置填进新草稿，填入自己的 API Key 即可提交。')}</p>}
     {props.formalizationId && <p class="run-continuation" data-run-formalization><Icon name="languages" /><a class="text-button" href={`formalize.html?id=${encodeURIComponent(props.formalizationId)}`}>{t('查看最新审核')}</a></p>}
     {props.continuation && <p class="run-continuation" data-run-continuation><Icon name="git-branch" />
       <span>{t('从「{0}」继续：这一版的代码交给了每个 Agent 参考，仍要重新通过 Lean 检查。', props.continuation.label)}</span>

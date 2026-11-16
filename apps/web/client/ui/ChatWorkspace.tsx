@@ -235,7 +235,7 @@ function TaskMessage(props: ChatThreadProps) {
     {accepted && props.onEditProblem && <button type="button" class="text-button" onClick={props.onEditProblem}>{t('修改题目')}</button>}
   </>;
   return <div class="chat-task">
-    {props.sample && <p class="sample-note" data-chat-sample-note>{t('预设示例 · 附 Lean 验收记录')}</p>}
+    {props.sample && <p class="sample-note" data-chat-sample-note>{t('附 Lean 验收记录')}</p>}
     <div class="research-conversation-status" data-active={active} data-accepted={accepted} data-failed={failed}>
       <div class="chat-task-status-line"><p class="research-conversation-state" role="status" aria-atomic="true">
         <Icon name={accepted ? 'circle-check' : failed ? 'circle-alert' : active ? 'clock-3' : !run && formalProgress?.ready ? 'file-code-2' : 'square'} /><strong>{title}</strong></p>
@@ -570,7 +570,7 @@ function ChatComposer(props: ChatComposerProps) {
               title={t('通过模型列表检查连接')}
               disabled={props.checkingConnection || !props.model.trim() || props.keyRequired && !props.apiKey.trim()}>{props.checkingConnection ? t('正在检查连接…') : t('检查 Key 与模型')}</button></div>
             {props.connection && <p class="field-note" id="chat-connection-result" role="status" data-status={props.connection.status}>{props.connection.message}</p>}
-            {props.newProblem && <p class="field-note">{tx('这一步只读取模型列表，不调用模型。', 'This check reads the model list and does not call a model.')}</p>}
+            {props.newProblem && <p class="field-note">{tx('先确认账号能访问所选模型。', 'First confirm your account can reach the chosen model.')}</p>}
             </div>
             {props.newProblem && <fieldset class="chat-participation" data-chat-participation disabled={props.submitting || props.participationLocked}>
               <legend>{t('研究方式')}</legend>

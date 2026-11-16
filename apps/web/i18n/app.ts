@@ -392,7 +392,7 @@ export const app: Record<string, string> = {
   "读取已检查的代码失败：{0}": "Could not read the checked code: {0}",
   "连接中断，恢复后可取消。": "Disconnected; you can cancel once the connection is back.",
   "这次研究已经结束，无需取消。": "This research has already ended; there is nothing to cancel.",
-  "任务还在排队，取消后不会开始，也不会调用模型。之后可以用「复用任务配置」重新提交。": "The task is still queued. Cancelling means it never starts and no model is called. You can submit it again later with “Reuse task settings”.",
+  "任务还在排队，取消后不会开始。之后可以用「复用任务配置」重新提交。": "The task is still queued. Cancelling means it never starts. You can submit it again later with “Reuse task settings”.",
   "Agent 会立即停止，这道题不会完成验收。已通过 Lean 检查的代码、解题轨迹和活动日志都会保留，之后可以从已检查的代码继续。": "The agents stop right away and this problem will not reach acceptance. Code that already passed a Lean check, the trajectory and the activity log are kept, and you can continue from the checked code later.",
   "取消结果尚未确认，请核对最新运行状态。": "Cancellation is not confirmed yet; check the latest run status.",
   "连接需要恢复，请核对取消结果。": "The connection needs to recover; check whether the run was cancelled.",

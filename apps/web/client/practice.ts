@@ -6,7 +6,7 @@ const explicit = new URLSearchParams(location.search).get('lang');
 const language = explicit === 'zh' || explicit === 'en' ? explicit : locale;
 const tx = (zh: string, en: string) => language === 'en' ? en : zh;
 document.documentElement.lang = language === 'en' ? 'en' : 'zh-CN';
-document.title = tx('录制研究演练 · TheoremOS', 'Recorded research exercise · TheoremOS');
+document.title = tx('研究演练 · TheoremOS', 'Research exercise · TheoremOS');
 const root = document.getElementById('practice-root');
 if (root) render(h(ResearchPractice, { language }), root);
 const home = document.querySelector<HTMLAnchorElement>('[data-practice-home]');

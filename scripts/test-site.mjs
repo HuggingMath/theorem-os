@@ -142,7 +142,7 @@ try {
   const beforeReplayProof = await page.locator('.proof-row.is-selected').getAttribute('data-proof-id');
   await page.locator('[data-view-link="quickstart"]').click();
   assert.equal(await page.locator('#quickstart-view').isVisible(), true);
-  assert.match(await page.locator('#quickstart-view').innerText(), /不调用模型/);
+  assert.match(await page.locator('#quickstart-view').innerText(), /独立 Lean 流程检查/);
   assert.match(await page.locator('.quickstart-access').innerText(), /申请内测/);
   assert.equal(await page.locator('.quickstart-access a').getAttribute('href'), 'index.html#start');
   assert.equal(await page.locator('[data-action^="copy-install"], [data-action^="copy-replay"]').count(), 0);
