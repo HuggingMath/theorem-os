@@ -8,6 +8,14 @@ Give an investigator the original statement and enough definitions and environme
 
 When the host exposes `theoremos_team`, Lead chooses the decomposition, assignments, route changes and adoption decisions. Children have isolated writable worktrees, the same pinned Skill and their own native threads. A later assignment continues that child's thread and saved sources. All agents share the run's time, turn and token allowances. The host enforces source ownership, process isolation, persistence and independent proof checks.
 
+### Start and reassess
+
+After reading the frozen statement and definitions, choose the first useful collaboration before extended solo investigation. Identify a complementary question with a clear consumer and inspectable output, and queue it through `theoremos_team` using `operation: "spawn"`, a new `agentId` and a self-contained `message`. A research question can be dispatched before the full proof route or exact helper type is known. Read only the relevant role or domain guidance as the question requires; the role catalogue is not a prerequisite to the first useful assignment.
+
+When no useful assignment is ready, state the concrete reason in your research notes or progress message and continue the work needed to resolve it. Reassess when new evidence creates an independent gap or your own work stalls. Lead chooses the route, questions and number of members; do not fill every available slot without a useful task.
+
+Use the host's reported remaining run allowance and hard turn deadline to plan investigations, save sources and RESEARCH.md, and return for checking or handoff before cutoff. A hard native-turn limit can interrupt an unfinished provider request even when the overall run has time left. Save useful partial work at natural milestones; use a member's `yield` when a dependency calls for a resumable handoff.
+
 Organize a flat team around complementary gaps in the current proof effort. Direct discussion between members can clarify interfaces or challenge assumptions without passing every message through Lead. Explore an alternative route when its answer can change the team's decision; avoid independently repeating the whole original problem by default. Lead remains responsible for assignments, shared route changes and formal adoption, while each member chooses its mathematical approach.
 
 ### Identity and assignments

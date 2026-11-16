@@ -136,7 +136,8 @@ function fixture({ maxTotalTokens = 0, maxAgents = 3, maxTurns = 16, beforeOpen,
   const current = { directory, root, environment, problem, state, stateFile, team, teams, sessions, opened, makeTeam, call, controller, events, snapshots,
     source: (worktree: string) => path.join(worktree, problem.projectRelative, 'Submission.lean'),
     session: async (id: string, occurrence = 0) => {
-      await expect.poll(() => sessions.filter(item => item.id === id).length).toBeGreaterThan(occurrence);
+      // A follow-up session may wait for an actual Lean check before dispatch.
+      await expect.poll(() => sessions.filter(item => item.id === id).length, { timeout: 10_000 }).toBeGreaterThan(occurrence);
       const session = sessions.filter(item => item.id === id)[occurrence]!; await session.started.promise; return session;
     },
   };
@@ -417,6 +418,56 @@ describe('Agent-led sustained collaboration with real Git and Lean', () => {
     expect(f.team.archive.researchArtifacts!.filter(artifact => artifact.taskId === task.id)).toHaveLength(2);
     expect(f.state.check).toBeUndefined();
   }, 90_000);
+
+  it('pauses a settled turn checkpoint and resumes the same saved task and thread with cumulative usage', async () => {
+    const f = fixture({ maxTotalTokens: 100, maxTurns: 5 });
+    await f.call({ operation: 'spawn', agentId: 'child', message: 'Develop a draft and retain useful partial work.',
+      budget: { tokens: 50, turns: 2 } });
+    const first = await f.session('child'), worker = f.team.archive.workers[0]!, task = worker.tasks[0]!;
+    const deliveryBase = task.seedCommit;
+    const settle = (session: typeof first, requestId: string, totalTokens: number) => {
+      const admission = session.options.requestGate!({ requestId, threadId: session.threadId });
+      expect(admission).toMatchObject({ allowed: true });
+      if (!admission.allowed) throw new Error(admission.reason);
+      admission.settle({ complete: true, outcome: 'completed', usage: { inputTokens: totalTokens - 2, outputTokens: 2, totalTokens } });
+    };
+    settle(first, 'checkpoint-request', 20);
+    const draft = original.replace('end Team', 'theorem draft (n : Nat) : n = n := by sorry\nend Team');
+    const notes = 'Saved partial work at the turn boundary; the same investigation remains open.';
+    fs.writeFileSync(f.source(worker.worktree), draft);
+    fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), notes);
+    first.outcome.resolve('checkpoint'); await first.stopping.promise;
+    expect(task).toMatchObject({ status: 'running', pauseRequested: { kind: 'budget', reason: 'math_team_turn_checkpoint' } });
+    expect(task.researchArtifactId).toBeUndefined();
+    expect(await f.call({ operation: 'resume', agentId: 'child', taskId: task.id }))
+      .toMatchObject({ ok: false, error: 'math_team_task_not_paused' });
+
+    first.stopReceipt.resolve({ status: 'stopped' }); await idle(f.team);
+    expect(task).toMatchObject({ status: 'paused', turns: 1, budget: { tokens: 50, turns: 2 },
+      sourceCommit: expect.any(String), researchArtifactId: expect.any(String) });
+    expect(worker).toMatchObject({ status: 'paused', activity: 'paused', pendingSourceBase: deliveryBase });
+    expect(worker.writerStopUnconfirmed).toBeUndefined(); expect(first.closed).toBe(true);
+    expect(git(worker.worktree, ['show', `${task.sourceCommit}:${f.problem.projectRelative}/Submission.lean`])).toBe(draft.trim());
+    expect((await f.call({ operation: 'inspect-research', artifactId: task.researchArtifactId })).notes!.text).toBe(notes);
+    expect(readSolverRunState(f.stateFile).agentTeam!.workers[0]!.tasks[0])
+      .toMatchObject({ id: task.id, status: 'paused', turns: 1, sourceCommit: task.sourceCommit });
+    expect(f.state.taskUsage![task.id]!.totalTokens).toBe(20); expect(f.sessions).toHaveLength(1);
+
+    expect(await f.call({ operation: 'resume', agentId: 'child', taskId: task.id })).toMatchObject({ ok: true, taskId: task.id });
+    const second = await f.session('child', 1);
+    expect(second.threadId).toBe(first.threadId); expect(second.messageId).toBe(task.id);
+    expect(dispatchedAssignment(second.message)).toMatchObject({ taskId: task.id, deliveryBaseCommit: deliveryBase,
+      sourceCommit: task.sourceCommit });
+    expect(fs.readFileSync(f.source(worker.worktree), 'utf8')).toBe(draft);
+    expect(fs.readFileSync(path.join(worker.worktree, 'RESEARCH.md'), 'utf8')).toBe(notes);
+    expect(task).toMatchObject({ status: 'running', turns: 2, budget: { tokens: 50, turns: 2 } });
+    expect(task.pauseRequested).toBeUndefined(); expect(f.state.taskUsage![task.id]!.totalTokens).toBe(20);
+    settle(second, 'resumed-request', 5);
+    second.complete(); await idle(f.team);
+    expect(worker.tasks).toHaveLength(1); expect(task).toMatchObject({ status: 'completed', turns: 2 });
+    expect(f.state.taskUsage![task.id]!.totalTokens).toBe(25);
+    expect(f.state.tokenBudget).toMatchObject({ status: 'available', reportedTotalTokens: 25, usageComplete: true });
+  });
 
   it('pauses at a cumulative task budget, resumes after Lead adjustment and retains the Lead turn reserve', async () => {
     const f = fixture({ maxTotalTokens: 100, maxTurns: 5 });

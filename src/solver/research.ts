@@ -46,7 +46,7 @@ import { DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT } from './tacticBatteryFailur
 import { committedResearchNotesDigest, researchHandoffNotesDigest } from './researchCheckpoints';
 import { SingleSolverProofHandoff } from './singleSolverProofHandoff';
 import { assertMathAgentSkillsCurrent, type MathAgentSkill } from '../runtime/agentSkills';
-import { buildSkillResearchContext } from './skillResearchContext';
+import { buildSkillResearchContext, teamTurnTiming } from './skillResearchContext';
 import { stopProofWriter } from './proofWriter';
 import { createSkillProofLifecycle } from './skillProofLifecycle';
 
@@ -225,6 +225,8 @@ export async function runResearchWorkers(input: {
     maxTotalTokens: input.maxTotalTokens, proofTimeoutMs: input.proofTimeoutMs, remainingMs: () => budget().remainingMs,
     prepareWorker: input.prepareTeamWorker, save, emit: input.emit, exclusiveCheck,
   }) : undefined;
+  const turnTiming = team ? teamTurnTiming(input.maxTurnMs)
+    : { turnTimeoutMs: Number.isFinite(input.maxTurnMs) ? input.maxTurnMs : undefined };
   const updateUsage = () => {
     if (parallel) state.usage = aggregateUsage(state.workers!);
     const previous = state.tokenBudget!.status;
@@ -293,6 +295,7 @@ export async function runResearchWorkers(input: {
           ...(modules.M4.tools ? { tools: modules.M4.tools } : {}),
           sourceFeedback: feedback, previousCheck, previousFailures, assignment: promptAction(assignment),
           maxOptionalContextBytes: research.contextOverflow?.maxOptionalContextBytes,
+          ...(skillResearch ? { executionLimits: { ...turnTiming, remainingRunMs: () => budget().remainingMs } } : {}),
           ...(team ? { teamRole: { id: 'lead', role: 'lead' as const } } : {}),
           ...(access.researchSkill ? { researchSkill: access.researchSkill } : {}),
         };
@@ -1042,7 +1045,7 @@ export async function runResearchWorkers(input: {
                 workspace, environment: { ...environment, ...access.harnessEnvironment,
                   DEEPSCIENTIST_MATH_WORKER_ID: worker.id, DEEPSCIENTIST_MATH_WORKER_WORKTREE: workspace },
                 model: state.model, effort: state.effort, threadId: research.threadId,
-                turnTimeoutMs: Number.isFinite(input.maxTurnMs) ? input.maxTurnMs : undefined,
+                ...turnTiming,
                 instructions: currentContext.instructions, onActivity: activity => {
                   research.lastActivity = { ...activity, at: Date.now() };
                   emit('worker_activity', { activity: activity.event, itemType: activity.itemType }); save();

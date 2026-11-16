@@ -38,13 +38,15 @@ import { nextCheckContextText } from '../nextChecks';
 import { goalProgressTaskContext } from '../goalProgress';
 import { assertMathAgentSkillsCurrent, type MathAgentSkill } from '../../runtime/agentSkills';
 import { buildCommonResearchContext, buildCommonResearchGuide, cooperativeDeliveryProtocol } from '../researchGuidance';
-import { agentTeamContextSection, buildSkillResearchContext } from '../skillResearchContext';
+import { agentTeamContextSection, buildSkillResearchContext, executionLimitsSection } from '../skillResearchContext';
 import type { AgentTeamAssignment, AgentTeamRole } from '../agentTeamContext';
 import { researchSkillIdentity } from '../researchSkill';
 
 export type ContextAccess = Readonly<{
   teamRole?: AgentTeamRole;
   teamAssignment?: AgentTeamAssignment;
+  /** Dispatch-time observations; execution and request admission remain host enforced. */
+  executionLimits?: Readonly<{ turnTimeoutMs?: number; turnCheckpointMs?: number; remainingRunMs(): number }>;
   root: string;
   /** The bundled Agent commands (scripts/build-agent-tools.ts) for shells that cannot read `root`; default `root`/bin/math.ts. */
   tools?: string;
@@ -155,7 +157,7 @@ export function buildResearchContext(task: SolverProblem, state: Readonly<Solver
     assertMathAgentSkillsCurrent([access.researchSkill]);
   }
   const singleSkill = skillWorkflow && !state.workers && !state.cooperation && !access.assignment
-    ? buildSkillResearchContext(task, state, { ...access, researchSkill: access.researchSkill! }) : undefined;
+    ? buildSkillResearchContext(task, state, { ...access, executionLimits: undefined, researchSkill: access.researchSkill! }) : undefined;
   const command = `bun ${shellArgument(access.tools ?? path.join(access.root, 'bin/math.ts'))}`;
   const fixedReview = access.assignment?.kind === 'review';
   const planningLead = access.assignment?.kind === 'lead';
@@ -301,9 +303,12 @@ ${access.corpusFile ? `For library lookup, run ${command} search-lean --workspac
           text: 'Read current host declaration feedback at ' + path.join(access.worktree, '.scratch/declaration-feedback.json') + ' before resubmitting.' }] : [])],
     optional: [...residualSections, ...librarySections, ...knowledgeSections, ...applicationSections, ...(reference ? [reference] : [])] };
   const compileFull = (checkpointInstruction?: string) => compileTaskContext({ ...compilation, instructions,
-    mandatory: [...dispatchPrefix(checkpointInstruction), ...(compilation.mandatory ?? [])] });
+    mandatory: [...dispatchPrefix(checkpointInstruction),
+      ...(access.executionLimits ? [executionLimitsSection(access.executionLimits)] : []), ...(compilation.mandatory ?? [])] });
   const compileSingleContinuation = (checkpointInstruction?: string) => compileContextSections({ instructions,
-    mandatory: [...dispatchPrefix(checkpointInstruction), { id: 'same-thread-skill-workflow', kind: 'continuation',
+    mandatory: [...dispatchPrefix(checkpointInstruction),
+      ...(access.executionLimits ? [executionLimitsSection(access.executionLimits)] : []),
+      { id: 'same-thread-skill-workflow', kind: 'continuation',
       text: singleSkill!.continuationMessage! }], optional: compilation.optional,
     maxContextBytes: access.maxContextBytes, maxOptionalContextBytes: access.maxOptionalContextBytes, inlineManifest: false });
   const continued = singleSkill ? compileSingleContinuation() : undefined;

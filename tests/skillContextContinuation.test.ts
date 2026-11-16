@@ -5,7 +5,7 @@ import { mathDigest } from '../src/math/mathRuntimeIo';
 import { readMathAgentSkill } from '../src/runtime/codexSkills';
 import { buildResearchContext, finalizeResearchDispatch, type ContextBundle } from '../src/solver/modules/context';
 import { researchSkillIdentity } from '../src/solver/researchSkill';
-import { buildSkillResearchContext } from '../src/solver/skillResearchContext';
+import { buildSkillResearchContext, teamTurnTiming } from '../src/solver/skillResearchContext';
 import { localExample, solverState } from './helpers/solver';
 
 const roots: string[] = [];
@@ -41,7 +41,8 @@ it('compiles the current child assignment and inbox inside both full and continu
       turns: 1, cursor: 0, seedCommit: sourceCommit,
       tasks: [{ id: 'current-task', message: objective, status: 'running', seedCommit: deliveryBaseCommit }] }] };
   const context = buildSkillResearchContext(f.problem, f.state, { ...f.access,
-    teamRole: { id: 'child', role: 'worker' }, teamAssignment: { taskId: 'current-task', message: objective, sourceCommit } });
+    teamRole: { id: 'child', role: 'worker' }, teamAssignment: { taskId: 'current-task', message: objective, sourceCommit },
+    executionLimits: { ...teamTurnTiming(300_000), remainingRunMs: () => 1_200_000 } });
   for (const continuation of [false, true]) {
     const dispatch = finalizeResearchDispatch(context, { continuation });
     expect(dispatch.manifest!.included.find(item => item.id === 'agent-team-assignment'))
@@ -50,6 +51,8 @@ it('compiles the current child assignment and inbox inside both full and continu
     const envelope = JSON.parse(dispatch.message.split('\n')[1]!);
     expect(envelope).toMatchObject({ agentId: 'child', coordinator: 'lead', taskId: 'current-task', objective,
       sourceCommit, deliveryBaseCommit, inbox: { through: 1, events: [{ text: 'An additional boundary case to inspect.' }] } });
+    expect(JSON.parse(dispatch.message.split('\n').find(line => line.startsWith('{"remainingRunMs"'))!))
+      .toEqual({ remainingRunMs: 1_200_000, turnCheckpointMs: 240_000, turnTimeoutMs: 300_000 });
   }
   expect(() => buildSkillResearchContext(f.problem, f.state, { ...f.access,
     teamRole: { id: 'child', role: 'worker' }, teamAssignment: { taskId: 'other-task', message: objective, sourceCommit } }))
@@ -58,6 +61,30 @@ it('compiles the current child assignment and inbox inside both full and continu
 
 describe.each([{ common: false, mode: 'standalone skill' }, { common: true, mode: 'shared-guidance skill' }])
   ('$mode same-thread context', ({ common }) => {
+    it('refreshes execution time on continuation and retains it as required context', () => {
+      const f = fixture(common);
+      f.state.researchSkillWorkflow = 'full';
+      f.state.researchDelegation = { mode: 'team', maxAgents: 3 };
+      let remainingRunMs = 1_200_000;
+      const context = buildResearchContext(f.problem, f.state, { ...f.access,
+        executionLimits: { ...teamTurnTiming(300_000), remainingRunMs: () => remainingRunMs } });
+      const readLimits = (dispatch: ContextBundle) => {
+        expect(dispatch.manifest!.included.find(item => item.id === 'execution-limits'))
+          .toMatchObject({ required: true, kind: 'feedback' });
+        expect(dispatch.manifest!.usedBytes).toBe(Buffer.byteLength(dispatch.instructions) + Buffer.byteLength(dispatch.message));
+        return JSON.parse(dispatch.message.split('\n').find(line => line.startsWith('{"remainingRunMs"'))!);
+      };
+      expect(readLimits(finalizeResearchDispatch(context))).toEqual({
+        remainingRunMs: 1_200_000, turnCheckpointMs: 240_000, turnTimeoutMs: 300_000 });
+      remainingRunMs = 450_000;
+      expect(readLimits(finalizeResearchDispatch(context, { continuation: true }))).toEqual({
+        remainingRunMs: 450_000, turnCheckpointMs: 240_000, turnTimeoutMs: 300_000 });
+      const unbounded = buildResearchContext(f.problem, f.state, { ...f.access,
+        executionLimits: { ...teamTurnTiming(Infinity), remainingRunMs: () => Infinity } });
+      expect(readLimits(finalizeResearchDispatch(unbounded))).toEqual({
+        remainingRunMs: null, turnCheckpointMs: null, turnTimeoutMs: null });
+    });
+
     it('sends the full frozen problem initially and current feedback without repeating it on continuation', () => {
       const f = fixture(common);
       fs.writeFileSync(path.join(f.workspace, '.scratch/declaration-feedback.json'), JSON.stringify({ status: 'rejected' }));
