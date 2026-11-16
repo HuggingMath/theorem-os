@@ -15,8 +15,12 @@ const official = catalog.records.filter(record => record.status === 'official_ac
 const ongoing = catalog.records.filter(record => record.status === 'in_progress_not_officially_accepted');
 const local = catalog.records.filter(record => record.status === 'locally_verified');
 // The shared replay, roadmap layout and bilingual node labels are UI code. Lean sources still load per record.
+// The record index itself must stay inline so filtering and file:// previews work without a request, so the
+// budget covers the code only and subtracts the index payload the page also publishes as data/index.json.
 const archiveBundle = fs.readFileSync(path.join(root, 'out/site/site.js'), 'utf8');
-assert.ok(Buffer.byteLength(archiveBundle) < 390_000, 'site.js with the replay, roadmap and translated research summaries must not bundle the archive sources');
+const inlineIndexBytes = fs.statSync(path.join(root, 'out/site/data/index.json')).size;
+assert.ok(Buffer.byteLength(archiveBundle) - inlineIndexBytes < 300_000,
+  `site.js must stay a UI bundle: ${Buffer.byteLength(archiveBundle)} bytes minus ${inlineIndexBytes} bytes of inlined record index`);
 assert.equal(archiveBundle.includes('The no-seed alternative of the weighted totient companion theorem.'), false,
   'The Totient Lean source must stay in its lazy source asset');
 const errors = [];
@@ -41,6 +45,8 @@ try {
   for (const record of local) {
     await page.locator(`[data-proof-id="${record.id}"]`).click();
     await page.getByRole('tab', { name: '验证证据' }).click();
+    // The complete receipts sit behind a disclosure, so open it before reading the checked status.
+    await page.locator('.campaign-evidence [data-acceptance-receipts] > summary').click();
     assert.match(await page.locator('.campaign-evidence').innerText(), /kernel_verified/);
     assert.match(await page.locator('.campaign-evidence').innerText(), new RegExp(record.campaign.proofSha256));
     assert.equal(await page.locator('.official-result-link').count(), 0);
@@ -185,8 +191,17 @@ try {
     await page.locator('.global-history-panel > summary').waitFor();
     await page.evaluate(() => document.fonts.ready);
     if (viewport.width <= 700) {
-      await page.waitForFunction(() => document.activeElement?.id === 'inspector');
-      assert.ok(Math.abs(await page.locator('#inspector').evaluate(element => element.getBoundingClientRect().top)) <= 1, 'Mobile proof links reveal details without manual scrolling');
+      // A proof link opens the record on a tab that already hides the list, so the record starts below the top bar.
+      // The record is revealed without framing it or scrolling the top bar away; the list click is what moves focus.
+      const landing = await page.evaluate(() => {
+        const topbar = document.querySelector('.topbar').getBoundingClientRect();
+        const inspector = document.querySelector('#inspector').getBoundingClientRect();
+        return { active: document.activeElement?.id, topbarBottom: topbar.bottom, inspectorTop: inspector.top, scrollY, height: innerHeight };
+      });
+      assert.notEqual(landing.active, 'inspector', 'A mobile proof link must not frame the whole record');
+      assert.equal(landing.scrollY, 0, 'A mobile proof link must not scroll the top bar away');
+      assert.ok(landing.inspectorTop >= landing.topbarBottom && landing.inspectorTop < landing.height,
+        `Mobile proof links reveal details below the top bar: inspector at ${landing.inspectorTop}, top bar ends at ${landing.topbarBottom}`);
       const proofLink = page.url();
       await page.locator('[data-action="back-list"]').first().click();
       const previous = new URLSearchParams(new URL(proofLink).hash.slice(1));

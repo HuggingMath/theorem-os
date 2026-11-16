@@ -14,7 +14,6 @@
   <link rel="alternate" hreflang="zh-CN" href="https://theoremos.top/">
   <link rel="alternate" hreflang="en" href="https://theoremos.top/en/">
   <link rel="icon" type="image/svg+xml" href="assets/mark.svg">
-  <link rel="stylesheet" href="replay.css">
   <link rel="stylesheet" href="landing.css">
   <title>TheoremOS | 从原题到 Lean 证明</title>
 </head>
@@ -23,10 +22,10 @@
   <header class="site-header">
     <div class="header-inner wrap">
       <a class="brand" href="index.html" aria-label="TheoremOS 首页"><img src="assets/mark.svg" alt="" width="31" height="31"><span>Theorem<span class="brand-os">OS</span></span></a>
-      <nav class="desktop-nav" aria-label="主导航"><a href="#workbench-preview">工作台</a><a href="#demo">证明回放</a><a href="#proofs">证明档案</a><a href="#components">研究组件</a></nav>
+      <nav class="desktop-nav" aria-label="主导航"><a href="#workbench-preview">工作台</a><a href="archive.html#view=quickstart">证明回放</a><a href="#proofs">证明档案</a><a href="#components">研究组件</a></nav>
       <div class="header-actions"><a class="lang-link" href="en/index.html" hreflang="en" lang="en" aria-label="English version">EN</a><a class="nav-start" href="#start" data-umami-event="request-access-nav">申请内测<i data-lucide="arrow-up-right"></i></a><button class="menu-toggle" type="button" aria-label="打开导航" aria-expanded="false" aria-controls="mobile-nav"><i data-lucide="menu"></i><i data-lucide="x"></i></button></div>
     </div>
-    <nav class="mobile-nav wrap" id="mobile-nav" aria-label="手机导航" hidden><a href="#start">申请内测<i data-lucide="arrow-down-right"></i></a><a href="#workbench-preview">研究工作台<i data-lucide="arrow-down-right"></i></a><a href="#demo">验收回放<i data-lucide="arrow-down-right"></i></a><a href="#proofs">证明成果<i data-lucide="arrow-down-right"></i></a><a href="#components">研究组件<i data-lucide="arrow-down-right"></i></a><a href="archive.html">证明档案<i data-lucide="arrow-up-right"></i></a><a href="feedback.html">反馈与建议<i data-lucide="arrow-up-right"></i></a><a href="https://github.com/LikC1606/TheoremOS" target="_blank" rel="noreferrer">GitHub<i data-lucide="arrow-up-right"></i></a></nav>
+    <nav class="mobile-nav wrap" id="mobile-nav" aria-label="手机导航" hidden><a href="#start">申请内测<i data-lucide="arrow-down-right"></i></a><a href="#workbench-preview">研究工作台<i data-lucide="arrow-down-right"></i></a><a href="archive.html#view=quickstart">验收回放<i data-lucide="arrow-up-right"></i></a><a href="#proofs">证明成果<i data-lucide="arrow-down-right"></i></a><a href="#components">研究组件<i data-lucide="arrow-down-right"></i></a><a href="archive.html">证明档案<i data-lucide="arrow-up-right"></i></a><a href="feedback.html">反馈与建议<i data-lucide="arrow-up-right"></i></a><a href="https://github.com/LikC1606/TheoremOS" target="_blank" rel="noreferrer">GitHub<i data-lucide="arrow-up-right"></i></a></nav>
   </header>
   <main id="main">
     <div class="hero-shell">
@@ -39,10 +38,6 @@
           <p class="hero-terms">内测期间平台免费，自备模型 API Key。</p>
           <p class="hero-practice"><a class="text-link" data-research-practice href="https://app.theoremos.top/practice.html?lang=zh">无需 Key，先操作一遍<i data-lucide="arrow-up-right"></i></a></p>
         </div>
-        <section class="hero-demo" id="demo" aria-labelledby="demo-title">
-          <h2 id="demo-title">看一份证明如何完成</h2>
-          <div class="product-demo" aria-label="TheoremOS 预设证明回放"><!-- research-replay --></div>
-        </section>
       </section>
     </div>
 
@@ -62,7 +57,7 @@
           <p class="scenario-continuation">登录后会带入所选模板，并使用统一的 TheoremOS 数学环境，准备草稿不调用模型。</p>
         </section>
         <section class="human-decision" id="human-decision" aria-labelledby="human-decision-title">
-          <div class="human-decision-copy"><h3 id="human-decision-title">原题对不对，由你决定</h3><p>先核对假设和目标。确认后进入证明；需要修改，就留在陈述审核。</p><p class="decision-example-label">交互示例 · 沿用上方加零题，不发起研究。</p></div>
+          <div class="human-decision-copy"><h3 id="human-decision-title">原题对不对，由你决定</h3><p>先核对假设和目标。确认后进入证明；需要修改，就留在陈述审核。</p><p class="decision-example-label">交互示例 · 以自然数加零为例，不发起研究。</p></div>
           <div class="decision-example" data-human-decision data-ui>
             <p class="decision-question">对任意自然数，证明在左边或右边加零，结果都不变。</p>
             <ul class="decision-targets"><li><code>Tutorial.add_zero</code><span><code>n + 0 = n</code></span></li><li><code>Tutorial.zero_add</code><span><code>0 + n = n</code></span></li></ul>

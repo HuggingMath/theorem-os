@@ -104,10 +104,14 @@ try {
         assert.equal(await page.locator('#quickstart-view').isVisible(), true);
         await page.goto(home);
         await page.locator('[data-case-guide="route"]').click();
-        await page.waitForSelector('[data-proof-walkthrough="openai_triangle_face"]');
+        await page.waitForSelector('.process-global-trajectory');
         assert.equal(await page.locator('[data-tab="process"][aria-selected="true"]').count(), 1);
         assert.equal(await page.locator('.process-global-trajectory').isVisible(), true);
-        assert.ok(await page.locator('[data-proof-route-step]').count() > 1, 'The complex case must include an interactive mathematical route');
+        // The process tab carries the trajectory and a digest of the step-by-step proof; its route graph is the
+        // interactive map into that proof, and the full walkthrough lives behind the digest's reading button.
+        assert.equal(await page.locator('[data-proof-walkthrough-digest="openai_triangle_face"]').count(), 1);
+        assert.ok(await page.locator('.process-global-trajectory .solution-route-node').count() > 1,
+          'The complex case must include an interactive mathematical route');
         await page.goto(home);
         await page.locator('[data-case-guide="evidence"]').click();
         await page.waitForSelector('[data-tab="evidence"][aria-selected="true"]');

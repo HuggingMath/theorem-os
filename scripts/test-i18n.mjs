@@ -298,7 +298,8 @@ try {
     await open(page, `${hosted}en/`, 'landingReady');
     assert.equal(await page.getAttribute('html', 'lang'), 'en');
     await checkEnglishHomepageFacts(page);
-    assert.equal(await page.locator('.replay-badge').innerText(), 'Recorded example');
+    assert.equal(await page.locator('.replay-window, #demo').count(), 0, 'The homepage no longer embeds the replay');
+    assert.equal(await page.locator('.desktop-nav a[href="archive.html#view=quickstart"], .mobile-nav a[href="archive.html#view=quickstart"]').count(), 2, 'Replay navigation points at the archive');
     assert.equal(await page.locator('[data-umami-event="request-access-hero"]').getAttribute('href'), '#start');
     assert.equal(await page.locator('[data-umami-event="open-workbench-hero"]').getAttribute('href'), 'https://app.theoremos.top/');
     assert.match(await page.locator('#featured-proof').innerText(), /Official Lean-Eval pass/);
@@ -316,8 +317,6 @@ try {
     await checkEnglishAdvancedWorkbench(page, width);
     await checkEnglishArchiveEntry(page);
     for (const id of ['m1', 'm2', 'm4', 'm5']) await page.locator(`[data-component="${id}"]`).click();
-    await page.locator('#replay-next').scrollIntoViewIfNeeded();
-    await page.locator('[data-replay-stage]').first().click();
     await page.locator('.faq-list summary').first().click();
     if (width < 900) await page.locator('.menu-toggle').click();
     assert.deepEqual(await cjkIn(page), [], `English homepage at ${width}px`);
@@ -369,6 +368,7 @@ try {
     await checkOverflow(page, `English archive at ${width}px`);
     await page.screenshot({ path: path.join(output, `en-archive-${width}.png`), fullPage: true });
     await open(page, `${hosted}en/archive.html#proof=openai_totient_companion_zero&status=verified&tab=evidence`);
+    await page.locator('.campaign-evidence [data-acceptance-receipts] > summary').click();
     assert.match(await page.locator('.campaign-evidence').innerText(), /kernel_verified/);
     assert.deepEqual(await cjkIn(page), [], `English local acceptance at ${width}px`);
     assert.equal(await page.locator('.campaign-evidence a').getAttribute('href'), '../data/proofs/openai_totient_companion_zero/verification.json');

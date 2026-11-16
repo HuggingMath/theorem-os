@@ -156,16 +156,18 @@ element('feedback-download').addEventListener('click', () => {
 
 /**
  * The workbench links here with ?kind=…&area=…&environment=… so a report starts with where it happened. Only known
- * kinds and areas are taken; the environment fills an empty field and stays editable before anything is published.
+ * kinds and areas are taken; the environment replaces whatever was there and stays editable before anything is
+ * published. The link describes this visit, so it wins over a draft that only carries an earlier link's context,
+ * while a field the link omits keeps what the draft restored. Work the reader typed is never replaced by a link.
  */
-function prefill(params: URLSearchParams) {
+function prefill(params: URLSearchParams): boolean {
   const kind = params.get('kind'), where = params.get('area'), env = params.get('environment');
-  const input = kindInputs.find(item => item.value === kind);
-  if (input) input.checked = true;
-  if (where && [...area.options].some(option => option.value === where && !option.disabled)) area.value = where;
-  if (env && !environment.value) environment.value = env.replace(/\s+/gu, ' ').trim().slice(0, environment.maxLength);
+  if (!kind && !where && env === null) return false;
+  if (kind !== null) kindInputs.forEach(input => { input.checked = input.value === (kinds[kind as Kind] ? kind : 'bug'); });
+  if (where !== null) area.value = [...area.options].some(option => option.value === where && !option.disabled) ? where : '';
+  if (env !== null) environment.value = env.replace(/\s+/gu, ' ').trim().slice(0, environment.maxLength);
+  return true;
 }
-prefill(new URLSearchParams(location.search));
 let restoredDraft = false;
 try {
   const saved = parseFeedbackDraft(sessionStorage.getItem(feedbackDraftKey));
@@ -175,9 +177,13 @@ try {
     restoredDraft = true; draftStatus.textContent = text.draftRestored;
   }
 } catch { draftStatus.textContent = text.draftUnavailable; }
+// Entry context describes this visit, so it applies after a draft that only carries an earlier visit's context.
+// A link must not discard text the reader already wrote, so a drafted subject or description keeps the draft.
+const typedWork = restoredDraft && (subject.value.trim() !== '' || description.value.trim() !== '');
+const prefilled = !typedWork && prefill(new URLSearchParams(location.search));
 
-// Validated entry context is already useful work, even before the first keystroke.
-if (!restoredDraft && (area.value || environment.value || selectedKind() !== 'bug')) saveDraft();
+// Validated entry context is already useful work, even before the first keystroke, and replaces an older draft.
+if (prefilled || (!restoredDraft && (area.value || environment.value || selectedKind() !== 'bug'))) saveDraft();
 updateFields();
 form.hidden = false;
 element('feedback-fallback').hidden = true;

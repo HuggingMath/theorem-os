@@ -2,7 +2,7 @@ import { gsap } from 'gsap';
 import { createSelectionIndicator } from './selectionIndicator';
 import type { Locale } from './site';
 
-/** The same recorded proof player is used by the homepage, archive and workbench classics. */
+/** The recorded proof player is used by the proof archive. The caller must ensure a .replay-window exists. */
 export function initializeReplay(locale: Locale) {
   const replayRoot = document.querySelector<HTMLElement>('.replay-window')!;
   const element = <T extends HTMLElement = HTMLElement>(selector: string): T => replayRoot.querySelector<T>(selector)!;

@@ -35,7 +35,6 @@ for (const [locale, directory] of [['zh', ''], ['en', 'en']] as const) {
   fs.mkdirSync(path.join(output, directory), { recursive: true });
   const homepage = fs.readFileSync(path.join(root, 'docs', directory, 'index.html'), 'utf8')
     .replace('<!-- featured-proof -->', featuredProof(catalog, locale))
-    .replace('<!-- research-replay -->', researchReplay(LOCAL_EXAMPLE_FAILED_PROOF, LOCAL_EXAMPLE_PROOF, replay, locale))
     .replace('<!-- accepted-count -->', String(catalog.records.filter(record => record.status === 'official_accepted').length))
     .replace('<!-- local-count -->', String(catalog.records.filter(record => record.status === 'locally_verified').length))
     .replace('<!-- accepted-proofs -->', acceptedProofRows(catalog, locale));

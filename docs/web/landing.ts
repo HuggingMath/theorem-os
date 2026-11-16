@@ -5,7 +5,6 @@ import {
 } from 'lucide';
 import { gsap } from 'gsap';
 import { createSelectionIndicator } from './selectionIndicator';
-import { initializeReplay } from './replay';
 import { initializeHumanDecision } from './humanDecision';
 import { keepHashOnLanguageSwitch, localeOf } from './site';
 
@@ -86,7 +85,7 @@ entranceMotion.add('(prefers-reduced-motion: no-preference)', context => {
       });
     }
   }, { rootMargin: '0px 0px -35px 0px', threshold: .08 });
-  document.querySelectorAll('.section-heading, .workflow-steps li, .replay-window, .proof-row, .featured-proof, .component-explorer, .component-panel, .module-media, .archive-footer, .start-copy, .faq-list')
+  document.querySelectorAll('.section-heading, .workflow-steps li, .proof-row, .featured-proof, .component-explorer, .component-panel, .module-media, .archive-footer, .start-copy, .faq-list')
     .forEach(target => observer.observe(target));
   return () => observer.disconnect();
 });
@@ -234,7 +233,6 @@ selectComponent('m3');
 
 drawGraphEdges();
 
-initializeReplay(locale);
 initializeHumanDecision(locale);
 reducedMotion.addEventListener('change', () => {
   if (selectionTargets.size) {

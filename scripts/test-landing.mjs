@@ -365,19 +365,26 @@ try {
   await checkArchiveEntry(page);
   await checkProductImages(page, '1440px local preview');
   await checkModuleShowcase(page, 1440);
-  assert.equal(await page.locator('#demo').count(), 1, 'The replay remains directly linkable');
+  assert.equal(await page.locator('#demo, .replay-window').count(), 0, 'The homepage must not embed the replay');
   await checkHomepageFacts(page);
   assert.equal(await page.locator('[data-accepted-proof]').count(), accepted.length);
   assert.match(await page.locator('a[href="archive.html#status=accepted"]').innerText(), new RegExp(`\\b${accepted.length}\\b`));
   await checkProofActions(page);
   assert.match(await page.locator('#proofs').innerText(), /DeepScientist/);
   assert.match(await page.locator('#proofs').innerText(), /历史|前身|原始归属/);
+  assert.equal(replayEvidence.source, 'preset-replay');
+  assert.equal(replayEvidence.modelInvoked, false);
+  // The four-step replay lives in the archive; both homepage nav entries point there.
+  assert.equal(await page.locator('.desktop-nav a[href="archive.html#view=quickstart"], .mobile-nav a[href="archive.html#view=quickstart"]').count(), 2);
+  assert.equal(await page.locator('.desktop-nav a[href="#demo"], .mobile-nav a[href="#demo"]').count(), 0, 'No navigation target may point at the removed hero replay');
+  assert.equal(await page.locator('a[href="archive.html#view=quickstart"]').count(), 4, 'Navigation, the decision example and the reading guide share one replay destination');
+  await page.goto(new URL('archive.html#view=quickstart', url).href);
+  await page.waitForSelector('#quickstart-view .replay-window');
+  assert.equal(await page.locator('#quickstart-view').isVisible(), true);
+  assert.equal(await page.locator('.replay-badge').innerText(), '示例证明回放');
   assert.match(await page.locator('.receipt-status').innerText(), new RegExp(replayEvidence.status));
   await reveal(page.locator('.receipt-targets'));
   for (const target of replayEvidence.targets) assert.ok((await page.locator('.receipt-targets').innerText()).includes(target.theorem));
-  assert.equal(await page.locator('.replay-badge').innerText(), '示例证明回放');
-  assert.equal(replayEvidence.source, 'preset-replay');
-  assert.equal(replayEvidence.modelInvoked, false);
   for (const id of ['candidate', 'feedback', 'repair', 'verified']) {
     await page.locator(`#demo-${id}`).click();
     assert.equal(await page.locator(`#demo-${id}`).getAttribute('aria-selected'), 'true');
@@ -392,6 +399,8 @@ try {
   assert.equal(await page.locator('#demo-candidate').getAttribute('aria-selected'), 'true');
   await page.keyboard.press('End');
   assert.equal(await page.locator('#demo-verified').getAttribute('aria-selected'), 'true');
+  await page.goto(url);
+  await page.waitForFunction(() => document.documentElement.dataset.landingReady === 'true');
   // Verify local navigation and packaged resources, including file:// previews.
   const localPaths = await page.locator('a[href], img[src], script[src], link[href]').evaluateAll(nodes => nodes.map(node => node.getAttribute('href') ?? node.getAttribute('src')).filter(Boolean));
   for (const relative of localPaths) {
@@ -456,10 +465,6 @@ try {
     await checkStart(page);
     await checkProofActions(page);
     await checkWidth(page, `${viewport.width}px homepage`);
-    for (const id of ['feedback', 'repair', 'verified']) {
-      await page.locator(`#demo-${id}`).click();
-      await checkWidth(page, `${viewport.width}px replay ${id}`);
-    }
     assert.ok(await page.locator('.brand img').first().evaluate(image => image.complete && image.naturalWidth > 0));
     await page.locator('#tab-m2').click();
     await checkWidth(page, `${viewport.width}px M2`);
@@ -582,7 +587,7 @@ try {
   await page.waitForSelector('.proof-row');
   assert.equal(await page.locator('.proof-row').count(), catalog.records.length);
   assert.deepEqual(errors, []);
-  console.log('Landing checks passed: interactive module graph and static no-script graph, no graph API or mutation calls, Lean workflow, beta application and model billing, exact accepted source and original attribution, responsive product screenshots, modal zoom and keyboard focus, replay and component controls, mobile navigation, JavaScript-disabled content, file preview, Pages subpath, and 5 viewport sizes.');
+  console.log('Landing checks passed: interactive module graph and static no-script graph, no graph API or mutation calls, Lean workflow, beta application and model billing, exact accepted source and original attribution, text-only hero with the replay in the archive, mobile navigation, JavaScript-disabled content, file preview, Pages subpath, and 5 viewport sizes.');
 } finally {
   if (server) await new Promise(resolve => server.close(resolve));
   await browser.close();

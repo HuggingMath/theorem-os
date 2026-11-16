@@ -339,7 +339,7 @@ h1 span { font-family: var(--serif); font-weight: 400; color: var(--muted); font
   .brand { gap: 8px; font-size: 19px; }
   .brand-mark { width: 28px; height: 28px; }
   .preview-tag { display: none; }
-  .header-links { gap: 15px; }
+  .header-links { gap: 14px; }
   .header-links a { font-size: 13px; gap: 5px; }
   .header-links svg { width: 14px; height: 14px; }
   .header-links .external-arrow { display: none; }
@@ -399,7 +399,8 @@ h1 span { font-family: var(--serif); font-weight: 400; color: var(--muted); font
 }
 @media (max-width: 360px) {
   .brand { font-size: 17px; }
-  .header-links { gap: 9px; }
+  .topbar { gap: 8px; padding: 0 14px; }
+  .header-links { gap: 7px; }
   .header-links a:first-child span { display: none; }
   .status-filter label > span { padding: 0 11px; }
   h1 { font-size: 25px; }
