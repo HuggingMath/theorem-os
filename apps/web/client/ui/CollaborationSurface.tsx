@@ -16,7 +16,9 @@ export function CollaborationSurface(props: { runId: string; taskView: TaskView;
       <div class="collab-heading-actions">
         <div class="collab-detail-toggle" role="group" aria-label={t('信息详略')} title={t('简洁和详细对对话、协作与轨迹同时生效')}><button type="button" data-collab-detail="simple">{t('简洁')}</button><button type="button" data-collab-detail="full">{t('详细')}</button></div>
         <button type="button" class="button" data-collab-refresh>{t('刷新观察')}</button><button type="button" class="button" data-collab-plan disabled>{t('编辑计划')}</button><button type="button" class="button" data-collab-archive disabled>{t('归档知识')}</button></div></div>
-    <div data-collab-navigation></div><div data-collab-summary></div><p data-collab-status class="collab-help collab-operation-status" role="status"></p>
+    <div data-collab-navigation></div><div data-collab-summary></div>
+    <section class="collab-focus" data-collab-focus aria-label={t('正在证明')} hidden></section>
+    <p data-collab-status class="collab-help collab-operation-status" role="status"></p>
     <section class="collab-agent-route"><div class="collab-section-heading"><h3>{t('Agent 操作明细')}</h3></div><div data-agent-route></div></section>
     <section class="collab-now"><div class="collab-section-heading"><h3>{t('现在在做什么')}</h3></div><div data-collab-now></div></section>
     <div data-collab-progress></div>

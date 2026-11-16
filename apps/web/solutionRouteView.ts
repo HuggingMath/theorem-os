@@ -3,7 +3,12 @@ import { h, render } from 'preact';
 import { Rich, RichProse } from './client/richText';
 
 type Options = { onSelect?: (id: string) => void; onOpen?: (target: string) => void; /** The workbench panel: secondary controls stay folded until the reader asks for them. */ compact?: boolean };
-type Memory = { selected: string; zoom: number; left: number; top: number; all: boolean; library: boolean; opened: Set<string>; query: string; reading: boolean; more: boolean; details: Map<string, boolean> };
+type Memory = { selected: string; zoom: number; left: number; top: number; all: boolean; library: boolean; opened: Set<string>; query: string; reading: boolean; more: boolean; details: Map<string, boolean>;
+  /** The zoom came from "fit", so a resized frame fits again while a hand-panned map keeps its place. */ fitted: boolean;
+  /** The frame the last fit was computed against, so expanding the canvas can fit again without resizing loops. */ fitWidth: number; fitHeight: number;
+  /** The step details column is open beside the map; folding it gives the map the whole panel. */ detail: boolean };
+/** The workbench panel is narrow: fitting a wide route there shrinks text past reading, so the map scrolls instead. */
+const readableZoom = .75;
 type Box = { x: number; y: number; width: number; height: number };
 const memories = new Map<string, Memory>();
 const html = (value: unknown) => String(value ?? '').replace(/[&<>"']/gu, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -71,7 +76,7 @@ export function solutionRouteLayout(model: SolutionRoute, nodes: readonly Soluti
         const item = pending.pop()!;
         if (boxes.has(item.node.id)) continue;
         const inset = Math.min(42, item.depth * 14);
-        boxes.set(item.node.id, { x: 30 + rank * 298 + inset, y, width: 238 - inset, height: 180 }); y += 206;
+        boxes.set(item.node.id, { x: 30 + rank * 298 + inset, y, width: 238 - inset, height: 140 }); y += 162;
         for (const child of [...children.get(item.node.id) ?? []].reverse()) pending.push({ node: child, depth: item.depth + 1 });
       }
       y += 20;
@@ -136,7 +141,8 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       const selected = next.initial ?? next.nodes[0]?.id ?? '', opened = new Set<string>();
       let parent = next.nodes.find(node => node.id === selected)?.parentId;
       while (parent && !opened.has(parent)) { opened.add(parent); parent = next.nodes.find(node => node.id === parent)?.parentId; }
-      saved = { selected, zoom: 1, left: 0, top: 0, all: false, library: false, opened, query: '', reading: false, more: false, details: new Map() }; memories.set(next.id, saved);
+      saved = { selected, zoom: 1, left: 0, top: 0, all: false, library: false, opened, query: '', reading: false, more: false, details: new Map(),
+        fitted: false, fitWidth: 0, fitHeight: 0, detail: false }; memories.set(next.id, saved);
     }
     return saved;
   }
@@ -183,7 +189,7 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
     const sectionContent = (section: SolutionRouteSection, index: number) => `<section class="solution-route-section"><h5 tabindex="-1" data-solution-section-heading="${index}"><span class="solution-route-section-number">${String(index + 1).padStart(2, '0')}</span>${html(section.title)}</h5>${section.code ? `<pre tabindex="0"><code>${html(section.text)}</code></pre>` : `<div data-solution-prose="block">${html(section.text)}</div>`}${section.reason ? `<div class="solution-route-reason" data-solution-prose="block">${html(section.reason)}</div>` : ''}</section>`;
     const evidence = sections.map((section, index) => supporting(section) ? sectionContent(section, index) : '').join('');
     const summary = node.summary && !sections.some(section => !section.code && section.text.trim() === node.summary!.trim()) ? node.summary : '';
-    return `<header class="solution-route-detail-heading"><p>${node.origin ? originNames[model.locale][node.origin] : kindNames[model.locale][node.kind]}<span data-status="${node.status}">${statusNames[model.locale][node.status]}</span></p><h4 tabindex="-1" data-solution-heading="${html(node.id)}" data-solution-prose>${html(node.title)}</h4>
+    return `<header class="solution-route-detail-heading">${options.compact && !state.reading ? `<button type="button" class="solution-route-detail-close" data-solution-detail-close aria-label="${word('收起步骤详情', 'Close step details')}">×</button>` : ''}<p>${node.origin ? originNames[model.locale][node.origin] : kindNames[model.locale][node.kind]}<span data-status="${node.status}">${statusNames[model.locale][node.status]}</span></p><h4 tabindex="-1" data-solution-heading="${html(node.id)}" data-solution-prose>${html(node.title)}</h4>
       ${!state.reading ? `<button type="button" class="solution-route-read" data-solution-view="read">${word('展开阅读', 'Read in full')} ↗</button>` : ''}</header>
       ${summary ? `<div class="solution-route-summary" data-solution-prose="block">${html(summary)}</div>` : ''}
       ${node.at ? `<time>${html(node.at)}</time>` : ''}
@@ -210,6 +216,7 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
     root.classList.add('solution-route'); root.dataset.solutionRouteId = model.id; root.dataset.solutionRouteBasis = model.basis;
     root.dataset.solutionExpanded = String(expanded); root.dataset.solutionReading = String(state.reading);
     root.dataset.solutionCompact = String(Boolean(options.compact)); root.dataset.solutionMore = String(state.more);
+    root.dataset.solutionDetail = String(state.detail);
     if (expanded) { root.setAttribute('role', 'dialog'); root.setAttribute('aria-modal', 'true'); root.setAttribute('aria-label', model.title); }
     else { root.removeAttribute('role'); root.removeAttribute('aria-modal'); root.removeAttribute('aria-label'); }
     root.innerHTML = `<header class="solution-route-heading"><div><h3 data-solution-prose="inline">${html(model.title)}</h3><p>${model.basis === 'source' ? word('证明声明与源码引用', 'Proof declarations and source references') : model.basis === 'explanation' ? word('推导步骤与所用结论', 'Derivation steps and the results they use') : word('任务依赖、推导、尝试与验收', 'Tasks, reasoning, attempts and acceptance')}</p></div><span data-solution-count>${state.reading ? model.nodes.length : `${visible.length} / ${model.nodes.length}`} ${state.reading ? word('步骤', 'steps') : word('节点', 'nodes')}</span></header>
@@ -220,7 +227,7 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
         ${model.nodes.some(node => node.origin === 'library') ? `<button type="button" data-solution-library aria-pressed="${state.library}">${word('库里的结论', 'Library results')} ${model.nodes.filter(node => node.origin === 'library').length}</button>` : ''}
         <div class="solution-route-view-controls" role="group" aria-label="${word('阅读方式', 'Reading view')}"><button type="button" data-solution-view="map" aria-pressed="${!state.reading}">${word('路线图', 'Route map')}</button><button type="button" data-solution-view="read" aria-pressed="${state.reading}">${word('阅读推导', 'Read reasoning')}</button></div>
         ${state.reading ? `<label class="solution-route-step-picker"><span>${word('当前步骤', 'Current step')}</span><select data-solution-reader-select aria-label="${word('跳转到路线中的步骤', 'Jump to a route step')}">${model.nodes.map((node, index) => `<option value="${html(node.id)}"${node.id === state.selected ? ' selected' : ''}>${String(index + 1).padStart(2, '0')} · ${html(node.title)}</option>`).join('')}</select><span>${model.nodes.findIndex(node => node.id === state.selected) + 1} / ${model.nodes.length}</span></label>` : ''}
-        <div role="group" aria-label="${word('路线图缩放', 'Route zoom')}"><button type="button" data-solution-zoom="out" aria-label="${word('缩小', 'Zoom out')}">−</button><button type="button" data-solution-zoom="reset" aria-label="${word('恢复原始大小', 'Reset zoom')}"><output>${Math.round(state.zoom * 100)}%</output></button><button type="button" data-solution-zoom="in" aria-label="${word('放大', 'Zoom in')}">＋</button><button type="button" data-solution-zoom="fit">${word('查看全图', 'Fit route')}</button><button type="button" data-solution-expand aria-expanded="${expanded}">${expanded ? word('收起画布', 'Close canvas') : word('展开画布', 'Expand canvas')}</button></div></div>
+        <div role="group" aria-label="${word('路线图缩放', 'Route zoom')}"><button type="button" data-solution-zoom="out" aria-label="${word('缩小', 'Zoom out')}">−</button><button type="button" data-solution-zoom="reset" aria-label="${word('恢复原始大小', 'Reset zoom')}"><output>${Math.round(state.zoom * 100)}%</output></button><button type="button" data-solution-zoom="in" aria-label="${word('放大', 'Zoom in')}">＋</button><button type="button" data-solution-zoom="fit">${word('查看全图', 'Fit route')}</button>${options.compact && !state.reading ? `<button type="button" data-solution-detail-toggle aria-pressed="${state.detail}">${state.detail ? word('只看路线图', 'Map only') : word('打开步骤详情', 'Step details')}</button>` : ''}<button type="button" data-solution-expand aria-expanded="${expanded}">${expanded ? word('收起画布', 'Close canvas') : word('展开画布', 'Expand canvas')}</button></div></div>
       <div class="solution-route-workspace"><div class="solution-route-viewport" tabindex="0" aria-label="${word('交互路线图，可拖动平移并选择步骤', 'Interactive route: drag to pan and select a step')}"><div class="solution-route-scaled"><div class="solution-route-canvas">
       <svg class="solution-route-lines" width="${layout.width}" height="${layout.height}" aria-hidden="true"><defs><marker id="solution-arrow-${html(model.id.replace(/[^a-zA-Z0-9]/gu, ''))}" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7"/></marker></defs>${model.edges.filter(edge => ids.has(edge.from) && ids.has(edge.to)).map(edge => {
         const a = layout.boxes.get(edge.from)!, b = layout.boxes.get(edge.to)!;
@@ -235,6 +242,15 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       }).join('')}</div></div>${!visible.length ? `<p class="solution-route-empty">${word('没有匹配的步骤。换一个关键词，或清空搜索。', 'No matching steps. Try another term or clear the search.')}</p>` : ''}</div>
       <aside class="solution-route-detail" data-solution-inspector aria-label="${word('路线步骤详情', 'Route step details')}" aria-live="polite">${inspector()}</aside></div>
       <footer class="solution-route-footer">${legend(visible, ids)}${model.partial ? `<span>${word('当前记录尚未全部读取', 'Some records have not been loaded')}</span>` : ''}<div><button type="button" data-solution-step="previous">← ${word('上一步', 'Previous')}</button><button type="button" data-solution-step="next">${word('下一步', 'Next')} →</button></div></footer>`;
+    // A fitted map follows its frame: opening the drawer, expanding the canvas or resizing the panel fits again.
+    const frame = root.querySelector<HTMLElement>('.solution-route-viewport');
+    if (frame && state.fitted && !state.reading && state.fitWidth && (frame.clientWidth !== state.fitWidth || frame.clientHeight !== state.fitHeight)) {
+      state.fitWidth = frame.clientWidth; state.fitHeight = frame.clientHeight;
+      const exact = Math.min(1, (state.fitWidth - 10) / layout.width, (state.fitHeight - 10) / layout.height);
+      state.zoom = options.compact && !expanded ? Math.max(readableZoom, exact) : Math.max(.00001, exact);
+      state.left = 0; state.top = 0;
+      const output = root.querySelector<HTMLElement>('[data-solution-zoom="reset"] output'); if (output) output.textContent = `${Math.round(state.zoom * 100)}%`;
+    }
     // Apply layout through CSSOM: the workbench CSP intentionally disallows HTML style attributes.
     const space = root.querySelector<HTMLElement>('.solution-route-scaled')!;
     space.style.width = `${layout.width * state.zoom}px`; space.style.height = `${layout.height * state.zoom}px`;
@@ -264,6 +280,8 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       }
     }
     if (state.query && !shown().some(item => item.id === id)) state.query = '';
+    // Picking a step in the narrow panel is a request to read it: open the details over the map.
+    if (options.compact && !state.reading) state.detail = true;
     draw();
     if (state.reading) {
       if (focus) {
@@ -284,13 +302,30 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
     const button = root.querySelector<HTMLElement>('[data-solution-node][aria-pressed="true"]')
       ?? root.querySelector<HTMLElement>('[data-solution-node]');
     if (!button) return;
+    // The drawer covers the right edge of the map; keep the chosen step in the part still in view.
+    const drawer = root.querySelector<HTMLElement>('.solution-route-detail');
+    const covered = options.compact && state.detail && drawer && drawer.getClientRects().length ? drawer.offsetWidth : 0;
+    const visible = Math.max(160, viewport.clientWidth - covered);
     const left = button.offsetLeft * state.zoom, top = button.offsetTop * state.zoom;
     const right = left + button.offsetWidth * state.zoom, bottom = top + button.offsetHeight * state.zoom;
     if (left < viewport.scrollLeft) viewport.scrollLeft = left;
-    else if (right > viewport.scrollLeft + viewport.clientWidth) viewport.scrollLeft = right - viewport.clientWidth;
+    else if (right > viewport.scrollLeft + visible) viewport.scrollLeft = right - visible;
     if (top < viewport.scrollTop) viewport.scrollTop = top;
     else if (bottom > viewport.scrollTop + viewport.clientHeight) viewport.scrollTop = bottom - viewport.clientHeight;
     state.left = viewport.scrollLeft; state.top = viewport.scrollTop;
+  }
+  /** Fit the whole route, but never below a size whose node titles can still be read: then the map scrolls instead. */
+  function fit(reveal = false) {
+    const viewport = root.querySelector<HTMLElement>('.solution-route-viewport');
+    if (!viewport) return;
+    const layout = solutionRouteLayout(model, shown());
+    const exact = Math.min(1, (viewport.clientWidth - 10) / layout.width, (viewport.clientHeight - 10) / layout.height);
+    // Only the narrow workbench panel needs the floor; a full-page route has the width to fit every declaration.
+    state.zoom = options.compact && !expanded ? Math.max(readableZoom, exact) : Math.max(.00001, exact);
+    state.fitWidth = viewport.clientWidth; state.fitHeight = viewport.clientHeight;
+    state.left = 0; state.top = 0;
+    draw();
+    if (reveal && !state.reading) revealSearchResult();
   }
   function expand(value: boolean) {
     if (value === expanded) return;
@@ -359,15 +394,27 @@ export function mountSolutionRoute(root: HTMLElement, initial: SolutionRoute, op
       drawVisibleSelection(); root.querySelector<HTMLButtonElement>('[data-solution-children]')?.focus({ preventScroll: true }); return;
     }
     if (target.hasAttribute('data-solution-expand')) { expand(!expanded); return; }
+    if (target.hasAttribute('data-solution-detail-toggle')) {
+      state.detail = !state.detail; draw();
+      root.querySelector<HTMLButtonElement>('[data-solution-detail-toggle]')?.focus({ preventScroll: true }); return;
+    }
+    if (target.hasAttribute('data-solution-detail-close')) {
+      state.detail = false; draw();
+      root.querySelector<HTMLButtonElement>('[data-solution-detail-toggle]')?.focus({ preventScroll: true }); return;
+    }
     const zoom = target.dataset.solutionZoom;
     if (zoom) {
-      const viewport = root.querySelector<HTMLElement>('.solution-route-viewport')!, layout = solutionRouteLayout(model, shown());
+      const viewport = root.querySelector<HTMLElement>('.solution-route-viewport')!;
       const center = { x: (viewport.scrollLeft + viewport.clientWidth / 2) / state.zoom, y: (viewport.scrollTop + viewport.clientHeight / 2) / state.zoom };
-      state.zoom = zoom === 'fit' ? Math.max(.00001, Math.min(1, (viewport.clientWidth - 10) / layout.width, (viewport.clientHeight - 10) / layout.height))
-        : Math.max(.1, Math.min(2, zoom === 'reset' ? 1 : state.zoom + (zoom === 'in' ? .1 : -.1)));
-      state.left = zoom === 'fit' ? 0 : Math.max(0, center.x * state.zoom - viewport.clientWidth / 2);
-      state.top = zoom === 'fit' ? 0 : Math.max(0, center.y * state.zoom - viewport.clientHeight / 2);
-      draw(); root.querySelector<HTMLButtonElement>(`[data-solution-zoom="${zoom}"]`)?.focus({ preventScroll: true }); return;
+      if (zoom === 'fit') { state.fitted = true; fit(true); }
+      else {
+        state.fitted = false;
+        state.zoom = Math.max(.1, Math.min(2, zoom === 'reset' ? 1 : state.zoom + (zoom === 'in' ? .1 : -.1)));
+        state.left = Math.max(0, center.x * state.zoom - viewport.clientWidth / 2);
+        state.top = Math.max(0, center.y * state.zoom - viewport.clientHeight / 2);
+        draw();
+      }
+      root.querySelector<HTMLButtonElement>(`[data-solution-zoom="${zoom}"]`)?.focus({ preventScroll: true }); return;
     }
     if (target.dataset.solutionStep) {
       const nodes = state.reading ? model.nodes : shown();

@@ -671,4 +671,12 @@ export const collaboration: Record<string, string> = {
   "收起画布": "Close expanded canvas",
   "点击节点查看详情 · 拖动平移": "Select a node for details · Drag to pan",
   "部分早期记录已超出保留范围，路线图仅展示已保存的过程。": "Some earlier records are no longer retained. The roadmap shows the saved part of the run.",
+  "已检查 {0} / {1} 个证明任务{2}": "{0} of {1} proof tasks checked{2}",
+  " · 有条件 {0}": " · {0} conditional",
+  " · 受阻 {0}": " · {0} blocked",
+  "没有拆分成子任务，Agent 直接证明完整原题": "Not split into subtasks; the Agent proves the whole original problem directly",
+  "整道题已通过独立 Lean 验收": "The whole problem passed independent Lean acceptance",
+  "原题已通过；可以归档这次的知识，或在此基础上继续新的题目。": "The original problem passed. Archive what this run learned, or build on it for a new problem.",
+  "这次运行结束时还没有通过验收的完整证明；证据保留在报告与源码中，可以在下方指导、提高预算后重跑，或从已有结果继续。": "This run ended without an accepted complete proof. The evidence stays in the report and source; give guidance below, rerun with a larger budget, or continue from the existing result.",
+  "运行数据与凭据": "Run data and evidence",
 };

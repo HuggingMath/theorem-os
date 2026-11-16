@@ -80,8 +80,9 @@ export class CollaborationNavigation {
       this.element.querySelector<HTMLButtonElement>(`[data-collab-jump="${id}"]`)!.hidden = unsupported;
       const option = picker.querySelector<HTMLOptionElement>(`option[value="${id}"]`)!;
       option.hidden = unsupported; option.disabled = unsupported;
-      this.element.querySelector(`[data-collab-nav-count="${id}"]`)!.textContent = count === undefined ? '' : String(count);
-      picker.querySelector(`option[value="${id}"]`)!.textContent = `${title}${count === undefined ? '' : ` · ${count}`}`;
+      // An empty section shows no number: a row of zeros reads as clutter, not as information.
+      this.element.querySelector(`[data-collab-nav-count="${id}"]`)!.textContent = count ? String(count) : '';
+      picker.querySelector(`option[value="${id}"]`)!.textContent = `${title}${count ? ` · ${count}` : ''}`;
     }
     const sync = this.element.querySelector<HTMLElement>('[data-collab-sync]')!;
     sync.textContent = connected ? observation ? t('观察 #{0}', observation.sequence) : t('等待观察') : t('连接中断');

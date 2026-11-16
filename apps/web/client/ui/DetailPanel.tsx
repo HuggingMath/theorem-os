@@ -182,12 +182,10 @@ function ResultDocument(props: ResultPanelProps) {
     </section>
     {props.recoveryContext && <RecoveryChoices {...props.recoveryContext} steps={props.recovery} />}
     {props.saveLibrary && <a class="button" data-save-library href={props.saveLibrary}>{t('保存到我的 Library')}</a>}
-    {props.later && <Later runs={props.later} comparing={props.compare?.id} />}
+    {/* 下一步: what is still open. */}
     {props.goals && <Goals {...props.goals} active={props.active} />}
-    {props.proof ? <ProofPreview {...props.proof} open={Boolean(props.viewer)} />
-      : <section class="result-section result-proof-empty"><h3>{t('证明')}</h3>
-        <p class="result-note">{props.active ? t('Agent 写出候选证明后显示在这里。') : t('这次运行没有产出候选证明。')}</p>
-        <button type="button" class="text-button" data-action="open-source"><Icon name="file-code-2" />{t('查看原始题目')}</button></section>}
+    {/* 证据: only blocks that carry something; a run without a proof is already said by the verdict. */}
+    {props.proof && <ProofPreview {...props.proof} open={Boolean(props.viewer)} />}
     {props.route && <section class="result-section result-route" aria-labelledby="result-route-heading">
       <div class="result-section-heading"><h3 id="result-route-heading">{t('Agent 路线图')}</h3>
         <button type="button" class="text-button" data-action="show-agents">{t('研究协作')}<Icon name="arrow-up-right" /></button></div>
@@ -195,11 +193,12 @@ function ResultDocument(props: ResultPanelProps) {
       <details class="result-agent-actions"><summary>{t('Agent 操作明细')}</summary><div class="agent-route" data-result-route /></details>
     </section>}
     <ReportPanel {...props.report} />
+    {props.later && <Later runs={props.later} comparing={props.compare?.id} />}
+    {/* The task stays readable; how it was run is background and stays folded. */}
     <section class="result-section result-task">
       <div class="result-task-copy"><h3>{t('研究任务')}</h3><p class="task-content" translate={false}>{props.task}</p></div>
-      <div><div class="term-heading"><h3>{t('执行配置')}</h3><TermHint id="budget" /></div>
-        <FactList facts={props.facts} />
-        {props.config.length > 0 && <details class="target-diagnostics result-config"><summary>{t('全部配置')}</summary><FactList facts={props.config} /></details>}</div>
+      <details class="target-diagnostics result-config"><summary>{t('执行配置')}</summary>
+        <FactList facts={props.facts} />{props.config.length > 0 && <FactList facts={props.config} />}</details>
     </section>
   </div>;
 }
@@ -355,8 +354,8 @@ function CompareViewer(props: CompareProps) {
 }
 
 function ReportPanel(props: ReportPanelProps) {
-  // While the run is active there is nothing to accept yet; the verdict above says so.
-  if (props.kind === 'empty') return props.active ? null : <section class="result-section"><h3>{t('验收报告')}</h3><p class="result-note">{t('暂无结果报告')}</p></section>;
+  // No report is no section: the verdict above already says how the run stands.
+  if (props.kind === 'empty') return null;
   // The verdict above explains the failure; the worker's own text is kept folded for a feedback report.
   if (props.kind === 'error') return <section class="result-section result-diagnostics"><details class="target-diagnostics"><summary>{t('运行诊断')}</summary>
     <pre class="diagnostic-output" tabIndex={0}>{props.error}</pre></details></section>;
@@ -371,31 +370,34 @@ function ReportPanel(props: ReportPanelProps) {
   return <section class="result-section result-report" aria-labelledby="result-report-heading">{heading}<div class="report-summary">
     {summary.reason && <section class="report-section report-reason"><h3>{t('运行说明')}</h3><p>{summary.reason}</p></section>}
     {props.stuck && <Stuck {...props.stuck} />}
-    {summary.metrics.length > 0 && <dl class="report-metrics">{summary.metrics.map(item => <Fact key={item.label} {...item} />)}</dl>}
-    {summary.library && <section class="report-section report-library" data-report-library>
-      <h3>{t('库调用')}</h3><p><code>{summary.library.id}</code> · {summary.library.revision}</p>
-      <dl class="report-metrics">
-        <Fact label={t('装入模块')} value={String(summary.library.installedModules)} />
-        <Fact label={t('按需补装轮次')} value={String(summary.library.installationRounds)} />
-        <Fact label={t('已记录证明引用')} value={summary.library.referenceCount === undefined ? summary.library.coverage === 'partial' ? t('记录不完整') : t('未记录') : String(summary.library.referenceCount)} />
-      </dl>
-      {summary.library.coverage === 'unknown' ? <p class="result-note">{t('尚无独立验收的库引用记录。')}</p> :
-        summary.library.coverage === 'partial' ? <p class="result-note">{t('部分目标缺少引用记录，以下为已记录引用。')}</p> :
-          summary.library.referenceCount === 0 ? <p class="result-note">{t('独立验收的证明未引用该库的公开声明。')}</p> : null}
-      {summary.library.references.length > 0 && <details class="target-diagnostics"><summary>{t('查看引用的公开声明')}</summary>
-        <ul>{summary.library.references.map(reference => <li key={reference.name}><code title={reference.sourceDigest}>{reference.name}</code><br /><code>{reference.file}</code></li>)}</ul>
-        {summary.library.omittedReferences > 0 && <p class="result-note">{t('另有 {0} 条引用未在此展开。', summary.library.omittedReferences)}</p>}
-      </details>}
-      <details class="target-diagnostics"><summary>{t('库版本凭据')}</summary><code>{summary.library.catalogDigest}</code></details>
-    </section>}
     {props.outline && <section class="report-section report-outline" aria-labelledby="report-outline-heading"><div class="report-check-heading"><h3 id="report-outline-heading">{props.accepted ? t('证明结构') : t('候选证明结构')}</h3></div>
       <div class="outline-body" aria-live="polite"><Outline {...props.outline} /></div></section>}
-    {summary.checks.length ? summary.checks.map(check => <Check key={check.id} {...check} />) : <p class="result-note">{t('这次运行没有留下验收记录。')}</p>}
+    {summary.checks.map(check => <Check key={check.id} {...check} />)}
     {summary.diagnostic && <details class="target-diagnostics report-diagnostic"><summary>{t('运行诊断')}</summary>
       <pre class="diagnostic-output" tabIndex={0}>{summary.diagnostic}</pre></details>}
-    {/* Commits and digests let someone reproduce the check; they stay folded for everyone else. */}
-    {summary.identity.length > 0 && <details class="target-diagnostics report-credentials"><summary>{t('验收凭据')}</summary>
-      <dl class="facts report-identity">{summary.identity.map(item => <Fact key={item.label} {...item} />)}</dl></details>}
+    {/* Usage, library provenance, commits and digests let someone reproduce the check; they stay folded for everyone else. */}
+    {(summary.metrics.length > 0 || summary.library || summary.identity.length > 0) && <details class="target-diagnostics report-more" data-report-more>
+      <summary>{t('运行数据与凭据')}</summary>
+      {summary.metrics.length > 0 && <dl class="report-metrics">{summary.metrics.map(item => <Fact key={item.label} {...item} />)}</dl>}
+      {summary.library && <section class="report-section report-library" data-report-library>
+        <h3>{t('库调用')}</h3><p><code>{summary.library.id}</code> · {summary.library.revision}</p>
+        <dl class="report-metrics">
+          <Fact label={t('装入模块')} value={String(summary.library.installedModules)} />
+          <Fact label={t('按需补装轮次')} value={String(summary.library.installationRounds)} />
+          <Fact label={t('已记录证明引用')} value={summary.library.referenceCount === undefined ? summary.library.coverage === 'partial' ? t('记录不完整') : t('未记录') : String(summary.library.referenceCount)} />
+        </dl>
+        {summary.library.coverage === 'unknown' ? <p class="result-note">{t('尚无独立验收的库引用记录。')}</p> :
+          summary.library.coverage === 'partial' ? <p class="result-note">{t('部分目标缺少引用记录，以下为已记录引用。')}</p> :
+            summary.library.referenceCount === 0 ? <p class="result-note">{t('独立验收的证明未引用该库的公开声明。')}</p> : null}
+        {summary.library.references.length > 0 && <details class="target-diagnostics"><summary>{t('查看引用的公开声明')}</summary>
+          <ul>{summary.library.references.map(reference => <li key={reference.name}><code title={reference.sourceDigest}>{reference.name}</code><br /><code>{reference.file}</code></li>)}</ul>
+          {summary.library.omittedReferences > 0 && <p class="result-note">{t('另有 {0} 条引用未在此展开。', summary.library.omittedReferences)}</p>}
+        </details>}
+        <details class="target-diagnostics"><summary>{t('库版本凭据')}</summary><code>{summary.library.catalogDigest}</code></details>
+      </section>}
+      {summary.identity.length > 0 && <section class="report-section report-credentials"><h3>{t('验收凭据')}</h3>
+        <dl class="facts report-identity">{summary.identity.map(item => <Fact key={item.label} {...item} />)}</dl></section>}
+    </details>}
   </div></section>;
 }
 

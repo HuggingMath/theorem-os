@@ -184,6 +184,8 @@ try {
     const report = { libraryUsage, evaluator: { status: 'passed', method: 'host-lean-kernel-all-targets' } };
     const run = await createRun(h, 'Accepted library proof', result(report, 'evaluated_passed'));
     await refresh(h); await select(h, run.id); await showArtifacts(h.page);
+    // Library provenance is reproduction detail; it sits in the report's folded run data.
+    await h.page.locator('[data-report-more] > summary').click();
     const section = h.page.locator('[data-report-library]'); await section.waitFor();
     assert.deepEqual(await section.locator('.report-metrics dd').allTextContents(), ['3', '1', '1']);
     await section.locator('summary').filter({ hasText: '查看引用的公开声明' }).click();
@@ -201,6 +203,7 @@ try {
       ...libraryUsage, proof: { ...libraryUsage.proof, coverage: 'unknown', coveredTargets: 0, referenceCount: null, references: [] },
     } }));
     await refresh(h); await select(h, pending.id); await showArtifacts(h.page);
+    await h.page.locator('[data-report-more] > summary').click();
     const unverified = h.page.locator('[data-report-library]'); await unverified.waitFor();
     assert.deepEqual(await unverified.locator('.report-metrics dd').allTextContents(), ['3', '1', '未记录']);
     assert.ok((await unverified.innerText()).includes('尚无独立验收的库引用记录。'));

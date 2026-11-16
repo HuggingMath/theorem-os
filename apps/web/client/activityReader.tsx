@@ -187,6 +187,19 @@ export class ActivityReader {
     const body = this.get<HTMLTableSectionElement>('tbody');
     // Times alone repeat across days: a log reaching past one local day dates the newest row of each day (newest first).
     const dated = day(this.events[0]?.at) !== day(this.events.at(-1)?.at);
+    // A run of the same line from the same Agent is one row with a count. The newest row of the run stays visible
+    // and carries the total; the older rows stay keyed but hidden, so sequence lookups and exports keep working.
+    const totals = new Map<number, number>(), hidden = new Set<number>();
+    let leader = this.shown[0]?.sequence, count = 1, lastKey: string | undefined;
+    for (const [index, event] of this.shown.entries()) {
+      const key = `${event.type}\u0000${readableMessage(event, this.names)}`;
+      if (index) {
+        if (key === lastKey) { count++; hidden.add(event.sequence); } else { totals.set(leader!, count); leader = event.sequence; count = 1; }
+      }
+      lastKey = key;
+    }
+    if (leader !== undefined) totals.set(leader, count);
+    for (const [sequence, total] of totals) if (total < 2) totals.delete(sequence);
     let cursor = body.firstElementChild, previous: string | undefined;
     for (const event of this.shown) {
       let row = this.rows.get(event.sequence);
@@ -198,6 +211,9 @@ export class ActivityReader {
         row.append(time, document.createElement('td'));
         this.rows.set(event.sequence, row);
       }
+      const total = totals.get(event.sequence);
+      row.hidden = hidden.has(event.sequence);
+      if (total) row.cells[1]!.dataset.repeats = String(total); else delete row.cells[1]!.dataset.repeats;
       const time = row.querySelector('time')!, date = row.querySelector<HTMLElement>('.activity-date')!, today = day(event.at);
       const label = dated && today !== previous ? dayLabel(event.at) : '';
       previous = today;
@@ -210,6 +226,7 @@ export class ActivityReader {
       if (row === cursor) cursor = cursor.nextElementSibling;
       else body.insertBefore(row, cursor);
     }
+    // The count is drawn by CSS from the data attribute, so the cell's text stays exactly the message text.
     if (this.following) this.seenSequence = this.events.at(-1)?.sequence ?? 0;
     if (!this.following && anchor && !retained.has(anchor.sequence) && !reset) this.readingLost = true;
     this.renderControls();
@@ -217,8 +234,9 @@ export class ActivityReader {
     scroll.hidden = !this.shown.length;
     if (this.following || reset) scroll.scrollTop = 0;
     else if (anchor) {
+      // A folded duplicate has no box; its run's newest row stands in for it.
       const row = this.rows.get(anchor.sequence);
-      const target = row?.parentElement === body ? row
+      const target = row && row.parentElement === body && !row.hidden ? row
         : this.rows.get((this.shown.find(event => event.sequence < anchor.sequence) ?? this.shown.at(-1))?.sequence ?? -1);
       if (target) scroll.scrollTop += target.getBoundingClientRect().top - scroll.getBoundingClientRect().top - anchor.offset;
       else scroll.scrollTop = this.top;

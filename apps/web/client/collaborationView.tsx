@@ -468,7 +468,7 @@ export class CollaborationView {
     view.element.dataset.observed = String(Boolean(observation));
     view.element.dataset.tasks = String(Boolean(observation?.inspection.tasks.length));
     this.renderRoute(view, run);
-    if (!observation) { renderProgressSummary(summary, { empty: unobservedText(run) }); return; }
+    if (!observation) { renderProgressSummary(summary, { empty: unobservedText(run) }); this.renderFocus(view, run); return; }
     const inspection = observation.inspection;
     // Proof tasks split by recorded proof status first, then by scheduling state; checked uses the server's count.
     const proofTasks = inspection.tasks.filter(task => task.kind === 'lemma' || task.kind === 'goal');
@@ -486,7 +486,7 @@ export class CollaborationView {
         ['unscheduled', t('未记录调度'), Math.max(0, inspection.workers.length - scheduling.observedWorkers)]]) },
       accepted: isAcceptedRun(run), rejected: isRejectedRun(run), completedResearch: inspection.progress.completedResearchTasks, ended: run.status !== 'queued' && run.status !== 'running',
     });
-    this.renderNow(view, run);
+    this.renderNow(view, run); this.renderFocus(view, run);
     this.renderTasks(view); this.renderInspector(view); this.renderAgents(view); view.progress.update(observation); view.changes.update(observation); view.reviews.update(observation, run);
     renderSection(view.element.querySelector('[data-collab-edits]')!, inspection.edits.length ? <>{inspection.edits.map(edit => <article key={edit.id} class="collab-edit">
       <strong>{edit.id} · {editStatusLabel(edit.status)}</strong>
@@ -495,6 +495,36 @@ export class CollaborationView {
     </article>)}</> : <p class="collab-help">{t('尚无人工计划编辑记录')}</p>);
     this.updateKnowledge(view, run);
     this.updateCommands(view);
+  }
+  /**
+   * The simple layer's lead: the statement being proved, how far the proof is, and the one thing it is stuck on.
+   * The full layer keeps the same facts in the goal and progress sections, so this block only exists there.
+   */
+  private renderFocus(view: ViewState, run: WebRun) {
+    const root = view.element.querySelector<HTMLElement>('[data-collab-focus]')!;
+    const observation = view.observation;
+    root.hidden = !observation;
+    if (!observation) { renderSection(root, null); return; }
+    const inspection = observation.inspection, ended = run.status !== 'queued' && run.status !== 'running';
+    // The cards above already count the proof tasks; this block answers only what a reader still asks: where it is stuck.
+    const stuck = inspection.tasks.filter(task => (task.kind === 'goal' || task.kind === 'lemma') && ['blocked', 'paused', 'stopped'].includes(taskState(task)));
+    const waiting = inspection.waiting?.reason && localizeText(inspection.waiting.reason).trim();
+    const blocker = inspection.mathematics.snapshot.blockers.find(item => !['parked', 'superseded'].includes(item.status));
+    const stuckBlock = waiting || blocker || stuck.length;
+    root.hidden = !stuckBlock && !ended;
+    if (!stuckBlock && !ended) { renderSection(root, null); return; }
+    renderSection(root, <>
+      {stuckBlock ? <div class="collab-focus-stuck" role="group" aria-label={t('卡在哪里')}>
+        <strong>{t('卡在哪里')}</strong>
+        {waiting && <p>{waiting}</p>}
+        {!waiting && blocker && <p><code>{blocker.mechanism}</code>{inspection.tasks.some(task => task.id === blocker.taskId) && <> · <button type="button" class="text-button" data-collab-task={blocker.taskId} data-task-version={blocker.taskDigest}>{taskNames(inspection.tasks).get(blocker.taskId) ?? blocker.taskId}</button></>}</p>}
+        {!waiting && !blocker && stuck.length > 0 && <ul class="collab-focus-blocked">{stuck.slice(0, 4).map(task => <li key={task.id}>
+          <button type="button" class="text-button" data-collab-task={task.id} data-task-version={task.version}>{taskNames(inspection.tasks).get(task.id) ?? task.id}</button>
+          <span>{(task.finding && localizeText(task.finding)) || (task.feedback && localizeText(task.feedback)) || label(taskState(task))}</span></li>)}</ul>}
+      </div> : null}
+      {ended && <p class="collab-focus-next">{isAcceptedRun(run) ? t('原题已通过；可以归档这次的知识，或在此基础上继续新的题目。')
+        : t('这次运行结束时还没有通过验收的完整证明；证据保留在报告与源码中，可以在下方指导、提高预算后重跑，或从已有结果继续。')}</p>}
+    </>);
   }
   private updateKnowledge(view: ViewState, run: WebRun) {
     const inspection = view.observation?.inspection; if (!inspection) return;
