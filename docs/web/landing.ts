@@ -290,10 +290,12 @@ function initializeProofStage() {
   }
   // Every pane element is tagged with the step it appears at; the roadmap additionally advances node state.
   const revealed = Array.from(canvas.querySelectorAll<HTMLElement>('[data-step]'));
+  // A node may appear before it starts work: T2 becomes visible with the plan but waits for T1.
   const nodes = Array.from(canvas.querySelectorAll<HTMLElement>('.proof-node')).map(node => ({
     node,
-    start: Number(node.dataset.step ?? 0),
-    fail: Number(node.dataset.fail ?? node.dataset.step ?? 0),
+    start: Number(node.dataset.start ?? node.dataset.step ?? 0),
+    step: Number(node.dataset.step ?? 0),
+    fail: Number(node.dataset.fail ?? -1),
     done: Number(node.dataset.done ?? node.dataset.step ?? 0),
   }));
   const tabCount = canvas.querySelector<HTMLElement>('[data-tab-count]');
@@ -302,15 +304,16 @@ function initializeProofStage() {
     revealed.forEach(item => { item.hidden = Number(item.dataset.step) > step; });
     let finished = 0;
     nodes.forEach(({ node, start, fail, done }) => {
-      const state = step >= done ? 'done' : step === fail ? 'failed' : step >= start ? 'running' : 'waiting';
+      // A failed node stays failed until it finishes, so the red state persists while the repair runs.
+      const state = step >= done ? 'done' : step >= fail && fail > 0 ? 'failed' : step >= start ? 'running' : 'waiting';
       node.dataset.state = state;
       if (state === 'done') finished += 1;
     });
     // The roadmap tab counter shows how many roadmap nodes have finished, matching the workbench.
     if (tabCount) tabCount.textContent = `${finished}/${nodes.length}`;
   };
-  // [delay before the step, step]: statement confirmed, split into two tasks, right addition passes,
-  // left addition fails, your guidance, both goals pass the kernel check.
+  // [delay before the step, step]: statement confirmed, split into two tasks, omega fails on the parity
+  // lemma, the case split passes, your descent guidance, both lemmas pass and the statement closes.
   const steps: Array<[number, number]> = [[900, 1], [1100, 2], [1200, 3], [1400, 4], [1200, 5], [1300, 6]];
   const finalStep = steps[steps.length - 1]![1]!;
   let timer = 0;
