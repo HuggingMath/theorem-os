@@ -27,18 +27,11 @@
   font-weight: 100 900;
   font-display: swap;
 }
+/* Lora, the serif the archive pages already use: a normal-width face that sits evenly beside the Chinese serif. */
 @font-face {
-  font-family: "Instrument Serif";
-  src: url("assets/fonts/InstrumentSerif-latin.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Instrument Serif";
-  src: url("assets/fonts/InstrumentSerif-latin-italic.woff2") format("woff2");
-  font-style: italic;
-  font-weight: 400;
+  font-family: "TheoremOS Serif Latin";
+  src: url("assets/fonts/TheoremOSSerif-latin.woff2") format("woff2");
+  font-weight: 400 700;
   font-display: swap;
 }
 @font-face {
@@ -80,7 +73,7 @@
   --syntax-string: #c3cf9f;
   --syntax-property: #a9c4e2;
   --sans: "Geist", "TheoremOS Sans SC", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
-  --serif: "Instrument Serif", "TheoremOS Serif SC", "Songti SC", "Noto Serif CJK SC", Georgia, serif;
+  --serif: "TheoremOS Serif Latin", "TheoremOS Serif SC", "Songti SC", "Noto Serif CJK SC", Georgia, serif;
   --mono: "Fira Code", monospace; /* taste-skill-ignore: literal Lean code only. */
   --step-small: 14px;
   --step-body: 18px;
@@ -416,6 +409,7 @@ summary svg { flex-shrink: 0; transition: transform 180ms var(--ease-out); }
   .desktop-nav { gap: 18px; }
   .header-inner { gap: 24px; }
   .header-actions { gap: 20px; }
+  .hero-copy { grid-template-columns: minmax(0, 1fr) minmax(0, 22em); column-gap: 40px; }
   .hero-actions { gap: 12px 20px; }
   .hero-description { font-size: 18px; }
   .workbench-layout, .component-layout { gap: 40px; }
@@ -437,6 +431,11 @@ summary svg { flex-shrink: 0; transition: transform 180ms var(--ease-out); }
   .module-details dl { max-width: 600px; }
   .proof-totals { gap: 32px; }
 }
+/* The two-line title needs about 450px beside the copy column; below that the hero stacks. */
+@media (max-width: 1000px) {
+  .hero-copy { display: block; max-width: 46em; }
+  .hero-description { margin-top: 28px; }
+}
 @media (max-width: 900px) {
   :root { --step-display: 52px; --margin: 28px; }
   .site-header { position: sticky; top: 0; display: flex; flex-direction: column; max-height: 100dvh; }
@@ -446,7 +445,6 @@ summary svg { flex-shrink: 0; transition: transform 180ms var(--ease-out); }
   .header-actions { margin-left: auto; gap: 16px; }
   .menu-toggle { display: grid; }
   .hero { padding-block: 48px 64px; }
-  .hero-copy { display: block; max-width: 46em; }
   .desktop-break { display: none; }
   .hero-description { max-width: 34em; }
   .hero-description, .hero-category { margin-top: 20px; }
