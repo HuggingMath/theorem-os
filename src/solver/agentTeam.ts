@@ -11,7 +11,7 @@ import type { WorkerAccess } from './research';
 import type { SolverModules } from './modules';
 import { git, assertSolverSources, commitSolverSources, solverSourceConstraints } from './problem';
 import { prepareResearchSkill } from './researchSkill';
-import { buildSkillResearchContext } from './skillResearchContext';
+import { buildSkillResearchContext, teamTurnTiming } from './skillResearchContext';
 import { declarationSubmissionSchema, DeclarationArtifactCheckError, DeclarationSubmissionError } from './declarationArtifacts';
 import { hasDeterministicLeanFailure } from './proofReuse';
 import { solverSourceDigest } from './modules/evidence';
@@ -538,9 +538,11 @@ export class AgentResearchTeam {
     const teamRole = { id: worker.id, role: 'worker' as const };
     const teamAssignment = { taskId: task.id, message: task.message, sourceCommit };
     const { inboxThrough } = agentTeamWorkerSection(state, teamRole, teamAssignment);
+    const turnTiming = teamTurnTiming(this.input.maxTurnMs);
     const context = buildSkillResearchContext(state.problem, { ...state, ...worker, check: undefined }, { ...access,
       root: this.input.root, worktree: worker.worktree, taskText: this.input.taskText,
-      researchSkill: access.researchSkill!, teamRole, teamAssignment });
+      researchSkill: access.researchSkill!, teamRole, teamAssignment,
+      executionLimits: { ...turnTiming, remainingRunMs: this.input.remainingMs } });
     writeOwnedDeclarationIndex(state.problem, worker.worktree);
     let completed = false, started = false, reserved = false, writerStopped = false;
     let outcome: 'completed' | 'failed' | 'interrupted' = 'interrupted';
@@ -556,7 +558,7 @@ export class AgentResearchTeam {
         skills: [access.researchSkill!], tools: this.tools(worker.id),
         hiddenRoots: [DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT, this.directory, state.worktree], isolateProcess: true,
         instructions: context.instructions, signal,
-        turnTimeoutMs: Number.isFinite(this.input.maxTurnMs) ? this.input.maxTurnMs : undefined,
+        ...turnTiming,
         onActivity: activity => { worker.lastActivity = { ...activity, at: Date.now() }; this.changed(); }, ...callbacks, requestGate });
       usage.sessionOpened(entry.session);
       if (entry.session.processIdentity) worker.writerProcess = entry.session.processIdentity;
@@ -567,6 +569,10 @@ export class AgentResearchTeam {
       const status = await entry.session.run(context.message, task.id, worker.worktree, turnId => {
         worker.threadId = entry.session!.threadId; worker.cursor = inboxThrough; usage.turnStarted(turnId); this.changed();
       });
+      if (status === 'checkpoint') {
+        task.pauseRequested ??= { at: Date.now(), kind: 'budget', reason: 'math_team_turn_checkpoint' };
+        this.changed();
+      }
       completed = ['completed', 'submitted'].includes(status);
       outcome = completed ? 'completed' : status === 'failed' ? 'failed' : 'interrupted';
       const response = entry.session.lastCompletedResponse?.text;

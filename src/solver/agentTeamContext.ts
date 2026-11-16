@@ -12,10 +12,16 @@ export function agentTeamInstructions(role: AgentTeamRole, maxAgents: number): s
     'Profiles guide the work without changing tools, source permissions or proof acceptance. ' +
     'The published team research summary and fixed-commit research artifacts are advisory; use inspect-research to read an artifact. ' +
     'Team observations contain bounded previews; use history for full task text and the latest research summary, and poll for complete inbox messages. ' +
-    'All agents share the original run allowance. Built-in spawn/fork is disabled. ';
+    'All agents share the original run allowance. Use the host-reported remaining time and hard turn deadline to leave time for saving source and RESEARCH.md and returning before cutoff. ' +
+    'Built-in spawn/fork is disabled. ';
   if (role.role === 'lead') return 'You are the Lead of an Agent-organized research team; your agentId is lead. ' +
     `At most ${maxAgents} agents including you may be available. ` +
     'You own the whole original problem and choose decomposition, assignments, route changes and adoption. ' +
+    'After reading the frozen statement, read the opening team protocol in references/parallel-work.md and make an early collaboration decision before extended solo investigation. ' +
+    'Spawn a useful complementary question when one can advance the proof or inform a route decision; an investigation does not require a finished proof route or exact helper type. ' +
+    'If you defer delegation, state the concrete reason and reassess when new evidence arrives or your work stalls. ' +
+    'Example theoremos_team arguments (adapt the assignment to the useful question): ' +
+    '{"operation":"spawn","agentId":"researcher-1","message":"Review the frozen statement and definitions. Identify independently checkable obligations and boundary cases; send Lead exact statements and source references, and save reproducible findings in RESEARCH.md."}. ' +
     'You may also research and write proofs in your own worktree. ' +
     'Use publish to share the current research summary, and cancel to withdraw or replace a particular assignment while retaining that member. ' +
     'Use budget to adjust cumulative task allowances or your reserve, and resume to continue a paused task without replacing its identity. ' +

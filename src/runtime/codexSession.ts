@@ -308,20 +308,21 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   if (options.delegation) validateNativeDelegation(options.delegation);
   const executionPlan = planMathAgentSession('codex', options);
   const activeRequests = new Set<object>();
-  let requestTurn = 0, turnSettled = true, turnStopping = false;
+  let requestTurn = 0, turnSettled = true, turnStopping = false, turnCheckpointReached = false;
   type NotificationFence = { promise: Promise<void>; release(): void; steered: boolean };
   let notificationFence: NotificationFence | undefined;
   let requestStateChanged = () => {};
   let cancelNotifications = () => {};
-  let drainSubmittedRequests: (() => void) | undefined;
+  let drainTurnRequests: (() => void) | undefined;
   const drainRequests = () => new Promise<void>(resolve => {
-    drainSubmittedRequests = () => {
+    drainTurnRequests = () => {
       if (activeRequests.size) return;
-      drainSubmittedRequests = undefined; resolve();
+      drainTurnRequests = undefined; resolve();
     };
-    drainSubmittedRequests();
+    drainTurnRequests();
   });
   let checkCompletedOutput: (() => void) | undefined;
+  let checkTurnCheckpoint: (() => boolean) | undefined;
   let checkShellRejections: ((allowFeedback?: boolean) => void) | undefined;
   let shellRejectionReader: CodexShellRejectionReader | undefined;
   let pendingShellRejections = 0;
@@ -329,6 +330,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     // A tool can submit and immediately request more model work between output polls.
     // Inspect that file synchronously before admitting another paid request.
     if (!turnSettled && !turnStopping) checkCompletedOutput?.();
+    checkTurnCheckpoint?.();
     if (turnSettled || turnStopping) return { allowed: false, reason: 'math_model_request_stopped' };
     const admission = options.requestGate?.(identity) ?? { allowed: true as const, settle: () => {} };
     if (!admission.allowed) return admission;
@@ -340,6 +342,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   };
   requestGate.beforeRequest = async signal => {
     const turn = requestTurn;
+    if (checkTurnCheckpoint?.()) throw new Error('math_codex_turn_checkpoint');
     let deferredFence: NotificationFence | undefined;
     checkShellRejections?.();
     await options.requestGate?.beforeRequest?.(signal);
@@ -512,7 +515,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     notices.clear(); releaseFence();
   };
   const flushNotifications = (atRequest = false): NotificationFence | undefined => {
-    if (!notices.size || activeRequests.size || investigations?.busy || tools?.busy || notificationFence || !activeTurn || turnSettled || turnStopping || closing) return;
+    if (!notices.size || activeRequests.size || investigations?.busy || tools?.busy || notificationFence || !activeTurn || turnSettled || turnStopping || turnCheckpointReached || closing) return;
     if (![...notices].some(notice => !notice.waitForRequest || atRequest)) return;
     const turnId = activeTurn, turn = requestTurn;
     let release!: () => void;
@@ -543,7 +546,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     return fence;
   };
   const notify: NonNullable<MathAgentSession['notify']> = async (message, notifyOptions) => {
-    if (!activeTurn || turnSettled || turnStopping || closing) {
+    if (!activeTurn || turnSettled || turnStopping || turnCheckpointReached || closing) {
       if (notifyOptions?.waitForRequest === false) throw new Error('math_codex_notification_turn_settled');
       return;
     }
@@ -555,7 +558,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       flushNotifications();
     });
   };
-  requestStateChanged = () => { drainSubmittedRequests?.(); flushNotifications(); };
+  requestStateChanged = () => { drainTurnRequests?.(); flushNotifications(); };
   let lastStreamActivityAt = 0;
   const outputTails = new Map<string, string>();
   const outputKey = (turnId: unknown, itemId: string) => `${typeof turnId === 'string' ? turnId : ''}\u0000${itemId}`;
@@ -857,7 +860,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         const done = new Promise<Json>((yes, no) => { resolve = yes; reject = no; });
         // Attach immediately so a transport failure during turn/start is handled.
         void done.catch(() => {});
-        requestTurn++; turnSettled = false; turnStopping = false;
+        requestTurn++; turnSettled = false; turnStopping = false; turnCheckpointReached = false;
         boundTurn = new Promise(resolve => { bindTurn = resolve; });
         completion = {
           resolve: turn => { turnSettled = true; tools?.cancel(); cancelNotifications(); publicItems.clear(); resolve(turn); },
@@ -866,9 +869,10 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         lastStreamActivityAt = 0; outputTails.clear(); publicItems.clear(); earlyActivities.clear();
         let checkpoint = false;
         let submitted = false;
-        let submissionDrain: Promise<void> | undefined;
+        let requestDrain: Promise<void> | undefined;
         let interruptionRequested = false;
         let cancelTimer: (() => void) | undefined;
+        let cancelCheckpointTimer: (() => void) | undefined;
         let outputWatcher: NodeJS.Timeout | undefined;
         let shellWatcher: NodeJS.Timeout | undefined;
         let interruptDeadline: NodeJS.Timeout | undefined;
@@ -926,6 +930,24 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
               if (activeTurn === turnId && !turnSettled) void closeSession();
             });
           };
+          const stopAfterRequests = () => {
+            turnStopping = true; tools?.cancel(); cancelNotifications(); publicItems.clear();
+            requestDrain ??= drainRequests();
+            void requestDrain.then(() => {
+              if (activeTurn === turnId && !turnSettled && !closing) requestInterruption();
+            });
+          };
+          checkTurnCheckpoint = () => {
+            if (!turnCheckpointReached || checkpoint || turnSettled || turnStopping || closing) return false;
+            // A settled response may still have tools to run. The next request is
+            // the unpaid boundary proving those tools finished; prefer a valid
+            // output they just saved before requesting a checkpoint.
+            checkCompletedOutput?.();
+            if (submitted || turnSettled || turnStopping || closing) return false;
+            checkpoint = true;
+            stopAfterRequests();
+            return true;
+          };
           const early = earlyCompletions.get(activeTurn);
           earlyCompletions.delete(activeTurn);
           if (early) completion.resolve(early);
@@ -968,11 +990,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
               submitted = true;
               // Stop new paid work first. Interrupting an in-flight request loses its final
               // usage receipt, so let admitted requests settle before stopping the writer.
-              turnStopping = true; tools?.cancel(); cancelNotifications(); publicItems.clear();
-              submissionDrain = drainRequests();
-              void submissionDrain.then(() => {
-                if (activeTurn === turnId && !turnSettled && !closing) requestInterruption();
-              });
+              stopAfterRequests();
             };
             // Admission has already passed beforeRequest's notification fence. Only
             // accept valid submissions here; the watcher queues repair feedback safely.
@@ -980,6 +998,14 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
             outputWatcher = setInterval(checkOutput, 100);
             checkOutput();
           }
+          if (options.turnCheckpointMs) cancelCheckpointTimer = scheduleMathTimeout(() => {
+            // Keep the admitted response and its native tools alive. Admission
+            // performs the handoff; natural completion or the hard deadline also
+            // settles a turn which never asks for another request.
+            if (activeTurn !== turnId || turnSettled || turnStopping || closing) return;
+            turnCheckpointReached = true;
+            cancelNotifications();
+          }, options.turnCheckpointMs);
           if (options.turnTimeoutMs) cancelTimer = scheduleMathTimeout(() => {
             // Draining paid requests still consumes the existing turn allowance.
             if (submitted && !activeRequests.size) return;
@@ -989,7 +1015,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           }, options.turnTimeoutMs);
           const finished = await done;
           await tools?.settled();
-          await submissionDrain;
+          await requestDrain;
           if (investigations?.busy) {
             await closeSession();
             if (finished.status === 'completed' && !submitted)
@@ -1023,9 +1049,10 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           throw error;
         } finally {
           checkShellRejections?.(false); checkShellRejections = undefined;
-          cancelTimer?.(); clearTimeout(interruptDeadline); clearInterval(outputWatcher); clearInterval(shellWatcher);
+          cancelTimer?.(); cancelCheckpointTimer?.(); clearTimeout(interruptDeadline); clearInterval(outputWatcher); clearInterval(shellWatcher);
           checkCompletedOutput = undefined;
-          drainSubmittedRequests = undefined;
+          checkTurnCheckpoint = undefined; turnCheckpointReached = false;
+          drainTurnRequests = undefined;
           turnSettled = true; tools?.cancel(); await tools?.settled(); cancelNotifications();
           bindTurn?.(); bindTurn = undefined;
           activeTurn = undefined; completion = undefined;

@@ -35,7 +35,11 @@ export type MathAgentOptions = {
   environment?: NodeJS.ProcessEnv;
   proofProjectRoot?: string;
   threadId?: string;
+  /** Hard native-turn deadline; may interrupt an in-flight paid request. */
   turnTimeoutMs?: number;
+  /** Earlier Codex checkpoint: close paid admission at the next request boundary,
+   * after the current response and its tools. The hard deadline still applies. */
+  turnCheckpointMs?: number;
   outputSchema?: Record<string, unknown>;
   onUsage: (usage: Json, context?: { turnId?: string }) => void;
   onUsageIncomplete?: () => void;

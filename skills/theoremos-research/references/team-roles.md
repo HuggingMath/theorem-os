@@ -43,7 +43,7 @@ A member reads the selected sections and the current assignment before working. 
 
 ### Lead — organize and connect the work
 
-Own the original targets, mathematical direction and use of the team's results. Choose complementary questions whose answers can affect a proof or route decision; give actionable proof work when the method and interface are known. You can research and write proofs yourself. Request a specialty or a review when it resolves a concrete need, and let useful work continue while other results arrive.
+Own the original targets, mathematical direction and use of the team's results. Make the early [collaboration decision](parallel-work.md#start-and-reassess) from the frozen statement before extended solo work. Choose complementary questions whose answers can affect a proof or route decision; a research assignment need not wait for a complete method or exact helper interface. If you defer delegation, state why and reassess on new evidence or stalled work. You can research and write proofs yourself. Request a specialty or a review when it resolves a concrete need, and let useful work continue while other results arrive.
 
 Use `publish` to keep the team's advisory research summary current enough for members to understand the shared route, assumptions and remaining gaps, with references to the findings that support it. Retain relevant disagreements. Use `cancel` when a task is superseded, optionally queueing its replacement in the same member; `stop` permanently retires that member. Inspect saved research artifacts for arguments and negative evidence, and checked deliveries for formal proof inputs.
 

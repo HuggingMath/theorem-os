@@ -88,6 +88,7 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
     fs.writeFileSync(executable, '#!' + process.execPath + '\n' +
       fs.readFileSync(path.join(repository, 'tests/fixtures/agentTeamPeer.cjs'), 'utf8'), { mode: 0o700 });
     const processes = new Map<string, HarnessProcessIdentity>();
+    const open = vi.fn(directSolverModules.M1.open);
     const events: { event: string; details?: Record<string, unknown> }[] = [];
     const snapshots: SolverRunState[] = [];
     const controller = new AbortController();
@@ -97,7 +98,8 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
       winner = await runResearchWorkers({ state, root, buildFile, taskText: task, executable, profile,
         workers: [{ id: 'solver', role: 'lead', worktree, ownedFiles: problem.ownedFiles }],
         access: new Map([['solver', { environment, retrievalRoot: path.join(worktree, problem.projectRelative), researchSkill: skill }]]),
-        modules: directSolverModules, signal: controller.signal, deadline: Date.now() + 60_000,
+        modules: { ...directSolverModules, M1: { ...directSolverModules.M1, open } },
+        signal: controller.signal, deadline: Date.now() + 60_000,
         maxTurns: 8, maxTurnMs: 45_000, maxTotalTokens: 1000, proofTimeoutMs: 30_000,
         save: () => {
           for (const current of [state.writerProcess, ...(state.agentTeam?.workers.map(worker => worker.writerProcess) ?? [])])
@@ -123,6 +125,10 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
     expect(state.teamUsage?.totalTokens).toBe(50);
     expect(state.tokenBudget).toMatchObject({ usageComplete: true, reportedTotalTokens: 50 });
     expect(state.agentTeam?.workers).toHaveLength(2);
+    expect(open).toHaveBeenCalledTimes(5);
+    for (const [options] of open.mock.calls) {
+      expect(options).toMatchObject({ turnTimeoutMs: 45_000, turnCheckpointMs: 36_000 });
+    }
     expect(state.agentTeam?.deliveries).toHaveLength(2);
     expect(state.agentTeam?.adoptions.map(adoption => adoption.status)).toEqual(['completed', 'completed']);
     expect(state.writerStopUnconfirmed).toBeUndefined();

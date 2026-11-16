@@ -53,7 +53,7 @@ setInterval(() => {
     send({ method: 'item/completed', params: { threadId: 'notice-thread', item: { id: 'reasoning', type: 'reasoning' } } });
     record('reasoning-reported');
   }
-  if (command === 'complete') finish('completed');
+  if (command === 'complete' || command.startsWith('complete:')) finish('completed');
   if (command === 'cancel-request') { controller?.abort(); record('client-aborted'); }
   if (command === 'request' || command.startsWith('request:')) void request();
   if (command === 'ack') { const reply = steerReply; steerReply = undefined; reply?.(); }
@@ -97,7 +97,7 @@ const control = (command: string) => fs.writeFileSync(path.join(directory, 'cont
 const until = async (check: () => boolean) => { while (!check()) await delay(5); };
 
 async function fixture(provider: 'sub2api' | 'westlake' = 'sub2api', extra: {
-  holdAck?: boolean; turnTimeoutMs?: number; completedOutput?: boolean; validationFeedback?: boolean;
+  holdAck?: boolean; turnTimeoutMs?: number; turnCheckpointMs?: number; completedOutput?: boolean; validationFeedback?: boolean;
   submitTool?: boolean; holdSteerAbort?: boolean;
   beforeRequest?: (requestNumber: number) => void;
 } = {}) {
@@ -144,7 +144,7 @@ async function fixture(provider: 'sub2api' | 'westlake' = 'sub2api', extra: {
   };
   requestGate.beforeRequest = async () => { extra.beforeRequest?.(++requestNumber); };
   session = await createCodexMathSession({ executable, profile, workspace: directory, model: 'deepseek-flash', effort: 'max',
-    instructions: 'offline fixture', onUsage: () => {}, turnTimeoutMs: extra.turnTimeoutMs,
+    instructions: 'offline fixture', onUsage: () => {}, turnTimeoutMs: extra.turnTimeoutMs, turnCheckpointMs: extra.turnCheckpointMs,
     onUsageIncomplete: () => { incompleteUsage++; },
     ...(extra.completedOutput || extra.validationFeedback ? { completedOutput: { file: path.join(directory, 'OUTPUT.json'), validate: value => {
       if ((value as { approved?: boolean }).approved !== true) throw new Error('invalid fixture output');
@@ -170,6 +170,112 @@ afterEach(async () => {
 });
 
 describe('soft notifications at real provider request boundaries', () => {
+  it.each(['sub2api', 'westlake'] as const)(
+    'keeps the paid %s response and its tools alive before checkpointing the next admission, then continues the same thread', async provider => {
+      let checkpoint!: () => void;
+      vi.spyOn(mathTimers, 'scheduleMathTimeout').mockImplementation((callback, timeoutMs) => {
+        expect(timeoutMs).toBe(400);
+        checkpoint = callback;
+        return () => {};
+      });
+      const { running } = await fixture(provider, { turnCheckpointMs: 400, submitTool: true });
+      const notice = session!.notify!('Save the current research'); void notice.catch(() => {});
+      checkpoint();
+      await expect(notice).rejects.toThrow('math_codex_notification_turn_settled');
+      expect(trace().filter(item => item.event === 'interrupt' || item.event === 'steer')).toEqual([]);
+      expect(streams[0].ended).toBe(false); expect(cancelled).toEqual([]); expect(receipts).toEqual([]);
+
+      streams[0].finish();
+      expect(await running).toBe('checkpoint');
+      expect(trace().filter(item => item.event === 'submission-tool-finished')).toHaveLength(1);
+      expect(trace().filter(item => item.event === 'submission-tool-cancelled')).toEqual([]);
+      expect(streams).toHaveLength(1); expect(sources).toHaveLength(1);
+      expect(receipts).toMatchObject([{ complete: true, usage: { totalTokens: 12 } }]);
+      expect(cancelled).toEqual([]); expect(incompleteUsage).toBe(0);
+
+      const second = session!.run('continue', 'second-turn', directory, () => {}); void second.catch(() => {});
+      await until(() => streams.length === 2);
+      checkpoint(); streams[1].finish();
+      expect(await second).toBe('checkpoint');
+      expect(session!.threadId).toBe('notice-thread');
+      expect(receipts).toMatchObject([
+        { complete: true, usage: { totalTokens: 12 } }, { complete: true, usage: { totalTokens: 12 } },
+      ]);
+      expect(sources).toHaveLength(2); expect(cancelled).toEqual([]); expect(incompleteUsage).toBe(0);
+    });
+
+  it('refuses later paid admission after a soft checkpoint while waiting for the already admitted request', async () => {
+    let checkpoint!: () => void;
+    vi.spyOn(mathTimers, 'scheduleMathTimeout').mockImplementation((callback, timeoutMs) => {
+      expect(timeoutMs).toBe(400); checkpoint = callback; return () => {};
+    });
+    const { running } = await fixture('sub2api', { turnCheckpointMs: 400 });
+    checkpoint(); control('request');
+    await until(() => trace().some(item => item.event === 'request-returned'));
+    expect(trace().find(item => item.event === 'request-returned').status).toBeGreaterThanOrEqual(400);
+    expect(streams).toHaveLength(1); expect(sources).toHaveLength(1);
+    expect(receipts).toEqual([]); expect(cancelled).toEqual([]);
+    expect(trace().filter(item => item.event === 'interrupt')).toEqual([]);
+    streams[0].finish();
+    expect(await running).toBe('checkpoint');
+    expect(receipts).toMatchObject([{ complete: true, usage: { totalTokens: 12 } }]);
+    expect(incompleteUsage).toBe(0);
+  });
+
+  it('prefers a valid submission saved by the admitted response after the soft checkpoint', async () => {
+    let checkpoint!: () => void;
+    vi.spyOn(mathTimers, 'scheduleMathTimeout').mockImplementation((callback, timeoutMs) => {
+      expect(timeoutMs).toBe(400); checkpoint = callback; return () => {};
+    });
+    const { running } = await fixture('sub2api', { turnCheckpointMs: 400, completedOutput: true, submitTool: true });
+    checkpoint(); streams[0].finish();
+    expect(await running).toBe('submitted');
+    expect(validatedOutputs).toBe(1);
+    expect(trace().filter(item => item.event === 'submission-tool-finished')).toHaveLength(1);
+    expect(streams).toHaveLength(1); expect(sources).toHaveLength(1);
+    expect(receipts).toMatchObject([{ complete: true, usage: { totalTokens: 12 } }]);
+    expect(cancelled).toEqual([]); expect(incompleteUsage).toBe(0);
+  });
+
+  it('allows natural completion after the soft checkpoint without leaking its admission stop to the next turn', async () => {
+    let checkpoint!: () => void;
+    vi.spyOn(mathTimers, 'scheduleMathTimeout').mockImplementation((callback, timeoutMs) => {
+      expect(timeoutMs).toBe(400); checkpoint = callback; return () => {};
+    });
+    const { running } = await fixture('sub2api', { turnCheckpointMs: 400 });
+    checkpoint(); streams[0].finish();
+    await until(() => receipts.length === 1);
+    control('complete:first'); expect(await running).toBe('completed');
+    expect(trace().filter(item => item.event === 'interrupt')).toEqual([]);
+
+    const second = session!.run('continue', 'second-turn', directory, () => {}); void second.catch(() => {});
+    await until(() => streams.length === 2);
+    streams[1].finish(); await until(() => receipts.length === 2);
+    control('complete:second'); expect(await second).toBe('completed');
+    expect(trace().filter(item => item.event === 'interrupt')).toEqual([]);
+    expect(receipts.every(item => item.complete)).toBe(true);
+    expect(cancelled).toEqual([]); expect(incompleteUsage).toBe(0);
+  });
+
+  it.each(['timeout', 'cancel'] as const)(
+    'keeps explicit %s forceful after the soft checkpoint and preserves a missing usage receipt', async stop => {
+      const deadlines = new Map<number, () => void>();
+      vi.spyOn(mathTimers, 'scheduleMathTimeout').mockImplementation((callback, timeoutMs) => {
+        deadlines.set(timeoutMs, callback); return () => { deadlines.delete(timeoutMs); };
+      });
+      const { running } = await fixture('sub2api', { turnCheckpointMs: 400, turnTimeoutMs: 500 });
+      deadlines.get(400)!();
+      expect(trace().filter(item => item.event === 'interrupt')).toEqual([]);
+      expect(cancelled).toEqual([]);
+      if (stop === 'timeout') deadlines.get(500)!();
+      else await session!.interrupt();
+      expect(await running).toBe(stop === 'timeout' ? 'checkpoint' : 'interrupted');
+      await until(() => receipts.length === 1);
+      expect(cancelled).toEqual([0]);
+      expect(receipts).toMatchObject([{ complete: false, missingReason: 'request-cancelled' }]);
+      expect(receipts[0].usage).toBeUndefined(); expect(incompleteUsage).toBe(1);
+    });
+
   it.each(['sub2api', 'westlake'] as const)('lets a settled %s response submit its tool before a deferred reminder', async provider => {
     const { running } = await fixture(provider, { completedOutput: true, submitTool: true });
     const notice = session!.notify!('Finish your independent review', { waitForRequest: true });

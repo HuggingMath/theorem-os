@@ -3,6 +3,7 @@ import path from 'node:path';
 import { mathematicsRuntimeInstruction } from '../math/mathRuntimeEnvironment';
 import { mathToolsInstruction } from '../math/mathTools';
 import { assertMathAgentSkillsCurrent, type MathAgentSkill } from '../runtime/agentSkills';
+import type { MathAgentOptions } from '../runtime/agentSession';
 import type { SolverRunState } from './archive';
 import { compileContextSections, type ContextSection } from './contextCompiler';
 import { continuationContextSection, readContinuationSnapshot } from './continuationInput';
@@ -14,6 +15,23 @@ import { materializeResearchToolHelp } from './researchToolHelp';
 import { buildResearchToolGuide } from './researchToolGuide';
 import { agentTeamInstructions, agentTeamWorkerDeliveryHelp, agentTeamWorkerSection } from './agentTeamContext';
 import { agentTeamOverview, agentTeamRecentEvents } from './agentTeamViews';
+
+/** Leave the last fifth of a bounded team turn for request settlement and handoff. */
+export function teamTurnTiming(maxTurnMs: number): Pick<MathAgentOptions, 'turnTimeoutMs' | 'turnCheckpointMs'> {
+  return Number.isFinite(maxTurnMs) && maxTurnMs > 0
+    ? { turnTimeoutMs: maxTurnMs, turnCheckpointMs: Math.max(1, Math.floor(maxTurnMs * 0.8)) } : {};
+}
+
+export function executionLimitsSection(limits: NonNullable<ContextAccess['executionLimits']>): ContextSection {
+  const remaining = limits.remainingRunMs();
+  return { id: 'execution-limits', kind: 'feedback', text: 'Execution limits at this dispatch (milliseconds; null means unlimited):\n' +
+    JSON.stringify({ remainingRunMs: Number.isFinite(remaining) ? Math.max(0, Math.floor(remaining)) : null,
+      turnCheckpointMs: limits.turnCheckpointMs ?? null, turnTimeoutMs: limits.turnTimeoutMs ?? null }) + '\n' +
+    'The stage checkpoint stops new paid requests after the current response and its tools finish. ' +
+    'The hard turn limit and remaining run time can interrupt in-flight work and make usage unavailable. ' +
+    'Save useful sources and RESEARCH.md, communicate findings and arrange handoff before the stage checkpoint. ' +
+    'A checkpoint retains this research; it does not accept a proof or enlarge any allowance.' };
+}
 
 /** Only selected after this frozen responsibility was actually dispatched to the same native thread. */
 export function skillResearchContinuationSection(problem: Pick<SolverProblem, 'receiptDigest'>,
@@ -71,7 +89,7 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
     'Accepted proofs cannot use sorry, admit, native_decide, unsafe or new axioms. Independent helpers may be submitted while other goals remain unfinished. ' +
     'Do not read external candidate solutions. Do not edit the pinned skill, host help, configuration or receipts. ' +
     'A message, local diagnostic or historical receipt is never acceptance. The host freezes sources after writer shutdown and checks every original target. ' +
-    'There is no host task graph or timed research slice in this mode. ' +
+    'There is no host task graph in this mode. Execution-limit observations describe any stage and hard deadlines. ' +
     (state.researchDelegation?.mode === 'team' ? '' :
     state.researchDelegation?.mode === 'read-only' ? `The theoremos_investigate tool dispatches read-only native threads through the host, with at most ${state.researchDelegation.maxAgents} agents including you. ` +
       'Pass a questions array of bounded independent questions; the call waits for every result. Built-in spawn/fork is disabled. ' +
@@ -104,6 +122,7 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
     'Current files and complete references remain available even when their full text is not included in this message. Continue the original research from saved work.' });
   const compile = (options: ResearchDispatchOptions = {}) => compileContextSections({ instructions,
     mandatory: [...(teamWorker ? [agentTeamWorkerSection(state, access.teamRole!, access.teamAssignment!).section] : []),
+      ...(access.executionLimits ? [executionLimitsSection(access.executionLimits)] : []),
       options.continuation ? skillResearchContinuationSection(problem, state) : originalProblem,
       ...mandatory, ...(options.checkpointInstruction ? [{ id: 'checkpoint', kind: 'checkpoint' as const,
       text: options.checkpointInstruction }] : [])], maxContextBytes: access.maxContextBytes,
