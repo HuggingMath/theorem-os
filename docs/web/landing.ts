@@ -283,7 +283,7 @@ function initializeProofStage() {
   if (!canvas) return;
   const setScale = (width: number) => stage.style.setProperty('--stage-scale', String(width / 1120));
   setScale(stage.getBoundingClientRect().width);
-  if (typeof ResizeObserver !== 'undefined') {
+  if ('ResizeObserver' in window) {
     new ResizeObserver(entries => entries.forEach(entry => setScale(entry.contentRect.width))).observe(stage);
   } else {
     window.addEventListener('resize', () => setScale(stage.getBoundingClientRect().width));
