@@ -92,9 +92,13 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
     'The following declaration-submission file is only for your own Lead worktree; do not assign it to a member. ' + ownDelivery : ownDelivery, '');
   materializeResearchToolHelp({ toolHelp: help.build() }, access.worktree);
   const editable = problem.ownedFiles.filter(file => !Object.hasOwn(problem.frozenFiles ?? {}, file));
+  // Stable instructions survive both the full M4 wrapper and same-thread continuations.
+  // Coordinator identity comes from the host, never from an assignment's Profiles line.
+  const leadProfile = team && !teamWorker ? agentTeamProfileSection(skill, 'Profiles: lead') : undefined;
   const instructions = (state.researchDelegation?.mode === 'team'
     ? agentTeamInstructions(access.teamRole ?? { id: 'lead', role: 'lead' }, state.researchDelegation.maxAgents,
       state.agentTeam?.transport) : '') +
+    (leadProfile ? leadProfile.text + '\n\n' : '') +
     'Research the fixed original mathematics problem in this isolated worktree using the pinned theoremos-research skill.\n' +
     `Lean project: ${project}. Editable Lean paths relative to it: ${JSON.stringify(editable)}. ` +
     'Only these paths may contain submitted Lean source; add helpers inside them instead of creating another Lean file. ' +

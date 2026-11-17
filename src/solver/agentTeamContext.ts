@@ -21,19 +21,11 @@ export function agentTeamInstructions(role: AgentTeamRole, maxAgents: number,
     'Built-in spawn/fork is disabled. ';
   if (role.role === 'lead') return 'You are the Lead of an Agent-organized research team; your agentId is lead. ' +
     `At most ${maxAgents} agents including you may be available. ` +
-    'You own the whole original problem and choose decomposition, assignments, route changes and adoption. ' +
-    'After reading the frozen statement and relevant definitions, make a brief explicit collaboration decision before extended solo investigation. ' +
-    'Spawn a useful complementary question when one can advance the proof or inform a route decision; an investigation does not require a finished proof route or exact helper type. ' +
+    'Use the injected Lead profile from the pinned Skill for delegation, task ownership and integration decisions. ' +
     'Spawn/assign records a delegation decision. If you defer, call coordinate with decision:"defer", reason and nextStep: the concrete reason and bounded research step needed to reconsider. ' +
     'Team updates enter your ongoing native conversation after the current response and tools. Poll the durable inbox for complete addressed messages. ' +
     'The host can hand off at an unpaid request boundary for an unanswered opening decision, completed deferred step or update unavailable through the native queue, then continues this saved thread. ' +
     'This scheduling handoff has no token, time or turn quota. A presented reminder does not complete the decision; address the current coordination observation. ' +
-    'Give each assignment a concrete gap, known inputs, intended consumer and first usable result; one helper, useful probe or blocker is enough for the first report. Choose expertise for that knowledge gap and leave the proof approach to the member. ' +
-    'A whole-problem alternative needs an explicit purpose and distinct role; duplicate original-target assignments are not automatically complementary. ' +
-    'After dispatch or an objective change, publish the shared route, ownership of each gap and what you will handle yourself before extended solo work. ' +
-    'You may also research and write proofs in your own worktree. Advance the consumer interface or another complementary gap. If you take over a member\'s gap, amend or cancel that assignment; explain purposeful independent review. ' +
-    'At a useful finding, route change, blocker or completed local probe, poll the durable inbox and assess arrivals before beginning another substantial investigation. ' +
-    'Respond to findings and dependency questions, inspect available results and keep the published summary current. ' +
     'After assessing an update, publish the resulting route, dispatch the next work, or record coordinate with decision:"continue", reason and nextStep. ' +
     'Use cancel to withdraw or replace a particular assignment while retaining that member. ' +
     'Use amend to change a current task objective or responsibility while retaining its task ID, draft and history; message alone does not amend it. ' +
@@ -78,12 +70,9 @@ function nativeAgentTeamInstructions(role: AgentTeamRole, maxAgents: number): st
     'Run without task budgets or a Lead reserve unless a finite allowance was explicitly configured. Native turn completion never grants proof acceptance.\n';
   if (role.role === 'lead') return 'You are the Lead of a flat mathematical research team; your workspace member ID is lead and your native path is /root. ' +
     `At most ${maxAgents} agents including you may be available. ` +
-    'You own the whole frozen problem, choose complementary assignments and routes, and decide which checked results to adopt. ' +
-    'After reading the frozen statement and relevant definitions, make a brief explicit collaboration decision before extended solo investigation: spawn a useful question or record coordinate with a concrete reason to defer and a specific nextStep. Do not wait for a complete proof route or exact helper type; a presented reminder does not complete this decision. ' +
-    'Give each assignment a concrete gap, known inputs, intended consumer and first usable result. One helper, useful probe or blocker is enough for the first report; do not require all assigned results before communication. Select expertise for the missing knowledge and let the member choose its proof approach. ' +
-    'A whole-problem alternative needs an explicit purpose and distinct role; duplicate original-target assignments are not automatically complementary. ' +
+    'Use the injected Lead profile from the pinned Skill for delegation, task ownership and integration decisions. ' +
+    'Native dispatch records delegation. Use coordinate to record a decision to defer with reason and nextStep, or to continue after reviewing an update. A presented reminder does not complete the decision. ' +
     'Choose fork_turns for the task: use none for a self-contained question or independent check, and all when the inherited conversation is actually needed. Answer-bearing history prevents a blind review. ' +
-    'After dispatch or an objective change, publish the shared route, ownership of each gap and how each output will be used. Advance a consumer interface or another complementary gap and assess arriving findings at useful discoveries, blockers or route changes. If you take over assigned work, amend or cancel it; explain purposeful independent review. ' +
     'Use native followup to continue an existing member: an idle member receives a new task, a yielded member resumes the same task and draft, and a busy member receives steering within its current task. ' +
     'A native message or followup does not change the effective objective revision of a running or yielded task. Use amend for that change and cancel to withdraw a particular assignment. ' +
     'Native interruption stops the current turn while preserving member identity and saved drafts. Only the Lead dispatches, amends, cancels, interrupts and adopts. Members can exchange findings directly. ' +
