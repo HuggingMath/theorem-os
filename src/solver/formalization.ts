@@ -1,4 +1,5 @@
 import { assertWorkflowSessionSupported, openWorkflowSession, workflowProfileFiles } from './workflowSession';
+import { completedWorkflowOutput, nativeWorkflowOutputInstructions, usesNativeWorkflowOutput } from './workflowOutput';
 import fs from 'node:fs';
 import { scheduleMathTimeout } from '../math/mathTimers';
 import { getFormalizationRoleOutputSchema, getFormalizationRoleOutputValidator,
@@ -12,7 +13,7 @@ import type { MathAgentFailureDiagnostic, MathAgentOptions, MathAgentSession } f
 import { warmFormalizationPackages } from '../runtime/formalizationSandbox';
 import { DEFAULT_MATH_PROOF_ENVIRONMENT_CACHE_ROOT } from '../math/mathProofEnvironmentCache';
 import { readMathBuildManifest } from '../math/mathBuildManifest';
-import { canonicalMathJson, mathDigest, readMathText, withMathRuntimeLease, writeMathJsonDurable } from '../math/mathRuntimeIo';
+import { canonicalMathJson, mathDigest, readMathText, withMathRuntimeLease, writeMathFrozen, writeMathJsonDurable } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath, isMathPathWithin, repositoryRelativePath } from '../math/paths';
 import { projectMathematicsRuntimeEnvironment, resolveMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnvironment';
 import { getLeanTaskEnvironment } from '../math/leanTaskEnvironment';
@@ -368,6 +369,7 @@ export async function runFormalization(directory: string, root: string, options:
           request.workflow.backtranslator : role === 'compare' && request.workflow ?
             request.workflow.reviewers.find(item => item.id === slot?.reviewerId)! : request;
         if (!config) throw new Error('formalization_role_configuration_missing');
+        const nativeOutput = usesNativeWorkflowOutput(config, request.execution, request.outputDelivery);
         const inputText = canonicalMathJson(input);
         const sharedInput = request.fidelityPolicy && reviewing ?
           shareFormalizationContext(inputText) : undefined;
@@ -409,7 +411,7 @@ export async function runFormalization(directory: string, root: string, options:
             { error: errorText(cause), outputText: output.text });
           return generationOutputFeedback(cause);
         } : request.fidelityPolicy && structuredInput ? reviewOutputFeedback : undefined;
-        const instructionsText = (direct && role === 'generate' ? directGenerationInstructions :
+        const baseInstructionsText = (direct && role === 'generate' ? directGenerationInstructions :
           request.fidelityPolicy && role === 'plan' ? taskPreservingPlanInstructions :
           structured && reviewing ? formalizationReviewInstructions(role === 'compare' ? 'review' : 'backtranslate',
             semanticContext, reviewStructureContext, role === 'compare' ? request.fidelityPolicy : undefined,
@@ -493,17 +495,18 @@ export async function runFormalization(directory: string, root: string, options:
             'In definitions, explain the mathematical meanings needed to interpret the statement. Do not turn the output into an inventory of kernel constructors or typeclass dispatch helpers; still examine any instance or local definition that can change the mathematical meaning. Once every target, domain, quantifier, hypothesis, conclusion and relevant definition has been interpreted, write OUTPUT.json and stop. Record any remaining uncertainty explicitly rather than repeatedly rechecking settled facts.',
             'Refer to each target by its exact qualified theorem name throughout the translation, including assumptions and definitions; positional target numbers are ambiguous.',
           ] : []),
-          'Write your complete final JSON atomically in this workspace: write ./OUTPUT.json.tmp, then rename ./OUTPUT.json.tmp to ./OUTPUT.json. Keep the temporary file beside OUTPUT.json; /tmp is a separate mount and renaming from there fails with a cross-device error.',
-          ...(direct && role === 'generate' ? [
+          ...(!nativeOutput ? ['Write your complete final JSON atomically in this workspace: write ./OUTPUT.json.tmp, then rename ./OUTPUT.json.tmp to ./OUTPUT.json. Keep the temporary file beside OUTPUT.json; /tmp is a separate mount and renaming from there fails with a cross-device error.'] : []),
+          ...(!nativeOutput && direct && role === 'generate' ? [
             'If source is already in ./Candidate.lean, write only coverage, assumptions, assumptionsExplanation and definitionsExplanation to ./Candidate.metadata.json, with exact original quotations and the required schema types. Package the existing source without copying or shell-escaping it again: /usr/bin/python3 -I - <<\'THEOREMOS_PACKAGE\'\nimport json\nfrom pathlib import Path\noutput = json.loads(Path("./Candidate.metadata.json").read_text(encoding="utf-8"))\noutput["source"] = Path("./Candidate.lean").read_bytes().decode("utf-8")\nPath("./OUTPUT.json.tmp").write_text(json.dumps(output, ensure_ascii=False), encoding="utf-8")\nPath("./OUTPUT.json.tmp").replace("./OUTPUT.json")\nTHEOREMOS_PACKAGE\nThis only serializes your chosen source and notes; host schema, exact coverage, source admission and Lean checks still decide acceptance.',
           ] : []),
-          ...(request.fidelityPolicy ? [
+          ...(!nativeOutput && request.fidelityPolicy ? [
             'When submitting JSON with exec_command, use a quoted shell heredoc: cat > ./OUTPUT.json.tmp <<\'THEOREMOS_OUTPUT_JSON\', followed on the next line by your complete JSON, then THEOREMOS_OUTPUT_JSON on its own line, then mv ./OUTPUT.json.tmp ./OUTPUT.json. Use a delimiter absent from the JSON. The quoted heredoc preserves apostrophes, backticks, dollar signs and backslashes literally. Do not place JSON prose inside a single-quoted printf or echo argument: an apostrophe in mathematical prose would break that shell quoting and require another model request.',
           ] : []),
           directGenerator ? 'The first complete source- and coverage-valid OUTPUT.json is your submission. Source or coverage failures receive precise feedback in this same thread; correct the existing candidate and resubmit. The host stops the writer before Lean compilation and validates the final bytes again. Stop after a valid submission.' :
             'The first complete schema-valid OUTPUT.json is your submission: the host ends this role and validates it. Stop after submitting.',
           'Do not change INPUT.json, ROLE.md or OUTPUT.schema.json. Read only this role input, protocol and installed libraries; do not search for benchmark answers.',
         ].join('\n');
+        const instructionsText = nativeOutput ? nativeWorkflowOutputInstructions(baseInstructionsText) : baseInstructionsText;
         const roleContract = { schema: 'theorem-os.formalization-role-contract.v1' as const,
           roleInstructionsSha256: mathDigest(instructionsText), outputSchemaSha256: mathDigest(schemaText) };
         // Only closed, validated writers can be reused. Bind the actual input and
@@ -572,7 +575,7 @@ export async function runFormalization(directory: string, root: string, options:
           const timeLeft = remaining();
           const budgetReminder = Number.isFinite(timeLeft) ?
             `\nThe shared pipeline has ${Math.max(0, Math.ceil(timeLeft / 1000))} seconds remaining for ${sharedStages} as well as this role.` : '';
-          void session.notify(message + budgetReminder, { waitForRequest: true })
+          void session.notify((nativeOutput ? nativeWorkflowOutputInstructions(message) : message) + budgetReminder, { waitForRequest: true })
             .then(() => event('formalization_submission_reminded', role))
             .catch(() => event('formalization_submission_reminder_cancelled', role));
         };
@@ -597,8 +600,9 @@ export async function runFormalization(directory: string, root: string, options:
             ...(request.execution === 'model' ? { readIsolation: { environment: request.environment,
               ...(request.library && !sourceOnlyPlan ? { library: { file: request.library.file, digest: request.library.digest } } : {}),
               ...(sourceOnlyPlan ? { packages: 'none' as const } : {}) } } : {}),
-            completedOutput: { file: outputFile, validate: value => { validateOutput(value); },
-              ...(outputFeedback ? { validationFeedback: outputFeedback } : {}) },
+            ...(nativeOutput ? { outputSchema: JSON.parse(schemaText) as Record<string, unknown> } : {
+              completedOutput: { file: outputFile, validate: (value: unknown) => { validateOutput(value); },
+                ...(outputFeedback ? { validationFeedback: outputFeedback } : {}) } }),
             onUsage: usage => {
               // Relayed roles settle each provider request; cumulative native notifications are observational.
               if (record.requestUsageAccounting) return;
@@ -661,7 +665,7 @@ export async function runFormalization(directory: string, root: string, options:
             receivedTurnUsage = false;
             record.usageAccounting.startedTurns++; record.usageAccounting.pending = true;
             record.status = 'running'; save();
-            const ran = session.run(message, crypto.randomUUID(), workspace,
+            const ran = session.run(nativeOutput ? nativeWorkflowOutputInstructions(message) : message, crypto.randomUUID(), workspace,
               turnId => { record.turnId = turnId; record.turns++; save(); });
             // A turn stopped at the allowance ends the run; one that still finished keeps its output.
             record.status = await ran.catch((cause: unknown) => { throw stopped ? new Error('math_total_token_limit') : cause; });
@@ -684,9 +688,13 @@ export async function runFormalization(directory: string, root: string, options:
                   readMathText(instructionsFile, 1_000_000) !== instructionsText || readMathText(schemaFile, 1_000_000) !== schemaText)
                 throw new Error('formalization_role_contract_changed');
               let output: unknown, outputText = '';
-              try { outputText = readMathText(outputFile, 2_000_000); output = JSON.parse(outputText); }
+              try {
+                outputText = nativeOutput ? completedWorkflowOutput(session, record.turnId, 2_000_000) : readMathText(outputFile, 2_000_000);
+                output = JSON.parse(outputText);
+              }
               catch (cause) {
-                if (!(cause instanceof SyntaxError) && (cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause;
+                if (!(cause instanceof SyntaxError) && (cause as NodeJS.ErrnoException).code !== 'ENOENT' &&
+                    !(nativeOutput && errorText(cause) === 'math_workflow_final_response_missing')) throw cause;
                 message = outputFeedback(cause, { text: outputText });
                 event(directGenerator ? 'formalization_generation_output_repairing' : 'formalization_review_output_repairing', role, errorText(cause)); continue;
               }
@@ -705,8 +713,10 @@ export async function runFormalization(directory: string, root: string, options:
           if (readMathText(instructionsFile, 1_000_000) !== instructionsText || readMathText(schemaFile, 1_000_000) !== schemaText)
             throw new Error('formalization_role_contract_changed');
           assertMathCanonicalPath(outputFile);
-          const output = JSON.parse(readMathText(outputFile, 2_000_000)) as unknown;
+          const outputText = nativeOutput ? completedWorkflowOutput(session, record.turnId!, 2_000_000) : readMathText(outputFile, 2_000_000);
+          const output = JSON.parse(outputText) as unknown;
           validateOutput(output);
+          if (nativeOutput) writeMathFrozen(outputFile, outputText);
           record.outputDigest = formalizationDigest(output);
           return { output, record };
         } finally {

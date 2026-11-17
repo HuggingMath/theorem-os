@@ -7,6 +7,16 @@ import { checkLeanType } from '../../src/math/leanTypeDiagnostics';
 import { readMathJson } from '../../src/math/mathRuntimeIo';
 import { assertSolverProjectSources, SolverSourceError, type SolverSourceConstraints } from '../../src/solver/problem';
 import { currentWorkerProject } from '../../src/solver/workerProject';
+import { checkLeanEnvironmentHealth, leanEnvironmentFailure } from '../../src/math/leanEnvironmentHealth';
+import { assertMathConstructionSources } from '../../src/math/mathConstructionSources';
+
+let stage: 'usage' | 'project' | 'source' | 'diagnostics' = 'usage';
+let project: string | undefined;
+let compilationAttempted = false;
+const publish = (result: unknown, exitCode: number) => {
+  console.log(JSON.stringify(result));
+  process.exitCode = exitCode;
+};
 
 async function main() {
   const args = process.argv.slice(2);
@@ -14,38 +24,63 @@ async function main() {
   const { values } = parseArgs({ args, options: {
     workspace: { type: 'string' }, worktree: { type: 'string' }, file: { type: 'string', multiple: true },
     type: { type: 'string' }, context: { type: 'string' }, expression: { type: 'string' },
-    'timeout-seconds': { type: 'string', default: '0' }, help: { type: 'boolean' },
+    'timeout-seconds': { type: 'string', default: '0' }, health: { type: 'boolean' }, help: { type: 'boolean' },
   } });
   if (values.help) console.log('Usage: theorem-os check-lean (--workspace DIR | --worktree ROOT) --file FILE [--file FILE --timeout-seconds N]\n'
     + 'Optional: --type TYPE --context DECLARATION elaborates one closed type in a proof-erased snapshot of the single --file context.\n'
     + 'Add --expression TERM to check one selected closed application against that type. Local theorem bodies are erased; this is advisory sufficiency, not proof acceptance.\n'
+    + 'Use --health instead of --file to verify the current namespace, sealed lease and pinned compiler without compiling sources.\n'
     + 'Checks saved sources against pinned packages. Timeout 0 waits until completion. Diagnostics and type elaboration are advisory, not proof acceptance.');
   else {
     const timeout = Number(values['timeout-seconds']);
-    if (Boolean(values.workspace) === Boolean(values.worktree) || !values.file?.length || !Number.isSafeInteger(timeout) || timeout < 0)
-      throw new Error('Exactly one of --workspace/--worktree, --file and a nonnegative --timeout-seconds are required');
-    if ((values.type !== undefined || values.context !== undefined) && (!values.type || !values.context || values.file.length !== 1))
+    if (Boolean(values.workspace) === Boolean(values.worktree) || (!values.health && !values.file?.length) || !Number.isSafeInteger(timeout) || timeout < 0)
+      throw new Error('Exactly one of --workspace/--worktree, --file (or --health) and a nonnegative --timeout-seconds are required');
+    if (values.health && (values.file?.length || values.type !== undefined || values.context !== undefined || values.expression !== undefined))
+      throw new Error('--health checks the environment only; omit --file, --type, --context and --expression');
+    if ((values.type !== undefined || values.context !== undefined) && (!values.type || !values.context || values.file?.length !== 1))
       throw new Error('--type requires --context and exactly one --file');
     if (values.expression !== undefined && !values.type) throw new Error('--expression requires --type and --context');
-    const project = values.workspace ? fs.realpathSync(values.workspace) : currentWorkerProject(values.worktree!);
+    stage = 'project';
+    project = values.workspace ? fs.realpathSync(values.workspace) : currentWorkerProject(values.worktree!);
+    stage = 'source';
     const constraints = path.join(project, '.lake/source-constraints.json');
-    if (fs.existsSync(constraints)) assertSolverProjectSources(readMathJson(constraints) as SolverSourceConstraints, project);
+    if (!values.health && fs.existsSync(constraints)) assertSolverProjectSources(readMathJson(constraints) as SolverSourceConstraints, project);
+    if (!values.health) assertMathConstructionSources(project, values.file!);
     const controller = new AbortController();
     const abort = () => controller.abort();
     process.once('SIGINT', abort); process.once('SIGTERM', abort);
     let result;
     const shared = { projectRoot: project, timeoutMs: timeout === 0 ? Infinity : timeout * 1000,
-      signal: controller.signal, onProgress: (file: string) => console.error(JSON.stringify({ event: 'lean_check_started', file })) };
-    try { result = values.type ? await checkLeanType({ ...shared, file: values.file[0], type: values.type, context: values.context!, expression: values.expression }) :
-      await runLeanDiagnostics({ ...shared, files: values.file });
+      signal: controller.signal, onProgress: (file: string) => {
+        compilationAttempted = true;
+        console.error(JSON.stringify({ event: 'lean_check_started', file }));
+      } };
+    try {
+      const health = await checkLeanEnvironmentHealth(shared);
+      if (values.health || health.status !== 'ready') return publish(health, health.exitCode);
+      stage = 'diagnostics';
+      result = values.type ? await checkLeanType({ ...shared, file: values.file![0], type: values.type, context: values.context!, expression: values.expression }) :
+        await runLeanDiagnostics({ ...shared, files: values.file! });
     } finally { process.removeListener('SIGINT', abort); process.removeListener('SIGTERM', abort); }
-    console.log(JSON.stringify(result));
-    process.exitCode = result.timedOut ? 124 : result.exitCode ?? 1;
+    const startupFailed = !result.timedOut && !result.aborted && 'started' in result && result.started === false;
+    publish({ ...result, classification: result.timedOut ? 'timeout' : result.aborted ? 'cancelled' :
+      result.exitCode === 0 ? 'success' : startupFailed ? 'infrastructure' : 'lean',
+      ...(startupFailed ? { status: 'infrastructure-error', leanStarted: false,
+        error: leanEnvironmentFailure('toolchain', new Error(result.stderr || 'Lean compiler process did not start')) } : {}) },
+    result.timedOut ? 124 : result.exitCode ?? 1);
   }
 }
-void main().catch(error => {
-  console.error(error instanceof SolverSourceError
-    ? `${error.message}\nFile: ${error.proofPath}\n${error.recovery}\nRepair the saved file and rerun check-lean; no Lean compilation has started.`
-    : error instanceof Error ? error.message : 'math_diagnostics_failed');
-  process.exitCode = 1;
+void main().catch(async error => {
+  if (stage === 'diagnostics' && project) {
+    const health = await checkLeanEnvironmentHealth({ projectRoot: project });
+    if (health.status !== 'ready') return publish({ ...health, leanStarted: compilationAttempted ? null : false }, 1);
+  }
+  const message = error instanceof Error ? error.message : 'math_diagnostics_failed';
+  if (stage === 'project') return publish({ status: 'infrastructure-error', classification: 'infrastructure',
+    exitCode: 1, timedOut: false, leanStarted: false, error: leanEnvironmentFailure('project', error) }, 1);
+  publish({ status: stage === 'usage' ? 'usage-error' : error instanceof SolverSourceError || stage === 'source' ? 'source-error' : 'diagnostics-error',
+    classification: stage === 'usage' ? 'usage' : error instanceof SolverSourceError || stage === 'source' ? 'source' : 'tooling',
+    exitCode: 1, timedOut: false, leanStarted: compilationAttempted ? null : false,
+    error: { code: error instanceof SolverSourceError ? error.message : 'math_diagnostics_failed', message,
+      ...(error instanceof SolverSourceError ? { file: error.proofPath, recovery: error.recovery } : {}) } }, 1);
 });

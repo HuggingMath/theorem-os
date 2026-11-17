@@ -47,8 +47,8 @@ function complete(stage, text, status = 'completed') {
 
 function checkRole(method, params) {
   const expected = actor === 'lead'
-    ? ['spawn', 'assign', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'publish', 'cancel', 'budget', 'resume', 'history']
-    : ['message', 'poll', 'wait', 'inspect', 'inspect-research', 'submit', 'yield', 'history'];
+    ? ['spawn', 'assign', 'amend', 'finish', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'publish', 'cancel', 'budget', 'resume', 'history', 'coordinate']
+    : ['message', 'poll', 'wait', 'inspect', 'inspect-research', 'submit', 'yield', 'history', 'progress'];
   assert(params.config['features.multi_agent'] === false && params.config['features.multi_agent_v2'] === false,
     'native-unmanaged-delegation-enabled');
   if (method === 'thread/start') {
@@ -184,6 +184,8 @@ stream.on('line', line => {
     return;
   }
   const reply = result => send({ id: call.id, result });
+  // The injected nativeFileWatchFixture owns these connection-scoped calls.
+  if (call.method === 'fs/watch' || call.method === 'fs/unwatch') return;
   try {
     if (call.method === 'initialize') return reply({});
     if (call.method === 'thread/start' || call.method === 'thread/resume') {

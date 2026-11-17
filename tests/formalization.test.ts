@@ -30,7 +30,9 @@ function preset(options: { rejectFirst?: boolean; unknownFirst?: boolean; always
   const seen: { role: string; input: any }[] = [];
   const open = async (config: MathAgentOptions): Promise<MathAgentSession> => {
     const sequence = ++sessions, role = path.basename(config.workspace);
+    let lastCompletedResponse: MathAgentSession['lastCompletedResponse'];
     return { threadId: options.reusedThread ? 'reused' : 'fixture-thread-' + sequence,
+      get lastCompletedResponse() { return lastCompletedResponse; },
       ...(options.isolationReceipt ? { isolationReceipt: options.isolationReceipt } : {}),
       interrupt: async () => {}, close: async () => {},
       run: async (_message, _id, workspace, onStarted) => {
@@ -64,7 +66,8 @@ function preset(options: { rejectFirst?: boolean; unknownFirst?: boolean; always
           fs.chmodSync(contract, 0o600);
           fs.writeFileSync(contract, 'changed protocol');
         }
-        fs.writeFileSync(path.join(workspace, 'OUTPUT.json'), JSON.stringify(output));
+        if (config.outputSchema) lastCompletedResponse = { turnId: 'fixture-turn-' + sequence, text: JSON.stringify(output) };
+        else fs.writeFileSync(path.join(workspace, 'OUTPUT.json'), JSON.stringify(output));
         if (options.submitted) config.completedOutput!.validate(output);
         return options.submitted ? 'submitted' : 'completed';
       },
@@ -76,6 +79,52 @@ const elaborate: NonNullable<Parameters<typeof runFormalization>[2]>['elaborate'
   async (_directory, source, environment, options) => syntheticElaboration(source, environment, options);
 
 describe('formalization generation and independent statement review', () => {
+  it('collects native final JSON for independent model roles and saves it only after each writer closes', async () => {
+    const f = fixture({ execution: 'model' }), agent = preset();
+    expect(f.request.outputDelivery).toBe('native-schema');
+    const closed: string[] = [];
+    const openSession = async (options: MathAgentOptions): Promise<MathAgentSession> => {
+      expect(options.outputSchema).toEqual(JSON.parse(readMathText(path.join(options.workspace, 'OUTPUT.schema.json'))));
+      expect(options.completedOutput).toBeUndefined();
+      const session = await agent.open(options);
+      return { ...session, get lastCompletedResponse() { return session.lastCompletedResponse; }, close: async () => {
+        if (closed.includes(options.workspace)) return;
+        expect(fs.existsSync(path.join(options.workspace, 'OUTPUT.json'))).toBe(false);
+        closed.push(options.workspace); await session.close();
+      } };
+    };
+    expect(await runFormalization(f.directory, f.root, { openSession, elaborate })).toMatchObject({ status: 'approved' });
+    expect(closed).toHaveLength(3);
+    for (const workspace of closed) {
+      expect(JSON.parse(readMathText(path.join(workspace, 'OUTPUT.json')))).toBeTypeOf('object');
+      expect(fs.statSync(path.join(workspace, 'OUTPUT.json')).mode & 0o222).toBe(0);
+    }
+    expect(readFormalizationArtifact(path.join(f.directory, 'artifact')).proofVerified).toBe(false);
+  });
+
+  it('restores a historical file checkpoint without upgrading its frozen role contract', async () => {
+    const f = fixture({ execution: 'model' }), legacy = { ...f.request };
+    delete legacy.outputDelivery;
+    writeMathJsonDurable(path.join(f.directory, 'request.json'), legacy, 0o400);
+    const controller = new AbortController(), first = preset();
+    const stopped = await runFormalization(f.directory, f.root, { openSession: first.open, elaborate, signal: controller.signal,
+      onEvent: event => { if (event.event === 'formalization_role_finished' && event.role === 'generate') controller.abort(); } });
+    expect(stopped.status).toBe('stopped');
+    const before = readFormalizationState(f.directory)!.sessions[0];
+    expect(before.outputDigest).toBeDefined();
+    const workspace = path.join(f.directory, before.workspace!);
+    const frozenRole = readMathText(path.join(workspace, 'ROLE.md'));
+    const second = preset(), opened: string[] = [];
+    expect(await runFormalization(f.directory, f.root, { elaborate, openSession: async options => {
+      expect(options.outputSchema).toBeUndefined(); expect(options.completedOutput).toBeDefined();
+      opened.push(path.basename(options.workspace));
+      const session = await second.open(options); return { ...session, threadId: 'resumed-' + session.threadId };
+    } })).toMatchObject({ status: 'approved' });
+    expect(opened).toEqual(['backtranslate', 'compare']);
+    expect(readMathText(path.join(workspace, 'ROLE.md'))).toBe(frozenRole);
+    expect(readFormalizationState(f.directory)!.sessions[0].roleContract).toEqual(before.roleContract);
+  });
+
   it('reads a frozen v1 request and resumes its artifact without upgrading or opening a role', async () => {
     const f = fixture(), agent = preset();
     const legacy = { ...f.request, schema: 'theorem-os.formalization-request.v1' };

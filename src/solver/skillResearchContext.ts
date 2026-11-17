@@ -15,6 +15,7 @@ import { materializeResearchToolHelp } from './researchToolHelp';
 import { buildResearchToolGuide } from './researchToolGuide';
 import { agentTeamInstructions, agentTeamWorkerDeliveryHelp, agentTeamWorkerSection } from './agentTeamContext';
 import { agentTeamOverview, agentTeamRecentEvents } from './agentTeamViews';
+import { agentTeamProfileSection } from './agentTeamProfiles';
 
 /** Leave the last fifth of a bounded team turn for request settlement and handoff. */
 export function teamTurnTiming(maxTurnMs: number): Pick<MathAgentOptions, 'turnTimeoutMs' | 'turnCheckpointMs'> {
@@ -62,7 +63,7 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
   if (access.knowledgeFile) {
     if (!access.knowledgeDigest || access.knowledgeDigest !== state.knowledgeDigest) throw new Error('math_knowledge_identity_changed');
   } else if (state.knowledgeDigest) throw new Error('math_knowledge_identity_missing');
-  const { command, help } = buildResearchToolGuide(problem, access, state.environmentDigest);
+  const { command, help } = buildResearchToolGuide(problem, access, state.environmentDigest, state.researchDelegation?.mode === 'team');
   const project = path.join(access.worktree, problem.projectRelative);
   const teamWorker = state.researchDelegation?.mode === 'team' && access.teamRole?.role === 'worker';
   if (teamWorker && !access.teamAssignment) throw new Error('math_team_assignment_missing');
@@ -80,7 +81,8 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
   materializeResearchToolHelp({ toolHelp: help.build() }, access.worktree);
   const editable = problem.ownedFiles.filter(file => !Object.hasOwn(problem.frozenFiles ?? {}, file));
   const instructions = (state.researchDelegation?.mode === 'team'
-    ? agentTeamInstructions(access.teamRole ?? { id: 'lead', role: 'lead' }, state.researchDelegation.maxAgents) : '') +
+    ? agentTeamInstructions(access.teamRole ?? { id: 'lead', role: 'lead' }, state.researchDelegation.maxAgents,
+      state.agentTeam?.transport) : '') +
     'Research the fixed original mathematics problem in this isolated worktree using the pinned theoremos-research skill.\n' +
     `Lean project: ${project}. Editable Lean paths relative to it: ${JSON.stringify(editable)}. ` +
     `Public research notes: ${path.join(access.worktree, 'RESEARCH.md')}. Temporary experiments and requests belong in .scratch/tmp or the documented .scratch paths.\n` +
@@ -121,7 +123,8 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
     `The current owned declaration index is ${path.join(access.worktree, DECLARATION_INDEX_FILE)}. ` +
     'Current files and complete references remain available even when their full text is not included in this message. Continue the original research from saved work.' });
   const compile = (options: ResearchDispatchOptions = {}) => compileContextSections({ instructions,
-    mandatory: [...(teamWorker ? [agentTeamWorkerSection(state, access.teamRole!, access.teamAssignment!).section] : []),
+    mandatory: [...(teamWorker ? [agentTeamWorkerSection(state, access.teamRole!, access.teamAssignment!).section,
+      agentTeamProfileSection(skill, access.teamAssignment!.message)] : []),
       ...(access.executionLimits ? [executionLimitsSection(access.executionLimits)] : []),
       options.continuation ? skillResearchContinuationSection(problem, state) : originalProblem,
       ...mandatory, ...(options.checkpointInstruction ? [{ id: 'checkpoint', kind: 'checkpoint' as const,

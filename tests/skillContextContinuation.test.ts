@@ -33,7 +33,7 @@ function fixture(common: boolean) {
 
 it('compiles the current child assignment and inbox inside both full and continuation context budgets', () => {
   const f = fixture(false), sourceCommit = 'a'.repeat(40), deliveryBaseCommit = 'b'.repeat(40);
-  const objective = '研究当前不等式并独立验证假设；明确报告反例或可复用的 Lean 声明。';
+  const objective = 'Profiles: D041, prover\n研究当前不等式并独立验证假设；明确报告反例或可复用的 Lean 声明。';
   f.state.researchDelegation = { mode: 'team', maxAgents: 3 };
   f.state.agentTeam = { schema: 'theorem-os.agent-team.v1', deliveries: [], adoptions: [], operations: [],
     events: [{ sequence: 1, from: 'lead', to: 'child', kind: 'message', at: 1, text: 'An additional boundary case to inspect.' }],
@@ -47,6 +47,11 @@ it('compiles the current child assignment and inbox inside both full and continu
     const dispatch = finalizeResearchDispatch(context, { continuation });
     expect(dispatch.manifest!.included.find(item => item.id === 'agent-team-assignment'))
       .toMatchObject({ kind: 'assignment', required: true });
+    expect(dispatch.manifest!.included.find(item => item.id === 'agent-team-profiles'))
+      .toMatchObject({ kind: 'assignment', required: true });
+    expect(JSON.parse(dispatch.message.split('\n').find(line => line.startsWith('{"schema":"theorem-os.agent-team-profile-evidence.v1"'))!))
+      .toMatchObject({ skillDigest: f.access.researchSkill.digest, loaded: ['D041', 'prover'], unresolved: [] });
+    expect(dispatch.message).toContain('references/domain-materials/analysis.md#real-analysis');
     expect(dispatch.manifest!.usedBytes).toBe(Buffer.byteLength(dispatch.instructions) + Buffer.byteLength(dispatch.message));
     const envelope = JSON.parse(dispatch.message.split('\n')[1]!);
     expect(envelope).toMatchObject({ agentId: 'child', coordinator: 'lead', taskId: 'current-task', objective,
@@ -57,6 +62,12 @@ it('compiles the current child assignment and inbox inside both full and continu
   expect(() => buildSkillResearchContext(f.problem, f.state, { ...f.access,
     teamRole: { id: 'child', role: 'worker' }, teamAssignment: { taskId: 'other-task', message: objective, sourceCommit } }))
     .toThrow('math_team_assignment_changed');
+  const help = fs.readFileSync(path.join(f.workspace, '.scratch/theoremos-help.md'), 'utf8');
+  expect(help).not.toContain('research-observe');
+  expect(help).toContain('check-lean --worktree');
+  expect(() => buildSkillResearchContext(f.problem, f.state, { ...f.access,
+    teamRole: { id: 'child', role: 'worker' }, teamAssignment: { taskId: 'current-task', message: objective, sourceCommit },
+    maxContextBytes: 2000 })).toThrow('math_context_mandatory_overflow');
 });
 
 describe.each([{ common: false, mode: 'standalone skill' }, { common: true, mode: 'shared-guidance skill' }])

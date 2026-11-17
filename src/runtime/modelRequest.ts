@@ -25,6 +25,9 @@ export type ModelRequestAdmission =
 
 /** Admission and settlement are synchronous so another request cannot observe stale receipts. */
 export type ModelRequestGate = ((identity?: ModelRequestIdentity) => ModelRequestAdmission) & {
+  /** Ask for a resumable handoff at an unpaid request boundary. This is scheduling,
+   * not a model allowance; the caller may continue the same thread afterwards. */
+  checkpoint?: () => boolean;
   /** Transport coordination before admission; waiting neither reserves nor charges a provider request. */
   beforeRequest?: (signal: AbortSignal) => Promise<void>;
 };

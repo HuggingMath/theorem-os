@@ -14,6 +14,7 @@ import { withMathRuntimeLease, writeMathJsonDurable, readMathText, mathDigest } 
 import { closeMathProcess } from '../../src/math/mathProcess';
 import { git, committedSource, solverSourceConstraints } from '../../src/solver/problem';
 import { prepareResearchSkill } from '../../src/solver/researchSkill';
+import { writeWorkerProject } from '../../src/solver/workerProject';
 import { buildCommonResearchGuide } from '../../src/solver/researchGuidance';
 import { compileTaskContext, frozenSourceContext } from '../../src/solver/contextCompiler';
 import { writeOwnedDeclarationIndex } from '../../src/solver/declarationIndex';
@@ -61,6 +62,7 @@ export async function runNativeSkillBaseline(argv: string[]): Promise<number> {
       git(job.workspace, ['worktree', 'add', '--quiet', '--detach', worktree, job.initialCommit]);
       const project = path.join(worktree, problem.projectRelative);
       fs.mkdirSync(path.join(project, '.lake'), { recursive: true });
+      writeWorkerProject(worktree, problem.projectRelative);
       writeMathJsonDurable(path.join(project, '.lake/source-constraints.json'), solverSourceConstraints(problem), 0o400);
       const skill = prepareResearchSkill(job.root, worktree, job.skill, problem);
       writeOwnedDeclarationIndex(problem, worktree);

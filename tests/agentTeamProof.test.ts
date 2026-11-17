@@ -9,6 +9,7 @@ import { commitSolverSources, git, readSolverProblem } from '../src/solver/probl
 import { solverState } from './helpers/solver';
 import { temporaryDirectory } from './helpers/files';
 import { declarationSubmissionSchema } from '../src/solver/declarationArtifacts';
+import { prepareAgentTeamWorkspace } from '../src/solver/agentTeamWorkspace';
 
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -47,6 +48,36 @@ function consumerWithDraft(f: ReturnType<typeof fixture>, draft: string) {
 }
 
 describe('agent-owned declaration deliveries with real Lean', () => {
+  it('checks independent member evidence, survives source cleanup, and imports only during authorized adoption', async () => {
+    const f = fixture(), migrationDirectory = path.join(f.directory, 'runtime/agent-team/migrations');
+    const prepare = (worktree: string) => prepareAgentTeamWorkspace({ sourceWorktree: f.receipt.workspaceRoot,
+      worktree, seedCommit: f.problem.baseCommit, migrationDirectory });
+    prepare(f.worktree);
+    const consumer = consumerWithDraft(f, 'theorem ownDraft : True := by sorry\n'); prepare(consumer.worktree);
+    const provenance = { objectiveRevision: 3, exposures: [{ deliveryId: mathDigest('prior research'), agentId: 'peer',
+      taskId: 'research-1', commit: f.problem.baseCommit, kind: 'inspected' as const, at: '2026-11-17T00:00:00.000Z' }] };
+    const delivery = await checkAgentTeamProofDelivery({ ...f.check, provenance });
+    expect(delivery.provenance).toEqual(provenance);
+    expect(() => git(f.receipt.workspaceRoot, ['show', `${delivery.commit}:${f.problem.projectRelative}/Submission.lean`])).toThrow();
+    expect(() => git(consumer.worktree, ['show', `${delivery.commit}:${f.problem.projectRelative}/Submission.lean`])).toThrow();
+    const archive = path.join(f.common.evidenceDirectory, 'sources.git');
+    expect(git(archive, ['show', `${delivery.commit}:${f.problem.projectRelative}/Submission.lean`])).toContain('theorem reusable');
+    for (const artifact of delivery.artifacts)
+      expect(git(archive, ['rev-parse', `${artifact.proof.verification.targetCommit}^{commit}`]))
+        .toBe(artifact.proof.verification.targetCommit);
+    fs.rmSync(f.worktree, { recursive: true });
+    const restored = readAgentTeamProofDelivery(path.join(f.common.evidenceDirectory, 'deliveries', `${delivery.id}.json`), f.state);
+    const adoption = await integrateAgentTeamProofDelivery({ ...f.common, delivery: restored,
+      worktree: consumer.worktree, expectedCommit: consumer.commit });
+    expect(git(consumer.worktree, ['rev-parse', 'HEAD'])).toBe(adoption.commit);
+    expect(fs.readFileSync(f.source(consumer.worktree), 'utf8')).toContain('theorem ownDraft : True := by sorry');
+    expect(fs.readFileSync(f.source(consumer.worktree), 'utf8')).toContain(peerHelper);
+    expect(fs.readFileSync(path.join(consumer.worktree, 'RESEARCH.md'), 'utf8')).toBe(consumer.notes);
+    expect(await integrateAgentTeamProofDelivery({ ...f.common, delivery: restored,
+      worktree: consumer.worktree, expectedCommit: consumer.commit })).toEqual(adoption);
+    expect(f.state.check).toBeUndefined();
+  }, 90_000);
+
   it('freezes a helper in a separate worktree, restores its record, and adopts only after a fresh check', async () => {
     const f = fixture(), delivery = await checkAgentTeamProofDelivery(f.check);
     expect(delivery.artifacts[0]!.proof.verification.results[0]).toMatchObject({ status: 'kernel_verified',
@@ -71,6 +102,22 @@ describe('agent-owned declaration deliveries with real Lean', () => {
     expect(git(f.receipt.workspaceRoot, ['rev-parse', 'HEAD'])).toBe(adoption.commit);
     expect(fs.statSync(path.join(f.common.evidenceDirectory, 'adoptions', `${adoption.id}.json`)).mode & 0o777).toBe(0o400);
     expect(f.state.phase).toBe('running'); expect(f.state.check).toBeUndefined();
+  }, 90_000);
+
+  it('imports legacy shared-repository evidence into a migrated independent receiver', async () => {
+    const f = fixture(), delivery = await checkAgentTeamProofDelivery(f.check);
+    // Older runs retained these objects only in the primary common repository.
+    fs.rmSync(path.join(f.common.evidenceDirectory, 'sources.git'), { recursive: true });
+    git(f.receipt.workspaceRoot, ['worktree', 'remove', '--force', f.worktree]);
+    const consumer = consumerWithDraft(f, 'theorem ownDraft : True := by sorry\n');
+    prepareAgentTeamWorkspace({ sourceWorktree: f.receipt.workspaceRoot, worktree: consumer.worktree,
+      seedCommit: f.problem.baseCommit, migrationDirectory: path.join(f.directory, 'runtime/agent-team/migrations') });
+    expect(() => git(consumer.worktree, ['cat-file', '-e', `${delivery.commit}^{commit}`])).toThrow();
+    const adoption = await integrateAgentTeamProofDelivery({ ...f.common, delivery,
+      worktree: consumer.worktree, expectedCommit: consumer.commit });
+    expect(git(consumer.worktree, ['rev-parse', 'HEAD'])).toBe(adoption.commit);
+    expect(fs.readFileSync(f.source(consumer.worktree), 'utf8')).toContain(peerHelper);
+    expect(fs.readFileSync(f.source(consumer.worktree), 'utf8')).toContain('theorem ownDraft');
   }, 90_000);
 
   it('adopts an explicitly delivered original theorem without accepting unfinished original targets', async () => {

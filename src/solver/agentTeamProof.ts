@@ -11,13 +11,16 @@ import { checkDeclarationArtifacts, declarationSubmissionSchema, validateDeclara
 import { assertSolverSources, committedSource, commitSolverSources, git, solverProofImports, withSolverWorktree } from './problem';
 import { locateKnowledgeDeclaration } from './theoremKnowledge';
 import { solverSourceDigest } from './modules/evidence';
+import { archiveAgentTeamCommits, importAgentTeamCommit } from './agentTeamWorkspace';
 
 type Identity = { runId: string; problemReceiptDigest: string; environmentDigest: string };
+export type AgentTeamProofProvenance = z.infer<typeof provenanceSchema>;
 export type AgentTeamProofDelivery = Readonly<Identity & {
   schema: 'theorem-os.agent-team-proof-delivery.v1'; id: string; agentId: string; sourceWorktree: string;
   seedCommit: string; commit: string; sourceDigest: string;
   declarations: DeclarationSubmission['declarations']; artifacts: readonly DeclarationArtifact[];
   changes: readonly DeclarationChange[]; imports: readonly { file: string; module: string }[];
+  provenance?: AgentTeamProofProvenance;
 }>;
 export type AgentTeamProofAdoption = Readonly<Identity & {
   schema: 'theorem-os.agent-team-proof-adoption.v1'; id: string; deliveryId: string;
@@ -32,6 +35,10 @@ type CheckInput = { state: DeclarationArtifactIdentity; env: NodeJS.ProcessEnv; 
 type IntegrationInput = CheckInput & { delivery: AgentTeamProofDelivery; worktree: string; expectedCommit: string };
 const hash = z.string().regex(/^[a-f0-9]{64}$/u), commitHash = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u);
 const identitySchema = { runId: z.string().min(1), problemReceiptDigest: hash, environmentDigest: hash };
+const provenanceSchema = z.object({ objectiveRevision: z.number().int().positive().optional(),
+  taskId: z.string().min(1).optional(), workKind: z.enum(['research', 'proof', 'independent-reconstruction', 'review', 'assembly']).optional(),
+  exposures: z.array(z.object({ deliveryId: hash, agentId: z.string().min(1), taskId: z.string().min(1),
+    commit: commitHash, kind: z.enum(['inspected', 'adopted']), at: z.string().min(1) }).strict()).optional() }).strict();
 // The host can combine prior checked peer inputs with a member's <=32-declaration submission.
 // Individual declarations keep the public validation; only the internal collection is larger.
 const teamDeclarations = z.array(declarationSubmissionSchema.shape.declarations.element).min(1);
@@ -42,6 +49,7 @@ const deliverySchema = z.object({ schema: z.literal('theorem-os.agent-team-proof
   changes: z.array(z.object({ file: z.string(), name: z.string(), before: z.string().optional(), after: z.string(),
     beforeName: z.string().optional(), afterName: z.string().optional(), tail: z.string().optional() }).strict()),
   imports: z.array(z.object({ file: z.string(), module: z.string() }).strict()),
+  provenance: provenanceSchema.optional(),
 }).strict();
 const adoptionSchema = z.object({ schema: z.literal('theorem-os.agent-team-proof-adoption.v1'), id: hash,
   ...identitySchema, deliveryId: hash, beforeCommit: commitHash, commit: commitHash, sourceDigest: hash,
@@ -122,11 +130,31 @@ function readIntent(input: IntegrationInput, delivery: AgentTeamProofDelivery): 
   return adoption;
 }
 
-function retainEvidence(worktree: string, artifacts: readonly DeclarationArtifact[], commit: string): void {
-  for (const id of new Set([commit, ...artifacts.map(artifact => artifact.proof.verification.targetCommit)])) {
+function retainEvidence(input: CheckInput, worktree: string, artifacts: readonly DeclarationArtifact[], commit: string): void {
+  const commits = [...new Set([commit, ...artifacts.map(artifact => artifact.proof.verification.targetCommit)])];
+  // Validate the host evidence location before creating or moving source objects there.
+  evidenceFile(input, 'deliveries', 'source-archive', worktree);
+  archiveAgentTeamCommits(path.join(input.evidenceDirectory, 'sources.git'), worktree, commits);
+  for (const id of commits) {
     commitHash.parse(id);
     git(worktree, ['update-ref', `refs/math/agent-team/evidence/${id}`, id]);
   }
+}
+
+function importEvidenceCommit(input: IntegrationInput, commit: string): void {
+  try { git(input.worktree, ['cat-file', '-e', `${commit}^{commit}`]); return; }
+  catch { /* An independent receiver may not have this checked source yet. */ }
+  evidenceFile(input, 'deliveries', 'source-archive', input.worktree);
+  const archive = path.join(input.evidenceDirectory, 'sources.git');
+  let archived = false;
+  if (fs.existsSync(archive)) {
+    try { git(archive, ['cat-file', '-e', `${commit}^{commit}`]); archived = true; }
+    catch { /* Legacy records can predate the host-owned archive. */ }
+  }
+  // Legacy shared-worktree evidence is retained in the frozen primary repository.
+  // Never read a mutable/deleted member path supplied by a delivery record.
+  if (!archived) archiveAgentTeamCommits(archive, input.state.problem.workspace, [commit]);
+  importAgentTeamCommit(archive, input.worktree, commit);
 }
 
 /** Every changed declaration must be named and independently checked; metadata never widens source ownership. */
@@ -188,14 +216,14 @@ async function checkTeamDeclarationArtifacts(input: Parameters<typeof checkDecla
 /** Called only after the child writer has stopped. No mutable child files become proof evidence. */
 export async function checkAgentTeamProofDelivery(input: CheckInput & {
   agentId: string; worktree: string; seedCommit: string; declarations: DeclarationSubmission['declarations'];
+  provenance?: AgentTeamProofProvenance;
 }): Promise<AgentTeamProofDelivery> {
   const declarations = teamDeclarations.parse(input.declarations);
   const agentId = deliverySchema.shape.agentId.parse(input.agentId);
   commitHash.parse(input.seedCommit); assertMathCanonicalPath(input.worktree);
   input.signal.throwIfAborted(); input.assertWriterStopped();
   const { problem } = input.state;
-  if (input.worktree === problem.workspace || git(input.worktree, ['rev-parse', '--path-format=absolute', '--git-common-dir']) !==
-      git(problem.workspace, ['rev-parse', '--path-format=absolute', '--git-common-dir'])) return fail('worktree_not_isolated');
+  if (input.worktree === problem.workspace) return fail('worktree_not_isolated');
   const commit = commitSolverSources(problem, input.worktree), stable = frozenSource(input, input.worktree, commit);
   stable();
   const patch = deliveryPatch(input.state, input.worktree, input.seedCommit, commit, declarations);
@@ -203,10 +231,11 @@ export async function checkAgentTeamProofDelivery(input: CheckInput & {
   stable();
   const record: AgentTeamProofDelivery = { schema: 'theorem-os.agent-team-proof-delivery.v1', id: '',
     ...identityOf(input.state), agentId, sourceWorktree: input.worktree, seedCommit: input.seedCommit, commit,
-    sourceDigest: ownedSourceDigest(problem, input.worktree, commit), declarations, artifacts, ...patch };
+    sourceDigest: ownedSourceDigest(problem, input.worktree, commit), declarations, artifacts, ...patch,
+    ...(input.provenance === undefined ? {} : { provenance: provenanceSchema.parse(input.provenance) }) };
   const delivery = { ...record, id: recordId(record) };
   validateDelivery(delivery, input.state);
-  retainEvidence(input.worktree, artifacts, commit);
+  retainEvidence(input, input.worktree, artifacts, commit);
   persist(input, 'deliveries', delivery, input.worktree); stable();
   return delivery;
 }
@@ -265,6 +294,10 @@ export async function integrateAgentTeamProofDelivery(input: IntegrationInput): 
   const pending = readIntent(input, delivery);
   const stable = frozenSource(input, input.worktree, input.expectedCommit);
   if (!pending) stable();
+  // New deliveries are independent of the mutable member directory. Legacy evidence
+  // already in the target repository remains readable without a new source lookup.
+  importEvidenceCommit(input, delivery.commit);
+  if (pending) importEvidenceCommit(input, pending.commit);
   return withSolverWorktree(input.worktree, delivery.commit, async frozen => {
     assertSolverSources(problem, frozen);
     if (ownedSourceDigest(problem, frozen, delivery.commit) !== delivery.sourceDigest) return fail('delivery_source_changed');
@@ -285,7 +318,7 @@ export async function integrateAgentTeamProofDelivery(input: IntegrationInput): 
         ...identityOf(input.state), deliveryId: delivery.id, beforeCommit: input.expectedCommit, commit,
         sourceDigest: ownedSourceDigest(problem, checkout, commit), artifacts };
       const adoption = { ...record, id: recordId(record) };
-      retainEvidence(input.worktree, artifacts, commit);
+      retainEvidence(input, input.worktree, artifacts, commit);
       persist(input, 'adoption-intents', { schema: 'theorem-os.agent-team-proof-adoption-intent.v1',
         id: intentId(input, delivery), ...identityOf(input.state), worktree: input.worktree, adoption }, input.worktree);
       // This is checked adoption evidence, not whole-problem acceptance. Journals stay with the primary.

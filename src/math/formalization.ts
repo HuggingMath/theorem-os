@@ -60,6 +60,8 @@ export const formalizationRequestSchema = z.object({
   schema: z.enum(['theorem-os.formalization-request.v1', 'theorem-os.formalization-request.v2', 'theorem-os.formalization-request.v3']), problemId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u),
   statement: original, statementSha256: hash, environment: z.enum(['standard', 'mathlib']), environmentDigest: hash,
   execution: z.enum(['model', 'replay']), model: text, effort: text, profile: text, executable: text,
+  /** Missing on historical requests, whose file submission protocol must remain unchanged. */
+  outputDelivery: z.enum(['native-schema', 'file']).optional(),
   agentHarness: agentHarnessIdentitySchema.optional(),
   buildManifestRef: text, buildDigest: hash, maxRounds: executionLimit,
   maxRunSeconds: executionLimit, maxTurnSeconds: executionLimit,
@@ -287,6 +289,7 @@ export function prepareFormalization(directory: string, input: Omit<Formalizatio
   const exemplars = exemplarSource ? prepareFormalizationExemplars(exemplarSource, input.statement) : undefined;
   const compatibility = compatibilitySource ? prepareFormalizationNameCompatibility(compatibilitySource) : undefined;
   const request = formalizationRequestSchema.parse({ ...base, schema: 'theorem-os.formalization-request.v3',
+    outputDelivery: input.outputDelivery ?? 'native-schema',
     contextProtocol: input.contextProtocol ?? LEAN_STATEMENT_CONTEXT_PROTOCOL,
     ...(retrieval ? { retrieval: retrieval.configuration } : {}),
     ...(exemplars ? { exemplars } : {}),

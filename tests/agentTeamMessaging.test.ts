@@ -15,7 +15,7 @@ import { prepareResearchSkill, researchSkillIdentity } from '../src/solver/resea
 import { deferred } from './helpers/async';
 import { solverState } from './helpers/solver';
 
-// This local protocol peer exercises the real native tool dispatcher and notification fence.
+// This local protocol peer exercises the real tool dispatcher and native notification routing.
 // It never contacts a model. The host writes a gate only after each turn has actually started.
 const peer = String.raw`
 const fs = require('node:fs'), path = require('node:path'), readline = require('node:readline');
@@ -156,28 +156,53 @@ afterEach(async () => {
 });
 
 describe.skipIf(process.platform !== 'linux')('Agent team messaging through the real native adapter', () => {
-  it('acknowledges self-messages before the native tool clears and then delivers the deferred steer', async () => {
+  it('rejects self-messages through the native dispatcher without a notification or blocked stop', async () => {
     const f = fixture();
     await f.call({ operation: 'publish', summary: 'Revision one is the context dispatched to this member.' });
     await f.start('self');
     await f.call({ operation: 'publish', summary: 'Revision two arrives after the member started.' });
+    const eventsBefore = [...f.team.archive.events];
     f.send('self', [{ operation: 'message', agentId: 'self', message: 'A self-message must not wait for its own callback.' }]);
     await expect.poll(() => f.trace('self').some(item => item.direction === 'host' && item.id === 10001 && item.result),
       { timeout: 2500 }).toBe(true);
     const response = f.trace('self').find(item => item.direction === 'host' && item.id === 10001)!.result;
     expect(response.success).toBe(true);
-    expect(JSON.parse(response.contentItems[0].text)).toMatchObject({ ok: true, delivery: 'saved-inbox', notification: 'queued' });
-    await expect.poll(() => f.trace('self').some(item => item.direction === 'host' && item.method === 'turn/steer' &&
-      JSON.stringify(item.params.input).includes('A self-message must not wait for its own callback.')),
-      { timeout: 2500 }).toBe(true);
-    expect(readSolverRunState(f.stateFile).agentTeam!.events).toContainEqual(expect.objectContaining({
-      from: 'self', to: 'self', kind: 'message', text: 'A self-message must not wait for its own callback.',
-      taskId: f.worker('self').tasks[0]!.id, sourceTaskId: f.worker('self').tasks[0]!.id, dispatchResearchRevision: 1,
-    }));
+    expect(JSON.parse(response.contentItems[0].text)).toMatchObject({ ok: false,
+      error: 'math_team_message_self_addressed', from: 'self', to: 'self',
+      hint: expect.stringContaining('Use agentId: "lead"') });
+    expect(readSolverRunState(f.stateFile).agentTeam!.events).toEqual(eventsBefore);
     expect(await bounded(f.call({ operation: 'stop', agentId: 'self' }), 2500, 'self-message-blocked-stop'))
       .toMatchObject({ ok: true });
     await expect.poll(() => f.team.hasActiveWorkers, { timeout: 5000 }).toBe(false);
     expect(f.worker('self').writerStopUnconfirmed).toBeUndefined();
+    expect(f.trace('self').some(item => item.direction === 'host' &&
+      ['turn/steer', 'thread/inject_items'].includes(item.method) &&
+      JSON.stringify(item.params).includes('A self-message must not wait for its own callback.'))).toBe(false);
+  }, 20000);
+
+  it('queues advisory messages in native history while amendments retain turn-bound steering', async () => {
+    const f = fixture(); await f.start('member');
+    const task = f.worker('member').tasks[0]!;
+    await f.call({ operation: 'message', agentId: 'member', message: 'A complementary finding is available.' });
+    await expect.poll(() => f.trace('member').filter(item => item.direction === 'host' &&
+      item.method === 'thread/inject_items').length, { timeout: 2500 }).toBe(1);
+    const injected = f.trace('member').find(item => item.method === 'thread/inject_items')!.params;
+    expect(injected).toMatchObject({ threadId: f.worker('member').threadId, items: [{
+      type: 'message', role: 'user', content: [{ type: 'input_text', text: expect.stringContaining('Team update (advisory)') }],
+    }] });
+    expect(injected.items[0].content[0].text).toContain('A complementary finding is available.');
+    expect(f.trace('member').filter(item => item.method === 'turn/steer')).toEqual([]);
+
+    await f.call({ operation: 'amend', agentId: 'member', taskId: task.id,
+      message: 'Review the dependency interface before further work.', reason: 'The effective task objective changed.' });
+    await expect.poll(() => f.trace('member').filter(item => item.direction === 'host' &&
+      item.method === 'turn/steer').length, { timeout: 2500 }).toBe(1);
+    const steered = f.trace('member').find(item => item.method === 'turn/steer')!.params;
+    expect(steered).toMatchObject({ threadId: f.worker('member').threadId, expectedTurnId: task.id });
+    expect(JSON.stringify(steered.input)).toContain('Lead assignment amendment (effective objective)');
+    expect(JSON.stringify(steered.input)).toContain('Review the dependency interface before further work.');
+    expect(f.trace('member').filter(item => item.method === 'turn/start')).toHaveLength(1);
+    expect(f.trace('member').filter(item => item.method === 'thread/inject_items')).toHaveLength(1);
   }, 20000);
 
   it('keeps Lead cancel and stop responsive while two busy native members exchange concurrent messages', async () => {
@@ -208,15 +233,17 @@ describe.skipIf(process.platform !== 'linux')('Agent team messaging through the 
     // Simulate a stale session reference during a close boundary, using its real notify method.
     f.team.setLeadSession(closed);
     const responses = await bounded(Promise.all([
-      f.call({ operation: 'message', agentId: 'lead', message: 'Keep the late notification in the durable inbox.' }),
+      f.team.tools('closed').call('theoremos_team', {
+        operation: 'message', agentId: 'lead', message: 'Keep the late notification in the durable inbox.',
+      }, { callId: 'closed-late-message', threadId: closed.threadId, turnId: 'closed-turn', signal: f.controller.signal }),
       f.call({ operation: 'publish', summary: 'A later mutation still progresses after native shutdown.' }),
     ]), 2500, 'late-notification-blocked-serial');
     f.team.setLeadSession(undefined);
     expect(responses[0]).toMatchObject({ ok: true, delivery: 'saved-inbox' });
     expect(responses[1]).toMatchObject({ ok: true });
     expect((await f.call({ operation: 'poll' })).events).toContainEqual(expect.objectContaining({
-      kind: 'message', text: 'Keep the late notification in the durable inbox.',
+      from: 'closed', to: 'lead', kind: 'message', text: 'Keep the late notification in the durable inbox.',
     }));
-    expect(f.trace('closed').some(item => item.method === 'turn/steer')).toBe(false);
+    expect(f.trace('closed').some(item => ['turn/steer', 'thread/inject_items'].includes(item.method))).toBe(false);
   }, 20000);
 });

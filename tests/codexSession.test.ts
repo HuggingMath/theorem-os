@@ -6,6 +6,7 @@ import { createCodexMathSession, mathWorkerPermissionConfig, type MathAgentOptio
 import { deepSeekProfileDigest, prepareDeepSeekProfile } from '../src/runtime/deepseek';
 import { prepareWestlakeProfile, westlakeProfileDigest } from '../src/runtime/westlake';
 import { prepareSub2apiProfile, sub2apiProfileDigest } from '../src/runtime/sub2api';
+import { nativeFileWatchFixture } from './helpers/nativeFileWatchFixture';
 
 describe('Codex app-server adapter without provider calls', () => {
   let root: string;
@@ -16,6 +17,7 @@ describe('Codex app-server adapter without provider calls', () => {
     const executable = path.join(root, 'fake-codex');
     fs.writeFileSync(path.join(root, 'config.toml'), '[mcp_servers.unrelated]\ncommand = "unrelated"\n');
     fs.writeFileSync(executable, `#!${process.execPath}
+${nativeFileWatchFixture}
 const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('node:readline');
@@ -906,21 +908,21 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     const first = session.run('wait', 'first-invalid-turn', root, () => { started = true; });
     await expect.poll(() => started).toBe(true);
     fs.writeFileSync(file, invalidText);
-    await expect.poll(() => validate.mock.calls.length).toBeGreaterThanOrEqual(3);
+    await expect.poll(() => feedback.mock.calls.length).toBe(1);
     expect(feedback).toHaveBeenCalledTimes(1);
     fs.writeFileSync(file, '{"answer":"still wrong"}');
     await expect.poll(() => feedback.mock.calls.length).toBe(2);
     fs.writeFileSync(file, invalidText);
     const before = validate.mock.calls.length;
-    await expect.poll(() => validate.mock.calls.length).toBeGreaterThanOrEqual(before + 3);
+    await expect.poll(() => validate.mock.calls.length).toBeGreaterThan(before);
     expect(feedback).toHaveBeenCalledTimes(2);
     await session.interrupt();
     expect(await first).toBe('interrupted');
     started = false;
+    const previous = validate.mock.calls.length;
     const second = session.run('wait', 'second-invalid-turn', root, () => { started = true; });
     await expect.poll(() => started).toBe(true);
-    const previous = validate.mock.calls.length;
-    await expect.poll(() => validate.mock.calls.length).toBeGreaterThanOrEqual(previous + 3);
+    expect(validate.mock.calls.length).toBeGreaterThan(previous);
     expect(feedback).toHaveBeenCalledTimes(2);
     fs.writeFileSync(file, '{"answer":"valid"}');
     expect(await second).toBe('submitted');

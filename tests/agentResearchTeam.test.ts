@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bootstrapLeanTask } from '../src/math/leanTask';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { readMathAgentSkill } from '../src/runtime/agentSkills';
@@ -20,6 +20,14 @@ import { RESEARCH_TOOL_HELP_FILE } from '../src/solver/researchToolHelp';
 import { deferred } from './helpers/async';
 import { temporaryDirectory } from './helpers/files';
 import { solverState } from './helpers/solver';
+import { currentWorkerProject } from '../src/solver/workerProject';
+import { agentTeamCoordinationReview } from '../src/solver/agentTeamCoordination';
+
+// Scheduling fixtures do not execute a backend bundle; Git sources, writer handoff
+// and independent Lean verification below remain real.
+vi.mock('../src/math/mathBuildManifest', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/math/mathBuildManifest')>(), readMathBuildManifest: vi.fn(),
+}));
 
 const original = 'namespace Team\ntheorem original : True := by sorry\n' +
   'theorem other : True := by sorry\nend Team\n';
@@ -82,8 +90,8 @@ function controlledSession(options: MathAgentOptions, index: number) {
   };
 }
 
-function fixture({ maxTotalTokens = 0, maxAgents = 3, maxTurns = 16, beforeOpen, beforeCheck }: {
-  maxTotalTokens?: number; maxAgents?: number; maxTurns?: number;
+function fixture({ maxTotalTokens = 0, maxAgents = 3, maxTurns = 16, maxTurnMs = 30_000, beforeOpen, beforeCheck }: {
+  maxTotalTokens?: number; maxAgents?: number; maxTurns?: number; maxTurnMs?: number;
   beforeOpen?: (options: MathAgentOptions, attempt: number) => Promise<void>;
   beforeCheck?: (signal: AbortSignal) => Promise<void>;
 } = {}) {
@@ -119,7 +127,7 @@ function fixture({ maxTotalTokens = 0, maxAgents = 3, maxTurns = 16, beforeOpen,
     const team = new AgentResearchTeam({ state: currentState, root, taskText: 'Prove both frozen statements.',
       leadAccess: { environment, retrievalRoot: path.join(currentState.worktree, problem.projectRelative), researchSkill: skill },
       modules, executable: 'offline-no-model', profile: 'offline-no-credentials', signal: controller.signal,
-      maxAgents, maxTurns, maxTurnMs: 30_000, maxTotalTokens, remainingMs: () => Infinity,
+      maxAgents, maxTurns, maxTurnMs, maxTotalTokens, remainingMs: () => Infinity,
       save: () => { writeSolverRunState(stateFile, currentState); snapshots.push(structuredClone(currentState)); },
       emit: (event, details) => { events.push({ event, details }); }, exclusiveCheck: async operation => {
         await beforeCheck?.(controller.signal); return operation();
@@ -167,6 +175,206 @@ function dispatchedAssignment(message: string) {
 }
 
 describe('Agent-led sustained collaboration with real Git and Lean', () => {
+  it('persists a deferred collaboration decision, preserves replay identity and reopens it after its research step', async () => {
+    const f = fixture({ maxTurns: Infinity, maxTurnMs: Infinity });
+    let settled = false;
+    const gate = f.team.leadRequestGate(() => {
+      f.state.requestUsageAccounting!.startedRequests++;
+      f.state.requestUsageAccounting!.pendingRequests++;
+      return { allowed: true, settle: () => { settled = true; f.state.requestUsageAccounting!.pendingRequests--; } };
+    });
+    f.team.beginLeadTurn();
+    expect(gate.checkpoint!()).toBe(false);
+    const orientation = gate({ requestId: 'orientation' });
+    expect(gate.checkpoint!()).toBe(false);
+    if (orientation.allowed) orientation.settle({ complete: true });
+    expect(settled).toBe(true);
+    expect(gate.checkpoint!()).toBe(true);
+    expect(f.events.filter(event => event.event === 'team_coordination_checkpoint')).toHaveLength(1);
+    const choice = { operation: 'coordinate', decision: 'defer', reason: 'The notation needs disambiguation.',
+      nextStep: 'Read the frozen definition and identify independent questions.' };
+    expect(await f.call(choice, 'lead', 'opening-decision')).toMatchObject({ ok: true });
+    expect(gate.checkpoint!()).toBe(false);
+    const saved = readSolverRunState(f.stateFile);
+    expect(saved.agentTeam!.coordination).toMatchObject({ revision: 1, decision: 'defer', reason: choice.reason,
+      nextStep: choice.nextStep, startedRequests: 1 });
+    expect(saved.agentTeam!.workers).toHaveLength(0);
+    expect(saved.tokenBudget!.status).toBe('unlimited');
+    const restored = f.makeTeam(saved);
+    expect(await f.call(choice, 'lead', 'opening-decision', restored)).toMatchObject({ ok: true });
+    expect(restored.archive.coordination!.revision).toBe(1);
+    f.team.beginLeadTurn();
+    const investigation = gate({ requestId: 'definition-read' });
+    if (investigation.allowed) investigation.settle({ complete: true });
+    expect(agentTeamCoordinationReview(f.state)).toMatchObject({ required: true, reason: 'deferred-step-complete' });
+    expect(gate.checkpoint!()).toBe(true);
+    expect(f.state.agentTeam!.workers).toHaveLength(0);
+  });
+
+  it('records actual delegation and requires an assessed decision after a new member finding', async () => {
+    const f = fixture({ maxTurns: Infinity, maxTurnMs: Infinity });
+    await f.call({ operation: 'spawn', agentId: 'specialist', message: 'Investigate an independent statement boundary.' });
+    const child = await f.session('specialist');
+    expect(f.team.archive.coordination).toMatchObject({ decision: 'delegate' });
+    expect(agentTeamCoordinationReview(f.state).required).toBe(false);
+    await child.call({ operation: 'message', agentId: 'lead', message: 'A boundary condition needs a route decision.' });
+    expect(agentTeamCoordinationReview(f.state)).toMatchObject({ required: true, reason: 'team-update' });
+    const eventCount = f.team.archive.events.length;
+    await f.call({ operation: 'poll', after: 0 });
+    expect(agentTeamCoordinationReview(f.state).required).toBe(true);
+    await f.call({ operation: 'coordinate', decision: 'continue', reason: 'The finding is consistent with the current scope.',
+      nextStep: 'Check the consumer interface while the specialist finishes.' });
+    expect(agentTeamCoordinationReview(f.state).required).toBe(false);
+    expect(f.team.archive.events).toHaveLength(eventCount);
+    child.complete(); await idle(f.team);
+    expect(agentTeamCoordinationReview(f.state)).toMatchObject({ required: true, reason: 'team-update' });
+  });
+
+  it('resumes real solver scheduling in the saved Lead thread with drafts, complete usage and no allowances', async () => {
+    const f = fixture({ maxTurns: Infinity, maxTurnMs: Infinity });
+    const opened: MathAgentOptions[] = [], messages: string[] = [];
+    let requestId = 0;
+    const modules = { ...directSolverModules, M1: { ...directSolverModules.M1,
+      open: async (options: MathAgentOptions): Promise<MathAgentSession> => {
+        const turn = opened.push(options);
+        const threadId = options.threadId ?? 'coordination-persistent-lead';
+        return { threadId, usageSource: 'upstream-requests', close: async () => {}, interrupt: async () => {},
+          stopForFreeze: async () => ({ status: 'stopped' }),
+          run: async (message, id, _workspace, started) => {
+            messages.push(message); started(id);
+            expect(options.requestGate!.checkpoint!()).toBe(false);
+            const request = options.requestGate!({ requestId: `coordination-request-${++requestId}`, threadId });
+            expect(request.allowed).toBe(true);
+            if (request.allowed) request.settle({ complete: true, outcome: 'completed',
+              usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 } });
+            if (turn === 1) {
+              fs.writeFileSync(path.join(f.state.worktree, 'RESEARCH.md'), 'Saved notation observation.');
+              expect(options.requestGate!.checkpoint!()).toBe(true);
+              return 'checkpoint';
+            }
+            expect(fs.readFileSync(path.join(f.state.worktree, 'RESEARCH.md'), 'utf8')).toBe('Saved notation observation.');
+            if (turn === 2) {
+              expect(message).toContain('"reason":"opening"');
+              expect(await options.tools!.call('theoremos_team', { operation: 'coordinate', decision: 'defer',
+                reason: 'The frozen notation needs one inspection.', nextStep: 'Inspect the definition before choosing a member question.' },
+              { callId: 'defer-choice', threadId, turnId: id, signal: f.controller.signal })).toMatchObject({ ok: true });
+              expect(options.requestGate!.checkpoint!()).toBe(false);
+              const next = options.requestGate!({ requestId: `coordination-request-${++requestId}`, threadId });
+              if (next.allowed) next.settle({ complete: true, outcome: 'completed',
+                usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 } });
+              expect(options.requestGate!.checkpoint!()).toBe(true);
+              return 'checkpoint';
+            }
+            expect(turn).toBe(3);
+            expect(message).toContain('deferred-step-complete');
+            expect(message).toContain('Inspect the definition before choosing a member question.');
+            fs.writeFileSync(f.source(f.state.worktree), original.replaceAll('by sorry', 'by trivial'));
+            return 'completed';
+          } };
+      } } };
+    const result = await runResearchWorkers({ state: f.state, root: f.root, taskText: 'Prove both frozen statements.',
+      workers: [{ id: 'solver', role: 'lead', worktree: f.state.worktree, ownedFiles: f.problem.ownedFiles }],
+      access: new Map([['solver', { environment: f.environment,
+        researchSkill: prepareResearchSkill(f.root, f.state.worktree, f.state.researchSkill!, f.problem), retrievalRoot: f.state.worktree }]]),
+      modules, buildFile: path.join(f.directory, 'unused-build.json'), executable: 'offline-no-model', profile: 'offline-no-credentials',
+      signal: f.controller.signal, deadline: Infinity, maxTurns: Infinity, maxTotalTokens: 0, maxTurnMs: Infinity,
+      save: () => writeSolverRunState(f.stateFile, f.state), emit: (event, details) => { f.events.push({ event, details }); } });
+    expect(result?.check.verification.status).toBe('kernel_verified');
+    expect(opened.map(item => item.threadId)).toEqual([undefined, 'coordination-persistent-lead', 'coordination-persistent-lead']);
+    expect(opened.every(item => item.turnCheckpointMs === undefined && item.turnTimeoutMs === undefined)).toBe(true);
+    expect(f.state.tokenBudget).toMatchObject({ status: 'unlimited', usageComplete: true, reportedTotalTokens: 12 });
+    expect(f.events.filter(item => item.event === 'turn_checkpoint').map(item => item.details?.reason))
+      .toEqual(['math_team_coordination_checkpoint', 'math_team_coordination_checkpoint']);
+    expect(readSolverRunState(f.stateFile).agentTeam!.coordination).toMatchObject({ decision: 'defer' });
+    expect(messages).toHaveLength(3);
+  }, 90_000);
+
+  it('automatically hands off a pending Lead adoption before more model work and resumes only after confirmed shutdown and integration', async () => {
+    const f = fixture({ maxTurns: Infinity, maxTurnMs: Infinity });
+    await f.call({ operation: 'spawn', agentId: 'producer', message: 'Prove the reusable equality helper.' });
+    const producer = await f.session('producer'), worker = f.team.archive.workers[0]!;
+    const producerRequest = producer.options.requestGate!({ requestId: 'producer-proof', threadId: producer.threadId });
+    if (!producerRequest.allowed) throw new Error(producerRequest.reason);
+    producerRequest.settle({ complete: true, outcome: 'completed', usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 } });
+    fs.writeFileSync(f.source(worker.worktree), original.replace('end Team', helper + 'end Team'));
+    await producer.call({ operation: 'submit', summary: 'The reusable helper is proved.', declarations });
+    producer.complete(); await idle(f.team);
+    const deliveryId = f.team.archive.deliveries[0]!.id;
+    await f.team.close();
+
+    const draft = original.replace('end Team', 'theorem leadDraft : True := by trivial\nend Team');
+    const notes = 'The consumer draft is saved before requesting the checked helper.';
+    const stopping = deferred(), stopReceipt = deferred<StopReceipt>();
+    const opened: MathAgentOptions[] = [];
+    const modules = { ...directSolverModules, M1: { ...directSolverModules.M1,
+      open: async (options: MathAgentOptions): Promise<MathAgentSession> => {
+        const turn = opened.push(options), threadId = options.threadId ?? 'adoption-persistent-lead';
+        return { threadId, usageSource: 'upstream-requests', close: async () => {}, interrupt: async () => {},
+          stopForFreeze: async () => {
+            if (turn !== 1) return { status: 'stopped' };
+            stopping.resolve(); return stopReceipt.promise;
+          },
+          run: async (_message, id, _workspace, started) => {
+            started(id);
+            expect(options.requestGate!.checkpoint!()).toBe(false);
+            const request = options.requestGate!({ requestId: `adoption-request-${turn}`, threadId });
+            if (!request.allowed) throw new Error(request.reason);
+            if (turn === 1) {
+              fs.writeFileSync(f.source(f.state.worktree), draft);
+              fs.writeFileSync(path.join(f.state.worktree, 'RESEARCH.md'), notes);
+              const args = { operation: 'adopt', deliveryId };
+              const context = { callId: 'adopt-helper', threadId, turnId: id, signal: f.controller.signal };
+              const adoption = await options.tools!.call('theoremos_team', args, context);
+              expect(adoption).toMatchObject({ ok: true, adoption: { status: 'queued' } });
+              expect(await options.tools!.call('theoremos_team', args, context)).toEqual(adoption);
+              // A pending response is never cancelled to obtain the writer.
+              expect(options.requestGate!.checkpoint!()).toBe(false);
+              request.settle({ complete: true, outcome: 'completed', usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 } });
+              // The model tries to continue after adopt; the next admission must yield.
+              expect(options.requestGate!.checkpoint!()).toBe(true);
+              expect(options.requestGate!.checkpoint!()).toBe(true);
+              expect(f.state.agentTeam!.adoptions).toHaveLength(1);
+              expect(fs.readFileSync(f.source(f.state.worktree), 'utf8')).toBe(draft);
+              return 'checkpoint';
+            }
+            expect(turn).toBe(2);
+            expect(threadId).toBe('adoption-persistent-lead');
+            expect(f.state.agentTeam!.adoptions[0]).toMatchObject({ status: 'completed', commit: expect.any(String) });
+            const integrated = fs.readFileSync(f.source(f.state.worktree), 'utf8');
+            expect(integrated).toContain(helper);
+            expect(integrated).toContain('theorem leadDraft : True := by trivial');
+            expect(fs.readFileSync(path.join(f.state.worktree, 'RESEARCH.md'), 'utf8')).toBe(notes);
+            request.settle({ complete: true, outcome: 'completed', usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 } });
+            fs.writeFileSync(f.source(f.state.worktree), integrated.replaceAll('by sorry', 'by trivial'));
+            return 'completed';
+          } };
+      } } };
+    const running = runResearchWorkers({ state: f.state, root: f.root, taskText: 'Prove both frozen statements.',
+      workers: [{ id: 'solver', role: 'lead', worktree: f.state.worktree, ownedFiles: f.problem.ownedFiles }],
+      access: new Map([['solver', { environment: f.environment,
+        researchSkill: prepareResearchSkill(f.root, f.state.worktree, f.state.researchSkill!, f.problem), retrievalRoot: f.state.worktree }]]),
+      modules, buildFile: path.join(f.directory, 'unused-build.json'), executable: 'offline-no-model', profile: 'offline-no-credentials',
+      signal: f.controller.signal, deadline: Infinity, maxTurns: Infinity, maxTotalTokens: 0, maxTurnMs: Infinity,
+      save: () => writeSolverRunState(f.stateFile, f.state), emit: (event, details) => { f.events.push({ event, details }); } });
+    void running.catch(() => {});
+    await Promise.race([stopping.promise, running.then(() => { throw new Error('adoption-skipped-writer-shutdown'); })]);
+    try {
+      expect(opened).toHaveLength(1);
+      expect(f.state.agentTeam!.adoptions[0]!.status).toBe('queued');
+      expect(fs.readFileSync(f.source(f.state.worktree), 'utf8')).toBe(draft);
+    } finally { stopReceipt.resolve({ status: 'stopped' }); }
+    const result = await running;
+    expect(result?.check.verification.status).toBe('kernel_verified');
+    expect(opened.map(options => options.threadId)).toEqual([undefined, 'adoption-persistent-lead']);
+    expect(opened.every(options => options.turnCheckpointMs === undefined && options.turnTimeoutMs === undefined)).toBe(true);
+    expect(f.state.tokenBudget).toMatchObject({ status: 'unlimited', usageComplete: true, reportedTotalTokens: 9 });
+    expect(f.state.requestUsageAccounting).toMatchObject({ startedRequests: 2, reportedRequests: 2, pendingRequests: 0 });
+    expect(f.events.filter(event => event.event === 'team_adoption_checkpoint')).toHaveLength(1);
+    expect(f.events.filter(event => event.event === 'turn_checkpoint').map(event => event.details?.reason))
+      .toEqual(['math_team_adoption_checkpoint']);
+    expect(f.state.agentTeam!.adoptions.map(adoption => adoption.status)).toEqual(['completed']);
+  }, 90_000);
+
   it('delivers a stopped fast writer while another researches, then freshly checks the Lead-selected adoption', async () => {
     const f = fixture();
     expect(await f.call({ operation: 'spawn', agentId: 'fast', message: 'Prove a reusable equality helper.' })).toMatchObject({ ok: true });
@@ -179,7 +387,7 @@ describe('Agent-led sustained collaboration with real Git and Lean', () => {
     expect(fast.options.tools!.definitions.find(item => item.name === 'theoremos_team')!.inputSchema)
       .toMatchObject({ properties: { operation: { enum: expect.arrayContaining([
         'message', 'poll', 'wait', 'inspect', 'inspect-research', 'history', 'yield', 'submit']) } } });
-    expect((fast.options.tools!.definitions[0]!.inputSchema.properties as Record<string, { enum?: string[] }>).operation!.enum).toHaveLength(8);
+    expect((fast.options.tools!.definitions[0]!.inputSchema.properties as Record<string, { enum?: string[] }>).operation!.enum).toHaveLength(9);
     expect(fast.options.skills![0]!.digest).toBe(f.state.researchSkill!.digest);
     const help = fs.readFileSync(path.join(fastWorker.worktree, RESEARCH_TOOL_HELP_FILE), 'utf8');
     expect(fast.options.instructions).toContain(path.join(fastWorker.worktree, RESEARCH_TOOL_HELP_FILE));
@@ -233,10 +441,16 @@ describe('Agent-led sustained collaboration with real Git and Lean', () => {
 
   it('persists messages, resumes one native child thread, and does not replay completed tasks on restore', async () => {
     const f = fixture();
-    const spawn = { operation: 'spawn', agentId: 'researcher', message: 'Investigate the interface.' };
+    const spawn = { operation: 'spawn', agentId: 'researcher', message: 'Profiles: D006, researcher\nInvestigate the interface.' };
     const firstHandle = await f.call(spawn, 'lead', 'spawn-once');
     expect(await f.call(spawn, 'lead', 'spawn-once')).toEqual(firstHandle);
     const first = await f.session('researcher');
+    const profileRecord = (message: string) => JSON.parse(message.split('\n')
+      .find(line => line.startsWith('{"schema":"theorem-os.agent-team-profile-evidence.v1"'))!);
+    expect(profileRecord(first.message)).toMatchObject({ loaded: ['D006', 'researcher'], unresolved: [] });
+    const firstWorker = f.team.archive.workers[0]!;
+    expect(currentWorkerProject(firstWorker.worktree)).toBe(path.join(firstWorker.worktree, f.state.problem.projectRelative));
+    expect(fs.existsSync(path.join(firstWorker.worktree, 'COOPERATION.json'))).toBe(false);
     expect(await f.call({ operation: 'message', agentId: 'researcher', message: 'Please keep the useful notes.' }))
       .toMatchObject({ ok: true, delivery: 'saved-inbox', notification: 'queued' });
     expect(first.notifications[0]).toContain('Please keep the useful notes.');
@@ -261,12 +475,14 @@ describe('Agent-led sustained collaboration with real Git and Lean', () => {
     expect(f.sessions).toHaveLength(1); expect(resumed.hasActiveWorkers).toBe(false);
     expect(await f.call({ operation: 'message', agentId: 'researcher', message: 'New explicit assignment follows.' }, 'lead', undefined, resumed))
       .toMatchObject({ ok: true, delivery: 'saved-inbox' });
-    expect(await f.call({ operation: 'assign', agentId: 'researcher', message: 'Use your saved notes to continue.' }, 'lead', undefined, resumed))
+    expect(await f.call({ operation: 'assign', agentId: 'researcher', message: 'Profiles: D064, engineer\nUse your saved notes to continue.' }, 'lead', undefined, resumed))
       .toMatchObject({ ok: true });
     const second = await f.session('researcher', 1);
     expect(second.options.threadId).toBe(first.threadId); expect(second.threadId).toBe(first.threadId);
     expect(second.message).toContain('New explicit assignment follows.');
     expect(second.message).toContain('Use your saved notes to continue.');
+    expect(profileRecord(second.message)).toMatchObject({ loaded: ['D064', 'engineer'], unresolved: [] });
+    expect(second.message).not.toContain('Profile D006 (');
     expect(fs.readFileSync(path.join(worktree, 'RESEARCH.md'), 'utf8')).toBe('A durable research note.');
     second.complete(); await idle(resumed);
     expect(resumed.archive.workers[0]!.tasks.map(task => task.status)).toEqual(['completed', 'completed']);
@@ -467,6 +683,73 @@ describe('Agent-led sustained collaboration with real Git and Lean', () => {
     expect(worker.tasks).toHaveLength(1); expect(task).toMatchObject({ status: 'completed', turns: 2 });
     expect(f.state.taskUsage![task.id]!.totalTokens).toBe(25);
     expect(f.state.tokenBudget).toMatchObject({ status: 'available', reportedTotalTokens: 25, usageComplete: true });
+  });
+
+  it('keeps an unlimited team free of invented task budgets while accounting for large input requests', async () => {
+    const f = fixture({ maxTurns: Infinity, maxTurnMs: Infinity });
+    const schema = f.team.tools().definitions[0]!.inputSchema;
+    const properties = schema.properties as Record<string, { enum?: string[] }>;
+    expect(properties.operation!.enum).not.toContain('budget');
+    expect(properties).not.toHaveProperty('budget'); expect(properties).not.toHaveProperty('leadReserve');
+    const invalid = { ok: false, error: 'math_team_budget_not_configured' };
+    expect(await f.call({ operation: 'spawn', agentId: 'child', message: 'Work without a quota.', budget: { tokens: 25000 } }))
+      .toMatchObject(invalid);
+    expect(f.team.archive.workers).toHaveLength(0);
+    expect(await f.call({ operation: 'budget', leadReserve: { tokens: 1000 } })).toMatchObject(invalid);
+    expect(f.team.archive.leadReserve).toBeUndefined();
+
+    expect(await f.call({ operation: 'spawn', agentId: 'child', message: 'Work without a quota.' })).toMatchObject({ ok: true });
+    const first = await f.session('child'), worker = f.team.archive.workers[0]!, task = worker.tasks[0]!;
+    expect(first.options.turnTimeoutMs).toBeUndefined(); expect(first.options.turnCheckpointMs).toBeUndefined();
+    expect(await f.call({ operation: 'assign', agentId: 'child', message: 'Do not queue a capped task.', budget: { turns: 1 } }))
+      .toMatchObject(invalid);
+    expect(worker.tasks).toHaveLength(1); expect(task.budget).toBeUndefined();
+    expect(await f.call({ operation: 'budget', agentId: 'child', taskId: task.id, budget: { tokens: 25000 } }))
+      .toMatchObject(invalid);
+    for (let request = 0; request < 3; request++) {
+      const admission = first.options.requestGate!({ requestId: `large-input-${request}`, threadId: first.threadId });
+      expect(admission.allowed).toBe(true);
+      if (!admission.allowed) throw new Error(admission.reason);
+      admission.settle({ complete: true, outcome: 'completed', usage: { inputTokens: 49500, outputTokens: 500, totalTokens: 50000 } });
+    }
+    expect(task).toMatchObject({ status: 'running', turns: 1 }); expect(task.pauseRequested).toBeUndefined();
+    expect(f.state.tokenBudget).toMatchObject({ status: 'unlimited', maxTotalTokens: 0,
+      reportedTotalTokens: 150000, usageComplete: true });
+    expect(worker.requestUsageAccounting).toMatchObject({ startedRequests: 3, reportedRequests: 3, pendingRequests: 0, incomplete: false });
+    first.complete(); await idle(f.team);
+    expect(task.status).toBe('completed'); expect(task.budget).toBeUndefined();
+  });
+
+  it('retains older saved task caps as history without enforcing them in an unlimited run', async () => {
+    const f = fixture({ maxTurns: Infinity });
+    await f.call({ operation: 'spawn', agentId: 'child', message: 'Continue saved work.' });
+    const first = await f.session('child'), worker = f.team.archive.workers[0]!, task = worker.tasks[0]!;
+    // Stand in for the optional local cap retained in a historical run archive.
+    task.budget = { tokens: 1, turns: 1 }; f.team.archive.leadReserve = { tokens: 100, turns: 1 };
+    const admission = first.options.requestGate!({ requestId: 'saved-allowance' });
+    if (!admission.allowed) throw new Error(admission.reason);
+    admission.settle({ complete: true, outcome: 'completed', usage: { inputTokens: 8, outputTokens: 2, totalTokens: 10 } });
+    expect(await first.call({ operation: 'yield', reason: 'Wait for a peer dependency.' })).toMatchObject({ ok: true });
+    first.complete(); await idle(f.team);
+    expect(task.status).toBe('paused');
+    const restoredState = readSolverRunState(f.stateFile);
+    const restored = f.makeTeam(restoredState);
+    expect(await f.call({ operation: 'resume', agentId: 'child', taskId: task.id }, 'lead', 'resume-unlimited', restored))
+      .toMatchObject({ ok: true });
+    const resumed = await f.session('child', 1), restoredTask = restored.archive.workers[0]!.tasks[0]!;
+    expect(resumed.threadId).toBe(first.threadId);
+    const next = resumed.options.requestGate!({ requestId: 'released-cap' });
+    expect(next.allowed).toBe(true);
+    if (!next.allowed) throw new Error(next.reason);
+    next.settle({ complete: true, outcome: 'completed', usage: { inputTokens: 30000, outputTokens: 100, totalTokens: 30100 } });
+    expect(restoredTask.pauseRequested).toBeUndefined();
+    expect(restoredTask.budget).toEqual({ tokens: 1, turns: 1 });
+    expect(restored.archive.leadReserve).toEqual({ tokens: 100, turns: 1 });
+    const overview = await f.call({ operation: 'poll' }, 'lead', 'poll-unlimited', restored);
+    expect(overview.budget).toMatchObject({ maxTurns: null, leadReserve: { tokens: 0, turns: 0 },
+      remaining: { tokens: null, turns: null } });
+    resumed.complete(); await idle(restored);
+    expect(restoredTask.status).toBe('completed');
   });
 
   it('pauses at a cumulative task budget, resumes after Lead adjustment and retains the Lead turn reserve', async () => {
@@ -822,8 +1105,8 @@ describe('Agent-led sustained collaboration with real Git and Lean', () => {
     const f = fixture();
     expect(f.team.tools('lead').definitions.find(item => item.name === 'theoremos_team')!.inputSchema)
       .toMatchObject({ properties: { operation: { enum: expect.arrayContaining([
-        'spawn', 'assign', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'publish', 'cancel', 'budget', 'resume', 'history']) } } });
-    expect((f.team.tools('lead').definitions[0]!.inputSchema.properties as Record<string, { enum?: string[] }>).operation!.enum).toHaveLength(14);
+        'spawn', 'assign', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'publish', 'cancel', 'budget', 'resume', 'history', 'coordinate']) } } });
+    expect((f.team.tools('lead').definitions[0]!.inputSchema.properties as Record<string, { enum?: string[] }>).operation!.enum).toHaveLength(17);
     const spawn = { operation: 'spawn', agentId: 'child', message: 'Study independently.' };
     await f.call(spawn, 'lead', 'one-handle');
     const child = await f.session('child');
@@ -870,13 +1153,17 @@ describe('Agent-led sustained collaboration with real Git and Lean', () => {
     const addition = kind === 'invalid-proof' ? helper.replace('by rfl', 'by exact False.elim (by trivial)')
       : kind === 'undeclared-helper' ? helper + 'theorem unlisted : True := by trivial\n' : helper;
     fs.writeFileSync(f.source(worktree), original.replace('end Team', addition + 'end Team'));
-    await child.call({ operation: 'submit', summary: 'Candidate helper.', declarations: kind === 'missing-name'
+    const submission = await child.call({ operation: 'submit', summary: 'Candidate helper.', declarations: kind === 'missing-name'
       ? [{ ...declarations[0], name: 'Team.missing' }] : kind === 'outside-ownership'
         ? [{ ...declarations[0], file: 'NotOwned.lean' }] : declarations });
+    if (kind === 'outside-ownership') {
+      expect(submission).toMatchObject({ ok: false, error: 'math_agent_team_proof_declaration_outside_ownership' });
+      expect(f.team.archive.workers[0]!.tasks[0]!.declarations).toBeUndefined();
+    }
     child.complete(); await idle(f.team);
     expect(f.team.archive.deliveries).toHaveLength(0);
     expect(f.team.archive.workers[0]!.pendingDelivery).toBeUndefined();
-    expect(f.team.archive.events).toContainEqual(expect.objectContaining({ from: 'child', to: 'lead', kind: 'failed',
+    if (kind !== 'outside-ownership') expect(f.team.archive.events).toContainEqual(expect.objectContaining({ from: 'child', to: 'lead', kind: 'failed',
       text: expect.stringContaining({ 'invalid-proof': 'math_declaration_artifact_check_failed',
         'undeclared-helper': 'undeclared_source_change', 'missing-name': 'declaration_missing',
         'outside-ownership': 'declaration_outside_ownership' }[kind]) }));
@@ -1241,4 +1528,243 @@ describe('Agent-led sustained collaboration with real Git and Lean', () => {
     expect(f.team.archive.workers[0]!.status).toBe('stopped');
     expect(f.team.archive.deliveries).toHaveLength(0);
   });
+});
+
+describe('Agent-owned unpaid handoff checkpoints', () => {
+  it('settles every paid request before a submit checkpoint and checks the nomination only after confirmed writer shutdown', async () => {
+    const f = fixture({ maxTurns: Infinity, maxTurnMs: Infinity });
+    await f.call({ operation: 'spawn', agentId: 'producer', message: 'Prove a reusable equality helper.' });
+    await expect.poll(() => f.team.archive.workers[0]?.error ?? f.sessions.length).toBe(1);
+    const child = await f.session('producer'), worker = f.team.archive.workers[0]!, task = worker.tasks[0]!;
+    const gate = child.options.requestGate!;
+    expect(gate.checkpoint!()).toBe(false);
+    const first = gate({ requestId: 'nomination-paid-response', threadId: child.threadId });
+    const second = gate({ requestId: 'nomination-parallel-response', threadId: child.threadId });
+    if (!first.allowed || !second.allowed) throw new Error('fixture-request-refused');
+    fs.writeFileSync(f.source(worker.worktree), original.replace('end Team', helper + 'end Team'));
+    expect(await child.call({ operation: 'submit', summary: 'The reusable helper is ready for independent checking.', declarations }))
+      .toMatchObject({ ok: true, status: 'pending-writer-stop' });
+    expect(gate.checkpoint!()).toBe(false);
+    first.settle({ complete: true, outcome: 'completed', usage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 } });
+    expect(gate.checkpoint!()).toBe(false);
+    // Other tools from the already paid response may still finish their output.
+    fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), 'All tools finished before the unpaid handoff.');
+    second.settle({ complete: true, outcome: 'completed', usage: { inputTokens: 3, outputTokens: 1, totalTokens: 4 } });
+    expect(gate.checkpoint!()).toBe(true);
+    expect(gate.checkpoint!()).toBe(true);
+    expect(child.closed).toBe(false); expect(child.options.signal?.aborted).toBe(false);
+    expect(worker.requestUsageAccounting).toMatchObject({ startedRequests: 2, reportedRequests: 2, pendingRequests: 0, incomplete: false });
+    expect(f.team.archive.deliveries).toHaveLength(0);
+
+    child.outcome.resolve('checkpoint'); await child.stopping.promise;
+    expect(task).toMatchObject({ status: 'running', declarations });
+    expect(task.pauseRequested).toBeUndefined(); expect(task.researchArtifactId).toBeUndefined();
+    expect(f.team.archive.deliveries).toHaveLength(0);
+    child.stopReceipt.resolve({ status: 'stopped' }); await idle(f.team);
+    expect(task).toMatchObject({ status: 'completed', turns: 1, deliveryId: expect.any(String), researchArtifactId: expect.any(String) });
+    expect(task.pauseRequested).toBeUndefined();
+    expect(f.sessions).toHaveLength(1); expect(child.closed).toBe(true);
+    expect(f.state.tokenBudget).toMatchObject({ status: 'unlimited' });
+    expect(worker.usageAccounting).toMatchObject({ startedTurns: 1, reportedTurns: 1, pending: false, incomplete: false });
+    const delivery = readAgentTeamProofDelivery(f.team.archive.deliveries[0]!.path, f.state);
+    expect(delivery.artifacts.every(artifact => artifact.proof.verification.status === 'kernel_verified')).toBe(true);
+    expect((await f.call({ operation: 'inspect-research', artifactId: task.researchArtifactId })).notes!.text)
+      .toBe('All tools finished before the unpaid handoff.');
+    expect(fs.readFileSync(f.source(f.state.worktree), 'utf8')).toBe(original);
+    expect(f.state.check).toBeUndefined();
+  }, 90_000);
+
+  it('yields at the unpaid boundary and resumes the same task, thread and saved draft without a budget pause', async () => {
+    const f = fixture({ maxTurns: Infinity, maxTurnMs: Infinity });
+    await f.call({ operation: 'spawn', agentId: 'consumer', message: 'Keep the current draft until a peer result is available.' });
+    await expect.poll(() => f.team.archive.workers[0]?.error ?? f.sessions.length).toBe(1);
+    const first = await f.session('consumer'), worker = f.team.archive.workers[0]!, task = worker.tasks[0]!;
+    const draft = original.replace('end Team', 'theorem draft (n : Nat) : n = n := by sorry\nend Team');
+    const gate = first.options.requestGate!;
+    const paid = gate({ requestId: 'yield-paid-response', threadId: first.threadId });
+    if (!paid.allowed) throw new Error(paid.reason);
+    fs.writeFileSync(f.source(worker.worktree), draft);
+    fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), 'Waiting for a checked peer interface.');
+    expect(await first.call({ operation: 'yield', reason: 'Release the workspace so Lead can adopt the peer interface.' }))
+      .toMatchObject({ ok: true, taskId: task.id, status: 'pending-writer-stop' });
+    expect(gate.checkpoint!()).toBe(false);
+    paid.settle({ complete: true, outcome: 'completed', usage: { inputTokens: 4, outputTokens: 1, totalTokens: 5 } });
+    expect(gate.checkpoint!()).toBe(true);
+    expect(first.options.signal?.aborted).toBe(false);
+    first.outcome.resolve('checkpoint'); await first.stopping.promise;
+    expect(task.status).toBe('running'); expect(task.sourceCommit).toBeUndefined();
+    first.stopReceipt.resolve({ status: 'stopped' }); await idle(f.team);
+    expect(task).toMatchObject({ status: 'paused', turns: 1, pauseRequested: { kind: 'handoff' },
+      sourceCommit: expect.any(String), researchArtifactId: expect.any(String) });
+    expect(f.team.archive.deliveries).toHaveLength(0);
+    expect(worker.requestUsageAccounting).toMatchObject({ startedRequests: 1, reportedRequests: 1, pendingRequests: 0, incomplete: false });
+    expect(worker.usageAccounting).toMatchObject({ reportedTurns: 1, incomplete: false });
+    const pausedArtifactId = task.researchArtifactId;
+
+    expect(await f.call({ operation: 'resume', agentId: worker.id, taskId: task.id })).toMatchObject({ ok: true, taskId: task.id });
+    const second = await f.session('consumer', 1);
+    expect(second.threadId).toBe(first.threadId); expect(second.messageId).toBe(task.id);
+    expect(worker.tasks).toHaveLength(1); expect(task.turns).toBe(2);
+    expect(task.pauseRequested).toBeUndefined(); expect(second.options.requestGate!.checkpoint!()).toBe(false);
+    expect(fs.readFileSync(f.source(worker.worktree), 'utf8')).toBe(draft);
+    expect(fs.readFileSync(path.join(worker.worktree, 'RESEARCH.md'), 'utf8')).toBe('Waiting for a checked peer interface.');
+    const resumed = second.options.requestGate!({ requestId: 'resumed-paid-response', threadId: second.threadId });
+    if (!resumed.allowed) throw new Error(resumed.reason);
+    resumed.settle({ complete: true, outcome: 'completed', usage: { inputTokens: 3, outputTokens: 1, totalTokens: 4 } });
+    second.complete(); await idle(f.team);
+    expect(task).toMatchObject({ status: 'completed', turns: 2 });
+    expect(task.researchArtifactId).not.toBe(pausedArtifactId);
+    expect(f.state.tokenBudget).toMatchObject({ status: 'unlimited' });
+    expect(worker.requestUsageAccounting).toMatchObject({ startedRequests: 2, reportedRequests: 2, pendingRequests: 0, incomplete: false });
+  }, 90_000);
+
+  it('persists Lead finish intent, waits for paid settlement and restores its checkpoint without another request', async () => {
+    const f = fixture({ maxTurns: Infinity, maxTurnMs: Infinity });
+    let paidRequests = 0;
+    const gate = f.team.leadRequestGate(() => {
+      paidRequests++; f.state.requestUsageAccounting!.startedRequests++; f.state.requestUsageAccounting!.pendingRequests++;
+      return { allowed: true, settle: () => {
+        f.state.requestUsageAccounting!.reportedRequests++; f.state.requestUsageAccounting!.pendingRequests--;
+      } };
+    });
+    f.team.beginLeadTurn();
+    const paid = gate({ requestId: 'finish-paid-response' });
+    if (!paid.allowed) throw new Error(paid.reason);
+    const summary = 'The current source is ready for frozen independent acceptance.';
+    expect(await f.call({ operation: 'finish', summary }, 'lead', 'finish-current-source')).toMatchObject({ ok: true });
+    const persisted = readSolverRunState(f.stateFile);
+    expect(persisted.agentTeam!.completionRequested).toMatchObject({ summary, at: expect.any(Number) });
+    expect(gate.checkpoint!()).toBe(false); expect(f.team.leadCompletionCheckpoint).toBe(false);
+    paid.settle({ complete: true, outcome: 'completed' });
+    expect(gate.checkpoint!()).toBe(true); expect(gate.checkpoint!()).toBe(true);
+    expect(f.team.leadCompletionCheckpoint).toBe(true);
+    expect(f.events.filter(item => item.event === 'team_completion_checkpoint')).toHaveLength(1);
+    expect(f.events.filter(item => item.event === 'team_coordination_checkpoint')).toHaveLength(0);
+    expect(paidRequests).toBe(1);
+    // A crash after settlement preserves the intent and needs no paid rediscovery.
+    writeSolverRunState(f.stateFile, f.state);
+    const restored = f.makeTeam(readSolverRunState(f.stateFile));
+    restored.beginLeadTurn();
+    const recoveredGate = restored.leadRequestGate(() => { throw new Error('finish-must-stay-unpaid'); });
+    expect(recoveredGate.checkpoint!()).toBe(true); expect(restored.leadCompletionCheckpoint).toBe(true);
+    expect(f.state.check).toBeUndefined(); expect(f.team.archive.deliveries).toHaveLength(0);
+  });
+});
+
+describe('Task objectives, professional knowledge and source provenance', () => {
+  it('amends a running objective without losing its draft, profile history or revision-bound progress', async () => {
+    const f = fixture({ maxTurns: Infinity, maxTurnMs: Infinity });
+    await f.call({ operation: 'spawn', agentId: 'specialist', message: 'Profiles: D041, researcher\nInvestigate the stated assumptions.', workKind: 'independent-reconstruction' });
+    const child = await f.session('specialist'), worker = f.team.archive.workers[0]!, task = worker.tasks[0]!;
+    fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), 'Retained draft.');
+    const oldSource = task.profileEvidence!.sources[0]!;
+    const first = await child.call({ operation: 'progress', objectiveRevision: 1, kind: 'finding', summary: 'The assumption needs a precise boundary.',
+      nextStep: 'Check the boundary.', knowledgeUses: [{ anchor: oldSource.file + '#' + oldSource.anchor, application: 'Used the stated domain assumptions to identify the boundary.' }] });
+    expect(first).toMatchObject({ ok: true, objectiveRevision: 1, advisory: true });
+    const amendment = { operation: 'amend', agentId: worker.id, taskId: task.id,
+      message: 'Profiles: D006, engineer\nAssemble the specified checked interfaces.', reason: 'The useful output is now integration.', workKind: 'assembly' };
+    expect(await f.call(amendment, 'lead', 'amendment-once')).toMatchObject({ ok: true, objectiveRevision: 2 });
+    expect(await f.call(amendment, 'lead', 'amendment-once')).toMatchObject({ ok: true, objectiveRevision: 2 });
+    expect(task.objectiveHistory).toHaveLength(1);
+    expect(task.objectiveHistory![0]).toMatchObject({ revision: 1, workKind: 'independent-reconstruction',
+      profileEvidence: { selected: ['D041', 'researcher'] } });
+    expect(task.profileEvidence).toMatchObject({ selected: ['D006', 'engineer'], loaded: ['D006', 'engineer'] });
+    expect(child.notifications.some(text => text.includes('"objectiveRevision":2') && text.includes('Assemble the specified checked interfaces.'))).toBe(true);
+    expect(fs.readFileSync(path.join(worker.worktree, 'RESEARCH.md'), 'utf8')).toBe('Retained draft.');
+    expect(await child.call({ operation: 'progress', objectiveRevision: 1, kind: 'finding', summary: 'A finding from the earlier objective.' }))
+      .toMatchObject({ ok: false, error: 'math_team_objective_revision_changed' });
+    expect(await child.call({ operation: 'submit', summary: 'A result without an amended objective version.', declarations }))
+      .toMatchObject({ ok: false, error: 'math_team_objective_revision_required' });
+    expect(await child.call({ operation: 'progress', objectiveRevision: 2, kind: 'probe', summary: 'Use an obsolete source.',
+      knowledgeUses: [{ anchor: oldSource.file + '#' + oldSource.anchor, application: 'Obsolete knowledge is not the current assignment.' }] }))
+      .toMatchObject({ ok: false, error: expect.stringContaining('math_team_knowledge_anchor_not_loaded') });
+    const nextSource = task.profileEvidence!.sources[0]!;
+    expect(await child.call({ operation: 'progress', objectiveRevision: 2, kind: 'blocker', summary: 'The supplied interface remains incomplete.',
+      evidenceRefs: ['RESEARCH.md'], knowledgeUses: [{ anchor: nextSource.file + '#' + nextSource.anchor, application: 'Checked the current interface assumptions.' }] }))
+      .toMatchObject({ ok: true, objectiveRevision: 2 });
+    expect(task.progress!.map(item => item.objectiveRevision)).toEqual([1, 2]);
+    expect(task.progress![0]!.knowledgeUses![0]!.digest).toBe(oldSource.digest);
+    const full = await f.call({ operation: 'history', agentId: worker.id, limit: 1 }) as any;
+    expect(full.tasks[0]).toMatchObject({ objectiveRevision: 2, workKind: 'assembly', progressCount: 2 });
+    expect(full.tasks[0].profileEvidence.sources[0]).toEqual(nextSource);
+    child.complete(); await idle(f.team);
+    expect(readSolverRunState(f.stateFile).agentTeam!.workers[0]!.tasks[0]!.objectiveHistory).toHaveLength(1);
+    expect(await f.call(amendment, 'lead', 'after-finish')).toMatchObject({ ok: false, error: 'math_team_task_not_amendable' });
+  });
+
+  it('retains inspection and adoption exposure in a later checked assembled delivery', async () => {
+    const f = fixture({ maxTurns: Infinity, maxTurnMs: Infinity });
+    await f.call({ operation: 'spawn', agentId: 'producer', message: 'Prove the reusable helper.', workKind: 'proof' });
+    const producer = await f.session('producer');
+    fs.writeFileSync(f.source(f.team.archive.workers[0]!.worktree), original.replace('end Team', helper + 'end Team'));
+    await producer.call({ operation: 'submit', summary: 'Reusable helper.', declarations }); producer.complete(); await idle(f.team);
+    const reference = f.team.archive.deliveries[0]!;
+    expect(reference).toBeDefined();
+    await f.call({ operation: 'spawn', agentId: 'consumer', message: 'Reconstruct the interface independently.', workKind: 'independent-reconstruction' });
+    const consumer = await f.session('consumer'), worker = f.team.archive.workers[1]!, task = worker.tasks[0]!;
+    expect(await consumer.call({ operation: 'inspect', deliveryId: reference.id })).toMatchObject({ ok: true, agentId: 'producer' });
+    await consumer.call({ operation: 'yield', reason: 'Need the checked dependency.' }); consumer.complete(); await idle(f.team);
+    await f.call({ operation: 'adopt', deliveryId: reference.id, targetId: 'consumer' }); await idle(f.team);
+    expect(worker.exposures?.map(item => item.kind)).toEqual(['inspected', 'adopted']);
+    await f.call({ operation: 'amend', agentId: 'consumer', taskId: task.id, message: 'Assemble using the checked peer helper.', reason: 'The source has now been inspected and imported.', workKind: 'assembly' });
+    await f.call({ operation: 'resume', agentId: 'consumer', taskId: task.id });
+    const resumed = await f.session('consumer', 1);
+    expect(resumed.threadId).toBe(consumer.threadId);
+    fs.writeFileSync(f.source(worker.worktree), fs.readFileSync(f.source(worker.worktree), 'utf8')
+      .replace('end Team', 'theorem consumerReuse (n : Nat) : n = n := by exact reusable n\nend Team'));
+    await resumed.call({ operation: 'submit', objectiveRevision: 2, summary: 'Consumer assembled with the peer dependency.',
+      declarations: [{ file: 'Submission.lean', name: 'Team.consumerReuse', type: '∀ n : Nat, n = n' }] });
+    resumed.complete(); await idle(f.team);
+    const own = f.team.archive.deliveries.find(item => item.agentId === 'consumer')!;
+    const delivery = readAgentTeamProofDelivery(own.path, f.state);
+    expect(delivery.provenance).toMatchObject({ objectiveRevision: 2, taskId: task.id, workKind: 'assembly', exposures: [
+      { deliveryId: reference.id, agentId: 'producer', taskId: reference.taskId, kind: 'inspected' },
+      { deliveryId: reference.id, agentId: 'producer', taskId: reference.taskId, kind: 'adopted' },
+    ] });
+    expect(delivery.declarations.map(item => item.name)).toContain('Team.consumerReuse');
+    expect(readSolverRunState(f.stateFile).agentTeam!.workers[1]!.exposures).toHaveLength(2);
+    expect(f.state.check).toBeUndefined();
+  }, 90_000);
+
+  it.each(['holes', 'source-contract'] as const)('finishes only after every frozen original proof is ready and independently checked (%s)', async firstFailure => {
+    const f = fixture({ maxTurns: Infinity, maxTurnMs: Infinity });
+    let opens = 0;
+    const modules = { ...directSolverModules, M1: { ...directSolverModules.M1,
+      open: async (options: MathAgentOptions): Promise<MathAgentSession> => {
+        const turn = ++opens, threadId = options.threadId ?? 'finish-lead';
+        return { threadId, usageSource: 'upstream-requests', close: async () => {}, interrupt: async () => {},
+          stopForFreeze: async () => ({ status: 'stopped' }), run: async (_message, id, _workspace, started) => {
+            started(id);
+            const request = options.requestGate!({ requestId: 'finish-' + turn, threadId });
+            if (request.allowed) request.settle({ complete: true, outcome: 'completed', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } });
+            if (turn === 1) {
+              expect(f.state.check?.passed).not.toBe(true);
+              if (firstFailure === 'source-contract') fs.writeFileSync(f.source(f.state.worktree), original.replace('theorem original : True', 'theorem original : False'));
+            }
+            else {
+              expect(turn).toBe(2);
+              expect(f.state.agentTeam!.completionRequested).toBeUndefined();
+              fs.writeFileSync(f.source(f.state.worktree), original.replaceAll('by sorry', 'by trivial'));
+            }
+            expect(await options.tools!.call('theoremos_team', { operation: 'finish', summary: 'Saved candidate; request independent checking.' },
+              { callId: 'finish-call-' + turn, threadId, turnId: id, signal: f.controller.signal }))
+              .toMatchObject({ ok: true, originalProblemAcceptance: 'not-assessed' });
+            expect(options.requestGate!.checkpoint!()).toBe(true);
+            return 'checkpoint';
+          } };
+      } } };
+    const result = await runResearchWorkers({ state: f.state, root: f.root, taskText: 'Prove both frozen statements.',
+      workers: [{ id: 'solver', role: 'lead', worktree: f.state.worktree, ownedFiles: f.problem.ownedFiles }],
+      access: new Map([['solver', { environment: f.environment,
+        researchSkill: prepareResearchSkill(f.root, f.state.worktree, f.state.researchSkill!, f.problem), retrievalRoot: f.state.worktree }]]),
+      modules, buildFile: path.join(f.directory, 'unused-build.json'), executable: 'offline-no-model', profile: 'offline-no-credentials',
+      signal: f.controller.signal, deadline: Infinity, maxTurns: Infinity, maxTotalTokens: 0, maxTurnMs: Infinity,
+      save: () => writeSolverRunState(f.stateFile, f.state), emit: (event, details) => { f.events.push({ event, details }); } });
+    expect(opens).toBe(2);
+    expect(result?.check.verification.status).toBe('kernel_verified');
+    expect(f.events.filter(item => item.event === 'team_completion_frozen').map(item => item.details?.wholeProofReady))
+      .toEqual(firstFailure === 'holes' ? [false, true] : [true]);
+    expect(f.events.some(item => item.event === 'team_completion_rejected')).toBe(firstFailure === 'source-contract');
+    expect(f.state.agentTeam!.completionRequested).toBeUndefined();
+  }, 90_000);
 });

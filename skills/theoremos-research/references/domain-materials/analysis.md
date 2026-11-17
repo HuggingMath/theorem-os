@@ -24,6 +24,16 @@ Knowledge: Let fn be continuously differentiable real functions on a bounded int
 
 Scope: Differentiation of limits under uniform derivative convergence, continuous differentiability and an anchor value on a bounded interval; arbitrary derivative limits and integration on unbounded domains need other hypotheses.
 
+### Scalar sequences and series
+
+Reading: [Jiří Lebl — Basic Analysis I: Introduction to Real Analysis, Volume I — version 6.3](https://www.jirka.org/ra/realanal.pdf)
+
+Locator: §2.1.1, Theorem 2.1.10, printed/PDF pp. 55–56; §2.3.1, Definition 2.3.1 and Proposition 2.3.2, pp. 73–74; Theorem 2.3.4, pp. 75–76 and Proposition 2.3.5, pp. 76–77; §2.5.4, Propositions 2.5.13 and 2.5.15, pp. 92–93. Read from the locally collected source PDF.
+
+Knowledge: An increasing real sequence bounded above converges to the supremum of its values; the decreasing counterpart converges to its infimum when bounded below. For a bounded real sequence, the supremum of each tail decreases and its infimum increases. Their limits define limsup and liminf, and subsequences converge to each of these two values. The tail extrema themselves need not be terms of the original sequence. For a series of nonnegative terms, its increasing partial sums converge exactly when they are bounded above. Absolute convergence of a real series implies convergence.
+
+Scope: Scalar real sequences and real series with the stated order and boundedness assumptions. Extended-real infinite limits use a different codomain; a total formal-library expression does not remove the hypotheses of an order-limit theorem. These facts describe subject knowledge and do not select a proof method or establish a particular assignment.
+
 ## complex-analysis
 
 **复分析专家 / Complex Analysis Expert** (D042)

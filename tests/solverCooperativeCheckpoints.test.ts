@@ -152,6 +152,21 @@ describe('cooperative advisory scheduling checkpoints', () => {
     }
   }
 
+  it.each([true, false])('routes ordinary peer updates through native advisory only when the session supports it (%s)', async nativeAdvisory => {
+    const { workers, controller, run } = fixture();
+    const held = heldAdvisoryTurns(1), notify = vi.fn(async (_message: string, _options?: { waitForRequest?: boolean; mode?: 'advisory' }) => {});
+    const open = async (options: MathAgentOptions): Promise<MathAgentSession> => ({ ...await held.open(options), notify,
+      ...(nativeAdvisory ? { advisoryNotifications: 'native-history' as const } : {}) });
+    const completion = run(open, 1); void completion.catch(() => {}); await held.wait(0, completion);
+    const active = vi.mocked(CooperativeResearch.prototype.activate).mock.calls.find(([worker]) => worker.id === workers[1].id)!;
+    await active[3]('A peer published a finding.', { mode: 'advisory' });
+    expect(notify).toHaveBeenLastCalledWith('A peer published a finding.', nativeAdvisory ? { mode: 'advisory' } : { waitForRequest: true });
+    await active[3]('A queued human instruction.', { requireTurn: true });
+    expect(notify).toHaveBeenLastCalledWith('A queued human instruction.', { waitForRequest: false });
+    expect(held.interrupt).not.toHaveBeenCalled();
+    controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
+  });
+
   it.each([false, true])('publishes the research reminder example through the current assignment protocol (needs decision: %s)', async needsDecision => {
     const { state, workers, check, controller, run, pulse } = fixture();
     const held = heldAdvisoryTurns(1), completion = run(held.open, 1); void completion.catch(() => {});
@@ -185,7 +200,8 @@ describe('cooperative advisory scheduling checkpoints', () => {
     controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
   });
 
-  function heldContinuationTurns(options: { saveNotes?: boolean; highContext?: boolean; deferFirstActivity?: boolean; count?: number } = {}) {
+  function heldContinuationTurns(options: { saveNotes?: boolean; highContext?: boolean; deferFirstActivity?: boolean; count?: number;
+    nativeCompact?: 'success' | 'failure' } = {}) {
     const count = options.count ?? 2;
     const started = Array.from({ length: count }, () => deferred()), done = Array.from({ length: count }, () => deferred<string>());
     const messages: { assignment: CooperativeAction; receipt?: string; mode: string; exactTasks?: unknown[]; sentinel?: string;
@@ -195,11 +211,20 @@ describe('cooperative advisory scheduling checkpoints', () => {
     const interrupt = vi.fn(async () => { active?.resolve('interrupted'); });
     const close = vi.fn(async () => { active?.resolve('interrupted'); });
     const notify = vi.fn(async (_message: string) => {});
+    const compact = vi.fn();
     const open = vi.fn(async (access: MathAgentOptions): Promise<MathAgentSession> => {
       const threadId = access.threadId ?? `continuation-thread-${++newThreads}`;
+      let inputTokens = options.highContext ? 100_000 : 0, running = false;
       return { threadId, close, interrupt, notify,
-        ...(options.highContext ? { lastInputTokens: 100_000 } : {}),
+        get lastInputTokens() { return inputTokens; },
+        ...(options.nativeCompact ? { compact: async () => {
+          compact(); expect(running).toBe(false);
+          if (options.nativeCompact === 'failure') throw new Error('fixture_compaction_failed');
+          inputTokens = 12;
+          access.onUsage({ inputTokens: 12, outputTokens: 2, totalTokens: 14 }, { turnId: 'native-compact-turn' });
+        } } : {}),
         run: async (message, _messageId, _workspace, onStarted) => {
+          running = true;
           const turn = turns++;
           if (turn >= count) throw new Error('fixture_unexpected_extra_continuation_turn');
           messages.push(JSON.parse(message)); threads.push(threadId); active = done[turn];
@@ -209,12 +234,12 @@ describe('cooperative advisory scheduling checkpoints', () => {
           started[turn].resolve();
           // The advisory clock starts at the model's first produced item, not at turn admission.
           if (!options.deferFirstActivity) access.onActivity?.({ event: 'reasoning' });
-          return done[turn].promise;
+          try { return await done[turn].promise; } finally { running = false; }
         } };
     });
     const wait = (turn: number, completion: Promise<unknown>) => Promise.race([started[turn].promise,
       completion.then(() => { throw new Error('fixture_finished_before_continuation:' + turn); })]);
-    return { open, close, interrupt, notify, messages, threads, wait };
+    return { open, close, interrupt, notify, compact, messages, threads, wait };
   }
 
   it('publishes a saved partial finding only after its scheduling checkpoint has stopped the writer', async () => {
@@ -801,6 +826,30 @@ describe('cooperative advisory scheduling checkpoints', () => {
     expect(events).toContainEqual({ event: 'context_restarted', details: expect.objectContaining({ workerId: 'solver',
       previousThreadId: 'continuation-thread-1', reason: 'context' }) });
     expect(check).not.toHaveBeenCalled(); expect(state.check).toBeUndefined();
+    controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
+  });
+
+  it.each(['success', 'failure'] as const)('uses native compact between settled turns and restores full task context (%s)', async nativeCompact => {
+    const { state, workers, check, events, controller, run, pulse } = fixture(false, undefined, 'lead');
+    const held = heldContinuationTurns({ saveNotes: true, highContext: true, nativeCompact });
+    const completion = run(held.open, Infinity); void completion.catch(() => {});
+    await held.wait(0, completion);
+    held.open.mock.calls[0][0].onActivity!({ event: 'reasoning' });
+    expect(held.compact).not.toHaveBeenCalled();
+    const request = state.workers![0].contextCheckpoint!;
+    fs.appendFileSync(path.join(workers[0].worktree, held.messages[0].receipt!), JSON.stringify({
+      kind: 'checkpoint', requestId: request.requestId,
+      notesDigest: mathDigest(fs.readFileSync(path.join(workers[0].worktree, 'RESEARCH.md'))),
+    }) + '\n');
+    await pulse(workers[0].id); await vi.advanceTimersByTimeAsync(5_000); await held.wait(1, completion);
+    expect(held.compact).toHaveBeenCalledOnce();
+    expect(held.threads).toEqual(['continuation-thread-1', nativeCompact === 'success' ? 'continuation-thread-1' : 'continuation-thread-2']);
+    expect(held.messages[1].mode).toBe('full'); expect(held.messages[1].exactTasks).toEqual(state.cooperation!.tasks.map(node => node.task));
+    expect(events.some(item => item.event === 'context_restarted')).toBe(nativeCompact === 'failure');
+    expect(events.some(item => item.event === (nativeCompact === 'success' ? 'context_compaction_completed' : 'context_compaction_failed'))).toBe(true);
+    expect(state.workers![0].usageAccounting?.startedTurns).toBe(2);
+    if (nativeCompact === 'success') expect(state.workers![0].usage?.totalTokens).toBe(14);
+    expect(check).not.toHaveBeenCalled();
     controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
   });
 

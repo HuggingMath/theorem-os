@@ -34,6 +34,27 @@ export class ResearchUsage {
 
   resetTurn() { this.stopReason = undefined; }
 
+  /** Native compaction can make model requests between proof turns. It is maintenance, not a solver turn. */
+  beginMaintenance(assignment?: CooperativeAction) {
+    if (this.active) throw new Error('math_model_maintenance_during_turn');
+    this.active = { reported: false, incomplete: false, initialPlanning: false, taskId: assignmentTask(assignment),
+      upstreamRequests: this.requestSessionId === this.sessionId && this.sessionId !== undefined,
+      nativeTurnTotals: Boolean(this.boundSession && this.boundSession.id === this.sessionId && this.boundSession.nativeTurnTotals),
+      finished: false };
+    if (!this.active.upstreamRequests) this.nativeTurns.push(this.active);
+    this.input.research.usageAccounting!.pending = true;
+    this.resetTurn(); this.input.changed();
+  }
+
+  finishMaintenance() {
+    const maintenance = this.active!;
+    const accounting = this.input.research.usageAccounting!;
+    accounting.pending = false;
+    if (maintenance.incomplete || !maintenance.upstreamRequests && !maintenance.reported ||
+        this.input.research.requestUsageAccounting?.pendingRequests) accounting.incomplete = true;
+    maintenance.finished = true; this.active = undefined; this.input.changed();
+  }
+
   begin(assignment?: CooperativeAction, taskId = assignmentTask(assignment)) {
     const { state, research, maxTotalTokens } = this.input;
     research.usageAccounting!.startedTurns++;

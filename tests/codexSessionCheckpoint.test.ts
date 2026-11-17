@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createCodexMathSession, type MathAgentOptions, type MathAgentSession } from '../src/runtime/codexSession';
+import { nativeFileWatchFixture } from './helpers/nativeFileWatchFixture';
 
 // This process only speaks stdio and writes disposable fixture files. It has no provider transport.
 const appServer = String.raw`
@@ -76,7 +77,7 @@ describe('Codex checkpoint turn settlement', () => {
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-checkpoint-'));
     const executable = path.join(root, 'fake-codex');
-    fs.writeFileSync(executable, '#!' + process.execPath + '\n' + appServer, { mode: 0o700 });
+    fs.writeFileSync(executable, '#!' + process.execPath + '\n' + nativeFileWatchFixture + appServer, { mode: 0o700 });
     fs.writeFileSync(path.join(root, 'proof.lean'), '-- Mutable proof\n');
     options = { executable, profile: root, workspace: root, model: 'fixture-model', effort: 'high',
       instructions: 'Offline checkpoint fixture.', environment: { PATH: process.env.PATH }, onUsage: vi.fn() };

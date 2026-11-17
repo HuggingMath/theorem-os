@@ -245,12 +245,36 @@ describe('advisory scratch source ownership', () => {
 
   it('quarantines in source feedback only when a cooperative caller asks for it', () => {
     const stray = write('outside.txt', 'stray\n'), reports: string[][] = [];
-    expect(() => solverSourceFeedback(problem, workspace)).toThrow('math_source_outside_ownership');
+    expect(solverSourceFeedback(problem, workspace)).toContain('"outside.txt" (untracked)');
     expect(fs.existsSync(stray)).toBe(true);
     expect(solverSourceFeedback(problem, workspace, paths => reports.push(paths))).toBeUndefined();
     expect(reports).toEqual([['outside.txt']]);
     expect(fs.existsSync(stray)).toBe(false);
     expect(solverSourceFeedback(problem, workspace, paths => reports.push(paths))).toBeUndefined();
     expect(reports).toHaveLength(1);
+  });
+
+  it('reports exact untracked, staged and linked paths without changing bytes or the index', () => {
+    const untracked = 'generated/addition/draft\nname.new', staged = '.scratch/staged-probe.lean', linked = 'scratch_link';
+    write(untracked, 'untracked draft\n'); write(staged, 'staged draft\n');
+    git(workspace, ['add', '--', staged]);
+    fs.symlinkSync(path.join(project, 'Challenge.lean'), path.join(workspace, linked));
+    const head = git(workspace, ['rev-parse', 'HEAD']), index = git(workspace, ['diff', '--cached', '--name-only', '-z']);
+    const feedback = solverSourceFeedback(problem, workspace)!;
+    expect(feedback).toContain(`${JSON.stringify(untracked)} (untracked)`);
+    expect(feedback).toContain(`${JSON.stringify(staged)} (tracked or staged)`);
+    expect(feedback).toContain(`${JSON.stringify(linked)} (untracked)`);
+    expect(feedback).toContain('unstage that exact path before moving it');
+    expect(feedback).toContain('Scratch symlinks and non-regular paths are rejected');
+    expect(fs.readFileSync(path.join(workspace, untracked), 'utf8')).toBe('untracked draft\n');
+    expect(fs.readFileSync(path.join(workspace, staged), 'utf8')).toBe('staged draft\n');
+    expect(fs.lstatSync(path.join(workspace, linked)).isSymbolicLink()).toBe(true);
+    expect(git(workspace, ['rev-parse', 'HEAD'])).toBe(head);
+    expect(git(workspace, ['diff', '--cached', '--name-only', '-z'])).toBe(index);
+  });
+
+  it('does not turn trusted-source integrity failure into editable ownership feedback', () => {
+    fs.appendFileSync(path.join(project, 'Challenge.lean'), '\n-- protected input changed\n');
+    expect(() => solverSourceFeedback(problem, workspace)).toThrow('math_trusted_source_changed');
   });
 });

@@ -13,6 +13,7 @@ import type { SolverRunState, SolverWorkerState } from './archive';
 import { commitSolverSources, git, solverScratchDigest, pinSolverResearchSkill } from './problem';
 import { CooperativeResearch } from './cooperation';
 import { AgentResearchTeam, assertAgentTeamProcessesStopped } from './agentTeam';
+import { LeanEnvironmentHealthCheckError } from '../runtime/leanHealthCheck';
 import { assignmentDeliveryFile, leadPlanDeliveryFile, isFeasibilityReview, isFinalCandidateReview, taskGroup, type CooperativeAction } from './tasks';
 import { isStatementAction } from './statementReview';
 import { rememberSolverFailure, solverSourceFeedback } from './feedback';
@@ -42,7 +43,7 @@ import { LEAD_MAX_BACKOFF } from './leadWakes';
 import { applyOriginalLibraryTasks } from './libraryApplication';
 import { LibraryInstallationRequested, takeLibraryRequest, writeLibraryAccess, type LibraryAccess } from './libraryAccess';
 import { hasTaskConnectionCheck } from './taskConnections';
-import { DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT } from './tacticBatteryFailureCache';
+import { prepareTacticBatteryFailureCacheRoot } from './tacticBatteryFailureCache';
 import { committedResearchNotesDigest, researchHandoffNotesDigest } from './researchCheckpoints';
 import { SingleSolverProofHandoff } from './singleSolverProofHandoff';
 import { assertMathAgentSkillsCurrent, type MathAgentSkill } from '../runtime/agentSkills';
@@ -256,7 +257,7 @@ export async function runResearchWorkers(input: {
       const emit = (event: string, details = {}) => input.emit(event, { workerId: worker.id, ...details });
       const singleHandoff = !parallel ? new SingleSolverProofHandoff(state.problem, worker.worktree,
         submission => emit('proof_ready_checkpoint_requested', { ...submission, reason: 'current-lean-diagnostics' })) : undefined;
-      // A stray untracked file must not stop a cooperative peer; the single solver keeps its strict stop.
+      // Cooperative callers keep their existing stopped-writer quarantine; other callers receive exact correction feedback.
       const sourceFeedback = () => solverSourceFeedback(state.problem, worker.worktree,
         cooperation ? paths => emit('source_quarantined', { paths: paths.slice(0, 32), count: paths.length }) : undefined);
       const recovered = () => {
@@ -345,6 +346,8 @@ export async function runResearchWorkers(input: {
       let cooperativeCheckpoint = false;
       let contextSchedulingCheckpoint = false;
       let compactionRestart = false;
+      let explicitCompaction = false, contextUsageVersion = 0, compactedUsageVersion = -1;
+      let sessionHasHistory = false;
       let turnActivity: ((activity: MathAgentActivity) => void) | undefined;
       let advisoryTurn: { scope: string; contentDigest?: string; inputDigest?: string } | undefined;
       let turnContext: { digest: string; fresh: boolean } | undefined;
@@ -458,6 +461,7 @@ export async function runResearchWorkers(input: {
         contextSchedulingCheckpoint = false;
         advisoryTurn = undefined;
         usage.begin(assignment);
+        team?.beginLeadTurn();
         const activeSession = session!;
         const advisoryScope = advisoryCheckpointScope(assignment);
         const researchAssignment = assignment?.kind === 'task' &&
@@ -601,7 +605,8 @@ export async function runResearchWorkers(input: {
               throw new Error('math_guidance_recipient_not_running');
             if (!isStatementAction(assignment)) try {
               // Guidance polling must not wait for a long provider request or claim an enqueue as delivery.
-              await activeSession.notify?.(message, { waitForRequest: !options?.requireTurn });
+              await activeSession.notify?.(message, options?.mode === 'advisory' && !options.requireTurn &&
+                activeSession.advisoryNotifications === 'native-history' ? { mode: 'advisory' } : { waitForRequest: !options?.requireTurn });
             } catch (error) {
               if (options?.requireTurn && error instanceof Error &&
                   /^math_codex_notification_(?:request_active|turn_settled)$/u.test(error.message))
@@ -1028,18 +1033,23 @@ export async function runResearchWorkers(input: {
                 (assignment && !cooperation!.current(assignment))) return false;
             try {
               const sessionId = crypto.randomUUID();
+              const resumingThread = research.threadId;
               const usageCallbacks = usage.bindSession(sessionId, () => session?.lastInputTokens);
+              if (team && usageCallbacks.requestGate) usageCallbacks.requestGate = team.leadRequestGate(usageCallbacks.requestGate);
               access.assertHarnessCurrent?.();
               session = await modules.M1.open({ executable: input.executable, profile: input.profile,
                 ...((access.commonResearchSkill ?? access.researchSkill) ? { skills: [(access.commonResearchSkill ?? access.researchSkill)!] } : {}),
                 ...(state.researchDelegation?.mode === 'read-only' ? { delegation: { ...state.researchDelegation, mode: 'read-only' as const } } : {}),
-                ...(team ? { tools: team.tools(), isolateProcess: true } : {}),
+                ...(team ? { tools: team.tools(), isolateProcess: true,
+                  ...(team.nativeAgentControlEnabled ? { nativeAgentControl: team.nativeAgentControlOptions() } : {}) } : {}),
+                ...(team && !statement ? { leanHealthCheck: { executable: process.execPath, arguments: [path.join(input.root, 'out/main/check-lean.js'),
+                  '--workspace', path.join(worker.worktree, state.problem.projectRelative), '--health', '--timeout-seconds', '0'] } } : {}),
                 ...(state.researchDelegation?.mode === 'read-only' ? { onNativeAgent: (agent: import('../runtime/nativeDelegation').NativeResearchAgent) => {
                   const agents = state.nativeAgents ??= [], index = agents.findIndex(item => item.threadId === agent.threadId);
                   if (index < 0) agents.push(agent); else agents[index] = agent;
                   emit('investigator_observed', { ...agent }); save();
                 } } : {}),
-                hiddenRoots: [DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT, ...(team?.hiddenRoots ?? [])],
+                hiddenRoots: [prepareTacticBatteryFailureCacheRoot(), ...(team?.hiddenRoots ?? [])],
                 ...(!statement ? { proofProjectRoot: path.join(worker.worktree, state.problem.projectRelative) } : {}),
                 ...(singleHandoff ? { completedOutput: singleHandoff.output } : {}),
                 workspace, environment: { ...environment, ...access.harnessEnvironment,
@@ -1049,16 +1059,23 @@ export async function runResearchWorkers(input: {
                 instructions: currentContext.instructions, onActivity: activity => {
                   research.lastActivity = { ...activity, at: Date.now() };
                   emit('worker_activity', { activity: activity.event, itemType: activity.itemType }); save();
+                  if (activity.event === 'lean_environment_ready') emit('lean_environment_ready', { workerId: worker.id, health: activity.health });
                   turnActivity?.(activity);
-                }, ...usageCallbacks });
+                }, ...usageCallbacks, onUsage: (value, context) => {
+                  usageCallbacks.onUsage(value, context);
+                  if (!explicitCompaction) contextUsageVersion++;
+                } });
               if (state.agentSessionPlan && session.executionPlan &&
                   canonicalMathJson(state.agentSessionPlan) !== canonicalMathJson(session.executionPlan))
                 throw new Error('math_agent_session_plan_changed');
               usage.sessionOpened(session);
+              sessionHasHistory = Boolean(resumingThread && resumingThread === session.threadId);
               team?.setLeadSession(session);
               if (team && session.processIdentity) { state.writerProcess = session.processIdentity; save(); }
             } catch (error) {
               signal.throwIfAborted();
+              if (error instanceof LeanEnvironmentHealthCheckError)
+                emit('lean_environment_unavailable', { workerId: worker.id, health: error.health });
               if (assignment && !cooperation!.current(assignment)) return false;
               const detail = failureDetail(error);
               if (!recoverableResearchFailure(detail)) throw error;
@@ -1078,6 +1095,13 @@ export async function runResearchWorkers(input: {
               research.contextCheckpointBaseline = { threadId: session.threadId, notesDigest: checkpointNotesDigest() };
             research.threadId = session.threadId; save();
           }
+        }
+        if (await maintainContext(assignment) !== 'unchanged') {
+          // Recompile the complete current task after compaction or rotation; a short continuation
+          // may refer to context the native summary no longer retains.
+          rebuildContext = true;
+          if (unreserveTurn()) save();
+          return false;
         }
         // Opening a session can await while another worker exhausts the shared allowance.
         return dispatchAllowed();
@@ -1133,8 +1157,45 @@ export async function runResearchWorkers(input: {
         await close();
         if (previous) research.previousThreadIds = [...(research.previousThreadIds ?? []), previous];
         research.threadId = undefined; research.lastInputTokens = undefined; research.contextCheckpoint = undefined; research.contextCheckpointBaseline = undefined;
+        sessionHasHistory = false; compactedUsageVersion = -1;
         research.usageBeforeThread = research.usage; save();
         emit('context_restarted', { previousThreadId: previous, turns: research.turns, reason });
+      };
+      const maintainContext = async (assignment?: CooperativeAction): Promise<'unchanged' | 'compacted' | 'rotated'> => {
+        if (skillMode || !research.threadId || !session || !sessionHasHistory) return 'unchanged';
+        const threadId = research.threadId, lastInputTokens = Math.max(session.lastInputTokens ?? 0, research.lastInputTokens ?? 0);
+        const notesDigest = currentCheckpointNotesDigest();
+        if (lastInputTokens < 96_000 && !notesDigest) return 'unchanged';
+        if (session.compact && (compactedUsageVersion !== contextUsageVersion || notesDigest)) {
+          const startedAt = Date.now();
+          if (notesDigest) emit('context_checkpoint_ready', { threadId, notesDigest });
+          emit('context_compaction_requested', { threadId, lastInputTokens });
+          usage.beginMaintenance(assignment); explicitCompaction = true;
+          try {
+            await session.compact(); signal.throwIfAborted();
+            dispatchedContexts.clear(); compactedUsageVersion = contextUsageVersion;
+            research.contextCheckpoint = undefined;
+            research.contextCheckpointBaseline = { threadId, notesDigest: checkpointNotesDigest() };
+            research.lastInputTokens = session.lastInputTokens;
+            emit('context_compaction_completed', { threadId, maintenanceMs: Date.now() - startedAt }); save();
+            return 'compacted';
+          } catch (error) {
+            signal.throwIfAborted();
+            emit('context_compaction_failed', { threadId, reason: failureDetail(error) });
+          } finally { explicitCompaction = false; usage.finishMaintenance(); }
+          await rotateSession('context'); return 'rotated';
+        }
+        if (session.compact) return 'unchanged'; // Wait for a new usage observation before another native maintenance request.
+        if (!cooperation || !assignment || notesDigest) {
+          if (notesDigest) emit('context_checkpoint_ready', { threadId, notesDigest });
+          await rotateSession('context'); return 'rotated';
+        }
+        requestContextCheckpoint(lastInputTokens);
+        if (research.contextCheckpoint && research.contextCheckpoint.deferredAt === undefined) {
+          research.contextCheckpoint.deferredAt = Date.now();
+          emit('context_rotation_deferred', { threadId, reason: 'checkpoint-not-published', lastInputTokens }); save();
+        }
+        return 'unchanged';
       };
       const checkWhole = async (candidate = research.candidate) => {
         const previousFailures = research.failures;
@@ -1282,27 +1343,7 @@ export async function runResearchWorkers(input: {
           }
           if (!skillMode && research.threadId && research.contextCheckpoint?.threadId === research.threadId && !research.contextCheckpoint.requestId)
             requestContextCheckpoint(Math.max(session?.lastInputTokens ?? 0, research.lastInputTokens ?? 0));
-          if (!skillMode && research.threadId && (Math.max(session?.lastInputTokens ?? 0, research.lastInputTokens ?? 0) >= 96_000 ||
-              research.contextCheckpoint?.threadId === research.threadId && currentCheckpointNotesDigest())) {
-            const threadId = research.threadId, lastInputTokens = Math.max(session?.lastInputTokens ?? 0, research.lastInputTokens ?? 0);
-            const notesDigest = currentCheckpointNotesDigest();
-            if (!cooperation || !assignment) {
-              await rotateSession('context');
-            } else if (notesDigest) {
-              emit('context_checkpoint_ready', { threadId, notesDigest });
-              await rotateSession('context');
-            } else {
-              requestContextCheckpoint(lastInputTokens);
-              // A high token count is not evidence that the argument is durable.
-              // Keep the saved thread; actual provider overflow still uses the
-              // existing bounded recovery path and can rotate it when necessary.
-              if (research.contextCheckpoint && research.contextCheckpoint.deferredAt === undefined) {
-                research.contextCheckpoint.deferredAt = Date.now();
-                emit('context_rotation_deferred', { threadId, reason: 'checkpoint-not-published', lastInputTokens });
-                save();
-              }
-            }
-          }
+          await maintainContext(assignment);
           const options: readonly ResearchOperation[] = ['direct'];
           while ((pendingTurn = waitForTurn())) await pendingTurn;
           const action = skillMode && !fullSkillWorkflow ? { operation: 'direct' as const, reason: 'continue' as const }
@@ -1457,6 +1498,7 @@ export async function runResearchWorkers(input: {
             }
           } finally { cooperation?.deactivate(worker); }
           const lastInputTokens = session?.lastInputTokens;
+          sessionHasHistory = true;
           const diagnostic = safeFailureDiagnostic(session?.lastFailureDiagnostic);
           const turnError = executionError ?? failureDetail(session?.lastError, undefined, diagnostic);
           if (access.libraryCatalog && candidate.status !== 'failed') {
@@ -1517,21 +1559,37 @@ export async function runResearchWorkers(input: {
           if (!['completed', 'failed', 'checkpoint'].includes(turn)) break;
           if (turn !== 'failed') retries = 0;
           if (turn === 'checkpoint') emit('turn_checkpoint', { turn: research.turns,
-            ...(planningCheckpoint ? { reason: 'math_initial_planning_limit' } :
+            ...(team?.leadCompletionCheckpoint ? { reason: 'math_team_completion_checkpoint' } :
+              team?.leadAdoptionCheckpoint ? { reason: 'math_team_adoption_checkpoint' } :
+              team?.leadCoordinationCheckpoint ? { reason: 'math_team_coordination_checkpoint' } :
+              planningCheckpoint ? { reason: 'math_initial_planning_limit' } :
               contextSchedulingCheckpoint ? { reason: 'math_context_scheduling_checkpoint' } :
                 cooperativeCheckpoint ? { reason: 'math_cooperative_scheduling_checkpoint' } : {}) });
           if (turn === 'failed') emit('turn_failed', { reason: researchFailureReason(turnError), ...(diagnostic ? { diagnostic } : {}) });
           const sourceError = sourceFeedback();
           if (sourceError) {
+            if (team?.archive.completionRequested) {
+              emit('team_completion_rejected', { reason: sourceError, requestedAt: team.archive.completionRequested.at });
+              team.archive.completionRequested = undefined;
+            }
             research.check = undefined;
             if (assignment) cooperation!.rejected(assignment, sourceError, undefined, turn !== 'completed');
-            save(); emit('source_rejected');
-            if (turn === 'failed' || planningCheckpoint) throw new Error(sourceError);
+            save(); emit('source_rejected', { reason: sourceError });
+            if (turn === 'failed' && turnError && !recoverableResearchFailure(turnError) && !locallyStopped(turnError))
+              throw new Error(researchFailureReason(turnError), { cause: turnError });
+            // A deterministic saved-source rejection needs a corrective turn even when the native
+            // request failed or yielded. The next dispatch carries sourceFeedback; no invalid source
+            // is committed or checked, and no host repair modifies the writer's saved work.
             continue;
           }
           if (skillMode) {
             await team?.flushAdoptions();
             const { commit, wholeProofReady } = await skillProofLifecycle!.freezeSources();
+            if (team?.archive.completionRequested) {
+              const requested = team.archive.completionRequested;
+              team.archive.completionRequested = undefined;
+              emit('team_completion_frozen', { commit, wholeProofReady, requestedAt: requested.at }); save();
+            }
             // An unfinished research turn can publish useful helpers without repeatedly
             // compiling every original hole. Ordinary diagnostics remain advisory.
             if (!wholeProofReady) {

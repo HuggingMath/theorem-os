@@ -49,6 +49,10 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     const reply = value => send({ id: request.id, result: value });
     if (request.method === 'initialize') { reply({}); return; }
     if (request.method === 'initialized') return;
+    // This smoke peer writes and completes synchronously. Model native noop
+    // watches here; output-event behavior is covered by the runtime fixtures.
+    if (request.method === 'fs/watch') { reply({ path: request.params.path }); return; }
+    if (request.method === 'fs/unwatch') { reply({}); return; }
     if (request.method === 'thread/start' || request.method === 'thread/resume') {
       checkProvider();
       settings = request.params;

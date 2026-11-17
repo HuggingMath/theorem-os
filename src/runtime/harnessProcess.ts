@@ -72,7 +72,7 @@ export function confirmHarnessProcessStopped(identity: HarnessProcessIdentity): 
 }
 
 /** Native tool permissions do not constrain arbitrary shell children. Both CLI harnesses use this OS contract. */
-export function prepareHarnessProcess(options: Pick<MathAgentOptions, 'workspace' | 'profile' | 'environment' | 'hiddenRoots'>,
+export function prepareHarnessProcess(options: Pick<MathAgentOptions, 'workspace' | 'profile' | 'environment' | 'hiddenRoots' | 'isolatedWorkspaceParent'>,
   executable: string, arguments_: readonly string[], infoDescriptor?: number) {
   if (process.platform !== 'linux' || !fs.existsSync('/usr/bin/bwrap'))
     throw new Error('math_harness_process_isolation_unavailable');
@@ -82,6 +82,12 @@ export function prepareHarnessProcess(options: Pick<MathAgentOptions, 'workspace
   }
   if (isMathPathWithin(options.workspace, options.profile) || isMathPathWithin(options.profile, options.workspace))
     throw new Error('math_harness_profile_must_be_separate');
+  const workspaceParent = options.isolatedWorkspaceParent;
+  if (workspaceParent !== undefined) {
+    assertMathCanonicalPath(workspaceParent);
+    if (workspaceParent !== path.dirname(options.workspace) || workspaceParent === '/' ||
+        isMathPathWithin(workspaceParent, options.profile)) throw new Error('math_harness_workspace_parent_invalid');
+  }
   const temporary = path.join(options.workspace, '.scratch', 'tmp');
   assertMathCanonicalPath(temporary);
   fs.mkdirSync(temporary, { recursive: true, mode: 0o700 });
@@ -106,14 +112,17 @@ export function prepareHarnessProcess(options: Pick<MathAgentOptions, 'workspace
       throw new Error('math_harness_hidden_root_conflict');
     if (!hidden.some(parent => isMathPathWithin(parent, mask))) hidden.push(mask);
   }
+  if (workspaceParent) hidden.push(workspaceParent);
   const masks = hidden.filter(root => !hidden.some(parent => parent !== root && isMathPathWithin(parent, root)));
   const args = ['--die-with-parent', '--unshare-pid', '--unshare-ipc', '--new-session', '--cap-drop', 'ALL',
-    '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev',
-    '--bind', options.workspace, options.workspace, '--bind', options.profile, options.profile];
+    '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev'];
   if (infoDescriptor !== undefined) {
     if (!Number.isSafeInteger(infoDescriptor) || infoDescriptor < 3) throw new Error('math_harness_info_descriptor_invalid');
     args.push('--info-fd', String(infoDescriptor));
   }
+  for (const root of masks) args.push(...(fs.statSync(root).isDirectory() ? ['--tmpfs', root] : ['--ro-bind', '/dev/null', root]));
+  // Resolve the bind source in the host namespace after masking peers in the child namespace.
+  args.push('--bind', options.workspace, options.workspace, '--bind', options.profile, options.profile);
   const lock = env.DEEPSCIENTIST_MATH_LEAN_LOCK;
   if (lock) {
     assertMathCanonicalPath(lock);
@@ -121,7 +130,6 @@ export function prepareHarnessProcess(options: Pick<MathAgentOptions, 'workspace
       throw new Error('math_harness_lean_lock_invalid');
     args.push('--bind', lock, lock);
   }
-  for (const root of masks) args.push(...(fs.statSync(root).isDirectory() ? ['--tmpfs', root] : ['--ro-bind', '/dev/null', root]));
   args.push('--chdir', options.workspace, '--', executable, ...arguments_);
   return { command: '/usr/bin/bwrap', args, env,
     isolationReceipt: { schema: 'theorem-os.harness-process.v1', backend: 'bwrap',

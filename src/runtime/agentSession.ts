@@ -8,14 +8,19 @@ import type { NativeDelegationOptions, NativeResearchAgent } from './nativeDeleg
 import type { MathAgentTools } from './agentTeamTools';
 export type { MathAgentTools, MathAgentToolDefinition, MathAgentToolContext } from './agentTeamTools';
 import type { HarnessProcessIdentity } from './harnessProcess';
+import type { LeanEnvironmentHealth } from '../math/leanEnvironmentHealth';
+import type { NativeAgentControlOptions, NativeAgentControlConnection } from './nativeAgentControl';
+export type { NativeAgentControlOptions, NativeAgentControlConnection } from './nativeAgentControl';
 
 type Json = Record<string, unknown>;
 
 /** Harness events describe execution; none of them grants mathematical acceptance. */
 export type MathAgentActivity = {
   event: 'item_started' | 'item_completed' | 'reasoning' | 'message' | 'command_output' | 'lean_lock_waiting' | 'lean_lock_acquired'
-    | 'shell_argument_rejected';
+    | 'lean_environment_ready';
   itemType?: string;
+  /** Present on the host's pre-model lean_environment_ready event. */
+  health?: LeanEnvironmentHealth;
 };
 
 /** The solver owns this contract; each harness translates its native protocol. */
@@ -30,10 +35,14 @@ export type MathAgentOptions = {
   delegation?: NativeDelegationOptions;
   onNativeAgent?: (agent: NativeResearchAgent) => void;
   tools?: MathAgentTools;
+  /** Host backend for Codex's built-in collaboration tools, with isolated native children. */
+  nativeAgentControl?: NativeAgentControlOptions;
   /** Tie the complete native writer tree to this host with a dedicated PID namespace. */
   isolateProcess?: boolean;
   environment?: NodeJS.ProcessEnv;
   proofProjectRoot?: string;
+  /** Host-owned environment probe, run in the same isolated namespace before native/model startup. */
+  leanHealthCheck?: Readonly<{ executable: string; arguments: readonly string[] }>;
   threadId?: string;
   /** Hard native-turn deadline; may interrupt an in-flight paid request. */
   turnTimeoutMs?: number;
@@ -48,6 +57,8 @@ export type MathAgentOptions = {
   onItem?: (phase: 'started' | 'completed', item: Json, context?: { turnId?: string }) => void;
   onItemUpdate?: (item: Json, context?: { turnId?: string }) => void;
   hiddenRoots?: readonly string[];
+  /** Hide present and future peer directories, then expose only this workspace below its direct parent. */
+  isolatedWorkspaceParent?: string;
   readIsolation?: { environment: LeanTaskEnvironment; packages?: 'none' | 'sources'; library?: { file: string; digest: string } };
   completedOutput?: {
     file: string;
@@ -66,12 +77,17 @@ export type MathAgentSession = {
   readonly lastCompletedResponse?: Readonly<{ turnId: string; text: string }>;
   /** Turn totals must be emitted once for that turn, rather than passed off as thread totals. */
   readonly usageSource?: 'upstream-requests' | 'native-thread-totals' | 'native-turn-totals';
+  /** The adapter can queue advisory history without steering or starting a turn. */
+  readonly advisoryNotifications?: 'native-history';
   readonly isolationReceipt?: Record<string, unknown>;
   readonly processIdentity?: HarnessProcessIdentity;
+  readonly nativeAgentControl?: NativeAgentControlConnection;
   /** Selected execution contracts, not a claim of mathematical acceptance or complete usage. */
   readonly executionPlan?: MathAgentSessionPlan;
   run: (message: string, messageId: string, workspace: string, onStarted: (turnId: string) => void) => Promise<string>;
-  notify?: (message: string, options?: { waitForRequest?: boolean }) => Promise<void>;
+  /** Advisory updates can enter native history without interrupting or starting work.
+   * The default remains turn-bound steering for effective instructions. */
+  notify?: (message: string, options?: { waitForRequest?: boolean; mode?: 'advisory' }) => Promise<void>;
   compact?: () => Promise<void>;
   interrupt: () => Promise<void>;
   close: () => Promise<void>;

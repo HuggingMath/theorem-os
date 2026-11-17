@@ -1,5 +1,5 @@
 import type { ProofCheck } from './modules/evidence';
-import { assertSolverSources, quarantineSolverStrayFiles, SolverSourceError, type SolverProblem } from './problem';
+import { assertSolverSources, quarantineSolverStrayFiles, solverPathsOutsideOwnership, SolverSourceError, type SolverProblem } from './problem';
 import { mathDigest } from '../math/mathRuntimeIo';
 import { parseLeanDiagnosticOutput, renderLeanDiagnosticMessage } from '../math/leanDiagnosticMessages';
 
@@ -57,6 +57,19 @@ export function solverSourceFeedback(problem: SolverProblem, worktree: string,
   try {
     assertSolverSources(problem, worktree);
   } catch (error) {
+    if (error instanceof Error && error.message === 'math_source_outside_ownership') {
+      const { outside, untracked } = solverPathsOutsideOwnership(problem, worktree);
+      // This is a saved-source correction, not permission to broaden ownership or discard work.
+      return bounded('Host rejected the edited source before committing or checking it in Lean.\n' +
+        'Error: math_source_outside_ownership\nPaths are relative to the repository root and JSON-quoted:\n' +
+        outside.map(file => `${JSON.stringify(file)} (${untracked.has(file) ? 'untracked' : 'tracked or staged'})`).join('\n') +
+        '\nOnly the frozen owned proof files may enter proof commits. Move untracked advisory drafts or temporary outputs into the repository .scratch/ directory as ordinary files. ' +
+        'If a new draft was staged, unstage that exact path before moving it; the index is checked even when its disk copy was removed. ' +
+        'For a tracked out-of-scope edit, preserve useful work under .scratch/ and restore only that path to its frozen baseline bytes. ' +
+        'Scratch symlinks and non-regular paths are rejected: keep ordinary local files instead. ' +
+        `Compare tracked paths with baseline commit ${problem.baseCommit} using git show. ` +
+        'The host left these paths, the index and proof sources unchanged. Correct the listed paths before retrying; do not reset or discard the worktree.', MAX_FEEDBACK_BYTES);
+    }
     if (!(error instanceof SolverSourceError)) throw error;
     return `Host rejected the edited source before committing or checking it in Lean.\nFile: ${problem.projectRelative}/${error.proofPath}\nError: ${error.message}\n${error.recovery}\nCompare this file with baseline commit ${problem.baseCommit} using git show. Edit only the allowed files; do not reset or discard the worktree. The original source checks must pass before Lean acceptance.`;
   }

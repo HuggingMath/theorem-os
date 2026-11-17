@@ -150,6 +150,7 @@ describe('bounded team observations and complete history', () => {
 
   it('projects activity, cumulative task use and pending proof work from the saved records without copying receipts', () => {
     const state = fixture(), worker = state.agentTeam!.workers[0]!, task = worker.tasks[0];
+    state.agentTeam!.hostLimits = { maxTurns: 10, maxTotalTokens: 0 };
     worker.lastActivity = { at: 1234, event: 'item/started', itemType: 'commandExecution' };
     worker.usage = { totalTokens: 1200 };
     worker.requestUsageAccounting = { startedRequests: 3, reportedRequests: 2, pendingRequests: 1, incomplete: false,

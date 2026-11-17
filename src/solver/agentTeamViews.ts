@@ -2,6 +2,7 @@ import type { SolverRunState } from './archive';
 import type { AgentTeamState, AgentTeamTask, AgentTeamWorker } from './agentTeamState';
 import { projectAgentTeamBudget } from './agentTeamBudget';
 import { buildTokenBudget } from './usageBudget';
+import { agentTeamCoordinationReview } from './agentTeamCoordination';
 
 const WORKERS = 4, TASKS = 4, REFERENCES = 8, EVENTS = 8;
 const TASK_TEXT = 600, EVENT_TEXT = 800, RESEARCH_TEXT = 2000;
@@ -28,6 +29,17 @@ function taskProjection(task: AgentTeamTask, historyOffset: number, full = false
   };
   const result = {
     id: task.id, sequence: task.sequence, historyOffset, status: task.status,
+    objectiveRevision: task.objectiveRevision ?? 1, workKind: task.workKind,
+    profileEvidence: full ? task.profileEvidence : task.profileEvidence && {
+      skillDigest: task.profileEvidence.skillDigest, selected: task.profileEvidence.selected,
+      loaded: task.profileEvidence.loaded, unresolved: task.profileEvidence.unresolved,
+      sourceCount: task.profileEvidence.sources.length },
+    objectiveHistory: full ? task.objectiveHistory : undefined,
+    objectiveHistoryCount: task.objectiveHistory?.length ?? 0,
+    progress: (full ? task.progress : task.progress?.slice(-1))?.map(item => ({ ...item,
+      summary: field('progress.summary', item.summary), nextStep: field('progress.nextStep', item.nextStep),
+      knowledgeUses: full ? item.knowledgeUses : undefined, evidenceRefs: full ? item.evidenceRefs : undefined })),
+    progressCount: task.progress?.length ?? 0,
     objective: field('objective', task.message), summary: field('summary', task.summary), error: field('error', task.error),
     createdAt: task.createdAt, startedAt: task.startedAt, lastStartedAt: task.lastStartedAt,
     pausedAt: task.pausedAt, finishedAt: task.finishedAt, turns: task.turns,
@@ -65,7 +77,7 @@ function taskBudget(state: Readonly<SolverRunState>, worker: AgentTeamWorker, ta
     taskUsage: state.taskUsage, taskUsageUnavailable: unavailable }).task!;
   const tokens = unavailable && state.taskUsage?.[task.id] === undefined ? null : projection.used.tokens;
   const turns = task.turns ?? (task.status === 'queued' ? 0 : null);
-  return { ...task.budget, used: { tokens, turns },
+  return { ...projection.budget, used: { tokens, turns },
     remaining: { tokens: tokens === null ? null : projection.remaining.tokens,
       turns: turns === null ? null : projection.remaining.turns },
     usageUnavailable: projection.usageUnavailable, turnUsageKnown: turns !== null };
@@ -119,12 +131,21 @@ export function agentTeamOverview(state: Readonly<SolverRunState>, options: { fo
     if (selectedAdoptions.size >= REFERENCES) break;
     selectedAdoptions.add(item.id);
   }
+  const review = agentTeamCoordinationReview(state);
+  const decision = review.decision;
+  const decisionReason = decision && preview(decision.reason, EVENT_TEXT);
+  const decisionStep = decision && preview(decision.nextStep, EVENT_TEXT);
   return {
+    ...(!options.focusAgentId || options.focusAgentId === 'lead'
+      ? { coordination: { ...review, decision: decision && { ...decision,
+        reason: decisionReason!.text, nextStep: decisionStep!.text,
+        ...(decisionReason!.truncated || decisionStep!.truncated ? { textTruncated: true } : {}) } } } : {}),
     workers: workers.filter(worker => visible.has(worker.id)).map(worker => {
       const tasks = visibleTasks(state, worker), error = worker.error && preview(worker.error, TASK_TEXT);
       const stopReason = worker.writerStopUnconfirmed && preview(worker.writerStopUnconfirmed.reason, TASK_TEXT);
       const usage = buildTokenBudget(0, [worker]), requests = worker.requestUsageAccounting;
       return { id: worker.id, status: worker.status, activity: activity(team!, worker), turns: worker.turns,
+        ...(worker.native ? { nativeIdentity: { threadId: worker.native.threadId, agentPath: worker.native.agentPath } } : {}),
         error: error && error.text, ...(error?.truncated ? { errorTruncated: true } : {}),
         lastActivity: worker.lastActivity && { at: worker.lastActivity.at, event: worker.lastActivity.event,
           itemType: worker.lastActivity.itemType },
@@ -135,6 +156,8 @@ export function agentTeamOverview(state: Readonly<SolverRunState>, options: { fo
           sourceDigest: worker.pendingDelivery.sourceDigest, declarationCount: worker.pendingDelivery.declarations.length },
         pendingPeerDeliveries: worker.pendingPeerDeliveries?.slice(-REFERENCES) ?? [],
         pendingPeerDeliveryCount: worker.pendingPeerDeliveries?.length ?? 0,
+        deliveryExposures: worker.exposures?.slice(-REFERENCES) ?? [],
+        deliveryExposureCount: worker.exposures?.length ?? 0,
         tasks, taskCount: worker.tasks.length, tasksOmitted: worker.tasks.length - tasks.length,
         queuedTaskCount: worker.tasks.filter(task => task.status === 'queued').length,
         writerStopUnconfirmed: worker.writerStopUnconfirmed && { at: worker.writerStopUnconfirmed.at,
@@ -142,6 +165,8 @@ export function agentTeamOverview(state: Readonly<SolverRunState>, options: { fo
     }),
     ...(research && { researchState: { revision: research.revision, publishedAt: research.publishedAt,
       summary: researchPreview!.text, advisory: true, ...(researchPreview!.truncated ? { summaryTruncated: true } : {}) } }),
+    completionRequested: team?.completionRequested && { at: team.completionRequested.at,
+      summary: preview(team.completionRequested.summary, EVENT_TEXT).text },
     researchArtifacts: refs.slice(-REFERENCES).map(({ id, agentId, taskId, commit }) => ({ id, agentId, taskId, commit })),
     deliveries: deliveries.slice(-REFERENCES).map(({ id, agentId, taskId }) => ({ id, agentId, taskId })),
     adoptions: adoptions.filter(item => selectedAdoptions.has(item.id)).map(item => ({ id: item.id, deliveryId: item.deliveryId, targetId: item.targetId,
@@ -157,7 +182,7 @@ export function agentTeamOverview(state: Readonly<SolverRunState>, options: { fo
       adoptions: Math.max(0, adoptions.length - REFERENCES) },
     retrieval: {
       history: { operation: 'history', offset: 0, limit: 4 },
-      task: 'Use history with agentId and the task historyOffset, limit 1. Full task objective, summary and error are in history; current task state may change.',
+      task: 'Use history with agentId and the task historyOffset, limit 1. Full objective revisions, progress, profile source identities, summary and error are in history; current task state may change.',
       research: 'History includes the full latest advisory research summary and each task researchArtifactId; use inspect-research for fixed notes.',
       proof: 'History includes deliveryId. Use inspect for exact checked declarations and evidence; overview omits declaration arrays.',
       omissions: 'Only selected members, current/next/recent tasks and recent references are shown. Use global history for omitted members and tasks; archived state is retained.',
@@ -186,6 +211,7 @@ export function agentTeamTaskHistory(team: Readonly<AgentTeamState>, input: { ag
     page.push(entry); bytes += size;
   }
   return { ok: true, agentId: input.agentId, offset, total: all.length,
+    coordination: team.coordination,
     tasks: page.map(item => ({ agentId: item.agentId, ...taskProjection(item.task, item.index, true) })),
     nextOffset: offset + page.length < all.length ? offset + page.length : null,
     ...(team.researchState && { researchState: { ...team.researchState, advisory: true } }),

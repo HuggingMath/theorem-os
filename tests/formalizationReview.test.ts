@@ -10,6 +10,7 @@ import { prepareFormalizationEvaluation, readFormalizationEvaluationBundle,
 import { assertFormalizationSemanticReview, formalizationSemanticReviewSchema,
   type FormalizationSemanticReview } from '../src/math/formalizationReview';
 import { runFormalizationReview } from '../src/solver/formalizationReview';
+import * as mathBuildManifest from '../src/math/mathBuildManifest';
 
 const production = vi.hoisted(() => ({ open: vi.fn() }));
 vi.mock('../src/runtime/codexSession', () => ({ createCodexMathSession: production.open }));
@@ -102,6 +103,35 @@ function firstOutput(runDirectory: string) {
 }
 
 describe('isolated semantic review execution with offline sessions', () => {
+  it('takes a native model final response and writes the review artifact only after closing the writer', async () => {
+    const f = fixture(2), profile = path.join(f.base, 'native-profile'), manifest = path.join(f.base, 'native-build.json');
+    fs.mkdirSync(profile); fs.writeFileSync(path.join(profile, 'config.toml'), 'model_provider = "offline-fixture"\n');
+    write(manifest, { fixture: 'No model is launched.' });
+    vi.spyOn(mathBuildManifest, 'readMathBuildManifest').mockReturnValue({ buildId: 'offline-fixture' } as any);
+    const config = { execution: 'model' as const, environment: 'standard' as const, model: 'offline-fixture', effort: 'offline',
+      profile, executable: '/offline/no-model', buildManifestRef: manifest };
+    const closed = new Set<string>();
+    const openSession = async (options: MathAgentOptions): Promise<MathAgentSession> => {
+      expect(options.outputSchema).toEqual(read(path.join(options.workspace, 'OUTPUT.schema.json')));
+      expect(options.completedOutput).toBeUndefined();
+      const input = read(path.join(options.workspace, 'INPUT.json')) as FormalizationEvaluationReviewerInput;
+      const turnId = 'native-turn-' + input.caseId;
+      let final: MathAgentSession['lastCompletedResponse'];
+      return { threadId: 'native-' + input.caseId, get lastCompletedResponse() { return final; }, interrupt: async () => {},
+        close: async () => {
+          if (closed.has(options.workspace)) return;
+          expect(fs.existsSync(path.join(options.workspace, 'OUTPUT.json'))).toBe(false); closed.add(options.workspace);
+        }, run: async (_message, _id, _workspace, started) => {
+          started(turnId); options.onUsage({ totalTokens: 1 }); final = { turnId, text: JSON.stringify(review(input)) }; return 'completed';
+        } };
+    };
+    expect(await runFormalizationReview(f.bundleDirectory, f.runDirectory, config, { openSession }))
+      .toMatchObject({ status: 'complete', completedCases: 2 });
+    expect(closed.size).toBe(2);
+    for (const workspace of closed) expect(fs.statSync(path.join(workspace, 'OUTPUT.json')).mode & 0o222).toBe(0);
+    expect(read(path.join(f.runDirectory, 'request.json')).outputDelivery).toBe('native-schema');
+  });
+
   it('runs preset decisions through the existing scorer without opening a production session', async () => {
     const f = fixture();
     const result = await runFormalizationReview(f.bundleDirectory, f.runDirectory, f.config);

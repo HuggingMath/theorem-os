@@ -352,7 +352,7 @@ export function solverScratchDigest(problem: SolverProblem, worktree: string): s
 }
 
 /** Changed paths outside the owned sources, journals and advisory scratch roots. */
-function solverPathsOutsideOwnership(problem: SolverProblem, worktree: string) {
+export function solverPathsOutsideOwnership(problem: SolverProblem, worktree: string) {
   const untracked = new Set(solverGitPaths(worktree, ['ls-files', '--others', '--exclude-standard', '-z']));
   // Include the index separately: an added file deleted from disk must not enter the checkpoint.
   const changed = new Set([...solverGitPaths(worktree, ['diff', '--name-only', '-z', problem.baseCommit]),

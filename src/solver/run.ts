@@ -48,6 +48,7 @@ import { verifierFailureDiagnostic } from './verifierFailure';
 import { generateSolverExplanations, type SolverExplanations } from './automaticExplanations';
 import { readMathAgentSkill } from '../runtime/agentSkills';
 import { prepareResearchSkill, researchSkillIdentity } from './researchSkill';
+import { writeWorkerProject } from './workerProject';
 import { prepareSolverRuntimeEnvironment } from './environment';
 import { assertResearchHarnessCurrent, bindResearchHarness, researchHarness, researchHarnessEnvironment } from '../runtime/researchHarness';
 import { readCliConfiguration } from '../runtime/cliConfiguration';
@@ -138,6 +139,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
   if (delegationMode === 'read-only') validateNativeDelegation({ mode: 'read-only', maxAgents });
   if (delegationMode === 'team' && harness.id !== 'codex') throw new Error('math_team_requires_codex_dynamic_tools');
   const researchDelegation = delegationMode ? { mode: delegationMode as 'read-only' | 'team', maxAgents } : undefined;
+  // A saved team without this discriminator retains its original transport.
+  const nativeTeamRun = delegationMode === 'team' && (!values.resume || savedConfiguration?.agentTeam?.transport === 'native-agent-control');
   if (skillMode) {
     if (!specified('workers')) values.workers = String(savedConfiguration?.workerCount ??
       (specified('coordination') && values.coordination === 'cooperative' ? 4 : 1));
@@ -271,10 +274,11 @@ export async function runSolver(args: string[], root: string, customModules?: So
       let { environment: env, corpusFile, corpusBytes, corpus } = preparedEnvironment;
       const { mathTools } = preparedEnvironment;
       const executable = values['harness-executable'] ?? values.codex ?? savedConfiguration?.agentHarness?.executable ??
-        (cli?.executable ?? (harness.id === 'codex' ? process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex' : harness.id === 'claude-code' ? 'claude' : 'opencode'));
+        (nativeTeamRun ? process.env.THEOREMOS_CODEX_BACKEND_EXECUTABLE || path.join(root, 'out/codex-backend/codex') :
+          cli?.executable ?? (harness.id === 'codex' ? process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE || 'codex' : harness.id === 'claude-code' ? 'claude' : 'opencode'));
       // Historical Codex checkpoints retain their existing binding; explicit new flags opt into full launch identity.
       const pinHarness = harness.id !== 'codex' || specified('harness-executable') || specified('harness-profile') ||
-        Boolean(savedConfiguration?.agentHarness);
+        Boolean(savedConfiguration?.agentHarness) || nativeTeamRun;
       const agentHarness = pinHarness ? bindResearchHarness(harness.id, executable, profile, process.env, values.model) : undefined;
       const harnessEnvironment = harness.id === 'codex' ? undefined : researchHarnessEnvironment(harness.id, process.env,
         { profile, model: values.model! });
@@ -405,6 +409,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
           agentSessionPlan: plannedSession,
           ...(researchSkill ? { researchMode: 'skill', researchSkill, researchSkillWorkflow: 'full' } : {}),
           ...(commonResearchSkill ? { commonResearchSkill } : {}), ...(researchDelegation ? { researchDelegation } : {}),
+          ...(nativeTeamRun ? { agentTeam: { schema: 'theorem-os.agent-team.v1' as const, transport: 'native-agent-control' as const,
+            workers: [], events: [], deliveries: [], adoptions: [], operations: [] } } : {}),
           ...(continuation ? { continuationDigest: continuation.digest } : {}),
           worktree: path.join(directory, 'worktree'), phase: 'prepared', turns: 0, dispatchCounts: {}, workerCount,
           coordination, ...(planApproval ? { planApproval } : {}), moduleConfiguration, tokenBudget: buildTokenBudget(maxTotalTokens, [],
@@ -428,6 +434,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
       const prepareProject = (worktree: string) => {
         const project = path.join(worktree, state.problem.projectRelative);
         fs.mkdirSync(path.join(project, '.lake'), { recursive: true });
+        writeWorkerProject(worktree, state.problem.projectRelative);
         writeMathJsonDurable(path.join(project, '.lake/source-constraints.json'), solverSourceConstraints(state.problem), 0o400);
         if (sourcePackages) bindLeanPackages(project, sourcePackages);
         return project;
