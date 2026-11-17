@@ -126,8 +126,8 @@ const clientTool = z.union([
     format: z.union([z.object({ type: z.literal('text') }).strict(),
       z.object({ type: z.literal('grammar'), syntax: z.literal('lark'), definition: z.string() }).strict()]).optional() }).strict(),
 ]);
-// GPT's native code-mode dialect declares local tools inline. Namespaces contain
-// only the same client-executed tools; they grant no hosted or remote capability.
+// Native Codex declares local tool namespaces either at the request root or inline.
+// They contain only the same client-executed tools and grant no remote capability.
 const inlineTool = z.object({ type: z.literal('namespace'), name: toolName, description: z.string().optional(),
   tools: z.array(clientTool) }).strict();
 const inlineInputItem = z.union([
@@ -146,6 +146,11 @@ const inlineInputItem = z.union([
     call_id: z.string().min(1), output: inlineContent }).strict(),
   z.object({ type: z.literal('custom_tool_call_output'), id: inlineId, status: itemStatus,
     call_id: z.string().min(1), output: inlineContent }).strict(),
+  z.object({ type: z.literal('agent_message'), id: inlineId,
+    author: z.string().min(1), recipient: z.string().min(1), content: z.array(z.union([
+      z.object({ type: z.literal('input_text'), text: z.string() }).strict(),
+      z.object({ type: z.literal('encrypted_content'), encrypted_content: z.string() }).strict(),
+    ])) }).strict(),
   z.object({ type: z.literal('additional_tools'), id: inlineId,
     role: z.literal('developer'), tools: z.array(inlineTool) }).strict(),
 ]);
@@ -156,7 +161,8 @@ const statelessResponsesRequest = z.object({
   reasoning: z.object({ effort: z.enum(['low', 'high', 'max']),
     summary: z.enum(['auto', 'concise', 'detailed', 'none']).nullable().optional(),
     context: z.literal('all_turns').optional() }).strict(),
-  tools: z.array(clientTool).optional(), tool_choice: z.union([z.enum(['auto', 'none', 'required']), selectedTool]).optional(),
+  tools: z.array(z.union([clientTool, inlineTool])).optional(),
+  tool_choice: z.union([z.enum(['auto', 'none', 'required']), selectedTool]).optional(),
   parallel_tool_calls: z.boolean().optional(),
   text: z.object({ verbosity: z.enum(['low', 'medium', 'high']).optional(),
     format: z.union([z.object({ type: z.literal('text') }).strict(),

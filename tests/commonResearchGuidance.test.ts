@@ -46,7 +46,7 @@ describe('common mathematical guidance across research strategies', () => {
     const shared = sections(fs.readFileSync(helpFile, 'utf8'));
     expect(shared).toEqual(standalone);
     expect(shared).not.toHaveProperty('delivery');
-    expect(shared.lean).toContain("bun '" + tools.replaceAll("'", "'\\''") + "' declarations get");
+    expect(shared.lean).toContain("bun '" + tools.replaceAll("'", "'\\''") + "' check-lean");
     expect(JSON.stringify(shared)).not.toContain(path.join(f.access.root, 'bin/math.ts'));
     for (const name of ['lean-search', 'knowledge', 'library'])
       expect(Object.hasOwn(shared, name)).toBe(resources);

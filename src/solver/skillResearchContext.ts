@@ -86,7 +86,8 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
     'Research the fixed original mathematics problem in this isolated worktree using the pinned theoremos-research skill.\n' +
     `Lean project: ${project}. Editable Lean paths relative to it: ${JSON.stringify(editable)}. ` +
     `Public research notes: ${path.join(access.worktree, 'RESEARCH.md')}. Temporary experiments and requests belong in .scratch/tmp or the documented .scratch paths.\n` +
-    'Keep original declaration kinds, names, types, hypotheses, imports, options and scopes fixed; fill only allowed proof/definition bodies. ' +
+    'For original declarations, keep kinds, names, types, hypotheses, imports, options and scopes fixed; edit only permitted proof/definition bodies. ' +
+    'You may add independent helper declarations inside the editable owned Lean files; the original-declaration restriction does not prohibit these additions. ' +
     'Preserve trusted files and frozen definitions. New imports must be permitted by the frozen source policy. ' +
     'Accepted proofs cannot use sorry, admit, native_decide, unsafe or new axioms. Independent helpers may be submitted while other goals remain unfinished. ' +
     'Do not read external candidate solutions. Do not edit the pinned skill, host help, configuration or receipts. ' +
@@ -119,7 +120,7 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
       taskDigest: state.taskDigest, problemReceiptDigest: problem.receiptDigest });
     mandatory.push(continuationContextSection(snapshot, command, problem.projectRelative));
   }
-  mandatory.push({ id: 'saved-work', kind: 'sources', text: 'Read the current owned source files and worktree-root RESEARCH.md. ' +
+  mandatory.push({ id: 'saved-work', kind: 'sources', text: 'Read the current owned source files, relevant definitions and worktree-root RESEARCH.md before extending a remembered or inherited argument. ' +
     `The current owned declaration index is ${path.join(access.worktree, DECLARATION_INDEX_FILE)}. ` +
     'Current files and complete references remain available even when their full text is not included in this message. Continue the original research from saved work.' });
   const compile = (options: ResearchDispatchOptions = {}) => compileContextSections({ instructions,

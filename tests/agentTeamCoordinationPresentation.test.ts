@@ -69,7 +69,7 @@ function fixture() {
   fixtures.push(f); return f;
 }
 
-describe('one coordination handoff per outstanding event or decision', () => {
+describe('coordination decisions remain pending across response opportunities', () => {
   it.each([false, true])('uses acknowledged native history to present an update, retaining handoff on failure (failed=%s)', async failed => {
     const f = fixture();
     f.team.archive.workers.push({ id: 'expert', role: 'researcher', worktree: path.join(f.directory, 'expert'),
@@ -118,7 +118,7 @@ describe('one coordination handoff per outstanding event or decision', () => {
     expect(f.events.filter(event => event.event === 'team_coordination_presented')).toEqual([]);
   });
 
-  it('keeps an unassessed completed event visible through repeated settled responses without resetting Lead again', () => {
+  it('revisits an unassessed event after each response opportunity without losing Lead work', () => {
     const f = fixture();
     recordAgentTeamCoordination(f.state, { decision: 'delegate', reason: 'A question was assigned.', nextStep: 'Assess the returned result.' });
     f.incoming();
@@ -130,11 +130,11 @@ describe('one coordination handoff per outstanding event or decision', () => {
     expect(f.team.archive.coordinationPresentation).toMatchObject({ reason: 'team-update', decisionRevision: 1, eventSequence: 1 });
     for (let turn = 0; turn < 16; turn++) {
       f.team.beginLeadTurn(); f.settle(gate, `continued-research-${turn}`);
-      expect(gate.checkpoint!()).toBe(false);
+      expect(gate.checkpoint!()).toBe(true);
       expect(agentTeamOverview(f.state).coordination).toMatchObject({ required: true, checkpointRequired: false, reason: 'team-update' });
       expect(agentTeamCoordinationReview(f.state).instruction).toContain('Make the collaboration decision now.');
     }
-    expect(f.events.filter(event => event.event === 'team_coordination_checkpoint')).toHaveLength(1);
+    expect(f.events.filter(event => event.event === 'team_coordination_checkpoint')).toHaveLength(17);
     expect(f.team.archive.coordination).toEqual(decision); expect(f.team.archive.events).toEqual(inbox);
     expect(f.state.threadId).toBe('saved-lead-thread'); expect(f.state.turns).toBe(0);
     expect(git(f.state.worktree, ['rev-parse', 'HEAD'])).toBe(head); expect(fs.readFileSync(f.sourceFile, 'utf8')).toBe(source);
@@ -143,7 +143,7 @@ describe('one coordination handoff per outstanding event or decision', () => {
     expect(f.open).not.toHaveBeenCalled();
   });
 
-  it('reopens for a new member event while publications and polling do not assess the outstanding result', async () => {
+  it('reopens for a new member event while self-events and polling do not assess the outstanding result', async () => {
     const f = fixture();
     recordAgentTeamCoordination(f.state, { decision: 'continue', reason: 'Continue the current investigation.', nextStep: 'Check its interface.' });
     f.incoming();
@@ -154,7 +154,7 @@ describe('one coordination handoff per outstanding event or decision', () => {
     await f.team.tools().call('theoremos_team', { operation: 'poll', after: 0 }, {
       callId: 'poll-unassessed', turnId: 'lead-turn', threadId: f.state.threadId!, signal: new AbortController().signal,
     });
-    f.settle(gate, 'same-result'); expect(gate.checkpoint!()).toBe(false);
+    f.settle(gate, 'same-result'); expect(gate.checkpoint!()).toBe(true);
     expect(f.team.archive.coordination!.eventSequence).toBe(0);
     f.incoming(f.state, 'message');
     const paid = gate({ requestId: 'new-finding', threadId: f.state.threadId });
@@ -163,26 +163,26 @@ describe('one coordination handoff per outstanding event or decision', () => {
     paid.settle({ complete: true, outcome: 'completed', usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 } });
     expect(gate.checkpoint!()).toBe(true);
     expect(f.team.archive.coordinationPresentation).toMatchObject({ reason: 'team-update', decisionRevision: 1, eventSequence: 3 });
-    expect(f.events.filter(event => event.event === 'team_coordination_checkpoint')).toHaveLength(2);
+    expect(f.events.filter(event => event.event === 'team_coordination_checkpoint')).toHaveLength(3);
     expect(agentTeamCoordinationReview(f.state).required).toBe(true);
     recordAgentTeamCoordination(f.state, { decision: 'continue', reason: 'The findings are assessed.', nextStep: 'Continue the chosen research.' });
     expect(agentTeamCoordinationReview(f.state).required).toBe(false); expect(gate.checkpoint!()).toBe(false);
     expect(f.team.archive.events).toHaveLength(3);
   });
 
-  it('presents each deferred research step once and lets a new explicit decision reopen reconsideration', () => {
+  it('keeps deferred reconsideration pending until Lead records a new decision', () => {
     const f = fixture(), gate = f.requestGate();
     const defer = () => recordAgentTeamCoordination(f.state, {
       decision: 'defer', reason: 'One definition needs clarification.', nextStep: 'Inspect that definition.' });
     defer();
     f.team.beginLeadTurn(); f.settle(gate, 'first-bounded-step'); expect(gate.checkpoint!()).toBe(true);
-    f.team.beginLeadTurn(); f.settle(gate, 'continued-first-step'); expect(gate.checkpoint!()).toBe(false);
+    f.team.beginLeadTurn(); f.settle(gate, 'continued-first-step'); expect(gate.checkpoint!()).toBe(true);
     expect(agentTeamCoordinationReview(f.state)).toMatchObject({ required: true, reason: 'deferred-step-complete', checkpointRequired: false });
     defer();
     expect(agentTeamCoordinationReview(f.state).required).toBe(false);
     f.team.beginLeadTurn(); f.settle(gate, 'new-bounded-step'); expect(gate.checkpoint!()).toBe(true);
     expect(f.team.archive.coordinationPresentation).toMatchObject({ reason: 'deferred-step-complete', decisionRevision: 2, eventSequence: 0 });
-    expect(f.events.filter(event => event.event === 'team_coordination_checkpoint')).toHaveLength(2);
+    expect(f.events.filter(event => event.event === 'team_coordination_checkpoint')).toHaveLength(3);
     expect(f.team.archive.workers).toHaveLength(0);
   });
 
@@ -197,11 +197,73 @@ describe('one coordination handoff per outstanding event or decision', () => {
     restored.beginLeadTurn();
     expect(recoveredGate.checkpoint!()).toBe(false);
     f.settle(recoveredGate, 'recovered-continuation', saved);
-    expect(recoveredGate.checkpoint!()).toBe(false);
+    expect(recoveredGate.checkpoint!()).toBe(true);
     expect(agentTeamOverview(saved).coordination).toMatchObject({ required: true, reason: 'opening', checkpointRequired: false });
     f.incoming(saved, 'message');
     expect(recoveredGate.checkpoint!()).toBe(true);
     expect(restored.archive.coordination).toBeUndefined(); expect(saved.threadId).toBe('saved-lead-thread');
     expect(f.open).not.toHaveBeenCalled();
+  });
+
+  it('lets Lead read accepted native messages once, then requires an explicit assessment', () => {
+    const f = fixture(), gate = f.requestGate();
+    recordAgentTeamCoordination(f.state, { decision: 'continue', reason: 'Current route.', nextStep: 'Check a local step.' });
+    f.team.beginLeadTurn(); f.settle(gate, 'local-step');
+    f.team.archive.nativeControl = { sessionId: 'native', rootThreadId: f.state.threadId!, sequence: 1,
+      mailbox: [{ id: 'finding', threadId: f.state.threadId!, author: '/root/expert', recipient: '/root',
+        status: 'accepted', sequence: 1, message: { kind: 'plaintext', text: 'A useful intermediate result.' } }] };
+    expect(gate.checkpoint!()).toBe(false);
+    expect(f.team.archive.coordinationPresentation).toMatchObject({ nativeMessageSequence: 1, startedRequests: 1 });
+    f.settle(gate, 'read-native-finding');
+    expect(gate.checkpoint!()).toBe(true);
+    f.team.beginLeadTurn(); f.settle(gate, 'unassessed-native-finding');
+    expect(gate.checkpoint!()).toBe(true);
+    recordAgentTeamCoordination(f.state, { decision: 'continue', reason: 'Finding assessed.', nextStep: 'Use the result.' });
+    expect(gate.checkpoint!()).toBe(false);
+    expect(f.team.archive.nativeControl.mailbox).toHaveLength(1);
+    expect(f.team.archive.events).toEqual([]);
+    expect(f.events.filter(event => event.event === 'team_coordination_presented')).toHaveLength(1);
+  });
+
+  it('keeps new and amended assignments pending until their shared route is published', async () => {
+    const f = fixture(), gate = f.requestGate();
+    f.team.archive.workers.push({ id: 'expert', role: 'researcher', worktree: path.join(f.directory, 'expert'),
+      phase: 'running', status: 'running', turns: 0, seedCommit: f.state.problem.baseCommit, cursor: 0,
+      tasks: [{ id: 'helper', message: 'Resolve a useful gap.', status: 'running', objectiveRevision: 1 }] });
+    recordAgentTeamCoordination(f.state, { decision: 'delegate', reason: 'Gap assigned.', nextStep: 'Publish ownership.' });
+    f.team.beginLeadTurn(); f.settle(gate, 'after-dispatch');
+    expect(gate.checkpoint!()).toBe(true);
+    expect(agentTeamCoordinationReview(f.state).reason).toBe('assignments-unpublished');
+    const publish = (callId: string) => f.team.tools().call('theoremos_team', {
+      operation: 'publish', summary: 'Expert supplies the helper to Lead; Lead integrates its result.' },
+    { callId, turnId: 'lead-turn', threadId: f.state.threadId!, signal: new AbortController().signal });
+    await publish('publish-dispatch');
+    expect(gate.checkpoint!()).toBe(false);
+    f.team.archive.workers[0]!.tasks[0]!.objectiveRevision = 2;
+    f.team.beginLeadTurn(); f.settle(gate, 'after-amendment');
+    expect(gate.checkpoint!()).toBe(true);
+    await publish('publish-amendment');
+    expect(gate.checkpoint!()).toBe(false);
+    expect(f.team.archive.researchState).toMatchObject({ revision: 2, assignmentRevision: 2 });
+    expect(f.open).not.toHaveBeenCalled();
+  });
+
+  it('retains an unassessed native update when recovery makes delivery uncertain', () => {
+    const f = fixture();
+    recordAgentTeamCoordination(f.state, { decision: 'continue', reason: 'Current work.', nextStep: 'Read incoming findings.' });
+    f.team.archive.transport = 'native-agent-control';
+    f.team.archive.nativeControl = { sessionId: 'native', rootThreadId: f.state.threadId!, sequence: 1,
+      mailbox: [{ id: 'finding', threadId: f.state.threadId!, author: '/root/expert', recipient: '/root',
+        status: 'accepted', sequence: 1, message: { kind: 'plaintext', text: 'A saved finding.' } }] };
+    const restored = JSON.parse(JSON.stringify(f.state)) as SolverRunState;
+    const recovered = f.makeTeam(restored), gate = f.requestGate(recovered, restored);
+    expect(restored.agentTeam!.nativeControl!.mailbox[0]!.status).toBe('uncertain');
+    expect(agentTeamCoordinationReview(restored)).toMatchObject({ reason: 'team-update', nativeDeliveryUncertain: true });
+    recovered.beginLeadTurn(); f.settle(gate, 'inspect-recovered-history', restored);
+    expect(gate.checkpoint!()).toBe(true);
+    recordAgentTeamCoordination(restored, { decision: 'continue', reason: 'Saved finding assessed.', nextStep: 'Use it.' });
+    expect(gate.checkpoint!()).toBe(false);
+    expect(restored.agentTeam!.nativeControl!.mailbox).toHaveLength(1);
+    expect(f.events.some(event => event.event === 'team_coordination_presented')).toBe(false);
   });
 });

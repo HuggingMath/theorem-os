@@ -6,7 +6,7 @@ import { runLeanDiagnostics } from '../../src/math/leanDiagnostics';
 import { checkLeanType } from '../../src/math/leanTypeDiagnostics';
 import { readMathJson } from '../../src/math/mathRuntimeIo';
 import { assertSolverProjectSources, SolverSourceError, type SolverSourceConstraints } from '../../src/solver/problem';
-import { currentWorkerProject } from '../../src/solver/workerProject';
+import { currentWorkerProject, WorkerProjectArgumentError } from '../../src/solver/workerProject';
 import { checkLeanEnvironmentHealth, leanEnvironmentFailure } from '../../src/math/leanEnvironmentHealth';
 import { assertMathConstructionSources } from '../../src/math/mathConstructionSources';
 
@@ -17,6 +17,7 @@ const publish = (result: unknown, exitCode: number) => {
   console.log(JSON.stringify(result));
   process.exitCode = exitCode;
 };
+const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -27,6 +28,8 @@ async function main() {
     'timeout-seconds': { type: 'string', default: '0' }, health: { type: 'boolean' }, help: { type: 'boolean' },
   } });
   if (values.help) console.log('Usage: theorem-os check-lean (--workspace DIR | --worktree ROOT) --file FILE [--file FILE --timeout-seconds N]\n'
+    + '--worktree is the worker root containing .scratch/worker-project.json; --workspace is the Lean project directory.\n'
+    + '--file is relative to the Lean project, e.g. Submission.lean, without a generated/problem/ prefix.\n'
     + 'Optional: --type TYPE --context DECLARATION elaborates one closed type in a proof-erased snapshot of the single --file context.\n'
     + 'Add --expression TERM to check one selected closed application against that type. Local theorem bodies are erased; this is advisory sufficiency, not proof acceptance.\n'
     + 'Use --health instead of --file to verify the current namespace, sealed lease and pinned compiler without compiling sources.\n'
@@ -71,6 +74,12 @@ async function main() {
   }
 }
 void main().catch(async error => {
+  if (error instanceof WorkerProjectArgumentError) return publish({ status: 'usage-error', classification: 'usage',
+    exitCode: 1, timedOut: false, leanStarted: false,
+    error: { code: error.code, message: error.message,
+      recovery: `Use check-lean --worktree ${quote(error.worktreeRoot)} --file 'OWNED_FILE.lean', or ` +
+        `check-lean --workspace ${quote(error.projectRoot)} --file 'OWNED_FILE.lean'. ` +
+        'File paths are relative to the Lean project, without its prefix.' } }, 1);
   if (stage === 'diagnostics' && project) {
     const health = await checkLeanEnvironmentHealth({ projectRoot: project });
     if (health.status !== 'ready') return publish({ ...health, leanStarted: compilationAttempted ? null : false }, 1);
@@ -82,5 +91,8 @@ void main().catch(async error => {
     classification: stage === 'usage' ? 'usage' : error instanceof SolverSourceError || stage === 'source' ? 'source' : 'tooling',
     exitCode: 1, timedOut: false, leanStarted: compilationAttempted ? null : false,
     error: { code: error instanceof SolverSourceError ? error.message : 'math_diagnostics_failed', message,
+      ...(stage === 'source' && project ? { recovery: `Inspect the requested saved sources and their imports in ${quote(project)}. ` +
+        '--file paths are relative to this Lean project; do not repeat the project directory prefix. ' +
+        `For example: check-lean --workspace ${quote(project)} --file 'Submission.lean'.` } : {}),
       ...(error instanceof SolverSourceError ? { file: error.proofPath, recovery: error.recovery } : {}) } }, 1);
 });

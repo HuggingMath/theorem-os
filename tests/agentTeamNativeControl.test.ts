@@ -91,6 +91,11 @@ describe('native AgentControl mathematical-team host routing', () => {
     await f.call('send', { caller: CHILD, target: { kind: 'reference', reference: '/root' },
       input: { kind: 'message', mode: 'queueOnly', message: { kind: 'plaintext', text: 'An advisory finding.' } } }, 'analyst', child);
     expect(f.archive.nativeControl!.mailbox[0]).toMatchObject({ author: '/root/analyst', recipient: '/root', status: 'accepted' });
+    expect(f.archive.nativeControl!.mailbox[0].hostEventSequence).toBeUndefined();
+    await f.control.advisory('analyst', 'lead', 'Host progress event.', 17);
+    expect(f.archive.nativeControl!.mailbox[1]).toMatchObject({ hostEventSequence: 17, status: 'accepted' });
+    const notification = vi.mocked(f.root.update).mock.calls.at(-1)![0].mailbox![0];
+    expect(notification).not.toHaveProperty('hostEventSequence');
     await expect(f.call('spawn', { caller: CHILD }, 'analyst', child)).rejects.toThrow('lead_operation_required');
     await expect(f.call('interrupt', { caller: CHILD, target: { kind: 'id', threadId: ROOT } }, 'analyst', child))
       .rejects.toThrow('lead_operation_required');
