@@ -5,7 +5,7 @@ import { readMathAgentSkill } from '../src/runtime/agentSkills';
 import { agentTeamOperationAllowed, agentTeamRequestSchema, type AgentTeamTransport } from '../src/solver/agentTeamTool';
 import { agentTeamTaskHistory } from '../src/solver/agentTeamViews';
 import { agentTeamContextSection, buildSkillResearchContext } from '../src/solver/skillResearchContext';
-import { finalizeResearchDispatch } from '../src/solver/modules/context';
+import { buildResearchContext, finalizeResearchDispatch } from '../src/solver/modules/context';
 import { resolveAgentTeamProfiles } from '../src/solver/agentTeamProfiles';
 import { researchSkillIdentity } from '../src/solver/researchSkill';
 import { localExample, solverState } from './helpers/solver';
@@ -29,6 +29,27 @@ function fixture(transport: AgentTeamTransport) {
 }
 
 describe.each(['host-tools', 'native-agent-control'] as const)('%s complete context contract', transport => {
+  it.each(['direct', 'full'] as const)('injects the pinned Lead charter once through the %s workflow, including continuation', workflow => {
+    const f = fixture(transport);
+    if (workflow === 'full') f.state.researchSkillWorkflow = 'full';
+    const profile = resolveAgentTeamProfiles(f.access.researchSkill, 'Profiles: lead');
+    expect(profile.evidence).toMatchObject({ selected: ['lead'], loaded: ['lead'], unresolved: [] });
+    // Root dispatch normally omits teamRole; explicit coordinator dispatch has the same charter.
+    for (const teamRole of [undefined, { id: 'lead', role: 'lead' } as const]) {
+      const access = { ...f.access, ...(teamRole ? { teamRole } : {}) };
+      const context = workflow === 'full' ? buildResearchContext(f.problem, f.state, access)
+        : buildSkillResearchContext(f.problem, f.state, access);
+      for (const continuation of [false, true]) {
+        const dispatched = finalizeResearchDispatch(context, { continuation,
+          checkpointInstruction: 'Assess the current team update and continue saved work.' });
+        expect(dispatched.instructions).toContain(profile.section.text);
+        expect((dispatched.instructions + dispatched.message).split(profile.section.text)).toHaveLength(2);
+        expect(dispatched.instructions).toContain(JSON.stringify(profile.evidence));
+        expect(dispatched.manifest?.usedBytes).toBe(Buffer.byteLength(dispatched.instructions) + Buffer.byteLength(dispatched.message));
+      }
+    }
+  });
+
   it('gives Lead the actual member delivery interface while keeping its own standalone request separate', () => {
     const f = fixture(transport);
     const lead = buildSkillResearchContext(f.problem, f.state, { ...f.access, teamRole: { id: 'lead', role: 'lead' } });
@@ -37,6 +58,8 @@ describe.each(['host-tools', 'native-agent-control'] as const)('%s complete cont
       teamRole: { id: 'member', role: 'worker' },
       teamAssignment: { taskId: 'current', message: f.objective, sourceCommit: f.problem.baseCommit } });
     const memberHelp = fs.readFileSync(path.join(f.workspace, '.scratch/theoremos-help.md'), 'utf8');
+    const leadProfile = resolveAgentTeamProfiles(f.access.researchSkill, 'Profiles: lead').section.text;
+    const memberProfile = resolveAgentTeamProfiles(f.access.researchSkill, f.objective).section.text;
     const request = agentTeamRequestSchema.parse({ operation: 'submit', summary: 'One independent result.',
       declarations: [{ file: f.problem.ownedFiles[0], name: 'Fixture.helper', type: 'True' }] });
     expect(agentTeamOperationAllowed('member', false, transport, request.operation)).toBe(true);
@@ -48,6 +71,10 @@ describe.each(['host-tools', 'native-agent-control'] as const)('%s complete cont
     for (const context of [lead, member]) {
       for (const continuation of [false, true]) {
         const full = finalizeResearchDispatch(context, { continuation });
+        if (context === member) {
+          expect(full.instructions + full.message).not.toContain(leadProfile);
+          expect(full.message).toContain(memberProfile);
+        }
         const editable = JSON.parse(/Editable Lean paths relative to it: (\[[^\n]*?\])\./u.exec(full.instructions)![1]!);
         expect(editable).toEqual(f.problem.ownedFiles.filter(file => !Object.hasOwn(f.problem.frozenFiles ?? {}, file)));
         expect(full.instructions).toContain('separate worktree');
