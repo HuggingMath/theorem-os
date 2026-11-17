@@ -10,6 +10,7 @@ import { bootstrapLeanTask } from '../src/math/leanTask';
 import { mathDigest, writeMathJsonDurable } from '../src/math/mathRuntimeIo';
 import { readMathAgentSkill } from '../src/runtime/agentSkills';
 import { createCodexMathSession } from '../src/runtime/codexSession';
+import { admitResponsesRequest } from '../src/runtime/formalizationRelay';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/agentSession';
 import { confirmHarnessProcessStopped, type HarnessProcessIdentity } from '../src/runtime/harnessProcess';
 import { prepareSub2apiProfile } from '../src/runtime/sub2api';
@@ -56,6 +57,9 @@ const server = createServer(async (request, response) => {
     assert.equal(request.url, '/v1/responses');
     const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const body = JSON.parse(Buffer.concat(chunks).toString());
+    // Exercise the production relay's contract against actual native requests,
+    // including child message history. A permissive fixture server hid this boundary.
+    admitResponsesRequest(body, 'deepseek-flash', 'high');
     requests.push(body);
     const text = body.input.filter((item: any) => ['message', 'agent_message'].includes(item.type))
       .flatMap((item: any) => item.content ?? []).map((part: any) => part.text ?? part.encrypted_content ?? '').join('\n');
@@ -290,6 +294,13 @@ try {
   observations.nativePaths = state.agentTeam!.workers.map(worker => worker.native!.agentPath);
   observations.taskCounts = state.agentTeam!.workers.map(worker => ({ id: worker.id, count: worker.tasks.length }));
   observations.loopbackRequests = requests.length;
+  observations.relayAdmission = {
+    acceptedRequests: requests.length,
+    namespaceRequests: requests.filter(body => body.tools?.some((tool: any) => tool.type === 'namespace')).length,
+    agentMessageRequests: requests.filter(body => body.input?.some((item: any) => item.type === 'agent_message')).length,
+  };
+  assert.ok(observations.relayAdmission.namespaceRequests > 0, 'native namespaces must pass production relay admission');
+  assert.ok(observations.relayAdmission.agentMessageRequests > 0, 'native child messages must pass production relay admission');
   observations.status = 'passed';
 } catch (error) {
   observations.status = 'failed'; observations.error = error instanceof Error ? { message: error.message, stack: error.stack } : String(error);

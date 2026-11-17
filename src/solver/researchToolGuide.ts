@@ -14,6 +14,7 @@ export function buildResearchToolGuide(problem: Pick<SolverProblem, 'receiptDige
   const help = new ResearchToolHelpBuilder();
   help.section('lean', `${command} check-lean --worktree ${quote(access.worktree)} --file 'OWNED_FILE.lean' --timeout-seconds 0\n` +
     'Repeat --file for all relevant saved source files. Paths are relative to the Lean project, without its prefix. ' +
+    'For a concrete claim or library application, save a focused probe and check it before expanding the surrounding proof. ' +
     'Read classification, firstBlocking and diagnosticArtifacts; stdout is JSON and stderr is progress. Poll unfinished processes. ' +
     'An infrastructure-error identifies an environment fault; leanStarted:false confirms compilation did not start. Preserve proof work and report error.code, error.fingerprint and error.recovery to Lead/host. ' +
     'Retry after an environment repair or changed health result; repeating the same failed command does not repair its environment. ' +
@@ -26,7 +27,8 @@ export function buildResearchToolGuide(problem: Pick<SolverProblem, 'receiptDige
     'The JSONL declaration index records names, project-relative files, lines and indexed types. ' +
     'Read matching source with its surrounding scopes, imports and complete type; the index is a lexical aid. ' +
     'A ripgrep exit code of 1 means no match. Choose literal terms or an explicit pattern as appropriate; ' +
-    'do not infer that a declaration is absent from one search miss.', '');
+    'do not infer that a declaration is absent from one search miss. ' +
+    (teamMode ? 'Share a useful probe result or blocker through the exposed native message tool or theoremos_team progress, with its saved source path and exact diagnostic; private tool output is not a team report.' : ''), '');
   if (!teamMode) help.section('cooperation', `${command} research-observe --worktree ${quote(access.worktree)} --finding '.scratch/finding.json' ` +
     '[--probe LEAN_FILE] [--snapshot-sources]\n' +
     'For cooperative task assignments only. The finding file contains the finding object, not the outer delivery event. ' +

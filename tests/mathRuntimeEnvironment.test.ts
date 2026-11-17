@@ -72,6 +72,69 @@ describe('resolved mathematics environment', () => {
     if (process.platform === 'linux') expect(env.PATH?.split(path.delimiter)).toContain('/usr/sbin');
   });
 
+  it.skipIf(process.platform !== 'linux').each(['.env', '.json'])(
+    'runs system Python instead of a user-local wrapper from a %s environment', extension => {
+    const temporaryRoot = process.env.TMPDIR || '/data/lzh/default-storage/tmp';
+    fs.mkdirSync(temporaryRoot, { recursive: true });
+    const root = fs.mkdtempSync(path.join(temporaryRoot, 'math-env-python-')); roots.push(root);
+    const userBin = path.join(root, '.local/bin'), marker = path.join(root, 'wrapper-started');
+    fs.mkdirSync(userBin, { recursive: true });
+    fs.writeFileSync(path.join(userBin, 'python3'), `#!/bin/sh\necho wrapper > '${marker}'\nexit 76\n`, { mode: 0o700 });
+    fs.writeFileSync(path.join(userBin, 'user-tool'), '#!/bin/sh\necho user-tool-ok\n', { mode: 0o700 });
+    const file = path.join(root, `math${extension}`), suppliedPath = [userBin, '/usr/bin', '/bin'].join(path.delimiter);
+    fs.writeFileSync(file, extension === '.json'
+      ? JSON.stringify(projectMathematicsRuntimeEnvironment({ DEEPSCIENTIST_MATH_ENV_FILE: file, PATH: suppliedPath }))
+      : `PATH=${suppliedPath}\n`);
+    const env = resolveMathematicsRuntimeEnvironment({ HOME: root, DEEPSCIENTIST_MATH_ENV_FILE: file });
+    const result = spawnSync('python3', ['-c', 'import sys; print(sys.executable)'], { env, encoding: 'utf8', timeout: 5000 });
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe('/usr/bin/python3');
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(spawnSync('user-tool', [], { env, encoding: 'utf8', timeout: 5000 }).stdout.trim()).toBe('user-tool-ok');
+    expect(resolveMathematicsRuntimeEnvironment({ PATH: suppliedPath, HOME: root,
+      ELAN_HOME: '/pinned/elan' }, path.join(root, 'absent.env')).PATH?.split(path.delimiter)[0]).toBe('/pinned/elan/bin');
+  });
+
+  it.skipIf(process.platform !== 'linux')('keeps explicit virtualenv Python ahead of system and user-local commands', () => {
+    const temporaryRoot = process.env.TMPDIR || '/data/lzh/default-storage/tmp';
+    fs.mkdirSync(temporaryRoot, { recursive: true });
+    const root = fs.mkdtempSync(path.join(temporaryRoot, 'math-env-venv-')); roots.push(root);
+    const venvBin = path.join(root, 'venv/bin'), userBin = path.join(root, '.local/bin');
+    fs.mkdirSync(venvBin, { recursive: true }); fs.mkdirSync(userBin, { recursive: true });
+    fs.writeFileSync(path.join(venvBin, 'python3'), '#!/bin/sh\necho configured-python\n', { mode: 0o700 });
+    const env = resolveMathematicsRuntimeEnvironment({ HOME: root,
+      PATH: [venvBin, userBin, '/usr/bin', '/bin'].join(path.delimiter) }, path.join(root, 'absent.env'));
+    const result = spawnSync('python3', [], { env, encoding: 'utf8', timeout: 5000 });
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe('configured-python');
+    expect(env.PATH?.split(path.delimiter).slice(0, 3)).toEqual([venvBin, '/usr/bin', '/bin']);
+    const restricted = resolveMathematicsRuntimeEnvironment({ HOME: root, PATH: userBin }, path.join(root, 'absent.env'));
+    expect(restricted.PATH?.split(path.delimiter)).toEqual([userBin, '/usr/sbin']);
+  });
+
+  it.skipIf(process.platform !== 'linux')('does not move a later user bin ahead of an explicit virtualenv', () => {
+    const temporaryRoot = process.env.TMPDIR || '/data/lzh/default-storage/tmp';
+    fs.mkdirSync(temporaryRoot, { recursive: true });
+    const root = fs.mkdtempSync(path.join(temporaryRoot, 'math-env-later-venv-')); roots.push(root);
+    const venvBin = path.join(root, 'venv/bin'), userBin = path.join(root, '.local/bin');
+    fs.mkdirSync(venvBin, { recursive: true }); fs.mkdirSync(userBin, { recursive: true });
+    fs.writeFileSync(path.join(venvBin, 'project-command'), '#!/bin/sh\necho configured-tool\n', { mode: 0o700 });
+    fs.writeFileSync(path.join(userBin, 'project-command'), '#!/bin/sh\necho user-tool\n', { mode: 0o700 });
+    const entries = ['/usr/bin', venvBin, userBin];
+    const env = resolveMathematicsRuntimeEnvironment({ HOME: root, PATH: entries.join(path.delimiter) }, path.join(root, 'absent.env'));
+    expect(env.PATH?.split(path.delimiter)).toEqual([...entries, '/usr/sbin']);
+    const result = spawnSync('project-command', [], { env, encoding: 'utf8', timeout: 5000 });
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe('configured-tool');
+  });
+
+  it.skipIf(process.platform !== 'linux')('recognizes the host user bin when the projected environment omits HOME', () => {
+    const userBin = path.join(os.homedir(), '.local/bin');
+    const env = resolveMathematicsRuntimeEnvironment({ PATH: `${userBin}:/usr/bin:/bin` }, '');
+    expect(env.PATH?.split(path.delimiter)).toEqual(['/usr/bin', '/bin', userBin, '/usr/sbin']);
+    expect(env.HOME).toBeUndefined();
+  });
+
   it('freezes the runner proxy route for subprocesses and resume', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'math-env-')); roots.push(root);
     const file = path.join(root, 'math.json');

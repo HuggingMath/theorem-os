@@ -34,7 +34,7 @@ import { writeWorkerProject } from './workerProject';
 import { agentTeamRequestSchema as request, agentTeamToolDefinition as teamTool,
   agentTeamMemberOperations as memberOperations, agentTeamArgumentFeedback, agentTeamMessageRouteFeedback,
   agentTeamOperationAllowed } from './agentTeamTool';
-import { agentTeamCoordinationReview, recordAgentTeamCoordination, recordAgentTeamCoordinationPresentation } from './agentTeamCoordination';
+import { agentTeamAssignmentRevision, agentTeamCoordinationReview, recordAgentTeamCoordination, recordAgentTeamCoordinationPresentation } from './agentTeamCoordination';
 import type { ModelRequestGate } from '../runtime/modelRequest';
 import { LeanEnvironmentHealthCheckError } from '../runtime/leanHealthCheck';
 import { prepareAgentTeamWorkspace } from './agentTeamWorkspace';
@@ -162,12 +162,22 @@ export class AgentResearchTeam {
       }
       const review = agentTeamCoordinationReview(this.input.state);
       if (!review.required) return false;
+      const presented = this.archive.coordinationPresentation;
+      if (review.reason === 'team-update' && !review.nativeDeliveryUncertain &&
+          review.latestNativeMessageSequence > (presented?.nativeMessageSequence ?? 0) &&
+          review.latestIncomingSequence <= (presented?.eventSequence ?? this.archive.coordination?.eventSequence ?? 0)) {
+        // Native acceptance supplies the next context directly. Let Lead read
+        // it once; an unanswered decision is checked after that response.
+        const presentation = recordAgentTeamCoordinationPresentation(this.input.state)!;
+        this.changed();
+        this.input.emit('team_coordination_presented', { ...presentation, delivery: 'native-history' });
+        return this.leadCoordinationCheckpoint;
+      }
       if (!review.checkpointRequired) return this.leadCoordinationCheckpoint;
       const presentation = recordAgentTeamCoordinationPresentation(this.input.state)!;
       this.leadCoordinationCheckpoint = true;
       this.changed();
-      this.input.emit('team_coordination_checkpoint', { reason: presentation.reason,
-        decisionRevision: presentation.decisionRevision, eventSequence: presentation.eventSequence });
+      this.input.emit('team_coordination_checkpoint', { ...presentation });
       return true;
     };
     return gate;
@@ -200,7 +210,7 @@ export class AgentResearchTeam {
     if (from !== to && kind !== 'amended') {
       if (this.nativeControl) {
         if (kind !== 'completed' && kind !== 'interrupted')
-          void this.nativeControl.advisory(from, to, 'Mathematical host update (advisory):\n' + canonicalMathJson(item)).catch(() => {});
+          void this.nativeControl.advisory(from, to, 'Mathematical host update (advisory):\n' + canonicalMathJson(item), item.sequence).catch(() => {});
       } else void this.notify(to, item);
     }
     return item;
@@ -565,7 +575,7 @@ export class AgentResearchTeam {
       }
       case 'publish': {
         const researchState = { revision: (this.archive.researchState?.revision ?? 0) + 1,
-          summary: operation.summary, publishedAt: Date.now() };
+          summary: operation.summary, publishedAt: Date.now(), assignmentRevision: agentTeamAssignmentRevision(this.archive) };
         this.archive.researchState = researchState;
         for (const recipient of ['lead', ...this.archive.workers.filter(worker => worker.status !== 'stopped').map(worker => worker.id)]) {
           this.event('lead', recipient, 'research-updated', operation.summary, { researchRevision: researchState.revision });
@@ -718,7 +728,7 @@ export class AgentResearchTeam {
   private enqueue(worker: AgentTeamWorker, message: string, budget?: AgentTeamTask['budget'], workKind?: AgentTeamTask['workKind']) {
     const task = this.newTask(message, budget, workKind);
     worker.tasks.push(task); this.changed(); this.launch(worker);
-    this.recordCoordination({ decision: 'delegate', reason: 'Lead dispatched a complementary assignment.', nextStep: message });
+    this.recordCoordination({ decision: 'delegate', reason: 'Lead dispatched an assignment.', nextStep: message });
     return { ok: true, agentId: worker.id, taskId: task.id, status: 'queued',
       worktree: worker.worktree, seedCommit: worker.seedCommit,
       selectedProfiles: agentTeamProfileSelection(message),

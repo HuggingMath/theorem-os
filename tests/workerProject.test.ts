@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { currentWorkerProject, writeWorkerProject } from '../src/solver/workerProject';
+import { currentWorkerProject, WorkerProjectArgumentError, writeWorkerProject } from '../src/solver/workerProject';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -28,6 +28,28 @@ describe('shared worker project location', () => {
     const { root, project } = fixture();
     fs.writeFileSync(path.join(root, 'COOPERATION.json'), JSON.stringify({ researchDelivery: { projectRelative: 'generated/problem' } }));
     expect(currentWorkerProject(root)).toBe(project);
+  });
+
+  it.each(['common', 'legacy'])('identifies a nested Lean project argument from valid %s metadata', kind => {
+    const { root, project } = fixture();
+    if (kind === 'common') writeWorkerProject(root, 'generated/problem');
+    else fs.writeFileSync(path.join(root, 'COOPERATION.json'), JSON.stringify({ researchDelivery: { projectRelative: 'generated/problem' } }));
+    let failure: unknown;
+    try { currentWorkerProject(project); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(WorkerProjectArgumentError);
+    expect(failure).toMatchObject({ code: 'math_worktree_root_required', actualRoot: project, worktreeRoot: root, projectRoot: project });
+  });
+
+  it('does not suggest an ancestor when its project metadata is broken or does not contain the input', () => {
+    const { root, project } = fixture();
+    writeWorkerProject(root, 'generated/problem');
+    expect(() => currentWorkerProject(path.join(root, 'generated'))).toThrow('ENOENT');
+    const metadata = path.join(root, '.scratch/worker-project.json');
+    fs.chmodSync(metadata, 0o600); fs.writeFileSync(metadata, '{');
+    let failure: unknown;
+    try { currentWorkerProject(project); } catch (error) { failure = error; }
+    expect(failure).not.toBeInstanceOf(WorkerProjectArgumentError);
+    expect(failure).toBeInstanceOf(Error);
   });
 
   it('refreshes the common location without reading stale cooperative context', () => {

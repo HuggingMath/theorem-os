@@ -30,7 +30,8 @@ export function buildCommonResearchGuide(problem: SolverProblem,
       : 'Choose mathematical methods using the pinned skill; the host retains the current workflow and delivery contracts. ') +
     `Lean project: ${path.join(access.worktree, problem.projectRelative)}. Owned Lean paths: ${JSON.stringify(editable)}. ` +
     `Save public research notes at ${path.join(access.worktree, 'RESEARCH.md')}; scratch experiments belong under .scratch/tmp. ` +
-    'Keep original declaration kinds, names, types, hypotheses, imports, options and scopes fixed; change only permitted proof/definition bodies. ' +
+    'For original declarations, keep kinds, names, types, hypotheses, imports, options and scopes fixed; edit only permitted proof/definition bodies. ' +
+    'Independent helper declarations may be added inside editable owned Lean files when the current assignment permits source edits; any narrower assignment restrictions still apply. ' +
     'Preserve trusted and frozen source. Accepted proofs cannot use sorry, admit, native_decide, unsafe or new axioms. ' +
     'Do not read external candidate solutions or alter host skill, help, configuration, receipts or run state. ' +
     'A model message, local diagnostic or historical receipt is never acceptance. The host confirms writer shutdown, freezes actual sources and independently checks the required declarations and all original targets. ' +

@@ -11,6 +11,7 @@ import { mathProofEnvironmentConfiguration, MATH_PROOF_ENVIRONMENT_METADATA } fr
 import { LeanEnvironmentHealthCheckError, runHarnessLeanHealthCheck } from '../src/runtime/leanHealthCheck';
 import { tacticBatteryCacheTestDefines } from './helpers/tacticBatteryCache';
 import { createCodexMathSession } from '../src/runtime/codexSession';
+import { writeWorkerProject } from '../src/solver/workerProject';
 
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
@@ -68,9 +69,9 @@ describe.skipIf(process.platform !== 'linux')('Lean environment diagnostics in t
   });
   const options = () => ({ workspace, profile, proofProjectRoot: workspace, environment: env, isolateProcess: true,
     leanHealthCheck: { executable: process.execPath, arguments: [cli, '--workspace', workspace, '--health', '--timeout-seconds', '0'] } });
-  function runCli(arguments_: string[]) {
+  function runCli(arguments_: string[], location = ['--workspace', workspace]) {
     return new Promise<{ exitCode: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-      const child = spawn(process.execPath, [cli, '--workspace', workspace, ...arguments_], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(process.execPath, [cli, ...location, ...arguments_], { env, stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '', stderr = '';
       child.stdout.on('data', bytes => { stdout += String(bytes); });
       child.stderr.on('data', bytes => { stderr += String(bytes); });
@@ -161,6 +162,63 @@ describe.skipIf(process.platform !== 'linux')('Lean environment diagnostics in t
     expect(result.exitCode).toBe(1);
     expect(JSON.parse(result.stdout)).toMatchObject({ status: 'source-error', classification: 'source', leanStarted: false });
     expect(requests).toBe(0);
+  });
+
+  it('reports a nested project passed as --worktree as an argument error with both correct alternatives', async () => {
+    const worktree = path.join(root, 'worker'), project = path.join(worktree, 'generated/problem');
+    fs.mkdirSync(project, { recursive: true });
+    writeWorkerProject(worktree, 'generated/problem');
+    const result = await runCli(['--file', 'Submission.lean'], ['--worktree', project]);
+    expect(result.exitCode).toBe(1);
+    const report = JSON.parse(result.stdout);
+    expect(report).toMatchObject({ status: 'usage-error', classification: 'usage', leanStarted: false,
+      error: { code: 'math_worktree_root_required' } });
+    expect(report.error.recovery).toContain(`--worktree ${quote(worktree)}`);
+    expect(report.error.recovery).toContain(`--workspace ${quote(project)}`);
+    expect(report.error.recovery).toContain('relative to the Lean project');
+    expect(requests).toBe(0);
+    expect(result.stderr).not.toContain('lean_check_started');
+  });
+
+  it('explains project-relative file paths when --file repeats the project prefix', async () => {
+    const worktree = path.join(root, 'worker'), project = path.join(worktree, 'generated/problem');
+    fs.mkdirSync(project, { recursive: true });
+    fs.writeFileSync(path.join(project, 'Submission.lean'), 'theorem unfinished : False := by sorry\n');
+    writeWorkerProject(worktree, 'generated/problem');
+    const result = await runCli(['--file', 'generated/problem/Submission.lean'], ['--worktree', worktree]);
+    expect(result.exitCode).toBe(1);
+    const report = JSON.parse(result.stdout);
+    expect(report).toMatchObject({ status: 'source-error', classification: 'source', leanStarted: false });
+    expect(report.error.recovery).toContain(`--workspace ${quote(project)} --file 'Submission.lean'`);
+    expect(report.error.recovery).toContain('do not repeat the project directory prefix');
+    expect(requests).toBe(0);
+    expect(result.stderr).not.toContain('lean_check_started');
+  });
+
+  it.each(['missing', 'invalid'])('keeps %s worker metadata at the correct root classified as infrastructure', async kind => {
+    if (kind === 'invalid') {
+      fs.mkdirSync(path.join(workspace, '.scratch'));
+      fs.writeFileSync(path.join(workspace, '.scratch/worker-project.json'), '{');
+    }
+    const result = await runCli(['--file', 'Submission.lean'], ['--worktree', workspace]);
+    expect(result.exitCode).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({ status: 'infrastructure-error', classification: 'infrastructure',
+      leanStarted: false, error: { code: 'math_lean_project_unavailable', retry: 'after-environment-repair' } });
+    expect(requests).toBe(0);
+  });
+
+  it('keeps a successful compilation with sorry advisory and preserves its warning', async () => {
+    fs.writeFileSync(path.join(workspace, 'Submission.lean'), 'theorem unfinished : False := by sorry\n');
+    const warning = JSON.stringify({ severity: 'warning', data: "declaration uses 'sorry'", fileName: 'Submission.lean', pos: { line: 1, column: 0 } });
+    fs.writeFileSync(path.join(tools, 'lean'), '#!/bin/sh\nif [ "$1" = "--version" ]; then\n' +
+      "printf '%s\\n' 'Lean (version 4.33.0, fixture)'\nexit 0\nfi\n" +
+      `printf '%s\\n' ${quote(warning)}\nexit 0\n`, { mode: 0o700 });
+    const result = await runCli(['--file', 'Submission.lean']);
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ classification: 'success', exitCode: 0,
+      messages: [{ severity: 'warning', message: "declaration uses 'sorry'" }] });
+    const latest = JSON.parse(fs.readFileSync(path.join(workspace, '.lake/lean-diagnostics-latest.json'), 'utf8'));
+    expect(latest.authority).toBe('advisory-lean-process');
   });
 
   it('rejects a missing descriptor when the supplied sandbox mapping requires a sealed environment', async () => {

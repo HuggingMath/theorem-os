@@ -115,6 +115,25 @@ export function projectMathematicsRuntimeEnvironment(source: NodeJS.ProcessEnv):
   );
 }
 
+function systemCommandsBeforeUserScripts(entries: string[], source: NodeJS.ProcessEnv): string[] {
+  if (process.platform !== 'linux') return entries;
+  const userBins = new Set([source.HOME, process.env.HOME, os.homedir()]
+    .filter((home): home is string => Boolean(home))
+    .map(home => path.resolve(home, '.local/bin')));
+  const isUserBin = (entry: string) => path.isAbsolute(entry) && userBins.has(path.normalize(entry));
+  const isSystemBin = (entry: string) => ['/usr/local/bin', '/usr/bin', '/bin'].includes(path.normalize(entry));
+  const lastSystemBin = entries.findLastIndex(isSystemBin);
+  const displaced = (entry: string, index: number) => index < lastSystemBin && isUserBin(entry);
+  const scripts = entries.filter(displaced);
+  if (!scripts.length) return entries;
+  const remaining = entries.filter((entry, index) => !displaced(entry, index));
+  const insertAt = remaining.findLastIndex(isSystemBin) + 1;
+  // Keep explicit tool/venv prefixes and restricted PATHs. User-installed scripts
+  // stay available. Only move those shadowing system commands; a user bin already
+  // after them must not jump ahead of a later explicit tool/venv directory.
+  return [...remaining.slice(0, insertAt), ...scripts, ...remaining.slice(insertAt)];
+}
+
 /** Merge the local mathematics env file into subprocesses without importing secrets. */
 export function resolveMathematicsRuntimeEnvironment(
   source: NodeJS.ProcessEnv = process.env,
@@ -145,7 +164,8 @@ export function resolveMathematicsRuntimeEnvironment(
   if (pathEntries.length || process.platform === 'linux') {
     // Missing PATH keeps the system search defaults; an explicit empty PATH stays restricted.
     const basePath = merged.PATH ?? defaultPath;
-    merged.PATH = [...pathEntries, ...basePath.split(path.delimiter), ...(process.platform === 'linux' ? ['/usr/sbin'] : [])]
+    merged.PATH = [...pathEntries, ...systemCommandsBeforeUserScripts(basePath.split(path.delimiter), source),
+      ...(process.platform === 'linux' ? ['/usr/sbin'] : [])]
       .filter(Boolean)
       .filter((entry, index, entries) => entries.indexOf(entry) === index)
       .join(path.delimiter);

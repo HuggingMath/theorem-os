@@ -8,6 +8,9 @@ import { stringify as stringifyToml } from 'smol-toml';
 import { formalizationAuditOutputSchema } from '../src/math/formalizationAudit';
 import { startFormalizationRelay, type FormalizationRelay } from '../src/runtime/formalizationRelay';
 import type { ModelRequestGate } from '../src/runtime/modelRequest';
+import type { SolverRunState } from '../src/solver/archive';
+import { ResearchUsage } from '../src/solver/researchUsage';
+import { buildTokenBudget, initializeUsageAccounting } from '../src/solver/usageBudget';
 
 const secret = 'fixture-upstream-credential-0123456789';
 const model = 'deepseek-flash';
@@ -43,6 +46,19 @@ const nativeSolRequest = {
   ], tool_choice: 'auto', parallel_tool_calls: false, reasoning: { effort, context: 'all_turns' },
   store: false, include: ['reasoning.encrypted_content'], prompt_cache_key: 'native-sol-fixture', text: { verbosity: 'low' },
   client_metadata: { session_id: 'native-sol-fixture', 'x-codex-turn-metadata': JSON.stringify({ model: 'gpt-6.1-sol', reasoning_effort: effort }) },
+};
+// Wire shapes captured from the native Codex 0.169.0 AgentControl backend.
+// All text, task identities and tool parameters below are disposable fixtures.
+const nativeTeamMessage = { type: 'agent_message', id: 'amsg-native-team', author: '/root', recipient: '/root/expert',
+  content: [{ type: 'input_text', text: 'Message Type: NEW_TASK\nTask name: /root/expert\nSender: /root\nPayload:\n' },
+    { type: 'encrypted_content', encrypted_content: 'Inspect the disposable fixture.' }] };
+const nativeTeamRequest = { ...body, input: [{ type: 'message', role: 'user', content: [
+  { type: 'input_text', text: 'Inspect the disposable fixture with a teammate.' }] }],
+  tools: [nativeTools[0], nativeTools[3], { type: 'namespace', name: 'collaboration',
+    description: 'Native agent collaboration.', tools: ['spawn_agent', 'send_message', 'wait_agent'].map(solFunction) },
+  solFunction('theoremos_team')],
+  tool_choice: 'auto', parallel_tool_calls: false, include: [], text: { verbosity: 'low' },
+  client_metadata: { session_id: 'native-team-fixture' },
 };
 const fakeResponse = (text = 'data: {"type":"response.completed"}\n\n') =>
   new Response(text, { headers: { 'Content-Type': 'text/event-stream' } });
@@ -453,6 +469,109 @@ describe('host credential relay for isolated formalization roles', () => {
     expect(gate).toHaveBeenCalledOnce(); expect(fetch).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])('forwards native team namespaces and collaboration history unchanged (followup: %s)', async followup => {
+    const fetch = vi.fn(async () => fakeResponse()); vi.stubGlobal('fetch', fetch);
+    const gate = vi.fn(() => ({ allowed: true as const, settle: vi.fn() }));
+    const request = { ...nativeTeamRequest, input: [...nativeTeamRequest.input, ...(followup ? [
+      { type: 'function_call', call_id: 'call-spawn', name: 'spawn_agent', namespace: 'collaboration', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'call-spawn', output: 'Spawned /root/expert.' },
+      nativeTeamMessage,
+    ] : [])] };
+    const result = await send(await start({ requestGate: gate }), { body: JSON.stringify(request) });
+    expect(result.status).toBe(200); expect(gate).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledExactlyOnceWith('http://127.0.0.1:8080/v1/responses',
+      expect.objectContaining({ body: JSON.stringify(request) }));
+  });
+
+  it('persists partial team usage when shutdown cancels a native member request before its terminal receipt', async () => {
+    const lead = { runId: 'native-usage-fixture', turns: 0 } as SolverRunState;
+    const member = { runId: lead.runId, turns: 0 } as SolverRunState;
+    for (const record of [lead, member]) initializeUsageAccounting(record);
+    const changed = () => { lead.tokenBudget = buildTokenBudget(0, [lead, member]); };
+    changed();
+    const track = (record: SolverRunState, sessionId: string) => {
+      const usage = new ResearchUsage({ state: lead, research: record, maxTotalTokens: 0,
+        signal: new AbortController().signal, remainingMs: () => Infinity, changed, emit: () => {} });
+      const callbacks = usage.bindSession(sessionId, () => undefined);
+      usage.sessionOpened({ threadId: sessionId, usageSource: 'upstream-requests',
+        run: async () => 'completed', close: async () => {}, interrupt: async () => {} });
+      usage.begin();
+      return { usage, callbacks };
+    };
+    const leadUsage = track(lead, 'lead-session'), memberUsage = track(member, 'member-session');
+    const terminal = (id: string, input: number, output: number) => fakeResponse('data: ' + JSON.stringify({
+      type: 'response.completed', response: { id, status: 'completed',
+        usage: { input_tokens: input, output_tokens: output, total_tokens: input + output } },
+    }) + '\n\n');
+    let reached!: () => void;
+    const streaming = new Promise<void>(resolve => { reached = resolve; });
+    const cancelled = vi.fn();
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(terminal('lead-completed', 10, 5))
+      .mockResolvedValueOnce(terminal('member-completed', 5, 2))
+      .mockImplementationOnce(async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(Buffer.from('data: {"type":"response.output_text.delta","delta":"working"}\n\n')); },
+        pull() { reached(); }, cancel: cancelled,
+      }, { highWaterMark: 0 }), { headers: { 'Content-Type': 'text/event-stream' } }));
+    vi.stubGlobal('fetch', fetch);
+    const leadRelay = await start(leadUsage.callbacks), memberRelay = await start(memberUsage.callbacks);
+    expect((await send(leadRelay, { body: JSON.stringify(nativeTeamRequest) })).status).toBe(200);
+    leadUsage.usage.finish(true);
+    const memberRequest = { ...nativeTeamRequest, input: [nativeTeamMessage] };
+    expect((await send(memberRelay, { body: JSON.stringify(memberRequest) })).status).toBe(200);
+    const pending = send(memberRelay, { body: JSON.stringify(memberRequest) }).catch(() => undefined);
+    try { await streaming; } finally { await memberRelay.close(); await pending; }
+    memberUsage.usage.finish(false);
+    await memberRelay.close();
+    expect(cancelled).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(member.requestUsageAccounting).toMatchObject({ startedRequests: 2, reportedRequests: 1,
+      pendingRequests: 0, incomplete: true, receipts: [
+        expect.objectContaining({ status: 'reported', providerRequestId: 'member-completed' }),
+        expect.objectContaining({ status: 'missing', outcome: 'cancelled', missingReason: 'request-cancelled' }),
+      ] });
+    expect(member.requestUsageAccounting!.receipts![1]).not.toHaveProperty('usage');
+    expect(member.usage).toEqual({ inputTokens: 5, outputTokens: 2, totalTokens: 7 });
+    const restored = JSON.parse(JSON.stringify([lead, member])) as SolverRunState[];
+    restored.forEach(initializeUsageAccounting);
+    expect(buildTokenBudget(0, restored)).toMatchObject({ status: 'unlimited', reportedTotalTokens: 22,
+      usageComplete: false });
+    expect(new Set(restored.flatMap(record => record.requestUsageAccounting!.receipts!.map(item => item.requestId))).size).toBe(3);
+  });
+
+  it.each([
+    { choice: { type: 'function', name: 'collaboration.spawn_agent' }, status: 200 },
+    { choice: { type: 'custom', name: 'collaboration.spawn_agent' }, status: 400 },
+    { choice: { type: 'function', name: 'spawn_agent' }, status: 400 },
+  ])('binds native top-level tool choices to qualified namespace members: %j', async ({ choice, status }) => {
+    const fetch = vi.fn(async () => fakeResponse()); vi.stubGlobal('fetch', fetch);
+    const result = await send(await start(), { body: JSON.stringify({ ...nativeTeamRequest, tool_choice: choice }) });
+    expect(result.status).toBe(status); expect(fetch).toHaveBeenCalledTimes(status === 200 ? 1 : 0);
+    if (status === 400) expect(result.text).toContain('unknown_tool_choice');
+  });
+
+  it('rejects duplicate tool names across top-level and inline namespaces', async () => {
+    const fetch = vi.fn(), gate = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const request = { ...nativeTeamRequest, input: [{ type: 'additional_tools', role: 'developer',
+      tools: [{ type: 'namespace', name: 'collaboration', tools: [solFunction('spawn_agent')] }] }] };
+    const result = await send(await start({ env: {}, requestGate: gate }), { body: JSON.stringify(request) });
+    expect(result.status).toBe(400); expect(result.text).toContain('duplicate_tool_name');
+    expect(gate).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { ...nativeTeamMessage, author: 1 },
+    { ...nativeTeamMessage, recipient: null },
+    { ...nativeTeamMessage, content: [{ type: 'encrypted_content', file_id: 'remote-file' }] },
+    { ...nativeTeamMessage, content: [{ type: 'input_file', file_url: 'https://private.invalid' }] },
+  ])('rejects malformed or remote-resource native agent messages: %j', async message => {
+    const fetch = vi.fn(), gate = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const result = await send(await start({ env: {}, requestGate: gate }), {
+      body: JSON.stringify({ ...nativeTeamRequest, input: [message] }) });
+    expect(result.status).toBe(400); expect(result.text).toContain('unsupported_responses_request');
+    expect(gate).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+  });
+
   it.each([
     { call: { type: 'custom_tool_call', id: 'ct-native-sol', call_id: 'call-sol', name: 'exec', namespace: 'functions',
       input: 'text("offline fixture")' }, output: { type: 'custom_tool_call_output', id: 'ctco-native-sol', call_id: 'call-sol',
@@ -607,7 +726,8 @@ describe('host credential relay for isolated formalization roles', () => {
     { tools: [{ type: 'computer_use_preview', display_width: 1024, display_height: 768, environment: 'browser' }] },
     { tools: [{ type: 'image_generation' }] }, { tools: [{ type: 'shell', environment: { type: 'container_auto' } }] },
     { tools: [{ type: 'mcp', server_label: 'private', server_url: 'http://127.0.0.1/private' }] },
-    { tools: [{ type: 'namespace', name: 'remote', tools: nativeTools }] },
+    { tools: [{ type: 'namespace', name: 'remote', tools: [{ type: 'web_search' }] }] },
+    { tools: [{ type: 'namespace', name: 'remote', tools: [{ type: 'namespace', name: 'nested', tools: nativeTools }] }] },
     { tools: [{ ...nativeTools[0], server_url: 'http://127.0.0.1/private' }] },
     { tools: [{ ...nativeTools[3], remote: { id: 'tool-other-role' } }] },
     { tools: nativeTools, tool_choice: { type: 'mcp', server_label: 'private', name: 'read' } },

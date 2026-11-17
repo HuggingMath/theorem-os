@@ -151,17 +151,19 @@ export class AgentTeamNativeControl {
 
   connection(threadId: string) { return this.connections.get(threadId); }
 
-  async advisory(from: string, to: string, message: string): Promise<void> {
+  async advisory(from: string, to: string, message: string, hostEventSequence?: number): Promise<void> {
     if (from === to || !this.archive.nativeControl) return;
     const sender = from === 'lead' ? this.archive.nativeControl.rootThreadId : this.worker(from).native!.threadId;
     const recipient = to === 'lead' ? this.archive.nativeControl.rootThreadId : this.worker(to).native!.threadId;
-    await this.queue(sender, recipient, { kind: 'plaintext', text: message });
+    await this.queue(sender, recipient, { kind: 'plaintext', text: message }, false, hostEventSequence);
   }
 
-  private async queue(sender: string, recipient: string, message: Json, nativeCommunication = false): Promise<string> {
+  private async queue(sender: string, recipient: string, message: Json, nativeCommunication = false,
+    hostEventSequence?: number): Promise<string> {
     const id = crypto.randomUUID(), author = this.identity(sender).path, target = this.identity(recipient).path;
     this.archive.nativeControl!.mailbox.push({ id, threadId: recipient, author, recipient: target,
-      ...(nativeCommunication ? { communication: message } : { message }), status: 'queued' });
+      ...(nativeCommunication ? { communication: message } : { message }), status: 'queued',
+      ...(hostEventSequence === undefined ? {} : { hostEventSequence }) });
     this.save();
     await this.flush(recipient);
     return id;
