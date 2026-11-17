@@ -6,7 +6,7 @@ import { archiveRoadmapTaskLabel } from './roadmapLabels';
 import { renderGlobalTrajectory } from './globalTrajectory';
 import { readableProcessText } from './processText';
 import { selectedProofWalkthrough } from './proofWalkthrough';
-import type { Localized, ProofWalkthrough, ProofWalkthroughStage, ProofWalkthroughStep } from './proofWalkthroughTypes';
+import type { Localized, ProofWalkthrough } from './proofWalkthroughTypes';
 
 type Run = ArchiveProcess['runs'][number];
 type Task = Run['tasks'][number];
@@ -161,12 +161,13 @@ function stepDetail(step: Step, run: Run, record: ArchiveIndexRecord, process: A
 }
 /** A verdict a reader can start from; the raw Lean bytes stay one disclosure away. */
 function checkFeedback(check: Check, locale: Locale): string {
+  const diagnostics = check.diagnostics ?? '';
   const failed = ['failed', 'error'].includes(check.status ?? '');
   const verdict = failed
     ? choose(locale, 'Lean 拒绝了这份证明。下面的输出是它给出的原因，逐条对应需要修改的声明。', 'Lean rejected this proof. The output below gives the reasons, clause by clause.')
     : choose(locale, 'Lean 接受了这份文件：原题目标已由这份证明推出，没有未解决的占位，没有额外的公理。下面保留当时检查的原始输出。', 'Lean accepted this file: the proof establishes the target with no unsolved placeholders and no extra axioms. The original check output is kept below.');
-  const axioms = /depends on axioms:\s*\[([^\]]*)\]/u.exec(check.diagnostics)?.[1];
-  const pre = `<pre tabindex="0">${escape(check.diagnostics)}</pre>`;
+  const axioms = /depends on axioms:\s*\[([^\]]*)\]/u.exec(diagnostics)?.[1];
+  const pre = `<pre tabindex="0">${escape(diagnostics)}</pre>`;
   return `<section class="process-diagnostics" data-tone="${failed ? 'attention' : 'passed'}"><h4>${choose(locale, '检查反馈', 'Check feedback')}</h4><p class="process-verdict">${verdict}</p>
     ${failed ? pre : `<details class="process-raw-output"><summary>${choose(locale, '原始输出', 'Original output')}</summary>${pre}</details>`}
     ${axioms ? `<p class="process-axioms">${choose(locale, '内核记录的依赖公理：', 'Axioms recorded by the kernel:')}<code>${escape(axioms)}</code></p>` : ''}</section>`;
@@ -208,7 +209,7 @@ function taskContext(task: Task, run: Run, walkthrough: ProofWalkthrough | undef
     return dependency ? `<button data-process-node="task:${escape(id)}">${escape(archiveRoadmapTaskLabel(dependency, locale))}</button>` : '';
   }).join('')}</div>` : '';
   const brief = `<details class="process-map-objective"><summary>${choose(locale, '当时交给 Agent 的任务说明', 'Task brief given to the agent')}</summary><p>${escape(readableProcessText(task.objective, 1600))}</p></details>`;
-  if (found) return `<p class="process-map-step-note">${choose(locale, `第 ${ordinal(found.index)} 步 · 阶段 ${found.stageIndex + 1}`, `Step ${ordinal(found.index)} · Part ${found.stageIndex + 1}`)}<i>${escape(prose(found.stage.title, locale))}</i></p>
+  if (found && walkthrough) return `<p class="process-map-step-note">${choose(locale, `第 ${ordinal(found.index)} 步 · 阶段 ${found.stageIndex + 1}`, `Step ${ordinal(found.index)} · Part ${found.stageIndex + 1}`)}<i>${escape(prose(found.stage.title, locale))}</i></p>
     <div class="process-map-claim"><span>${choose(locale, '这一步推出', 'This step establishes')}</span><p>${escape(prose(found.step.claim, locale))}</p></div>
     <p class="process-map-given"><span>${choose(locale, '已知', 'Given')}</span>${escape(prose(found.step.given, locale))}</p>
     ${found.step.because.zh || found.step.because.en ? `<details class="process-map-why"><summary>${choose(locale, '为什么这一步成立', 'Why this step holds')}</summary><p>${escape(prose(found.step.because, locale))}</p></details>` : ''}
