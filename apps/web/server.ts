@@ -486,7 +486,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             templates: webTemplates, defaults: webDefaults, limits: webLimits, runtime: await runner.readiness(),
             ...(sample ? { sample: { id: sample.run.id, title: sample.run.title } } : {}), ...(prechecker ? { precheck: true } : {}) };
           const owner = url.searchParams.has('runs') ? ownerOf(session) : undefined;
-          if (owner) body.runs = { runs: jobs.list(owner), version: jobs.version(owner) };
+          if (owner) body.runs = { runs: jobs.listSummary(owner), version: jobs.version(owner) };
           json(response, 200, body); return;
         }
         if (!session && request.method === 'GET' && url.pathname.startsWith('/api/research/')) {
@@ -911,7 +911,11 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const version = jobs.version(owner);
           response.setHeader('ETag', version);
           if (request.headers['if-none-match'] === version) { response.writeHead(304); response.end(); }
-          else json(response, 200, { runs: jobs.list(owner) });
+          else {
+            const detail = url.searchParams.get('detail');
+            const runs = detail === 'summary' ? jobs.listSummary(owner) : jobs.list(owner);
+            json(response, 200, { runs });
+          }
           return;
         }
         if (url.pathname === '/api/precheck' && request.method === 'POST') {

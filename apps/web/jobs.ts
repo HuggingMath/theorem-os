@@ -76,6 +76,50 @@ export class WebJobs {
   list(owner: string): WebRun[] {
     return [...this.jobs.values()].filter(job => job.owner === owner).map(job => job.run).reverse();
   }
+  /** Returns a summary view of runs for list display, omitting large fields like full observation and moduleConfiguration. */
+  listSummary(owner: string): WebRun[] {
+    return this.list(owner).map(run => {
+      const summaryRun = { ...run };
+
+      // Trim observation to only what the list view needs
+      if (summaryRun.observation) {
+        const obs = summaryRun.observation;
+        summaryRun.observation = {
+          ...obs,
+          inspection: {
+            ...obs.inspection,
+            // Keep workers for display names, but trim task array to just length metadata
+            tasks: obs.inspection.tasks.slice(0, 0), // Empty array preserves type but saves space
+            // Trim large nested structures in mathematics and knowledge
+            mathematics: { ...obs.inspection.mathematics, snapshot: { ...obs.inspection.mathematics.snapshot,
+              obligations: [], goals: [], blockers: [], routes: [], advisory: [] }, recentChanges: [] },
+            knowledge: { ...obs.inspection.knowledge, retrievals: [], originalUses: [], uses: [] },
+          },
+          // Trim large arrays
+          sources: [],
+          checks: [],
+          guidance: [],
+          deliveries: [],
+          history: undefined,
+          declarations: undefined,
+        } as any;
+      }
+
+      // Keep only recent events (last 10) to show latest activity
+      summaryRun.events = run.events.slice(-10);
+
+      // Omit moduleConfiguration and researchConfiguration entirely
+      delete (summaryRun as any).moduleConfiguration;
+      delete (summaryRun as any).researchConfiguration;
+
+      // Keep result but trim proof source text if present
+      if (summaryRun.result?.proof) {
+        summaryRun.result = { ...summaryRun.result, proof: { ...summaryRun.result.proof, source: '' } };
+      }
+
+      return summaryRun;
+    });
+  }
   get(owner: string, id: string): WebRun | undefined {
     const job = this.jobs.get(id);
     return job?.owner === owner ? job.run : undefined;

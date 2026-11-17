@@ -2355,6 +2355,23 @@ function selectRun(id: string, closeHistory = true, address: 'push' | 'replace' 
   if (switching) setMobileView('compose');
   // Phones move between their own views.
   if (switching && !historyQuery.matches) animateEntrance(element('#run-detail'), 'panel', true);
+  // Fetch full run data in the background (list view uses summary, detail needs complete data)
+  void fetchFullRunData(id);
+}
+async function fetchFullRunData(id: string) {
+  try {
+    const result = await api<{ run: WebRun }>(`/api/runs/${encodeURIComponent(id)}`);
+    if (!result?.run || state.selectedId !== id) return; // Selection changed, discard
+    // Update both selectedRun and the runs array
+    state.selectedRun = result.run;
+    const index = state.runs.findIndex(r => r.id === id);
+    if (index >= 0) state.runs[index] = result.run;
+    // Re-render detail view with full data
+    renderDetail(true);
+  } catch (error) {
+    console.warn('Failed to fetch full run data:', error);
+    // Keep showing summary data, don't break the UI
+  }
 }
 /** The server names templates, environments and the sample in Chinese; known names are shown in the interface language. */
 function localizeSession(session: WebSession): WebSession {
@@ -2748,7 +2765,7 @@ function receiveRunObservation(observation: WebObservation) {
 async function refreshRuns(epoch: number, force = false, listed?: WebSession['runs']) {
   const generation = ++state.listGeneration;
   let etag: string | null = listed?.version ?? null;
-  const result = listed ?? await api<{ runs: WebRun[] }>('/api/runs', {
+  const result = listed ?? await api<{ runs: WebRun[] }>('/api/runs?detail=summary', {
     headers: !force && state.runsEtag ? { 'If-None-Match': state.runsEtag } : {},
   }, value => { etag = value; });
   if (generation !== state.listGeneration || !currentConnection(epoch)) return;
