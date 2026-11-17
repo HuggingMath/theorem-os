@@ -18,14 +18,6 @@
 
 `scripts/enrich-archive-process.ts <campaign>` 可从每题轨迹索引所指的压缩快照与 Git 归档补全已有 `research/openai-math/*/process.json`，正常成果导入也使用同一提取函数。只恢复类型化交付、宿主检查和能够核对 `proofHash` 的源码，不读取模型原始对话。补全过程仅更新 `process.json` 及 manifest 中相应校验值，保留题目、最终 Lean 与验收文件。
 
-## 中文设计页与局部发布
-
-中文首页与共建页采用独立的 `docs/design.css`、`docs/web/design.js` 和 `docs/web/designHumanDecision.ts`。字体声明保存在 `docs/design-fonts.css`、`docs/design-initiative-fonts.css`，`*-design-home-*` 与 `*-design-initiative-*` 子集不覆盖英文页使用的字库。中文截图沿用已发布的真实工作台素材。
-
-本轮设计改版使用 `bun run build:site -- --presentation-only`（也可直接运行 `bun scripts/build-site.ts --presentation-only`）：先把公开站点当前版本放入 `out/site`，构建仅更新中文两页、设计脚本和独立字体资源。该模式读取现有 `out/site/data/catalog.json`，保留公开证明档案、英文页和其他资源。不要用本地较少的研究记录重建并替换已公开档案；本轮发布基线包含 29 条记录。
-
-`bun run test:site-design` 检查两页的陈述编辑、回放、手机导航、邮件草稿和无脚本回退；测试仅使用合成输入，不启动研究或发送邮件。通用 `build:site` 仍可从仓库本地材料完整构建。
-
 ## 内测申请
 
 首屏和导航的“申请内测”入口跳转到开始区，开始区的主按钮打开公开仓库的 Issue 表单 `.github/ISSUE_TEMPLATE/early-access.yml`（源文件在 `docs/site-repo/`）。表单是中英双语，提醒申请会公开，不收集 API Key 和联系方式。通过后在同一条 Issue 里回复，请申请人把登录邮箱私下发来，加入白名单后在 app.theoremos.top 登录。首屏另有“打开工作台”入口，开始区也为已有资格的用户提供登录链接。

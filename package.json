@@ -18,7 +18,7 @@
     "build:site": "bun scripts/build-site.ts",
     "import:math-results": "bun scripts/import-math-campaign.ts",
     "export:site": "bun scripts/export-site-repo.ts",
-    "test:site": "bun run test:site-design && node scripts/test-site.mjs && node scripts/test-feedback.mjs && node scripts/test-i18n.mjs && bun run test:site-feedback-drafts",
+    "test:site": "node scripts/test-landing.mjs && node scripts/test-site.mjs && node scripts/test-landing-motion.mjs && node scripts/test-feedback.mjs && node scripts/test-i18n.mjs && bun run test:site-feedback-drafts",
     "test:site-product-flow": "node scripts/test-site-product-flow.mjs",
     "test:proof-reading-navigation": "node scripts/test-proof-reading-navigation.mjs",
     "typecheck:site": "tsc --noEmit --project docs/web/tsconfig.json",
@@ -131,9 +131,7 @@
     "test:site-feedback-drafts": "node scripts/test-site-feedback-drafts.mjs",
     "test:frontend-product-gaps": "bunx vitest run --maxWorkers=4 tests/researchIssueExecutionDraft.test.ts tests/webClassicPreparation.test.ts tests/webResearchReleaseComparison.test.ts tests/webDraft.test.ts tests/webDraftRecovery.test.ts tests/webProblemDrafts.test.ts tests/webServer.test.ts tests/webBudgetContinuity.test.ts tests/webResearchWorkspace.test.ts tests/webResearchCollections.test.ts && bun scripts/test-web-library-product-gaps.ts && bun scripts/test-web-share-bookmark-notes.ts && bun scripts/test-web-budget-live-refresh.ts && bun scripts/test-web-issue-action-continuity.ts && bun scripts/test-web-classic-preparation.ts",
     "test:frontend-continuity-seven": "bunx vitest run --maxWorkers=4 tests/webResearchTeamContinuity.test.ts tests/researchBudgetEditor.test.ts tests/webLibraryProposalContinuity.test.ts tests/webDraftRecovery.test.ts tests/webDraft.test.ts tests/webProblemDrafts.test.ts && bun scripts/test-web-team-continuity.ts && bun scripts/test-web-recovery-context.ts && bun scripts/test-web-recovery-library-context.ts && bun scripts/test-web-budget-save-continuity.ts && bun scripts/test-web-project-attempt-reuse.ts && bun scripts/test-web-library-proposal-continuity.ts",
-    "test:frontend-product-four": "bunx vitest run --maxWorkers=4 tests/firstResearchBudgetValidation.test.ts tests/researchOverviewVerifiedRuns.test.ts tests/personalApprovalStore.test.ts && bun scripts/test-web-first-budget-corrections.ts && bun scripts/test-web-journey-project-navigation.ts && bun scripts/test-web-personal-approval-continuity.ts && bun scripts/test-web-brief-export-continuity.ts",
-    "test:site-legacy-home": "node scripts/test-landing.mjs && node scripts/test-landing-motion.mjs",
-    "test:site-design": "node scripts/test-design-interactions.mjs"
+    "test:frontend-product-four": "bunx vitest run --maxWorkers=4 tests/firstResearchBudgetValidation.test.ts tests/researchOverviewVerifiedRuns.test.ts tests/personalApprovalStore.test.ts && bun scripts/test-web-first-budget-corrections.ts && bun scripts/test-web-journey-project-navigation.ts && bun scripts/test-web-personal-approval-continuity.ts && bun scripts/test-web-brief-export-continuity.ts"
   },
   "dependencies": {
     "eventsource-parser": "3.0.6",

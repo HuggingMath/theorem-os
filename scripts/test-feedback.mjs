@@ -267,7 +267,7 @@ try {
   await page.goto(`${hosted}feedback.html`);
   await ready(page);
   await page.getByRole('link', { name: 'TheoremOS 首页' }).click();
-  await page.waitForFunction(() => document.documentElement.dataset.landingReady === 'true' || document.documentElement.dataset.designReady === 'true');
+  await page.waitForFunction(() => document.documentElement.dataset.landingReady === 'true');
   assert.equal(page.url(), `${hosted}index.html`);
   assert.ok(await page.locator('.site-footer a[href="feedback.html"]').isVisible());
   await page.locator('.site-footer a[href="feedback.html"]').click();
@@ -280,8 +280,8 @@ try {
   assert.equal(page.url(), `${hosted}feedback.html`);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(hosted);
-  await page.waitForFunction(() => document.documentElement.dataset.landingReady === 'true' || document.documentElement.dataset.designReady === 'true');
-  await page.locator('.menu-toggle').click();
+  await page.waitForFunction(() => document.documentElement.dataset.landingReady === 'true');
+  await page.getByRole('button', { name: '打开导航' }).click();
   await page.locator('#mobile-nav a[href="feedback.html"]').click();
   await ready(page);
   await checkWidth(page, 'GitHub Pages feedback subpath');
