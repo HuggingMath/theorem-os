@@ -5,7 +5,7 @@ import { canonicalMathJson, mathDigest, readMathJson } from '../math/mathRuntime
 import { taskGroup, taskVersion, type TaskRecord } from './tasks';
 import { researchFailureCategory } from './modules/search';
 import { buildProofContinuation, recordedTaskProofStatus } from './progress';
-import { aggregateUsage, buildTokenBudget } from './usageBudget';
+import { aggregateUsage, buildTokenBudget, summarizeUsageObservation } from './usageBudget';
 import { captureObligationSnapshot } from './obligationProgress';
 import { contributionExecutionAttempts, type ContributionObservation, type ResearchContributionFlow } from './contributionFlow';
 import type { StoredRunInspectionArtifacts } from './storedRunInspection';
@@ -58,6 +58,8 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
   const skillMode = state.researchMode === 'skill' && !state.workers;
   const teamMode = state.researchDelegation?.mode === 'team';
   const usageRecords = [...(state.workers ?? [state]), ...(state.agentTeam?.workers ?? [])];
+  const receiptObservation = summarizeUsageObservation([{ runId: state.runId, observedAt: 0, records: usageRecords }],
+    { runId: state.runId, startedAt: 0, endedAt: Number.MAX_SAFE_INTEGER });
   const tokenBudget = buildTokenBudget(state.tokenBudget?.maxTotalTokens ?? state.agentTeam?.hostLimits?.maxTotalTokens ?? 0,
     usageRecords, state.tokenBudget?.enforcement);
   const teamBudget = teamMode ? { ...projectAgentTeamBudget({ tokenBudget,
@@ -95,17 +97,29 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
       commonResearchSkill: state.commonResearchSkill, researchDelegation: state.researchDelegation,
       buildDigest: state.buildDigest, environmentDigest: state.environmentDigest, methodDigest: state.methodDigest,
       knowledgeDigest: state.knowledgeDigest },
-    turns: state.turns, usage: teamMode ? aggregateUsage(usageRecords) : state.usage, planVersion: cooperative?.planVersion,
+    turns: state.turns, usage: teamMode ? aggregateUsage(usageRecords) : state.usage,
+    requestUsage: { observedRequests: receiptObservation.denominator.observedRequestStarts,
+      reportedRequests: receiptObservation.requestsWithCompleteUsage, pendingRequests: receiptObservation.pendingRequests,
+      missingRequests: receiptObservation.knownMissingRequests, missingReasons: receiptObservation.missingReasons,
+      unidentifiedHistoricalRequests: receiptObservation.unidentifiedHistoricalRequests,
+      nativeRecordsWithUnknownRequests: receiptObservation.nativeRecordsWithUnknownRequests,
+      duplicateReceiptRecords: receiptObservation.duplicateReceiptRecords },
+    planVersion: cooperative?.planVersion,
     ...(state.researchDelegation?.mode === 'read-only' ? { delegation: { evidence: 'recorded-agent-observations',
       dispatch: 'host-mediated-native-threads', builtinMultiAgent: false,
       agents: state.nativeAgents ?? [], usageSource: 'shared-upstream-request-receipts',
       nativeTotals: 'observational-only' } } : {}),
     ...(teamMode ? { agentTeam: { evidence: 'recorded-not-replayed', control: 'agent-organized',
       maxAgents: state.researchDelegation!.maxAgents,
+      native: state.agentTeam?.nativeControl && { status: state.agentTeam.nativeControl.rootAgent?.status,
+        writerStop: state.agentTeam.nativeControl.rootWriterStop,
+        runtimeConfiguration: state.agentTeam.nativeControl.rootRuntimeConfiguration },
       budget: teamBudget,
       overview: agentTeamOverview({ ...state, tokenBudget }, { budget: teamBudget }),
       workers: (state.agentTeam?.workers ?? []).map(worker => ({ id: worker.id, status: worker.status,
         turns: worker.turns, threadId: worker.threadId, writerStopUnconfirmed: worker.writerStopUnconfirmed,
+        native: worker.native && { status: worker.native.status, lastOutcome: worker.native.lastOutcome,
+          writerStop: worker.native.writerStop, runtimeConfiguration: worker.native.runtimeConfiguration },
         tasks: worker.tasks.map(task => ({ id: task.id, message: task.message, status: task.status,
           summary: task.summary, error: task.error, deliveryId: task.deliveryId })) })),
       events: state.agentTeam?.events ?? [],
@@ -311,6 +325,13 @@ export function renderRunInspection(report: Inspection): string {
     report.tokenBudget.maxTotalTokens || 'unlimited', report.tokenBudget.reportedTotalTokens,
     report.tokenBudget.usageComplete, report.tokenBudget.overrunTokens, report.tokenBudget.status]]));
   text += '\nThe allowance stops new model turns using provider reports. In-flight turns may exceed it; missing reports leave consumption incomplete. No monetary cost is inferred.\n';
+  text += table(['Reported input tokens', 'Cached input subset', 'Reported output tokens'], [[
+    report.usage?.inputTokens ?? 'unknown', report.usage?.cachedInputTokens ?? 'unknown', report.usage?.outputTokens ?? 'unknown']]);
+  text += section('Request receipts', table(['Observed requests', 'Reported usage', 'Pending', 'Missing usage', 'Historical requests without receipts'], [[
+    report.requestUsage.observedRequests, report.requestUsage.reportedRequests, report.requestUsage.pendingRequests,
+    report.requestUsage.missingRequests, report.requestUsage.unidentifiedHistoricalRequests]]));
+  if (Object.keys(report.requestUsage.missingReasons).length) text += table(['Missing reason', 'Requests'], Object.entries(report.requestUsage.missingReasons));
+  if (report.requestUsage.nativeRecordsWithUnknownRequests) text += '\nSome native records lack individual request identities; observed requests are not a complete provider request count.\n';
   if (report.artifacts) text += renderStoredArtifacts(report.artifacts);
   if (report.contributionFlow && !skillMode) text += renderContributionFlow(report.contributionFlow);
   const knowledgeUses = [...report.knowledge.originalUses, ...report.knowledge.uses];
@@ -338,6 +359,18 @@ export function renderRunInspection(report: Inspection): string {
       '\nRecorded activity does not establish current process liveness or mathematical progress.\n';
     if (report.agentTeam) {
       const team = report.agentTeam, budget = team.budget!;
+      const nativeMembers = [{ id: 'lead', native: team.native }, ...team.workers].filter(member => member.native);
+      if (nativeMembers.length) text += section('Native execution records', table([
+        'Agent', 'Last native status', 'Last writer stop source', 'Last writer stopped at',
+      ], nativeMembers.map(({ id, native }) => [id,
+        typeof native!.status === 'object' ? JSON.stringify(native!.status) : native!.status,
+        native!.writerStop?.source, native!.writerStop ? new Date(native!.writerStop.at).toISOString() : undefined,
+      ]))) + '\nThese are historical native states and confirmed writer stops, not current process liveness or proof acceptance.\n';
+      const nativeSettings = nativeMembers.filter(member => member.native?.runtimeConfiguration);
+      if (nativeSettings.length) text += section('Native execution settings', table(['Agent', 'Configuration source', 'Overrides'],
+        nativeSettings.map(member => [member.id, member.native!.runtimeConfiguration!.source,
+          JSON.stringify(member.native!.runtimeConfiguration!.overrides)]))) +
+        '\nThese are requested thread settings. They do not claim a native configuration readback.\n';
       text += section('Team budget', table(['Dimension', 'Remaining', 'Lead reserve', 'Child allowance'], [
         ['Tokens', budget.remaining.tokens ?? 'unlimited', budget.leadReserve.tokens, budget.childRemaining.tokens ?? 'unlimited'],
         ['Turns', budget.remaining.turns ?? (budget.turnLimitKnown ? 'unlimited' : 'unknown'),

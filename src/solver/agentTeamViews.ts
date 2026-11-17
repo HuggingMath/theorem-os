@@ -83,7 +83,7 @@ function taskBudget(state: Readonly<SolverRunState>, worker: AgentTeamWorker, ta
     usageUnavailable: projection.usageUnavailable, turnUsageKnown: turns !== null };
 }
 
-function visibleTasks(state: Readonly<SolverRunState>, worker: AgentTeamWorker) {
+function visibleTasks(state: Readonly<SolverRunState>, worker: AgentTeamWorker, assignmentTaskId?: string) {
   const selected = new Set(worker.tasks.filter(task => task.status === 'running').map(task => task.id));
   const next = worker.tasks.find(task => task.status === 'queued');
   if (next) selected.add(next.id);
@@ -94,7 +94,9 @@ function visibleTasks(state: Readonly<SolverRunState>, worker: AgentTeamWorker) 
     selected.add(task.id);
   }
   return worker.tasks.flatMap((task, index) => selected.has(task.id)
-    ? [{ ...taskProjection(task, index), budget: taskBudget(state, worker, task) }] : []).slice(-TASKS);
+    ? [{ ...taskProjection(task, index),
+      ...(task.id === assignmentTaskId ? { objective: undefined, profileEvidence: undefined } : {}),
+      budget: taskBudget(state, worker, task) }] : []).slice(-TASKS);
 }
 
 function contextBudget(state: Readonly<SolverRunState>, focusAgentId?: string) {
@@ -112,7 +114,7 @@ function contextBudget(state: Readonly<SolverRunState>, focusAgentId?: string) {
 }
 
 /** A bounded observation shared by poll/wait and both kinds of dispatch context. */
-export function agentTeamOverview(state: Readonly<SolverRunState>, options: { focusAgentId?: string; budget?: unknown } = {}) {
+export function agentTeamOverview(state: Readonly<SolverRunState>, options: { focusAgentId?: string; assignmentTaskId?: string; budget?: unknown } = {}) {
   const team = state.agentTeam;
   const workers = team?.workers ?? [];
   const selected = [...workers].sort((left, right) => {
@@ -141,7 +143,7 @@ export function agentTeamOverview(state: Readonly<SolverRunState>, options: { fo
         reason: decisionReason!.text, nextStep: decisionStep!.text,
         ...(decisionReason!.truncated || decisionStep!.truncated ? { textTruncated: true } : {}) } } } : {}),
     workers: workers.filter(worker => visible.has(worker.id)).map(worker => {
-      const tasks = visibleTasks(state, worker), error = worker.error && preview(worker.error, TASK_TEXT);
+      const tasks = visibleTasks(state, worker, worker.id === options.focusAgentId ? options.assignmentTaskId : undefined), error = worker.error && preview(worker.error, TASK_TEXT);
       const stopReason = worker.writerStopUnconfirmed && preview(worker.writerStopUnconfirmed.reason, TASK_TEXT);
       const usage = buildTokenBudget(0, [worker]), requests = worker.requestUsageAccounting;
       return { id: worker.id, status: worker.status, activity: activity(team!, worker), turns: worker.turns,
@@ -236,7 +238,9 @@ export function agentTeamInboxPreview(team: Readonly<AgentTeamState>, actor: str
   }
   return { after, through, previewThrough: events.at(-1)?.sequence ?? after, events,
     more: unread.length > events.length || truncated,
-    continuation: 'Poll after through for complete unread messages. textTruncated previews do not acknowledge their bodies; previewThrough is not a receive cursor.' };
+    continuation: team.transport === 'native-agent-control'
+      ? 'Read addressed native messages for complete updates; use history and inspect-research for saved task results. Previews do not acknowledge their bodies.'
+      : 'Poll after through for complete unread messages. textTruncated previews do not acknowledge their bodies; previewThrough is not a receive cursor.' };
 }
 
 export function agentTeamRecentEvents(team: Readonly<AgentTeamState> | undefined, actor: string) {

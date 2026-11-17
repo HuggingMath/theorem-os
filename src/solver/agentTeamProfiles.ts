@@ -12,6 +12,7 @@ export const agentTeamProfileEvidenceSchema = z.object({
   schema: z.literal('theorem-os.agent-team-profile-evidence.v1'), skillDigest: digest,
   selected: z.array(z.string()), loaded: z.array(z.string()), unresolved: z.array(z.string()),
   sources: z.array(z.object({ profileId: z.string(), kind: z.enum(['profile', 'collected-reading']),
+    loading: z.enum(['injected', 'available-on-demand']).optional(),
     file: z.string(), heading: z.string(), anchor: z.string(), firstLine: z.number().int().positive(),
     lastLine: z.number().int().positive(), digest, fileDigest: digest }).strict()),
 }).strict();
@@ -63,7 +64,7 @@ export function agentTeamProfileSelection(message: string): string[] {
   return [...new Set(line?.[1]?.split(',').map(value => value.trim()).filter(Boolean) ?? [])];
 }
 
-/** Resolve the loaded passages and their identity together; loading does not establish their use. */
+/** Bind injected profiles and available reading separately; neither establishes their use. */
 export function resolveAgentTeamProfiles(skill: MathAgentSkill, message: string): {
   section: ContextSection; evidence: AgentTeamProfileEvidence;
 } {
@@ -72,9 +73,9 @@ export function resolveAgentTeamProfiles(skill: MathAgentSkill, message: string)
   const loaded = new Set<string>(), unresolved: string[] = [], passages: string[] = [];
   const sources: AgentTeamProfileEvidence['sources'] = [];
   const load = (profileId: string, kind: AgentTeamProfileEvidence['sources'][number]['kind'],
-    file: string, heading: string, anchor: string) => {
+    file: string, heading: string, anchor: string, loading: 'injected' | 'available-on-demand' = 'injected') => {
     const fileText = read(directory, file), passage = section(fileText, heading);
-    sources.push({ profileId, kind, file, heading, anchor, firstLine: passage.firstLine, lastLine: passage.lastLine,
+    sources.push({ profileId, kind, loading, file, heading, anchor, firstLine: passage.firstLine, lastLine: passage.lastLine,
       digest: mathDigest(passage.text), fileDigest: mathDigest(fileText) });
     return passage.text;
   };
@@ -89,8 +90,9 @@ export function resolveAgentTeamProfiles(skill: MathAgentSkill, message: string)
     const reading = /\]\(\.\.\/(domain-materials\/[a-z-]+\.md)#([a-z0-9-]+)\)/u.exec(text);
     if (reading) {
       const file = 'references/' + reading[1]!;
-      passages.push(`Collected reading; source: ${file}#${reading[2]}\n` +
-        load(profile.id, 'collected-reading', file, reading[2]!, reading[2]!));
+      load(profile.id, 'collected-reading', file, reading[2]!, reading[2]!, 'available-on-demand');
+      passages.push(`Collected reading available on demand (not injected): ${file}#${reading[2]}. ` +
+        `Read the relevant section of ${JSON.stringify(path.join(directory, file))} when its knowledge is needed.`);
     }
   }
   const evidence: AgentTeamProfileEvidence = { schema: 'theorem-os.agent-team-profile-evidence.v1',
@@ -100,9 +102,10 @@ export function resolveAgentTeamProfiles(skill: MathAgentSkill, message: string)
     JSON.stringify(evidence) + '\n' +
     (selected.length ? '' : 'No catalogue profile was selected. Read references/domain-experts.md and references/team-roles.md for relevant knowledge; clarify a missing specialization with Lead.\n') +
     (unresolved.length ? 'Unresolved names may describe custom expertise. Use the assignment to clarify that knowledge; do not claim a catalogue passage was loaded for them.\n' : '') +
-    'Use relevant definitions, assumptions and distinctions from this knowledge; choose your own proof approach. ' +
-    'This record establishes context loading only. Report knowledge actually used with its source anchor and application ' +
-    'when communicating a useful finding. The source locators identify collected notes, not a new external-source read ' +
+    'Use relevant definitions, assumptions and distinctions from the injected profile; choose your own proof approach. ' +
+    'Read linked material only when it addresses a concrete missing concept. Sources marked available-on-demand are locators, not loaded text. ' +
+    'This record distinguishes supplied knowledge from available reading. When useful, report knowledge actually used with its source anchor and application. ' +
+    'The source locators identify collected notes, not a new external-source read ' +
     'or proof acceptance.\n' + passages.join('\n\n') };
   return { section: context, evidence };
 }

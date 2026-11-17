@@ -82,6 +82,8 @@ export type MathAgentSession = {
   readonly isolationReceipt?: Record<string, unknown>;
   readonly processIdentity?: HarnessProcessIdentity;
   readonly nativeAgentControl?: NativeAgentControlConnection;
+  /** Safe startup overrides acknowledged by thread creation, not an effective-config readback. */
+  readonly nativeConfiguration?: MathNativeConfiguration;
   /** Selected execution contracts, not a claim of mathematical acceptance or complete usage. */
   readonly executionPlan?: MathAgentSessionPlan;
   run: (message: string, messageId: string, workspace: string, onStarted: (turnId: string) => void) => Promise<string>;
@@ -94,6 +96,16 @@ export type MathAgentSession = {
   stopForFreeze?: () => Promise<MathProcessStopReceipt | Readonly<{ status: 'unconfirmed';
     reason: 'turn-not-settled' | 'shutdown-failed' }>>;
 };
+
+export type MathNativeConfiguration = Readonly<{
+  source: 'thread-start-overrides';
+  overrides: Readonly<{
+    includeSkillInstructions: false;
+    deferMailboxPreemption?: true;
+    rootAgentUsageHintText?: '';
+    subagentUsageHintText?: '';
+  }>;
+}>;
 
 export type MathAgentHarnessId = 'codex' | 'claude-code' | 'opencode' | 'cli';
 

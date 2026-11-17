@@ -6,6 +6,8 @@ When elaboration fails, isolate the failing expression in a small probe using th
 
 Use the generated `check-lean` command directly and inspect its JSON `classification`, `firstBlocking` and `diagnosticArtifacts`. Its exit status is part of the result. A shell pipeline ending in `head`, or a later successful `cat`/`echo`, can hide the compiler's failure. For a manual shell check, redirect output to a file, save the compiler status immediately, then preview the file and return the saved status.
 
+Use the prepared environment and its health result for the first focused check. An unfamiliar dependency layout, a symlink's small apparent size or a missing global tool path does not establish an environment failure. Investigate dependencies when the actual check or health result reports a fault, preserving that diagnostic.
+
 An `infrastructure-error` identifies an environment fault; `leanStarted: false` confirms compilation did not start. Report its error code, fingerprint and recovery to Lead/host, preserve source work, and retry after a repair or changed health result. Use `check-lean --health` with the same worktree to check the actual namespace's sealed mount, lease and pinned compiler. An invisible mount or host PID inside sandbox `/proc` does not establish that the host helper died. Avoid repeated compilation or assembly attempts against the same failed environment; host proof delivery and final verification retain their independent checks.
 
 Computational examples can refute a proposed intermediate claim or guide a conjecture. A successful finite search or numerical experiment does not prove an unrestricted statement. Keep executable experiment code, parameters and output if it informs a route decision.

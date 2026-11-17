@@ -45,12 +45,20 @@ export function skillResearchContinuationSection(problem: Pick<SolverProblem, 'r
 }
 
 export function agentTeamContextSection(state: Readonly<SolverRunState>): ContextSection {
+  const native = state.agentTeam?.transport === 'native-agent-control';
+  const overview = agentTeamOverview(state), reason = overview.coordination?.reason;
+  const currentStage = reason === 'opening' || reason === 'deferred-step-complete' ? {
+    kind: 'collaboration-decision', reason,
+    instruction: 'Read only the statement and definitions needed for this decision, then dispatch a useful question or call coordinate with reason and nextStep before extended proof work. A defer permits that specific nextStep; reassess when it is complete. A reminder does not complete the decision.',
+  } : reason ? { kind: 'collaboration-review', reason, instruction: overview.coordination?.instruction }
+    : { kind: 'research', instruction: 'Advance the current gap and assess useful incoming findings at research milestones.' };
   return { id: 'agent-team', kind: 'feedback',
-    text: 'Team observations (advisory; use theoremos_team poll for the durable inbox):\n' +
-      JSON.stringify({ ...agentTeamOverview(state),
+    text: 'Team observations (advisory; ' + (native ? 'receive updates through native messages' : 'use theoremos_team poll for the durable inbox') + '):\n' +
+      JSON.stringify({ ...overview, currentStage,
         recentEvents: agentTeamRecentEvents(state.agentTeam, 'lead'),
         latestSequence: state.agentTeam?.events.at(-1)?.sequence ?? 0,
-        inbox: 'Poll after your last received cursor (initially 0) for the full durable inbox. latestSequence is not an acknowledgment.' }) };
+        inbox: native ? 'Native messages carry addressed updates. Use history for complete tasks and inspect or inspect-research for saved results. Native acceptance and latestSequence are not read acknowledgments.' :
+          'Poll after your last received cursor (initially 0) for the full durable inbox. latestSequence is not an acknowledgment.' }) };
 }
 
 /** Stable host contracts and current facts; research methods live in the pinned skill. */
@@ -65,9 +73,10 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
   } else if (state.knowledgeDigest) throw new Error('math_knowledge_identity_missing');
   const { command, help } = buildResearchToolGuide(problem, access, state.environmentDigest, state.researchDelegation?.mode === 'team');
   const project = path.join(access.worktree, problem.projectRelative);
+  const team = state.researchDelegation?.mode === 'team';
   const teamWorker = state.researchDelegation?.mode === 'team' && access.teamRole?.role === 'worker';
   if (teamWorker && !access.teamAssignment) throw new Error('math_team_assignment_missing');
-  help.section('delivery', teamWorker ? agentTeamWorkerDeliveryHelp() :
+  const ownDelivery =
     'Save useful source and worktree-root RESEARCH.md before returning. The host confirms writer shutdown and freezes actual source. ' +
     'A successful check-lean covering every original proof file, with no remaining proof holes, also hands writing back automatically. ' +
     'Only independent host checks of all original targets can accept the original problem.\n' +
@@ -77,7 +86,10 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
     'Optional description and premises describe scope, not additional proof authority. The host verifies each actual declaration and complete type independently. ' +
     'Other incomplete goals may remain; a helper that depends on them or on new axioms is rejected. ' +
     'The request is consumed after the turn, and its host feedback is saved at .scratch/declaration-feedback.json. ' +
-    'It never claims the original problem is solved. No task graph, role acknowledgment or fabricated receipt is required.', '');
+    'It never claims the original problem is solved. No task graph, role acknowledgment or fabricated receipt is required.';
+  help.section('delivery', teamWorker ? agentTeamWorkerDeliveryHelp() : team ?
+    'Member delivery contract, supplied by the host: ' + agentTeamWorkerDeliveryHelp() + '\n\n' +
+    'The following declaration-submission file is only for your own Lead worktree; do not assign it to a member. ' + ownDelivery : ownDelivery, '');
   materializeResearchToolHelp({ toolHelp: help.build() }, access.worktree);
   const editable = problem.ownedFiles.filter(file => !Object.hasOwn(problem.frozenFiles ?? {}, file));
   const instructions = (state.researchDelegation?.mode === 'team'
@@ -85,6 +97,8 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
       state.agentTeam?.transport) : '') +
     'Research the fixed original mathematics problem in this isolated worktree using the pinned theoremos-research skill.\n' +
     `Lean project: ${project}. Editable Lean paths relative to it: ${JSON.stringify(editable)}. ` +
+    'Only these paths may contain submitted Lean source; add helpers inside them instead of creating another Lean file. ' +
+    (team ? 'Every member has a separate worktree. Identical relative filenames belong to different copies; Lead does not own the member\'s copy. ' : '') +
     `Public research notes: ${path.join(access.worktree, 'RESEARCH.md')}. Temporary experiments and requests belong in .scratch/tmp or the documented .scratch paths.\n` +
     'For original declarations, keep kinds, names, types, hypotheses, imports, options and scopes fixed; edit only permitted proof/definition bodies. ' +
     'You may add independent helper declarations inside the editable owned Lean files; the original-declaration restriction does not prohibit these additions. ' +

@@ -95,7 +95,7 @@ const failureDiagnostic = (error: Json): MathAgentFailureDiagnostic | undefined 
   return { code: code ?? (reason === 'account_concurrency_limit' ? 'rateLimitExceeded' : 'responseStreamDisconnected'),
     ...(httpStatusCode !== undefined ? { httpStatusCode } : {}), ...(reason ? { reason } : {}) };
 };
-import type { MathAgentActivity, MathAgentOptions, MathAgentSession } from './agentSession';
+import type { MathAgentActivity, MathAgentOptions, MathAgentSession, MathNativeConfiguration } from './agentSession';
 export type { MathAgentActivity, MathAgentOptions, MathAgentSession } from './agentSession';
 
 // Isolated formalization already supplies the complete frozen role protocol.
@@ -476,6 +476,10 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   catch (error) { await responsesRelay?.close(); await bridge?.close(); await isolated?.close(); throw error; }
   const nativeControl = options.nativeAgentControl ? new NativeAgentControl(options.nativeAgentControl,
     (method, params) => rpc.request(method, params)) : undefined;
+  const nativeConfiguration: MathNativeConfiguration = {
+    source: 'thread-start-overrides', overrides: { includeSkillInstructions: false,
+      ...(nativeControl ? { deferMailboxPreemption: true, rootAgentUsageHintText: '', subagentUsageHintText: '' } as const : {}) },
+  };
   let closing: Promise<void> | undefined;
   let investigations: NativeInvestigations | undefined;
   let boundTurn: Promise<string | undefined> = Promise.resolve(undefined);
@@ -793,6 +797,9 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         mcp_servers: disabled,
         'features.apps': false,
         'features.plugins': false,
+        // Only the frozen, explicitly selected mathematics skills belong in these
+        // sessions. This suppresses the global catalog, not explicit skill loading.
+        'skills.include_instructions': nativeConfiguration.overrides.includeSkillInstructions,
         // Preserve the projected proof environment; user profiles and shell snapshots
         // can select tools that execute outside the isolated mathematical worktree.
         allow_login_shell: false,
@@ -803,8 +810,15 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         // Native role files cannot narrow inherited writer permissions; profiles cannot enable children implicitly.
         ...(!nativeControl && (options.skills?.length || options.tools) ? { 'features.multi_agent': false, 'features.multi_agent_v2': false,
           'agents.enabled': false, 'features.goals': false } : {}),
-        ...(nativeControl ? { 'features.multi_agent': true, 'features.multi_agent_v2': true,
-          'agents.enabled': true, 'features.goals': false } : {}),
+        ...(nativeControl ? { 'features.multi_agent': true,
+          // Empty role overrides suppress generic hints that conflict with the
+          // host's complete workspace, capacity and delegation contract.
+          'features.multi_agent_v2': { enabled: true,
+            root_agent_usage_hint_text: nativeConfiguration.overrides.rootAgentUsageHintText,
+            subagent_usage_hint_text: nativeConfiguration.overrides.subagentUsageHintText },
+          'agents.enabled': true, 'features.goals': false,
+          'features.defer_mailbox_preemption': nativeConfiguration.overrides.deferMailboxPreemption,
+        } : {}),
         model_reasoning_effort: options.effort,
         // The formalization sandbox is the OS boundary for isolated roles; every other shell runs the worker profile.
         ...(!isolated ? { ...mathWorkerPermissionConfig(options.workspace, options.hiddenRoots),
@@ -869,6 +883,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     return {
       threadId,
       executionPlan,
+      nativeConfiguration,
       ...(isolated ? { isolationReceipt: isolated.receipt } : processLaunch ? { isolationReceipt: processLaunch.isolationReceipt } : {}),
       ...(processIdentity ? { processIdentity } : {}),
       usageSource: (bridge || responsesRelay || isolated) && options.requestGate ? 'upstream-requests' as const : 'native-thread-totals' as const,

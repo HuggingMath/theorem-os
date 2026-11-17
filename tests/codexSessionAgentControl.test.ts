@@ -6,6 +6,7 @@ import { createCodexMathSession } from '../src/runtime/codexSession';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/agentSession';
 import type { NativeAgentControlOptions } from '../src/runtime/nativeAgentControl';
 import { nativeAgentControlModelCatalog } from '../src/runtime/nativeAgentControl';
+import { readMathAgentSkill } from '../src/runtime/agentSkills';
 
 const fixture = String.raw`
 const fs = require('node:fs'), path = require('node:path'), readline = require('node:readline');
@@ -29,6 +30,8 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   if (call.method === 'initialize') return reply({});
   if (call.method === 'theoremos/agentControl/capabilities') return reply({version:process.env.BAD_BACKEND ? 2 : 1,
     backend:'theoremos-host',nativeTools:true,isolatedChildBootstrap:true});
+  if (call.method === 'skills/list') return reply({data:[{cwd:settings.cwd,errors:[],skills:[{
+    name:'pinned-fixture',path:process.env.FIXTURE_SKILL_PATH,enabled:true}]}]});
   if (['thread/start','thread/resume','theoremos/agentControl/start'].includes(call.method)) {
     start = call; settings = call.params.thread || call.params.resume || call.params;
     threadId = settings.threadId || call.params.bootstrap?.threadId || 'root-id';
@@ -80,7 +83,12 @@ describe('native AgentControl stdio integration without model calls', () => {
       operationId: 'operation-attach' }), expect.any(Object), expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(session.nativeAgentControl?.info).toEqual(expect.objectContaining({ sessionId: 'root-id' }));
     const start = calls().find(call => call.method === 'thread/start').params;
-    expect(start.config).toMatchObject({ 'features.multi_agent': true, 'features.multi_agent_v2': true, 'agents.enabled': true });
+    expect(start.config).toMatchObject({ 'features.multi_agent': true,
+      'features.multi_agent_v2': { enabled: true, root_agent_usage_hint_text: '', subagent_usage_hint_text: '' },
+      'features.defer_mailbox_preemption': true, 'skills.include_instructions': false, 'agents.enabled': true });
+    expect(session.nativeConfiguration).toEqual({ source: 'thread-start-overrides', overrides: {
+      includeSkillInstructions: false, deferMailboxPreemption: true, rootAgentUsageHintText: '', subagentUsageHintText: '',
+    } });
     expect(start.dynamicTools).toBeUndefined();
     expect(await session.nativeAgentControl!.update({ sessionId: 'root-id', threadId: session.threadId, sequence: 4 }))
       .toEqual({ acceptedSequence: 4 });
@@ -110,6 +118,29 @@ describe('native AgentControl stdio integration without model calls', () => {
     expect(await session.run('Continue from saved work.', 'next', directory, () => {})).toBe('completed');
     const next = calls().filter(call => call.method === 'theoremos/agentControl/input').at(-1).params;
     expect(next.input).toEqual({ kind: 'userInput', items: [{ type: 'text', text: 'Continue from saved work.', text_elements: [] }] });
+  });
+
+  it.each(['root', 'child', 'resumed-child'] as const)('preserves explicit pinned skill dispatch with the global catalog suppressed (%s)', async mode => {
+    const skillDirectory = path.join(directory, '.agents', 'skills', 'pinned-fixture');
+    fs.mkdirSync(skillDirectory, { recursive: true });
+    const skillPath = path.join(skillDirectory, 'SKILL.md');
+    fs.writeFileSync(skillPath, '---\nname: pinned-fixture\ndescription: Fixed mathematical fixture instructions.\n---\nUse the pinned fixture contract.\n');
+    const bootstrap = { version: 1, sessionId: 'root-id', threadId: 'child-id', source: { subagent: {} } };
+    const initialInput = { author: '/root', input: { kind: 'message', mode: 'triggerTurn',
+      message: { kind: 'plaintext', text: 'Assigned fixture.' } }, startOptions: {} };
+    session = await createCodexMathSession({ ...options,
+      environment: { ...options.environment, FIXTURE_SKILL_PATH: skillPath },
+      skills: [readMathAgentSkill(skillPath)], ...(mode === 'resumed-child' ? { threadId: 'child-id' } : {}),
+      nativeAgentControl: { ...host, ...(mode === 'root' ? {} : { bootstrap, initialInput }) },
+    });
+    expect(await session.run('Read the fixed proof context.', 'task', directory, () => {})).toBe('completed');
+    const started = calls().find(call => ['thread/start', 'theoremos/agentControl/start'].includes(call.method)).params;
+    const settings = started.thread ?? started.resume ?? started;
+    expect(settings.config['skills.include_instructions']).toBe(false);
+    expect(calls().some(call => call.method === 'skills/list')).toBe(true);
+    const input = calls().find(call => ['turn/start', 'theoremos/agentControl/input'].includes(call.method)).params;
+    if (mode === 'root') expect(input.input).toContainEqual({ type: 'skill', name: 'pinned-fixture', path: skillPath });
+    else expect(input.contextItems[0].content[0].text).toContain(JSON.stringify(skillPath));
   });
 
   it('rejects an incompatible executable before dispatching a thread', async () => {

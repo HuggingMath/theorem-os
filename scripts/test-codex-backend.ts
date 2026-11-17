@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { parse, stringify } from 'smol-toml';
@@ -20,26 +21,32 @@ import type { SolverRunState } from '../src/solver/archive';
 import { directSolverModules } from '../src/solver/modules';
 import { git, readSolverProblem } from '../src/solver/problem';
 import { prepareResearchSkill, researchSkillIdentity } from '../src/solver/researchSkill';
+import { verifyNativeProofDelivery } from './test-codex-backend-delivery';
 
 // Real Codex collaboration handlers and isolated writer processes. All Responses
 // are deterministic fixture messages on this process's loopback server.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const flag = (name: string) => { const index = process.argv.indexOf(name); return index < 0 ? undefined : process.argv[index + 1]; };
-const executable = fs.realpathSync(flag('--executable') ?? path.join(root, 'out/codex-backend/codex'));
+const requestedExecutable = flag('--executable') ?? process.env.THEOREMOS_TEST_CODEX_EXECUTABLE ?? path.join(root, 'out/codex-backend/codex');
+if (!fs.existsSync(requestedExecutable)) throw new Error('Native backend acceptance requires a real Codex binary. ' +
+  'Pass --executable PATH or THEOREMOS_TEST_CODEX_EXECUTABLE; missing: ' + requestedExecutable);
+const executable = fs.realpathSync(requestedExecutable);
+const version = spawnSync(executable, ['--version'], { encoding: 'utf8', timeout: 5000 });
+if (version.status !== 0) throw new Error('Native backend acceptance could not execute Codex: ' + executable);
 const output = path.resolve(flag('--output') ?? path.join(process.env.TMPDIR ?? '/data/lzh/default-storage/tmp', 'codex-backend-verification'));
 fs.mkdirSync(output, { recursive: true, mode: 0o700 });
 const directory = fs.mkdtempSync(path.join(process.env.TMPDIR ?? '/data/lzh/default-storage/tmp', 'codex-backend-e2e-'));
 const requests: Record<string, any>[] = [], events: Record<string, unknown>[] = [];
 const processes = new Map<string, HarnessProcessIdentity>();
 const observations: Record<string, any> = { schema: 'theorem-os.codex-backend-verification.v1',
-  executable, executableDigest: mathDigest(fs.readFileSync(executable)), paidModelCalls: 0, status: 'running' };
+  executable, version: version.stdout.trim(), executableDigest: mathDigest(fs.readFileSync(executable)), paidModelCalls: 0, status: 'running' };
 let team: AgentResearchTeam | undefined, lead: MathAgentSession | undefined;
 let sequence = 0, rootStep = 0;
 const memberSteps = new Map<string, number>();
 let state: SolverRunState;
 const controller = new AbortController();
 // A disposable integration-test timeout, independent of solving/model budgets.
-const deadline = setTimeout(() => controller.abort(new Error('offline-native-backend-test-timeout')), 180_000);
+const deadline = setTimeout(() => controller.abort(new Error('offline-native-backend-test-timeout')), 240_000);
 const until = async (predicate: () => boolean) => {
   while (!predicate()) { controller.signal.throwIfAborted(); await new Promise(resolve => setTimeout(resolve, 20)); }
 };
@@ -103,8 +110,8 @@ const server = createServer(async (request, response) => {
         : step === 1 ? nativeCall('peer_' + member, 'send_message', { target: '/root', message: 'Native member result ' + member })
           : message('Independent member research saved.')];
     } else {
-      // Native mailbox arrivals may cancel sampling and retry the same model request.
-      // Advance the scripted workflow only after its actual tool receipt is in history.
+      // Resume and full-history forks retain prior tool calls. Advance the scripted
+      // workflow only after the original tool's actual receipt is in history.
       const receipts = new Set(body.input.filter((item: any) => item.type === 'function_call_output').map((item: any) => item.call_id));
       const stages = ['spawn_fresh', 'queue_idle', 'followup', 'spawn_fork', 'native_list', 'interrupt_idle',
         'followup_interrupt', 'native_wait', 'followup_busy', 'amend_active', 'interrupt_active'];
@@ -301,6 +308,9 @@ try {
   };
   assert.ok(observations.relayAdmission.namespaceRequests > 0, 'native namespaces must pass production relay admission');
   assert.ok(observations.relayAdmission.agentMessageRequests > 0, 'native child messages must pass production relay admission');
+  await team.close(); await lead.close(); team = undefined; lead = undefined;
+  observations.proofDelivery = await verifyNativeProofDelivery({ repository: root, executable,
+    output: path.join(output, 'proof-delivery'), signal: controller.signal });
   observations.status = 'passed';
 } catch (error) {
   observations.status = 'failed'; observations.error = error instanceof Error ? { message: error.message, stack: error.stack } : String(error);

@@ -123,7 +123,23 @@ export class AgentResearchTeam {
   get nativeAgentControlEnabled() { return this.archive.transport === 'native-agent-control'; }
   nativeAgentControlOptions(actor = 'lead') { return this.nativeControl?.options(actor); }
   private get budgetControlsEnabled() { return this.input.maxTotalTokens > 0 || Number.isFinite(this.input.maxTurns); }
-  setLeadSession(session?: MathAgentSession) { this.leadSession = session; }
+  setLeadSession(session?: MathAgentSession) {
+    this.leadSession = session;
+    if (session?.nativeConfiguration && this.archive.nativeControl) {
+      this.archive.nativeControl.rootRuntimeConfiguration = session.nativeConfiguration;
+      this.changed();
+    }
+  }
+
+  leadWriterStopped() { this.nativeControl?.writerStopped('lead'); }
+
+  /** Coordination alone neither freezes sources nor requires replacing the native process. */
+  get canContinueCoordination() {
+    return this.nativeAgentControlEnabled && this.leadCoordinationCheckpoint &&
+      !this.leadAdoptionCheckpoint && !this.leadCompletionCheckpoint &&
+      !this.archive.completionRequested && !this.archive.adoptions.some(item => item.targetId === 'lead' &&
+        ['queued', 'integrating'].includes(item.status));
+  }
 
   beginLeadTurn() {
     this.leadRequestedInTurn = false;
@@ -197,11 +213,11 @@ export class AgentResearchTeam {
     for (const wake of this.waiters) wake();
   }
 
-  private event(from: string, to: string, kind: AgentTeamState['events'][number]['kind'], message: string,
+  private event(from: string | null, to: string, kind: AgentTeamState['events'][number]['kind'], message: string,
     extra: { taskId?: string; deliveryId?: string; researchArtifactId?: string; researchRevision?: number;
       sourceTaskId?: string; relatedTaskId?: string; dispatchResearchRevision?: number;
       objectiveRevision?: number; progressId?: string } = {}) {
-    const item = { sequence: (this.archive.events.at(-1)?.sequence ?? 0) + 1, from, to, kind,
+    const item = { sequence: (this.archive.events.at(-1)?.sequence ?? 0) + 1, from: from ?? 'host', to, kind,
       at: Date.now(), text: message.slice(0, 16000), ...extra };
     this.archive.events.push(item); this.changed();
     this.input.emit('team_event', { ...item });
@@ -376,6 +392,7 @@ export class AgentResearchTeam {
     await stopProofWriter({ session, record: worker, workerId: worker.id,
       close: async () => { await session.close(); this.nativeIdle.delete(worker.id); }, save: () => this.changed(),
       deferred: reason => this.input.emit('team_writer_stop_deferred', { workerId: worker.id, reason }) });
+    this.nativeControl?.writerStopped(worker.id);
     worker.writerProcess = undefined; this.changed();
   }
 
@@ -405,6 +422,7 @@ export class AgentResearchTeam {
       instructions: context.instructions, signal: this.input.signal,
       onUsage: () => { throw new Error('math_team_native_idle_usage'); } });
     this.nativeIdle.set(worker.id, session);
+    if (worker.native && session.nativeConfiguration) worker.native.runtimeConfiguration = session.nativeConfiguration;
     worker.writerProcess = session.processIdentity; this.changed();
   }
 
@@ -900,6 +918,7 @@ export class AgentResearchTeam {
           this.changed();
         }, ...callbacks, requestGate });
       usage.sessionOpened(entry.session);
+      if (worker.native && entry.session.nativeConfiguration) worker.native.runtimeConfiguration = entry.session.nativeConfiguration;
       if (entry.session.processIdentity) worker.writerProcess = entry.session.processIdentity;
       worker.threadId = entry.session.threadId || worker.threadId; this.changed();
       signal.throwIfAborted();
@@ -937,6 +956,7 @@ export class AgentResearchTeam {
           await stopProofWriter({ session: current, record: worker, workerId: worker.id,
             close: async () => { await current.close(); entry.session = undefined; usage.sessionClosed(sessionId); },
             save: () => this.changed(), deferred: reason => this.input.emit('team_writer_stop_deferred', { workerId: worker.id, reason }) });
+          this.nativeControl?.writerStopped(worker.id);
           worker.writerProcess = undefined;
         }
         writerStopped = true;
@@ -992,7 +1012,7 @@ export class AgentResearchTeam {
   private pauseForBudget(worker: AgentTeamWorker, task: AgentTeamTask, reason: string) {
     task.status = 'paused'; task.pauseRequested = { at: Date.now(), kind: 'budget', reason }; task.pausedAt = Date.now();
     worker.status = 'paused'; worker.activity = 'paused';
-    this.event('host', 'lead', 'paused', reason, { taskId: task.id });
+    this.event(null, 'lead', 'paused', reason, { taskId: task.id });
   }
 
   private deliveryDeclarations(worker: AgentTeamWorker, task: AgentTeamTask) {
@@ -1082,7 +1102,7 @@ export class AgentResearchTeam {
             if (!peers.includes(delivery.id)) peers.push(delivery.id);
           } else { target!.pendingSourceBase = undefined; target!.pendingPeerDeliveries = undefined; }
         }
-        this.event('host', targetId, 'adopted', 'Checked declarations integrated at ' + result.commit, { deliveryId: adoption.deliveryId });
+        this.event(null, targetId, 'adopted', 'Checked declarations integrated at ' + result.commit, { deliveryId: adoption.deliveryId });
       } catch (error) {
         adoption.error = error instanceof Error ? error.message : 'math_team_adoption_failed';
         if (!correctableProofFailure(error) && !/^math_task_integration_(?:conflict|missing_context|missing_declaration)$/u.test(adoption.error) &&
@@ -1091,7 +1111,7 @@ export class AgentResearchTeam {
           this.changed(); throw error;
         }
         adoption.status = 'failed';
-        this.event('host', 'lead', 'failed', adoption.error, { deliveryId: adoption.deliveryId });
+        this.event(null, 'lead', 'failed', adoption.error, { deliveryId: adoption.deliveryId });
       }
       if (target) target.activity = target.tasks.some(task => task.status === 'paused') ? 'paused' : 'idle';
       this.changed();
@@ -1100,10 +1120,12 @@ export class AgentResearchTeam {
 
   async restore() {
     assertAgentTeamProcessesStopped(this.input.state);
+    this.nativeControl?.writerStopped('lead', 'recovery-process-check');
     this.input.state.writerProcess = undefined;
     for (const worker of this.archive.workers) {
       initializeUsageAccounting(worker);
       worker.writerProcess = undefined;
+      if (worker.native) this.nativeControl?.writerStopped(worker.id, 'recovery-process-check');
       await this.prepare(worker);
       for (const task of worker.tasks.filter(item => item.status === 'running')) {
         task.status = task.cancelRequested ? 'cancelled' : task.pauseRequested ? 'paused' : 'interrupted';

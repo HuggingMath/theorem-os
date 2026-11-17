@@ -30,6 +30,9 @@ export function createSkillProofLifecycle(input: {
     const source = inspectLeanSource(fs.readFileSync(path.join(worktree, state.problem.projectRelative, file), 'utf8'));
     return source.sorryCount > 0 || source.admitCount > 0;
   });
+  const needsSourceFreeze = () => Boolean(state.pendingResearchFreeze || state.pendingDeclarationCheck ||
+    state.pendingProofCheck || fs.existsSync(path.join(worktree, '.scratch', DECLARATION_SUBMISSION_FILE)) ||
+    !originalProofHasHoles());
   const rememberWholeProof = (commit: string) => {
     const pending = { commit, sourceDigest: solverSourceDigest(state.problem, worktree), problemReceiptDigest: state.problem.receiptDigest,
       environmentDigest: state.environmentDigest };
@@ -152,5 +155,5 @@ export function createSkillProofLifecycle(input: {
     }
     if (state.pendingProofCheck) await checkFrozenWholeProof();
   };
-  return { freezeSources, resumePending, checkFrozenWholeProof };
+  return { freezeSources, resumePending, checkFrozenWholeProof, needsSourceFreeze };
 }

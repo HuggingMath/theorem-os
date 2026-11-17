@@ -151,16 +151,37 @@ export class AgentTeamNativeControl {
 
   connection(threadId: string) { return this.connections.get(threadId); }
 
-  async advisory(from: string, to: string, message: string, hostEventSequence?: number): Promise<void> {
+  /** A confirmed stopped process is distinct from a native turn completion or a proof delivery. */
+  writerStopped(actor: string, source: 'writer-stop' | 'recovery-process-check' = 'writer-stop') {
+    const state = this.archive.nativeControl;
+    if (!state) return;
+    if (actor === 'lead') {
+      state.rootWriterStop = { source, at: Date.now() };
+      if (state.rootAgent && (state.rootAgent.status === 'running' || state.rootAgent.status === 'pending_init'))
+        state.rootAgent = { ...state.rootAgent, status: 'shutdown' };
+    } else {
+      const native = this.worker(actor).native!;
+      native.writerStop = { source, at: Date.now(), ...(native.turnId ? { turnId: native.turnId } : {}) };
+      if (native.status === undefined || native.status === 'running' || native.status === 'pending_init') {
+        native.status = 'shutdown';
+        if (native.agent) native.agent = { ...native.agent, status: 'shutdown' };
+      }
+    }
+    this.save();
+  }
+
+  /** A null sender denotes the host; member names, including "host", retain their identity. */
+  async advisory(from: string | null, to: string, message: string, hostEventSequence?: number): Promise<void> {
     if (from === to || !this.archive.nativeControl) return;
-    const sender = from === 'lead' ? this.archive.nativeControl.rootThreadId : this.worker(from).native!.threadId;
+    const sender = from === null ? null : from === 'lead' ? this.archive.nativeControl.rootThreadId : this.worker(from).native!.threadId;
     const recipient = to === 'lead' ? this.archive.nativeControl.rootThreadId : this.worker(to).native!.threadId;
     await this.queue(sender, recipient, { kind: 'plaintext', text: message }, false, hostEventSequence);
   }
 
-  private async queue(sender: string, recipient: string, message: Json, nativeCommunication = false,
+  private async queue(sender: string | null, recipient: string, message: Json, nativeCommunication = false,
     hostEventSequence?: number): Promise<string> {
-    const id = crypto.randomUUID(), author = this.identity(sender).path, target = this.identity(recipient).path;
+    const id = crypto.randomUUID(), author = sender === null ? '/morpheus' : this.identity(sender).path,
+      target = this.identity(recipient).path;
     this.archive.nativeControl!.mailbox.push({ id, threadId: recipient, author, recipient: target,
       ...(nativeCommunication ? { communication: message } : { message }), status: 'queued',
       ...(hostEventSequence === undefined ? {} : { hostEventSequence }) });
