@@ -10,14 +10,15 @@ const skill = readMathAgentSkill(path.resolve('skills/theoremos-research/SKILL.m
 const record = (text: string) => JSON.parse(text.split('\n')[1]!);
 
 describe('Lead-selected professional knowledge', () => {
-  it('loads domain knowledge, its collected reading and the independent work responsibility', () => {
+  it('loads domain knowledge and responsibility while exposing collected reading on demand', () => {
     const { text } = agentTeamProfileSection(skill, 'Profiles: D006, prover\nStudy the specified representation.');
     expect(record(text)).toMatchObject({ skillDigest: skill.digest, selected: ['D006', 'prover'],
       loaded: ['D006', 'prover'], unresolved: [] });
     expect(text).toContain('references/domain-experts/algebra.md');
     expect(text).toContain('references/domain-materials/algebra.md#representation-theory');
     expect(text).toContain('Maschke');
-    expect(text).toContain('Locator:');
+    expect(text).toContain('Collected reading available on demand (not injected)');
+    expect(text).not.toContain('Locator:');
     expect(text).toContain('### Lean Prover');
     expect(text).not.toContain('## commutative-algebra');
     expect(text).not.toContain('## real-analysis');
@@ -30,12 +31,12 @@ describe('Lead-selected professional knowledge', () => {
     expect(text.match(/Profile D064 /gu)).toHaveLength(1);
   });
 
-  it('has a complete loadable profile and reading section for every published domain ID', () => {
+  it('has a complete profile and a valid on-demand reading section for every published domain ID', () => {
     for (let index = 1; index <= 100; index++) {
       const id = 'D' + String(index).padStart(3, '0');
       const { text } = agentTeamProfileSection(skill, 'Profiles: ' + id);
       expect(record(text)).toMatchObject({ loaded: [id], unresolved: [] });
-      expect(text).toContain('Collected reading; source: references/domain-materials/');
+      expect(text).toContain('Collected reading available on demand (not injected): references/domain-materials/');
     }
   });
 
@@ -53,7 +54,7 @@ describe('Lead-selected professional knowledge', () => {
     expect(record(unselected)).toMatchObject({ selected: [], loaded: [], unresolved: [] });
   });
 
-  it('returns serializable evidence binding every injected passage to its exact source bytes', () => {
+  it('binds source bytes while distinguishing injected passages from on-demand reading', () => {
     const { section, evidence } = resolveAgentTeamProfiles(skill, 'Profiles: D041, prover');
     expect(agentTeamProfileEvidenceSchema.parse(JSON.parse(JSON.stringify(evidence)))).toEqual(evidence);
     expect(record(section.text)).toEqual(evidence);
@@ -65,10 +66,15 @@ describe('Lead-selected professional knowledge', () => {
       const passage = text.split('\n').slice(source.firstLine - 1, source.lastLine).join('\n').trim();
       expect(mathDigest(text)).toBe(source.fileDigest);
       expect(mathDigest(passage)).toBe(source.digest);
-      expect(section.text).toContain(passage);
+      if (source.loading === 'available-on-demand') expect(section.text).not.toContain(passage);
+      else expect(section.text).toContain(passage);
     }
     expect(evidence.sources[0]).toMatchObject({ file: 'references/domain-experts/analysis.md',
-      anchor: 'real-analysis', heading: 'real-analysis' });
+      anchor: 'real-analysis', heading: 'real-analysis', loading: 'injected' });
+    expect(evidence.sources[1]).toMatchObject({ kind: 'collected-reading', loading: 'available-on-demand' });
+    const historical = structuredClone(evidence);
+    for (const source of historical.sources) delete source.loading;
+    expect(agentTeamProfileEvidenceSchema.parse(historical)).toEqual(historical);
   });
 
   it('resolves the current selection again on a resumed or amended assignment without retaining former expertise', () => {

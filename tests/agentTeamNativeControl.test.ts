@@ -107,6 +107,29 @@ describe('native AgentControl mathematical-team host routing', () => {
       .rejects.toThrow();
   });
 
+  it('delivers host adoption and failure observations without looking up a nonexistent host worker', async () => {
+    const f = await fixture(), child = connection(CHILD, '/root/analyst');
+    await f.call('attach', { threadId: CHILD, sessionId: ROOT }, 'analyst', child);
+    await f.control.advisory(null, 'lead', 'Checked declarations were integrated.', 18);
+    await f.control.advisory(null, 'analyst', 'The dependency is ready.', 19);
+    expect(f.archive.nativeControl!.mailbox).toMatchObject([
+      { author: '/morpheus', recipient: '/root', hostEventSequence: 18, status: 'accepted' },
+      { author: '/morpheus', recipient: '/root/analyst', hostEventSequence: 19, status: 'accepted' },
+    ]);
+    expect(f.lifecycle.followup).not.toHaveBeenCalled();
+  });
+
+  it('keeps a member named host distinct from the native host author', async () => {
+    const f = await fixture();
+    f.archive.workers[0] = member('host');
+    await f.control.advisory('host', 'lead', 'Member research update.', 20);
+    await f.control.advisory(null, 'host', 'Checked dependency ready.', 21);
+    expect(f.archive.nativeControl!.mailbox).toMatchObject([
+      { author: '/root/host', recipient: '/root', hostEventSequence: 20, status: 'accepted' },
+      { author: '/morpheus', recipient: '/root/host', hostEventSequence: 21, status: 'queued' },
+    ]);
+  });
+
   it('passes attributed followup to the current member lifecycle without amending its objective', async () => {
     const f = await fixture(), worker = f.archive.workers[0];
     worker.tasks.push({ id: 'same-task', message: 'Profiles: D006\nInvestigate this gap.', status: 'running', objectiveRevision: 2 });

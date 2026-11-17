@@ -5,6 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { VerificationCheckpointError } from './verificationCheckpoint';
 import type { MathAgentActivity, MathAgentFailureDiagnostic, MathAgentSession } from '../runtime/agentSession';
 import { safeFailureDiagnostic } from '../runtime/failureDiagnostic';
+import { confirmHarnessProcessStopped } from '../runtime/harnessProcess';
 import { VerifierFailureError, verifierFailureDiagnostic } from './verifierFailure';
 import { readMathBuildManifest } from '../math/mathBuildManifest';
 import { MathGitError } from '../math/mathGit';
@@ -973,7 +974,12 @@ export async function runResearchWorkers(input: {
         if (!session) { await closing; return; }
         const current = session, closingSessionId = usage.sessionId; session = undefined;
         team?.setLeadSession(undefined);
-        try { closing = current.close(); await closing; } catch (error) { cleanupErrors.push(error); throw error; }
+        try {
+          closing = current.close(); await closing;
+          if (team && current.processIdentity && confirmHarnessProcessStopped(current.processIdentity).status === 'stopped') {
+            team.leadWriterStopped(); state.writerProcess = undefined; save();
+          }
+        } catch (error) { cleanupErrors.push(error); throw error; }
         finally { usage.sessionClosed(closingSessionId); }
       };
       const cancel = () => { void close().catch(() => {}); };
@@ -1513,8 +1519,11 @@ export async function runResearchWorkers(input: {
               fs.rmSync(path.join(worker.worktree, 'LIBRARY_REQUEST.json'), { force: true });
             }
             if (request) {
-              if (skillMode) await stopProofWriter({ session: turnSession, record: research, workerId: worker.id,
-                close, save, deferred: reason => emit('proof_ready_freeze_deferred', { reason }) });
+              if (skillMode) {
+                await stopProofWriter({ session: turnSession, record: research, workerId: worker.id,
+                  close, save, deferred: reason => emit('proof_ready_freeze_deferred', { reason }) });
+                if (team) { team.leadWriterStopped(); state.writerProcess = undefined; save(); }
+              }
               else await close();
               access.assertHarnessCurrent?.();
               if (access.researchSkill) assertMathAgentSkillsCurrent([access.researchSkill]);
@@ -1531,12 +1540,26 @@ export async function runResearchWorkers(input: {
               completedGuidanceDecisions(turnSession, executedTurnId, candidate.status));
           if (await proofLifecycle?.settleTurn(assignment, candidate, operation, turnSession)) continue;
           const singleSubmission = singleHandoff?.takeSubmission();
+          if (skillMode && team?.canContinueCoordination && !singleSubmission && candidate.status === 'checkpoint' &&
+              !sourceFeedback() && !skillProofLifecycle!.needsSourceFreeze()) {
+            // The response and its tools have settled, but no source needs freezing.
+            // Keep the native process and thread; the next input carries the pending
+            // decision and current team observations without restarting the writer.
+            research.lastInputTokens = lastInputTokens ?? research.lastInputTokens;
+            research.candidate = candidate;
+            retries = 0;
+            emit('turn_checkpoint', { turn: research.turns, reason: 'math_team_coordination_checkpoint' });
+            emit('team_coordination_continued', { threadId: turnSession.threadId,
+              process: turnSession.processIdentity, writerStopped: false });
+            save();
+            continue;
+          }
           if (singleSubmission || skillMode) {
             // The runtime has settled the turn and stopped new requests. Reap all remaining
             // writer processes before the ordinary source freeze and independent host check.
             await stopProofWriter({ session: turnSession, record: research, workerId: worker.id, close, save,
               deferred: reason => emit('proof_ready_freeze_deferred', { ...singleSubmission, reason }) });
-            if (team) { state.writerProcess = undefined; save(); }
+            if (team) { team.leadWriterStopped(); state.writerProcess = undefined; save(); }
             access.assertHarnessCurrent?.();
             if (access.researchSkill) assertMathAgentSkillsCurrent([access.researchSkill]);
             // submitted is a delivery status, never proof acceptance. The usual M2 check below

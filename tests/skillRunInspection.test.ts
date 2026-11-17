@@ -57,7 +57,7 @@ describe('skill research inspection', () => {
     expect(report.mathematics.snapshot.obligations).toEqual([]); expect(report.mathematics.snapshot.routes).toEqual([]);
     expect(report.progress.checkedProofTasks).toBe(0);
     const markdown = renderRunInspection(report);
-    expect(markdown).toContain('One Codex researcher'); expect(markdown).toContain('theoremos-research');
+    expect(markdown).toContain('One researcher with a versioned mathematical research skill'); expect(markdown).toContain('theoremos-research');
     for (const invented of ['not yet planned', '## Tasks', '## Routes', '## Contribution flow', '| solver | lead |'])
       expect(markdown).not.toContain(invented);
     expect(markdown).toContain('Original targets'); expect(markdown).toContain('View.original');
@@ -92,7 +92,7 @@ describe('skill research inspection', () => {
       usage: { totalTokens: 20 }, message: 'Advisory investigation.' }];
     writeSolverRunState(f.stateFile, f.state);
     const before = fs.readFileSync(f.stateFile), report = await inspectStoredRun(f.run);
-    expect(report.delegation).toMatchObject({ evidence: 'recorded-not-replayed', nativeTotals: 'observational-only',
+    expect(report.delegation).toMatchObject({ evidence: 'recorded-agent-observations', nativeTotals: 'observational-only',
       usageSource: 'shared-upstream-request-receipts', agents: f.state.nativeAgents });
     expect(report.usage).toEqual({ totalTokens: 60 });
     expect(report.progress.checkedProofTasks).toBe(0);

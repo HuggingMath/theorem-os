@@ -12,7 +12,7 @@ export function agentTeamInstructions(role: AgentTeamRole, maxAgents: number,
   const shared = 'Read the pinned references/parallel-work.md for the theoremos_team interface and collaboration methods. ' +
     'Select domain knowledge for the specific missing concept from references/domain-experts.md and work responsibilities from references/team-roles.md. ' +
     'Lead puts selected IDs or slugs on the first line of an assignment, for example Profiles: D006, prover. ' +
-    'The host includes those profiles and their collected reading notes from the pinned Skill in the member context; clarify unresolved or custom expertise. ' +
+    'The host includes selected profiles and locators for collected reading from the pinned Skill; read relevant material on demand and clarify unresolved expertise. ' +
     'Profiles guide the work without changing tools, source permissions or proof acceptance. ' +
     'The published team research summary and fixed-commit research artifacts are advisory; use inspect-research to read an artifact. ' +
     'Team observations contain bounded previews; use history for full task text and the latest research summary, and poll for complete inbox messages. ' +
@@ -28,10 +28,10 @@ export function agentTeamInstructions(role: AgentTeamRole, maxAgents: number,
     'Team updates enter your ongoing native conversation after the current response and tools. Poll the durable inbox for complete addressed messages. ' +
     'The host can hand off at an unpaid request boundary for an unanswered opening decision, completed deferred step or update unavailable through the native queue, then continues this saved thread. ' +
     'This scheduling handoff has no token, time or turn quota. A presented reminder does not complete the decision; address the current coordination observation. ' +
-    'Give each assignment a concrete gap, known inputs, intended consumer and first usable result; choose expertise for that knowledge gap and leave the proof approach to the member. ' +
+    'Give each assignment a concrete gap, known inputs, intended consumer and first usable result; one helper, useful probe or blocker is enough for the first report. Choose expertise for that knowledge gap and leave the proof approach to the member. ' +
     'A whole-problem alternative needs an explicit purpose and distinct role; duplicate original-target assignments are not automatically complementary. ' +
     'After dispatch or an objective change, publish the shared route, ownership of each gap and what you will handle yourself before extended solo work. ' +
-    'You may also research and write proofs in your own worktree. Choose a complementary gap; if you need to overlap a member, explain and coordinate that change. ' +
+    'You may also research and write proofs in your own worktree. Advance the consumer interface or another complementary gap. If you take over a member\'s gap, amend or cancel that assignment; explain purposeful independent review. ' +
     'At a useful finding, route change, blocker or completed local probe, poll the durable inbox and assess arrivals before beginning another substantial investigation. ' +
     'Respond to findings and dependency questions, inspect available results and keep the published summary current. ' +
     'After assessing an update, publish the resulting route, dispatch the next work, or record coordinate with decision:"continue", reason and nextStep. ' +
@@ -53,7 +53,7 @@ export function agentTeamInstructions(role: AgentTeamRole, maxAgents: number,
     'Lead and peers do not automatically see your files or conversation. Use message for self-contained findings, questions and disagreements, and poll/wait for addressed updates. ' +
     'For message, agentId is the recipient: use agentId:"lead" to report to Lead, or the peer ID to contact a peer. The host binds your sender identity; self-addressed messages are rejected. ' +
     'Message Lead at the first usable result, local probe or blocker, including the exact claim, assumptions and available evidence; a whole-target assignment does not require waiting for the complete proof to report. ' +
-    'Use progress for a useful finding, probe result, blocker or route change. Give the exact result and next step; optional knowledgeUses names a loaded file#anchor and its concrete application. These reports remain advisory. ' +
+    'Use progress for a useful finding, probe result, blocker or route change. Give the exact result and next step; optional knowledgeUses names a supplied source anchor actually used and its concrete application. These reports remain advisory. ' +
     'For a formal delivery, save exact declarations and call submit, then return to release writing for host checking; a local check or normal return alone does not publish a team delivery. ' +
     'Deliver an independent helper as soon as it answers the assignment, even while other original goals remain open. Ask Lead before expanding into another member\'s gap; finish the handoff before starting unrelated work. ' +
     'For a host tool failure, message Lead with the command and diagnostic; use a documented fallback when available and distinguish that result from host checking. ' +
@@ -68,9 +68,9 @@ function nativeAgentTeamInstructions(role: AgentTeamRole, maxAgents: number): st
   const shared = 'This run uses the real native AgentControl backend. Use native spawn_agent, followup_task, send_message, list_agents, wait_agent and interrupt_agent for collaboration. ' +
     'The theoremos_team tool supplies mathematical host operations; it does not duplicate native identities or mailboxes. ' +
     'Native tools target canonical agent paths or native thread IDs. Mathematical host operations use the workspace member IDs in the team observation. ' +
-    'Read the pinned references/parallel-work.md for cooperation and delivery rules. For this run, the native transport instructions here supersede historical theoremos_team spawn/message/poll examples. ' +
+    'Read the pinned references/parallel-work.md for cooperation and delivery rules. The current native transport and tool schema take precedence over historical transport examples. ' +
     'Choose domain knowledge for the specific missing concept from references/domain-experts.md and responsibilities from references/team-roles.md. ' +
-    'Start each new assignment with Profiles: followed by the selected IDs or slugs; the host loads those profiles and source notes into the member context. ' +
+    'Start each new assignment with Profiles: followed by the selected IDs or slugs; the host loads those profiles and locators for source notes to read on demand. ' +
     'Profiles supply knowledge and responsibility without changing source permissions or proof acceptance. ' +
     'Each member writes in its own isolated workspace. Source files, notes and native thread persist across assignments. ' +
     'Findings, native final answers, local checks and saved research artifacts are advisory. Only stopped-writer host checks publish checked delivery IDs; independent checks of every frozen original target accept the original problem. ' +
@@ -80,10 +80,10 @@ function nativeAgentTeamInstructions(role: AgentTeamRole, maxAgents: number): st
     `At most ${maxAgents} agents including you may be available. ` +
     'You own the whole frozen problem, choose complementary assignments and routes, and decide which checked results to adopt. ' +
     'After reading the frozen statement and relevant definitions, make a brief explicit collaboration decision before extended solo investigation: spawn a useful question or record coordinate with a concrete reason to defer and a specific nextStep. Do not wait for a complete proof route or exact helper type; a presented reminder does not complete this decision. ' +
-    'Give each assignment a concrete gap, known inputs, intended consumer and first usable result. Select expertise for the missing knowledge and let the member choose its proof approach. ' +
+    'Give each assignment a concrete gap, known inputs, intended consumer and first usable result. One helper, useful probe or blocker is enough for the first report; do not require all assigned results before communication. Select expertise for the missing knowledge and let the member choose its proof approach. ' +
     'A whole-problem alternative needs an explicit purpose and distinct role; duplicate original-target assignments are not automatically complementary. ' +
     'Choose fork_turns for the task: use none for a self-contained question or independent check, and all when the inherited conversation is actually needed. Answer-bearing history prevents a blind review. ' +
-    'After dispatch or an objective change, publish the shared route and ownership of each gap. Work on a complementary gap and assess arriving findings at useful discoveries, blockers or route changes. ' +
+    'After dispatch or an objective change, publish the shared route, ownership of each gap and how each output will be used. Advance a consumer interface or another complementary gap and assess arriving findings at useful discoveries, blockers or route changes. If you take over assigned work, amend or cancel it; explain purposeful independent review. ' +
     'Use native followup to continue an existing member: an idle member receives a new task, a yielded member resumes the same task and draft, and a busy member receives steering within its current task. ' +
     'A native message or followup does not change the effective objective revision of a running or yielded task. Use amend for that change and cancel to withdraw a particular assignment. ' +
     'Native interruption stops the current turn while preserving member identity and saved drafts. Only the Lead dispatches, amends, cancels, interrupts and adopts. Members can exchange findings directly. ' +
@@ -92,7 +92,7 @@ function nativeAgentTeamInstructions(role: AgentTeamRole, maxAgents: number): st
   return `You are a mathematical researcher and Lean proof writer; your workspace member ID is ${JSON.stringify(role.id)} and your coordinator is /root (lead). ` +
     'Carry out the current Lead assignment using the selected specialist knowledge and your own methods. Read the current task/revision, relevant source definitions, exact types and feedback before extending an inherited argument. ' +
     'Send self-contained findings, questions and disagreements to Lead or peers through native send_message, and use native wait_agent when waiting for updates. ' +
-    'Report the first usable finding, local probe result or blocker promptly, including the exact claim, assumptions and available evidence. A whole-target assignment does not require waiting for the complete proof to report. Use progress with the current objectiveRevision; optional knowledgeUses records a loaded file#anchor and its application. ' +
+    'Report the first usable finding, local probe result or blocker promptly, including the exact claim, assumptions and available evidence. A whole-target assignment does not require waiting for the complete proof to report. Use progress with the current objectiveRevision; optional knowledgeUses records a supplied source anchor actually used and its application. ' +
     'Save exact declarations and RESEARCH.md, then call submit and return. The pending-writer-stop acknowledgment is not a checked delivery. Submit useful helpers once they answer the assignment, even if other original goals remain open. ' +
     'When the same task needs a dependency or Lead decision, save the draft, call yield with a reason and return. Lead can adopt dependencies into your stopped workspace and resume this same task by native followup. ' +
     'Only Lead dispatches and adopts. Ask Lead before expanding into another gap. Do not spawn subteams or interrupt peers.\n' + shared;
@@ -101,7 +101,7 @@ function nativeAgentTeamInstructions(role: AgentTeamRole, maxAgents: number): st
 export function agentTeamWorkerDeliveryHelp(): string {
   return 'This proof-writing member publishes through theoremos_team, operation submit. Save source and worktree-root RESEARCH.md, ' +
     'then supply summary and declarations: [{"file":"OWNED_FILE.lean","name":"Qualified.helper","type":"COMPLETE_CLOSED_LEAN_TYPE"}]. ' +
-    'New independent helper declarations may be added inside editable owned Lean files while frozen original statements remain fixed; put scratch results in an editable owned file before nomination. ' +
+    'Use the member\'s own editable paths listed by the host; the same filename in Lead\'s workspace is a separate copy. New independent helper declarations may be added inside these files while frozen original statements remain fixed; put scratch results in an editable owned file before nomination. ' +
     'List every changed declaration since the assignment deliveryBaseCommit, including earlier unpublished or rejected drafts. ' +
     'Each declaration may include description and explicit premises. Submit accepts 1–32 declarations, including original targets you have proved. ' +
     'Submit useful independent declarations when they answer the assignment; other original goals may remain unfinished. Message Lead about the result before extending the scope. ' +
@@ -119,7 +119,7 @@ export function agentTeamWorkerSection(state: Readonly<SolverRunState>, role: Ag
   if (!worker) throw new Error('math_team_agent_unknown:' + role.id);
   const current = worker.tasks.find(item => item.id === assignment.taskId);
   if (!current || current.message !== assignment.message) throw new Error('math_team_assignment_changed');
-  const overview = agentTeamOverview(state, { focusAgentId: role.id });
+  const overview = agentTeamOverview(state, { focusAgentId: role.id, assignmentTaskId: current.id });
   const own = overview.workers.find(item => item.id === role.id)!;
   const prior = own.tasks.filter(item => item.id !== current.id && ['completed', 'failed', 'interrupted', 'cancelled', 'paused'].includes(item.status)).at(-1);
   const inbox = agentTeamInboxPreview(state.agentTeam!, role.id, worker.cursor);
@@ -128,7 +128,7 @@ export function agentTeamWorkerSection(state: Readonly<SolverRunState>, role: Ag
     text: 'Current team assignment (replaces earlier assignments; messages are advisory updates):\n' + JSON.stringify({
       agentId: role.id, coordinator: 'lead', taskId: current.id, objective: assignment.message,
       objectiveRevision: current.objectiveRevision ?? 1, workKind: current.workKind,
-      profileEvidence: current.profileEvidence, deliveryExposures: worker.exposures ?? [],
+      deliveryExposures: worker.exposures ?? [],
       sourceCommit: assignment.sourceCommit, deliveryBaseCommit: current.seedCommit,
       cancelRequested: current.cancelRequested, pauseRequested: current.pauseRequested,
       previousTask: prior,

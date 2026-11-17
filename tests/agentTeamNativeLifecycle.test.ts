@@ -9,7 +9,7 @@ import { readMathAgentSkill } from '../src/runtime/agentSkills';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/agentSession';
 import type { NativeAgentControlConnection } from '../src/runtime/nativeAgentControl';
 import { AgentResearchTeam } from '../src/solver/agentTeam';
-import { writeSolverRunState } from '../src/solver/archive';
+import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
 import { directSolverModules } from '../src/solver/modules';
 import { readSolverProblem } from '../src/solver/problem';
 import { prepareResearchSkill, researchSkillIdentity } from '../src/solver/researchSkill';
@@ -73,6 +73,8 @@ function fixture({ earlyCompletion = false, beforeOpen }: { earlyCompletion?: bo
     const abort = () => { outcome.resolve('interrupted'); stopGate.resolve(); };
     options.signal?.addEventListener('abort', abort, { once: true });
     const session: MathAgentSession = { threadId, nativeAgentControl: connection, usageSource: 'upstream-requests',
+      nativeConfiguration: { source: 'thread-start-overrides', overrides: { includeSkillInstructions: false,
+        deferMailboxPreemption: true, rootAgentUsageHintText: '', subagentUsageHintText: '' } },
       get lastCompletedResponse() { return settled ? { turnId, text: 'Saved an advisory research result.' } : undefined; },
       run: async (message, _messageId, _workspace, onStarted) => {
         didRun = true;
@@ -203,6 +205,7 @@ describe('native AgentControl preserves the mathematical team lifecycle', () => 
       nativeAgentControl: { bootstrap: { threadId: workers[0].native!.threadId,
         hostOverrides: { cwd: workers[0].worktree, workspaceRelocation: { from: f.state.worktree, to: workers[0].worktree } } } } });
     expect(f.sessions[0].message).toContain('Current team assignment');
+    expect(workers[0].native!.runtimeConfiguration).toEqual(f.sessions[0].session.nativeConfiguration);
     expect(workers[0].tasks[0].profileEvidence?.loaded).toEqual(expect.arrayContaining(['D006', 'prover']));
     await f.native('send', { caller: ROOT, target: { kind: 'id', threadId: workers[0].native!.threadId },
       input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: 'Consider this advisory observation.' } }, startOptions: {} });
@@ -238,6 +241,12 @@ describe('native AgentControl preserves the mathematical team lifecycle', () => 
     expect(snapshot.result).toMatchObject({ kind: 'loaded', agent: { status: 'running' } });
     await expect.poll(() => f.team.hasActiveWorkers).toBe(false);
     expect(worker.status).toBe('interrupted'); expect(task.status).toBe('interrupted');
+    expect(worker.native!.status).toBe('shutdown');
+    expect(worker.native!.agent!.status).toBe('shutdown');
+    expect(worker.native!.writerStop).toMatchObject({ source: 'writer-stop', turnId: f.sessions[0].turnId });
+    expect(worker.native!.lastOutcome).toBeUndefined();
+    const saved = readSolverRunState(path.join(f.directory, 'state.json')).agentTeam!.workers[0].native!;
+    expect(saved.status).toBe('shutdown'); expect(saved.lastOutcome).toBeUndefined();
     await f.native('send', { caller: ROOT, target: { kind: 'id', threadId: worker.native!.threadId },
       input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: 'Continue the saved task.' } }, startOptions: {} });
     expect(worker.tasks).toHaveLength(1); expect(worker.tasks[0]).toBe(task);

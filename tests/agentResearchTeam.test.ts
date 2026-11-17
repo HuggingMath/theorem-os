@@ -216,6 +216,8 @@ describe('Agent-led sustained collaboration with real Git and Lean', () => {
     await f.call({ operation: 'spawn', agentId: 'specialist', message: 'Investigate an independent statement boundary.' });
     const child = await f.session('specialist');
     expect(f.team.archive.coordination).toMatchObject({ decision: 'delegate' });
+    expect(agentTeamCoordinationReview(f.state).reason).toBe('assignments-unpublished');
+    await f.call({ operation: 'publish', summary: 'Specialist investigates the boundary; Lead checks the consumer interface.' });
     expect(agentTeamCoordinationReview(f.state).required).toBe(false);
     await child.call({ operation: 'message', agentId: 'lead', message: 'A boundary condition needs a route decision.' });
     expect(agentTeamCoordinationReview(f.state)).toMatchObject({ required: true, reason: 'team-update' });

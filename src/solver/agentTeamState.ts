@@ -8,6 +8,11 @@ export const writerProcessSchema = z.object({ schema: z.literal('theorem-os.harn
   pid: z.number().int().positive(), startTime: z.string(), bootId: z.string(), pidNamespace: z.string() }).strict();
 const declaration = z.object({ file: z.string(), name: z.string(), type: z.string(),
   description: z.string().optional(), premises: z.array(z.string()).optional() }).strict();
+const nativeRuntimeConfiguration = z.object({ source: z.literal('thread-start-overrides'),
+  overrides: z.object({ includeSkillInstructions: z.literal(false), deferMailboxPreemption: z.literal(true).optional(),
+    rootAgentUsageHintText: z.literal('').optional(), subagentUsageHintText: z.literal('').optional() }).strict() }).strict();
+const nativeWriterStop = z.object({ source: z.enum(['writer-stop', 'recovery-process-check']), at: z.number(),
+  turnId: z.string().optional() }).strict();
 export const agentTeamAllowanceSchema = z.object({ tokens: z.number().int().positive().safe().optional(),
   turns: z.number().int().positive().safe().optional() }).strict();
 export const agentTeamReserveSchema = z.object({ tokens: z.number().int().nonnegative().safe().optional(),
@@ -43,6 +48,7 @@ export const agentTeamStateSchema = z.object({ schema: z.literal('theorem-os.age
   transport: z.enum(['host-tools', 'native-agent-control']).optional(),
   nativeControl: z.object({ sessionId: z.string(), rootThreadId: z.string(),
     rootAgent: z.record(z.unknown()).optional(), rootConfigSnapshot: z.record(z.unknown()).optional(),
+    rootRuntimeConfiguration: nativeRuntimeConfiguration.optional(), rootWriterStop: nativeWriterStop.optional(),
     sequence: z.number().int().nonnegative(),
     mailbox: z.array(z.object({ id: z.string(), threadId: z.string(), author: z.string(), recipient: z.string(),
       message: z.record(z.unknown()).optional(), communication: z.record(z.unknown()).optional(),
@@ -77,6 +83,7 @@ export const agentTeamStateSchema = z.object({ schema: z.literal('theorem-os.age
       spawnOperationId: z.string().optional(), spawnRequestDigest: z.string().optional(),
       bootstrap: z.record(z.unknown()), initialInput: z.record(z.unknown()),
       agent: z.record(z.unknown()).optional(), configSnapshot: z.record(z.unknown()).optional(),
+      runtimeConfiguration: nativeRuntimeConfiguration.optional(), writerStop: nativeWriterStop.optional(),
       submissionId: z.string().optional(), turnId: z.string().optional(), status: z.unknown().optional(),
       lastOutcome: z.object({ turnId: z.string(), status: z.unknown() }).strict().optional(),
     }).strict().optional(),

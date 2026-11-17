@@ -79,6 +79,60 @@ function agentTeamFixture() {
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 
 describe('run inspection', () => {
+  it('renders recorded native status and last writer stops for Lead and members without inferring liveness', () => {
+    const { state } = agentTeamFixture(), team = state.agentTeam!;
+    team.nativeControl = { sessionId: 'native-lead', rootThreadId: 'native-lead', sequence: 0, mailbox: [],
+      rootAgent: { status: 'shutdown' }, rootWriterStop: { source: 'writer-stop', at: 1000 } };
+    team.workers[0].native = { sessionId: 'native-lead', threadId: 'native-child-a', agentPath: '/root/child-a',
+      parentThreadId: 'native-lead', bootstrap: {}, initialInput: {}, status: { completed: 'Helper saved.' },
+      writerStop: { source: 'recovery-process-check', at: 2000, turnId: 'previous-turn' } };
+    team.workers[1].native = { sessionId: 'native-lead', threadId: 'native-child-b', agentPath: '/root/child-b',
+      parentThreadId: 'native-lead', bootstrap: {}, initialInput: {}, status: 'running' };
+    const before = JSON.stringify(state), markdown = renderRunInspection(buildRunInspection(state));
+    expect(markdown).toContain('| lead | shutdown | writer-stop | 1970-01-01T00:00:01.000Z |');
+    expect(markdown).toContain('| child-a | {"completed":"Helper saved."} | recovery-process-check | 1970-01-01T00:00:02.000Z |');
+    expect(markdown).toContain('| child-b | running | — | — |');
+    expect(markdown).toContain('historical native states and confirmed writer stops, not current process liveness or proof acceptance');
+    expect(JSON.stringify(state)).toBe(before);
+  });
+
+  it('separates cached tokens, missing request receipts and configured native settings without inventing completion', () => {
+    const { state } = agentTeamFixture(), team = state.agentTeam!;
+    state.usage = { inputTokens: 8, outputTokens: 2, cachedInputTokens: 6, totalTokens: 10 };
+    state.requestUsageAccounting = { startedRequests: 2, reportedRequests: 1, pendingRequests: 0, incomplete: true, receipts: [
+      { requestId: 'lead-reported', startedAt: 1, settledAt: 2, status: 'reported', outcome: 'completed',
+        usage: { inputTokens: 8, outputTokens: 2, cachedInputTokens: 6, totalTokens: 10 } },
+      { requestId: 'lead-cancelled', startedAt: 3, settledAt: 4, status: 'missing', outcome: 'cancelled', missingReason: 'request-cancelled' },
+    ] };
+    team.workers[0].usage = { inputTokens: 18, outputTokens: 2, cachedInputTokens: 16, totalTokens: 20 };
+    team.workers[0].requestUsageAccounting!.receipts = [
+      { requestId: 'child-reported', startedAt: 5, settledAt: 6, status: 'reported', outcome: 'completed',
+        usage: { inputTokens: 18, outputTokens: 2, cachedInputTokens: 16, totalTokens: 20 } },
+    ];
+    team.workers[1].usage = { inputTokens: 28, outputTokens: 2, cachedInputTokens: 26, totalTokens: 30 };
+    team.workers[1].requestUsageAccounting!.receipts = [
+      { requestId: 'child-second-reported', startedAt: 7, settledAt: 8, status: 'reported', outcome: 'completed',
+        usage: { inputTokens: 28, outputTokens: 2, cachedInputTokens: 26, totalTokens: 30 } },
+      { requestId: 'child-pending', startedAt: 9, status: 'pending' },
+    ];
+    team.nativeControl = { sessionId: 'native-lead', rootThreadId: 'native-lead', sequence: 0, mailbox: [],
+      rootAgent: { status: 'shutdown' }, rootWriterStop: { source: 'writer-stop', at: 10 },
+      rootRuntimeConfiguration: { source: 'thread-start-overrides', overrides: { includeSkillInstructions: false,
+        deferMailboxPreemption: true, rootAgentUsageHintText: '', subagentUsageHintText: '' } } };
+    const before = JSON.stringify(state), report = buildRunInspection(state);
+    expect(report.usage).toEqual({ inputTokens: 54, cachedInputTokens: 48, outputTokens: 6, totalTokens: 60 });
+    expect(report.requestUsage).toMatchObject({ observedRequests: 5, reportedRequests: 3, pendingRequests: 1,
+      missingRequests: 1, missingReasons: { 'request-cancelled': 1 }, unidentifiedHistoricalRequests: 0 });
+    expect(report.tokenBudget.usageComplete).toBe(false);
+    expect(report.agentTeam?.native).toMatchObject({ status: 'shutdown', writerStop: { source: 'writer-stop' },
+      runtimeConfiguration: { source: 'thread-start-overrides' } });
+    const rendered = renderRunInspection(report);
+    expect(rendered).toContain('| 54 | 48 | 6 |');
+    expect(rendered).toContain('| request-cancelled | 1 |');
+    expect(rendered).toContain('They do not claim a native configuration readback.');
+    expect(JSON.stringify(state)).toBe(before);
+  });
+
   it('restores real Lead and child observations, queues and checked deliveries without treating local adoption as final acceptance', () => {
     const f = agentTeamFixture(); writeSolverRunState(f.stateFile, f.state);
     const before = fs.readFileSync(f.stateFile), { state } = readRunInspection(f.run);
