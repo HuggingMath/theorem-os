@@ -1,4 +1,5 @@
 import { assertWorkflowSessionSupported, openWorkflowSession, workflowProfileFiles } from './workflowSession';
+import { usesNativeWorkflowOutput } from './workflowOutput';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -95,7 +96,8 @@ export async function runFormalizationAudit(directory: string, root: string, evi
   const view = formalizationAuditReadingView(inputText);
   const inlineView = view && Buffer.byteLength(view) + Buffer.byteLength(schemaText) +
     Buffer.byteLength(FORMALIZATION_AUDIT_READING_PROTOCOL) <= 128 * 1024 ? view : undefined;
-  const cliHandoff = config.agentHarness?.id === 'cli';
+  const cliHandoff = config.agentHarness?.id === 'cli' || (config.agentHarness?.id ?? 'codex') === 'codex' &&
+    !usesNativeWorkflowOutput(config, 'model', 'native-schema');
   const handoffFile = path.join(workspace, 'AUDIT-REVIEW.json');
   const handoffRolePath = '/workspace/AUDIT-REVIEW.json';
   const submissionInstructions = cliHandoff ? formalizationAuditInstructions.split('\n').map(line =>
@@ -124,7 +126,6 @@ export async function runFormalizationAudit(directory: string, root: string, evi
   if (options.signal?.aborted) cancel();
   const cancelTimer = maxRunSeconds ? scheduleMathTimeout(() => controller.abort(new Error('formalization_audit_time_limit')), maxRunSeconds * 1000) : undefined;
   let session: MathAgentSession | undefined, modelSlot: MathModelSlot | undefined, closing: Promise<void> | undefined;
-  const finalResponses = new Map<string, string>();
   let incomplete = false, receivedUsage = false;
   const closeWriter = () => session ? closing ??= session.close() : Promise.resolve();
   const interrupt = () => { void session?.interrupt().catch(() => {}); void closeWriter().catch(() => {}); };
@@ -144,14 +145,9 @@ export async function runFormalizationAudit(directory: string, root: string, evi
       signal: controller.signal, turnTimeoutMs: maxRunSeconds ? Math.max(1, maxRunSeconds * 1000 - (Date.now() - Date.parse(state.startedAt))) : undefined,
       readIsolation: { environment: evidence.request.environment, packages: 'sources',
         ...(evidence.request.library ? { library: { file: evidence.request.library.file, digest: evidence.request.library.digest } } : {}) },
-      outputSchema: formalizationAuditOutputSchema,
       ...(cliHandoff ? { completedOutput: { file: handoffFile,
-        validate: (value: unknown) => { assertFormalizationAuditReview(evidence, value); } } } : {}),
-      onItem: (phase, item, context) => {
-        if (phase === 'completed' && item.type === 'agentMessage' && typeof item.text === 'string' &&
-            context?.turnId && (item.phase === undefined || item.phase === null || item.phase === 'final_answer'))
-          finalResponses.set(context.turnId, item.text);
-      },
+        validate: (value: unknown) => { assertFormalizationAuditReview(evidence, value); } } }
+        : { outputSchema: formalizationAuditOutputSchema }),
       onUsage: usage => {
         if (record.requestUsageAccounting) return;
         receivedUsage = recordThreadUsage(record, usage); observeUsage();
@@ -206,7 +202,8 @@ export async function runFormalizationAudit(directory: string, root: string, evi
       if (readMathText(filename) !== text) throw new Error('formalization_audit_contract_changed');
     }
     if (cliHandoff) assertMathCanonicalPath(handoffFile);
-    const finalResponse = cliHandoff ? readMathText(handoffFile, 4_000_000) : finalResponses.get(record.turnId);
+    const finalResponse = cliHandoff ? readMathText(handoffFile, 4_000_000)
+      : session.lastCompletedResponse?.turnId === record.turnId ? session.lastCompletedResponse.text : undefined;
     if (finalResponse === undefined) throw new Error('formalization_audit_final_response_missing');
     const review = assertFormalizationAuditReview(evidence, JSON.parse(finalResponse));
     writeMathFrozen(outputFile, canonicalMathJson(review) + '\n');

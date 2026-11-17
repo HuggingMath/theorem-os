@@ -1,8 +1,12 @@
 # Work with exact declarations
 
-Inspect the actual Lean type and surrounding namespace, variables, instances and imports before applying a similarly named lemma. Use the run's declaration and library search tools to narrow candidates, then inspect the source or exact type. A name match alone is insufficient.
+Inspect the actual Lean type and surrounding namespace, variables, instances and imports before applying a similarly named lemma. Use native shell tools such as `rg` to search source text or the host-prepared declaration index, then read the matching source. The local tool help gives the index location. Use the run's library tools when you need frozen dependency metadata or an archived declaration. A name match alone is insufficient.
 
 When elaboration fails, isolate the failing expression in a small probe using the same environment. Check implicit arguments, coercions, notation, universe levels and instance requirements as indicated by the real diagnostic. Recompile after a meaningful change; retain the exact error rather than replacing it with a broad claim that the mathematics is impossible.
+
+Use the generated `check-lean` command directly and inspect its JSON `classification`, `firstBlocking` and `diagnosticArtifacts`. Its exit status is part of the result. A shell pipeline ending in `head`, or a later successful `cat`/`echo`, can hide the compiler's failure. For a manual shell check, redirect output to a file, save the compiler status immediately, then preview the file and return the saved status.
+
+An `infrastructure-error` identifies an environment fault; `leanStarted: false` confirms compilation did not start. Report its error code, fingerprint and recovery to Lead/host, preserve source work, and retry after a repair or changed health result. Use `check-lean --health` with the same worktree to check the actual namespace's sealed mount, lease and pinned compiler. An invisible mount or host PID inside sandbox `/proc` does not establish that the host helper died. Avoid repeated compilation or assembly attempts against the same failed environment; host proof delivery and final verification retain their independent checks.
 
 Computational examples can refute a proposed intermediate claim or guide a conjecture. A successful finite search or numerical experiment does not prove an unrestricted statement. Keep executable experiment code, parameters and output if it informs a route decision.
 

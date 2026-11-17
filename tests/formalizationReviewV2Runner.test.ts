@@ -174,9 +174,10 @@ function decisions(file: string): { caseId: string; verdict: string; compileStat
   return read(file).decisions;
 }
 
-function modelFixture() {
+function modelFixture(nativeOutput = false) {
   const f = fixture(), profile = path.join(f.base, 'disposable-profile'), manifest = path.join(f.base, 'build.json');
-  fs.mkdirSync(profile); fs.writeFileSync(path.join(profile, 'config.toml'), 'model_provider = "offline-fixture"\n');
+  fs.mkdirSync(profile); fs.writeFileSync(path.join(profile, 'config.toml'),
+    'model_provider = "' + (nativeOutput ? 'offline-fixture' : 'westlake') + '"\n');
   write(manifest, { fixture: 'No model or runtime build is launched.' }, true);
   vi.spyOn(mathBuildManifest, 'readMathBuildManifest').mockReturnValue({ buildId: 'offline-fixture' } as any);
   const config = { execution: 'model' as const, protocol: 'v2' as const, environment: 'auto' as const,
@@ -576,6 +577,43 @@ describe('frozen protocol and request binding', () => {
 });
 
 describe('model output format correction in the same session', () => {
+  it('repairs native final JSON in the same role and saves each independent output after close', async () => {
+    const f = modelFixture(true), visits: { role: Role; workspace: string; turns: number; closed: boolean }[] = [];
+    const openSession = async (config: MathAgentOptions): Promise<MathAgentSession> => {
+      const input = read(path.join(config.workspace, 'INPUT.json')) as RoleInput;
+      const role: Role = input.schema === 'theorem-os.formalization-snapshot.v1' ? 'backtranslate' : input.role;
+      expect(config.outputSchema).toEqual(read(path.join(config.workspace, 'OUTPUT.schema.json')));
+      expect(config.completedOutput).toBeUndefined();
+      const visit = { role, workspace: config.workspace, turns: 0, closed: false }; visits.push(visit);
+      let final: MathAgentSession['lastCompletedResponse'];
+      return { threadId: 'native-review-' + role, get lastCompletedResponse() { return final; }, interrupt: async () => {},
+        close: async () => {
+          if (visit.closed) return;
+          expect(fs.existsSync(path.join(config.workspace, 'OUTPUT.json'))).toBe(false); visit.closed = true;
+        }, run: async (message, _messageId, workspace, started) => {
+          expect(visit.closed).toBe(false); expect(workspace).toBe(config.workspace); visit.turns++;
+          const turnId = 'native-review-' + role + '-' + visit.turns; started(turnId);
+          config.onUsage({ totalTokens: visit.turns });
+          const output = role === 'backtranslate' ? backtranslation(input as TranslationInput) : review(input as StructuredReviewInput, false, 'unknown');
+          if (role === 'primary' && visit.turns === 1) {
+            (output as StructuredSemanticReview).correspondences[0].candidateFragment = 'ABSENT_NATIVE_FRAGMENT';
+          } else if (role === 'primary') expect(message).toContain('Host validation error');
+          final = { turnId, text: JSON.stringify(output) }; return 'completed';
+        } };
+    };
+    const options = { openSession, observeStatement: f.observeStatement };
+    expect(await runStructuredFormalizationReview(f.bundleDirectory, f.runDirectory, f.config, options))
+      .toMatchObject({ status: 'complete', completedCases: 1, attempts: 3, unknownCases: 1 });
+    expect(visits.map(visit => [visit.role, visit.turns, visit.closed])).toEqual([
+      ['primary', 2, true], ['backtranslate', 1, true], ['recheck', 1, true],
+    ]);
+    for (const visit of visits) expect(fs.statSync(path.join(visit.workspace, 'OUTPUT.json')).mode & 0o222).toBe(0);
+    const saved = read(path.join(f.runDirectory, 'request.json'));
+    expect(saved.outputDelivery).toBe('native-schema');
+    expect(await runStructuredFormalizationReview(f.bundleDirectory, f.runDirectory, f.config, options)).toMatchObject({ status: 'complete', attempts: 3 });
+    expect(visits).toHaveLength(3);
+  });
+
   it('corrects missing, JSON, schema and fragment failures without a turn cap and freezes exact feedback bytes', async () => {
     const f = modelFixture(), invalidTexts: (string | null)[] = [];
     const agent = repairSessions({ run: (visit, _turn, output) => {

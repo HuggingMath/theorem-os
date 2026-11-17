@@ -1,4 +1,5 @@
 import { assertWorkflowSessionSupported, openWorkflowSession, workflowProfileFiles } from './workflowSession';
+import { completedWorkflowOutput, nativeWorkflowOutputInstructions, usesNativeWorkflowOutput } from './workflowOutput';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -7,7 +8,7 @@ import { z } from 'zod';
 import { parse as parseToml } from 'smol-toml';
 import type { MathAgentFailureDiagnostic, MathAgentOptions, MathAgentSession } from '../runtime/agentSession';
 import { readMathBuildManifest } from '../math/mathBuildManifest';
-import { canonicalMathJson, mathDigest, readMathText, withMathRuntimeLease, writeMathJsonDurable } from '../math/mathRuntimeIo';
+import { canonicalMathJson, mathDigest, readMathText, withMathRuntimeLease, writeMathFrozen, writeMathJsonDurable } from '../math/mathRuntimeIo';
 import { assertMathCanonicalPath, isMathPathWithin, repositoryRelativePath } from '../math/paths';
 import { projectMathematicsRuntimeEnvironment, resolveMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnvironment';
 import { scheduleMathTimeout } from '../math/mathTimers';
@@ -171,7 +172,9 @@ export async function runInformalization(directory: string, root: string, option
         const config = slot.role === 'write' ? request.writer : request.auditors.find(item => item.id === slot.auditorId)!;
         const inputText = canonicalMathJson(input);
         if (Buffer.byteLength(inputText) > 8_000_000) throw new Error('informalization_role_input_too_large');
-        const instructionsText = informalizationRoleInstructions(slot.role, request.alignment, request.explanationPolicy, request.outlinePolicy);
+        const nativeOutput = usesNativeWorkflowOutput(config, 'model', request.outputDelivery);
+        const baseInstructionsText = informalizationRoleInstructions(slot.role, request.alignment, request.explanationPolicy, request.outlinePolicy);
+        const instructionsText = nativeOutput ? nativeWorkflowOutputInstructions(baseInstructionsText) : baseInstructionsText;
         const schemaText = canonicalMathJson(informalizationRoleOutputSchema(slot.role, request.alignment, request.outlinePolicy));
         const roleContract = { roleInstructionsSha256: mathDigest(instructionsText), outputSchemaSha256: mathDigest(schemaText) };
         const configurationDigest = formalizationModelConfigurationDigest(config);
@@ -235,9 +238,10 @@ export async function runInformalization(directory: string, root: string, option
             instructions: instructionsText, environment: env, signal: lease.signal,
             turnTimeoutMs: Number.isFinite(turnTimeout) ? turnTimeout : undefined,
             readIsolation: { environment: request.environment },
-            completedOutput: { file: outputFile,
-              validate: value => { const problems = check(value); if (problems.length) throw new OutputRejected(problems); },
-              validationFeedback: error => informalizationRejectionFeedback(error instanceof OutputRejected ? error.problems : [errorText(error)]) },
+            ...(nativeOutput ? { outputSchema: JSON.parse(schemaText) as Record<string, unknown> } : {
+              completedOutput: { file: outputFile,
+                validate: (value: unknown) => { const problems = check(value); if (problems.length) throw new OutputRejected(problems); },
+                validationFeedback: (error: unknown) => informalizationRejectionFeedback(error instanceof OutputRejected ? error.problems : [errorText(error)]) } }),
             onUsage: usage => {
               record.usage = usage; save();
               if (spent()) for (const stopRole of running) stopRole();
@@ -251,7 +255,8 @@ export async function runInformalization(directory: string, root: string, option
           record.usageAccounting.startedTurns = 1; record.usageAccounting.pending = true;
           record.status = 'running'; save();
           // A turn stopped at the allowance ends the run; one that still finished keeps its output.
-          record.status = await session.run(ROLE_PROMPT, crypto.randomUUID(), workspace, turnId => { record.turnId = turnId; record.turns = 1; save(); })
+          record.status = await session.run(nativeOutput ? nativeWorkflowOutputInstructions(ROLE_PROMPT) : ROLE_PROMPT,
+            crypto.randomUUID(), workspace, turnId => { record.turnId = turnId; record.turns = 1; save(); })
             .catch((cause: unknown) => { throw stopped ? new Error('math_total_token_limit') : cause; });
           lease.signal.throwIfAborted();
           if (!['completed', 'submitted'].includes(record.status) || !record.turnId) {
@@ -265,7 +270,12 @@ export async function runInformalization(directory: string, root: string, option
               readMathText(schemaFile, 1_000_000) !== schemaText) throw new Error('informalization_role_contract_changed');
           // A missing, linked or malformed output is a failed attempt, not an infrastructure error.
           let output: unknown;
-          try { output = JSON.parse(readMathText(outputFile, 4_000_000)); } catch { output = undefined; }
+          let outputText: string | undefined;
+          try {
+            outputText = nativeOutput ? completedWorkflowOutput(session, record.turnId, 4_000_000) : readMathText(outputFile, 4_000_000);
+            output = JSON.parse(outputText);
+          } catch { output = undefined; }
+          if (nativeOutput && output !== undefined) writeMathFrozen(outputFile, outputText!);
           if (output !== undefined) record.outputDigest = informalizationDigest(output);
           return output;
         } finally {

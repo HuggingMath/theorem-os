@@ -70,6 +70,41 @@ describe('shared native harness process isolation', () => {
       .toThrow('math_harness_lean_lock_invalid');
   });
 
+  it('hides existing and future peers while rebinding only the member workspace', async () => {
+    const members = path.join(outside, 'members'), sibling = path.join(members, 'peer'), future = path.join(members, 'later');
+    workspace = path.join(members, 'own');
+    fs.mkdirSync(workspace, { recursive: true }); fs.mkdirSync(sibling);
+    fs.writeFileSync(path.join(sibling, 'proof.lean'), 'unpublished peer proof');
+    fs.writeFileSync(path.join(workspace, 'proof.lean'), 'own draft');
+    const ready = path.join(profile, 'ready'), go = path.join(profile, 'go');
+    const launch = prepareHarnessProcess({ workspace, profile, isolatedWorkspaceParent: members }, process.execPath, ['-e', `
+      const fs=require('fs');
+      fs.writeFileSync(${JSON.stringify(ready)}, 'ready');
+      const timer=setInterval(() => {
+        if(!fs.existsSync(${JSON.stringify(go)}))return;
+        clearInterval(timer);
+        if(fs.readdirSync(${JSON.stringify(members)}).join()!=='own')process.exit(7);
+        for(const peer of ${JSON.stringify([sibling, future])}) {
+          try { fs.readFileSync(peer+'/proof.lean'); process.exit(8); }
+          catch(e) { if(e.code!=='ENOENT' && e.code!=='EACCES')throw e; }
+        }
+        fs.appendFileSync(${JSON.stringify(path.join(workspace, 'proof.lean'))}, ' continued');
+      }, 10);`]);
+    const child = spawn(launch.command, launch.args, { env: launch.env, stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = ''; child.stderr.on('data', chunk => { stderr += String(chunk); });
+    const exited = new Promise<number | null>(resolve => child.once('close', resolve));
+    try {
+      await vi.waitFor(() => expect(fs.existsSync(ready), stderr).toBe(true));
+      fs.mkdirSync(future); fs.writeFileSync(path.join(future, 'proof.lean'), 'new peer proof');
+      fs.writeFileSync(go, 'go');
+      expect(await exited, stderr).toBe(0);
+      expect(fs.readFileSync(path.join(workspace, 'proof.lean'), 'utf8')).toBe('own draft continued');
+      expect(launch.isolationReceipt.hiddenRoots).toContain(members);
+      expect(() => prepareHarnessProcess({ workspace, profile, isolatedWorkspaceParent: outside }, '/bin/true', []))
+        .toThrow('math_harness_workspace_parent_invalid');
+    } finally { child.kill('SIGKILL'); await exited; }
+  });
+
   it('confirms an actual writer that exits between reading its status and namespace', async () => {
     // This supervisor reaps the writer independently of the observing host.
     const supervisor = spawn('/bin/sh', ['-c', 'sleep 30 & task_writer=$!; printf "%s\\n" "$task_writer"; wait "$task_writer"'],
@@ -89,7 +124,12 @@ describe('shared native harness process isolation', () => {
           const deadline = Date.now() + 1000;
           for (;;) {
             try { fs.readlinkSync('/proc/' + pid + '/ns/pid'); }
-            catch (error) { if (error.code === 'ENOENT' || error.code === 'ESRCH') break; throw error; }
+            catch (error) {
+              if (error.code === 'ENOENT' || error.code === 'ESRCH') break;
+              // A dying process can briefly deny namespace access before its
+              // supervisor reaps it. Keep waiting for disappearance.
+              if (error.code !== 'EACCES') throw error;
+            }
             if (Date.now() >= deadline) process.exit(1);
           }
         `, String(writerPid)], { encoding: 'utf8', timeout: 3000 });

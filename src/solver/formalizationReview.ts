@@ -1,4 +1,5 @@
 import { assertWorkflowSessionSupported, openWorkflowSession, workflowProfileFiles } from './workflowSession';
+import { completedWorkflowOutput, nativeWorkflowOutputInstructions, usesNativeWorkflowOutput } from './workflowOutput';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -110,8 +111,14 @@ export async function runFormalizationReview(bundleDirectory: string, runDirecto
       ...(config.agentHarness ? { harness: workflowProfileFiles(config, () => null, options.env ?? process.env) } : {}) });
   };
   const binding = currentExecutionBinding();
-  const instructions = FORMALIZATION_SEMANTIC_REVIEW_INSTRUCTIONS;
+  const savedRequest = fs.existsSync(path.join(runDirectory, 'request.json'))
+    ? JSON.parse(frozenText(path.join(runDirectory, 'request.json'), 32_000_000)) : undefined;
+  const outputDelivery = savedRequest ? savedRequest.outputDelivery as 'native-schema' | 'file' | undefined : 'native-schema';
+  const nativeOutput = usesNativeWorkflowOutput(config, config.execution, outputDelivery);
+  const instructions = nativeOutput ? nativeWorkflowOutputInstructions(FORMALIZATION_SEMANTIC_REVIEW_INSTRUCTIONS)
+    : FORMALIZATION_SEMANTIC_REVIEW_INSTRUCTIONS;
   const request = { schema: 'theorem-os.formalization-review-run.v1', bundleDirectory: prepared.directory,
+    ...(outputDelivery ? { outputDelivery } : {}),
     bundleDigest: prepared.bundleDigest, configuration: config, adapter, executionBinding: binding,
     environmentDigest: getLeanTaskEnvironment(config.environment).dependencyDigest,
     instructionsSha256: mathDigest(instructions), inputDigests: inputs.map(input => ({ caseId: input.caseId,
@@ -223,7 +230,8 @@ export async function runFormalizationReview(bundleDirectory: string, runDirecto
           effort: config.execution === 'model' ? config.effort : 'offline-replay', workspace, instructions,
           environment: production ? resolveMathematicsRuntimeEnvironment(options.env) : options.env,
           signal, readIsolation: { environment: config.environment },
-          completedOutput: { file: outputFile, validate: value => { assertFormalizationSemanticReview(input, value); } },
+          ...(nativeOutput ? { outputSchema: formalizationSemanticReviewOutputSchema(input) } : {
+            completedOutput: { file: outputFile, validate: (value: unknown) => { assertFormalizationSemanticReview(input, value); } } }),
           onUsage: usage => { attempt.usage = usage; save(); },
           onUsageIncomplete: () => { attempt.usageIncomplete = true; save(); },
         };
@@ -244,7 +252,8 @@ export async function runFormalizationReview(bundleDirectory: string, runDirecto
         attempt.threadId = session.threadId;
         if (session.isolationReceipt) attempt.isolationReceipt = session.isolationReceipt;
         signal.throwIfAborted(); attempt.status = 'running'; save();
-        attempt.sessionStatus = await session.run('Read INPUT.json, ROLE.md and OUTPUT.schema.json. Review this statement and submit OUTPUT.json using the exact contract.',
+        const message = 'Read INPUT.json, ROLE.md and OUTPUT.schema.json. Review this statement and submit OUTPUT.json using the exact contract.';
+        attempt.sessionStatus = await session.run(nativeOutput ? nativeWorkflowOutputInstructions(message) : message,
           crypto.randomUUID(), workspace, turnId => { attempt.turnId = turnId; save(); });
         signal.throwIfAborted();
         if (!['completed', 'submitted'].includes(attempt.sessionStatus) || !attempt.turnId)
@@ -252,7 +261,9 @@ export async function runFormalizationReview(bundleDirectory: string, runDirecto
         await close();
         assertCurrent(); checkWorkspace(workspace, input);
         assertMathCanonicalPath(outputFile);
-        const text = readMathText(outputFile, 1_000_000), output = assertFormalizationSemanticReview(input, JSON.parse(text));
+        const text = nativeOutput ? completedWorkflowOutput(session, attempt.turnId, 1_000_000) : readMathText(outputFile, 1_000_000);
+        const output = assertFormalizationSemanticReview(input, JSON.parse(text));
+        if (nativeOutput) writeMathFrozen(outputFile, text);
         fs.chmodSync(outputFile, 0o400);
         attempt.status = 'completed';
         const receipt = receiptSchema.parse({ schema: 'theorem-os.formalization-review-receipt.v1', requestDigest,

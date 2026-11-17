@@ -81,8 +81,11 @@ function presetAgent(behavior: Behavior = {}) {
   const open = async (options: MathAgentOptions): Promise<MathAgentSession> => {
     const threadId = 'informalization-thread-' + crypto.randomUUID();
     let diagnostic: MathAgentFailureDiagnostic | undefined;
-    return { threadId, get lastFailureDiagnostic() { return diagnostic; }, interrupt: async () => {}, close: async () => {},
+    let lastCompletedResponse: MathAgentSession['lastCompletedResponse'];
+    return { threadId, get lastFailureDiagnostic() { return diagnostic; }, get lastCompletedResponse() { return lastCompletedResponse; },
+      interrupt: async () => {}, close: async () => {},
       run: async (_message, _id, workspace, onStarted) => {
+        lastCompletedResponse = undefined;
         onStarted('informalization-turn-' + threadId);
         options.onUsage({ inputTokens: 1, outputTokens: 0, totalTokens: 1 });
         const name = path.basename(workspace), parts = workspace.slice(workspace.lastIndexOf('/batches/') + 1).split('/');
@@ -98,7 +101,10 @@ function presetAgent(behavior: Behavior = {}) {
         const output = role === 'write'
           ? behavior.write ? behavior.write(input as unknown as InformalizationWriterInput, count) : explain(input as unknown as InformalizationWriterInput)
           : behavior.audit ? behavior.audit(input as unknown as InformalizationAuditInput, auditorId!, count) : review(input as unknown as InformalizationAuditInput);
-        if (output !== undefined) fs.writeFileSync(path.join(workspace, 'OUTPUT.json'), JSON.stringify(output));
+        if (output !== undefined) {
+          if (options.outputSchema) lastCompletedResponse = { turnId: 'informalization-turn-' + threadId, text: JSON.stringify(output) };
+          else fs.writeFileSync(path.join(workspace, 'OUTPUT.json'), JSON.stringify(output));
+        }
         return 'completed';
       } };
   };
@@ -733,8 +739,43 @@ describe('preparation', () => {
 });
 
 describe('informalization runner', () => {
+  it('uses native final JSON for new writer and blind auditor sessions without a tool-written output file', async () => {
+    const r = runner(), agent = presetAgent(), closed = new Set<string>();
+    expect(r.request.outputDelivery).toBe('native-schema');
+    const open = async (options: MathAgentOptions): Promise<MathAgentSession> => {
+      expect(options.outputSchema).toEqual(JSON.parse(readMathText(path.join(options.workspace, 'OUTPUT.schema.json'))));
+      expect(options.completedOutput).toBeUndefined();
+      const session = await agent.open(options);
+      return { ...session, get lastCompletedResponse() { return session.lastCompletedResponse; }, close: async () => {
+        if (closed.has(options.workspace)) return;
+        expect(fs.existsSync(path.join(options.workspace, 'OUTPUT.json'))).toBe(false);
+        closed.add(options.workspace); await session.close();
+      } };
+    };
+    expect(await r.run({ ...agent, open })).toMatchObject({ status: 'approved' });
+    expect(closed.size).toBe(6);
+    for (const workspace of closed) expect(fs.statSync(path.join(workspace, 'OUTPUT.json')).mode & 0o222).toBe(0);
+  });
+
+  it('resumes historical file checkpoints with unchanged instructions after a stopped auditor', async () => {
+    const r = runner(), legacy = { ...r.request }; delete legacy.outputDelivery;
+    const requestFile = path.join(r.directory, 'request.json'); fs.chmodSync(requestFile, 0o600);
+    fs.writeFileSync(requestFile, JSON.stringify(legacy)); fs.chmodSync(requestFile, 0o400);
+    const failing = presetAgent({ diagnostic: (call, count) =>
+      call.auditorId === 'auditor-2' && count === 2 ? { code: 'other' } : undefined });
+    expect(await r.run(failing)).toMatchObject({ status: 'stopped', approvedBatches: 1 });
+    const completed = failing.calls.find(call => call.role === 'write' && call.batch === 1)!;
+    const frozenRole = readMathText(path.join(completed.workspace, 'ROLE.md'));
+    expect(frozenRole).toBe(INFORMALIZATION_WRITER_INSTRUCTIONS);
+    const resumed = presetAgent();
+    expect(await r.run(resumed)).toMatchObject({ status: 'approved' });
+    expect(resumed.calls.map(call => call.auditorId)).toEqual(['auditor-2']);
+    expect(resumed.calls[0].options.outputSchema).toBeUndefined(); expect(resumed.calls[0].options.completedOutput).toBeDefined();
+    expect(readMathText(path.join(completed.workspace, 'ROLE.md'))).toBe(frozenRole);
+  });
+
   it('approves batch by batch with blind auditors and publishes a re-verifiable proof', async () => {
-    const r = runner(), agent = presetAgent();
+    const r = runner({ outputDelivery: 'file' }), agent = presetAgent();
     const result = await r.run(agent);
     expect(result).toMatchObject({ status: 'approved', batches: 2, approvedBatches: 2, rounds: 2, modelInvoked: true,
       proof: path.join(r.directory, 'artifact', 'proof.md') });
@@ -922,7 +963,7 @@ describe('informalization runner', () => {
     expect(writes[1]!.input.previousOutput).toBeNull();
     for (const call of agent.calls) {
       expect(call.input.alignment).toBe(INFORMALIZATION_ALIGNMENT);
-      expect(readMathText(path.join(call.workspace, 'ROLE.md'))).toBe(informalizationRoleInstructions(call.role, INFORMALIZATION_ALIGNMENT));
+      expect(readMathText(path.join(call.workspace, 'ROLE.md'))).toContain(informalizationRoleInstructions(call.role, INFORMALIZATION_ALIGNMENT));
       expect(JSON.parse(readMathText(path.join(call.workspace, 'OUTPUT.schema.json'))))
         .toEqual(informalizationRoleOutputSchema(call.role, INFORMALIZATION_ALIGNMENT));
     }
@@ -947,7 +988,7 @@ describe('informalization runner', () => {
   });
 
   it('keeps unaligned role files unchanged', async () => {
-    const r = runner(), agent = presetAgent();
+    const r = runner({ outputDelivery: 'file' }), agent = presetAgent();
     expect(await r.run(agent)).toMatchObject({ status: 'approved' });
     expect(r.request).not.toHaveProperty('alignment');
     for (const call of agent.calls) {
@@ -986,7 +1027,7 @@ describe('informalization runner', () => {
     for (const call of agent.calls) {
       expect(call.input.explanationPolicy).toBe(INFORMALIZATION_EXPLANATION_POLICY);
       expect(readMathText(path.join(call.workspace, 'ROLE.md')))
-        .toBe(informalizationRoleInstructions(call.role, INFORMALIZATION_ALIGNMENT, INFORMALIZATION_EXPLANATION_POLICY));
+        .toContain(informalizationRoleInstructions(call.role, INFORMALIZATION_ALIGNMENT, INFORMALIZATION_EXPLANATION_POLICY));
       expect(JSON.parse(readMathText(path.join(call.workspace, 'OUTPUT.schema.json'))))
         .toEqual(informalizationRoleOutputSchema(call.role, INFORMALIZATION_ALIGNMENT));
     }
@@ -1029,7 +1070,7 @@ describe('informalization runner', () => {
     expect(writes[3]!.input.feedback).toContain('auditor-1, double_eq, summary mismatch: The lemma does not give this.');
     for (const call of agent.calls) {
       expect(call.input).toMatchObject({ outlinePolicy: INFORMALIZATION_OUTLINE_POLICY, declarations: ['lib_fact', 'double', 'double_eq', 'double_add_zero'] });
-      expect(readMathText(path.join(call.workspace, 'ROLE.md'))).toBe(informalizationRoleInstructions(call.role, undefined, undefined, INFORMALIZATION_OUTLINE_POLICY));
+      expect(readMathText(path.join(call.workspace, 'ROLE.md'))).toContain(informalizationRoleInstructions(call.role, undefined, undefined, INFORMALIZATION_OUTLINE_POLICY));
       expect(readMathText(path.join(call.workspace, 'ROLE.md'))).toContain('proof-outline-v1');
       expect(JSON.parse(readMathText(path.join(call.workspace, 'OUTPUT.schema.json'))))
         .toEqual(informalizationRoleOutputSchema(call.role, undefined, INFORMALIZATION_OUTLINE_POLICY));
@@ -1086,7 +1127,7 @@ describe('informalization runner', () => {
   });
 
   it('interrupts both auditors once their combined usage reaches the token limit', async () => {
-    const r = runner({ maxTotalTokens: 8 }), agent = presetAgent(), long = longTurns(agent.open, name => name.startsWith('audit-'));
+    const r = runner({ maxTotalTokens: 8, outputDelivery: 'file' }), agent = presetAgent(), long = longTurns(agent.open, name => name.startsWith('audit-'));
     expect(await r.run({ ...agent, open: long.open })).toMatchObject({ status: 'stopped', error: 'math_total_token_limit',
       tokenBudget: { status: 'exhausted', reportedTotalTokens: 8 } });
     expect(long.stopped.sort()).toEqual(['audit-auditor-1-1', 'audit-auditor-2-1']);

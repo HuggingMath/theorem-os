@@ -44,4 +44,9 @@ describe('pinned Lean toolchain readiness', () => {
       status: 'unavailable', diagnostics: expect.stringContaining('toolchain is not installed'),
     });
   });
+
+  it('honors an explicitly unlimited health probe without adding a process deadline', () => {
+    expect(checkResolvedLeanToolchainReadiness({ projectRoot: root, env, timeoutMs: Infinity }).status).toBe('ready');
+    expect(probe.mock.calls[0][2]).not.toHaveProperty('timeout');
+  });
 });

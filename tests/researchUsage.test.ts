@@ -8,6 +8,7 @@ import type { ProofCheck } from '../src/solver/modules/evidence';
 import { commitSolverSources } from '../src/solver/problem';
 import { runResearchWorkers } from '../src/solver/research';
 import { ResearchUsage } from '../src/solver/researchUsage';
+import { buildTokenBudget } from '../src/solver/usageBudget';
 import { workerAccess } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 
@@ -52,6 +53,39 @@ function fixture(cooperative = false) {
 }
 
 describe('research usage at the real research worker boundary', () => {
+  it.each([true, false])('accounts native compaction without inventing a proof turn (usage reported: %s)', reported => {
+    const { state, emit, save } = fixture();
+    state.usageAccounting = { startedTurns: 0, reportedTurns: 0, pending: false, incomplete: false };
+    const usage = new ResearchUsage({ state, research: state, maxTotalTokens: 0,
+      signal: new AbortController().signal, remainingMs: () => Infinity, emit, changed: save });
+    const callbacks = usage.bindSession('maintenance-session', () => 12);
+    usage.sessionOpened({ threadId: 'maintenance-thread', usageSource: 'native-thread-totals', run: async () => 'completed', interrupt: async () => {}, close: async () => {} });
+    usage.beginMaintenance();
+    if (reported) callbacks.onUsage({ inputTokens: 12, outputTokens: 2, totalTokens: 14 }, { turnId: 'native-compact' });
+    usage.finishMaintenance();
+    expect(state.usageAccounting).toEqual({ startedTurns: 0, reportedTurns: 0, pending: false, incomplete: !reported });
+    expect(state.usage?.totalTokens).toBe(reported ? 14 : undefined);
+  });
+
+  it('admits and settles upstream compaction requests between proof turns', () => {
+    const { state, emit, save } = fixture();
+    state.tokenBudget = buildTokenBudget(0, [state]);
+    state.usageAccounting = { startedTurns: 0, reportedTurns: 0, pending: false, incomplete: false };
+    const usage = new ResearchUsage({ state, research: state, maxTotalTokens: 0,
+      signal: new AbortController().signal, remainingMs: () => Infinity, emit, changed: save });
+    const callbacks = usage.bindSession('maintenance-session', () => undefined);
+    usage.sessionOpened({ threadId: 'maintenance-thread', usageSource: 'upstream-requests', run: async () => 'completed', interrupt: async () => {}, close: async () => {} });
+    usage.beginMaintenance();
+    const request = callbacks.requestGate!({ requestId: 'compact-request', source: 'responses-relay' });
+    expect(request.allowed).toBe(true);
+    if (request.allowed) request.settle({ complete: true, outcome: 'completed', usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 } });
+    usage.finishMaintenance();
+    expect(state.usage!.totalTokens).toBe(7);
+    expect(state.usageAccounting).toEqual({ startedTurns: 0, reportedTurns: 0, pending: false, incomplete: false });
+    expect(state.requestUsageAccounting).toMatchObject({ startedRequests: 1, reportedRequests: 1, pendingRequests: 0, incomplete: false });
+    expect(callbacks.requestGate!({ requestId: 'outside-maintenance', source: 'responses-relay' }).allowed).toBe(false);
+  });
+
   it('keeps usage incomplete when a turn starts without a bound native session', () => {
     const { state, emit, save } = fixture();
     state.usageAccounting = { startedTurns: 0, reportedTurns: 0, pending: false, incomplete: false };

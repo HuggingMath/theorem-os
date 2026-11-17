@@ -1,0 +1,23 @@
+{
+  "schema": "theoremos.codex-backend-upstream.v1",
+  "repository": "https://github.com/openai/codex.git",
+  "tag": "rust-v0.169.0",
+  "tagObject": "a41fe5b443652cbdbee57717fbb9fd78d8d8b32a",
+  "revision": "d32063f96c2dff1dc96af839b3952abb6acfeda4",
+  "toolchain": "1.95.0",
+  "cargoLockSha256": "56e04c89b25a6efa1fa6f1cf02934e92451933c8ebda57a5153207ba9ea9fb9e",
+  "derivedCargoLockSha256": "58e50e7c7d3e384ae707e45e020b472ec2db6da527a60d269dd12443091b1fae",
+  "lockPatch": "derived-lock.patch",
+  "lockPatchSha256": "49aa6e1fdf57579b55534cdedf9a8d24fa4abf23443e1bdd2eec036ff8f4d89a",
+  "lockPatchReason": "Align 173 local workspace versions with release 0.169.0; add the AgentControl adapter codex-app-server -> codex-rollout-trace workspace dependency. External dependencies remain unchanged.",
+  "patch": "agent-control.patch",
+  "package": "codex-cli",
+  "binary": "codex",
+  "profile": "dev",
+  "devDebug": "0",
+  "incremental": "0",
+  "submoduleMetadata": {
+    "repository": "https://github.com/openai-oss-forks/rusty_v8.git",
+    "revision": "90a65f887a0c0f048f3784afbcb320b373c8a2e0"
+  }
+}

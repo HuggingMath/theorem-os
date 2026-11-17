@@ -6,7 +6,7 @@ Each profile's **Reading** link leads to [collected domain materials](domain-mat
 
 ## Choose and combine
 
-Select expertise from the actual objects, definitions and subject matter. A cross-domain question can use several experts or combine specialties in one member. State the selected ID or slug and its profile reference in the ordinary `spawn.message` or `assign.message`, with a self-contained mathematical question, known inputs, intended consumer and useful output. There is no separate domain or role tool parameter.
+Select expertise from the actual objects, definitions and subject matter. A cross-domain question can use several experts or combine specialties in one member. Put the selected IDs or slugs on the first line of the ordinary `spawn.message` or `assign.message`, for example `Profiles: D006, prover`, followed by a self-contained mathematical question, known inputs, intended consumer and useful output. The host includes those knowledge sections and their local collected reading in the member's context; inspect its loaded and unresolved selection record. There is no separate domain or role tool parameter.
 
 For example, assign a representation theorist the question whether a specified invariant subspace has an invariant complement, giving the group, field and action. The expert selects the relevant knowledge and decides how to investigate it. Several profiles can fit the same question; use complementary knowledge where it helps and give additional members distinct questions.
 

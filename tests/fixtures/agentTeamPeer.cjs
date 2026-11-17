@@ -151,13 +151,15 @@ stream.on('line', line => {
     return;
   }
   const reply = result => send({ id: call.id, result });
+  // The injected nativeFileWatchFixture owns these connection-scoped calls.
+  if (call.method === 'fs/watch' || call.method === 'fs/unwatch') return;
   if (call.method === 'initialize') return reply({});
   if (call.method === 'thread/start' || call.method === 'thread/resume') {
     threadId = params.threadId || threadId;
     if (call.method === 'thread/start') {
       const expected = actor === 'lead'
-        ? ['spawn', 'assign', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'publish', 'cancel', 'budget', 'resume', 'history']
-        : ['message', 'poll', 'wait', 'inspect', 'inspect-research', 'submit', 'yield', 'history'];
+        ? ['spawn', 'assign', 'amend', 'finish', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'publish', 'cancel', 'budget', 'resume', 'history', 'coordinate']
+        : ['message', 'poll', 'wait', 'inspect', 'inspect-research', 'submit', 'yield', 'history', 'progress'];
       const tool = params.dynamicTools.find(tool => tool.name === 'theoremos_team');
       if (!tool || JSON.stringify(tool.inputSchema.properties.operation.enum.toSorted()) !== JSON.stringify(expected.toSorted()))
         throw new Error('role-operation-schema-mismatch');

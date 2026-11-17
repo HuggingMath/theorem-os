@@ -15,6 +15,8 @@ import { solverSourceDigest } from '../src/solver/modules/evidence';
 import { prepareResearchSkill, researchSkillIdentity } from '../src/solver/researchSkill';
 import { readMathAgentSkill } from '../src/runtime/codexSkills';
 import { solverState } from './helpers/solver';
+import { tacticBatteryCacheTestDefines } from './helpers/tacticBatteryCache';
+import { nativeFileWatchFixture } from './helpers/nativeFileWatchFixture';
 
 // This peer supplies deterministic protocol frames and tool writes. It cannot use a provider.
 // The lease, native adapter, skill lifecycle, usage ledger, archive and restart execute unchanged.
@@ -123,6 +125,7 @@ beforeAll(() => {
     .map((name, index) => [MATH_RUNTIME_BUNDLES[index].replace(/\.js$/u, ''),
       path.join(runtimeRoot, 'scripts/mathematics', name + '.ts')])),
     outdir: bundleRoot, bundle: true, platform: 'node', format: 'cjs',
+    define: tacticBatteryCacheTestDefines(path.join(runtimeRoot, 'tactic-battery-cache')),
     nodePaths: [path.join(sourceRoot, 'node_modules')], loader: { '.py': 'text', '.lean': 'text' }, logLevel: 'silent' });
   runtimeManifest = path.join(runtimeRoot, 'build-manifest.json');
   writeMathJsonDurable(runtimeManifest, { schema: 'deepscientist.math.build-manifest.v1',
@@ -180,7 +183,7 @@ describe.skipIf(process.platform !== 'linux')('skill mode across actual owner pr
       prepareResearchSkill(repo, state.worktree, state.researchSkill!, problem);
       writeSolverRunState(path.join(root, 'state.json'), state);
       fs.mkdirSync(path.join(root, 'profile'));
-      fs.writeFileSync(path.join(root, 'peer'), '#!' + process.execPath + '\n' + peer, { mode: 0o700 });
+      fs.writeFileSync(path.join(root, 'peer'), '#!' + process.execPath + '\n' + nativeFileWatchFixture + peer, { mode: 0o700 });
       const toolchain = path.join(os.homedir(), '.elan/toolchains/leanprover--lean4---v4.33.0');
       const config = path.join(root, 'config.json');
       fs.writeFileSync(config, JSON.stringify({ root, repo, buildFile: runtimeManifest, phase, environment: {
@@ -189,6 +192,7 @@ describe.skipIf(process.platform !== 'linux')('skill mode across actual owner pr
       const executable = path.join(root, 'owner.mjs');
       buildSync({ stdin: { contents: owner, resolveDir: repo, loader: 'ts' }, outfile: executable,
         bundle: true, platform: 'node', format: 'esm', loader: { '.py': 'text', '.lean': 'text' },
+        define: tacticBatteryCacheTestDefines(path.join(root, 'tactic-battery-cache')),
         nodePaths: [path.join(process.cwd(), 'node_modules')],
         banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" } });
       const start = (resume: boolean) => {

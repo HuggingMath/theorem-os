@@ -81,8 +81,11 @@ describe('versioned Codex research skills', () => {
     expect(calls().find(call=>call.method===(resume?'thread/resume':'thread/start')).params.config)
       .toMatchObject({'features.multi_agent':false,'features.multi_agent_v2':false,'features.goals':false});
     const turns=calls().filter(call=>call.method==='turn/start');
-    expect(turns[0].params.input.filter(item=>item.type==='skill')).toEqual([{type:'skill',name:skill.name,path:skill.path}]);
-    expect(turns[1].params.input.some(item=>item.type==='skill')).toBe(false);
+    expect(turns[0].params.input).toEqual([
+      {type:'text',text:'Research the exact task.',text_elements:[]},
+      {type:'skill',name:skill.name,path:skill.path},
+    ]);
+    expect(turns[1].params.input).toEqual([{type:'text',text:'Continue from your artifacts.',text_elements:[]}]);
   });
 
   it('uses explicit file loading without claiming native discovery',async()=>{
@@ -91,9 +94,10 @@ describe('versioned Codex research skills', () => {
     await session.run('Investigate.','first',root,()=>{});
     expect(calls().some(call=>call.method==='skills/list')).toBe(false);
     const inputs=calls().find(call=>call.method==='turn/start').params.input;
-    expect(inputs).toHaveLength(3);
-    expect(inputs[2]).toMatchObject({type:'text',text:expect.stringContaining(JSON.stringify(skillFile))});
-    expect(inputs[2].text).toContain('explicit file loading, not native');
+    expect(inputs).toHaveLength(2);
+    expect(inputs[0]).toEqual({type:'text',text:'Investigate.',text_elements:[]});
+    expect(inputs[1]).toMatchObject({type:'text',text:expect.stringContaining(JSON.stringify(skillFile))});
+    expect(inputs[1].text).toContain('explicit file loading, not native');
   });
 
   it.each([
@@ -120,7 +124,7 @@ describe('versioned Codex research skills', () => {
   it('keeps legacy sessions free of skill discovery and inputs',async()=>{
     session=await createCodexMathSession(options());await session.run('Legacy.','legacy',root,()=>{});
     expect(calls().some(call=>call.method==='skills/list')).toBe(false);
-    expect(calls().find(call=>call.method==='turn/start').params.input).toHaveLength(2);
+    expect(calls().find(call=>call.method==='turn/start').params.input).toEqual([{type:'text',text:'Legacy.',text_elements:[]}]);
     const config=calls().find(call=>call.method==='thread/start').params.config;
     for(const feature of ['features.multi_agent','features.multi_agent_v2','features.goals']) expect(config).not.toHaveProperty(feature);
   });

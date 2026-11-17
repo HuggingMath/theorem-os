@@ -1585,7 +1585,6 @@ describe('isolated solver and host acceptance', () => {
 
   it.each([
     ['trusted input', 'generated/p/Challenge.lean', 'math_trusted_source_changed'],
-    ['outside file', 'outside.txt', 'math_source_outside_ownership'],
   ])('stops on a changed %s without sending it through Lean', async (_kind, file, reason) => {
     const run = vi.fn(async (options: MathAgentOptions) => {
       fs.writeFileSync(path.join(options.workspace, file), 'unexpected content');
@@ -1791,12 +1790,23 @@ describe('isolated solver and host acceptance', () => {
   });
 
   it('checks in the isolated worktree, closes the model, rechecks integration and scores independently', async () => {
+    host.verify.mockImplementation(async request => {
+      if (host.verify.mock.calls.length === 1) {
+        const checkout = path.resolve(request.projectRoot, '../..');
+        expect(path.basename(checkout)).toBe('worktree');
+        expect(path.basename(path.dirname(checkout))).toMatch(/^math-check-/u);
+        expect(git(checkout, ['status', '--porcelain'])).toBe('');
+        expect(fs.readFileSync(path.join(request.projectRoot, 'Submission.lean'), 'utf8'))
+          .toBe(original.replaceAll('by sorry', 'by trivial'));
+      }
+      return verified(request);
+    });
     expect(await runSolver(args, directory)).toBe(0);
     const result = JSON.parse(fs.readFileSync(output, 'utf8'));
     expect(result).toMatchObject({ status: 'evaluated_passed', solver_ready_receipt_valid: true,
       completion_signal_valid: true, evaluator: { official: true, method: 'official-comparator' } });
     expect(host.verify).toHaveBeenCalledTimes(2);
-    expect(host.verify.mock.calls[0][0].projectRoot).toBe(path.join(`${output}.runtime/worktree`, 'generated/p'));
+    expect(host.verify.mock.calls[0][0].projectRoot).not.toBe(path.join(`${output}.runtime/worktree`, 'generated/p'));
     expect(host.verify.mock.calls[1][0].projectRoot).toBe(project);
     expect(git(workspace, ['rev-parse', 'HEAD'])).toBe(result.solution_commit);
     const session = await host.createSession.mock.results[0].value;
@@ -6772,21 +6782,28 @@ describe('isolated solver and host acceptance', () => {
     expect(host.verify).toHaveBeenCalledTimes(3);
   });
 
-  it('reports a failed turn with invalid sources without retrying the closed session', async () => {
+  it('returns frozen-source feedback after a failed turn so the next session can repair it', async () => {
     const run = vi.fn();
     host.createSession.mockImplementation(async (options: MathAgentOptions) => {
-      run.mockImplementation(async () => {
-        fs.writeFileSync(path.join(options.workspace, 'generated/p/Submission.lean'), original.replace('first : True', 'first : False'));
-        return 'failed';
+      run.mockImplementation(async (message: string) => {
+        if (run.mock.calls.length === 1) {
+          fs.writeFileSync(path.join(options.workspace, 'generated/p/Submission.lean'), original.replace('first : True', 'first : False'));
+          return 'failed';
+        }
+        expect(message).toContain('math_original_declaration_changed');
+        expect(message).toContain('generated/p/Submission.lean');
+        expect(host.verify).not.toHaveBeenCalled();
+        fs.writeFileSync(path.join(options.workspace, 'generated/p/Submission.lean'), original.replaceAll('by sorry', 'by trivial'));
+        return 'completed';
       });
       return { threadId: 'fixture-thread', run, close: vi.fn(), interrupt: vi.fn() };
     });
-    expect(await runSolver([...args, '--max-turns', '3'], directory)).toBe(1);
-    expect(run).toHaveBeenCalledTimes(1);
-    expect(host.verify).not.toHaveBeenCalled();
-    expect(host.officialGate).not.toHaveBeenCalled();
-    expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ status: 'runtime_error', turns: 1,
-      reason: expect.stringContaining('math_original_declaration_changed') });
+    expect(await runSolver([...args, '--max-turns', '3'], directory)).toBe(0);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(host.createSession.mock.calls[1][0].threadId).toBe('fixture-thread');
+    expect(host.verify).toHaveBeenCalledTimes(2);
+    expect(host.officialGate).toHaveBeenCalledOnce();
+    expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ status: 'evaluated_passed', turns: 2 });
   });
 
   it.each(['stream disconnected before completion: Concurrency limit exceeded for account, please retry later',

@@ -47,7 +47,8 @@ describe('web BYOK provider configuration and offline app-server fixture', () =>
 
   it('completes a real stdio adapter turn after checking BYOK and writes a valid addition candidate', async () => {
     const activity = vi.fn();
-    session = await createCodexMathSession({ ...options(), onActivity: activity });
+    session = await createCodexMathSession({ ...options(), onActivity: activity,
+      completedOutput: { file: path.join(root, 'workspace/OUTPUT.json'), validate: vi.fn() } });
     expect(await session.run('WEB_SMOKE_VALID_PROOF', 'valid-turn', path.join(root, 'workspace'), () => {})).toBe('completed');
     const source = fs.readFileSync(path.join(root, 'workspace/generated/problem/Submission.lean'), 'utf8');
     expect(source).toContain('by rfl');

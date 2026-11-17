@@ -64,6 +64,8 @@ const statement = z.string().min(1).max(256 * 1024).refine(value => value.trim()
 const auditorSchema = formalizationModelConfigurationSchema.extend({ id: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/u) }).strict();
 export const informalizationRequestSchema = z.object({
   schema: z.literal('theorem-os.informalization-request.v1'), protocol: z.literal(INFORMALIZATION_PROTOCOL),
+  /** Missing on historical requests, whose file submission protocol must remain unchanged. */
+  outputDelivery: z.enum(['native-schema', 'file']).optional(),
   proofId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u), target: leanName,
   environment: z.enum(['standard', 'mathlib', 'mathlib-4.8', 'openai-math',
     'openai-math-cartier-reviewed-v1', 'openai-math-character-reviewed-v1']),
@@ -162,6 +164,7 @@ export function prepareInformalization(directory: string, input: Informalization
   }
   const request = informalizationRequestSchema.parse({
     schema: 'theorem-os.informalization-request.v1', protocol: INFORMALIZATION_PROTOCOL,
+    outputDelivery: input.outputDelivery ?? 'native-schema',
     proofId: input.proofId, target: input.target, environment: input.environment,
     environmentDigest: environment.dependencyDigest, toolchain: environment.toolchain,
     mathlibRevision: environment.mathlibRevision ?? null, rootModule: sources.at(-1)!.module,

@@ -59,12 +59,16 @@ function objection(): FormalizationAuditReview {
       explanation: 'Synthetic objection locates a target-type quotation to exercise the host contract.' }] };
 }
 function reviewer(behavior: { output?: FormalizationAuditReview; threadId?: string; status?: string;
-  finalText?: string; noFinal?: boolean;
+  finalText?: string; noFinal?: boolean; finalTurnId?: string; finalAfterClose?: string;
   isolated?: boolean;
   upstream?: boolean; missingUsage?: boolean; onRun?: (options: MathAgentOptions) => void;
   onClose?: (options: MathAgentOptions) => void } = {}) {
   const seen: { options: MathAgentOptions; input: ReturnType<typeof formalizationAuditInput>; message: string }[] = [];
-  const close = vi.fn(async () => { if (current) behavior.onClose?.(current); });
+  let lastCompletedResponse: MathAgentSession['lastCompletedResponse'];
+  const close = vi.fn(async () => {
+    if (current) behavior.onClose?.(current);
+    if (behavior.finalAfterClose) lastCompletedResponse = { turnId: 'audit-turn', text: behavior.finalAfterClose };
+  });
   let current: MathAgentOptions | undefined;
   const run = vi.fn(async (message: string, _id: string, workspace: string, started: (turnId: string) => void) => {
     const options = current!;
@@ -80,14 +84,14 @@ function reviewer(behavior: { output?: FormalizationAuditReview; threadId?: stri
     } else if (!behavior.missingUsage) options.onUsage({ totalTokens: 7 });
     behavior.onRun?.(options);
     const output = behavior.output ?? approved();
-    if (!behavior.noFinal) options.onItem!('completed', { type: 'agentMessage', phase: 'final_answer',
-      text: behavior.finalText ?? JSON.stringify(output) }, { turnId: 'audit-turn' });
+    if (!behavior.noFinal) lastCompletedResponse = { turnId: behavior.finalTurnId ?? 'audit-turn', text: behavior.finalText ?? JSON.stringify(output) };
     return behavior.status ?? 'completed';
   });
   const interrupt = vi.fn(async () => {});
   const open = vi.fn(async (options: MathAgentOptions): Promise<MathAgentSession> => {
     current = options;
     return { threadId: behavior.threadId ?? 'independent-audit-thread', run, close, interrupt,
+      get lastCompletedResponse() { return lastCompletedResponse; },
       ...(behavior.isolated ? { isolationReceipt: { schema: 'theorem-os.formalization-sandbox.v2', backend: 'bwrap',
         workspace: '/workspace', profile: '/profile', providerId: 'web_provider',
         namespaces: ['user', 'mount', 'pid', 'ipc', 'uts', 'net'], network: 'role-model-relay-only', credentials: 'host-only',
@@ -306,10 +310,8 @@ describe('background formalization audit', () => {
   });
 
   it('validates the final output after closing its writer', async () => {
-    const f = fixture(), model = reviewer({ onClose: options => {
+    const f = fixture(), model = reviewer({ finalAfterClose: JSON.stringify({ ...approved(), checks: { ...approved().checks, domains: false } }), onClose: options => {
       expect(fs.existsSync(path.join(options.workspace, 'OUTPUT.json'))).toBe(false);
-      options.onItem!('completed', { type: 'agentMessage', phase: 'final_answer',
-        text: JSON.stringify({ ...approved(), checks: { ...approved().checks, domains: false } }) }, { turnId: 'audit-turn' });
     } });
     await expect(runFormalizationAudit(f.directory, f.root, f.evidence, f.configuration, { openSession: model.open }))
       .rejects.toThrow('formalization_audit_approval_invalid');
@@ -317,11 +319,8 @@ describe('background formalization audit', () => {
     expect(readState(f.directory)).toMatchObject({ status: 'error', error: 'formalization_audit_approval_invalid' });
   });
 
-  it.each(['commentary', 'partial_answer'])('rejects a %s message without a completed final JSON response', async phase => {
-    const f = fixture(), model = reviewer({ noFinal: true, onRun: options => {
-      options.onItem!('started', { type: 'agentMessage', phase: 'final_answer', text: JSON.stringify(approved()) }, { turnId: 'audit-turn' });
-      options.onItem!('completed', { type: 'agentMessage', phase, text: JSON.stringify(approved()) }, { turnId: 'audit-turn' });
-      options.onItem!('completed', { type: 'agentMessage', phase: 'final_answer', text: JSON.stringify(approved()) }, { turnId: 'unrelated-turn' });
+  it.each(['missing', 'another-turn'])('rejects a %s final response even if OUTPUT.json exists', async mode => {
+    const f = fixture(), model = reviewer({ noFinal: mode === 'missing', finalTurnId: 'unrelated-turn', onRun: options => {
       fs.writeFileSync(path.join(options.workspace, 'OUTPUT.json'), JSON.stringify(approved()));
     } });
     await expect(runFormalizationAudit(f.directory, f.root, f.evidence, f.configuration, { openSession: model.open }))

@@ -9,17 +9,25 @@ const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 /** Shared optional tool reference; callers retain their own mandatory delivery contracts. */
 export function buildResearchToolGuide(problem: Pick<SolverProblem, 'receiptDigest'>,
   access: Pick<ContextAccess, 'root' | 'tools' | 'worktree' | 'retrievalRoot' | 'corpusFile' |
-    'knowledgeFile' | 'knowledgeDigest' | 'libraryCatalog'>, environmentDigest: string) {
+    'knowledgeFile' | 'knowledgeDigest' | 'libraryCatalog'>, environmentDigest: string, teamMode = false) {
   const command = `bun ${quote(access.tools ?? path.join(access.root, 'bin/math.ts'))}`;
   const help = new ResearchToolHelpBuilder();
   help.section('lean', `${command} check-lean --worktree ${quote(access.worktree)} --file 'OWNED_FILE.lean' --timeout-seconds 0\n` +
     'Repeat --file for all relevant saved source files. Paths are relative to the Lean project, without its prefix. ' +
-    'Read firstBlocking and diagnosticArtifacts; stdout is JSON and stderr is progress. Poll unfinished processes. ' +
+    'Read classification, firstBlocking and diagnosticArtifacts; stdout is JSON and stderr is progress. Poll unfinished processes. ' +
+    'An infrastructure-error identifies an environment fault; leanStarted:false confirms compilation did not start. Preserve proof work and report error.code, error.fingerprint and error.recovery to Lead/host. ' +
+    'Retry after an environment repair or changed health result; repeating the same failed command does not repair its environment. ' +
+    'Sandbox /proc cannot establish whether a host helper died. Use check-lean --health --worktree with this same worktree to check namespace visibility, lease and pinned tools. ' +
+    'Preserve the compiler exit status: use check-lean directly; for a manual shell check, capture output to a file and save the exit status before displaying a preview. ' +
+    'A pipeline ending in head or a successful cat/echo is not evidence that Lean passed. ' +
     'Digests use the diagnostic tool scheme; an unchanged successful result can be reused. A local diagnostic is advisory.\n' +
-    `${command} declarations search --index ${quote(path.join(access.worktree, DECLARATION_INDEX_FILE))} --query 'KEYWORDS'\n` +
-    `${command} declarations get --index ${quote(path.join(access.worktree, DECLARATION_INDEX_FILE))} --name 'QUALIFIED_NAME'\n` +
-    'Read the saved source for complete scopes, imports and types; the index is a bounded lexical aid.', '');
-  help.section('cooperation', `${command} research-observe --worktree ${quote(access.worktree)} --finding '.scratch/finding.json' ` +
+    `rg --line-number --ignore-case --fixed-strings --max-count 12 -- 'KEYWORD' ${quote(path.join(access.worktree, DECLARATION_INDEX_FILE))}\n` +
+    'Use native exec_command for text lookup and source reads, and native apply_patch for edits. ' +
+    'The JSONL declaration index records names, project-relative files, lines and indexed types. ' +
+    'Read matching source with its surrounding scopes, imports and complete type; the index is a lexical aid. ' +
+    'A ripgrep exit code of 1 means no match. Choose literal terms or an explicit pattern as appropriate; ' +
+    'do not infer that a declaration is absent from one search miss.', '');
+  if (!teamMode) help.section('cooperation', `${command} research-observe --worktree ${quote(access.worktree)} --finding '.scratch/finding.json' ` +
     '[--probe LEAN_FILE] [--snapshot-sources]\n' +
     'For cooperative task assignments only. The finding file contains the finding object, not the outer delivery event. ' +
     'This validates and appends to the current assignment log; it never supplies proof acceptance. Read the result for correction feedback.', '');

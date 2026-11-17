@@ -21,6 +21,8 @@ import { runResearchWorkers } from '../src/solver/research';
 import { runSolver } from '../src/solver/run';
 import { prepareResearchSkill, researchSkillIdentity } from '../src/solver/researchSkill';
 import { solverState } from './helpers/solver';
+import { tacticBatteryCacheTestDefines } from './helpers/tacticBatteryCache';
+import { nativeFileWatchFixture } from './helpers/nativeFileWatchFixture';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const task = 'Prove the frozen original target using independently checked team helpers.';
@@ -49,6 +51,7 @@ function freezeRuntime(root: string) {
     .map((name, index) => [MATH_RUNTIME_BUNDLES[index].replace(/\.js$/u, ''),
       path.join(root, 'scripts/mathematics', name + '.ts')])),
     outdir: bundleRoot, bundle: true, platform: 'node', format: 'cjs',
+    define: tacticBatteryCacheTestDefines(path.join(root, 'tactic-battery-cache')),
     nodePaths: [path.join(repository, 'node_modules')], loader: { '.py': 'text', '.lean': 'text' }, logLevel: 'silent' });
   const manifest = path.join(root, 'build-manifest.json'), now = new Date().toISOString();
   writeMathJsonDurable(manifest, { schema: 'deepscientist.math.build-manifest.v1', buildId: crypto.randomUUID(),
@@ -85,9 +88,10 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
       DEEPSCIENTIST_MATH_SANDBOX_BACKEND: 'bwrap', DEEPSCIENTIST_MATH_ENV_FILE: path.join(directory, 'missing.env') };
     const profile = path.join(directory, 'profile'), executable = path.join(directory, 'peer');
     fs.mkdirSync(profile); fs.writeFileSync(path.join(profile, 'config.toml'), '');
-    fs.writeFileSync(executable, '#!' + process.execPath + '\n' +
+    fs.writeFileSync(executable, '#!' + process.execPath + '\n' + nativeFileWatchFixture +
       fs.readFileSync(path.join(repository, 'tests/fixtures/agentTeamPeer.cjs'), 'utf8'), { mode: 0o700 });
     const processes = new Map<string, HarnessProcessIdentity>();
+    const open = vi.fn(directSolverModules.M1.open);
     const events: { event: string; details?: Record<string, unknown> }[] = [];
     const snapshots: SolverRunState[] = [];
     const controller = new AbortController();
@@ -97,7 +101,8 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
       winner = await runResearchWorkers({ state, root, buildFile, taskText: task, executable, profile,
         workers: [{ id: 'solver', role: 'lead', worktree, ownedFiles: problem.ownedFiles }],
         access: new Map([['solver', { environment, retrievalRoot: path.join(worktree, problem.projectRelative), researchSkill: skill }]]),
-        modules: directSolverModules, signal: controller.signal, deadline: Date.now() + 60_000,
+        modules: { ...directSolverModules, M1: { ...directSolverModules.M1, open } },
+        signal: controller.signal, deadline: Date.now() + 60_000,
         maxTurns: 8, maxTurnMs: 45_000, maxTotalTokens: 1000, proofTimeoutMs: 30_000,
         save: () => {
           for (const current of [state.writerProcess, ...(state.agentTeam?.workers.map(worker => worker.writerProcess) ?? [])])
@@ -123,6 +128,10 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
     expect(state.teamUsage?.totalTokens).toBe(50);
     expect(state.tokenBudget).toMatchObject({ usageComplete: true, reportedTotalTokens: 50 });
     expect(state.agentTeam?.workers).toHaveLength(2);
+    expect(open).toHaveBeenCalledTimes(5);
+    for (const [options] of open.mock.calls) {
+      expect(options).toMatchObject({ turnTimeoutMs: 45_000, turnCheckpointMs: 36_000 });
+    }
     expect(state.agentTeam?.deliveries).toHaveLength(2);
     expect(state.agentTeam?.adoptions.map(adoption => adoption.status)).toEqual(['completed', 'completed']);
     expect(state.writerStopUnconfirmed).toBeUndefined();
@@ -193,7 +202,7 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
       DEEPSCIENTIST_MATH_SANDBOX_BACKEND: 'bwrap', DEEPSCIENTIST_MATH_ENV_FILE: path.join(directory, 'missing.env') };
     const profile = path.join(directory, 'profile'), executable = path.join(directory, 'peer');
     fs.mkdirSync(profile); fs.writeFileSync(path.join(profile, 'config.toml'), '');
-    fs.writeFileSync(executable, '#!' + process.execPath + '\n' +
+    fs.writeFileSync(executable, '#!' + process.execPath + '\n' + nativeFileWatchFixture +
       fs.readFileSync(path.join(repository, 'tests/fixtures/agentTeamFollowupPeer.cjs'), 'utf8'), { mode: 0o700 });
     const processes = new Map<string, HarnessProcessIdentity>();
     const events: { event: string; details?: Record<string, unknown> }[] = [];
@@ -241,7 +250,7 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
     expect(childResumes[0]!.params.dynamicTools).toBeUndefined();
     expect(childStart.params.dynamicTools[0].inputSchema.properties.operation.enum)
       .toEqual(expect.arrayContaining(['message', 'poll', 'wait', 'inspect', 'inspect-research', 'submit', 'yield', 'history']));
-    expect(childStart.params.dynamicTools[0].inputSchema.properties.operation.enum).toHaveLength(8);
+    expect(childStart.params.dynamicTools[0].inputSchema.properties.operation.enum).toHaveLength(9);
     expect([childStart, ...childResumes].every(frame => frame.params.developerInstructions.includes(
       'your agentId is "child", and your coordinator is lead.'))).toBe(true);
     expect([childStart, ...childResumes].some(frame => frame.params.developerInstructions.includes('You are the Lead'))).toBe(false);
@@ -260,8 +269,8 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
 
     const leadTrace = trace(worktree), leadFrames = leadTrace.filter(frame => frame.direction === 'host');
     expect(leadFrames.find(frame => frame.method === 'thread/start')!.params.dynamicTools[0].inputSchema.properties.operation.enum)
-      .toEqual(expect.arrayContaining(['spawn', 'assign', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'publish', 'cancel', 'budget', 'resume', 'history']));
-    expect(leadFrames.find(frame => frame.method === 'thread/start')!.params.dynamicTools[0].inputSchema.properties.operation.enum).toHaveLength(14);
+      .toEqual(expect.arrayContaining(['spawn', 'assign', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'publish', 'cancel', 'budget', 'resume', 'history', 'coordinate']));
+    expect(leadFrames.find(frame => frame.method === 'thread/start')!.params.dynamicTools[0].inputSchema.properties.operation.enum).toHaveLength(17);
     expect(leadFrames.filter(frame => frame.method === 'thread/resume').map(frame => frame.params.threadId))
       .toEqual(['followup-lead']);
     expect(leadTrace).toContainEqual({ observation: 'lead-assigned-correction',
@@ -316,7 +325,7 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
       DEEPSCIENTIST_MATH_SANDBOX_BACKEND: 'bwrap', DEEPSCIENTIST_MATH_ENV_FILE: path.join(directory, 'missing.env') };
     const profile = path.join(directory, 'profile'), executable = path.join(directory, 'peer');
     fs.mkdirSync(profile); fs.writeFileSync(path.join(profile, 'config.toml'), '');
-    fs.writeFileSync(executable, '#!' + process.execPath + '\n' +
+    fs.writeFileSync(executable, '#!' + process.execPath + '\n' + nativeFileWatchFixture +
       fs.readFileSync(path.join(repository, 'tests/fixtures/agentTeamHandoffPeer.cjs'), 'utf8'), { mode: 0o700 });
     const processes = new Map<string, HarnessProcessIdentity>();
     const events: { event: string; details?: Record<string, unknown> }[] = [];
@@ -424,7 +433,7 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
     expect(git(receipt.workspaceRoot, ['rev-parse', 'HEAD'])).toBe(winner!.check.commit);
   }, 120_000);
 
-  it('runs the CLI preparation hooks and independent S3 evaluation with the same native team protocol', async () => {
+  it('freezes the new native transport and resumes historical host-tool runs through CLI preparation and independent S3 evaluation', async () => {
     const temporaryRoot = process.env.TMPDIR ?? '/data/lzh/default-storage/tmp';
     fs.mkdirSync(temporaryRoot, { recursive: true });
     directory = fs.realpathSync(fs.mkdtempSync(path.join(temporaryRoot, 'agent-team-cli-')));
@@ -462,18 +471,27 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
     fs.writeFileSync(path.join(profile, 'config.toml'), 'model_provider = "fixture"\n' +
       '[model_providers.fixture]\nname = "Local protocol fixture"\nwire_api = "responses"\n' +
       `base_url = "http://127.0.0.1:${address.port}/v1"\n`);
-    fs.writeFileSync(executable, '#!' + process.execPath + '\n' +
+    fs.writeFileSync(executable, '#!' + process.execPath + '\n' + nativeFileWatchFixture +
       fs.readFileSync(path.join(repository, 'tests/fixtures/agentTeamPeer.cjs'), 'utf8'), { mode: 0o700 });
     const events: Record<string, unknown>[] = [];
     vi.spyOn(console, 'log').mockImplementation(line => { events.push(JSON.parse(String(line))); });
-    const code = await runSolver(['--workspace', receipt.workspaceRoot, '--task-file', taskFile,
+    const args = ['--workspace', receipt.workspaceRoot, '--task-file', taskFile,
       '--output', output, '--build-manifest', buildFile, '--harness', 'codex',
       '--harness-profile', profile, '--harness-executable', executable,
       '--model', 'fixture-model', '--effort', 'high', '--research-mode', 'skill',
       '--skill-delegation', 'team', '--skill-max-agents', '3', '--no-explanations',
       '--prepare-timeout-seconds', '30', '--max-run-seconds', '60', '--max-turns', '8',
       '--max-turn-seconds', '30', '--max-total-tokens', '1000', '--proof-timeout-seconds', '30',
-      '--evaluator-timeout-seconds', '30'], root);
+      '--evaluator-timeout-seconds', '30'];
+    expect(await runSolver([...args, '--startup-only'], root)).toBe(0);
+    const historicalFile = path.join(output + '.runtime', 'state.json');
+    const historical = readSolverRunState(historicalFile);
+    expect(historical.agentTeam?.transport).toBe('native-agent-control');
+    // This fixture implements the historical dynamic tool protocol. Existing
+    // saved runs retain it even when the current default uses AgentControl.
+    delete historical.agentTeam!.transport;
+    writeSolverRunState(historicalFile, historical);
+    const code = await runSolver([...args, '--resume'], root);
     const result = JSON.parse(fs.readFileSync(output, 'utf8'));
     expect(code, JSON.stringify({ result, events })).toBe(0);
     expect(result).toMatchObject({ status: 'evaluated_passed', solver_ready_receipt_valid: true,
@@ -490,7 +508,7 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
     const runtime = output + '.runtime';
     expect(JSON.parse(fs.readFileSync(path.join(runtime, 'toolchain-readiness.json'), 'utf8')).status).toBe('ready');
     expect(JSON.parse(fs.readFileSync(path.join(runtime, 'provider-connectivity.json'), 'utf8')).status).toBe('reachable');
-    expect(httpRequests).toEqual([{ method: 'HEAD', url: '/v1/models' }]);
+    expect(httpRequests).toEqual([{ method: 'HEAD', url: '/v1/models' }, { method: 'HEAD', url: '/v1/models' }]);
     for (const id of ['solver', 'fast', 'slow']) {
       const accessId = id === 'solver' ? id : 'team-' + id;
       const diagnostics = JSON.parse(fs.readFileSync(path.join(runtime,

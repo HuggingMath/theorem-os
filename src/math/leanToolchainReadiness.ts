@@ -129,7 +129,8 @@ export function checkResolvedLeanToolchainReadiness(
     });
   }
 
-  const timeoutMs = Math.max(250, Math.min(180_000, request.timeoutMs ?? DEFAULT_TIMEOUT_MS));
+  const timeoutMs = request.timeoutMs === Infinity ? Infinity
+    : Math.max(250, Math.min(180_000, request.timeoutMs ?? DEFAULT_TIMEOUT_MS));
   let probe: ReturnType<typeof spawnSync>;
   try {
     // `lake env` may inspect every package checkout before launching Lean.
@@ -140,7 +141,7 @@ export function checkResolvedLeanToolchainReadiness(
       cwd: projectRoot,
       env,
       encoding: 'utf8',
-      timeout: timeoutMs,
+      ...(Number.isFinite(timeoutMs) ? { timeout: timeoutMs } : {}),
       maxBuffer: 32 * 1024,
     });
   } catch (error) {

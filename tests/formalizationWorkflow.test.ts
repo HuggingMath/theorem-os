@@ -28,7 +28,7 @@ function fixture(configure?: (workflow: FormalizationWorkflow) => void, requestO
   // This fixture deliberately exercises finite retry behavior; new CLI requests default to unlimited.
   workflow.maxPlanningRounds = 2; configure?.(workflow);
   const request = prepareFormalization(directory, { problemId: 'synthetic_addition', statement: fixtureStatement,
-    environment: 'standard', execution: 'replay', ...author, workflow,
+    environment: 'standard', execution: 'replay', outputDelivery: 'file', ...author, workflow,
     buildManifestRef: manifest, maxRounds: 1, maxRunSeconds: 60, maxTurnSeconds: 10, maxCompileSeconds: 10,
     maxTotalTokens: 0, ...requestOverrides });
   return { parent, root, manifest, directory, request };

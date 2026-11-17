@@ -83,7 +83,7 @@ export abstract class CooperationCore {
   protected planSynchronization?: Promise<void>;
   protected planSynchronizations = new Set<Promise<void>>();
   protected leadDeliveries = new Set<Promise<unknown>>();
-  protected active = new Map<string, { action: CooperativeAction; interrupt: () => Promise<void>; notify: (message: string, options?: { requireTurn?: boolean }) => Promise<void>;
+  protected active = new Map<string, { action: CooperativeAction; interrupt: () => Promise<void>; notify: (message: string, options?: { requireTurn?: boolean; mode?: 'advisory' }) => Promise<void>;
     requestReady?: () => Promise<void>; cancelled?: boolean }>();
   private freshProofReady = new WeakMap<CooperativeAction, string>();
   protected notifications = new Set<Promise<void>>();
@@ -847,7 +847,7 @@ export abstract class CooperationCore {
     record.status = 'failed'; record.reason = 'Freeze unconfirmed: ' + reason;
     this.freshProofReady.delete(action); this.changed();
   }
-  activate(worker: ResearchWorker, action: CooperativeAction, interrupt: () => Promise<void>, notify: (message: string, options?: { requireTurn?: boolean }) => Promise<void>,
+  activate(worker: ResearchWorker, action: CooperativeAction, interrupt: () => Promise<void>, notify: (message: string, options?: { requireTurn?: boolean; mode?: 'advisory' }) => Promise<void>,
     requestReady?: () => Promise<void>) {
     this.active.set(worker.id, { action, interrupt, notify, requestReady }); this.changed();
   }
@@ -907,7 +907,7 @@ export abstract class CooperationCore {
       const task = active.action.kind === 'task' ? active.action.task : undefined;
       if (task && record.taskId && !this.deliveryVisible(record, task, versions)) continue;
       const notice = `Cooperation update: ${record.kind} ${record.id}, task ${record.taskId ?? 'original'}, status ${record.status}. Read COOPERATION.json for peer state and current-version references; use M4 to choose relevant material. This notification grants no proof acceptance.`;
-      const pending = active.notify(notice).catch(() => { this.input.emit('notification_deferred', { workerId: id, deliveryId: record.id }); });
+      const pending = active.notify(notice, { mode: 'advisory' }).catch(() => { this.input.emit('notification_deferred', { workerId: id, deliveryId: record.id }); });
       this.notifications.add(pending); void pending.finally(() => this.notifications.delete(pending));
     }
     this.input.emit('delivery_published', { deliveryId: record.id, producer: record.producer, workerId: record.producer,

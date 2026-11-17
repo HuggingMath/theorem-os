@@ -30,9 +30,13 @@ const remaining = (limit: number | undefined, used: number) =>
  *
  * Null global remaining values denote an unlimited dimension; unknown task tokens also
  * remain null. Original receipt completeness stays visible instead of manufacturing usage.
+ * With no finite host token or turn allowance, saved local caps and reserves stay historical.
  */
 export function projectAgentTeamBudget(input: AgentTeamBudgetInput) {
-  const leadReserve = { tokens: input.leadReserve?.tokens ?? 0, turns: input.leadReserve?.turns ?? 0 };
+  const allocationEnabled = input.tokenBudget.maxTotalTokens > 0 || Number.isFinite(input.maxTurns);
+  const taskBudget = allocationEnabled ? input.task?.budget : undefined;
+  const leadReserve = { tokens: allocationEnabled ? input.leadReserve?.tokens ?? 0 : 0,
+    turns: allocationEnabled ? input.leadReserve?.turns ?? 0 : 0 };
   const totalRemaining = {
     tokens: remaining(input.tokenBudget.maxTotalTokens || undefined, input.tokenBudget.reportedTotalTokens ?? 0),
     turns: remaining(input.maxTurns, input.turns),
@@ -42,7 +46,7 @@ export function projectAgentTeamBudget(input: AgentTeamBudgetInput) {
   const taskTurns = input.task?.turns ?? 0;
   return {
     enforcement: 'provider-observed-request-admission' as const,
-    tokenBudget: { ...input.tokenBudget }, maxTurns: input.maxTurns, turns: input.turns,
+    tokenBudget: { ...input.tokenBudget }, maxTurns: Number.isFinite(input.maxTurns) ? input.maxTurns : null, turns: input.turns,
     reportedTotalTokens: input.tokenBudget.reportedTotalTokens,
     usageComplete: input.tokenBudget.usageComplete,
     leadReserve,
@@ -53,13 +57,13 @@ export function projectAgentTeamBudget(input: AgentTeamBudgetInput) {
     },
     ...(input.task ? { task: {
       id: input.task.id,
-      budget: { ...input.task.budget },
+      budget: { ...taskBudget },
       used: { tokens: taskTokens, turns: taskTurns },
       usageUnavailable: Boolean(input.taskUsageUnavailable || taskTokens === null),
       remaining: {
-        tokens: input.task.budget?.tokens === undefined ? null : taskTokens === null
-          ? null : remaining(input.task.budget.tokens, taskTokens),
-        turns: remaining(input.task.budget?.turns, taskTurns),
+        tokens: taskBudget?.tokens === undefined ? null : taskTokens === null
+          ? null : remaining(taskBudget.tokens, taskTokens),
+        turns: remaining(taskBudget?.turns, taskTurns),
       },
     } } : {}),
   };
@@ -79,7 +83,7 @@ export function agentTeamChildAdmission(input: AgentTeamBudgetInput,
   const task = projection.task;
   if (stage === 'turn' && projection.remaining.turns !== null && projection.remaining.turns <= 0)
     return { allowed: false, reason: 'math_team_total_turn_limit' };
-  if (input.task?.budget?.tokens !== undefined &&
+  if (task?.budget.tokens !== undefined &&
       task?.usageUnavailable)
     return { allowed: false, reason: 'math_model_usage_unavailable' };
   if (task && task.remaining.tokens !== null && task.remaining.tokens <= 0)

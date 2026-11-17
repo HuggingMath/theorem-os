@@ -10,7 +10,12 @@ import type { checkLeanType, prepareLeanTypeDiagnostic } from '../math/leanTypeD
 import type { LeanDiagnosticMessage } from '../math/leanTypes';
 import { assertMathCanonicalPath } from '../math/paths';
 
-export const DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT = `/var/tmp/theoremos-tactic-battery-${process.getuid?.() ?? process.pid}`;
+// Test builds replace this identifier with a private fixture path. Runtime
+// environment variables cannot redirect the host's signed cache.
+declare const __THEOREMOS_TEST_TACTIC_BATTERY_CACHE_ROOT__: string | undefined;
+export const DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT =
+  typeof __THEOREMOS_TEST_TACTIC_BATTERY_CACHE_ROOT__ === 'string' ? __THEOREMOS_TEST_TACTIC_BATTERY_CACHE_ROOT__ :
+    `/var/tmp/theoremos-tactic-battery-${process.getuid?.() ?? process.pid}`;
 const schema = 'theoremos.tactic-battery-failure.v1';
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const entrySchema = z.object({ schema: z.literal(schema), key: digest, diagnosticDigest: digest,
@@ -125,10 +130,21 @@ function privateFile(file: string, limit: number) {
   return readMathFile(file, limit).bytes;
 }
 
+/** Create the exact directory before hiding it from a writer. A missing
+ * cache would otherwise cause the isolation launcher to mask its parent, which
+ * can also contain the pinned proof environment and its lease socket. */
+export function prepareTacticBatteryFailureCacheRoot(root = DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT): string {
+  assertMathCanonicalPath(root);
+  if (!fs.existsSync(root)) fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  // Existing unusable caches are still hidden exactly; the optional cache open
+  // below retains responsibility for checking private directory permissions.
+  assertMathCanonicalPath(root);
+  return root;
+}
+
 /** Host records only; the model sandbox cannot supply a trusted cache directory or signing key. */
 export function openTacticBatteryFailureCache(root = DEFAULT_TACTIC_BATTERY_FAILURE_CACHE_ROOT) {
-  assertMathCanonicalPath(root);
-  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  prepareTacticBatteryFailureCacheRoot(root);
   const stat = fs.lstatSync(root);
   if (!stat.isDirectory() || (stat.mode & 0o777) !== 0o700 || process.getuid && stat.uid !== process.getuid())
     throw new Error('tactic_battery_cache_directory_invalid');

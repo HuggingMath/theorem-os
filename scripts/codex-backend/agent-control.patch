@@ -1,0 +1,3343 @@
+diff --git a/codex-rs/app-server-protocol/src/protocol/common.rs b/codex-rs/app-server-protocol/src/protocol/common.rs
+index 52ed76c..44997b0 100644
+--- a/codex-rs/app-server-protocol/src/protocol/common.rs
++++ b/codex-rs/app-server-protocol/src/protocol/common.rs
+@@ -569,7 +569,37 @@ client_request_definitions! {
+         response: v2::UserVerificationCancelResponse,
+     },
+ 
+-    /// NEW APIs
++    #[experimental("theoremos/agentControl/capabilities")]
++    /// Opt-in trusted host AgentControl capabilities.
++    TheoremosAgentControlCapabilities => "theoremos/agentControl/capabilities" {
++        params: v2::TheoremosAgentControlCapabilitiesParams,
++        serialization: None,
++        response: v2::TheoremosAgentControlCapabilitiesResponse,
++    },
++    #[experimental("theoremos/agentControl/start")]
++    TheoremosAgentControlStart => "theoremos/agentControl/start" {
++        params: v2::TheoremosAgentControlStartParams,
++        serialization: None,
++        response: v2::TheoremosAgentControlStartResponse,
++    },
++    #[experimental("theoremos/agentControl/input")]
++    TheoremosAgentControlInput => "theoremos/agentControl/input" {
++        params: v2::TheoremosAgentControlInputParams,
++        serialization: None,
++        response: v2::TheoremosAgentControlInputResponse,
++    },
++    #[experimental("theoremos/agentControl/update")]
++    TheoremosAgentControlUpdate => "theoremos/agentControl/update" {
++        params: v2::TheoremosAgentControlUpdateParams,
++        serialization: None,
++        response: v2::TheoremosAgentControlUpdateResponse,
++    },
++    #[experimental("theoremos/agentControl/snapshot")]
++    TheoremosAgentControlSnapshot => "theoremos/agentControl/snapshot" {
++        params: v2::TheoremosAgentControlSnapshotParams,
++        serialization: None,
++        response: v2::TheoremosAgentControlSnapshotResponse,
++    },
+     // Thread lifecycle
+     // Uses `inspect_params` because only some fields are experimental.
+     ThreadStart => "thread/start" {
+@@ -1893,6 +1923,12 @@ impl TryFrom<JSONRPCRequest> for ServerRequest {
+ }
+ 
+ server_request_definitions! {
++    #[experimental("theoremos/agentControl/request")]
++    /// Trusted execution backend callback, available only in explicit host mode.
++    TheoremosAgentControlRequest => "theoremos/agentControl/request" {
++        params: v2::TheoremosAgentControlRequestParams,
++        response: v2::TheoremosAgentControlRequestResponse,
++    },
+     /// NEW APIs
+     /// Sent when approval is requested for a specific command execution.
+     /// This request is used for Turns started via turn/start.
+diff --git a/codex-rs/app-server-protocol/src/protocol/v2/mod.rs b/codex-rs/app-server-protocol/src/protocol/v2/mod.rs
+index 96bb11c..869bf98 100644
+--- a/codex-rs/app-server-protocol/src/protocol/v2/mod.rs
++++ b/codex-rs/app-server-protocol/src/protocol/v2/mod.rs
+@@ -40,6 +40,7 @@ mod thread_data;
+ mod thread_prediction;
+ mod thread_sample;
+ mod thread_usage;
++mod theoremos_agent_control;
+ mod turn;
+ mod user_verification;
+ mod windows_sandbox;
+@@ -85,6 +86,7 @@ pub use thread_data::*;
+ pub use thread_prediction::*;
+ pub use thread_sample::*;
+ pub use thread_usage::*;
++pub use theoremos_agent_control::*;
+ pub use turn::*;
+ pub use user_verification::*;
+ pub use windows_sandbox::*;
+diff --git a/codex-rs/app-server-protocol/src/protocol/v2/theoremos_agent_control.rs b/codex-rs/app-server-protocol/src/protocol/v2/theoremos_agent_control.rs
+new file mode 100644
+index 0000000..e3ad31c
+--- /dev/null
++++ b/codex-rs/app-server-protocol/src/protocol/v2/theoremos_agent_control.rs
+@@ -0,0 +1,73 @@
++//! Opt-in trusted host transport for an external AgentControl execution backend.
++//!
++//! These envelopes are decoded and validated by the opted-in backend. They are
++//! not dynamic model tools, and do not grant mathematical acceptance.
++
++use crate::JsonSchema;
++use crate::TS;
++use serde::Deserialize;
++use serde::Serialize;
++use serde_json::Value;
++
++macro_rules! host_envelope {
++    ($($name:ident),+ $(,)?) => {$(
++        #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema, TS)]
++        #[serde(transparent)]
++        #[ts(type = "unknown", export_to = "v2/")]
++        pub struct $name {
++            pub value: Value,
++        }
++    )+};
++}
++
++host_envelope!(
++    TheoremosAgentControlCapabilitiesParams,
++    TheoremosAgentControlCapabilitiesResponse,
++    TheoremosAgentControlStartParams,
++    TheoremosAgentControlStartResponse,
++    TheoremosAgentControlInputParams,
++    TheoremosAgentControlInputResponse,
++    TheoremosAgentControlUpdateParams,
++    TheoremosAgentControlUpdateResponse,
++    TheoremosAgentControlSnapshotParams,
++    TheoremosAgentControlSnapshotResponse,
++    TheoremosAgentControlRequestParams,
++    TheoremosAgentControlRequestResponse,
++);
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::ClientRequest;
++    use crate::RequestId;
++    use crate::ServerRequest;
++    use crate::ServerResponse;
++    use serde_json::json;
++
++    #[test]
++    fn native_host_requests_preserve_the_trusted_wire_envelope() {
++        let value = json!({"version":1,"threadId":"child","bootstrap":{"sessionId":"root"},
++            "thread":{"cwd":"/isolated/worker"}});
++        let request = ClientRequest::TheoremosAgentControlStart {
++            request_id: RequestId::Integer(7),
++            params: TheoremosAgentControlStartParams { value: value.clone() },
++        };
++        assert_eq!(serde_json::to_value(request).unwrap(), json!({"id":7,
++            "method":"theoremos/agentControl/start","params":value}));
++    }
++
++    #[test]
++    fn native_backend_callbacks_decode_host_results_without_tool_wrappers() {
++        let request = ServerRequest::TheoremosAgentControlRequest {
++            request_id: RequestId::Integer(8),
++            params: TheoremosAgentControlRequestParams { value: json!({"version":1,
++                "sessionId":"root","threadId":"root","operationId":"stable-id",
++                "operation":"spawn","payload":{}}) },
++        };
++        let response = request.response_from_result(json!({"result":{"submissionId":"turn"}})).unwrap();
++        let ServerResponse::TheoremosAgentControlRequest { response, .. } = response else {
++            panic!("wrong callback response");
++        };
++        assert_eq!(response.value, json!({"result":{"submissionId":"turn"}}));
++    }
++}
+diff --git a/codex-rs/app-server/Cargo.toml b/codex-rs/app-server/Cargo.toml
+index 959373d..b2843a8 100644
+--- a/codex-rs/app-server/Cargo.toml
++++ b/codex-rs/app-server/Cargo.toml
+@@ -93,6 +93,7 @@ codex-app-server-transport = { workspace = true }
+ codex-feedback = { workspace = true }
+ codex-rmcp-client = { workspace = true }
+ codex-rollout = { workspace = true }
++codex-rollout-trace = { workspace = true }
+ codex-sandboxing = { workspace = true }
+ codex-state = { workspace = true }
+ codex-thread-store = { workspace = true }
+diff --git a/codex-rs/app-server/src/lib.rs b/codex-rs/app-server/src/lib.rs
+index 7a2892b..829ec33 100644
+--- a/codex-rs/app-server/src/lib.rs
++++ b/codex-rs/app-server/src/lib.rs
+@@ -148,6 +148,7 @@ mod request_serialization;
+ mod server_request_error;
+ mod skills_watcher;
+ mod startup_warnings;
++mod theoremos_agent_control;
+ mod thread_sample;
+ mod thread_state;
+ mod thread_status;
+diff --git a/codex-rs/app-server/src/message_processor.rs b/codex-rs/app-server/src/message_processor.rs
+index 4bf10fc..07502a7 100644
+--- a/codex-rs/app-server/src/message_processor.rs
++++ b/codex-rs/app-server/src/message_processor.rs
+@@ -151,6 +151,7 @@ fn reject_removed_permission_profile(request: &JSONRPCRequest) -> Result<(), JSO
+ 
+ pub(crate) struct MessageProcessor {
+     pub(crate) turn_admission: TurnAdmission,
++    native_agent_bridge: Option<Arc<crate::theoremos_agent_control::NativeAgentBridge>>,
+     user_verification: Arc<crate::user_verification::Service>,
+     outgoing: Arc<OutgoingMessageSender>,
+     startup_warnings: StartupWarnings,
+@@ -367,6 +368,8 @@ impl MessageProcessor {
+             app_server_extension_event_sink(outgoing.clone(), thread_state_manager.clone());
+         let mut queue_service = None;
+         let sample_responses = Arc::new(crate::thread_sample::SampleResponseRegistry::default());
++        let native_agent_bridge =
++            crate::theoremos_agent_control::NativeAgentBridge::new(outgoing.clone());
+         let thread_manager = Arc::new_cyclic(|thread_manager| {
+             queue_service = queue_store.map(|queue| {
+                 Arc::new(QueuedItemService::new(
+@@ -423,11 +426,20 @@ impl MessageProcessor {
+                     Some(time_provider)
+                 },
+             );
++            let manager = if let Some(bridge) = &native_agent_bridge {
++                let bridge = bridge.clone();
++                manager.with_agent_control_factory(move |id| bridge.clone().controller(id))
++            } else {
++                manager
++            };
+             match code_mode_session_provider {
+                 Some(provider) => manager.with_code_mode_session_provider(provider),
+                 None => manager,
+             }
+         });
++        if let Some(bridge) = &native_agent_bridge {
++            bridge.bind_manager(&thread_manager);
++        }
+         let runtime_auth = thread_manager.runtime_auth_manager();
+         if let (Some(slot), Some(runtime)) = (runtime_auth_slot, &runtime_auth) {
+             // Analytics starts before the harness. Bind its requests to the harness registration.
+@@ -644,6 +656,7 @@ impl MessageProcessor {
+ 
+         Self {
+             turn_admission,
++            native_agent_bridge,
+             user_verification,
+             outgoing,
+             startup_warnings: StartupWarnings {
+@@ -1363,6 +1376,102 @@ impl MessageProcessor {
+                 .model_provider_capabilities_read()
+                 .await
+                 .map(|response| Some(response.into())),
++            ClientRequest::TheoremosAgentControlCapabilities { .. } => {
++                self.native_agent_bridge.as_ref().ok_or_else(|| {
++                    method_not_found("TheoremOS native AgentControl is not enabled")
++                })?;
++                Ok(Some(codex_app_server_protocol::TheoremosAgentControlCapabilitiesResponse { value: serde_json::json!({"version":1,"backend":"theoremos-host","nativeTools":true,"isolatedChildBootstrap":true}) }.into()))
++            }
++            ClientRequest::TheoremosAgentControlInput { params, .. } => {
++                let bridge = self.native_agent_bridge.as_ref().ok_or_else(|| {
++                    method_not_found("TheoremOS native AgentControl is not enabled")
++                })?;
++                Ok(Some(
++                    codex_app_server_protocol::TheoremosAgentControlInputResponse {
++                        value: bridge.input(params.value).await?,
++                    }
++                    .into(),
++                ))
++            }
++            ClientRequest::TheoremosAgentControlUpdate { params, .. } => {
++                let bridge = self.native_agent_bridge.as_ref().ok_or_else(|| {
++                    method_not_found("TheoremOS native AgentControl is not enabled")
++                })?;
++                Ok(Some(
++                    codex_app_server_protocol::TheoremosAgentControlUpdateResponse {
++                        value: bridge.update(params.value)?,
++                    }
++                    .into(),
++                ))
++            }
++            ClientRequest::TheoremosAgentControlSnapshot { params, .. } => {
++                let bridge = self.native_agent_bridge.as_ref().ok_or_else(|| {
++                    method_not_found("TheoremOS native AgentControl is not enabled")
++                })?;
++                Ok(Some(
++                    codex_app_server_protocol::TheoremosAgentControlSnapshotResponse {
++                        value: bridge.snapshot(params.value).await?,
++                    }
++                    .into(),
++                ))
++            }
++            ClientRequest::TheoremosAgentControlStart { params, .. } => {
++                let bridge = self.native_agent_bridge.as_ref().ok_or_else(|| {
++                    method_not_found("TheoremOS native AgentControl is not enabled")
++                })?;
++                #[derive(serde::Deserialize)]
++                #[serde(deny_unknown_fields)]
++                struct Start {
++                    version: u8,
++                    bootstrap: codex_core::NativeChildBootstrap,
++                    thread: Option<codex_app_server_protocol::ThreadStartParams>,
++                    resume: Option<codex_app_server_protocol::ThreadResumeParams>,
++                }
++                let start: Start = serde_json::from_value(params.value)
++                    .map_err(|error| invalid_params(error.to_string()))?;
++                if start.version != 1 {
++                    return Err(invalid_params("unsupported native child start version"));
++                }
++                let bootstrap_value = serde_json::to_value(&start.bootstrap)
++                    .map_err(|error| invalid_params(error.to_string()))?;
++                bridge.register_bootstrap(start.bootstrap)?;
++                match (start.thread, start.resume) {
++                    (Some(mut thread), None) => {
++                        thread.config.get_or_insert_with(Default::default).insert(
++                            crate::theoremos_agent_control::BOOTSTRAP_CONFIG_KEY.into(),
++                            bootstrap_value,
++                        );
++                        self.thread_processor
++                            .thread_start(
++                                request_id.clone(),
++                                thread,
++                                app_server_client_name.clone(),
++                                client_version.clone(),
++                                client_mcp_extensions.clone(),
++                                request_context,
++                            )
++                            .await
++                    }
++                    (None, Some(mut resume)) => {
++                        resume.config.get_or_insert_with(Default::default).insert(
++                            crate::theoremos_agent_control::BOOTSTRAP_CONFIG_KEY.into(),
++                            bootstrap_value,
++                        );
++                        self.thread_processor
++                            .thread_resume(
++                                ThreadResumeTarget::Client(request_id.clone()),
++                                resume,
++                                app_server_client_name.clone(),
++                                client_version.clone(),
++                                client_mcp_extensions.clone(),
++                            )
++                            .await
++                    }
++                    _ => Err(invalid_params(
++                        "native start requires exactly one thread or resume request",
++                    )),
++                }
++            }
+             ClientRequest::ThreadStart { params, .. } => {
+                 self.thread_processor
+                     .thread_start(
+diff --git a/codex-rs/app-server/src/request_processors/thread_processor.rs b/codex-rs/app-server/src/request_processors/thread_processor.rs
+index 75761a2..c6a0ed4 100644
+--- a/codex-rs/app-server/src/request_processors/thread_processor.rs
++++ b/codex-rs/app-server/src/request_processors/thread_processor.rs
+@@ -1472,6 +1472,23 @@ impl ThreadRequestProcessor {
+         initial_config_warnings: Arc<Vec<ConfigWarningNotification>>,
+     ) -> Result<(), JSONRPCErrorError> {
+         let thread_start_started_at = std::time::Instant::now();
++        let mut config_overrides = config_overrides;
++        let native_bootstrap: Option<codex_core::NativeChildBootstrap> = config_overrides
++            .as_mut()
++            .and_then(|values| values.remove(crate::theoremos_agent_control::BOOTSTRAP_CONFIG_KEY))
++            .map(serde_json::from_value)
++            .transpose()
++            .map_err(|error| invalid_params(format!("invalid native bootstrap: {error}")))?;
++        if native_bootstrap.is_some()
++            && std::env::var("THEOREMOS_HOST_AGENT_CONTROL")
++                .ok()
++                .as_deref()
++                != Some("1")
++        {
++            return Err(invalid_request(
++                "native child bootstrap requires host AgentControl",
++            ));
++        }
+         let requested_cwd = typesafe_overrides.cwd.clone();
+         let mut config = config_manager
+             .load_with_overrides(config_overrides.clone(), typesafe_overrides.clone())
+@@ -1618,7 +1635,10 @@ impl ThreadRequestProcessor {
+             )
+             .await?
+         };
+-        let thread_id = reserved_thread_id
++        let thread_id = native_bootstrap
++            .as_ref()
++            .and_then(|bootstrap| bootstrap.thread_id)
++            .or(reserved_thread_id)
+             .unwrap_or_else(|| listener_task_context.thread_manager.reserve_thread_id());
+         start_options.reserved_thread_id = Some(thread_id);
+         // Startup can prewarm the Responses socket before start_thread returns.
+@@ -1628,26 +1648,31 @@ impl ThreadRequestProcessor {
+             .try_add_connection_to_thread(thread_id, request_id.connection_id)
+             .await;
+         let create_thread_started_at = std::time::Instant::now();
++        let mut start_options = StartThreadOptions {
++            allow_provider_model_fallback,
++            initial_history: match session_start_source
++                .unwrap_or(codex_app_server_protocol::ThreadStartSource::Startup)
++            {
++                codex_app_server_protocol::ThreadStartSource::Startup => InitialHistory::New,
++                codex_app_server_protocol::ThreadStartSource::Clear => InitialHistory::Cleared,
++            },
++            history_mode,
++            thread_source,
++            dynamic_tools,
++            metrics_service_name: service_name,
++            parent_trace: request_trace,
++            environments: Some(environment_requests),
++            thread_extension_init,
++            client_mcp_extensions,
++            ..start_options
++        };
++        if let Some(bootstrap) = native_bootstrap.clone() {
++            codex_core::apply_native_child_bootstrap(&mut start_options, bootstrap)
++                .map_err(|error| invalid_request(error.to_string()))?;
++        }
+         let new_thread = listener_task_context
+             .thread_manager
+-            .start_thread(StartThreadOptions {
+-                allow_provider_model_fallback,
+-                initial_history: match session_start_source
+-                    .unwrap_or(codex_app_server_protocol::ThreadStartSource::Startup)
+-                {
+-                    codex_app_server_protocol::ThreadStartSource::Startup => InitialHistory::New,
+-                    codex_app_server_protocol::ThreadStartSource::Clear => InitialHistory::Cleared,
+-                },
+-                history_mode,
+-                thread_source,
+-                dynamic_tools,
+-                metrics_service_name: service_name,
+-                parent_trace: request_trace,
+-                environments: Some(environment_requests),
+-                thread_extension_init,
+-                client_mcp_extensions,
+-                ..start_options
+-            })
++            .start_thread(start_options)
+             .instrument(tracing::info_span!(
+                 "app_server.thread_start.create_thread",
+                 otel.name = "app_server.thread_start.create_thread",
+@@ -1698,6 +1723,15 @@ impl ThreadRequestProcessor {
+                 otel.name = "app_server.thread_start.config_snapshot",
+             ))
+             .await;
++        let native_agent_snapshot = if native_bootstrap.is_some() {
++            Some(
++                codex_core::native_agent_snapshot(thread.as_ref())
++                    .await
++                    .map_err(|error| internal_error(error.to_string()))?,
++            )
++        } else {
++            None
++        };
+         let mut thread = build_thread_from_snapshot(
+             thread_id,
+             session_configured.session_id.to_string(),
+@@ -1771,14 +1805,27 @@ impl ThreadRequestProcessor {
+             multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
+         };
+         let notif = thread_started_notification(thread);
+-        listener_task_context
+-            .outgoing
+-            .send_response_with_thread_originator(request_id, response, thread_originator)
+-            .instrument(tracing::info_span!(
+-                "app_server.thread_start.send_response",
+-                otel.name = "app_server.thread_start.send_response",
+-            ))
+-            .await;
++        if let Some(snapshot) = native_agent_snapshot {
++            let mut value = serde_json::to_value(response)
++                .map_err(|error| internal_error(error.to_string()))?;
++            value
++                .as_object_mut()
++                .ok_or_else(|| internal_error("invalid native start response"))?
++                .insert("agentControl".into(), snapshot);
++            listener_task_context
++                .outgoing
++                .send_response_with_thread_originator(
++                    request_id,
++                    codex_app_server_protocol::TheoremosAgentControlStartResponse { value },
++                    thread_originator,
++                )
++                .await;
++        } else {
++            listener_task_context
++                .outgoing
++                .send_response_with_thread_originator(request_id, response, thread_originator)
++                .await;
++        }
+ 
+         listener_task_context
+             .outgoing
+@@ -4048,6 +4095,22 @@ impl ThreadRequestProcessor {
+             initial_turns_page,
+         } = params.clone();
+         let include_turns = !exclude_turns;
++        let native_bootstrap: Option<codex_core::NativeChildBootstrap> = request_overrides
++            .as_mut()
++            .and_then(|values| values.remove(crate::theoremos_agent_control::BOOTSTRAP_CONFIG_KEY))
++            .map(serde_json::from_value)
++            .transpose()
++            .map_err(|error| invalid_params(format!("invalid native resume bootstrap: {error}")))?;
++        if native_bootstrap.is_some()
++            && std::env::var("THEOREMOS_HOST_AGENT_CONTROL")
++                .ok()
++                .as_deref()
++                != Some("1")
++        {
++            return Err(invalid_request(
++                "native child resume requires host AgentControl",
++            ));
++        }
+ 
+         let prepared_model_context = prepared_config
+             .as_mut()
+@@ -4128,8 +4191,11 @@ impl ThreadRequestProcessor {
+             .await;
+         }
+ 
+-        // Parent-owned V2 children must resume through their owner, not caller configuration.
+-        if let InitialHistory::Resumed(resumed_history) = &thread_history
++        // Parent-owned V2 children normally resume through their local owner. The
++        // explicit host transport restores the child's own persisted history in
++        // a separate process and validates its captured identity before startup.
++        if native_bootstrap.is_none()
++            && let InitialHistory::Resumed(resumed_history) = &thread_history
+             && let Some((source, _)) = thread_history.get_resumed_session_sources()
+             && !can_accept_direct_input(thread_history.get_multi_agent_version(), &source)
+         {
+@@ -4371,21 +4437,22 @@ impl ThreadRequestProcessor {
+         }
+         let response_history = thread_history.clone();
+ 
+-        match self
+-            .thread_manager
+-            .start_thread(StartThreadOptions {
+-                initial_history: thread_history,
+-                parent_trace: match target {
+-                    ThreadResumeTarget::Client(request_id) => {
+-                        self.request_trace_context(request_id).await
+-                    }
+-                    ThreadResumeTarget::DaemonRecovery(_) => None,
+-                },
+-                client_mcp_extensions,
+-                ..StartThreadOptions::new(config)
+-            })
+-            .await
+-        {
++        let mut start_options = StartThreadOptions {
++            initial_history: thread_history,
++            parent_trace: match target {
++                ThreadResumeTarget::Client(request_id) => {
++                    self.request_trace_context(request_id).await
++                }
++                ThreadResumeTarget::DaemonRecovery(_) => None,
++            },
++            client_mcp_extensions,
++            ..StartThreadOptions::new(config)
++        };
++        if let Some(bootstrap) = native_bootstrap.clone() {
++            codex_core::apply_native_child_resume_bootstrap(&mut start_options, bootstrap)
++                .map_err(|error| invalid_request(error.to_string()))?;
++        }
++        match self.thread_manager.start_thread(start_options).await {
+             Ok(NewThread {
+                 thread_id,
+                 thread: codex_thread,
+@@ -4594,9 +4661,32 @@ impl ThreadRequestProcessor {
+                 };
+ 
+                 let connection_id = request_id.connection_id;
+-                self.outgoing
+-                    .send_response_with_thread_originator(request_id, response, thread_originator)
+-                    .await;
++                if native_bootstrap.is_some() {
++                    let snapshot = codex_core::native_agent_snapshot(codex_thread.as_ref())
++                        .await
++                        .map_err(|error| internal_error(error.to_string()))?;
++                    let mut value = serde_json::to_value(response)
++                        .map_err(|error| internal_error(error.to_string()))?;
++                    value
++                        .as_object_mut()
++                        .ok_or_else(|| internal_error("invalid native resume response"))?
++                        .insert("agentControl".into(), snapshot);
++                    self.outgoing
++                        .send_response_with_thread_originator(
++                            request_id,
++                            codex_app_server_protocol::TheoremosAgentControlStartResponse { value },
++                            thread_originator,
++                        )
++                        .await;
++                } else {
++                    self.outgoing
++                        .send_response_with_thread_originator(
++                            request_id,
++                            response,
++                            thread_originator,
++                        )
++                        .await;
++                }
+                 // `excludeTurns` is explicitly the cheap resume path, so avoid
+                 // rebuilding history only to attribute a replayed usage update.
+                 if let Some(token_usage_turn_id) = token_usage_turn_id {
+diff --git a/codex-rs/app-server/src/theoremos_agent_control.rs b/codex-rs/app-server/src/theoremos_agent_control.rs
+new file mode 100644
+index 0000000..d66b8d6
+--- /dev/null
++++ b/codex-rs/app-server/src/theoremos_agent_control.rs
+@@ -0,0 +1,856 @@
++//! Opt-in stdio transport for the native AgentControl execution contract.
++//! The model still invokes upstream collaboration handlers. The trusted host owns
++//! isolated runtimes and durable membership; it is never a dynamic-tool facade.
++
++use crate::error_code::{internal_error, invalid_params, invalid_request};
++use crate::outgoing_message::OutgoingMessageSender;
++use codex_app_server_protocol::{
++    JSONRPCErrorError, ServerRequestPayload, TheoremosAgentControlRequestParams,
++};
++use codex_core::{
++    AgentConfigUpdate, AgentControl, AgentExecutionGuard, AgentInfo, AgentMetadata, AgentRef,
++    AgentRuntimeOwnership, AgentServiceTier, AgentSessionReader, AgentTarget, AgentTurnAdmission,
++    AgentTurnAdmissionRequest, AgentTurnOutcome, AgentTurnOutcomeReporter, AgentUsageAccounting,
++    AgentUsageReport, DeliveryReceipt, LiveAgent, NativeAgentInput, NativeChildBootstrap,
++    NativeTurnStartOptions, PendingAgentMessage, RolloutBudgetReminder, SendRequest, SpawnRequest,
++    ThreadConfigSnapshot, ThreadManager, UsageAccountingDecision,
++};
++use codex_extension_api::ExtensionDataInit;
++use codex_protocol::error::{CodexErr, Result};
++use codex_protocol::models::ResponseItem;
++use codex_protocol::protocol::{
++    InterAgentCommunication, MultiAgentVersion, SessionSource, TokenUsage,
++};
++use codex_protocol::{AgentPath, SessionId, ThreadId};
++use codex_rollout_trace::ThreadTraceContext;
++use futures::future::BoxFuture;
++use serde::Deserialize;
++use serde_json::{Value, json};
++use std::collections::{HashMap, HashSet};
++use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
++use tokio::sync::watch;
++
++pub(crate) const BOOTSTRAP_CONFIG_KEY: &str = "__theoremos_native_agent_bootstrap";
++
++pub(crate) struct NativeAgentBridge {
++    outgoing: Arc<OutgoingMessageSender>,
++    manager: OnceLock<Weak<ThreadManager>>,
++    bootstraps: Mutex<HashMap<ThreadId, NativeChildBootstrap>>,
++    controls: Mutex<HashMap<ThreadId, NativeHostControl>>,
++    input_locks: tokio::sync::Mutex<HashMap<ThreadId, Arc<tokio::sync::Mutex<()>>>>,
++}
++
++impl NativeAgentBridge {
++    pub(crate) fn new(outgoing: Arc<OutgoingMessageSender>) -> Option<Arc<Self>> {
++        (std::env::var("THEOREMOS_HOST_AGENT_CONTROL")
++            .ok()
++            .as_deref()
++            == Some("1"))
++        .then(|| {
++            Arc::new(Self {
++                outgoing,
++                manager: OnceLock::new(),
++                bootstraps: Mutex::new(HashMap::new()),
++                controls: Mutex::new(HashMap::new()),
++                input_locks: tokio::sync::Mutex::new(HashMap::new()),
++            })
++        })
++    }
++    pub(crate) fn bind_manager(&self, manager: &Arc<ThreadManager>) {
++        let _ = self.manager.set(Arc::downgrade(manager));
++    }
++    fn manager(&self) -> Result<Arc<ThreadManager>> {
++        self.manager.get().and_then(Weak::upgrade).ok_or_else(|| {
++            CodexErr::InvalidRequest("native host thread manager is unavailable".into())
++        })
++    }
++
++    pub(crate) async fn controller(
++        self: Arc<Self>,
++        thread_id: ThreadId,
++    ) -> Result<Arc<dyn AgentControl>> {
++        let bootstrap = self
++            .bootstraps
++            .lock()
++            .unwrap_or_else(PoisonError::into_inner)
++            .get(&thread_id)
++            .cloned();
++        let session_id = bootstrap
++            .as_ref()
++            .map(|b| b.session_id)
++            .unwrap_or_else(|| thread_id.into());
++        let mut control = NativeHostControl {
++            bridge: Arc::downgrade(&self),
++            thread_id,
++            session_id,
++            local: Arc::new(Mutex::new(LocalState::default())),
++        };
++        self.controls
++            .lock()
++            .unwrap_or_else(PoisonError::into_inner)
++            .insert(thread_id, control.clone());
++        let response = match control
++            .rpc(
++                "attach",
++                json!({"threadId":thread_id,"sessionId":session_id}),
++            )
++            .await
++        {
++            Ok(response) => response,
++            Err(error) => {
++                self.controls
++                    .lock()
++                    .unwrap_or_else(PoisonError::into_inner)
++                    .remove(&thread_id);
++                return Err(error);
++            }
++        };
++        control.session_id = serde_json::from_value(
++            response
++                .get("sessionId")
++                .cloned()
++                .ok_or_else(|| CodexErr::InvalidRequest("host attach omitted sessionId".into()))?,
++        )
++        .map_err(decode_error)?;
++        self.controls
++            .lock()
++            .unwrap_or_else(PoisonError::into_inner)
++            .insert(thread_id, control.clone());
++        Ok(Arc::new(control))
++    }
++
++    pub(crate) fn register_bootstrap(
++        &self,
++        bootstrap: NativeChildBootstrap,
++    ) -> std::result::Result<(), JSONRPCErrorError> {
++        let id = bootstrap
++            .thread_id
++            .ok_or_else(|| invalid_params("native child threadId must be reserved"))?;
++        let mut entries = self
++            .bootstraps
++            .lock()
++            .unwrap_or_else(PoisonError::into_inner);
++        if entries.contains_key(&id) {
++            return Err(invalid_request("native child startup is already reserved"));
++        }
++        entries.insert(id, bootstrap);
++        Ok(())
++    }
++
++    pub(crate) async fn input(
++        &self,
++        value: Value,
++    ) -> std::result::Result<Value, JSONRPCErrorError> {
++        #[derive(Deserialize)]
++        #[serde(rename_all = "camelCase", deny_unknown_fields)]
++        struct Input {
++            version: u8,
++            thread_id: ThreadId,
++            author: AgentPath,
++            input: NativeAgentInput,
++            #[serde(default)]
++            start_options: NativeTurnStartOptions,
++            expected_turn_id: Option<String>,
++            #[serde(default)]
++            context_items: Vec<ResponseItem>,
++        }
++        let input: Input =
++            serde_json::from_value(value).map_err(|error| invalid_params(error.to_string()))?;
++        if input.version != 1 {
++            return Err(invalid_params("unsupported native input version"));
++        }
++        let lock = self
++            .input_locks
++            .lock()
++            .await
++            .entry(input.thread_id)
++            .or_default()
++            .clone();
++        let _lock = lock.lock().await;
++        let thread = self
++            .manager()
++            .map_err(rpc_error)?
++            .get_thread(input.thread_id)
++            .await
++            .map_err(rpc_error)?;
++        codex_core::native_submit_agent_input(
++            thread.as_ref(),
++            input.author,
++            input.input,
++            input.start_options,
++            input.context_items,
++            input.expected_turn_id,
++        )
++        .await
++        .map_err(rpc_error)
++    }
++
++    pub(crate) async fn snapshot(
++        &self,
++        value: Value,
++    ) -> std::result::Result<Value, JSONRPCErrorError> {
++        let thread_id: ThreadId = serde_json::from_value(
++            value
++                .get("threadId")
++                .cloned()
++                .ok_or_else(|| invalid_params("threadId is required"))?,
++        )
++        .map_err(|error| invalid_params(error.to_string()))?;
++        let thread = self
++            .manager()
++            .map_err(rpc_error)?
++            .get_thread(thread_id)
++            .await
++            .map_err(rpc_error)?;
++        codex_core::native_agent_snapshot(thread.as_ref())
++            .await
++            .map_err(rpc_error)
++    }
++
++    pub(crate) fn update(&self, value: Value) -> std::result::Result<Value, JSONRPCErrorError> {
++        #[derive(Deserialize)]
++        #[serde(rename_all = "camelCase", deny_unknown_fields)]
++        struct Update {
++            version: u8,
++            session_id: SessionId,
++            thread_id: ThreadId,
++            sequence: u64,
++            #[serde(default)]
++            mailbox: Vec<Mail>,
++            #[serde(default)]
++            service_tier: Option<Option<String>>,
++            admission: Option<Admission>,
++        }
++        #[derive(Deserialize)]
++        struct Mail {
++            id: String,
++            author: AgentPath,
++            recipient: AgentPath,
++            message: Option<Value>,
++            communication: Option<InterAgentCommunication>,
++        }
++        #[derive(Deserialize)]
++        struct Admission {
++            allowed: bool,
++            reason: Option<String>,
++        }
++        let tier_update = value
++            .get("serviceTier")
++            .map(|value| serde_json::from_value::<Option<String>>(value.clone()))
++            .transpose()
++            .map_err(|error| invalid_params(error.to_string()))?;
++        let update: Update =
++            serde_json::from_value(value).map_err(|error| invalid_params(error.to_string()))?;
++        let _ = &update.service_tier;
++        if update.version != 1 {
++            return Err(invalid_params("unsupported native update version"));
++        }
++        let controls = self.controls.lock().unwrap_or_else(PoisonError::into_inner);
++        let control = controls
++            .get(&update.thread_id)
++            .ok_or_else(|| invalid_request("native runtime is not attached"))?;
++        if update.session_id != control.session_id {
++            return Err(invalid_request("native session identity mismatch"));
++        }
++        let mut local = control.local.lock().unwrap_or_else(PoisonError::into_inner);
++        if update.sequence <= local.sequence {
++            return Ok(json!({"acceptedSequence":local.sequence}));
++        }
++        // Decode the complete batch before ownership transfer; malformed mail is never partially accepted.
++        let mut batch = Vec::new();
++        for mail in update.mailbox {
++            if local.mail_ids.contains(&mail.id) {
++                continue;
++            }
++            let communication = if let Some(communication) = mail.communication {
++                if communication.author != mail.author
++                    || communication.recipient != mail.recipient
++                    || communication.trigger_turn
++                {
++                    return Err(invalid_params(
++                        "invalid queue-only native communication attribution",
++                    ));
++                }
++                communication
++            } else {
++                let input:NativeAgentInput=serde_json::from_value(json!({"kind":"message","message":mail.message.ok_or_else(||invalid_params("mail message is required"))?,"mode":"queueOnly"})).map_err(|error|invalid_params(error.to_string()))?;
++                let NativeAgentInput::Message { message, mode } = input else {
++                    unreachable!()
++                };
++                message.into_communication(mail.author, mail.recipient, mode)
++            };
++            batch.push((mail.id, PendingAgentMessage::from(communication)));
++        }
++        for (id, message) in batch {
++            if local.mail_ids.insert(id) {
++                local.mailbox.push(message);
++            }
++        }
++        if let Some(tier) = tier_update {
++            local.service_tier = tier;
++        }
++        if let Some(admission) = update.admission {
++            local.allowed = admission.allowed;
++            local.denial = admission.reason;
++        }
++        local.sequence = update.sequence;
++        local.watch.send_replace(!local.mailbox.is_empty());
++        Ok(json!({"acceptedSequence":local.sequence}))
++    }
++}
++
++struct LocalState {
++    sequence: u64,
++    mailbox: Vec<PendingAgentMessage>,
++    mail_ids: HashSet<String>,
++    watch: watch::Sender<bool>,
++    service_tier: Option<String>,
++    allowed: bool,
++    denial: Option<String>,
++}
++impl Default for LocalState {
++    fn default() -> Self {
++        Self {
++            sequence: 0,
++            mailbox: Vec::new(),
++            mail_ids: HashSet::new(),
++            watch: watch::channel(false).0,
++            service_tier: None,
++            allowed: true,
++            denial: None,
++        }
++    }
++}
++
++#[derive(Clone)]
++struct NativeHostControl {
++    bridge: Weak<NativeAgentBridge>,
++    thread_id: ThreadId,
++    session_id: SessionId,
++    local: Arc<Mutex<LocalState>>,
++}
++
++impl NativeHostControl {
++    async fn rpc(&self, operation: &str, payload: Value) -> Result<Value> {
++        let bridge = self
++            .bridge
++            .upgrade()
++            .ok_or_else(|| CodexErr::InvalidRequest("native host transport is closed".into()))?;
++        let params = TheoremosAgentControlRequestParams {
++            value: json!({"version":1,"sessionId":self.session_id,"threadId":self.thread_id,"operationId":uuid::Uuid::now_v7().to_string(),"operation":operation,"payload":payload}),
++        };
++        let (request_id, receiver) = bridge
++            .outgoing
++            .send_request(ServerRequestPayload::TheoremosAgentControlRequest(params))
++            .await;
++        struct Pending {
++            outgoing: Arc<OutgoingMessageSender>,
++            id: Option<codex_app_server_protocol::RequestId>,
++        }
++        impl Drop for Pending {
++            fn drop(&mut self) {
++                if let Some(id) = self.id.take() {
++                    let outgoing = self.outgoing.clone();
++                    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
++                        runtime.spawn(async move {
++                            outgoing.cancel_request(&id).await;
++                        });
++                    }
++                }
++            }
++        }
++        let mut pending = Pending {
++            outgoing: bridge.outgoing.clone(),
++            id: Some(request_id),
++        };
++        let response = receiver
++            .await
++            .map_err(|_| CodexErr::InvalidRequest("native host callback disconnected".into()))?
++            .map_err(|error| {
++                CodexErr::InvalidRequest(format!("native host {operation}: {}", error.message))
++            })?;
++        pending.id = None;
++        response.get("result").cloned().ok_or_else(|| {
++            CodexErr::InvalidRequest(format!("native host {operation} omitted result"))
++        })
++    }
++    fn spawn_rpc(&self, operation: &'static str, payload: Value) {
++        let control = self.clone();
++        tokio::spawn(async move {
++            if let Err(error) = control.rpc(operation, payload).await {
++                tracing::warn!(%error,operation,"native host background handoff failed");
++            }
++        });
++    }
++    async fn target(&self, target: AgentTarget) -> Result<Value> {
++        match target {
++            AgentTarget::Id(id) => Ok(json!({"kind":"id","threadId":id})),
++            AgentTarget::Reference(reference) => {
++                let bridge = self.bridge.upgrade().ok_or_else(|| {
++                    CodexErr::InvalidRequest("native host transport closed".into())
++                })?;
++                let thread = bridge.manager()?.get_thread(self.thread_id).await?;
++                let base = thread
++                    .session_source()
++                    .get_agent_path()
++                    .unwrap_or_else(AgentPath::root);
++                let path = base
++                    .resolve(&reference)
++                    .map_err(CodexErr::UnsupportedOperation)?;
++                Ok(json!({"kind":"reference","reference":path}))
++            }
++        }
++    }
++}
++
++impl AgentControl for NativeHostControl {
++    fn identity(&self) -> SessionId {
++        self.session_id
++    }
++    fn configure_startup(&self, data: &mut ExtensionDataInit, config: &codex_core::config::Config) {
++        self.local
++            .lock()
++            .unwrap_or_else(PoisonError::into_inner)
++            .service_tier = config.service_tier.clone();
++        data.insert(AgentRuntimeOwnership::Host);
++        data.insert(Arc::new(self.clone()) as Arc<dyn AgentTurnAdmission>);
++        data.insert(Arc::new(self.clone()) as Arc<dyn AgentUsageAccounting>);
++        data.insert(Arc::new(self.clone()) as Arc<dyn AgentServiceTier>);
++        data.insert(Arc::new(self.clone()) as Arc<dyn AgentSessionReader>);
++        if self.session_id == SessionId::from(self.thread_id) {
++            data.insert(Arc::new(self.clone()) as Arc<dyn AgentTurnOutcomeReporter>);
++        }
++    }
++    fn resolve<'a>(
++        &'a self,
++        caller: ThreadId,
++        parent: Option<ThreadId>,
++        source: &'a SessionSource,
++        target: &'a str,
++    ) -> BoxFuture<'a, Result<ThreadId>> {
++        Box::pin(async move {
++            let target = match ThreadId::from_string(target) {
++                Ok(id) => json!({"kind":"id","threadId":id}),
++                Err(_) => {
++                    json!({"kind":"reference","reference":source.get_agent_path().unwrap_or_else(AgentPath::root).resolve(target).map_err(CodexErr::UnsupportedOperation)?})
++                }
++            };
++            let value = self
++                .rpc(
++                    "resolve",
++                    json!({"caller":caller,"parent":parent,"source":source,"target":target}),
++                )
++                .await?;
++            serde_json::from_value(value.get("threadId").cloned().unwrap_or(Value::Null))
++                .map_err(decode_error)
++        })
++    }
++    fn spawn(
++        &self,
++        request: SpawnRequest,
++    ) -> BoxFuture<'_, Result<(LiveAgent, ThreadConfigSnapshot)>> {
++        Box::pin(async move {
++            let caller = request.caller;
++            let source = request.source.clone();
++            let bridge = self
++                .bridge
++                .upgrade()
++                .ok_or_else(|| CodexErr::InvalidRequest("native host transport closed".into()))?;
++            let parent = bridge.manager()?.get_thread(caller).await?;
++            let (bootstrap, input, start) = codex_core::prepare_native_child_bootstrap(
++                parent.as_ref(),
++                self.session_id,
++                request,
++            )
++            .await?;
++            let value=self.rpc("spawn",json!({"caller":caller,"source":source,"bootstrap":bootstrap,"input":input,"startOptions":start})).await?;
++            Ok((
++                serde_json::from_value(value.get("agent").cloned().unwrap_or(Value::Null))
++                    .map_err(decode_error)?,
++                serde_json::from_value(value.get("configSnapshot").cloned().unwrap_or(Value::Null))
++                    .map_err(decode_error)?,
++            ))
++        })
++    }
++    fn send(&self, request: SendRequest) -> BoxFuture<'_, Result<DeliveryReceipt>> {
++        Box::pin(async move {
++            let target = self.target(request.target).await?;
++            let value=self.rpc("send",json!({"caller":request.caller,"target":target,"input":codex_core::native_agent_input_value(request.input),"startOptions":NativeTurnStartOptions::from(request.start_options)})).await?;
++            #[derive(Deserialize)]
++            #[serde(rename_all = "camelCase")]
++            struct Receipt {
++                thread_id: ThreadId,
++                metadata: AgentMetadata,
++                submission_id: String,
++            }
++            let receipt: Receipt = serde_json::from_value(value).map_err(decode_error)?;
++            Ok(DeliveryReceipt {
++                thread_id: receipt.thread_id,
++                metadata: receipt.metadata,
++                submission_id: receipt.submission_id,
++            })
++        })
++    }
++    fn take_mailbox(&self, _agent: ThreadId) -> Vec<PendingAgentMessage> {
++        let mut local = self.local.lock().unwrap_or_else(PoisonError::into_inner);
++        let messages = std::mem::take(&mut local.mailbox);
++        local.watch.send_replace(false);
++        messages
++    }
++    fn watch_mailbox(&self, _agent: ThreadId) -> watch::Receiver<bool> {
++        self.local
++            .lock()
++            .unwrap_or_else(PoisonError::into_inner)
++            .watch
++            .subscribe()
++    }
++    fn ensure_child_loaded(&self, parent: ThreadId, child: ThreadId) -> BoxFuture<'_, Result<()>> {
++        Box::pin(async move {
++            self.rpc("ensureChildLoaded", json!({"parent":parent,"child":child}))
++                .await?;
++            Ok(())
++        })
++    }
++    fn interrupt(
++        &self,
++        caller: ThreadId,
++        target: AgentTarget,
++        version: MultiAgentVersion,
++    ) -> BoxFuture<'_, Result<AgentInfo>> {
++        Box::pin(async move {
++            let value = self
++                .rpc(
++                    "interrupt",
++                    json!({"caller":caller,"target":self.target(target).await?,"version":version}),
++                )
++                .await?;
++            match value.get("kind").and_then(Value::as_str) {
++                Some("loaded") => Ok(AgentInfo::Loaded {
++                    agent: serde_json::from_value(value["agent"].clone()).map_err(decode_error)?,
++                    config: Box::new(
++                        serde_json::from_value(value["configSnapshot"].clone())
++                            .map_err(decode_error)?,
++                    ),
++                }),
++                Some("unloaded") => Ok(AgentInfo::Unloaded(
++                    serde_json::from_value(value["metadata"].clone()).map_err(decode_error)?,
++                )),
++                _ => Err(CodexErr::InvalidRequest(
++                    "host interrupt returned invalid observation".into(),
++                )),
++            }
++        })
++    }
++    fn list<'a>(
++        &'a self,
++        caller: ThreadId,
++        parent: Option<ThreadId>,
++        source: &'a SessionSource,
++        path_prefix: Option<&'a str>,
++    ) -> BoxFuture<'a, Result<Vec<LiveAgent>>> {
++        Box::pin(async move {
++            let path = path_prefix
++                .map(|prefix| {
++                    source
++                        .get_agent_path()
++                        .unwrap_or_else(AgentPath::root)
++                        .resolve(prefix)
++                        .map_err(CodexErr::UnsupportedOperation)
++                })
++                .transpose()?;
++            let value = self
++                .rpc(
++                    "list",
++                    json!({"caller":caller,"parent":parent,"source":source,"pathPrefix":path}),
++                )
++                .await?;
++            serde_json::from_value(value["agents"].clone()).map_err(decode_error)
++        })
++    }
++    fn child_agent_paths(&self, parent: ThreadId) -> BoxFuture<'_, Vec<AgentPath>> {
++        Box::pin(async move {
++            match self
++                .rpc("childPaths", json!({"parent":parent}))
++                .await
++                .and_then(|v| serde_json::from_value(v["paths"].clone()).map_err(decode_error))
++            {
++                Ok(paths) => paths,
++                Err(error) => {
++                    tracing::warn!(%error,"native host roster unavailable");
++                    Vec::new()
++                }
++            }
++        })
++    }
++    fn check_turn_admission(
++        &self,
++        _version: MultiAgentVersion,
++        _source: &SessionSource,
++    ) -> Result<()> {
++        let state = self.local.lock().unwrap_or_else(PoisonError::into_inner);
++        if state.allowed {
++            Ok(())
++        } else {
++            Err(CodexErr::InvalidRequest(
++                state
++                    .denial
++                    .clone()
++                    .unwrap_or_else(|| "native host admission denied".into()),
++            ))
++        }
++    }
++    fn admit_turn(
++        &self,
++        _version: MultiAgentVersion,
++        _source: &SessionSource,
++    ) -> Option<AgentExecutionGuard> {
++        None
++    }
++    fn record_usage(&self, usage: TokenUsage) -> BoxFuture<'_, Result<()>> {
++        Box::pin(async move {
++            self.rpc(
++                "recordUsage",
++                json!({"usage":usage,"codexRolloutBudgetUnits":usage.codex_rollout_budget_units}),
++            )
++            .await?;
++            Ok(())
++        })
++    }
++    fn turn_finished<'a>(
++        &'a self,
++        outcome: AgentTurnOutcome,
++        _trace: &'a ThreadTraceContext,
++    ) -> BoxFuture<'a, ()> {
++        Box::pin(async move {
++            let completion = codex_core::native_completion_communication(&outcome);
++            let payload = json!({"outcome":{"threadId":outcome.thread_id,"turnId":outcome.turn_id,"source":outcome.source,"parentTurnId":outcome.parent_turn_id,"initiatingAgentPath":outcome.initiating_agent_path,"status":outcome.status,"errorInfo":outcome.error_info},"parentThreadId":completion.as_ref().map(|(id,_)|id),"completionMessage":completion.map(|(_,communication)|communication)});
++            if let Err(error) = self.rpc("turnFinished", payload).await {
++                tracing::warn!(%error,"native host completion handoff failed");
++            }
++        })
++    }
++    fn service_tier(&self) -> Option<String> {
++        self.local
++            .lock()
++            .unwrap_or_else(PoisonError::into_inner)
++            .service_tier
++            .clone()
++    }
++    fn propagate_config_update(&self, update: AgentConfigUpdate) {
++        let AgentConfigUpdate::ServiceTier(tier) = update;
++        self.local
++            .lock()
++            .unwrap_or_else(PoisonError::into_inner)
++            .service_tier = tier.clone();
++        self.spawn_rpc("configUpdate", json!({"serviceTier":tier}));
++    }
++    fn get_guardian_package(
++        &self,
++        _agent: ThreadId,
++    ) -> BoxFuture<'_, Option<codex_core::GuardianRootSnapshot>> {
++        Box::pin(async { None })
++    }
++    fn pending_budget_reminder<'a>(
++        &'a self,
++        _agent: ThreadId,
++        _window: &'a str,
++    ) -> BoxFuture<'a, Option<RolloutBudgetReminder>> {
++        Box::pin(async { None })
++    }
++    fn mark_budget_reminder_delivered<'a>(
++        &'a self,
++        _agent: ThreadId,
++        _window: &'a str,
++        _reminder: RolloutBudgetReminder,
++    ) -> BoxFuture<'a, ()> {
++        Box::pin(async {})
++    }
++}
++
++impl AgentTurnAdmission for NativeHostControl {
++    fn admit_turn(
++        &self,
++        request: AgentTurnAdmissionRequest,
++    ) -> BoxFuture<'_, Result<AgentExecutionGuard>> {
++        Box::pin(async move {
++            let payload = json!({"threadId":request.thread_id,"turnId":request.turn_id});
++            let result = self.rpc("admitTurn", payload.clone()).await?;
++            if result.get("admitted") != Some(&Value::Bool(true)) {
++                return Err(CodexErr::new(
++                    codex_protocol::error::CodexErrorDetails::AgentLimitReached { max_threads: 0 },
++                ));
++            }
++            struct Permit {
++                control: NativeHostControl,
++                payload: Value,
++            }
++            impl Drop for Permit {
++                fn drop(&mut self) {
++                    self.control.spawn_rpc("releaseTurn", self.payload.clone());
++                }
++            }
++            Ok(AgentExecutionGuard::new(Permit {
++                control: self.clone(),
++                payload,
++            }))
++        })
++    }
++}
++impl AgentUsageAccounting for NativeHostControl {
++    fn report_usage(
++        &self,
++        report: AgentUsageReport,
++    ) -> BoxFuture<'_, Result<UsageAccountingDecision>> {
++        Box::pin(async move {
++            self.rpc("recordUsage",json!({"threadId":report.thread_id,"turnId":report.turn_id,"usage":report.usage,"codexRolloutBudgetUnits":report.usage.codex_rollout_budget_units})).await?;
++            Ok(UsageAccountingDecision::Continue)
++        })
++    }
++}
++impl AgentServiceTier for NativeHostControl {
++    fn current(&self) -> BoxFuture<'_, Option<String>> {
++        Box::pin(async move { AgentControl::service_tier(self) })
++    }
++    fn update(&self, tier: Option<String>) -> BoxFuture<'static, std::result::Result<(), String>> {
++        let control = self.clone();
++        self.local
++            .lock()
++            .unwrap_or_else(PoisonError::into_inner)
++            .service_tier = tier.clone();
++        let task = tokio::spawn(async move {
++            control
++                .rpc("configUpdate", json!({"serviceTier":tier}))
++                .await
++                .map(|_| ())
++                .map_err(|error| error.to_string())
++        });
++        Box::pin(async move { task.await.map_err(|error| error.to_string())? })
++    }
++}
++impl AgentTurnOutcomeReporter for NativeHostControl {
++    fn report(&self, outcome: AgentTurnOutcome) -> BoxFuture<'_, ()> {
++        Box::pin(async move {
++            AgentControl::turn_finished(self, outcome, &ThreadTraceContext::disabled()).await;
++        })
++    }
++}
++impl AgentSessionReader for NativeHostControl {
++    fn root(&self) -> BoxFuture<'_, Result<AgentRef>> {
++        Box::pin(async move {
++            Ok(AgentRef {
++                thread_id: self.session_id.into(),
++                path: AgentPath::root(),
++            })
++        })
++    }
++    fn parent(&self) -> BoxFuture<'_, Result<Option<AgentRef>>> {
++        Box::pin(async move {
++            let bridge = self
++                .bridge
++                .upgrade()
++                .ok_or_else(|| CodexErr::InvalidRequest("native host transport closed".into()))?;
++            let thread = bridge.manager()?.get_thread(self.thread_id).await?;
++            let Some(parent) = thread.session_source().parent_thread_id() else {
++                return Ok(None);
++            };
++            let path = thread
++                .session_source()
++                .get_agent_path()
++                .and_then(|path| {
++                    path.as_str()
++                        .rsplit_once('/')
++                        .and_then(|(parent, _)| AgentPath::try_from(parent).ok())
++                })
++                .ok_or_else(|| {
++                    CodexErr::InvalidRequest("native child parent path missing".into())
++                })?;
++            Ok(Some(AgentRef {
++                thread_id: parent,
++                path,
++            }))
++        })
++    }
++    fn children(&self) -> BoxFuture<'_, Result<Vec<AgentRef>>> {
++        Box::pin(async move {
++            let value = self
++                .rpc("childPaths", json!({"parent":self.thread_id}))
++                .await?;
++            let paths: Vec<AgentPath> =
++                serde_json::from_value(value["paths"].clone()).map_err(decode_error)?;
++            let mut children = Vec::with_capacity(paths.len());
++            for path in paths {
++                let response=self.rpc("resolve",json!({"caller":self.thread_id,"parent":Value::Null,"source":SessionSource::Cli,"target":{"kind":"reference","reference":path}})).await?;
++                let thread_id: ThreadId =
++                    serde_json::from_value(response["threadId"].clone()).map_err(decode_error)?;
++                children.push(AgentRef { thread_id, path });
++            }
++            Ok(children)
++        })
++    }
++}
++
++fn decode_error(error: serde_json::Error) -> CodexErr {
++    CodexErr::InvalidRequest(format!("invalid native host response: {error}"))
++}
++fn rpc_error(error: CodexErr) -> JSONRPCErrorError {
++    internal_error(error.to_string())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    fn control() -> NativeHostControl {
++        let thread_id = ThreadId::from_string("01900000-0000-7000-8000-000000000001").unwrap();
++        NativeHostControl {
++            bridge: Weak::new(),
++            thread_id,
++            session_id: thread_id.into(),
++            local: Arc::new(Mutex::new(LocalState::default())),
++        }
++    }
++    #[test]
++    fn synchronous_mailbox_transfer_clears_watch_without_losing_subscription() {
++        let control = control();
++        let receiver = control.watch_mailbox(control.thread_id);
++        let communication = InterAgentCommunication::new(
++            AgentPath::root(),
++            AgentPath::root(),
++            Vec::new(),
++            "queued".into(),
++            false,
++        );
++        {
++            let mut local = control.local.lock().unwrap();
++            local.mailbox.push(communication.into());
++            local.watch.send_replace(true);
++        }
++        assert!(*receiver.borrow());
++        let messages = control.take_mailbox(control.thread_id);
++        assert_eq!(messages.len(), 1);
++        assert_eq!(messages[0].content, "queued");
++        assert!(!*receiver.borrow());
++        assert!(control.take_mailbox(control.thread_id).is_empty());
++        // A later handoff reuses the same watch subscription.
++        control.local.lock().unwrap().watch.send_replace(true);
++        assert!(*receiver.borrow());
++    }
++    #[tokio::test]
++    async fn native_admission_failure_does_not_fall_back_to_local_capacity() {
++        let control = control();
++        control.local.lock().unwrap().allowed = false;
++        assert!(
++            control
++                .check_turn_admission(MultiAgentVersion::V2, &SessionSource::Cli)
++                .is_err()
++        );
++        let request = AgentTurnAdmissionRequest {
++            thread_id: control.thread_id,
++            turn_id: "actual-turn".into(),
++        };
++        assert!(
++            AgentTurnAdmission::admit_turn(&control, request)
++                .await
++                .is_err()
++        );
++    }
++}
+diff --git a/codex-rs/core/src/agent/api.rs b/codex-rs/core/src/agent/api.rs
+index 7664a86..efee368 100644
+--- a/codex-rs/core/src/agent/api.rs
++++ b/codex-rs/core/src/agent/api.rs
+@@ -41,6 +41,15 @@ const _: Option<&dyn AgentControl> = None;
+ pub trait AgentControl: Send + Sync {
+     fn identity(&self) -> SessionId;
+ 
++    /// Install backend-owned providers before root, child, or cold-resumed startup.
++    /// The default preserves controller-owned execution.
++    fn configure_startup(
++        &self,
++        _data: &mut codex_extension_api::ExtensionDataInit,
++        _config: &Config,
++    ) {
++    }
++
+     /// Resolve an ID or a name relative to the caller's captured source, without loading.
+     /// The local backend lazily registers callers with no parent before resolving, including
+     /// for direct IDs. Keeping resolution separate preserves tool error and analytics ordering.
+diff --git a/codex-rs/core/src/agent/host/mod.rs b/codex-rs/core/src/agent/host/mod.rs
+index 06a15b3..55a3ad0 100644
+--- a/codex-rs/core/src/agent/host/mod.rs
++++ b/codex-rs/core/src/agent/host/mod.rs
+@@ -36,3 +36,5 @@ pub use types::RestrictRootCapabilities;
+ pub use usage::AgentUsageAccounting;
+ pub use usage::AgentUsageReport;
+ pub use usage::UsageAccountingDecision;
++
++pub(crate) mod wire;
+diff --git a/codex-rs/core/src/agent/host/spawn.rs b/codex-rs/core/src/agent/host/spawn.rs
+index b0cffc5..33612c5 100644
+--- a/codex-rs/core/src/agent/host/spawn.rs
++++ b/codex-rs/core/src/agent/host/spawn.rs
+@@ -29,7 +29,7 @@ use codex_protocol::protocol::MultiAgentVersion;
+ use codex_protocol::protocol::ThreadSource;
+ use std::sync::Arc;
+ 
+-async fn prepare_spawn_inputs(
++pub(super) async fn prepare_spawn_inputs(
+     parent: &CodexThread,
+     request: ChildSpawnSettings,
+ ) -> Result<(
+diff --git a/codex-rs/core/src/agent/host/wire.rs b/codex-rs/core/src/agent/host/wire.rs
+new file mode 100644
+index 0000000..97e3d7b
+--- /dev/null
++++ b/codex-rs/core/src/agent/host/wire.rs
+@@ -0,0 +1,959 @@
++//! Narrow transport snapshots for a trusted host running each native child in its own process.
++//! Provider credentials and Config never cross this boundary.
++
++use super::RestrictRootCapabilities;
++use super::spawn::prepare_spawn_inputs;
++use crate::agent::api::{AgentInput, AgentTurnOutcome, SpawnRequest};
++use crate::agent::types::{AgentMessage, AgentMetadata, LiveAgent, MessageDeliveryMode};
++use crate::codex_thread::CodexThread;
++use crate::thread_manager::StartThreadOptions;
++use crate::thread_spawn::ChildSpawnSettings;
++use codex_execpolicy::{Policy, RequirementsExecPolicy};
++use codex_extension_api::{Instructions, LoadedUserInstructions};
++use codex_history::InitialHistory;
++use codex_network_proxy::EnvironmentNetworkPolicy;
++use codex_protocol::config_types::{ApprovalsReviewer, Personality, ReasoningSummary};
++use codex_protocol::dynamic_tools::DynamicToolSpec;
++use codex_protocol::error::{CodexErr, Result};
++use codex_protocol::models::{PermissionProfile, ResponseItem};
++use codex_protocol::openai_models::ReasoningEffort;
++use codex_protocol::permissions::{FileSystemAccessMode, FileSystemPath};
++use codex_protocol::protocol::{
++    AgentStatus, AskForApproval, InterAgentCommunication, SessionSource, ThreadHistoryMode,
++    ThreadSource, TurnEnvironmentRequest,
++};
++use codex_protocol::turn_input::{
++    TurnInput, TurnInputRequest, TurnInputSubmission, TurnStartOptions,
++};
++use codex_protocol::user_input::UserInput;
++use codex_protocol::{AgentPath, SessionId, ThreadId, intersect_effective_permission_profiles};
++use codex_utils_absolute_path::AbsolutePathBuf;
++use serde::{Deserialize, Serialize};
++use serde_json::{Value, json};
++use std::sync::Arc;
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(rename_all = "camelCase")]
++pub struct NativeChildSettings {
++    pub model: Option<String>,
++    pub reasoning_effort: Option<ReasoningEffort>,
++    pub service_tier: Option<String>,
++    pub reasoning_summary: Option<ReasoningSummary>,
++    pub personality: Option<Personality>,
++    pub base_instructions: Option<String>,
++    pub developer_instructions: Option<String>,
++    pub approval_policy: AskForApproval,
++    pub approvals_reviewer: ApprovalsReviewer,
++    pub permission_profile: PermissionProfile,
++    #[serde(default)]
++    pub network_policy: Option<EnvironmentNetworkPolicy>,
++    pub cwd: AbsolutePathBuf,
++}
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub struct NativeWorkspaceRelocation {
++    pub from: AbsolutePathBuf,
++    pub to: AbsolutePathBuf,
++}
++
++#[derive(Clone, Debug, Default, Serialize, Deserialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++pub struct NativeHostOverrides {
++    pub cwd: Option<AbsolutePathBuf>,
++    pub environments: Option<Vec<TurnEnvironmentRequest>>,
++    pub developer_instructions: Option<String>,
++    #[serde(default, deserialize_with = "deserialize_host_dynamic_tools")]
++    pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
++    pub permission_profile: Option<PermissionProfile>,
++    /// Trusted host capability: move workspace authority to an isolated destination.
++    pub workspace_relocation: Option<NativeWorkspaceRelocation>,
++}
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(rename_all = "camelCase")]
++pub struct NativeChildBootstrap {
++    pub version: u8,
++    pub session_id: SessionId,
++    pub thread_id: Option<ThreadId>,
++    pub source: SessionSource,
++    pub config: NativeChildSettings,
++    pub initial_history: InitialHistory,
++    pub history_mode: Option<ThreadHistoryMode>,
++    pub user_instructions: Option<NativeInstructions>,
++    pub thread_instructions: Option<NativeInstructions>,
++    pub exec_policy: Policy,
++    pub exec_policy_source_requirements: Option<RequirementsExecPolicy>,
++    pub environments: Vec<TurnEnvironmentRequest>,
++    pub dynamic_tools: Vec<DynamicToolSpec>,
++    pub disabled_plugin_ids: Option<Vec<String>>,
++    pub originator: String,
++    #[serde(default)]
++    pub host_overrides: NativeHostOverrides,
++}
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(rename_all = "camelCase")]
++pub struct NativeInstructions {
++    pub text: String,
++    pub source: Option<AbsolutePathBuf>,
++}
++impl From<Instructions> for NativeInstructions {
++    fn from(value: Instructions) -> Self {
++        Self {
++            text: value.text,
++            source: value.source,
++        }
++    }
++}
++impl From<NativeInstructions> for Instructions {
++    fn from(value: NativeInstructions) -> Self {
++        Self {
++            text: value.text,
++            source: value.source,
++        }
++    }
++}
++pub(crate) struct TransportedAgentOriginator(pub(crate) String);
++/// Only the trusted native transport requests synchronous turn acceptance for attributed mail.
++#[derive(Clone, Debug)]
++pub(crate) struct NativeAgentTransportInput;
++
++fn deserialize_host_dynamic_tools<'de, D: serde::Deserializer<'de>>(
++    deserializer: D,
++) -> std::result::Result<Option<Vec<DynamicToolSpec>>, D::Error> {
++    let values = Option::<Vec<Value>>::deserialize(deserializer)?;
++    values
++        .map(codex_protocol::dynamic_tools::normalize_dynamic_tool_specs)
++        .transpose()
++        .map_err(serde::de::Error::custom)
++}
++
++pub fn apply_native_child_resume_bootstrap(
++    options: &mut StartThreadOptions,
++    bootstrap: NativeChildBootstrap,
++) -> Result<()> {
++    validate_native_resume_identity(
++        &options.initial_history,
++        bootstrap.thread_id,
++        bootstrap.session_id,
++        &bootstrap.source,
++    )?;
++    let history = options.initial_history.clone();
++    apply_native_child_bootstrap(options, bootstrap)?;
++    options.initial_history = history;
++    options.reserved_thread_id = None;
++    Ok(())
++}
++
++fn validate_native_resume_identity(
++    initial_history: &InitialHistory,
++    thread_id: Option<ThreadId>,
++    session_id: SessionId,
++    source: &SessionSource,
++) -> Result<()> {
++    let InitialHistory::Resumed(history) = initial_history else {
++        return Err(CodexErr::InvalidRequest(
++            "native resume requires persisted history".into(),
++        ));
++    };
++    if Some(history.conversation_id) != thread_id {
++        return Err(CodexErr::InvalidRequest(
++            "native resume thread identity mismatch".into(),
++        ));
++    }
++    let metadata = history.history.iter().find_map(|item| match item {
++        codex_history::RolloutItem::SessionMeta(line) => Some(&line.meta),
++        _ => None,
++    });
++    if !metadata.is_some_and(|metadata| {
++        metadata.id == history.conversation_id
++            && metadata.session_id == session_id
++            && &metadata.source == source
++    }) {
++        return Err(CodexErr::InvalidRequest(
++            "native resume persisted session or source identity mismatch".into(),
++        ));
++    }
++    Ok(())
++}
++
++pub async fn prepare_native_child_bootstrap(
++    parent: &CodexThread,
++    session_id: SessionId,
++    request: SpawnRequest,
++) -> Result<(NativeChildBootstrap, Value, NativeTurnStartOptions)> {
++    if request.caller != parent.session.thread_id {
++        return Err(CodexErr::InvalidRequest(
++            "spawn caller does not match runtime".into(),
++        ));
++    }
++    let start = NativeTurnStartOptions::from(TurnStartOptions {
++        parent_turn_id: request.options.parent_turn_id.clone(),
++        root_turn_id: request.options.root_turn_id.clone(),
++        turn_trigger: request.options.turn_trigger.clone(),
++        initiating_agent_path: request.source.get_agent_path().and_then(|path| {
++            path.as_str()
++                .rsplit_once('/')
++                .and_then(|(parent, _)| AgentPath::try_from(parent).ok())
++        }),
++        ..Default::default()
++    });
++    let input = native_agent_input_value(request.input);
++    let settings = NativeChildSettings {
++        model: request.config.model.clone(),
++        reasoning_effort: request.config.model_reasoning_effort.clone(),
++        service_tier: request.config.service_tier.clone(),
++        reasoning_summary: request.config.model_reasoning_summary,
++        personality: request.config.personality,
++        base_instructions: request.config.base_instructions.clone(),
++        developer_instructions: request.config.developer_instructions.clone(),
++        approval_policy: request.config.permissions.approval_policy.value(),
++        approvals_reviewer: request.config.approvals_reviewer,
++        permission_profile: request.config.permissions.effective_permission_profile(),
++        network_policy: request
++            .config
++            .permissions
++            .network
++            .as_ref()
++            .map(|network| network.environment_policy()),
++        cwd: request.config.cwd.clone(),
++    };
++    let (options, inheritance, _) = prepare_spawn_inputs(
++        parent,
++        ChildSpawnSettings {
++            config: request.config,
++            source: request.source.clone(),
++            options: request.options,
++        },
++    )
++    .await?;
++    let (exec_policy, requirements) = match inheritance.exec_policy {
++        Some(manager) => manager.snapshot(),
++        None => parent.session.services.exec_policy.snapshot(),
++    };
++    let environments = options
++        .inherited_environments
++        .as_ref()
++        .map(|snapshot| snapshot.inheritable_requests())
++        .unwrap_or_default();
++    Ok((
++        NativeChildBootstrap {
++            version: 1,
++            session_id,
++            thread_id: None,
++            source: request.source,
++            config: settings,
++            initial_history: options.initial_history,
++            history_mode: options.history_mode,
++            user_instructions: inheritance.instructions.user.map(Into::into),
++            thread_instructions: inheritance.instructions.thread.map(Into::into),
++            exec_policy: (*exec_policy).clone(),
++            exec_policy_source_requirements: requirements.as_deref().cloned(),
++            environments,
++            dynamic_tools: options.dynamic_tools,
++            disabled_plugin_ids: options.disabled_plugin_ids,
++            originator: inheritance.originator,
++            host_overrides: NativeHostOverrides::default(),
++        },
++        input,
++        start,
++    ))
++}
++
++pub fn apply_native_child_bootstrap(
++    options: &mut StartThreadOptions,
++    bootstrap: NativeChildBootstrap,
++) -> Result<()> {
++    if bootstrap.version != 1 || !bootstrap.source.is_non_root_agent() {
++        return Err(CodexErr::InvalidRequest(
++            "unsupported native child bootstrap".into(),
++        ));
++    }
++    let child_id = bootstrap.thread_id.ok_or_else(|| {
++        CodexErr::InvalidRequest("native child thread ID must be reserved by host".into())
++    })?;
++    if SessionId::from(child_id) == bootstrap.session_id {
++        return Err(CodexErr::InvalidRequest(
++            "child cannot use root identity".into(),
++        ));
++    }
++    let dest_cwd = bootstrap
++        .host_overrides
++        .cwd
++        .clone()
++        .unwrap_or_else(|| options.config.cwd.clone());
++    if options.config.cwd != dest_cwd {
++        return Err(CodexErr::InvalidRequest(
++            "bootstrap cwd must match destination profile cwd".into(),
++        ));
++    }
++    let mut authority = bootstrap.config.permission_profile.clone();
++    if let Some(relocation) = &bootstrap.host_overrides.workspace_relocation {
++        if relocation.from != bootstrap.config.cwd
++            || relocation.to != dest_cwd
++            || relocation.from == relocation.to
++        {
++            return Err(CodexErr::InvalidRequest(
++                "invalid trusted workspace relocation".into(),
++            ));
++        }
++        authority = relocate_workspace_authority(&authority, &relocation.from, &relocation.to)?;
++    }
++    let destination_network = options
++        .config
++        .permissions
++        .network
++        .as_ref()
++        .map(|network| network.environment_policy());
++    validate_native_network_policy(
++        bootstrap.config.network_policy.as_ref(),
++        destination_network.as_ref(),
++    )?;
++    let destination = options.config.permissions.effective_permission_profile();
++    let mut permissions =
++        intersect_effective_permission_profiles(&authority, &destination, dest_cwd.as_path())
++            .map_err(|error| {
++                CodexErr::InvalidRequest(format!("native child permission intersection: {error}"))
++            })?;
++    if let Some(requested) = &bootstrap.host_overrides.permission_profile {
++        permissions =
++            intersect_effective_permission_profiles(&permissions, requested, dest_cwd.as_path())
++                .map_err(|error| {
++                    CodexErr::InvalidRequest(format!(
++                        "native child host permission restriction: {error}"
++                    ))
++                })?;
++    }
++    options
++        .config
++        .permissions
++        .set_permission_profile(permissions)
++        .map_err(|error| {
++            CodexErr::InvalidRequest(format!(
++                "destination rejected inherited permissions: {error}"
++            ))
++        })?;
++    options
++        .config
++        .permissions
++        .approval_policy
++        .set(bootstrap.config.approval_policy)
++        .map_err(|error| {
++            CodexErr::InvalidRequest(format!("destination rejected approval policy: {error}"))
++        })?;
++    options.config.approvals_reviewer = bootstrap.config.approvals_reviewer;
++    options.config.model = bootstrap.config.model;
++    options.config.model_reasoning_effort = bootstrap.config.reasoning_effort;
++    options.config.service_tier = bootstrap.config.service_tier;
++    options.config.model_reasoning_summary = bootstrap.config.reasoning_summary;
++    options.config.personality = bootstrap.config.personality;
++    options.config.base_instructions = bootstrap.config.base_instructions;
++    options.config.developer_instructions = bootstrap
++        .host_overrides
++        .developer_instructions
++        .or(bootstrap.config.developer_instructions);
++    options.initial_history = bootstrap.initial_history;
++    options.history_mode = bootstrap.history_mode;
++    options.session_source = Some(bootstrap.source);
++    options.thread_source = Some(ThreadSource::Subagent);
++    options.reserved_thread_id = Some(child_id);
++    options.user_instructions = Some(LoadedUserInstructions {
++        instructions: bootstrap.user_instructions.map(Into::into),
++        warnings: Vec::new(),
++    });
++    options.set_inherited_thread_instructions(
++        bootstrap
++            .thread_instructions
++            .map(Into::into)
++            .unwrap_or(Instructions {
++                text: String::new(),
++                source: None,
++            }),
++    );
++    // The captured policy already includes the parent's user/project rules. The isolated
++    // destination must not re-read a different worktree's user/project policy. Managed
++    // requirements and system policy sources remain subject to native compatibility checks.
++    options.config.config_layer_stack = options
++        .config
++        .config_layer_stack
++        .clone()
++        .with_user_and_project_exec_policy_rules_ignored(true);
++    options.set_inherited_exec_policy(
++        Arc::new(bootstrap.exec_policy),
++        bootstrap.exec_policy_source_requirements.map(Arc::new),
++    );
++    options.dynamic_tools = bootstrap
++        .host_overrides
++        .dynamic_tools
++        .unwrap_or(bootstrap.dynamic_tools);
++    options.disabled_plugin_ids = bootstrap.disabled_plugin_ids;
++    if let Some(environments) = bootstrap.host_overrides.environments {
++        options.environments = Some(environments);
++    } else if bootstrap.host_overrides.workspace_relocation.is_none() {
++        options.environments = Some(bootstrap.environments);
++    }
++    // Relocated environments come from the destination's trusted profile, never parent bindings.
++    // Native subagents get the shared session identity from their attached
++    // AgentControl (or persisted metadata on resume). InheritedSessionId is only
++    // valid for fresh host-root threads and must not be installed for this path.
++    options
++        .thread_extension_init
++        .insert(RestrictRootCapabilities);
++    options
++        .thread_extension_init
++        .insert(TransportedAgentOriginator(bootstrap.originator));
++    Ok(())
++}
++
++// Proxy listeners, credentials and URLs belong to the destination. The current
++// transport supports the same captured traffic policy, plus an independently
++// restrictive destination when the parent did not use a proxy. Different proxy
++// allowlists fail closed rather than guessing whether wildcard rules are subsets.
++fn validate_native_network_policy(
++    captured: Option<&EnvironmentNetworkPolicy>,
++    destination: Option<&EnvironmentNetworkPolicy>,
++) -> Result<()> {
++    if let Some(captured) = captured
++        && Some(captured) != destination
++    {
++        return Err(CodexErr::InvalidRequest(
++            "native child destination network policy differs from captured authority".into(),
++        ));
++    }
++    Ok(())
++}
++
++fn relocate_workspace_authority(
++    profile: &PermissionProfile,
++    from: &AbsolutePathBuf,
++    to: &AbsolutePathBuf,
++) -> Result<PermissionProfile> {
++    let (mut filesystem, network) = profile.to_runtime_permissions();
++    let mut saw_workspace_grant = false;
++    filesystem.entries.retain(|entry| {
++        let FileSystemPath::Path { path } = &entry.path else {
++            return true;
++        };
++        let Ok(path) = path.to_abs_path() else {
++            return true;
++        };
++        if entry.access == FileSystemAccessMode::Write && path.as_path().starts_with(from.as_path())
++        {
++            saw_workspace_grant = true;
++            return false;
++        }
++        // The trusted host rebinds this subtree in an independent namespace. Other denies survive.
++        !(entry.access == FileSystemAccessMode::Deny && to.as_path().starts_with(path.as_path()))
++    });
++    if !saw_workspace_grant {
++        return Err(CodexErr::InvalidRequest(
++            "relocation requires captured workspace write authority".into(),
++        ));
++    }
++    filesystem
++        .entries
++        .push(codex_protocol::permissions::FileSystemSandboxEntry::new(
++            FileSystemPath::Path {
++                path: codex_utils_path_uri::PathUri::from_abs_path(to),
++            },
++            FileSystemAccessMode::Write,
++        ));
++    Ok(
++        PermissionProfile::from_runtime_permissions_with_enforcement(
++            profile.enforcement(),
++            &filesystem,
++            network,
++        ),
++    )
++}
++
++#[derive(Clone, Debug, Default, Serialize, Deserialize)]
++#[serde(rename_all = "camelCase")]
++pub struct NativeTurnStartOptions {
++    pub parent_turn_id: Option<String>,
++    pub root_turn_id: Option<String>,
++    pub turn_trigger: Option<String>,
++    pub initiating_agent_path: Option<AgentPath>,
++    pub final_output_json_schema: Option<Value>,
++    pub service_tier: Option<String>,
++}
++impl From<TurnStartOptions> for NativeTurnStartOptions {
++    fn from(value: TurnStartOptions) -> Self {
++        Self {
++            parent_turn_id: value.parent_turn_id,
++            root_turn_id: value.root_turn_id,
++            turn_trigger: value.turn_trigger,
++            initiating_agent_path: value.initiating_agent_path,
++            final_output_json_schema: value.final_output_json_schema,
++            service_tier: value.service_tier,
++        }
++    }
++}
++impl From<NativeTurnStartOptions> for TurnStartOptions {
++    fn from(value: NativeTurnStartOptions) -> Self {
++        Self {
++            parent_turn_id: value.parent_turn_id,
++            root_turn_id: value.root_turn_id,
++            turn_trigger: value.turn_trigger,
++            initiating_agent_path: value.initiating_agent_path,
++            final_output_json_schema: value.final_output_json_schema,
++            service_tier: value.service_tier,
++            ..Default::default()
++        }
++    }
++}
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(tag = "kind", rename_all = "camelCase")]
++pub enum NativeAgentInput {
++    Message {
++        message: NativeMessage,
++        mode: NativeDeliveryMode,
++    },
++    UserInput {
++        items: Vec<UserInput>,
++    },
++    Communication {
++        communication: InterAgentCommunication,
++    },
++}
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(tag = "kind", content = "text", rename_all = "camelCase")]
++pub enum NativeMessage {
++    Plaintext(String),
++    Encrypted(String),
++}
++#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
++#[serde(rename_all = "camelCase")]
++pub enum NativeDeliveryMode {
++    QueueOnly,
++    TriggerTurn,
++}
++impl NativeMessage {
++    pub fn into_communication(
++        self,
++        author: AgentPath,
++        recipient: AgentPath,
++        mode: NativeDeliveryMode,
++    ) -> InterAgentCommunication {
++        let message = match self {
++            Self::Plaintext(text) => AgentMessage::Plaintext(text),
++            Self::Encrypted(text) => AgentMessage::Encrypted(text),
++        };
++        message.into_communication(
++            author,
++            recipient,
++            match mode {
++                NativeDeliveryMode::QueueOnly => MessageDeliveryMode::QueueOnly,
++                NativeDeliveryMode::TriggerTurn => MessageDeliveryMode::TriggerTurn,
++            },
++        )
++    }
++}
++pub fn native_agent_input_value(input: AgentInput) -> Value {
++    let input = match input {
++        AgentInput::UserInput(items) => NativeAgentInput::UserInput { items },
++        AgentInput::Message { message, mode } => NativeAgentInput::Message {
++            message: match message {
++                AgentMessage::Plaintext(text) => NativeMessage::Plaintext(text),
++                AgentMessage::Encrypted(text) => NativeMessage::Encrypted(text),
++            },
++            mode: match mode {
++                MessageDeliveryMode::QueueOnly => NativeDeliveryMode::QueueOnly,
++                MessageDeliveryMode::TriggerTurn => NativeDeliveryMode::TriggerTurn,
++            },
++        },
++    };
++    serde_json::to_value(input).expect("native agent input is serializable")
++}
++
++pub fn native_completion_communication(
++    outcome: &AgentTurnOutcome,
++) -> Option<(ThreadId, InterAgentCommunication)> {
++    let codex_protocol::protocol::SessionSource::SubAgent(
++        codex_protocol::protocol::SubAgentSource::ThreadSpawn {
++            parent_thread_id,
++            agent_path: Some(child),
++            ..
++        },
++    ) = &outcome.source
++    else {
++        return None;
++    };
++    let parent = AgentPath::try_from(child.as_str().rsplit_once('/')?.0).ok()?;
++    let text = match (&outcome.status, &outcome.error_info) {
++        (
++            AgentStatus::Errored(error),
++            Some(codex_protocol::protocol::CodexErrorInfo::TooManyDenials),
++        ) => Some(crate::session_prefix::format_guardian_interruption_message(
++            parent.clone(),
++            child.clone(),
++            error,
++        )),
++        _ => crate::session_prefix::format_inter_agent_completion_message(
++            parent.clone(),
++            child.clone(),
++            &outcome.status,
++        ),
++    }?;
++    Some((
++        *parent_thread_id,
++        InterAgentCommunication::new(child.clone(), parent, Vec::new(), text, false),
++    ))
++}
++
++pub async fn native_agent_snapshot(thread: &CodexThread) -> Result<Value> {
++    let snapshot = crate::agent::control::effective_spawn_config(thread).await?;
++    let source = &snapshot.session_source;
++    let agent = LiveAgent {
++        thread_id: thread.session.thread_id,
++        metadata: AgentMetadata {
++            agent_id: Some(thread.session.thread_id),
++            agent_path: Some(source.get_agent_path().unwrap_or_else(AgentPath::root)),
++            agent_nickname: source.get_nickname(),
++            agent_role: source.get_agent_role(),
++        },
++        status: thread.io.agent_status.borrow().clone(),
++    };
++    Ok(json!({"sessionId":thread.session.session_id(), "agent":agent, "configSnapshot":snapshot}))
++}
++
++/// Called under the transport's per-thread lock, after observers are registered.
++pub async fn native_submit_agent_input(
++    thread: &CodexThread,
++    author: AgentPath,
++    input: NativeAgentInput,
++    start: NativeTurnStartOptions,
++    context_items: Vec<ResponseItem>,
++    expected_turn_id: Option<String>,
++) -> Result<Value> {
++    if let Some(expected) = &expected_turn_id {
++        let active = thread
++            .session
++            .active_turn_context_and_cancellation_token()
++            .await;
++        if active.as_ref().map(|(turn, _)| turn.sub_id.as_str()) != Some(expected.as_str()) {
++            return Err(CodexErr::InvalidRequest(
++                "expected native turn is no longer active".into(),
++            ));
++        }
++    }
++    if !context_items.is_empty() {
++        thread.inject_response_items_for_turn(context_items).await?;
++    }
++    let id = uuid::Uuid::now_v7().to_string();
++    let recipient = thread
++        .session_source
++        .get_agent_path()
++        .unwrap_or_else(AgentPath::root);
++    let turn = match input {
++        NativeAgentInput::UserInput { items } => {
++            let request = TurnInputRequest::user_input(items).on_start(start.into());
++            if let Some(expected) = expected_turn_id {
++                match thread.steer_turn(request, expected).await? {
++                    codex_protocol::turn_input::SteerSubmission::Steered { turn_id } => {
++                        Some(turn_id)
++                    }
++                    codex_protocol::turn_input::SteerSubmission::NotSubmitted { reason } => {
++                        return Err(CodexErr::InvalidRequest(format!(
++                            "native input not steered: {reason:?}"
++                        )));
++                    }
++                }
++            } else {
++                match thread.start_or_steer_turn(request).await? {
++                    TurnInputSubmission::Started { turn_id, .. }
++                    | TurnInputSubmission::Steered { turn_id, .. } => Some(turn_id),
++                    TurnInputSubmission::Accepted => None,
++                    TurnInputSubmission::NotSubmitted { reason } => {
++                        return Err(CodexErr::InvalidRequest(format!(
++                            "native input not submitted: {reason:?}"
++                        )));
++                    }
++                }
++            }
++        }
++        NativeAgentInput::Message { message, mode } => {
++            let communication = message.into_communication(author, recipient, mode);
++            deliver_communication(thread, communication, start.into(), expected_turn_id).await?
++        }
++        NativeAgentInput::Communication { communication } => {
++            if communication.author != author || communication.recipient != recipient {
++                return Err(CodexErr::InvalidRequest(
++                    "native communication attribution mismatch".into(),
++                ));
++            }
++            deliver_communication(thread, communication, start.into(), expected_turn_id).await?
++        }
++    };
++    Ok(
++        json!({"threadId":thread.session.thread_id, "submissionId":id, "accepted":true, "turn":turn.map(|id|json!({"id":id,"status":"inProgress","items":[]}))}),
++    )
++}
++
++async fn deliver_communication(
++    thread: &CodexThread,
++    communication: InterAgentCommunication,
++    start: TurnStartOptions,
++    expected_turn_id: Option<String>,
++) -> Result<Option<String>> {
++    if !communication.trigger_turn && expected_turn_id.is_none() {
++        thread
++            .session
++            .input_queue
++            .enqueue_mailbox_communication(communication.into(), start)
++            .await;
++        return Ok(None);
++    }
++    let mut init = thread.config_snapshot().await.turn_extension_init;
++    init.insert(NativeAgentTransportInput);
++    let request = crate::WithTurnExtensionData::new(
++        TurnInputRequest::new(TurnInput::InterAgentCommunication(communication)).on_start(start),
++        init,
++    );
++    if let Some(expected) = expected_turn_id {
++        match thread.steer_turn(request, expected).await? {
++            codex_protocol::turn_input::SteerSubmission::Steered { turn_id } => Ok(Some(turn_id)),
++            codex_protocol::turn_input::SteerSubmission::NotSubmitted { reason } => Err(
++                CodexErr::InvalidRequest(format!("native message not steered: {reason:?}")),
++            ),
++        }
++    } else {
++        match thread.start_or_steer_turn(request).await? {
++            TurnInputSubmission::Started { turn_id, .. }
++            | TurnInputSubmission::Steered { turn_id, .. } => Ok(Some(turn_id)),
++            TurnInputSubmission::Accepted => Err(CodexErr::InvalidRequest(
++                "native message lost synchronous acceptance".into(),
++            )),
++            TurnInputSubmission::NotSubmitted { reason } => Err(CodexErr::InvalidRequest(format!(
++                "native message not submitted: {reason:?}"
++            ))),
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use codex_protocol::permissions::{
++        FileSystemSandboxEntry, FileSystemSandboxPolicy, NetworkSandboxPolicy,
++    };
++    use codex_utils_path_uri::PathUri;
++
++    fn path(value: &str) -> AbsolutePathBuf {
++        AbsolutePathBuf::from_absolute_path(value).unwrap()
++    }
++    fn entry(value: &str, access: FileSystemAccessMode) -> FileSystemSandboxEntry {
++        FileSystemSandboxEntry::new(
++            FileSystemPath::Path {
++                path: PathUri::from_abs_path(&path(value)),
++            },
++            access,
++        )
++    }
++
++    #[test]
++    fn native_resume_requires_owned_persisted_thread_session_and_source() {
++        use codex_history::{ResumedHistory, RolloutItem};
++        use codex_protocol::protocol::{SessionMeta, SessionMetaLine, SubAgentSource};
++
++        let root = ThreadId::default();
++        let child = ThreadId::default();
++        let session_id = SessionId::from(root);
++        let source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
++            parent_thread_id: root,
++            depth: 1,
++            agent_path: Some(AgentPath::try_from("/root/algebra").unwrap()),
++            agent_nickname: None,
++            agent_role: Some("algebra".into()),
++        });
++        let metadata = RolloutItem::SessionMeta(Box::new(SessionMetaLine {
++            meta: SessionMeta {
++                id: child,
++                session_id,
++                source: source.clone(),
++                ..Default::default()
++            },
++            git: None,
++        }));
++        let persisted = InitialHistory::Resumed(ResumedHistory {
++            conversation_id: child,
++            history: Arc::new(vec![metadata.clone()]),
++            history_revision: None,
++            rollout_path: None,
++        });
++        assert!(
++            validate_native_resume_identity(&persisted, Some(child), session_id, &source).is_ok()
++        );
++        assert!(
++            validate_native_resume_identity(&persisted, Some(root), session_id, &source).is_err()
++        );
++        assert!(
++            validate_native_resume_identity(&persisted, Some(child), child.into(), &source)
++                .is_err()
++        );
++        assert!(
++            validate_native_resume_identity(
++                &persisted,
++                Some(child),
++                session_id,
++                &SessionSource::Cli
++            )
++            .is_err()
++        );
++        let missing_metadata = InitialHistory::Resumed(ResumedHistory {
++            conversation_id: child,
++            history: Arc::new(Vec::new()),
++            history_revision: None,
++            rollout_path: None,
++        });
++        assert!(
++            validate_native_resume_identity(&missing_metadata, Some(child), session_id, &source)
++                .is_err()
++        );
++        for copied_history in [InitialHistory::New, InitialHistory::Forked(vec![metadata])] {
++            assert!(
++                validate_native_resume_identity(&copied_history, Some(child), session_id, &source)
++                    .is_err()
++            );
++        }
++    }
++
++    #[test]
++    fn trusted_relocation_preserves_secret_denies_and_revokes_source_write() {
++        let workspace = tempfile::tempdir().unwrap();
++        let from = AbsolutePathBuf::from_absolute_path(workspace.path().join("lead")).unwrap();
++        let agents = AbsolutePathBuf::from_absolute_path(workspace.path().join("agents")).unwrap();
++        let to = AbsolutePathBuf::from_absolute_path(agents.join("algebra")).unwrap();
++        let peer = AbsolutePathBuf::from_absolute_path(agents.join("topology")).unwrap();
++        let secret = AbsolutePathBuf::from_absolute_path(workspace.path().join("secrets")).unwrap();
++        for directory in [&from, &to, &peer, &secret] {
++            std::fs::create_dir_all(directory).unwrap();
++        }
++        let local_entry = |path: &AbsolutePathBuf, access| {
++            FileSystemSandboxEntry::new(
++                FileSystemPath::Path {
++                    path: PathUri::from_abs_path(path),
++                },
++                access,
++            )
++        };
++        let parent = PermissionProfile::from_runtime_permissions(
++            &FileSystemSandboxPolicy::restricted(vec![
++                entry("/", FileSystemAccessMode::Read),
++                local_entry(&from, FileSystemAccessMode::Write),
++                local_entry(&agents, FileSystemAccessMode::Deny),
++                local_entry(&secret, FileSystemAccessMode::Deny),
++            ]),
++            NetworkSandboxPolicy::Restricted,
++        );
++        let relocated = relocate_workspace_authority(&parent, &from, &to).unwrap();
++        let fs = relocated.file_system_sandbox_policy();
++        assert!(fs.can_write_local_path_with_cwd(to.as_path(), to.as_path()));
++        assert!(!fs.can_write_local_path_with_cwd(from.as_path(), to.as_path()));
++        assert!(
++            fs.entries
++                .contains(&local_entry(&secret, FileSystemAccessMode::Deny))
++        );
++        assert_eq!(
++            relocated.network_sandbox_policy(),
++            NetworkSandboxPolicy::Restricted
++        );
++        let destination = PermissionProfile::from_runtime_permissions(
++            &FileSystemSandboxPolicy::restricted(vec![
++                entry("/", FileSystemAccessMode::Read),
++                local_entry(&to, FileSystemAccessMode::Write),
++                local_entry(&from, FileSystemAccessMode::Deny),
++                local_entry(&peer, FileSystemAccessMode::Deny),
++            ]),
++            NetworkSandboxPolicy::Enabled,
++        );
++        let bounded =
++            intersect_effective_permission_profiles(&relocated, &destination, to.as_path())
++                .unwrap();
++        assert!(
++            bounded
++                .file_system_sandbox_policy()
++                .can_write_local_path_with_cwd(to.as_path(), to.as_path())
++        );
++        assert!(
++            !bounded
++                .file_system_sandbox_policy()
++                .can_write_local_path_with_cwd(from.as_path(), to.as_path())
++        );
++        assert!(
++            !bounded
++                .file_system_sandbox_policy()
++                .can_read_local_path_with_cwd(peer.as_path(), to.as_path())
++        );
++        assert_eq!(
++            bounded.network_sandbox_policy(),
++            NetworkSandboxPolicy::Restricted
++        );
++    }
++
++    #[test]
++    fn relocation_requires_an_actual_workspace_write_grant() {
++        let read_only = PermissionProfile::from_runtime_permissions(
++            &FileSystemSandboxPolicy::restricted(vec![entry("/", FileSystemAccessMode::Read)]),
++            NetworkSandboxPolicy::Restricted,
++        );
++        assert!(
++            relocate_workspace_authority(&read_only, &path("/work/lead"), &path("/work/child"))
++                .is_err()
++        );
++    }
++
++    #[test]
++    fn host_override_tools_use_upstream_legacy_normalizer_and_reject_unknown_authority() {
++        let overrides:NativeHostOverrides=serde_json::from_value(json!({"dynamicTools":[{"name":"lean_check","description":"check proof","inputSchema":{"type":"object"}}]})).unwrap();
++        assert!(
++            matches!(overrides.dynamic_tools.unwrap().as_slice(),[DynamicToolSpec::Function(tool)] if tool.name=="lean_check")
++        );
++        assert!(
++            serde_json::from_value::<NativeHostOverrides>(json!({"modelProvider":"parent-relay"}))
++                .is_err()
++        );
++    }
++
++    #[test]
++    fn native_network_policy_cannot_lose_proxy_denials_or_import_listener_credentials() {
++        let mut config = codex_network_proxy::NetworkProxyConfig::default();
++        config.enabled = true;
++        config.upsert_domain_permission(
++            "private.example".into(),
++            codex_network_proxy::NetworkDomainPermission::Deny,
++            codex_network_proxy::normalize_host,
++        );
++        let captured = EnvironmentNetworkPolicy::from_config(&config, false);
++        let destination = EnvironmentNetworkPolicy::from_config(
++            &codex_network_proxy::NetworkProxyConfig::default(),
++            false,
++        );
++        assert!(validate_native_network_policy(Some(&captured), Some(&destination)).is_err());
++        assert!(validate_native_network_policy(Some(&captured), None).is_err());
++        assert!(validate_native_network_policy(Some(&captured), Some(&captured)).is_ok());
++        let transport = serde_json::to_value(&captured).unwrap();
++        assert!(transport.get("proxyUrl").is_none());
++        assert!(transport.get("credentialBroker").is_none());
++    }
++
++    #[test]
++    fn native_messages_preserve_encryption_and_delivery_mode() {
++        let input:NativeAgentInput=serde_json::from_value(json!({"kind":"message","message":{"kind":"encrypted","text":"ciphertext"},"mode":"queueOnly"})).unwrap();
++        let NativeAgentInput::Message { message, mode } = input else {
++            panic!("wrong input")
++        };
++        let communication = message.into_communication(
++            AgentPath::root(),
++            AgentPath::try_from("/root/algebra").unwrap(),
++            mode,
++        );
++        assert_eq!(
++            communication.encrypted_content.as_deref(),
++            Some("ciphertext")
++        );
++        assert!(!communication.trigger_turn);
++    }
++}
+diff --git a/codex-rs/core/src/agent/types.rs b/codex-rs/core/src/agent/types.rs
+index 2b3626f..c8cad84 100644
+--- a/codex-rs/core/src/agent/types.rs
++++ b/codex-rs/core/src/agent/types.rs
+@@ -10,7 +10,8 @@ use codex_protocol::turn_input::CyberAccessProgram;
+ 
+ /// Registry identity shared by loaded and unloaded agents.
+ /// Registered agents have an `agent_id`; a reserved spawn can still be awaiting its ID.
+-#[derive(Clone, Debug, Default)]
++#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
++#[serde(rename_all = "camelCase")]
+ pub struct AgentMetadata {
+     pub agent_id: Option<ThreadId>,
+     pub agent_path: Option<AgentPath>,
+@@ -42,7 +43,8 @@ pub struct SpawnAgentOptions {
+ }
+ 
+ /// Identity and status observed from a loaded agent, without a handle to its runtime.
+-#[derive(Clone, Debug)]
++#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
++#[serde(rename_all = "camelCase")]
+ pub struct LiveAgent {
+     pub thread_id: ThreadId,
+     pub metadata: AgentMetadata,
+diff --git a/codex-rs/core/src/codex_thread.rs b/codex-rs/core/src/codex_thread.rs
+index 3b694fc..558b977 100644
+--- a/codex-rs/core/src/codex_thread.rs
++++ b/codex-rs/core/src/codex_thread.rs
+@@ -94,9 +94,11 @@ use codex_rollout::state_db::StateDbHandle;
+ 
+ static LIVE_THREADS: Gauge = Gauge::new("core.threads.live");
+ 
+-#[derive(Clone, Debug)]
++#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
++#[serde(rename_all = "camelCase")]
+ pub struct ThreadConfigSnapshot {
+     /// Host data inherited by future turns; not included in persisted settings.
++    #[serde(skip)]
+     pub turn_extension_init: codex_extension_api::ExtensionDataInit,
+     pub model: String,
+     pub model_provider_id: String,
+diff --git a/codex-rs/core/src/lib.rs b/codex-rs/core/src/lib.rs
+index d684b39..d06533c 100644
+--- a/codex-rs/core/src/lib.rs
++++ b/codex-rs/core/src/lib.rs
+@@ -296,3 +296,10 @@ pub use environment_selection::validate_environment_ids_and_cwds;
+ 
+ mod runtime_auth;
+ pub use runtime_auth::build_runtime_auth_manager;
++
++// Trusted, isolated host-owned native agent transport.
++pub use agent::host::wire::{
++    NativeAgentInput, NativeChildBootstrap, NativeTurnStartOptions, apply_native_child_bootstrap,
++    apply_native_child_resume_bootstrap, native_agent_input_value, native_agent_snapshot,
++    native_completion_communication, native_submit_agent_input, prepare_native_child_bootstrap,
++};
+diff --git a/codex-rs/core/src/session/mod.rs b/codex-rs/core/src/session/mod.rs
+index ce93060..dbfb817 100644
+--- a/codex-rs/core/src/session/mod.rs
++++ b/codex-rs/core/src/session/mod.rs
+@@ -3177,7 +3177,7 @@ impl Session {
+             .map(|task| Arc::clone(&task.turn_context))
+     }
+ 
+-    async fn active_turn_context_and_cancellation_token(
++    pub(crate) async fn active_turn_context_and_cancellation_token(
+         &self,
+     ) -> Option<(Arc<TurnContext>, CancellationToken)> {
+         let active = self.active_turn.lock().await;
+diff --git a/codex-rs/core/src/session/turn_input.rs b/codex-rs/core/src/session/turn_input.rs
+index fb75759..acb7562 100644
+--- a/codex-rs/core/src/session/turn_input.rs
++++ b/codex-rs/core/src/session/turn_input.rs
+@@ -387,10 +387,15 @@ async fn start_or_steer(
+     request: WithTurnExtensionData<TurnInputRequest>,
+     submission_id: String,
+ ) -> CodexResult<TurnInputSubmission> {
++    let host_transport_input = request.turn_extension_init.as_ref().is_some_and(|data| {
++        data.get::<crate::agent::host::wire::NativeAgentTransportInput>()
++            .is_some()
++    });
+     if matches!(
+         request.request.input,
+         SubmittedTurnInput::InterAgentCommunication(_)
+-    ) {
++    ) && !host_transport_input
++    {
+         return agent::submit(session, request, submission_id).await;
+     }
+     let WithTurnExtensionData {
+@@ -407,6 +412,7 @@ async fn start_or_steer(
+         ..
+     } = request;
+     let has_explicit_input = match &input {
++        SubmittedTurnInput::InterAgentCommunication(_) if host_transport_input => true,
+         SubmittedTurnInput::UserInput { content, .. } => !content.is_empty(),
+         SubmittedTurnInput::ResponseItem(ResponseItem::FunctionCallOutput {
+             call_id: None,
+@@ -489,6 +495,14 @@ async fn start_or_steer(
+                 .await;
+             let mut task_input =
+                 merge_additional_context_input(session, &turn_context, additional_context).await;
++            if host_transport_input {
++                // Mail accepted before this native trigger belongs to its first
++                // sampling batch. Leaving it in pending_input would defer it
++                // until after the explicit trigger has already been sampled.
++                let mut mailbox_input = session.input_queue.drain_mailbox_input_items().await.0;
++                mailbox_input.extend(task_input);
++                task_input = mailbox_input;
++            }
+             if has_explicit_input {
+                 task_input.push(
+                     pending_turn_input(
+@@ -695,6 +709,10 @@ async fn steer(
+     expected_turn_id: String,
+     submission_id: String,
+ ) -> CodexResult<TurnInputSubmission> {
++    let host_transport_input = request.turn_extension_init.as_ref().is_some_and(|data| {
++        data.get::<crate::agent::host::wire::NativeAgentTransportInput>()
++            .is_some()
++    });
+     let WithTurnExtensionData {
+         request,
+         turn_extension_init,
+@@ -708,7 +726,10 @@ async fn steer(
+         responsesapi_client_metadata,
+         ..
+     } = request;
+-    if !matches!(&input, SubmittedTurnInput::UserInput { .. }) {
++    if !matches!(&input, SubmittedTurnInput::UserInput { .. })
++        && !(host_transport_input
++            && matches!(&input, SubmittedTurnInput::InterAgentCommunication(_)))
++    {
+         return Err(CodexErr::InvalidRequest(
+             "only user input can steer a turn".to_string(),
+         ));
+diff --git a/codex-rs/core/src/session/turn_input_tests.rs b/codex-rs/core/src/session/turn_input_tests.rs
+index 219a422..f742b29 100644
+--- a/codex-rs/core/src/session/turn_input_tests.rs
++++ b/codex-rs/core/src/session/turn_input_tests.rs
+@@ -111,6 +111,215 @@ async fn submit_steer_only(
+     .expect("steer-only submission should be valid")
+ }
+ 
++#[tokio::test]
++async fn native_message_steer_preserves_author_and_requires_matching_active_turn() {
++    use crate::agent::host::wire::NativeAgentTransportInput;
++    use crate::agent::types::{AgentMessage, MessageDeliveryMode};
++    use codex_extension_api::ExtensionDataInit;
++
++    let (session, turn_context, _events) = make_session_and_context_with_rx().await;
++    session
++        .spawn_task(
++            Arc::clone(&turn_context),
++            Vec::new(),
++            NeverEndingTask {
++                kind: TaskKind::Regular,
++                listen_to_cancellation_token: true,
++            },
++        )
++        .await;
++    let communication = AgentMessage::Encrypted("amended objective".into()).into_communication(
++        AgentPath::try_from("/root/expert").unwrap(),
++        AgentPath::root(),
++        MessageDeliveryMode::TriggerTurn,
++    );
++    let request = || {
++        let mut init = ExtensionDataInit::default();
++        init.insert(NativeAgentTransportInput);
++        WithTurnExtensionData::new(
++            TurnInputRequest::new(SubmittedTurnInput::InterAgentCommunication(
++                communication.clone(),
++            )),
++            init,
++        )
++    };
++    let ordinary = handle(
++        &session,
++        TurnInputRequest::new(SubmittedTurnInput::InterAgentCommunication(
++            communication.clone(),
++        )),
++        TurnInputMode::Steer {
++            expected_turn_id: turn_context.sub_id.clone(),
++        },
++        "untrusted-message".into(),
++    )
++    .await
++    .expect_err("ordinary message steering remains unsupported");
++    assert!(
++        ordinary
++            .to_string()
++            .contains("only user input can steer a turn")
++    );
++    let mismatch = handle(
++        &session,
++        request(),
++        TurnInputMode::Steer {
++            expected_turn_id: "wrong-turn".into(),
++        },
++        "native-mismatch".into(),
++    )
++    .await
++    .unwrap();
++    assert_eq!(
++        mismatch,
++        TurnInputSubmission::NotSubmitted {
++            reason: NotSubmittedReason::ExpectedTurnMismatch {
++                expected: "wrong-turn".into(),
++                actual: turn_context.sub_id.clone(),
++            },
++        }
++    );
++    assert!(
++        session
++            .input_queue
++            .get_pending_input(&session.active_turn)
++            .await
++            .0
++            .is_empty()
++    );
++    let accepted = handle(
++        &session,
++        request(),
++        TurnInputMode::Steer {
++            expected_turn_id: turn_context.sub_id.clone(),
++        },
++        "native-notice".into(),
++    )
++    .await
++    .unwrap();
++    assert_eq!(
++        accepted,
++        TurnInputSubmission::Steered {
++            turn_id: turn_context.sub_id.clone(),
++            root_turn_id: turn_context.root_turn_id(),
++        }
++    );
++    assert_eq!(
++        session
++            .input_queue
++            .get_pending_input(&session.active_turn)
++            .await
++            .0,
++        vec![TurnInput::InterAgentCommunication(
++            communication.clone().into()
++        )],
++    );
++    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
++    let idle = handle(
++        &session,
++        request(),
++        TurnInputMode::Steer {
++            expected_turn_id: turn_context.sub_id.clone(),
++        },
++        "native-idle-notice".into(),
++    )
++    .await
++    .unwrap();
++    assert_eq!(
++        idle,
++        TurnInputSubmission::NotSubmitted {
++            reason: NotSubmittedReason::NoActiveTurn
++        }
++    );
++    assert!(session.active_turn.lock().await.is_none());
++}
++
++#[tokio::test]
++async fn native_trigger_samples_queued_mail_before_its_first_response() {
++    use crate::agent::host::wire::NativeAgentTransportInput;
++    use crate::agent::types::{AgentMessage, MessageDeliveryMode};
++    use crate::session::tests::make_session_and_context_with_auth_and_config_and_rx;
++    use codex_extension_api::ExtensionDataInit;
++    use core_test_support::responses;
++
++    let server = responses::start_mock_server().await;
++    let requests = responses::mount_sse_once(
++        &server,
++        responses::sse(vec![
++            responses::ev_response_created("native-mailbox"),
++            responses::ev_completed("native-mailbox"),
++        ]),
++    )
++    .await;
++    let mut provider = codex_model_provider_info::built_in_model_providers(None)["openai"].clone();
++    provider.base_url = Some(format!("{}/v1", server.uri()));
++    provider.supports_websockets = false;
++    let (session, _turn_context, events) = make_session_and_context_with_auth_and_config_and_rx(
++        codex_login::CodexAuth::from_api_key("offline-native-mailbox"),
++        Vec::new(),
++        move |config| {
++            config.model = Some("gpt-5.2".into());
++            config.model_provider = provider;
++            config.features.enable(Feature::MultiAgentV2).unwrap();
++            config.features.disable(Feature::TokenBudget).unwrap();
++        },
++    )
++    .await;
++    let message = |text: &str, mode| {
++        AgentMessage::Encrypted(text.into()).into_communication(
++            AgentPath::root(),
++            AgentPath::root(),
++            mode,
++        )
++    };
++    session
++        .input_queue
++        .enqueue_mailbox_communication(
++            message("queued-before-trigger", MessageDeliveryMode::QueueOnly).into(),
++            Default::default(),
++        )
++        .await;
++    let mut init = ExtensionDataInit::default();
++    init.insert(NativeAgentTransportInput);
++    let submission = handle(
++        &session,
++        WithTurnExtensionData::new(
++            TurnInputRequest::new(SubmittedTurnInput::InterAgentCommunication(message(
++                "current-native-trigger",
++                MessageDeliveryMode::TriggerTurn,
++            ))),
++            init,
++        ),
++        TurnInputMode::StartOrSteer,
++        "native-mailbox-turn".into(),
++    )
++    .await
++    .expect("native trigger accepted");
++    assert!(matches!(submission, TurnInputSubmission::Started { .. }));
++    tokio::time::timeout(std::time::Duration::from_secs(10), async {
++        loop {
++            let event = events.recv().await.expect("turn events open");
++            if matches!(event.msg, EventMsg::TurnComplete(_)) {
++                break;
++            }
++        }
++    })
++    .await
++    .expect("loopback native turn completed");
++    let input = serde_json::to_string(&requests.single_request().input()).unwrap();
++    let queued = input
++        .find("queued-before-trigger")
++        .expect("queued mail in first request");
++    let trigger = input
++        .find("current-native-trigger")
++        .expect("trigger in first request");
++    assert!(
++        queued < trigger,
++        "accepted native mailbox order must be preserved"
++    );
++    assert!(!session.input_queue.has_pending_mailbox_items().await);
++}
++
+ #[tokio::test]
+ #[expect(
+     clippy::await_holding_invalid_type,
+diff --git a/codex-rs/core/src/thread_manager.rs b/codex-rs/core/src/thread_manager.rs
+index b7d841c..b6d6596 100644
+--- a/codex-rs/core/src/thread_manager.rs
++++ b/codex-rs/core/src/thread_manager.rs
+@@ -2658,6 +2658,9 @@ impl ThreadManagerState {
+             }
+             (_, control) => control,
+         };
++        if let AgentControlInit::Provided { control, .. } = &agent_control {
++            control.configure_startup(&mut thread_extension_init, &config);
++        }
+         let parent_thread_id = parent_thread_id
+             .or_else(|| initial_history.get_resumed_parent_thread_id())
+             .or(match &session_source {
+@@ -2713,6 +2716,8 @@ impl ThreadManagerState {
+                 .await,
+             ),
+         };
++        let transported_originator =
++            thread_extension_init.get::<crate::agent::host::wire::TransportedAgentOriginator>();
+         let (originator, attachment_source) = match prepared_child {
+             Some(child) => (child.originator, child.attachment_source),
+             None => (
+@@ -2729,6 +2734,14 @@ impl ThreadManagerState {
+                     .filter(|_| matches!(&initial_history, InitialHistory::Forked(_))),
+             ),
+         };
++        let multi_agent_version = if transported_originator.is_some() {
++            Some(MultiAgentVersion::V2)
++        } else {
++            multi_agent_version
++        };
++        let originator = transported_originator
++            .map(|value| value.0.clone())
++            .unwrap_or(originator);
+         let startup_context = ThreadStartupContext {
+             history_initialization,
+             instructions,
+diff --git a/codex-rs/exec/src/lib.rs b/codex-rs/exec/src/lib.rs
+index bb01fc3..8f9743c 100644
+--- a/codex-rs/exec/src/lib.rs
++++ b/codex-rs/exec/src/lib.rs
+@@ -2232,6 +2232,15 @@ async fn handle_server_request(
+ ) {
+     let method = server_request_method_name(&request);
+     let handle_result = match request {
++        ServerRequest::TheoremosAgentControlRequest { request_id, .. } => {
++            reject_server_request(
++                client,
++                request_id,
++                &method,
++                "TheoremOS AgentControl requires its trusted stdio host".into(),
++            )
++            .await
++        }
+         ServerRequest::McpServerElicitationRequest { request_id, params } => {
+             // Exec auto-cancels elicitation instead of surfacing it
+             // interactively. Preserve that behavior for attached subagent
+diff --git a/codex-rs/execpolicy/src/policy.rs b/codex-rs/execpolicy/src/policy.rs
+index 206094f..47be694 100644
+--- a/codex-rs/execpolicy/src/policy.rs
++++ b/codex-rs/execpolicy/src/policy.rs
+@@ -35,11 +35,66 @@ pub struct Policy {
+ }
+ 
+ /// A requirements-owned execution policy with order-independent equality.
+-#[derive(Debug, Clone)]
++#[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct RequirementsExecPolicy {
+     policy: Policy,
+ }
+ 
++/// Complete trusted transport snapshot. Unknown executable rule implementations fail export.
++#[derive(Serialize, Deserialize)]
++#[serde(rename_all = "camelCase")]
++struct PolicySnapshot {
++    prefix_rules: Vec<PrefixRule>,
++    network_rules: Vec<NetworkRule>,
++    host_executables: HashMap<String, Arc<[AbsolutePathBuf]>>,
++}
++
++impl Serialize for Policy {
++    fn serialize<S: serde::Serializer>(
++        &self,
++        serializer: S,
++    ) -> std::result::Result<S::Ok, S::Error> {
++        let prefix_rules = self
++            .rules_by_program
++            .iter_all()
++            .flat_map(|(_, rules)| rules)
++            .map(|rule| {
++                rule.as_any()
++                    .downcast_ref::<PrefixRule>()
++                    .cloned()
++                    .ok_or_else(|| {
++                        <S::Error as serde::ser::Error>::custom(
++                            "unsupported transported exec-policy rule",
++                        )
++                    })
++            })
++            .collect::<std::result::Result<Vec<_>, _>>()?;
++        PolicySnapshot {
++            prefix_rules,
++            network_rules: self.network_rules.clone(),
++            host_executables: self.host_executables_by_name.clone(),
++        }
++        .serialize(serializer)
++    }
++}
++
++impl<'de> Deserialize<'de> for Policy {
++    fn deserialize<D: serde::Deserializer<'de>>(
++        deserializer: D,
++    ) -> std::result::Result<Self, D::Error> {
++        let snapshot = PolicySnapshot::deserialize(deserializer)?;
++        let mut rules = MultiMap::new();
++        for rule in snapshot.prefix_rules {
++            rules.insert(rule.pattern.first.to_string(), Arc::new(rule) as RuleRef);
++        }
++        Ok(Self::from_parts(
++            rules,
++            snapshot.network_rules,
++            snapshot.host_executables,
++        ))
++    }
++}
++
+ impl RequirementsExecPolicy {
+     pub fn new(policy: Policy) -> Self {
+         Self { policy }
+@@ -593,3 +648,44 @@ impl Evaluation {
+         }
+     }
+ }
++
++#[cfg(test)]
++mod host_transport_tests {
++    use super::*;
++    #[test]
++    fn policy_snapshot_roundtrip_keeps_canonical_rules_and_host_executables() {
++        let mut rules = MultiMap::new();
++        rules.insert(
++            "Git".to_string(),
++            Arc::new(PrefixRule {
++                pattern: PrefixPattern {
++                    canonical_matching: true,
++                    first: Arc::from("Git"),
++                    rest: vec![PatternToken::Alts(vec!["status".into(), "diff".into()])].into(),
++                },
++                decision: Decision::Allow,
++                justification: Some("captured rule".into()),
++            }) as RuleRef,
++        );
++        let policy = Policy::from_parts(
++            rules,
++            vec![NetworkRule {
++                host: "example.com".into(),
++                protocol: NetworkRuleProtocol::Https,
++                decision: Decision::Forbidden,
++                justification: None,
++            }],
++            HashMap::from([(
++                "git".into(),
++                vec![AbsolutePathBuf::from_absolute_path("/usr/bin/git").unwrap()].into(),
++            )]),
++        );
++        let encoded = serde_json::to_value(&policy).unwrap();
++        let decoded: Policy = serde_json::from_value(encoded).unwrap();
++        assert_eq!(policy.rules().len(), decoded.rules().len());
++        assert_eq!(
++            serde_json::to_value(&policy).unwrap(),
++            serde_json::to_value(&decoded).unwrap()
++        );
++    }
++}
+diff --git a/codex-rs/execpolicy/src/rule.rs b/codex-rs/execpolicy/src/rule.rs
+index 92d94ba..36a1d60 100644
+--- a/codex-rs/execpolicy/src/rule.rs
++++ b/codex-rs/execpolicy/src/rule.rs
+@@ -19,7 +19,7 @@ pub(crate) fn canonical_key(token: &str) -> impl Iterator<Item = char> + '_ {
+ }
+ 
+ /// Matches a single command token, either a fixed string or one of several allowed alternatives.
+-#[derive(Clone, Debug, Eq, PartialEq)]
++#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+ pub enum PatternToken {
+     Single(String),
+     Alts(Vec<String>),
+@@ -36,7 +36,7 @@ impl PatternToken {
+ 
+ /// Prefix matcher for commands with support for alternative match tokens.
+ /// First token is fixed since we key by the first token in policy.
+-#[derive(Clone, Debug, Eq, PartialEq)]
++#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+ pub struct PrefixPattern {
+     pub canonical_matching: bool,
+     pub first: Arc<str>,
+@@ -120,14 +120,14 @@ impl RuleMatch {
+     }
+ }
+ 
+-#[derive(Clone, Debug, Eq, PartialEq)]
++#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+ pub struct PrefixRule {
+     pub pattern: PrefixPattern,
+     pub decision: Decision,
+     pub justification: Option<String>,
+ }
+ 
+-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+ pub enum NetworkRuleProtocol {
+     Http,
+     Https,
+@@ -158,7 +158,7 @@ impl NetworkRuleProtocol {
+     }
+ }
+ 
+-#[derive(Clone, Debug, Eq, PartialEq)]
++#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+ pub struct NetworkRule {
+     pub host: String,
+     pub protocol: NetworkRuleProtocol,
+diff --git a/codex-rs/protocol/src/capabilities.rs b/codex-rs/protocol/src/capabilities.rs
+index 651861e..2f48fe2 100644
+--- a/codex-rs/protocol/src/capabilities.rs
++++ b/codex-rs/protocol/src/capabilities.rs
+@@ -22,7 +22,7 @@ pub struct SelectedCapabilityRoot {
+ /// The index is each root's position in the original thread list. Executor skills assign
+ /// aliases (`e0`, `e1`, ...) in root order. Keeping the index lets us split roots across
+ /// environments and combine them again without changing those aliases.
+-#[derive(Clone, Debug, Default, PartialEq, Eq)]
++#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+ pub struct EnvironmentCapabilityRoots(Arc<[(usize, SelectedCapabilityRoot)]>);
+ 
+ impl EnvironmentCapabilityRoots {
+diff --git a/codex-rs/protocol/src/config_types.rs b/codex-rs/protocol/src/config_types.rs
+index 87ffe6d..9d1098e 100644
+--- a/codex-rs/protocol/src/config_types.rs
++++ b/codex-rs/protocol/src/config_types.rs
+@@ -236,7 +236,7 @@ pub type EnvironmentVariablePattern = WildMatchPattern<'*', '?'>;
+ /// 3. If `exclude` is not empty, filter the map using the provided patterns.
+ /// 4. Insert any entries from `r#set` into the map.
+ /// 5. If non-empty, filter the map using the `include_only` patterns.
+-#[derive(Debug, Clone, PartialEq)]
++#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+ pub struct ShellEnvironmentPolicy {
+     /// Starting point when building the environment.
+     pub inherit: ShellEnvironmentPolicyInherit,
+@@ -246,12 +246,14 @@ pub struct ShellEnvironmentPolicy {
+     pub ignore_default_excludes: bool,
+ 
+     /// Environment variable names to exclude from the environment.
++    #[serde(with = "environment_variable_patterns")]
+     pub exclude: Vec<EnvironmentVariablePattern>,
+ 
+     /// (key, value) pairs to insert in the environment.
+     pub r#set: HashMap<String, String>,
+ 
+     /// Environment variable names to retain in the environment.
++    #[serde(with = "environment_variable_patterns")]
+     pub include_only: Vec<EnvironmentVariablePattern>,
+ 
+     /// If true, the shell profile will be used to run the command.
+@@ -978,3 +980,26 @@ mod tests {
+         assert_eq!(expected, base.merge(&overlay));
+     }
+ }
++
++mod environment_variable_patterns {
++    use super::EnvironmentVariablePattern;
++    use serde::{Deserialize, Serialize};
++    pub fn serialize<S: serde::Serializer>(
++        patterns: &[EnvironmentVariablePattern],
++        serializer: S,
++    ) -> Result<S::Ok, S::Error> {
++        patterns
++            .iter()
++            .map(EnvironmentVariablePattern::pattern)
++            .collect::<Vec<_>>()
++            .serialize(serializer)
++    }
++    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
++        deserializer: D,
++    ) -> Result<Vec<EnvironmentVariablePattern>, D::Error> {
++        Ok(Vec::<String>::deserialize(deserializer)?
++            .iter()
++            .map(|pattern| EnvironmentVariablePattern::new(pattern))
++            .collect())
++    }
++}
+diff --git a/codex-rs/protocol/src/environment.rs b/codex-rs/protocol/src/environment.rs
+index c9f1a96..27a2b3b 100644
+--- a/codex-rs/protocol/src/environment.rs
++++ b/codex-rs/protocol/src/environment.rs
+@@ -14,13 +14,14 @@ use codex_execpolicy::RequirementsExecPolicy;
+ use codex_network_proxy::EnvironmentNetworkPolicy;
+ use codex_utils_absolute_path::AbsolutePathBuf;
+ use codex_utils_path_uri::PathUri;
++use serde::{Deserialize, Serialize};
+ 
+ /// An environment requested by a caller, before attaching the receiving thread's roots.
+ ///
+ /// Callers choose the environment and paths, but startup may still need to load roots from
+ /// saved history or inherited attachments. Keeping this input separate lets the receiving
+ /// thread construct a complete selection instead of filling in missing roots later.
+-#[derive(Debug, Clone, PartialEq)]
++#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+ pub struct TurnEnvironmentRequest {
+     pub environment_id: String,
+     pub cwd: PathUri,
+@@ -32,7 +33,7 @@ pub struct TurnEnvironmentRequest {
+ ///
+ /// Runtime snapshots carry this value so capability discovery uses the roots captured
+ /// with the environment. Construct it from a request and the receiving thread's roots.
+-#[derive(Debug, Clone, PartialEq)]
++#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+ pub struct TurnEnvironmentSelection {
+     pub environment_id: String,
+     pub cwd: PathUri,
+@@ -82,7 +83,7 @@ impl TurnEnvironmentSelection {
+ }
+ 
+ /// The environments captured by a thread and its fallback working directory.
+-#[derive(Debug, Clone, PartialEq)]
++#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+ pub struct TurnEnvironmentSelections {
+     pub legacy_fallback_cwd: AbsolutePathBuf,
+     pub environments: Vec<TurnEnvironmentSelection>,
+@@ -147,7 +148,7 @@ impl TurnEnvironmentRequests {
+ 
+ /// Configuration supplied for a thread's selected environment.
+ #[allow(clippy::large_enum_variant)]
+-#[derive(Clone, Debug, PartialEq)]
++#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+ pub enum EnvironmentConfigState {
+     /// Preserve the existing thread-derived environment configuration.
+     FromThread,
+@@ -188,7 +189,7 @@ pub fn has_full_access<'a>(
+ }
+ 
+ /// Resolved configuration for a thread/environment attachment.
+-#[derive(Clone, PartialEq)]
++#[derive(Clone, PartialEq, Serialize, Deserialize)]
+ pub struct EnvironmentConfig {
+     /// Hooks from this environment's effective managed requirements.
+     pub environment_hooks: crate::hooks::HookEventsToml,
+diff --git a/codex-rs/protocol/src/mcp_policy.rs b/codex-rs/protocol/src/mcp_policy.rs
+index cb371c0..6a02c3c 100644
+--- a/codex-rs/protocol/src/mcp_policy.rs
++++ b/codex-rs/protocol/src/mcp_policy.rs
+@@ -1,14 +1,15 @@
+ use serde::Deserialize;
++use serde::Serialize;
+ use std::collections::BTreeMap;
+ 
+ /// Additional managed MCP restrictions supplied by an environment owner.
+-#[derive(Debug, Clone, Default, PartialEq, Eq)]
++#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+ pub struct EnvironmentMcpPolicy {
+     pub servers: Option<BTreeMap<String, McpServerRequirement>>,
+     pub plugins: Option<BTreeMap<String, PluginMcpRequirements>>,
+ }
+ 
+-#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
++#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+ #[serde(untagged)]
+ pub enum McpServerIdentity {
+     Command { command: String },
+@@ -16,7 +17,7 @@ pub enum McpServerIdentity {
+ }
+ 
+ /// String matching operations available to managed MCP server matchers.
+-#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
++#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+ #[serde(tag = "match", rename_all = "snake_case", deny_unknown_fields)]
+ pub enum McpServerValueMatcher {
+     Exact { value: String },
+@@ -24,7 +25,7 @@ pub enum McpServerValueMatcher {
+     Regex { expression: String },
+ }
+ 
+-#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
++#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+ #[serde(deny_unknown_fields)]
+ pub struct McpServerCommandMatcher {
+     pub executable: String,
+@@ -55,6 +56,20 @@ pub enum McpServerRequirement {
+     Url(McpServerValueMatcher),
+ }
+ 
++impl Serialize for McpServerRequirement {
++    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
++        let identity = match self {
++            Self::Identity { identity } => serde_json::to_value(identity),
++            Self::Command(command) => {
++                serde_json::to_value(command).map(|command| serde_json::json!({"command":command}))
++            }
++            Self::Url(url) => serde_json::to_value(url).map(|url| serde_json::json!({"url":url})),
++        }
++        .map_err(serde::ser::Error::custom)?;
++        serde_json::json!({"identity":identity}).serialize(serializer)
++    }
++}
++
+ #[derive(Deserialize)]
+ struct RawMcpServerRequirement {
+     identity: RawMcpServerIdentity,
+@@ -84,7 +99,7 @@ impl<'de> Deserialize<'de> for McpServerRequirement {
+ }
+ 
+ /// Managed MCP server requirements for one plugin.
+-#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
++#[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, Eq)]
+ pub struct PluginMcpRequirements {
+     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
+ }
+diff --git a/codex-rs/protocol/src/permission_profile_snapshot.rs b/codex-rs/protocol/src/permission_profile_snapshot.rs
+index 34fe6fd..5f625ca 100644
+--- a/codex-rs/protocol/src/permission_profile_snapshot.rs
++++ b/codex-rs/protocol/src/permission_profile_snapshot.rs
+@@ -2,6 +2,7 @@
+ 
+ use codex_utils_absolute_path::AbsolutePathBuf;
+ use codex_utils_path_uri::PathUri;
++use serde::{Deserialize, Serialize};
+ 
+ use crate::models::ActivePermissionProfile;
+ use crate::models::PermissionProfile;
+@@ -11,7 +12,8 @@ use crate::models::PermissionProfile;
+ /// Local and remote roots share the same URI representation. Snapshot equality
+ /// compares the stored URI spelling without folding Windows case, so a spelling
+ /// change still propagates through settings.
+-#[derive(Debug, Clone, Eq)]
++#[derive(Debug, Clone, Eq, Serialize, Deserialize)]
++#[serde(transparent)]
+ pub struct ProfileWorkspaceRoot(PathUri);
+ 
+ impl PartialEq for ProfileWorkspaceRoot {
+@@ -45,7 +47,8 @@ impl From<PathUri> for ProfileWorkspaceRoot {
+ /// profile-defined workspace roots together for atomic installation. Callers
+ /// handling user-selected profile ids must resolve those ids before
+ /// constructing a snapshot.
+-#[derive(Debug, Clone, PartialEq, Eq)]
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++#[serde(rename_all = "camelCase")]
+ pub struct PermissionProfileSnapshot {
+     permission_profile: PermissionProfile,
+     active_permission_profile: Option<ActivePermissionProfile>,
+diff --git a/codex-rs/tui/src/app/app_server_event_targets.rs b/codex-rs/tui/src/app/app_server_event_targets.rs
+index cc5d3d8..3e1d155 100644
+--- a/codex-rs/tui/src/app/app_server_event_targets.rs
++++ b/codex-rs/tui/src/app/app_server_event_targets.rs
+@@ -27,7 +27,8 @@ pub(super) fn server_request_thread_id(request: &ServerRequest) -> Option<Thread
+         ServerRequest::CurrentTimeRead { params, .. } => {
+             ThreadId::from_string(&params.thread_id).ok()
+         }
+-        ServerRequest::ChatgptAuthTokensRefresh { .. }
++        ServerRequest::TheoremosAgentControlRequest { .. }
++        | ServerRequest::ChatgptAuthTokensRefresh { .. }
+         | ServerRequest::AttestationGenerate { .. }
+         | ServerRequest::ApplyPatchApproval { .. }
+         | ServerRequest::ExecCommandApproval { .. } => None,
+diff --git a/codex-rs/tui/src/app/app_server_events.rs b/codex-rs/tui/src/app/app_server_events.rs
+index 8f179f3..485a90f 100644
+--- a/codex-rs/tui/src/app/app_server_events.rs
++++ b/codex-rs/tui/src/app/app_server_events.rs
+@@ -740,7 +740,8 @@ impl App {
+         }
+         let unsupported_request = matches!(
+             &request,
+-            ServerRequest::DynamicToolCall { .. }
++            ServerRequest::TheoremosAgentControlRequest { .. }
++                | ServerRequest::DynamicToolCall { .. }
+                 | ServerRequest::AttestationGenerate { .. }
+                 | ServerRequest::CurrentTimeRead { .. }
+                 | ServerRequest::ApplyPatchApproval { .. }
+diff --git a/codex-rs/tui/src/app/app_server_requests.rs b/codex-rs/tui/src/app/app_server_requests.rs
+index be5c776..ccfc6a9 100644
+--- a/codex-rs/tui/src/app/app_server_requests.rs
++++ b/codex-rs/tui/src/app/app_server_requests.rs
+@@ -195,6 +195,12 @@ impl PendingAppServerRequests {
+                 );
+                 None
+             }
++            ServerRequest::TheoremosAgentControlRequest { request_id, .. } => {
++                Some(UnsupportedAppServerRequest {
++                    request_id: request_id.clone(),
++                    message: "TheoremOS AgentControl requires its trusted stdio host".into(),
++                })
++            }
+             ServerRequest::DynamicToolCall { .. } => None,
+             ServerRequest::ChatgptAuthTokensRefresh { .. } => None,
+             ServerRequest::AttestationGenerate { request_id, .. } => {
+@@ -528,7 +534,8 @@ impl PendingAppServerRequests {
+                 })
+             }
+             ServerRequest::ChatgptAuthTokensRefresh { .. } => None,
+-            ServerRequest::DynamicToolCall { .. }
++            ServerRequest::TheoremosAgentControlRequest { .. }
++            | ServerRequest::DynamicToolCall { .. }
+             | ServerRequest::AttestationGenerate { .. }
+             | ServerRequest::CurrentTimeRead { .. }
+             | ServerRequest::ApplyPatchApproval { .. }
+diff --git a/codex-rs/tui/src/app/side.rs b/codex-rs/tui/src/app/side.rs
+index a97fdea..80366d8 100644
+--- a/codex-rs/tui/src/app/side.rs
++++ b/codex-rs/tui/src/app/side.rs
+@@ -65,7 +65,8 @@ impl SideParentStatus {
+             | ServerRequest::PermissionsRequestApproval { .. }
+             | ServerRequest::ApplyPatchApproval { .. }
+             | ServerRequest::ExecCommandApproval { .. } => Some(SideParentStatus::NeedsApproval),
+-            ServerRequest::DynamicToolCall { .. }
++            ServerRequest::TheoremosAgentControlRequest { .. }
++            | ServerRequest::DynamicToolCall { .. }
+             | ServerRequest::AttestationGenerate { .. }
+             | ServerRequest::CurrentTimeRead { .. }
+             | ServerRequest::ChatgptAuthTokensRefresh { .. } => None,
+diff --git a/codex-rs/tui/src/chatwidget/protocol_requests.rs b/codex-rs/tui/src/chatwidget/protocol_requests.rs
+index e76b50b..49a24b8 100644
+--- a/codex-rs/tui/src/chatwidget/protocol_requests.rs
++++ b/codex-rs/tui/src/chatwidget/protocol_requests.rs
+@@ -48,7 +48,8 @@ impl ChatWidget {
+             ServerRequest::ToolRequestUserInput { params, .. } => {
+                 self.on_request_user_input(params);
+             }
+-            ServerRequest::DynamicToolCall { .. }
++            ServerRequest::TheoremosAgentControlRequest { .. }
++            | ServerRequest::DynamicToolCall { .. }
+             | ServerRequest::AttestationGenerate { .. }
+             | ServerRequest::CurrentTimeRead { .. }
+             | ServerRequest::ChatgptAuthTokensRefresh { .. }

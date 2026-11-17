@@ -131,8 +131,7 @@ describe('base instructions for isolated formalization sessions', () => {
     expect(start.config).not.toHaveProperty('model_catalog_json');
     expect(calls().find(call => call.method === 'turn/start').params).toMatchObject({
       model: 'gpt-6.1-sol', effort: 'max', approvalPolicy: 'never', cwd: '/workspace',
-      sandboxPolicy: { type: 'dangerFullAccess' }, input: [{ type: 'text', text: message, text_elements: [] },
-        { type: 'text', text: expect.stringContaining('Shell call contract for this turn'), text_elements: [] }],
+      sandboxPolicy: { type: 'dangerFullAccess' }, input: [{ type: 'text', text: message, text_elements: [] }],
     });
     expect(calls().find(call => call.method === 'turn/start').params).not.toHaveProperty('outputSchema');
     expect(calls().find(call => call.id === 'fixture-interactive-input').error).toMatchObject({ code: -32601 });
@@ -159,8 +158,7 @@ describe('base instructions for isolated formalization sessions', () => {
     const turn = calls().find(call => call.method === 'turn/start').params;
     expect(turn).toMatchObject({ outputSchema: formalizationAuditOutputSchema, model: 'gpt-6.1-sol', effort: 'max',
       approvalPolicy: 'never', cwd: '/workspace', sandboxPolicy: { type: 'dangerFullAccess' },
-      input: [{ type: 'text', text: message, text_elements: [] },
-        { type: 'text', text: expect.stringContaining('Shell call contract for this turn'), text_elements: [] }],
+      input: [{ type: 'text', text: message, text_elements: [] }],
     });
     const start = calls().find(call => call.method === (resume ? 'thread/resume' : 'thread/start')).params;
     expect(start.developerInstructions.slice(0, instructions.length + 2)).toBe(instructions + '\n\n');
@@ -194,18 +192,24 @@ describe('base instructions for isolated formalization sessions', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('refreshes the shell contract on each turn even when this Codex does not expose a rollout path', async () => {
+  it('sets the shell contract once on the saved thread and sends only business messages in later turns', async () => {
     session = await createCodexMathSession(options(false, true));
     expect(await session.run(message, 'first-contract-turn', root, () => {})).toBe('completed');
     expect(await session.run('Continue the proof.', 'second-contract-turn', root, () => {})).toBe('completed');
-    const turns = calls().filter(call => call.method === 'turn/start').map(call => call.params);
+    const recorded = calls();
+    const threads = recorded.filter(call => call.method === 'thread/start' || call.method === 'thread/resume');
+    expect(threads).toHaveLength(1);
+    expect(threads[0].method).toBe('thread/resume');
+    expect(threads[0].params.threadId).toBe('retained-instruction-thread');
+    expectShellCallContract(threads[0].params.developerInstructions.slice(instructions.length));
+    expect(recorded.filter(call => call.params?.developerInstructions !== undefined)).toHaveLength(1);
+    const turns = recorded.filter(call => call.method === 'turn/start').map(call => call.params);
     expect(turns).toHaveLength(2);
-    for (const turn of turns) {
-      expect(turn.input[1].text).toContain('Shell call contract for this turn');
-      expect(turn.input[1].text).toContain('"login": false');
-      expect(turn.input[1].text).toContain('omit justification and sandbox_permissions');
-      expect(turn.input[1].text).toContain('Other parallel calls may already have executed');
-    }
-    expect(calls().filter(call => call.method === 'turn/steer')).toEqual([]);
+    expect(turns.map(turn => turn.threadId)).toEqual(['retained-instruction-thread', 'retained-instruction-thread']);
+    expect(turns.map(turn => turn.input)).toEqual([
+      [{ type: 'text', text: message, text_elements: [] }],
+      [{ type: 'text', text: 'Continue the proof.', text_elements: [] }],
+    ]);
+    expect(recorded.filter(call => call.method === 'turn/steer')).toEqual([]);
   });
 });

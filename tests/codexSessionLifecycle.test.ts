@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createCodexMathSession, type MathAgentOptions, type MathAgentSession } from '../src/runtime/codexSession';
+import { nativeFileWatchFixture } from './helpers/nativeFileWatchFixture';
 
 const fixture = String.raw`
 const fs = require('node:fs'), path = require('node:path'), readline = require('node:readline');
@@ -78,7 +79,7 @@ describe('Codex stdio cancellation and terminal RPC timeouts', () => {
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-lifecycle-'));
     const executable = path.join(root, 'fake-codex');
-    fs.writeFileSync(executable, '#!' + process.execPath + '\n' + fixture, { mode: 0o700 });
+    fs.writeFileSync(executable, '#!' + process.execPath + '\n' + nativeFileWatchFixture + fixture, { mode: 0o700 });
     options = { executable, profile: root, workspace: root, model: 'fixture-model', effort: 'high',
       instructions: 'Offline lifecycle fixture.', environment: { PATH: process.env.PATH }, onUsage: vi.fn() };
   });

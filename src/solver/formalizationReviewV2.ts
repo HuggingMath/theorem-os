@@ -1,4 +1,5 @@
 import { assertWorkflowSessionSupported, openWorkflowSession, workflowProfileFiles } from './workflowSession';
+import { completedWorkflowOutput, nativeWorkflowOutputInstructions, usesNativeWorkflowOutput } from './workflowOutput';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -131,8 +132,13 @@ export async function runStructuredFormalizationReview(bundleDirectory: string, 
     buildManifestRef: path.resolve(config.buildManifestRef) } : { ...config, replayFile: path.resolve(config.replayFile) };
   const semanticContext = config.contextProtocol !== undefined, structureContext = allowsOmittedLibraryContext(config.contextProtocol) ? 'bounded' as const :
     hasStructureContext(config.contextProtocol);
-  const reviewInstructions = formalizationReviewInstructions('review', semanticContext, structureContext, config.fidelityPolicy);
-  const backtranslationInstructions = formalizationReviewInstructions('backtranslate', semanticContext, structureContext);
+  const savedRequest = fs.existsSync(path.join(runDirectory, 'request.json'))
+    ? JSON.parse(frozenText(path.join(runDirectory, 'request.json'), 32_000_000)) : undefined;
+  const outputDelivery = savedRequest ? savedRequest.outputDelivery as 'native-schema' | 'file' | undefined : 'native-schema';
+  const nativeOutput = usesNativeWorkflowOutput(config, config.execution, outputDelivery);
+  const outputInstructions = (text: string) => nativeOutput ? nativeWorkflowOutputInstructions(text) : text;
+  const reviewInstructions = outputInstructions(formalizationReviewInstructions('review', semanticContext, structureContext, config.fidelityPolicy));
+  const backtranslationInstructions = outputInstructions(formalizationReviewInstructions('backtranslate', semanticContext, structureContext));
   const production = config.execution === 'model' && !options.openSession;
   const adapter = options.openSession ? 'injected-preset' : config.execution === 'model' ? config.agentHarness?.id ?? 'codex' : 'saved-preset';
   const inputs = [...prepared.inputs.values()].sort((a, b) => a.caseId.localeCompare(b.caseId));
@@ -174,6 +180,7 @@ export async function runStructuredFormalizationReview(bundleDirectory: string, 
   };
   const binding = executionBinding();
   const request = { schema: 'theorem-os.formalization-review-run.v2', protocol: STRUCTURED_REVIEW_PROTOCOL,
+    ...(outputDelivery ? { outputDelivery } : {}),
     bundleDirectory: prepared.directory, bundleDigest: prepared.bundleDigest, configuration: config, adapter,
     executionBinding: binding, environment, timeoutMs: 0,
     instructions: { primary: mathDigest(reviewInstructions), recheck: mathDigest(reviewInstructions),
@@ -295,7 +302,7 @@ export async function runStructuredFormalizationReview(bundleDirectory: string, 
       const recordFeedback = (cause: unknown, outputText: string | null, turnId: string,
         trigger: 'active-turn-validation' | 'completed-turn-validation') => {
         signal.throwIfAborted(); assertCurrent(); checkWorkspace(workspace);
-        const message = outputValidationFeedback(cause, role);
+        const message = outputInstructions(outputValidationFeedback(cause, role));
         const relative = 'output-feedback/' + id + '/' + crypto.randomUUID() + '.json';
         fs.mkdirSync(path.dirname(path.join(runDirectory, relative)), { recursive: true, mode: 0o700 });
         const contents = canonicalMathJson({ schema: 'theorem-os.formalization-output-feedback.v1',
@@ -316,9 +323,9 @@ export async function runStructuredFormalizationReview(bundleDirectory: string, 
           model: config.execution === 'model' ? config.model : 'offline-replay',
           effort: config.execution === 'model' ? config.effort : 'offline-replay', workspace, instructions, signal,
           environment: env, readIsolation: { environment: environment.environment },
-          completedOutput: { file: outputFile, validate,
+          ...(nativeOutput ? { outputSchema: schema as Record<string, unknown> } : { completedOutput: { file: outputFile, validate,
             ...(config.execution === 'model' ? { validationFeedback: (cause: unknown, output: { text: string; turnId: string }) =>
-              recordFeedback(cause, output.text, output.turnId, 'active-turn-validation') } : {}) },
+              recordFeedback(cause, output.text, output.turnId, 'active-turn-validation') } : {}) } }),
           onUsage: usage => { attempt.usage = usage; if (currentTurn) currentTurn.usage = usage; save(); },
           onUsageIncomplete: () => {
             attempt.usageIncomplete = true; if (currentTurn) currentTurn.usageIncomplete = true; save();
@@ -341,9 +348,10 @@ export async function runStructuredFormalizationReview(bundleDirectory: string, 
           'Read INPUT.json, ROLE.md and OUTPUT.schema.json. Submit the exact role output atomically.';
         while (true) {
           signal.throwIfAborted(); assertCurrent(); checkWorkspace(workspace);
-          currentTurn = { messageId: crypto.randomUUID(), messageSha256: mathDigest(message), usage: {}, usageIncomplete: false };
+          const turnMessage = outputInstructions(message);
+          currentTurn = { messageId: crypto.randomUUID(), messageSha256: mathDigest(turnMessage), usage: {}, usageIncomplete: false };
           attempt.turns!.push(currentTurn); delete attempt.sessionStatus; save();
-          attempt.sessionStatus = await session.run(message, currentTurn.messageId, workspace, turnId => {
+          attempt.sessionStatus = await session.run(turnMessage, currentTurn.messageId, workspace, turnId => {
             attempt.turnId = turnId; currentTurn!.turnId = turnId; save();
           });
           currentTurn.sessionStatus = attempt.sessionStatus;
@@ -357,10 +365,12 @@ export async function runStructuredFormalizationReview(bundleDirectory: string, 
           // Replay data has no model to repair it; failed/interrupted turns remain failures.
           if (config.execution === 'model' && attempt.sessionStatus === 'completed') {
             let outputText: string;
-            try { outputText = readMathText(outputFile, 2_000_000); }
+            try { outputText = nativeOutput ? completedWorkflowOutput(session, turnId, 2_000_000) : readMathText(outputFile, 2_000_000); }
             catch (cause) {
-              if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause;
-              message = recordFeedback(new Error('OUTPUT.json is missing. Submit the role output file.'), null, turnId,
+              if ((cause as NodeJS.ErrnoException).code !== 'ENOENT' &&
+                  !(nativeOutput && errorText(cause) === 'math_workflow_final_response_missing')) throw cause;
+              message = recordFeedback(new Error(nativeOutput ? 'The completed final JSON response is missing. Return the complete role output.'
+                : 'OUTPUT.json is missing. Submit the role output file.'), null, turnId,
                 'completed-turn-validation');
               continue;
             }
@@ -373,8 +383,10 @@ export async function runStructuredFormalizationReview(bundleDirectory: string, 
           break;
         }
         await close(); assertCurrent(); checkWorkspace(workspace); assertMathCanonicalPath(outputFile);
-        const outputText = readMathText(outputFile, 2_000_000), output = validate(JSON.parse(outputText));
+        const outputText = nativeOutput ? completedWorkflowOutput(session, attempt.turnId!, 2_000_000) : readMathText(outputFile, 2_000_000);
+        const output = validate(JSON.parse(outputText));
         checkAttemptEvidence(attempt);
+        if (nativeOutput) writeMathFrozen(outputFile, outputText);
         fs.chmodSync(outputFile, 0o400); attempt.status = 'completed';
         writeMathFrozen(receiptFile, canonicalMathJson(roleReceiptSchema.parse({
           schema: 'theorem-os.formalization-review-role-receipt.v2', requestDigest, caseId: input.caseId, role,

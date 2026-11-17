@@ -112,11 +112,13 @@ describe('Agent team child admission and Lead integration allowance', () => {
     expect(agentTeamChildAdmission(source)).toEqual({ allowed: false, reason });
   });
 
-  it('does not create finite global limits from reserves when the run allowance is unlimited', () => {
+  it('keeps saved local caps and reserves inactive when the run allowance is unlimited', () => {
     const source = input({ tokenBudget: observedBudget(5000, 0), maxTurns: Infinity,
-      leadReserve: { tokens: 1000, turns: 5 }, task: { id: 'helper', turns: 500 }, taskUsage: undefined });
-    expect(projectAgentTeamBudget(source)).toMatchObject({ remaining: { tokens: null, turns: null },
-      childRemaining: { tokens: null, turns: null }, task: { remaining: { tokens: null, turns: null } } });
+      leadReserve: { tokens: 1000, turns: 5 }, task: { id: 'helper', turns: 500, budget: { tokens: 1, turns: 1 } },
+      taskUsage: { helper: { totalTokens: 5000 } }, taskUsageUnavailable: true });
+    expect(projectAgentTeamBudget(source)).toMatchObject({ maxTurns: null, remaining: { tokens: null, turns: null },
+      leadReserve: { tokens: 0, turns: 0 }, childRemaining: { tokens: null, turns: null },
+      task: { budget: {}, remaining: { tokens: null, turns: null } } });
     expect(agentTeamChildAdmission(source)).toEqual({ allowed: true });
   });
 

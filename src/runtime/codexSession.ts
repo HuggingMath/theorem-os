@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { mathProofEnvironmentWorkerEnvironment } from '../math/mathProofEnvironment';
-import { assertMathCanonicalPath } from '../math/paths';
+import { assertMathCanonicalPath, isMathPathWithin } from '../math/paths';
 import { startChatCompletionsBridge } from './chatCompletionsBridge';
 import { DEEPSEEK_PROVIDER } from './deepseek';
 import { WESTLAKE_PROVIDER, validateWestlakeModel } from './westlake';
@@ -16,13 +16,14 @@ import { prepareFormalizationSandbox } from './formalizationSandbox';
 import { startFormalizationRelay } from './formalizationRelay';
 import { mathDigest, readMathText } from '../math/mathRuntimeIo';
 import { scheduleMathTimeout } from '../math/mathTimers';
-import { CodexShellRejectionReader } from './codexShellRejection';
 import { assertMathAgentSkillsCurrent, assertMathAgentSkillsDiscovered } from './codexSkills';
 import { INVESTIGATION_TOOL, INVESTIGATOR_PERMISSION_PROFILE, NativeInvestigations,
   nativeInvestigationTool, validateNativeDelegation } from './nativeDelegation';
 import { planMathAgentSession } from './agentSessionPlan';
 import { MathAgentToolDispatcher } from './agentTeamTools';
 import { confirmHarnessProcessStopped, prepareHarnessProcess, readHarnessProcessIdentity, type HarnessProcessIdentity } from './harnessProcess';
+import { runHarnessLeanHealthCheck } from './leanHealthCheck';
+import { NativeAgentControl, NATIVE_AGENT_CONTROL_REQUEST, nativeAgentControlModelCatalog } from './nativeAgentControl';
 import { CODEX_FAILURE_CODES, HTTP_FAILURE_CODES, safeFailureReason, safeHttpStatusCode,
   type MathAgentFailureDiagnostic } from './failureDiagnostic';
 export type { MathAgentFailureDiagnostic, MathAgentFailureReason } from './failureDiagnostic';
@@ -46,11 +47,6 @@ const RELAY_CAPABILITY_ENV = 'THEOREM_OS_MODEL_RELAY_CAPABILITY';
 // Responses may remain silent between completed reasoning and their next tool/output event.
 // Restore Codex's default idle tolerance per session, preserving frozen provider profiles.
 const RESPONSES_STREAM_IDLE_TIMEOUT_MS = 300_000;
-const shellTurnContract = 'Shell call contract for this turn: set "login": false on exec_command and omit justification and sandbox_permissions. '
-  + 'Only an explicit argument rejection establishes that a call did not execute. Other parallel calls may already have executed; '
-  + 'inspect their results before retrying. Do not replay a command after an ordinary exit error or an unclear execution result.';
-const shellRejectionFeedback = 'The native executor explicitly rejected exec_command arguments before execution. '
-  + shellTurnContract + ' Correct the rejected call arguments and continue the assigned task. The host has not replayed any command.';
 
 export const MATH_WORKER_PERMISSION_PROFILE = 'math-worker';
 
@@ -201,7 +197,8 @@ class CodexRpc {
           this.pending.delete(message.id);
           clearTimeout(call.timer);
           const code = typeof error?.code === 'number' && Number.isSafeInteger(error.code) ? error.code : 'invalid_code';
-          if (error) call.reject(new Error(`math_codex_rpc_failed:${code}:${call.method}`));
+          if (error) call.reject(new Error(`math_codex_rpc_failed:${code}:${call.method}`,
+            call.method.startsWith('theoremos/agentControl/') ? { cause: error } : undefined));
           else call.resolve(result!);
         }
       } catch { fail('invalid_frame'); }
@@ -291,6 +288,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   if (skills.length && options.readIsolation) throw new Error('math_codex_skill_read_isolation_unsupported');
   if (options.tools && options.readIsolation) throw new Error('math_codex_tools_read_isolation_unsupported');
   if (options.isolateProcess && options.readIsolation) throw new Error('math_codex_process_isolation_role_conflict');
+  if (options.nativeAgentControl && (options.readIsolation || options.delegation))
+    throw new Error('math_native_agent_control_role_conflict');
   const tools = options.tools ? new MathAgentToolDispatcher(options.tools,
     (calledThread, calledTurn) => calledThread === threadId && activeTurn === calledTurn &&
       !turnSettled && !turnStopping && !closing, options.delegation ? [INVESTIGATION_TOOL] : []) : undefined;
@@ -306,29 +305,30 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   if (options.delegation && (!skills.length || !useResponsesRelay))
     throw new Error('math_native_delegation_requires_skill_and_metered_relay');
   if (options.delegation) validateNativeDelegation(options.delegation);
-  const executionPlan = planMathAgentSession('codex', options);
+  const executionPlan = planMathAgentSession('codex', options.nativeAgentControl?.initialInput
+    ? { ...options, skills: skills.map(skill => ({ ...skill, loading: 'file' as const })) } : options);
   const activeRequests = new Set<object>();
-  let requestTurn = 0, turnSettled = true, turnStopping = false;
+  let requestTurn = 0, turnSettled = true, turnStopping = false, turnCheckpointReached = false;
   type NotificationFence = { promise: Promise<void>; release(): void; steered: boolean };
   let notificationFence: NotificationFence | undefined;
   let requestStateChanged = () => {};
   let cancelNotifications = () => {};
-  let drainSubmittedRequests: (() => void) | undefined;
+  let drainTurnRequests: (() => void) | undefined;
   const drainRequests = () => new Promise<void>(resolve => {
-    drainSubmittedRequests = () => {
+    drainTurnRequests = () => {
       if (activeRequests.size) return;
-      drainSubmittedRequests = undefined; resolve();
+      drainTurnRequests = undefined; resolve();
     };
-    drainSubmittedRequests();
+    drainTurnRequests();
   });
   let checkCompletedOutput: (() => void) | undefined;
-  let checkShellRejections: ((allowFeedback?: boolean) => void) | undefined;
-  let shellRejectionReader: CodexShellRejectionReader | undefined;
-  let pendingShellRejections = 0;
+  let completedOutputWatch: { id: string; file: string; changed(): void } | undefined;
+  let checkTurnCheckpoint: (() => boolean) | undefined;
   const requestGate: ModelRequestGate = identity => {
-    // A tool can submit and immediately request more model work between output polls.
+    // A tool can submit and immediately request more model work before fs/changed arrives.
     // Inspect that file synchronously before admitting another paid request.
     if (!turnSettled && !turnStopping) checkCompletedOutput?.();
+    checkTurnCheckpoint?.();
     if (turnSettled || turnStopping) return { allowed: false, reason: 'math_model_request_stopped' };
     const admission = options.requestGate?.(identity) ?? { allowed: true as const, settle: () => {} };
     if (!admission.allowed) return admission;
@@ -340,8 +340,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   };
   requestGate.beforeRequest = async signal => {
     const turn = requestTurn;
+    if (checkTurnCheckpoint?.()) throw new Error('math_codex_turn_checkpoint');
     let deferredFence: NotificationFence | undefined;
-    checkShellRejections?.();
     await options.requestGate?.beforeRequest?.(signal);
     if ([...notices].some(notice => notice.waitForRequest)) {
       // A settled response may still be executing its submission tool. The next
@@ -440,7 +440,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       .filter(([name]) => !name.startsWith('WESTLAKEHPC_API_KEY')));
     environment[WESTLAKE_PROVIDER.apiKeyEnvironment] = bridge.apiKey;
   }
-  const providerSettings = isolated ? {
+  const providerSettings: Json = isolated ? {
     model_provider: isolated.providerId,
     [`model_providers.${isolated.providerId}.base_url`]: isolated.providerBaseUrl,
     [`model_providers.${isolated.providerId}.stream_idle_timeout_ms`]: RESPONSES_STREAM_IDLE_TIMEOUT_MS,
@@ -452,18 +452,30 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       ? { [`model_providers.${providerId}.base_url`]: responsesRelay?.baseUrl ?? bridge?.baseUrl ?? provider.base_url } : {}),
     ...(typeof profileConfig.model_catalog_json === 'string' ? { model_catalog_json: profileConfig.model_catalog_json } : {}),
   } : {};
+  if (options.nativeAgentControl && typeof providerSettings.model_catalog_json === 'string') {
+    providerSettings.model_catalog_json = nativeAgentControlModelCatalog(
+      path.resolve(options.profile, providerSettings.model_catalog_json), options.model,
+      path.join(nativeProfile, 'agent-control'));
+  }
   let rpc: CodexRpc;
   environment = { ...(environment ?? process.env) };
   delete environment.THEOREMOS_LIBRARY_HOST_CONFIG;
+  delete environment.THEOREMOS_HOST_AGENT_CONTROL;
+  if (options.nativeAgentControl) environment.THEOREMOS_HOST_AGENT_CONTROL = '1';
   let processLaunch: ReturnType<typeof prepareHarnessProcess> | undefined;
   try {
     options.signal?.throwIfAborted();
+    const leanEnvironmentHealth = await runHarnessLeanHealthCheck({ ...options, profile: nativeProfile, environment });
+    if (leanEnvironmentHealth) options.onActivity?.({ event: 'lean_environment_ready', health: leanEnvironmentHealth });
     processLaunch = options.isolateProcess ? prepareHarnessProcess({ ...options, profile: nativeProfile, environment },
       options.executable, ['app-server', '--listen', 'stdio://'], 3) : undefined;
+    if (leanEnvironmentHealth && processLaunch) processLaunch.isolationReceipt.leanEnvironmentHealth = leanEnvironmentHealth;
     rpc = new CodexRpc(options.executable, nativeProfile,
       processLaunch?.env ?? environment, processLaunch ? { ...processLaunch, infoDescriptor: 3 } : isolated);
   }
   catch (error) { await responsesRelay?.close(); await bridge?.close(); await isolated?.close(); throw error; }
+  const nativeControl = options.nativeAgentControl ? new NativeAgentControl(options.nativeAgentControl,
+    (method, params) => rpc.request(method, params)) : undefined;
   let closing: Promise<void> | undefined;
   let investigations: NativeInvestigations | undefined;
   let boundTurn: Promise<string | undefined> = Promise.resolve(undefined);
@@ -472,7 +484,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     options.signal?.removeEventListener('abort', aborted);
     compacting?.reject(new Error('math_codex_compaction_closed'));
     turnStopping = true; cancelNotifications(); publicItems.clear();
-    bindTurn?.(); investigations?.stop(); tools?.stop();
+    bindTurn?.(); investigations?.stop(); tools?.stop(); nativeControl?.stop();
     try { await rpc.close(); } finally {
       try { await responsesRelay?.close(); } finally { try { await bridge?.close(); } finally { await isolated?.close(); } }
       if (investigations) {
@@ -481,6 +493,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         investigations.confirmStopped(receipt.status === 'stopped');
       }
       await tools?.settled();
+      await nativeControl?.settled();
     }
   })();
   const aborted = () => { void closeSession().catch(() => {}); };
@@ -512,7 +525,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     notices.clear(); releaseFence();
   };
   const flushNotifications = (atRequest = false): NotificationFence | undefined => {
-    if (!notices.size || activeRequests.size || investigations?.busy || tools?.busy || notificationFence || !activeTurn || turnSettled || turnStopping || closing) return;
+    if (!notices.size || activeRequests.size || investigations?.busy || tools?.busy || notificationFence || !activeTurn || turnSettled || turnStopping || turnCheckpointReached || closing) return;
     if (![...notices].some(notice => !notice.waitForRequest || atRequest)) return;
     const turnId = activeTurn, turn = requestTurn;
     let release!: () => void;
@@ -530,8 +543,13 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       const batch = [...notices].filter(notice => notice.turn === turn && notice.turnId === turnId &&
         (!notice.waitForRequest || atRequest));
       fence.steered = true;
-      void rpc.request('turn/steer', { threadId, expectedTurnId: turnId,
-        input: batch.map(notice => ({ type: 'text', text: notice.message, text_elements: [] })) })
+      const request = options.nativeAgentControl?.initialInput ? rpc.request('theoremos/agentControl/input', {
+        version: 1, threadId, expectedTurnId: turnId, author: options.nativeAgentControl.initialInput.author,
+        input: { kind: 'message', message: { kind: 'plaintext', text: batch.map(notice => notice.message).join('\n\n') },
+          mode: 'triggerTurn' }, startOptions: {},
+      }) : rpc.request('turn/steer', { threadId, expectedTurnId: turnId,
+        input: batch.map(notice => ({ type: 'text', text: notice.message, text_elements: [] })) });
+      void request
         .then(() => {
           for (const notice of batch) if (notices.delete(notice)) notice.resolve();
         }, error => {
@@ -543,8 +561,23 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     return fence;
   };
   const notify: NonNullable<MathAgentSession['notify']> = async (message, notifyOptions) => {
-    if (!activeTurn || turnSettled || turnStopping || closing) {
+    if (!activeTurn || turnSettled || turnStopping || turnCheckpointReached || closing) {
+      if (notifyOptions?.mode === 'advisory') throw new Error('math_codex_notification_turn_settled');
       if (notifyOptions?.waitForRequest === false) throw new Error('math_codex_notification_turn_settled');
+      return;
+    }
+    if (notifyOptions?.mode === 'advisory') {
+      if (options.nativeAgentControl?.initialInput) {
+        await rpc.request('theoremos/agentControl/input', { version: 1, threadId,
+          author: options.nativeAgentControl.initialInput.author, startOptions: {},
+          input: { kind: 'message', message: { kind: 'plaintext', text: message }, mode: 'queueOnly' } });
+        return;
+      }
+      // Codex queues these behind the current response and tools. Unlike steer,
+      // history injection neither cancels a request nor starts work if the turn
+      // finishes during delivery; the durable team inbox remains authoritative.
+      await rpc.request('thread/inject_items', { threadId, items: [{ type: 'message', role: 'user',
+        content: [{ type: 'input_text', text: message }] }] });
       return;
     }
     if (notifyOptions?.waitForRequest === false && (activeRequests.size || notificationFence))
@@ -555,7 +588,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       flushNotifications();
     });
   };
-  requestStateChanged = () => { drainSubmittedRequests?.(); flushNotifications(); };
+  requestStateChanged = () => { drainTurnRequests?.(); flushNotifications(); };
   let lastStreamActivityAt = 0;
   const outputTails = new Map<string, string>();
   const outputKey = (turnId: unknown, itemId: string) => `${typeof turnId === 'string' ? turnId : ''}\u0000${itemId}`;
@@ -644,12 +677,33 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     cancelNotifications(); publicItems.clear();
     transportFailure = error; lastError = error.message; lastFailureDiagnostic = undefined;
     completion?.reject(error); compacting?.reject(error);
-    investigations?.stop(); tools?.stop(); bindTurn?.();
+    investigations?.stop(); tools?.stop(); nativeControl?.stop(); bindTurn?.();
     if (!closing) {
       void closeSession().catch(() => {});
     }
   };
+  rpc.onRequest = async (method, params) => {
+    if (method === NATIVE_AGENT_CONTROL_REQUEST && nativeControl) return nativeControl.call(params);
+    if (method !== 'item/tool/call' || !investigations && !tools) return;
+    const turnId = await boundTurn;
+    if (!turnId || params.turnId !== turnId) return { contentItems: [{ type: 'inputText',
+      text: 'math_agent_tool_turn_mismatch' }], success: false };
+    if (investigations && params.tool === INVESTIGATION_TOOL) return investigations.call(params);
+    if (tools) {
+      const result = await tools.call(params);
+      flushNotifications();
+      return result;
+    }
+  };
   rpc.onNotification = (method, params) => {
+    if (method === 'fs/changed') {
+      // File watches belong to this connection, not a thread or turn. Old watches
+      // and unrelated directory changes must never submit the active role.
+      if (completedOutputWatch && params.watchId === completedOutputWatch.id &&
+          Array.isArray(params.changedPaths) && params.changedPaths.includes(completedOutputWatch.file))
+        completedOutputWatch.changed();
+      return;
+    }
     investigations?.observe(method, params);
     if (threadId !== undefined && params.threadId !== undefined && params.threadId !== threadId) return;
     if (method === 'thread/compacted' || method === 'item/completed' && object(params.item).type === 'contextCompaction')
@@ -719,7 +773,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   try {
     options.signal?.throwIfAborted();
     const processIdentity = await rpc.processIdentity;
-    await rpc.initialize(Boolean(options.delegation || options.tools));
+    await rpc.initialize(Boolean(options.delegation || options.tools || nativeControl));
+    await nativeControl?.initialize();
     const inherited = profileConfig.mcp_servers;
     const disabled = Object.fromEntries(Object.keys(inherited ?? {}).map(name => [name, { enabled: false }]));
     const settings = {
@@ -743,11 +798,13 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         allow_login_shell: false,
         'features.shell_snapshot': false,
         'shell_environment_policy.experimental_use_profile': false,
-        ...(bridge || responsesRelay || isolated ? { 'features.multi_agent': false, 'features.multi_agent_v2': false,
+        ...(bridge || responsesRelay || isolated ? { ...(!nativeControl ? { 'features.multi_agent': false, 'features.multi_agent_v2': false } : {}),
           'features.goals': false, 'features.view_image': false } : {}),
         // Native role files cannot narrow inherited writer permissions; profiles cannot enable children implicitly.
-        ...(options.skills?.length || options.tools ? { 'features.multi_agent': false, 'features.multi_agent_v2': false,
+        ...(!nativeControl && (options.skills?.length || options.tools) ? { 'features.multi_agent': false, 'features.multi_agent_v2': false,
           'agents.enabled': false, 'features.goals': false } : {}),
+        ...(nativeControl ? { 'features.multi_agent': true, 'features.multi_agent_v2': true,
+          'agents.enabled': true, 'features.goals': false } : {}),
         model_reasoning_effort: options.effort,
         // The formalization sandbox is the OS boundary for isolated roles; every other shell runs the worker profile.
         ...(!isolated ? { ...mathWorkerPermissionConfig(options.workspace, options.hiddenRoots),
@@ -756,21 +813,40 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         ...providerSettings,
       },
     };
-    const result = await rpc.request(options.threadId ? 'thread/resume' : 'thread/start', {
+    const capturedBootstrap = options.nativeAgentControl?.bootstrap;
+    const bootstrap: Json | undefined = capturedBootstrap ? { ...capturedBootstrap, hostOverrides: {
+      ...object(capturedBootstrap.hostOverrides ?? {}), developerInstructions: settings.developerInstructions,
+      ...(tools ? { dynamicTools: tools.definitions } : {}),
+    } } : undefined;
+    const threadSettings = {
       ...settings, ...(options.threadId ? { threadId: options.threadId } : {}),
       ...(!options.threadId && (options.delegation || tools?.definitions.length) ? { dynamicTools: [
         ...(options.delegation ? [nativeInvestigationTool(options.delegation.maxAgents)] : []), ...(tools?.definitions ?? []),
       ] } : {}),
-    });
+    };
+    const result = await rpc.request(bootstrap ? 'theoremos/agentControl/start' : options.threadId ? 'thread/resume' : 'thread/start',
+      bootstrap ? { version: 1, bootstrap, [options.threadId ? 'resume' : 'thread']: threadSettings } : threadSettings);
     const startedThreadId = object(result.thread).id;
     if (typeof startedThreadId !== 'string' || !startedThreadId) throw new Error('math_codex_thread_missing');
     threadId = startedThreadId;
+    if (bootstrap && (threadId !== bootstrap.threadId || object(result.agentControl).sessionId !== bootstrap.sessionId ||
+        object(object(result.agentControl).agent).threadId !== threadId))
+      throw new Error('math_native_agent_control_child_binding_mismatch');
+    if (nativeControl) await nativeControl.bind(result.agentControl ??
+      await rpc.request('theoremos/agentControl/snapshot', { threadId }));
     if (options.threadId && threadId !== options.threadId) throw new Error('math_codex_session_binding_mismatch');
     if (result.model !== options.model || result.reasoningEffort !== options.effort || result.approvalPolicy !== 'never')
       throw new Error('math_codex_session_binding_mismatch');
     if (providerId && result.modelProvider !== providerId) throw new Error('math_codex_session_binding_mismatch');
-    // A new thread fixes its sandbox now; one that ignored the profile would keep host network and sockets.
-    if (!isolated && !options.threadId && object(result.activePermissionProfile ?? {}).id !== MATH_WORKER_PERMISSION_PROFILE)
+    // Native bootstrap intersects the captured authority with the destination math-worker profile.
+    // Upstream represents that intersection as a custom profile, without a named profile ID.
+    if (bootstrap) {
+      const effective = object(object(result.agentControl).configSnapshot);
+      if (effective.fullAccess !== false || object(effective.permissionProfile ?? {}).type !== 'managed')
+        throw new Error('math_codex_sandbox_profile_mismatch');
+    }
+    // Ordinary new threads must still confirm the requested named sandbox profile.
+    if (!bootstrap && !isolated && !options.threadId && object(result.activePermissionProfile ?? {}).id !== MATH_WORKER_PERMISSION_PROFILE)
       throw new Error('math_codex_sandbox_profile_mismatch');
     if (options.delegation) {
       if (object(result.activePermissionProfile ?? {}).id !== MATH_WORKER_PERMISSION_PROFILE)
@@ -783,32 +859,11 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         activity: (event, itemType) => activity(event, itemType, true, activeTurn),
         fail: error => { completion?.reject(error); void closeSession().catch(() => {}); } });
     }
-    if (investigations || tools) {
-      rpc.onRequest = async (method, params) => {
-        if (method !== 'item/tool/call') return;
-        const turnId = await boundTurn;
-        if (!turnId || params.turnId !== turnId) return { contentItems: [{ type: 'inputText',
-          text: 'math_agent_tool_turn_mismatch' }], success: false };
-        if (investigations && params.tool === INVESTIGATION_TOOL) return investigations.call(params);
-        if (tools) {
-          const result = await tools.call(params);
-          flushNotifications();
-          return result;
-        }
-      };
-    }
     if (skills.some(skill => skill.loading === 'native')) {
       const discovered = await rpc.request('skills/list', { cwds: [options.workspace], forceReload: true });
       assertMathAgentSkillsDiscovered(discovered, options.workspace, skills);
       assertMathAgentSkillsCurrent(skills);
     }
-    const rollout = object(result.thread).path;
-    // An isolated app-server reports its in-sandbox /profile path. Only its
-    // existing host audit directory is the corresponding readable profile.
-    const rolloutProfile = isolated?.receipt.auditDirectory ?? nativeProfile;
-    const rolloutPath = isolated && typeof rollout === 'string' && rollout.startsWith(`${isolated.profile}/`)
-      ? path.join(rolloutProfile, path.relative(isolated.profile, rollout)) : rollout;
-    shellRejectionReader = CodexShellRejectionReader.create(rolloutProfile, threadId, rolloutPath);
     options.signal?.throwIfAborted();
     let skillsDispatched = false;
     return {
@@ -817,6 +872,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       ...(isolated ? { isolationReceipt: isolated.receipt } : processLaunch ? { isolationReceipt: processLaunch.isolationReceipt } : {}),
       ...(processIdentity ? { processIdentity } : {}),
       usageSource: (bridge || responsesRelay || isolated) && options.requestGate ? 'upstream-requests' as const : 'native-thread-totals' as const,
+      advisoryNotifications: 'native-history',
+      ...(nativeControl ? { nativeAgentControl: nativeControl.connection } : {}),
       get lastError() { return lastError; },
       get lastFailureDiagnostic() { return lastFailureDiagnostic; },
       get lastInputTokens() { return lastInputTokens; },
@@ -857,7 +914,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         const done = new Promise<Json>((yes, no) => { resolve = yes; reject = no; });
         // Attach immediately so a transport failure during turn/start is handled.
         void done.catch(() => {});
-        requestTurn++; turnSettled = false; turnStopping = false;
+        requestTurn++; turnSettled = false; turnStopping = false; turnCheckpointReached = false;
         boundTurn = new Promise(resolve => { bindTurn = resolve; });
         completion = {
           resolve: turn => { turnSettled = true; tools?.cancel(); cancelNotifications(); publicItems.clear(); resolve(turn); },
@@ -866,30 +923,52 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         lastStreamActivityAt = 0; outputTails.clear(); publicItems.clear(); earlyActivities.clear();
         let checkpoint = false;
         let submitted = false;
-        let submissionDrain: Promise<void> | undefined;
+        let requestDrain: Promise<void> | undefined;
         let interruptionRequested = false;
         let cancelTimer: (() => void) | undefined;
-        let outputWatcher: NodeJS.Timeout | undefined;
-        let shellWatcher: NodeJS.Timeout | undefined;
+        let cancelCheckpointTimer: (() => void) | undefined;
+        let outputWatchId: string | undefined;
+        let checkOutput: ((allowFeedback?: boolean, stopped?: boolean) => void) | undefined;
+        let submittedDigest: string | undefined;
         let interruptDeadline: NodeJS.Timeout | undefined;
         try {
-          shellRejectionReader?.beginTurn();
-          const previousRejections = pendingShellRejections;
-          const started = await rpc.request('turn/start', {
+          if (options.completedOutput) {
+            const file = path.resolve(options.completedOutput.file), parent = path.dirname(file);
+            if (isolated && !isMathPathWithin(options.workspace, file))
+              throw new Error('math_codex_output_watch_outside_workspace');
+            assertMathCanonicalPath(parent);
+            fs.mkdirSync(parent, { recursive: true });
+            assertMathCanonicalPath(parent);
+            const nativeFile = isolated ? path.join(isolated.workspace, path.relative(options.workspace, file)) : file;
+            outputWatchId = randomUUID();
+            completedOutputWatch = { id: outputWatchId, file: nativeFile, changed: () => checkOutput?.() };
+            // Watch the parent before starting the writer: the output may not
+            // exist yet, and atomic submissions replace the file's inode.
+            const watched = await rpc.request('fs/watch', { watchId: outputWatchId, path: path.dirname(nativeFile) });
+            if (typeof watched.path !== 'string' || !path.isAbsolute(watched.path))
+              throw new Error('math_codex_output_watch_path_missing');
+            completedOutputWatch.file = path.join(watched.path, path.basename(nativeFile));
+          }
+          const initialEnvelope = options.nativeAgentControl?.initialInput;
+          const initialInput = initialEnvelope ? !skillsDispatched ? initialEnvelope : {
+            author: initialEnvelope.author, startOptions: {}, input: { kind: 'userInput',
+              items: [{ type: 'text', text: message, text_elements: [] }] },
+          } : undefined;
+          const contextItems = initialInput && !skillsDispatched ? [{ type: 'message', role: 'user',
+            content: [{ type: 'input_text', text: message + skills.map(skill =>
+              `\nUse the frozen ${skill.name} research skill. Read ${JSON.stringify(skill.path)} before research and follow its relevant references on demand.`).join('') }] }] : undefined;
+          const started = await rpc.request(initialInput ? 'theoremos/agentControl/input' : 'turn/start', initialInput
+            ? { ...initialInput, version: 1, threadId, ...(contextItems ? { contextItems } : {}) } : {
             threadId, clientUserMessageId: messageId, cwd: isolated?.workspace ?? workspace,
             model: options.model, effort: options.effort, approvalPolicy: 'never',
             ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}),
             ...(isolated ? { sandboxPolicy: { type: 'dangerFullAccess' } } : {}),
-            input: [{ type: 'text', text: message, text_elements: [] },
-              { type: 'text', text: shellTurnContract + (previousRejections
-                ? ` The previous turn had ${previousRejections} explicitly rejected exec_command call(s). Correct those call arguments; the host has not replayed them.` : ''),
-              text_elements: [] }, ...(!skillsDispatched ? skills.map(skill => skill.loading === 'native'
+            input: [{ type: 'text', text: message, text_elements: [] }, ...(!skillsDispatched ? skills.map(skill => skill.loading === 'native'
                 ? { type: 'skill', name: skill.name, path: skill.path }
                 : { type: 'text', text: `Use the frozen ${skill.name} research skill. Read ${JSON.stringify(skill.path)} before research and follow its relevant references on demand. This session uses explicit file loading, not native skill injection.`,
                   text_elements: [] }) : [])],
           });
           skillsDispatched = true;
-          pendingShellRejections -= previousRejections;
           const turnId = object(started.turn).id;
           if (typeof turnId !== 'string' || !turnId) throw new Error('math_codex_turn_missing');
           activeTurn = turnId;
@@ -897,18 +976,6 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           // Replay pre-terminal activity before applying an early completion below.
           for (const entry of earlyActivities.get(turnId) ?? []) emitActivity(entry);
           earlyActivities.clear();
-          checkShellRejections = (allowFeedback = true) => {
-            const rejected = shellRejectionReader?.poll(turnId) ?? [];
-            if (!rejected.length) return;
-            pendingShellRejections += rejected.length;
-            for (const _rejection of rejected) activity('shell_argument_rejected');
-            // Direct native providers expose no unpaid admission boundary. Keep
-            // their correction for the next run instead of cancelling paid work.
-            if (!allowFeedback || !(bridge || responsesRelay || isolated) || turnSettled || turnStopping || closing) return;
-            void notify(shellRejectionFeedback, { waitForRequest: true })
-              .then(() => { pendingShellRejections -= rejected.length; }, () => {});
-          };
-          if (shellRejectionReader) shellWatcher = setInterval(checkShellRejections, 100);
           turnHasOutput ||= earlyOutputTurns.has(turnId);
           earlyOutputTurns.clear();
           for (const [key, entry] of publicItems) {
@@ -926,6 +993,25 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
               if (activeTurn === turnId && !turnSettled) void closeSession();
             });
           };
+          const stopAfterRequests = () => {
+            turnStopping = true; tools?.cancel(); cancelNotifications(); publicItems.clear();
+            requestDrain ??= drainRequests();
+            void requestDrain.then(() => {
+              if (activeTurn === turnId && !turnSettled && !closing) requestInterruption();
+            });
+          };
+          checkTurnCheckpoint = () => {
+            if (checkpoint || turnSettled || turnStopping || closing ||
+                !(turnCheckpointReached || options.requestGate?.checkpoint?.())) return false;
+            // A settled response may still have tools to run. The next request is
+            // the unpaid boundary proving those tools finished; prefer a valid
+            // output they just saved before requesting a checkpoint.
+            checkCompletedOutput?.();
+            if (submitted || turnSettled || turnStopping || closing) return false;
+            checkpoint = true;
+            stopAfterRequests();
+            return true;
+          };
           const early = earlyCompletions.get(activeTurn);
           earlyCompletions.delete(activeTurn);
           if (early) completion.resolve(early);
@@ -934,16 +1020,26 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           if (turnStopping && !turnSettled && !closing) requestInterruption();
           onStarted(activeTurn);
           if (options.completedOutput) {
-            // A file submission ends this role. Admit it only after turn/completed
-            // confirms that the writer stopped; the caller then rechecks its digest.
-            const checkOutput = (allowFeedback = true) => {
-              if (submitted || checkpoint || !activeTurn || options.signal?.aborted) return;
+            // A file submission ends this role. Report it after the native turn
+            // settles; the caller still confirms process shutdown before acceptance.
+            checkOutput = (allowFeedback = true, stopped = false) => {
+              if ((!stopped && (submitted || checkpoint)) || !activeTurn || options.signal?.aborted) return;
               let outputText: string, value: unknown;
               try {
                 const file = options.completedOutput!.file;
                 outputText = readMathText(file, 2_000_000);
+                // Validators may hand a candidate to the host exactly once.
+                // Recheck the accepted bytes after the writer has stopped,
+                // without repeating those submission side effects.
+                if (stopped && submitted) {
+                  submitted = mathDigest(outputText) === submittedDigest;
+                  return;
+                }
                 value = JSON.parse(outputText);
-              } catch { return; /* Missing, partial or unsafe files are not submissions. */ }
+              } catch {
+                if (stopped) submitted = false;
+                return; /* Missing, partial or unsafe files are not submissions. */
+              }
               try {
                 options.completedOutput!.validate(value);
               } catch (error) {
@@ -966,20 +1062,24 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
                 return;
               }
               submitted = true;
+              submittedDigest = mathDigest(outputText);
               // Stop new paid work first. Interrupting an in-flight request loses its final
               // usage receipt, so let admitted requests settle before stopping the writer.
-              turnStopping = true; tools?.cancel(); cancelNotifications(); publicItems.clear();
-              submissionDrain = drainRequests();
-              void submissionDrain.then(() => {
-                if (activeTurn === turnId && !turnSettled && !closing) requestInterruption();
-              });
+              if (!turnSettled) stopAfterRequests();
             };
             // Admission has already passed beforeRequest's notification fence. Only
             // accept valid submissions here; the watcher queues repair feedback safely.
-            checkCompletedOutput = () => checkOutput(false);
-            outputWatcher = setInterval(checkOutput, 100);
+            checkCompletedOutput = () => checkOutput?.(false);
             checkOutput();
           }
+          if (options.turnCheckpointMs) cancelCheckpointTimer = scheduleMathTimeout(() => {
+            // Keep the admitted response and its native tools alive. Admission
+            // performs the handoff; natural completion or the hard deadline also
+            // settles a turn which never asks for another request.
+            if (activeTurn !== turnId || turnSettled || turnStopping || closing) return;
+            turnCheckpointReached = true;
+            cancelNotifications();
+          }, options.turnCheckpointMs);
           if (options.turnTimeoutMs) cancelTimer = scheduleMathTimeout(() => {
             // Draining paid requests still consumes the existing turn allowance.
             if (submitted && !activeRequests.size) return;
@@ -988,8 +1088,12 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
             requestInterruption();
           }, options.turnTimeoutMs);
           const finished = await done;
+          await nativeControl?.waitTurnSettled(turnId, finished.status);
           await tools?.settled();
-          await submissionDrain;
+          await requestDrain;
+          // Native watches are debounced and can be a noop on unsupported
+          // hosts. Completion remains a deterministic final discovery boundary.
+          if (finished.status !== 'failed') checkOutput?.(false, true);
           if (investigations?.busy) {
             await closeSession();
             if (finished.status === 'completed' && !submitted)
@@ -1022,10 +1126,13 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           options.signal?.throwIfAborted();
           throw error;
         } finally {
-          checkShellRejections?.(false); checkShellRejections = undefined;
-          cancelTimer?.(); clearTimeout(interruptDeadline); clearInterval(outputWatcher); clearInterval(shellWatcher);
+          cancelTimer?.(); cancelCheckpointTimer?.(); clearTimeout(interruptDeadline);
+          completedOutputWatch = undefined;
+          if (outputWatchId && !closing && !transportFailure)
+            await rpc.request('fs/unwatch', { watchId: outputWatchId }).catch(() => closeSession().catch(() => {}));
           checkCompletedOutput = undefined;
-          drainSubmittedRequests = undefined;
+          checkTurnCheckpoint = undefined; turnCheckpointReached = false;
+          drainTurnRequests = undefined;
           turnSettled = true; tools?.cancel(); await tools?.settled(); cancelNotifications();
           bindTurn?.(); bindTurn = undefined;
           activeTurn = undefined; completion = undefined;
@@ -1044,7 +1151,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
       close: closeSession,
       stopForFreeze: async () => {
         // An interrupt RPC acknowledgement does not settle the active turn.
-        if (completion || activeTurn || compacting || investigations?.busy || tools?.busy) return { status: 'unconfirmed', reason: 'turn-not-settled' };
+        if (completion || activeTurn || compacting || investigations?.busy || tools?.busy || nativeControl?.busy)
+          return { status: 'unconfirmed', reason: 'turn-not-settled' };
         try {
           await closeSession();
         }
