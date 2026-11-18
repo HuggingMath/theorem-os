@@ -1,295 +1,79 @@
+<!-- README_SYNC: source=2cbe72f0cfde; updated=2026-11-18 -->
+<p align="center">简体中文 · <a href="./README_EN.md">English</a></p>
+
 <div align="center">
-
-<img src="docs/assets/mark.png" alt="" width="64" height="64">
-
-<h1>TheoremOS</h1>
-
-<p><strong>从自然语言原题出发，构造可独立核查的 Lean 证明。</strong></p>
-<p>面向数学研究者、Lean 用户与数学 Agent 研究者的在线工作台。</p>
-
-[![Research Preview](https://img.shields.io/badge/status-research%20preview-0f766e.svg)](docs/releases/v0.1.0.md) [![Lean 4 · Mathlib](https://img.shields.io/badge/Lean_4-Mathlib-315cf5.svg)](docs/web-workbench.md) [![License: proprietary](https://img.shields.io/badge/license-proprietary-555.svg)](LICENSE)
-
-<p>
-  <a href="https://theoremos.top/"><strong>产品官网</strong></a> ·
-  <a href="https://theoremos.top/archive.html">证明档案</a> ·
-  <a href="#快速开始">快速开始</a> ·
-  <a href="docs/usage.md">使用文档</a> ·
-  <a href="docs/README.md">项目与文档导航</a> ·
-  <a href="https://theoremos.top/feedback.html">反馈与建议</a>
-</p>
-
+  <img src="./docs/assets/mark.png" alt="" width="64" height="64">
+  <h1>TheoremOS</h1>
+  <p><strong>从自然语言原题出发，构造并独立核验 Lean 证明。</strong></p>
+  <p><a href="https://theoremos.top/">产品官网</a> · <a href="https://app.theoremos.top/">在线工作台</a> · <a href="https://theoremos.top/archive.html">公开证明档案</a></p>
 </div>
 
-<a href="docs/assets/workbench-full-desktop.png">
-  <picture>
-    <source media="(max-width: 640px)" srcset="docs/assets/workbench-mobile.png">
-    <img src="docs/assets/workbench-desktop.png" alt="TheoremOS 自然语言入口：输入原题、设置模型与两阶段预算；真实界面预览，尚未提交任务" width="1440">
-  </picture>
-</a>
+[![Lean 4 · Mathlib](https://img.shields.io/badge/Lean_4-Mathlib-315cf5.svg)](./docs/web-workbench.md)
+[![License: proprietary](https://img.shields.io/badge/license-proprietary-555.svg)](./LICENSE)
 
-<p align="center"><sub>真实界面预览 · 自然语言入口，尚未提交 · <a href="docs/assets/workbench-full-desktop.png">桌面原图</a> · <a href="docs/assets/workbench-full-mobile.png">手机原图</a></sub></p>
+![原题输入、模型和预算设置的真实工作台界面](./docs/assets/workbench-desktop.png)
 
-输入自然语言、TeX 或已有 Lean 原题，使用自己的 API Key 开始研究。系统默认直接生成 Lean 陈述，编译通过后构造证明并独立验收。可以查看过程、核对原意、下载证明和本地复核包。研究者还可替换搜索、上下文或协作策略开展对照实验。
-
-## 选择你的入口
-
-| 你想做什么 | 从这里开始 | 需要准备 |
-| --- | --- | --- |
-| 先了解产品与成果 | [产品官网](https://theoremos.top/) · [证明档案](https://theoremos.top/archive.html) | 浏览器即可 |
-| 输入自己的题目，在线构造证明 | [打开工作台](https://app.theoremos.top/) | 获准的邮箱、OpenAI 或所选网关的 API Key |
-| 维护或部署独立服务 | [部署网页工作台](#部署网页工作台) | 源码使用授权、Linux、Docker、API Key |
-| 看一次失败、修复与验收 | [预设 Lean 回放](#快速体验) | 本机 Lean 环境，无需 API Key |
-| 研究自己的 Agent 策略 | [替换研究组件](#五个可替换组件) · [CLI 指南](docs/usage.md) | 本地开发环境；模型运行需认证 |
-
-> [!NOTE]
-> 在线工作台当前仍是**白名单 Beta，尚未开放自由注册**。已有资格的邮箱可直接登录；其余用户可通过[官网申请入口](https://theoremos.top/#start)联系。浏览器使用在线服务不需要本地安装 Lean 或 Docker。
-
-## 已验收证明
-
-仓库收录了 **10 个具有 Lean-Eval 官方通过记录的证明包**。题目链接指向归档源码，结果链接指向官方回复。
-
-| 题目 | 数学领域 | 官方结果 |
-| --- | --- | --- |
-| [Unit conjecture · 群环中的非平凡单位](accepted/annals_unit_conjecture/) | 代数 · 群环 | [#1246 · pass](https://github.com/leanprover/lean-eval-submissions/issues/1246#issuecomment-5380977645) |
-| [Rademacher type and Enflo type coincide](accepted/annals_rademacher_enflo_type/) | 泛函分析 · 概率 | [#2115 · pass](https://github.com/leanprover/lean-eval-submissions/issues/2115#issuecomment-6161355838) |
-| [Equiangular lines with a fixed angle](accepted/annals_equiangular_lines_fixed_angle/) | 组合数学 · 线性代数 | [#2135 · pass](https://github.com/leanprover/lean-eval-submissions/issues/2135#issuecomment-6186332699) |
-| [Fractional expectation thresholds · 分数期望阈值](accepted/annals_fractional_expectation_thresholds/) | 概率组合 | [#2141 · pass](https://github.com/leanprover/lean-eval-submissions/issues/2141#issuecomment-6197783762) |
-| [Dimitrov · 代数整数的 house 下界](accepted/dimitrov/) | 代数数论 | [#2143 · pass](https://github.com/leanprover/lean-eval-submissions/issues/2143#issuecomment-6215093969) |
-| [Hopf–Rinow · 测地完备与度量完备](accepted/hopf_rinow/) | 微分几何 | [#2143 · pass](https://github.com/leanprover/lean-eval-submissions/issues/2143#issuecomment-6215093969) |
-| [Sunflower · 向日葵引理改进界](submitted/annals_improved_bounds_sunflower_lemma/) | 组合数学 | [#2144 · pass](https://github.com/leanprover/lean-eval-submissions/issues/2144) |
-| [Lorentzian polynomials](submitted/annals_lorentzian_polynomials/) | 代数组合 | [#2144 · pass](https://github.com/leanprover/lean-eval-submissions/issues/2144) |
-| [The optimal paper Möbius band](submitted/annals_optimal_moebius/) | 几何 | [#2144 · pass](https://github.com/leanprover/lean-eval-submissions/issues/2144) |
-| [Algebraic integers](submitted/annals_algebraic_integers/) | 代数数论 | [#2144 · pass](https://github.com/leanprover/lean-eval-submissions/issues/2144) |
-
-这些成果来自前身 DeepScientist / DeepScientist Math 及后续工作，包含复用早期证明的继续运行和环境迁移，不构成当前版本从零求解的成功率评测。[早期成果档案](accepted/README.md)与 [#2144 证明档案](submitted/README.md)保留模型归因、题目版本、提交来源和 SHA-256 校验值。
-
-[定理知识库](docs/theorem-knowledge.md)可将这些证明包及运行中已检查的辅助定理导入统一索引，供 Agent 按需搜索完整类型、前提、依赖和源码；跨题复用仍需重新通过 Lean 检查。
-
-后四题于 2026 年 10 月 16 日在 [Lean-Eval 提交 #2144](https://github.com/leanprover/lean-eval-submissions/issues/2144) 获得官方托管评测 4/4 通过。证明包仍保留在原提交归档目录，目录名不表示当前验收状态。
-
-[OpenAI math 求解成果](results/openai-math/README.md)另收录 Truffet 有限反例、三维完备局部复代数、Hadamard 三次纤维消去和 Cartier 图域回缩紧致性的完整证明及本地原比较器证据。两道 D 档题已完成 TheoremOS 原生验收，其余状态见索引；尚无 OpenAI 托管验收记录，D/C 分档为本项目评估。
-
-<details>
-<summary>预览证明档案与历史研究快照</summary>
-
-<a href="https://theoremos.top/archive.html">
-  <picture>
-    <source media="(max-width: 640px)" srcset="docs/assets/archive-preview-mobile.png">
-    <img src="docs/assets/archive-preview.png" alt="证明档案：已验收题目、研究中快照、Lean 源码与验证证据" width="1440">
-  </picture>
-</a>
-
-[在线档案](https://theoremos.top/archive.html)可搜索、筛选题目，查看 Lean 源码和验收证据，并下载公开记录；当前展示早期 6 道已验收题目。#2144 的 4 道证明见上表和[提交归档](submitted/README.md)。
-
-[历史研究快照](in-progress/README.md)保留 Dimitrov、Hopf–Rinow 与 Szemerédi 的 Agent 工作区、研究记录与历史。其中前两题已有上述最终验收包，Szemerédi 尚未获官方验收；历史草稿可能包含 `sorry` 和未完成路线。
-
-</details>
+本仓库包含 TheoremOS 的内部工作台与 CLI。输入自然语言、TeX 或 Lean 题面后，可以查看生成的 Lean 陈述、候选证明和诊断，再下载证明及验收报告。研究者可在同一验收规则下比较不同的检索、上下文和协作策略。[TheoremOS 公开仓库](https://github.com/HuggingMath/TheoremOS)提供官网源码、公开证明档案和本地复核材料。两仓库各有自己的许可证。
 
 ## 快速开始
 
-### 在线工作台
+| 你想做什么 | 从哪里开始 | 需要准备 |
+| --- | --- | --- |
+| 在线看例题、回放或证明 | [工作台](https://app.theoremos.top/) · [公开档案](https://theoremos.top/archive.html) | 浏览器；登录工作台需获准邮箱 |
+| 用自己的题目开始研究 | [工作台指南](./docs/web-workbench.md) | 获准邮箱、所选模型服务的 API Key |
+| 在本机核验一次预设回放 | [小题示例](./examples/getting-started/README.md) | 本机 Lean；无需模型 Key |
+| 维护部署或替换研究组件 | [运行指南](./docs/usage.md) · [组件示例](./examples/components/README.md) | 源码使用权限；模型调用另需认证 |
 
-1. 打开 <https://app.theoremos.top/>，用获准邮箱登录。可以先浏览经典题库或录制回放，无需模型 Key。
-2. 在首页「设置」中选择服务商与模型，填写对应 Key。OpenAI Key 可在[服务商后台](https://platform.openai.com/api-keys)创建；网关账号与 Key 需向该网关管理员取得。「检查 Key 与模型」只读取模型列表，不调用模型。
-3. 输入完整的自然语言或 TeX 原题，或选择「试试例题」。已有 Lean 源码时使用输入框旁的 Lean 入口。
-4. 发送题目。形式化与证明的时间、Token 和证明轮数默认留空，表示无限制；填写正数才启用对应限制。Beta 期间平台免费，模型账单由服务商向你的 API 账户收取。用量按服务商报告计数，进行中的请求可能超额，Token 预算不是金额封顶。
-
-Lean 陈述编译通过后立即提供代码，并自动开始证明；独立语义审核默认在后台同步进行，不占用生成或证明的执行位。审核状态和具体意见在「原题 / Lean」持续更新，不改写已有代码或中断证明。Lean 验收检查冻结陈述的证明。若陈述已完成而证明未能入队，可使用「继续证明」，无需重新形式化。
-
-自然语言入口的 Key 只保留在当前页面内存，刷新后清空；进阶版可选择加密保存到账号，并在「模型连接」中删除。数据、分享与删除范围见[隐私说明](https://app.theoremos.top/privacy.html)。
-
-### 部署网页工作台
-
-以下面向维护者与获授权的部署者；当前源码使用遵循 [LICENSE](LICENSE)。
-
-在浏览器中提交原题、查看研究进度、对比候选源码，并下载证明和验收报告。支持 OpenAI 及兼容 Responses API 的服务；仅提供 Chat Completions 的服务暂不支持。
-
-需要 Linux、Docker Engine / Compose，宿主机允许创建用户命名空间；Mathlib 还需要 `/dev/fuse`。在本地启动：
-
-```bash
-git clone https://github.com/LikC1606/theorem-os.git
-cd theorem-os
-docker compose -f apps/web/compose.yml build worker web
-docker compose -f apps/web/compose.yml up -d web
-```
-
-也可以跳过本地构建，拉取 GitHub Actions 发布到 GHCR 的镜像：`docker compose -f apps/web/compose.yml -f apps/web/compose.ghcr.yml pull worker web`，再用同样的两个 `-f` 参数执行 `up -d --no-build web`。
-
-打开 <http://127.0.0.1:8787>，输入题目或选择模板，填写自己的 API Key。默认连接宿主机 8080 端口的 Sub2API，模型为 `deepseek-flash`，形式化与证明的默认推理强度均为 `high`；也可选择 OpenAI 并填写其支持的模型。网页新任务统一使用 TheoremOS 数学环境，包含固定版本的 Lean、Mathlib 和项目自有库；形式化、证明和独立验收使用同一份冻结依赖。历史任务恢复时保留原环境。
-
-<details>
-<summary>资源要求、API Key 与运行记录</summary>
-
-- Mathlib 每次运行的内存上限为 8 GiB，标准库为 4 GiB；建议每个并发 Mathlib 运行预留 30 GiB 可用磁盘。首次构建需下载大型依赖和预编译缓存。
-- Mathlib 冷准备最长 600 秒，准备与最终验收均不计入解题预算。轮次和时间限制不等于 API 费用上限。
-- Key 由使用者提供，不写入草稿、运行档案或日志。自然语言对话仅在当前页面内存中保留；进阶版提交后清空输入。配置密钥库的部署允许用户选择加密保存到账号。
-- 网页服务配置数据目录后会持久保存历史与证据，Compose 默认使用命名卷；未配置数据目录时仅保存在内存。服务重启会将未完成任务标为中断，不会自动恢复执行。需要保留的证明与 JSON 仍建议下载；CLI 提供持久运行档案与断点恢复。
-
-标准库与 Mathlib 已通过真实容器和 Lean 检查，验证使用模拟模型，不产生 API 费用。不同服务商的实际 API 兼容性需使用对应账户验证。
-
-服务商配置、完整功能范围、容器验证和服务器部署见[网页工作台指南](docs/web-workbench.md)。
-
-</details>
+工作台采用白名单 Beta，[官网](https://theoremos.top/)提供申请入口。提交前请设置模型和所需的预算限制；空白限制不生效，模型调用由服务商计费。Lean 能检查给定陈述的证明，原意是否准确仍应由研究者复核。编译通过后可以先查看陈述，后台语义审核单独提供意见。
 
 <a id="快速体验"></a>
 
 ### 预设 Lean 回放
 
-无需模型认证，先看一道自然数加法小题如何经历错误候选、Lean 诊断和修复验收。候选证明是预设的，Lean 检查在本机真实执行。
-
-需要 Linux、Git、[Bun 1.2+](https://bun.sh/)、[Node.js 22+](https://nodejs.org/)、`/usr/bin/python3`、util-linux、Elan/Lean，以及允许创建用户命名空间的 Bubblewrap（`bwrap`）。此回放不需要 Mathlib 或 FUSE。
-
-在仓库根目录执行；尚未克隆仓库时，先执行上方的 `git clone` 和 `cd`：
+在仓库根目录执行。需要 Linux、Git、Bun 1.2+、Node.js 22+、系统 Python、util-linux、Elan，以及允许用户命名空间的 Bubblewrap。回放只用 Lean 标准库，不需要 Mathlib 或 FUSE。
 
 ```bash
 bun install --frozen-lockfile
-
-# 只需准备一次 Lean
 elan toolchain install leanprover/lean4:v4.33.0
 bun run math doctor --lean-only
-
 export THEOREMOS_CASE="$PWD/../theorem-os-runs/first-replay"
 bun run math example replay --dir "$THEOREMOS_CASE"
 bun run math inspect --run "$THEOREMOS_CASE/result.json"
 ```
 
-`result.json` 的 `example.source` 会注明预设回放；最终状态 `evaluated_passed` 表示本机对完整题目的验收通过。此示例展示检查流程，不代表模型解题能力，也不是官方评测。
+为新回放选择未使用的目录。候选证明是预设的，Lean 检查实际执行。[运行指南](./docs/usage.md)说明如何准备、检查与恢复模型运行。
 
-<details>
-<summary>让 Agent 自己证明这道小题</summary>
+### 部署网页工作台
 
-先按[小题示例](examples/getting-started/README.md)配置 Codex profile 和认证，再使用另一个新目录。`prepare` 和 `check` 不调用模型；`resume` 会调用模型并产生相应费用：
+供维护者和获授权的部署者使用。需要 Linux、Docker Compose 和用户命名空间支持；运行 Mathlib 任务还需要 `/dev/fuse`。
 
 ```bash
-bun run math doctor
-bun run math example prepare --dir "$PWD/../theorem-os-runs/model-run"
-bun run math example check --dir "$PWD/../theorem-os-runs/model-run"
-bun run math example resume --dir "$PWD/../theorem-os-runs/model-run"
+git clone https://github.com/HuggingMath/theorem-os.git
+cd theorem-os
+docker compose -f apps/web/compose.yml build worker web
+docker compose -f apps/web/compose.yml up -d web
 ```
 
-模型小题默认使用单 Agent，调度轮数、解题时间和 Token 均不设上限。真实公开题目还需要对应的 Mathlib 与 FUSE 环境，见 [IMO2026 示例](examples/imo2026/README.md)；完整依赖与故障诊断见[运行指南](docs/usage.md)。
-
-</details>
+访问 <http://127.0.0.1:8787>。[部署指南](./docs/web-workbench.md)覆盖资源限制、数据保存、模型服务与 Key 配置；[发布状态](./docs/web-release-status.md)列出已验证的工作台范围。CLI 可以独立运行。
 
 ## 验证与结果
 
-Agent 的完成消息、局部检查和同伴审阅都不能代替完整原题验收。TheoremOS 固定题目和环境，检查原题声明及受保护文件，并在证明集成后重新执行独立 Lean 检查。
+运行先冻结原题声明和依赖。候选证明可以多次检查和修订，集成后再交给独立验收。`result.json` 中的 `evaluated_passed` 表示该次运行通过最终检查。局部检查、审阅意见和 Agent 的完成消息各有自己的含义。
 
-```mermaid
-flowchart LR
-    A["Agent 构造候选"] --> B["Lean 检查"]
-    B -->|失败诊断| A
-    B -->|完整候选| C["集成与独立验收"]
-    C --> D["结果与运行档案"]
-```
-
-**只有 `status: evaluated_passed` 表示最终验收通过。** CLI 将结果写入实验目录的 `result.json`；网页工作台只有在任务结束且结果满足这一状态时才显示“验收通过”。
-
-<details>
-<summary>其他状态与评测范围</summary>
-
-| 状态 | 含义 |
+| 记录 | 如何解读 |
 | --- | --- |
-| `prepared` | 仅完成启动预检 |
-| `incomplete` | 研究尚未完成 |
-| `limit_reached` | 达到预算限制 |
-| `evaluated_failed` | 最终验收未通过 |
-| `runtime_error` | 运行过程发生错误 |
-
-网页工作台、教学小题和 IMO2026 使用本地独立 Lean 验收；本地记录为 `official: false`。Lean-Eval 使用其官方比较器，官方通过以对应的官方回复为准。
-
-CLI 档案保存候选、失败反馈、任务计划、会话、版本和累计用量，支持断点恢复。网页工作台的历史与存储范围见上方说明。
-
-</details>
-
-### IMO2026 逐题结果（2026-10-24）
-
-TheoremOS 使用 `gpt-5.6-sol`、`xhigh`、每题 4 个 worker，通过 **6/6 道题、15/15 个原始目标**。其它方法按作者报告记录；主表均对应相同形式化题面，证明和来源见[完整逐题对比](examples/imo2026/RESULTS.md)。
-
-所有用时单位均为分钟，保留两位小数。**加粗表示各表中该列已披露用时的最小值**；总用时仅在完整六题记录中比较。数字对应本方验收或作者报告通过的题目，各方计时口径仍有差异，不是统一预算下的速度排名。
-
-总用时优先采用原报告总计；本方使用原始精确记录，AxiomProver按逐题记录相加。各项独立取整，总计可能与显示值之和略有差异；≈ 表示作者给出的近似总计。
-
-| 方法 | Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | 总用时（分钟） | 通过题数 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **[TheoremOS + GPT-5.6](https://github.com/LikC1606/theorem-os/tree/main/examples/imo2026/results/20261024)（本项目）** | **17.68** | **72.26** | **114.00** | **13.01** | 19.25 | **49.36** | **285.55** | 6/6 |
-| [Humanfia + GPT-5.6](https://github.com/humanfia/hoa-qed/blob/1c918ec9a96c7751ce9c283304e1aebd7ffb19a3/imo2026/README.md) | 38.10 | 100.40 | 187.10 | 58.70 | 46.50 | 66.90 | 497.70 | 6/6 |
-| [Humanfia + Kimi-K3 / Codex](https://github.com/humanfia/hoa-qed/blob/1c918ec9a96c7751ce9c283304e1aebd7ffb19a3/imo2026/README.md) | 87.10 | 224.30 | 343.70 | 75.60 | 91.90 | 212.40 | 1034.90 | 6/6 |
-| [AxiomProver](https://github.com/AxiomMath/IMO2026/blob/c5a6a089d06d3619afe7ff45c5ccab9e2a30d5d2/README.md) | 24.00 | 360.00 | 869.00 | 39.00 | 65.00 | 139.00 | 1496.00 | 6/6 |
-| [Hardy（AxiomMath Appendix轨）](https://github.com/pramaana-labs/imo2026-lean/blob/788fddc53c463d5d40d4680fb9bfd7b0f96f1063/README.md) | 20.43 | 173.00 | 184.00 | 16.33 | 31.15 | 112.00 | ≈537.00 | 6/6 |
-| [Dirac](https://github.com/Boundless-Intuition/IMO2026/blob/37259237016275044e3905e8d537efd0eead74d2/README.md) | 29.08 | 80.30 | 130.47 | 15.98 | **18.18** | 164.08 | 438.10 | 6/6 |
-| [EonMath（文本+形式证明）](https://github.com/MechMath/IMO2026/blob/47ff510110dd400c98aee2ead3be0f53f7b8ba04/README.md) | 74.13 | 244.58 | 305.80 | 60.58 | 141.65 | 351.68 | 1178.43 | 6/6 |
-
-本方计时为所选成功链的确认成功API请求区间并集，合计285.55分钟，排除工具/Lean等待、失败/未确认响应及另行放弃的历史尝试；Q2、Q3包含续跑或系统升级。Humanfia报告API时间，EonMath包含自然语言及形式证明时间，其余方法的定义见来源。模型、并行度与预算未统一，不能据表计算加速倍数或策略优劣。本方为本地独立验收（`official: false`）；[六题证明与验收摘要](examples/imo2026/results/20261024/README.md)已归档。
-
-<a id="组件模型"></a>
+| [Lean-Eval 早期成果](./accepted/README.md) · [提交档案](./submitted/README.md) | 保留官方结果链接、证明来源和复核材料。部分成果来自前身 DeepScientist Math 或沿用早期证明，不能用来推算当前系统从零求解的成功率。 |
+| [IMO2026 本地结果](./examples/imo2026/RESULTS.md) · [对照实验](./examples/imo2026/COMPARISON.md) | 逐题保存 Lean 验收、形式化题面和计时口径。各方的模型、预算和计时方式不同。 |
+| [OpenAI math 本地记录](./results/openai-math/README.md) | 分开记录证明、原比较器和系统验收；没有 OpenAI 托管验收。 |
 
 ## 五个可替换组件
 
-一次求解会反复经历选任务、整理上下文、尝试证明、检查和决定下一步。TheoremOS 将这些研究决策拆开，便于只替换一个组件开展实验，最终验收独立于研究策略。
+M1 在隔离工作区执行，M2 返回 Lean 证据，M3 选择就绪任务，M4 组装原题、已知结果和反馈，M5 分配研究与审阅职责。运行时保存组件版本，恢复时核对；研究组件与最终验收分开。当前使用 TypeScript 源码接口，尚无稳定插件 SDK。
 
-| 组件 | 负责什么 | 可研究的方向 |
-| --- | --- | --- |
-| M1 执行 | 在隔离工作区执行一次模型工作 | 生成方式、提示与修复策略 |
-| M2 证据 | 检查固定版本和精确声明，返回 Lean 回执 | 错误反馈、局部验证与引理连接 |
-| M3 搜索调度 | 选择可推进且能分配的任务、重试或停止 | 任务排序、路线与预算分配 |
-| M4 上下文 | 组装版本一致的题目、接口、成果和反馈 | 上下文压缩、证据选择与检索 |
-| M5 职责分配 | 将任务和审阅交给符合约束的工作槽 | 角色、并行方式与交接协议 |
-
-[解题模块与交接协议](docs/solver-modules.md)说明各模块的输入、产物、消费者和验收边界，以及研究提案如何转为引理任务、再供原题使用。合作求解的计划、研究和证明派发携带对应的工作契约；研究完成、引理通过和原题验收分别记录。
-
-例如，用 `bun run math component init --name my-search` 生成 M3 模板，修改任务排序函数，再用 `bun run math component check --name my-search` 检查基本约定。完整接入步骤见[组件示例](examples/components/README.md)，接口定义见 [SolverModules](src/solver/modules/index.ts)。
-
-支持单 Agent、独立并行尝试与多 Agent 协作，组件与 Agent 数量相互独立。CLI 每轮支持 1–8 个 Agent，默认四人；扩展名额由专门证明辅助引理的 Prover 承接，依赖就绪且任务充足时八人配置最多执行七个任务。已有运行的人数保持冻结，扩容需创建新运行，见[职责与并发配置](docs/usage.md#协作方式)。比较策略时固定题目、环境、模型和预算，使用[三组对照实验](examples/imo2026/COMPARISON.md)检查效果；目前尚无证据表明协作一定更快或更容易解出题目。
-
-[模块实验](examples/components/EXPERIMENTS.md)提供默认方案、精简上下文、关键路径组合和自定义规则的固定预算对照入口，支持 [Westlake DeepSeek](examples/components/WESTLAKE.md) 和 [DeepSeek 官方服务](examples/components/DEEPSEEK.md)。Westlake 的 Chat Completions 由会话内临时兼容器接入 Codex。工具与实验配置已具备，真实模块效果实验尚未完成，不能据此声称解题率或效率提升。
-
-[PutnamBench 小样本](examples/putnambench/README.md)可固定种子抽取三道兼容原题，每题准备四组模块方案，共 12 次隔离运行计划，并按题目分别配对汇总。准备和汇总均不调用模型。
-
-[自然语言题面形式化](docs/formalization.md)默认直接生成 Lean 陈述，编译通过后冻结为原生 Lean 求解任务；Web 同时启动单独的后台语义审核，代码使用和证明不必等待审核。CLI 默认直接交付编译产物，可用 `--review-mode independent` 启用规划、盲回译和多审核者对照，也支持分别配置模型及参考 Lean 题面比较。反方向的[证明讲解](docs/informalization.md)把已编译的 Lean 证明按依赖顺序写成自然语言证明：每一步引用原文 Lean 片段和所用声明，由宿主校验，再由看不到题面的独立审核者查漏步与编造；文本仍是模型撰写、未经人工审阅。[离线审核评测](docs/formalization-evaluation.md)保留标签来源和数据划分，分别统计误放行、误拒绝、未知与编译结果。[First Proof Batch 3 Lean 接入](examples/first-proof/README.md)保存 10 道官方题面，可导入完整审核产物，也保留人工审核路径。决策题的答案合同仍待补齐；当前尚未调用模型生成这 10 题的形式化，练习题回放不计入 benchmark 成绩。
-
-当前通过 TypeScript 源码接口替换组件，尚未提供稳定 SDK 或动态插件加载。运行时保存组件版本，恢复时检查版本一致性。跨任务学习仍是后续扩展。
-
-## 文档与开发
-
-完整入口见[项目与文档导航](docs/README.md)，按使用、实现、维护、成果与历史记录组织。部署版本及验收范围见[工作台发布状态](docs/web-release-status.md)。
-
-| 文档 | 内容 |
-| --- | --- |
-| [运行指南](docs/usage.md) | 依赖、CLI 参数、恢复、批量运行与故障诊断 |
-| [固定历史 Lean-Eval](docs/lean-eval-historical.md) | 显式 Lean 4.34.1 benchmark 配置、依赖投影与收据恢复 |
-| [网页工作台](docs/web-workbench.md) | Docker、API 服务商、资源限制与服务器部署 |
-| [小题示例](examples/getting-started/README.md) · [IMO2026](examples/imo2026/README.md) | 从第一次回放到真实题目 |
-| [组件示例](examples/components/README.md) · [对照实验](examples/imo2026/COMPARISON.md) | 接入研究策略与比较实验 |
-| [PutnamBench 小样本](examples/putnambench/README.md) | 固定选题、逐题模块对照与离线汇总 |
-| [First Proof Batch 3](examples/first-proof/README.md) | 官方题面快照、形式化审核门槛和离线接入 |
-| [成果来源](accepted/README.md) · [发布说明](docs/releases/v0.1.0.md) · [工作台发布状态](docs/web-release-status.md) | 归属与验收记录、版本范围与限制、工作台验收及待办 |
-
-<a id="架构与开发"></a>
-
-<details>
-<summary>架构入口、贡献与本地检查</summary>
-
-从 [SolverModules](src/solver/modules/index.ts) 查看五个组件的接口与默认组合，再看 [run.ts](src/solver/run.ts) 如何准备和验收一次运行。网页工作台是独立服务，CLI 不依赖它。
-
-欢迎贡献组件策略、题目适配器，以及可复现的问题和实验。提交问题时，请附上运行命令、依赖版本、结果状态和相关诊断，并移除认证信息。
-
-```bash
-bun run test
-bun run typecheck
-bun run build
-```
-
-测试使用本地 fixture 和模拟会话，不调用真实模型。当前发布为 [v0.1.0 Research Preview](https://github.com/LikC1606/theorem-os/releases/tag/v0.1.0)，适合研究实验与源码扩展。
-
-</details>
+- [组件与交接协议](./docs/solver-modules.md) · [TypeScript 接口](./src/solver/modules/index.ts) · [独立验收入口](./src/solver/evaluation.ts)
+- [形式化](./docs/formalization.md) · [证明讲解](./docs/informalization.md) · [定理索引](./docs/theorem-knowledge.md)
+- [项目与维护文档](./docs/README.md)
 
 ## 许可证与致谢
 
-Copyright 2026 TheoremOS contributors。
-
-本项目从 DeepScientist 的数学证明运行时抽取，闭源，保留所有权利（见 [LICENSE](LICENSE)）；来源与第三方声明见 [NOTICE](NOTICE)。带 `SPDX-License-Identifier: Apache-2.0` 的文件仍按 [Apache-2.0](LICENSES/Apache-2.0.txt) 授权，其他保留独立许可证声明的文件遵循各自条款。
-
-项目原名 DeepScientist Math，保留 `deepscientist-math` CLI 别名、`bun run math` 以及已有环境变量和配置路径，方便继续使用已有实验。
-
-感谢 [Lean](https://lean-lang.org/)、[Mathlib](https://github.com/leanprover-community/mathlib4)、[Humanfia IMO2026](https://github.com/humanfia/imo2026) 与 [Lean-Eval](https://github.com/leanprover/lean-eval) 提供的形式化工具、数学库和公开评测资源。
+当前内部源码遵循专有 [LICENSE](./LICENSE)。较早发布的 AGPL-3.0-only 副本保留原有许可；带 Apache-2.0 标识的 DeepScientist 来源文件遵循 [Apache-2.0 条款](./LICENSES/Apache-2.0.txt)。[NOTICE](./NOTICE)记录代码谱系和第三方材料。感谢 [Lean](https://lean-lang.org/)、[Mathlib](https://github.com/leanprover-community/mathlib4) 和 [Lean-Eval](https://github.com/leanprover/lean-eval) 提供工具与评测资源。
