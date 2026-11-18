@@ -50,7 +50,7 @@ const query = (url: URL): ResearchQuery => {
   return { q: params.get('q') ?? params.get('query') ?? undefined, field: params.get('field') ?? undefined,
     author: params.get('author') ?? undefined, offset: integer('offset'), limit: integer('limit'), after: integer('after') };
 };
-const configurationSchema = z.object({ environment: z.enum(['standard', 'mathlib']), selection: z.object({
+const configurationSchema = z.object({ environment: z.enum(['standard', 'mathlib']), nativeTeam: z.boolean().optional(), selection: z.object({
   agent: z.object({ assetId: z.string(), version: z.string(), digest: z.string().optional() }).strict().optional(),
   skills: z.array(z.object({ assetId: z.string(), version: z.string(), digest: z.string().optional() }).strict()).max(32).optional(),
   libraries: z.array(z.object({ assetId: z.string(), version: z.string(), digest: z.string().optional() }).strict()).max(32).optional(),
@@ -313,7 +313,8 @@ export class WebResearchApi {
       return item(this.projects.follow(viewer, id as 'person' | 'theorem', action, await body()));
     if (section === 'configuration' && method === 'POST') {
       const input = parse(configurationSchema, await body());
-      return item(this.assets.freeze(viewer, input.selection as ResearchConfigurationSelection, input.environment));
+      return item(input.nativeTeam ? this.assets.freezeNativeTeam(viewer, input.selection as ResearchConfigurationSelection, input.environment)
+        : this.assets.freeze(viewer, input.selection as ResearchConfigurationSelection, input.environment));
     }
     if (section === 'publications' && method === 'GET') return item(this.recordPublication(viewer, id));
     if (section === 'library') {

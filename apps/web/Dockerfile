@@ -1,6 +1,22 @@
 FROM oven/bun:1.4.0 AS bun
 FROM docker:29-cli AS docker-cli
 
+# Compile against the worker's libc; a binary from the development host may
+# require a newer glibc even when the Codex source and architecture match.
+FROM rust:1.95.0-bookworm AS codex-backend
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 cmake pkg-config libssl-dev libcap-dev libasound2-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY scripts/build-codex-backend.sh scripts/build-codex-backend.sh
+COPY scripts/codex-backend/ scripts/codex-backend/
+ARG CODEX_BUILD_JOBS=4
+RUN --mount=type=cache,id=theoremos-codex-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=theoremos-codex-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,id=theoremos-bookworm-codex-target,target=/build/artifacts/target,sharing=locked \
+    bash scripts/build-codex-backend.sh --source /build/upstream --downloads /build/downloads \
+      --output /build/artifacts --jobs "$CODEX_BUILD_JOBS"
+
 FROM node:22-bookworm-slim AS base
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -70,7 +86,13 @@ ENV DEEPSCIENTIST_MATH_PROOF_ENVIRONMENT_SOURCE_SEED=/opt/theoremos-proof-source
 ARG THEOREMOS_SOURCE_COMMIT=unknown
 LABEL org.opencontainers.image.revision=$THEOREMOS_SOURCE_COMMIT
 ENV THEOREMOS_SOURCE_COMMIT=$THEOREMOS_SOURCE_COMMIT
+COPY --from=codex-backend /build/artifacts/bin/codex /opt/theoremos-codex-backend/codex
+ENV THEOREMOS_CODEX_BACKEND_EXECUTABLE=/opt/theoremos-codex-backend/codex
 USER 10001:10001
+RUN timeout 30s python3 scripts/codex-backend/check-capabilities.py "$THEOREMOS_CODEX_BACKEND_EXECUTABLE"
+LABEL org.theoremos.native-agent-control=v1
+LABEL org.theoremos.team-profile-preferences=v1
+LABEL org.theoremos.team-expert-cards=v1
 ENTRYPOINT ["/opt/theorem-os/apps/web/worker-entrypoint.sh"]
 
 FROM source AS web

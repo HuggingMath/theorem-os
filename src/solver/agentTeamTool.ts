@@ -5,7 +5,7 @@ import { declarationSubmissionSchema } from './declarationArtifacts';
 
 type Json = Record<string, any>;
 export type AgentTeamTransport = 'host-tools' | 'native-agent-control';
-const nativeOperations = new Set(['spawn', 'assign', 'message', 'poll', 'wait', 'stop', 'resume']);
+const nativeOperations = new Set(['finish', 'history', 'inspect', 'inspect-research', 'adopt', 'yield', 'submit']);
 
 const text = z.string().trim().min(1).max(16000);
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/u);
@@ -32,7 +32,9 @@ export const agentTeamRequestSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('poll'), after: z.number().int().nonnegative().optional() }).strict(),
   z.object({ operation: z.literal('wait'), after: z.number().int().nonnegative(),
     timeoutMs: z.number().int().min(1).max(30000).optional() }).strict(),
-  z.object({ operation: z.literal('inspect'), deliveryId: z.string().regex(/^[a-f0-9]{64}$/u) }).strict(),
+  z.object({ operation: z.literal('inspect'), deliveryId: z.string().regex(/^[a-f0-9]{64}$/u),
+    changeIndex: z.number().int().nonnegative().optional(), offset: z.number().int().nonnegative().optional(),
+    limit: z.number().int().min(1).max(16000).optional() }).strict(),
   z.object({ operation: z.literal('inspect-research'), artifactId: z.string().regex(/^[a-f0-9]{64}$/u),
     offset: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(16000).optional() }).strict(),
   z.object({ operation: z.literal('submit'), summary: text, objectiveRevision: z.number().int().positive().optional(), declarations: declarationSubmissionSchema.shape.declarations }).strict(),
@@ -51,7 +53,7 @@ export function agentTeamMessageRouteFeedback(actor: string, recipient: string) 
 }
 
 function optionsFor(actor: string, budgetControlsEnabled: boolean, transport: AgentTeamTransport = 'host-tools') {
-  return agentTeamRequestSchema.options.filter(option => (transport !== 'native-agent-control' || !nativeOperations.has(option.shape.operation.value)) && (actor === 'lead'
+  return agentTeamRequestSchema.options.filter(option => (transport !== 'native-agent-control' || nativeOperations.has(option.shape.operation.value)) && (actor === 'lead'
     ? !['submit', 'yield', 'progress'].includes(option.shape.operation.value) && (budgetControlsEnabled || option.shape.operation.value !== 'budget')
     : agentTeamMemberOperations.has(option.shape.operation.value)));
 }
@@ -99,6 +101,10 @@ function operationContracts(actor: string, budgetControlsEnabled: boolean, trans
       delete schema.properties.budget;
       delete schema.properties.leadReserve;
     }
+    if (transport === 'native-agent-control') {
+      delete schema.properties.objectiveRevision;
+      schema.required = schema.required.filter((key: string) => key !== 'objectiveRevision');
+    }
     return { operation: option.shape.operation.value, schema };
   });
 }
@@ -107,7 +113,8 @@ function contractText(operation: string, schema: Json): string {
   const required = (schema.required as string[]).filter(key => key !== 'operation');
   const optional = Object.keys(schema.properties).filter(key => key !== 'operation' && !required.includes(key));
   return `${operation}: required ${required.length ? required.join(', ') : 'none'}; optional ${optional.length ? optional.join(', ') : 'none'}; other fields forbidden.` +
-    (operation === 'message' ? ' agentId is the recipient; sender is host-bound. Self-addressed messages are rejected.' : '');
+    (operation === 'message' ? ' agentId is the recipient; sender is host-bound. Self-addressed messages are rejected.' :
+      operation === 'inspect' ? ' For more source, pass a changeIndex from the overview and its nextOffset. offset and limit require changeIndex and count Unicode code points.' : '');
 }
 
 /** The same contracts drive advertised fields and corrective feedback. */
@@ -130,8 +137,8 @@ export function agentTeamToolDefinition(actor: string, budgetControlsEnabled: bo
   for (const { schema } of contracts) Object.assign(properties, schema.properties);
   properties.operation = { type: 'string', enum: contracts.map(item => item.operation) };
   const purpose = native ? lead
-    ? 'Mathematical host interface for the Lead. Native collaboration tools manage agent identities, spawning, followups, messages and interruption. Publish the shared research route, inspect checked evidence and choose adoption. Amend explicitly changes a task objective/revision; a native message alone does not amend it. Finish requests independent original-proof checking. '
-    : 'Mathematical host interface for a proof-writing member. Native collaboration tools deliver messages. Progress reports findings against the current objectiveRevision. Submit exact saved declarations, then return for stopped-writer checking. Yield preserves this task and draft for native followup after dependencies are integrated. '
+    ? 'Mathematical host interface for the Lead. Native collaboration tools manage agent identities, spawning, followups, messages and interruption. Inspect reads a checked delivery; it does not install its declarations. Adopt merges them into the saved consumer draft before rechecking, so that draft may already call the agreed names. Finish requests independent original-proof checking. '
+    : 'Mathematical host interface for a proof-writing member. Native collaboration tools deliver messages. Submit exact saved declarations, then return for stopped-writer checking. Yield preserves this task and draft for native followup after dependencies are integrated. '
     : lead
     ? 'Lead collaboration interface. Spawn and assign queue proof writers and return immediately. Amend changes the effective objective or workKind of a queued, running or paused task, retaining its identity, draft and revision history. Coordinate records a deliberate collaboration decision and next step. Publish updates the shared advisory research summary. Inspect evidence before adoption; return after adopting into yourself so the host can stop writing and integrate. Finish hands saved original proofs to the host for independent acceptance even if local diagnostics failed to start. Stop interrupts a member. '
     : 'Proof-writing member interface. Progress records a useful finding, local probe, blocker or route change against the supplied current objectiveRevision and notifies Lead. Optional knowledgeUses names a supplied source anchor (file#heading) actually used and its concrete application; a report remains advisory. Message Lead or peers to discuss results. Submit exact declarations once they answer the assignment; include objectiveRevision after an amendment, then return for host checking. The host also checkpoints before the next model request after submit/yield. Other original goals may remain open. Yield preserves the task and draft for later resume. ';
@@ -139,16 +146,18 @@ export function agentTeamToolDefinition(actor: string, budgetControlsEnabled: bo
     (native ? 'History pages complete business task text; inspect and inspect-research read fixed evidence. agentId/targetId refer to the workspace member IDs shown in team observations; native collaboration targets use canonical paths or thread IDs. ' :
       'Poll/wait receives the durable inbox, saved research and delivery references. History pages complete task text; inspect and inspect-research read fixed evidence. ' +
       `For message, the host fixes the sender as "${actor}"; agentId names the recipient. Self-addressed messages are rejected. `) +
-    (lead && budgetControlsEnabled ? 'Budget controls allocate the configured finite run allowance. ' :
+    (native ? 'Configured limits apply to the shared run; this interface does not allocate task budgets. ' :
+      lead && budgetControlsEnabled ? 'Budget controls allocate the configured finite run allowance. ' :
       lead ? 'This run has no token or turn budget; do not set task allowances or a Lead reserve. ' : '') +
     'Only the host publishes checked proof evidence; original proof acceptance remains independent. ' +
-    'WorkKind describes the deliverable: research, proof, independent-reconstruction, review or assembly. Inspection/adoption exposure is recorded and carried with later deliveries; this records reuse, not a guarantee of mathematical independence. ' +
-    (lead ? (native ? 'For native spawn/followup assignments, ' : 'For spawn/assign, ') + 'start message with Profiles: D006, prover, then give the question, inputs, consumer and useful deliverable. Coordinate reason explains the decision and nextStep names the next bounded investigation or coordination action. ' :
-      (native ? '' : 'To report to Lead use agentId: "lead"; for peer discussion use the peer ID. ') + 'Submit omits agentId because the caller and task are already bound; each declaration supplies file, name and complete closed type. ') +
+    (native ? 'Inspection and adoption retain peer-result provenance. ' :
+      'WorkKind describes the deliverable: research, proof, independent-reconstruction, review or assembly. Inspection/adoption exposure is recorded and carried with later deliveries; this records reuse, not a guarantee of mathematical independence. ') +
+    (lead ? (native ? '' : 'For spawn/assign, select assignment profiles from the pinned Skill for the gap. ') :
+      (native ? '' : 'To report to Lead use agentId: "lead"; for peer discussion use the peer ID. ') + 'Submit omits agentId because the caller and task are already bound; each declaration supplies file, name and complete closed type. For a new auxiliary def or abbrev, also set kind to "definition"; submit theorems about it as separate declarations. ') +
     // Native Codex preserves these descriptions. Its provider conversion drops
     // the entire finite-budget schema when the nested allowances are in oneOf;
     // keep that wire schema flat and enforce the exact branches on the host.
     'Supply only the fields for the selected operation:\n' + contracts.map(item => contractText(item.operation, item.schema)).join('\n'),
     inputSchema: { type: 'object', properties, required: ['operation'], additionalProperties: false,
-      ...(lead && budgetControlsEnabled ? {} : { oneOf: contracts.map(item => item.schema) }) } };
+      ...(lead && budgetControlsEnabled && !native ? {} : { oneOf: contracts.map(item => item.schema) }) } };
 }

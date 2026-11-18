@@ -1,4 +1,5 @@
 import path from 'node:path';
+import type { AgentTeamTransport } from './agentTeamTool';
 import { DECLARATION_INDEX_FILE } from './declarationIndex';
 import type { ContextAccess } from './modules/context';
 import type { SolverProblem } from './problem';
@@ -9,9 +10,12 @@ const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 /** Shared optional tool reference; callers retain their own mandatory delivery contracts. */
 export function buildResearchToolGuide(problem: Pick<SolverProblem, 'receiptDigest'>,
   access: Pick<ContextAccess, 'root' | 'tools' | 'worktree' | 'retrievalRoot' | 'corpusFile' |
-    'knowledgeFile' | 'knowledgeDigest' | 'libraryCatalog'>, environmentDigest: string, teamMode = false) {
+    'knowledgeFile' | 'knowledgeDigest' | 'libraryCatalog' | 'teamRole'>, environmentDigest: string,
+  teamTransport?: AgentTeamTransport) {
   const command = `bun ${quote(access.tools ?? path.join(access.root, 'bin/math.ts'))}`;
   const help = new ResearchToolHelpBuilder();
+  const report = teamTransport === 'native-agent-control' ? 'native send_message' :
+    teamTransport === 'host-tools' ? 'theoremos_team ' + (access.teamRole?.role === 'worker' ? 'progress' : 'message') : undefined;
   help.section('lean', `${command} check-lean --worktree ${quote(access.worktree)} --file 'OWNED_FILE.lean' --timeout-seconds 0\n` +
     'Repeat --file for all relevant saved source files. Paths are relative to the Lean project, without its prefix. ' +
     'For a concrete claim or library application, save a focused probe and check it before expanding the surrounding proof. ' +
@@ -28,8 +32,9 @@ export function buildResearchToolGuide(problem: Pick<SolverProblem, 'receiptDige
     'Read matching source with its surrounding scopes, imports and complete type; the index is a lexical aid. ' +
     'A ripgrep exit code of 1 means no match. Choose literal terms or an explicit pattern as appropriate; ' +
     'do not infer that a declaration is absent from one search miss. ' +
-    (teamMode ? 'Share a useful probe result or blocker through the exposed native message tool or theoremos_team progress, with its saved source path and exact diagnostic; private tool output is not a team report.' : ''), '');
-  if (!teamMode) help.section('cooperation', `${command} research-observe --worktree ${quote(access.worktree)} --finding '.scratch/finding.json' ` +
+    (report ? `Share a useful probe result or blocker through ${report}, with its saved source path and exact diagnostic; private tool output is not a team report.` :
+      'Save useful probe results and exact diagnostics with source references in RESEARCH.md for continuation.'), '');
+  if (!teamTransport) help.section('cooperation', `${command} research-observe --worktree ${quote(access.worktree)} --finding '.scratch/finding.json' ` +
     '[--probe LEAN_FILE] [--snapshot-sources]\n' +
     'For cooperative task assignments only. The finding file contains the finding object, not the outer delivery event. ' +
     'This validates and appends to the current assignment log; it never supplies proof acceptance. Read the result for correction feedback.', '');

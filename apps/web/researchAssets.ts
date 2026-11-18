@@ -3,6 +3,7 @@ import { canonicalMathJson, mathDigest } from '../../src/math/mathRuntimeIo';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { LIBRARY_PACK_SCHEMA, libraryPackDigest, parseLibraryPack, type LibraryPack } from '../../src/math/libraryPacks';
 import { defaultResearchModulePlan, researchModulePlanSchema, type ResearchModulePlan } from '../../src/solver/modules/policy';
+import { personalExpertSchema, type FrozenPersonalExpert } from '../../src/solver/personalExperts';
 import { WebStorage, WebStorageError } from './storage';
 import type { FrozenResearchConfiguration, ResearchAgentDraft, ResearchAsset, ResearchAssetContent, ResearchAssetKind, ResearchAssetPreview,
   ResearchAssetRelease, ResearchConfigurationSelection, ResearchMathDeclaration, ResearchMathDraft, ResearchMathSource, ResearchPublication,
@@ -475,6 +476,56 @@ export class WebResearchAssets {
       id: `skill_${mathDigest(`${ref.assetId}\0${ref.version}\0${slot}`).slice(0, 24)}`,
       name: `Skill ${ref.assetId.slice(-12)} ${slot}`, slot, mode: skill.mode, enabled: true, instructions: body,
     });
+  }
+  /** Native teams consume published domain material, never a legacy execution plan. */
+  freezeNativeTeam(owner: string, input: ResearchConfigurationSelection, env: 'standard' | 'mathlib'): FrozenResearchConfiguration {
+    this.writer(owner);
+    const selected = parsed(selectionSchema, input) as ResearchConfigurationSelection;
+    const base = this.freeze(owner, { libraries: selected.libraries }, env);
+    if (!selected.agent && !selected.skills?.length) return base;
+
+    const cards: FrozenPersonalExpert[] = [], versions = new Map<string, string>();
+    const resolve = (ref: ResearchReleaseRef, kind: 'skill' | 'agent') => {
+      const item = this.reference(owner, ref, kind);
+      if (versions.has(ref.assetId) && versions.get(ref.assetId) !== ref.version)
+        fail(409, '每个个人专家在一次运行中只能选择一个发布版本。');
+      versions.set(ref.assetId, ref.version);
+      return item;
+    };
+    const addCard = (ref: ResearchReleaseRef, kind: 'skill' | 'agent') => {
+      const root = resolve(ref, kind);
+      if (cards.some(card => card.assetId === ref.assetId)) return root.ref;
+      if (cards.length >= 32) fail(400, '每次运行最多选择 32 个个人专家。');
+      const passages: string[] = [], seen = new Set<string>();
+      const collect = (item: typeof root) => {
+        if (seen.has(item.ref.assetId)) return;
+        seen.add(item.ref.assetId);
+        if (seen.size > 32 + Number(kind === 'agent')) fail(400, 'Skill 依赖超过 32 项限制。');
+        const { release } = item;
+        const details = [release.description.trim(), release.area.trim() && 'Area: ' + release.area.trim()];
+        const body = release.type === 'skill' ? parsed(skillSchema, release.content) as ResearchSkillDraft : undefined;
+        if (body) for (const [label, lines] of [['Inputs', body.inputs], ['Outputs', body.outputs], ['Examples', body.examples]] as const) {
+          const values = lines.map(line => line.trim()).filter(Boolean);
+          if (values.length) details.push(label + ':\n' + values.join('\n'));
+        }
+        if (details.some(Boolean)) passages.push(
+          `${release.name} [${release.assetId}@${release.version}; sha256:${release.digest}]\n` + details.filter(Boolean).join('\n'));
+        const deps = body?.dependencies ?? (parsed(agentSchema, release.content) as ResearchAgentDraft).skills;
+        for (const dep of deps) collect(resolve(dep, 'skill'));
+      };
+      collect(root);
+      if (!passages.length) fail(400, `所选专家没有可导入的知识：${root.release.name}。请补充描述、领域、输入输出或示例并发布新版本。`);
+      cards.push(parsed(personalExpertSchema, { ...root.ref, name: root.release.name, summary: root.release.description,
+        knowledge: passages.join('\n\n') }));
+      return root.ref;
+    };
+    const agent = selected.agent && addCard(selected.agent, 'agent');
+    const skills = (selected.skills ?? []).map(ref => addCard(ref, 'skill'));
+    const { digest: _digest, ...configuration } = base;
+    const snapshot = { ...configuration, personalExperts: cards,
+      personalExpertSelection: { ...(agent && { agent }), ...(skills.length && { skills }),
+        ...(base.libraries.length && { libraries: base.libraries.map(item => item.ref) }) } };
+    return { ...snapshot, digest: mathDigest(canonicalMathJson(snapshot)) };
   }
   freeze(owner: string, input: ResearchConfigurationSelection, selectedEnvironment: 'standard' | 'mathlib',
     basePlan?: ResearchModulePlan): FrozenResearchConfiguration {

@@ -10,6 +10,7 @@ import { canonicalMathJson, mathDigest, readMathFile, readMathJson, withMathRunt
 import { resolveMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnvironment';
 import { resolveMathematicsLakePackagesCache } from '../math/verifier';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from './archive';
+import { continuationActivity } from './continuationHistory';
 import { checkTaskProofs, createTaskSourceProjector, isAttributedTaskProof, ownedSourceDigest, projectedGoalInputs, type TaskProof, type TaskProofRequest } from './cooperativeProof';
 import { rejectionCode, taskSourceRejections } from './cooperationShared';
 import { freezeContinuationInput, MAX_CONTINUATION_ATTACHMENT_BYTES, readContinuationSnapshot, type ContinuationManifest } from './continuationInput';
@@ -583,7 +584,9 @@ function frozenTaskAssignment(candidate: z.infer<typeof frozenCandidate>, task: 
 }
 
 function captureSource(sourceStateFile: string, stateFile: string, state: SolverRunState, sourceLease?: MathLease): SeedSource {
+  const stateDigest = mathDigest(readMathFile(sourceStateFile).bytes);
   const archived = readSolverRunState(sourceStateFile);
+  if (stateDigest !== mathDigest(readMathFile(sourceStateFile).bytes)) throw new Error('math_continuation_seed_source_changed');
   const sameProblem = archived.problem.receiptDigest === state.problem.receiptDigest &&
     policyDigest(archived.problem) === policyDigest(state.problem);
   const added = sameProblem ? undefined : ownershipExtension(archived.problem, state.problem);
@@ -769,7 +772,7 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
     problemReceiptDigest: state.problem.receiptDigest, sourcePolicyDigest: policyDigest(state.problem),
     destination: { runId: state.runId, stateFile, buildDigest: state.buildDigest,
       methodDigest: state.methodDigest, environmentDigest: state.environmentDigest },
-    source: { runId: archived.runId, stateFile: sourceStateFile, stateDigest: mathDigest(canonicalMathJson(archived)),
+    source: { runId: archived.runId, stateFile: sourceStateFile, stateDigest,
       buildDigest: archived.buildDigest, methodDigest: archived.methodDigest, canonicalCommit: archived.cooperation.canonicalCommit,
       planVersion: archived.cooperation.planVersion },
     plan, ...(initialPlanning ? { initialPlanning: true } : {}), canonicalSources, workers, conditionalCandidates,
@@ -796,13 +799,7 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
     ...(added ? { ownershipExtension: { sourceReceiptDigest: archived.problem.receiptDigest,
       sourcePolicyDigest: policyDigest(archived.problem), addedFiles: added } } : {}),
     history: { evidence: 'recorded-not-replayed', sourcePhase: archived.phase,
-      ...(initialPlanning ? { activity: { turns: archived.turns, dispatchCounts: archived.dispatchCounts,
-        usage: archived.usage, usageBeforeThread: archived.usageBeforeThread, usageAccounting: archived.usageAccounting,
-        requestUsageAccounting: archived.requestUsageAccounting, tokenBudget: archived.tokenBudget,
-        workers: archived.workers.map(worker => ({ id: worker.id, role: worker.role, turns: worker.turns,
-          dispatchCounts: worker.dispatchCounts, threadId: worker.threadId, previousThreadIds: worker.previousThreadIds,
-          usage: worker.usage, usageBeforeThread: worker.usageBeforeThread, usageAccounting: worker.usageAccounting,
-          requestUsageAccounting: worker.requestUsageAccounting })) } } : {}),
+      ...(initialPlanning ? { activity: continuationActivity(archived, archived.workers) } : {}),
       tasks: archived.cooperation.tasks.map(node => ({ taskId: node.task.id, taskDigest: taskVersion(node.task), status: node.status,
         attempts: node.attempts, assignment: node.assignment, finding: node.finding,
         proof: proofHistory(node.proof), integratedCheck: proofHistory(node.integratedCheck) })),

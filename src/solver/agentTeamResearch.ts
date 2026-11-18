@@ -12,6 +12,9 @@ export type AgentTeamResearchState = Pick<SolverRunState, 'runId' | 'environment
 export type AgentTeamResearchArtifactReference = Readonly<{
   id: string; agentId: string; taskId: string; commit: string; path: string;
 }>;
+export type AgentTeamContinuationOrigin = Pick<AgentTeamResearchArtifactReference, 'agentId' | 'taskId' | 'commit'> & {
+  artifactId: string; status: AgentTeamResearchArtifactStatus;
+};
 export type AgentTeamResearchArtifactStatus = 'completed' | 'interrupted' | 'failed' | 'cancelled' | 'paused';
 type Identity = { runId: string; environmentDigest: string; problemReceiptDigest: string };
 const hash = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -95,17 +98,32 @@ export function saveAgentTeamResearchArtifact(input: {
   return referenceOf(artifact, file);
 }
 
+function readArtifact(reference: AgentTeamResearchArtifactReference, state: AgentTeamResearchState) {
+  referenceSchema.parse(reference);
+  assertMathCanonicalPath(reference.path);
+  if (path.basename(reference.path) !== `${reference.id}.json`) return fail('reference_changed');
+  const artifact = validateArtifact(JSON.parse(readMathText(reference.path)), state);
+  if (canonicalMathJson(referenceOf(artifact, reference.path)) !== canonicalMathJson(reference)) return fail('reference_changed');
+  return artifact;
+}
+
+/** A new run may inherit fixed, explicitly shared notes, never the automatic terminal summary. */
+export function readAgentTeamContinuationNote(directory: string, reference: AgentTeamResearchArtifactReference, state: AgentTeamResearchState) {
+  if (reference.path !== path.join(directory, reference.id + '.json')) return fail('reference_changed');
+  const artifact = readArtifact(reference, state);
+  if ((fs.lstatSync(reference.path).mode & 0o777) !== 0o400) return fail('artifact_not_frozen');
+  if (!artifact.notes?.text.trim()) return;
+  const { id: artifactId, agentId, taskId, commit, status } = artifact;
+  return { notes: artifact.notes, origin: { artifactId, agentId, taskId, commit, status } };
+}
+
 /** Offsets and limits count Unicode code points so a page never splits a surrogate pair. */
 export function inspectAgentTeamResearchArtifact(input: {
   reference: AgentTeamResearchArtifactReference; state: AgentTeamResearchState; offset?: number; limit?: number;
 }): AgentTeamResearchInspection {
-  const reference = referenceSchema.parse(input.reference);
+  const artifact = readArtifact(input.reference, input.state);
   const offset = z.number().int().nonnegative().parse(input.offset ?? 0);
   const limit = Math.min(z.number().int().positive().parse(input.limit ?? 16000), 16000);
-  assertMathCanonicalPath(reference.path);
-  if (path.basename(reference.path) !== `${reference.id}.json`) return fail('reference_changed');
-  const artifact = validateArtifact(JSON.parse(readMathText(reference.path)), input.state);
-  if (canonicalMathJson(referenceOf(artifact, reference.path)) !== canonicalMathJson(reference)) return fail('reference_changed');
   const { id, agentId, taskId, commit, summary, status, advisory, originalProblemAcceptance } = artifact;
   const result = { id, agentId, taskId, commit, summary, status, advisory, originalProblemAcceptance };
   if (!artifact.notes) return { ...result, notes: null };

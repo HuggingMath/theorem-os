@@ -21,6 +21,11 @@ export function submissionIssues(draft: TaskDraft, apiKey: string, session: WebS
   const issues: SubmissionIssue[] = [];
   const add = (field: SubmissionField, message: string) => issues.push({ field, message });
   if (!session.providers.some(provider => provider.id === draft.providerId)) add('provider', t('请选择可用的服务商'));
+  else if (draft.nativeTeamCapacity && (!session.runtime.nativeTeam ||
+    (session.providers.find(provider => provider.id === draft.providerId)?.harness ?? 'codex') !== 'codex'))
+    add('provider', t('当前执行器或运行镜像不支持原生团队。'));
+  else if (draft.nativeTeamPreferredProfiles?.length && !session.runtime.nativeTeamPreferences)
+    add('provider', t('当前运行镜像不支持角色偏好。清空偏好后仍可使用原生团队。'));
   if (!session.environments.some(environment => environment.id === draft.environment)) add('environment', t('请选择可用的证明环境'));
   for (const [field, value, label, limit] of [
     ['source', draft.source, t('Lean 源码'), session.limits.maxSourceBytes],

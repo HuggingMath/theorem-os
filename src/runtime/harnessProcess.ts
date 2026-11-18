@@ -20,7 +20,7 @@ function processStat(pid: number): { startTime: string; state: string } {
   return { state: fields[0], startTime: fields[19] };
 }
 
-const processGone = (error: unknown) => ['ENOENT', 'ESRCH'].includes((error as NodeJS.ErrnoException).code);
+const processGone = (error: unknown) => ['ENOENT', 'ESRCH'].includes((error as NodeJS.ErrnoException).code ?? '');
 
 /** bwrap writes host PID and namespace metadata through a private parent pipe before exec. */
 export function readHarnessProcessIdentity(info: Record<string, unknown>): HarnessProcessIdentity {

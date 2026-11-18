@@ -49,6 +49,9 @@ const archivedSingleHistorySchema = z.object({ schema: z.literal('deepscientist.
   runId: z.string().min(1), taskDigest: z.string(), buildDigest: z.string(), environmentDigest: z.string(),
   methodDigest: z.string().optional(), cooperation: z.object({ canonicalCommit: z.string().optional(), planVersion: z.string().optional() }).optional(),
 });
+const singleHistorySchema = z.discriminatedUnion('schema', [archivedSingleHistorySchema,
+  archivedSingleHistorySchema.extend({ schema: z.literal('theorem-os.single-continuation-history.v1'),
+    stateDigest: z.string().regex(/^[a-f0-9]{64}$/u) })]);
 
 export type StoredInspectionContinuation =
   | { status: 'absent' }
@@ -127,13 +130,14 @@ function readInspectionContinuation(stateFile: string, state: SolverRunState): S
         return unknown('math_inspect_single_source_not_frozen');
       const sourceText = readMathText(sourceFile), description = singleSourceInspectionSchema.safeParse(
         parseMathJson(sourceText, 'math_inspect_single_source_invalid'));
-      const archived = archivedSingleHistorySchema.safeParse(parseMathJson(bytes, 'math_inspect_seed_history_invalid'));
+      const archived = singleHistorySchema.safeParse(parseMathJson(bytes, 'math_inspect_seed_history_invalid'));
       if (!description.success || !archived.success) return unknown('math_inspect_single_source_invalid');
       const record = description.data, source = record.source;
       if (record.taskDigest !== state.taskDigest || record.problemReceiptDigest !== state.problem.receiptDigest ||
           record.sourcePolicyDigest !== continuationSourcePolicyDigest(state.problem) ||
           record.destination.runId !== state.runId || record.destination.stateFile !== stateFile ||
-          source.runId === state.runId || source.runId !== archived.data.runId || source.stateDigest !== item.sha256 ||
+          source.runId === state.runId || source.runId !== archived.data.runId ||
+          source.stateDigest !== (archived.data.schema === 'theorem-os.single-continuation-history.v1' ? archived.data.stateDigest : item.sha256) ||
           archived.data.taskDigest !== state.taskDigest || source.environmentDigest !== archived.data.environmentDigest ||
           item.provenance.runId !== source.runId || item.provenance.source !== source.stateFile ||
           archived.data.cooperation?.canonicalCommit && archived.data.cooperation.canonicalCommit !== source.canonicalCommit)

@@ -12,6 +12,7 @@ import type { StoredRunInspectionArtifacts } from './storedRunInspection';
 import { safeFailureDiagnostic } from '../runtime/failureDiagnostic';
 import { planApprovalInspection } from './planApproval';
 import { agentTeamOverview } from './agentTeamViews';
+import { buildAgentTeamContributions, teamContributionsSchema } from './agentTeamContributions';
 import { projectAgentTeamBudget } from './agentTeamBudget';
 
 /** Binds a report to the stored observation; this does not replay or accept its proof evidence. */
@@ -76,6 +77,11 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
   const evaluator = resultMatches && result?.evaluator && typeof result.evaluator === 'object'
     ? result.evaluator as Record<string, unknown> : undefined;
   const tasks = cooperative?.tasks ?? [];
+  const savedContributions = teamContributionsSchema.safeParse(resultMatches ? result?.teamContributions : undefined);
+  const contributions = state.agentTeam?.transport !== 'native-agent-control' ? undefined :
+    savedContributions.success && savedContributions.data.runId === state.runId &&
+    (!savedContributions.data.finalCommit || savedContributions.data.finalCommit === result?.solution_commit)
+      ? savedContributions.data : buildAgentTeamContributions(state, evaluator ?? {});
   const checked = tasks.filter(node => proofRecord(node, state).status === 'checked');
   const scheduled = (state.workers ?? []).filter(worker => worker.scheduling);
   const working = scheduled.filter(worker => worker.scheduling!.status === 'working');
@@ -94,7 +100,13 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
       researchSkillWorkflow: state.researchSkillWorkflow, agentSessionPlan: state.agentSessionPlan,
       ...(state.agentHarness ? { agentHarness: { id: state.agentHarness.id,
         executableDigest: state.agentHarness.executableDigest, configurationDigest: state.agentHarness.configurationDigest } } : {}),
-      commonResearchSkill: state.commonResearchSkill, researchDelegation: state.researchDelegation,
+      commonResearchSkill: state.commonResearchSkill,
+      researchDelegation: state.researchDelegation?.mode === 'team'
+        ? { mode: state.researchDelegation.mode, maxAgents: state.researchDelegation.maxAgents,
+            ...(state.researchDelegation.preferredProfiles && { preferredProfiles: state.researchDelegation.preferredProfiles }),
+            ...(state.researchDelegation.personalExperts && { personalExperts: { digest: state.researchDelegation.personalExperts.digest,
+              cards: state.researchDelegation.personalExperts.cards.map(({ assetId, version, digest, name }) => ({ assetId, version, digest, name })) } }) }
+        : state.researchDelegation,
       buildDigest: state.buildDigest, environmentDigest: state.environmentDigest, methodDigest: state.methodDigest,
       knowledgeDigest: state.knowledgeDigest },
     turns: state.turns, usage: teamMode ? aggregateUsage(usageRecords) : state.usage,
@@ -110,6 +122,7 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
       agents: state.nativeAgents ?? [], usageSource: 'shared-upstream-request-receipts',
       nativeTotals: 'observational-only' } } : {}),
     ...(teamMode ? { agentTeam: { evidence: 'recorded-not-replayed', control: 'agent-organized',
+      contributions,
       maxAgents: state.researchDelegation!.maxAgents,
       native: state.agentTeam?.nativeControl && { status: state.agentTeam.nativeControl.rootAgent?.status,
         writerStop: state.agentTeam.nativeControl.rootWriterStop,
@@ -119,6 +132,7 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
       workers: (state.agentTeam?.workers ?? []).map(worker => ({ id: worker.id, status: worker.status,
         turns: worker.turns, threadId: worker.threadId, writerStopUnconfirmed: worker.writerStopUnconfirmed,
         native: worker.native && { status: worker.native.status, lastOutcome: worker.native.lastOutcome,
+          spawnHistory: worker.native.spawnHistory ?? 'unknown',
           writerStop: worker.native.writerStop, runtimeConfiguration: worker.native.runtimeConfiguration },
         tasks: worker.tasks.map(task => ({ id: task.id, message: task.message, status: task.status,
           summary: task.summary, error: task.error, deliveryId: task.deliveryId })) })),
@@ -387,6 +401,20 @@ export function renderRunInspection(report: Inspection): string {
       text += section('Selected integrations', table(['Delivery', 'Recipient', 'Saved status', 'Commit', 'Error'],
         report.agentTeam.adoptions.map(adoption => [adoption.deliveryId, adoption.targetId, adoption.status, adoption.commit, adoption.error]))) +
         '\nLocal delivery and integration records do not grant original-problem acceptance.\n';
+      if (team.contributions) {
+        const c = team.contributions;
+        text += section('Final proof references to member deliveries', table(
+          ['Member', 'Delivered declaration', 'Original target', 'Relation', 'Submission', 'Delivery / forwarded from', 'Lean receipt or reason'],
+          c.declarations.flatMap(d => d.targets.map(t => [d.agentId, d.file + ': ' + d.name, t.name, t.relation,
+            [d.kind ?? 'theorem', d.taskId, d.objectiveRevision && 'rev ' + d.objectiveRevision].filter(Boolean).join(' / '),
+            [d.deliveryId, ...d.forwardedFrom].join(' / '), [t.receiptId, t.reason].filter(Boolean).join('; ')])))) +
+          '\nRelations concern the exact transferred source. A forwarded declaration is not evidence of authorship. ' +
+          'Not-referenced concerns the recorded proof term only; old receipts may not distinguish direct from indirect.\n';
+        if (c.unavailableDeliveries.length) text += '\nUnavailable delivery evidence: ' + c.unavailableDeliveries.join(', ') + '\n';
+        if (c.advisoryMessages.length) text += section('Member messages (use not established)', table(
+          ['From', 'To', 'Mailbox status', 'Recorded message'],
+          c.advisoryMessages.map(m => [m.from, m.to, m.status, m.text ?? m.id])));
+      }
     }
     const recoveries = report.workers.filter(worker => worker.recovery);
     if (recoveries.length) text += section('Session recovery', table(['Session', 'Recovery', 'Reason', 'Cycles', 'Waited ms'],

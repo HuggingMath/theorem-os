@@ -31,11 +31,43 @@ function fixture(common: boolean) {
   return { ...base, state, taskText, access, build };
 }
 
+it('retains source research and failure feedback on native continuation with a saved coordination presentation', () => {
+  const f = fixture(false);
+  f.state.researchDelegation = { mode: 'team', maxAgents: 3 };
+  f.state.agentTeam = { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control',
+    workers: [], events: [], deliveries: [], adoptions: [], operations: [],
+    coordination: { decision: 'continue', reason: 'Inspect a direct proof.', nextStep: 'Check the saved candidate.',
+      revision: 1, at: 1, startedRequests: 0, eventSequence: 0, observationRevision: 0 },
+    coordinationObservation: { revision: 1, at: 2, key: 'failed-check', kind: 'proof-feedback', failed: true,
+      description: 'The saved candidate still has an unresolved proof obligation.' },
+    coordinationPresentation: { at: 3, reason: 'research-update', decisionRevision: 1, eventSequence: 0,
+      observationRevision: 1, startedRequests: 1 } };
+  const feedback = f.state.agentTeam.coordinationObservation!.description;
+  const context = buildSkillResearchContext(f.problem, f.state, { ...f.access,
+    sourceFeedback: feedback, teamRole: { id: 'lead', role: 'lead' } });
+  const dispatch = finalizeResearchDispatch(context, { continuation: true });
+  expect(dispatch.message).toContain(feedback);
+  expect(dispatch.message).toContain('Read the current owned source files, relevant definitions and worktree-root RESEARCH.md');
+  expect(dispatch.message).toContain('Read current owned sources and RESEARCH.md before relying on saved claims.');
+  expect(dispatch.manifest!.included).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: 'saved-work', kind: 'sources', required: true }),
+    expect.objectContaining({ id: 'same-thread-skill-research', kind: 'continuation', required: true }),
+    expect.objectContaining({ id: 'host-feedback', kind: 'feedback', required: true }),
+  ]));
+  expect(dispatch.message).not.toContain('Address the pending collaboration decision');
+  expect(dispatch.message).not.toContain('After ordinary tools resume');
+  expect(dispatch.message).not.toContain('Resume original research after addressing');
+  expect(dispatch.message).not.toContain('before extended proof work');
+  expect(dispatch.message).not.toContain(f.taskText);
+});
+
 it('compiles the current child assignment and inbox inside both full and continuation context budgets', () => {
   const f = fixture(false), sourceCommit = 'a'.repeat(40), deliveryBaseCommit = 'b'.repeat(40);
   const objective = 'Profiles: D041, prover\n研究当前不等式并独立验证假设；明确报告反例或可复用的 Lean 声明。';
   f.state.researchDelegation = { mode: 'team', maxAgents: 3 };
-  f.state.agentTeam = { schema: 'theorem-os.agent-team.v1', deliveries: [], adoptions: [], operations: [],
+  f.state.agentTeam = { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control',
+    deliveries: [], adoptions: [], operations: [],
+    coordinationPresentation: { at: 1, reason: 'opening', decisionRevision: 0, eventSequence: 0 },
     events: [{ sequence: 1, from: 'lead', to: 'child', kind: 'message', at: 1, text: 'An additional boundary case to inspect.' }],
     workers: [{ id: 'child', role: 'researcher', worktree: f.workspace, phase: 'running', status: 'running',
       turns: 1, cursor: 0, seedCommit: sourceCommit,
@@ -45,6 +77,11 @@ it('compiles the current child assignment and inbox inside both full and continu
     executionLimits: { ...teamTurnTiming(300_000), remainingRunMs: () => 1_200_000 } });
   for (const continuation of [false, true]) {
     const dispatch = finalizeResearchDispatch(context, { continuation });
+    expect(dispatch.message).not.toContain('Address the pending collaboration decision');
+    expect(dispatch.message).not.toContain('After ordinary tools resume');
+    expect(dispatch.message).not.toContain('"currentStage"');
+    expect(dispatch.instructions).toContain('Only Lead dispatches and adopts.');
+    expect(dispatch.instructions).toContain('Do not spawn subteams or interrupt peers.');
     expect(dispatch.manifest!.included.find(item => item.id === 'agent-team-assignment'))
       .toMatchObject({ kind: 'assignment', required: true });
     expect(dispatch.manifest!.included.find(item => item.id === 'agent-team-profiles'))

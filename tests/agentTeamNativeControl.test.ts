@@ -66,6 +66,37 @@ describe('native AgentControl mathematical-team host routing', () => {
     expect(f.archive.workers[0].status).toBe('idle');
   });
 
+  it('keeps repeated native reads and usage acknowledgments out of the durable mutation journal', async () => {
+    const f = await fixture();
+    f.save.mockClear();
+    for (let index = 0; index < 3; index++) {
+      expect(await f.call('resolve', { caller: ROOT, target: { kind: 'reference', reference: '/root/analyst' } }))
+        .toEqual({ result: { threadId: CHILD } });
+      expect((await f.call('list', { caller: ROOT })).result).toMatchObject({ agents: [{ threadId: ROOT }] });
+      expect(await f.call('childPaths', { parent: ROOT })).toEqual({ result: { paths: ['/root/analyst'] } });
+      expect(await f.call('recordUsage', { caller: ROOT, threadId: ROOT, turnId: 'turn-' + index,
+        usage: { total_tokens: index } })).toEqual({ result: {} });
+      expect(await f.call('releaseTurn', { caller: ROOT, threadId: ROOT, turnId: 'turn-' + index })).toEqual({ result: {} });
+    }
+    await expect(f.call('recordUsage', { caller: CHILD })).rejects.toThrow('caller_changed');
+    await expect(f.call('releaseTurn', { caller: CHILD })).rejects.toThrow('caller_changed');
+    expect(f.archive.operations).toEqual([]); expect(f.save).not.toHaveBeenCalled();
+    expect(f.root.update).not.toHaveBeenCalled(); expect(f.lifecycle.followup).not.toHaveBeenCalled();
+  });
+
+  it('reads current loaded membership instead of replaying a saved list snapshot', async () => {
+    const f = await fixture();
+    const payload = { caller: ROOT };
+    expect((await f.call('list', payload, 'lead', f.root, 'same-read')).result).toMatchObject({ agents: [{ threadId: ROOT }] });
+    const child = connection(CHILD, '/root/analyst');
+    await f.call('attach', { threadId: CHILD, sessionId: ROOT }, 'analyst', child);
+    f.save.mockClear();
+    expect((await f.call('list', payload, 'lead', f.root, 'same-read')).result).toMatchObject({
+      agents: [{ threadId: ROOT }, { threadId: CHILD }],
+    });
+    expect(f.archive.operations).toEqual([]); expect(f.save).not.toHaveBeenCalled();
+  });
+
   it('keeps queue-only mail durable without starting an idle model turn', async () => {
     const f = await fixture();
     const result = await f.call('send', { caller: ROOT, target: { kind: 'id', threadId: CHILD },
@@ -92,8 +123,9 @@ describe('native AgentControl mathematical-team host routing', () => {
       input: { kind: 'message', mode: 'queueOnly', message: { kind: 'plaintext', text: 'An advisory finding.' } } }, 'analyst', child);
     expect(f.archive.nativeControl!.mailbox[0]).toMatchObject({ author: '/root/analyst', recipient: '/root', status: 'accepted' });
     expect(f.archive.nativeControl!.mailbox[0].hostEventSequence).toBeUndefined();
-    await f.control.advisory('analyst', 'lead', 'Host progress event.', 17);
-    expect(f.archive.nativeControl!.mailbox[1]).toMatchObject({ hostEventSequence: 17, status: 'accepted' });
+    await f.control.advisory('analyst', 'lead', 'Checked declarations are ready.');
+    expect(f.archive.nativeControl!.mailbox[1]).toMatchObject({ status: 'accepted' });
+    expect(f.archive.nativeControl!.mailbox[1]).not.toHaveProperty('hostEventSequence');
     const notification = vi.mocked(f.root.update).mock.calls.at(-1)![0].mailbox![0];
     expect(notification).not.toHaveProperty('hostEventSequence');
     await expect(f.call('spawn', { caller: CHILD }, 'analyst', child)).rejects.toThrow('lead_operation_required');
@@ -110,23 +142,24 @@ describe('native AgentControl mathematical-team host routing', () => {
   it('delivers host adoption and failure observations without looking up a nonexistent host worker', async () => {
     const f = await fixture(), child = connection(CHILD, '/root/analyst');
     await f.call('attach', { threadId: CHILD, sessionId: ROOT }, 'analyst', child);
-    await f.control.advisory(null, 'lead', 'Checked declarations were integrated.', 18);
-    await f.control.advisory(null, 'analyst', 'The dependency is ready.', 19);
+    await f.control.advisory(null, 'lead', 'Checked declarations were integrated.');
+    await f.control.advisory(null, 'analyst', 'The dependency is ready.');
     expect(f.archive.nativeControl!.mailbox).toMatchObject([
-      { author: '/morpheus', recipient: '/root', hostEventSequence: 18, status: 'accepted' },
-      { author: '/morpheus', recipient: '/root/analyst', hostEventSequence: 19, status: 'accepted' },
+      { author: '/morpheus', recipient: '/root', status: 'accepted' },
+      { author: '/morpheus', recipient: '/root/analyst', status: 'accepted' },
     ]);
+    expect(f.archive.nativeControl!.mailbox.every(item => item.hostEventSequence === undefined)).toBe(true);
     expect(f.lifecycle.followup).not.toHaveBeenCalled();
   });
 
   it('keeps a member named host distinct from the native host author', async () => {
     const f = await fixture();
     f.archive.workers[0] = member('host');
-    await f.control.advisory('host', 'lead', 'Member research update.', 20);
-    await f.control.advisory(null, 'host', 'Checked dependency ready.', 21);
+    await f.control.advisory('host', 'lead', 'Member checked delivery.');
+    await f.control.advisory(null, 'host', 'Checked dependency ready.');
     expect(f.archive.nativeControl!.mailbox).toMatchObject([
-      { author: '/root/host', recipient: '/root', hostEventSequence: 20, status: 'accepted' },
-      { author: '/morpheus', recipient: '/root/host', hostEventSequence: 21, status: 'queued' },
+      { author: '/root/host', recipient: '/root', status: 'accepted' },
+      { author: '/morpheus', recipient: '/root/host', status: 'queued' },
     ]);
   });
 
@@ -154,6 +187,26 @@ describe('native AgentControl mathematical-team host routing', () => {
     expect(await first).toEqual(await repeated); expect(f.lifecycle.followup).toHaveBeenCalledTimes(1);
     await expect(f.call('send', { ...payload, startOptions: { parentTurnId: 'changed' } }, 'lead', f.root, 'stable-op'))
       .rejects.toThrow('call_changed');
+  });
+
+  it('replays a saved native dispatch receipt after recovery without dispatching the member twice', async () => {
+    const f = await fixture();
+    const payload = { caller: ROOT, target: { kind: 'id', threadId: CHILD },
+      input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: 'Continue the assignment.' } } };
+    const accepted = await f.call('send', payload, 'lead', f.root, 'saved-dispatch');
+    expect(f.lifecycle.followup).toHaveBeenCalledTimes(1);
+    const archive = structuredClone(f.archive), save = vi.fn();
+    const lifecycle = { ...f.lifecycle, followup: vi.fn(async () => f.accepted) };
+    const recovered = new AgentTeamNativeControl(archive, lifecycle, save), root = connection();
+    const request = (operation: string, operationId: string, payload: Json) => recovered.options('lead').request({
+      version: 1, sessionId: ROOT, threadId: ROOT, operation, operationId, payload,
+    }, root, { signal: new AbortController().signal });
+    await request('attach', 'recovered-attach', { threadId: ROOT, sessionId: ROOT });
+    save.mockClear();
+    expect(await request('send', 'saved-dispatch', payload)).toEqual(accepted);
+    await expect(request('send', 'saved-dispatch', { ...payload, startOptions: { parentTurnId: 'changed' } })).rejects.toThrow('call_changed');
+    expect(lifecycle.followup).not.toHaveBeenCalled(); expect(save).not.toHaveBeenCalled();
+    expect(archive.operations).toEqual(f.archive.operations);
   });
 
   it('records native completion as advisory without manufacturing a proof delivery', async () => {
@@ -221,13 +274,14 @@ describe('native AgentControl mathematical-team host routing', () => {
   it('makes native transport operations unavailable through the mathematical dynamic tool', () => {
     const tool = agentTeamToolDefinition('lead', false, 'native-agent-control');
     const operations = (tool.inputSchema.properties as Json).operation.enum;
-    for (const operation of ['spawn', 'assign', 'message', 'poll', 'wait', 'stop', 'resume']) {
+    for (const operation of ['spawn', 'assign', 'message', 'poll', 'wait', 'stop', 'resume', 'amend', 'cancel', 'coordinate', 'publish', 'budget', 'progress']) {
       expect(operations).not.toContain(operation);
       expect(agentTeamOperationAllowed('lead', false, 'native-agent-control', operation)).toBe(false);
     }
-    expect(operations).toEqual(expect.arrayContaining(['amend', 'adopt', 'inspect', 'finish', 'coordinate']));
-    expect(operations).not.toContain('budget');
-    expect(agentTeamInstructions({ id: 'lead', role: 'lead' }, 4, 'native-agent-control')).toContain('native spawn_agent');
+    expect(operations).toEqual(['finish', 'history', 'inspect', 'inspect-research', 'adopt']);
+    const memberTool = agentTeamToolDefinition('analyst', false, 'native-agent-control');
+    expect((memberTool.inputSchema.properties as Json).operation.enum).toEqual(['yield', 'history', 'inspect', 'inspect-research', 'submit']);
+    expect(agentTeamInstructions({ id: 'lead', role: 'lead' }, 4, 'native-agent-control')).toContain('native collaboration tools');
     expect(agentTeamInstructions({ id: 'lead', role: 'lead' }, 4, 'native-agent-control')).not.toContain('Built-in spawn/fork is disabled');
     expect(agentTeamInstructions({ id: 'lead', role: 'lead' }, 4)).toContain('Built-in spawn/fork is disabled');
   });

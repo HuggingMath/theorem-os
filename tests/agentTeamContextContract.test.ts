@@ -4,10 +4,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { readMathAgentSkill } from '../src/runtime/agentSkills';
 import { agentTeamOperationAllowed, agentTeamRequestSchema, type AgentTeamTransport } from '../src/solver/agentTeamTool';
 import { agentTeamTaskHistory } from '../src/solver/agentTeamViews';
+import { agentTeamStateSchema } from '../src/solver/agentTeamState';
 import { agentTeamContextSection, buildSkillResearchContext } from '../src/solver/skillResearchContext';
 import { buildResearchContext, finalizeResearchDispatch } from '../src/solver/modules/context';
-import { resolveAgentTeamProfiles } from '../src/solver/agentTeamProfiles';
+import { resolveAgentTeamLeadProfile, resolveAgentTeamProfiles } from '../src/solver/agentTeamProfiles';
 import { researchSkillIdentity } from '../src/solver/researchSkill';
+import { readPersonalExperts } from '../src/solver/personalExperts';
 import { localExample, solverState } from './helpers/solver';
 
 const roots: string[] = [];
@@ -32,7 +34,8 @@ describe.each(['host-tools', 'native-agent-control'] as const)('%s complete cont
   it.each(['direct', 'full'] as const)('injects the pinned Lead charter once through the %s workflow, including continuation', workflow => {
     const f = fixture(transport);
     if (workflow === 'full') f.state.researchSkillWorkflow = 'full';
-    const profile = resolveAgentTeamProfiles(f.access.researchSkill, 'Profiles: lead');
+    f.state.researchDelegation = { mode: 'team', maxAgents: 3, preferredProfiles: ['D011', 'engineer'] };
+    const profile = resolveAgentTeamLeadProfile(f.access.researchSkill);
     expect(profile.evidence).toMatchObject({ selected: ['lead'], loaded: ['lead'], unresolved: [] });
     // Root dispatch normally omits teamRole; explicit coordinator dispatch has the same charter.
     for (const teamRole of [undefined, { id: 'lead', role: 'lead' } as const]) {
@@ -43,6 +46,8 @@ describe.each(['host-tools', 'native-agent-control'] as const)('%s complete cont
         const dispatched = finalizeResearchDispatch(context, { continuation,
           checkpointInstruction: 'Assess the current team update and continue saved work.' });
         expect(dispatched.instructions).toContain(profile.section.text);
+        expect(dispatched.instructions).toContain('User-preferred member profiles:');
+        expect(dispatched.instructions).toContain('D011 (Elementary Number Theory)');
         expect((dispatched.instructions + dispatched.message).split(profile.section.text)).toHaveLength(2);
         expect(dispatched.instructions).toContain(JSON.stringify(profile.evidence));
         expect(dispatched.manifest?.usedBytes).toBe(Buffer.byteLength(dispatched.instructions) + Buffer.byteLength(dispatched.message));
@@ -52,13 +57,14 @@ describe.each(['host-tools', 'native-agent-control'] as const)('%s complete cont
 
   it('gives Lead the actual member delivery interface while keeping its own standalone request separate', () => {
     const f = fixture(transport);
+    f.state.researchDelegation = { mode: 'team', maxAgents: 3, preferredProfiles: ['D011', 'engineer'] };
     const lead = buildSkillResearchContext(f.problem, f.state, { ...f.access, teamRole: { id: 'lead', role: 'lead' } });
     const leadHelp = fs.readFileSync(path.join(f.workspace, '.scratch/theoremos-help.md'), 'utf8');
     const member = buildSkillResearchContext(f.problem, f.state, { ...f.access,
       teamRole: { id: 'member', role: 'worker' },
       teamAssignment: { taskId: 'current', message: f.objective, sourceCommit: f.problem.baseCommit } });
     const memberHelp = fs.readFileSync(path.join(f.workspace, '.scratch/theoremos-help.md'), 'utf8');
-    const leadProfile = resolveAgentTeamProfiles(f.access.researchSkill, 'Profiles: lead').section.text;
+    const leadProfile = resolveAgentTeamLeadProfile(f.access.researchSkill).section.text;
     const memberProfile = resolveAgentTeamProfiles(f.access.researchSkill, f.objective).section.text;
     const request = agentTeamRequestSchema.parse({ operation: 'submit', summary: 'One independent result.',
       declarations: [{ file: f.problem.ownedFiles[0], name: 'Fixture.helper', type: 'True' }] });
@@ -74,6 +80,15 @@ describe.each(['host-tools', 'native-agent-control'] as const)('%s complete cont
         if (context === member) {
           expect(full.instructions + full.message).not.toContain(leadProfile);
           expect(full.message).toContain(memberProfile);
+          expect(full.instructions + full.message).not.toContain('User-preferred member profiles:');
+          expect(full.message).not.toContain('Profile D011 (');
+          expect(full.instructions).toContain('the assignment defines the result you own');
+          expect(full.instructions).not.toContain('Research the fixed original mathematics problem');
+          expect(full.message).toContain(JSON.stringify(f.objective));
+          if (!continuation) {
+            expect(full.message).toContain('Frozen original problem (background for your current Lead assignment)');
+            expect(full.message).toContain(JSON.stringify(f.problem.contract.formalStatement));
+          }
         }
         const editable = JSON.parse(/Editable Lean paths relative to it: (\[[^\n]*?\])\./u.exec(full.instructions)![1]!);
         expect(editable).toEqual(f.problem.ownedFiles.filter(file => !Object.hasOwn(f.problem.frozenFiles ?? {}, file)));
@@ -81,12 +96,44 @@ describe.each(['host-tools', 'native-agent-control'] as const)('%s complete cont
         if (transport === 'native-agent-control') {
           expect(full.instructions + full.message).not.toContain('theoremos_team poll');
           expect(full.instructions + full.message).not.toContain('Poll after');
+          expect(full.instructions + full.message).not.toContain('After ordinary tools resume');
+          expect(full.instructions + full.message).not.toContain('Built-in spawn/fork is disabled');
+          if (context === member) {
+            expect(full.instructions).toContain('Only Lead dispatches and adopts.');
+            expect(full.instructions).toContain('Do not spawn subteams or interrupt peers.');
+            expect(full.message).not.toContain('"currentStage"');
+          } else {
+            expect(full.instructions).toContain('Lead of a flat mathematical research team');
+            expect(full.instructions).toContain('Call collaboration tools directly in their exposed namespace, not through functions.exec.');
+            expect(full.instructions).toContain('A child\'s final answer is automatically delivered to its parent.');
+          }
           expect(agentTeamOperationAllowed('member', false, transport, 'poll')).toBe(false);
         } else {
           expect(agentTeamOperationAllowed('member', false, transport, 'poll')).toBe(true);
         }
       }
     }
+  });
+
+  it('shows personal card descriptions to Lead and only assigned card knowledge to members', () => {
+    const f = fixture(transport);
+    const file = path.join(f.directory, 'expert-cards.json');
+    const card = { name: 'Chosen expert', assetId: 'chosen', version: 'v1', digest: 'a'.repeat(64),
+      summary: 'Short catalogue entry', knowledge: 'Private chosen expert knowledge' };
+    fs.writeFileSync(file, JSON.stringify([card, { ...card, assetId: 'other', name: 'Other expert',
+      digest: 'b'.repeat(64), knowledge: 'Private unrelated knowledge' }]));
+    f.state.researchDelegation = { mode: 'team', maxAgents: 3, personalExperts: readPersonalExperts(file)! };
+    const lead = buildSkillResearchContext(f.problem, f.state, f.access);
+    expect(lead.instructions).toContain(card.summary);
+    expect(lead.instructions + lead.message).not.toContain(card.knowledge);
+    const msg = 'Profiles: asset:chosen, prover\nInvestigate the consumer.';
+    f.state.agentTeam!.workers[0]!.tasks[0]!.message = msg;
+    const member = buildSkillResearchContext(f.problem, f.state, { ...f.access, teamRole: { id: 'member', role: 'worker' },
+      teamAssignment: { taskId: 'current', message: msg, sourceCommit: f.problem.baseCommit } });
+    expect(member.message).toContain(card.knowledge);
+    expect(member.message).toContain('"releaseDigest":"' + card.digest + '"');
+    expect(member.message + member.instructions).not.toContain('Private unrelated knowledge');
+    expect(member.continuationMessage).toContain(card.knowledge);
   });
 
   it('keeps one full current assignment and one evidence record, with complete history still readable', () => {
@@ -106,15 +153,40 @@ describe.each(['host-tools', 'native-agent-control'] as const)('%s complete cont
   });
 });
 
-it('makes the opening decision the current stage and returns to research after a recorded choice', () => {
-  const f = fixture('native-agent-control');
-  f.state.agentTeam!.workers = [];
-  const data = () => JSON.parse(agentTeamContextSection(f.state).text.split('\n')[1]!);
-  expect(data().currentStage).toMatchObject({ kind: 'collaboration-decision', reason: 'opening' });
-  f.state.agentTeam!.coordination = { decision: 'defer', reason: 'Resolve one definition.', nextStep: 'Read its declaration.',
-    revision: 1, at: 1, startedRequests: 0, eventSequence: 0, nativeMessageSequence: 0 };
-  expect(data().currentStage.kind).toBe('research');
-});
+it.each(['opening', 'saved presentation', 'failed probe', 'uncertain mail'] as const)
+  ('keeps native %s evidence advisory after state recovery', scenario => {
+    const f = fixture('native-agent-control'), team = f.state.agentTeam!;
+    team.workers = [];
+    if (scenario !== 'opening') team.coordinationPresentation = {
+      at: 1, reason: 'opening', decisionRevision: 0, eventSequence: 0, startedRequests: 0 };
+    if (scenario === 'failed probe' || scenario === 'uncertain mail') team.coordination = {
+      revision: 1, at: 2, decision: 'continue', reason: 'A concrete question is ready to inspect.',
+      nextStep: 'Read current sources and check the next inference.', startedRequests: 0,
+      eventSequence: 0, nativeMessageSequence: 0, observationRevision: 0 };
+    if (scenario === 'failed probe') team.coordinationObservation = {
+      revision: 1, at: 3, key: 'failed-probe', kind: 'tool-result', failed: true,
+      description: 'The local probe failed; inspect the current diagnostic.' };
+    if (scenario === 'uncertain mail') team.nativeControl = {
+      sessionId: 'session', rootThreadId: 'root-thread', sequence: 1, mailbox: [{ id: 'mail-1',
+        threadId: 'root-thread', author: '/root/member', recipient: '/root', status: 'uncertain', sequence: 1 }] };
+    f.state.agentTeam = agentTeamStateSchema.parse(JSON.parse(JSON.stringify(team)));
+    const archived = structuredClone(f.state.agentTeam);
+    const observation = JSON.parse(agentTeamContextSection(f.state).text.split('\n')[1]!);
+    expect(observation).not.toHaveProperty('currentStage');
+    expect(observation).not.toHaveProperty('coordination');
+    expect(observation).not.toHaveProperty('coordinationObservation');
+    const context = buildSkillResearchContext(f.problem, f.state, { ...f.access, teamRole: { id: 'lead', role: 'lead' } });
+    for (const continuation of [false, true]) {
+      const dispatch = finalizeResearchDispatch(context, { continuation });
+      expect(dispatch.message).toContain('Read the current owned source files, relevant definitions and worktree-root RESEARCH.md');
+      expect(dispatch.message).not.toContain('Address the pending collaboration decision');
+      expect(dispatch.message).not.toContain('After ordinary tools resume');
+      expect(dispatch.message).not.toContain('before extended proof work');
+      expect(dispatch.manifest!.included.find(item => item.id === 'saved-work'))
+        .toMatchObject({ kind: 'sources', required: true });
+    }
+    expect(f.state.agentTeam).toEqual(archived);
+  });
 
 it('retains standalone declaration delivery without exposing a team contract', () => {
   const f = fixture('native-agent-control');

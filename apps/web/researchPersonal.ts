@@ -16,6 +16,7 @@ import type { WebFormalization } from './formalizationTypes';
 import type { ProblemDraftValue } from './problemDraftTypes';
 import { matchesProblemFormalization, matchesProblemRun } from './problemDraftSubmission';
 import { webLimits } from './shared';
+import { nativeTeamCapacitySchema, nativeTeamPreferencesSchema } from './researchMode';
 
 const key = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u), hash = z.string().regex(/^[a-f0-9]{64}$/u);
 const text = (max: number) => z.string().max(max).refine(value => !value.includes('\0'));
@@ -46,6 +47,8 @@ const values = {
       effort: z.enum(['none', 'low', 'medium', 'high', 'xhigh', 'max']), environment: z.enum(['standard', 'mathlib']),
       coordination: z.enum(['cooperative', 'independent']), planApproval: z.literal(true).optional(), templateId: text(64),
       researchMode: z.enum(['legacy', 'skill']).optional(), skillLoading: z.enum(['native', 'file']).optional(),
+      nativeTeamCapacity: nativeTeamCapacitySchema.optional(),
+      nativeTeamPreferredProfiles: nativeTeamPreferencesSchema.optional(),
       modulePlan: researchModulePlanDraftSchema.optional(), knowledgeDigest: text(256).nullable().optional(),
       sharedProofOrigin: z.object({ readingId: key, title: text(500), digest: hash }).strict().optional(),
       classicOrigin: z.object({ id: key, title: text(500), sourceSha256: hash }).strict().optional(),

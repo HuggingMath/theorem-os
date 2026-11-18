@@ -20,6 +20,8 @@ export function leanProblemDraft(value: TaskDraft, libraries?: ResearchReleaseRe
     coordination: value.coordination, templateId: value.templateId,
     ...(value.researchMode ? { researchMode: value.researchMode } : {}),
     ...(value.skillLoading ? { skillLoading: value.skillLoading } : {}),
+    ...(value.nativeTeamCapacity ? { nativeTeamCapacity: value.nativeTeamCapacity } : {}),
+    ...(value.nativeTeamCapacity && value.nativeTeamPreferredProfiles?.length ? { nativeTeamPreferredProfiles: [...value.nativeTeamPreferredProfiles] } : {}),
     ...(value.maxTotalTokens !== undefined ? { maxTotalTokens: value.maxTotalTokens } : {}),
     ...(value.planApproval ? { planApproval: true } : {}), ...(value.modulePlan ? { modulePlan: structuredClone(value.modulePlan) } : {}),
     ...(value.knowledgeDigest !== undefined ? { knowledgeDigest: value.knowledgeDigest } : {}),

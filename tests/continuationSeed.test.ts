@@ -1064,17 +1064,20 @@ describe('explicit prepared-run continuation initialization', () => {
     expect(state.cooperation!.planVersion).toBeUndefined();
     expect(fs.readFileSync(path.join(f.worktree, f.projectRelative, 'Submission/Helpers.lean'), 'utf8')).toBe(emptyHelpers);
     const source = JSON.parse(fs.readFileSync(path.join(f.directory, 'continuation-seed-source.json'), 'utf8'));
+    const { receipts: _receipts, ...requestCounts } = f.requests;
     expect(source).toMatchObject({ initialPlanning: true, source: { runId: 'old-run' }, plan: { tasks: [], groups: [] },
       history: { activity: { turns: 3, dispatchCounts: { planning: 3 }, usage: f.usage,
         workers: [expect.objectContaining({ id: 'solver', turns: 3, usage: f.usage,
-          usageAccounting: f.accounting, requestUsageAccounting: f.requests }),
+          usageAccounting: f.accounting, requestUsageAccounting: requestCounts }),
         expect.objectContaining({ id: 'researcher-1', turns: 0 }), expect.objectContaining({ id: 'researcher-2', turns: 0 }),
         expect.objectContaining({ id: 'engineer', turns: 0 })] } } });
     expect(source.history.deliveries).toContainEqual(expect.objectContaining(f.savedDraft));
     const snapshot = path.join(f.directory, 'continuation.json');
     const history = JSON.parse(readContinuationPage(snapshot, state.continuationDigest, 'seed-history').text);
     expect(history.history.activity.turns).toBe(3);
-    expect(history.history.activity.workers[0].requestUsageAccounting).toEqual(f.requests);
+    expect(history.history.activity.workers[0].requestUsageAccounting).toEqual(requestCounts);
+    expect(history.history.activity.workers[0]).not.toHaveProperty('threadId');
+    expect(history.history.activity.workers[0]).not.toHaveProperty('previousThreadIds');
     const draft = JSON.parse(readContinuationPage(snapshot, state.continuationDigest, 'draft-solver').text);
     expect(draft.notes).toBe(f.leadNotes); expect(draft.sources['Submission/Helpers.lean']).toBe(f.leadDraft);
     const firstDigest = report.snapshotDigest;

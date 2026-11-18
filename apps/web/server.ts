@@ -1,5 +1,6 @@
 import { publicWebProvider, webProviderHarness, webHarnessResearchError } from './harness';
-import { webDefaultSkillLoading } from './researchMode';
+import { nativeTeamCapacitySchema, nativeTeamPreferencesSchema, webDefaultSkillLoading } from './researchMode';
+import { webTeamProfiles } from './nativeTeamProfiles';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -69,6 +70,8 @@ const inputSchema = z.object({
   explanationLanguage: z.enum(['zh', 'en']).optional(),
   researchMode: z.enum(['legacy', 'skill']).optional(),
   skillLoading: z.enum(['native', 'file']).optional(),
+  nativeTeamCapacity: nativeTeamCapacitySchema.optional(),
+  nativeTeamPreferredProfiles: nativeTeamPreferencesSchema.optional(),
   planApproval: z.boolean().optional(),
   modulePlan: researchModulePlanSchema.optional(),
   researchSelection: researchSelectionSchema.optional(),
@@ -92,6 +95,7 @@ const explainSchema = z.object({
   apiKey: z.string().max(4096).regex(/^(?:[\x21-\x7e]{8,})?$/).default(''),
 }).strict();
 const precheckSchema = z.object({
+  nativeTeam: z.boolean().optional(),
   checkScope: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u).optional(),
   environment: z.enum(['standard', 'mathlib']).default(webDefaults.environment),
   source: z.string().min(1).refine(value => Buffer.byteLength(value) <= webLimits.maxSourceBytes),
@@ -661,6 +665,9 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           json(response, result.status, result.body); return;
         }
         if (!owner) throw new HttpError(401, '请先登录。');
+        if (url.pathname === '/api/team-profiles' && request.method === 'GET') {
+          json(response, 200, { profiles: webTeamProfiles() }); return;
+        }
         const newWork = request.method === 'POST' && (['/api/runs', '/api/formalizations', '/api/precheck'].includes(url.pathname)
           || /^\/api\/runs\/[^/]+\/(?:explain|explanations)$/u.test(url.pathname)
           || /^\/api\/formalizations\/[^/]+\/research$/u.test(url.pathname));
@@ -922,8 +929,9 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const gone = new AbortController();
           response.once('close', () => { if (!response.writableFinished) gone.abort(new PrecheckSuperseded()); });
           admitWork();
-          const frozen = parsed.data.researchSelection ? research.assets.freeze(owner,
-            parsed.data.researchSelection as ResearchConfigurationSelection, parsed.data.environment) : undefined;
+          const frozen = !parsed.data.researchSelection ? undefined : parsed.data.nativeTeam
+            ? research.assets.freezeNativeTeam(owner, parsed.data.researchSelection as ResearchConfigurationSelection, parsed.data.environment)
+            : research.assets.freeze(owner, parsed.data.researchSelection as ResearchConfigurationSelection, parsed.data.environment);
           const libraryPack = frozen ? combineWebLibraryPacks(frozen.libraryPack,
             selectWebLibraryPack({ source: parsed.data.source!, task: '', environment: parsed.data.environment })) : undefined;
           try { json(response, 200, { precheck: await prechecker.check(owner, { ...parsed.data,
@@ -953,7 +961,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           }
           const harnessError = webHarnessResearchError(provider, input as WebRunInput);
           if (harnessError) throw new HttpError(400, harnessError);
-          const researchModeError = webResearchModeError(input as WebRunInput);
+          const researchModeError = webResearchModeError(input as WebRunInput, provider);
           if (researchModeError) throw new HttpError(400, researchModeError);
           if (input.researchMode === 'skill') input.skillLoading ??= webDefaultSkillLoading(provider);
           if (input.planApproval && (input.coordination !== 'cooperative' || input.workers < 2))
@@ -971,9 +979,10 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             if (origin.run.source !== input.source || origin.run.environment !== input.environment)
               throw new HttpError(409, '运行的原题或环境与陈述版本不一致。');
           }
-          const frozenResearch = input.researchSelection
-            ? research.assets.freeze(owner, input.researchSelection as ResearchConfigurationSelection, input.environment,
-              input.researchSelection.agent ? undefined : input.modulePlan as ResearchModulePlan | undefined) : undefined;
+          const frozenResearch = !input.researchSelection ? undefined : input.nativeTeamCapacity
+            ? research.assets.freezeNativeTeam(owner, input.researchSelection as ResearchConfigurationSelection, input.environment)
+            : research.assets.freeze(owner, input.researchSelection as ResearchConfigurationSelection, input.environment,
+              input.researchSelection.agent ? undefined : input.modulePlan as ResearchModulePlan | undefined);
           if (frozenResearch && input.researchSelection?.agent && input.modulePlan
               && JSON.stringify(input.modulePlan) !== JSON.stringify(frozenResearch.modulePlan))
             throw new HttpError(409, '所选 Agent 的方案与当前自定义方案不同，请清除自定义方案后重新提交。');
@@ -995,6 +1004,10 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const raced = jobs.replay(owner, input as WebRunInput, provider, requestId, legacyEnvironmentOmitted);
           if (raced) { json(response, 200, { run: raced, ...submissionKeys() }); return; }
           if (!readiness.ready) throw new HttpError(503, '运行环境尚未就绪，请先构建 worker 镜像。');
+          if (input.nativeTeamCapacity && !readiness.nativeTeam) throw new HttpError(503, '当前运行镜像未安装原生团队后端。');
+          if (frozenResearch?.personalExperts?.length && !readiness.nativeTeamExpertCards)
+            throw new HttpError(503, '当前运行镜像不支持个人专家资料。请移除专家资产或更新运行镜像。');
+          if (input.nativeTeamPreferredProfiles?.length && !readiness.nativeTeamPreferences) throw new HttpError(503, '当前运行镜像不支持角色偏好。清空偏好后仍可使用原生团队。');
           const from = input.continueFrom as WebContinuation | undefined;
           const saved = from && jobs.get(owner, from.runId) ? trajectories.version(owner, from.runId, from.taskId, from.commit)?.source : undefined;
           if (from && !saved) throw new HttpError(404, '这个版本的代码没有记录或已超出保留范围。');

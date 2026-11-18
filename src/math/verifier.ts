@@ -80,6 +80,8 @@ export type MathematicsVerifierExecutionOptions = {
   dependencyCandidates?: readonly string[];
   /** Export actual references to declarations in project-local modules, separately for type and proof. */
   collectDeclarationReferences?: boolean;
+  /** For team attribution, distinguish immediate constants in the final elaborated term from the closure. */
+  collectDirectProofReferences?: boolean;
 };
 
 export type MathematicsVerifierResult = {
@@ -98,6 +100,7 @@ export type MathematicsVerifierResult = {
   sourceDeclarationHash?: string;
   usedDeclarationDependencies?: string[];
   declarationReferences?: LeanDeclarationReferences;
+  directProofReferences?: LeanDeclarationReferences['proof'];
   statementBinding: 'caller-bound-to-committed-declaration';
   toolchain: MathematicsVerificationToolchain;
   verifier: 'lean-kernel' | 'bounded-check' | 'unavailable';
@@ -204,6 +207,7 @@ type PreparedFile = {
   axiomDependencies: Map<string, string[]>;
   usedDeclarationDependencies?: Map<string, string[]>;
   declarationReferences?: Map<string, LeanDeclarationReferences>;
+  directProofReferences?: Map<string, LeanDeclarationReferences['proof']>;
   proofHash: string;
   inspection: Pick<MathematicsVerifierResult, 'sorryCount' | 'admitCount' | 'axioms'>;
   items: PreparedItem[];
@@ -1855,6 +1859,7 @@ type LeanDeclarationQuery = Readonly<{
     axioms?: Map<string, string[]>;
     usedDependencies?: Map<string, string[]>;
     references?: Map<string, LeanDeclarationReferences>;
+    direct?: Map<string, LeanDeclarationReferences['proof']>;
     error?: string;
   };
 }>;
@@ -1870,6 +1875,7 @@ const prepareLeanDeclarationQuery = async (
     forbiddenImportModules?: readonly string[];
     dependencyCandidates?: readonly string[];
     referenceModules?: readonly { module: string; file: string }[];
+    directProof?: boolean;
   }>
 ): Promise<LeanDeclarationQuery | undefined> => {
   const theoremNameSet = new Set<string>();
@@ -1971,6 +1977,17 @@ const prepareLeanDeclarationQuery = async (
           : []),
         ...(options.referenceModules ? theoremNames.flatMap(name =>
           leanReferenceCommands(name, options.referenceModules!, referenceMarkers.get(name)!)) : []),
+        ...(options.directProof && options.referenceModules ? theoremNames.flatMap(name => [
+          'run_cmd do', '  let env <- Lean.getEnv',
+          `  let modules : List (String × String) := [${options.referenceModules!.map(item => `(${JSON.stringify(item.module)}, ${JSON.stringify(item.file)})`).join(', ')}]`,
+          `  let root <- Lean.getConstInfo (${JSON.stringify(name)}.toName)`,
+          '  let some proof := root.value? (allowOpaque := true) | return',
+          '  let refs := (Lean.Expr.getUsedConstants proof).toList.filterMap fun n => Id.run do',
+          '    let m := match env.getModuleIdxFor? n with | some i => env.header.moduleNames[i.toNat]!.toString | none => ""',
+          '    return (modules.find? (fun e => e.1 == m)).map fun e => (n.toString, e.2)',
+          '  let report := (Lean.toJson (([] : List (String × String)), refs)).compress',
+          `  Lean.logInfo m!"${referenceMarkers.get(name)!.replace('DS_DECL_REFERENCES_', 'DS_DIRECT_REFERENCES_')}{if report.utf8ByteSize <= 8000 then report else "null"}"`,
+        ]) : []),
       ].join('\n')
     : file.source;
   await fs.promises.writeFile(queryAbsolutePath, `${externalChecks}\n${queries}\n`, 'utf8');
@@ -1983,9 +2000,15 @@ const prepareLeanDeclarationQuery = async (
       const axioms = new Map<string, string[]>();
       const usedDependencies = new Map<string, string[]>();
       const references = new Map<string, LeanDeclarationReferences>();
+      const direct = new Map<string, LeanDeclarationReferences['proof']>();
       if (options?.referenceModules) for (const [name, marker] of referenceMarkers) {
         const report = parseLeanReferences(stdout, marker, options.referenceModules.map(module => module.file));
         if (report) references.set(name, report);
+        if (options.directProof) {
+          const immediate = parseLeanReferences(stdout, marker.replace('DS_DECL_REFERENCES_', 'DS_DIRECT_REFERENCES_'), options.referenceModules.map(module => module.file));
+          if (immediate && report && immediate.proof.every(item => report.proof.some(ref => ref.file === item.file && ref.name === item.name)))
+            direct.set(name, immediate.proof);
+        }
       }
       if (dependencyCandidates) {
         for (const [theoremName, dependencyMarker] of dependencyMarkers) {
@@ -2046,7 +2069,7 @@ const prepareLeanDeclarationQuery = async (
         axioms.set(query.name, dependencies);
         if (query.localName) axioms.set(query.localName, dependencies);
       }
-      return { hashes, types, axioms, usedDependencies, references };
+      return { hashes, types, axioms, usedDependencies, references, direct };
     },
   };
 };
@@ -2300,6 +2323,7 @@ async function verifyFormalFile(file: PreparedFile, context: FormalFileVerificat
           dependencyCandidates: options.dependencyCandidates,
           referenceModules: options.collectDeclarationReferences
             ? localModules ?? [{ module: '', file: file.relativeProofPath }] : undefined,
+          directProof: options.collectDirectProofReferences,
         }
       : undefined
   );
@@ -2368,6 +2392,7 @@ async function verifyFormalFile(file: PreparedFile, context: FormalFileVerificat
   if (declarationExport?.usedDependencies)
     file.usedDeclarationDependencies = declarationExport.usedDependencies;
   if (declarationExport?.references) file.declarationReferences = declarationExport.references;
+  if (declarationExport?.direct) file.directProofReferences = declarationExport.direct;
 
   const axiomDependenciesFor = (item: PreparedItem): string[] =>
     (item.theoremName && declarationNamed(file.axiomDependencies, item.theoremName)) || file.inspection.axioms;
@@ -2531,6 +2556,8 @@ async function checkManyFormalVerificationsUnbounded(
                 : {}),
               ...(file.declarationReferences?.has(theoremName)
                 ? { declarationReferences: file.declarationReferences.get(theoremName) } : {}),
+              ...(file.directProofReferences?.has(theoremName)
+                ? { directProofReferences: file.directProofReferences.get(theoremName) } : {}),
             }
           : {}),
         statementBinding: 'caller-bound-to-committed-declaration',
@@ -2982,6 +3009,7 @@ async function buildFormalVerificationCacheKey(
       forbiddenImportModules: options.forbiddenImportModules ?? [],
       dependencyCandidates: options.dependencyCandidates ?? null,
       collectDeclarationReferences: options.collectDeclarationReferences ?? false,
+      ...(options.collectDirectProofReferences ? { collectDirectProofReferences: true } : {}),
       verifierExecutable,
       environment,
       toolchainFiles,

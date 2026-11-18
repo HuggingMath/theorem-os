@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { createServer, type Server } from 'node:http';
+import { createServer, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -22,6 +22,8 @@ const nativeAvailable = spawnSync(executable, ['--version'], {
 }).status === 0;
 const operations = ['spawn', 'assign', 'amend', 'finish', 'coordinate', 'budget', 'resume', 'history', 'publish', 'cancel',
   'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop'];
+const nativeLeadOperations = ['finish', 'history', 'inspect', 'inspect-research', 'adopt'];
+const nativeMemberOperations = ['yield', 'history', 'inspect', 'inspect-research', 'submit'];
 
 let directory: string | undefined, session: MathAgentSession | undefined, server: Server | undefined;
 afterEach(async () => {
@@ -41,11 +43,42 @@ function declaredTools(request: Json): Json[] {
   return declarations.flatMap((tool: Json) => tool.type === 'namespace' ? tool.tools : [tool]);
 }
 
+/** Full forks retain earlier role hints; only the latest privileged mode applies. */
+function effectiveMultiAgentMode(request: Json): string | undefined {
+  const messages = [request.instructions, ...(Array.isArray(request.input) ? request.input
+    .filter((item: Json) => ['system', 'developer'].includes(item.role))
+    .map((item: Json) => typeof item.content === 'string' ? item.content
+      : (item.content ?? []).map((part: Json) => part.text ?? '').join('\n')) : [])];
+  return messages.filter((text): text is string => typeof text === 'string')
+    .flatMap(text => [...text.matchAll(/<multi_agent_mode>([\s\S]*?)<\/multi_agent_mode>/gu)].map(match => match[1]!.trim())).at(-1);
+}
+
+function fixtureResponse(response: ServerResponse, id: string, items: Json[]) {
+  const base = { id, object: 'response', created_at: 1, model: 'deepseek-flash', status: 'in_progress', output: [] };
+  const stream: Json[] = [{ type: 'response.created', response: base }];
+  for (const [output_index, item] of items.entries()) {
+    const isCall = item.type === 'function_call';
+    stream.push({ type: 'response.output_item.added', output_index, item: isCall
+      ? { ...item, status: 'in_progress', arguments: '' } : { ...item, status: 'in_progress', content: [] } });
+    if (isCall) stream.push(
+      { type: 'response.function_call_arguments.delta', item_id: item.id, output_index, delta: item.arguments },
+      { type: 'response.function_call_arguments.done', item_id: item.id, output_index, arguments: item.arguments });
+    else stream.push(
+      { type: 'response.output_text.delta', item_id: item.id, output_index, content_index: 0, delta: item.content[0].text },
+      { type: 'response.output_text.done', item_id: item.id, output_index, content_index: 0, text: item.content[0].text });
+    stream.push({ type: 'response.output_item.done', output_index, item });
+  }
+  stream.push({ type: 'response.completed', response: { ...base, status: 'completed', output: items,
+    usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } } });
+  response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
+  response.end(stream.map(event => 'event: ' + event.type + '\ndata: ' + JSON.stringify(event) + '\n\n').join(''));
+}
+
 // This checks the real native client's wire protocol. The upstream is local and
 // scripted, so passing this test says nothing about a model choosing to delegate.
 describe.skipIf(!nativeAvailable)('real Codex dynamic team tool transport without a model', () => {
   it.each([{ actor: 'lead', finiteBudget: true }, { actor: 'lead', finiteBudget: false }, { actor: 'member', finiteBudget: false }])(
-    'advertises $actor for finite budget = $finiteBudget and returns a real host operation', async ({ actor, finiteBudget }) => {
+    'advertises historical $actor operations for finite budget = $finiteBudget', async ({ actor, finiteBudget }) => {
     const temporaryRoot = process.env.TMPDIR ?? '/data/lzh/default-storage/tmp';
     fs.mkdirSync(temporaryRoot, { recursive: true });
     directory = fs.realpathSync(fs.mkdtempSync(path.join(temporaryRoot, 'agent-team-native-tools-')));
@@ -64,14 +97,15 @@ describe.skipIf(!nativeAvailable)('real Codex dynamic team tool transport withou
         const final = { type: 'message', id: 'msg_team_probe', role: 'assistant', status: 'completed',
           content: [{ type: 'output_text', text: 'The host publication was received.', annotations: [] }] };
         const item = index === 1 ? call : final;
+        const isCall = item.type === 'function_call';
         const base = { id: 'resp_team_probe_' + index, object: 'response', created_at: 1,
           model: 'deepseek-flash', status: 'in_progress', output: [] };
         const events: Json[] = [{ type: 'response.created', response: base },
-          { type: 'response.output_item.added', output_index: 0, item: index === 1
-            ? { ...call, status: 'in_progress', arguments: '' } : { ...final, status: 'in_progress', content: [] } }];
-        if (index === 1) events.push(
-          { type: 'response.function_call_arguments.delta', item_id: call.id, output_index: 0, delta: call.arguments },
-          { type: 'response.function_call_arguments.done', item_id: call.id, output_index: 0, arguments: call.arguments });
+          { type: 'response.output_item.added', output_index: 0, item: isCall
+            ? { ...item, status: 'in_progress', arguments: '' } : { ...final, status: 'in_progress', content: [] } }];
+        if (isCall) events.push(
+          { type: 'response.function_call_arguments.delta', item_id: item.id, output_index: 0, delta: item.arguments },
+          { type: 'response.function_call_arguments.done', item_id: item.id, output_index: 0, arguments: item.arguments });
         else events.push(
           { type: 'response.output_text.delta', item_id: final.id, output_index: 0, content_index: 0, delta: final.content[0].text },
           { type: 'response.output_text.done', item_id: final.id, output_index: 0, content_index: 0, text: final.content[0].text });
@@ -110,13 +144,14 @@ describe.skipIf(!nativeAvailable)('real Codex dynamic team tool transport withou
     const tools = team.tools(actor), hostCalls: { name: string; arguments: unknown; threadId: string; turnId: string }[] = [];
     session = await createCodexMathSession({ executable, profile, workspace: receipt.workspaceRoot,
       model: 'deepseek-flash', effort: 'high', instructions: 'Offline team transport fixture.', turnTimeoutMs: 10_000,
-      environment: { PATH: process.env.PATH, THEOREMOS_TEST_KEY: 'offline-synthetic-key', NO_PROXY: '127.0.0.1,localhost' },
+      environment: { PATH: process.env.PATH, THEOREMOS_TEST_KEY: 'offline-synthetic-key',
+        [SUB2API_PROVIDER.apiKeyEnvironment]: 'offline-synthetic-key', NO_PROXY: '127.0.0.1,localhost' },
       onUsage: () => {}, tools: { definitions: tools.definitions, call: async (name, args, context) => {
         hostCalls.push({ name, arguments: args, threadId: context.threadId, turnId: context.turnId });
         return tools.call(name, args, context);
       } } });
     expect(await session.run('Exercise the local team interface.', 'offline-native-tools', receipt.workspaceRoot, () => {})).toBe('completed');
-    expect(errors).toEqual([]); expect(routes).toEqual(['/v1/responses', '/v1/responses']);
+    expect(errors).toEqual([]); expect(routes).toEqual(Array(2).fill('/v1/responses'));
     expect(requests).toHaveLength(2);
     const advertised = declaredTools(requests[0]).find(tool => tool.name === 'theoremos_team');
     // Codex normalizes provider schemas (for example, omitting numeric bounds).
@@ -132,7 +167,7 @@ describe.skipIf(!nativeAvailable)('real Codex dynamic team tool transport withou
     expect(advertised?.description).toContain('Self-addressed messages are rejected.');
     if (finiteBudget) expect(advertised?.parameters).not.toHaveProperty('oneOf');
     else {
-      expect(advertised?.parameters.oneOf).toHaveLength(allowed.length);
+      expect(advertised?.parameters.oneOf).toHaveLength(advertised?.parameters.properties.operation.enum.length);
       const messageSchema = advertised?.parameters.oneOf.find((branch: Json) => branch.properties.operation.enum[0] === 'message');
       expect(messageSchema).toMatchObject({ required: ['operation', 'agentId', 'message'], additionalProperties: false });
     }
@@ -165,11 +200,273 @@ describe.skipIf(!nativeAvailable)('real Codex dynamic team tool transport withou
       threadId: session.threadId, turnId: expect.any(String) }]);
     if (actor === 'lead') expect(state.agentTeam!.researchState).toMatchObject({ revision: 1, summary });
     else expect(state.agentTeam!.events).toContainEqual(expect.objectContaining({ from: 'member', to: 'lead', kind: 'message', text: summary }));
-    const returned = requests[1].input.find((item: Json) => item.type === 'function_call_output' && item.call_id === call.call_id);
+    const returned = requests.at(-1)!.input.find((item: Json) => item.type === 'function_call_output' && item.call_id === call.call_id);
     expect(JSON.stringify(returned?.output)).toContain(actor === 'lead' ? summary : 'saved-inbox');
     expect(session.lastCompletedResponse?.text).toBe('The host publication was received.');
     expect(await session.stopForFreeze!()).toEqual({ status: 'stopped' });
   }, 20_000);
+
+  it.skipIf(!process.env.THEOREMOS_TEST_CODEX_EXECUTABLE).each(['opening', 'defer', 'continue'] as const)(
+    'ignores archived %s coordination state while native research and collaboration remain available', async savedDecision => {
+    const temporaryRoot = process.env.TMPDIR ?? '/data/lzh/default-storage/tmp';
+    fs.mkdirSync(temporaryRoot, { recursive: true });
+    directory = fs.realpathSync(fs.mkdtempSync(path.join(temporaryRoot, 'agent-team-native-autonomy-')));
+    const requests: Json[] = [], errors: unknown[] = [], events: string[] = [], hostCalls: Json[] = [];
+    const functionCall = (id: string, name: string, args: Json, namespace?: string) => ({
+      type: 'function_call', id, call_id: id, name, ...(namespace ? { namespace } : {}),
+      arguments: JSON.stringify(args), status: 'completed',
+    });
+    // Archived decisions, a failed probe and native recipient feedback cannot
+    // introduce a host coordination prerequisite for ordinary research.
+    const calls = [
+      functionCall('probe_before_decision', 'ordinary_research_probe', { stage: 'before-decision' }),
+      functionCall('saved_history', 'theoremos_team', { operation: 'history' }),
+      functionCall('native_list', 'list_agents', {}, 'collaboration'),
+      functionCall('native_recipient_probe', 'send_message', {
+        target: '/root', message: 'Offline self-addressed recipient probe; no team task is dispatched.',
+      }, 'collaboration'),
+      functionCall('probe_after_updates', 'ordinary_research_probe', { stage: 'after-updates' }),
+    ];
+    const finalText = 'Native research continued without a host coordination gate.';
+    server = createServer(async (request, response) => {
+      try {
+        if (request.url !== '/v1/responses') throw new Error('unexpected_native_autonomy_route');
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) chunks.push(Buffer.from(chunk));
+        requests.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+        const index = requests.length;
+        const item = calls[index - 1] ?? { type: 'message', id: 'msg_native_autonomy', role: 'assistant', status: 'completed',
+          content: [{ type: 'output_text', text: finalText, annotations: [] }] };
+        fixtureResponse(response, 'resp_native_autonomy_' + index, [item]);
+      } catch (error) { errors.push(error); response.writeHead(500); response.end(); }
+    });
+    await new Promise<void>((resolve, reject) => { server!.once('error', reject); server!.listen(0, '127.0.0.1', resolve); });
+    const endpoint = 'http://127.0.0.1:' + (server.address() as AddressInfo).port + '/v1/responses';
+    const realFetch = globalThis.fetch.bind(globalThis);
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url !== SUB2API_PROVIDER.baseUrl + '/responses') throw new Error('unexpected_native_autonomy_upstream');
+      return realFetch(endpoint, init);
+    });
+    const profile = path.join(directory, 'profile'); prepareSub2apiProfile(profile, 'deepseek-flash', 'high');
+    const receipt = bootstrapLeanTask(path.join(directory, 'work'), {
+      task: 'Offline native autonomy fixture.', source: 'theorem original : True := by sorry\n',
+    });
+    const state = solverState(readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath), receipt.workspaceRoot,
+      { runId: 'offline-native-autonomy', phase: 'running', researchMode: 'skill',
+        researchDelegation: { mode: 'team', maxAgents: 3 },
+        agentTeam: { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control',
+          workers: [], events: [], deliveries: [], adoptions: [], operations: [] } });
+    if (savedDecision !== 'opening') {
+      state.agentTeam!.coordination = { decision: savedDecision, reason: 'Saved archived decision.', nextStep: 'Inspect a local probe.',
+        revision: 1, at: 1, startedRequests: 0, observationRevision: 0, activeAssignments: false,
+        eventSequence: 0, nativeMessageSequence: 0 };
+      state.agentTeam!.coordinationObservation = { key: 'saved-failed-probe', kind: 'tool-result', failed: true,
+        description: 'A previous local probe failed.', revision: 1, at: 1 };
+    }
+    // A persisted presentation from the old scheduler must remain harmless on resume.
+    state.agentTeam!.coordinationPresentation = { at: 1, reason: savedDecision === 'opening' ? 'opening' : 'research-update',
+      decisionRevision: state.agentTeam!.coordination?.revision ?? 0, eventSequence: 0, nativeMessageSequence: 0,
+      observationRevision: state.agentTeam!.coordinationObservation?.revision ?? 0, startedRequests: 0 };
+    const savedJournal = structuredClone({ coordination: state.agentTeam!.coordination,
+      observation: state.agentTeam!.coordinationObservation, presentation: state.agentTeam!.coordinationPresentation });
+    const receipts: ModelRequestReceipt[] = [];
+    const team = new AgentResearchTeam({ state, root: process.cwd(), taskText: 'Offline native autonomy fixture.',
+      leadAccess: { environment: {}, retrievalRoot: receipt.workspaceRoot }, modules: directSolverModules,
+      executable, profile, signal: new AbortController().signal, maxAgents: 3, maxTurns: Infinity, maxTurnMs: Infinity,
+      maxTotalTokens: 0, remainingMs: () => Infinity, save: () => {}, emit: event => { events.push(event); },
+      exclusiveCheck: operation => operation() });
+    const tools = team.tools(), onUsageIncomplete = vi.fn();
+    const gate = team.leadRequestGate(() => ({ allowed: true, settle: value => { receipts.push(value); } }));
+    try {
+      team.beginLeadTurn();
+      session = await createCodexMathSession({ executable, profile, workspace: receipt.workspaceRoot,
+        model: 'deepseek-flash', effort: 'high', instructions: 'Offline native autonomy fixture.', turnTimeoutMs: 10_000,
+        nativeAgentControl: team.nativeAgentControlOptions(), requestGate: gate,
+        environment: { PATH: process.env.PATH, [SUB2API_PROVIDER.apiKeyEnvironment]: 'offline-synthetic-key', NO_PROXY: '127.0.0.1,localhost' },
+        onUsage: () => {}, onUsageIncomplete, tools: { definitions: [...tools.definitions, {
+          name: 'ordinary_research_probe', description: 'Disposable local research observation.',
+          inputSchema: { type: 'object', properties: { stage: { type: 'string' } }, required: ['stage'], additionalProperties: false },
+        }], call: async (name, args, context) => {
+          hostCalls.push({ name, arguments: args });
+          if (name === 'ordinary_research_probe') {
+            const stage = (args as Json).stage;
+            return { ok: false, diagnostic: stage };
+          }
+          return tools.call(name, args, context);
+        } } });
+      team.setLeadSession(session);
+      expect(await session.run('Exercise native research with archived coordination state.', 'offline-native-autonomy', receipt.workspaceRoot, () => {})).toBe('completed');
+      expect(errors).toEqual([]); expect(requests).toHaveLength(calls.length + 1);
+      for (const request of requests) {
+        expect(request.tool_choice).toBe('auto');
+        const advertised = declaredTools(request);
+        expect(advertised.map(tool => tool.name)).toEqual(expect.arrayContaining([
+          'spawn_agent', 'followup_task', 'send_message', 'list_agents', 'wait_agent', 'interrupt_agent',
+          'theoremos_team', 'ordinary_research_probe', 'exec_command',
+        ]));
+        const host = advertised.find(tool => tool.name === 'theoremos_team');
+        expect([...host!.parameters.properties.operation.enum].sort()).toEqual([...nativeLeadOperations].sort());
+        for (const property of ['decision', 'nextStep', 'budget', 'leadReserve', 'objectiveRevision'])
+          expect(host!.parameters.properties).not.toHaveProperty(property);
+      }
+      expect(hostCalls).toEqual(calls.filter(call => !('namespace' in call)).map(call => ({
+        name: call.name, arguments: JSON.parse(call.arguments),
+      })));
+      const listOutput = requests.at(-1)!.input.find((item: Json) => item.type === 'function_call_output' && item.call_id === 'native_list');
+      expect(JSON.stringify(listOutput?.output)).toContain('/root');
+      expect(requests.at(-1)!.input).toContainEqual(expect.objectContaining({
+        type: 'function_call_output', call_id: 'native_recipient_probe',
+      }));
+      expect(state.agentTeam!.workers).toHaveLength(0); expect(state.agentTeam!.deliveries).toHaveLength(0);
+      expect({ coordination: state.agentTeam!.coordination, observation: state.agentTeam!.coordinationObservation,
+        presentation: state.agentTeam!.coordinationPresentation }).toEqual(savedJournal);
+      expect(state.agentTeam!.researchState).toBeUndefined();
+      expect(events.filter(event => event.startsWith('team_coordination') || event === 'team_research_observed')).toEqual([]);
+      expect(receipts).toHaveLength(requests.length); expect(receipts.every(value => value.complete)).toBe(true);
+      expect(onUsageIncomplete).not.toHaveBeenCalled(); expect(session.lastCompletedResponse?.text).toBe(finalText);
+      expect(await session.stopForFreeze!()).toEqual({ status: 'stopped' });
+    } finally { await team.close(); }
+  }, 20_000);
+
+  it.skipIf(!process.env.THEOREMOS_TEST_CODEX_EXECUTABLE)(
+    'runs official native spawn, isolated child tools, mailbox wakeup and native completion with minimal host operations', async () => {
+    const [{ readMathAgentSkill }, { prepareResearchSkill, researchSkillIdentity }, { agentTeamInstructions }] = await Promise.all([
+      import('../src/runtime/agentSkills'), import('../src/solver/researchSkill'), import('../src/solver/agentTeamContext'),
+    ]);
+    const temporaryRoot = process.env.TMPDIR ?? '/data/lzh/default-storage/tmp';
+    fs.mkdirSync(temporaryRoot, { recursive: true });
+    directory = fs.realpathSync(fs.mkdtempSync(path.join(temporaryRoot, 'agent-team-native-dispatch-')));
+    const root = process.cwd(), requests: Json[] = [], errors: unknown[] = [], events: string[] = [];
+    const controller = new AbortController();
+    const receipt = bootstrapLeanTask(path.join(directory, 'work'), {
+      task: 'Offline native dispatch fixture.', source: 'theorem original : True := by sorry\n',
+    });
+    const problem = readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath);
+    const identity = researchSkillIdentity(readMathAgentSkill(path.join(root, 'skills/theoremos-research/SKILL.md')));
+    const state = solverState(problem, receipt.workspaceRoot, { runId: 'offline-native-dispatch', phase: 'running',
+      environmentDigest: 'e'.repeat(64), model: 'deepseek-flash', effort: 'high', researchMode: 'skill', researchSkill: identity,
+      researchDelegation: { mode: 'team', maxAgents: 2 },
+      agentTeam: { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control',
+        workers: [], events: [], deliveries: [], adoptions: [], operations: [] } });
+    const researchSkill = prepareResearchSkill(root, state.worktree, identity, problem);
+    const privateFile = path.join(state.worktree, 'lead-private'); fs.writeFileSync(privateFile, 'fixture-private');
+    const profile = path.join(directory, 'profile'); prepareSub2apiProfile(profile, 'deepseek-flash', 'high');
+    const toolchain = path.join(process.env.HOME!, '.elan/toolchains/leanprover--lean4---v4.33.0');
+    const environment = { PATH: `${toolchain}/bin:${process.env.PATH}`,
+      ELAN_HOME: path.join(process.env.HOME!, '.elan'), LEAN_PATH: '', LEAN_SYSROOT: '',
+      DEEPSCIENTIST_MATH_SANDBOX_BACKEND: 'bwrap', DEEPSCIENTIST_MATH_ENV_FILE: path.join(directory, 'missing.env'),
+      [SUB2API_PROVIDER.apiKeyEnvironment]: 'offline-synthetic-key', NO_PROXY: '127.0.0.1,localhost' };
+    const opened: Parameters<typeof directSolverModules.M1.open>[0][] = [];
+    const modules = { ...directSolverModules, M1: { ...directSolverModules.M1,
+      open: async (options: Parameters<typeof directSolverModules.M1.open>[0]) => {
+        opened.push(options); return createCodexMathSession(options);
+      } } };
+    const team = new AgentResearchTeam({ state, root, taskText: 'Offline native dispatch fixture.', modules, executable, profile,
+      leadAccess: { environment, researchSkill, retrievalRoot: receipt.workspaceRoot }, signal: controller.signal,
+      maxAgents: 2, maxTurns: Infinity, maxTurnMs: Infinity, maxTotalTokens: 0, remainingMs: () => Infinity,
+      save: () => {}, emit: event => { events.push(event); }, exclusiveCheck: check => check() });
+    const functionCall = (id: string, name: string, args: Json, namespace?: string) => ({ type: 'function_call', id, call_id: id,
+      name, ...(namespace ? { namespace } : {}), arguments: JSON.stringify(args), status: 'completed' });
+    const finalMessage = (id: string, text: string) => ({ type: 'message', id, role: 'assistant', status: 'completed',
+      content: [{ type: 'output_text', text, annotations: [] }] });
+    const quote = (value: string) => "'" + value.replace(/'/gu, "'\\''") + "'";
+    const finding = 'The native child verified its isolated fixture workspace.';
+    const childFinal = 'The native child completed its independent fixture assignment.';
+    const rootFinal = 'The Lead received the child message and native completion.';
+    let rootStep = 0, childStep = 0, waitStarted = false;
+    const modes = { lead: new Set<string>(), member: new Set<string>() };
+    server = createServer(async (request, response) => {
+      try {
+        if (request.url !== '/v1/responses') throw new Error('unexpected_native_dispatch_route');
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) chunks.push(Buffer.from(chunk));
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')); requests.push(body);
+        const requestIndex = requests.length;
+        const text = body.input.filter((item: Json) => ['message', 'agent_message'].includes(item.type))
+          .flatMap((item: Json) => item.content ?? []).map((part: Json) => part.text ?? part.encrypted_content ?? '').join('\n');
+        const host = declaredTools(body).find(tool => tool.name === 'theoremos_team');
+        const child = text.includes('NATIVE_ACTUAL_CHILD_FIXTURE');
+        const allowed = child ? nativeMemberOperations : nativeLeadOperations;
+        expect([...host!.parameters.properties.operation.enum].sort()).toEqual([...allowed].sort());
+        const mode = effectiveMultiAgentMode(body);
+        expect(mode).toBeDefined();
+        expect(mode).not.toContain('Any earlier instruction enabling proactive multi-agent delegation no longer applies');
+        expect(mode).not.toContain('Do not spawn sub-agents unless');
+        expect(body.tool_choice).toBe('auto');
+        if (child) {
+          expect(mode).toContain('You are a member of an explicitly requested flat team.');
+          expect(mode).toContain('Do not spawn sub-agents or dispatch, redirect or interrupt other members.');
+          expect(mode).not.toContain('Proactively delegate useful complementary work');
+          modes.member.add(mode!);
+        } else {
+          expect(mode).toContain('You are the Lead of an explicitly requested flat team.');
+          expect(mode).toContain('Proactively delegate useful complementary work');
+          modes.lead.add(mode!);
+        }
+        let item: Json;
+        if (text.includes('NATIVE_ACTUAL_CHILD_FIXTURE')) {
+          const worker = team.archive.workers[0]!;
+          if (childStep++ === 0) item = functionCall('child_isolation', 'exec_command', { login: false,
+            cmd: 'test "$PWD" = ' + quote(worker.worktree) + ' && test ! -r ' + quote(privateFile) +
+              ' && mkdir -p .scratch && printf native-isolation-ok > .scratch/native-receipt.txt && cat .scratch/native-receipt.txt' });
+          else if (childStep === 2) {
+            await expect.poll(() => waitStarted, { timeout: 10_000 }).toBe(true);
+            item = functionCall('child_message', 'send_message', { target: '/root', message: finding }, 'collaboration');
+          } else item = finalMessage('child_final', childFinal);
+        } else if (rootStep++ === 0) item = functionCall('native_spawn', 'spawn_agent', { task_name: 'expert', fork_turns: 'none',
+          message: 'Profiles: researcher\nNATIVE_ACTUAL_CHILD_FIXTURE Inspect the disposable fixture and report the observed isolation result.' }, 'collaboration');
+        else if (rootStep === 2) item = functionCall('native_wait', 'wait_agent', { timeout_ms: 10000 }, 'collaboration');
+        else if (rootStep === 3) {
+          await expect.poll(() => team.hasActiveWorkers, { timeout: 20_000 }).toBe(false);
+          // Completion can arrive after this model request started. Finish one
+          // native tool boundary before expecting it in the next request's history.
+          item = functionCall('native_list', 'list_agents', {}, 'collaboration');
+        } else item = finalMessage('root_final', rootFinal);
+        fixtureResponse(response, 'resp_native_dispatch_' + requestIndex, [item]);
+      } catch (error) { errors.push(error); controller.abort(error); response.writeHead(500); response.end(); }
+    });
+    await new Promise<void>((resolve, reject) => { server!.once('error', reject); server!.listen(0, '127.0.0.1', resolve); });
+    const endpoint = 'http://127.0.0.1:' + (server.address() as AddressInfo).port + '/v1/responses';
+    const realFetch = globalThis.fetch.bind(globalThis);
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url !== SUB2API_PROVIDER.baseUrl + '/responses') throw new Error('unexpected_native_dispatch_upstream');
+      return realFetch(endpoint, init);
+    });
+    try {
+      team.beginLeadTurn();
+      session = await createCodexMathSession({ executable, profile, workspace: state.worktree, environment,
+        model: state.model, effort: state.effort, signal: controller.signal, skills: [researchSkill],
+        instructions: agentTeamInstructions({ id: 'lead', role: 'lead' }, 2, 'native-agent-control'),
+        nativeAgentControl: team.nativeAgentControlOptions(), requestGate: team.leadRequestGate(() => ({ allowed: true, settle: () => {} })),
+        onUsage: () => {}, onItem: (phase, item) => {
+          if (phase === 'started' && item.id === 'native_wait') waitStarted = true;
+        }, tools: team.tools() });
+      team.setLeadSession(session);
+      expect(await session.run('Run the offline native team fixture.', 'offline-native-dispatch', state.worktree, () => {})).toBe('completed');
+      expect(errors).toEqual([]); expect(rootStep).toBe(4); expect(childStep).toBe(3);
+      expect(opened).toHaveLength(1); expect(opened[0]!.nativeAgentControl).toBeDefined(); expect(opened[0]!.isolateProcess).toBe(true);
+      const worker = team.archive.workers[0]!;
+      expect(worker.worktree).not.toBe(state.worktree); expect(worker.native?.agentPath).toBe('/root/expert');
+      expect(worker.native?.parentThreadId).toBe(session.threadId); expect(worker.tasks[0]!.status).toBe('completed');
+      expect(worker.native?.lastOutcome).toMatchObject({ status: { completed: childFinal } });
+      expect([...modes.lead]).toEqual([session.nativeConfiguration!.overrides.multiAgentModeHintText]);
+      expect([...modes.member]).toEqual([worker.native!.runtimeConfiguration!.overrides.multiAgentModeHintText]);
+      expect(fs.readFileSync(path.join(worker.worktree, '.scratch/native-receipt.txt'), 'utf8')).toBe('native-isolation-ok');
+      const history = JSON.stringify(requests.at(-1)!.input);
+      expect(history).toContain(finding); expect(history).toContain(childFinal);
+      const waitOutput = requests.at(-1)!.input.find((item: Json) => item.type === 'function_call_output' && item.call_id === 'native_wait');
+      expect(JSON.stringify(waitOutput?.output)).toContain('Wait completed.');
+      expect(requests.every(request => request.tool_choice === 'auto')).toBe(true);
+      expect(events.filter(event => event.startsWith('team_coordination') || event === 'team_research_observed')).toEqual([]);
+      expect(team.archive.coordination).toBeUndefined();
+      expect(requests.flatMap(request => request.input.filter((item: Json) => item.type === 'function_call' && item.name === 'theoremos_team'))).toEqual([]);
+      expect(team.archive.deliveries).toHaveLength(0); expect(state.check).toBeUndefined();
+      expect(worker.writerStopUnconfirmed).toBeUndefined(); expect(team.hasActiveWorkers).toBe(false);
+      expect(session.lastCompletedResponse?.text).toBe(rootFinal); expect(await session.stopForFreeze!()).toEqual({ status: 'stopped' });
+    } finally { controller.abort(); await team.close(); }
+  }, 60_000);
 
   it('checkpoints native continuation after a Lead adoption and resumes the saved thread after writer shutdown', async () => {
     const temporaryRoot = process.env.TMPDIR ?? '/data/lzh/default-storage/tmp';

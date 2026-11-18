@@ -23,7 +23,7 @@ import { planMathAgentSession } from './agentSessionPlan';
 import { MathAgentToolDispatcher } from './agentTeamTools';
 import { confirmHarnessProcessStopped, prepareHarnessProcess, readHarnessProcessIdentity, type HarnessProcessIdentity } from './harnessProcess';
 import { runHarnessLeanHealthCheck } from './leanHealthCheck';
-import { NativeAgentControl, NATIVE_AGENT_CONTROL_REQUEST, nativeAgentControlModelCatalog } from './nativeAgentControl';
+import { NativeAgentControl, NativeAgentControlInputError, NATIVE_AGENT_CONTROL_REQUEST, nativeAgentControlModelCatalog } from './nativeAgentControl';
 import { CODEX_FAILURE_CODES, HTTP_FAILURE_CODES, safeFailureReason, safeHttpStatusCode,
   type MathAgentFailureDiagnostic } from './failureDiagnostic';
 export type { MathAgentFailureDiagnostic, MathAgentFailureReason } from './failureDiagnostic';
@@ -137,8 +137,9 @@ class CodexRpc {
       stdio: extras.length ? ['pipe', 'pipe', 'pipe', ...extras] : 'pipe',
       detached: process.platform !== 'win32',
     }) as ChildProcessWithoutNullStreams; // All three protocol streams are pipes, including launches with extra inherited FDs.
-    this.processIdentity = launch?.infoDescriptor === undefined ? Promise.resolve(undefined) : new Promise((resolve, reject) => {
-      const pipe = this.child.stdio[launch.infoDescriptor] as NodeJS.ReadableStream;
+    const infoDescriptor = launch?.infoDescriptor;
+    this.processIdentity = infoDescriptor === undefined ? Promise.resolve(undefined) : new Promise((resolve, reject) => {
+      const pipe = this.child.stdio[infoDescriptor] as NodeJS.ReadableStream;
       let bytes = '', finished = false;
       const timer = setTimeout(() => finish(new Error('math_harness_process_identity_unavailable')), 10_000);
       const finish = (error?: Error, identity?: HarnessProcessIdentity) => {
@@ -184,8 +185,10 @@ class CodexRpc {
           void Promise.resolve().then(() => this.onRequest(message.method as string, object(message.params ?? {})))
             .then(result => this.write(result === undefined ? { id: message.id,
               error: { code: -32601, message: 'Interactive requests are unavailable in headless mathematics' } }
-              : { id: message.id, result }), () => this.write({ id: message.id,
-              error: { code: -32603, message: 'Headless tool request failed' } })).catch(() => {});
+              : { id: message.id, result }), error => this.write({ id: message.id,
+              error: message.method === NATIVE_AGENT_CONTROL_REQUEST && error instanceof NativeAgentControlInputError
+                ? { code: -32602, message: error.message }
+                : { code: -32603, message: 'Headless tool request failed' } })).catch(() => {});
         } else if (message.method) {
           this.onNotification(message.method as string, object(message.params ?? {}));
         } else {
@@ -309,6 +312,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     ? { ...options, skills: skills.map(skill => ({ ...skill, loading: 'file' as const })) } : options);
   const activeRequests = new Set<object>();
   let requestTurn = 0, turnSettled = true, turnStopping = false, turnCheckpointReached = false;
+  let priorBoundaryCheckpoint = false, externallyInterrupted = false;
   type NotificationFence = { promise: Promise<void>; release(): void; steered: boolean };
   let notificationFence: NotificationFence | undefined;
   let requestStateChanged = () => {};
@@ -406,7 +410,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
   let responsesRelay: Awaited<ReturnType<typeof startFormalizationRelay>> | undefined;
   let nativeProfile = isolated?.profile ?? options.profile;
   if (!isolated && (providerId === DEEPSEEK_PROVIDER.id || providerId === WESTLAKE_PROVIDER.id ||
-      providerId === SUB2API_PROVIDER.id)) {
+      providerId === SUB2API_PROVIDER.id || options.nativeAgentControl && fs.existsSync(configFile))) {
     // Codex persists project trust in config.toml; keep those writes outside the frozen profile.
     nativeProfile = path.join(options.profile, 'runtime');
     fs.mkdirSync(nativeProfile, { recursive: true, mode: 0o700 });
@@ -478,7 +482,18 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     (method, params) => rpc.request(method, params)) : undefined;
   const nativeConfiguration: MathNativeConfiguration = {
     source: 'thread-start-overrides', overrides: { includeSkillInstructions: false,
-      ...(nativeControl ? { deferMailboxPreemption: true, rootAgentUsageHintText: '', subagentUsageHintText: '' } as const : {}) },
+      ...(nativeControl ? { deferMailboxPreemption: true, rootAgentUsageHintText: '', subagentUsageHintText: '',
+        // Codex high effort otherwise emits ExplicitRequestOnly after the host's
+        // delegation instructions. Use its native per-session mode override.
+        multiAgentModeHintText: options.nativeAgentControl?.bootstrap
+          ? 'You are a member of an explicitly requested flat team. Carry out the Lead assignment and exchange findings through native messages. ' +
+            'Send the first usable finding, probe result or blocker without waiting for a complete proof. ' +
+            'Do not spawn sub-agents or dispatch, redirect or interrupt other members. Ask Lead when responsibility or a dependency needs to change.'
+          : 'You are the Lead of an explicitly requested flat team. Proactively delegate useful complementary work through the native collaboration tools and connect the results to your own work. ' +
+            'Follow the pinned Lead charter: assign concrete gaps with a consumer and first usable result. Say in the assignment what you will work on. If a member takes the original target, hand over its proof and work on that separate question instead of competing for the same deliverable. ' +
+            'The team request authorizes you to spawn and direct members without asking again. Only Lead dispatches or interrupts members; members may communicate directly. ' +
+            'Choose tasks and team size for the work within the host\'s capacity.',
+      } as const : {}) },
   };
   let closing: Promise<void> | undefined;
   let investigations: NativeInvestigations | undefined;
@@ -815,7 +830,8 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
           // host's complete workspace, capacity and delegation contract.
           'features.multi_agent_v2': { enabled: true,
             root_agent_usage_hint_text: nativeConfiguration.overrides.rootAgentUsageHintText,
-            subagent_usage_hint_text: nativeConfiguration.overrides.subagentUsageHintText },
+            subagent_usage_hint_text: nativeConfiguration.overrides.subagentUsageHintText,
+            multi_agent_mode_hint_text: nativeConfiguration.overrides.multiAgentModeHintText },
           'agents.enabled': true, 'features.goals': false,
           'features.defer_mailbox_preemption': nativeConfiguration.overrides.deferMailboxPreemption,
         } : {}),
@@ -917,6 +933,11 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         options.signal?.throwIfAborted();
         if (transportFailure) throw transportFailure;
         if (completion || compacting) throw new Error('math_codex_turn_already_running');
+        if (priorBoundaryCheckpoint) message = 'Host continuation: the preceding turn ended at a settled request boundary for a checkpoint. ' +
+          'The transport used turn/interrupt, which can add a generic turn_aborted notice; this was not a new user cancellation. ' +
+          'Completed tool results remain valid. Explicitly backgrounded commands may still be running. ' +
+          'Continue from the saved work and the current host observations below.\n\n' + message;
+        priorBoundaryCheckpoint = false; externallyInterrupted = false;
         investigations?.beginTurn();
         tools?.beginTurn();
         assertMathAgentSkillsCurrent(skills);
@@ -937,6 +958,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         };
         lastStreamActivityAt = 0; outputTails.clear(); publicItems.clear(); earlyActivities.clear();
         let checkpoint = false;
+        let boundaryCheckpoint = false;
         let submitted = false;
         let requestDrain: Promise<void> | undefined;
         let interruptionRequested = false;
@@ -1024,6 +1046,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
             checkCompletedOutput?.();
             if (submitted || turnSettled || turnStopping || closing) return false;
             checkpoint = true;
+            boundaryCheckpoint = true;
             stopAfterRequests();
             return true;
           };
@@ -1099,6 +1122,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
             // Draining paid requests still consumes the existing turn allowance.
             if (submitted && !activeRequests.size) return;
             checkpoint = true;
+            boundaryCheckpoint = false;
             // Only check sources after turn/completed confirms the writer stopped.
             requestInterruption();
           }, options.turnTimeoutMs);
@@ -1132,6 +1156,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
             const text = completedAssistantText(finalItem) ?? completedMessages.get(turnId);
             if (text !== undefined) lastCompletedResponse = { turnId, text };
           }
+          priorBoundaryCheckpoint = boundaryCheckpoint && !externallyInterrupted && !submitted && finished.status === 'interrupted';
           return submitted && finished.status === 'interrupted' ? 'submitted' :
             checkpoint && finished.status === 'interrupted' ? 'checkpoint' : finished.status;
         } catch (error) {
@@ -1157,6 +1182,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
         }
       },
       interrupt: async () => {
+        externallyInterrupted = true;
         turnStopping = true; tools?.cancel(); cancelNotifications(); publicItems.clear();
         // Native turn/interrupt does not reap investigator background commands.
         if (investigations?.busy) { await closeSession(); return; }

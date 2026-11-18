@@ -1,18 +1,34 @@
+import { z } from 'zod';
+import { MIN_TEAM_AGENTS, MAX_TEAM_AGENTS } from '../../src/solver/teamCapacity';
 import type { WebProvider, WebRunInput } from './shared';
+
+export const nativeTeamCapacitySchema = z.number().int().min(MIN_TEAM_AGENTS).max(MAX_TEAM_AGENTS);
+export const nativeTeamPreferencesSchema = z.array(z.string().trim().min(1).max(100)).max(256);
 
 /** The optional research engine is frozen with each new run, never changed by an observation. */
 export function webResearchModeError(input: Pick<WebRunInput, 'researchMode' | 'skillLoading' | 'workers' |
-  'coordination' | 'planApproval' | 'modulePlan' | 'researchSelection'>): string | undefined {
+  'coordination' | 'planApproval' | 'modulePlan' | 'researchSelection' | 'nativeTeamCapacity' | 'nativeTeamPreferredProfiles'>, provider?: Pick<WebProvider, 'harness'>): string | undefined {
+  if (input.nativeTeamPreferredProfiles?.length && input.nativeTeamCapacity === undefined) return '角色偏好仅适用于 Codex 原生团队。';
+  if (input.nativeTeamCapacity !== undefined) {
+    if (!nativeTeamCapacitySchema.safeParse(input.nativeTeamCapacity).success)
+      return '原生团队容量必须为 2 至 8 人（含 Lead）。';
+    if (provider?.harness && provider.harness !== 'codex') return '原生团队需要 Codex 执行器。';
+    if (input.researchMode !== 'skill' || input.workers !== 1 || input.coordination !== 'independent' ||
+        input.planApproval || input.modulePlan)
+      return '原生团队由一名 Lead 自主派工，不能与宿主协作、审计划或自定义模块方案一起使用。';
+  }
   if (input.researchMode !== undefined && !['legacy', 'skill'].includes(input.researchMode)) return '研究方式无效。';
   if (input.skillLoading !== undefined && !['native', 'file'].includes(input.skillLoading)) return '技能加载方式无效。';
   if (input.researchMode !== 'skill') return input.skillLoading === undefined ? undefined : '技能加载选项需要 Skill 研究方式。';
 }
 
 export function webResearchArguments(input: WebRunInput, provider?: Pick<WebProvider, 'harness'>): string[] {
-  const error = webResearchModeError(input);
+  const error = webResearchModeError(input, provider);
   if (error) throw new Error(error);
   return input.researchMode === 'skill'
-    ? ['--research-mode', 'skill', '--skill-loading', input.skillLoading ?? webDefaultSkillLoading(provider)] : [];
+    ? ['--research-mode', 'skill', '--skill-loading', input.skillLoading ?? webDefaultSkillLoading(provider),
+      ...(input.nativeTeamCapacity ? ['--skill-delegation', 'team', '--skill-max-agents', String(input.nativeTeamCapacity)] : []),
+      ...(input.nativeTeamPreferredProfiles?.length ? ['--skill-preferred-profiles', input.nativeTeamPreferredProfiles.join(',')] : [])] : [];
 }
 
 /** A Skill changes research methods; only the execution arrangement controls collaboration. */

@@ -183,19 +183,60 @@ describe('opt-in skill research CLI and pinned identity', () => {
     expect(open).not.toHaveBeenCalled();
   });
 
-  it('pins Agent-led team capacity with one host Lead and inherits that configuration on resume', async () => {
-    const flags = [...args, '--research-mode', 'skill', '--skill-delegation', 'team', '--skill-max-agents', '3'];
-    expect(await runSolver(flags, root, modules)).toBe(0);
+  it.each([{ flags: [], capacity: 4 }, { flags: ['--skill-max-agents', '8'], capacity: 8 }])(
+    'pins an Agent-led team of $capacity including one Lead and restores it on resume', async ({ flags: capacityFlags, capacity }) => {
+    const flags = [...args, '--research-mode', 'skill', '--skill-delegation', 'team', ...capacityFlags];
+    const code = await runSolver(flags, root, modules);
+    expect(code, vi.mocked(console.log).mock.calls.flat().join('\n')).toBe(0);
     const before = state();
     expect(before).toMatchObject({ researchMode: 'skill', researchSkillWorkflow: 'full',
-      researchDelegation: { mode: 'team', maxAgents: 3 }, workerCount: 1, coordination: 'independent',
+      researchDelegation: { mode: 'team', maxAgents: capacity }, workerCount: 1, coordination: 'independent',
       researchSkill: { name: 'theoremos-research', loading: 'native' }, turns: 0 });
     expect(before.workers).toBeUndefined(); expect(before.cooperation).toBeUndefined();
+    expect(before.researchDelegation).not.toHaveProperty('preferredProfiles');
     expect(before.nativeAgents).toBeUndefined(); expect(before.threadId).toBeUndefined();
     expect(await runSolver([...args, '--resume'], root, modules)).toBe(0);
     expect(state()).toMatchObject({ runId: before.runId, researchDelegation: before.researchDelegation,
       researchSkill: before.researchSkill, agentSessionPlan: before.agentSessionPlan, methodDigest: before.methodDigest,
       workerCount: 1, coordination: 'independent', turns: 0 });
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('freezes optional profiles without filling seats and preserves them on resume', async () => {
+    const team = [...args, '--research-mode', 'skill', '--skill-delegation', 'team', '--skill-max-agents', '8'];
+    expect(await runSolver([...team, '--skill-preferred-profiles', ' engineer,elementary-number-theory,D011 '], root, modules)).toBe(0);
+    const before = state();
+    expect(before.researchDelegation).toEqual({ mode: 'team', maxAgents: 8, preferredProfiles: ['D011', 'engineer'] });
+    expect(before.agentTeam!.workers).toEqual([]);
+    expect(await runSolver([...args, '--resume'], root, modules)).toBe(0);
+    expect(await runSolver([...args, '--resume', '--skill-preferred-profiles', 'D011,engineer'], root, modules)).toBe(0);
+    expect(await runSolver([...args, '--resume', '--skill-preferred-profiles', 'reviewer'], root, modules)).toBe(1);
+    rejected('math_resume_research_strategy_changed');
+    expect(state()).toMatchObject({ runId: before.runId, researchDelegation: before.researchDelegation, turns: 0 });
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('rejects a reserved profile before creating a team checkpoint', async () => {
+    const flags = [...args, '--research-mode', 'skill', '--skill-delegation', 'team',
+      '--skill-preferred-profiles', 'engineer,lead'];
+    expect(await runSolver(flags, root, modules)).toBe(1);
+    rejected('math_team_preferred_profile_invalid: "lead"');
+    expect(fs.existsSync(output + '.runtime/state.json')).toBe(false);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('reuses frozen personal knowledge without the CLI file and rejects a changed body on resume', async () => {
+    const file = path.join(example.directory, 'personal-cards.json');
+    const card = { assetId: 'specialist', name: 'User specialist', version: '1', digest: 'a'.repeat(64),
+      summary: 'Introduces the relevant structures.', knowledge: 'Definition and assumptions from the selected release.' };
+    fs.writeFileSync(file, JSON.stringify([card]));
+    expect(await runSolver([...args, '--research-mode', 'skill', '--skill-delegation', 'team', '--skill-expert-cards-file', file], root, modules)).toBe(0);
+    expect(state().researchDelegation).toMatchObject({ personalExperts: { cards: [card] } });
+    fs.unlinkSync(file);
+    expect(await runSolver([...args, '--resume'], root, modules)).toBe(0);
+    fs.writeFileSync(file, JSON.stringify([{ ...card, knowledge: 'Changed without a new release.' }]));
+    expect(await runSolver([...args, '--resume', '--skill-expert-cards-file', file], root, modules)).toBe(1);
+    rejected('math_resume_research_strategy_changed');
     expect(open).not.toHaveBeenCalled();
   });
 
@@ -230,6 +271,9 @@ describe('opt-in skill research CLI and pinned identity', () => {
   });
 
   it.each([['--skill-delegation', 'read-only'], ['--skill-max-agents', '3'],
+    ['--skill-preferred-profiles', 'engineer'],
+    ['--research-mode', 'skill', '--skill-delegation', 'read-only', '--skill-preferred-profiles', 'engineer'],
+    ['--research-mode', 'skill', '--skill-delegation', 'team', '--skill-max-agents', '9'],
     ['--research-mode', 'skill', '--skill-delegation', 'read-only', '--skill-max-agents', '5'],
     ['--research-mode', 'skill', '--skill-loading', 'file', '--common-research-skill', 'native']].map(flags => ({ flags })))
   ('rejects an incompatible optional research capability $flags', async ({ flags }) => {

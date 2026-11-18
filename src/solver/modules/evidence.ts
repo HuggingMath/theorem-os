@@ -121,7 +121,7 @@ export async function checkProjectedDeclarations(problem: SolverProblem, checkou
 
 /** M2: exact-source Lean evidence. Reused rejections must come from this process and pinned environment. */
 export async function checkSolverProof(problem: SolverProblem, worktree: string, env: NodeJS.ProcessEnv,
-  signal?: AbortSignal, previous?: ProofCheck, timeoutMs = 180_000): Promise<ProofCheck> {
+  signal?: AbortSignal, previous?: ProofCheck, timeoutMs = 180_000, collectDirectProofReferences = false): Promise<ProofCheck> {
   signal?.throwIfAborted();
   const commit = commitSolverSources(problem, worktree);
   const projectRoot = path.join(worktree, problem.projectRelative);
@@ -145,7 +145,8 @@ export async function checkSolverProof(problem: SolverProblem, worktree: string,
     items: problem.targets.map(target => ({ proofPath: target.proofPath, theoremName: target.theoremName,
       expectedSourceDeclarationHash: target.declarationHash, statementHash: problem.contract.statementHash,
       leanStatementHash: problem.contract.leanStatementHash, claim: 'statement' as const })) },
-  { env: environment.env, signal, prepareLocalDependencies: problem.kind === 'lean-eval', collectDeclarationReferences: true });
+  { env: environment.env, signal, prepareLocalDependencies: problem.kind === 'lean-eval', collectDeclarationReferences: true,
+    collectDirectProofReferences });
   // Advisory scratch and diagnostic logs stay in the worker. The strict verifier receives
   // only the fixed commit and the same pinned packages, without weakening its clean-tree gate.
   const evidence = git(worktree, ['status', '--porcelain=v1', '--untracked-files=all'])

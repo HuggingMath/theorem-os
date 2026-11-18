@@ -7,6 +7,9 @@ type Json = Record<string, unknown>;
 export const NATIVE_AGENT_CONTROL_VERSION = 1 as const;
 export const NATIVE_AGENT_CONTROL_REQUEST = 'theoremos/agentControl/request';
 
+/** Actionable input feedback intended for the calling agent, unlike private host diagnostics. */
+export class NativeAgentControlInputError extends Error {}
+
 /** Requests originate in the native AgentControl implementation, never in a model tool. */
 export type NativeAgentControlRequest = Readonly<{
   version: 1;

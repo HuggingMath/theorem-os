@@ -140,6 +140,9 @@ export type FrozenResearchConfiguration = {
   preferences: Pick<ResearchAgentDraft, 'providerId' | 'model' | 'effort' | 'workers' | 'coordination'>;
   agent?: { ref: ResearchReleaseRef; content: ResearchAgentDraft };
   skills: { ref: ResearchReleaseRef; content: ResearchSkillDraft }[];
+  /** Explicit release choices, excluding dependencies, for native-team drafts and re-use. */
+  personalExpertSelection?: ResearchConfigurationSelection;
+  personalExperts?: import('../../src/solver/personalExperts').FrozenPersonalExpert[];
   libraries: { ref: ResearchReleaseRef; mathematics: ResearchVerifiedMathematics }[];
   libraryPack?: ResearchLibraryPack;
   digest: string;

@@ -8,6 +8,7 @@ export type WebEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type WebCoordination = 'cooperative' | 'independent';
 export type WebResearchMode = 'legacy' | 'skill';
 export type WebSkillLoading = 'native' | 'file';
+export type WebTeamProfile = { id: string; name: string; kind: 'work' | 'domain'; nameZh?: string; alias?: string };
 export type WebRunStatus = 'queued' | 'running' | 'completed' | 'cancelled' | 'error';
 export type WebEnvironment = 'standard' | 'mathlib';
 /** What one web run may ask for; the server enforces these, and the workbench reads them to know when a limit is already at its highest. */
@@ -73,6 +74,10 @@ export type WebRunInput = {
   /** Omitted on older runs: retain the existing research engine. */
   researchMode?: WebResearchMode;
   skillLoading?: WebSkillLoading;
+  /** Native Codex capacity includes Lead. The host still runs one worker. */
+  nativeTeamCapacity?: number;
+  /** Advisory Skill profile IDs requested before starting; actual assignments belong to Lead. */
+  nativeTeamPreferredProfiles?: string[];
   /** Hold every Agent after the first plan until the person who started the run approves it. */
   planApproval?: boolean;
   modulePlan?: ResearchModulePlan;
@@ -157,6 +162,8 @@ export type WebRun = {
   researchMode?: WebResearchMode;
   skillLoading?: WebSkillLoading;
   researchSkill?: { name: string; digest: string; loading: WebSkillLoading };
+  nativeTeamCapacity?: number;
+  nativeTeamPreferredProfiles?: string[];
   /** Frozen server-selected execution backend; old runs without a value used Codex. */
   harness?: WebHarness;
   harnessConfigurationDigest?: string;
@@ -214,7 +221,7 @@ export type WebSession = {
   templates: WebTemplate[];
   defaults: Pick<WebRunInput, 'model' | 'effort' | 'maxTurns' | 'maxRunSeconds' | 'workers' | 'coordination'> & { environment: WebEnvironment };
   limits: { maxTurns: number; maxRunSeconds: number; maxWorkers: number; maxTotalTokens: number; maxSourceBytes: number; maxTaskBytes: number; maxRuns: number };
-  runtime: { ready: boolean; message: string };
+  runtime: { ready: boolean; message: string; nativeTeam?: boolean; nativeTeamPreferences?: boolean; nativeTeamExpertCards?: boolean };
   /** A recorded read-only run that needs no API key; absent when the image ships without one. */
   sample?: { id: string; title: string };
   /** Set when the service can compile a statement before submission (POST /api/precheck). */

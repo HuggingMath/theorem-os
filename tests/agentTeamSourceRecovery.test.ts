@@ -8,6 +8,7 @@ import { readMathAgentSkill } from '../src/runtime/agentSkills';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/agentSession';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from '../src/solver/archive';
 import { AgentResearchTeam } from '../src/solver/agentTeam';
+import { readAgentTeamProofDelivery } from '../src/solver/agentTeamProof';
 import { directSolverModules } from '../src/solver/modules';
 import { git, readSolverProblem } from '../src/solver/problem';
 import { prepareResearchSkill, researchSkillIdentity } from '../src/solver/researchSkill';
@@ -24,14 +25,14 @@ const helper = 'theorem helper : True := by trivial\n';
 const declarations = [{ file: 'Submission.lean', name: 'Recovery.helper', type: 'True' }];
 const fixtures: ReturnType<typeof fixture>[] = [];
 
-function fixture() {
+function fixture(maxAgents = 2) {
   const directory = temporaryDirectory('agent-team-source-recovery-');
   const receipt = bootstrapLeanTask(path.join(directory, 'primary'), { source: original, task: 'Prove True.' });
   const problem = readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath), root = path.resolve('.');
   const identity = researchSkillIdentity(readMathAgentSkill(path.join(root, 'skills/theoremos-research/SKILL.md')));
   const state = solverState(problem, receipt.workspaceRoot, { runId: 'agent-team-source-recovery', phase: 'running',
     environmentDigest: mathDigest('real Lean True recovery fixture'), researchMode: 'skill', researchSkillWorkflow: 'full',
-    researchSkill: identity, researchDelegation: { mode: 'team', maxAgents: 2 }, workerCount: 1, coordination: 'independent' });
+    researchSkill: identity, researchDelegation: { mode: 'team', maxAgents }, workerCount: 1, coordination: 'independent' });
   const skill = prepareResearchSkill(root, state.worktree, identity, problem);
   const toolchain = path.join(os.homedir(), '.elan/toolchains/leanprover--lean4---v4.33.0');
   if (!fs.existsSync(path.join(toolchain, 'bin/lean'))) throw new Error('Real Lean 4.33.0 is required.');
@@ -59,7 +60,7 @@ function fixture() {
         return session;
       } } },
       executable: 'offline-no-model', profile: 'offline-no-credentials', signal: controller.signal,
-      maxAgents: 2, maxTurns: Infinity, maxTurnMs: Infinity, maxTotalTokens: 0, remainingMs: () => Infinity,
+      maxAgents, maxTurns: Infinity, maxTurnMs: Infinity, maxTotalTokens: 0, remainingMs: () => Infinity,
       save: () => writeSolverRunState(stateFile, current), emit: (event, details) => { events.push({ event, details }); },
       exclusiveCheck: operation => operation(),
     });
@@ -90,6 +91,34 @@ async function idle(team: AgentResearchTeam) {
 }
 
 describe('recoverable team source rejections', () => {
+  it('preserves the rejected Lean interface and check receipt for the producer, a repair peer and restored history', async () => {
+    const f = fixture(3); await f.call({ operation: 'spawn', agentId: 'member', message: 'Prove the helper.' });
+    const first = await f.session(0), worker = f.team.archive.workers[0]!;
+    fs.writeFileSync(f.source(worker.worktree), original.replace('end Recovery', helper + 'end Recovery'));
+    const wrong = [{ ...declarations[0]!, type: 'False' }];
+    await f.call({ operation: 'submit', summary: 'Check this interface.', declarations: wrong }, 'member');
+    first.complete(); await idle(f.team);
+    const task = worker.tasks[0]!, locator = { operation: 'history', agentId: worker.id, offset: 0, limit: 1 };
+    const failure = task.failedCheck!;
+    expect(task.status).toBe('failed');
+    expect(failure).toMatchObject({ declaration: wrong[0], commit: git(worker.worktree, ['rev-parse', 'HEAD']),
+      seedCommit: f.problem.baseCommit, objectiveRevision: 1, environmentDigest: f.state.environmentDigest,
+      problemReceiptDigest: f.problem.receiptDigest, sourceDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      projectionCommit: expect.stringMatching(/^[a-f0-9]{40,64}$/),
+      results: [expect.objectContaining({ receiptId: expect.any(String), checkId: expect.any(String) })] });
+    expect(f.team.archive.events.find(event => event.kind === 'failed')?.text).toContain(JSON.stringify(locator));
+    expect(f.team.archive.deliveries).toHaveLength(0);
+    expect(readSolverRunState(f.stateFile).agentTeam!.workers[0]!.tasks[0]!.failedCheck).toEqual(failure);
+    await f.call({ operation: 'assign', agentId: 'member', message: 'Repair the rejected declaration.' });
+    const next = await f.session(1);
+    expect(next.message).toContain('failedCheck');
+    expect((await f.call(locator, 'member')).tasks[0]?.failedCheck).toEqual(failure);
+    await f.call({ operation: 'spawn', agentId: 'repair', message: 'Read the earlier failed interface: ' + JSON.stringify(locator) });
+    await f.session(2);
+    expect((await f.call(locator, 'repair')).tasks[0]?.failedCheck).toEqual(failure);
+    expect(f.state.check).toBeUndefined();
+  }, 60_000);
+
   it('rejects a non-owned declaration file before nomination, and accepts a corrected submission on the same turn', async () => {
     const f = fixture(); await f.call({ operation: 'spawn', agentId: 'member', message: 'Prove the helper.' });
     const session = await f.session(0), worker = f.team.archive.workers[0]!;
@@ -190,4 +219,43 @@ describe('recoverable team source rejections', () => {
     expect(worker.status).toBe('failed'); expect(worker.error).toBe('fixture-source-EIO');
     expect(worker.pendingDelivery).toBeDefined(); expect(f.team.archive.deliveries).toHaveLength(0);
   });
+
+  it('resumes the exact acknowledged nomination after writer loss but honors an explicit cancellation', async () => {
+    const f = fixture(); await f.call({ operation: 'spawn', agentId: 'member', message: 'Investigate.' });
+    await f.session(0);
+    const worker = f.team.archive.workers[0]!, task = worker.tasks[0]!;
+    const message = 'Prove the helper.';
+    expect(await f.call({ operation: 'amend', agentId: worker.id, taskId: task.id, message,
+      workKind: 'proof', reason: 'The interface is ready.' })).toMatchObject({ ok: true });
+    fs.writeFileSync(f.source(worker.worktree), original.replace('end Recovery', helper + 'end Recovery'));
+    const reply = await f.call({ operation: 'submit', summary: 'Ready to check.', objectiveRevision: 2, declarations }, 'member');
+    expect(reply).toMatchObject({ status: 'pending-writer-stop' });
+    const beforeCancel = readSolverRunState(f.stateFile);
+    expect(await f.call({ operation: 'cancel', agentId: worker.id, taskId: task.id })).toMatchObject({ ok: true });
+    await idle(f.team);
+    expect(f.team.archive.deliveries).toHaveLength(0);
+    const cancelled = f.makeTeam(readSolverRunState(f.stateFile));
+    await cancelled.restore();
+    expect(cancelled.archive.deliveries).toHaveLength(0);
+    // Legacy shutdown saved source and status but did not register the acknowledged submission.
+    const legacy = readSolverRunState(f.stateFile);
+    const old = legacy.agentTeam!.workers[0]!.tasks[0]!;
+    old.status = 'interrupted'; delete old.cancelRequested; delete old.nomination;
+    const sourceFile = f.source(worker.worktree), fixed = fs.readFileSync(sourceFile, 'utf8');
+    fs.writeFileSync(sourceFile, fixed + '\n-- newer draft\n');
+    const dirty = f.makeTeam(structuredClone(legacy)); await dirty.restore();
+    expect(dirty.archive.deliveries).toHaveLength(0);
+    fs.writeFileSync(sourceFile, fixed);
+    const exact = f.makeTeam(legacy); await exact.restore();
+    expect(exact.archive.deliveries).toHaveLength(1);
+    // It has amended history, but no evidence of which revision nominated it.
+    expect(readAgentTeamProofDelivery(exact.archive.deliveries[0]!.path, legacy).provenance).not.toHaveProperty('objectiveRevision');
+    const recovered = f.makeTeam(beforeCancel);
+    await recovered.restore();
+    expect(recovered.archive.workers[0]!.tasks[0]!.status).toBe('interrupted');
+    expect(recovered.archive.deliveries).toHaveLength(1);
+    expect(readAgentTeamProofDelivery(recovered.archive.deliveries[0]!.path, beforeCancel).provenance)
+      .toMatchObject({ taskId: task.id, objectiveRevision: 2, objectiveDigest: mathDigest(message), workKind: 'proof' });
+    expect(f.sessions).toHaveLength(1);
+  }, 60_000);
 });

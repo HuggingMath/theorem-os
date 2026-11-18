@@ -139,6 +139,31 @@ describe('shared research assets', () => {
     status(() => assets.freeze('owner-B', { skills: [{ ...ref, digest: 'f'.repeat(64) }] }, 'standard'), 409);
   });
 
+  it('extracts only versioned knowledge, including each permitted dependency, from a native team selection', async () => {
+    const assets = setup();
+    const skill = createSkill(assets, 'owner-A', 'geometry', { inputs: ['Compact Hausdorff space'], examples: ['Riesz example'],
+      instructions: 'force-overwrite', mode: 'replace', steps: ['force-delegate'] });
+    const ref = await publish(assets, skill, 'owner-A', 'private');
+    const agent = assets.create('owner-A', { requestId: 'topology', type: 'agent', name: 'Topologist', description: 'compact spaces', content: {
+      environment: 'standard', model: 'ignored-model', workers: 2, modulePlan: defaultResearchModulePlan(), skills: [ref] } });
+    const agentRef = await publish(assets, agent, 'owner-A', 'private');
+    const config = assets.freezeNativeTeam('owner-A', { agent: agentRef }, 'mathlib');
+    expect(config.personalExpertSelection).toEqual({ agent: agentRef });
+    expect(config.personalExperts).toHaveLength(1);
+    expect(config.personalExperts![0]).toMatchObject({ ...agentRef, name: 'Topologist', summary: 'compact spaces' });
+    const body = config.personalExperts![0].knowledge;
+    for (const value of ['compact spaces', 'Compact Hausdorff space', 'Riesz example', ref.digest!]) expect(body).toContain(value);
+    for (const value of ['force-overwrite', 'force-delegate', 'ignored-model']) expect(JSON.stringify(config)).not.toContain(value);
+    expect(config.modulePlan).toEqual(defaultResearchModulePlan());
+    expect(config.preferences).toEqual({});
+    status(() => assets.freezeNativeTeam('owner-B', { agent: agentRef }, 'mathlib'), 404);
+    status(() => assets.freezeNativeTeam('owner-A', { skills: [{ ...ref, digest: 'a'.repeat(64) }] }, 'standard'), 409);
+    const second = await publish(assets, assets.get('owner-A', skill.id), 'owner-A', 'private', 'v2');
+    status(() => assets.freezeNativeTeam('owner-A', { agent: agentRef, skills: [second] }, 'standard'), 409);
+    const empty = await publish(assets, createSkill(assets, 'owner-A', 'empty'));
+    status(() => assets.freezeNativeTeam('owner-A', { skills: [empty] }, 'standard'), 400);
+  });
+
   it('requires dependencies to be publicly accessible before publishing an open tool', async () => {
     const assets = setup(), privateRef = await publish(assets, createSkill(assets), 'owner-A', 'private');
     const dependent = createSkill(assets, 'owner-A', 'dependent', { dependencies: [privateRef] });

@@ -6,11 +6,12 @@ import { agentTeamProfileEvidenceSchema } from './agentTeamProfiles';
 const identifier = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/u);
 export const writerProcessSchema = z.object({ schema: z.literal('theorem-os.harness-process-identity.v1'),
   pid: z.number().int().positive(), startTime: z.string(), bootId: z.string(), pidNamespace: z.string() }).strict();
-const declaration = z.object({ file: z.string(), name: z.string(), type: z.string(),
+const declaration = z.object({ file: z.string(), name: z.string(), type: z.string(), kind: z.literal('definition').optional(),
   description: z.string().optional(), premises: z.array(z.string()).optional() }).strict();
 const nativeRuntimeConfiguration = z.object({ source: z.literal('thread-start-overrides'),
   overrides: z.object({ includeSkillInstructions: z.literal(false), deferMailboxPreemption: z.literal(true).optional(),
-    rootAgentUsageHintText: z.literal('').optional(), subagentUsageHintText: z.literal('').optional() }).strict() }).strict();
+    rootAgentUsageHintText: z.literal('').optional(), subagentUsageHintText: z.literal('').optional(),
+    multiAgentModeHintText: z.string().min(1).max(2000).optional() }).strict() }).strict();
 const nativeWriterStop = z.object({ source: z.enum(['writer-stop', 'recovery-process-check']), at: z.number(),
   turnId: z.string().optional() }).strict();
 export const agentTeamAllowanceSchema = z.object({ tokens: z.number().int().positive().safe().optional(),
@@ -20,8 +21,10 @@ export const agentTeamReserveSchema = z.object({ tokens: z.number().int().nonneg
 export const agentTeamWorkKindSchema = z.enum(['research', 'proof', 'independent-reconstruction', 'review', 'assembly']);
 export const agentTeamKnowledgeUseSchema = z.object({ anchor: z.string().min(1).max(1000),
   application: z.string().min(1).max(16000) }).strict();
+export const teamExposureKind = z.enum(['inspected', 'adopted', 'possible-via-parent']);
+export const teamSpawnHistory = z.enum(['fresh', 'parent-history', 'unknown']);
 const exposure = z.object({ deliveryId: z.string(), agentId: identifier, taskId: z.string(), commit: z.string(),
-  kind: z.enum(['inspected', 'adopted']), at: z.string() }).strict();
+  kind: teamExposureKind, at: z.string() }).strict();
 const task = z.object({ id: z.string(), message: z.string(), seedCommit: z.string().optional(),
   objectiveRevision: z.number().int().positive().optional(), workKind: agentTeamWorkKindSchema.optional(),
   profileEvidence: agentTeamProfileEvidenceSchema.optional(),
@@ -39,6 +42,14 @@ const task = z.object({ id: z.string(), message: z.string(), seedCommit: z.strin
   pausedAt: z.number().optional(), lastStartedAt: z.number().optional(),
   startedAt: z.number().optional(), finishedAt: z.number().optional(),
   declarations: z.array(declaration).optional(), summary: z.string().optional(), deliveryId: z.string().optional(),
+  nomination: z.object({ objectiveRevision: z.number().int().positive(),
+    objectiveDigest: z.string().regex(/^[a-f0-9]{64}$/u), workKind: agentTeamWorkKindSchema.optional() }).strict().optional(),
+  failedCheck: z.object({ declaration, seedCommit: z.string(), commit: z.string(), sourceDigest: z.string(),
+    environmentDigest: z.string(), problemReceiptDigest: z.string(), objectiveRevision: z.number().int().positive().optional(),
+    projectionCommit: z.string(), status: z.string(), reusedFrom: z.object({ commit: z.string(), agentId: identifier }).strict().optional(),
+    results: z.array(z.object({ checkId: z.string(), receiptId: z.string(), status: z.string(),
+      error: z.string().optional(), stdoutPreview: z.string().optional(), stderrPreview: z.string().optional() }).strict()),
+  }).strict().optional(),
   sourceCommit: z.string().regex(/^[a-f0-9]{40,64}$/u).optional(),
   researchArtifactId: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
   cancelRequested: z.object({ at: z.number(), reason: z.string().optional(), replacementTaskId: z.string().optional() }).strict().optional(),
@@ -60,10 +71,14 @@ export const agentTeamStateSchema = z.object({ schema: z.literal('theorem-os.age
   coordination: z.object({ revision: z.number().int().positive(), at: z.number(),
     decision: z.enum(['delegate', 'defer', 'continue']), reason: z.string().min(1).max(16000),
     nextStep: z.string().min(1).max(16000), startedRequests: z.number().int().nonnegative(),
+    observationRevision: z.number().int().nonnegative().optional(), activeAssignments: z.boolean().optional(),
     eventSequence: z.number().int().nonnegative(), nativeMessageSequence: z.number().int().nonnegative().optional() }).strict().optional(),
+  coordinationObservation: z.object({ revision: z.number().int().positive(), at: z.number(), key: z.string(),
+    kind: z.enum(['tool-result', 'proof-feedback']), failed: z.boolean(), description: z.string().max(2000) }).strict().optional(),
   coordinationPresentation: z.object({ at: z.number(),
-    reason: z.enum(['opening', 'deferred-step-complete', 'team-update', 'members-idle', 'assignments-unpublished']),
+    reason: z.enum(['opening', 'deferred-step-complete', 'research-update', 'team-update', 'members-idle', 'assignments-unpublished']),
     decisionRevision: z.number().int().nonnegative(), eventSequence: z.number().int().nonnegative(),
+    observationRevision: z.number().int().nonnegative().optional(),
     nativeMessageSequence: z.number().int().nonnegative().optional(), startedRequests: z.number().int().nonnegative().optional(),
   }).strict().optional(),
   leadReserve: agentTeamReserveSchema.optional(),
@@ -80,7 +95,7 @@ export const agentTeamStateSchema = z.object({ schema: z.literal('theorem-os.age
     exposures: z.array(exposure).optional(),
     threadId: z.string().optional(), seedCommit: z.string(), tasks: z.array(task),
     native: z.object({ sessionId: z.string(), threadId: z.string(), agentPath: z.string(), parentThreadId: z.string(),
-      spawnOperationId: z.string().optional(), spawnRequestDigest: z.string().optional(),
+      spawnOperationId: z.string().optional(), spawnRequestDigest: z.string().optional(), spawnHistory: teamSpawnHistory.optional(),
       bootstrap: z.record(z.unknown()), initialInput: z.record(z.unknown()),
       agent: z.record(z.unknown()).optional(), configSnapshot: z.record(z.unknown()).optional(),
       runtimeConfiguration: nativeRuntimeConfiguration.optional(), writerStop: nativeWriterStop.optional(),

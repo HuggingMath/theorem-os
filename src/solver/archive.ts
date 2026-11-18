@@ -1,4 +1,5 @@
 import { readMathJson, writeMathJsonDurable } from '../math/mathRuntimeIo';
+import { personalExpertSetSchema, type PersonalExpertSet } from './personalExperts';
 import { agentTeamStateSchema, writerProcessSchema, type AgentTeamState } from './agentTeamState';
 import type { SolverProblem } from './problem';
 import type { ProofCheck } from './modules/evidence';
@@ -23,6 +24,7 @@ import { proofSearchCheckpointReferenceSchema, proofSearchRecordSchema } from '.
 import { researchBasisSchema, researchRecordSchema } from './researchRecords';
 import { nextCheckRecordSchema } from './nextCheckContract';
 import { goalProgressStateSchema } from './goalProgress';
+import { MIN_TEAM_AGENTS, MAX_TEAM_AGENTS } from './teamCapacity';
 
 /** A recorded dispatch observation, never a permission to dispatch or accept a proof. */
 export type DispatchWaitObservation = {
@@ -82,7 +84,7 @@ export type SolverRunState = {
   agentSessionPlan?: import('../runtime/agentSession').MathAgentSessionPlan;
   researchSkill?: { name: string; digest: string; loading: 'native' | 'file' };
   commonResearchSkill?: { name: string; digest: string; loading: 'native' | 'file' };
-  researchDelegation?: { mode: 'read-only' | 'team'; maxAgents: number };
+  researchDelegation?: { mode: 'read-only'; maxAgents: number } | { mode: 'team'; maxAgents: number; preferredProfiles?: string[]; personalExperts?: PersonalExpertSet };
   agentTeam?: AgentTeamState;
   teamUsage?: Record<string, unknown>;
   writerProcess?: import('../runtime/harnessProcess').HarnessProcessIdentity;
@@ -359,7 +361,11 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
     loading: z.enum(['native', 'file']) }).strict().optional(),
   commonResearchSkill: z.object({ name: z.string().min(1), digest: z.string().regex(/^[a-f0-9]{64}$/u),
     loading: z.enum(['native', 'file']) }).strict().optional(),
-  researchDelegation: z.object({ mode: z.enum(['read-only', 'team']), maxAgents: z.number().int().min(2).max(4) }).strict().optional(),
+  researchDelegation: z.discriminatedUnion('mode', [
+    z.object({ mode: z.literal('team'), maxAgents: z.number().int().min(MIN_TEAM_AGENTS).max(MAX_TEAM_AGENTS),
+      preferredProfiles: z.array(z.string().min(1)).nonempty().optional(), personalExperts: personalExpertSetSchema.optional() }).strict(),
+    z.object({ mode: z.literal('read-only'), maxAgents: z.number().int().min(2).max(4) }).strict(),
+  ]).optional(),
   agentTeam: agentTeamStateSchema.optional(), teamUsage: record.optional(), writerProcess: writerProcessSchema.optional(),
   nativeAgents: z.array(z.object({ threadId: z.string().min(1), parentThreadId: z.string().min(1),
     startedAt: safeCount, updatedAt: safeCount, status: z.enum(['running', 'completed', 'errored', 'interrupted', 'stopped', 'unknown']),

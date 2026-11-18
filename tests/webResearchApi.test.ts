@@ -819,6 +819,26 @@ describe('collaborative research through the actual HTTP service', () => {
     expect((await (await request(undefined, route)).json()).items).toEqual([]);
   });
 
+  it('requires a card-capable worker for native team expert assets and passes the fixed knowledge through HTTP', async () => {
+    const user = await client('Alice');
+    const release = await publish(user, await createAsset(user, 'skill', 'Topologist', { inputs: ['compactness criterion'], instructions: 'OLD_HOST_RULE' }));
+    const selection = { skills: [{ assetId: release.assetId, version: release.version }] };
+    const team = { ...input(), researchMode: 'skill', nativeTeamCapacity: 2, workers: 1, coordination: 'independent' };
+    const expected = await item(user, '/api/research/configuration', { nativeTeam: true, environment: 'standard', selection }, 'POST');
+    expect(expected.personalExperts[0].knowledge).toContain('compactness criterion');
+    expect(JSON.stringify(expected)).not.toContain('OLD_HOST_RULE');
+    const ready = { ready: true, message: 'Disposable fixture', nativeTeam: true, nativeTeamExpertCards: false };
+    vi.spyOn(runner, 'readiness').mockResolvedValue(ready);
+    const rejected = await request(user, '/api/runs', { ...team, researchSelection: selection });
+    expect(rejected.status).toBe(503); expect((await rejected.json()).error).toContain('个人专家');
+    expect((await request(user, '/api/runs', team)).status).toBe(201);
+    ready.nativeTeamExpertCards = true;
+    const response = await request(user, '/api/runs', { ...team, researchSelection: selection });
+    const { run } = await response.json(); expect(response.status).toBe(201);
+    expect(run.researchConfiguration.personalExperts).toEqual(expected.personalExperts);
+    expect(runner.calls.find(call => call.id === run.id)?.researchConfiguration?.personalExperts).toEqual(expected.personalExperts);
+  });
+
   it('freezes shared Skill, Agent and mathematics into the third user worker input and retains it after updates or withdrawal', async () => {
     const alice = await client('Alice'), bob = await client('Bob'), carol = await client('Carol');
     const { run } = await projectWithRun(alice, bob);

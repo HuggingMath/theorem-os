@@ -92,6 +92,8 @@ export type WebInspection = {
     agentHarness?: { id: 'codex' | 'claude-code' | 'opencode' | 'cli'; executableDigest: string; configurationDigest: string };
     researchSkillWorkflow?: 'full'; agentSessionPlan?: unknown;
     researchMode?: 'legacy' | 'skill'; researchSkill?: { name: string; digest: string; loading: 'native' | 'file' };
+    researchDelegation?: { mode: 'team' | 'read-only'; maxAgents: number; preferredProfiles?: string[];
+      personalExperts?: { digest: string; cards: { assetId: string; version: string; digest: string; name: string }[] } };
     modules?: { id: string; versions: Record<string, string> }; buildDigest: string; environmentDigest: string;
     methodDigest?: string; knowledgeDigest?: string };
   turns: number; usage?: Record<string, unknown>; planVersion?: string;

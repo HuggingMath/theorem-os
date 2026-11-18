@@ -24,6 +24,8 @@ export function matchesProblemRun(value: ProblemDraftValue, run: WebRun): boolea
     || run.environment !== draft.environment || run.effort !== draft.effort || run.coordination !== draft.coordination
     || (run.researchMode ?? 'legacy') !== (draft.researchMode ?? 'legacy')
     || (run.researchMode === 'skill' && (run.skillLoading ?? 'native') !== (draft.skillLoading ?? 'native'))
+    || run.nativeTeamCapacity !== draft.nativeTeamCapacity
+    || !equal(run.nativeTeamPreferredProfiles ?? [], [...new Set(draft.nativeTeamPreferredProfiles ?? [])].sort())
     || run.maxTurns !== Number(draft.maxTurns) || run.maxRunSeconds !== Number(draft.maxRunSeconds) || run.workers !== Number(draft.workers)
     || (run.maxTotalTokens ?? 0) !== Math.round(Number(draft.maxTotalTokens ?? '') * 10_000)
     || Boolean(run.planApproval) !== Boolean(draft.planApproval && draft.coordination === 'cooperative' && Number(draft.workers) >= 2)
@@ -31,6 +33,13 @@ export function matchesProblemRun(value: ProblemDraftValue, run: WebRun): boolea
   const refs = [...(config?.agent ? [config.agent.ref] : []), ...(config?.skills.map(item => item.ref) ?? []), ...(config?.libraries.map(item => item.ref) ?? [])];
   const sameRef = (a: ResearchReleaseRef, b: ResearchReleaseRef) => a.assetId === b.assetId && a.version === b.version && (!a.digest || a.digest === b.digest);
   const selected = [...(value.libraries ?? [])];
+  if (run.nativeTeamCapacity && config?.personalExpertSelection) {
+    const pick = config.personalExpertSelection;
+    const explicit = [...(pick.agent ? [pick.agent] : []), ...(pick.skills ?? []), ...(pick.libraries ?? [])];
+    return selected.every(ref => explicit.some(actual => sameRef(ref, actual)))
+      && explicit.every(actual => selected.some(ref => sameRef(ref, actual)))
+      && !run.modulePlan && !draft.modulePlan;
+  }
   if (selected.some(ref => !refs.some(actual => sameRef(ref, actual)))) return false;
   // Frozen selections also contain Agent/Skill dependencies. Only those dependencies may be extra.
   for (let index = 0; index < selected.length; index++) {

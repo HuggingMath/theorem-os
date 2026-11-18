@@ -25,7 +25,7 @@ export function evaluatorExecutionFailure(result: Pick<MathematicsSandboxCommand
 
 /** S3: final acceptance stays independent of replaceable research modules. */
 export async function evaluateSolverProof(problem: SolverProblem, worktree: string, receipt: ProofCheck,
-  env: NodeJS.ProcessEnv, signal: AbortSignal, options: { command?: string; timeoutMs: number }): Promise<Record<string, unknown>> {
+  env: NodeJS.ProcessEnv, signal: AbortSignal, options: { command?: string; timeoutMs: number; teamContributions?: boolean }): Promise<Record<string, unknown>> {
   const deadline = Date.now() + options.timeoutMs;
   const controller = new AbortController();
   const expire = () => controller.abort(new Error('math_evaluation_timeout'));
@@ -50,7 +50,7 @@ export async function evaluateSolverProof(problem: SolverProblem, worktree: stri
       throw new Error('math_main_workspace_changed');
     git(problem.workspace, ['merge', '--ff-only', receipt.commit]);
     assertActive();
-    const finalCheck = await checkSolverProof(problem, problem.workspace, env, evaluationSignal, undefined, options.timeoutMs);
+    const finalCheck = await checkSolverProof(problem, problem.workspace, env, evaluationSignal, undefined, options.timeoutMs, options.teamContributions);
     assertActive();
     if (!finalCheck.passed || finalCheck.commit !== receipt.commit || finalCheck.sourceDigest !== receipt.sourceDigest)
       throw new Error('math_integrated_proof_mismatch');
@@ -60,7 +60,8 @@ export async function evaluateSolverProof(problem: SolverProblem, worktree: stri
       assertActive();
       const reason = evaluatorExecutionFailure(result);
       return { status: reason ? 'error' : result.exitCode === 0 ? 'passed' : 'failed',
-        ...(reason ? { reason } : {}), method: 'external-command', official: false, result };
+        ...(reason ? { reason } : {}), method: 'external-command', official: false, result,
+        ...(options.teamContributions ? { verification: finalCheck } : {}) };
     }
     if (problem.kind === 'lean-eval') {
       if (!problem.sourceRepository) throw new Error('math_official_source_missing');
@@ -72,7 +73,8 @@ export async function evaluateSolverProof(problem: SolverProblem, worktree: stri
         stderr: comparison.stderrPreview ?? '' });
       return { status: reason || comparison.cleanupError ? 'error' :
         comparison.status === 'official_verified' ? 'passed' : comparison.status === 'failed' ? 'failed' : 'error',
-        ...(reason ? { reason } : {}), method: 'official-comparator', official: true, comparison };
+        ...(reason ? { reason } : {}), method: 'official-comparator', official: true, comparison,
+        ...(options.teamContributions ? { verification: finalCheck } : {}) };
     }
     return { status: 'passed', method: 'host-lean-kernel-all-targets', official: false, verification: finalCheck };
   } catch (error) {
