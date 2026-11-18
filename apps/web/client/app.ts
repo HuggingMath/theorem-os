@@ -1,4 +1,6 @@
 import { webSkillWithoutCooperation } from '../researchMode';
+import { renderPersonalExpertPicker, renderTeamProfilePicker } from './teamProfilePicker';
+import type { WebTeamProfile } from '../shared';
 import {
   createIcons, ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, BookOpen, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
   Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
@@ -7,7 +9,8 @@ import {
 import type { WebAdminOverview, WebContinuation, WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebRun, WebRunRequest, WebSavedKey, WebSession } from '../shared';
 import { loginHref } from '../shared';
 import { webTaskEnvironment } from '../environment';
-import { ResearchSelection } from './researchSelection';
+import { configurationRefs, ResearchSelection } from './researchSelection';
+import type { ResearchAsset } from '../researchAssetTypes';
 import type { ResearchLibraryAttemptPreparation, ResearchLibraryPersonalAttemptPreparation } from '../researchLibraryTrialTypes';
 import { consumeResearchEntry, readResearchEntry } from './researchEntry';
 import { openFrozenTask } from './frozenTaskView';
@@ -455,6 +458,35 @@ let draftTimer: ReturnType<typeof setTimeout> | undefined;
 let latestDraft: TaskDraft | undefined;
 let draftAutoExplain: TaskDraft['autoExplain'] = true;
 let draftExplanationLanguage: TaskDraft['explanationLanguage'] = locale;
+let draftTeamProfiles: string[] = [];
+const loadTeamProfiles = async () => (await api<{ profiles: WebTeamProfile[] }>('/api/team-profiles')).profiles;
+const loadExpertAssets = async () => (await Promise.all(['agent', 'skill'].map(async type =>
+  (await api<{ items: ResearchAsset[] }>(`/api/research/library?type=${type}`)).items))).flat();
+function refreshPersonalExperts() {
+  const session = state.session, owner = session ? webDraftOwner(session) : '';
+  const selection = researchSelection.value();
+  renderPersonalExpertPicker(element('#native-team-personal-experts'), {
+    owner, load: loadExpertAssets, selected: [...(selection?.agent ? [selection.agent] : []), ...(selection?.skills ?? [])],
+    choose: async ({ assetId, version, digest, type }) => {
+      if (!session || state.submitting || field('research-mode').value !== 'native-team') return;
+      const revision = draftRevision, environment = field('environment').value as WebEnvironment;
+      const existing = researchSelection.value(), current = type === 'agent' ? existing?.agent : existing?.skills?.find(ref => ref.assetId === assetId);
+      const chosen = current?.assetId === assetId && current.version === version ? undefined : { assetId, version, digest };
+      const agent = type === 'agent' ? chosen : existing?.agent;
+      const skills = type === 'agent' ? existing?.skills ?? [] : [...(existing?.skills ?? []).filter(ref => ref.assetId !== assetId), ...(chosen ? [chosen] : [])];
+      const refs = [...(agent ? [agent] : []), ...skills, ...(existing?.libraries ?? [])];
+      const prepared = refs.length ? await researchSelection.prepare(refs, environment, true) : undefined;
+      if (!state.session || webDraftOwner(state.session) !== owner || field('research-mode').value !== 'native-team' || state.submitting || draftRevision !== revision)
+        throw new Error(t('读取期间原题已修改，请重新选择恢复。'));
+      if (prepared) researchSelection.adopt(prepared); else researchSelection.clear();
+    },
+  });
+}
+function setDraftTeamProfiles(profiles: string[] = []) {
+  draftTeamProfiles = [...new Set(profiles)].sort();
+  renderTeamProfilePicker(element('#native-team-profiles'), { value: draftTeamProfiles, load: loadTeamProfiles,
+    change: next => { setDraftTeamProfiles(next); draftChanged(); } });
+}
 let replacingDraft = false;
 let restoringDraft = false;
 const ownedDrafts = new OwnedDrafts(() => sessionStorage);
@@ -485,6 +517,7 @@ function clearOwnedDrafts() {
   draftReady = false; draftDirty = false; clearTimeout(draftTimer);
   latestDraft = undefined; pendingImport = undefined; taskImportSequence++;
   draftAutoExplain = true; draftExplanationLanguage = locale;
+  setDraftTeamProfiles();
   draftContinuation = undefined; submissionIdentity.clear(); draftRecovery.clear(); ownedDrafts.clear();
   forgetRememberedKey(); clearProblemDraftTabMemory();
   try {
@@ -580,15 +613,16 @@ const validationShown = new Set<SubmissionField>();
 const checkScope = crypto.randomUUID();
 const sourceCheck = new SourceCheck({
   input: () => ({ environment: field('environment').value as WebEnvironment, source: field('source').value,
-    ...(researchSelection.value() ? { researchSelection: researchSelection.value() } : {}) }),
+    ...(researchSelection.value() ? { researchSelection: researchSelection.value(),
+      ...(field('research-mode').value === 'native-team' ? { nativeTeam: true as const } : {}) } : {}) }),
   enabled: () => Boolean(researchEntry === 'lean' && state.session?.precheck && state.connected && state.session.runtime.ready
     && new TextEncoder().encode(field('source').value).length <= state.session.limits.maxSourceBytes),
   post: async (input, signal) => (await api<{ precheck: WebPrecheck }>('/api/precheck',
-    { method: 'POST', body: JSON.stringify({ ...input, checkScope, ...(researchSelection.value() ? { researchSelection: researchSelection.value() } : {}) }), signal, timeoutMs: 120_000 })).precheck,
+    { method: 'POST', body: JSON.stringify({ ...input, checkScope }), signal, timeoutMs: 120_000 })).precheck,
   message: error => message(error),
   render: () => { renderSourceCheckView(); renderPreparation(); },
 });
-const researchSelection = new ResearchSelection(api, () => { draftChanged(); saveDraft(); }, ownedDrafts);
+const researchSelection = new ResearchSelection(api, () => { refreshPersonalExperts(); draftChanged(); saveDraft(); }, ownedDrafts);
 function renderSourceCheckView() {
   renderSourceCheck(element('#source-check'), element('#source-check-status'), {
     check: sourceCheck, onJump: jumpToSourceDiagnostic, onRecheck: () => { void sourceCheck.run(); },
@@ -852,6 +886,9 @@ function clearValidation() {
 function currentSubmissionIssues(): SubmissionIssue[] {
   if (!state.session) return [];
   const issues = submissionIssues(captureDraft(), field('api-key').value, state.session);
+  const assets = researchSelection.value();
+  if (field('research-mode').value === 'native-team' && (assets?.agent || assets?.skills?.length) && !state.session.runtime.nativeTeamExpertCards)
+    issues.push({ field: 'provider', message: t('当前运行镜像不支持个人专家资料。请移除专家资产或更新运行镜像。') });
   const blocking = sourceCheck.blocking();
   // A failed compile is the source field's issue, in the source field's place, unless the field already has one.
   if (!blocking || issues.some(issue => issue.field === 'source')) return issues;
@@ -1137,19 +1174,22 @@ function sourceChanged() {
 function captureDraft(): TaskDraft {
   const modulePlan = modulePlanEditor.value();
   const knowledgeDigest = serverModulePlans.knowledgeDigest();
-  const skillMode = field('research-mode').value === 'skill';
+  const nativeTeam = field('research-mode').value === 'native-team';
+  const skillMode = nativeTeam || field('research-mode').value === 'skill';
   return { providerId: field('provider').value, model: field('model').value,
     ...(draftAutoExplain === undefined ? {} : { autoExplain: draftAutoExplain }),
     ...(draftExplanationLanguage === undefined ? {} : { explanationLanguage: draftExplanationLanguage }),
     effort: field('effort').value as WebEffort, environment: field('environment').value as WebEnvironment,
     source: field('source').value, task: field('task').value, templateId: field('template').value,
-    maxTurns: field('max-turns').value, maxRunSeconds: field('max-seconds').value, workers: field('workers').value,
+    maxTurns: field('max-turns').value, maxRunSeconds: field('max-seconds').value, workers: nativeTeam ? '1' : field('workers').value,
     ...(field('max-tokens').value ? { maxTotalTokens: field('max-tokens').value } : {}),
-    coordination: element<HTMLInputElement>('input[name="coordination"]:checked').value as WebCoordination,
+    coordination: nativeTeam ? 'independent' : element<HTMLInputElement>('input[name="coordination"]:checked').value as WebCoordination,
+    ...(nativeTeam ? { nativeTeamCapacity: Number(field('native-team-capacity').value) } : {}),
+    ...(nativeTeam && draftTeamProfiles.length ? { nativeTeamPreferredProfiles: [...draftTeamProfiles] } : {}),
     ...(skillMode ? { researchMode: 'skill' as const, skillLoading: field('skill-loading').value as 'native' | 'file' } : {}),
-    ...(element<HTMLInputElement>('#plan-approval').checked ? { planApproval: true as const } : {}),
+    ...(!nativeTeam && element<HTMLInputElement>('#plan-approval').checked ? { planApproval: true as const } : {}),
     ...(knowledgeDigest !== undefined ? { knowledgeDigest } : {}),
-    ...((modulePlan.custom.length || modulePlan.scheduler !== 'plan' || modulePlan.context !== 'full') ? { modulePlan } : {}),
+    ...(!nativeTeam && (modulePlan.custom.length || modulePlan.scheduler !== 'plan' || modulePlan.context !== 'full') ? { modulePlan } : {}),
     ...(draftContinuation ? { continueFrom: draftContinuation } : {}),
     ...(budgetDraftOrigin && budgetDraftOrigin.source === field('source').value && budgetDraftOrigin.environment === field('environment').value
       ? { problemBudget: { runId: budgetDraftOrigin.runId, ...(budgetDraftOrigin.projectId ? { projectId: budgetDraftOrigin.projectId } : {}) } } : {}),
@@ -1176,7 +1216,7 @@ async function restoreProblemDraft(value: ProblemDraftValue, beforeApply: () => 
   const owner = ownerOfSession(state.session), revision = draftRevision, entry = researchEntry;
   const original = JSON.stringify(chatWorkspace?.problemDraft());
   if (value.mode === 'lean') value = { ...value, draft: editableTaskDraft(value.draft, submissionIdentity.unresolved, value.libraries?.length ? value.draft.environment : undefined) };
-  const selected = value.mode === 'lean' && value.libraries?.length ? await researchSelection.prepare(value.libraries, value.draft.environment) : undefined;
+  const selected = value.mode === 'lean' && value.libraries?.length ? await researchSelection.prepare(value.libraries, value.draft.environment, Boolean(value.draft.nativeTeamCapacity)) : undefined;
   if (value.mode === 'natural') { if (!naturalPage) naturalPage = Promise.resolve().then(loadNaturalResearch); await naturalPage; }
   if (!state.session || ownerOfSession(state.session) !== owner || state.submitting || currentRun() || draftRevision !== revision || researchEntry !== entry
     || original !== undefined && original !== JSON.stringify(chatWorkspace?.problemDraft())) throw new Error(t('读取期间原题已修改，请重新选择恢复。'));
@@ -1248,7 +1288,7 @@ async function recoverDraft() {
   restoringDraft = true; renderDraftRecovery();
   try {
     const draft = editableTaskDraft(recovery.draft, submissionIdentity.unresolved, recovery.libraries?.length ? recovery.draft.environment : undefined);
-    const selected = recovery.libraries?.length ? await researchSelection.prepare(recovery.libraries, draft.environment) : undefined;
+    const selected = recovery.libraries?.length ? await researchSelection.prepare(recovery.libraries, draft.environment, Boolean(draft.nativeTeamCapacity)) : undefined;
     if (!state.session || ownerOfSession(state.session) !== owner || state.submitting || draftRevision !== revision
       || selectedId !== state.selectedId || composing !== state.composing || librariesBefore !== JSON.stringify(selectedProblemLibraries())
       || identity !== JSON.stringify(draftRecovery.current)) {
@@ -1268,14 +1308,15 @@ async function recoverDraft() {
   } finally { restoringDraft = false; renderDraftRecovery(); }
 }
 /** 先审计划 holds the Agents after the Lead's plan, so it needs a Lead and at least one other Agent. */
-const planApprovalAvailable = () => element<HTMLInputElement>('input[name="coordination"]:checked').value === 'cooperative' && Number(field('workers').value) >= 2;
+const planApprovalAvailable = () => field('research-mode').value !== 'native-team' && element<HTMLInputElement>('input[name="coordination"]:checked').value === 'cooperative' && Number(field('workers').value) >= 2;
 function syncResearchMode() {
   const provider = state.session?.providers.find(item => item.id === field('provider').value);
   const portable = Boolean(provider?.harness && provider.harness !== 'codex');
   const mode = field('research-mode') as HTMLSelectElement, loading = field('skill-loading') as HTMLSelectElement;
-  for (const option of mode.options) option.disabled = portable && option.value === 'legacy';
+  const teamAvailable = Boolean(provider && !portable && state.session?.runtime.nativeTeam);
+  for (const option of mode.options) option.disabled = option.value === 'native-team' ? !teamAvailable : portable && option.value === 'legacy';
   for (const option of loading.options) option.disabled = portable && option.value === 'native';
-  if (portable) { mode.value = 'skill'; loading.value = 'file'; }
+  if (portable && mode.value !== 'native-team') { mode.value = 'skill'; loading.value = 'file'; }
   const efforts = field('effort') as HTMLSelectElement;
   for (const option of efforts.options) {
     const supported = provider?.harness === 'cli' ? Boolean(provider.efforts?.includes(option.value as WebEffort)) : option.value !== 'none';
@@ -1283,14 +1324,20 @@ function syncResearchMode() {
   }
   if (Array.from(efforts.options).find(option => option.value === efforts.value)?.disabled)
     efforts.value = provider?.efforts?.[0] ?? 'high';
-  const skill = mode.value === 'skill';
-  field('workers').disabled = false;
-  for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="coordination"]')) radio.disabled = false;
-  element('#research-mode-note').hidden = !skill;
+  const team = mode.value === 'native-team', skill = team || mode.value === 'skill';
+  field('workers').disabled = team;
+  field('workers').parentElement!.hidden = team;
+  element('fieldset.coordination').hidden = team;
+  for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="coordination"]')) radio.disabled = team;
+  element('#native-team-field').hidden = !team;
+  if (team) refreshPersonalExperts();
+  element('#native-team-profiles').hidden = !state.session?.runtime.nativeTeamPreferences && !draftTeamProfiles.length;
+  element('#native-team-unavailable').hidden = !team || teamAvailable;
+  element('#research-mode-note').hidden = !skill || team;
   element('#skill-loading-field').hidden = !skill;
-  element('.plan-approval-option').hidden = false;
-  element('#module-plan').hidden = false;
-  element('[data-settings-section="module-plan"]').hidden = false;
+  element('.plan-approval-option').hidden = team;
+  element('#module-plan').hidden = team;
+  element('[data-settings-section="module-plan"]').hidden = team;
 }
 function draftChanged(persist = true) {
   syncResearchMode();
@@ -1352,7 +1399,9 @@ function applyTaskDraft(draft: TaskDraft, fixedEnvironment?: WebEnvironment) {
     && template.environment === draft.environment && template.source === field('source').value && template.task === field('task').value);
   field('template').value = template?.id ?? '';
   element<HTMLInputElement>(`input[name="coordination"][value="${draft.coordination}"]`).checked = true;
-  field('research-mode').value = draft.researchMode ?? 'legacy';
+  field('research-mode').value = draft.nativeTeamCapacity ? 'native-team' : draft.researchMode ?? 'legacy';
+  field('native-team-capacity').value = String(draft.nativeTeamCapacity ?? 3);
+  setDraftTeamProfiles(draft.nativeTeamPreferredProfiles);
   field('skill-loading').value = draft.skillLoading ?? 'native';
   element<HTMLInputElement>('#plan-approval').checked = Boolean(draft.planApproval);
   modulePlanEditor.setValue(draft.modulePlan);
@@ -1407,9 +1456,12 @@ async function importTaskFile(file: File) {
     renderFacts(element('#import-facts'), [[t('证明环境'), environmentName(draft.environment)],
       [t('服务商'), provider?.name ?? t('{0} · 当前不可用', draft.providerId || t('未选择'))], [t('模型'), draft.model || t('未填写'), true],
       [t('推理强度'), effortLabels[draft.effort] ?? draft.effort], [t('轮次上限'), Number(draft.maxTurns) ? draft.maxTurns : t('不限')],
-      [t('解题预算 / 秒'), Number(draft.maxRunSeconds) ? draft.maxRunSeconds : t('不限')], [t('Agent 数量'), draft.workers || t('未填写')],
-      [t('用量上限 / 万 Token'), Number(draft.maxTotalTokens) ? draft.maxTotalTokens! : t('不限')], [t('模块方案'), planSummary],
-      [t('协作模式'), draft.coordination === 'cooperative' ? t('任务协作') : t('独立并行')],
+      [t('解题预算 / 秒'), Number(draft.maxRunSeconds) ? draft.maxRunSeconds : t('不限')],
+      [draft.nativeTeamCapacity ? t('团队人数上限（含 Lead）') : t('Agent 数量'), String(draft.nativeTeamCapacity ?? (draft.workers || t('未填写')))],
+      ...(draft.nativeTeamPreferredProfiles?.length ? [[t('角色偏好（可选）'), draft.nativeTeamPreferredProfiles.join(', ')] as [string, string]] : []),
+      [t('用量上限 / 万 Token'), Number(draft.maxTotalTokens) ? draft.maxTotalTokens! : t('不限')],
+      ...(!draft.nativeTeamCapacity ? [[t('模块方案'), planSummary] as [string, string]] : []),
+      [t('协作模式'), draft.nativeTeamCapacity ? t('Codex 原生团队') : draft.coordination === 'cooperative' ? t('任务协作') : t('独立并行')],
       ...(draft.planApproval ? [[t('先审计划'), t('开启')] as [string, string]] : [])]);
     element('#import-task-preview').textContent = draft.task || t('未填写');
     element('#import-source-preview').textContent = draft.source || t('未填写');
@@ -1440,6 +1492,7 @@ function resetForm() {
     draftReady = false;
     clearTimeout(draftTimer); draftDirty = false;
     element<HTMLFormElement>('#run-form').reset();
+    setDraftTeamProfiles();
     draftAutoExplain = true; draftExplanationLanguage = locale;
     modulePlanLibrary.resetSelection(); modulePlanEditor.setValue(); serverModulePlans.setKnowledgeDigest();
     field('api-key').value = '';
@@ -1834,7 +1887,9 @@ function resultProps(run: WebRun): ResultPanelProps {
     config: [item(t('服务商'), provider?.name ?? (isSample(run) ? t('离线示例') : run.providerId)), item(t('推理强度'), effortLabels[run.effort] ?? run.effort),
       ...(run.researchMode === 'skill' ? [item(t('研究方式'), t('项目技能')), item(t('技能加载'), run.skillLoading === 'file' ? t('读取固定文件') : t('原生加载')),
         ...(run.researchSkill ? [item(t('技能版本'), run.researchSkill.digest, true)] : [])] : []),
-      item(t('协作模式'), run.coordination === 'cooperative' ? t('任务协作') : t('独立并行')), item(t('Agent 数量'), run.workers),
+      item(t('协作模式'), run.nativeTeamCapacity ? t('Codex 原生团队') : run.coordination === 'cooperative' ? t('任务协作') : t('独立并行')),
+      item(run.nativeTeamCapacity ? t('团队人数上限（含 Lead）') : t('Agent 数量'), run.nativeTeamCapacity ?? run.workers),
+      ...(run.nativeTeamPreferredProfiles?.length ? [item(t('角色偏好（可选）'), run.nativeTeamPreferredProfiles.join(', '))] : []),
       ...(run.planApproval ? [item(t('先审计划'), t('开启'))] : []),
       item(t('轮次上限'), run.maxTurns || t('不限')), item(t('解题预算'), run.maxRunSeconds ? readableDuration(run.maxRunSeconds * 1000) : t('不限')),
       item(t('用量上限'), run.maxTotalTokens ? `${formatTokens(run.maxTotalTokens)} Token` : t('不限')),
@@ -2049,8 +2104,9 @@ function renderPanel(force = false) {
 onDetailLevel(() => { if (state.tab === 'result') renderPanel(true); });
 function moduleInput(run?: WebRun): ModuleViewInput {
   return { id: run?.id ?? 'draft', run, model: run?.model ?? field('model').value,
-    researchMode: run ? run.researchMode : field('research-mode').value as 'legacy' | 'skill',
-    workers: run?.workers ?? Number(field('workers').value),
+    researchMode: run ? run.researchMode : captureDraft().researchMode,
+    nativeTeamCapacity: run ? run.nativeTeamCapacity : captureDraft().nativeTeamCapacity,
+    workers: run?.workers ?? Number(captureDraft().workers),
     coordination: run?.coordination ?? element<HTMLInputElement>('input[name="coordination"]:checked').value as WebCoordination,
     environment: environmentName(run?.environment ?? field('environment').value), connected: state.connected,
     editable: !run && Boolean(state.session) && !state.submitting,
@@ -2072,7 +2128,8 @@ function renderDraftPreview(force = false) {
     ['environment', t('证明环境'), environment?.name ?? t('未选择'), false],
     ['model', t('模型'), field('model').value || t('未设置'), true],
     ['budget', t('解题预算'), Number(field('max-seconds').value) === 0 ? t('不限') : numericLabel('max-seconds', value => readableDuration(value * 1000)), false],
-    ['workers', t('Agent 数量'), numericLabel('workers', value => t('{0} 个 Agent', value)), false],
+    ['workers', field('research-mode').value === 'native-team' ? t('团队人数上限（含 Lead）') : t('Agent 数量'),
+      numericLabel(field('research-mode').value === 'native-team' ? 'native-team-capacity' : 'workers', value => t('{0} 个 Agent', value)), false],
   ] as const;
   const title = template?.name ?? t('自定义研究');
   const signature = JSON.stringify([title, source, task, facts, draftSourceExpanded, state.draftView, state.connected,
@@ -2689,8 +2746,8 @@ async function openBudgetAttemptDraft() {
         run = { ...result.run, formalization: undefined, formalizationId: undefined };
       }
       const configuration = own ? run.researchConfiguration : undefined;
-      const refs = configuration ? [configuration.agent?.ref, ...configuration.skills.map(item => item.ref), ...configuration.libraries.map(item => item.ref)].filter(item => item !== undefined) : [];
-      const selected = refs.length ? await researchSelection.prepare(refs, run.environment) : undefined;
+      const refs = configurationRefs(configuration);
+      const selected = refs.length ? await researchSelection.prepare(refs, run.environment, Boolean(run.nativeTeamCapacity)) : undefined;
       if (!state.session || ownerOfSession(state.session) !== owner || draftRevision !== revision || state.submitting)
         throw new Error(t('草稿已变化，未载入预算规划。请核对后重新准备。'));
       const issue = submissionIssues({ ...captureDraft(), source: run.source, task: run.task }, '', state.session).find(issue => issue.field === 'source' || issue.field === 'task');
@@ -2910,7 +2967,7 @@ function initialize(): Promise<void> {
         const preferences = configuration.preferences;
         // A restored attempt already contains the user's execution choices, including Agent preference overrides.
         const keepSettings = restoredTaskDraft && !productTarget.has('researchAsset') && !productTarget.has('libraryReturn');
-        if (!keepSettings) {
+        if (!keepSettings && field('research-mode').value !== 'native-team') {
           if (preferences.providerId && session.providers.some(provider => provider.id === preferences.providerId)) field('provider').value = preferences.providerId;
           if (preferences.model) field('model').value = preferences.model;
           if (preferences.effort) field('effort').value = preferences.effort;
@@ -2928,7 +2985,7 @@ function initialize(): Promise<void> {
         // Restoring Library choices prepares the composer without replacing an open research or conversation.
         if (!state.composing || chatWorkspace?.id || new URLSearchParams(location.search).has('chat')) return;
         chooseEntry('lean'); startDraft(false, 'replace');
-      });
+      }, field('research-mode').value === 'native-team');
       await openLibraryProposalDraft();
       await openLibraryPersonalAttemptDraft();
       await openBudgetAttemptDraft();
@@ -3311,8 +3368,9 @@ element<HTMLFormElement>('#run-form').addEventListener('submit', async event => 
       autoExplain: capturedDraft.autoExplain, explanationLanguage: capturedDraft.explanationLanguage,
       maxTurns: Number(field('max-turns').value), maxRunSeconds: Number(field('max-seconds').value),
       ...(tokenCap(field('max-tokens').value, session.limits.maxTotalTokens) ? { maxTotalTokens: tokenCap(field('max-tokens').value, session.limits.maxTotalTokens) } : {}),
-      workers: Number(field('workers').value),
-      coordination: element<HTMLInputElement>('input[name="coordination"]:checked').value as WebCoordination,
+      workers: Number(capturedDraft.workers), coordination: capturedDraft.coordination,
+      ...(capturedDraft.nativeTeamCapacity ? { nativeTeamCapacity: capturedDraft.nativeTeamCapacity } : {}),
+      ...(capturedDraft.nativeTeamPreferredProfiles?.length ? { nativeTeamPreferredProfiles: capturedDraft.nativeTeamPreferredProfiles } : {}),
       ...(capturedDraft.researchMode ? { researchMode: capturedDraft.researchMode, skillLoading: capturedDraft.skillLoading } : {}),
       ...(element<HTMLInputElement>('#plan-approval').checked && planApprovalAvailable() ? { planApproval: true } : {}),
       ...(capturedDraft.modulePlan ? { modulePlan: capturedDraft.modulePlan } : {}),
@@ -3629,10 +3687,9 @@ async function reuseRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 're
   const owner = ownerOfSession(session), revision = draftRevision, selectedId = state.selectedId;
   try {
     const configuration = run.researchConfiguration;
-    const refs = configuration ? [configuration.agent?.ref, ...configuration.skills.map(item => item.ref), ...configuration.libraries.map(item => item.ref)]
-      .filter(item => item !== undefined) : [];
+    const refs = configurationRefs(configuration);
     // Check the exact versions before replacing another draft. Missing dependencies keep the original run open.
-    const selected = refs.length ? await researchSelection.prepare(refs, run.environment) : undefined;
+    const selected = refs.length ? await researchSelection.prepare(refs, run.environment, Boolean(run.nativeTeamCapacity)) : undefined;
     if (!state.session || ownerOfSession(state.session) !== owner || state.submitting || revision !== draftRevision || selectedId !== state.selectedId) return;
     applyReusedRun(run, recovery, from);
     if (selected) researchSelection.adopt(selected); else researchSelection.clear();
@@ -3668,7 +3725,9 @@ function applyReusedRun(run: WebRun, recovery: Exclude<RecoveryAction['id'], 're
     const raise = limit && limit.value > 0 && limit.value < limit.highest ? { ...limit, to: raised(limit.value, limit.highest) } : undefined;
     if (raise) field(raise.id).value = String(raise.to);
     element<HTMLInputElement>(`input[name="coordination"][value="${run.coordination}"]`).checked = true;
-    field('research-mode').value = run.researchMode ?? 'legacy';
+    field('research-mode').value = run.nativeTeamCapacity ? 'native-team' : run.researchMode ?? 'legacy';
+    field('native-team-capacity').value = String(run.nativeTeamCapacity ?? 3);
+    setDraftTeamProfiles(run.nativeTeamPreferredProfiles);
     field('skill-loading').value = run.skillLoading ?? 'native';
     element<HTMLInputElement>('#plan-approval').checked = Boolean(run.planApproval);
     modulePlanLibrary.resetSelection(); modulePlanEditor.setValue(run.modulePlan);
@@ -3911,7 +3970,7 @@ field('template').addEventListener('change', () => applyTemplate(field('template
 for (const container of ['#run-form', '#inline-problem-fields'])
 for (const type of ['input', 'change']) element(container).addEventListener(type, event => {
   const target = event.target as HTMLElement;
-  if (target.closest('#module-plan-library, [data-start-cost]')) return;
+  if (target.closest('#module-plan-library, [data-start-cost], #native-team-profiles, #native-team-personal-experts')) return;
   // Selects emit input before change; preserve the previous environment and template until replacement finishes.
   if (type === 'input' && ['environment', 'template'].includes(target.id)) return;
   if (target.id !== 'source') draftChanged(target.id !== 'api-key');

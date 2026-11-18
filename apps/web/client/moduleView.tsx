@@ -34,6 +34,7 @@ export type ModuleViewInput = {
   editable?: boolean;
   modulePlan?: ResearchModulePlan;
   researchMode?: WebResearchMode;
+  nativeTeamCapacity?: number;
 };
 
 const schedulers: Record<string, string> = { plan: t('按计划'), 'critical-path': t('关键路径优先'), continuation: t('延续已有进展') };
@@ -254,7 +255,9 @@ export class ModuleView {
     if (skillMode) {
       root.querySelector<HTMLElement>('.module-live')!.hidden = true;
       root.querySelector<HTMLButtonElement>('[data-module-configure]')!.hidden = true;
-      text(root.querySelector('[data-module-configuration]')!, tx('1 名研究者 · 项目技能 · 独立验收', '1 researcher · Project skill · Independent acceptance'));
+      text(root.querySelector('[data-module-configuration]')!, input.nativeTeamCapacity
+        ? t('Codex 原生团队') + ' · ' + t('团队人数上限（含 Lead）') + ': ' + input.nativeTeamCapacity
+        : tx('1 名研究者 · 项目技能 · 独立验收', '1 researcher · Project skill · Independent acceptance'));
       const identity = run?.researchSkill;
       render(<>
         <p class="collab-help">{tx('研究者自行检索、推理和调用工具；完整原题由独立 Lean 验收。', 'The researcher searches, reasons and uses tools autonomously; the complete original problem is checked independently in Lean.')}</p>

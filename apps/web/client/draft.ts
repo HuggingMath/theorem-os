@@ -1,5 +1,6 @@
 import type { WebContinuation, WebCoordination, WebEffort, WebEnvironment } from '../shared';
 import { webLimits } from '../shared';
+import { nativeTeamCapacitySchema, nativeTeamPreferencesSchema } from '../researchMode';
 import { researchModulePlanDraftSchema, type ResearchModulePlan } from '../../../src/solver/modules/policy';
 import { t } from '../i18n';
 import type { ClassicOrigin } from './classicPreparation';
@@ -26,6 +27,8 @@ export type TaskDraft = {
   coordination: WebCoordination;
   researchMode?: 'legacy' | 'skill';
   skillLoading?: 'native' | 'file';
+  nativeTeamCapacity?: number;
+  nativeTeamPreferredProfiles?: string[];
   /** 先审计划: hold the Agents until the plan is approved. Only `true` is stored; it applies to cooperative runs of 2+ Agents. */
   planApproval?: true;
   templateId: string;
@@ -162,6 +165,10 @@ function validatedDraft(value: unknown): TaskDraft {
     coordination: enumeration(draft, 'coordination', ['cooperative', 'independent']),
     ...(Object.hasOwn(draft, 'researchMode') ? { researchMode: enumeration(draft, 'researchMode', ['legacy', 'skill'] as const) } : {}),
     ...(Object.hasOwn(draft, 'skillLoading') ? { skillLoading: enumeration(draft, 'skillLoading', ['native', 'file'] as const) } : {}),
+    ...(Object.hasOwn(draft, 'nativeTeamCapacity') ? { nativeTeamCapacity: nativeTeamCapacitySchema.safeParse(draft.nativeTeamCapacity).success
+      ? draft.nativeTeamCapacity as number : invalid() } : {}),
+    ...(draft.nativeTeamCapacity && Object.hasOwn(draft, 'nativeTeamPreferredProfiles')
+      ? { nativeTeamPreferredProfiles: nativeTeamPreferencesSchema.parse(draft.nativeTeamPreferredProfiles) } : {}),
     ...flag(draft, 'planApproval'),
     templateId: text(draft, 'templateId', 64),
     ...(Object.hasOwn(draft, 'knowledgeDigest') ? { knowledgeDigest: draft.knowledgeDigest === null ? null : text(draft, 'knowledgeDigest', 256) } : {}),
@@ -201,6 +208,8 @@ export function decodeTaskDraft(value: unknown): TaskDraft {
       ...(Object.hasOwn(run, 'explanationLanguage') ? { explanationLanguage: run.explanationLanguage } : {}),
       ...(Object.hasOwn(run, 'researchMode') ? { researchMode: run.researchMode } : {}),
       ...(Object.hasOwn(run, 'skillLoading') ? { skillLoading: run.skillLoading } : {}),
+      ...(Object.hasOwn(run, 'nativeTeamCapacity') ? { nativeTeamCapacity: run.nativeTeamCapacity } : {}),
+      ...(Object.hasOwn(run, 'nativeTeamPreferredProfiles') ? { nativeTeamPreferredProfiles: run.nativeTeamPreferredProfiles } : {}),
       ...(Object.hasOwn(run, 'planApproval') ? { planApproval: run.planApproval } : {}),
       ...(Object.hasOwn(run, 'knowledgeDigest') ? { knowledgeDigest: run.knowledgeDigest } : {}),
       ...(Object.hasOwn(run, 'modulePlan') ? { modulePlan: run.modulePlan } : {}),

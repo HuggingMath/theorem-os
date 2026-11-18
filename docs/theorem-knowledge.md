@@ -24,6 +24,27 @@ locally verified submissions must match their recorded source hashes. Their
 theorem/lemma declarations retain the submission's evidence category; each helper
 is not a separate official result.
 
+To import a specific native team delivery, select it by its delivery ID:
+
+```bash
+bun bin/math.ts knowledge build \
+  --state /PATH/previous-run/result.json.runtime/state.json \
+  --team-delivery DELIVERY_ID \
+  --output /PATH/knowledge/team-catalog.json
+```
+
+The delivery need not have been adopted by Lead. Its checked auxiliary definitions
+and theorems come from the saved source version. A catalog entry retains its
+origin; using it as proof in a new problem still requires checking it in that
+problem's Lean environment. Repeat `--team-delivery` to select another delivery.
+
+The producer of a selected delivery is the member who submitted it. If A delivers
+`h` and B later delivers the unchanged `h` together with a new theorem `g`,
+the catalog can trace that copy of `h` to A. B's use of `h` to prove `g`
+is a dependency, not a transfer of `g` from A. Looking at another member's work,
+or adopting a declaration and then rewriting it, does not establish an exact
+transfer. Recording that origin does not import other declarations from A.
+
 Declaration lookup prefers an exact qualified name over a colliding raw name.
 An unqualified alias is usable only when it identifies one declaration; `_root_.`
 requires the exact root name. Run imports bind receipts to that precise header.

@@ -54,6 +54,13 @@ describe('Lead-selected professional knowledge', () => {
     expect(record(unselected)).toMatchObject({ selected: [], loaded: [], unresolved: [] });
   });
 
+  it('replays a historical member assignment without loading coordinator instructions', () => {
+    const { evidence, section } = resolveAgentTeamProfiles(skill, 'Profiles: lead, prover\nProve a helper.');
+    expect(evidence).toMatchObject({ selected: ['lead', 'prover'], loaded: ['prover'], unresolved: ['lead'] });
+    expect(evidence.sources.map(source => source.profileId)).toEqual(['prover']);
+    expect(section.text).not.toContain('### Lead — organize and connect the work');
+  });
+
   it('binds source bytes while distinguishing injected passages from on-demand reading', () => {
     const { section, evidence } = resolveAgentTeamProfiles(skill, 'Profiles: D041, prover');
     expect(agentTeamProfileEvidenceSchema.parse(JSON.parse(JSON.stringify(evidence)))).toEqual(evidence);

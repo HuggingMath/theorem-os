@@ -1062,7 +1062,8 @@ export async function runResearchWorkers(input: {
                   DEEPSCIENTIST_MATH_WORKER_ID: worker.id, DEEPSCIENTIST_MATH_WORKER_WORKTREE: workspace },
                 model: state.model, effort: state.effort, threadId: research.threadId,
                 ...turnTiming,
-                instructions: currentContext.instructions, onActivity: activity => {
+                instructions: currentContext.instructions,
+                onActivity: activity => {
                   research.lastActivity = { ...activity, at: Date.now() };
                   emit('worker_activity', { activity: activity.event, itemType: activity.itemType }); save();
                   if (activity.event === 'lean_environment_ready') emit('lean_environment_ready', { workerId: worker.id, health: activity.health });
@@ -1210,8 +1211,9 @@ export async function runResearchWorkers(input: {
         research.check = lastCheck?.passed && commitSolverSources(state.problem, worker.worktree) === lastCheck.commit ? lastCheck :
           await modules.M2.check(state.problem, worker.worktree, access.environment, signal, lastCheck, input.proofTimeoutMs);
         research.failures = rememberSolverFailure(research.check, previousFailures);
+        const reused = research.check === lastCheck || research.check.verification === lastCheck?.verification;
         emit('proof_checked', { passed: research.check.passed, commit: research.check.commit,
-          reused: research.check === lastCheck || research.check.verification === lastCheck?.verification,
+          reused,
           durationMs: Date.now() - checkStarted });
         if (access.knowledgeSnapshot || access.installedLibrary) {
           let claims: unknown;
@@ -1540,20 +1542,6 @@ export async function runResearchWorkers(input: {
               completedGuidanceDecisions(turnSession, executedTurnId, candidate.status));
           if (await proofLifecycle?.settleTurn(assignment, candidate, operation, turnSession)) continue;
           const singleSubmission = singleHandoff?.takeSubmission();
-          if (skillMode && team?.canContinueCoordination && !singleSubmission && candidate.status === 'checkpoint' &&
-              !sourceFeedback() && !skillProofLifecycle!.needsSourceFreeze()) {
-            // The response and its tools have settled, but no source needs freezing.
-            // Keep the native process and thread; the next input carries the pending
-            // decision and current team observations without restarting the writer.
-            research.lastInputTokens = lastInputTokens ?? research.lastInputTokens;
-            research.candidate = candidate;
-            retries = 0;
-            emit('turn_checkpoint', { turn: research.turns, reason: 'math_team_coordination_checkpoint' });
-            emit('team_coordination_continued', { threadId: turnSession.threadId,
-              process: turnSession.processIdentity, writerStopped: false });
-            save();
-            continue;
-          }
           if (singleSubmission || skillMode) {
             // The runtime has settled the turn and stopped new requests. Reap all remaining
             // writer processes before the ordinary source freeze and independent host check.
@@ -1584,7 +1572,6 @@ export async function runResearchWorkers(input: {
           if (turn === 'checkpoint') emit('turn_checkpoint', { turn: research.turns,
             ...(team?.leadCompletionCheckpoint ? { reason: 'math_team_completion_checkpoint' } :
               team?.leadAdoptionCheckpoint ? { reason: 'math_team_adoption_checkpoint' } :
-              team?.leadCoordinationCheckpoint ? { reason: 'math_team_coordination_checkpoint' } :
               planningCheckpoint ? { reason: 'math_initial_planning_limit' } :
               contextSchedulingCheckpoint ? { reason: 'math_context_scheduling_checkpoint' } :
                 cooperativeCheckpoint ? { reason: 'math_cooperative_scheduling_checkpoint' } : {}) });

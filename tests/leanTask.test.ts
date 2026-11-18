@@ -76,6 +76,29 @@ function legacyDefaultWhereFixture() {
 }
 
 describe('user-provided Lean task bootstrap', () => {
+  it('accepts replacing a flush-left proof body while preserving the next command and frozen definition', () => {
+    const input = [
+      'namespace User', 'def marker : Nat :=', '7', 'theorem goal : marker = 7 :=',
+      '/- body can follow a comment -/', 'sorry', 'set_option pp.universes true', 'end User', '',
+    ].join('\n');
+    const receipt = bootstrapLeanTask(path.join(rootDirectory(), 'workspace'), { source: input, task });
+    const problem = readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath);
+    const submission = path.join(receipt.projectRoot, 'Submission.lean');
+    const solved = input.replace('/- body can follow a comment -/\nsorry', 'rfl');
+    for (const candidate of [solved, solved.replace(':=\nrfl', ':=\nby\n  rfl'), solved.replace(':=\nrfl', ':= by rfl')]) {
+      fs.writeFileSync(submission, candidate);
+      expect(() => assertSolverSources(problem, receipt.workspaceRoot)).not.toThrow();
+      // Resume reconstructs these constraints from the verified, committed seed.
+      expect(readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath).receiptDigest).toBe(problem.receiptDigest);
+    }
+    fs.writeFileSync(submission, solved.replace('pp.universes true', 'pp.universes false'));
+    expect(() => assertSolverSources(problem, receipt.workspaceRoot)).toThrow('math_original_context_changed');
+    fs.writeFileSync(submission, solved.replace(':=\n7', ':=\n8'));
+    expect(() => assertSolverSources(problem, receipt.workspaceRoot)).toThrow('math_original_declaration_changed');
+    fs.writeFileSync(submission, solved.replace('goal : marker = 7', 'goal : 7 = 7'));
+    expect(() => assertSolverSources(problem, receipt.workspaceRoot)).toThrow('math_original_declaration_changed');
+  });
+
   it('bootstraps and rereads the target after a named where instance with default fields', () => {
     const input = [
       'namespace User',

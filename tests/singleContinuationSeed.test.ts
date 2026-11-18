@@ -5,6 +5,8 @@ import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
 import { projectMathematicsRuntimeEnvironment } from '../src/math/mathRuntimeEnvironment';
 import type { MathematicsVerifierBatchRequest } from '../src/math/verifier';
 import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
+import { saveAgentTeamResearchArtifact } from '../src/solver/agentTeamResearch';
+import { searchContinuation } from '../src/solver/continuationSearch';
 import { seedSingleSolverContinuation } from '../src/solver/continuationSeed';
 import { freezeContinuationInput, readContinuationContents, readContinuationPage, type ContinuationManifest } from '../src/solver/continuationInput';
 import { readDeclarationArtifacts } from '../src/solver/declarationArtifacts';
@@ -182,6 +184,47 @@ describe('single researcher continuation', () => {
     expect(committedSource(f.worktree, git(f.worktree, ['rev-parse', 'HEAD']), `${f.problem.projectRelative}/Submission.lean`)).toBe(f.sources);
   });
 
+  it('carries checked archive bytes of explicit member notes as searchable advisory history, without importing private summaries', async () => {
+    const f = fixture(), text = 'A counterexample at the endpoint disproves the proposed monotonicity inference.\r\n';
+    delete f.archived.workers; delete f.archived.cooperation; f.archived.coordination = 'independent'; f.archived.workerCount = 1;
+    const directory = path.join(f.oldDirectory, 'agent-team/research'), privateSummary = 'private-terminal-response';
+    const save = (taskId: string, commit: string) => saveAgentTeamResearchArtifact({ state: f.archived, directory,
+      worktree: f.peer, agentId: 'researcher', taskId, commit, summary: privateSummary, status: 'interrupted' });
+    const missing = save('no-notes', f.problem.baseCommit);
+    fs.writeFileSync(path.join(f.peer, 'RESEARCH.md'), text);
+    const commit = commitSolverSources(f.problem, f.peer), first = save('endpoint', commit), second = save('boundary', commit);
+    fs.writeFileSync(path.join(f.peer, 'RESEARCH.md'), 'new unpublished draft');
+    f.archived.agentTeam = { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control', workers: [],
+      deliveries: [], adoptions: [], events: [], operations: [], researchArtifacts: [first, first, second, missing] };
+    writeSolverRunState(f.sourceStateFile, f.archived);
+    const migrated = await f.seed(), state = readSolverRunState(f.stateFile), file = path.join(f.directory, 'continuation.json');
+    const input = readContinuationContents(file, migrated.snapshotDigest!);
+    const refs = input.snapshot.manifest.attachments.filter(item => item.id.startsWith('member-notes-'));
+    expect(refs).toHaveLength(1);
+    expect(refs[0]!.provenance).toMatchObject({ runId: f.archived.runId, source: f.sourceStateFile, commit, evidence: 'recorded-not-replayed' });
+    const note = input.contents.get(refs[0]!.sha256)!;
+    expect(note.slice(note.indexOf('\n') + 1)).toBe(text);
+    expect(JSON.parse(note.split('\n')[0]!)).toMatchObject({ advisory: true, originalProblemAcceptance: 'not-assessed',
+      sha256: mathDigest(text), origins: [expect.objectContaining({ artifactId: first.id, agentId: 'researcher', taskId: 'endpoint' }),
+        expect.objectContaining({ artifactId: second.id, taskId: 'boundary' })] });
+    expect(JSON.stringify(searchContinuation(file, migrated.snapshotDigest!, 'monotonicity', { kinds: ['research-notes'] }))).toContain(refs[0]!.id);
+    const captured = fs.readFileSync(path.join(f.directory, 'continuation-single-source.json'), 'utf8');
+    for (const secret of [privateSummary, 'new unpublished draft']) expect(captured).not.toContain(secret);
+    expect(migrated.candidates).toEqual([]); expect(migrated.checked).toEqual([]); expect(host.verify).not.toHaveBeenCalled();
+    expect(state.agentTeam).toBeUndefined(); expect(state.check).toBeUndefined();
+
+    const laterDir = path.join(f.oldDirectory, '..', 'third.runtime'), laterTree = path.join(laterDir, 'worktree');
+    fs.mkdirSync(laterDir, { mode: 0o700 }); git(f.workspace, ['worktree', 'add', '--quiet', '--detach', laterTree, f.problem.baseCommit]);
+    const skillDir = path.dirname(path.join(laterTree, path.relative(f.worktree, f.skill)));
+    fs.mkdirSync(skillDir, { recursive: true }); fs.writeFileSync(path.join(skillDir, 'SKILL.md'), f.skillText);
+    const laterStateFile = path.join(laterDir, 'state.json');
+    writeSolverRunState(laterStateFile, { ...f.state, runId: 'third-run', worktree: laterTree });
+    const later = await seedSingleSolverContinuation({ ...f.options, sourceRun: f.stateFile, run: laterStateFile });
+    const repeated = readContinuationContents(path.join(laterDir, 'continuation.json'), later.snapshotDigest!);
+    expect(repeated.snapshot.manifest.attachments.filter(item => item.sha256 === refs[0]!.sha256))
+      .toEqual([expect.objectContaining({ kind: 'research-notes', provenance: refs[0]!.provenance })]);
+  });
+
   it('preserves a full historical attachment set across repeated migration within existing manifest bounds', async () => {
     const f = fixture(), bodies = Array.from({ length: 32 }, (_, index) => `reference ${index}: λ\n\"exact\"\r\n`);
     const manifest: ContinuationManifest = { schema: 'theorem-os.continuation-snapshot.v1', taskDigest: f.archived.taskDigest,
@@ -198,5 +241,53 @@ describe('single researcher continuation', () => {
     const texts = [...next.contents.values()].join('\n');
     for (const text of bodies) expect(texts).toContain(text);
     expect(texts).toContain('earlier-run'); expect(texts).toContain('textSha256');
+  });
+
+  it('rejects a member note reference outside the host archive before creating the frozen seed', async () => {
+    const f = fixture();
+    const ref = saveAgentTeamResearchArtifact({ state: f.archived, directory: path.join(f.oldDirectory, 'alternate'),
+      agentId: 'researcher', taskId: 'archived', worktree: f.sourceWorktree, commit: f.canonical,
+      summary: 'Terminal response', status: 'completed' });
+    f.archived.agentTeam = { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control', workers: [],
+      deliveries: [], adoptions: [], events: [], operations: [], researchArtifacts: [ref] };
+    writeSolverRunState(f.sourceStateFile, f.archived);
+    await expect(f.seed()).rejects.toThrow('math_agent_team_research_reference_changed');
+    expect(fs.existsSync(path.join(f.directory, 'continuation-single-source.json'))).toBe(false);
+    expect(readSolverRunState(f.stateFile).continuationDigest).toBeUndefined();
+  });
+
+  it('projects private run history before freezing a new snapshot, including renamed and nested legacy diagnostics', async () => {
+    const f = fixture();
+    const privateCard = 'PRIVATE_CARD_BODY_CANARY', privateTurn = 'PRIVATE_WORKER_TURN_CANARY';
+    f.archived.agentTeam = { schema: 'theorem-os.agent-team.v1', workers: [], adoptions: [], events: [],
+      deliveries: [], operations: [{ key: 'example-call', digest: 'a'.repeat(64), result: { response: privateTurn } }] };
+    f.archived.usage = { totalTokens: 480, customBackendField: privateCard };
+    const legacy = JSON.stringify({ ...f.archived, runId: 'prior-generation', historicalPrivateConfiguration: privateCard }, null, 2);
+    const provenance = { runId: 'prior-generation', source: '/archived/source/state.json', evidence: 'recorded-not-replayed' as const };
+    const framed = (id: string, body: string) => canonicalMathJson({ schema: 'theorem-os.continuation-text-record.v1',
+      id, kind: 'diagnostics', provenance, textLength: body.length, textBytes: Buffer.byteLength(body), textSha256: mathDigest(body) }) +
+      '\n' + body + '\n';
+    const note = 'Exact mathematical study note 🧮\nincluding empty lines\n\n';
+    const bodies = [legacy, framed('previous-7', framed('previous-11', legacy) + framed('probe', note)), note];
+    const manifest: ContinuationManifest = { schema: 'theorem-os.continuation-snapshot.v1', taskDigest: f.archived.taskDigest,
+      problemReceiptDigest: f.problem.receiptDigest, attachments: bodies.map((body, i) => ({ id: 'previous-' + (i + 1),
+        kind: i === 2 ? 'research-notes' : 'diagnostics', path: i + '.txt', bytes: Buffer.byteLength(body), sha256: mathDigest(body),
+        contentPath: 'continuation/' + mathDigest(body) + '.txt', provenance })) };
+    const source = freezeContinuationInput({ manifest, digest: mathDigest(canonicalMathJson(manifest)),
+      contents: new Map(bodies.map(body => [mathDigest(body), body])) }, f.oldDirectory);
+    f.archived.continuationDigest = source.digest; writeSolverRunState(f.sourceStateFile, f.archived);
+    const sourceBytes = fs.readFileSync(f.sourceStateFile);
+    const result = await f.seed(), next = readContinuationContents(path.join(f.directory, 'continuation.json'), result.snapshotDigest!);
+    const read = (id: string) => next.contents.get(next.snapshot.manifest.attachments.find(item => item.id === id)!.sha256)!;
+    expect(JSON.parse(read('seed-history'))).toMatchObject({ schema: 'theorem-os.single-continuation-history.v1',
+      stateDigest: mathDigest(sourceBytes), usage: { totalTokens: 480 } });
+    expect(JSON.parse(read('previous-1'))).toMatchObject({ runId: 'prior-generation', stateDigest: mathDigest(legacy) });
+    expect(read('previous-2')).toContain(mathDigest(legacy)); expect(read('previous-2')).toContain(note);
+    expect(read('previous-3')).toBe(note);
+    expect(next.snapshot.manifest.attachments.find(item => item.id === 'previous-3')!.provenance).toEqual(provenance);
+    const saved = fs.readFileSync(path.join(f.directory, 'continuation-single-source.json'), 'utf8') +
+      [...next.contents.values()].join('');
+    for (const privateValue of [privateCard, privateTurn, 'old-engineer']) expect(saved).not.toContain(privateValue);
+    expect(fs.readFileSync(f.sourceStateFile)).toEqual(sourceBytes);
   });
 });

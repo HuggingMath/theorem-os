@@ -10,6 +10,8 @@ import { resolveMathematicsRuntimeEnvironment } from '../math/mathRuntimeEnviron
 import { assertMathCanonicalPath } from '../math/paths';
 import { resolveMathematicsLakePackagesCache } from '../math/verifier';
 import { readSolverRunState, writeSolverRunState, type SolverRunState } from './archive';
+import { inheritedContinuationText, singleContinuationHistory } from './continuationHistory';
+import { readAgentTeamContinuationNote, type AgentTeamResearchArtifactReference, type AgentTeamContinuationOrigin } from './agentTeamResearch';
 import { freezeContinuationInput, MAX_CONTINUATION_ATTACHMENT_BYTES, readContinuationContents, type ContinuationManifest } from './continuationInput';
 import { captureContinuationTaskDrafts, continuationOwnershipExtension, continuationSourcePolicyDigest,
   type ContinuationSeedReport, type seedSolverContinuation } from './continuationSeed';
@@ -88,7 +90,8 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
     if (mathDigest(committedSource(archived.worktree, canonicalCommit, `${state.problem.projectRelative}/${file}`)) !== expected)
       throw new Error('math_continuation_seed_source_policy_changed');
   const provenance = { source: sourceStateFile, runId: archived.runId, evidence: 'recorded-not-replayed' as const, commit: canonicalCommit };
-  const documents: SingleSource['documents'] = [{ id: 'seed-history', kind: 'diagnostics', text: archivedBytes.toString('utf8'), provenance },
+  const documents: SingleSource['documents'] = [{ id: 'seed-history', kind: 'diagnostics',
+    text: singleContinuationHistory(archived, mathDigest(archivedBytes)), provenance },
     { id: 'seed-recovery-guide', kind: 'research-notes', provenance,
       text: 'A new single-researcher run starts from these fixed source bytes. No historical thread, task, owner, pause, usage counter or proof flag is execution authority. The old state and worker drafts are advisory history; source-run costs remain in seed-history and are not erased or attributed to new work.\n' +
         'Canonical sources are pinned to their recorded commit. Worker drafts are individually stable reads, not a globally atomic observation. Drafts and suspended task snapshots remain separate and must not overwrite canonical proofs. Historical claims require a fresh check in this run; failed and conditional helpers stay advisory.\n' }];
@@ -112,12 +115,30 @@ function captureSource(sourceStateFile: string, stateFile: string, state: Solver
   if (archived.cooperation) for (const [index, draft] of captureContinuationTaskDrafts(archived, sourceStateFile).entries())
     documents.push({ id: `seed-task-draft-${index + 1}`, kind: 'proof-source', text: canonicalMathJson(draft),
       provenance: { ...provenance, commit: draft.commit } });
+  if (archived.agentTeam?.transport === 'native-agent-control') {
+    const byText = new Map<string, { text: string; origins: Map<string, AgentTeamContinuationOrigin> }>();
+    for (const ref of archived.agentTeam.researchArtifacts ?? []) {
+      const note = readAgentTeamContinuationNote(path.join(sourceDirectory, 'agent-team/research'), ref as AgentTeamResearchArtifactReference, archived);
+      if (!note) continue;
+      const group = byText.get(note.notes.sha256) ?? { text: note.notes.text, origins: new Map() };
+      group.origins.set(note.origin.artifactId, note.origin); byText.set(note.notes.sha256, group);
+    }
+    for (const [sha256, group] of byText) {
+      const origins = [...group.origins.values()];
+      documents.push({ id: 'member-notes-' + (documents.length + 1), kind: 'research-notes',
+        provenance: { source: sourceStateFile, runId: archived.runId, evidence: 'recorded-not-replayed',
+          ...(origins.every(item => item.commit === origins[0]!.commit) ? { commit: origins[0]!.commit } : {}) },
+        text: canonicalMathJson({ schema: 'theorem-os.continuation-member-notes.v1', sourceRunId: archived.runId,
+          problemReceiptDigest: archived.problem.receiptDigest, environmentDigest: archived.environmentDigest,
+          advisory: true, originalProblemAcceptance: 'not-assessed', file: 'RESEARCH.md', sha256, origins }) + '\n' + group.text });
+    }
+  }
   if (archived.continuationDigest) {
     const old = readContinuationContents(path.join(sourceDirectory, 'continuation.json'), archived.continuationDigest,
       { taskDigest: archived.taskDigest, problemReceiptDigest: archived.problem.receiptDigest });
     for (const [index, attachment] of old.snapshot.manifest.attachments.entries()) documents.push({
-      id: `previous-${index + 1}`, kind: attachment.kind, text: old.contents.get(attachment.sha256)!,
-      provenance: { source: `${sourceStateFile}#${attachment.id}`, runId: attachment.provenance.runId ?? archived.runId,
+      id: `previous-${index + 1}`, kind: attachment.kind, text: inheritedContinuationText(attachment.kind, old.contents.get(attachment.sha256)!),
+      provenance: { source: attachment.provenance.source ?? `${sourceStateFile}#${attachment.id}`, runId: attachment.provenance.runId ?? archived.runId,
         evidence: attachment.provenance.evidence, ...(attachment.provenance.commit ? { commit: attachment.provenance.commit } : {}) } });
   }
   const candidates = new Map<string, SingleSource['declarations'][number]>();

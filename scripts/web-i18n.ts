@@ -150,7 +150,7 @@ export function errorKeys() {
   const files = ['apps/web/conversations.ts', 'apps/web/formalizations.ts', 'apps/web/server.ts', 'apps/web/jobs.ts', 'apps/web/storage.ts', 'apps/web/auth.ts', 'apps/web/explain.ts', 'apps/web/quota.ts', 'apps/web/admission.ts', 'apps/web/providerCheck.ts',
     'apps/web/runner.ts', 'apps/web/worker.ts', 'apps/web/moduleRegistry.ts', 'apps/web/knowledgeService.ts', 'apps/web/researchProjects.ts', 'apps/web/researchAssets.ts', 'apps/web/researchApi.ts', 'apps/web/researchMathematics.ts', 'apps/web/researchCandidateScope.ts', 'apps/web/researchAssetPrefill.ts', 'apps/web/researchLibraryTrials.ts', 'apps/web/researchProblems.ts', 'apps/web/researchMathExamples.ts',
     'apps/web/researchBudgets.ts', 'apps/web/researchPersonal.ts', 'apps/web/researchJourney.ts', 'apps/web/researchProjectStart.ts',
-    'apps/web/sharedProofs.ts', 'apps/web/researchCollections.ts', 'apps/web/researchCollaborationApi.ts', 'apps/web/researchMode.ts'];
+    'apps/web/sharedProofs.ts', 'apps/web/researchCollections.ts', 'apps/web/researchCollaborationApi.ts', 'apps/web/researchMode.ts', 'apps/web/nativeTeamProfiles.ts'];
   for (const relative of files) {
     const source = parse(path.join(root, relative));
     const add = (node: ts.Node, text: string) => {

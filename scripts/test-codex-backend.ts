@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { createServer } from 'node:http';
+import { createServer, type ServerResponse } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { parse, stringify } from 'smol-toml';
 import { bootstrapLeanTask } from '../src/math/leanTask';
@@ -27,6 +27,8 @@ import { verifyNativeProofDelivery } from './test-codex-backend-delivery';
 // are deterministic fixture messages on this process's loopback server.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const flag = (name: string) => { const index = process.argv.indexOf(name); return index < 0 ? undefined : process.argv[index + 1]; };
+const capacityTest = process.argv.includes('--team-capacity');
+const maxAgents = capacityTest ? 8 : 3;
 const requestedExecutable = flag('--executable') ?? process.env.THEOREMOS_TEST_CODEX_EXECUTABLE ?? path.join(root, 'out/codex-backend/codex');
 if (!fs.existsSync(requestedExecutable)) throw new Error('Native backend acceptance requires a real Codex binary. ' +
   'Pass --executable PATH or THEOREMOS_TEST_CODEX_EXECUTABLE; missing: ' + requestedExecutable);
@@ -59,6 +61,75 @@ const call = (id: string, name: string, args: unknown, namespace?: string) => ({
 });
 const nativeCall = (id: string, name: string, args: unknown) => call(id, name, args, 'collaboration');
 
+const pendingMembers = new Set<string>();
+let releaseMembers = false;
+async function capacityResponse(body: Record<string, any>, text: string, mode: string) {
+  if (mode.includes('You are a member')) {
+    const name = text.match(/NATIVE_CAPACITY_MEMBER (seat_[1-7])\b/u)?.[1];
+    assert.ok(name && !pendingMembers.has(name), 'one real writer request per accepted seat');
+    pendingMembers.add(name);
+    try { await until(() => releaseMembers); }
+    finally { pendingMembers.delete(name); }
+    return [message('Capacity fixture worker finished.')];
+  }
+  const receipts = new Map<string, string>(body.input.filter((item: any) => item.type === 'function_call_output')
+    .map((item: any) => [item.call_id, item.output]));
+  for (let n = 1; n <= 7; n++) {
+    const name = 'seat_' + n, receipt = receipts.get(name);
+    if (!receipt) return [nativeCall(name, 'spawn_agent', { task_name: name, fork_turns: 'none',
+      message: 'NATIVE_CAPACITY_MEMBER ' + name + ' Hold this disposable fixture assignment.' })];
+    assert.equal(JSON.parse(receipt).task_name, '/root/' + name, 'native spawn must accept ' + name + ': ' + receipt);
+  }
+  await until(() => pendingMembers.size === 7 || releaseMembers);
+  if (!receipts.has('capacity_roster')) return [nativeCall('capacity_roster', 'list_agents', {})];
+  const roster = JSON.parse(receipts.get('capacity_roster')!).agents;
+  const expected = ['/root', ...Array.from({ length: 7 }, (_, i) => '/root/seat_' + (i + 1))];
+  assert.deepEqual(roster.filter((agent: any) => agent.agent_status === 'running').map((agent: any) => agent.agent_name).sort(), expected);
+  if (!receipts.has('overflow')) return [nativeCall('overflow', 'spawn_agent', {
+    task_name: 'overflow', fork_turns: 'none', message: 'Overflow fixture; must never reach a writer.' })];
+  const overflow = receipts.get('overflow')!;
+  assert.match(overflow, /math_team_capacity_exceeded/u);
+  assert.equal(processes.size, maxAgents, 'one isolated writer process per occupied seat');
+  assert.equal(state.agentTeam!.workers.length, 7, 'overflow must not allocate a worker');
+  observations.capacity = { maxAgents, activeNativeAgents: expected, simultaneousMemberRequests: 7,
+    writerProcesses: processes.size, overflowReceipt: overflow };
+  releaseMembers = true;
+  await until(() => !team!.hasActiveWorkers);
+  return [message('Capacity verified.')];
+}
+
+/** Native resumes/full forks preserve history; a later mode supersedes older hints. */
+const effectiveMultiAgentMode = (body: Record<string, any>): string | undefined => {
+  const messages = [body.instructions, ...body.input.filter((item: any) => ['system', 'developer'].includes(item.role))
+    .map((item: any) => typeof item.content === 'string' ? item.content
+      : (item.content ?? []).map((part: any) => part.text ?? '').join('\n'))];
+  return messages.filter((text): text is string => typeof text === 'string')
+    .flatMap(text => [...text.matchAll(/<multi_agent_mode>([\s\S]*?)<\/multi_agent_mode>/gu)].map(match => match[1]!.trim())).at(-1);
+};
+
+function sendResponse(response: ServerResponse, items: any[]) {
+  const base = { id: 'resp_' + ++sequence, object: 'response', created_at: 1,
+    model: 'deepseek-flash', status: 'in_progress', output: [] };
+  const emit = (value: unknown) => response.write('event: ' + (value as any).type + '\ndata: ' + JSON.stringify(value) + '\n\n');
+  response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
+  emit({ type: 'response.created', response: base });
+  for (const [output_index, item] of items.entries()) {
+    emit({ type: 'response.output_item.added', output_index, item: { ...item, status: 'in_progress',
+      ...(item.type === 'function_call' ? { arguments: '' } : { content: [] }) } });
+    if (item.type === 'function_call') {
+      emit({ type: 'response.function_call_arguments.delta', item_id: item.id, output_index, delta: item.arguments });
+      emit({ type: 'response.function_call_arguments.done', item_id: item.id, output_index, arguments: item.arguments });
+    } else {
+      emit({ type: 'response.output_text.delta', item_id: item.id, output_index, content_index: 0, delta: item.content[0].text });
+      emit({ type: 'response.output_text.done', item_id: item.id, output_index, content_index: 0, text: item.content[0].text });
+    }
+    emit({ type: 'response.output_item.done', output_index, item });
+  }
+  emit({ type: 'response.completed', response: { ...base, status: 'completed', output: items,
+    usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } } });
+  response.end();
+}
+
 const server = createServer(async (request, response) => {
   try {
     assert.equal(request.url, '/v1/responses');
@@ -73,6 +144,26 @@ const server = createServer(async (request, response) => {
     let items: any[];
     const member = /NATIVE_INTERRUPT_TEST/u.test(text) ? 'interrupt' : /NATIVE_FORK_TEST/u.test(text) ? 'forked' : /NATIVE_FOLLOWUP_TEST/u.test(text) ? 'followup'
       : /NATIVE_WORKER_TEST/u.test(text) ? 'expert' : undefined;
+    const mode = effectiveMultiAgentMode(body);
+    assert.ok(mode, 'Every native writer request must carry an effective multi-agent mode.');
+    assert.doesNotMatch(mode, /Any earlier instruction enabling proactive multi-agent delegation no longer applies|Do not spawn sub-agents unless/u,
+      'The current native mode must honor the explicitly requested team.');
+    assert.equal(body.tool_choice, 'auto', 'Native collaboration must remain a model choice.');
+    if (capacityTest) return sendResponse(response, await capacityResponse(body, text, mode));
+    if (member) {
+      assert.match(mode, /You are a member of an explicitly requested flat team\./u);
+      assert.match(mode, /Do not spawn sub-agents or dispatch, redirect or interrupt other members\./u);
+      assert.match(mode, /first usable finding, probe result or blocker without waiting for a complete proof/u);
+      assert.doesNotMatch(mode, /Proactively delegate useful complementary work|You are the Lead/u,
+        'A cold resume or full-history fork must not inherit Lead authority as its current mode.');
+    } else {
+      assert.match(mode, /You are the Lead of an explicitly requested flat team\./u);
+      assert.match(mode, /Proactively delegate useful complementary work/u);
+      assert.match(mode, /concrete gaps with a consumer and first usable result/u);
+      assert.match(mode, /instead of competing for the same deliverable/u);
+    }
+    const modeChecks = observations.modeChecks ??= {};
+    modeChecks[member ?? 'lead'] = (modeChecks[member ?? 'lead'] ?? 0) + 1;
     if (member) {
       const id = ['followup', 'interrupt'].includes(member) ? 'expert' : member;
       const worker = state.agentTeam!.workers.find(worker => worker.id === id)!;
@@ -81,7 +172,14 @@ const server = createServer(async (request, response) => {
       if (member === 'interrupt') {
         const history = JSON.stringify(body.input);
         observations.busySteerSeen ||= history.includes('FIXTURE_BUSY_FOLLOWUP');
-        observations.effectiveAmendSeen ||= history.includes('FIXTURE_EFFECTIVE_AMEND');
+        observations.effectiveFollowupSeen ||= history.includes('FIXTURE_EFFECTIVE_FOLLOWUP');
+        if (observations.effectiveFollowupSeen) {
+          assert.match(text, /The ideal class group measures the obstruction to principality/u,
+            'The changed specialty must reach the actual busy writer request with its native followup.');
+          assert.ok(text.includes(path.join(worker.worktree, '.agents/skills/theoremos-research/references/domain-materials/number-theory.md')),
+            'Domain reading must be located in the recipient workspace.');
+          observations.hotProfileSeen = true;
+        }
       }
       if (step === 0) {
         assert.equal(text.includes('NATIVE_ROOT_TEST'), member === 'forked', 'only a full-history fork inherits the parent turn');
@@ -90,14 +188,14 @@ const server = createServer(async (request, response) => {
       if (member === 'interrupt' && step === 1) await until(() => observations.waitRequested === true);
       if (member === 'interrupt' && step >= 2) {
         observations.interruptModelPending = true;
-        // Effective host notifications finish the current response and tools first.
+        // Native followups finish the current response and tools first.
         // Give each steering action that boundary, then hold the final response for interruption.
-        if (!observations.busySteerSeen || !observations.effectiveAmendSeen) {
+        if (!observations.busySteerSeen || !observations.effectiveFollowupSeen) {
           const busy = !observations.busySteerSeen;
           await until(() => response.destroyed || (busy ? observations.busyFollowupAccepted === true
-            : worker.tasks.at(-1)!.objectiveRevision === 2));
+            : worker.tasks.at(-1)!.objectiveRevision === 3));
           if (response.destroyed) return;
-          items = [call((busy ? 'busy' : 'amend') + '_boundary_' + step, 'exec_command', {
+          items = [call((busy ? 'busy' : 'followup') + '_boundary_' + step, 'exec_command', {
             login: false, cmd: 'printf continuation-boundary' })];
         } else {
           await new Promise<void>(resolve => response.once('close', resolve));
@@ -114,7 +212,7 @@ const server = createServer(async (request, response) => {
       // workflow only after the original tool's actual receipt is in history.
       const receipts = new Set(body.input.filter((item: any) => item.type === 'function_call_output').map((item: any) => item.call_id));
       const stages = ['spawn_fresh', 'queue_idle', 'followup', 'spawn_fork', 'native_list', 'interrupt_idle',
-        'followup_interrupt', 'native_wait', 'followup_busy', 'amend_active', 'interrupt_active'];
+        'followup_interrupt', 'native_wait', 'followup_busy', 'followup_effective', 'interrupt_active'];
       let step = 0; while (receipts.has(stages[step])) step++;
       rootStep = Math.max(rootStep, step + 1);
       if (step === 0) items = [nativeCall('spawn_fresh', 'spawn_agent', {
@@ -133,6 +231,7 @@ const server = createServer(async (request, response) => {
         await until(() => !team!.hasActiveWorkers);
         assert.equal(state.agentTeam!.workers.find(worker => worker.id === 'expert')!.tasks.length, 2);
         assert.equal(state.agentTeam!.workers.find(worker => worker.id === 'expert')!.tasks.at(-1)!.status, 'completed', 'native cold followup must complete');
+        assert.ok(processes.size > observations.opensAfterIdleQueue, 'The cold followup must open a new isolated writer.');
         items = [nativeCall('spawn_fork', 'spawn_agent', {
           task_name: 'forked', message: 'NATIVE_FORK_TEST Retain the parent history in this disposable fixture.', fork_turns: 'all' })];
       } else if (step === 4) {
@@ -155,37 +254,17 @@ const server = createServer(async (request, response) => {
         await until(() => observations.busySteerSeen === true);
         const worker = state.agentTeam!.workers.find(worker => worker.id === 'expert')!;
         assert.equal(worker.tasks.length, 3, 'busy followup must retain the current task');
-        items = [call('amend_active', 'theoremos_team', { operation: 'amend', agentId: worker.id,
-          taskId: worker.tasks.at(-1)!.id, message: 'NATIVE_INTERRUPT_TEST FIXTURE_EFFECTIVE_AMEND Inspect the amended disposable fixture.',
-          reason: 'Verify attributed effective notifications in an active native child.' })];
+        items = [nativeCall('followup_effective', 'followup_task', { target: '/root/expert',
+          message: 'Profiles: D012, engineer\nNATIVE_INTERRUPT_TEST FIXTURE_EFFECTIVE_FOLLOWUP Inspect the updated disposable fixture.' })];
       } else if (step === 10) {
-        await until(() => observations.effectiveAmendSeen === true);
+        await until(() => observations.effectiveFollowupSeen === true);
         items = [nativeCall('interrupt_active', 'interrupt_agent', { target: '/root/expert' })];
       } else {
         await until(() => !team!.hasActiveWorkers);
         items = [message('Native backend fixture complete.')];
       }
     }
-    const base = { id: 'resp_' + ++sequence, object: 'response', created_at: 1,
-      model: 'deepseek-flash', status: 'in_progress', output: [] };
-    const emit = (value: unknown) => response.write('event: ' + (value as any).type + '\ndata: ' + JSON.stringify(value) + '\n\n');
-    response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
-    emit({ type: 'response.created', response: base });
-    for (const [output_index, item] of items.entries()) {
-      emit({ type: 'response.output_item.added', output_index, item: { ...item, status: 'in_progress',
-        ...(item.type === 'function_call' ? { arguments: '' } : { content: [] }) } });
-      if (item.type === 'function_call') {
-        emit({ type: 'response.function_call_arguments.delta', item_id: item.id, output_index, delta: item.arguments });
-        emit({ type: 'response.function_call_arguments.done', item_id: item.id, output_index, arguments: item.arguments });
-      } else {
-        emit({ type: 'response.output_text.delta', item_id: item.id, output_index, content_index: 0, delta: item.content[0].text });
-        emit({ type: 'response.output_text.done', item_id: item.id, output_index, content_index: 0, text: item.content[0].text });
-      }
-      emit({ type: 'response.output_item.done', output_index, item });
-    }
-    emit({ type: 'response.completed', response: { ...base, status: 'completed', output: items,
-      usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } } });
-    response.end();
+    sendResponse(response, items);
   } catch (error) {
     observations.providerFailure ??= String(error); controller.abort(error);
     response.writeHead(500); response.end('Offline fixture failed.');
@@ -205,7 +284,7 @@ try {
   state = { schema: 'deepscientist.math.solver.v1', runId: 'offline-native-backend', phase: 'prepared', problem,
     worktree, model: 'deepseek-flash', effort: 'high', turns: 0, taskDigest: mathDigest('fixture'), buildDigest: 'fixture',
     environmentDigest: mathDigest('offline-native-backend'), evaluatorDigest: 'fixture', researchMode: 'skill',
-    researchSkillWorkflow: 'full', researchSkill: identity, researchDelegation: { mode: 'team', maxAgents: 3 },
+    researchSkillWorkflow: 'full', researchSkill: identity, researchDelegation: { mode: 'team', maxAgents },
     agentTeam: { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control', workers: [],
       events: [], deliveries: [], adoptions: [], operations: [] } };
   const profile = path.join(directory, 'profile');
@@ -269,26 +348,60 @@ try {
   team = new AgentResearchTeam({ state, root, taskText: 'Disposable integration fixture.', leadAccess: {
     environment, researchSkill: skill, retrievalRoot: path.join(worktree, problem.projectRelative) },
     modules: { ...directSolverModules, M1: { ...directSolverModules.M1, open } }, executable, profile,
-    signal: controller.signal, maxAgents: 3, maxTurns: Infinity, maxTurnMs: Infinity, maxTotalTokens: 0,
+    signal: controller.signal, maxAgents, maxTurns: Infinity, maxTurnMs: Infinity, maxTotalTokens: 0,
     remainingMs: () => Infinity, save, emit: (event, details) => { events.push({ event, ...details }); },
     exclusiveCheck: async operation => operation() });
   lead = await open({ executable, profile, workspace: worktree, proofProjectRoot: path.join(worktree, problem.projectRelative),
     model: state.model, effort: state.effort, environment, skills: [skill], tools: team.tools(),
     nativeAgentControl: team.nativeAgentControlOptions(), isolateProcess: true, hiddenRoots: team.hiddenRoots,
-    instructions: agentTeamInstructions({ id: 'lead', role: 'lead' }, 3, 'native-agent-control'),
+    instructions: agentTeamInstructions({ id: 'lead', role: 'lead' }, maxAgents, 'native-agent-control'),
     signal: controller.signal, onUsage: () => {} });
   team.setLeadSession(lead); state.writerProcess = lead.processIdentity; save();
   observations.rootStatus = await lead.run('NATIVE_ROOT_TEST Execute the scripted disposable backend fixture.', 'root-task', worktree, () => {});
   assert.equal(observations.rootStatus, 'completed');
+  if (capacityTest) {
+    assert.ok(observations.capacity, 'must reach the full team and observe the failed overflow spawn');
+    assert.ok(state.agentTeam!.workers.every(w => w.tasks.at(-1)?.status === 'completed'));
+    observations.loopbackRequests = requests.length;
+  } else checkLifecycle(worktree, problem.projectRelative);
+  await team.close(); await lead.close(); team = undefined; lead = undefined;
+  if (!capacityTest) observations.proofDelivery = await verifyNativeProofDelivery({ repository: root, executable,
+    output: path.join(output, 'proof-delivery'), signal: controller.signal });
+  observations.status = 'passed';
+} catch (error) {
+  observations.status = 'failed'; observations.error = error instanceof Error ? { message: error.message, stack: error.stack } : String(error);
+  process.exitCode = 1;
+} finally {
+  clearTimeout(deadline); controller.abort();
+  await team?.close(); await lead?.close();
+  observations.processes = [...processes.values()].map(identity => ({ ...identity, stop: confirmHarnessProcessStopped(identity) }));
+  if (observations.processes.some((process: any) => process.stop.status !== 'stopped')) { observations.status = 'failed'; process.exitCode = 1; }
+  writeMathJsonDurable(path.join(output, 'verification.json'), observations);
+  writeMathJsonDurable(path.join(output, 'trace.json'), { requests, events });
+  server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+  fs.rmSync(directory, { recursive: true, force: true });
+}
+console.log(JSON.stringify(observations, null, 2));
+
+function checkLifecycle(worktree: string, projectRelative: string) {
   assert.equal(rootStep, 12);
   assert.deepEqual(state.agentTeam!.workers.map(worker => worker.native!.agentPath).sort(), ['/root/expert', '/root/forked']);
   const expert = state.agentTeam!.workers.find(worker => worker.id === 'expert')!;
+  assert.equal(expert.native!.spawnHistory, 'fresh');
+  assert.equal(state.agentTeam!.workers.find(worker => worker.id === 'forked')!.native!.spawnHistory, 'parent-history');
   assert.equal(expert.tasks.length, 3);
   assert.equal(expert.tasks.at(-1)!.status, 'interrupted');
-  assert.equal(expert.tasks.at(-1)!.objectiveRevision, 2);
+  assert.equal(expert.tasks.at(-1)!.objectiveRevision, 3);
+  assert.deepEqual(expert.tasks.at(-1)!.profileEvidence?.loaded, ['D012', 'engineer']);
+  assert.equal(observations.hotProfileSeen, true);
+  for (const role of ['lead', 'expert', 'followup', 'forked', 'interrupt'])
+    assert.ok(observations.modeChecks[role] > 0, 'Actual provider requests must validate the current mode for ' + role);
+  assert.match(state.agentTeam!.nativeControl!.rootRuntimeConfiguration!.overrides.multiAgentModeHintText!, /You are the Lead/u);
+  for (const worker of state.agentTeam!.workers)
+    assert.match(worker.native!.runtimeConfiguration!.overrides.multiAgentModeHintText!, /You are a member/u);
   assert.ok(expert.tasks.at(-1)!.sourceCommit, 'interruption must preserve the stopped writer draft');
   assert.equal(state.agentTeam!.deliveries.length, 0, 'native completed replies must not become Lean deliveries');
-  assert.match(fs.readFileSync(path.join(worktree, problem.projectRelative, 'Submission.lean'), 'utf8'), /sorry/u);
+  assert.match(fs.readFileSync(path.join(worktree, projectRelative, 'Submission.lean'), 'utf8'), /sorry/u);
   const outputs = requests.flatMap(body => body.input ?? []).filter(item => item.type === 'function_call_output');
   // Native forks mark the parent's unfinished tool as aborted in copied history.
   // Retain the original producer's receipt before later inherited copies.
@@ -308,21 +421,4 @@ try {
   };
   assert.ok(observations.relayAdmission.namespaceRequests > 0, 'native namespaces must pass production relay admission');
   assert.ok(observations.relayAdmission.agentMessageRequests > 0, 'native child messages must pass production relay admission');
-  await team.close(); await lead.close(); team = undefined; lead = undefined;
-  observations.proofDelivery = await verifyNativeProofDelivery({ repository: root, executable,
-    output: path.join(output, 'proof-delivery'), signal: controller.signal });
-  observations.status = 'passed';
-} catch (error) {
-  observations.status = 'failed'; observations.error = error instanceof Error ? { message: error.message, stack: error.stack } : String(error);
-  process.exitCode = 1;
-} finally {
-  clearTimeout(deadline); controller.abort();
-  await team?.close(); await lead?.close();
-  observations.processes = [...processes.values()].map(identity => ({ ...identity, stop: confirmHarnessProcessStopped(identity) }));
-  if (observations.processes.some((process: any) => process.stop.status !== 'stopped')) { observations.status = 'failed'; process.exitCode = 1; }
-  writeMathJsonDurable(path.join(output, 'verification.json'), observations);
-  writeMathJsonDurable(path.join(output, 'trace.json'), { requests, events });
-  server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
-  fs.rmSync(directory, { recursive: true, force: true });
 }
-console.log(JSON.stringify(observations, null, 2));

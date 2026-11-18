@@ -25,6 +25,9 @@ import { researchModulePlanSchema, type ResearchModulePlan } from './modules/pol
 import { MAX_RESEARCH_WORKERS, researchWorkers } from './modules/organization';
 import { runResearchWorkers, type WorkerAccess } from './research';
 import { validateNativeDelegation } from '../runtime/nativeDelegation';
+import { MIN_TEAM_AGENTS, MAX_TEAM_AGENTS } from './teamCapacity';
+import { getPreferredAgentTeamProfiles } from './agentTeamProfiles';
+import { readPersonalExperts } from './personalExperts';
 import { evaluateSolverProof } from './evaluation';
 import { solverProofIsCurrent } from './modules/evidence';
 import { checkCodexProviderConnectivity } from '../runtime/codexConnectivity';
@@ -55,6 +58,7 @@ import { readCliConfiguration } from '../runtime/cliConfiguration';
 import { planMathAgentSession } from '../runtime/agentSessionPlan';
 import { SingleSolverProofHandoff } from './singleSolverProofHandoff';
 import { assertAgentTeamProcessesStopped } from './agentTeam';
+import { buildAgentTeamContributions } from './agentTeamContributions';
 
 const runSummary = (state: SolverRunState | undefined) => {
   const workers = state?.workers ?? (state?.agentTeam ? [
@@ -90,6 +94,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
     'plan-approval': { type: 'boolean' },
     'research-mode': { type: 'string' }, 'skill-loading': { type: 'string' },
     'common-research-skill': { type: 'string' }, 'skill-delegation': { type: 'string' }, 'skill-max-agents': { type: 'string' },
+    'skill-preferred-profiles': { type: 'string' },
+    'skill-expert-cards-file': { type: 'string' },
   } });
   if (values.help) {
     console.log(`Usage: theorem-os run --workspace DIR --task-file FILE --output FILE --build-manifest FILE [--receipt-file FILE] [--resume] [--method direct] [--scheduler plan|critical-path|continuation] [--module-plan FILE] [--coordination cooperative|independent] [--workers 1..${MAX_RESEARCH_WORKERS}] [--plan-approval] [--model MODEL --effort LEVEL] [--max-run-seconds N --max-turns N --max-turn-seconds N] [--max-total-tokens N] [--prepare-timeout-seconds N] [--proof-timeout-seconds N] [--evaluator-command CMD --evaluator-timeout-seconds N] [--proof-environment-cache-dir DIR] [--startup-only] [--check-statement]\n--module-plan loads the shared research-module plan JSON; use --scheduler plan.\nUse 0 for --prepare-timeout-seconds, --max-run-seconds, --max-turns, --max-turn-seconds, --proof-timeout-seconds or --evaluator-timeout-seconds to disable that limit. All time, turn and token limits default to 0 (unlimited). With an explicit proof-check timeout, an expired check saves a resumable checkpoint and the identical candidate gets more time on its next check.\n--max-total-tokens defaults to 0 (unlimited). A finite value stops new model turns after provider-reported consumption reaches it; in-flight turns finish and may exceed it. Resume retains cumulative usage and the saved allowance unless explicitly changed.`);
@@ -105,7 +111,9 @@ export async function runSolver(args: string[], root: string, customModules?: So
     console.log('--research-mode skill loads pinned research methods in single, independent or cooperative workflows. New Skill runs default to one independent researcher; explicit --workers above 1 defaults to cooperative, and explicit --coordination cooperative defaults to 4 workers. Schedulers, module plans, plan approval and host acceptance retain their existing contracts. --skill-loading native|file selects native skill input or the same frozen file. Resume inherits saved mode, loading, workers and coordination; historical single-only Skill checkpoints retain their original semantics.');
     console.log('--harness codex|claude-code|opencode|cli selects the native agent independently of research method and --model. Additional harnesses default to Skill/file loading, require an explicit --model and dedicated --harness-profile DIR, and support host-managed single, independent and cooperative execution. Explicit legacy mode remains available. --harness-executable overrides the native binary; --codex remains a Codex-only alias. Resume retains the backend, model, executable, profile and session plan; changed executable/configuration bytes require a new run. New backends require Linux bubblewrap. Native turn usage stops subsequent dispatches; it does not enforce individual provider-request admission.');
     console.log('--harness cli runs any configured headless command using DEDICATED_PROFILE/cli.json: argv, stdin/file/argument input, text/JSON/JSONL output, optional exact native session resume and usage fields. Use --harness-profile DIR and an explicit --model; --harness-executable optionally overrides the configured executable. CLIs without reasoning control require explicit --effort none. Commands without native resume receive full context on every turn and continue from saved sources/notes. Missing or partial usage blocks further finite-budget dispatches. See docs/generic-cli.md.');
-    console.log('--common-research-skill native|file gives every research worker the same pinned mathematical skill and minimal host contracts for controlled strategy comparisons. Resume retains this identity. --research-mode skill --skill-delegation team --skill-max-agents 3 enables a Codex Lead to organize persistent proof writers through theoremos_team (single host Lead, --workers 1 --coordination independent). --skill-delegation read-only retains bounded native investigations. --skill-max-agents 2..4 includes the Lead. Both modes share the run budget; built-in spawn/fork remains disabled.');
+    console.log('--common-research-skill native|file gives every research worker the same pinned mathematical skill and minimal host contracts for controlled strategy comparisons. Resume retains this identity. --research-mode skill --skill-delegation team --skill-max-agents 3 enables a Codex Lead to organize persistent proof writers with native spawn_agent, followup_task, send_message and wait_agent (single host Lead, --workers 1 --coordination independent). theoremos_team supplies only saved-result lookup and checked proof handoffs; collaboration uses the native tools. Historical host-tools runs retain their saved transport. --skill-delegation read-only retains bounded native investigations with built-in spawn/fork disabled. --skill-max-agents counts the Lead: 2..8 for team, 2..4 for read-only (default 4). Configured limits are shared; no research budget is imposed when limits are disabled.');
+    console.log('--skill-preferred-profiles engineer,D011 optionally suggests member work roles and domain specialties from the pinned Skill to the team Lead. The Lead chooses actual assignments and may use other profiles. Omit for no preference on a new run; resume retains the saved selection.');
+    console.log('--skill-expert-cards-file FILE freezes user-selected expert cards for a team run. Lead sees their catalogue and can select asset:<assetId> in a member assignment. Resume reuses the saved cards.');
     console.log('Team mode makes an early collaboration decision and exposes remaining run time and turn deadlines to every member. A finite --max-turn-seconds remains a hard ceiling; at 80% the host requests a checkpoint at the next model-request boundary, allowing the current response and tools to finish first. The overall deadline and cancellation remain hard stops; missing usage still blocks finite-budget continuation.');
     return 0;
   }
@@ -135,10 +143,14 @@ export async function runSolver(args: string[], root: string, customModules?: So
   if (delegationMode && (!skillMode || !['read-only', 'team'].includes(delegationMode)) || values['skill-max-agents'] && !delegationMode)
     throw new Error('invalid --skill-delegation');
   const maxAgents = Number(values['skill-max-agents'] ?? savedConfiguration?.researchDelegation?.maxAgents ?? 4);
-  if (delegationMode && (!Number.isSafeInteger(maxAgents) || maxAgents < 2 || maxAgents > 4)) throw new Error('invalid --skill-max-agents');
+  if (delegationMode && (!Number.isSafeInteger(maxAgents) || maxAgents < MIN_TEAM_AGENTS ||
+    maxAgents > (delegationMode === 'team' ? MAX_TEAM_AGENTS : 4))) throw new Error('invalid --skill-max-agents');
   if (delegationMode === 'read-only') validateNativeDelegation({ mode: 'read-only', maxAgents });
   if (delegationMode === 'team' && harness.id !== 'codex') throw new Error('math_team_requires_codex_dynamic_tools');
-  const researchDelegation = delegationMode ? { mode: delegationMode as 'read-only' | 'team', maxAgents } : undefined;
+  if (values['skill-preferred-profiles'] !== undefined && delegationMode !== 'team')
+    throw new Error('invalid --skill-preferred-profiles: requires --skill-delegation team');
+  if (values['skill-expert-cards-file'] !== undefined && delegationMode !== 'team')
+    throw new Error('invalid --skill-expert-cards-file: requires --skill-delegation team');
   // A saved team without this discriminator retains its original transport.
   const nativeTeamRun = delegationMode === 'team' && (!values.resume || savedConfiguration?.agentTeam?.transport === 'native-agent-control');
   if (skillMode) {
@@ -292,15 +304,25 @@ export async function runSolver(args: string[], root: string, customModules?: So
       const resumedState = values.resume ? readSolverRunState(stateFile) : undefined;
       if (cli && !cli.efforts.includes(resumedState && !effortSpecified ? resumedState.effort : values.effort!))
         throw new Error('math_cli_effort_unsupported');
-      const researchSkill = skillMode ? researchSkillIdentity(readMathAgentSkill(
-        path.join(root, 'skills/theoremos-research/SKILL.md'), skillLoading as 'native' | 'file')) : undefined;
-      const commonResearchSkill = commonLoading ? researchSkillIdentity(readMathAgentSkill(
-        path.join(root, 'skills/theoremos-research/SKILL.md'), commonLoading as 'native' | 'file')) : undefined;
-      const skill = researchSkill ?? commonResearchSkill;
-      const plannedSession = planMathAgentSession(harness.id, { ...(skill ? { skills: [readMathAgentSkill(
-        path.join(root, 'skills/theoremos-research/SKILL.md'), skill.loading)] } : {}),
+      const skillFile = path.join(root, 'skills/theoremos-research/SKILL.md');
+      const loadedSkill = skillMode ? readMathAgentSkill(skillFile, skillLoading as 'native' | 'file') : undefined;
+      const researchSkill = loadedSkill && researchSkillIdentity(loadedSkill);
+      const commonSkill = commonLoading ? loadedSkill ?? readMathAgentSkill(skillFile, commonLoading as 'native' | 'file') : undefined;
+      const commonResearchSkill = commonSkill && researchSkillIdentity(commonSkill);
+      const savedTeam = resumedState?.researchDelegation;
+      const requestedProfiles = values['skill-preferred-profiles']?.split(',') ??
+        (savedTeam?.mode === 'team' ? savedTeam.preferredProfiles : undefined);
+      const preferredProfiles = delegationMode === 'team' && requestedProfiles
+        ? getPreferredAgentTeamProfiles(loadedSkill!, requestedProfiles) : undefined;
+      const personalExperts = values['skill-expert-cards-file'] !== undefined
+        ? readPersonalExperts(values['skill-expert-cards-file']) : savedTeam?.mode === 'team' ? savedTeam.personalExperts : undefined;
+      const researchDelegation: SolverRunState['researchDelegation'] = delegationMode === 'team'
+        ? { mode: 'team', maxAgents, ...(preferredProfiles?.length ? { preferredProfiles } : {}), ...(personalExperts && { personalExperts }) }
+        : delegationMode === 'read-only' ? { mode: 'read-only', maxAgents } : undefined;
+      const sessionSkill = loadedSkill ?? commonSkill;
+      const plannedSession = planMathAgentSession(harness.id, { ...(sessionSkill ? { skills: [sessionSkill] } : {}),
         ...(workerCount === 1 ? { completedOutput: new SingleSolverProofHandoff(problem, slots[0].worktree, () => {}).output } : {}),
-        ...(researchDelegation?.mode === 'read-only' ? { delegation: { ...researchDelegation, mode: 'read-only' as const } } : {}) }, cli);
+        ...(researchDelegation?.mode === 'read-only' ? { delegation: researchDelegation } : {}) }, cli);
       const identity = { taskDigest: mathDigest(task), buildDigest: mathDigest(fs.readFileSync(buildFile)),
         providerProfile: providerProfile?.profile, providerProfileDigest: providerProfile?.digest,
         environmentDigest: preparedEnvironment.environmentDigest,
@@ -669,7 +691,8 @@ export async function runSolver(args: string[], root: string, customModules?: So
         const evaluationStarted = Date.now();
         emit('evaluation_started', { workerId: state.winningWorker ?? 'solver' });
         evaluation = await evaluateSolverProof(state.problem, winner.worktree, winner.check, env, signal,
-          { command: values['evaluator-command'], timeoutMs: evaluatorMs });
+          { command: values['evaluator-command'], timeoutMs: evaluatorMs,
+            teamContributions: state.agentTeam?.transport === 'native-agent-control' && state.agentTeam.deliveries.length > 0 });
         emit('evaluation_finished', { status: evaluation.status, durationMs: Date.now() - evaluationStarted });
       }
       state.phase = 'finished'; save();
@@ -678,6 +701,7 @@ export async function runSolver(args: string[], root: string, customModules?: So
         status, run_outcome: status, solution_commit: state.check?.passed ? state.check.commit : null,
         solver_ready_receipt_valid: state.check?.passed === true, completion_signal_valid: evaluation.status === 'passed',
         evaluator: evaluation, ...runSummary(state),
+        ...(state.agentTeam?.transport === 'native-agent-control' ? { teamContributions: buildAgentTeamContributions(state, evaluation) } : {}),
         ...(status === 'runtime_error' && typeof evaluation.reason === 'string' ? { reason: evaluation.reason } : {}),
         ...(status === 'limit_reached' && state.tokenBudget?.reason ? { reason: state.tokenBudget.reason } : {}),
         solveWallMs: state.solveFinishedAt - state.solveStartedAt, solveExecutionMs: executionClock.executionMs(),

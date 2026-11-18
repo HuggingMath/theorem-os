@@ -284,6 +284,15 @@ body[data-file-drag] .inline-problem #source{outline:2px dashed var(--blue-500);
 .section-heading h2{font-size:var(--text-md);color:var(--gray-800);font-weight:600}
 .field-note{font-size:var(--text-xs);line-height:1.8;color:var(--gray-500);margin-bottom:15px;overflow-wrap:anywhere}
 .environment-details{margin-top:5px}
+:is(#native-team-profiles,#native-team-personal-experts){margin:10px 0 16px;font-size:var(--text-sm)}
+:is(#native-team-profiles,#native-team-personal-experts) summary{cursor:pointer;color:var(--gray-700)}
+:is(#native-team-profiles,#native-team-personal-experts) summary small{margin-inline-start:8px;color:var(--muted);overflow-wrap:anywhere}
+:is(#native-team-profiles,#native-team-personal-experts) .field-note{margin:6px 0 9px}
+:is(#native-team-profiles,#native-team-personal-experts) .profile-options{max-height:15rem;overflow:auto;scrollbar-width:thin}
+:is(#native-team-profiles,#native-team-personal-experts) fieldset{border:0;margin:8px 0;padding:0}
+:is(#native-team-profiles,#native-team-personal-experts) fieldset label{display:flex;align-items:center;gap:7px;cursor:pointer;min-height:26px;margin:0}
+:is(#native-team-profiles,#native-team-personal-experts) input[type=checkbox]{width:16px;height:16px;flex:none}
+:is(#native-team-profiles,#native-team-personal-experts) label small{color:var(--muted);overflow-wrap:anywhere}
 label,legend{display:block;font-size:var(--text-xs);font-weight:500;color:var(--gray-600);margin-bottom:7px}
 input:not([type=radio]),select,textarea{display:block;width:100%;min-width:0;border:1px solid var(--gray-200);border-radius:var(--radius-md);background:var(--card);padding:9px 11px;font-size:var(--text-sm);line-height:1.55}
 input:not([type=radio]),select{height:40px}

@@ -24,7 +24,7 @@ import { webFormalizationPhases, webFormalizationReason, type WorkerFormalizatio
   type WorkerFormalizationMessage, type WorkerFormalizationAuditMessage } from './formalizationTypes';
 
 export type WebRunner = {
-  readiness(): Promise<{ ready: boolean; message: string }>;
+  readiness(): Promise<{ ready: boolean; message: string; nativeTeam?: boolean; nativeTeamPreferences?: boolean; nativeTeamExpertCards?: boolean }>;
   run(input: WorkerInput, onMessage: (message: WorkerMessage) => void, signal: AbortSignal): Promise<void>;
   command?(id: string, command: WebCommand): Promise<WebCommandResult>;
   /** Compiles a statement on its own, without a model or a workspace; absent when the service cannot. */
@@ -133,7 +133,7 @@ export function parseFormalizationMessage(line: string): WorkerFormalizationMess
 }
 
 export class DockerWebRunner implements WebRunner {
-  private cached?: { at: number; result: { ready: boolean; message: string } };
+  private cached?: { at: number; result: Awaited<ReturnType<WebRunner['readiness']>> };
   private active = new Set<string>();
   constructor(private readonly config: Pick<WebConfig, 'workerImage'>) {}
 
@@ -270,13 +270,13 @@ export class DockerWebRunner implements WebRunner {
 
   async readiness() {
     if (this.cached && Date.now() - this.cached.at < 10_000) return this.cached.result;
-    const ready = await new Promise<boolean>(resolve => {
-      const child = spawn('docker', ['image', 'inspect', this.config.workerImage], { stdio: 'ignore' });
-      const timer = setTimeout(() => { child.kill('SIGKILL'); resolve(false); }, 5_000);
-      child.once('error', () => { clearTimeout(timer); resolve(false); });
-      child.once('close', code => { clearTimeout(timer); resolve(code === 0); });
-    });
-    const result = { ready, message: ready ? '运行环境就绪' : '运行镜像尚未就绪，请先构建 theorem-os-worker 镜像。' };
+    const metadata = await execute('docker', ['image', 'inspect', '--format', '{{index .Config.Labels "org.theoremos.native-agent-control"}}|{{index .Config.Labels "org.theoremos.team-profile-preferences"}}|{{index .Config.Labels "org.theoremos.team-expert-cards"}}',
+      this.config.workerImage], { timeout: 5_000, maxBuffer: 4096 }).catch(() => undefined);
+    const ready = Boolean(metadata);
+    const [team, preferences, expertCards] = metadata?.stdout.trim().split('|') ?? [];
+    const result = { ready, nativeTeam: team === 'v1', nativeTeamPreferences: team === 'v1' && preferences === 'v1',
+      nativeTeamExpertCards: team === 'v1' && expertCards === 'v1',
+      message: ready ? '运行环境就绪' : '运行镜像尚未就绪，请先构建 theorem-os-worker 镜像。' };
     this.cached = { at: Date.now(), result };
     return result;
   }

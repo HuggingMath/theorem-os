@@ -9,9 +9,12 @@ import { readMathAgentSkill } from '../src/runtime/agentSkills';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/agentSession';
 import type { NativeAgentControlConnection } from '../src/runtime/nativeAgentControl';
 import { AgentResearchTeam } from '../src/solver/agentTeam';
+import { readAgentTeamProofDelivery } from '../src/solver/agentTeamProof';
+import { agentTeamOverview } from '../src/solver/agentTeamViews';
 import { readSolverRunState, writeSolverRunState } from '../src/solver/archive';
 import { directSolverModules } from '../src/solver/modules';
 import { readSolverProblem } from '../src/solver/problem';
+import { personalExpertCardsDigest } from '../src/solver/personalExperts';
 import { prepareResearchSkill, researchSkillIdentity } from '../src/solver/researchSkill';
 import { deferred } from './helpers/async';
 import { temporaryDirectory } from './helpers/files';
@@ -120,11 +123,12 @@ function fixture({ earlyCompletion = false, beforeOpen }: { earlyCompletion?: bo
     callId: 'tool-' + ++toolCalls, signal: controller.signal,
   }) as Promise<Json>;
   const spawn = async (name: string, message = 'Profiles: D006, prover\nInvestigate a complementary helper.', signal?: AbortSignal,
-    messageKind: 'plaintext' | 'encrypted' = 'plaintext') => {
+    messageKind: 'plaintext' | 'encrypted' = 'plaintext', initialHistory?: unknown) => {
     await native('attach', { threadId: ROOT, sessionId: ROOT });
     const source = { subagent: { thread_spawn: { parent_thread_id: ROOT, agent_path: '/root/' + name, depth: 1 } } };
     return native('spawn', { caller: ROOT, source,
-      bootstrap: { version: 1, sessionId: ROOT, threadId: null, source, config: { cwd: state.worktree } },
+      bootstrap: { version: 1, sessionId: ROOT, threadId: null, source, config: { cwd: state.worktree },
+        ...(initialHistory === undefined ? {} : { initialHistory }) },
       input: { kind: 'message', mode: 'triggerTurn', message: { kind: messageKind, text: message } }, startOptions: { parentTurnId: 'root-turn' } }, crypto.randomUUID(), signal);
   };
   const f = { directory, state, team, sessions, controller, native, tool, spawn,
@@ -141,6 +145,41 @@ afterEach(async () => {
 });
 
 describe('native AgentControl preserves the mathematical team lifecycle', () => {
+  it.each([
+    ['fresh', 'New'], ['unknown', undefined], ['unknown', { Resumed: {} }],
+  ])('does not infer parent inspection for %s child history (%j)', async (expected, initialHistory) => {
+    const f = fixture(), parent = f.team.archive.leadExposures = [
+      { deliveryId: 'a'.repeat(64), taskId: 'draft', agentId: 'author', commit: f.state.problem.baseCommit, kind: 'inspected', at: '2026-01-01' },
+      { deliveryId: 'b'.repeat(64), taskId: 'merged', agentId: 'author', commit: f.state.problem.baseCommit, kind: 'adopted', at: '2026-01-02' },
+    ];
+    await f.spawn('reviewer', 'Review this claim.', undefined, 'plaintext', initialHistory);
+    const worker = f.team.archive.workers[0]!;
+    expect(worker.exposures).toEqual([parent[1]]); expect(worker.native!.spawnHistory).toBe(expected);
+    const saved = readSolverRunState(path.join(f.directory, 'state.json'));
+    // Old records have no frozen exposure snapshot; never reconstruct it from later Lead activity.
+    delete saved.agentTeam!.workers[0]!.native!.spawnHistory;
+    expect(agentTeamOverview(saved).workers[0]?.nativeIdentity?.spawnHistory).toBe('unknown');
+  });
+  it.each([
+    ['Profiles: lead', /math_team_profile_reserved/],
+    ['Profiles: , ', /math_team_profile_unresolved: empty Profiles: header/],
+    ['Profiles: asset:unselected', /math_team_profile_unresolved: .*asset:unselected/],
+    ['Profiles: prover (Lean prover, Mathlib).', /math_team_profile_unresolved: .*Lean prover.*Mathlib.*Profiles: prover.*body/],
+  ])('rejects %s before reserving a place or steering a member', async (header, feedback) => {
+    const f = fixture(), bad = header + '\nInvestigate the interface.';
+    await expect(f.spawn('analyst', bad)).rejects.toThrow(feedback);
+    expect(f.state.agentTeam!.workers).toHaveLength(0);
+    expect(f.sessions).toHaveLength(0);
+    await f.spawn('analyst', 'Profiles: prover\nUse your Mathlib expertise to check the interface.');
+    const worker = f.state.agentTeam!.workers[0], task = worker.tasks[0];
+    await expect(f.native('send', { caller: ROOT, target: { kind: 'id', threadId: worker.native!.threadId },
+      input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: bad } }, startOptions: {} }))
+      .rejects.toThrow(feedback);
+    expect(task.objectiveRevision).toBe(1);
+    expect(task.profileEvidence?.loaded).toEqual(['prover']);
+    expect(f.sessions[0].inputs).toHaveLength(0);
+  });
+
   it('accepts the upstream Direct encrypted message shape for spawn and new-task followup without changing codec or attribution', async () => {
     const f = fixture(), message = 'Profiles: D006, prover\nNATIVE_WORKER_TEST Read the fixed skill and inspect the fixture.';
     await f.spawn('analyst', message, undefined, 'encrypted');
@@ -204,18 +243,51 @@ describe('native AgentControl preserves the mathematical team lifecycle', () => 
     expect(f.sessions[0].options).toMatchObject({ isolateProcess: true, workspace: workers[0].worktree,
       nativeAgentControl: { bootstrap: { threadId: workers[0].native!.threadId,
         hostOverrides: { cwd: workers[0].worktree, workspaceRelocation: { from: f.state.worktree, to: workers[0].worktree } } } } });
-    expect(f.sessions[0].message).toContain('Current team assignment');
+    expect(f.sessions[0].message).toContain('Investigate a complementary helper.');
     expect(workers[0].native!.runtimeConfiguration).toEqual(f.sessions[0].session.nativeConfiguration);
     expect(workers[0].tasks[0].profileEvidence?.loaded).toEqual(expect.arrayContaining(['D006', 'prover']));
     await f.native('send', { caller: ROOT, target: { kind: 'id', threadId: workers[0].native!.threadId },
       input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: 'Consider this advisory observation.' } }, startOptions: {} });
     expect(f.sessions).toHaveLength(2); expect(workers[0].tasks).toHaveLength(1);
-    expect(workers[0].tasks[0].objectiveRevision).toBe(1);
+    expect(workers[0].tasks[0].objectiveRevision).toBe(2);
+    expect(workers[0].tasks[0].message).toContain('Consider this advisory observation.');
+    expect(workers[0].tasks[0].profileEvidence?.loaded).toEqual(expect.arrayContaining(['D006', 'prover']));
+    expect(workers[0].tasks[0].objectiveHistory?.[0]?.revision).toBe(1);
     expect(f.sessions[0].inputs).toMatchObject([{ author: '/root', threadId: workers[0].native!.threadId }]);
+    expect(f.sessions[0].inputs[0]).not.toHaveProperty('contextItems');
     expect(await f.tool({ operation: 'spawn', agentId: 'shadow', message: 'Attempt an obsolete transport.' })).toMatchObject({ ok: false });
   });
 
-  it('resumes a yielded draft in the same task and revision through attributed native followup', async () => {
+  it('delivers the new specialty in the attributed busy input and records it only after acceptance', async () => {
+    const f = fixture(); await f.spawn('analyst');
+    const worker = f.state.agentTeam!.workers[0], task = worker.tasks[0], session = f.sessions[0];
+    const cards = [{ assetId: 'ideal', name: 'User expert on ideals', version: '1', digest: 'b'.repeat(64),
+      summary: 'Fractional ideals', knowledge: 'Observe the hypotheses of the chosen factorization law.' }];
+    f.state.researchDelegation = { mode: 'team', maxAgents: 3, personalExperts: { cards, digest: personalExpertCardsDigest(cards) } };
+    const text = 'Profiles: D012, engineer, asset:ideal\nCheck the ideal factorization interface.';
+    const input = { kind: 'message', mode: 'triggerTurn', message: { kind: 'encrypted', text } };
+    const startOptions = { initiatingAgentPath: '/root', parentTurnId: 'root-followup' };
+    const send = () => f.native('send', { caller: ROOT, target: { kind: 'id', threadId: worker.native!.threadId }, input, startOptions });
+    vi.mocked(session.session.nativeAgentControl!.input).mockResolvedValueOnce({ accepted: false });
+    await expect(send()).rejects.toThrow('math_team_native_input_not_accepted');
+    expect(task.objectiveRevision).toBe(1);
+    expect(task.profileEvidence?.loaded).toEqual(['D006', 'prover']);
+    await send();
+    expect(f.sessions).toHaveLength(1);
+    expect(session.inputs[0]).toMatchObject({ author: '/root', input, startOptions, expectedTurnId: session.turnId });
+    const passage = session.inputs[0].contextItems[0].content[0].text;
+    expect(passage).toContain('The ideal class group measures the obstruction to principality');
+    expect(passage).toContain(path.join(path.dirname(session.options.skills![0].path), 'references/domain-materials/number-theory.md'));
+    expect(passage).toContain('Profile engineer');
+    expect(passage).toContain(cards[0].knowledge);
+    expect(task.message).toBe(text);
+    expect(task.profileEvidence?.loaded).toEqual(['D012', 'engineer', 'asset:ideal']);
+    expect(task.profileEvidence?.sources.find(source => source.kind === 'collected-reading')?.loading).toBe('available-on-demand');
+    await send();
+    expect(session.inputs[1]).not.toHaveProperty('contextItems');
+  });
+
+  it('resumes a yielded draft in the same task with the latest native instruction', async () => {
     const f = fixture(); await f.spawn('analyst');
     const worker = f.state.agentTeam!.workers[0], task = worker.tasks[0], first = f.sessions[0];
     fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), 'A saved dependency question.\n');
@@ -223,10 +295,20 @@ describe('native AgentControl preserves the mathematical team lifecycle', () => 
     await first.complete();
     await expect.poll(() => f.team.hasActiveWorkers).toBe(false);
     expect(task.status).toBe('paused');
+    const oldInput = worker.native!.initialInput;
+    await expect(f.native('send', { caller: ROOT, target: { kind: 'id', threadId: worker.native!.threadId },
+      input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: 'Profiles: unknown-profile\nContinue the draft.' } },
+      startOptions: {} })).rejects.toThrow('math_team_profile_unresolved');
+    expect(worker.native!.initialInput).toEqual(oldInput);
+    expect(task.status).toBe('paused'); expect(task.objectiveRevision).toBe(1);
+    expect(f.sessions).toHaveLength(1);
     await f.native('send', { caller: ROOT, target: { kind: 'id', threadId: worker.native!.threadId },
       input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: 'The dependency is now available; continue.' } },
       startOptions: { parentTurnId: 'root-turn-2' } });
-    expect(worker.tasks).toHaveLength(1); expect(worker.tasks[0]).toBe(task); expect(task.objectiveRevision).toBe(1);
+    expect(worker.tasks).toHaveLength(1); expect(worker.tasks[0]).toBe(task); expect(task.objectiveRevision).toBe(2);
+    expect(task.message).toContain('The dependency is now available; continue.');
+    expect(task.profileEvidence?.loaded).toEqual(expect.arrayContaining(['D006', 'prover']));
+    expect(task.objectiveHistory?.[0]?.message).toContain('Investigate a complementary helper.');
     expect(f.sessions).toHaveLength(2); expect(f.sessions[1].session.threadId).toBe(first.session.threadId);
     expect(f.sessions[1].options.nativeAgentControl!.initialInput).toMatchObject({ author: '/root',
       input: { message: { text: 'The dependency is now available; continue.' } } });
@@ -266,10 +348,14 @@ describe('native AgentControl preserves the mathematical team lifecycle', () => 
     await f.native('send', { caller: ROOT, target: { kind: 'id', threadId: worker.native!.threadId },
       input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: 'Profiles: prover\nSave and submit the helper.' } }, startOptions: {} });
     expect(worker.tasks).toHaveLength(2);
+    await f.native('send', { caller: ROOT, target: { kind: 'id', threadId: worker.native!.threadId },
+      input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: 'Profiles: engineer, prover\nCheck this helper against the owned source interface.' } }, startOptions: {} });
+    expect(worker.tasks).toHaveLength(2); expect(worker.tasks[1].objectiveRevision).toBe(2);
+    expect(worker.tasks[1].profileEvidence?.loaded).toEqual(['engineer', 'prover']);
     const draft = fs.readFileSync(f.source(worker.worktree), 'utf8').replace('end NativeTeam',
       'theorem reusable (n : Nat) : n = n := by rfl\nend NativeTeam');
     fs.writeFileSync(f.source(worker.worktree), draft);
-    expect(await f.tool({ operation: 'submit', objectiveRevision: 1, summary: 'A useful helper.',
+    expect(await f.tool({ operation: 'submit', summary: 'A useful helper.',
       declarations: [{ file: 'Submission.lean', name: 'NativeTeam.reusable', type: '∀ n : Nat, n = n' }] }, worker.id))
       .toMatchObject({ status: 'pending-writer-stop' });
     const second = f.sessions[1]; await second.complete(false);
@@ -280,5 +366,51 @@ describe('native AgentControl preserves the mathematical team lifecycle', () => 
     expect(f.state.agentTeam!.deliveries).toHaveLength(1);
     expect(worker.tasks[1].deliveryId).toBe(f.state.agentTeam!.deliveries[0].id);
     expect(f.state.phase).toBe('running');
+  }, 70_000);
+
+  it('pins a submitted declaration across an in-flight reassignment and an interruption before completion', async () => {
+    const f = fixture(), inspected = { deliveryId: 'a'.repeat(64), taskId: 'draft', agentId: 'producer',
+      commit: f.state.problem.baseCommit, kind: 'inspected' as const, at: '2026-01-01' };
+    const alsoInspected = { ...inspected, deliveryId: 'b'.repeat(64) }, adopted = { ...alsoInspected, kind: 'adopted' as const };
+    f.team.archive.leadExposures = [inspected, alsoInspected, adopted];
+    await f.spawn('analyst', 'Prove helper A.', undefined, 'plaintext', { Forked: [] });
+    f.team.archive.leadExposures.push({ ...inspected, deliveryId: 'c'.repeat(64) });
+    const worker = f.state.agentTeam!.workers[0]!, task = worker.tasks[0]!, session = f.sessions[0]!;
+    const address = { caller: ROOT, target: { kind: 'id', threadId: worker.native!.threadId } };
+    const followup = () => f.native('send', { ...address, input: { kind: 'message', mode: 'triggerTurn',
+      message: { kind: 'plaintext', text: 'Investigate a new question B.' } }, startOptions: {} });
+    const steering = deferred(); const acknowledge = deferred();
+    vi.mocked(session.session.nativeAgentControl!.input).mockImplementationOnce(async () => {
+      steering.resolve(); await acknowledge.promise;
+      return { accepted: true, threadId: worker.native!.threadId, submissionId: session.turnId };
+    });
+    const inFlight = followup(); await steering.promise;
+    fs.writeFileSync(f.source(worker.worktree), fs.readFileSync(f.source(worker.worktree), 'utf8').replace('end NativeTeam',
+      'theorem helperA : True := by trivial\nend NativeTeam'));
+    const nomination = { operation: 'submit', summary: 'A is ready.',
+      declarations: [{ file: 'Submission.lean', name: 'NativeTeam.helperA', type: 'True' }] };
+    expect(await f.tool(nomination, worker.id)).toMatchObject({ status: 'pending-writer-stop' });
+    acknowledge.resolve(); await inFlight;
+    expect(task.objectiveRevision).toBe(2);
+    expect(readSolverRunState(path.join(f.directory, 'state.json')).agentTeam!.workers[0]!.tasks[0]!.nomination)
+      .toMatchObject({ objectiveRevision: 1, objectiveDigest: mathDigest('Prove helper A.') });
+    await expect(followup()).rejects.toThrow('math_team_submission_pending');
+    expect(await f.tool({ ...nomination, summary: 'Replace A.', declarations: [
+      { file: 'Submission.lean', name: 'NativeTeam.other', type: 'False' }] }, worker.id)).toMatchObject({ ok: false });
+    expect(f.team.archive.deliveries).toHaveLength(0);
+    await f.native('interrupt', { ...address, version: 'v2' });
+    await expect.poll(() => f.team.hasActiveWorkers, { timeout: 60_000 }).toBe(false);
+    expect(task.status).toBe('interrupted');
+    expect(f.team.archive.deliveries).toHaveLength(1);
+    const delivery = readAgentTeamProofDelivery(f.team.archive.deliveries[0]!.path, f.state);
+    expect(delivery.provenance).toMatchObject({ taskId: task.id, objectiveRevision: 1, objectiveDigest: mathDigest('Prove helper A.') });
+    expect(delivery.provenance?.spawnHistory).toBe('parent-history');
+    expect(delivery.provenance?.exposures).toEqual([{ ...inspected, kind: 'possible-via-parent' }, adopted]);
+    const durable = readSolverRunState(path.join(f.directory, 'state.json'));
+    expect(agentTeamOverview(durable).workers[0]?.deliveryExposures).toEqual(delivery.provenance!.exposures);
+    expect(delivery.declarations).toEqual(nomination.declarations);
+    await followup();
+    expect(worker.tasks).toHaveLength(2);
+    expect(task.deliveryId).toBe(delivery.id); expect(task.objectiveRevision).toBe(2);
   }, 70_000);
 });

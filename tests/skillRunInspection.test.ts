@@ -121,13 +121,19 @@ describe('skill research inspection', () => {
     expect(buildRunInspection(f.state).tasks).toEqual([]);
   });
 
-  it('reads a single-seed raw archived state through its frozen source description and checks both identities', async () => {
+  it.each(['raw', 'projected'] as const)('reads %s single-seed history and checks the original and attachment identities', async mode => {
     const f = fixture(), oldStateFile = path.join(f.directory, 'unavailable-old.runtime/state.json');
     f.state.taskDigest = mathDigest('unchanged task');
     const archived = { ...f.state, runId: 'old-single-source', turns: 12, buildDigest: mathDigest('source build'),
       methodDigest: mathDigest('source method'), environmentDigest: mathDigest('source environment'),
       usage: { totalTokens: 18000 }, cooperation: { canonicalCommit: f.commit, planVersion: 'old-plan', tasks: [] } };
-    const text = canonicalMathJson(archived), sha256 = mathDigest(text);
+    const stateDigest = mathDigest(canonicalMathJson(archived));
+    const text = mode === 'raw' ? canonicalMathJson(archived) : canonicalMathJson({
+      schema: 'theorem-os.single-continuation-history.v1', stateDigest, runId: archived.runId, taskDigest: archived.taskDigest,
+      environmentDigest: archived.environmentDigest, buildDigest: archived.buildDigest, methodDigest: archived.methodDigest,
+      cooperation: { canonicalCommit: f.commit, planVersion: 'old-plan' }, turns: archived.turns,
+    });
+    const sha256 = mathDigest(text);
     const provenance = { source: oldStateFile, runId: archived.runId, evidence: 'recorded-not-replayed' as const, commit: f.commit };
     const manifest: ContinuationManifest = { schema: 'theorem-os.continuation-snapshot.v1', taskDigest: f.state.taskDigest,
       problemReceiptDigest: f.state.problem.receiptDigest, attachments: [{ id: 'seed-history', kind: 'diagnostics',
@@ -139,7 +145,7 @@ describe('skill research inspection', () => {
     const description = { schema: 'theorem-os.single-continuation-source.v1', taskDigest: f.state.taskDigest,
       problemReceiptDigest: f.state.problem.receiptDigest, sourcePolicyDigest: continuationSourcePolicyDigest(f.state.problem),
       destination: { runId: f.state.runId, stateFile: f.stateFile, configurationDigest: mathDigest('frozen destination configuration') },
-      source: { runId: archived.runId, stateFile: oldStateFile, stateDigest: sha256, canonicalCommit: f.commit,
+      source: { runId: archived.runId, stateFile: oldStateFile, stateDigest, canonicalCommit: f.commit,
         environmentDigest: archived.environmentDigest, capturedAt: 1234 },
       canonicalSources: { 'Submission.lean': fs.readFileSync(path.join(f.receipt.projectRoot, 'Submission.lean'), 'utf8') },
       canonicalNotes: null, documents: [{ id: 'seed-history', kind: 'diagnostics', text, provenance }], declarations: [] };
@@ -148,7 +154,7 @@ describe('skill research inspection', () => {
     const stateBefore = fs.readFileSync(f.stateFile), sourceBefore = fs.readFileSync(file);
     const report = await inspectStoredRun(f.run);
     expect(report.artifacts.continuation).toMatchObject({ status: 'recorded', evidence: 'recorded-not-replayed',
-      source: { runId: archived.runId, stateFile: oldStateFile, stateDigest: sha256, buildDigest: archived.buildDigest,
+      attachment: { sha256 }, source: { runId: archived.runId, stateFile: oldStateFile, stateDigest, buildDigest: archived.buildDigest,
         methodDigest: archived.methodDigest, canonicalCommit: f.commit, planVersion: 'old-plan' }, capturedAt: 1234,
       capture: 'single-researcher-frozen-source-and-advisory-history' });
     expect(report.turns).toBe(8); expect(report.usage).toBeUndefined(); expect(report.tasks).toEqual([]);

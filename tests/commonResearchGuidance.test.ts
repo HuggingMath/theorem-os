@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { readMathAgentSkill } from '../src/runtime/codexSkills';
+import { agentTeamOperationAllowed } from '../src/solver/agentTeamTool';
 import { buildResearchContext, finalizeResearchDispatch } from '../src/solver/modules/context';
 import { researchSkillIdentity } from '../src/solver/researchSkill';
 import { buildSkillResearchContext } from '../src/solver/skillResearchContext';
@@ -25,6 +26,53 @@ function fixture() {
 }
 
 describe('common mathematical guidance across research strategies', () => {
+  it.each([
+    { mode: 'native default Lead', transport: 'native-agent-control', role: undefined, channel: 'native send_message' },
+    { mode: 'native Lead', transport: 'native-agent-control', role: 'lead', channel: 'native send_message' },
+    { mode: 'native member', transport: 'native-agent-control', role: 'worker', channel: 'native send_message' },
+    { mode: 'historical default Lead', transport: 'host-tools', role: undefined, channel: 'theoremos_team message' },
+    { mode: 'historical Lead', transport: 'host-tools', role: 'lead', channel: 'theoremos_team message' },
+    { mode: 'historical member', transport: 'host-tools', role: 'worker', channel: 'theoremos_team progress' },
+    { mode: 'saved Lead without transport', transport: undefined, role: undefined, channel: 'theoremos_team message' },
+    { mode: 'saved member without transport', transport: undefined, role: 'worker', channel: 'theoremos_team progress' },
+  ] as const)('materializes a permitted result-sharing channel for $mode', ({ transport, role, channel }) => {
+    const f = fixture(), objective = 'Profiles: prover\nInspect one saved Lean probe.';
+    f.state.researchMode = 'skill'; f.state.researchSkill = researchSkillIdentity(f.skill);
+    f.state.researchDelegation = { mode: 'team', maxAgents: 3 };
+    f.state.agentTeam = { schema: 'theorem-os.agent-team.v1', transport,
+      workers: [{ id: 'member', role: 'researcher', worktree: f.workspace, phase: 'running', status: 'running',
+        seedCommit: f.problem.baseCommit, turns: 1, cursor: 0,
+        tasks: [{ id: 'probe', message: objective, status: 'running', seedCommit: f.problem.baseCommit }] }],
+      events: [], deliveries: [], adoptions: [], operations: [] };
+    buildSkillResearchContext(f.problem, f.state, { ...f.access, researchSkill: f.skill,
+      ...(role ? { teamRole: { id: role === 'lead' ? 'lead' : 'member', role } } : {}),
+      ...(role === 'worker' ? { teamAssignment: { taskId: 'probe', message: objective, sourceCommit: f.problem.baseCommit } } : {}) });
+    const help = fs.readFileSync(path.join(f.workspace, '.scratch/theoremos-help.md'), 'utf8');
+    expect(help).toContain(`Share a useful probe result or blocker through ${channel}, with its saved source path and exact diagnostic`);
+    expect(help).not.toContain('research-observe');
+    if (transport === 'native-agent-control') {
+      expect(help).not.toContain('theoremos_team progress');
+      expect(help).not.toContain('theoremos_team message');
+      expect(agentTeamOperationAllowed(role === 'worker' ? 'member' : 'lead', false, transport, 'progress')).toBe(false);
+    } else {
+      const operation = role === 'worker' ? 'progress' : 'message';
+      expect(agentTeamOperationAllowed(role === 'worker' ? 'member' : 'lead', false, transport ?? 'host-tools', operation)).toBe(true);
+      expect(help).not.toContain('native send_message');
+      if (role !== 'worker') expect(help).not.toContain('theoremos_team progress');
+    }
+  });
+
+  it('keeps standalone result retention independent of team-only tools', () => {
+    const f = fixture();
+    f.state.researchMode = 'skill'; f.state.researchSkill = researchSkillIdentity(f.skill);
+    buildSkillResearchContext(f.problem, f.state, { ...f.access, researchSkill: f.skill });
+    const help = fs.readFileSync(path.join(f.workspace, '.scratch/theoremos-help.md'), 'utf8');
+    expect(help).toContain('Save useful probe results and exact diagnostics with source references in RESEARCH.md for continuation.');
+    expect(help).not.toContain('theoremos_team');
+    expect(help).not.toContain('native send_message');
+    expect(help).toContain('.scratch/declaration-submission.json');
+  });
+
   it.each([false, true])('shares available tool commands with standalone skill when optional resources are %s', resources => {
     const f = fixture(), digest = 'a'.repeat(64);
     const tools = path.join(f.directory, "agent tools'", 'math.mjs');

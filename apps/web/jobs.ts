@@ -4,6 +4,8 @@ import type { WebConfig } from './config';
 import type { WebRunner } from './runner';
 import type { WebEvent, WebEventDetails, WebProvider, WebWorkerProvider, WebRun, WebRunInput, WorkerInput, WorkerMessage } from './shared';
 import { webResearchModeError, webSkillWithoutCooperation, webDefaultSkillLoading } from './researchMode';
+import { normalizeWebTeamPreferences } from './nativeTeamProfiles';
+import { personalExpertCardsDigest } from '../../src/solver/personalExperts';
 import { isProgressEvent, parseWebFailure, webAgentActionLimits, webLimits } from './shared';
 import { recordWebModuleEvent, sanitizeWebEventDetails } from './moduleTelemetry';
 import type { WebCommand, WebCommandResult, WebObservation } from './collaboration';
@@ -105,6 +107,7 @@ export class WebJobs {
   }
   replay(owner: string, input: WebRunInput, provider: WebWorkerProvider, requestId?: string, legacyEnvironmentOmitted = false): WebRun | undefined {
     if (!requestId) return;
+    input = normalizeWebTeamPreferences(input);
     const expected = this.creation(input, provider, requestId);
     const stored = this.creations.get(JSON.stringify([owner, requestId]));
     const previous = stored ?? this.storage.deletedCreation(owner, requestId);
@@ -122,9 +125,10 @@ export class WebJobs {
   create(owner: string, input: WebRunInput, provider: WebWorkerProvider, continuation?: WorkerInput['continuation'], requestId?: string,
     formalization?: { evidence?: unknown; compiled?: unknown; provenance: NonNullable<WebRun['formalization']> },
     researchConfiguration?: WorkerInput['researchConfiguration']): WebRun {
+    input = normalizeWebTeamPreferences(input);
     if (webProviderHarness(provider) !== 'codex') input = { ...input, researchMode: input.researchMode ?? 'skill',
       skillLoading: input.skillLoading ?? 'file' };
-    const modeError = webResearchModeError(input);
+    const modeError = webResearchModeError(input, provider);
     const harnessError = webHarnessResearchError(provider, input);
     if (harnessError) throw new WebStorageError(400, harnessError);
     if (modeError) throw new WebStorageError(400, modeError);
@@ -145,7 +149,7 @@ export class WebJobs {
       throw new WebStorageError(404, '所选知识目录不存在或不属于当前会话。');
     const pinnedInput: WebRunInput = { ...input, environment: input.environment ?? 'standard',
       autoExplain: input.autoExplain ?? true, explanationLanguage: input.explanationLanguage ?? 'zh' };
-    if (researchConfiguration) pinnedInput.modulePlan = structuredClone(researchConfiguration.modulePlan);
+    if (researchConfiguration && !input.nativeTeamCapacity) pinnedInput.modulePlan = structuredClone(researchConfiguration.modulePlan);
     if (input.researchMode === 'skill') pinnedInput.skillLoading ??= webDefaultSkillLoading(provider);
     if (pinnedDigest) pinnedInput.knowledgeDigest = pinnedDigest;
     else delete pinnedInput.knowledgeDigest;
@@ -309,6 +313,11 @@ export class WebJobs {
     if (actualHarness && actualHarness.id !== expectedHarness || expectedHarness !== 'codex' && !actualHarness ||
         job.run.agentHarness && canonicalMathJson(job.run.agentHarness) !== canonicalMathJson(actualHarness)) return;
     if ((configuration?.researchMode ?? 'legacy') !== (job.run.researchMode ?? 'legacy')) return;
+    if ((configuration?.researchDelegation?.mode === 'team' ? configuration.researchDelegation.maxAgents : undefined)
+        !== job.run.nativeTeamCapacity) return;
+    if (canonicalMathJson(configuration?.researchDelegation?.preferredProfiles ?? []) !== canonicalMathJson(job.run.nativeTeamPreferredProfiles ?? [])) return;
+    const cards = job.researchConfiguration?.personalExperts;
+    if (configuration?.researchDelegation?.personalExperts?.digest !== (cards?.length ? personalExpertCardsDigest(cards) : undefined)) return;
     if (job.run.researchMode === 'skill') {
       const skill = configuration?.researchSkill, frozen = job.run.researchSkill;
       if (!skill || skill.loading !== (job.run.skillLoading ?? 'native') ||

@@ -176,6 +176,16 @@ export function writeWebContinuation(directory: string, continuation: NonNullabl
  */
 export const webAgentToolsDefault = '/opt/theoremos-agent-tools/math.mjs';
 export const webPantographManifest = '/opt/theoremos-pantograph/manifest.json';
+
+/** Pass only the frozen knowledge projection to the solver, outside all member worktrees. */
+export function webExpertCardArguments(directory: string, request: Pick<WorkerInput, 'input' | 'researchConfiguration'>): string[] {
+  const cards = request.researchConfiguration?.personalExperts;
+  if (!request.input.nativeTeamCapacity || !cards?.length) return [];
+  const file = path.join(directory, 'personal-experts.json');
+  fs.writeFileSync(file, JSON.stringify(cards), { mode: 0o600, flag: 'wx' });
+  return ['--skill-expert-cards-file', file];
+}
+
 /** Proof search needs the existing sealed Mathlib/FUSE environment. Standard workers have no lease. */
 export function configureWebProofSearchEnvironment(environment: LeanTaskEnvironment, env: NodeJS.ProcessEnv = process.env): void {
   if (environment === 'mathlib') env[PANTOGRAPH_MANIFEST_ENV] = webPantographManifest;
@@ -216,6 +226,8 @@ export function webSolverModules(request: WorkerInput, actions?: { sink: (action
         const binding = harness.id === 'codex' ? undefined : bindWebWorkerProfile(options, request.provider);
         return harness.open({ ...options, ...(binding ? { profile: binding.profile } : {}),
           ...(isolation ? { hiddenRoots: [...(options.hiddenRoots ?? []), ...isolation.hiddenRoots] } : {}),
+          ...(isolation && options.leanHealthCheck ? { leanHealthCheck: { ...options.leanHealthCheck,
+            arguments: [isolation.tools, 'check-lean', ...options.leanHealthCheck.arguments.slice(1)] } } : {}),
           environment: { ...options.environment, ...webHarnessEnvironment(request.provider, request.input.apiKey) },
           ...(context ? { onItem: (phase, item) => show(phase, item),
             onItemUpdate: (item, context) => { options.onItemUpdate?.(item, context); show('started', item, true); } } : {}) })
@@ -293,6 +305,7 @@ async function main() {
     readMathBuildManifest(buildIndex.buildManifestRef, root, path.join(root, 'out/main'));
     const taskFile = receipt.taskFile;
     const knowledgeFile = freezeWebKnowledge(directory, request.knowledgeCatalog);
+    const expertCardArguments = webExpertCardArguments(directory, request);
     if (request.input.knowledgeDigest) {
       if (!knowledgeFile) throw new Error('math_knowledge_identity_changed');
       readKnowledgeCatalog(knowledgeFile, request.input.knowledgeDigest);
@@ -328,7 +341,9 @@ async function main() {
       '--model', webHarnessModel(request.provider, request.input.model), '--effort', request.input.effort, '--workers', String(request.input.workers), '--no-explanations',
       '--coordination', request.input.coordination, '--max-turns', String(round.limits.maxTurns),
       ...webResearchArguments(request.input, request.provider),
-      ...(harness !== 'codex' || request.provider.execution?.executable ? ['--harness', harness, '--harness-profile', profile, '--harness-executable', webHarnessExecutable(request.provider)] : []),
+      ...expertCardArguments,
+      ...(request.input.nativeTeamCapacity ? ['--harness-profile', profile] :
+        harness !== 'codex' || request.provider.execution?.executable ? ['--harness', harness, '--harness-profile', profile, '--harness-executable', webHarnessExecutable(request.provider)] : []),
       ...(request.input.planApproval ? ['--plan-approval'] : []),
       ...(knowledgeFile ? ['--knowledge-base', knowledgeFile] : []),
       ...(round.continuationFile ? ['--continuation-manifest', round.continuationFile] : []),
@@ -349,7 +364,7 @@ async function main() {
     const raw = completed.raw;
     const report = Object.fromEntries(['schema', 'runId', 'problemId', 'status', 'solution_commit',
       'solver_ready_receipt_valid', 'completion_signal_valid', 'evaluator', 'turns', 'solveWallMs', 'solveExecutionMs', 'solveWaitingMs', 'usage',
-      'winningWorker', 'workers', 'reason', 'tokenBudget', 'libraryResearch', 'libraryUsage'].filter(field => Object.hasOwn(raw, field)).map(field => [field, raw[field]]));
+      'winningWorker', 'workers', 'teamContributions', 'reason', 'tokenBudget', 'libraryResearch', 'libraryUsage'].filter(field => Object.hasOwn(raw, field)).map(field => [field, raw[field]]));
     const failure = classifyWebResult(raw);
     if (failure) report.failure = failure;
     const stopReason = webIncompleteReason(raw, request.input);

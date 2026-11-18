@@ -8,6 +8,15 @@ export type NativeTeamAcceptedChild = { agent: Json; configSnapshot: Json; submi
 export type NativeTeamSpawn = { sessionId: string; threadId: string; agentPath: string; parentThreadId: string;
   operationId: string; requestDigest: string; bootstrap: Json; initialInput: Json; message: string };
 
+/** NativeChildBootstrap.initialHistory is the serde representation of Codex InitialHistory. */
+export function nativeSpawnHistory(bootstrap: Json): 'fresh' | 'parent-history' | 'unknown' {
+  const history = bootstrap.initialHistory;
+  if (history === 'New') return 'fresh';
+  if (history && typeof history === 'object' && Object.keys(history).length === 1 &&
+      'Forked' in history && Array.isArray(history.Forked)) return 'parent-history';
+  return 'unknown';
+}
+
 export type AgentTeamNativeLifecycle = {
   spawn(input: NativeTeamSpawn, signal: AbortSignal): Promise<NativeTeamAcceptedChild>;
   followup(worker: AgentTeamWorker, input: Json, signal: AbortSignal): Promise<NativeTeamAcceptedChild>;
@@ -123,7 +132,7 @@ export class AgentTeamNativeControl {
     const info = connection.info;
     if (!info) return;
     const agent = object(info.agent), actualId = text(agent.threadId);
-    if (actualId !== threadId || info.sessionId !== this.archive.nativeControl?.sessionId)
+    if (!this.archive.nativeControl || actualId !== threadId || info.sessionId !== this.archive.nativeControl.sessionId)
       throw new Error('math_team_native_start_identity_changed');
     const configSnapshot = object(info.configSnapshot);
     if (threadId === this.archive.nativeControl.rootThreadId) {
@@ -171,20 +180,18 @@ export class AgentTeamNativeControl {
   }
 
   /** A null sender denotes the host; member names, including "host", retain their identity. */
-  async advisory(from: string | null, to: string, message: string, hostEventSequence?: number): Promise<void> {
+  async advisory(from: string | null, to: string, message: string): Promise<void> {
     if (from === to || !this.archive.nativeControl) return;
     const sender = from === null ? null : from === 'lead' ? this.archive.nativeControl.rootThreadId : this.worker(from).native!.threadId;
     const recipient = to === 'lead' ? this.archive.nativeControl.rootThreadId : this.worker(to).native!.threadId;
-    await this.queue(sender, recipient, { kind: 'plaintext', text: message }, false, hostEventSequence);
+    await this.queue(sender, recipient, { kind: 'plaintext', text: message });
   }
 
-  private async queue(sender: string | null, recipient: string, message: Json, nativeCommunication = false,
-    hostEventSequence?: number): Promise<string> {
+  private async queue(sender: string | null, recipient: string, message: Json, nativeCommunication = false): Promise<string> {
     const id = crypto.randomUUID(), author = sender === null ? '/morpheus' : this.identity(sender).path,
       target = this.identity(recipient).path;
     this.archive.nativeControl!.mailbox.push({ id, threadId: recipient, author, recipient: target,
-      ...(nativeCommunication ? { communication: message } : { message }), status: 'queued',
-      ...(hostEventSequence === undefined ? {} : { hostEventSequence }) });
+      ...(nativeCommunication ? { communication: message } : { message }), status: 'queued' });
     this.save();
     await this.flush(recipient);
     return id;
@@ -272,6 +279,10 @@ export class AgentTeamNativeControl {
     if (payload.caller !== undefined && payload.caller !== expected)
       return Promise.reject(new Error('math_team_native_caller_changed'));
     this.refresh(expected, connection);
+    // Reads and no-op acknowledgments have no side effect to replay. Keep the
+    // operation journal for dispatch, messages and other mutating callbacks.
+    if (['resolve', 'list', 'childPaths', 'recordUsage', 'releaseTurn'].includes(request.operation))
+      return this.perform(actor, request, signal).then(result => ({ result }));
     const key = 'native:' + request.operationId;
     const digest = mathDigest(canonicalMathJson([request.sessionId, expected, request.operation, payload]));
     const receipt = this.archive.operations.find(item => item.key === key);

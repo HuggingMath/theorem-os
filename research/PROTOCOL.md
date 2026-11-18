@@ -59,7 +59,7 @@ Updated: 2026-11-16
 
 ## 实现与接口
 
-新增 `--research-mode skill --skill-delegation team --skill-max-agents 3`，总容量含 Lead，接受 2–4、默认 4。该路径使用一个宿主 Lead（`--workers 1 --coordination independent`），当前依赖 Codex 动态工具和 Linux bubblewrap。既有 cooperative 和 read-only 调查路径继续独立保留。
+新增 `--research-mode skill --skill-delegation team --skill-max-agents 3`，总容量含 Lead，接受 2–8、CLI 默认 4；最多 1 名 Lead 与 7 名成员。该路径使用一个宿主 Lead（`--workers 1 --coordination independent`），当前依赖 Codex 动态工具和 Linux bubblewrap。既有 cooperative 和 read-only 调查路径继续独立保留。
 
 `theoremos_team` 有十六个操作：`spawn`、`assign`、`budget`、`resume`、`cancel`、`publish`、`message`、`poll`、`wait`、`history`、`inspect`、`inspect-research`、`submit`、`yield`、`adopt`、`stop`。Lead 可用十四个（除 submit/yield），子 Agent 可用八个（message/poll/wait/history/inspect/inspect-research/submit/yield），仍不能派工或自行采纳。完整参数见[固定 Skill 协作约定](../skills/theoremos-research/references/parallel-work.md)，运行入口见[运行文档](../docs/codex-skill-runtime.md)。
 

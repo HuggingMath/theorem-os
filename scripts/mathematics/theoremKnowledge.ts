@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { importKnowledgeRuns } from '../../src/solver/theoremKnowledgeRuns';
+import { importKnowledgeRuns, importTeamKnowledgeDeliveries } from '../../src/solver/theoremKnowledgeRuns';
 import { importAcceptedKnowledge } from '../../src/solver/theoremKnowledgeAccepted';
 import { buildTheoremKnowledge, getKnowledgeTheorem, searchTheoremKnowledgeBatch,
   theoremKnowledgeStats, writeTheoremKnowledge } from '../../src/solver/theoremKnowledge';
@@ -21,6 +21,7 @@ const help = `Usage: theorem-os knowledge <build|enrich|pack|search|get|finding|
   build  [--state STATE_JSON ...] [--accepted-manifest accepted.json] [--submitted-manifest submitted.json]
          [--accepted-enrichment FILE] [--submitted-enrichment FILE]
          --output NEW_CATALOG [--merge EXISTING_CATALOG] [--report NEW_REPORT] [--format v1|v2] [--include-findings]
+  build  --state STATE_JSON --team-delivery DELIVERY_ID [--team-delivery DELIVERY_ID ...] --output NEW_CATALOG
   enrich --accepted-manifest accepted.json --problem ID --output NEW_SIDECAR
          (or --submitted-manifest submitted.json) [--retry-enrichment PREVIOUS_SIDECAR]
   pack   --catalog FILE --output NEW_CATALOG [--sha256 HASH]
@@ -45,6 +46,9 @@ Text fields concatenate directly; concatenate JSON fields before parsing them.
 The source command returns bounded exact excerpts; --offset uses UTF-16 code units
 and resumes at nextOffset. An excerpt does not establish complete Lean context.
 Build reads only explicit sources and never starts a solver or calls a model.
+--team-delivery imports only the selected native team deliveries from one run,
+including checked definitions and lemmas that have not been adopted. Source files
+retain their Lean context. The catalog does not grant acceptance in another run.
 Only enrich runs Lean, in a disposable full-proof copy with the already installed
 pinned toolchain. It has no time limit. Unavailable environments remain unknown.
 Sidecars bind the exact manifest, record, source, configuration, tool and collector.
@@ -81,7 +85,7 @@ try {
       environment: { type: 'string' }, 'problem-receipt': { type: 'string' },
       id: { type: 'string' }, source: { type: 'string' }, depth: { type: 'string', default: '2' },
       metadata: { type: 'boolean' }, field: { type: 'string' },
-      'include-findings': { type: 'boolean' },
+      'include-findings': { type: 'boolean' }, 'team-delivery': { type: 'string', multiple: true },
       file: { type: 'string' }, name: { type: 'string' }, 'start-line': { type: 'string' }, offset: { type: 'string' },
       lines: { type: 'string' }, 'max-bytes': { type: 'string' },
     } });
@@ -92,6 +96,8 @@ try {
     };
     if (values['retry-enrichment'] !== undefined && command !== 'enrich')
       throw new Error('--retry-enrichment requires enrich');
+    if (values['team-delivery'] && (command !== 'build' || values.state?.length !== 1 || values['include-findings']))
+      throw new Error('--team-delivery requires build, exactly one --state and no --include-findings');
     const hosted = Boolean(libraryHostConfigPath());
     if (hosted && ['build', 'enrich', 'pack'].includes(command)) throw new Error('library_knowledge_history_unauthorized');
     if (command === 'build') {
@@ -111,7 +117,8 @@ try {
       if (!['v1', 'v2'].includes(values.format)) throw new Error('--format must be v1 or v2');
       const previous = values.merge ? readKnowledgeCatalog(values.merge).base : undefined;
       const imports = [
-        ...(values.state?.length ? [importKnowledgeRuns(values.state, { includeFindings: values['include-findings'] })] : []),
+        ...(values['team-delivery'] ? [importTeamKnowledgeDeliveries(values.state![0]!, values['team-delivery'])] :
+          values.state?.length ? [importKnowledgeRuns(values.state, { includeFindings: values['include-findings'] })] : []),
         ...(values['accepted-manifest'] ? [importAcceptedKnowledge(values['accepted-manifest'],
           { enrichmentFile: values['accepted-enrichment'] })] : []),
         ...(values['submitted-manifest'] ? [importAcceptedKnowledge(values['submitted-manifest'],

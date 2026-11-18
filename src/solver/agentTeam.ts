@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import type { MathAgentSession, MathAgentTools } from '../runtime/agentSession';
 import { confirmHarnessProcessStopped } from '../runtime/harnessProcess';
+import { NativeAgentControlInputError } from '../runtime/nativeAgentControl';
 import { canonicalMathJson, mathDigest, writeMathJsonDurable } from '../math/mathRuntimeIo';
 import { bindLeanPackages } from '../math/leanDiagnostics';
 import type { SolverRunState } from './archive';
@@ -23,22 +24,22 @@ import { ResearchUsage } from './researchUsage';
 import { aggregateUsage, buildTokenBudget, initializeUsageAccounting, modelDispatchAllowed } from './usageBudget';
 import { agentTeamStateSchema,
   type AgentTeamState, type AgentTeamWorker, type AgentTeamTask } from './agentTeamState';
-import { checkAgentTeamProofDelivery, integrateAgentTeamProofDelivery, readAgentTeamProofDelivery } from './agentTeamProof';
+import { checkAgentTeamProofDelivery, integrateAgentTeamProofDelivery, readAgentTeamProofDelivery,
+  ReusedTeamCheckFailure, type TeamFailureCache } from './agentTeamProof';
 import { ownedSourceDigest } from './cooperativeProof';
 import { agentTeamWorkerSection } from './agentTeamContext';
 import { saveAgentTeamResearchArtifact, inspectAgentTeamResearchArtifact } from './agentTeamResearch';
 import { agentTeamChildAdmission, projectAgentTeamBudget } from './agentTeamBudget';
 import { agentTeamOverview, agentTeamTaskHistory } from './agentTeamViews';
-import { agentTeamProfileSelection, resolveAgentTeamProfiles } from './agentTeamProfiles';
+import { agentTeamProfileSelection, resolveNewMemberProfiles, resolveAgentTeamProfiles } from './agentTeamProfiles';
 import { writeWorkerProject } from './workerProject';
 import { agentTeamRequestSchema as request, agentTeamToolDefinition as teamTool,
   agentTeamMemberOperations as memberOperations, agentTeamArgumentFeedback, agentTeamMessageRouteFeedback,
   agentTeamOperationAllowed } from './agentTeamTool';
-import { agentTeamAssignmentRevision, agentTeamCoordinationReview, recordAgentTeamCoordination, recordAgentTeamCoordinationPresentation } from './agentTeamCoordination';
 import type { ModelRequestGate } from '../runtime/modelRequest';
 import { LeanEnvironmentHealthCheckError } from '../runtime/leanHealthCheck';
 import { prepareAgentTeamWorkspace } from './agentTeamWorkspace';
-import { AgentTeamNativeControl, nativeTeamAssignmentMessage, type NativeTeamAcceptedChild, type NativeTeamSpawn } from './agentTeamNative';
+import { AgentTeamNativeControl, nativeSpawnHistory, nativeTeamAssignmentMessage, type NativeTeamAcceptedChild, type NativeTeamSpawn } from './agentTeamNative';
 
 type LiveWorker = { session?: MathAgentSession; task: Promise<void>; abort: AbortController; cancelledTaskId?: string;
   admittedTurnId?: string; runSettled?: boolean };
@@ -71,6 +72,7 @@ export class AgentResearchTeam {
   private live = new Map<string, LiveWorker>();
   private readonly nativeControl?: AgentTeamNativeControl;
   private readonly nativeIdle = new Map<string, MathAgentSession>();
+  private readonly failedNominations: TeamFailureCache = new Map();
   private readonly nativeStarts = new Map<string, { promise: Promise<NativeTeamAcceptedChild>;
     resolve: (value: NativeTeamAcceptedChild) => void; reject: (error: unknown) => void; accepted: boolean }>();
   private access = new Map<string, WorkerAccess>();
@@ -78,8 +80,6 @@ export class AgentResearchTeam {
   private waiters = new Set<() => void>();
   private stopping = false;
   private serial: Promise<unknown> = Promise.resolve();
-  private leadRequestedInTurn = false;
-  leadCoordinationCheckpoint = false;
   leadAdoptionCheckpoint = false;
   leadCompletionCheckpoint = false;
 
@@ -133,28 +133,14 @@ export class AgentResearchTeam {
 
   leadWriterStopped() { this.nativeControl?.writerStopped('lead'); }
 
-  /** Coordination alone neither freezes sources nor requires replacing the native process. */
-  get canContinueCoordination() {
-    return this.nativeAgentControlEnabled && this.leadCoordinationCheckpoint &&
-      !this.leadAdoptionCheckpoint && !this.leadCompletionCheckpoint &&
-      !this.archive.completionRequested && !this.archive.adoptions.some(item => item.targetId === 'lead' &&
-        ['queued', 'integrating'].includes(item.status));
-  }
-
   beginLeadTurn() {
-    this.leadRequestedInTurn = false;
-    this.leadCoordinationCheckpoint = false;
     this.leadAdoptionCheckpoint = false;
     this.leadCompletionCheckpoint = false;
   }
 
-  /** Release the Lead writer at an unpaid boundary for integration, review or final acceptance. */
+  /** Only proof handoffs interrupt Lead; Codex owns ordinary team orchestration. */
   leadRequestGate(base: ModelRequestGate): ModelRequestGate {
-    const gate: ModelRequestGate = identity => {
-      const admission = base(identity);
-      if (admission.allowed) this.leadRequestedInTurn = true;
-      return admission;
-    };
+    const gate: ModelRequestGate = identity => base(identity);
     gate.beforeRequest = base.beforeRequest;
     gate.checkpoint = () => {
       if (base.checkpoint?.()) return true;
@@ -166,43 +152,16 @@ export class AgentResearchTeam {
         }
         return true;
       }
-      if (!this.leadRequestedInTurn) return false;
       const adoptions = this.archive.adoptions.filter(item => item.targetId === 'lead' &&
         ['queued', 'integrating'].includes(item.status));
-      if (adoptions.length) {
-        if (!this.leadAdoptionCheckpoint) {
-          this.leadAdoptionCheckpoint = true;
-          this.input.emit('team_adoption_checkpoint', { adoptionIds: adoptions.map(item => item.id) });
-        }
-        return true;
+      if (!adoptions.length) return false;
+      if (!this.leadAdoptionCheckpoint) {
+        this.leadAdoptionCheckpoint = true;
+        this.input.emit('team_adoption_checkpoint', { adoptionIds: adoptions.map(item => item.id) });
       }
-      const review = agentTeamCoordinationReview(this.input.state);
-      if (!review.required) return false;
-      const presented = this.archive.coordinationPresentation;
-      if (review.reason === 'team-update' && !review.nativeDeliveryUncertain &&
-          review.latestNativeMessageSequence > (presented?.nativeMessageSequence ?? 0) &&
-          review.latestIncomingSequence <= (presented?.eventSequence ?? this.archive.coordination?.eventSequence ?? 0)) {
-        // Native acceptance supplies the next context directly. Let Lead read
-        // it once; an unanswered decision is checked after that response.
-        const presentation = recordAgentTeamCoordinationPresentation(this.input.state)!;
-        this.changed();
-        this.input.emit('team_coordination_presented', { ...presentation, delivery: 'native-history' });
-        return this.leadCoordinationCheckpoint;
-      }
-      if (!review.checkpointRequired) return this.leadCoordinationCheckpoint;
-      const presentation = recordAgentTeamCoordinationPresentation(this.input.state)!;
-      this.leadCoordinationCheckpoint = true;
-      this.changed();
-      this.input.emit('team_coordination_checkpoint', { ...presentation });
       return true;
     };
     return gate;
-  }
-
-  private recordCoordination(input: Parameters<typeof recordAgentTeamCoordination>[1]) {
-    const decision = recordAgentTeamCoordination(this.input.state, input);
-    this.changed(); this.input.emit('team_coordination_decided', { ...decision });
-    return decision;
   }
 
   private changed() {
@@ -226,7 +185,7 @@ export class AgentResearchTeam {
     if (from !== to && kind !== 'amended') {
       if (this.nativeControl) {
         if (kind !== 'completed' && kind !== 'interrupted')
-          void this.nativeControl.advisory(from, to, 'Mathematical host update (advisory):\n' + canonicalMathJson(item), item.sequence).catch(() => {});
+          void this.nativeControl.advisory(from, to, 'Mathematical host update (advisory):\n' + canonicalMathJson(item)).catch(() => {});
       } else void this.notify(to, item);
     }
     return item;
@@ -239,16 +198,6 @@ export class AgentResearchTeam {
       await session.notify((event.kind === 'amended' ? 'Lead assignment amendment (effective objective):\n' :
         'Team update (advisory):\n') + canonicalMathJson(event),
       event.kind === 'amended' ? undefined : { mode: 'advisory' });
-      if (actor === 'lead' && session === this.leadSession && session.advisoryNotifications === 'native-history') {
-        const review = agentTeamCoordinationReview(this.input.state);
-        if (review.reason === 'team-update' && review.latestIncomingSequence === event.sequence && review.checkpointRequired) {
-          // Native acceptance puts this update in the next model context. A
-          // separate stop/freeze/resume would repeat that same presentation.
-          const presentation = recordAgentTeamCoordinationPresentation(this.input.state)!;
-          this.changed();
-          this.input.emit('team_coordination_presented', { ...presentation, delivery: 'native-history' });
-        }
-      }
       return true;
     }
     catch { return false; }
@@ -282,12 +231,17 @@ export class AgentResearchTeam {
         const prior = this.archive.operations.find(item => item.key === key);
         if (prior) {
           if (prior.digest !== digest) throw new Error('math_team_call_changed');
+          if (operation.operation === 'inspect' && operation.changeIndex !== undefined &&
+              prior.result === 'read-fixed-delivery-page') return this.perform(actor, operation);
           return prior.result;
         }
         let result: unknown;
         try { result = await this.perform(actor, operation); }
         catch (error) { result = { ok: false, error: error instanceof Error ? error.message : 'math_team_operation_failed' }; }
-        this.archive.operations.push({ key, digest, result }); this.changed();
+        // Successful pages can be replayed from the content-addressed delivery; avoid storing its whole source twice.
+        const fixedPage = operation.operation === 'inspect' && operation.changeIndex !== undefined &&
+          result !== null && typeof result === 'object' && 'ok' in result && result.ok === true;
+        this.archive.operations.push({ key, digest, result: fixedPage ? 'read-fixed-delivery-page' : result }); this.changed();
         return result;
       });
       this.serial = apply.catch(() => {});
@@ -335,33 +289,52 @@ export class AgentResearchTeam {
 
   private async spawnNative(request: NativeTeamSpawn, signal: AbortSignal): Promise<NativeTeamAcceptedChild> {
     if (this.archive.workers.filter(item => item.status !== 'stopped' || this.live.has(item.id)).length >= this.input.maxAgents - 1)
-      throw new Error('math_team_capacity_exceeded');
+      throw new NativeAgentControlInputError('math_team_capacity_exceeded');
     const leaf = request.agentPath.slice('/root/'.length);
     const id = /^[A-Za-z0-9_-]{1,64}$/u.test(leaf) && leaf !== 'lead' ? leaf : 'native-' + mathDigest(request.agentPath).slice(0, 24);
     if (this.archive.workers.some(worker => worker.id === id)) throw new Error('math_team_agent_exists');
+    const task = this.newTask(request.message);
     const seedCommit = git(this.input.state.worktree, ['rev-parse', 'HEAD']);
+    const spawnHistory = nativeSpawnHistory(request.bootstrap);
     const worker: AgentTeamWorker = { id, role: 'researcher',
       worktree: path.join(path.dirname(this.input.state.worktree), 'team-workspaces', id), seedCommit,
       status: 'preparing', phase: 'prepared', turns: 0, tasks: [], cursor: 0,
       native: { sessionId: request.sessionId, threadId: request.threadId, agentPath: request.agentPath,
         parentThreadId: request.parentThreadId, spawnOperationId: request.operationId,
-        spawnRequestDigest: request.requestDigest,
+        spawnRequestDigest: request.requestDigest, spawnHistory,
         bootstrap: request.bootstrap, initialInput: request.initialInput } };
-    worker.exposures = structuredClone((this.archive.leadExposures ?? []).filter(item => item.kind === 'adopted'));
+    const parentExposures = this.archive.leadExposures ?? [];
+    const adopted = new Set(parentExposures.filter(item => item.kind === 'adopted').map(item => item.deliveryId));
+    worker.exposures = parentExposures.filter(item => item.kind === 'adopted' ||
+      spawnHistory === 'parent-history' && item.kind === 'inspected' && !adopted.has(item.deliveryId))
+      .map(item => ({ ...item, kind: item.kind === 'adopted' ? 'adopted' : 'possible-via-parent' }));
     this.archive.workers.push(worker); this.nativeStart(worker); this.changed();
-    this.enqueue(worker, request.message);
+    this.enqueue(worker, task);
     return this.waitNativeStart(worker, signal, true);
   }
 
   private async followupNative(worker: AgentTeamWorker, initialInput: Record<string, unknown>, signal: AbortSignal): Promise<NativeTeamAcceptedChild> {
+    const message = nativeTeamAssignmentMessage(initialInput.input as Record<string, unknown>);
     if (worker.writerStopUnconfirmed) throw new Error('math_writer_stop_unconfirmed:' + worker.id);
     if (worker.status === 'stopped') throw new Error('math_team_agent_stopped');
+    const profiles = message.trimStart().startsWith('Profiles:') ? this.memberProfiles(message, worker) : undefined;
     const active = this.live.get(worker.id);
     if (active?.session && !active.runSettled && worker.native!.status === 'running' && worker.activity === 'running') {
       const connection = active.session.nativeAgentControl;
       if (!connection) throw new Error('math_team_native_backend_required');
-      const result = await connection.input({ threadId: worker.native!.threadId, ...initialInput });
+      const task = worker.tasks.find(task => task.status === 'running');
+      if (!task) throw new Error('math_team_task_not_running');
+      if (task.declarations) throw new NativeAgentControlInputError(
+        'math_team_submission_pending: this member has already submitted. Send new work after its writer stops and the nomination is checked.');
+      const changedProfiles = profiles && canonicalMathJson(profiles.evidence.selected) !== canonicalMathJson(task.profileEvidence?.selected);
+      // Preserve the attributed native message and codec. The receiver's frozen
+      // profile and its local reading paths accompany the very same turn input.
+      const result = await connection.input({ threadId: worker.native!.threadId, ...initialInput,
+        expectedTurnId: worker.native!.turnId,
+        ...(changedProfiles ? { contextItems: [{ type: 'message', role: 'user',
+          content: [{ type: 'input_text', text: profiles.section.text }] }] } : {}) });
       if (result.accepted !== true || typeof result.submissionId !== 'string') throw new Error('math_team_native_input_not_accepted');
+      this.saveNativeFollowup(task, message, profiles?.evidence ?? task.profileEvidence);
       const accepted = this.nativeControl!.accepted(worker, active.session, worker.native!.turnId!);
       return { ...accepted, submissionId: result.submissionId };
     }
@@ -369,15 +342,26 @@ export class AgentResearchTeam {
     await this.closeNativeIdle(worker);
     worker.native!.initialInput = initialInput;
     this.nativeStart(worker);
-    const saved = worker.tasks.toReversed().find(task => ['paused', 'interrupted', 'queued'].includes(task.status) && !task.cancelRequested);
+    const saved = worker.tasks.toReversed().find(task => ['paused', 'interrupted', 'queued'].includes(task.status) && !task.cancelRequested && !task.deliveryId);
     if (saved) {
+      this.saveNativeFollowup(saved, message, profiles?.evidence);
       saved.pauseRequested = undefined; saved.status = 'queued'; saved.error = undefined;
-      this.recordCoordination({ decision: 'delegate', reason: 'Lead continued a native member assignment.', nextStep: saved.message });
       this.launch(worker);
     } else {
-      this.enqueue(worker, nativeTeamAssignmentMessage(initialInput.input as Record<string, unknown>));
+      this.enqueue(worker, this.newTask(message, profiles?.evidence));
     }
     return this.waitNativeStart(worker, signal);
+  }
+
+  /** Native input is the instruction source; retain it for isolated-workspace resume. */
+  private saveNativeFollowup(task: AgentTeamTask, message: string, evidence?: AgentTeamTask['profileEvidence']) {
+    (task.objectiveHistory ??= []).push({ revision: task.objectiveRevision ?? 1, message: task.message,
+      workKind: task.workKind, at: Date.now(), reason: 'Native followup.', profileEvidence: task.profileEvidence });
+    const selected = agentTeamProfileSelection(message), inherited = agentTeamProfileSelection(task.message);
+    task.message = selected.length || !inherited.length ? message : 'Profiles: ' + inherited.join(', ') + '\n' + message;
+    task.objectiveRevision = (task.objectiveRevision ?? 1) + 1;
+    task.profileEvidence = evidence ?? resolveAgentTeamProfiles(this.input.leadAccess.researchSkill!, task.message, this.expertCards).evidence;
+    this.changed();
   }
 
   private async interruptNative(worker: AgentTeamWorker) {
@@ -406,7 +390,7 @@ export class AgentResearchTeam {
     const task = worker.tasks.at(-1)!;
     const sourceCommit = git(worker.worktree, ['rev-parse', 'HEAD']);
     const context = buildSkillResearchContext(state.problem, { ...state, ...worker, check: undefined }, { ...access,
-      root: this.input.root, worktree: worker.worktree, taskText: this.input.taskText, researchSkill: access.researchSkill!,
+      root: this.input.root, tools: this.input.modules.M4.tools, worktree: worker.worktree, taskText: this.input.taskText, researchSkill: access.researchSkill!,
       teamRole: { id: worker.id, role: 'worker' }, teamAssignment: { taskId: task.id, message: task.message, sourceCommit },
       sourceFeedback: this.sourceFeedback(worker) });
     access.assertHarnessCurrent?.(); access.assertKnowledgeCurrent?.();
@@ -480,29 +464,32 @@ export class AgentResearchTeam {
       throw new Error('math_team_budget_not_configured');
     switch (operation.operation) {
       case 'coordinate': {
-        const decision = this.recordCoordination(operation);
-        return { ok: true, coordination: decision,
-          instruction: operation.decision === 'defer'
-            ? 'Carry out the stated research step, then reconsider delegation using its result. The next settled response is a coordination boundary when no member has active work.'
-            : 'Continue the chosen complementary work. Reassess addressed findings, idle members and route changes.' };
+        // Compatibility for pinned historical host-tool clients; a note has no scheduling effect.
+        const coordination = this.archive.coordination = { decision: operation.decision, reason: operation.reason,
+          nextStep: operation.nextStep, revision: (this.archive.coordination?.revision ?? 0) + 1, at: Date.now(),
+          startedRequests: this.input.state.requestUsageAccounting?.startedRequests ?? 0,
+          eventSequence: this.archive.events.at(-1)?.sequence ?? 0 };
+        this.changed();
+        return { ok: true, coordination, advisory: true };
       }
       case 'spawn': {
         if (operation.agentId === 'lead' || this.archive.workers.some(item => item.id === operation.agentId))
           throw new Error('math_team_agent_exists');
         if (this.archive.workers.filter(item => item.status !== 'stopped' || this.live.has(item.id)).length >= this.input.maxAgents - 1)
           throw new Error('math_team_capacity_exceeded');
+        const task = this.newTask(operation.message, undefined, operation);
         const worktree = path.join(path.dirname(this.input.state.worktree), 'team-workspaces', operation.agentId);
         const seedCommit = git(this.input.state.worktree, ['rev-parse', 'HEAD']);
         const worker: AgentTeamWorker = { id: operation.agentId, role: 'researcher', worktree, seedCommit,
           status: 'preparing', phase: 'prepared', turns: 0, tasks: [], cursor: 0 };
         this.archive.workers.push(worker); this.changed();
         worker.exposures = structuredClone((this.archive.leadExposures ?? []).filter(item => item.kind === 'adopted'));
-        return this.enqueue(worker, operation.message, operation.budget, operation.workKind);
+        return this.enqueue(worker, task);
       }
       case 'assign': {
         const worker = this.worker(operation.agentId);
         if (worker.status === 'stopped') throw new Error('math_team_agent_stopped');
-        return this.enqueue(worker, operation.message, operation.budget, operation.workKind);
+        return this.enqueue(worker, this.newTask(operation.message, this.memberProfiles(operation.message, worker).evidence, operation));
       }
       case 'amend': {
         const worker = this.worker(operation.agentId), task = worker.tasks.find(task => task.id === operation.taskId);
@@ -511,7 +498,7 @@ export class AgentResearchTeam {
         if (!['queued', 'running', 'paused'].includes(task.status) || task.cancelRequested)
           throw new Error('math_team_task_not_amendable');
         if (task.declarations || worker.pendingDelivery?.taskId === task.id) throw new Error('math_team_submission_pending');
-        const profiles = resolveAgentTeamProfiles(this.input.leadAccess.researchSkill!, operation.message);
+        const profiles = this.memberProfiles(operation.message, worker);
         (task.objectiveHistory ??= []).push({ revision: task.objectiveRevision ?? 1, message: task.message,
           workKind: task.workKind, at: Date.now(), reason: operation.reason, profileEvidence: task.profileEvidence });
         task.message = operation.message; task.objectiveRevision = (task.objectiveRevision ?? 1) + 1;
@@ -525,7 +512,6 @@ export class AgentResearchTeam {
         // The entire profile section can exceed the ordinary event preview; notify with
         // the full assignment while durable history retains its source identities.
         if (task.status === 'running') void this.notify(worker.id, { ...event, text: canonicalMathJson(assignment) + '\n' + profiles.section.text });
-        this.recordCoordination({ decision: 'delegate', reason: operation.reason, nextStep: task.message });
         return { ok: true, agentId: worker.id, taskId: task.id, objectiveRevision: task.objectiveRevision,
           workKind: task.workKind, profileEvidence: profiles.evidence, notification: task.status === 'running' ? 'queued' : 'saved-inbox' };
       }
@@ -586,20 +572,17 @@ export class AgentResearchTeam {
         const admission = agentTeamChildAdmission(this.budgetInput(task), 'turn');
         if (admission.allowed === false) return { ok: false, error: admission.reason, budget: this.budget(task) };
         task.pauseRequested = undefined; task.status = 'queued'; task.error = undefined;
-        this.recordCoordination({ decision: 'delegate', reason: 'Lead resumed a saved assignment.', nextStep: task.message });
         this.event('lead', worker.id, 'resumed', 'Lead resumed the same saved task.', { taskId: task.id });
         this.launch(worker);
         return { ok: true, agentId: worker.id, taskId: task.id, status: 'queued' };
       }
       case 'publish': {
         const researchState = { revision: (this.archive.researchState?.revision ?? 0) + 1,
-          summary: operation.summary, publishedAt: Date.now(), assignmentRevision: agentTeamAssignmentRevision(this.archive) };
+          summary: operation.summary, publishedAt: Date.now(), assignmentRevision: this.archive.workers.reduce((sum, worker) => sum + worker.tasks.reduce((total, task) => total + (task.objectiveRevision ?? 1), 0), 0) };
         this.archive.researchState = researchState;
         for (const recipient of ['lead', ...this.archive.workers.filter(worker => worker.status !== 'stopped').map(worker => worker.id)]) {
           this.event('lead', recipient, 'research-updated', operation.summary, { researchRevision: researchState.revision });
         }
-        if (this.archive.workers.some(worker => worker.tasks.length)) this.recordCoordination({
-          decision: 'continue', reason: 'Lead updated the shared research route.', nextStep: operation.summary });
         return { ok: true, researchState: { ...researchState, advisory: true } };
       }
       case 'cancel': {
@@ -614,7 +597,7 @@ export class AgentResearchTeam {
         const active = this.live.get(worker.id);
         if (task.status === 'running' && !active) throw new Error('math_team_task_not_running');
         const replacement: AgentTeamTask | undefined = operation.replacement
-          ? this.newTask(operation.replacement) : undefined;
+          ? this.newTask(operation.replacement, this.memberProfiles(operation.replacement, worker).evidence) : undefined;
         if (replacement && worker.native) worker.native.initialInput = { author: '/root',
           input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: replacement.message } }, startOptions: {} };
         task.cancelRequested = { at: Date.now(), reason: operation.reason, replacementTaskId: replacement?.id };
@@ -663,13 +646,32 @@ export class AgentResearchTeam {
         const reference = this.archive.deliveries.find(item => item.id === operation.deliveryId);
         if (!reference) throw new Error('math_team_delivery_unknown');
         const delivery = readAgentTeamProofDelivery(reference.path, this.input.state);
+        if (delivery.id !== reference.id || delivery.agentId !== reference.agentId ||
+            delivery.provenance?.taskId && delivery.provenance.taskId !== reference.taskId) throw new Error('math_team_delivery_identity_changed');
+        if (operation.changeIndex === undefined && (operation.offset !== undefined || operation.limit !== undefined))
+          throw new Error('math_team_inspect_change_index_required');
+        const page = (index: number, offset = 0, limit = 16000) => {
+          const change = delivery.changes[index];
+          if (!change) throw new Error('math_team_inspect_change_index_out_of_range');
+          const characters = Array.from(change.after);
+          if (offset > characters.length) throw new Error('math_team_inspect_offset_out_of_range');
+          const end = Math.min(offset + limit, characters.length);
+          return { file: change.file, name: change.name, changeIndex: index, offset, totalCharacters: characters.length,
+            source: characters.slice(offset, end).join(''), truncated: end < characters.length,
+            ...(end < characters.length ? { nextOffset: end } : {}) };
+        };
+        if (operation.changeIndex !== undefined) {
+          const change = page(operation.changeIndex, operation.offset, operation.limit);
+          this.recordExposure(actor, reference, delivery.commit, 'inspected');
+          return { ok: true, id: delivery.id, commit: delivery.commit, sourceDigest: delivery.sourceDigest,
+            change, originalProblemAcceptance: 'not-assessed' };
+        }
         this.recordExposure(actor, reference, delivery.commit, 'inspected');
         return { ok: true, id: delivery.id, agentId: delivery.agentId, taskId: reference.taskId,
           commit: delivery.commit, seedCommit: delivery.seedCommit, sourceDigest: delivery.sourceDigest,
           provenance: delivery.provenance,
           declarations: delivery.declarations, imports: delivery.imports,
-          changes: delivery.changes.map(change => ({ file: change.file, name: change.name,
-            source: change.after.slice(0, 16000), truncated: change.after.length > 16000 })),
+          changes: delivery.changes.map((_, index) => page(index)),
           artifacts: delivery.artifacts.map(artifact => ({ id: artifact.id, declaration: artifact.declaration,
             proof: artifact.proof })), originalProblemAcceptance: 'not-assessed' };
       }
@@ -677,9 +679,10 @@ export class AgentResearchTeam {
         if (actor === 'lead') throw new Error('math_team_child_submission_required');
         const worker = this.worker(actor), task = worker.tasks.find(item => item.status === 'running');
         if (!task || task.cancelRequested || task.pauseRequested || !this.live.has(actor)) throw new Error('math_team_task_not_running');
-        if (operation.objectiveRevision !== undefined && operation.objectiveRevision !== (task.objectiveRevision ?? 1))
+        if (task.declarations) throw new Error('math_team_submission_pending');
+        if (!this.nativeAgentControlEnabled && operation.objectiveRevision !== undefined && operation.objectiveRevision !== (task.objectiveRevision ?? 1))
           throw new Error('math_team_objective_revision_changed');
-        if (operation.objectiveRevision === undefined && task.objectiveHistory?.length)
+        if (!this.nativeAgentControlEnabled && operation.objectiveRevision === undefined && task.objectiveHistory?.length)
           throw new Error('math_team_objective_revision_required');
         const outside = operation.declarations.filter(declaration => !this.input.state.problem.ownedFiles.includes(declaration.file));
         if (outside.length) return { ok: false, error: 'math_agent_team_proof_declaration_outside_ownership',
@@ -687,6 +690,7 @@ export class AgentResearchTeam {
           ownedFiles: this.input.state.problem.ownedFiles,
           hint: 'Declaration file paths are relative to the Lean project. Use an exact owned file path; ' +
             'put helpers in an editable owned Lean file or keep exploratory files under .scratch. No nomination was saved; correct the declarations and submit again.' };
+        task.nomination = { objectiveRevision: task.objectiveRevision ?? 1, objectiveDigest: mathDigest(task.message), workKind: task.workKind };
         task.declarations = operation.declarations; task.summary = operation.summary; this.changed();
         return { ok: true, status: 'pending-writer-stop', taskId: task.id,
           instruction: 'Save source and notes, then return. The host checks declarations after confirming writer shutdown.' };
@@ -725,10 +729,20 @@ export class AgentResearchTeam {
     }
   }
 
-  private newTask(message: string, budget?: AgentTeamTask['budget'], workKind?: AgentTeamTask['workKind']): AgentTeamTask {
+  private get expertCards() {
+    const delegation = this.input.state.researchDelegation;
+    return delegation?.mode === 'team' ? delegation.personalExperts?.cards : undefined;
+  }
+  private memberProfiles(message: string, worker?: AgentTeamWorker) {
+    const skill = (worker && this.access.get(worker.id)?.researchSkill) ?? this.input.leadAccess.researchSkill!;
+    return resolveNewMemberProfiles(skill, message, this.expertCards);
+  }
+
+  private newTask(message: string, profileEvidence = this.memberProfiles(message).evidence,
+    { budget, workKind }: Pick<AgentTeamTask, 'budget' | 'workKind'> = {}): AgentTeamTask {
     return { id: crypto.randomUUID(), message, status: 'queued', createdAt: Date.now(), turns: 0, budget,
       objectiveRevision: 1, workKind,
-      profileEvidence: resolveAgentTeamProfiles(this.input.leadAccess.researchSkill!, message).evidence,
+      profileEvidence,
       sequence: Math.max(0, ...this.archive.workers.flatMap(worker => worker.tasks.map(task => task.sequence ?? 0))) + 1 };
   }
 
@@ -743,16 +757,12 @@ export class AgentResearchTeam {
     }
   }
 
-  private enqueue(worker: AgentTeamWorker, message: string, budget?: AgentTeamTask['budget'], workKind?: AgentTeamTask['workKind']) {
-    const task = this.newTask(message, budget, workKind);
+  private enqueue(worker: AgentTeamWorker, task: AgentTeamTask) {
     worker.tasks.push(task); this.changed(); this.launch(worker);
-    this.recordCoordination({ decision: 'delegate', reason: 'Lead dispatched an assignment.', nextStep: message });
     return { ok: true, agentId: worker.id, taskId: task.id, status: 'queued',
       worktree: worker.worktree, seedCommit: worker.seedCommit,
-      selectedProfiles: agentTeamProfileSelection(message),
-      profileEvidence: task.profileEvidence, objectiveRevision: task.objectiveRevision, workKind: task.workKind,
-      instruction: 'Publish the shared route and ownership of the complementary gaps before extended solo work. ' +
-        'At a useful finding or blocker, poll the durable inbox and assess team results before opening another substantial investigation.' };
+      selectedProfiles: task.profileEvidence!.selected,
+      profileEvidence: task.profileEvidence, objectiveRevision: task.objectiveRevision, workKind: task.workKind };
   }
 
   private async prepare(worker: AgentTeamWorker) {
@@ -785,6 +795,18 @@ export class AgentResearchTeam {
   private rejectSubmission(worker: AgentTeamWorker, task: AgentTeamTask, error: unknown) {
     const reason = correctableSourceFailure(error) ? this.sourceFeedback(worker) ?? (error as Error).message :
       error instanceof Error ? error.message : 'math_team_delivery_failed';
+    const pending = worker.pendingDelivery;
+    if (error instanceof DeclarationArtifactCheckError && pending?.taskId === task.id && pending.commit && pending.sourceDigest) {
+      task.failedCheck = {
+        declaration: error.declaration, seedCommit: pending.seedCommit, commit: pending.commit, sourceDigest: pending.sourceDigest,
+        problemReceiptDigest: this.input.state.problem.receiptDigest, environmentDigest: this.input.state.environmentDigest,
+        objectiveRevision: task.nomination?.objectiveRevision, projectionCommit: error.verification.targetCommit,
+        ...(error instanceof ReusedTeamCheckFailure && { reusedFrom: error.previous }),
+        status: error.verification.status, results: error.verification.results.map(
+          ({ checkId, receiptId, status, error, stdoutPreview, stderrPreview }) =>
+            ({ checkId, receiptId, status, error, stdoutPreview, stderrPreview })),
+      };
+    }
     task.status = 'failed'; task.error = reason; task.finishedAt ??= Date.now();
     worker.pendingDelivery = undefined;
     if (worker.status !== 'stopped') worker.status = worker.tasks.some(task => task.status === 'paused') ? 'paused' : 'idle';
@@ -845,11 +867,11 @@ export class AgentResearchTeam {
     worker.pendingSourceBase ??= sourceCommit;
     task.seedCommit = worker.pendingSourceBase;
     task.status = 'running'; task.startedAt ??= Date.now(); task.lastStartedAt = Date.now(); task.finishedAt = undefined;
-    task.summary = undefined; task.error = undefined; task.declarations = undefined;
+    task.summary = undefined; task.error = undefined; task.declarations = undefined; task.nomination = undefined;
     worker.status = 'running'; worker.activity = 'running'; worker.phase = 'running'; worker.error = undefined;
     worker.dispatchResearchRevision = this.archive.researchState?.revision;
     task.objectiveRevision ??= 1;
-    task.profileEvidence = resolveAgentTeamProfiles(access.researchSkill!, task.message).evidence;
+    task.profileEvidence = resolveAgentTeamProfiles(access.researchSkill!, task.message, this.expertCards).evidence;
     initializeUsageAccounting(worker);
     this.changed();
     const usage = new ResearchUsage({ state, research: worker, maxTotalTokens: this.input.maxTotalTokens,
@@ -880,7 +902,7 @@ export class AgentResearchTeam {
     const { inboxThrough } = agentTeamWorkerSection(state, teamRole, teamAssignment);
     const turnTiming = teamTurnTiming(this.input.maxTurnMs);
     const context = buildSkillResearchContext(state.problem, { ...state, ...worker, check: undefined }, { ...access,
-      root: this.input.root, worktree: worker.worktree, taskText: this.input.taskText,
+      root: this.input.root, tools: this.input.modules.M4.tools, worktree: worker.worktree, taskText: this.input.taskText,
       researchSkill: access.researchSkill!, teamRole, teamAssignment,
       sourceFeedback,
       executionLimits: { ...turnTiming, remainingRunMs: this.input.remainingMs } });
@@ -971,7 +993,7 @@ export class AgentResearchTeam {
           worker.activity = task.status === 'paused' ? 'paused' : 'idle';
           // Register submitted work in the same durable transition as the result and
           // research snapshot. A crash must never strand a completed nomination.
-          if (task.declarations && !task.cancelRequested && (completed || task.pauseRequested?.kind === 'budget')) {
+          if (task.declarations && !task.cancelRequested && task.pauseRequested?.kind !== 'handoff') {
             worker.pendingDelivery = { taskId: task.id, seedCommit: task.seedCommit!, declarations: this.deliveryDeclarations(worker, task) };
             worker.activity = 'checking'; worker.phase = 'checking';
           }
@@ -1039,9 +1061,13 @@ export class AgentResearchTeam {
       if (pending.commit && (pending.commit !== commit || pending.sourceDigest !== digest)) throw new Error('math_team_delivery_source_changed');
       pending.commit = commit; pending.sourceDigest = digest; this.changed();
       const delivery = await this.input.exclusiveCheck(() => checkAgentTeamProofDelivery({ state: this.input.state,
+        failureCache: this.nativeAgentControlEnabled ? this.failedNominations : undefined,
         agentId: worker.id, worktree: worker.worktree, seedCommit: pending.seedCommit, declarations: pending.declarations,
         env: this.access.get(worker.id)!.environment, signal: this.input.signal, timeoutMs: this.input.proofTimeoutMs,
-        provenance: { objectiveRevision: task.objectiveRevision ?? 1, taskId: task.id, workKind: task.workKind,
+        // Older checkpoints do not record when a nomination was made relative to a followup.
+        provenance: { ...(task.nomination ?? (!task.objectiveHistory?.length && (task.objectiveRevision ?? 1) === 1
+          ? { objectiveRevision: 1, workKind: task.workKind } : {})), taskId: task.id,
+          ...(worker.native ? { spawnHistory: worker.native.spawnHistory ?? 'unknown' } : {}),
           exposures: structuredClone(worker.exposures ?? []) },
         assertWriterStopped: () => {
           if (worker.writerStopUnconfirmed || this.live.get(worker.id)?.session) throw new Error('math_writer_stop_unconfirmed:' + worker.id);
@@ -1056,7 +1082,10 @@ export class AgentResearchTeam {
       // Keep infrastructure failures pending; deterministic proof feedback is correctable by another explicit assignment.
       if (correctableProofFailure(error)) {
         this.rejectSubmission(worker, task, error);
-        this.event(worker.id, 'lead', 'failed', task.error!, { taskId: task.id, researchArtifactId: task.researchArtifactId });
+        const location = task.failedCheck ? 'Failed Lean check for ' + task.failedCheck.declaration.name +
+          '. Read failedCheck via ' + JSON.stringify({ operation: 'history', agentId: worker.id,
+            offset: worker.tasks.indexOf(task), limit: 1 }) + '.\n' : '';
+        this.event(worker.id, 'lead', 'failed', location + task.error!, { taskId: task.id, researchArtifactId: task.researchArtifactId });
       } else throw error;
     }
     worker.activity = worker.tasks.some(task => task.status === 'paused') ? 'paused' : 'idle';
@@ -1147,11 +1176,15 @@ export class AgentResearchTeam {
       if (worker.tasks.some(task => task.status === 'paused') && worker.status !== 'stopped') {
         worker.status = 'paused'; worker.activity = 'paused';
       } else worker.activity = 'idle';
-      // Compatibility with the earlier completion-before-pending save window. Only
-      // reconstruct a nomination when its fixed source is still the exact current HEAD.
+      // Historical checkpoints could settle a completion or interruption without
+      // registering its nomination. Recover only the last writer at its fixed HEAD.
       if (!worker.pendingDelivery && worker.pendingSourceBase) {
-        const task = worker.tasks.toReversed().find(task => task.status === 'completed' && task.declarations?.length && !task.deliveryId);
-        if (task?.sourceCommit && task.sourceCommit === git(worker.worktree, ['rev-parse', 'HEAD'])) {
+        const task = worker.tasks.toReversed().find(task => task.seedCommit !== undefined);
+        if (task && ['completed', 'interrupted'].includes(task.status) && task.declarations?.length && !task.deliveryId &&
+            !task.cancelRequested && task.pauseRequested?.kind !== 'handoff' && task.seedCommit === worker.pendingSourceBase &&
+            task.sourceCommit && task.sourceCommit === git(worker.worktree, ['rev-parse', 'HEAD']) &&
+            !git(worker.worktree, ['status', '--porcelain', '--', ...this.input.state.problem.ownedFiles
+              .map(file => path.join(this.input.state.problem.projectRelative, file))])) {
           worker.pendingDelivery = { taskId: task.id, seedCommit: task.seedCommit ?? worker.pendingSourceBase,
             declarations: this.deliveryDeclarations(worker, task) };
           this.changed();

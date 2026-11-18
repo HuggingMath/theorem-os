@@ -23,6 +23,7 @@ const commitHash = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u);
 export const declarationSubmissionSchema = z.object({ declarations: z.array(z.object({
   file: z.string().refine(value => allowedKnowledgeFile(value) && value.endsWith('.lean')),
   name: z.string().min(1).max(1000).refine(isSimpleLeanName),
+  kind: z.literal('definition').optional(),
   type: z.string().trim().min(1).refine(value => Buffer.byteLength(value) <= 24000),
   description: z.string().max(8000).optional(), premises: z.array(z.string().max(8000)).max(128).optional(),
 }).strict()).min(1).max(32) }).strict();
@@ -60,6 +61,9 @@ const segmentSchema = z.object({ schema: z.literal('theorem-os.declaration-artif
   ...manifestIdentity, previous: hash.nullable(), artifacts: z.array(z.unknown()).min(1).max(manifestRecords) }).strict();
 
 const fail = (reason: string): never => { throw new Error(`math_declaration_artifact_${reason}`); };
+function declarationIdentity({ file, name, type, kind }: DeclarationSubmission['declarations'][number], declarationHash: string) {
+  return mathDigest(canonicalMathJson({ file, name, type, ...(kind && { kind }), declarationHash }));
+}
 const artifactId = ({ id: _id, ...record }: DeclarationArtifact) => mathDigest(canonicalMathJson(record));
 const fresh = new WeakMap<DeclarationArtifact, string>();
 const identityOf = (state: DeclarationArtifactIdentity) => ({ runId: state.runId,
@@ -105,9 +109,8 @@ export function validateDeclarationArtifact(value: unknown): DeclarationArtifact
     proof: z.object({ commit: commitHash, sourceDigest: hash, passed: z.literal(true), verification: z.unknown() }).strict(),
     references: z.unknown().optional(),
   }).strict().parse(value) as DeclarationArtifact;
-  if (artifactId(object) !== object.id || object.declarationDigest !== mathDigest(canonicalMathJson({
-    file: object.declaration.file, name: object.declaration.name, type: object.declaration.type,
-    declarationHash: object.declarationHash }))) return fail('identity_changed');
+  if (artifactId(object) !== object.id || object.declarationDigest !== declarationIdentity(object.declaration, object.declarationHash))
+    return fail('identity_changed');
   const verification = object.proof.verification, results = verification?.results;
   if (verification?.schema !== 'deepscientist.mathematics.verification-batch/v1' || verification.status !== 'kernel_verified' ||
       !commitHash.safeParse(verification.targetCommit).success || !Array.isArray(results) || results.length !== 1)
@@ -243,6 +246,7 @@ export function writeDeclarationArtifacts(directory: string, state: DeclarationA
 export async function checkDeclarationArtifacts(input: {
   state: DeclarationArtifactIdentity; worktree: string; commit: string;
   declarations: DeclarationSubmission['declarations']; env: NodeJS.ProcessEnv; signal: AbortSignal; timeoutMs?: number;
+  allowAuxiliaryDefinitions?: boolean;
   assertWriterStopped: () => void;
 }): Promise<readonly DeclarationArtifact[]> {
   const declarations = parseDeclarationSubmission({ declarations: input.declarations }).declarations;
@@ -266,18 +270,23 @@ export async function checkDeclarationArtifacts(input: {
       const source = fs.readFileSync(path.join(checkout, problem.projectRelative, declaration.file), 'utf8');
       const location = submissionContent(() => locateKnowledgeDeclaration(source, declaration.name),
         ['math_knowledge_declaration_missing_or_ambiguous']);
-      if (location.kind !== 'theorem') return submissionFail('requires_theorem');
+      const definition = declaration.kind === 'definition';
+      if (definition) {
+        if (!input.allowAuxiliaryDefinitions) return submissionFail('requires_theorem');
+        if (location.kind !== 'definition' || !/^(?:def|abbrev)\s/u.test(source.slice(location.startOffset, location.bodyOffset)))
+          return submissionFail('requires_definition');
+      } else if (location.kind !== 'theorem') return submissionFail('requires_theorem');
       const declarationHash = mathDigest(location.declarationType);
-      const declarationDigest = mathDigest(canonicalMathJson({ file: declaration.file, name: declaration.name,
-        type: declaration.type, declarationHash }));
+      const declarationDigest = declarationIdentity(declaration, declarationHash);
       const original = problem.targets.some(target => target.proofPath === declaration.file && target.theoremName === declaration.name);
+      if (definition && original) return submissionFail('definition_must_be_auxiliary');
       // A transient projection request reuses source isolation, not cooperation state or scheduling.
       const task: CooperativeTask = { id: `declaration-${declarationDigest}`, kind: original ? 'goal' : 'lemma',
-        objective: declaration.description || `Check ${declaration.name}`, proofPath: declaration.file,
+        ...(definition && { declaration: 'definition' }), objective: declaration.description || `Check ${declaration.name}`, proofPath: declaration.file,
         theoremName: declaration.name, type: declaration.type, dependsOn: [], revision: 0 };
       const project = createTaskSourceProjector(problem, checkout, commit, { compact: true });
       const sources = submissionContent(() => project(task, []), ['math_task_type_invalid', 'math_task_missing_declaration',
-        'math_task_ambiguous_declaration', 'math_task_requires_theorem', 'math_task_helper_is_original_declaration']);
+        'math_task_ambiguous_declaration', 'math_task_requires_theorem', 'math_task_requires_definition', 'math_task_helper_is_original_declaration']);
       for (const [file, text] of sources) fs.writeFileSync(path.join(checkout, problem.projectRelative, file), text);
       const checkedCommit = commitSolverProjection(problem, checkout, `Check declaration ${declaration.name}`);
       const result = await checkProjectedDeclarations(problem, checkout, worktree, checkedCommit,

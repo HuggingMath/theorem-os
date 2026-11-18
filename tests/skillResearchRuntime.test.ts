@@ -58,7 +58,7 @@ describe('skill research runtime', () => {
   });
 
   function fixture(plans: Plan[], stop: 'confirmed' | 'missing' | 'unconfirmed' | 'throw' = 'confirmed', tools?: string,
-    common = false, fullWorkflow = false, nativeCoordination = false) {
+    common = false, fullWorkflow = false, nativeTeam = false) {
     const base = localExample('skill-research-runtime-');
     const { directory, workspace, problem } = base;
     const projected = path.join(workspace, '.agents/skills/theoremos-research');
@@ -68,7 +68,7 @@ describe('skill research runtime', () => {
     const state = solverState(problem, workspace, { runId: 'skill-runtime', phase: 'prepared', researchMode: 'skill',
       researchSkill: { name: skill.name, digest: skill.digest, loading: skill.loading },
       ...(fullWorkflow ? { researchSkillWorkflow: 'full' } : {}),
-      ...(nativeCoordination ? { researchDelegation: { mode: 'team', maxAgents: 2 },
+      ...(nativeTeam ? { researchDelegation: { mode: 'team', maxAgents: 2 },
         agentTeam: { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control',
           workers: [], events: [], deliveries: [], adoptions: [], operations: [] } } as const : {}),
       ...(common ? { commonResearchSkill: { name: skill.name, digest: skill.digest, loading: skill.loading } } : {}) });
@@ -94,18 +94,15 @@ describe('skill research runtime', () => {
     const open = vi.fn(async (options: MathAgentOptions): Promise<MathAgentSession> => {
       const index = opened.push(options) - 1;
       return { threadId: options.threadId ?? 'persistent-native-research-thread', close,
-        ...(nativeCoordination ? { usageSource: 'upstream-requests' as const } : {}),
+        ...(nativeTeam ? { usageSource: 'upstream-requests' as const } : {}),
         run: async (message, id, _workspace, started) => {
           messages.push(message); started(id);
-          const admission = nativeCoordination ? options.requestGate?.({ requestId: id }) : undefined;
-          if (nativeCoordination) expect(admission?.allowed).toBe(true);
+          const admission = nativeTeam ? options.requestGate?.({ requestId: id }) : undefined;
+          if (nativeTeam) expect(admission?.allowed).toBe(true);
           await plans[index]?.(current, options, message);
           if (admission?.allowed) admission.settle({ complete: true, outcome: 'completed',
             usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 } });
-          if (nativeCoordination) {
-            expect(options.requestGate?.checkpoint?.()).toBe(true);
-            return 'checkpoint';
-          }
+          if (nativeTeam) expect(options.requestGate?.checkpoint?.()).toBe(false);
           return 'completed';
         }, interrupt: async () => {}, ...(stop === 'missing' ? {} : { stopForFreeze: stops }),
       };
@@ -318,13 +315,13 @@ describe('skill research runtime', () => {
     expect(current.state.check).toBeUndefined(); expect(host.verify).not.toHaveBeenCalled();
   });
 
-  it('checks a Lead declaration submission at a native coordination checkpoint', async () => {
+  it('checks a Lead declaration submission after native completion without a coordination checkpoint', async () => {
     const current = fixture([f => {
       fs.writeFileSync(f.source, LOCAL_EXAMPLE_STATEMENT.replace('end Tutorial', 'theorem helper : True := by trivial\n\nend Tutorial'));
       requestHelper(f);
     }], 'confirmed', undefined, false, false, true);
     expect(await current.completion).toBeUndefined();
-    expect(current.events.some(item => item.event === 'team_coordination_checkpoint')).toBe(true);
+    expect(current.events.some(item => item.event === 'team_coordination_checkpoint')).toBe(false);
     expect(current.events.some(item => item.event === 'team_coordination_continued')).toBe(false);
     expect(current.stops).toHaveBeenCalledOnce();
     expect(host.declarations).toHaveBeenCalledOnce();
@@ -333,21 +330,21 @@ describe('skill research runtime', () => {
     expect(current.state.check).toBeUndefined();
   });
 
-  it('accepts a completed original proof at a native coordination checkpoint', async () => {
+  it('accepts a completed native original proof only after writer shutdown', async () => {
     const current = fixture([f => { fs.writeFileSync(f.source, LOCAL_EXAMPLE_PROOF); }],
       'confirmed', undefined, false, false, true);
     expect((await current.completion)?.check.passed).toBe(true);
-    expect(current.events.some(item => item.event === 'team_coordination_checkpoint')).toBe(true);
+    expect(current.events.some(item => item.event === 'team_coordination_checkpoint')).toBe(false);
     expect(current.events.some(item => item.event === 'team_coordination_continued')).toBe(false);
     expect(current.stops).toHaveBeenCalledOnce();
     expect(current.stops.mock.invocationCallOrder[0]).toBeLessThan(host.verify.mock.invocationCallOrder[0]);
   });
 
-  it('returns invalid-source feedback instead of continuing a native coordination checkpoint', async () => {
+  it('returns invalid-source feedback after native completion without accepting the source', async () => {
     const current = fixture([f => { fs.writeFileSync(f.source, 'theorem changed : True := by trivial\n'); }],
       'confirmed', undefined, false, false, true);
     expect(await current.completion).toBeUndefined();
-    expect(current.events.some(item => item.event === 'team_coordination_checkpoint')).toBe(true);
+    expect(current.events.some(item => item.event === 'team_coordination_checkpoint')).toBe(false);
     expect(current.events.some(item => item.event === 'team_coordination_continued')).toBe(false);
     expect(current.events.some(item => item.event === 'source_rejected')).toBe(true);
     expect(current.stops).toHaveBeenCalledOnce();

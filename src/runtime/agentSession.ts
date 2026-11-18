@@ -104,6 +104,7 @@ export type MathNativeConfiguration = Readonly<{
     deferMailboxPreemption?: true;
     rootAgentUsageHintText?: '';
     subagentUsageHintText?: '';
+    multiAgentModeHintText?: string;
   }>;
 }>;
 

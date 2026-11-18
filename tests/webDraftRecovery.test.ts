@@ -19,6 +19,13 @@ const envelope = (value: TaskDraft = draft(), reason = 'template') => ({
 });
 
 describe('one recoverable draft replacement', () => {
+  it('restores expert release references together with their native team settings', () => {
+    const saved = storage(), original = draft({ researchMode: 'skill', skillLoading: 'native', nativeTeamCapacity: 8,
+      nativeTeamPreferredProfiles: ['engineer', 'D011'] }), release = { assetId: 'private-expert', version: 'v4', digest: 'e'.repeat(64) };
+    new DraftRecovery(() => saved).remember(original, draft({ source: 'theorem next : True := by sorry' }), 'source', [release]);
+    const restored = new DraftRecovery(() => saved); restored.load();
+    expect(restored.current).toMatchObject({ draft: original, libraries: [release] });
+  });
   it('restores project budget, shared provenance and fixed libraries as one recoverable context', () => {
     const saved = storage(), recovery = new DraftRecovery(() => saved);
     const original = draft({ problemBudget: { runId: 'a'.repeat(36), projectId: 'project-one' },

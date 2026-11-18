@@ -69,6 +69,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       reasoningEffort: params.config.model_reasoning_effort, approvalPolicy: 'never', activePermissionProfile: { id: 'math-worker' } });
   }
   if (call.method === 'turn/start') {
+    record('turn-start', { input: params.input });
     turn = params.clientUserMessageId; finished = false;
     reply({ turn: { id: turn } }); void request(); return;
   }
@@ -288,6 +289,8 @@ describe('soft notifications at real provider request boundaries', () => {
 
       const second = session!.run('continue', 'second-turn', directory, () => {}); void second.catch(() => {});
       await until(() => streams.length === 2);
+      expect(trace().filter(item => item.event === 'turn-start')[1].input[0].text)
+        .toContain('the preceding turn ended at a settled request boundary');
       checkpoint(); streams[1].finish();
       expect(await second).toBe('checkpoint');
       expect(session!.threadId).toBe('notice-thread');
@@ -367,6 +370,14 @@ describe('soft notifications at real provider request boundaries', () => {
       expect(cancelled).toEqual([0]);
       expect(receipts).toMatchObject([{ complete: false, missingReason: 'request-cancelled' }]);
       expect(receipts[0].usage).toBeUndefined(); expect(incompleteUsage).toBe(1);
+      const continued = session!.run('continue after interruption', 'after-interruption', directory, () => {});
+      void continued.catch(() => {});
+      await until(() => streams.length === 2);
+      expect(trace().filter(item => item.event === 'turn-start')[1].input[0].text)
+        .toBe('continue after interruption');
+      streams[1].finish(); await until(() => receipts.length === 2);
+      control('complete:after-interruption');
+      expect(await continued).toBe('completed');
     });
 
   it.each(['sub2api', 'westlake'] as const)('lets a settled %s response submit its tool before a deferred reminder', async provider => {

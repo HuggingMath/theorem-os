@@ -160,9 +160,11 @@ export function readSolverProblem(workspacePath: string, receiptFile: string): S
     return [relative, mathDigest(fs.readFileSync(target))];
   }));
   const publicObligations = 'publicObligations' in receipt ? receipt.publicObligations : undefined;
+  // readLeanTaskReceipt already verified the stored index against the seed. Equal
+  // headers are common across versions and must select today's body boundaries.
   const legacyWhere = receipt.schema === 'theorem-os.lean-task.v1' &&
-    canonicalMathJson(receipt.declarations) === canonicalMathJson(inspectLegacyLeanWhereSource(receipt.contract.formalStatement)
-      .declarations.map(item => ({ name: item.qualifiedName, kind: item.kind, declarationHash: mathDigest(item.declarationType) })));
+    canonicalMathJson(receipt.declarations) !== canonicalMathJson(inspectScopedLeanDeclarations(receipt.contract.formalStatement)
+      .map(item => ({ name: item.qualifiedName, kind: item.kind, declarationHash: mathDigest(item.declarationType) })));
   const sourceRegions = (source: string) => legacyWhere ? inspectLegacyLeanWhereSource(source).regions
     : inspectLeanDeclarationRegions(source);
   const names = publicObligations?.map(item => item.name) || theoremQualifiedNamesFromSource(receipt.contract.formalStatement);

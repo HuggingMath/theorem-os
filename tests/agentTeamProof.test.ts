@@ -1,15 +1,26 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bootstrapLeanTask } from '../src/math/leanTask';
 import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
-import { checkAgentTeamProofDelivery, integrateAgentTeamProofDelivery, readAgentTeamProofDelivery } from '../src/solver/agentTeamProof';
+import { checkAgentTeamProofDelivery, integrateAgentTeamProofDelivery, readAgentTeamProofDelivery,
+  ReusedTeamCheckFailure, type TeamFailureCache } from '../src/solver/agentTeamProof';
 import { commitSolverSources, git, readSolverProblem } from '../src/solver/problem';
 import { solverState } from './helpers/solver';
 import { temporaryDirectory } from './helpers/files';
 import { declarationSubmissionSchema } from '../src/solver/declarationArtifacts';
 import { prepareAgentTeamWorkspace } from '../src/solver/agentTeamWorkspace';
+import { buildAgentTeamContributions } from '../src/solver/agentTeamContributions';
+import { teamDeclarationForwarding } from '../src/solver/agentTeamForwarding';
+import { checkSolverProof } from '../src/solver/modules/evidence';
+import * as evidence from '../src/solver/modules/evidence';
+import { evaluateSolverProof } from '../src/solver/evaluation';
+import { buildRunInspection, renderRunInspection } from '../src/solver/inspection';
+import { writeSolverRunState } from '../src/solver/archive';
+import { readKnowledgeCatalog } from '../src/solver/theoremKnowledgeStore';
+import { importTeamKnowledgeDeliveries } from '../src/solver/theoremKnowledgeRuns';
 
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -48,6 +59,141 @@ function consumerWithDraft(f: ReturnType<typeof fixture>, draft: string) {
 }
 
 describe('agent-owned declaration deliveries with real Lean', () => {
+  it('imports a chosen unadopted delivery from its archive and checks reuse in a different problem', async () => {
+    const f = fixture('def shift (n : Nat) : Nat := n + 1\nabbrev first := shift 0\n' +
+      'theorem first_eq_one : first = 1 := by rfl\n');
+    prepareAgentTeamWorkspace({ sourceWorktree: f.problem.workspace, worktree: f.worktree,
+      seedCommit: f.problem.baseCommit, migrationDirectory: path.join(f.directory, 'migration') });
+    const declarations = [{ file: 'Submission.lean', name: 'Team.shift', type: 'Nat → Nat', kind: 'definition' as const },
+      { file: 'Submission.lean', name: 'Team.first', type: 'Nat', kind: 'definition' as const },
+      { file: 'Submission.lean', name: 'Team.first_eq_one', type: 'Team.first = 1' }];
+    const delivery = await checkAgentTeamProofDelivery({ ...f.check, declarations,
+      provenance: { taskId: 'gap', objectiveRevision: 2, exposures: [] } });
+    const file = path.join(f.common.evidenceDirectory, 'deliveries', delivery.id + '.json');
+    f.state.agentTeam = { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control', workers: [], events: [],
+      operations: [], adoptions: [], deliveries: [{ id: delivery.id, taskId: 'gap', agentId: delivery.agentId, path: file }] };
+    const stateFile = path.join(f.directory, 'runtime/state.json'), catalog = path.join(f.directory, 'catalog.json');
+    writeSolverRunState(stateFile, f.state);
+    fs.rmSync(f.worktree, { recursive: true });
+    expect(() => git(f.problem.workspace, ['cat-file', '-e', delivery.commit + '^{commit}'])).toThrow();
+    expect(() => importTeamKnowledgeDeliveries(stateFile, ['1'.repeat(64)])).toThrow('team_delivery_not_found');
+    execFileSync('bun', ['scripts/mathematics/theoremKnowledge.ts', 'build', '--state', stateFile,
+      '--team-delivery', delivery.id, '--output', catalog]);
+    const base = readKnowledgeCatalog(catalog).base;
+    expect(base).toMatchObject({ evidence: 'recorded-not-replayed', requiresFreshCheck: true });
+    expect(base.entries).toHaveLength(3);
+    const entries = declarations.map(d => base.entries.find(e => e.name === d.name)!);
+    expect(entries.map(e => e.kind)).toEqual(['definition', 'definition', 'lemma']);
+    expect(entries[2]!.dependencies.statement).toContainEqual({ file: 'Submission.lean', name: 'Team.first' });
+    expect(entries[2]!.provenance[0]).toMatchObject({ taskId: 'gap', sourceCommit: delivery.commit,
+      teamDelivery: { id: delivery.id, producerId: delivery.agentId, objectiveRevision: 2 } });
+    const dst = bootstrapLeanTask(path.join(f.directory, 'destination'), {
+      source: 'namespace Team\ntheorem cross_problem : 1 = (1 : Nat) := by sorry\nend Team\n', task: 'Prove cross_problem' });
+    const problem = readSolverProblem(dst.workspaceRoot, dst.activeProblemPath);
+    expect((await checkSolverProof(problem, dst.workspaceRoot, f.common.env, f.common.signal)).passed).toBe(false);
+    const dstFile = path.join(dst.workspaceRoot, problem.projectRelative, 'Submission.lean');
+    fs.writeFileSync(dstFile, fs.readFileSync(dstFile, 'utf8').replace('theorem cross_problem',
+      entries.map(e => e.declaration.trimEnd()).join('\n') + '\ntheorem cross_problem').replace('by sorry', 'by exact first_eq_one'));
+    expect((await checkSolverProof(problem, dst.workspaceRoot, f.common.env, f.common.signal)).passed).toBe(true);
+  }, 90_000);
+  it('checks the exact failed inputs once per live team, but retries operational errors and changed inputs', async () => {
+    const f = fixture(), failureCache: TeamFailureCache = new Map();
+    const declarations = [{ ...f.check.declarations[0]!, type: 'False' }];
+    const check = { ...f.check, declarations, failureCache };
+    const verify = vi.spyOn(evidence, 'checkProjectedDeclarations');
+    verify.mockRejectedValueOnce(new Error('test verifier transport unavailable'));
+    await expect(checkAgentTeamProofDelivery(check)).rejects.toThrow('test verifier transport unavailable');
+    expect(failureCache.size).toBe(0);
+    await expect(checkAgentTeamProofDelivery(check)).rejects.toThrow('math_declaration_artifact_check_failed');
+    expect(failureCache.size).toBe(1);
+    const firstCommit = git(f.worktree, ['rev-parse', 'HEAD']);
+    fs.writeFileSync(path.join(f.worktree, 'RESEARCH.md'), 'Re-examine the same interface.\n');
+    await expect(checkAgentTeamProofDelivery(check)).rejects.toMatchObject({ previous: { commit: firstCommit, agentId: 'child-1' } });
+    expect(verify).toHaveBeenCalledTimes(2);
+    const changedEnv = { ...check.env, LANG: 'C' };
+    await expect(checkAgentTeamProofDelivery({ ...check, env: changedEnv })).rejects.toThrow('math_declaration_artifact_check_failed');
+    expect(verify).toHaveBeenCalledTimes(3);
+    fs.writeFileSync(f.source(f.worktree), fs.readFileSync(f.source(f.worktree), 'utf8').replace(':= by rfl', ':= by exact rfl'));
+    const changed = await checkAgentTeamProofDelivery(check).catch(error => error);
+    expect(changed).not.toBeInstanceOf(ReusedTeamCheckFailure); expect(verify).toHaveBeenCalledTimes(4);
+    const fixed = await checkAgentTeamProofDelivery({ ...check, declarations: f.check.declarations });
+    expect(fixed.artifacts[0]?.proof.passed).toBe(true); expect(verify).toHaveBeenCalledTimes(5);
+  }, 90_000);
+
+  it('rechecks explicitly nominated auxiliary definitions in the consumer without proving original goals', async () => {
+    const def = 'def successor (n : Nat) : Nat := n + 1\nabbrev base : Nat := successor 0\n';
+    const f = fixture();
+    fs.writeFileSync(f.source(f.worktree), original.replace('theorem original', def + 'theorem original'));
+    const declarations = ['successor', 'base'].map((name, i) => ({ file: 'Submission.lean',
+      name: 'Team.' + name, type: i === 0 ? 'Nat → Nat' : 'Nat', kind: 'definition' as const }));
+    const delivery = await checkAgentTeamProofDelivery({ ...f.check, declarations });
+    const restored = readAgentTeamProofDelivery(path.join(f.common.evidenceDirectory, 'deliveries', delivery.id + '.json'), f.state);
+    const consumer = consumerWithDraft(f, 'theorem base_eq_one : base = 1 := by rfl\n');
+    const adoption = await integrateAgentTeamProofDelivery({ ...f.common, delivery: restored,
+      worktree: consumer.worktree, expectedCommit: consumer.commit });
+    expect(adoption.artifacts.map(a => [a.declaration.kind, a.proof.commit, a.proof.verification.status]))
+      .toEqual(declarations.map(() => ['definition', adoption.commit, 'kernel_verified']));
+    const merged = fs.readFileSync(f.source(consumer.worktree), 'utf8');
+    expect(merged).toContain(def); expect(merged.match(/by sorry/gu)).toHaveLength(2);
+    expect(f.state.check).toBeUndefined();
+    const later = await checkAgentTeamProofDelivery({ ...f.check, worktree: consumer.worktree,
+      seedCommit: f.problem.baseCommit, declarations: [...declarations,
+        { file: 'Submission.lean', name: 'Team.base_eq_one', type: 'Team.base = 1' }] });
+    expect(later.artifacts.at(-1)!.proof.verification.status).toBe('kernel_verified');
+  }, 90_000);
+
+  it('refuses incorrect types, incomplete bodies and replacement of an existing definition', async () => {
+    const body = 'def encode (n : Nat) : Nat := n + 1\n', f = fixture(body);
+    const decl = { file: 'Submission.lean', name: 'Team.encode', type: 'Nat → Nat', kind: 'definition' as const };
+    const submit = (type = decl.type, seedCommit = f.problem.baseCommit) =>
+      checkAgentTeamProofDelivery({ ...f.check, seedCommit, declarations: [{ ...decl, type }] });
+    await expect(submit('Nat → Bool')).rejects.toThrow(/check_failed/);
+    const seedCommit = git(f.worktree, ['rev-parse', 'HEAD']);
+    fs.writeFileSync(f.source(f.worktree), original.replace('end Team', body.replace('n + 1', 'n + 2') + 'end Team'));
+    await expect(submit(decl.type, seedCommit)).rejects.toThrow(/definition_must_be_new/);
+    fs.writeFileSync(f.source(f.worktree), original.replace('end Team', body.replace('n + 1', 'by sorry') + 'end Team'));
+    await expect(submit()).rejects.toThrow();
+    expect(f.state.check).toBeUndefined();
+  }, 90_000);
+
+  it('matches versions and separates final direct, transitive, absent and unknown references', async () => {
+    const f = fixture(), problem = f.problem, lead = path.join(f.directory, 'runtime/worktree');
+    git(problem.workspace, ['worktree', 'add', '--quiet', '--detach', lead, problem.baseCommit]);
+    const names = ['deep', 'helper', 'side', 'changed'];
+    fs.writeFileSync(f.source(f.worktree), original.replace('theorem original',
+      names.map(n => 'theorem ' + n + ' : True := by ' + (n === 'helper' ? 'exact deep' : 'trivial')).join('\n') + '\ntheorem original'));
+    const declarations = names.map(n => ({ file: 'Submission.lean', name: 'Team.' + n, type: 'True' }));
+    const delivery = await checkAgentTeamProofDelivery({ ...f.check, declarations });
+    const adoption = await integrateAgentTeamProofDelivery({ ...f.common, delivery, worktree: lead, expectedCommit: problem.baseCommit });
+    const state = f.state; state.worktree = lead;
+    state.researchMode = 'skill'; state.workerCount = 1; state.researchDelegation = { mode: 'team', maxAgents: 2 };
+    const reference = { id: delivery.id, agentId: f.check.agentId, taskId: 'task', path: path.join(f.common.evidenceDirectory, 'deliveries', delivery.id + '.json') };
+    state.agentTeam = { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control', workers: [], events: [], operations: [],
+      deliveries: [reference], adoptions: [{ id: 'selected', targetId: 'lead', deliveryId: delivery.id,
+        expectedCommit: problem.baseCommit, commit: adoption.commit, status: 'completed' }] };
+    const edited = fs.readFileSync(f.source(lead), 'utf8').replace('changed : True := by trivial', 'changed : True := True.intro')
+      .replace('original : True := by sorry', 'original : True := by exact helper')
+      .replace('other : True := by sorry', 'other : True := by exact changed');
+    fs.writeFileSync(f.source(lead), edited);
+    state.check = await checkSolverProof(problem, lead, f.common.env, f.common.signal);
+    expect(state.check.passed).toBe(true);
+    const evaluation = await evaluateSolverProof(problem, lead, state.check, f.common.env, f.common.signal, { timeoutMs: 30_000, teamContributions: true });
+    expect(evaluation.status).toBe('passed');
+    const report = buildAgentTeamContributions(state, evaluation), relations = (r: typeof report) =>
+      Object.fromEntries(r.declarations.map(d => [d.name, d.targets.map(t => t.relation)]));
+    expect(relations(report)).toEqual({ 'Team.deep': ['indirect', 'not-referenced'], 'Team.helper': ['direct', 'not-referenced'],
+      'Team.side': ['not-referenced', 'not-referenced'], 'Team.changed': ['unknown', 'unknown'] });
+    const old = structuredClone(evaluation);
+    delete (old.verification as typeof state.check).verification.results[0]!.directProofReferences;
+    delete (old.verification as typeof state.check).verification.results[1]!.declarationReferences;
+    expect(relations(buildAgentTeamContributions(state, old))['Team.helper']).toEqual(['referenced', 'unknown']);
+    state.phase = 'finished';
+    const inspection = buildRunInspection(state, { runId: state.runId, solution_commit: state.check.commit,
+      status: 'evaluated_passed', evaluator: evaluation, teamContributions: report });
+    expect(renderRunInspection(inspection)).toContain('Team.deep | Team.original | indirect');
+    state.agentTeam.adoptions = [];
+    expect(relations(buildAgentTeamContributions(state, evaluation))['Team.helper']).toEqual(['unknown', 'unknown']);
+  }, 90_000);
   it('checks independent member evidence, survives source cleanup, and imports only during authorized adoption', async () => {
     const f = fixture(), migrationDirectory = path.join(f.directory, 'runtime/agent-team/migrations');
     const prepare = (worktree: string) => prepareAgentTeamWorkspace({ sourceWorktree: f.receipt.workspaceRoot,
@@ -173,7 +319,7 @@ describe('agent-owned declaration deliveries with real Lean', () => {
     fs.writeFileSync(f.source(f.worktree), original.replace('theorem original', peerHelper + 'theorem original'));
     const draft = 'theorem downstream (n : Nat) : n = n := by exact reusable n\n';
     const consumer = consumerWithDraft(f, draft), delivery = await checkAgentTeamProofDelivery(f.check);
-    await integrateAgentTeamProofDelivery({ ...f.common, delivery, worktree: consumer.worktree, expectedCommit: consumer.commit });
+    const peerAdoption = await integrateAgentTeamProofDelivery({ ...f.common, delivery, worktree: consumer.worktree, expectedCommit: consumer.commit });
     const lead = f.receipt.workspaceRoot;
     const leadAdoption = await integrateAgentTeamProofDelivery({ ...f.common, delivery, worktree: lead,
       expectedCommit: f.problem.baseCommit });
@@ -182,7 +328,8 @@ describe('agent-owned declaration deliveries with real Lean', () => {
     await expect(checkAgentTeamProofDelivery({ ...f.check, agentId: 'consumer', worktree: consumer.worktree,
       declarations: [downstream] })).rejects.toThrow('math_agent_team_proof_undeclared_source_change');
     const combined = await checkAgentTeamProofDelivery({ ...f.check, agentId: 'consumer', worktree: consumer.worktree,
-      declarations: [...delivery.declarations, downstream] });
+      declarations: [...delivery.declarations, downstream], provenance: { exposures: [{ kind: 'adopted', agentId: delivery.agentId,
+        taskId: 'first', deliveryId: delivery.id, commit: delivery.commit, at: new Date().toISOString() }] } });
     expect(combined.changes.map(change => change.name)).toEqual(['reusable', 'downstream']);
     const adoption = await integrateAgentTeamProofDelivery({ ...f.common, delivery: combined, worktree: lead,
       expectedCommit: leadAdoption.commit });
@@ -193,6 +340,40 @@ describe('agent-owned declaration deliveries with real Lean', () => {
     expect(adoption.artifacts.every(artifact => artifact.proof.commit === adoption.commit &&
       artifact.proof.verification.status === 'kernel_verified')).toBe(true);
     expect(f.state.check).toBeUndefined();
+    f.state.worktree = path.join(f.directory, 'runtime/worktree');
+    f.state.agentTeam = { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control', workers: [], events: [], operations: [],
+      adoptions: [{ id: 'to-consumer', deliveryId: delivery.id, targetId: 'consumer', status: 'completed',
+        commit: peerAdoption.commit, expectedCommit: peerAdoption.beforeCommit }], deliveries: [delivery, combined].map(d =>
+        ({ id: d.id, agentId: d.agentId, taskId: d.id === delivery.id ? 'first' : 'second',
+          path: path.join(f.common.evidenceDirectory, 'deliveries', d.id + '.json') })) };
+    const report = buildAgentTeamContributions(f.state, {});
+    expect(report.declarations.find(d => d.agentId === 'consumer' && d.name === 'Team.reusable')?.forwardedFrom).toEqual([delivery.id]);
+    expect(report.declarations.find(d => d.agentId === 'consumer' && d.name === 'Team.downstream')?.forwardedFrom).toEqual([]);
+    const stateFile = path.join(f.directory, 'runtime/state.json');
+    const imported = () => {
+      writeSolverRunState(stateFile, f.state);
+      const rows = importTeamKnowledgeDeliveries(stateFile, [combined.id]).candidates;
+      expect(rows.map(r => r.name)).toEqual(['Team.reusable', 'Team.downstream']);
+      return rows.map(r => r.provenance.teamDelivery!);
+    };
+    const [peer, own] = imported();
+    expect(peer).toMatchObject({ id: combined.id, producerId: 'consumer', forwardedFrom: [
+      { deliveryId: delivery.id, producerId: delivery.agentId, taskId: 'first' }] });
+    expect(own).not.toHaveProperty('forwardedFrom');
+    const transfers = teamDeclarationForwarding(f.state, f.common.evidenceDirectory);
+    expect(transfers.origins({ ...combined, provenance: { exposures: combined.provenance!.exposures!
+      .map(e => ({ ...e, kind: 'inspected' as const })) } }, 'Submission.lean', 'Team.reusable')).toEqual([]);
+    expect(transfers.origins({ ...combined, changes: combined.changes.map(c =>
+      c.name === 'reusable' ? { ...c, after: c.after.replace('by rfl', 'by simp') } : c) },
+      'Submission.lean', 'Team.reusable')).toEqual([]);
+    // Adoption without a source change cannot establish that the declaration came from the peer.
+    const transfer = f.state.agentTeam.adoptions[0]!;
+    transfer.expectedCommit = transfer.commit;
+    expect(imported()[0]).not.toHaveProperty('forwardedFrom');
+    transfer.expectedCommit = peerAdoption.beforeCommit;
+    // Leave the selected delivery intact while its optional upstream record becomes unavailable.
+    fs.unlinkSync(path.join(f.common.evidenceDirectory, 'deliveries', delivery.id + '.json'));
+    expect(imported()[0]).not.toHaveProperty('forwardedFrom');
   }, 90_000);
 
   it('freshly checks and restores a host combination of one adopted peer plus a full 32-declaration member submission', async () => {

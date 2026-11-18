@@ -11,6 +11,7 @@ import { deliveryFinding, type DeliveryRecord } from './deliveries';
 import { prepareResearchDelivery, type ResearchAdmissionScope } from './researchAdmission';
 import { buildKnowledgeRouteFindings, type KnowledgeRouteContract, type KnowledgeRouteFindingCandidate } from './theoremKnowledgeFindings';
 import { DECLARATION_ARTIFACTS_FILE, readDeclarationArtifacts, type DeclarationArtifact } from './declarationArtifacts';
+import { teamDeclarationForwarding } from './agentTeamForwarding';
 
 const oid = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
 const digest = /^[a-f0-9]{64}$/u;
@@ -42,13 +43,14 @@ function committedFiles(roots: readonly string[], commit: string, project: strin
   return error('source_unavailable');
 }
 
-function declarationCandidate(state: SolverRunState, artifact: DeclarationArtifact, source: string, sourceDigest: string): KnowledgeCandidate {
+function declarationCandidate(state: SolverRunState, artifact: DeclarationArtifact, source: string, sourceDigest: string,
+  archiveRoot?: string): KnowledgeCandidate {
   const { problem } = state, { declaration, proof } = artifact;
   if (!problem.ownedFiles.includes(declaration.file) || !relativeDirectory(problem.projectRelative) ||
       problem.ownedFiles.some(file => !allowedKnowledgeFile(file))) return error('forbidden_source');
   const names = [...new Set([...problem.ownedFiles, ...Object.keys(problem.trustedFiles).filter(allowedKnowledgeFile)])].sort();
   if (!names.length || names.length > 4096) return error('source_selection_invalid');
-  const roots = [...new Set([problem.workspace, state.worktree, ...(state.workers ?? []).map(worker => worker.worktree)]
+  const roots = archiveRoot ? [archiveRoot] : [...new Set([problem.workspace, state.worktree, ...(state.workers ?? []).map(worker => worker.worktree)]
     .filter((root): root is string => typeof root === 'string' && path.isAbsolute(root)))];
   const files = committedFiles(roots, proof.commit, problem.projectRelative, names);
   if (mathDigest(canonicalMathJson(problem.ownedFiles.map(file => [file, mathDigest(files[file]!)]))) !== proof.sourceDigest)
@@ -56,13 +58,15 @@ function declarationCandidate(state: SolverRunState, artifact: DeclarationArtifa
   for (const file of names) if (Object.hasOwn(problem.trustedFiles, file) && mathDigest(files[file]!) !== problem.trustedFiles[file])
     return error('trusted_source_mismatch');
   const location = locateKnowledgeDeclaration(files[declaration.file]!, declaration.name);
-  if (location.kind !== 'theorem' || mathDigest(location.declarationType) !== artifact.declarationHash)
+  const definition = declaration.kind === 'definition';
+  if ((definition ? !archiveRoot || !/^(?:def|abbrev)\s/u.test(files[declaration.file]!.slice(location.startOffset, location.bodyOffset))
+    : location.kind !== 'theorem') || mathDigest(location.declarationType) !== artifact.declarationHash)
     return error('declaration_receipt_mismatch');
   const references = artifact.references;
   if (references && [...references.statement, ...references.proof].some(reference => !Object.hasOwn(files, reference.file)))
     return error('reference_mismatch');
   return { name: declaration.name, file: declaration.file, type: declaration.type, typeKind: 'closed-task-type',
-    kind: problem.targets.some(target => target.proofPath === declaration.file && target.theoremName === declaration.name) ? 'goal' : 'lemma',
+    kind: definition ? 'definition' : problem.targets.some(target => target.proofPath === declaration.file && target.theoremName === declaration.name) ? 'goal' : 'lemma',
     description: declaration.description ?? `Independently checked declaration ${declaration.name}`,
     premises: [...(declaration.premises ?? [])],
     dependencies: { statement: references?.statement ?? [], proof: references?.proof ?? [], tasks: [],
@@ -71,6 +75,35 @@ function declarationCandidate(state: SolverRunState, artifact: DeclarationArtifa
       checkedCommit: proof.verification.targetCommit, runId: state.runId, environmentDigest: state.environmentDigest,
       problemReceiptDigest: problem.receiptDigest, problemId: problem.contract.problemId,
       receiptIds: proof.verification.results.map(receipt => receipt.receiptId) } };
+}
+
+/** A selected delivery can be checked before adoption. Its immutable object store is the only source. */
+export function importTeamKnowledgeDeliveries(stateFile: string, deliveryIds: readonly string[]): KnowledgeImportResult {
+  const source = path.resolve(stateFile);
+  if (path.basename(source) !== 'state.json' || !deliveryIds.length || deliveryIds.some(id => !digest.test(id)))
+    return error('team_selection_invalid');
+  assertMathCanonicalPath(source);
+  const state = readSolverRunState(source);
+  if (state.agentTeam?.transport !== 'native-agent-control') return error('native_team_required');
+  const root = path.join(path.dirname(source), 'agent-team', 'proofs'), candidates: KnowledgeCandidate[] = [];
+  const transfers = teamDeclarationForwarding(state, root);
+  for (const id of new Set(deliveryIds)) {
+    const delivery = transfers.read(id);
+    const ref = state.agentTeam.deliveries.find(record => record.id === id)!;
+    const file = ref.path;
+    const sourceDigest = mathDigest(canonicalMathJson(delivery));
+    for (const artifact of delivery.artifacts) {
+      const candidate = declarationCandidate(state, artifact, file, sourceDigest, path.join(root, 'sources.git'));
+      candidate.provenance.taskId = ref.taskId;
+      const origins = transfers.origins(delivery, candidate.file, candidate.name.replace(/^_root_\./u, ''));
+      candidate.provenance.teamDelivery = { id, producerId: ref.agentId, objectiveRevision: delivery.provenance?.objectiveRevision,
+        ...(origins.length && { forwardedFrom: origins }),
+        adoptedInputs: (delivery.provenance?.exposures ?? []).filter(e => e.kind === 'adopted')
+          .map(e => ({ deliveryId: e.deliveryId, producerId: e.agentId, taskId: e.taskId })) };
+      candidates.push(candidate);
+    }
+  }
+  return { candidates, skipped: [] };
 }
 
 function runCandidate(state: SolverRunState, node: TaskRecord, stateFile: string, stateDigest: string,

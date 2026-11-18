@@ -2,7 +2,6 @@ import type { SolverRunState } from './archive';
 import type { AgentTeamState, AgentTeamTask, AgentTeamWorker } from './agentTeamState';
 import { projectAgentTeamBudget } from './agentTeamBudget';
 import { buildTokenBudget } from './usageBudget';
-import { agentTeamCoordinationReview } from './agentTeamCoordination';
 
 const WORKERS = 4, TASKS = 4, REFERENCES = 8, EVENTS = 8;
 const TASK_TEXT = 600, EVENT_TEXT = 800, RESEARCH_TEXT = 2000;
@@ -45,6 +44,9 @@ function taskProjection(task: AgentTeamTask, historyOffset: number, full = false
     pausedAt: task.pausedAt, finishedAt: task.finishedAt, turns: task.turns,
     budget: task.budget, seedCommit: task.seedCommit, sourceCommit: task.sourceCommit,
     researchArtifactId: task.researchArtifactId, deliveryId: task.deliveryId,
+    failedCheck: full ? task.failedCheck : task.failedCheck && {
+      file: task.failedCheck.declaration.file, name: task.failedCheck.declaration.name, commit: task.failedCheck.commit,
+    },
     declarationCount: task.declarations?.length,
     cancelRequested: task.cancelRequested && { ...task.cancelRequested,
       reason: field('cancelRequested.reason', task.cancelRequested.reason) },
@@ -133,22 +135,15 @@ export function agentTeamOverview(state: Readonly<SolverRunState>, options: { fo
     if (selectedAdoptions.size >= REFERENCES) break;
     selectedAdoptions.add(item.id);
   }
-  const review = agentTeamCoordinationReview(state);
-  const decision = review.decision;
-  const decisionReason = decision && preview(decision.reason, EVENT_TEXT);
-  const decisionStep = decision && preview(decision.nextStep, EVENT_TEXT);
   return {
-    ...(!options.focusAgentId || options.focusAgentId === 'lead'
-      ? { coordination: { ...review, decision: decision && { ...decision,
-        reason: decisionReason!.text, nextStep: decisionStep!.text,
-        ...(decisionReason!.truncated || decisionStep!.truncated ? { textTruncated: true } : {}) } } } : {}),
     workers: workers.filter(worker => visible.has(worker.id)).map(worker => {
       const tasks = visibleTasks(state, worker, worker.id === options.focusAgentId ? options.assignmentTaskId : undefined), error = worker.error && preview(worker.error, TASK_TEXT);
       const stopReason = worker.writerStopUnconfirmed && preview(worker.writerStopUnconfirmed.reason, TASK_TEXT);
       const usage = buildTokenBudget(0, [worker]), requests = worker.requestUsageAccounting;
       return { id: worker.id, status: worker.status, activity: activity(team!, worker), turns: worker.turns,
-        ...(worker.native ? { nativeIdentity: { threadId: worker.native.threadId, agentPath: worker.native.agentPath } } : {}),
-        error: error && error.text, ...(error?.truncated ? { errorTruncated: true } : {}),
+        ...(worker.native ? { nativeIdentity: { threadId: worker.native.threadId, agentPath: worker.native.agentPath,
+          spawnHistory: worker.native.spawnHistory ?? 'unknown' } } : {}),
+        error: error && error.text, ...(error && error.truncated ? { errorTruncated: true } : {}),
         lastActivity: worker.lastActivity && { at: worker.lastActivity.at, event: worker.lastActivity.event,
           itemType: worker.lastActivity.itemType },
         usage: { reportedTotalTokens: usage.reportedTotalTokens, usageComplete: usage.usageComplete,
@@ -184,7 +179,7 @@ export function agentTeamOverview(state: Readonly<SolverRunState>, options: { fo
       adoptions: Math.max(0, adoptions.length - REFERENCES) },
     retrieval: {
       history: { operation: 'history', offset: 0, limit: 4 },
-      task: 'Use history with agentId and the task historyOffset, limit 1. Full objective revisions, progress, profile source identities, summary and error are in history; current task state may change.',
+      task: 'Use history with agentId and the task historyOffset, limit 1. Full objective revisions, progress, profile source identities, summary and error are in history. For a rejected Lean check, failedCheck there identifies the submitted declaration, frozen source, environment and verifier diagnostics. It is not proof evidence.',
       research: 'History includes the full latest advisory research summary and each task researchArtifactId; use inspect-research for fixed notes.',
       proof: 'History includes deliveryId. Use inspect for exact checked declarations and evidence; overview omits declaration arrays.',
       omissions: 'Only selected members, current/next/recent tasks and recent references are shown. Use global history for omitted members and tasks; archived state is retained.',

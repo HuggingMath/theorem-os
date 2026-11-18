@@ -25,6 +25,7 @@ type MathematicsLeanSourceDeclarationKind = 'theorem' | 'definition' | 'instance
 type LeanSourceDeclaration = Readonly<{
   startOffset: number;
   bodyOffset: number;
+  firstTermOffset: number;
   parametersOffset: number;
   whereBody?: boolean;
   name: string;
@@ -496,6 +497,8 @@ function* leanSourceDeclarations(source: string, mode: LeanDeclarationIndex = 'n
       yield Object.freeze({
         startOffset,
         bodyOffset,
+        // A := term may begin flush left on the next line, even after comments.
+        firstTermOffset: !whereBody && source.startsWith(':=', proofStart) ? skipTrivia(bodyOffset) : bodyOffset,
         parametersOffset: nameEnd,
         whereBody,
         name,
@@ -580,15 +583,16 @@ export function inspectLegacyLeanWhereSource(source: string) {
   return {
     declarations: scopedLeanDeclarations(source, declarations.map(({ startOffset, name, kind, canonicalHeader }) =>
       ({ startOffset, name, kind, declarationType: canonicalHeader }))),
-    regions: declarations.map(declaration => leanSourceDeclarationRegion(source, declaration)),
+    regions: declarations.map(declaration => leanSourceDeclarationRegion(source, declaration, undefined, declaration.bodyOffset)),
   };
 }
 
-function leanSourceDeclarationRegion(source: string, declaration: LeanSourceDeclaration, cleanedSource?: string) {
+function leanSourceDeclarationRegion(source: string, declaration: LeanSourceDeclaration, cleanedSource?: string,
+  firstTermOffset = declaration.firstTermOffset) {
   const lineStart = source.lastIndexOf('\n', declaration.startOffset - 1) + 1;
   const indentation = source.slice(lineStart, declaration.startOffset).match(/^\s*/u)?.[0].length ?? 0;
   let endOffset = source.length;
-  let cursor = source.indexOf('\n', declaration.bodyOffset);
+  let cursor = source.indexOf('\n', firstTermOffset);
   while (cursor >= 0 && cursor + 1 < source.length) {
     const start = cursor + 1;
     const end = source.indexOf('\n', start);

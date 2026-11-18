@@ -84,10 +84,12 @@ describe('native AgentControl stdio integration without model calls', () => {
     expect(session.nativeAgentControl?.info).toEqual(expect.objectContaining({ sessionId: 'root-id' }));
     const start = calls().find(call => call.method === 'thread/start').params;
     expect(start.config).toMatchObject({ 'features.multi_agent': true,
-      'features.multi_agent_v2': { enabled: true, root_agent_usage_hint_text: '', subagent_usage_hint_text: '' },
+      'features.multi_agent_v2': { enabled: true, root_agent_usage_hint_text: '', subagent_usage_hint_text: '',
+        multi_agent_mode_hint_text: expect.stringContaining('Proactively delegate useful complementary work') },
       'features.defer_mailbox_preemption': true, 'skills.include_instructions': false, 'agents.enabled': true });
     expect(session.nativeConfiguration).toEqual({ source: 'thread-start-overrides', overrides: {
       includeSkillInstructions: false, deferMailboxPreemption: true, rootAgentUsageHintText: '', subagentUsageHintText: '',
+      multiAgentModeHintText: start.config['features.multi_agent_v2'].multi_agent_mode_hint_text,
     } });
     expect(start.dynamicTools).toBeUndefined();
     expect(await session.nativeAgentControl!.update({ sessionId: 'root-id', threadId: session.threadId, sequence: 4 }))
@@ -120,7 +122,8 @@ describe('native AgentControl stdio integration without model calls', () => {
     expect(next.input).toEqual({ kind: 'userInput', items: [{ type: 'text', text: 'Continue from saved work.', text_elements: [] }] });
   });
 
-  it.each(['root', 'child', 'resumed-child'] as const)('preserves explicit pinned skill dispatch with the global catalog suppressed (%s)', async mode => {
+  it.each(['root', 'resumed-root', 'child', 'resumed-child'] as const)('preserves explicit pinned skill dispatch with the global catalog suppressed (%s)', async mode => {
+    const isLead = mode === 'root' || mode === 'resumed-root';
     const skillDirectory = path.join(directory, '.agents', 'skills', 'pinned-fixture');
     fs.mkdirSync(skillDirectory, { recursive: true });
     const skillPath = path.join(skillDirectory, 'SKILL.md');
@@ -130,16 +133,30 @@ describe('native AgentControl stdio integration without model calls', () => {
       message: { kind: 'plaintext', text: 'Assigned fixture.' } }, startOptions: {} };
     session = await createCodexMathSession({ ...options,
       environment: { ...options.environment, FIXTURE_SKILL_PATH: skillPath },
-      skills: [readMathAgentSkill(skillPath)], ...(mode === 'resumed-child' ? { threadId: 'child-id' } : {}),
-      nativeAgentControl: { ...host, ...(mode === 'root' ? {} : { bootstrap, initialInput }) },
+      skills: [readMathAgentSkill(skillPath)],
+      ...(mode.startsWith('resumed-') ? { threadId: isLead ? 'root-id' : 'child-id' } : {}),
+      nativeAgentControl: { ...host, ...(isLead ? {} : { bootstrap, initialInput }) },
     });
     expect(await session.run('Read the fixed proof context.', 'task', directory, () => {})).toBe('completed');
-    const started = calls().find(call => ['thread/start', 'theoremos/agentControl/start'].includes(call.method)).params;
+    const started = calls().find(call => ['thread/start', 'thread/resume', 'theoremos/agentControl/start'].includes(call.method)).params;
     const settings = started.thread ?? started.resume ?? started;
     expect(settings.config['skills.include_instructions']).toBe(false);
+    const delegation = settings.config['features.multi_agent_v2'].multi_agent_mode_hint_text;
+    expect(delegation).toContain(isLead
+      ? 'You are the Lead of an explicitly requested flat team.'
+      : 'You are a member of an explicitly requested flat team.');
+    if (!isLead) {
+      expect(delegation).toContain('Do not spawn sub-agents');
+      expect(delegation).not.toContain('Proactively delegate');
+      expect(delegation).toContain('first usable finding, probe result or blocker');
+      expect(delegation).toContain('without waiting for a complete proof');
+    } else {
+      expect(delegation).toContain('concrete gaps with a consumer and first usable result');
+      expect(delegation).toContain('instead of competing for the same deliverable');
+    }
     expect(calls().some(call => call.method === 'skills/list')).toBe(true);
     const input = calls().find(call => ['turn/start', 'theoremos/agentControl/input'].includes(call.method)).params;
-    if (mode === 'root') expect(input.input).toContainEqual({ type: 'skill', name: 'pinned-fixture', path: skillPath });
+    if (isLead) expect(input.input).toContainEqual({ type: 'skill', name: 'pinned-fixture', path: skillPath });
     else expect(input.contextItems[0].content[0].text).toContain(JSON.stringify(skillPath));
   });
 
@@ -175,6 +192,9 @@ describe('native AgentControl stdio integration without model calls', () => {
     session = await createCodexMathSession({ ...options, environment: { ...options.environment, THEOREMOS_HOST_AGENT_CONTROL: '1' } });
     expect(session.nativeAgentControl).toBeUndefined();
     expect(calls().some(call => call.method === 'theoremos/agentControl/capabilities')).toBe(false);
+    const start = calls().find(call => call.method === 'thread/start').params;
+    expect(start.config).not.toHaveProperty('features.multi_agent_v2');
+    expect(session.nativeConfiguration?.overrides).not.toHaveProperty('multiAgentModeHintText');
     expect(JSON.parse(fs.readFileSync(path.join(directory, 'backend-env.json'), 'utf8'))).toEqual({});
   });
 

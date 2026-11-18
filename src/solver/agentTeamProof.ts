@@ -5,13 +5,16 @@ import { canonicalMathJson, mathDigest, readMathText, writeMathTextDurable } fro
 import { assertMathCanonicalPath, isMathPathWithin } from '../math/paths';
 import { leanDeclarationKeys } from '../math/leanSource';
 import { bindLeanPackages } from '../math/leanDiagnostics';
+import { formalVerificationToolIdentity } from '../math/verifier';
+import { hasDeterministicLeanFailure, proofReuseEnvironment } from './proofReuse';
 import { applyTaskChanges, ownedSourceDigest, taskChanges, type DeclarationChange } from './cooperativeProof';
-import { checkDeclarationArtifacts, declarationSubmissionSchema, validateDeclarationArtifact,
+import { checkDeclarationArtifacts, DeclarationArtifactCheckError, DeclarationSubmissionError, declarationSubmissionSchema, validateDeclarationArtifact,
   type DeclarationArtifact, type DeclarationArtifactIdentity, type DeclarationSubmission } from './declarationArtifacts';
 import { assertSolverSources, committedSource, commitSolverSources, git, solverProofImports, withSolverWorktree } from './problem';
 import { locateKnowledgeDeclaration } from './theoremKnowledge';
 import { solverSourceDigest } from './modules/evidence';
 import { archiveAgentTeamCommits, importAgentTeamCommit } from './agentTeamWorkspace';
+import { teamExposureKind, teamSpawnHistory } from './agentTeamState';
 
 type Identity = { runId: string; problemReceiptDigest: string; environmentDigest: string };
 export type AgentTeamProofProvenance = z.infer<typeof provenanceSchema>;
@@ -32,13 +35,20 @@ type AgentTeamProofAdoptionIntent = Readonly<Identity & {
 }>;
 type CheckInput = { state: DeclarationArtifactIdentity; env: NodeJS.ProcessEnv; signal: AbortSignal;
   timeoutMs?: number; assertWriterStopped: () => void; evidenceDirectory: string };
+export type TeamFailureCache = Map<string, { commit: string; agentId: string; error: DeclarationArtifactCheckError }>;
+export class ReusedTeamCheckFailure extends DeclarationArtifactCheckError {
+  constructor(readonly previous: { commit: string; agentId: string }, error: DeclarationArtifactCheckError) {
+    super(error.declaration, error.verification);
+  }
+}
 type IntegrationInput = CheckInput & { delivery: AgentTeamProofDelivery; worktree: string; expectedCommit: string };
 const hash = z.string().regex(/^[a-f0-9]{64}$/u), commitHash = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u);
 const identitySchema = { runId: z.string().min(1), problemReceiptDigest: hash, environmentDigest: hash };
-const provenanceSchema = z.object({ objectiveRevision: z.number().int().positive().optional(),
+const provenanceSchema = z.object({ objectiveRevision: z.number().int().positive().optional(), objectiveDigest: hash.optional(),
   taskId: z.string().min(1).optional(), workKind: z.enum(['research', 'proof', 'independent-reconstruction', 'review', 'assembly']).optional(),
+  spawnHistory: teamSpawnHistory.optional(),
   exposures: z.array(z.object({ deliveryId: hash, agentId: z.string().min(1), taskId: z.string().min(1),
-    commit: commitHash, kind: z.enum(['inspected', 'adopted']), at: z.string().min(1) }).strict()).optional() }).strict();
+    commit: commitHash, kind: teamExposureKind, at: z.string().min(1) }).strict()).optional() }).strict();
 // The host can combine prior checked peer inputs with a member's <=32-declaration submission.
 // Individual declarations keep the public validation; only the internal collection is larger.
 const teamDeclarations = z.array(declarationSubmissionSchema.shape.declarations.element).min(1);
@@ -179,6 +189,14 @@ function deliveryPatch(state: DeclarationArtifactIdentity, worktree: string, see
     }
     const name = leanDeclarationKeys(source).get(location.startOffset);
     if (!name) return fail('declaration_missing');
+    const change = changes.find(item => item.file === declaration.file && item.name === name);
+    if (declaration.kind === 'definition' && (!change || change.before !== undefined))
+      throw new DeclarationSubmissionError('math_agent_team_definition_must_be_new:' + declaration.name);
+    if (change?.before && change.before !== change.after) {
+      const prior = committedSource(worktree, seedCommit, `${problem.projectRelative}/${declaration.file}`);
+      if (locateKnowledgeDeclaration(prior, declaration.name).kind === 'definition')
+        throw new DeclarationSubmissionError('math_agent_team_cannot_replace_definition:' + declaration.name);
+    }
     return `${declaration.file}\0${name}`;
   }));
   if (declared.size !== declarations.length || changes.some(change => !declared.has(`${change.file}\0${change.name}`)))
@@ -207,7 +225,7 @@ function frozenSource(input: CheckInput, worktree: string, commit: string): () =
 async function checkTeamDeclarationArtifacts(input: Parameters<typeof checkDeclarationArtifacts>[0]) {
   const artifacts: DeclarationArtifact[] = [];
   for (let offset = 0; offset < input.declarations.length; offset += 32) {
-    artifacts.push(...await checkDeclarationArtifacts({ ...input,
+    artifacts.push(...await checkDeclarationArtifacts({ ...input, allowAuxiliaryDefinitions: true,
       declarations: input.declarations.slice(offset, offset + 32) }));
   }
   return artifacts;
@@ -216,7 +234,7 @@ async function checkTeamDeclarationArtifacts(input: Parameters<typeof checkDecla
 /** Called only after the child writer has stopped. No mutable child files become proof evidence. */
 export async function checkAgentTeamProofDelivery(input: CheckInput & {
   agentId: string; worktree: string; seedCommit: string; declarations: DeclarationSubmission['declarations'];
-  provenance?: AgentTeamProofProvenance;
+  provenance?: AgentTeamProofProvenance; failureCache?: TeamFailureCache;
 }): Promise<AgentTeamProofDelivery> {
   const declarations = teamDeclarations.parse(input.declarations);
   const agentId = deliverySchema.shape.agentId.parse(input.agentId);
@@ -227,7 +245,30 @@ export async function checkAgentTeamProofDelivery(input: CheckInput & {
   const commit = commitSolverSources(problem, input.worktree), stable = frozenSource(input, input.worktree, commit);
   stable();
   const patch = deliveryPatch(input.state, input.worktree, input.seedCommit, commit, declarations);
-  const artifacts = await checkTeamDeclarationArtifacts({ ...input, commit, declarations, assertWriterStopped: stable });
+  const project = path.join(input.worktree, problem.projectRelative);
+  const environmentKey = () => {
+    const env = proofReuseEnvironment(project, input.env);
+    const tools = env.reusable && env.digest && formalVerificationToolIdentity(project, env.env);
+    return tools ? [env.digest, tools] : undefined;
+  };
+  const environment = input.failureCache && environmentKey();
+  const key = environment && mathDigest(canonicalMathJson({ ...identityOf(input.state), environment, declarations,
+    // The project trees include trusted local imports, but exclude the worker's top-level research notes.
+    project: git(input.worktree, ['rev-parse', commit + ':' + problem.projectRelative]),
+    seed: git(input.worktree, ['rev-parse', input.seedCommit + ':' + problem.projectRelative]),
+    timeoutMs: Number.isFinite(input.timeoutMs) ? input.timeoutMs : null }));
+  const previous = key && input.failureCache?.get(key);
+  if (previous) throw new ReusedTeamCheckFailure({ commit: previous.commit, agentId: previous.agentId }, previous.error);
+  const artifacts = await checkTeamDeclarationArtifacts({ ...input, commit, declarations, assertWriterStopped: stable }).catch(error => {
+    if (key && input.failureCache && error instanceof DeclarationArtifactCheckError && hasDeterministicLeanFailure(error.verification)) {
+      stable();
+      if (canonicalMathJson(environmentKey() ?? null) === canonicalMathJson(environment)) {
+        if (input.failureCache.size >= 32) input.failureCache.delete(input.failureCache.keys().next().value!);
+        input.failureCache.set(key, { commit, agentId, error });
+      }
+    }
+    throw error;
+  });
   stable();
   const record: AgentTeamProofDelivery = { schema: 'theorem-os.agent-team-proof-delivery.v1', id: '',
     ...identityOf(input.state), agentId, sourceWorktree: input.worktree, seedCommit: input.seedCommit, commit,

@@ -10,6 +10,13 @@ const validRef = (value: unknown): value is ResearchReleaseRef => Boolean(value 
   && 'assetId' in value && typeof value.assetId === 'string' && /^[A-Za-z0-9_-]{1,128}$/u.test(value.assetId)
   && 'version' in value && typeof value.version === 'string' && /^[A-Za-z0-9._-]{1,64}$/u.test(value.version));
 
+export function configurationRefs(config?: FrozenResearchConfiguration): ResearchReleaseRef[] {
+  if (!config) return [];
+  const chosen = config.personalExpertSelection;
+  return chosen ? [...(chosen.agent ? [chosen.agent] : []), ...(chosen.skills ?? []), ...(chosen.libraries ?? [])]
+    : [config.agent?.ref, ...config.skills.map(s => s.ref), ...config.libraries.map(l => l.ref)].filter(r => r !== undefined);
+}
+
 /** A Library choice stays explicit in the composer and reaches the server as fixed references. */
 export class ResearchSelection {
   private refs: ResearchReleaseRef[] = [];
@@ -25,7 +32,7 @@ export class ResearchSelection {
     document.getElementById('run-form')!.prepend(this.panel);
   }
   /** Validate a proposal before replacing the current draft or its Library choices. */
-  async prepare(refs: ResearchReleaseRef[], environment: WebEnvironment): Promise<PreparedSelection> {
+  async prepare(refs: ResearchReleaseRef[], environment: WebEnvironment, nativeTeam = false): Promise<PreparedSelection> {
     if (!refs.length || refs.length > 32 || refs.some(ref => !validRef(ref))) throw new Error(t('所选 Library 版本不可用，请重新选择。'));
     const releases = await Promise.all(refs.map(async ref => {
       const release = (await this.api<{ item: ResearchAssetRelease }>(`/api/research/library/${encodeURIComponent(ref.assetId)}/releases/${encodeURIComponent(ref.version)}`)).item;
@@ -40,7 +47,7 @@ export class ResearchSelection {
       libraries: fixed.filter((_, index) => releases[index].type === 'mathematics'),
     };
     const { item: configuration } = await this.api<{ item: FrozenResearchConfiguration }>('/api/research/configuration', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ environment, selection }) });
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ environment, selection, ...(nativeTeam ? { nativeTeam: true } : {}) }) });
     return { refs: fixed, releases, configuration, imports: configuration.libraries.flatMap(library => library.mathematics.pack.modules.map(module => module.file.slice(0, -5).replaceAll('/', '.'))) };
   }
   adopt(prepared: PreparedSelection) {
@@ -50,7 +57,7 @@ export class ResearchSelection {
     catch { /* The explicit selection remains available in this page without browser storage. */ }
     this.panel.hidden = false; this.render(); this.changed();
   }
-  async load(apply: (configuration: FrozenResearchConfiguration, imports: string[]) => void, environment: WebEnvironment, onSelected?: () => void) {
+  async load(apply: (configuration: FrozenResearchConfiguration, imports: string[]) => void, environment: WebEnvironment, onSelected?: () => void, nativeTeam = false) {
     if (this.loaded) return;
     this.loaded = true;
     const entrySearch = this.entrySearch; this.entrySearch = '';
@@ -78,13 +85,17 @@ export class ResearchSelection {
     onSelected?.();
     this.panel.hidden = false; this.panel.textContent = t('正在读取选定的 Library 版本…');
     try {
-      this.releases = await Promise.all(this.refs.map(async ref => (await this.api<{ item: ResearchAssetRelease }>(
-        `/api/research/library/${encodeURIComponent(ref.assetId)}/releases/${encodeURIComponent(ref.version)}`)).item));
+      this.releases = await Promise.all(this.refs.map(async ref => {
+        const release = (await this.api<{ item: ResearchAssetRelease }>(
+          `/api/research/library/${encodeURIComponent(ref.assetId)}/releases/${encodeURIComponent(ref.version)}`)).item;
+        if (ref.digest && ref.digest !== release.digest) throw new Error(t('所选 Library 版本不可用，请重新选择。'));
+        return release;
+      }));
       if (this.releases.filter(release => release.type === 'agent').length > 1) throw new Error(t('每次研究只能选择一个 Agent，请在 Library 调整选择。'));
       const agent = this.releases.find(release => release.type === 'agent')?.content as { environment?: WebEnvironment } | undefined;
-      const selectedEnvironment = savedEnvironment ?? this.releases.find(release => release.mathematics)?.mathematics?.environment ?? agent?.environment ?? environment;
+      const selectedEnvironment = nativeTeam ? environment : savedEnvironment ?? this.releases.find(release => release.mathematics)?.mathematics?.environment ?? agent?.environment ?? environment;
       const { item } = await this.api<{ item: FrozenResearchConfiguration }>('/api/research/configuration', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ environment: selectedEnvironment, selection: this.value() }) });
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ environment: selectedEnvironment, selection: this.value(), ...(nativeTeam ? { nativeTeam: true } : {}) }) });
       this.selectedEnvironment = item.environment;
       apply(item, item.libraries.flatMap(library => library.mathematics.pack.modules.map(module => module.file.slice(0, -5).replaceAll('/', '.'))));
       this.render(); this.changed();

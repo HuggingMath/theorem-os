@@ -64,10 +64,14 @@ Mathematical nominations, source freezing, Lean checks and adoption remain host
 operations; a native final answer does not create a proof delivery.
 
 The built runtime link installs this backend for new local CLI team runs.
-Existing Web/Docker workflows still use their configured execution paths; this
-build does not deploy the backend into a worker image or add a Web team selector.
-Container installation requires a real executable at a container-visible path;
-the local output symlink points to its host build artifacts.
+The Web worker Dockerfile builds the same pinned source on Debian Bookworm
+and installs a separate binary at `/opt/theoremos-codex-backend/codex`.
+Ordinary runs keep the stock Codex binary. The worker build probes the native
+app-server's capabilities as the worker user before labeling the image
+`org.theoremos.native-agent-control=v1`. The Web service uses this label to
+offer native teams only with a compatible worker; existing deployments are
+unchanged until their images are rebuilt and selected. A host output symlink
+is not a portable installation.
 
 Cargo resolves V8 host manifests even though the CLI does not link that runtime.
 The build-local Git helper fetches the exact locked submodule commits without

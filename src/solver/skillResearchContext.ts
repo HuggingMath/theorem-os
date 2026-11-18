@@ -15,7 +15,7 @@ import { materializeResearchToolHelp } from './researchToolHelp';
 import { buildResearchToolGuide } from './researchToolGuide';
 import { agentTeamInstructions, agentTeamWorkerDeliveryHelp, agentTeamWorkerSection } from './agentTeamContext';
 import { agentTeamOverview, agentTeamRecentEvents } from './agentTeamViews';
-import { agentTeamProfileSection } from './agentTeamProfiles';
+import { agentTeamProfileSection, eligibleAgentTeamProfiles, resolveAgentTeamLeadProfile } from './agentTeamProfiles';
 
 /** Leave the last fifth of a bounded team turn for request settlement and handoff. */
 export function teamTurnTiming(maxTurnMs: number): Pick<MathAgentOptions, 'turnTimeoutMs' | 'turnCheckpointMs'> {
@@ -46,15 +46,10 @@ export function skillResearchContinuationSection(problem: Pick<SolverProblem, 'r
 
 export function agentTeamContextSection(state: Readonly<SolverRunState>): ContextSection {
   const native = state.agentTeam?.transport === 'native-agent-control';
-  const overview = agentTeamOverview(state), reason = overview.coordination?.reason;
-  const currentStage = reason === 'opening' || reason === 'deferred-step-complete' ? {
-    kind: 'collaboration-decision', reason,
-    instruction: 'Read only the statement and definitions needed for this decision, then dispatch a useful question or call coordinate with reason and nextStep before extended proof work. A defer permits that specific nextStep; reassess when it is complete. A reminder does not complete the decision.',
-  } : reason ? { kind: 'collaboration-review', reason, instruction: overview.coordination?.instruction }
-    : { kind: 'research', instruction: 'Advance the current gap and assess useful incoming findings at research milestones.' };
+  const overview = agentTeamOverview(state);
   return { id: 'agent-team', kind: 'feedback',
     text: 'Team observations (advisory; ' + (native ? 'receive updates through native messages' : 'use theoremos_team poll for the durable inbox') + '):\n' +
-      JSON.stringify({ ...overview, currentStage,
+      JSON.stringify({ ...overview,
         recentEvents: agentTeamRecentEvents(state.agentTeam, 'lead'),
         latestSequence: state.agentTeam?.events.at(-1)?.sequence ?? 0,
         inbox: native ? 'Native messages carry addressed updates. Use history for complete tasks and inspect or inspect-research for saved results. Native acceptance and latestSequence are not read acknowledgments.' :
@@ -71,7 +66,8 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
   if (access.knowledgeFile) {
     if (!access.knowledgeDigest || access.knowledgeDigest !== state.knowledgeDigest) throw new Error('math_knowledge_identity_changed');
   } else if (state.knowledgeDigest) throw new Error('math_knowledge_identity_missing');
-  const { command, help } = buildResearchToolGuide(problem, access, state.environmentDigest, state.researchDelegation?.mode === 'team');
+  const { command, help } = buildResearchToolGuide(problem, access, state.environmentDigest,
+    state.researchDelegation?.mode === 'team' ? state.agentTeam?.transport ?? 'host-tools' : undefined);
   const project = path.join(access.worktree, problem.projectRelative);
   const team = state.researchDelegation?.mode === 'team';
   const teamWorker = state.researchDelegation?.mode === 'team' && access.teamRole?.role === 'worker';
@@ -94,12 +90,25 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
   const editable = problem.ownedFiles.filter(file => !Object.hasOwn(problem.frozenFiles ?? {}, file));
   // Stable instructions survive both the full M4 wrapper and same-thread continuations.
   // Coordinator identity comes from the host, never from an assignment's Profiles line.
-  const leadProfile = team && !teamWorker ? agentTeamProfileSection(skill, 'Profiles: lead') : undefined;
+  const leadProfile = team && !teamWorker ? resolveAgentTeamLeadProfile(skill).section : undefined;
+  const cards = state.researchDelegation?.mode === 'team' ? state.researchDelegation.personalExperts?.cards : undefined;
+  const cardCatalogue = !teamWorker && cards?.length ? 'User-selected professional knowledge available for member assignments. ' +
+    'When a card fits a concrete gap, put its exact ID on the first Profiles: line of spawn or followup. ' +
+    'Only the assigned member receives its advisory text. Catalogue: ' +
+    JSON.stringify(cards.map(({ assetId, name, version, summary }) => ({ id: 'asset:' + assetId, name, version, summary }))) + '\n\n' : '';
+  const preferred = !teamWorker && state.researchDelegation?.mode === 'team' ? state.researchDelegation.preferredProfiles : undefined;
+  const preferenceInstruction = preferred?.length ? 'User-preferred member profiles: ' +
+    eligibleAgentTeamProfiles(path.dirname(skill.path)).filter(profile => preferred.includes(profile.id))
+      .map(profile => profile.id + ' (' + profile.name + ')').join(', ') + '. ' +
+    'Consider these when they fit a concrete gap. You choose whether to delegate and may use any other catalogued specialty. ' +
+    'To give a member profile knowledge, put its ID on the Profiles: line of that assignment.\n\n' : '';
   const instructions = (state.researchDelegation?.mode === 'team'
     ? agentTeamInstructions(access.teamRole ?? { id: 'lead', role: 'lead' }, state.researchDelegation.maxAgents,
       state.agentTeam?.transport) : '') +
-    (leadProfile ? leadProfile.text + '\n\n' : '') +
-    'Research the fixed original mathematics problem in this isolated worktree using the pinned theoremos-research skill.\n' +
+    (leadProfile ? leadProfile.text + '\n\n' : '') + preferenceInstruction + cardCatalogue +
+    (teamWorker ? 'Research the current Lead assignment in this isolated worktree using the pinned theoremos-research skill. ' +
+      'The frozen original problem is background and source constraints; the assignment defines the result you own.\n'
+      : 'Research the fixed original mathematics problem in this isolated worktree using the pinned theoremos-research skill.\n') +
     `Lean project: ${project}. Editable Lean paths relative to it: ${JSON.stringify(editable)}. ` +
     'Only these paths may contain submitted Lean source; add helpers inside them instead of creating another Lean file. ' +
     (team ? 'Every member has a separate worktree. Identical relative filenames belong to different copies; Lead does not own the member\'s copy. ' : '') +
@@ -119,7 +128,8 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
       : 'Native child delegation is disabled in this run.\n') +
     help.instruction(access.worktree) + mathematicsRuntimeInstruction(access.environment.DEEPSCIENTIST_MATH_ENV_FILE) +
     (access.mathTools ? '\n' + mathToolsInstruction(access.mathTools, access.worktree) : '');
-  const originalProblem: ContextSection = { id: 'original-problem', kind: 'problem', text: access.taskText + '\n\n' +
+  const originalProblem: ContextSection = { id: 'original-problem', kind: 'problem',
+    text: (teamWorker ? 'Frozen original problem (background for your current Lead assignment):\n' : '') + access.taskText + '\n\n' +
     JSON.stringify({ problemReceiptDigest: problem.receiptDigest, environmentDigest: state.environmentDigest,
       statement: problem.contract.informalStatement, formalStatement: problem.contract.formalStatement,
       assumptions: problem.contract.assumptions, targets: problem.targets,
@@ -143,7 +153,7 @@ export function buildSkillResearchContext(problem: SolverProblem, state: Readonl
     'Current files and complete references remain available even when their full text is not included in this message. Continue the original research from saved work.' });
   const compile = (options: ResearchDispatchOptions = {}) => compileContextSections({ instructions,
     mandatory: [...(teamWorker ? [agentTeamWorkerSection(state, access.teamRole!, access.teamAssignment!).section,
-      agentTeamProfileSection(skill, access.teamAssignment!.message)] : []),
+      agentTeamProfileSection(skill, access.teamAssignment!.message, cards)] : []),
       ...(access.executionLimits ? [executionLimitsSection(access.executionLimits)] : []),
       options.continuation ? skillResearchContinuationSection(problem, state) : originalProblem,
       ...mandatory, ...(options.checkpointInstruction ? [{ id: 'checkpoint', kind: 'checkpoint' as const,

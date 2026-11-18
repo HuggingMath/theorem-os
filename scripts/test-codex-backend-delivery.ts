@@ -7,13 +7,15 @@ import { createServer, type ServerResponse } from 'node:http';
 import { buildSync } from 'esbuild';
 import { bootstrapLeanTask } from '../src/math/leanTask';
 import { mathBuildFile, mathBuildSource, MATH_BUILD_INPUTS, MATH_RUNTIME_BUNDLES } from '../src/math/mathBuildManifest';
-import { mathDigest, writeMathJsonDurable } from '../src/math/mathRuntimeIo';
+import { canonicalMathJson, mathDigest, writeMathJsonDurable } from '../src/math/mathRuntimeIo';
 import { readMathAgentSkill } from '../src/runtime/agentSkills';
 import { confirmHarnessProcessStopped, type HarnessProcessIdentity } from '../src/runtime/harnessProcess';
 import { admitResponsesRequest } from '../src/runtime/formalizationRelay';
 import { prepareSub2apiProfile, SUB2API_PROVIDER } from '../src/runtime/sub2api';
 import type { SolverRunState } from '../src/solver/archive';
 import { readAgentTeamProofDelivery } from '../src/solver/agentTeamProof';
+import { buildAgentTeamContributions } from '../src/solver/agentTeamContributions';
+import { evaluateSolverProof } from '../src/solver/evaluation';
 import { directSolverModules } from '../src/solver/modules';
 import { git, readSolverProblem } from '../src/solver/problem';
 import { runResearchWorkers } from '../src/solver/research';
@@ -73,9 +75,15 @@ export async function verifyNativeProofDelivery(input: { repository: string; exe
     }
     return true;
   };
+  // A proof placeholder on its own unindented line is legal Lean source.
+  const originalTarget = 'theorem original (n : Nat) : n + 0 = n ∧ True :=\nsorry\n';
+  const consumerDraft = 'namespace NativeProof\n' + originalTarget.replace(':=\nsorry',
+    ':= by\n  constructor\n  · exact helper n\n  · sorry') + 'end NativeProof\n';
   const sourceWithHelper = 'namespace NativeProof\n' +
     'theorem helper (n : Nat) : n + 0 = n := by rfl\n' +
-    'theorem original (n : Nat) : n + 0 = n := by sorry\nend NativeProof\n';
+    'theorem side (n : Nat) : n = n := by rfl\n' +
+    originalTarget + 'end NativeProof\n';
+  const finding = 'NativeProof.helper is saved in my owned file; the original target remains unfinished.';
   const server = createServer(async (request, response) => {
     try {
       assert.equal(request.url, '/v1/responses');
@@ -85,8 +93,21 @@ export async function verifyNativeProofDelivery(input: { repository: string; exe
       const text = body.input.filter((item: Json) => ['message', 'agent_message'].includes(item.type))
         .flatMap((item: Json) => item.content ?? []).map((part: Json) => part.text ?? part.encrypted_content ?? '').join('\n');
       const receipts = new Set(body.input.filter((item: Json) => item.type === 'function_call_output').map((item: Json) => item.call_id));
+      const childRequest = text.includes('Current native task instructions');
+      const declarations = [...(body.tools ?? []), ...body.input.filter((item: Json) => item.type === 'additional_tools')
+        .flatMap((item: Json) => item.tools)].flatMap((tool: Json) => tool.type === 'namespace' ? tool.tools : [tool]);
+      const host = declarations.find((tool: Json) => tool.name === 'theoremos_team');
+      if (!childRequest) assert.doesNotMatch(host.description, /\bD\d{3}\b/u,
+        'The shared Lead tool must not preselect a domain expert for unrelated assignments.');
+      assert.deepEqual([...host.parameters.properties.operation.enum].sort(), (childRequest
+        ? ['yield', 'history', 'inspect', 'inspect-research', 'submit']
+        : ['finish', 'history', 'inspect', 'inspect-research', 'adopt']).sort(), 'Native host operations must stay limited to proof delivery and inspection.');
+      assert.equal(body.tool_choice, 'auto', 'The host must not impose a collaboration decision.');
+      if (!childRequest && JSON.stringify(body.input).includes(finding)) result.nativeFindingReceived = true;
       let items: Json[];
-      if (text.includes('Current team assignment')) {
+      if (childRequest) {
+        assert.deepEqual(state!.agentTeam!.workers[0]!.tasks[0]!.profileEvidence?.loaded, ['prover']);
+        assert.match(text, /### Lean Prover/u, 'The corrected specialty must reach the actual writer request.');
         for (const contradictoryHint of ['All agents share the same directory',
           'There are 4 available concurrency slots', 'You can spawn sub-agents to handle subtasks'])
           assert.equal(text.includes(contradictoryHint), false, 'Host role context must replace generic multi-agent hints.');
@@ -94,20 +115,35 @@ export async function verifyNativeProofDelivery(input: { repository: string; exe
         if (!receipts.has('proof_child_write')) items = [call('proof_child_write', 'exec_command', { login: false,
           cmd: 'test -s .agents/skills/theoremos-research/SKILL.md && cat .agents/skills/theoremos-research/SKILL.md >/dev/null && printf %s ' + quote(sourceWithHelper) +
             ' > generated/problem/Submission.lean && printf %s ' + quote('One independent helper is ready for the Lead.\n') + ' > RESEARCH.md' })];
-        else if (!receipts.has('proof_child_progress')) items = [call('proof_child_progress', 'theoremos_team', {
-          operation: 'progress', objectiveRevision: 1, kind: 'finding',
-          summary: 'NativeProof.helper is saved in my owned file; the original target remains unfinished.',
-          nextStep: 'Submit this independent helper for host checking.' })];
-        else if (!receipts.has('proof_child_submit')) items = [call('proof_child_submit', 'theoremos_team', {
-          operation: 'submit', objectiveRevision: 1, summary: 'Independent identity helper for the Lead.',
-          declarations: [{ file: 'Submission.lean', name: 'NativeProof.helper', type: '∀ n : Nat, n + 0 = n' }] })];
+        else if (!receipts.has('proof_child_finding')) items = [call('proof_child_finding', 'send_message', {
+          target: '/root', message: finding }, 'collaboration')];
+        else if (!receipts.has('proof_child_submit')) {
+          // Exercise the ordering from the real run: Lead writes the consumer while the member still owns the helper.
+          if (!await until(() => fs.readFileSync(path.join(state!.worktree, 'generated/problem/Submission.lean'), 'utf8') === consumerDraft, response)) return;
+          result.consumerDraftBeforeSubmit = true;
+          items = [call('proof_child_submit', 'theoremos_team', {
+            operation: 'submit', summary: 'Independent identity helper for the Lead.',
+            declarations: [{ file: 'Submission.lean', name: 'NativeProof.helper', type: '∀ n : Nat, n + 0 = n' },
+              { file: 'Submission.lean', name: 'NativeProof.side', type: '∀ n : Nat, n = n' }] })];
+        }
         else items = [message('Helper submitted; release writing for independent checking.')];
       } else if (!receipts.has('proof_opening_read')) items = [call('proof_opening_read', 'exec_command', {
         login: false, cmd: 'cat generated/problem/Submission.lean' })];
-      else if (!receipts.has('proof_spawn')) items = [call('proof_spawn', 'spawn_agent', {
-        task_name: 'proof_writer', fork_turns: 'none', message: 'Profiles: prover\nProve an independent NativeProof.helper (n : Nat) : n + 0 = n in your owned file. Lead consumes it in NativeProof.original. Report the first useful result and submit the helper; leave the original target unfinished.' }, 'collaboration')];
-      else if (!receipts.has('proof_publish')) items = [call('proof_publish', 'theoremos_team', { operation: 'publish',
-        summary: 'proof_writer supplies the independent identity helper; Lead waits for checked evidence and will consume it in the original theorem.' })];
+      else if (!receipts.has('proof_bad_profile')) items = [call('proof_bad_profile', 'spawn_agent', {
+        task_name: 'proof_writer', fork_turns: 'none', message: 'Profiles: prover (Lean prover, Mathlib).\nProve the helper.' }, 'collaboration')];
+      else if (!receipts.has('proof_spawn')) {
+        const rejection = body.input.find((item: Json) => item.type === 'function_call_output' && item.call_id === 'proof_bad_profile');
+        assert.match(JSON.stringify(rejection.output), /math_team_profile_unresolved.*Profiles: prover/u,
+          'The Lead must receive the rejected selection and the correction through the native tool.');
+        assert.equal(state!.agentTeam!.workers.length, 0, 'A rejected dispatch must not occupy a team slot.');
+        result.rejectedDispatchFeedback = rejection.output;
+        items = [call('proof_spawn', 'spawn_agent', {
+          task_name: 'proof_writer', fork_turns: 'none', message: 'Profiles: prover\nProve an independent NativeProof.helper (n : Nat) : n + 0 = n in your owned file. Lead consumes it in NativeProof.original. Report the first useful result and submit the helper; leave the original target unfinished.' }, 'collaboration')];
+      }
+      else if (!receipts.has('proof_draft')) items = [call('proof_draft', 'exec_command', { login: false,
+        cmd: 'printf %s ' + quote(consumerDraft) + ' > generated/problem/Submission.lean && printf %s ' +
+          quote('The first conjunct calls the agreed helper. Lead owns the remaining conjunct.\n') + ' > RESEARCH.md' })];
+      else if (!receipts.has('proof_wait')) items = [call('proof_wait', 'wait_agent', { timeout_ms: 10000 }, 'collaboration')];
       else if (!receipts.has('proof_history')) {
         if (!await until(() => Boolean(state?.agentTeam?.deliveries.length), response)) return;
         items = [call('proof_history', 'theoremos_team', { operation: 'history' })];
@@ -118,15 +154,19 @@ export async function verifyNativeProofDelivery(input: { repository: string; exe
       else if (!receipts.has('proof_consume')) {
         assert.equal(state!.agentTeam!.adoptions[0].status, 'completed', 'Lead must resume only after host adoption');
         const adoptedEvent = state!.agentTeam!.events.find(event => event.kind === 'adopted')!;
-        const adoptedMail = state!.agentTeam!.nativeControl!.mailbox.find(mail => mail.hostEventSequence === adoptedEvent.sequence)!;
+        const adoptedMail = state!.agentTeam!.nativeControl!.mailbox.find(mail => mail.author === '/morpheus' &&
+          mail.message?.kind === 'plaintext' &&
+          mail.message.text === 'Mathematical host update (advisory):\n' + canonicalMathJson(adoptedEvent))!;
         assert.ok(adoptedMail, 'The host adoption event must enter the native mailbox.');
         assert.equal(adoptedMail.author, '/morpheus');
         assert.equal(adoptedMail.status, 'accepted', 'The resumed native Lead must receive its host adoption event.');
-        result.adoptedHostMessage = { author: adoptedMail.author, status: adoptedMail.status, eventSequence: adoptedEvent.sequence };
+        result.adoptedHostMessage = { author: adoptedMail.author, status: adoptedMail.status,
+          kind: adoptedEvent.kind, deliveryId: adoptedEvent.deliveryId };
         const adopted = fs.readFileSync(path.join(state!.worktree, 'generated/problem/Submission.lean'), 'utf8');
         assert.match(adopted, /theorem helper/u);
+        assert.ok(adopted.includes(consumerDraft.slice('namespace NativeProof\n'.length)), 'Adoption must preserve the consumer proof drafted before submission.');
         items = [call('proof_consume', 'exec_command', { login: false,
-          cmd: 'printf %s ' + quote(adopted.replace('by sorry', 'by exact helper n')) +
+          cmd: 'printf %s ' + quote(adopted.replace('  · sorry\n', '  · trivial\n')) +
             ' > generated/problem/Submission.lean && printf %s ' + quote('The original consumes the host-checked child helper.\n') + ' > RESEARCH.md' })];
       } else if (!receipts.has('proof_finish')) items = [call('proof_finish', 'theoremos_team', {
         operation: 'finish', summary: 'Original theorem saved using the adopted helper; ready for independent host acceptance.' })];
@@ -171,7 +211,7 @@ export async function verifyNativeProofDelivery(input: { repository: string; exe
     }) as typeof fetch;
     const runtime = path.join(directory, 'runtime'), buildFile = freezeRuntime(input.repository, runtime);
     const receipt = bootstrapLeanTask(path.join(directory, 'primary'), { task: 'Prove the frozen original using one checked child helper.',
-      source: 'namespace NativeProof\ntheorem original (n : Nat) : n + 0 = n := by sorry\nend NativeProof\n' });
+      source: 'namespace NativeProof\n' + originalTarget + 'end NativeProof\n' });
     const problem = readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath), worktree = path.join(directory, 'lead');
     git(receipt.workspaceRoot, ['worktree', 'add', '--quiet', '--detach', worktree, problem.baseCommit]);
     const identity = researchSkillIdentity(readMathAgentSkill(path.join(runtime, 'skills/theoremos-research/SKILL.md')));
@@ -227,28 +267,42 @@ export async function verifyNativeProofDelivery(input: { repository: string; exe
     assert.equal(delivery.artifacts[0].proof.verification.status, 'kernel_verified');
     assert.equal(delivery.declarations[0].name, 'NativeProof.helper');
     assert.equal(state.agentTeam!.adoptions[0].status, 'completed');
-    const continued = events.find(event => event.event === 'team_coordination_continued');
-    assert.ok(continued, 'Opening coordination must continue without restarting the native writer.');
-    assert.equal(continued.writerStopped, false);
-    assert.equal(continued.process.pid, leadProcesses[0].pid);
-    assert.equal(continued.process.startTime, leadProcesses[0].startTime);
+    assert.equal(result.nativeFindingReceived, true, 'The child finding must reach the Lead through the native mailbox.');
+    assert.equal(state.agentTeam!.coordination, undefined, 'Native dispatch must not write an adapter coordination journal.');
+    assert.deepEqual(events.filter(event => event.event.startsWith('team_coordination') || event.event === 'team_research_observed'), [],
+      'Native collaboration must not create host coordination checkpoints.');
     assert.ok(leadProcesses.length >= 2, 'Adoption must stop the first writer and resume its saved native thread.');
-    assert.match(fs.readFileSync(path.join(worktree, 'generated/problem/Submission.lean'), 'utf8'), /by exact helper n/u);
+    assert.equal(result.consumerDraftBeforeSubmit, true);
     fs.copyFileSync(path.join(worktree, 'generated/problem/Submission.lean'), path.join(input.output, 'Submission.lean'));
     writeMathJsonDurable(path.join(input.output, 'delivery.json'), delivery);
     writeMathJsonDurable(path.join(input.output, 'original-check.json'), winner.check);
     assert.ok(state.agentTeam!.leadExposures?.some(exposure => exposure.kind === 'inspected' && exposure.deliveryId === reference.id));
     assert.ok(state.agentTeam!.leadExposures?.some(exposure => exposure.kind === 'adopted' && exposure.deliveryId === reference.id));
-    assert.equal(git(receipt.workspaceRoot, ['rev-parse', 'HEAD']), problem.baseCommit, 'The frozen original must stay unchanged.');
+    assert.equal(git(receipt.workspaceRoot, ['rev-parse', 'HEAD']), problem.baseCommit, 'Research must not publish into the original workspace.');
+    const evaluation = await evaluateSolverProof(problem, worktree, winner.check, environment, signal,
+      { timeoutMs: Infinity, teamContributions: true });
+    assert.equal(evaluation.status, 'passed');
+    const contributions = buildAgentTeamContributions(state, evaluation);
+    assert.ok(contributions);
+    assert.deepEqual(contributions.advisoryMessages.map(item => ({ from: item.from, to: item.to, text: item.text })),
+      [{ from: '/root/proof_writer', to: '/root', text: finding }],
+      'Only member messages should be reported here; the host delivery notice is separate.');
+    for (const [name, relation] of [['NativeProof.helper', 'direct'], ['NativeProof.side', 'not-referenced']]) {
+      const declaration = contributions.declarations.find(item => item.deliveryId === reference.id && item.name === name);
+      assert.ok(declaration?.targets.some(target => target.name === 'NativeProof.original' && target.relation === relation),
+        'Expected ' + relation + ' evidence for ' + name);
+    }
+    writeMathJsonDurable(path.join(input.output, 'final-contributions.json'), contributions);
     result.status = 'passed'; result.requests = requests.length;
     result.usageComplete = state.tokenBudget?.usageComplete;
     result.deliveryId = reference.id; result.adoption = state.agentTeam!.adoptions[0];
-    result.coordinationContinuation = { process: continued.process, writerStopped: continued.writerStopped };
+    result.leadWriterProcesses = leadProcesses;
     result.originalCheck = { passed: winner.check.passed, status: winner.check.verification.status,
       commit: winner.check.commit, declarations: winner.check.verification.results.map(item => item.theoremName) };
-    result.checks = ['production-relay', 'coordination-same-process', 'native-role-context', 'pinned-skill-read',
-      'native-spawn', 'native-source-write', 'incremental-progress', 'submit', 'writer-stop', 'adopted-host-mail',
-      'independent-helper-check', 'inspect', 'adopt', 'native-source-consumption', 'independent-original-check'];
+    result.checks = ['production-relay', 'minimal-native-host-operations', 'native-role-context', 'pinned-skill-read',
+      'native-spawn', 'native-source-write', 'native-finding-message', 'native-wait', 'submit', 'writer-stop', 'adopted-host-mail',
+      'independent-helper-check', 'inspect', 'adopt', 'native-source-consumption', 'independent-original-check',
+      'final-s3-check', 'final-uses-one-of-two-adopted-declarations'];
     return result;
   } catch (error) {
     result.status = 'failed'; result.error = error instanceof Error ? { message: error.message, stack: error.stack } : String(error);
