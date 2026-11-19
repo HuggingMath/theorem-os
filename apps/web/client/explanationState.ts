@@ -3,6 +3,7 @@ import { t } from '../i18n';
 
 const reasons: Record<string, string> = {
   informalization_rounds_exhausted: t('审核多轮仍未通过，已停止。可以重新生成；同一份证明换一次写作也可能通过。'),
+  informalization_role_retries_exhausted: t('模型请求反复失败，自动重试已停止。'),
   explanation_token_limit: t('Token 用量达到上限，已停止。'), informalization_token_limit: t('Token 用量达到上限，已停止。'),
   informalization_time_limit: t('生成时间达到上限，已停止。'), explanation_timeout: t('生成时间达到上限，已停止。'),
   explanation_usage_unavailable: t('模型服务没有返回 Token 用量，无法控制上限，已停止。'),
@@ -22,6 +23,7 @@ const reasons: Record<string, string> = {
   explanation_account_unavailable: t('当前账户不可用，暂未生成讲解。'),
 };
 export const explanationReasonText = (reason?: string) => reason && reasons[reason] ? reasons[reason] : t('生成失败，可以重新生成。');
+export const explanationConnectionFailuresText = (count?: number) => count ? t('模型连接失败 {0} 次', count) : undefined;
 
 const unavailable: Record<string, string> = {
   sample: t('示例运行只读，不能生成讲解。'), not_accepted: t('只有通过独立验收的运行可以生成讲解。'),

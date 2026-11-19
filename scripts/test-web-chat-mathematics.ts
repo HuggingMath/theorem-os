@@ -281,8 +281,9 @@ try {
             : selectedRun === failed ? 'error' : selectedRun === cancelled ? 'cancelled' : selectedRun === exhausted ? 'exhausted' : undefined;
           const entries = fixtureStatus ? [{ ...explanation(selectedRun, 'swap_sum', explanationLanguage), document: undefined, status: fixtureStatus,
             ...(fixtureStatus === 'queued' ? { queue: { position: 3, ahead: 2 } } : fixtureStatus === 'running'
-              ? { progress: { phase: 'auditing', batches: 3, approvedBatches: 1, updatedAt: at } }
-              : { reason: 'explanation_gateway_unavailable' }) } as WebExplanation] : undefined;
+              ? { progress: { phase: 'auditing', batches: 3, approvedBatches: 1, connectionFailures: 2, updatedAt: at } }
+              : fixtureStatus === 'error' ? { reason: 'informalization_role_retries_exhausted',
+                progress: { phase: 'auditing', connectionFailures: 3, updatedAt: at } } : { reason: 'explanation_gateway_unavailable' }) } as WebExplanation] : undefined;
           const savedOverview = overview(selectedRun, [accepted, missingTarget, emptyStatement, singleTarget].includes(selectedRun) || selectedRun === generating && generated, entries,
             selectedRun !== unavailable && selectedRun !== accepted && selectedRun !== working, explanationLanguage);
           if (selectedRun === singleTarget) {
@@ -381,7 +382,7 @@ try {
     const followup = await input.inputValue();
     assert.ok(followup.startsWith('保留已写的独立追问。\n\n'));
     for (const text of ['加法交换律', '第 1 步', '对任意自然数', '将自然数 a 和 b', 'Nat.add_comm', accepted.id]) assert.ok(followup.includes(text));
-    assert.ok(followup.includes(`${origin}/explain.html?run=${accepted.id}&target=swap_sum#explain-section-0`));
+    assert.ok(followup.includes(`${origin}/explain.html?run=${accepted.id}&target=swap_sum&language=zh#explain-section-0`));
     assert.deepEqual(writes, [], 'step questioning prepares a draft without sending it');
     await answer.locator('[data-chat-answer-use="supporting_identity"]').click();
     assert.equal(await answer.locator('.chat-answer-support').evaluate((element: HTMLDetailsElement) => element.open), true);
@@ -495,7 +496,7 @@ try {
 
     for (const [value, status, text] of [
       [unavailable, 'unavailable', '当前服务不提供证明讲解。'], [queued, 'queued', '前面 2 份'],
-      [generating, 'running', '正在核对讲解与证明'], [failed, 'error', '无法连接模型服务，请稍后重试。'],
+      [generating, 'running', '正在核对讲解与证明'], [failed, 'error', '模型请求反复失败，自动重试已停止。'],
       [cancelled, 'cancelled', '已停止生成'], [exhausted, 'exhausted', '讲解没有完成'],
     ] as const) {
       await page.goto(`${origin}/?chat=${conversations[runs.indexOf(value)]!.id}`, { timeout: 15_000 });
@@ -510,9 +511,11 @@ try {
       }
       if (status === 'running') {
         assert.match(await state.innerText(), /已通过批次\s+1\s*\/\s*3/u);
+        assert.equal(await state.getByText('模型连接失败 2 次').isVisible(), true);
         generated = true;
         await page.locator('[data-chat-answer-document="swap_sum"]').waitFor({ timeout: 15_000 });
       }
+      if (status === 'error') assert.equal(await state.getByText('模型连接失败 3 次').isVisible(), true);
       await fit(page); await screenshot(page, `${width}-explanation-${status}.png`);
     }
     mark(`${width}: unavailable, queued, running, failed, cancelled and incomplete explanations show accurate states; the finished document appears automatically without generation`);
@@ -534,7 +537,7 @@ try {
           'both target titles remain visible in a document with multiple target sections');
         assert.equal(await document.locator('[data-chat-answer-target="swap_sum"]').getAttribute('id'), `chat-answer-${value.id}-swap_sum-swap_sum`);
         await answer.locator('[data-chat-answer-question="swap_sum:0"]').click();
-        assert.ok((await input.inputValue()).includes(`${origin}/explain.html?run=${value.id}&target=swap_sum#explain-section-1`),
+        assert.ok((await input.inputValue()).includes(`${origin}/explain.html?run=${value.id}&target=swap_sum&language=zh#explain-section-1`),
           'the selected step retains the original saved section index after other target sections');
       }
       assert.deepEqual(writes, []); assert.deepEqual(forbiddenCalls, []);
@@ -553,7 +556,7 @@ try {
     await page.keyboard.press('Enter');
     const singleFollowup = await input.inputValue();
     assert.ok(singleFollowup.startsWith('保留只有一个阅读目标的追问。\n\n'));
-    for (const text of ['加法交换律', '对任意自然数', 'Nat.add_comm', `${origin}/explain.html?run=${singleTarget.id}&target=swap_sum#explain-section-0`])
+    for (const text of ['加法交换律', '对任意自然数', 'Nat.add_comm', `${origin}/explain.html?run=${singleTarget.id}&target=swap_sum&language=zh#explain-section-0`])
       assert.ok(singleFollowup.includes(text));
     assert.deepEqual(writes, []); assert.deepEqual(forbiddenCalls, []);
     await answer.locator('h3').scrollIntoViewIfNeeded();
@@ -665,7 +668,7 @@ try {
     await answer.locator('[data-chat-answer-question="swap_sum:0"]').click();
     const simpleFollowup = await input.inputValue();
     assert.ok(simpleFollowup.startsWith('保留简洁模式的独立追问。\n\n'));
-    assert.ok(simpleFollowup.includes(`${origin}/explain.html?run=${accepted.id}&target=swap_sum#explain-section-0`));
+    assert.ok(simpleFollowup.includes(`${origin}/explain.html?run=${accepted.id}&target=swap_sum&language=zh#explain-section-0`));
     await acceptedStatus.scrollIntoViewIfNeeded();
     await fit(page); await screenshot(page, `${width}-simple-accepted-solution.png`);
     await more.locator(':scope > summary').click();

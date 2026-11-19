@@ -8,6 +8,7 @@ import type { WebConfig } from './config';
 import type { WorkerExplanationInput, WorkerExplanationMessage, WorkerInput, WorkerMessage } from './shared';
 import { webArtifactMaxBytes, webExplanationPhases, webExplanationReason, webFailureKinds, webFailureReason } from './shared';
 import { isWebEventDetails } from './moduleTelemetry';
+import { explanationCheckpointSchema, maxExplanationMessageBytes } from './explanationCheckpoint';
 import { isWebAgentActionBody } from './agentActions';
 import { isWebFormalizationActivityBody } from './formalizationActivityValidation';
 import type { WebEventDetails } from './shared';
@@ -102,10 +103,11 @@ export function parseWorkerMessage(line: string): WorkerMessage | undefined {
 const count = z.number().int().nonnegative().max(1e12);
 const explanationMessageSchema = z.union([
   z.object({ type: z.literal('progress'), progress: z.object({ phase: z.enum(webExplanationPhases), batches: count.optional(),
-    approvedBatches: count.optional(), round: count.optional(), tokens: count.optional() }).strict() }).strict(),
+    approvedBatches: count.optional(), round: count.optional(), tokens: count.optional(), connectionFailures: count.optional() }).strict() }).strict(),
   // The server re-derives every check from the evidence; here it only has to be an object.
   z.object({ type: z.literal('result'), status: z.literal('approved'), evidence: z.record(z.unknown()) }).strict(),
-  z.object({ type: z.literal('result'), status: z.enum(['exhausted', 'error']), reason: z.string().regex(webExplanationReason) }).strict(),
+  z.object({ type: z.literal('result'), status: z.enum(['exhausted', 'error']), reason: z.string().regex(webExplanationReason),
+    checkpoint: explanationCheckpointSchema.optional() }).strict(),
 ]);
 export function parseExplanationMessage(line: string): WorkerExplanationMessage | undefined {
   try {
@@ -407,14 +409,17 @@ export class DockerWebRunner implements WebRunner {
         signal.addEventListener('abort', abort, { once: true });
         child.stdout.setEncoding('utf8');
         child.stdout.on('data', chunk => {
+          if (finished) return;
           buffer += chunk;
           for (let newline = buffer.indexOf('\n'); newline >= 0; newline = buffer.indexOf('\n')) {
-            const message = parseExplanationMessage(buffer.slice(0, newline));
+            const line = buffer.slice(0, newline);
+            if (Buffer.byteLength(line) > maxExplanationMessageBytes) return finish(new Error('explanation_output_too_large'));
+            const message = parseExplanationMessage(line);
             buffer = buffer.slice(newline + 1);
             if (message?.type === 'result') received = true;
             if (message && !finished) onMessage(message);
           }
-          if (buffer.length > 32 * 1024 * 1024) finish(new Error('explanation_output_too_large'));
+          if (buffer.length > maxExplanationMessageBytes) finish(new Error('explanation_output_too_large'));
         });
         child.stdin.on('error', () => {});
         child.once('error', () => finish(new Error('explanation_container_failed')));

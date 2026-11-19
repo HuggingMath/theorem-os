@@ -420,7 +420,7 @@ export const defaultProofId = (target: string) => target.replace(/[^A-Za-z0-9_-]
 export type WebExplanationReport = { schema: 'theorem-os.web-explanation-report.v1'; title: string; environment: WebEnvironment;
   proof: string; document: WebExplanationDocument; markdown: string; filename: string };
 export type WebExplanationProgress = { phase: WebExplanationPhase; batches?: number; approvedBatches?: number; round?: number;
-  tokens?: number; updatedAt: string };
+  tokens?: number; connectionFailures?: number; updatedAt: string };
 export type WebExplanation = {
   id: string; runId: string; target: string; language: WebExplanationLanguage; status: WebExplanationStatus;
   /** Created as part of the solve workflow, without a separate generation request. */
@@ -442,13 +442,17 @@ export type WebExplanationOverview = {
     maxRunSeconds: number; maxTotalTokens: number; reference: { declarations: number; seconds: number; tokens: number } }
     | { available: false; reason: 'sample' | 'not_accepted' | 'provider' | 'model' | 'runtime' };
 };
+/** Private container protocol data, never part of a WebExplanation. */
+export type WorkerExplanationCheckpoint = { schema: 'theorem-os.web-explanation-checkpoint.v1'; state: string; outline: string;
+  workspaces: Record<string, { 'INPUT.json': string; 'ROLE.md': string; 'OUTPUT.schema.json': string; 'OUTPUT.json': string }> };
 export type WorkerExplanationInput = { id: string; proof: string; target: string; language: WebExplanationLanguage;
   environment: WebEnvironment; model: string; effort: 'low' | 'high' | 'max'; apiKey: string; provider: WebWorkerProvider;
-  maxRunSeconds: number; maxTotalTokens: number; maxRoundsPerBatch: number; auditors: number };
+  maxRunSeconds: number; maxTotalTokens: number; maxRoundsPerBatch: number; auditors: number;
+  checkpoint?: WorkerExplanationCheckpoint };
 export type WorkerExplanationMessage =
   | { type: 'progress'; progress: Omit<WebExplanationProgress, 'updatedAt'> }
   | { type: 'result'; status: 'approved'; evidence: unknown }
-  | { type: 'result'; status: 'exhausted' | 'error'; reason: string };
+  | { type: 'result'; status: 'exhausted' | 'error'; reason: string; checkpoint?: WorkerExplanationCheckpoint };
 export const webExplanationReason = /^(?:explanation|informalization)_[a-z0-9_]{1,80}$/u;
 /** The id of the read-only sample run (apps/web/sample.ts); fixed so links and saved positions never collide with real runs. */
 export const webSampleRunId = '00000000-0000-4000-8000-00000000a001';

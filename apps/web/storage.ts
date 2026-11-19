@@ -3,11 +3,12 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { canonicalMathJson, mathDigest, syncMathDirectory, writeMathFrozen } from '../../src/math/mathRuntimeIo';
 import type { WebArchive, WebCheckReceipt, WebCommandResult, WebObservation, WebTaskSource } from './collaboration';
-import type { WebAccountIdentity, WebAgentAction, WebEvent, WebExplanation, WebRun } from './shared';
+import type { WebAccountIdentity, WebAgentAction, WebEvent, WebExplanation, WebRun, WorkerExplanationCheckpoint } from './shared';
 import type { WebShareSnapshot } from './share';
 
 export type WebCreation = { schema: 'theorem-os.web-creation.v1'; requestId: string; digest: string };
 type StoredRun = { owner: string; run: WebRun; creation?: WebCreation };
+type StoredExplanationCheckpoint = { binding: string; checkpoint: WorkerExplanationCheckpoint };
 
 export type StoredWebSession = { id: string; csrf: string; touchedAt: number; account?: WebAccountIdentity & { id: string }; passwordResetUntil?: number };
 export type StoredWebArchive = {
@@ -265,6 +266,18 @@ export class WebStorage {
   }
   getExplanationEvidence(owner: string, runId: string, key: string): unknown {
     return this.getRecord([...this.explanationPath(owner, runId, key), 'evidence.json']);
+  }
+  deleteExplanationEvidence(owner: string, runId: string, key: string): void {
+    this.deleteRecord([...this.explanationPath(owner, runId, key), 'evidence.json']);
+  }
+  saveExplanationCheckpoint(owner: string, runId: string, key: string, checkpoint: StoredExplanationCheckpoint): void {
+    this.saveRecord([...this.explanationPath(owner, runId, key), 'checkpoint.json'], checkpoint);
+  }
+  getExplanationCheckpoint(owner: string, runId: string, key: string): StoredExplanationCheckpoint | undefined {
+    return this.getRecord([...this.explanationPath(owner, runId, key), 'checkpoint.json']);
+  }
+  deleteExplanationCheckpoint(owner: string, runId: string, key: string): void {
+    this.deleteRecord([...this.explanationPath(owner, runId, key), 'checkpoint.json']);
   }
   deleteExplanation(owner: string, runId: string, key: string): void { this.deleteRecord(this.explanationPath(owner, runId, key)); }
   listEvents(owner: string, runId: string): WebEvent[] {

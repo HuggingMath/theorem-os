@@ -1,7 +1,9 @@
 import crypto from 'node:crypto';
 import { mathDigest } from '../../src/math/mathRuntimeIo';
+import { informalizationRetryLimit } from '../../src/solver/informalization';
 import { webExplanationLimits } from './config';
 import { explanationDocument, verifyExplanationEvidence } from './explanation';
+import { explanationCheckpointBinding } from './explanationCheckpoint';
 import type { WebRunner } from './runner';
 import type { WebExplanation, WebExplanationLanguage, WebExplanationProgress, WebProvider, WebRun, WorkerExplanationInput,
   WorkerExplanationMessage } from './shared';
@@ -126,8 +128,8 @@ export class WebExplanations {
     if (existingJob && active(existingJob.explanation)) throw new WebStorageError(409, '这份讲解正在生成。');
     if (existing?.status === 'approved') throw new WebStorageError(409, '这份讲解已经生成；如需重新生成，请先删除它。');
     if (!automatic) this.capacity(owner);
-    // A record without a live job can remain after a failed save; an explicit retry replaces it.
-    if (existing) this.storage.deleteExplanation(owner, run.id, key);
+    // A failed final save can leave orphaned evidence. A usable checkpoint survives an explicit retry.
+    if (existing) this.storage.deleteExplanationEvidence(owner, run.id, key);
     const now = new Date().toISOString();
     const waitingReview = automatic && !isStatementReviewed(run);
     const explanation: WebExplanation = { id: crypto.randomUUID(), runId: run.id, target: request.target, language: request.language,
@@ -189,6 +191,7 @@ export class WebExplanations {
   private release(job: Job) {
     if (this.current(job)) this.jobs.delete(this.id(job.owner, job.run.id, job.key));
     job.input.apiKey = '';
+    delete job.input.checkpoint;
   }
   /** Queue positions count every explanation generating or waiting before this one, across owners; never who they are. */
   private view(job: Job): WebExplanation {
@@ -233,24 +236,39 @@ export class WebExplanations {
         const previous = job.explanation.progress, now = new Date().toISOString();
         const progress: WebExplanationProgress = { ...previous, ...message.progress, updatedAt: now };
         job.explanation.progress = progress; job.explanation.updatedAt = now;
-        this.persist(job, previous?.phase !== progress.phase || previous?.approvedBatches !== progress.approvedBatches);
+        this.persist(job, previous?.phase !== progress.phase || previous?.approvedBatches !== progress.approvedBatches ||
+          previous?.connectionFailures !== progress.connectionFailures);
       } catch (error) { messageError = error; job.controller.abort(); }
     };
     try {
       this.persist(job, true);
       if (!this.runner.explain) throw new Error('explanation_runtime_unavailable');
       if (job.explanation.automatic) this.beforeAutomaticStart?.(job.owner);
+      const checkpointBinding = explanationCheckpointBinding(job.input);
+      const saved = this.storage.getExplanationCheckpoint(job.owner, job.run.id, job.key);
+      if (saved?.binding === checkpointBinding) job.input.checkpoint = saved.checkpoint;
+      else if (saved) this.storage.deleteExplanationCheckpoint(job.owner, job.run.id, job.key);
       await this.runner.explain(job.input, handle, job.controller.signal);
       if (messageError) throw messageError;
       if (!this.current(job) || !active(job.explanation)) return;
       if (!result) throw new Error('explanation_worker_no_result');
-      if (result.status !== 'approved') { this.finish(job, { status: result.status, reason: result.reason }); return; }
+      if (result.status !== 'approved') {
+        if (result.status === 'error' && result.reason === informalizationRetryLimit && result.checkpoint) {
+          this.storage.saveExplanationCheckpoint(job.owner, job.run.id, job.key, { binding: checkpointBinding, checkpoint: result.checkpoint });
+        } else if (job.input.checkpoint && (result.status === 'exhausted' ||
+          result.reason === 'informalization_audit_invalid' || result.reason === 'informalization_checkpoint_changed')) {
+          this.storage.deleteExplanationCheckpoint(job.owner, job.run.id, job.key);
+        }
+        this.finish(job, { status: result.status, reason: result.reason });
+        return;
+      }
       const binding = { proof: job.input.proof, target: job.input.target, language: job.input.language, environment: job.input.environment };
       const { evidence } = verifyExplanationEvidence(result.evidence, binding);
       // The projection must work before approval; its document is not stored, read() projects it again.
       explanationDocument(evidence, binding.proof);
       this.storage.saveExplanationEvidence(job.owner, job.run.id, job.key, evidence);
       this.finish(job, { status: 'approved' });
+      if (job.input.checkpoint) this.storage.deleteExplanationCheckpoint(job.owner, job.run.id, job.key);
     } catch (error) {
       try { this.finish(job, { status: 'error', reason: reasonOf(messageError ?? error) }); }
       catch { /* A failed final save is interrupted on restart or replaced on explicit retry. */ }

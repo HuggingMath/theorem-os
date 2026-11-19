@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { excerptLines, explanationDocument, explanationMarkdownFilename, verifyExplanationEvidence } from '../apps/web/explanation';
 import { explanationKey, WebExplanations } from '../apps/web/explanations';
 import { informalizationAuditInput, informalizationBatches } from '../src/math/informalization';
+import { informalizationRetryLimit } from '../src/solver/informalization';
 import { explanationStopReason, startGatewayForwarder } from '../apps/web/explanationWorker';
 import { parseExplanationMessage, type WebRunner } from '../apps/web/runner';
 import type { WebExplanation, WebRun, WorkerExplanationInput, WorkerExplanationMessage } from '../apps/web/shared';
@@ -202,6 +203,8 @@ const run = (id = '11111111-2222-4333-8444-555555555555'): WebRun => ({ id, titl
 const provider = { id: 'sub2api', name: 'Sub2API', baseUrl: 'http://host.docker.internal:8080/v1' };
 const request = (target = 'target_thm', language: 'zh' | 'en' = 'zh') =>
   ({ target, language, apiKey: 'sk-explain-test-key', provider, model: 'deepseek-flash', effort: 'max' as const });
+const workerCheckpoint = { schema: 'theorem-os.web-explanation-checkpoint.v1' as const,
+  outline: '{"private":"outline"}', state: '{"private":"state"}', workspaces: {} };
 const status = (action: () => unknown) => {
   try { action(); } catch (error) { return error instanceof WebStorageError ? error.status : -1; }
   return 0;
@@ -272,6 +275,51 @@ describe('web explanation jobs', () => {
     save.mockRestore();
     expect(jobs.create('owner-a', run(), request())).toMatchObject({ status: 'queued' });
     await jobs.close();
+  });
+
+  it.each(['same', 'changed'] as const)('releases the slot and carries private work across a retry with the %s gateway', async configuration => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'web-explanation-retry-'));
+    const storage = new WebStorage(root), runner = new ExplainRunner();
+    const jobs = new WebExplanations(runner, storage, { concurrency: 1, queueLimit: 3, perOwner: 3 });
+    let retryJobs: WebExplanations | undefined;
+    try {
+      const proofRun = run(), key = explanationKey('target_thm', 'zh');
+      storage.saveRun('owner-a', proofRun);
+      const first = jobs.create('owner-a', proofRun, request());
+      const next = jobs.create('owner-b', proofRun, request());
+      await settle();
+      expect(runner.calls.map(call => call.input.id)).toEqual([first.id]);
+      runner.calls[0]!.send({ type: 'progress', progress: { phase: 'retrying', round: 1, connectionFailures: 3 } });
+      runner.calls[0]!.send({ type: 'result', status: 'error', reason: informalizationRetryLimit, checkpoint: workerCheckpoint });
+      runner.calls[0]!.resolve();
+      await settle();
+      expect(runner.calls.map(call => call.input.id)).toEqual([first.id, next.id]);
+      expect(runner.calls[1]!.input.checkpoint).toBeUndefined();
+      expect(jobs.read('owner-a', proofRun, 'target_thm', 'zh')).toMatchObject({ status: 'error', reason: informalizationRetryLimit,
+        progress: { connectionFailures: 3, round: 1 } });
+      expect(jobs.list('owner-a', proofRun.id)[0]).not.toHaveProperty('checkpoint');
+      expect(jobs.read('owner-a', proofRun, 'target_thm', 'zh')).not.toHaveProperty('document');
+      expect(storage.getExplanationCheckpoint('owner-a', proofRun.id, key)).toMatchObject({ checkpoint: workerCheckpoint });
+      expect(storage.getExplanationEvidence('owner-a', proofRun.id, key)).toBeUndefined();
+      await jobs.close();
+
+      const reopened = new WebStorage(root), retryRunner = new ExplainRunner();
+      retryJobs = new WebExplanations(retryRunner, reopened);
+      retryJobs.create('owner-a', proofRun, { ...request(), apiKey: 'sk-replaced-test-key',
+        provider: configuration === 'same' ? provider : { ...provider, baseUrl: 'http://another-fixture:8080/v1' } });
+      await settle();
+      expect(retryRunner.calls[0]!.input.checkpoint).toEqual(configuration === 'same' ? workerCheckpoint : undefined);
+      retryRunner.calls[0]!.send({ type: 'result', status: 'approved', evidence: roundTrip(evidence()) });
+      retryRunner.calls[0]!.resolve();
+      await settle();
+      expect(retryJobs.read('owner-a', proofRun, 'target_thm', 'zh')).toMatchObject({ status: 'approved',
+        document: { target: 'target_thm' } });
+      expect(reopened.getExplanationCheckpoint('owner-a', proofRun.id, key)).toBeUndefined();
+    } finally {
+      await retryJobs?.close();
+      await jobs.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('queues, runs and stores an approved explanation; the key reaches only the worker input', async () => {
@@ -439,12 +487,17 @@ describe('web explanation jobs', () => {
 });
 
 describe('explanation worker protocol', () => {
-  it('accepts only phase progress, evidence objects and reason codes from the container', () => {
+  it('accepts progress, evidence, and a bounded private checkpoint from the container', () => {
     expect(parseExplanationMessage(JSON.stringify({ type: 'progress', progress: { phase: 'auditing', batches: 2, approvedBatches: 1, round: 2, tokens: 0 } })))
       .toEqual({ type: 'progress', progress: { phase: 'auditing', batches: 2, approvedBatches: 1, round: 2, tokens: 0 } });
     expect(parseExplanationMessage('{"type":"result","status":"approved","evidence":{"schema":"x"}}')).toMatchObject({ status: 'approved' });
     expect(parseExplanationMessage('{"type":"result","status":"error","reason":"informalization_proof_does_not_compile"}'))
       .toMatchObject({ reason: 'informalization_proof_does_not_compile' });
+    const stopped = { type: 'result', status: 'error', reason: informalizationRetryLimit, checkpoint: workerCheckpoint };
+    expect(parseExplanationMessage(JSON.stringify(stopped))).toEqual(stopped);
+    expect(parseExplanationMessage(JSON.stringify({ ...stopped, checkpoint: { ...workerCheckpoint, workspaces: {
+      '../profile': { 'INPUT.json': '', 'ROLE.md': '', 'OUTPUT.schema.json': '', 'OUTPUT.json': '' },
+    } } }))).toBeUndefined();
     for (const line of [
       '{"type":"progress","progress":{"phase":"thinking"}}',
       '{"type":"progress","progress":{"phase":"writing","message":"model text"}}',
@@ -465,6 +518,7 @@ describe('explanation worker protocol', () => {
       .toEqual({ status: 'error', reason: 'informalization_proof_does_not_compile' });
     expect(explanationStopReason('stopped', 'informalization_role_incomplete:failed:other:model said', false))
       .toEqual({ status: 'error', reason: 'informalization_role_incomplete' });
+    expect(explanationStopReason('stopped', informalizationRetryLimit, false)).toEqual({ status: 'error', reason: informalizationRetryLimit });
     expect(explanationStopReason('stopped', 'formalization_sandbox_canary_failed', false))
       .toEqual({ status: 'error', reason: 'explanation_sandbox_canary_failed' });
     expect(explanationStopReason('stopped', 'Unexpected token < in JSON', false)).toEqual({ status: 'error', reason: 'explanation_failed' });

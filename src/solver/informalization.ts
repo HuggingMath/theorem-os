@@ -64,10 +64,14 @@ type Options = {
   extract?: typeof extractInformalizationOutline;
   env?: NodeJS.ProcessEnv; signal?: AbortSignal;
   waitForRetry?: (delayMs: number, signal: AbortSignal) => Promise<void>;
-  onEvent?: (event: { event: string; batch?: number; round?: number; role?: InformalizationRole; error?: string }) => void;
+  onEvent?: (event: { event: string } & EventDetail) => void;
 };
+type EventDetail = { batch?: number; round?: number; role?: InformalizationRole; error?: string;
+  failureDiagnostic?: MathAgentFailureDiagnostic };
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
 const MAX_AUDIT_ATTEMPTS = 3;
+const MAX_ROLE_TRANSPORT_ATTEMPTS = 3;
+export const informalizationRetryLimit = 'informalization_role_retries_exhausted';
 class InformalizationRoleFailure extends Error {
   constructor(status: string, readonly diagnostic?: MathAgentFailureDiagnostic) {
     super('informalization_role_incomplete:' + status + (diagnostic ? ':' + diagnostic.code +
@@ -158,14 +162,15 @@ export async function runInformalization(directory: string, root: string, option
         if (active) state.activeSince = Date.now(); else delete state.activeSince;
         writeMathJsonDurable(path.join(directory, 'state.json'), state);
       };
-      const event = (name: string, detail: { batch?: number; round?: number; role?: InformalizationRole; error?: string } = {}) =>
+      const event = (name: string, detail: EventDetail = {}) =>
         options.onEvent?.({ event: name, ...detail });
       type Slot = { role: InformalizationRole; batch: number; round: number; attempt: number; auditorId?: string };
       // Roles in flight; reported usage reaching the allowance stops all of them, not only the next dispatch.
       const running = new Set<() => void>();
       const spent = () => allowanceReached(request.maxTotalTokens, state.sessions);
-      const dispatchOnce = async (slot: Slot, input: { inputDigest: string }, check: (value: unknown) => string[]): Promise<unknown> => {
-        lease.signal.throwIfAborted();
+      const dispatchOnce = async (slot: Slot, input: { inputDigest: string }, check: (value: unknown) => string[],
+        signal: AbortSignal): Promise<unknown> => {
+        signal.throwIfAborted();
         if (remaining() <= 0) throw new Error('informalization_time_limit');
         if (currentProfileDigest() !== profileDigest) throw new Error('informalization_profile_changed_during_run');
         const config = slot.role === 'write' ? request.writer : request.auditors.find(item => item.id === slot.auditorId)!;
@@ -198,7 +203,8 @@ export async function runInformalization(directory: string, root: string, option
         const name = slot.role === 'write' ? 'write' : `audit-${slot.auditorId}-${slot.attempt}`;
         const roundDirectory = path.join(directory, 'batches', String(slot.batch), 'round-' + slot.round);
         const baseWorkspace = path.join(roundDirectory, name);
-        const workspace = fs.existsSync(baseWorkspace) ? path.join(roundDirectory, 'retry-' + crypto.randomUUID(), name) : baseWorkspace;
+        const baseUsed = fs.existsSync(baseWorkspace) || state.sessions.some(item => item.workspace === path.relative(directory, baseWorkspace));
+        const workspace = baseUsed ? path.join(roundDirectory, 'retry-' + crypto.randomUUID(), name) : baseWorkspace;
         assertMathCanonicalPath(workspace);
         fs.mkdirSync(workspace, { mode: 0o700, recursive: true });
         const inputFile = path.join(workspace, 'INPUT.json'), outputFile = path.join(workspace, 'OUTPUT.json');
@@ -219,20 +225,21 @@ export async function runInformalization(directory: string, root: string, option
         state.sessions.push(record); save(); event('informalization_role_started', slot);
         const turnTimeout = stageTimeout(request.maxTurnSeconds);
         let session: MathAgentSession | undefined, incomplete = false, modelSlot: MathModelSlot | undefined, stopped = false;
+        let failureDiagnostic: MathAgentFailureDiagnostic | undefined;
         const interrupt = () => { void session?.interrupt().catch(() => {}); void session?.close().catch(() => {}); };
         const stop = () => { stopped = true; interrupt(); };
-        lease.signal.addEventListener('abort', interrupt, { once: true });
+        signal.addEventListener('abort', interrupt, { once: true });
         running.add(stop);
         try {
           // Host-side admission control across every process sharing the model gateway.
           const slotConfiguration = options.openSession ? undefined : configuredMathModelSlots();
           if (slotConfiguration) {
             event('informalization_model_slot_waiting', slot);
-            modelSlot = await acquireMathModelSlot(slotConfiguration, { signal: lease.signal });
+            modelSlot = await acquireMathModelSlot(slotConfiguration, { signal });
           }
           session = await openWorkflowSession(config, {
             executable: config.executable, profile: config.profile, workspace, model: config.model, effort: config.effort,
-            instructions: instructionsText, environment: env, signal: lease.signal,
+            instructions: instructionsText, environment: env, signal,
             turnTimeoutMs: Number.isFinite(turnTimeout) ? turnTimeout : undefined,
             readIsolation: { environment: request.environment },
             completedOutput: { file: outputFile,
@@ -243,7 +250,7 @@ export async function runInformalization(directory: string, root: string, option
               if (spent()) for (const stopRole of running) stopRole();
             }, onUsageIncomplete: () => { incomplete = true; },
           }, options.openSession);
-          if (lease.signal.aborted) { await session.close(); lease.signal.throwIfAborted(); }
+          signal.throwIfAborted();
           if (stopped || spent()) throw new Error('math_total_token_limit');
           record.threadId = session.threadId;
           if (state.sessions.some(item => item !== record && item.threadId === record.threadId))
@@ -253,9 +260,10 @@ export async function runInformalization(directory: string, root: string, option
           // A turn stopped at the allowance ends the run; one that still finished keeps its output.
           record.status = await session.run(ROLE_PROMPT, crypto.randomUUID(), workspace, turnId => { record.turnId = turnId; record.turns = 1; save(); })
             .catch((cause: unknown) => { throw stopped ? new Error('math_total_token_limit') : cause; });
-          lease.signal.throwIfAborted();
+          signal.throwIfAborted();
           if (!['completed', 'submitted'].includes(record.status) || !record.turnId) {
-            if (session.lastFailureDiagnostic) record.failureDiagnostic = { ...session.lastFailureDiagnostic };
+            failureDiagnostic = session.lastFailureDiagnostic;
+            if (failureDiagnostic) record.failureDiagnostic = { ...failureDiagnostic };
             if (stopped) throw new Error('math_total_token_limit');
             throw new InformalizationRoleFailure(record.status, session.lastFailureDiagnostic);
           }
@@ -271,32 +279,33 @@ export async function runInformalization(directory: string, root: string, option
         } finally {
           await session?.close();
           await modelSlot?.release();
-          if (['opening', 'running'].includes(record.status)) record.status = lease.signal.aborted || stopped ? 'interrupted' : 'failed';
-          lease.signal.removeEventListener('abort', interrupt);
+          if (['opening', 'running'].includes(record.status)) record.status = signal.aborted || stopped ? 'interrupted' : 'failed';
+          signal.removeEventListener('abort', interrupt);
           running.delete(stop);
           record.usageAccounting.pending = false;
           record.usageAccounting.reportedTurns = reportedTotalTokens(record.usage) !== null && !incomplete ? 1 : 0;
           record.usageAccounting.incomplete = incomplete || (record.usageAccounting.startedTurns > record.usageAccounting.reportedTurns);
-          save(); event('informalization_role_finished', slot);
+          save(); event('informalization_role_finished', { ...slot, ...(failureDiagnostic ? { failureDiagnostic } : {}) });
         }
       };
-      const dispatch = async (...args: Parameters<typeof dispatchOnce>) => {
-        for (let attempt = 0; ; attempt++) {
+      const dispatch = async (slot: Slot, input: { inputDigest: string }, check: (value: unknown) => string[],
+        signal = lease.signal) => {
+        for (let attempt = 1; ; attempt++) {
           try {
-            const result = await dispatchOnce(...args);
+            const result = await dispatchOnce(slot, input, check, signal);
             if (state.error?.startsWith('informalization_role_incomplete:')) { delete state.error; save(); }
             return result;
           } catch (cause) {
             if (!retryableRoleFailure(cause)) throw cause;
-            lease.signal.throwIfAborted();
+            signal.throwIfAborted();
             if (remaining() <= 0) throw new Error('informalization_time_limit');
             const budget = buildTokenBudget(request.maxTotalTokens, state.sessions);
             if (!modelDispatchAllowed(budget)) throw new Error(budget.reason ?? 'informalization_token_limit');
-            state.error = errorText(cause); save(); event('informalization_role_retrying', { ...args[0], error: state.error });
-            // A jittered delay cap, not an attempt limit; only this role repeats, in a fresh thread.
-            const cap = Math.min(30_000, 1000 * 2 ** Math.min(attempt, 5), remaining());
+            if (attempt >= MAX_ROLE_TRANSPORT_ATTEMPTS) throw new Error(informalizationRetryLimit);
+            state.error = errorText(cause); save(); event('informalization_role_retrying', { ...slot, error: state.error });
+            const cap = Math.min(1000 * 2 ** (attempt - 1), remaining());
             const delay = Math.max(1, Math.round(cap * (0.5 + Math.random() * 0.5)));
-            await (options.waitForRetry ?? ((ms, signal) => wait(ms, undefined, { signal })))(delay, lease.signal);
+            await (options.waitForRetry ?? ((ms, signal) => wait(ms, undefined, { signal })))(delay, signal);
           }
         }
       };
@@ -357,24 +366,32 @@ export async function runInformalization(directory: string, root: string, option
             }
             const explanation = written as InformalizationWriterOutput;
             const auditInput = informalizationAuditInput({ ...context, explanation });
-            const settled = await Promise.allSettled(request.auditors.map(async auditor => {
-              for (let attempt = 1; attempt <= MAX_AUDIT_ATTEMPTS; attempt++) {
-                const output = await dispatch({ role: 'audit', batch: batch.index, round, attempt, auditorId: auditor.id }, auditInput,
-                  value => informalizationAuditRejections(auditInput, value));
-                if (output !== undefined && !informalizationAuditRejections(auditInput, output).length)
-                  return { auditorId: auditor.id, output: output as InformalizationAuditOutput };
+            const auditStop = new AbortController();
+            const auditSignal = AbortSignal.any([lease.signal, auditStop.signal]);
+            let firstFailure: { cause: unknown } | undefined;
+            const audits = await Promise.all(request.auditors.map(async auditor => {
+              try {
+                for (let attempt = 1; attempt <= MAX_AUDIT_ATTEMPTS; attempt++) {
+                  const output = await dispatch({ role: 'audit', batch: batch.index, round, attempt, auditorId: auditor.id }, auditInput,
+                    value => informalizationAuditRejections(auditInput, value), auditSignal);
+                  if (output !== undefined && !informalizationAuditRejections(auditInput, output).length)
+                    return { auditorId: auditor.id, output: output as InformalizationAuditOutput };
+                }
+                throw new Error(`informalization_audit_invalid: ${auditor.id} wrote no valid audit in ${MAX_AUDIT_ATTEMPTS} attempts`);
+              } catch (error) {
+                firstFailure ??= { cause: error };
+                if (errorText(error) === informalizationRetryLimit) auditStop.abort(error);
+                return undefined;
               }
-              throw new Error(`informalization_audit_invalid: ${auditor.id} wrote no valid audit in ${MAX_AUDIT_ATTEMPTS} attempts`);
             }));
-            const failed = settled.find(item => item.status === 'rejected');
-            if (failed) throw failed.reason;
-            const audits = settled.map(item => (item as PromiseFulfilledResult<{ auditorId: string; output: InformalizationAuditOutput }>).value);
-            if (audits.every(item => informalizationAuditApproved(item.output))) {
+            if (firstFailure) throw firstFailure.cause;
+            const completedAudits = audits.filter(item => item !== undefined);
+            if (completedAudits.every(item => informalizationAuditApproved(item.output))) {
               record.status = 'approved'; record.open = false; delete record.feedback; delete record.previous;
-              record.accepted = { writer: explanation, writerInputDigest: writerInput.inputDigest, audits };
+              record.accepted = { writer: explanation, writerInputDigest: writerInput.inputDigest, audits: completedAudits };
               save(); event('informalization_batch_approved', { batch: batch.index, round });
             } else {
-              record.feedback = informalizationAuditFeedback(audits); record.previous = explanation;
+              record.feedback = informalizationAuditFeedback(completedAudits); record.previous = explanation;
               record.open = false; save();
               event('informalization_revision_requested', { batch: batch.index, round, role: 'audit', error: record.feedback });
             }

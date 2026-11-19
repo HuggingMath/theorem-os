@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { explanationDocument } from '../apps/web/explanation';
+import { captureExplanationCheckpoint, restoreExplanationCheckpoint } from '../apps/web/explanationCheckpoint';
 import type { StaticReportPage } from '../apps/web/staticReport';
 import { formalizationDigest, readFormalizationArtifact } from '../src/math/formalization';
 import { attachInformalizationGoals, informalizationExtractionQuery, informalizationGoalsQuery, informalizationLibraryContext,
@@ -12,13 +13,13 @@ import { INFORMALIZATION_ALIGNMENT, INFORMALIZATION_EXPLANATION_POLICY, INFORMAL
   assertInformalizationEvidence, informalizationAuditApproved, informalizationAuditFeedback, informalizationAuditInput,
   informalizationAuditRejections, informalizationBatches, informalizationDigest, informalizationExcerptCoverage, informalizationRoleInstructions,
   informalizationRoleOutputSchema, informalizationWriterInput, informalizationWriterRejections, informalizationWriterSubmissionRejections,
-  readInformalizationArtifact,
+  prepareInformalization, readInformalizationArtifact,
   readInformalizationRequest, renderInformalization, type InformalizationAlignedAuditOutput, type InformalizationAlignedSection,
   type InformalizationAuditInput, type InformalizationAuditOutput, type InformalizationSection,
   type InformalizationWriterInput, type InformalizationWriterOutput } from '../src/math/informalization';
 import { mathDigest, readMathText } from '../src/math/mathRuntimeIo';
 import type { MathAgentFailureDiagnostic, MathAgentOptions, MathAgentSession } from '../src/runtime/codexSession';
-import { readInformalizationState, runInformalization } from '../src/solver/informalization';
+import { informalizationRetryLimit, readInformalizationState, runInformalization } from '../src/solver/informalization';
 import { informalize } from '../scripts/mathematics/informalize';
 import { INFORMALIZATION_NONCE, LIB_SOURCE, PROOF_SOURCE, informalizationFixture, informalizationGoalsReport, informalizationReport,
   informalizationSources, sourceRange } from './helpers/informalizationFixture';
@@ -879,6 +880,64 @@ describe('informalization runner', () => {
     expect(writes.map(call => [call.batch, call.round])).toEqual([[0, 1], [0, 1], [1, 1]]);
     expect(writes[1]!.workspace).toMatch(/\/batches\/0\/round-1\/retry-[0-9a-f-]+\/write$/u);
     expect(readInformalizationState(r.directory)!.error).toBeUndefined();
+  });
+
+  it('stops a disconnected reviewer after three attempts and resumes completed work in a fresh worker', async () => {
+    const r = runner(), waitForRetry = vi.fn(async () => {});
+    const failing = presetAgent({ diagnostic: call => call.batch === 1 && call.auditorId === 'auditor-2'
+      ? { code: 'responseStreamDisconnected' } : undefined });
+    expect(await r.run(failing, { waitForRetry })).toMatchObject({
+      status: 'stopped', approvedBatches: 1, rounds: 2, error: informalizationRetryLimit,
+    });
+    const failed = failing.calls.filter(call => call.batch === 1 && call.auditorId === 'auditor-2');
+    expect(failed.map(call => call.round)).toEqual([1, 1, 1]);
+    expect(new Set(failed.map(call => call.workspace)).size).toBe(3);
+    expect(waitForRetry).toHaveBeenCalledTimes(2);
+    expect(fs.existsSync(path.join(r.directory, 'artifact'))).toBe(false);
+
+    fs.writeFileSync(path.join(r.directory, 'private-model-log'), 'must-not-be-exported');
+    const snapshot = captureExplanationCheckpoint(r.directory, 'sk-fixture-key')!;
+    expect(JSON.stringify(snapshot)).not.toContain('must-not-be-exported');
+    expect(Object.keys(snapshot.workspaces).sort()).toEqual(['batches/1/round-1/audit-auditor-1-1', 'batches/1/round-1/write']);
+    const directory = path.join(r.base, 'fresh-worker');
+    const request = prepareInformalization(directory, r.preparation);
+    expect(restoreExplanationCheckpoint(directory, '0'.repeat(64), snapshot)).toBe(false);
+    expect(fs.existsSync(path.join(directory, 'state.json'))).toBe(false);
+    expect(restoreExplanationCheckpoint(directory, informalizationDigest(request), JSON.parse(JSON.stringify(snapshot)))).toBe(true);
+    fs.rmSync(r.directory, { recursive: true });
+
+    const resumed = presetAgent(), events: string[] = [];
+    expect(await runInformalization(directory, r.root, { openSession: resumed.open, extract: r.extract as never,
+      onEvent: event => events.push(event.event) })).toMatchObject({ status: 'approved', approvedBatches: 2, rounds: 2 });
+    expect(resumed.calls.map(call => [call.batch, call.role, call.auditorId])).toEqual([[1, 'audit', 'auditor-2']]);
+    expect(resumed.calls[0]!.workspace).toMatch(/\/retry-[0-9a-f-]+\/audit-auditor-2-1$/u);
+    expect(events.filter(event => event === 'informalization_role_restored')).toHaveLength(2);
+    expect(r.extract).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends an outstanding peer audit and waits for its cleanup when another reviewer repeatedly disconnects', async () => {
+    const r = runner();
+    const failing = presetAgent({ diagnostic: call => call.auditorId === 'auditor-1' ? { code: 'responseStreamDisconnected' } : undefined });
+    let finishAudit: (() => void) | undefined, cleanedUp = false;
+    const interrupt = vi.fn(async () => { finishAudit?.(); });
+    const close = vi.fn(async () => {
+      await new Promise<void>(resolve => setImmediate(resolve));
+      cleanedUp = true;
+    });
+    const result = await r.run({ ...failing, open: async options => {
+      if (path.basename(options.workspace) !== 'audit-auditor-2-1') return failing.open(options);
+      return { threadId: 'held-review', interrupt, close, run: async (_message, _id, _workspace, onStarted) => {
+        onStarted('held-review-turn');
+        await new Promise<void>(resolve => { finishAudit = resolve; });
+        return 'interrupted';
+      } };
+    } });
+    expect(result).toMatchObject({ status: 'stopped', error: informalizationRetryLimit, rounds: 1 });
+    expect(failing.calls.filter(call => call.auditorId === 'auditor-1')).toHaveLength(3);
+    expect(interrupt).toHaveBeenCalled();
+    expect(cleanedUp).toBe(true);
+    expect(readInformalizationState(r.directory)!.sessions.find(session => session.auditorId === 'auditor-2'))
+      .toMatchObject({ status: 'interrupted', usageAccounting: { pending: false } });
   });
 
   it('stops when an auditor writes no valid audit in three attempts', async () => {

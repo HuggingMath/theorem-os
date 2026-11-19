@@ -5,7 +5,7 @@ import type { WebExplanation, WebExplanationDocument, WebExplanationGoals, WebEx
 import { effortLabels, formatDuration, formatTokens } from '../presentation';
 import { t } from '../i18n';
 import { explanationEstimate, type StepRef } from './explainText';
-import { explanationReasonText, explanationUnavailableText } from './explanationState';
+import { explanationConnectionFailuresText, explanationReasonText, explanationUnavailableText } from './explanationState';
 import { ChosenBar, ProblemCard, type FragmentStep } from './correspondence';
 import { LeanName, Rich, type RichLink } from './richText';
 import { Icon, Spinner } from './ui/Icon';
@@ -115,6 +115,7 @@ function ProgressView({ explanation, now }: { explanation: WebExplanation; now: 
   const visiblePhases = waiting ? phases : phases.filter(item => item.id !== 'waiting_review');
   const current = Math.max(0, visiblePhases.findIndex(item => item.phases.includes(phase)));
   const elapsed = now - Date.parse(explanation.createdAt);
+  const connectionFailures = progress?.connectionFailures ?? 0;
   return <div class="explain-card explain-progress" aria-live="polite">
     <div class="result-banner running"><Spinner /><div><h3>{waiting ? t('等待原题含义审核') : explanation.status === 'queued' ? t('排队等待生成') : t('正在生成讲解')}</h3>
       <p>{t('生成在服务器上进行，可以关闭页面，稍后回来查看。')}</p></div></div>
@@ -126,6 +127,7 @@ function ProgressView({ explanation, now }: { explanation: WebExplanation; now: 
       {explanation.queue && <Fact label={t('排队位置')} value={t('前面 {0} 份', explanation.queue.ahead)} />}
       {progress?.batches !== undefined && <Fact label={t('已通过批次')} value={`${progress.approvedBatches ?? 0}/${progress.batches}`} mono />}
       {progress?.round !== undefined && <Fact label={t('审核轮次')} value={t('第 {0} 轮', progress.round)} />}
+      {connectionFailures > 0 && <Fact label={t('模型连接失败次数')} value={String(connectionFailures)} mono />}
       <Fact label={t('Token 用量')} value={`${formatTokens(progress?.tokens ?? 0)} / ${explanation.maxTotalTokens ? formatTokens(explanation.maxTotalTokens) : t('不限')}`} mono />
       <Fact label={t('时间上限')} value={hours(explanation.maxRunSeconds)} />
     </dl>
@@ -134,9 +136,11 @@ function ProgressView({ explanation, now }: { explanation: WebExplanation; now: 
 }
 function StoppedView({ explanation }: { explanation: WebExplanation }) {
   const cancelled = explanation.status === 'cancelled';
+  const connectionFailures = explanationConnectionFailuresText(explanation.progress?.connectionFailures);
   return <div class={`result-banner ${cancelled ? 'warning' : 'failed'}`}><Icon name={cancelled ? 'square' : 'circle-alert'} />
     <div><h3>{cancelled ? t('已停止生成') : explanation.status === 'exhausted' ? t('讲解没有完成') : t('生成失败')}</h3>
-      <p>{cancelled ? t('已用的 Token 不会退回。') : explanationReasonText(explanation.reason)}</p></div></div>;
+      <p>{cancelled ? t('已用的 Token 不会退回。') : explanationReasonText(explanation.reason)}</p>
+      {connectionFailures && <p>{connectionFailures}</p>}</div></div>;
 }
 
 /** The approved explanation: overview, then one section per declaration in file order, each step tied to its Lean lines. */

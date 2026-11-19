@@ -2,7 +2,7 @@ import type { WebExplanationPhase, WebExplanationSection } from '../../shared';
 import { locale, t } from '../../i18n';
 import { explanationStepQuestion, type ChatAnswer } from '../chatAnswer';
 import type { ChatMathematicalTask, ChatMathematics } from '../chatMathematics';
-import { explanationReasonText, explanationUnavailableText } from '../explanationState';
+import { explanationConnectionFailuresText, explanationReasonText, explanationUnavailableText } from '../explanationState';
 import { ChatMessageContent } from './ChatMessageContent';
 import { Icon } from './Icon';
 
@@ -94,6 +94,7 @@ export function ChatMathematicalAnswer({ runId, answer, onRetry, onTarget, onQue
 }) {
   const document = answer?.document, targets = answer?.overview?.targets ?? [];
   const explanation = answer?.explanation, generation = answer?.overview?.generation;
+  const connectionFailures = explanationConnectionFailuresText(explanation?.progress?.connectionFailures);
   const generating = explanation?.status === 'queued' || explanation?.status === 'running';
   const stopped = explanation && ['error', 'exhausted', 'cancelled'].includes(explanation.status);
   const phases: Record<WebExplanationPhase, string> = { queued: t('讲解正在排队'), waiting_review: t('等待原题含义审核'), preparing: t('正在准备讲解'),
@@ -129,11 +130,13 @@ export function ChatMathematicalAnswer({ runId, answer, onRetry, onTarget, onQue
       {generating ? <div class="chat-answer-generation" role="status"><p class="chat-answer-state"><span class="spinner" />{phases[explanation.progress?.phase ?? (explanation.status === 'queued' ? 'queued' : 'writing')]}</p>
         {explanation.queue && <p>{t('前面 {0} 份', explanation.queue.ahead)}</p>}
         {explanation.progress?.batches !== undefined && <p>{t('已通过批次')} {explanation.progress.approvedBatches ?? 0} / {explanation.progress.batches}</p>}
+        {connectionFailures && <p>{connectionFailures}</p>}
         <p>{t('讲解会在后台继续，完成后自动显示。')}</p></div>
         : <>
           {stopped ? <div class="chat-answer-stopped" role="status"><strong>{explanation.status === 'cancelled' ? t('已停止生成')
             : explanation.status === 'exhausted' ? t('讲解没有完成') : t('生成失败')}</strong>
-            {explanation.status !== 'cancelled' && <p>{explanationReasonText(explanation.reason)}</p>}</div>
+            {explanation.status !== 'cancelled' && <p>{explanationReasonText(explanation.reason)}</p>}
+            {connectionFailures && <p>{connectionFailures}</p>}</div>
             : <p class="chat-math-empty">{t('这份验收证明还没有可阅读的讲解。')}</p>}
           {generation && 'reason' in generation && <p class="chat-math-empty" data-chat-answer-unavailable>{explanationUnavailableText(generation.reason)}</p>}
         </>}
