@@ -271,11 +271,16 @@ try {
   await stopped.getByText('模型请求失败 3 次').waitFor();
   mark('model request failures are separate from review rounds, and the stop reason and final count survive reload');
 
-  // Generate again and approve: the page polls, then shows the document beside the proof.
+  // Generate again and approve: the page polls, then shows the document in reading mode.
   const completed = await generateAgain(3);
   completed.send({ type: 'result', status: 'approved', evidence: JSON.parse(JSON.stringify(webExplanationEvidence({ proof, target: 'target_thm', units, outlined: true }))) });
   completed.resolve();
   await page.locator('#explain-prose .explain-document').waitFor({ timeout: 20_000 });
+  const split = page.locator('#explain-split');
+  const readLayout = page.locator('[data-action="layout"][data-layout="read"]');
+  const compareLayout = page.locator('[data-action="layout"][data-layout="compare"]');
+  assert.equal(await split.getAttribute('data-layout'), 'read');
+  assert.equal(await page.locator('#explain-lean').isVisible(), false, 'saved proofs start with one reading column');
   const item = `/api/runs/${run.id}/explanations/item?${new URLSearchParams({ target: 'target_thm', language: 'zh' })}`;
   const explained = await page.evaluate(async url => (await (await fetch(url)).json()).explanation.document as WebExplanationDocument, item);
   assert.deepEqual(explained.sections.map(section => section.name), [...helpers.map((_, index) => `step_${index + 1}`), 'target_thm']);
@@ -287,9 +292,13 @@ try {
   // Mathematics finishes loading before its semantic MathML and source fallback are checked.
   await mathReady(page);
   const lead = page.locator('.explain-lead'), overviewJump = lead.getByRole('button', { name: '读主定理证明' });
+  assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), explained.sections.at(-1)!.title);
   assert.equal(await page.locator('.explain-document > :first-child').getAttribute('class'), 'explain-lead');
-  assert.equal(await lead.locator('h3').innerText(), explained.sections.at(-1)!.title);
+  assert.equal(await lead.locator('h1').innerText(), explained.sections.at(-1)!.title);
+  assert.equal(await page.getByRole('heading', { level: 2, name: '证明主线' }).count(), 1);
   assert.equal(await lead.locator('.explain-lead-statement').innerText(), explained.sections.at(-1)!.statement);
+  assert.equal(await page.locator('.explain-section.is-target .explain-statement').isVisible(), false, 'the repeated statement is folded in the proof chapter');
+  assert.equal(await page.locator('.explain-summary').count(), 0, 'the full proof reads straight through without outline summaries');
   await page.screenshot({ path: path.join(output, 'explain-overview-1440.png') });
   // A reader can jump directly from the conclusion to the full main proof, even from the folded view.
   await page.locator('[data-action="detail"][data-detail="outline"]').click();
@@ -297,13 +306,61 @@ try {
   await overviewJump.press('Enter');
   await page.locator('.explain-section.is-active.is-target .explain-steps').waitFor();
   await until(() => shown(page, '.explain-section.is-active.is-target header'), 'the main proof jump reveals the target');
-  await until(() => shown(page, `.lean-row[data-line="${explained.sections.at(-1)!.lines.start}"]`), 'the main proof jump aligns Lean');
+  assert.equal(await split.getAttribute('data-layout'), 'read', 'the main proof jump stays in reading mode');
   await until(() => page.evaluate(() => document.activeElement?.id === 'explain-section-6'), 'the main proof receives keyboard focus');
   await page.locator('[data-action="return"]').click();
   await until(() => overviewJump.evaluate(node => document.activeElement === node
     && node.closest('.explain-scroll')!.scrollTop === 0), 'return restores the overview position and keyboard focus');
-  await page.locator('[data-action="detail"][data-detail="steps"]').click();
   mark('the theorem and its conclusion lead, with a direct keyboard jump to the main proof and back');
+
+  // Readers can find a declaration without leaving the outline or losing their place.
+  const contents = page.getByRole('button', { name: '证明目录' });
+  const directory = page.getByRole('dialog', { name: '证明目录' });
+  const search = directory.getByRole('searchbox'), entries = directory.locator('[data-action="contents-jump"]');
+  const scroll = page.locator('#explain-prose');
+  const folded = await page.locator('.explain-unfold').count();
+  const previousScroll = await scroll.evaluate(node => { node.scrollTop = 200; return node.scrollTop; });
+  assert.ok(previousScroll > 0);
+  await contents.focus();
+  await page.keyboard.press('Enter');
+  await directory.waitFor();
+  assert.deepEqual(await directory.getByRole('heading', { level: 3 }).allInnerTexts(), ['主定理', '辅助声明']);
+  await search.fill(explained.sections[4]!.title);
+  assert.equal(await entries.count(), 1);
+  await search.fill('no declaration has this name');
+  await directory.getByText('没有匹配的声明').waitFor();
+  await search.fill('');
+  await page.keyboard.press('Escape');
+  await directory.waitFor({ state: 'hidden' });
+  await until(() => contents.evaluate(node => node === document.activeElement), 'Escape restores focus to the directory button');
+  await contents.click();
+  await search.fill('STEP_5');
+  assert.equal(await entries.count(), 1);
+  await entries.press('Enter');
+  await directory.waitFor({ state: 'hidden' });
+  await page.locator('.explain-section.is-active .explain-steps > li[data-anchor="4"]').first().waitFor();
+  await until(() => shown(page, '.explain-section.is-active #explain-section-4'), 'the directory reveals the chosen declaration');
+  assert.equal(await split.getAttribute('data-layout'), 'read', 'the directory stays in reading mode');
+  await until(() => page.evaluate(() => document.activeElement?.id === 'explain-section-4'), 'the directory focuses the chosen declaration');
+  assert.match(page.url(), /#at=step_5&view=outline$/u);
+  await page.locator('[data-action="detail"][data-detail="steps"]').click();
+  await page.locator('[data-action="return"]').click();
+  await until(async () => await contents.evaluate(node => node === document.activeElement)
+      && await scroll.evaluate((node, previous) => node.scrollTop === previous, previousScroll),
+    'return from the directory restores reading position and focus');
+  assert.equal(await page.locator('.explain-unfold').count(), folded, 'the outline folds back to its previous chapters');
+  await page.locator('[data-action="detail"][data-detail="steps"]').click();
+  mark('the searchable directory jumps within the outline and returns to the original scroll, folded chapters and focus');
+
+  const legacy = await open(browser, page.url().split('#')[0] + '#explain-section-2', { storageState: await owner.context.storageState() });
+  try {
+    await legacy.page.locator('.explain-section.is-active').filter({ has: legacy.page.locator('#explain-section-2') }).waitFor();
+    await until(() => shown(legacy.page, '#explain-section-2'), 'a legacy workbench link still opens its declaration');
+    assert.equal(await legacy.page.locator('#explain-split').getAttribute('data-layout'), 'read');
+    assert.equal(new URL(legacy.page.url()).hash, '#at=step_3');
+  } finally { await legacy.context.close(); }
+  mark('older links open the named chapter and are updated to its stable address');
+
   assert.equal(await page.locator('.explain-section .math-source').count(), 1, 'only the unclosed formula falls back in the prose sections');
   assert.equal(await page.locator('.explain-section .math-source').innerText(), 'x^{');
   assert.equal(await page.locator('.explain-section .math-source').getAttribute('data-math-state'), 'source');
@@ -324,11 +381,33 @@ try {
 
   const route = page.locator('#explain-prose .solution-route');
   const routeDisclosure = page.locator('[data-explain-route]');
-  await route.waitFor({ state: 'attached' });
-  assert.equal(await routeDisclosure.getAttribute('open'), null, 'the explanation starts with prose, with the optional route folded');
-  assert.equal(await route.isVisible(), false, 'the graph stays mounted without a second visible reading interface');
-  assert.equal(await page.locator('.explain-overview').isVisible(), true, 'the saved proof outline remains available without opening the graph');
-  assert.equal(await page.locator('.explain-overview .explain-rich').innerText(), explained.overview);
+  assert.equal(await routeDisclosure.getAttribute('open'), null);
+  assert.equal(await route.count(), 0, 'the graph is only drawn after it is opened');
+  const mainline = page.getByRole('region', { name: '证明主线' });
+  assert.deepEqual(await mainline.locator('.explain-mainline-claim').allInnerTexts(), explained.route!.map(stage => stage.claim));
+  const overviewDetail = page.locator('.explain-overview-detail');
+  assert.equal(await overviewDetail.locator('p').isVisible(), false);
+  await overviewDetail.locator('summary').click();
+  assert.equal(await overviewDetail.locator('p').innerText(), explained.overview);
+  await overviewDetail.locator('summary').click();
+  const stage = mainline.locator('.explain-mainline > li').first();
+  const declaration = stage.getByRole('button', { name: explained.sections[2]!.title });
+  assert.equal(await declaration.count(), 0, 'the long declaration list is folded');
+  await stage.locator('summary').click();
+  await declaration.scrollIntoViewIfNeeded();
+  await declaration.focus();
+  const mainlinePosition = await page.locator('#explain-prose').evaluate(pane => pane.scrollTop);
+  await page.keyboard.press('Enter');
+  await page.locator('.explain-section.is-active #explain-section-2').waitFor();
+  await until(() => shown(page, '.explain-section.is-active #explain-section-2'), 'the stage link reveals the declaration');
+  assert.equal(await split.getAttribute('data-layout'), 'read', 'the stage link stays in reading mode');
+  await until(() => page.evaluate(() => document.activeElement?.id === 'explain-section-2'), 'the stage link focuses the declaration');
+  assert.match(page.url(), /#at=step_3$/u);
+  await page.locator('[data-action="return"]').click();
+  await until(async () => await declaration.evaluate(node => node === document.activeElement)
+    && await page.locator('#explain-prose').evaluate((pane, offset) => pane.scrollTop === offset, mainlinePosition),
+  'return restores the stage link focus and scroll position');
+  mark('the saved main line keeps its claim order and jumps to an associated declaration and back');
   await routeDisclosure.locator(':scope > summary').click();
   await route.waitFor();
   assert.equal(await page.locator('.explain-provenance').getAttribute('open'), null, 'source and review context starts folded');
@@ -348,21 +427,43 @@ try {
   assert.equal(await page.locator('.explain-steps > li.is-active[data-step="0"]').getAttribute('data-anchor'), '6');
   await until(() => page.evaluate(() => document.activeElement?.id === 'explain-section-6'), 'opening a graph step focuses its prose section');
   await until(() => shown(page, '.explain-steps > li.is-active'), 'opening a graph step reveals its saved prose');
+  assert.equal(await split.getAttribute('data-layout'), 'read', 'the graph stays in reading mode');
   await route.locator('[data-solution-node="declaration:target_thm"]').click();
   await route.locator('[data-solution-zoom="in"]').click();
   const routeZoom = await route.locator('[data-solution-zoom="reset"]').innerText();
   await routeDisclosure.locator(':scope > summary').click();
-  await page.locator('#explain-sync').uncheck();
-  await page.locator('#explain-sync').check();
+  await page.locator('[data-action="detail"][data-detail="outline"]').click();
+  await page.locator('[data-action="detail"][data-detail="steps"]').click();
   assert.equal(await routeDisclosure.getAttribute('open'), null, 'a reader redraw keeps the optional route folded');
   await routeDisclosure.locator(':scope > summary').click();
   assert.equal(await route.locator('[data-solution-zoom="reset"]').innerText(), routeZoom, 'collapsing and reopening preserves graph zoom');
   assert.equal(await route.locator('[data-solution-node="declaration:target_thm"]').getAttribute('aria-pressed'), 'true', 'collapsing and reopening preserves graph selection');
   mark('the explanation starts with saved prose; its optional graph preserves selection and zoom and opens the exact prose section and Lean lines');
 
-  // Clicking a step marks its Lean lines and scrolls the proof to them; clicking a Lean line does the reverse.
+  // At a width where prose wraps differently in each layout, keep a partially visible step in place.
+  await page.setViewportSize({ width: 1024, height: 900 });
+  const readingStep = page.locator('.explain-steps > li[data-anchor="3"][data-step="1"]');
+  const position = () => readingStep.evaluate(step =>
+    step.getBoundingClientRect().top - step.closest('.explain-scroll')!.getBoundingClientRect().top);
+  await readingStep.evaluate(step => {
+    const pane = step.closest('.explain-scroll')!;
+    pane.scrollTop += step.getBoundingClientRect().top - pane.getBoundingClientRect().top + 12;
+  });
+  const beforeLayout = await position();
+  assert.ok(Math.abs(beforeLayout + 12) <= 2, 'the test step starts partly above the pane');
+  await compareLayout.click();
+  assert.equal(await split.getAttribute('data-layout'), 'compare');
+  await until(async () => Math.abs(await position() - beforeLayout) <= 2, 'comparison keeps the same step at the top');
+  await readLayout.click();
+  assert.equal(await split.getAttribute('data-layout'), 'read');
+  await until(async () => Math.abs(await position() - beforeLayout) <= 2, 'reading keeps the same step at the top');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  mark('switching between reading and comparison preserves the visible proof step as the prose reflows');
+
+  // Clicking a step's line chip opens comparison at its exact Lean lines; clicking a Lean line does the reverse.
   const sections = explained.sections, last = sections.length - 1;
   await page.locator(`[data-action="lines"][data-section="${last}"][data-step="0"]`).click();
+  assert.equal(await split.getAttribute('data-layout'), 'compare', 'the line chip opens comparison');
   const quoted = sections[last]!.steps[0]!.lines.flatMap(item => range(item.start, item.end));
   await until(async () => JSON.stringify(await marked(page, 'active')) === JSON.stringify(quoted), 'the step lines are marked');
   assert.deepEqual(await marked(page, 'section'), range(sections[last]!.lines.start, sections[last]!.lines.end));
@@ -469,8 +570,10 @@ try {
   await page.locator(`.lean-row[data-line="${sections[last]!.signature.start}"]`).click();
   await page.locator(`.explain-statement-block.is-active[data-anchor="${last}"]`).waitFor();
   await until(async () => JSON.stringify(await marked(page, 'active')) === JSON.stringify(signature(last)), 'the signature line selects the statement');
+  await page.locator('.explain-section.is-target .explain-statement-details[open] .explain-statement').waitFor();
   await until(() => shown(page, `.explain-statement-block[data-anchor="${last}"]`), 'the prose shows the statement');
   assert.equal(await page.locator('.explain-statement-block.is-active').count(), 1);
+  await page.locator('.explain-section.is-target .explain-statement-details > summary').click();
   mark('a statement and its signature lines select each other');
 
   // A line no step quotes opens its declaration with a note that says so; opening auditor notes keeps the selection.
@@ -478,32 +581,28 @@ try {
   await page.locator('.explain-section.is-active.is-target .explain-gap-note').filter({ hasText: `第 ${gap[0]} 行没有单独的讲解步骤` }).waitFor();
   assert.deepEqual(await marked(page, 'active'), gap);
   assert.equal(await page.locator('.explain-steps > li.is-active, .explain-statement-block.is-active').count(), 0);
-  const notes = page.locator(`.explain-steps > li[data-anchor="${last}"][data-step="1"] .explain-reviews:not(.explain-goals)`);
-  await notes.locator('summary').click();
-  assert.equal(await notes.evaluate(node => (node as HTMLDetailsElement).open), true);
-  assert.equal(await notes.locator('li').innerText(), 'Step 2 is what the quoted Lean does.');
-  assert.deepEqual(await marked(page, 'active'), gap, 'opening the notes keeps the selection');
-  assert.equal(await page.locator('.explain-section .explain-reviews:not(.explain-goals)').count(), 21, 'one note for each statement and step the first auditor explained');
-  mark('a line no step quotes opens its declaration with a note, and auditor notes open without changing the selection');
+  mark('a line no step quotes opens its declaration with a note');
 
-  // Each target step shows, folded, Lean's goal before its first quoted tactic and after its last; the lemmas have no recorded goals.
+  // A single disclosure shows the auditor notes and any recorded goals together.
   assert.deepEqual(sections.map(section => section.steps.filter(step => step.goals).length), [0, 0, 0, 0, 0, 0, 2]);
-  const goals = page.locator('.explain-goals');
-  assert.equal(await goals.count(), 2);
-  assert.deepEqual(await goals.evaluateAll(nodes => nodes.map(node => (node as HTMLDetailsElement).open)), [false, false]);
-  const panel = page.locator(`.explain-steps > li[data-anchor="${last}"][data-step="1"] .explain-goals`);
-  assert.equal(await panel.locator('summary').evaluate(node => node.textContent), `Lean 目标 · 第 ${gap[0]! + 1}–${gap[0]! + 3} 行`);
+  assert.equal(await page.locator('.explain-section .explain-review-notes').count(), 21, 'all recorded auditor notes remain in the document');
+  assert.equal(await page.locator('.explain-goals').count(), 2);
+  assert.equal(await page.locator('.explain-goals:visible').count(), 0);
+  const panel = page.locator(`.explain-steps > li[data-anchor="${last}"][data-step="1"] > details`);
+  assert.equal(await panel.locator('summary').innerText(), '核对这一步');
   await panel.locator('summary').click();
+  assert.equal(await panel.locator('.explain-goals .explain-evidence-label').innerText(), `Lean 目标 · 第 ${gap[0]! + 1}–${gap[0]! + 3} 行`);
+  assert.equal(await panel.locator('.explain-review-notes li').innerText(), 'Step 2 is what the quoted Lean does.');
   assert.deepEqual(await panel.locator('pre.explain-goal').allTextContents(), [goalAfter(4)]);
   assert.deepEqual(await panel.locator('.explain-goal-label, .explain-goal-none').allTextContents(), ['之前', '之后', '没有剩余目标']);
   assert.equal(await panel.locator('pre.explain-goal').getAttribute('translate'), 'no');
-  assert.deepEqual(await marked(page, 'active'), gap, 'opening the goals keeps the selection');
-  const first = page.locator(`.explain-steps > li[data-anchor="${last}"][data-step="0"] .explain-goals`);
+  assert.deepEqual(await marked(page, 'active'), gap, 'opening the evidence keeps the selection');
+  const first = page.locator(`.explain-steps > li[data-anchor="${last}"][data-step="0"] > details`);
   await first.locator('summary').click();
   assert.deepEqual(await first.locator('pre.explain-goal').allTextContents(), [goalAfter(0), goalAfter(3)]);
   await first.locator('summary').click();
   await panel.screenshot({ path: path.join(output, 'explain-goals-1440.png') });
-  mark('a target step shows the Lean goals around its quoted tactics, folded, without changing the selection');
+  mark('one disclosure opens the step’s goals and auditor notes without changing the Lean selection');
 
   // Choices within one section each redraw it: the whole declaration drops the gap note, then its statement, then each step.
   const own = (selector: string) => page.locator(`.explain-section:has(#explain-section-${last}) ${selector}`);
@@ -511,6 +610,7 @@ try {
   await own('.explain-gap-note').waitFor({ state: 'detached' });
   await page.locator('.explain-section.is-active').filter({ has: page.locator(`#explain-section-${last}`) }).waitFor();
   assert.deepEqual(await marked(page, 'active'), range(sections[last]!.lines.start, sections[last]!.lines.end));
+  await own('.explain-statement-details > summary').click();
   await own('.explain-statement-block [data-action="lines"][data-statement]').click();
   await page.locator(`.explain-statement-block.is-active[data-anchor="${last}"]`).waitFor();
   assert.equal(await page.locator('.explain-section.is-active').count(), 0, 'the statement replaces the whole declaration');
@@ -527,9 +627,12 @@ try {
   assert.deepEqual([written.name, written.place, written.spans.length], ['Nat.add_comm', 'step', 5]);
   const highlighted = () => page.evaluate(() => [...(CSS.highlights.get('explain-use') ?? [])].map(item => (item as Range).toString()));
   const chip = page.locator('.explain-steps > li[data-anchor="0"][data-step="0"] [data-action="use-lean"]');
+  await readLayout.click();
   await chip.hover();
   await until(async () => JSON.stringify(await marked(page, 'use')) === JSON.stringify(written.spans.map(span => span.line)), 'pointing at the name marks its lines');
+  assert.equal(await split.getAttribute('data-layout'), 'read', 'hovering does not open comparison');
   await chip.click();
+  assert.equal(await split.getAttribute('data-layout'), 'compare', 'an explicit Lean citation opens comparison');
   await until(async () => (await highlighted()).length === 5, 'clicking the name highlights each place it is written');
   assert.deepEqual([...new Set(await highlighted())], ['Nat.add_comm']);
   await until(() => shown(page, `.lean-row[data-line="${written.spans[0]!.line}"]`), 'the Lean pane scrolls to the name');
@@ -592,9 +695,8 @@ try {
   await route.locator('[data-solution-node="declaration:step_1"]').click();
   await route.locator('[data-solution-library]').click();
   assert.equal(await route.locator('[data-solution-node^="library:"]').count(), 0);
-  // The audited route gives the main line, and each declaration its one-sentence summary.
+  // The audited route gives the main line.
   assert.deepEqual(await route.locator('.solution-route-stages button > span:last-child').allInnerTexts(), ['First the lemmas.', 'Then the target follows.']);
-  assert.equal(await page.locator('.explain-summary').count(), sections.length);
   assert.equal(await route.locator('[data-solution-node="declaration:step_1"]').getAttribute('data-origin'), 'lemma');
   assert.match(await route.locator('.solution-route-overview pre').first().innerText(), /^theorem target_thm/u, 'the overview shows the Lean statement of the target');
   assert.match(await route.locator('.solution-route-overview').innerText(), /目标定理已通过 Lean 检查，不依赖 sorry/u);
@@ -604,6 +706,7 @@ try {
   await page.locator('[data-action="detail"][data-detail="outline"]').click();
   await until(async () => await page.locator('.explain-steps').count() === 1, 'the outline folds every step but the chosen one');
   assert.equal(await page.locator('.explain-unfold').count(), sections.length - 1);
+  assert.equal(await page.locator('.explain-summary').count(), sections.length - 1, 'summaries are shown for folded sections');
   await page.locator('.explain-unfold[data-section="1"]').click();
   await page.locator('.explain-steps > li[data-anchor="1"][data-step="1"] [data-action="lines"]').first().click();
   await until(async () => new URL(page.url()).hash === '#at=step_2&step=2&view=outline&node=declaration%3Astep_1', 'the address names the declaration, the step, the outline and the route node');
@@ -612,6 +715,7 @@ try {
   assert.equal(await routeDisclosure.getAttribute('open'), '', 'a route-node deep link opens the optional route');
   await until(async () => await route.locator('[data-solution-node="declaration:step_1"]').getAttribute('aria-pressed') === 'true', 'a link reopens its route node');
   await page.locator('.explain-steps > li.is-active[data-anchor="1"][data-step="1"]').waitFor();
+  assert.equal(await split.getAttribute('data-layout'), 'read', 'a link to a prose step starts in reading mode');
   assert.equal(await page.locator('[data-action="detail"][data-detail="outline"]').getAttribute('aria-pressed'), 'true');
   assert.equal(await page.locator('.explain-steps').count(), 1, 'a link opens the outline with only its own declaration unfolded');
   await page.locator('[data-action="detail"][data-detail="steps"]').click();
@@ -652,12 +756,13 @@ try {
   await dark.page.waitForTimeout(800);
   await dark.page.screenshot({ path: path.join(output, 'explain-use-dark-1440.png') });
   await dark.page.locator(`.lean-row[data-line="${gap[0]}"]`).click();
-  await dark.page.locator(`.explain-steps > li[data-anchor="${last}"][data-step="1"] .explain-reviews:not(.explain-goals) summary`).click();
-  await dark.page.locator(`.explain-steps > li[data-anchor="${last}"][data-step="1"] .explain-goals summary`).click();
+  await dark.page.locator(`.explain-steps > li[data-anchor="${last}"][data-step="1"] > details > summary`).click();
   await dark.page.waitForTimeout(800);
   assert.deepEqual(await contrastProblems(dark.page, '#explain-content'), [], 'explanation contrast below WCAG AA (dark)');
   await dark.page.screenshot({ path: path.join(output, 'explain-document-dark-1440.png') });
   // Printed, the served page drops its own controls too (back, language, sync, download, delete) and prints in light colours.
+  await dark.page.locator('[data-action="layout"][data-layout="read"]').click();
+  assert.equal(await dark.page.locator('#explain-split').getAttribute('data-layout'), 'read');
   assert.deepEqual(await printLayout(dark.page), { clipped: [], panes: ['prose', 'lean'], leanBreak: 'page', wrap: 'pre-wrap', lines: 1, wide: 0,
     controls: [], paper: 'rgb(245, 244, 238)' }, 'the explanation printed (dark)');
   assert.ok(await printedPages(dark.page) >= 2, 'the Lean prints on a page of its own');
@@ -692,13 +797,19 @@ try {
   assert.deepEqual(formulas, { over: 0, paneWide: false, pageWide: false, ready: true, semantic: true,
     overflow: true, scrollable: true, scrolled: true,
     source: 'a + b + 1 = \\mathrm{succ}\\,(a + b) = \\mathrm{succ}\\,(b + a) = b + a + 1' });
-  const phoneGoals = phone.page.locator(`.explain-steps > li[data-anchor="${last}"][data-step="0"] .explain-goals`);
+  const phoneGoals = phone.page.locator(`.explain-steps > li[data-anchor="${last}"][data-step="0"] > details`);
   await phoneGoals.locator('summary').click();
   assert.equal(await phone.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'open goals do not widen the phone page');
   await phoneGoals.screenshot({ path: path.join(output, 'explain-goals-390.png') });
-  await phone.page.locator(`[data-action="lines"][data-section="${last}"][data-step="0"]`).click();
+  const phoneProse = () => phone.page.locator('#explain-prose').evaluate(pane => Math.round(pane.scrollTop));
+  const lineChip = phone.page.locator(`[data-action="lines"][data-section="${last}"][data-step="0"]`);
+  await lineChip.scrollIntoViewIfNeeded();
+  await lineChip.focus();
+  const beforeLean = await phoneProse();
+  await phone.page.keyboard.press('Enter');
   await phone.page.locator('#explain-split[data-pane="lean"]').waitFor();
   await until(() => shown(phone.page, `.lean-row[data-line="${quoted[0]}"]`), 'the phone proof pane shows the step');
+  await phone.page.locator('#explain-lean:focus').waitFor();
   assert.equal(await phone.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'nothing widens the phone page');
   // Long lines wrap rather than run off the pane, and each row's indentation reaches the style under the page's policy.
   assert.equal(await phone.page.locator('#explain-lean').evaluate(pane => pane.scrollWidth <= pane.clientWidth + 1), true, 'the phone Lean pane wraps');
@@ -708,6 +819,7 @@ try {
   await phone.page.screenshot({ path: path.join(output, 'explain-lean-390.png') });
   // A cited name opens the proof at the line that writes it.
   await phone.page.locator('[data-action="pane"][data-pane="prose"]').click();
+  await until(async () => await phoneProse() === beforeLean, 'returning from Lean retains the prose position');
   await phone.page.locator('.explain-steps > li[data-anchor="0"][data-step="0"] [data-action="use-lean"]').click();
   await phone.page.locator('#explain-split[data-pane="lean"]').waitFor();
   await until(() => shown(phone.page, `.lean-row[data-line="${written.spans[0]!.line}"]`), 'the phone proof pane shows the name');
@@ -716,7 +828,6 @@ try {
   await phone.page.locator('#explain-split[data-pane="prose"]').waitFor();
   // Back after a cited lemma (the phone's back gesture) returns to the citation, even from the proof pane.
   const phoneCite = phone.page.locator(`.explain-steps > li[data-anchor="${last}"][data-step="0"] [data-action="use"]`).filter({ hasText: 'step_3' });
-  const phoneProse = () => phone.page.locator('#explain-prose').evaluate(pane => Math.round(pane.scrollTop));
   await phoneCite.scrollIntoViewIfNeeded();
   const phoneBefore = await phoneProse();
   await phoneCite.click();
@@ -733,7 +844,8 @@ try {
   await english.page.locator('#explain-prose .explain-document').waitFor();
   assert.equal(await english.page.locator('#explain-prose-heading').innerText(), 'Natural-language proof');
   assert.equal(await english.page.locator('#explain-lean-heading').innerText(), 'Lean proof');
-  assert.equal(await english.page.locator('[data-explain-route] > summary').innerText(), 'Proof route');
+  assert.equal(await english.page.locator('[data-explain-route] > summary').innerText(), 'Dependency graph');
+  assert.equal(await english.page.locator('#explain-mainline-heading').innerText(), 'Main line of proof');
   assert.equal(await english.page.locator('[data-explain-route]').getAttribute('open'), null);
   for (const width of [320, 1024]) {
     await english.page.setViewportSize({ width, height: 844 });
@@ -765,9 +877,10 @@ try {
   });
   assert.deepEqual(chrome, [], 'English chrome has no Chinese text');
   assert.doesNotMatch(await english.page.locator('#explain-lean-legend').innerText(), /\p{Script=Han}/u, 'the margin legend is English');
-  const englishGoals = english.page.locator('.explain-goals').first();
-  assert.match(await englishGoals.locator('summary').evaluate(node => node.textContent ?? ''), /^Lean goals · Lines \d+–\d+$/u);
+  const englishGoals = english.page.locator('.explain-steps > li > details:has(.explain-goals)').first();
+  assert.equal(await englishGoals.locator('summary').innerText(), 'Check this step');
   await englishGoals.locator('summary').click();
+  assert.match(await englishGoals.locator('.explain-goals .explain-evidence-label').innerText(), /^Lean goals · Lines \d+–\d+$/u);
   assert.deepEqual(await englishGoals.locator('.explain-goal-label').allTextContents(), ['Before', 'After']);
   // The report's link names no language: it opens the explanation that exists, here the Chinese one.
   await english.page.goto(`${origin}/${href}`);

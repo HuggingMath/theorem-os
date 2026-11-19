@@ -48,8 +48,8 @@ export function ChatMathematicalSummary({ work }: { work: ChatMathematics }) {
   </section>;
 }
 
-function AnswerSection({ section, sections, anchor, source, showStatement = true, showTitle = true, onQuestion }: { section: WebExplanationSection; sections: WebExplanationSection[];
-  anchor(name: string): string; source: string; showStatement?: boolean; showTitle?: boolean; onQuestion?(text: string): void }) {
+function AnswerSection({ section, sections, anchor, explanationUrl, showStatement = true, showTitle = true, onQuestion }: { section: WebExplanationSection; sections: WebExplanationSection[];
+  anchor(name: string): string; explanationUrl: string; showStatement?: boolean; showTitle?: boolean; onQuestion?(text: string): void }) {
   const content = <>
     {showStatement && section.statement && <div class="chat-answer-statement"><ChatMessageContent text={section.statement} /></div>}
     {section.steps.length > 0 && <ol class="chat-answer-steps">{section.steps.map((step, index) => <li key={index}>
@@ -65,7 +65,10 @@ function AnswerSection({ section, sections, anchor, source, showStatement = true
         }}>{local.title || local.name}</a> : <code key={use.name} translate={false}>{use.name}</code>;
       })}</p>}
       {onQuestion && <button type="button" class="text-button chat-answer-question" data-chat-answer-question={`${section.name}:${index}`}
-        onClick={() => onQuestion(explanationStepQuestion(section, index, source, locale))}>{t('解释这一步')}</button>}
+        onClick={() => {
+          const location = new URLSearchParams({ at: section.name, step: String(index + 1) });
+          onQuestion(explanationStepQuestion(section, index, `${explanationUrl}#${location}`, locale));
+        }}>{t('解释这一步')}</button>}
     </li>)}</ol>}
   </>;
   return section.target ? <section id={anchor(section.name)} tabIndex={-1} class="chat-answer-target" data-chat-answer-target={section.name}
@@ -131,9 +134,9 @@ export function ChatMathematicalAnswer({ runId, answer, onRetry, onTarget, onQue
       {conclusion && <div class="chat-answer-conclusion" data-chat-answer-conclusion><h4>{t('结论')}</h4><ChatMessageContent text={conclusion.statement} /></div>}
       {document.overview.trim() && <div class="chat-answer-idea" data-chat-answer-idea><h4>{t('证明思路')}</h4><ChatMessageContent text={document.overview} /></div>}
       {document.sections.length > 0 && <div class="chat-answer-derivation" data-chat-answer-derivation><h4>{t('推导过程')}</h4>
-        {document.sections.map((section, index) => <AnswerSection key={section.name} section={section} sections={document.sections} anchor={anchor}
+        {document.sections.map(section => <AnswerSection key={section.name} section={section} sections={document.sections} anchor={anchor}
           showStatement={section !== conclusion} showTitle={section !== repeatedTitle}
-          source={`${new URL(explanationUrl, location.href).href}#explain-section-${index}`} onQuestion={onQuestion} />)}
+          explanationUrl={new URL(explanationUrl, location.href).href} onQuestion={onQuestion} />)}
       </div>}
     </div>}
     {!document && (showStatus || !reading && !answer?.error) && <>

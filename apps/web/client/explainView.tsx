@@ -1,5 +1,5 @@
 import { Component, render } from 'preact';
-import { useMemo } from 'preact/hooks';
+import { useMemo, useState } from 'preact/hooks';
 import type { WebExplanation, WebExplanationDocument, WebExplanationGoals, WebExplanationLines, WebExplanationLink, WebExplanationOverview, WebExplanationPhase,
   WebExplanationSection, WebExplanationUse } from '../shared';
 import { effortLabels, formatDuration, formatTokens } from '../presentation';
@@ -16,13 +16,14 @@ import { SolutionRouteGraph } from './ui/SolutionRouteGraph';
 /** What explain.ts draws from; every button carries a data-action that explain.ts handles. */
 export type ExplainView = {
   overview: WebExplanationOverview; target: string; language: 'zh' | 'en'; pane: 'lean' | 'prose'; sync: boolean;
+  compare: boolean;
   explanation?: WebExplanation; document?: WebExplanationDocument; documentError?: string; active?: StepRef;
   /** A Lean proof line the reader chose that no step quotes. */ gap?: number;
   /** The 原题 pairs the reader last chose (a fragment or a pair in its list). */ chosen?: ReadonlySet<number>;
   /** Where the last click on a 原题 fragment or pair stands, shown above the Lean on a phone. */ step?: FragmentStep;
-  dialog?: 'generate' | 'cancel' | 'delete'; busy: boolean; error?: string; now: number;
+  dialog?: 'generate' | 'cancel' | 'delete' | 'contents'; busy: boolean; error?: string; now: number;
   /** An offline report: the Markdown is a blob URL, and nothing can be generated or deleted. */ report?: { href: string; filename: string };
-  /** The reader followed a cited lemma and can go back to where they cited it. */ canReturn?: boolean;
+  /** A jump has a previous reading position to return to. */ canReturn?: boolean;
   onRouteOpen?: (target: string) => void;
   /** `outline` shows each declaration's statement only; `opened` are the sections whose steps the reader unfolded. */
   detail?: 'outline' | 'steps'; opened?: ReadonlySet<number>;
@@ -39,7 +40,7 @@ export const linesLabel = (lines: readonly WebExplanationLines[]) =>
   t('第 {0} 行', lines.map(item => item.start === item.end ? String(item.start) : `${item.start}–${item.end}`).join(', '));
 const Fact = (props: { label: string; value: string; mono?: boolean; wide?: boolean }) => <div class={props.wide ? 'explain-fact-wide' : undefined}><dt>{props.label}</dt><dd class={props.mono ? 'mono' : undefined}>{props.value}</dd></div>;
 
-/** The target, the explanation language, and on phones which pane is shown. */
+/** The target, explanation language, and reading layout. */
 function Toolbar(view: ExplainView) {
   const { targets } = view.overview;
   const language = (value: 'zh' | 'en', label: string) => <button type="button" data-action="language" data-language={value} aria-pressed={view.language === value}>{label}</button>;
@@ -50,6 +51,10 @@ function Toolbar(view: ExplainView) {
         {targets.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select></>
       : <><span class="explain-target-label">{t('目标定理')}</span><code translate={false}><LeanName name={view.target} /></code></>}</div>
     {!view.report && <div class="source-switch explain-language-switch" role="group" aria-label={t('讲解语言')}>{language('zh', t('中文'))}{language('en', t('英文'))}</div>}
+    {view.document && <div class="source-switch explain-layout-switch" role="group" aria-label={t('阅读布局')}>
+      <button type="button" data-action="layout" data-layout="read" aria-pressed={!view.compare}>{t('单栏阅读')}</button>
+      <button type="button" data-action="layout" data-layout="compare" aria-pressed={view.compare}>{t('Lean 对照')}</button>
+    </div>}
     <div class="source-switch explain-pane-switch" role="group" aria-label={t('显示的一侧')}>{pane('lean', 'Lean')}{pane('prose', t('讲解'))}</div>
   </>;
 }
@@ -59,7 +64,7 @@ function ProseHead(view: ExplainView) {
   const approved = view.explanation?.status === 'approved';
   const query = new URLSearchParams({ target: view.target, language: view.language }).toString();
   return <>
-    <h2 id="explain-prose-heading">{t('自然语言证明')}</h2>
+    <span class="explain-pane-label" id="explain-prose-heading">{t('自然语言证明')}</span>
     <div class="explain-head-actions">
       {view.canReturn && <button type="button" class="text-button explain-return" data-action="return"
         aria-label={t('返回阅读位置')} title={t('回到跳转前的位置，和浏览器的后退一样')}>
@@ -68,6 +73,8 @@ function ProseHead(view: ExplainView) {
         <button type="button" data-action="detail" data-detail="outline" aria-pressed={view.detail === 'outline'}>{t('概要')}</button>
         <button type="button" data-action="detail" data-detail="steps" aria-pressed={view.detail !== 'outline'}>{t('逐步')}</button></div>}
       {view.document && <label class="explain-sync"><input type="checkbox" id="explain-sync" checked={view.sync} /><span>{t('同步滚动')}</span></label>}
+      {view.document && view.document.sections.length > 1 && <button type="button" class="icon-button explain-contents-button" data-action="contents"
+        aria-haspopup="dialog" aria-label={t('证明目录')} title={t('证明目录')}><Icon name="list" /><span>{t('证明目录')}</span></button>}
       {view.report ? <a class="icon-button" href={view.report.href} download={view.report.filename}
         aria-label={t('下载 Markdown')} title={t('下载 Markdown')}><Icon name="download" /></a>
         : approved && <a class="icon-button" href={`/api/runs/${encodeURIComponent(view.overview.run.id)}/explanations/markdown?${query}`} download
@@ -96,7 +103,7 @@ function Prose(view: ExplainView) {
   const estimate = explanationEstimate(declarations, generation.reference, generation);
   return <div class="explain-card">
     {explanation ? <StoppedView explanation={explanation} /> : <>
-      <h3>{t('还没有这份讲解')}</h3>
+      <h2>{t('还没有这份讲解')}</h2>
       <p>{t('模型从 Lean 证明出发写出自然语言证明：每个声明一节，每一步注明它对应的 Lean 行与用到的引理，再由独立的审核模型逐步对照 Lean 检查。')}</p></>}
     <p class="explain-estimate">{t('预计{0}，约 {1} Token。', hours(estimate.seconds), formatTokens(estimate.tokens))}</p>
     <button type="button" class="button button-primary" data-action="generate">{fill(explanation ? t('{0}重新生成') : t('{0}生成讲解'), <Icon name={explanation ? 'rotate-ccw' : 'play'} />)}</button>
@@ -122,7 +129,7 @@ function ProgressView({ explanation, now }: { explanation: WebExplanation; now: 
   return <div class="explain-card explain-progress">
     <div class="explain-progress-heading" role="status">
       <span class="explain-progress-icon" aria-hidden="true">{phaseIcon ? <Icon name={phaseIcon} /> : <Spinner />}</span>
-      <div><h3>{phaseTitle[phase]}</h3><p>{phaseDescription[phase] ?? t('生成在服务器上进行，可以关闭页面，稍后回来查看。')}</p></div>
+      <div><h2>{phaseTitle[phase]}</h2><p>{phaseDescription[phase] ?? t('生成在服务器上进行，可以关闭页面，稍后回来查看。')}</p></div>
     </div>
     {batches > 0 && <div class="explain-batch-progress">
       <div><label for="explain-batches">{t('已通过批次')}</label><span class="mono">{approved} / {batches}</span></div>
@@ -151,7 +158,7 @@ function StoppedView({ explanation }: { explanation: WebExplanation }) {
   const needsReview = explanation.reason === 'explanation_statement_unreviewed';
   const modelRequestFailures = explanationModelRequestFailuresText(explanation.progress?.modelRequestFailures);
   return <div class={`result-banner ${cancelled ? 'warning' : 'failed'}`}><Icon name={cancelled ? 'square' : 'circle-alert'} />
-    <div><h3>{needsReview ? t('暂未生成讲解') : cancelled ? t('已停止生成') : explanation.status === 'exhausted' ? t('讲解没有完成') : t('生成失败')}</h3>
+    <div><h2>{needsReview ? t('暂未生成讲解') : cancelled ? t('已停止生成') : explanation.status === 'exhausted' ? t('讲解没有完成') : t('生成失败')}</h2>
       <p>{cancelled && !explanation.reason ? t('已用的 Token 不会退回。') : explanationReasonText(explanation.reason)}</p>
       {modelRequestFailures && <p>{modelRequestFailures}</p>}</div></div>;
 }
@@ -168,25 +175,60 @@ const ownedBy = new WeakMap<WebExplanationDocument, Map<string, number>>();
 function DocumentView({ document, proof, runId, active, gap, chosen, onRouteOpen, outline, opened, node, onRouteSelect, routeOpen, onRouteToggle }: { document: WebExplanationDocument; proof: string; runId: string;
   active?: StepRef; gap?: number; chosen?: ReadonlySet<number>; onRouteOpen?: (target: string) => void; outline?: boolean; opened?: ReadonlySet<number>;
   node?: string; onRouteSelect?: (id: string) => void; routeOpen?: boolean; onRouteToggle?: (open: boolean) => void }) {
-  const route = useMemo(() => explanationSolutionRoute(document, proof, `${runId}:explanation:${document.target}:${document.language}`), [document, proof, runId]);
+  const [graphMounted, setGraphMounted] = useState(false);
+  const loadGraph = Boolean(routeOpen || graphMounted);
+  const route = useMemo(() => loadGraph ? explanationSolutionRoute(document, proof, `${runId}:explanation:${document.target}:${document.language}`) : undefined,
+    [loadGraph, document, proof, runId]);
   let owned = ownedBy.get(document);
   if (!owned) ownedBy.set(document, owned = new Map(document.sections.map((section, index) => [section.name, index])));
+  const mainline = (document.route ?? []).flatMap(stage => {
+    const sections: number[] = [];
+    for (const name of new Set(stage.declarations)) {
+      const index = owned.get(name);
+      if (index !== undefined) sections.push(index);
+    }
+    return sections.length && stage.claim.trim() ? [{ claim: stage.claim, sections }] : [];
+  });
+  const overview = document.overview.trim();
   const targetIndex = document.sections.findIndex(section => section.target);
   const target = document.sections[targetIndex];
-  return <article class="explain-document" lang={document.language === 'en' ? 'en' : 'zh-CN'}>
+  return <article class="explain-document container" lang={document.language === 'en' ? 'en' : 'zh-CN'}>
     {target && <header class="explain-lead">
-      <p class="explain-lead-label">{t('主定理')}</p>
-      <h3 class="explain-lead-title"><Rich text={target.title || target.name} /></h3>
+      <h1 class="explain-lead-title"><Rich text={target.title || target.name} /></h1>
       <p class="explain-rich explain-lead-statement"><Rich text={target.statement} /></p>
       <button type="button" class="text-button explain-lead-jump" data-action="proof-jump" data-target={targetIndex}>
         {t('读主定理证明')}<Icon name="arrow-down" />
       </button>
     </header>}
-    {document.overview.trim() && <section class="explain-overview"><h3>{t('证明思路')}</h3><p class="explain-rich"><Rich text={document.overview} /></p></section>}
+    {mainline.length > 0 ? <section class="explain-overview" aria-labelledby="explain-mainline-heading">
+      <h2 id="explain-mainline-heading">{t('证明主线')}</h2>
+      <ol class="explain-mainline">{mainline.map((stage, index) => {
+        const links = <ul class="explain-mainline-links">{stage.sections.map(section => {
+          const declaration = document.sections[section]!;
+          return <li key={declaration.name}><button type="button" class="text-button" data-action="mainline-jump"
+            data-stage={index} data-target={section}><Rich text={declaration.title || declaration.name} /></button></li>;
+        })}</ul>;
+        return <li key={index}>
+          <p class="explain-rich explain-mainline-claim"><Rich text={stage.claim} /></p>
+          {stage.sections.length > 3 ? <details class="explain-mainline-declarations">
+            <summary>{t('相关声明（{0}）', stage.sections.length)}</summary>{links}
+          </details> : links}
+        </li>;
+      })}</ol>
+    </section> : overview && <section class="explain-overview">
+      <h2>{t('证明思路')}</h2><p class="explain-rich"><Rich text={document.overview} /></p>
+    </section>}
     <div class="explain-reading-options">
-      <details class="explain-route explain-disclosure" data-explain-route open={routeOpen} onToggle={event => onRouteToggle?.(event.currentTarget.open)}>
-        <summary><Icon name="git-branch" />{t('证明路线')}</summary>
-        <SolutionRouteGraph model={route} onOpen={onRouteOpen} selection={node} onSelect={onRouteSelect} />
+      {mainline.length > 0 && overview && <details class="explain-overview-detail explain-disclosure">
+        <summary>{t('思路概述')}</summary><p class="explain-rich"><Rich text={document.overview} /></p>
+      </details>}
+      <details class="explain-route explain-disclosure" data-explain-route open={routeOpen} onToggle={event => {
+        const open = event.currentTarget.open;
+        if (open) setGraphMounted(true);
+        onRouteToggle?.(open);
+      }}>
+        <summary><Icon name="git-branch" />{t('依赖图')}</summary>
+        {route && <SolutionRouteGraph model={route} onOpen={onRouteOpen} selection={node} onSelect={onRouteSelect} />}
       </details>
       <details class="explain-reviews explain-provenance explain-disclosure">
         <summary><Icon name="shield-check" />{t('讲解来源与审阅')}</summary>
@@ -216,23 +258,32 @@ class CachedSection extends Component<SectionProps> {
 function SectionView(props: SectionProps) {
   const { section, index, active } = props;
   const whole = active && active.step === undefined && !active.statement;
+  const summary = props.folded && !active?.statement ? section.summary : undefined;
   // A theorem's statement explains its signature; any other declaration's statement explains all of it.
   const split = section.signature.start !== section.lines.start || section.signature.end !== section.lines.end;
+  const statement = <>
+    <p class="explain-rich explain-statement"><Rich text={section.statement}
+      links={richLinks(section.statementLinks, { 'data-section': index, 'data-statement': '' })} /></p>
+    {split && <div class="explain-step-meta">
+      <button type="button" class="explain-lines" data-action="lines" data-section={index} data-statement="" title={t('在 Lean 中定位定理的陈述')}>
+        {t('陈述 · {0}', linesLabel([section.signature]))}</button></div>}
+  </>;
   return <section class={`explain-section${section.target ? ' is-target' : ''}${whole ? ' is-active' : ''}`} aria-labelledby={`explain-section-${index}`}>
     <div class={`explain-statement-block${active?.statement ? ' is-active' : ''}`} data-anchor={index}>
       <header class="explain-section-head">
-        <div class="explain-section-meta">{section.target ? <span class="badge passed">{t('主定理')}</span> : <span class="badge">{kinds[section.kind]}</span>}
+        <h2 id={`explain-section-${index}`} tabIndex={-1}><Rich text={section.title || section.name} /></h2>
+        <div class="explain-section-meta"><span class="explain-section-kind">{section.target ? t('主定理') : kinds[section.kind]}</span>
           <code translate={false}><LeanName name={section.name} /></code>
           <button type="button" class="explain-lines" data-action="lines" data-section={index} title={t('在 Lean 中定位')}>{linesLabel([section.lines])}</button></div>
-        <h3 id={`explain-section-${index}`} tabIndex={-1}><Rich text={section.title} /></h3>
       </header>
-      {section.summary && <p class="explain-rich explain-summary"><Rich text={section.summary} /></p>}
-      {!(props.folded && section.summary) && <p class="explain-rich explain-statement"><Rich text={section.statement}
-        links={richLinks(section.statementLinks, { 'data-section': index, 'data-statement': '' })} /></p>}
-      {split && !(props.folded && section.summary) && <div class="explain-step-meta">
-        <button type="button" class="explain-lines" data-action="lines" data-section={index} data-statement="" title={t('在 Lean 中定位定理的陈述')}>
-          {t('陈述 · {0}', linesLabel([section.signature]))}</button></div>}
-      <Reviews notes={section.statementReviews} />
+      {summary ? <p class="explain-rich explain-summary"><Rich text={summary} /></p>
+        : section.target ? <details class="explain-reviews explain-statement-details">
+          <summary>{t('定理陈述')}</summary>
+          <div class="explain-evidence-body">
+            {statement}
+            <ReviewNotes notes={section.statementReviews} label />
+          </div>
+        </details> : <>{statement}<ProofEvidence notes={section.statementReviews} /></>}
     </div>
     {props.gap !== undefined && <p class="explain-gap-note" role="status"><Icon name="circle-help" />
       <span>{t('第 {0} 行没有单独的讲解步骤。可对照本声明的前后推导和 Lean 源码；现有记录无法确认这一行是否已被充分解释。', props.gap)}</span></p>}
@@ -246,27 +297,38 @@ function SectionView(props: SectionProps) {
             {step.lines.length ? linesLabel(step.lines) : t('整个声明')}</button>
           {step.uses.length > 0 && <Uses uses={step.uses} owned={props.owned} section={index} step={stepIndex} />}
         </div>
-        <Reviews notes={step.reviews} />
-        {step.goals && <Goals goals={step.goals} checked={step.goalsChecked} />}
+        <ProofEvidence notes={step.reviews} goals={step.goals} checked={step.goalsChecked} />
       </li>)}</ol>}
   </section>;
 }
-/** Lean's goals around the quoted tactics, folded; Lean's text, so never translated. `checked` auditors compared the step with them. */
+/** Lean's goals around the quoted tactics. `checked` auditors compared the step with them. */
 function Goals({ goals, checked }: { goals: WebExplanationGoals; checked?: number }) {
   const state = (items: string[], total: number) => total === 0 ? <p class="explain-goal-none">{t('没有剩余目标')}</p> : <>
     {items.map((goal, index) => <pre key={index} class="explain-goal" tabIndex={0} translate={false}>{goal}</pre>)}
     {total > items.length && <p class="explain-goal-none">{t('另有 {0} 个目标没有显示', total - items.length)}</p>}</>;
-  return <details class="explain-reviews explain-goals"><summary>{fill(t('{0}Lean 目标 · {1}'), <Icon name="locate-fixed" />, linesLabel([goals.lines]))}
+  return <div class="explain-goals"><p class="explain-evidence-label">{t('Lean 目标 · {0}', linesLabel([goals.lines]))}
     {checked ? <span class="explain-goal-checked" title={t('审核模型把这一步的讲解和这些目标逐个对照过，判断一致')}>
-      {fill(t('{0}{1} 个审核模型对照过'), <Icon name="check" />, String(checked))}</span> : null}</summary>
+      {fill(t('{0}{1} 个审核模型对照过'), <Icon name="check" />, String(checked))}</span> : null}</p>
     <p class="explain-goal-label">{t('之前')}</p>{state(goals.before, goals.beforeCount)}
-    <p class="explain-goal-label">{t('之后')}</p>{state(goals.after, goals.afterCount)}</details>;
+    <p class="explain-goal-label">{t('之后')}</p>{state(goals.after, goals.afterCount)}</div>;
 }
-/** What the independent auditors wrote about a statement or step, folded. */
-function Reviews({ notes }: { notes: string[] }) {
+function ReviewNotes({ notes, label }: { notes: string[]; label?: boolean }) {
   if (!notes.length) return null;
-  return <details class="explain-reviews"><summary>{fill(t('{0}审核说明 ({1})'), <Icon name="shield-check" />, String(notes.length))}</summary>
-    <ul>{notes.map((note, index) => <li key={index} class="explain-rich"><Rich text={note} /></li>)}</ul></details>;
+  return <div class="explain-review-notes">
+    {label && <p class="explain-evidence-label">{t('审核说明')}</p>}
+    <ul>{notes.map((note, index) => <li key={index} class="explain-rich"><Rich text={note} /></li>)}</ul>
+  </div>;
+}
+/** Keep one disclosure per step. Goals and auditor notes are shown together when available. */
+function ProofEvidence({ notes, goals, checked }: { notes: string[]; goals?: WebExplanationGoals; checked?: number }) {
+  if (!notes.length && !goals) return null;
+  return <details class="explain-reviews">
+    <summary>{goals ? t('核对这一步') : t('审核说明')}</summary>
+    <div class="explain-evidence-body">
+      {goals && <Goals goals={goals} checked={checked} />}
+      <ReviewNotes notes={notes} label={Boolean(goals)} />
+    </div>
+  </details>;
 }
 const placeNote: Record<WebExplanationUse['place'], string> = {
   step: t('写在这一步引用的 Lean 里'), declaration: t('写在这个声明的其他行里'),
@@ -301,8 +363,46 @@ function DocumentFacts({ document }: { document: WebExplanationDocument }) {
   return <dl class="facts explain-facts">{items.map(([label, value, mono, wide]) => <Fact key={label} label={label} value={value} mono={mono} wide={wide} />)}</dl>;
 }
 
-/** The generate confirmation (estimate, caps, key) and the stop and delete confirmations. */
+function ProofContents({ document, selected }: { document: WebExplanationDocument; selected?: number }) {
+  const [search, setSearch] = useState('');
+  const query = search.trim().toLowerCase();
+  const entries = document.sections.map((section, index) => ({ section, index })).filter(({ section }) =>
+    section.title.toLowerCase().includes(query) || section.name.toLowerCase().includes(query));
+  const groups = [
+    { label: t('主定理'), entries: entries.filter(({ section }) => section.target) },
+    { label: t('辅助声明'), entries: entries.filter(({ section }) => !section.target) },
+  ];
+  return <div class="explain-contents">
+    <header class="confirm-heading">
+      <h2 id="explain-dialog-heading">{t('证明目录')}</h2>
+      <button type="button" class="icon-button" data-action="close-dialog" aria-label={t('关闭')} title={t('关闭')}><Icon name="x" /></button>
+    </header>
+    <label class="explain-contents-search">
+      <Icon name="search" /><span class="sr-only">{t('按讲解标题或 Lean 名称查找')}</span>
+      <input type="search" value={search} placeholder={t('按讲解标题或 Lean 名称查找')}
+        onInput={event => setSearch(event.currentTarget.value)} />
+    </label>
+    <div class="explain-contents-list">
+      {!entries.length && <p class="explain-contents-empty" role="status">{t('没有匹配的声明')}</p>}
+      {groups.map(group => group.entries.length > 0 && <section key={group.label}>
+        <h3>{group.label}</h3>
+        <ul>{group.entries.map(({ section, index }) => <li key={section.name}>
+          <button type="button" data-action="contents-jump" data-target={index} aria-current={index === selected ? 'location' : undefined}>
+            <span class="explain-contents-entry" lang={document.language === 'zh' ? 'zh-CN' : 'en'}>
+              <span><Rich text={section.title || section.name} /></span>
+              {section.title && section.title !== section.name && <code translate={false}><LeanName name={section.name} /></code>}
+            </span>
+            <Icon name="chevron-right" />
+          </button>
+        </li>)}</ul>
+      </section>)}
+    </div>
+  </div>;
+}
+
+/** Reading navigation and the generate, stop and delete confirmations. */
 function Dialog(view: ExplainView) {
+  if (view.dialog === 'contents' && view.document) return <ProofContents document={view.document} selected={view.active?.section} />;
   const { generation } = view.overview;
   const header = (title: string) => <header class="confirm-heading"><h2 id="explain-dialog-heading">{title}</h2>
     <button type="button" class="icon-button" data-action="close-dialog" aria-label={t('关闭')} title={t('关闭')}><Icon name="x" /></button></header>;

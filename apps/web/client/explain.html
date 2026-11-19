@@ -13,6 +13,7 @@
 </head>
 <body class="explain-page">
   <header class="topbar explain-topbar">
+    <a class="skip-link" href="#main" data-action="skip-proof">跳到正文</a>
     <a class="brand" href="./" aria-label="TheoremOS 工作台"><img src="assets/mark.svg" alt="" width="26" height="26"><span>Theorem<span class="brand-os">OS</span></span></a>
     <span class="topbar-divider" aria-hidden="true"></span>
     <span class="explain-kind">证明讲解</span>
@@ -22,7 +23,8 @@
       <a id="explain-back" class="button" href="./"><i data-lucide="arrow-left"></i>返回工作台</a>
     </div>
   </header>
-  <main class="explain-shell" id="main">
+  <main class="explain-shell" id="main" tabindex="-1">
+    <h1 id="explain-page-heading" class="sr-only">证明讲解</h1>
     <p id="explain-loading" class="explain-state" role="status">正在读取证明…</p>
     <section id="explain-missing" class="share-card share-state-card explain-missing" hidden aria-labelledby="explain-missing-heading">
       <h1 id="explain-missing-heading">无法打开证明讲解</h1>
@@ -30,9 +32,9 @@
     </section>
     <div id="explain-content" class="explain-content" hidden>
       <div id="explain-toolbar" class="explain-toolbar"></div>
-      <div id="explain-split" class="explain-split" data-pane="prose">
+      <div id="explain-split" class="explain-split" data-pane="prose" data-layout="compare">
         <section class="explain-pane explain-pane-lean" aria-labelledby="explain-lean-heading">
-          <header class="explain-pane-head"><h2 id="explain-lean-heading">Lean 证明</h2><span id="explain-lean-count" class="mono explain-count"></span></header>
+          <header class="explain-pane-head"><span id="explain-lean-heading" class="explain-pane-label">Lean 证明</span><span id="explain-lean-count" class="mono explain-count"></span></header>
           <p id="explain-lean-legend" class="explain-legend" hidden></p>
           <div id="explain-chosen" class="formal-chosen" aria-live="polite"></div>
           <div id="explain-lean" class="explain-scroll explain-lean" tabindex="0" aria-labelledby="explain-lean-heading"><div id="explain-lean-code" class="lean-code" translate="no"></div></div>

@@ -94,16 +94,23 @@ const address = (base: string) => `${origin}/explain.html?${new URLSearchParams(
 try {
   for (const width of [1440, 390]) {
     await scenario(`${width}px: saved prose opens directly and optional routes preserve reading and deep links in both languages`, width, true, async ({ page, base }) => {
+      const reading = async () => {
+        if (width <= 900) return;
+        assert.equal(await page.locator('#explain-split').getAttribute('data-layout'), 'read');
+        assert.equal(await page.locator('#explain-lean').isVisible(), false);
+      };
       await page.goto(address(base)); await page.locator('.explain-document').waitFor();
       for (const language of ['zh', 'en'] as const) {
         const url = new URL(address(base)); url.searchParams.set('language', language); url.searchParams.set('lang', language);
         await page.goto(url.href); await page.locator('.explain-document').waitFor();
+        await reading();
         const disclosure = page.locator('[data-explain-route]'), route = disclosure.locator('.solution-route');
         assert.equal(await disclosure.getAttribute('open'), null, 'Saved explanations start on the prose');
         assert.equal(await route.isVisible(), false, 'The route is optional');
-        assert.equal(await route.count(), 1, 'The hidden route stays mounted');
-        assert.equal(await disclosure.locator(':scope > summary').innerText(), language === 'en' ? 'Proof route' : '证明路线');
+        assert.equal(await route.count(), 0, 'The route mounts on first open');
+        assert.equal(await disclosure.locator(':scope > summary').innerText(), language === 'en' ? 'Dependency graph' : '依赖图');
         assert.equal(await page.locator('.explain-overview').isVisible(), true, 'The proof outline is available in prose');
+        assert.equal(await page.locator('.explain-overview p').innerText(), 'Combine the lemmas.', 'legacy saved prose keeps its overview');
         assert.ok((await page.locator('.explain-section').first().innerText()).includes(`${language}: synthetic helper explanation.`));
         await page.screenshot({ path: path.join(output, `prose-default-${language}-${width}.png`), fullPage: true });
         await disclosure.locator(':scope > summary').click();
@@ -120,11 +127,13 @@ try {
         await until(() => page.evaluate(() => document.activeElement?.id === 'explain-section-0'), 'A route action focuses the matching prose section');
         assert.equal(await page.locator('.explain-section').first().locator('.explain-steps').isVisible(), true, 'A route action unfolds the section in outline mode');
         assert.equal(await page.locator('#explain-split').getAttribute('data-pane'), 'prose');
+        await reading();
         const helperLine = page.locator('.lean-row.is-active').first();
         assert.equal(await helperLine.getAttribute('data-line'), '1', 'The same section remains marked in Lean');
         await page.evaluate(url => history.replaceState(null, '', url), `${url.href}#at=recovery_helper&step=1`);
         await page.reload();
         await page.locator('.explain-steps > li.is-active[data-anchor="0"][data-step="0"]').waitFor();
+        await reading();
         assert.equal(await disclosure.getAttribute('open'), null, 'A prose-only deep link keeps the route folded');
         await page.goto(`${url.href}#node=declaration%3Arecovery_helper`);
         await route.locator('[data-solution-node="declaration:recovery_helper"][aria-pressed="true"]').waitFor();

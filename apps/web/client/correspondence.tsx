@@ -183,7 +183,7 @@ export function ProblemCard(props: { problemId: string; original: string; corres
   return <section class="explain-section formal-problem" aria-labelledby="explain-problem-heading">
     <header class="explain-section-head">
       <div class="explain-section-meta"><span class="badge">{t('形式化')}</span><code translate={false}><LeanName name={props.problemId} /></code></div>
-      <h3 id="explain-problem-heading">{t('原题')}</h3>
+      <h2 id="explain-problem-heading">{t('原题')}</h2>
     </header>
     <OriginalText original={props.original} correspondences={props.correspondences} active={props.active} />
     <p class="formal-note"><Icon name="shield-check" /><span>{!pieces.length

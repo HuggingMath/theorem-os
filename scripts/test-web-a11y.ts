@@ -34,17 +34,17 @@ const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port
   THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web') }), runner);
 const mark = (check: string) => console.log(`PASS ${check}`);
 const clean = async (page: Page, where: string, scope?: string) => assert.deepEqual(await audit(page, { scope }), [], `Accessibility problems: ${where}`);
-async function newProblemControl(page: Page, quiet: boolean) {
+async function newProblemControl(page: Page) {
   const control = page.locator('#topbar-draft');
   assert.equal(await control.isVisible(), true);
   assert.ok((await control.boundingBox())!.height >= 32, 'New problem keeps its visible click target');
-  const colors = await control.evaluate((element, quiet) => {
+  const colors = await control.evaluate(element => {
     const probe = document.body.appendChild(document.createElement('i'));
-    probe.style.backgroundColor = quiet ? 'var(--card)' : 'var(--ink)';
+    probe.style.backgroundColor = 'var(--card)';
     const expected = getComputedStyle(probe).backgroundColor, actual = getComputedStyle(element).backgroundColor;
     probe.remove(); return { actual, expected, view: document.body.dataset.view, entry: document.body.dataset.entry, empty: document.body.dataset.chatEmpty };
-  }, quiet);
-  assert.equal(colors.actual, colors.expected, `${quiet ? 'New problem is quiet on the empty home view' : 'New problem is prominent beside existing work'}: ${JSON.stringify(colors)}`);
+  });
+  assert.equal(colors.actual, colors.expected, `New problem keeps a neutral surface across views: ${JSON.stringify(colors)}`);
   assert.deepEqual(await contrastProblems(page, '#topbar-draft'), [], 'New problem meets WCAG AA contrast');
 }
 
@@ -84,7 +84,7 @@ try {
     const initialTheme = await page.locator('html').getAttribute('data-theme');
     for (const theme of ['light', 'dark']) {
       await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
-      await newProblemControl(page, true);
+      await newProblemControl(page);
     }
     await page.evaluate(theme => { if (theme) document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme; }, initialTheme);
     await ready(page);
@@ -160,7 +160,7 @@ try {
 
     // The sample: each tab is reachable with the arrow keys and every panel passes the audit.
     await openSample(page);
-    await newProblemControl(page, false);
+    await newProblemControl(page);
     await page.locator('#detail-tab-result').focus();
     const order = await page.locator('[data-detail-tab]').evaluateAll(tabs => tabs.map(tab => (tab as HTMLElement).dataset.detailTab!));
     for (let step = 0; step < order.length; step++) {
@@ -200,9 +200,9 @@ try {
     await page.locator('#submit-run').or(page.locator('#natural-research #formalize-original')).first().waitFor();
     await settled(page);
     await clean(page, `375px new research (${locale})`);
-    await newProblemControl(page, true);
+    await newProblemControl(page);
     await enterLean(page);
-    await newProblemControl(page, false);
+    await newProblemControl(page);
     mark(`the 375px layout passes the audit (${locale})`);
     await page.screenshot({ path: path.join(output, `a11y-${locale}-375.png`) });
     assert.deepEqual(errors, []);

@@ -396,7 +396,16 @@ try {
     const followup = await input.inputValue();
     assert.ok(followup.startsWith('保留已写的独立追问。\n\n'));
     for (const text of ['加法交换律', '第 1 步', '对任意自然数', '将自然数 a 和 b', 'Nat.add_comm', accepted.id]) assert.ok(followup.includes(text));
-    assert.ok(followup.includes(`${origin}/explain.html?run=${accepted.id}&target=swap_sum&language=zh#explain-section-0`));
+    const stepUrl = `${origin}/explain.html?run=${accepted.id}&target=swap_sum&language=zh#at=swap_sum&step=1`;
+    assert.ok(followup.includes(stepUrl));
+    if (width === 1440) {
+      const reader = await context.newPage();
+      reader.on('pageerror', error => errors.push(error.message));
+      try {
+        await reader.goto(stepUrl);
+        await reader.locator('.explain-section.is-target .explain-steps > li.is-active').filter({ hasText: '将自然数 a 和 b 代入加法交换律' }).waitFor();
+      } finally { await reader.close(); }
+    }
     assert.deepEqual(writes, [], 'step questioning prepares a draft without sending it');
     await answer.locator('[data-chat-answer-use="supporting_identity"]').click();
     assert.equal(await answer.locator('.chat-answer-support').evaluate((element: HTMLDetailsElement) => element.open), true);
@@ -591,7 +600,7 @@ try {
           'both target titles remain visible in a document with multiple target sections');
         assert.equal(await document.locator('[data-chat-answer-target="swap_sum"]').getAttribute('id'), `chat-answer-${value.id}-swap_sum-swap_sum`);
         await answer.locator('[data-chat-answer-question="swap_sum:0"]').click();
-        assert.ok((await input.inputValue()).includes(`${origin}/explain.html?run=${value.id}&target=swap_sum&language=zh#explain-section-1`),
+        assert.ok((await input.inputValue()).includes(`${origin}/explain.html?run=${value.id}&target=swap_sum&language=zh#at=swap_sum&step=1`),
           'the selected step retains the original saved section index after other target sections');
       }
       assert.deepEqual(writes, []); assert.deepEqual(forbiddenCalls, []);
@@ -610,7 +619,7 @@ try {
     await page.keyboard.press('Enter');
     const singleFollowup = await input.inputValue();
     assert.ok(singleFollowup.startsWith('保留只有一个阅读目标的追问。\n\n'));
-    for (const text of ['加法交换律', '对任意自然数', 'Nat.add_comm', `${origin}/explain.html?run=${singleTarget.id}&target=swap_sum&language=zh#explain-section-0`])
+    for (const text of ['加法交换律', '对任意自然数', 'Nat.add_comm', `${origin}/explain.html?run=${singleTarget.id}&target=swap_sum&language=zh#at=swap_sum&step=1`])
       assert.ok(singleFollowup.includes(text));
     assert.deepEqual(writes, []); assert.deepEqual(forbiddenCalls, []);
     await answer.locator('h3').scrollIntoViewIfNeeded();
@@ -722,7 +731,7 @@ try {
     await answer.locator('[data-chat-answer-question="swap_sum:0"]').click();
     const simpleFollowup = await input.inputValue();
     assert.ok(simpleFollowup.startsWith('保留简洁模式的独立追问。\n\n'));
-    assert.ok(simpleFollowup.includes(`${origin}/explain.html?run=${accepted.id}&target=swap_sum&language=zh#explain-section-0`));
+    assert.ok(simpleFollowup.includes(stepUrl));
     await acceptedStatus.scrollIntoViewIfNeeded();
     await fit(page); await screenshot(page, `${width}-simple-accepted-solution.png`);
     await more.locator(':scope > summary').click();
