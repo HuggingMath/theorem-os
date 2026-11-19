@@ -1,6 +1,6 @@
 import { Component, render } from 'preact';
 import { useMemo } from 'preact/hooks';
-import type { WebExplanation, WebExplanationDocument, WebExplanationGoals, WebExplanationLines, WebExplanationLink, WebExplanationOverview,
+import type { WebExplanation, WebExplanationDocument, WebExplanationGoals, WebExplanationLines, WebExplanationLink, WebExplanationOverview, WebExplanationPhase,
   WebExplanationSection, WebExplanationUse } from '../shared';
 import { effortLabels, formatDuration, formatTokens } from '../presentation';
 import { t } from '../i18n';
@@ -54,15 +54,16 @@ function Toolbar(view: ExplainView) {
   </>;
 }
 
-/** The right pane's heading: the way back from a cited lemma, scroll sync and, once approved, download and delete. */
+/** The right pane's heading: return to the previous reading position, sync scrolling, and manage the saved document. */
 function ProseHead(view: ExplainView) {
   const approved = view.explanation?.status === 'approved';
   const query = new URLSearchParams({ target: view.target, language: view.language }).toString();
   return <>
     <h2 id="explain-prose-heading">{t('自然语言证明')}</h2>
     <div class="explain-head-actions">
-      {view.canReturn && <button type="button" class="text-button explain-return" data-action="return" title={t('回到跳转前的位置，和浏览器的后退一样')}>
-        {fill(t('{0}回到引用处'), <Icon name="arrow-left" />)}</button>}
+      {view.canReturn && <button type="button" class="text-button explain-return" data-action="return"
+        aria-label={t('返回阅读位置')} title={t('回到跳转前的位置，和浏览器的后退一样')}>
+        <Icon name="arrow-left" /><span>{t('返回阅读位置')}</span></button>}
       {view.document && <div class="source-switch explain-detail-switch" role="group" aria-label={t('讲解详略')}>
         <button type="button" data-action="detail" data-detail="outline" aria-pressed={view.detail === 'outline'}>{t('概要')}</button>
         <button type="button" data-action="detail" data-detail="steps" aria-pressed={view.detail !== 'outline'}>{t('逐步')}</button></div>}
@@ -102,44 +103,56 @@ function Prose(view: ExplainView) {
   </div>;
 }
 
-const phases = [
-  { id: 'waiting_review', label: t('等待原题含义审核'), phases: ['waiting_review'] },
-  { id: 'queued', label: t('排队'), phases: ['queued'] }, { id: 'preparing', label: t('准备环境'), phases: ['preparing'] },
-  { id: 'extracting', label: t('提取证明结构'), phases: ['extracting'] },
-  { id: 'writing', label: t('写作与审核'), phases: ['writing', 'auditing', 'revising', 'retrying'] }, { id: 'finishing', label: t('整理结果'), phases: ['finishing'] },
-];
-const phaseDetail: Record<string, string> = { writing: t('正在写作'), auditing: t('正在审核'), revising: t('按审核意见修改'), retrying: t('模型调用失败，正在重试') };
+const phaseTitle: Record<WebExplanationPhase, string> = {
+  waiting_review: t('等待原题含义审核'), queued: t('排队等待生成'), preparing: t('正在准备 Lean 环境'),
+  extracting: t('正在提取证明结构'), writing: t('正在撰写讲解'), auditing: t('正在逐步审核'),
+  revising: t('按审核意见修改'), retrying: t('模型调用失败，正在重试'), finishing: t('正在整理讲解'),
+};
+const phaseDescription: Partial<Record<WebExplanationPhase, string>> = {
+  waiting_review: t('原题含义审核通过后会自动安排讲解。'),
+  auditing: t('审核模型正在逐步对照讲解和 Lean 证明。'),
+  retrying: t('正在重新连接模型服务。可以稍后回来看结果。'),
+};
 function ProgressView({ explanation, now }: { explanation: WebExplanation; now: number }) {
   const progress = explanation.progress, phase = progress?.phase ?? (explanation.status === 'queued' ? 'queued' : 'preparing');
-  const waiting = phase === 'waiting_review';
-  const visiblePhases = waiting ? phases : phases.filter(item => item.id !== 'waiting_review');
-  const current = Math.max(0, visiblePhases.findIndex(item => item.phases.includes(phase)));
   const elapsed = now - Date.parse(explanation.createdAt);
-  const modelRequestFailures = progress?.modelRequestFailures ?? 0;
-  return <div class="explain-card explain-progress" aria-live="polite">
-    <div class="result-banner running"><Spinner /><div><h3>{waiting ? t('等待原题含义审核') : explanation.status === 'queued' ? t('排队等待生成') : t('正在生成讲解')}</h3>
-      <p>{t('生成在服务器上进行，可以关闭页面，稍后回来查看。')}</p></div></div>
-    <ol class="explain-phases">{visiblePhases.map((item, index) => <li key={item.id} class={index < current ? 'done' : index === current ? 'active' : undefined}
-      aria-current={index === current ? 'step' : undefined}>{index < current ? <Icon name="check" /> : <span class="explain-phase-dot" />}<span>{item.label}</span>
-      {index === current && phaseDetail[phase] && <span class="explain-phase-detail">{phaseDetail[phase]}</span>}</li>)}</ol>
-    <dl class="facts explain-facts">
+  const batches = progress?.batches ?? 0, approved = progress?.approvedBatches ?? 0;
+  const hasFailures = (progress?.modelRequestFailures ?? 0) > 0;
+  const phaseIcon = phase === 'retrying' ? 'rotate-ccw' : explanation.status === 'queued' ? 'clock-3' : undefined;
+  return <div class="explain-card explain-progress">
+    <div class="explain-progress-heading" role="status">
+      <span class="explain-progress-icon" aria-hidden="true">{phaseIcon ? <Icon name={phaseIcon} /> : <Spinner />}</span>
+      <div><h3>{phaseTitle[phase]}</h3><p>{phaseDescription[phase] ?? t('生成在服务器上进行，可以关闭页面，稍后回来查看。')}</p></div>
+    </div>
+    {batches > 0 && <div class="explain-batch-progress">
+      <div><label for="explain-batches">{t('已通过批次')}</label><span class="mono">{approved} / {batches}</span></div>
+      <progress id="explain-batches" value={approved} max={batches} />
+    </div>}
+    <dl class="facts explain-facts explain-progress-facts">
       <Fact label={t('已用时间')} value={formatDuration(elapsed)} mono />
       {explanation.queue && <Fact label={t('排队位置')} value={t('前面 {0} 份', explanation.queue.ahead)} />}
-      {progress?.batches !== undefined && <Fact label={t('已通过批次')} value={`${progress.approvedBatches ?? 0}/${progress.batches}`} mono />}
       {progress?.round !== undefined && <Fact label={t('审核轮次')} value={t('第 {0} 轮', progress.round)} />}
-      {modelRequestFailures > 0 && <Fact label={t('模型请求失败次数')} value={String(modelRequestFailures)} mono />}
-      <Fact label={t('Token 用量')} value={`${formatTokens(progress?.tokens ?? 0)} / ${explanation.maxTotalTokens ? formatTokens(explanation.maxTotalTokens) : t('不限')}`} mono />
-      <Fact label={t('时间上限')} value={hours(explanation.maxRunSeconds)} />
+      {hasFailures && <Fact label={t('模型请求失败次数')} value={String(progress?.modelRequestFailures)} mono />}
     </dl>
-    <button type="button" class="button button-danger" data-action="cancel">{fill(t('{0}停止生成'), <Icon name="square" />)}</button>
+    <div class="explain-progress-actions">
+      <details class="explain-disclosure">
+        <summary>{t('用量与上限')}</summary>
+        <dl class="facts explain-facts">
+          <Fact label={t('Token 用量')} value={`${formatTokens(progress?.tokens ?? 0)} / ${explanation.maxTotalTokens ? formatTokens(explanation.maxTotalTokens) : t('不限')}`} mono />
+          <Fact label={t('时间上限')} value={hours(explanation.maxRunSeconds)} />
+        </dl>
+      </details>
+      <button type="button" class="button button-danger" data-action="cancel">{fill(t('{0}停止生成'), <Icon name="square" />)}</button>
+    </div>
   </div>;
 }
 function StoppedView({ explanation }: { explanation: WebExplanation }) {
   const cancelled = explanation.status === 'cancelled';
+  const needsReview = explanation.reason === 'explanation_statement_unreviewed';
   const modelRequestFailures = explanationModelRequestFailuresText(explanation.progress?.modelRequestFailures);
   return <div class={`result-banner ${cancelled ? 'warning' : 'failed'}`}><Icon name={cancelled ? 'square' : 'circle-alert'} />
-    <div><h3>{cancelled ? t('已停止生成') : explanation.status === 'exhausted' ? t('讲解没有完成') : t('生成失败')}</h3>
-      <p>{cancelled ? t('已用的 Token 不会退回。') : explanationReasonText(explanation.reason)}</p>
+    <div><h3>{needsReview ? t('暂未生成讲解') : cancelled ? t('已停止生成') : explanation.status === 'exhausted' ? t('讲解没有完成') : t('生成失败')}</h3>
+      <p>{cancelled && !explanation.reason ? t('已用的 Token 不会退回。') : explanationReasonText(explanation.reason)}</p>
       {modelRequestFailures && <p>{modelRequestFailures}</p>}</div></div>;
 }
 
@@ -158,19 +171,33 @@ function DocumentView({ document, proof, runId, active, gap, chosen, onRouteOpen
   const route = useMemo(() => explanationSolutionRoute(document, proof, `${runId}:explanation:${document.target}:${document.language}`), [document, proof, runId]);
   let owned = ownedBy.get(document);
   if (!owned) ownedBy.set(document, owned = new Map(document.sections.map((section, index) => [section.name, index])));
+  const targetIndex = document.sections.findIndex(section => section.target);
+  const target = document.sections[targetIndex];
   return <article class="explain-document" lang={document.language === 'en' ? 'en' : 'zh-CN'}>
-    <details class="explain-reviews explain-provenance"><summary>{t('讲解来源与审阅')}</summary>
-      <p class="explain-notice"><span>{t('这份讲解由模型根据 Lean 证明写成，并由 {0} 个审核模型逐步对照 Lean 检查，未经人工审阅。Lean 只检查了证明本身，没有检查这份讲解。', document.auditors)}</span></p>
-      {linkedDocument(document) && <p>{t('讲解中划虚线的短语各对应一段 Lean，点它标出那段 Lean；审核模型核对过每一对。')}</p>}</details>
-    {document.problem && <ProblemCard {...document.problem} active={chosen} />}
+    {target && <header class="explain-lead">
+      <p class="explain-lead-label">{t('主定理')}</p>
+      <h3 class="explain-lead-title"><Rich text={target.title || target.name} /></h3>
+      <p class="explain-rich explain-lead-statement"><Rich text={target.statement} /></p>
+      <button type="button" class="text-button explain-lead-jump" data-action="proof-jump" data-target={targetIndex}>
+        {t('读主定理证明')}<Icon name="arrow-down" />
+      </button>
+    </header>}
     {document.overview.trim() && <section class="explain-overview"><h3>{t('证明思路')}</h3><p class="explain-rich"><Rich text={document.overview} /></p></section>}
-    <details class="explain-route" data-explain-route open={routeOpen} onToggle={event => onRouteToggle?.(event.currentTarget.open)}>
-      <summary>{t('证明路线')}</summary>
-      <SolutionRouteGraph model={route} onOpen={onRouteOpen} selection={node} onSelect={onRouteSelect} />
-    </details>
+    <div class="explain-reading-options">
+      <details class="explain-route explain-disclosure" data-explain-route open={routeOpen} onToggle={event => onRouteToggle?.(event.currentTarget.open)}>
+        <summary><Icon name="git-branch" />{t('证明路线')}</summary>
+        <SolutionRouteGraph model={route} onOpen={onRouteOpen} selection={node} onSelect={onRouteSelect} />
+      </details>
+      <details class="explain-reviews explain-provenance explain-disclosure">
+        <summary><Icon name="shield-check" />{t('讲解来源与审阅')}</summary>
+        <p>{t('Lean 已检查证明。讲解由模型撰写，{0} 个审核模型逐步对照 Lean 核对，未经人工审阅。', document.auditors)}</p>
+        {linkedDocument(document) && <p>{t('讲解中划虚线的短语各对应一段 Lean，点它标出那段 Lean；审核模型核对过每一对。')}</p>}
+        <DocumentFacts document={document} />
+      </details>
+    </div>
+    {document.problem && <ProblemCard {...document.problem} active={chosen} />}
     {document.sections.map((section, index) => <CachedSection key={section.name} section={section} index={index} owned={owned} folded={!!outline && !opened?.has(index)}
       active={active?.section === index ? active : undefined} gap={active?.section === index ? gap : undefined} />)}
-    <Footer document={document} />
   </article>;
 }
 type SectionProps = { section: WebExplanationSection; index: number; owned: Map<string, number>; active?: StepRef; gap?: number; folded?: boolean };
@@ -258,7 +285,7 @@ function Uses(props: { uses: WebExplanationUse[]; owned: Map<string, number>; se
     return <code key={use.name} class={place} title={placeNote[use.place]} translate={false}>{use.name}{hint}</code>;
   })}</span>;
 }
-function Footer({ document }: { document: WebExplanationDocument }) {
+function DocumentFacts({ document }: { document: WebExplanationDocument }) {
   // Toolchain and Mathlib revision are long identifiers; they take a whole row instead of breaking inside a column.
   const items: [string, string, boolean?, boolean?][] = [
     [t('声明数'), String(document.metrics.declarations)], [t('步骤数'), String(document.metrics.steps)], [t('引用数'), String(document.metrics.citations)],
@@ -271,7 +298,7 @@ function Footer({ document }: { document: WebExplanationDocument }) {
     ...document.mathlibRevision ? [[t('Mathlib 版本'), document.mathlibRevision, true, true] as [string, string, boolean, boolean]] : [],
     [t('依赖的公理'), document.axioms.length ? document.axioms.join(', ') : t('无'), true],
   ];
-  return <dl class="facts explain-facts explain-footer">{items.map(([label, value, mono, wide]) => <Fact key={label} label={label} value={value} mono={mono} wide={wide} />)}</dl>;
+  return <dl class="facts explain-facts">{items.map(([label, value, mono, wide]) => <Fact key={label} label={label} value={value} mono={mono} wide={wide} />)}</dl>;
 }
 
 /** The generate confirmation (estimate, caps, key) and the stop and delete confirmations. */

@@ -275,29 +275,39 @@ window.addEventListener('hashchange', () => {
 });
 
 /**
- * Following a cited lemma is a jump the reader may want to undo: the entry it leaves remembers where the reader was, and
+ * A jump from the overview or a citation remembers where the reader was, and
  * the browser's Back (or the head's button) returns there. Entries keep the address, so an offline report keeps its file.
  */
-type Place = { prose: number; lean: number; pane: 'lean' | 'prose'; active?: StepRef; gap?: number; use: { section: string; step: string; use: string } };
-type Entry = { explain: 'place' | 'jump'; target: string; language: 'zh' | 'en'; depth: number; place?: Place; section?: number };
+type Place = { prose: number; lean: number; pane: 'lean' | 'prose'; active?: StepRef; gap?: number; use?: { section: string; step: string; use: string } };
+type Entry = { explain: 'place' | 'jump'; target: string; language: 'zh' | 'en'; depth: number; place?: Place; section?: number; unfold?: boolean };
 // How many jumps the current entry is from the reader's first; the head offers the way back while it is above zero.
 let depth = 0, returning = false;
 const entryOf = (value: unknown) => (value as Partial<Entry> | null)?.explain ? value as Entry : undefined;
 function jump(action: HTMLElement, keyboard: boolean) {
   const section = Number(action.dataset.target), { section: from = '', step = '', use = '' } = action.dataset;
+  const fromCitation = action.dataset.action === 'use';
   const place: Place = { prose: proseScroll.scrollTop, lean: leanScroll.scrollTop, pane: state.pane,
-    ...(state.active ? { active: state.active } : {}), ...(state.gap !== undefined ? { gap: state.gap } : {}), use: { section: from, step, use } };
+    ...(state.active ? { active: state.active } : {}), ...(state.gap !== undefined ? { gap: state.gap } : {}),
+    ...(fromCitation ? { use: { section: from, step, use } } : {}) };
   const at = { target: state.target, language: state.language };
   try {
     history.replaceState({ explain: 'place', ...at, depth, place } satisfies Entry, '');
-    history.pushState({ explain: 'jump', ...at, depth: depth + 1, section } satisfies Entry, '');
+    history.pushState({ explain: 'jump', ...at, depth: depth + 1, section, unfold: !fromCitation } satisfies Entry, '');
     depth += 1;
   } catch { /* A copy opened without history still jumps; there is just no way back. */ }
-  select({ section }, 'prose');
+  showDeclaration(section, !fromCitation);
   // From the keyboard, focus follows the jump (after select's frame, so the smooth scroll is not cut short).
   if (keyboard) requestAnimationFrame(() => document.getElementById(`explain-section-${section}`)?.focus({ preventScroll: true }));
 }
-/** Back at an entry the reader left: the same step, pane and scroll, and focus on the cited name unless it is elsewhere. */
+function showDeclaration(section: number, unfold = false) {
+  if (unfold) state.opened.add(section);
+  select({ section }, 'prose');
+  if (unfold && !narrow()) requestAnimationFrame(() => {
+    const line = currentDocument()?.sections[section]?.lines.start;
+    if (line !== undefined) revealLine(line);
+  });
+}
+/** Restore the same step, pane and scroll, and return focus to the jump control. */
 function restore(place: Place) {
   state.active = place.active; state.gap = place.gap; state.chosen = new Set(); pinned = []; ladder.reset();
   if (narrow()) state.pane = place.pane;
@@ -306,9 +316,12 @@ function restore(place: Place) {
   requestAnimationFrame(() => {
     holdUntil = performance.now() + 700;
     proseScroll.scrollTop = place.prose; leanScroll.scrollTop = place.lean;
-    const focused = document.activeElement, cited = proseScroll.querySelector<HTMLElement>(
-      `[data-action="use"][data-section="${place.use.section}"][data-step="${place.use.step}"][data-use="${place.use.use}"]`);
-    if (refocus || !focused || focused === document.body || proseScroll.contains(focused)) cited?.focus({ preventScroll: true });
+    const focused = document.activeElement;
+    const origin = place.use
+      ? `[data-action="use"][data-section="${place.use.section}"][data-step="${place.use.step}"][data-use="${place.use.use}"]`
+      : '[data-action="proof-jump"]';
+    if (refocus || !focused || focused === document.body || proseScroll.contains(focused))
+      proseScroll.querySelector<HTMLElement>(origin)?.focus({ preventScroll: true });
   });
 }
 addEventListener('popstate', event => {
@@ -319,7 +332,7 @@ addEventListener('popstate', event => {
   if (state.overview && (target !== state.target || language !== state.language)) openExplanation(target, language);
   depth = entry?.depth ?? 0;
   if (entry?.place) restore(entry.place);
-  else if (entry?.section !== undefined) select({ section: entry.section }, 'prose');
+  else if (entry?.section !== undefined) showDeclaration(entry.section, entry.unfold);
   else draw();
   returning = false;
 });
@@ -409,7 +422,7 @@ document.addEventListener('click', event => {
   if (name === 'lines') select(refOf(action), 'lean');
   // A linked phrase chooses its step or statement and marks where its Lean is written.
   else if (name === 'link') { if (!selecting()) select(refOf(action), 'lean', { spans: linkSpans(action) }); }
-  else if (name === 'use') jump(action, event.detail === 0);
+  else if (name === 'use' || name === 'proof-jump') jump(action, event.detail === 0);
   else if (name === 'return') { returning = true; history.back(); }
   else if (name === 'use-lean') select(refOf(action), 'lean', { spans: useSpans(action) });
   else if (name === 'generate' || name === 'cancel' || name === 'delete') { state.dialog = name; state.error = undefined; draw(); }

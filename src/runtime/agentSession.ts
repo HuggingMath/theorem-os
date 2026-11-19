@@ -38,7 +38,10 @@ export type MathAgentOptions = {
   onItem?: (phase: 'started' | 'completed', item: Json, context?: { turnId?: string }) => void;
   onItemUpdate?: (item: Json, context?: { turnId?: string }) => void;
   hiddenRoots?: readonly string[];
-  readIsolation?: { environment: LeanTaskEnvironment; packages?: 'none' | 'sources'; library?: { file: string; digest: string } };
+  readIsolation?: {
+    environment: LeanTaskEnvironment; packages?: 'none' | 'sources'; library?: { file: string; digest: string };
+    upstreamIdleTimeoutMs?: number;
+  };
   completedOutput?: {
     file: string;
     validate: (value: unknown) => void;

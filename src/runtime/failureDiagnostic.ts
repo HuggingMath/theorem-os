@@ -34,7 +34,7 @@ const FAILURE_REASON_PATTERNS: ReadonlyArray<readonly [MathAgentFailureReason, R
     /concurrency limit exceeded for account|timeout waiting for account concurrency slot|account_slot_acquire_failed/iu],
   ['invalid_tool_call_arguments',
     /invalid tool call arguments from upstream|(?:tool|function) call\b[^\n]{0,240}\barguments (?:are|is) invalid JSON|(?:error parsing|failed to (?:parse|deserialize)) (?:function|tool) (?:call|arguments)/iu],
-  ['upstream_request_failed', /stream disconnected before completion|upstream request failed|error sending request/iu],
+  ['upstream_request_failed', /stream disconnected before completion|upstream request failed|upstream_request_timeout|error sending request/iu],
 ];
 
 /** Classify a transient failure by its bounded category, never by copying provider text. */

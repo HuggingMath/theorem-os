@@ -170,6 +170,8 @@ function TaskMessage(props: ChatThreadProps) {
   const compactMathematics = simple && !accepted ? props.mathematics : undefined;
   const acceptance = accepted && run ? acceptedVerdict(run) : undefined;
   const reviewed = !!run && isStatementReviewed(run);
+  const explanationStatus = props.answer?.explanation?.status;
+  const showAnswer = accepted && (reviewed || Boolean(explanationStatus && explanationStatus !== 'approved'));
   const natural = !!(item || run?.formalization);
   const statementDecision = !run && !!item?.humanReview && !!item.report && ['review', 'confirmed'].includes(item.status);
   const openingStatement = props.conversation?.messages.find(message => message.role === 'user' && message.kind === 'text')?.text;
@@ -251,7 +253,9 @@ function TaskMessage(props: ChatThreadProps) {
     {backgroundReview && <BackgroundReview review={backgroundReview} compact />}
     <StatementDecision {...props} />
     <PlanDecision {...props} simple={simple} />
-    {accepted && run && (reviewed || props.answer?.explanation?.progress?.phase === 'waiting_review') && <ChatMathematicalAnswer runId={run.id} answer={props.answer} onRetry={() => props.onAnswerRetry?.()} onTarget={target => props.onAnswerTarget?.(target)} onQuestion={props.onAnswerQuestion} />}
+    {showAnswer && run && <ChatMathematicalAnswer runId={run.id} answer={props.answer} onRetry={() => props.onAnswerRetry?.()} onTarget={target => props.onAnswerTarget?.(target)} onQuestion={props.onAnswerQuestion} />}
+    {accepted && !reviewed && (confirmation === 'rejected' || confirmation === 'interrupted' || confirmation === 'superseded') &&
+      <p class="chat-math-empty">{t('原题含义审核尚未通过，暂未生成讲解。')}</p>}
     {mathematicsSummary && <ChatMathematicalSummary work={mathematicsSummary} />}
     {!accepted && props.mathematics && !compactMathematics && <ChatMathematicalProgress work={props.mathematics} onTask={taskId => props.onArtifact('roadmap', { taskId })} />}
     {accepted && <div class="research-conversation-artifacts"><button type="button" class="chat-result-primary" data-research-artifact="source" disabled={!proof} onClick={() => props.onArtifact('source')}><Icon name="file-code-2" /><span>{t('查看验收证明')}</span><Icon name="arrow-up-right" /></button></div>}

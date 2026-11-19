@@ -97,9 +97,14 @@ export function ChatMathematicalAnswer({ runId, answer, onRetry, onTarget, onQue
   const modelRequestFailures = explanationModelRequestFailuresText(explanation?.progress?.modelRequestFailures);
   const generating = explanation?.status === 'queued' || explanation?.status === 'running';
   const stopped = explanation && ['error', 'exhausted', 'cancelled'].includes(explanation.status);
+  const showStatus = generating || stopped;
+  const reading = answer?.loading && !document && !showStatus;
+  const phase = explanation?.progress?.phase ?? (explanation?.status === 'queued' ? 'queued' : 'writing');
+  const round = explanation?.progress?.round;
+  const showRound = round !== undefined && ['auditing', 'revising', 'retrying'].includes(phase);
   const phases: Record<WebExplanationPhase, string> = { queued: t('讲解正在排队'), waiting_review: t('等待原题含义审核'), preparing: t('正在准备讲解'),
     extracting: t('正在提取证明结构'), writing: t('正在撰写详细解答'), auditing: t('正在核对讲解与证明'),
-    revising: t('正在修订讲解'), retrying: t('正在重试生成讲解'), finishing: t('正在保存讲解') };
+    revising: t('正在修订讲解'), retrying: t('模型请求失败，正在自动重试'), finishing: t('正在保存讲解') };
   const explanationUrl = `explain.html?${new URLSearchParams({ run: runId, ...(answer?.target ? { target: answer.target } : {}),
     ...(explanation ? { language: explanation.language } : {}) })}`;
   const anchor = (name: string) => `chat-answer-${encodeURIComponent(runId)}-${encodeURIComponent(answer?.target ?? '')}-${encodeURIComponent(name)}`;
@@ -107,16 +112,21 @@ export function ChatMathematicalAnswer({ runId, answer, onRetry, onTarget, onQue
   const conclusion = targetSection?.statement.trim() ? targetSection : undefined;
   const repeatedTitle = document && targets.length > 1 && answer?.target === document.target
     && document.sections.filter(section => section.target).length === 1 ? targetSection : undefined;
-  return <section class="chat-mathematical-answer" data-chat-answer data-chat-answer-status={document ? 'ready' : answer?.error ? 'read-error'
-    : answer?.loading ? 'reading' : explanation?.status ?? (generation?.available ? 'missing' : 'unavailable')}
-    aria-labelledby="chat-answer-heading" aria-busy={answer?.loading || generating}>
+  return <section class="chat-mathematical-answer" data-chat-answer data-chat-answer-status={document ? 'ready' : showStatus ? explanation?.status
+    : answer?.error ? 'read-error' : reading ? 'reading' : generation?.available ? 'missing' : 'unavailable'}
+    aria-labelledby="chat-answer-heading" aria-busy={reading}>
     <div class="chat-answer-header"><h3 id="chat-answer-heading">{t('详细解答')}</h3>
       {targets.length > 1 && <label class="chat-answer-selection"><span class="sr-only">{t('阅读目标')}</span><select data-chat-answer-select value={answer?.target} onChange={event => onTarget(event.currentTarget.value)}>
         {targets.map(target => <option key={target.name} value={target.name}>{answer?.targetTitles?.[target.name] || target.name}</option>)}
       </select></label>}
     </div>
-    {answer?.loading && !document && <p class="chat-answer-state" role="status"><span class="spinner" />{t('正在读取已有讲解…')}</p>}
-    {answer?.error && <div class="chat-error" role="alert">{document && <p>{t('刷新失败，下面保留上次读取的解答。')}</p>}<p>{answer.error}</p><button type="button" class="text-button" data-chat-answer-retry onClick={onRetry}>{t('重新读取讲解')}</button></div>}
+    {reading && !answer?.error && <p class="chat-answer-state" role="status"><span class="spinner" />{t('正在读取已有讲解…')}</p>}
+    {answer?.error && <div class="chat-error" role="alert">
+      {document && <p>{t('刷新失败，下面保留上次读取的解答。')}</p>}
+      {showStatus && <p>{t('讲解状态暂时无法更新，下面显示上次获取的进度。')}</p>}
+      {!showStatus && <p>{answer.error}</p>}
+      <button type="button" class="text-button" data-chat-answer-retry disabled={answer.loading} onClick={onRetry}>{t('重新读取讲解')}</button>
+    </div>}
     {document && <div data-chat-answer-document={document.target}>
       {conclusion && <div class="chat-answer-conclusion" data-chat-answer-conclusion><h4>{t('结论')}</h4><ChatMessageContent text={conclusion.statement} /></div>}
       {document.overview.trim() && <div class="chat-answer-idea" data-chat-answer-idea><h4>{t('证明思路')}</h4><ChatMessageContent text={document.overview} /></div>}
@@ -126,16 +136,18 @@ export function ChatMathematicalAnswer({ runId, answer, onRetry, onTarget, onQue
           source={`${new URL(explanationUrl, location.href).href}#explain-section-${index}`} onQuestion={onQuestion} />)}
       </div>}
     </div>}
-    {!document && !answer?.loading && !answer?.error && <>
-      {generating ? <div class="chat-answer-generation" role="status"><p class="chat-answer-state"><span class="spinner" />{phases[explanation.progress?.phase ?? (explanation.status === 'queued' ? 'queued' : 'writing')]}</p>
+    {!document && (showStatus || !reading && !answer?.error) && <>
+      {generating ? <div class="chat-answer-generation" role="status"><p class="chat-answer-state">
+        {explanation.status === 'queued' ? <Icon name="clock-3" /> : <span class="spinner" />}{phases[phase]}</p>
         {explanation.queue && <p>{t('前面 {0} 份', explanation.queue.ahead)}</p>}
         {explanation.progress?.batches !== undefined && <p>{t('已通过批次')} {explanation.progress.approvedBatches ?? 0} / {explanation.progress.batches}</p>}
+        {showRound && <p>{t('讲解第 {0} 轮', round)}</p>}
         {modelRequestFailures && <p>{modelRequestFailures}</p>}
-        <p>{t('讲解会在后台继续，完成后自动显示。')}</p></div>
+        <p>{phase === 'waiting_review' ? t('题意审核通过后，讲解会自动进入生成队列。') : t('讲解会在后台继续，完成后自动显示。')}</p></div>
         : <>
           {stopped ? <div class="chat-answer-stopped" role="status"><strong>{explanation.status === 'cancelled' ? t('已停止生成')
             : explanation.status === 'exhausted' ? t('讲解没有完成') : t('生成失败')}</strong>
-            {explanation.status !== 'cancelled' && <p>{explanationReasonText(explanation.reason)}</p>}
+            {(explanation.status !== 'cancelled' || explanation.reason) && <p>{explanationReasonText(explanation.reason)}</p>}
             {modelRequestFailures && <p>{modelRequestFailures}</p>}</div>
             : <p class="chat-math-empty">{t('这份验收证明还没有可阅读的讲解。')}</p>}
           {generation && 'reason' in generation && <p class="chat-math-empty" data-chat-answer-unavailable>{explanationUnavailableText(generation.reason)}</p>}

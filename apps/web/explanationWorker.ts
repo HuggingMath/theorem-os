@@ -30,6 +30,7 @@ const inputSchema = z.object({
 }).strict();
 
 const relayUrl = new URL(SUB2API_PROVIDER.baseUrl);
+const MODEL_REQUEST_IDLE_TIMEOUT_MS = 5 * 60 * 1_000;
 
 /**
  * Explanation roles call the fixed sub2api address 127.0.0.1:8080 (src/runtime/formalizationRelay.ts). Inside the
@@ -141,6 +142,8 @@ async function main() {
     poll = setInterval(() => { refresh(); report(); }, 10_000);
     const run = () => runInformalization(directory, root, {
       openSession: options => createCodexMathSession({ ...options,
+        readIsolation: { environment: input.environment, ...options.readIsolation,
+          upstreamIdleTimeoutMs: MODEL_REQUEST_IDLE_TIMEOUT_MS },
         environment: { ...options.environment, [SUB2API_PROVIDER.apiKeyEnvironment]: key } }),
       onEvent: event => {
         if (refreshOnResume) { refresh(); refreshOnResume = false; }

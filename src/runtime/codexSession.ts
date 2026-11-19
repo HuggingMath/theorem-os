@@ -339,6 +339,7 @@ export async function createCodexMathSession(options: MathAgentOptions): Promise
     model: options.model, effort: options.effort, environment: options.readIsolation.environment,
     packages: options.readIsolation.packages,
     library: options.readIsolation.library,
+    upstreamIdleTimeoutMs: options.readIsolation.upstreamIdleTimeoutMs,
     ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}),
     env: options.environment, signal: options.signal,
     requestGate, onUsageIncomplete: options.onUsageIncomplete,

@@ -228,14 +228,21 @@ try {
   assert.equal((await page.content()).includes(credential), false, 'the Key never reaches the page');
   await page.locator('#explain-prose .explain-progress').waitFor();
   assert.equal(await page.locator('#explain-prose .solution-route').count(), 0, 'generation progress is not a completed derivation');
-  explains[0]!.send({ type: 'progress', progress: { phase: 'auditing', batches: 1, approvedBatches: 0, round: 1, tokens: 1234 } });
-  await page.locator('.explain-phases li.active').filter({ hasText: '正在审核' }).waitFor({ timeout: 15_000 });
+  explains[0]!.send({ type: 'progress', progress: { phase: 'auditing', batches: 2, approvedBatches: 1, round: 1, tokens: 1234 } });
+  const progress = page.locator('.explain-progress');
+  await progress.getByRole('heading', { name: '正在逐步审核' }).waitFor({ timeout: 15_000 });
+  const batches = progress.getByRole('progressbar', { name: '已通过批次' });
+  assert.equal(await batches.getAttribute('value'), '1');
+  assert.equal(await batches.getAttribute('max'), '2');
+  assert.equal(await progress.getByText('Token 用量', { exact: true }).isVisible(), false);
   await page.screenshot({ path: path.join(output, 'explain-progress-1440.png') });
-  mark('generation needs a Key, starts the runner with the run model and shows its phase while running');
+  await progress.getByText('用量与上限', { exact: true }).click();
+  assert.equal(await progress.getByText('Token 用量', { exact: true }).isVisible(), true);
+  mark('generation shows the current phase and actual batch progress, with usage available on demand');
   const modelRequestFailures = page.locator('.explain-facts > div').filter({ hasText: '模型请求失败次数' });
   assert.equal(await modelRequestFailures.count(), 0, 'previous workers do not report a failure count');
   explains[0]!.send({ type: 'progress', progress: { phase: 'retrying', round: 1, modelRequestFailures: 2 } });
-  await page.locator('.explain-phases li.active').filter({ hasText: '模型调用失败，正在重试' }).waitFor();
+  await progress.getByRole('heading', { name: '模型调用失败，正在重试' }).waitFor();
   assert.equal(await modelRequestFailures.locator('dd').innerText(), '2');
   assert.equal(await page.locator('.explain-facts > div').filter({ hasText: '审核轮次' }).locator('dd').innerText(), '第 1 轮');
 
@@ -279,6 +286,24 @@ try {
 
   // Mathematics finishes loading before its semantic MathML and source fallback are checked.
   await mathReady(page);
+  const lead = page.locator('.explain-lead'), overviewJump = lead.getByRole('button', { name: '读主定理证明' });
+  assert.equal(await page.locator('.explain-document > :first-child').getAttribute('class'), 'explain-lead');
+  assert.equal(await lead.locator('h3').innerText(), explained.sections.at(-1)!.title);
+  assert.equal(await lead.locator('.explain-lead-statement').innerText(), explained.sections.at(-1)!.statement);
+  await page.screenshot({ path: path.join(output, 'explain-overview-1440.png') });
+  // A reader can jump directly from the conclusion to the full main proof, even from the folded view.
+  await page.locator('[data-action="detail"][data-detail="outline"]').click();
+  await overviewJump.focus();
+  await overviewJump.press('Enter');
+  await page.locator('.explain-section.is-active.is-target .explain-steps').waitFor();
+  await until(() => shown(page, '.explain-section.is-active.is-target header'), 'the main proof jump reveals the target');
+  await until(() => shown(page, `.lean-row[data-line="${explained.sections.at(-1)!.lines.start}"]`), 'the main proof jump aligns Lean');
+  await until(() => page.evaluate(() => document.activeElement?.id === 'explain-section-6'), 'the main proof receives keyboard focus');
+  await page.locator('[data-action="return"]').click();
+  await until(() => overviewJump.evaluate(node => document.activeElement === node
+    && node.closest('.explain-scroll')!.scrollTop === 0), 'return restores the overview position and keyboard focus');
+  await page.locator('[data-action="detail"][data-detail="steps"]').click();
+  mark('the theorem and its conclusion lead, with a direct keyboard jump to the main proof and back');
   assert.equal(await page.locator('.explain-section .math-source').count(), 1, 'only the unclosed formula falls back in the prose sections');
   assert.equal(await page.locator('.explain-section .math-source').innerText(), 'x^{');
   assert.equal(await page.locator('.explain-section .math-source').getAttribute('data-math-state'), 'source');
@@ -372,7 +397,7 @@ try {
   assert.equal(await back.count(), 0, 'nothing to go back to before a jump');
   await cite.click();
   await citedSection();
-  assert.equal(await back.innerText(), '回到引用处');
+  assert.equal(await back.innerText(), '返回阅读位置');
   assert.notEqual(await place(), before, 'the jump moved the prose');
   // The reader looks around the cited lemma's Lean before going back.
   await page.locator('#explain-lean').evaluate(pane => { pane.scrollTop += 240; });
@@ -432,8 +457,8 @@ try {
   assert.ok(gutter.includes(`${gap[0]}:unexplained*`) && gutter.includes(`${sections[last]!.lines.start + 1}:step*=1`), 'the skipped line is ringed, the first step numbered');
   assert.equal(await page.locator('#explain-lean-legend').evaluate(node => node.textContent), '1讲解步骤由陈述讲解没有单独讲解 (1 行)');
   assert.deepEqual(explained.metrics, { ...explained.metrics, proofLines: 73, explainedLines: 72, ambiguousExcerpts: 0 });
-  const footer = await page.locator('.explain-footer').innerText();
-  assert.ok(footer.includes('72/73') && !footer.includes('重复出现的引用片段'), `the footer counts explained proof lines: ${footer}`);
+  const provenance = await page.locator('.explain-provenance .explain-facts').textContent();
+  assert.ok(provenance.includes('72/73') && !provenance.includes('重复出现的引用片段'), `the review details count explained proof lines: ${provenance}`);
   mark('the margin numbers each step on its lines, bars the statement and rings the line no step explains, with a legend');
 
   // A theorem's statement is tied to its signature, both ways.
@@ -710,9 +735,27 @@ try {
   assert.equal(await english.page.locator('#explain-lean-heading').innerText(), 'Lean proof');
   assert.equal(await english.page.locator('[data-explain-route] > summary').innerText(), 'Proof route');
   assert.equal(await english.page.locator('[data-explain-route]').getAttribute('open'), null);
+  for (const width of [320, 1024]) {
+    await english.page.setViewportSize({ width, height: 844 });
+    await english.page.getByRole('button', { name: 'Read the main proof' }).click();
+    const returnToReading = english.page.getByRole('button', { name: 'Back to where you were' });
+    await returnToReading.waitFor();
+    const clipped = await english.page.locator('#explain-prose-head').evaluate(header => {
+      const bounds = header.getBoundingClientRect();
+      return [...header.querySelectorAll('button,a,input')].filter(control => control.getClientRects().length)
+        .some(control => {
+          const box = control.getBoundingClientRect();
+          return box.left < bounds.left - 1 || box.right > bounds.right + 1;
+        });
+    });
+    assert.equal(clipped, false, `All explanation toolbar controls fit at ${width}px after a jump`);
+    await returnToReading.click();
+    await returnToReading.waitFor({ state: 'detached' });
+  }
+  await english.page.setViewportSize({ width: 1440, height: 900 });
   const chrome = await english.page.evaluate(() => {
     const han = /\p{Script=Han}/u, found: string[] = [];
-    for (const scope of document.querySelectorAll('.explain-topbar, #explain-toolbar, .explain-pane-head, #explain-lean-legend, .explain-notice, .explain-footer, .explain-section-meta'))
+    for (const scope of document.querySelectorAll('.explain-topbar, #explain-toolbar, .explain-pane-head, #explain-lean-legend, .explain-provenance, .explain-section-meta'))
       for (const element of scope.querySelectorAll('*')) {
         if (element.closest('[lang="zh-CN"]') || element.children.length) continue;
         const text = element.textContent?.trim() ?? '';
@@ -752,7 +795,7 @@ try {
   await english.context.close();
   mark('English chrome is English, a link without a language opens the existing explanation, English is a separate one, and Back after a cited lemma crosses a language switch');
 
-  // A short completed proof keeps its summary facts above the desktop fold; long proofs still scroll normally.
+  // A short completed proof leaves its technical metadata available without expanding it in the reading flow.
   const shortRun = await postRun({ page }, { ...input, task: 'Short viewport fixture', source: shortProof.replace('simp', 'sorry') });
   await until(async () => (await readRun({ page }, shortRun.id)).status === 'completed', 'the short fixture run finishes');
   const shortPage = await owner.context.newPage();
@@ -764,19 +807,17 @@ try {
   await shortPage.locator('#explain-dialog[open] button[type="submit"]').click();
   await shortPage.locator('#explain-prose .explain-document').waitFor();
   await mathReady(shortPage);
-  const shortFacts = await shortPage.locator('.explain-footer').evaluate(node => {
-    const box = node.getBoundingClientRect(), pane = node.closest('.explain-scroll')!.getBoundingClientRect();
-    return { bottom: box.bottom, paneBottom: pane.bottom, scrollTop: node.closest('.explain-scroll')!.scrollTop,
-      summaryRows: [...node.children].slice(0, 8).map(item => Math.round(item.getBoundingClientRect().top)) };
-  });
-  assert.equal(shortFacts.scrollTop, 0, 'The short proof needs no scrolling to read its metadata');
-  assert.deepEqual(shortFacts.summaryRows.slice(0, 4), Array(4).fill(shortFacts.summaryRows[0]), 'The desktop summary has four columns');
-  assert.deepEqual(shortFacts.summaryRows.slice(4), Array(4).fill(shortFacts.summaryRows[4]), 'The second summary row fits beneath the first');
-  assert.ok(shortFacts.summaryRows[4]! > shortFacts.summaryRows[0]!, 'The eight summary facts form two rows');
-  assert.ok(shortFacts.bottom <= shortFacts.paneBottom - 16, `Summary facts have breathing room at 1440×900: ${JSON.stringify(shortFacts)}`);
+  const shortFacts = shortPage.locator('.explain-provenance');
+  const disclosure = shortFacts.locator('summary');
+  assert.equal(await shortFacts.getAttribute('open'), null);
+  assert.equal(await shortFacts.getByText('Lean 工具链', { exact: true }).isVisible(), false);
+  assert.ok(await disclosure.evaluate(node => node.getBoundingClientRect().bottom <= innerHeight - 16),
+    'The metadata disclosure fits above the desktop fold');
+  await disclosure.click();
+  assert.equal(await shortFacts.getByText('Lean 工具链', { exact: true }).isVisible(), true);
   await shortPage.screenshot({ path: path.join(output, 'explain-short-metadata-1440.png') });
   await shortPage.close();
-  mark(`the short completed proof's metadata fits above the 900px fold (${Math.round(shortFacts.bottom)}px, at least 16px of breathing room)`);
+  mark('technical metadata stays folded until requested, with its disclosure above the fold on a short proof');
 
   // Deleting asks first and leaves the page ready to generate again.
   await page.locator('#explain-prose-head [data-action="delete"]').click();
