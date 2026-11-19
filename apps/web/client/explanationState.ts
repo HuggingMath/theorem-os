@@ -23,7 +23,7 @@ const reasons: Record<string, string> = {
   explanation_account_unavailable: t('当前账户不可用，暂未生成讲解。'),
 };
 export const explanationReasonText = (reason?: string) => reason && reasons[reason] ? reasons[reason] : t('生成失败，可以重新生成。');
-export const explanationConnectionFailuresText = (count?: number) => count ? t('模型连接失败 {0} 次', count) : undefined;
+export const explanationModelRequestFailuresText = (count?: number) => count ? t('模型请求失败 {0} 次', count) : undefined;
 
 const unavailable: Record<string, string> = {
   sample: t('示例运行只读，不能生成讲解。'), not_accepted: t('只有通过独立验收的运行可以生成讲解。'),

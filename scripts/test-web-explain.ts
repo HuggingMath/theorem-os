@@ -232,11 +232,11 @@ try {
   await page.locator('.explain-phases li.active').filter({ hasText: '正在审核' }).waitFor({ timeout: 15_000 });
   await page.screenshot({ path: path.join(output, 'explain-progress-1440.png') });
   mark('generation needs a Key, starts the runner with the run model and shows its phase while running');
-  const connectionFailures = page.locator('.explain-facts > div').filter({ hasText: '模型连接失败次数' });
-  assert.equal(await connectionFailures.count(), 0, 'previous workers do not report a connection count');
-  explains[0]!.send({ type: 'progress', progress: { phase: 'retrying', round: 1, connectionFailures: 2 } });
+  const modelRequestFailures = page.locator('.explain-facts > div').filter({ hasText: '模型请求失败次数' });
+  assert.equal(await modelRequestFailures.count(), 0, 'previous workers do not report a failure count');
+  explains[0]!.send({ type: 'progress', progress: { phase: 'retrying', round: 1, modelRequestFailures: 2 } });
   await page.locator('.explain-phases li.active').filter({ hasText: '模型调用失败，正在重试' }).waitFor();
-  assert.equal(await connectionFailures.locator('dd').innerText(), '2');
+  assert.equal(await modelRequestFailures.locator('dd').innerText(), '2');
   assert.equal(await page.locator('.explain-facts > div').filter({ hasText: '审核轮次' }).locator('dd').innerText(), '第 1 轮');
 
   // Stopping asks first; a stopped explanation can be generated again.
@@ -254,15 +254,15 @@ try {
     return explains.at(-1)!;
   };
   const interrupted = await generateAgain(2);
-  interrupted.send({ type: 'progress', progress: { phase: 'auditing', round: 1, connectionFailures: 3 } });
+  interrupted.send({ type: 'progress', progress: { phase: 'auditing', round: 1, modelRequestFailures: 3 } });
   interrupted.send({ type: 'result', status: 'error', reason: 'informalization_role_retries_exhausted' });
   interrupted.resolve();
   const stopped = page.locator('#explain-prose .result-banner.failed');
   await stopped.getByText('模型请求反复失败，自动重试已停止。').waitFor();
-  assert.equal(await stopped.getByText('模型连接失败 3 次').isVisible(), true);
+  assert.equal(await stopped.getByText('模型请求失败 3 次').isVisible(), true);
   await page.reload();
-  await stopped.getByText('模型连接失败 3 次').waitFor();
-  mark('connection failures are separate from review rounds, and the stop reason and final count survive reload');
+  await stopped.getByText('模型请求失败 3 次').waitFor();
+  mark('model request failures are separate from review rounds, and the stop reason and final count survive reload');
 
   // Generate again and approve: the page polls, then shows the document beside the proof.
   const completed = await generateAgain(3);

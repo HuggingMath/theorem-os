@@ -9,7 +9,8 @@ import { readMathBuildManifest } from '../../src/math/mathBuildManifest';
 import { readMathJson } from '../../src/math/mathRuntimeIo';
 import { createCodexMathSession } from '../../src/runtime/codexSession';
 import { prepareSub2apiProfile, SUB2API_PROVIDER } from '../../src/runtime/sub2api';
-import { informalizationRetryLimit, readInformalizationState, runInformalization } from '../../src/solver/informalization';
+import { informalizationRetryLimit, isRetryableInformalizationFailure, readInformalizationState,
+  runInformalization } from '../../src/solver/informalization';
 import { reportedTotalTokens } from '../../src/solver/usageBudget';
 import { webExplanationReason, type WebExplanationPhase, type WorkerExplanationCheckpoint, type WorkerExplanationInput,
   type WorkerExplanationMessage } from './shared';
@@ -29,12 +30,6 @@ const inputSchema = z.object({
 }).strict();
 
 const relayUrl = new URL(SUB2API_PROVIDER.baseUrl);
-const connectionFailureCodes = new Set(['httpConnectionFailed', 'responseStreamConnectionFailed', 'responseStreamDisconnected']);
-function isConnectionFailure(diagnostic?: { code?: string; httpStatusCode?: number; reason?: string }) {
-  // A rejected HTTP request or invalid tool call may also arrive in a transport error wrapper.
-  return diagnostic?.code !== undefined && connectionFailureCodes.has(diagnostic.code) && (diagnostic.httpStatusCode ?? 0) < 400 &&
-    diagnostic.reason !== 'invalid_tool_call_arguments' && diagnostic.reason !== 'account_concurrency_limit';
-}
 
 /**
  * Explanation roles call the fixed sub2api address 127.0.0.1:8080 (src/runtime/formalizationRelay.ts). Inside the
@@ -114,7 +109,7 @@ async function main() {
       if (state.batches.length) progress.batches = state.batches.length;
       progress.approvedBatches = state.batches.filter(batch => batch.status === 'approved').length;
       progress.tokens = state.sessions.reduce((sum, session) => sum + (reportedTotalTokens(session.usage) ?? 0), 0);
-      progress.connectionFailures = state.sessions.filter(session => isConnectionFailure(session.failureDiagnostic)).length;
+      progress.modelRequestFailures = state.sessions.filter(session => isRetryableInformalizationFailure(session.failureDiagnostic)).length;
     } catch { /* The next poll reads the state after its atomic replacement. */ }
   };
   try {
@@ -154,8 +149,8 @@ async function main() {
         else if (event.event === 'informalization_role_started')
           report(event.role === 'audit' ? 'auditing' : (event.round ?? 1) > 1 ? 'revising' : 'writing');
         else if (event.event === 'informalization_role_retrying') report('retrying');
-        else if (event.event === 'informalization_role_finished' && isConnectionFailure(event.failureDiagnostic)) {
-          progress.connectionFailures = (progress.connectionFailures ?? 0) + 1;
+        else if (event.event === 'informalization_role_finished' && isRetryableInformalizationFailure(event.failureDiagnostic)) {
+          progress.modelRequestFailures = (progress.modelRequestFailures ?? 0) + 1;
           report();
         } else if (event.event === 'informalization_extraction_finished' || event.event === 'informalization_batch_approved') {
           refresh(); report();

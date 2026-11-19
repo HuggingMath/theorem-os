@@ -81,13 +81,13 @@ class InformalizationRoleFailure extends Error {
 class OutputRejected extends Error {
   constructor(readonly problems: string[]) { super('informalization_output_rejected'); }
 }
-const retryableRoleFailure = (cause: unknown) => {
-  if (!(cause instanceof InformalizationRoleFailure) || !cause.diagnostic) return false;
-  const { code, httpStatusCode, reason } = cause.diagnostic;
+export function isRetryableInformalizationFailure(diagnostic?: { code?: string; httpStatusCode?: number; reason?: string }) {
+  if (!diagnostic?.code) return false;
+  const { code, httpStatusCode, reason } = diagnostic;
   if (httpStatusCode !== undefined && httpStatusCode < 500 && httpStatusCode !== 408 && httpStatusCode !== 429) return false;
   return code === 'other' && Boolean(reason) || ['rateLimitExceeded', 'flexUnavailable', 'serverOverloaded', 'httpConnectionFailed',
     'responseStreamConnectionFailed', 'internalServerError', 'responseStreamDisconnected', 'responseTooManyFailedAttempts'].includes(code);
-};
+}
 const ROLE_PROMPT = 'Follow the complete role protocol in the developer instructions. Read OUTPUT.schema.json and INPUT.json, ' +
   'write OUTPUT.json atomically using that contract, then stop. ROLE.md is the same protocol and need not be reread.';
 
@@ -296,7 +296,7 @@ export async function runInformalization(directory: string, root: string, option
             if (state.error?.startsWith('informalization_role_incomplete:')) { delete state.error; save(); }
             return result;
           } catch (cause) {
-            if (!retryableRoleFailure(cause)) throw cause;
+            if (!(cause instanceof InformalizationRoleFailure) || !isRetryableInformalizationFailure(cause.diagnostic)) throw cause;
             signal.throwIfAborted();
             if (remaining() <= 0) throw new Error('informalization_time_limit');
             const budget = buildTokenBudget(request.maxTotalTokens, state.sessions);

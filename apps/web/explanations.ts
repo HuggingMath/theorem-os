@@ -237,7 +237,7 @@ export class WebExplanations {
         const progress: WebExplanationProgress = { ...previous, ...message.progress, updatedAt: now };
         job.explanation.progress = progress; job.explanation.updatedAt = now;
         this.persist(job, previous?.phase !== progress.phase || previous?.approvedBatches !== progress.approvedBatches ||
-          previous?.connectionFailures !== progress.connectionFailures);
+          previous?.modelRequestFailures !== progress.modelRequestFailures);
       } catch (error) { messageError = error; job.controller.abort(); }
     };
     try {

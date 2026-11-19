@@ -103,7 +103,7 @@ export function parseWorkerMessage(line: string): WorkerMessage | undefined {
 const count = z.number().int().nonnegative().max(1e12);
 const explanationMessageSchema = z.union([
   z.object({ type: z.literal('progress'), progress: z.object({ phase: z.enum(webExplanationPhases), batches: count.optional(),
-    approvedBatches: count.optional(), round: count.optional(), tokens: count.optional(), connectionFailures: count.optional() }).strict() }).strict(),
+    approvedBatches: count.optional(), round: count.optional(), tokens: count.optional(), modelRequestFailures: count.optional() }).strict() }).strict(),
   // The server re-derives every check from the evidence; here it only has to be an object.
   z.object({ type: z.literal('result'), status: z.literal('approved'), evidence: z.record(z.unknown()) }).strict(),
   z.object({ type: z.literal('result'), status: z.enum(['exhausted', 'error']), reason: z.string().regex(webExplanationReason),

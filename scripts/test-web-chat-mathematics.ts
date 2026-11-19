@@ -281,9 +281,9 @@ try {
             : selectedRun === failed ? 'error' : selectedRun === cancelled ? 'cancelled' : selectedRun === exhausted ? 'exhausted' : undefined;
           const entries = fixtureStatus ? [{ ...explanation(selectedRun, 'swap_sum', explanationLanguage), document: undefined, status: fixtureStatus,
             ...(fixtureStatus === 'queued' ? { queue: { position: 3, ahead: 2 } } : fixtureStatus === 'running'
-              ? { progress: { phase: 'auditing', batches: 3, approvedBatches: 1, connectionFailures: 2, updatedAt: at } }
+              ? { progress: { phase: 'auditing', batches: 3, approvedBatches: 1, modelRequestFailures: 2, updatedAt: at } }
               : fixtureStatus === 'error' ? { reason: 'informalization_role_retries_exhausted',
-                progress: { phase: 'auditing', connectionFailures: 3, updatedAt: at } } : { reason: 'explanation_gateway_unavailable' }) } as WebExplanation] : undefined;
+                progress: { phase: 'auditing', modelRequestFailures: 3, updatedAt: at } } : { reason: 'explanation_gateway_unavailable' }) } as WebExplanation] : undefined;
           const savedOverview = overview(selectedRun, [accepted, missingTarget, emptyStatement, singleTarget].includes(selectedRun) || selectedRun === generating && generated, entries,
             selectedRun !== unavailable && selectedRun !== accepted && selectedRun !== working, explanationLanguage);
           if (selectedRun === singleTarget) {
@@ -516,11 +516,11 @@ try {
       }
       if (status === 'running') {
         assert.match(await state.innerText(), /已通过批次\s+1\s*\/\s*3/u);
-        assert.equal(await state.getByText('模型连接失败 2 次').isVisible(), true);
+        assert.equal(await state.getByText('模型请求失败 2 次').isVisible(), true);
         generated = true;
         await page.locator('[data-chat-answer-document="swap_sum"]').waitFor({ timeout: 15_000 });
       }
-      if (status === 'error') assert.equal(await state.getByText('模型连接失败 3 次').isVisible(), true);
+      if (status === 'error') assert.equal(await state.getByText('模型请求失败 3 次').isVisible(), true);
       await fit(page); await screenshot(page, `${width}-explanation-${status}.png`);
     }
     mark(`${width}: unavailable, queued, running, failed, cancelled and incomplete explanations show accurate states; the finished document appears automatically without generation`);

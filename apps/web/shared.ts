@@ -420,7 +420,7 @@ export const defaultProofId = (target: string) => target.replace(/[^A-Za-z0-9_-]
 export type WebExplanationReport = { schema: 'theorem-os.web-explanation-report.v1'; title: string; environment: WebEnvironment;
   proof: string; document: WebExplanationDocument; markdown: string; filename: string };
 export type WebExplanationProgress = { phase: WebExplanationPhase; batches?: number; approvedBatches?: number; round?: number;
-  tokens?: number; connectionFailures?: number; updatedAt: string };
+  tokens?: number; modelRequestFailures?: number; updatedAt: string };
 export type WebExplanation = {
   id: string; runId: string; target: string; language: WebExplanationLanguage; status: WebExplanationStatus;
   /** Created as part of the solve workflow, without a separate generation request. */

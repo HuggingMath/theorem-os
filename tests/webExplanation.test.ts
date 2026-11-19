@@ -289,14 +289,14 @@ describe('web explanation jobs', () => {
       const next = jobs.create('owner-b', proofRun, request());
       await settle();
       expect(runner.calls.map(call => call.input.id)).toEqual([first.id]);
-      runner.calls[0]!.send({ type: 'progress', progress: { phase: 'retrying', round: 1, connectionFailures: 3 } });
+      runner.calls[0]!.send({ type: 'progress', progress: { phase: 'retrying', round: 1, modelRequestFailures: 3 } });
       runner.calls[0]!.send({ type: 'result', status: 'error', reason: informalizationRetryLimit, checkpoint: workerCheckpoint });
       runner.calls[0]!.resolve();
       await settle();
       expect(runner.calls.map(call => call.input.id)).toEqual([first.id, next.id]);
       expect(runner.calls[1]!.input.checkpoint).toBeUndefined();
       expect(jobs.read('owner-a', proofRun, 'target_thm', 'zh')).toMatchObject({ status: 'error', reason: informalizationRetryLimit,
-        progress: { connectionFailures: 3, round: 1 } });
+        progress: { modelRequestFailures: 3, round: 1 } });
       expect(jobs.list('owner-a', proofRun.id)[0]).not.toHaveProperty('checkpoint');
       expect(jobs.read('owner-a', proofRun, 'target_thm', 'zh')).not.toHaveProperty('document');
       expect(storage.getExplanationCheckpoint('owner-a', proofRun.id, key)).toMatchObject({ checkpoint: workerCheckpoint });
