@@ -329,9 +329,9 @@ try {
     assert.equal(await participation.isVisible(), true);
     const advanced = page.locator('[data-chat-advanced-settings]');
     assert.equal(await advanced.evaluate((node: HTMLDetailsElement) => node.open), false, 'optional settings start collapsed');
-    for (const selector of ['#formalize-provider', '#formalize-model', '#formalize-key', '#check-model-connection'])
-      assert.equal(await page.locator(selector).isVisible(), true, `${selector} is available in primary setup`);
-    for (const selector of ['#formalize-environment', '#formalize-effort', ...budgetInputs])
+    for (const selector of ['#formalize-key', '#check-model-connection'])
+      assert.equal(await page.locator(selector).isVisible(), true, `${selector} is available in research settings`);
+    for (const selector of ['#formalize-environment', ...budgetInputs])
       assert.equal(await page.locator(selector).isVisible(), false, `${selector} belongs to optional advanced setup`);
     await screenshot(page, `${width}-simple-settings.png`);
     await advanced.locator(':scope > summary').click({ timeout: 15_000 });
@@ -339,7 +339,12 @@ try {
     await fit(page); await screenshot(page, `${width}-unlimited-settings.png`);
     await advanced.locator(':scope > summary').click({ timeout: 15_000 });
     mark(`${width}: visible task input, collapsed guided participation and empty unlimited budgets`);
-    await page.locator('#formalize-settings > summary').click();
+    const modelMenu = page.locator('#chat-model-settings > summary');
+    await modelMenu.click();
+    for (const selector of ['#formalize-provider', '#formalize-model', '#formalize-effort'])
+      assert.equal(await page.locator(selector).isVisible(), true, `${selector} is available in model settings`);
+    assert.equal(await page.locator('#formalize-key').isVisible(), false, 'model settings never opens the key field');
+    await modelMenu.click();
     const draft = '保留这份题目草稿，在配置 Key 后再发送。';
     await input.fill(draft);
     await page.locator('[data-chat-configure-key]').click();
