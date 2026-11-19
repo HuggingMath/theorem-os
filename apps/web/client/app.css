@@ -3313,7 +3313,13 @@ button.formal-lean{vertical-align:top}
 .first-research-connection svg{width:14px;height:14px;flex:none}.first-research-connection [data-status=error]{color:var(--red-700)!important}
 #natural-research .chat-composer #formalize-start.chat-send-start{width:auto;height:auto;min-height:42px;max-width:100%;padding:10px 14px;border-radius:4px;gap:8px;font-size:13px;line-height:1.5}
 #natural-research .chat-composer #formalize-start.chat-send-start span{white-space:normal;text-align:left}#natural-research .chat-composer #formalize-start.chat-send-start svg{flex:none;width:16px;height:16px}
-@media(max-width:480px){.first-research-budgets{grid-template-columns:1fr}.first-research-connection{align-items:flex-start;flex-direction:column;gap:2px}.chat-composer-toolbar:has(.chat-send-start){flex-wrap:wrap}.chat-send-start{margin-left:auto}}
+@media(max-width:480px){
+  .first-research-budgets{grid-template-columns:1fr}
+  .first-research-connection{align-items:flex-start;flex-direction:column;gap:2px}
+  #natural-research .chat-composer #formalize-start.chat-send-start{width:42px;min-width:42px;height:42px;padding:0;border-radius:50%}
+  #natural-research .chat-composer #formalize-start.chat-send-start>span:not(.spinner){display:none}
+  #natural-research .chat-composer #formalize-start.chat-send-start svg{width:20px;height:20px}
+}
 
 /* Shared proofs read as mathematical notes before their source and receipts. */
 .share-reading-nav{display:flex;flex-wrap:wrap;gap:6px 18px}.share-reading-nav button,.share-reading-contents button{min-height:44px;padding:4px 0;border:0;background:none;color:var(--ink);font:inherit;font-size:13px;cursor:pointer;text-align:left}

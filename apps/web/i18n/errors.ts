@@ -1,5 +1,13 @@
 /** Error messages from the server: request checks, session and login, runs, the run environment, explanations, plans and knowledge. */
 export const errors: Record<string, string> = {
+  "请输入用户名，不要使用邮箱地址。": "Enter a username, not an email address.",
+  "这个用户名已存在。": "This username already exists.",
+  "用户名需为 3–32 位，以字母开头，仅包含字母、数字、下划线或连字符。": "Use 3–32 letters, digits, underscores or hyphens for the username, starting with a letter.",
+  "账号或密码不正确。": "Incorrect username or password.",
+  "密码尝试过多，请一小时后再试。": "Too many password attempts. Try again in an hour.",
+  "请输入当前密码；忘记密码请联系管理员。": "Enter your current password. Contact an administrator if you forgot it.",
+  "用户名账号未绑定邮箱，无法开启邮件提醒。": "This username account has no email address and cannot receive email notifications.",
+  "请输入当前账号的用户名以确认删除。": "Enter this account's username to confirm deletion.",
   '此研究安排不支持协作计划、逐题指导或计划审批。': 'This research arrangement does not support collaboration plans, per-task guidance or plan approval.',
   '研究方式无效。': 'Invalid research mode.',
   '技能加载方式无效。': 'Invalid skill loading mode.',

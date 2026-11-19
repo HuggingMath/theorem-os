@@ -95,8 +95,11 @@ export const guide: Record<string, string> = {
   "关闭当前弹窗或查找栏。": "Close the current dialog or find bar.",
   "服务器用 Key 访问你选择的服务商，费用计入你的 API 账户。新填 Key 默认临时使用，刷新后清空。启用账号保存时，需在自然语言「配置模型」主动点击「保存到我的账号」，或在 Lean「模型连接」勾选默认不选中的同名保存框后提交，才会加密保存或替换。已保存 Key 只显示末四位，可在设置中删除，不进入草稿、运行档案或分享链接。":
     "The server uses your key with the selected provider, which bills your API account. Newly entered keys are temporary by default and clear on refresh. When account storage is enabled, explicitly click Save to my account under Configure model in natural-language mode or select the unchecked checkbox in Lean Model connection before submitting to save or replace an encrypted key. Saved keys show only their last four characters and can be deleted in Settings. Keys never enter drafts, run archives or share links.",
-  "登录后记录归属你的邮箱账号，可以在账号页删除账号和全部记录；未启用登录时，记录只属于当前浏览器会话。":
-    "When you sign in, records belong to your email account, and the account page can delete the account with all its records. Without sign-in, records belong only to the current browser session.",
+  "账号登录": "Account sign-in",
+  "可用管理员分配的用户名和密码登录，也可用已获准邮箱的验证码登录。用户名账号忘记密码时请联系管理员；没有邮箱的账号不接收邮件提醒。":
+    "Sign in with an assigned username and password, or a code sent to an approved email address. Contact an administrator if you forget a username account's password. Accounts without an email address do not receive email notifications.",
+  "登录后记录归属你的账号，可以在账号页删除账号和全部记录；未启用登录时，记录只属于当前浏览器会话。":
+    "When you sign in, records belong to your account, and the account page can delete the account with all its records. Without sign-in, records belong only to the current browser session.",
   "任务草稿保存在当前浏览器，可导出后换设备使用。节点指导、批注、回复和评审输入会保留在本机，也可主动保存为账号草稿。已提交的账号草稿版本会归档，其他尚未提交的修改继续保留；在「我的研究 → 账号草稿」中可恢复或丢弃。":
     "Task drafts stay in this browser and can be exported to another device. Guidance, annotations, replies and review inputs are retained locally and can also be explicitly saved as account drafts. Submitted account-draft versions are archived while other unfinished edits remain. Restore or discard them in My research → Account drafts.",
   "工作台里带 ? 的词都可以点开查看解释，顶栏的问号按钮打开完整的术语说明。还有不清楚的地方？":

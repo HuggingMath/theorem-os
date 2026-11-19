@@ -267,12 +267,14 @@ export class WebConversations {
     message.status = failed ? 'error' : status === 'unknown' ? 'pending' : 'complete';
     message.error = failed ? message.guidance.receipt.reason : undefined;
   }
-  async guide(owner: string, id: string, input: WebGuidanceInput, send: (runId: string, input: WebGuidanceInput) => Promise<WebCommandResult>) {
+  async guide(owner: string, id: string, input: WebGuidanceInput, send: (runId: string, input: WebGuidanceInput) => Promise<WebCommandResult>, expectedRunId?: string) {
     const conversation = this.read(owner, id), runId = conversation.runId;
     const run = runId ? this.resources.run(owner, runId) : undefined;
     if (!runId || !run) throw new WebStorageError(404, '关联的证明任务不存在。');
     if (webSkillWithoutCooperation(run)) throw new WebStorageError(409, '此研究安排不支持协作计划、逐题指导或计划审批。');
     const existing = conversation.messages.find(message => message.guidance?.input.id === input.id);
+    if ((expectedRunId !== undefined && expectedRunId !== runId) || (existing?.guidance && existing.guidance.runId !== runId))
+      throw new WebStorageError(409, '指导关联的研究已变化，请重新选择指导对象。');
     if (existing && canonicalMathJson(existing.guidance!.input) !== canonicalMathJson(input)) throw new WebStorageError(409, '命令 ID 已用于另一份内容，请使用新的 ID。');
     if (!existing && conversation.messages.length >= webConversationLimits.messages) throw new WebStorageError(429, '这段对话已达到消息上限，请新建对话。');
     if (!existing) {

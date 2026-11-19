@@ -12,14 +12,16 @@ export const legal: Record<string, string> = {
     "This notice explains what the workbench keeps, why it keeps it, who can see it, and how you delete it.",
 
   "一、账号": "1. Account",
-  "用邮箱验证码登录，第一次登录会创建账号。请只使用你能收信、并且有权使用的邮箱。":
-    "You sign in with an email code, and your first sign-in creates the account. Use only an address you can receive mail at and are entitled to use.",
+  "可用管理员分配的用户名和密码登录，也可用邮箱验证码登录。邮箱第一次登录会创建账号，请只使用你能收信、并且有权使用的邮箱。":
+    "Sign in with an assigned username and password or an email code. Your first email sign-in creates an account. Use only an address you can receive mail at and are entitled to use.",
   "账号归你使用，不要把验证码或登录密码交给别人。你账号下的操作视为你的操作。":
     "The account is yours to use; do not give your codes or your password to anyone else. What happens under your account counts as your own action.",
   "你可以随时在账号面板里删除账号，删除后账号下的运行记录、分享链接、知识库与模块方案一并删除，无法恢复。":
     "You can delete your account from the account panel at any time; deleting it also deletes the account's run records, share links, knowledge and module plans, and cannot be undone.",
-  "保存你的邮箱、账号 ID、第一次登录的时间，以及你接受使用条款的时间与版本。":
-    "Your email address, your account ID, when you first signed in, and when and which version of the terms you accepted.",
+  "保存你的用户名或邮箱、账号 ID、第一次登录的时间，以及你接受使用条款的时间与版本。":
+    "Your username or email address, your account ID, when you first signed in, and when and which version of the terms you accepted.",
+  "使用密码的账号仅保存密码哈希；无邮箱的用户名账号不接收邮件提醒，忘记密码需联系管理员重置。":
+    "Only a password hash is stored for accounts that use passwords. Username accounts without an email address do not receive email notifications; contact an administrator to reset a forgotten password.",
   "还记录两个时间：第一次提交运行和第一次通过验收，用来判断新手引导是否有效。统计只看汇总的人数和转化率，不记录你的点击或浏览。":
     "Two more times are recorded — your first run submission and your first acceptance — to judge whether onboarding works. Statistics look only at aggregate counts and conversion rates, never at your clicks or page views.",
   "邮箱用于登录验证码、你开启的研究提醒和条款通知，不用于营销。发信服务商会处理收件邮箱与邮件内容；当前邮件经阿里云邮件推送投递。":

@@ -1,4 +1,5 @@
 import type { WebAccount } from './auth';
+import { accountLogin } from './shared';
 
 /**
  * Closed-beta funnel totals: applications → allowlisted → first login → first submitted run → first accepted run.
@@ -17,18 +18,19 @@ const median = (values: number[]) => {
 
 export function webFunnel(accounts: WebAccount[], allowlist: Set<string>, applications?: number): WebFunnel {
   // Accounts whose address left the allowlist still count: they were admitted and logged in.
-  const admitted = new Set([...allowlist, ...accounts.map(account => account.email)]);
-  const ran = accounts.filter(account => account.firstRunAt), accepted = ran.filter(account => account.firstAcceptedAt);
+  const admitted = new Set([...allowlist, ...accounts.map(accountLogin)]);
+  const loggedIn = accounts.filter(account => !account.username || account.firstLoginAt);
+  const ran = loggedIn.filter(account => account.firstRunAt), accepted = ran.filter(account => account.firstAcceptedAt);
   const counts: [string, number][] = [
     ...(applications === undefined ? [] : [['applied', applications] as [string, number]]),
-    ['allowlisted', admitted.size], ['logged_in', accounts.length], ['submitted', ran.length], ['accepted', accepted.length],
+    ['allowlisted', admitted.size], ['logged_in', loggedIn.length], ['submitted', ran.length], ['accepted', accepted.length],
   ];
   const steps = counts.map(([step, count], index) => {
     const previous = index ? counts[index - 1]![1] : undefined;
     return { step, count, ...(previous ? { ofPrevious: Math.round(count / previous * 1000) / 10 } : {}) };
   });
   return { steps, medianHours: {
-    loginToRun: median(ran.map(account => hours(account.createdAt, account.firstRunAt!))),
+    loginToRun: median(ran.map(account => hours(account.firstLoginAt ?? account.createdAt, account.firstRunAt!))),
     runToAccepted: median(accepted.map(account => hours(account.firstRunAt!, account.firstAcceptedAt!))),
   } };
 }

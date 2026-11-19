@@ -48,6 +48,9 @@ export type WebEnvironmentOption = { id: WebEnvironment; name: string; descripti
   toolchain: string; mathlibRevision?: string };
 export type WebTemplate = { id: string; name: string; environment: WebEnvironment; source: string; task: string };
 export type WebSavedKey = { providerId: string; ending: string };
+/** A login identity is either a verified email or a locally provisioned username. */
+export type WebAccountIdentity = { email: string; username?: never } | { email?: never; username: string };
+export const accountLogin = (account: WebAccountIdentity): string => account.username ?? account.email;
 /** Omitted budgets normalize to 0 (unlimited); `saveKey` stays with this account and never reaches the run. */
 export type WebRunRequest = Omit<WebRunInput, 'maxTurns' | 'maxRunSeconds'> & {
   maxTurns?: number; maxRunSeconds?: number; saveKey?: boolean; requestId?: string };
@@ -207,7 +210,7 @@ export type WebSession = {
   /** `completionEmail: false` means the account turned off the mail sent when one of its runs ends; absent means on. */
   /** `serverKeys` lists the providers whose key the server fills in for this admin account when the field is left empty. */
   /** `keyVault` means this account may save its own keys; `savedKeys` names them by provider and last four characters. */
-  account?: { email: string; admin?: boolean; completionEmail?: boolean; passwordSet?: boolean; passwordResetAllowed?: boolean;
+  account?: WebAccountIdentity & { admin?: boolean; completionEmail?: boolean; passwordSet?: boolean; passwordResetAllowed?: boolean;
     serverKeys?: string[]; keyVault?: boolean; savedKeys?: WebSavedKey[] };
   providers: WebProvider[];
   environments: WebEnvironmentOption[];
@@ -466,9 +469,9 @@ export type WebAdminQuota = { windowHours: number; limits: { research: number; f
 export type WebAdminUsage = { research: number; formalizations: number; explanations: number };
 export type WebAdminOverview = {
   allowlist: { email: string; source: 'admin' | 'config' | 'file'; account: boolean }[];
-  accounts: { email: string; admin: boolean; createdAt: string; firstRunAt?: string; firstAcceptedAt?: string; allowed: boolean; suspended?: boolean;
+  accounts: (WebAccountIdentity & { admin: boolean; createdAt: string; firstRunAt?: string; firstAcceptedAt?: string; allowed: boolean; suspended?: boolean;
     /** Absent without a quota configuration (an anonymous loopback preview). */
-    usage?: WebAdminUsage }[];
+    usage?: WebAdminUsage })[];
   funnel: { step: string; count: number; ofPrevious?: number }[];
   /** False when the service has no allowlist file, so only the deployment configuration can change who signs in. */
   editable: boolean;

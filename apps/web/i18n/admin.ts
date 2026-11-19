@@ -1,5 +1,17 @@
 /** The admin dialog: allowlist, accounts and beta funnel. */
 export const admin: Record<string, string> = {
+  "当前登录账号": "Signed in as",
+  "账号创建": "Account created",
+  "用户名或邮箱": "Username or email",
+  "请输入用户名或邮箱。": "Enter your username or email.",
+  "使用用户名或邮箱密码登录": "Sign in with username or email and password",
+  "可使用已分配的用户名和密码，或已获准邮箱的验证码登录。": "Use your assigned username and password, or a code sent to an approved email address.",
+  "用户名账号由管理员分配；忘记密码请联系管理员。邮箱账号可用验证码找回。": "Usernames are assigned by an administrator. Contact them to reset a forgotten password. Email accounts can use a verification code.",
+  "输入用户名或邮箱以确认": "Enter your username or email to confirm",
+  "输入用户名或邮箱确认删除": "Enter your username or email to confirm deletion",
+  "请输入当前账号的用户名或邮箱以确认删除。": "Enter this account's username or email to confirm deletion.",
+  "输入当前密码和至少 12 位的新密码。忘记密码请联系管理员重置。": "Enter your current password and a new password of at least 12 characters. Contact an administrator if you forgot your password.",
+  "管理员可查看用户名或邮箱、账号状态、用量和使用时间，看不到其他账号的题目、证明和运行记录。": "Admins can see usernames or email addresses, account status, usage and activity times, but cannot see other accounts' problems, proofs or runs.",
   "管理": "Admin",
   "关闭管理": "Close admin",
   "已加入白名单": "Added to the allowlist",
@@ -28,8 +40,6 @@ export const admin: Record<string, string> = {
   "内测漏斗": "Beta funnel",
   "白名单里的邮箱才能收到登录验证码。移出后对方会立即退出登录，账号和运行记录保留。":
     "Only allowlisted addresses receive a login code. A removed address is signed out at once; its account and runs are kept.",
-  "管理员只能看到邮箱和这几个时间，看不到其他账号的题目、证明和运行记录。":
-    "Admins only see addresses and these times, never another account's problems, proofs or runs.",
   "研究结束时发邮件": "Email me when research ends",
   "把结果和链接发到登录邮箱；开了「先审计划」的研究，计划拟好时也发一封。邮件里不含源码、证明或 API Key。停止的研究不发。": "Sends the outcome and a link to your login email, and for runs with “Review plan first” one more when the plan is ready. The mail has no source, proof or API key. Stopped runs send nothing.",
   "研究结束时会发邮件到登录邮箱": "You will get an email when research ends",
@@ -65,6 +75,5 @@ export const admin: Record<string, string> = {
   "使用条款已更新。请阅读当前版本并确认，已有记录和运行会保留。": "The terms have changed. Read and accept the current version to continue. Your existing records and runs are kept.",
   "同意并继续": "Agree and continue",
   "不同意更新后的条款时，你仍可以退出或删除账号。删除会清除账号下的记录，无法恢复。": "If you do not agree to the updated terms, you can still sign out or delete your account. Deletion permanently removes your account records.",
-  "输入账号邮箱确认删除": "Enter your account email to confirm deletion",
   "登录页面打开过于频繁，请十分钟后重试。": "Too many new sign-in pages. Please try again in ten minutes.",
 }

@@ -5,7 +5,7 @@ import {
   LogOut, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Sun, Trash2, TriangleAlert, Undo2, Upload, X,
 } from 'lucide';
 import type { WebAdminOverview, WebContinuation, WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebRun, WebRunRequest, WebSavedKey, WebSession } from '../shared';
-import { loginHref } from '../shared';
+import { accountLogin, loginHref } from '../shared';
 import { webTaskEnvironment } from '../environment';
 import { ResearchSelection } from './researchSelection';
 import type { ResearchLibraryAttemptPreparation, ResearchLibraryPersonalAttemptPreparation } from '../researchLibraryTrialTypes';
@@ -794,8 +794,8 @@ function openSettings(focusId?: string) {
     void (naturalPage ?? openNaturalResearch()).then(() => {
       const settings = document.querySelector<HTMLDetailsElement>('#formalize-settings');
       if (settings) settings.open = true;
-      const key = document.querySelector<HTMLElement>('#formalize-key');
-      key?.focus(); key?.scrollIntoView({ block: 'center' });
+      const target = settings?.querySelector<HTMLElement>(focusId === 'api-key' ? '#formalize-key' : 'summary');
+      target?.focus(); target?.scrollIntoView({ block: 'nearest' });
     });
     return;
   }
@@ -1786,7 +1786,7 @@ const currentRun = () => state.selectedRun?.id === state.selectedId ? state.sele
   : sampleSelected() ? state.sample : state.runs.find(run => run.id === state.selectedId);
 const downloadUrl = (id: string) => `/api/runs/${encodeURIComponent(id)}/download`;
 /** A run keeps going on the server; say so, and how its end reaches the reader (the account's mail, else this list). */
-const awayNote = () => state.session?.account && state.session.account.completionEmail !== false
+const awayNote = () => state.session?.account?.email && state.session.account.completionEmail !== false
   ? t('可以关闭页面，运行会在服务器上继续；结束后会发邮件到 {0}。', state.session.account.email)
   : t('可以关闭页面，运行会在服务器上继续；结束后回到研究记录查看结果。');
 function resultTitle(run: WebRun) {
@@ -2854,7 +2854,7 @@ function initialize(): Promise<void> {
         try { storedOwnerChanged = sessionStorage.getItem(draftOwnerStorageKey) !== ownerOfSession(session); }
         catch { /* Unavailable storage cannot restore a previous owner's draft. */ }
         // Only the signed-in account's former email scope identifies an owner; old anonymous keys are unbound.
-        if (session.account && !storedOwnerChanged) try {
+        if (session.account?.email && !storedOwnerChanged) try {
           const previous = session.account.email, owner = ownerOfSession(session);
           for (const key of Object.keys(sessionStorage)) {
             const prefix = ['theorem-os.chat-draft.', 'theorem-os.chat-reading.'].find(value => key.startsWith(`${value}${previous}.`));
@@ -3004,7 +3004,7 @@ function renderShell() {
       : chatWorkspace?.editingProblem ? `library.html?${new URLSearchParams({ workbenchEdit: chatWorkspace.editingProblem })}` : 'library.html',
     history: { docked: historyDocked(), expanded: !historyCollapsed() },
     connection: { tone: ready ? 'ready' : 'offline', label: !state.connected ? connectionRequest ? t('连接中') : t('连接中断') : ready ? t('环境就绪') : t('环境未就绪') },
-    settingsDisabled: !session || state.submitting, account: session?.account?.email, onAccount: openAccount,
+    settingsDisabled: !session || state.submitting, account: session?.account && accountLogin(session.account), onAccount: openAccount,
     onHistory: toggleHistory, onHome: () => { void openNaturalResearch(); }, onDraft: openDraft, onSettings: () => openSettings(), onPalette: () => palette.open(), onGlossary: () => openGlossary(), onLocale: changeLocale,
     onLive: () => {
       const target = state.runs.filter(item => activeRun(item) && item.id !== run?.id).at(-1);
@@ -3020,7 +3020,7 @@ function renderShell() {
 /** Switching reloads the page; the draft is saved first, as on any page exit. The API key is never kept. */
 function changeLocale() { saveDraft(); switchLocale(otherLocale.locale); }
 function openAccount() {
-  element('#account-email').textContent = state.session?.account?.email ?? '';
+  element('#account-email').textContent = state.session?.account ? accountLogin(state.session.account) : '';
   // The allowance is only sent for signed-in accounts that are not admins; anything else leaves the line out.
   const quota = state.session?.quota, quotaLine = element('#account-quota');
   quotaLine.hidden = !quota;
@@ -3028,11 +3028,13 @@ function openAccount() {
     Math.max(0, quota.runs.limit - quota.runs.used), Math.max(0, quota.formalizations.limit - quota.formalizations.used),
     Math.max(0, quota.explanations.limit - quota.explanations.used)) : '';
   element<HTMLInputElement>('#completion-email').checked = state.session?.account?.completionEmail !== false;
+  element('.completion-email').hidden = !state.session?.account?.email;
   element('#open-admin').hidden = !state.session?.account?.admin;
   const account = state.session?.account, recentCode = account?.passwordResetAllowed;
   element('#account-current-wrap').hidden = !account?.passwordSet || Boolean(recentCode);
   element('#account-password-note').textContent = recentCode ? t('刚通过邮箱验证，可在 10 分钟内设置或重设密码。')
-    : account?.passwordSet ? t('输入当前密码和至少 12 位的新密码。忘记密码请用邮箱验证码重新登录。')
+    : !account?.email ? t('输入当前密码和至少 12 位的新密码。忘记密码请联系管理员重置。')
+    : account.passwordSet ? t('输入当前密码和至少 12 位的新密码。忘记密码请用邮箱验证码重新登录。')
       : t('请用邮箱验证码重新登录，在 10 分钟内设置至少 12 位的密码。');
   element<HTMLButtonElement>('#save-password').textContent = account?.passwordSet ? t('修改密码') : t('设置密码');
   for (const id of ['account-current-password', 'account-new-password', 'account-repeat-password']) field(id).value = '';
@@ -3047,10 +3049,10 @@ function renderAdmin() {
   renderAdminPanel(element('#admin-content'), { ...admin, onAdd: email => changeAllowlist('POST', email),
     onRemove: email => void changeAllowlist('DELETE', email), onSuspend: (email, suspended) => void changeSuspended(email, suspended) });
 }
-async function changeSuspended(email: string, suspended: boolean) {
-  admin.busy = email; admin.error = undefined; renderAdmin();
+async function changeSuspended(login: string, suspended: boolean) {
+  admin.busy = login; admin.error = undefined; renderAdmin();
   try {
-    admin.overview = await api<WebAdminOverview>('/api/admin/accounts', { method: 'PATCH', body: JSON.stringify({ email, suspended }) });
+    admin.overview = await api<WebAdminOverview>('/api/admin/accounts', { method: 'PATCH', body: JSON.stringify({ login, suspended }) });
     toast(suspended ? t('账号已暂停') : t('账号已恢复'));
   }
   catch (error) { admin.error = message(error); }
@@ -3092,7 +3094,9 @@ async function changePassword(event: Event) {
     if (!sameSession(session)) return;
     if (state.session?.account) { state.session.account.passwordSet = true; state.session.account.passwordResetAllowed = false; }
     element('#account-current-wrap').hidden = false;
-    element('#account-password-note').textContent = t('输入当前密码和至少 12 位的新密码。忘记密码请用邮箱验证码重新登录。');
+    element('#account-password-note').textContent = state.session?.account?.email
+      ? t('输入当前密码和至少 12 位的新密码。忘记密码请用邮箱验证码重新登录。')
+      : t('输入当前密码和至少 12 位的新密码。忘记密码请联系管理员重置。');
     button.textContent = t('修改密码');
     toast(t('密码已更新；其他设备需要重新登录'));
   } catch (cause) { if (sameSession(session)) { error.textContent = message(cause); error.hidden = false; } }
@@ -4155,14 +4159,26 @@ element('#run-settings').addEventListener('keydown', event => {
 });
 element('#close-history').addEventListener('click', closeHistoryDialog);
 element('#open-draft').addEventListener('click', openDraft);
-// The run menu closes on a click elsewhere and on Escape, like the browser's own menus.
+// These disclosures behave like menus: outside clicks keep their own focus, and Escape returns to the trigger.
+const openMenuSelector = '[data-run-menu][open], #chat-model-settings[open]';
+const openResearchSettingsSelector = '#formalize-settings[open]';
 document.addEventListener('click', event => {
-  for (const menu of document.querySelectorAll<HTMLDetailsElement>('[data-run-menu][open]')) if (!menu.contains(event.target as Node)) menu.open = false;
+  for (const menu of document.querySelectorAll<HTMLDetailsElement>(openMenuSelector)) {
+    if (!menu.contains(event.target as Node)) menu.open = false;
+  }
 });
+// Close the previous panel before running any outside control that opens it and focuses a field.
+document.addEventListener('click', event => {
+  const settings = document.querySelector<HTMLDetailsElement>(openResearchSettingsSelector);
+  if (settings && !settings.contains(event.target as Node)) settings.open = false;
+}, { capture: true });
 document.addEventListener('keydown', event => {
-  const menu = event.target instanceof Element ? event.target.closest<HTMLDetailsElement>('[data-run-menu][open]') : null;
-  if (event.key !== 'Escape' || !menu) return;
-  event.preventDefault(); menu.open = false; menu.querySelector('summary')?.focus();
+  if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || !(event.target instanceof Element)) return;
+  const menu = event.target.closest<HTMLDetailsElement>(`${openMenuSelector}, ${openResearchSettingsSelector}`);
+  if (!menu) return;
+  event.preventDefault();
+  menu.open = false;
+  menu.querySelector('summary')?.focus({ preventScroll: menu.id !== 'formalize-settings' });
 });
 document.addEventListener('keydown', event => {
   if (event.key !== 'Escape' || event.defaultPrevented || !historyDocked() || historyCollapsed()) return;
@@ -4399,10 +4415,11 @@ element('#close-admin').addEventListener('click', () => element<HTMLDialogElemen
 element('#close-glossary').addEventListener('click', () => element<HTMLDialogElement>('#glossary-dialog').close());
 element('#logout').addEventListener('click', event => void leaveAccount(() => api('/api/auth/logout', { method: 'POST', body: '{}' }), event.currentTarget as HTMLButtonElement));
 field('account-confirm').addEventListener('input', () => {
-  element<HTMLButtonElement>('#delete-account').disabled = field('account-confirm').value.trim().toLowerCase() !== state.session?.account?.email;
+  element<HTMLButtonElement>('#delete-account').disabled = !state.session?.account
+    || field('account-confirm').value.trim().toLowerCase() !== accountLogin(state.session.account);
 });
 element('#delete-account').addEventListener('click', event => void leaveAccount(() => api('/api/auth/account',
-  { method: 'DELETE', body: JSON.stringify({ email: field('account-confirm').value.trim() }) }), event.currentTarget as HTMLButtonElement));
+  { method: 'DELETE', body: JSON.stringify({ login: field('account-confirm').value.trim() }) }), event.currentTarget as HTMLButtonElement));
 if (readHistoryCollapsed(() => localStorage)) document.body.dataset.historyCollapsed = 'true';
 placeHistory();
 icons();
