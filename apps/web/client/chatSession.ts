@@ -32,7 +32,10 @@ import { detailLevel } from './detailLevel';
 
 const running = (item?: { status: string }) => item?.status === 'queued' || item?.status === 'running';
 const reason = (error: unknown) => localizeMessage(error instanceof Error ? error.message : String(error));
-type Request = <T>(url: string, init?: RequestInit) => Promise<T>;
+type Request = {
+  <T>(url: string, init?: RequestInit): Promise<T>;
+  <T>(url: string, init: RequestInit, etag: (value: string | null) => void): Promise<T | undefined>;
+};
 type DraftPosition = { start: number; end: number; direction: 'forward' | 'backward' | 'none'; top: number };
 type Options = {
   request: Request;
@@ -70,6 +73,7 @@ type Options = {
 /** Owns the conversation and its draft. Proof tasks remain independent server jobs. */
 export class ChatSession {
   private conversation?: WebConversation;
+  private conversationEtag: string | null = null;
   private summaries: WebConversationSummary[] = [];
   private historyLoaded = false;
   private historyFailed = false;
@@ -105,12 +109,14 @@ export class ChatSession {
   private error = '';
   // A failed read shows until a later read succeeds; a failed send, stop or guidance keeps `error` until the next action.
   private readError = '';
+  private threadRetryAt = 0;
   private guidanceDraft?: ChatGuidanceDraft;
   private pendingGuidance?: ChatPendingGuidance;
   private guidanceErrorId = '';
   private pendingMessage?: ChatPendingMessage;
   private messageErrorId = '';
   private generation = 0;
+  private threadReads = new AbortController();
   private ownerRevision = 0;
   private readRevision = 0;
   private timer?: ReturnType<typeof setTimeout>;
@@ -215,12 +221,17 @@ export class ChatSession {
   async start(run?: WebRun) {
     const owner = this.ownerRevision;
     const route = this.currentId;
-    const initial = this.loadCapabilities();
-    if (route) await this.open(route, 'replace');
-    else if (run) await this.openRun(run);
-    await initial;
-    if (owner !== this.ownerRevision) return;
-    await this.refreshHistory();
+    const capabilities = this.loadCapabilities();
+    if (route || !run) {
+      const conversation = route ? this.open(route, 'replace') : undefined;
+      await Promise.all([capabilities, conversation, this.refreshHistory()]);
+    } else {
+      // A successful attachment already refreshes the history. Sample runs do not attach.
+      await this.openRun(run);
+      await capabilities;
+      if (owner !== this.ownerRevision) return;
+      if (!this.historyLoaded && !this.historyFailed) await this.refreshHistory();
+    }
     if (owner === this.ownerRevision) this.schedule();
   }
   private async loadCapabilities() {
@@ -428,7 +439,7 @@ export class ChatSession {
       this.formalization = formalization;
       this.formalizations = this.formalizations.map(record => record.id === formalization.id ? formalization : record);
       if (this.conversation) {
-        const { conversation } = await this.options.request<{ conversation: WebConversation }>(`/api/conversations/${this.currentId}`);
+        const { conversation } = await this.options.request<{ conversation: WebConversation }>(`/api/conversations/${this.currentId}`, { signal: this.threadReads.signal });
         if (generation !== this.generation) return;
         this.setConversation(conversation); await this.loadTask(generation);
       }
@@ -439,7 +450,7 @@ export class ChatSession {
     const session = this.options.session();
     if (reset && resetAccountDraft && session) resetProblemDraftBinding(session.draftOwner ?? this.options.draftScope, 'natural');
     this.reading.select('');
-    this.rememberDraft(); this.generation++; this.currentId = ''; this.editedProblem = ''; this.conversation = undefined;
+    this.rememberDraft(); this.changeThread(); this.currentId = ''; this.editedProblem = ''; this.conversation = undefined;
     this.run = undefined; this.formalization = undefined; this.seed = undefined;
     this.guidanceDraft = undefined; this.pendingGuidance = undefined; this.guidanceErrorId = '';
     this.attachRunId = ''; this.loading = false; this.submitting = false; this.error = ''; this.readError = ''; this.apiKey = ''; this.keyNotice = ''; this.startingResearch = false; this.clearConnection();
@@ -531,8 +542,18 @@ export class ChatSession {
   libraryReferenceFailed(message: string) { this.error = message; this.draw(); }
   useRunKey(id: string, key: string) { if (this.runId === id) { this.apiKey = key; this.clearConnection(); this.draw(); } }
   focus() { this.composer.querySelector<HTMLTextAreaElement>('textarea')?.focus({ preventScroll: true }); }
-  private setConversation(conversation: WebConversation) {
+  private async readConversation(id: string, knownTag: string | null = null) {
+    let etag: string | null = null;
+    const result = await this.options.request<{ conversation: WebConversation }>(`/api/conversations/${encodeURIComponent(id)}`, {
+      signal: this.threadReads.signal,
+      ...(knownTag ? { headers: { 'If-None-Match': knownTag } } : {}),
+    }, value => { etag = value; });
+    if (!result?.conversation && (result !== undefined || !knownTag)) throw new Error(t('服务器返回了无法读取的响应'));
+    return { conversation: result?.conversation, etag };
+  }
+  private setConversation(conversation: WebConversation, etag: string | null = null) {
     this.reading.select(conversation.id);
+    this.conversationEtag = etag;
     this.conversation = conversation; this.currentId = conversation.id; this.readError = ''; this.options.onConversation();
     const message = this.pendingMessage;
     if (message && conversation.messages.some(item => item.role === 'user' && item.kind === 'text' && item.requestId === message.requestId)) {
@@ -557,10 +578,27 @@ export class ChatSession {
     }
     this.draw();
   }
+  private changeThread() {
+    this.threadReads.abort();
+    this.threadReads = new AbortController();
+    this.conversationEtag = null;
+    this.threadRetryAt = 0;
+    return ++this.generation;
+  }
+  private threadReadFailed(error: unknown) {
+    this.readError = reason(error);
+    const retryAt = error && typeof error === 'object' && 'retryAt' in error && typeof error.retryAt === 'number'
+      ? error.retryAt : 0;
+    this.threadRetryAt = retryAt > Date.now() ? retryAt : 0;
+  }
   async open(id: string, mode: 'push' | 'replace' = 'push') {
-    if (this.currentId === id && this.conversation) { this.options.onNavigate(id, mode); this.focus(); return; }
+    if (this.currentId === id && (this.conversation || this.loading)) {
+      this.options.onNavigate(id, mode);
+      if (!this.loading) this.focus();
+      return;
+    }
     this.reading.select(id);
-    this.rememberDraft(); const generation = ++this.generation;
+    this.rememberDraft(); const generation = this.changeThread();
     this.currentId = id; this.editedProblem = ''; this.conversation = undefined; this.run = undefined; this.formalization = undefined;
     this.guidanceDraft = undefined; this.pendingGuidance = undefined;
     this.seed = undefined; this.attachRunId = '';
@@ -568,18 +606,18 @@ export class ChatSession {
     this.draft = this.restoredDraft(id);
     this.options.onNavigate(id, mode); this.options.onSelection(); this.draw();
     try {
-      const { conversation } = await this.options.request<{ conversation: WebConversation }>(`/api/conversations/${encodeURIComponent(id)}`);
+      const { conversation, etag } = await this.readConversation(id);
       if (generation !== this.generation) return;
-      this.setConversation(conversation);
+      if (conversation) this.setConversation(conversation, etag);
       await this.loadTask(generation);
-    } catch (error) { if (generation === this.generation) this.readError = reason(error); }
+    } catch (error) { if (generation === this.generation) this.threadReadFailed(error); }
     finally { if (generation === this.generation) { this.loading = false; this.draw(); this.schedule(); } }
   }
   async openRun(run: WebRun) {
     if (this.runId === run.id && this.conversation) { this.observe(run); return; }
     if (this.attachRunId === run.id) { this.observe(run); return; }
     this.reading.select('');
-    this.rememberDraft(); const generation = ++this.generation, owner = this.ownerRevision;
+    this.rememberDraft(); const generation = this.changeThread(), owner = this.ownerRevision;
     this.currentId = ''; this.editedProblem = ''; this.references = []; this.conversation = undefined; this.run = run; this.formalization = undefined;
     this.guidanceDraft = undefined; this.pendingGuidance = undefined;
     this.pendingMessage = undefined; this.messageErrorId = '';
@@ -604,10 +642,16 @@ export class ChatSession {
   private async loadTask(generation: number) {
     const conversation = this.conversation, revision = this.readRevision;
     if (!conversation) return;
+    const init = { signal: this.threadReads.signal };
+    const readRun = async (id: string) => {
+      // Live updates and the workbench's fallback poll already maintain this list.
+      const listed = this.options.connected() && this.options.runs().find(run => run.id === id);
+      return listed || (await this.options.request<{ run: WebRun }>(`/api/runs/${id}`, init)).run;
+    };
     this.lastTaskRefresh = Date.now();
     const [formal, run] = await Promise.allSettled([
-      conversation.formalizationId ? this.options.request<{ formalization: WebFormalization }>(`/api/formalizations/${conversation.formalizationId}`) : undefined,
-      conversation.runId ? this.options.request<{ run: WebRun }>(`/api/runs/${conversation.runId}`) : undefined,
+      conversation.formalizationId ? this.options.request<{ formalization: WebFormalization }>(`/api/formalizations/${conversation.formalizationId}`, init) : undefined,
+      conversation.runId ? readRun(conversation.runId) : undefined,
     ]);
     if (generation !== this.generation || revision !== this.readRevision) return;
     const failed = [formal, run].find(result => result.status === 'rejected'
@@ -617,13 +661,13 @@ export class ChatSession {
     if (!conversation.followFormalization && conversation.runId && this.formalization?.runId !== conversation.runId)
       this.formalization = undefined;
     if (this.formalization) this.formalizations = [this.formalization, ...this.formalizations.filter(item => item.id !== this.formalization!.id)];
-    let received = run.status === 'fulfilled' ? run.value?.run : undefined;
+    let received = run.status === 'fulfilled' ? run.value : undefined;
     // A compiled revision can be published while the conversation response still names the previous candidate.
     const currentRunId = this.formalization?.runId ?? conversation.runId;
-    if (currentRunId && received?.id !== currentRunId) {
-      received = (await this.options.request<{ run: WebRun }>(`/api/runs/${currentRunId}`)).run;
+    if (currentRunId && currentRunId !== conversation.runId) {
+      received = await readRun(currentRunId);
       if (generation !== this.generation || revision !== this.readRevision) return;
-    }
+    } else if (currentRunId && run.status === 'rejected') throw run.reason;
     const next = received && retainLatestRun(received, this.run);
     const hadRun = this.run;
     this.run = next;
@@ -646,27 +690,37 @@ export class ChatSession {
     if (!this.options.draftScope) return;
     const pending = this.conversation?.messages.some(message => message.status === 'pending');
     const reviewing = backgroundReviewPending(this.formalization?.backgroundReview ?? this.formalization?.report?.backgroundReview);
+    if (document.hidden && !reviewing) return;
     // A completed formalization can overtake the conversation response that first linked it.
     // Keep refreshing until that conversation has also attached the proof run.
     const unlinkedRun = Boolean(this.formalization?.runId && this.conversation && this.conversation.runId !== this.formalization.runId);
     // Nothing in progress: a slow check, since returning to the tab refreshes at once. A fast idle poll on every open tab
     // reached the site's per-address request limit.
-    this.timer = setTimeout(() => void this.refresh(), document.hidden && reviewing ? 15_000
+    const interval = document.hidden ? 15_000
       : pending ? 500 : running(this.run) || running(this.formalization) || unlinkedRun || reviewing ? 1500
-        : this.answers.generating(this.run?.id) ? 5000 : 30_000);
+        : this.answers.generating(this.run?.id) ? 5000 : 30_000;
+    const wait = this.threadRetryAt - Date.now();
+    const ready = !this.refreshing && !this.loading && !this.submitting && !this.startingResearch;
+    const delay = this.threadRetryAt && ready ? Math.max(0, wait) : Math.max(interval, wait);
+    this.timer = setTimeout(() => void this.refresh(), Math.min(delay, 2_147_483_647));
   }
   async refresh() {
     if (!this.options.draftScope) return;
     const reviewing = backgroundReviewPending(this.formalization?.backgroundReview ?? this.formalization?.report?.backgroundReview);
-    if (this.refreshing || this.submitting || this.startingResearch || document.hidden && !reviewing) { this.schedule(); return; }
+    if (this.refreshing || this.submitting || this.startingResearch || this.threadRetryAt > Date.now()
+      || document.hidden && !reviewing) { this.schedule(); return; }
     this.refreshing = true; const generation = this.generation, revision = this.readRevision, owner = this.ownerRevision;
     try {
       if (this.currentId && !this.loading) {
-        const { conversation } = await this.options.request<{ conversation: WebConversation }>(`/api/conversations/${this.currentId}`);
+        const { conversation, etag } = await this.readConversation(this.currentId, this.conversationEtag);
         if (generation !== this.generation || revision !== this.readRevision) return;
-        const runChanged = conversation.runId !== this.conversation?.runId;
-        this.setConversation(conversation);
-        if (runChanged || Date.now() - this.lastTaskRefresh >= 1500) await this.loadTask(generation);
+        const recoveringThreadRead = this.threadRetryAt > 0;
+        this.threadRetryAt = 0;
+        const linkChanged = conversation && (conversation.runId !== this.conversation?.runId
+          || conversation.formalizationId !== this.conversation?.formalizationId);
+        if (conversation) this.setConversation(conversation, etag);
+        else if (this.readError) { this.readError = ''; this.draw(); }
+        if (linkChanged || recoveringThreadRead || Date.now() - this.lastTaskRefresh >= 1500) await this.loadTask(generation);
       }
       if (generation !== this.generation) return;
       if (Date.now() - this.lastAnswerRefresh >= (this.answers.generating(this.run?.id) ? 5000 : 30_000)) {
@@ -677,7 +731,7 @@ export class ChatSession {
         await this.loadCapabilities();
         if (owner === this.ownerRevision) await this.refreshHistory();
       }
-    } catch (error) { if (generation === this.generation && revision === this.readRevision) { this.readError = reason(error); this.draw(); } }
+    } catch (error) { if (generation === this.generation && revision === this.readRevision) { this.threadReadFailed(error); this.draw(); } }
     finally { if (owner === this.ownerRevision) { this.refreshing = false; this.schedule(); } }
   }
   private async submit(retryText?: string, prepareEditedProblem = false) {

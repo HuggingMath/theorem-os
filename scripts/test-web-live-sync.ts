@@ -158,6 +158,32 @@ try {
     assert.equal(await page.locator('#detail-panel').evaluate(node => node.scrollTop), before);
     assert.equal(h.requests.some(r => r.pathname.endsWith('/observation')), false);
     console.log(`Live burst reached the browser in ${Math.round(performance.now() - started)} ms including browser waits`);
+
+    // Deliver a series of separate browser events, with time for a GET to finish between them.
+    // Keep the clock paused so slow test hosts do not stretch the burst across refresh intervals.
+    await page.clock.install();
+    const freeze = await page.evaluate(() => Date.now() + 100);
+    await page.clock.pauseAt(freeze);
+    const anchor = page.waitForResponse(response => new URL(response.url()).pathname === '/api/runs');
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    await anchor;
+    const beforeSeries = lists(h), eventsBeforeSeries = (await probe(page)).events;
+    for (let step = 1; step <= 5; step++) {
+      control.observation.inspection.tasks[0]!.owner = `successive-update-${step}`;
+      control.emit();
+      await page.evaluate(count => {
+        const state = (window as unknown as { __liveSync: Probe }).__liveSync;
+        if (state.events < count) return new Promise<void>(resolve =>
+          state.sources.at(-1)!.addEventListener('runs-changed', () => resolve(), { once: true }));
+      }, eventsBeforeSeries + step);
+      await page.clock.runFor(70);
+    }
+    assert.equal(lists(h), beforeSeries, 'Live events share the upcoming refresh');
+    await page.clock.runFor(800);
+    await page.locator('.collab-graph [data-collab-task="original"]').getByText('successive-update-5').waitFor();
+    assert.equal(lists(h) - beforeSeries, 1, 'Five separate notifications produce one run-list read');
+    assert.equal(await page.locator(text).inputValue(), 'Keep this unsent mathematical guidance');
+    await page.clock.resume();
     await node!.dispose();
   });
 
@@ -285,6 +311,50 @@ try {
       await other.waitForFunction(() => document.querySelector('.detail-statusline .badge')?.getAttribute('data-status')?.startsWith('cancelled:'));
       assert.equal(await other.locator('[data-action="cancel"]').count(), 0);
     } finally { await other.close(); }
+  });
+
+  await scenario('an active conversation follows the shared run list without a second run poll', async h => {
+    const { page } = h, run = await postRun(h, input);
+    h.runIds.push(run.id);
+    await page.goto(`${origin}/?run=${run.id}`); await live(page);
+    const status = page.locator('#research-chat-thread .chat-messages .research-conversation-status');
+    await status.locator('[data-research-stop]').waitFor();
+    const chat = new URL(page.url()).searchParams.get('chat');
+    assert.ok(chat, 'Opening a run attaches its conversation');
+    const detailReads = () => h.requests.filter(r => r.method === 'GET' && r.pathname === `/api/runs/${run.id}`).length;
+    const before = detailReads();
+    // Let conversation polling run while the proof is still active.
+    for (let tick = 0; tick < 2; tick++) await page.waitForResponse(response =>
+      response.request().method() === 'GET' && new URL(response.url()).pathname === `/api/conversations/${chat}`);
+    await status.locator('[data-research-stop]').click(); await page.locator('#confirm-cancel-run').click();
+    await status.getByText('已取消', { exact: true }).waitFor();
+    assert.equal(detailReads(), before, 'The conversation follows cancellation without fetching the listed run again');
+  });
+
+  await scenario('the run list resumes when its Cloudflare cooldown ends', async h => {
+    const { page } = h; await live(page); const run = await create(h), control = controls.get(run.id)!;
+    let limited = false;
+    h.effect = async route => {
+      if (limited || route.request().method() !== 'GET' || new URL(route.request().url()).pathname !== '/api/runs') return false;
+      limited = true;
+      await route.fulfill({ status: 429, headers: { 'Retry-After': '50' },
+        json: { cloudflare_error: true, error_code: 1015, retryable: true, retry_after: 50 } });
+      return true;
+    };
+    await page.clock.install();
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    await page.locator('#runs-error').filter({ hasText: '请求太频繁' }).waitFor();
+    const retryAt = await page.evaluate(() => Date.now() + 50_000);
+    const blockedReads = lists(h);
+    await page.clock.fastForward(31_000);
+    assert.equal(lists(h), blockedReads, 'A limited list waits for Retry-After');
+    await page.clock.fastForward(20_000);
+    await page.locator('#runs-error').waitFor({ state: 'hidden' });
+    const recoveredAt = await page.evaluate(() => Date.now());
+    assert.ok(recoveredAt - retryAt < 2000, 'The quiet live connection resumes as soon as the cooldown expires');
+    assert.equal(lists(h), blockedReads + 1);
+    control.observation.inspection.tasks[0]!.owner = 'after-cooldown'; control.emit();
+    await sequence(page, control.observation.sequence, 1500);
   });
 
   await scenario('REST polling keeps the page usable while the live endpoint is unavailable', async h => {

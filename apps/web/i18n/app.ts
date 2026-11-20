@@ -185,6 +185,8 @@ export const app: Record<string, string> = {
   "modules plan 模块 方案": "modules plan",
   "请求失败 ({0})": "Request failed ({0})",
   "请求太频繁，请稍后再试。": "Too many requests; try again shortly.",
+  "Cloudflare 安全验证拦截了请求，请稍后重试": "A Cloudflare security check blocked the request. Try again shortly.",
+  "服务暂时不可用，请稍后重试": "The service is temporarily unavailable. Try again shortly.",
   "服务器返回了无法读取的响应": "The server returned an unreadable response",
   "请求失败，请重试": "Request failed; try again",
   "选择服务商": "Choose a provider",

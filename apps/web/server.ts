@@ -145,8 +145,23 @@ const jsonEncodings = new WeakMap<ServerResponse, 'br' | 'gzip'>();
 // A run carries its sources and report, so the list and the Agents' actions run to tens of KB each. no-transform keeps
 // Cloudflare from compressing them, so the server does: a fast brotli level costs a few ms even for MBs of JSON.
 const jsonBrotli = { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } };
-function json(response: ServerResponse, status: number, body: unknown) {
-  const text = JSON.stringify(body), encoding = text.length >= 2048 ? jsonEncodings.get(response) : undefined;
+function json(response: ServerResponse, status: number, body: unknown, revalidate?: IncomingMessage) {
+  const text = JSON.stringify(body);
+  if (revalidate) {
+    // Hash the response itself: streamed text and linked records can change within the same millisecond.
+    const tag = `"${crypto.createHash('sha256').update(text).digest('hex')}"`;
+    response.setHeader('ETag', `W/${tag}`);
+    if (text.length >= 2048) response.setHeader('Vary', 'Accept-Encoding');
+    if (revalidate.headers['if-none-match']?.split(',').some(candidate => {
+      const value = candidate.trim();
+      return value === '*' || value.replace(/^W\//u, '') === tag;
+    })) {
+      response.writeHead(304);
+      response.end();
+      return;
+    }
+  }
+  const encoding = text.length >= 2048 ? jsonEncodings.get(response) : undefined;
   if (!encoding) {
     response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
     response.end(text);
@@ -454,7 +469,11 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (rates.size >= 2_000) throw new HttpError(429, '请求较多，请稍后重试。');
           rates.set(ip, rate = { count: 0, expiresAt: Date.now() + 60_000 });
         }
-        if (++rate.count > 600) throw new HttpError(429, '请求过于频繁，请稍后重试。');
+        if (++rate.count > 600) {
+          response.setHeader('Retry-After', Math.max(1, Math.ceil((rate.expiresAt - Date.now()) / 1000)));
+          response.setHeader('X-Theoremos-Rate-Limit-Scope', 'api');
+          throw new HttpError(429, '请求过于频繁，请稍后重试。');
+        }
         // Share links are public read-only snapshots: no session, no cookie, nothing beyond the stored whitelist.
         const shared = /^\/api\/share\/([^/]+)$/u.exec(url.pathname);
         if (shared) {
@@ -702,7 +721,10 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         const conversationMatch = /^\/api\/conversations\/([a-f0-9-]{36})(?:\/(messages|stop|guidance|guidance-withdraw))?$/u.exec(url.pathname);
         if (conversationMatch) {
           const [, id, action] = conversationMatch;
-          if (!action && request.method === 'GET') { json(response, 200, { conversation: conversations.read(owner, id) }); return; }
+          if (!action && request.method === 'GET') {
+            json(response, 200, { conversation: conversations.read(owner, id) }, request);
+            return;
+          }
           if (!action && request.method === 'PATCH') {
             conversations.read(owner, id);
             const parsed = z.object({ title: z.string() }).strict().safeParse(await readBody());
@@ -1328,7 +1350,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         : undefined;
       const contentType = allowed[extension] ?? archiveType;
       if (!contentType) throw new HttpError(404, '文件不存在。');
-      sendStatic(request, response, file, path.extname(file), contentType);
+      sendStatic(request, response, file, extension, contentType, path.relative(config.staticRoot, file).split(path.sep).join('/'));
     } catch (error) {
       const invalidKnowledgeInput = error instanceof Error && /^math_knowledge_(?:invalid_query|invalid_dependency_options|(?:source|metadata|consumers|finding)_(?:options_invalid|position_invalid|budget_too_small))$/u.test(error.message);
       const known = error instanceof HttpError || error instanceof WebStorageError || error instanceof WebAuthError

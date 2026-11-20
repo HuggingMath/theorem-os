@@ -861,6 +861,15 @@ describe('conversation HTTP boundary with local fake provider only', () => {
     expect(created.status).toBe(201);
     const { conversation } = await created.json() as { conversation: WebConversation };
     const route = `${base}/api/conversations/${conversation.id}`;
+    const initial = await fetch(route, { headers });
+    expect((await initial.json()).conversation).toEqual(conversation);
+    const validator = initial.headers.get('etag')!;
+    expect(validator).toMatch(/^W\/"[a-f0-9]{64}"$/u);
+    const revalidate = { ...headers, 'If-None-Match': validator };
+    const unchanged = await fetch(route, { headers: revalidate });
+    expect(unchanged.status).toBe(304);
+    expect(unchanged.headers.get('cache-control')).toContain('no-store');
+    expect(await unchanged.text()).toBe('');
     expect((await fetch(route + '/messages', { method: 'POST', headers, body: JSON.stringify({ text: '为什么', apiKey: key, turns: [] }) })).status).toBe(400);
     expect((await fetch(route + '/messages', { method: 'POST', headers, body: JSON.stringify({ text: '为什么', apiKey: key }) })).status).toBe(202);
     let saved: WebConversation = conversation;
@@ -870,6 +879,10 @@ describe('conversation HTTP boundary with local fake provider only', () => {
       await tick();
     }
     expect(saved.messages.at(-1)).toMatchObject({ status: 'complete', text: '来自本地模拟服务的回答。' });
+    const changed = await fetch(route, { headers: revalidate });
+    expect(changed.status).toBe(200);
+    expect(changed.headers.get('etag')).not.toBe(validator);
+    expect((await changed.json()).conversation).toEqual(saved);
     expect(seen[0]?.instructions).toBe(webConversationInstructions);
     expect(JSON.stringify(seen[0]?.input)).toContain(run.source);
     const identified = { text: '按发送身份恢复', apiKey: key, requestId: 'http-send-1' };
@@ -894,7 +907,7 @@ describe('conversation HTTP boundary with local fake provider only', () => {
     }
     expect(seen).toHaveLength(2);
     const other = await fetch(`${base}/api/session`), otherCookie = other.headers.get('set-cookie')!.split(';')[0]!;
-    expect((await fetch(route, { headers: { Cookie: otherCookie } })).status).toBe(404);
+    expect((await fetch(route, { headers: { Cookie: otherCookie, 'If-None-Match': validator } })).status).toBe(404);
     const otherSession = await other.json() as WebSession;
     const guidance = guidanceInput();
     expect((await fetch(route + '/guidance', { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify(guidance) })).status).toBe(403);

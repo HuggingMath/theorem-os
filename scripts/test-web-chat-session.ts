@@ -489,9 +489,9 @@ try {
     // In a conversation the composer is at the bottom, so its settings open upwards, above the settings button and on screen.
     const settings = page.locator('#formalize-settings'), settingsOpen = await settings.evaluate(details => (details as HTMLDetailsElement).open);
     await settings.evaluate(details => { (details as HTMLDetailsElement).open = true; });
-    await page.locator('.chat-settings-fields').waitFor();
-    const placement = await page.evaluate(() => ({ panel: document.querySelector('.chat-settings-fields')!.getBoundingClientRect().toJSON(),
-      button: document.querySelector('#formalize-settings > summary')!.getBoundingClientRect().toJSON() }));
+    await settings.locator(':scope > .chat-settings-fields').waitFor();
+    const placement = await settings.evaluate(node => ({ panel: node.querySelector(':scope > .chat-settings-fields')!.getBoundingClientRect().toJSON(),
+      button: node.querySelector(':scope > summary')!.getBoundingClientRect().toJSON() }));
     assert.ok(placement.panel.bottom <= placement.button.top && placement.panel.top >= 0, `The settings must open above the composer: ${JSON.stringify(placement)}`);
     await settings.evaluate((details, open) => { (details as HTMLDetailsElement).open = open; }, settingsOpen);
     mark(`${width}px: in a conversation the settings open above the composer`);
@@ -501,7 +501,7 @@ try {
       await credentials(page); await page.locator('#formalize-start').click();
       await page.getByText('本地测试：暂时不可用', { exact: true }).waitFor();
       assert.equal(await page.locator('#formalize-original').inputValue(), draft, 'Failed HTTP send retains the unsent draft');
-      const read = page.waitForResponse(response => response.url().endsWith(`/api/conversations/${id}`) && response.ok());
+      const read = page.waitForResponse(response => response.url().endsWith(`/api/conversations/${id}`) && (response.ok() || response.status() === 304));
       await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await read;
       await page.evaluate(() => new Promise<void>(resolve => setTimeout(resolve, 150)));
       assert.equal(await page.getByText('本地测试：暂时不可用', { exact: true }).count(), 1, 'A later successful read keeps the failed send in view');
@@ -694,9 +694,10 @@ try {
           await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await page.waitForTimeout(200);
         }
         await page.locator('#formalize-error').filter({ hasText: '无法连接服务器' }).waitFor();
-        await page.evaluate(() => window.dispatchEvent(new Event('online')));
+        const revalidated = page.waitForResponse(response => response.url().endsWith(`/api/conversations/${id}`) && response.status() === 304);
+        await page.evaluate(() => window.dispatchEvent(new Event('online'))); await revalidated;
         await page.locator('#formalize-error').waitFor({ state: 'detached' });
-        mark('a failed background read shows until the connection returns, and the next read clears it');
+        mark('an unchanged conversation needs no response body and a successful 304 clears a previous background read error');
       }
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Failure details fit the width');
       await screenshot(page, `formalization-failure-${width}.png`);
@@ -722,20 +723,7 @@ try {
       await page.locator('[data-chat-history-retry]').click();
       await page.getByText('新对话会保存在这里').waitFor();
       assert.equal(await failed.count(), 0);
-      const missing = '00000000-0000-4000-8000-000000000000';
-      // A bodiless 429 is the edge throttling a burst: reads retry it twice, and only a persistent limit is shown.
-      let throttled = 0;
-      await page.route(`**/api/conversations/${missing}`, route => { throttled++; return route.fulfill({ status: 429, body: '' }); }, { times: 3 });
-      await page.goto(`${origin}/?chat=${missing}`);
-      await page.getByText('请求太频繁，请稍后再试。').first().waitFor();
-      assert.equal(throttled, 3, 'An edge 429 without a reason is retried twice before the limit is named');
-      // A server quota answer carries its reason and is shown at once, without retrying.
-      let quota = 0;
-      await page.route(`**/api/conversations/${missing}`, route => { quota++; return route.fulfill({ status: 429, json: { error: '本地测试：额度已用完' } }); }, { times: 3 });
-      await page.reload();
-      await page.getByText('本地测试：额度已用完').first().waitFor();
-      assert.equal(quota, 1, 'A quota 429 with a reason is not retried');
-      mark('a failed history load says so and retries; a rate-limited read retries edge throttling and names a persistent limit');
+      mark('a failed history load says so and retries');
     } finally { await context.close(); }
   }
   for (const width of [1440, 390]) {

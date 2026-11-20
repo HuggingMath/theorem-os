@@ -83,9 +83,21 @@ try {
     assert.ok(first.transferred <= 1800 * 1024, `first visit ${kb(first.transferred)} exceeds 1800 KB`);
     assert.ok(first.firstContentfulPaintMs > 0 && first.firstContentfulPaintMs <= 1500, `first contentful paint ${first.firstContentfulPaintMs} ms exceeds 1500 ms`);
     assert.ok(first.readyMs <= 5000, `first visit ready after ${first.readyMs} ms, budget 5000 ms`);
-    assert.ok(repeat.transferred <= 50 * 1024, `repeat visit ${kb(repeat.transferred)} exceeds 50 KB; files must revalidate`);
+    assert.ok(repeat.transferred <= 50 * 1024, `repeat visit ${kb(repeat.transferred)} exceeds 50 KB`);
     assert.ok(repeat.readyMs <= 2000, `repeat visit ready after ${repeat.readyMs} ms, budget 2000 ms`);
     console.log('Load budget checks passed');
+
+    const versionedApp = first.resources.find(item => /^\/app\.[a-f0-9]{16}\.js$/u.test(item.path));
+    assert.ok(versionedApp?.cache.includes('immutable'), 'The workbench starts from a cacheable, versioned entry');
+    assert.ok(first.resources.some(item => /^\/app\.[a-f0-9]{16}\.css$/u.test(item.path) && item.cache.includes('immutable')),
+      'The workbench loads its matching stylesheet');
+    assert.equal(first.resources.some(item => item.path === '/app.js' || item.path === '/app.css'), false,
+      'A cached entry from an earlier deployment cannot intercept the current page');
+    assert.ok(repeat.resources.some(item => item.path === versionedApp.path && item.bytes === 0),
+      'A repeat visit uses the versioned entry from the browser cache');
+    assert.ok(first.resources.some(item => /^\/chunks\/[\w-]+-[A-Z0-9]{8}\.js$/u.test(item.path) && item.cache.includes('immutable')),
+      'The hashed import graph can be cached too');
+    console.log('PASS the workbench opens the current version and a repeat visit reuses its cached assets');
 
     assert.equal(first.resources.some(item => /\/chunks\/(?:runViews|en)-/u.test(item.path)), false,
       'A blank Chinese composer does not load the run workspace or full English dictionary');
@@ -101,6 +113,27 @@ try {
     assert.deepEqual(englishErrors, []);
     await englishContext.close();
     console.log('PASS empty Chinese and English composers load the required language modules');
+
+    const historyContext = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } });
+    const history = await historyContext.newPage();
+    const capabilities = Promise.withResolvers<void>();
+    const historyId = crypto.randomUUID(), at = new Date().toISOString();
+    await history.route('**/api/formalizations', async route => {
+      await capabilities.promise;
+      await route.continue();
+    });
+    await history.route('**/api/conversations', route => route.fulfill({ json: { conversations: [
+      { id: historyId, title: '已保存的对话', createdAt: at, updatedAt: at, answering: false },
+    ] } }));
+    try {
+      await history.goto(origin);
+      await history.locator(`[data-chat-row="${historyId}"]`).waitFor({ state: 'attached', timeout: 5_000 });
+    } finally {
+      capabilities.resolve();
+      await history.unrouteAll({ behavior: 'wait' });
+      await historyContext.close();
+    }
+    console.log('PASS conversation history appears while formalization records are still loading');
 
     const retryContext = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } });
     const retry = await retryContext.newPage();

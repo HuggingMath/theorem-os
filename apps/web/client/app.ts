@@ -436,6 +436,8 @@ let toastTimer: ReturnType<typeof setTimeout> | undefined;
 let clockTimer: ReturnType<typeof setInterval> | undefined;
 let connectionRequest: Promise<void> | undefined;
 let liveRefreshPending = false;
+let lastRunsReadAt = -Infinity;
+const liveRefreshIntervalMs = 750;
 let readController = new AbortController();
 let pageActive = true;
 let sourceRevision = 0;
@@ -622,12 +624,17 @@ let historyCriteria = '';
 const arrivals = new Set<string>();
 let historyReading: { top: number; anchors: Array<{ id: string; offset: number }> } = { top: 0, anchors: [] };
 
-const edgeThrottled = (response: Response, method?: string) => (!method || method === 'GET')
-  && (response.status === 429 || response.status === 503) && !response.headers.get('Content-Type')?.includes('json');
-/** Retry-After in seconds when the edge gives one, otherwise 1.5 s then 3 s; never more than 6 s inside the 15 s request budget. */
-const retryDelay = (header: string | null, attempt: number) => {
-  const seconds = Number(header);
-  return Math.min(6_000, Number.isFinite(seconds) && seconds > 0 ? seconds * 1_000 : 1_500 * attempt);
+// Edge limits can apply to one route. The workbench's own address limit covers all API requests.
+const routeCooldowns = new Map<string, ApiError>();
+let addressCooldown: ApiError | undefined;
+function cooldownFor(route: string) {
+  const local = routeCooldowns.get(route);
+  return local && local.retryAt > (addressCooldown?.retryAt ?? 0) ? local : addressCooldown;
+}
+const retryAfterMs = (header: string | null, now: number) => {
+  if (!header) return;
+  const delay = /^\d+$/u.test(header) ? Number(header) * 1_000 : Date.parse(header) - now;
+  if (Number.isFinite(delay)) return Math.max(0, delay);
 };
 const pause = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
   if (signal.aborted) { reject(signal.reason); return; }
@@ -637,7 +644,7 @@ const pause = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, r
 });
 /** `message` is what the reader sees; `reason` keeps the server's own text for checks such as sessionFailure. */
 class ApiError extends Error {
-  constructor(readonly reason: string, readonly status: number) { super(localizeMessage(reason)); }
+  constructor(readonly reason: string, readonly status: number, readonly retryAt = 0) { super(localizeMessage(reason)); }
 }
 type ApiInit = RequestInit & { timeoutMs?: number };
 const sameSession = (session: WebSession | undefined) => session?.draftOwner === state.session?.draftOwner && session?.csrfToken === state.session?.csrfToken;
@@ -658,50 +665,98 @@ async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}
     keyChangeTail = new Promise<void>(resolve => { finishKeyChange = resolve; });
     await previous;
   }
+  const method = init.method?.toUpperCase() ?? 'GET';
+  const read = method === 'GET';
+  const route = `${method} ${url.split('?', 1)[0]}`;
+  const deadline = Date.now() + timeoutMs;
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(new Error(t('请求超时，请重新连接'))), timeoutMs);
   const signals = [timeout.signal];
-  if (!init.method || init.method === 'GET') signals.push(readController.signal);
+  if (read) signals.push(readController.signal);
   if (init.signal) signals.push(init.signal);
   try {
     // A queued change still belongs to the identity that requested it, even after another tab logs in.
     if (keyChange && !sameSession(requestSession)) throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
     // fetch rejects with a TypeError when the server cannot be reached; its text ("Failed to fetch") means nothing to a reader.
     const signal = AbortSignal.any(signals);
-    const send = () => fetch(url, { ...init, credentials: 'same-origin', cache: 'no-store', signal,
-      headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}),
-        ...(init.method && init.method !== 'GET' ? { 'X-CSRF-Token': state.session?.csrfToken ?? '' } : {}), ...init.headers } })
-      .catch((error: unknown) => { throw error instanceof TypeError ? new Error(t('无法连接服务器')) : error; });
-    let response = await send();
-    // The edge throttles bursts (opening a chat reads several records at once) with a 429/503 that has no JSON body.
-    // A read waits briefly and asks again before the reader sees an error; the server's own limits carry JSON and still surface.
-    for (let attempt = 1; attempt <= 2 && edgeThrottled(response, init.method); attempt++) {
-      await response.body?.cancel().catch(() => undefined);
-      await pause(retryDelay(response.headers.get('Retry-After'), attempt), signal);
-      response = await send();
+    const send = async () => {
+      signal.throwIfAborted();
+      let cooldown = cooldownFor(route);
+      while (cooldown && cooldown.retryAt > Date.now()) {
+        if (!read || cooldown.retryAt >= deadline) throw cooldown;
+        await pause(cooldown.retryAt - Date.now(), signal);
+        cooldown = cooldownFor(route);
+      }
+      routeCooldowns.delete(route);
+      return fetch(url, { ...init, credentials: 'same-origin', cache: 'no-store', signal,
+        headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+          ...(!read ? { 'X-CSRF-Token': state.session?.csrfToken ?? '' } : {}), ...init.headers } })
+        .catch((error: unknown) => { throw error instanceof TypeError ? new Error(t('无法连接服务器')) : error; });
+    };
+    for (let attempt = 0; ; attempt++) {
+      const response = await send();
+      const responseOwner = response.headers.get('X-Theoremos-Owner');
+      if (!url.startsWith('/api/session') && responseOwner && state.session?.draftOwner && responseOwner !== state.session.draftOwner) {
+        if (requestOwner === state.session.draftOwner) { clearOwnedDrafts(); state.submitting = false; void initialize(); }
+        throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
+      }
+      if (etag && response.status === 304) {
+        if (!sameSession(requestSession)) throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
+        etag(response.headers.get('ETag'));
+        return;
+      }
+
+      const challenged = response.headers.get('cf-mitigated') === 'challenge';
+      const json = response.headers.get('Content-Type')?.includes('json');
+      let payload: unknown;
+      if (!challenged && (response.ok || json)) payload = await response.json().catch(() => undefined);
+      else void response.body?.cancel().catch(() => undefined);
+      signal.throwIfAborted();
+      // The headers may have arrived before another tab's login; a slow body still belongs to its original session.
+      if (!url.startsWith('/api/session') && !sameSession(requestSession)) throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
+      if (!challenged && response.ok) {
+        if (payload === undefined) throw new Error(t('服务器返回了无法读取的响应'));
+        etag?.(response.headers.get('ETag'));
+        return payload as T;
+      }
+
+      const body = payload && typeof payload === 'object'
+        ? payload as { error?: unknown; cloudflare_error?: unknown; error_code?: unknown; retryable?: unknown; retry_after?: unknown }
+        : undefined;
+      const cloudflare = body?.cloudflare_error === true ? body : undefined;
+      const limited = response.status === 429 || cloudflare?.error_code === 1015;
+      const retryable = !challenged && (cloudflare ? cloudflare.retryable === true
+        : !json && (limited || response.status === 503));
+      const now = Date.now();
+      const headerDelay = retryAfterMs(response.headers.get('Retry-After'), now);
+      let delay = headerDelay;
+      if (delay === undefined && cloudflare?.retryable === true && typeof cloudflare.retry_after === 'number'
+        && Number.isSafeInteger(cloudflare.retry_after) && cloudflare.retry_after >= 0) delay = cloudflare.retry_after * 1_000;
+      if (delay === undefined && (challenged || cloudflare && limited)) delay = 30_000;
+      if (delay === undefined && retryable) delay = limited && attempt ? 5_000 : 1_500 * (attempt + 1);
+      const retryAt = delay !== undefined && (limited || challenged || retryable) ? now + delay : 0;
+      const limitMessage = t('请求太频繁，请稍后再试。');
+      let reason = t('请求失败 ({0})', response.status);
+      if (challenged) reason = t('Cloudflare 安全验证拦截了请求，请稍后重试');
+      else if (!cloudflare && typeof body?.error === 'string') reason = body.error;
+      else if (limited) reason = limitMessage;
+      else if (retryable) reason = t('服务暂时不可用，请稍后重试');
+      const error = new ApiError(reason, limited && !challenged ? 429 : response.status, retryAt);
+
+      if (retryAt > now) {
+        if (!challenged && !cloudflare && limited && response.headers.get('X-Theoremos-Rate-Limit-Scope') === 'api') {
+          if (retryAt > (addressCooldown?.retryAt ?? 0)) addressCooldown = new ApiError(limitMessage, 429, retryAt);
+        } else if (retryAt > (routeCooldowns.get(route)?.retryAt ?? 0)) {
+          for (const [key, previous] of routeCooldowns) if (previous.retryAt <= now) routeCooldowns.delete(key);
+          routeCooldowns.set(route, error);
+        }
+      }
+      if (!challenged && !cloudflare && response.status === 428) {
+        saveDraft(); draftReady = false; forgetKey(keyStorage); location.replace(loginAddress());
+      }
+      // Requests that change data are only retried by the reader. Longer waits remain in force for future reads.
+      if (!read || !retryable || attempt >= (limited ? 1 : 2) || retryAt >= deadline) throw error;
     }
-    const responseOwner = response.headers.get('X-Theoremos-Owner');
-    if (!url.startsWith('/api/session') && responseOwner && state.session?.draftOwner && responseOwner !== state.session.draftOwner) {
-      if (requestOwner === state.session.draftOwner) { clearOwnedDrafts(); state.submitting = false; void initialize(); }
-      throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
-    }
-    if (etag && response.status === 304) { etag(response.headers.get('ETag')); return; }
-    const payload: unknown = await response.json().catch(error => {
-      if (timeout.signal.aborted) throw timeout.signal.reason;
-      if (!response.ok) return undefined;
-      throw error;
-    });
-    // The headers may have arrived before another tab's login; a slow body still belongs to its original session.
-    if (!url.startsWith('/api/session') && !sameSession(requestSession)) throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
-    if (!response.ok) {
-      if (response.status === 428) { saveDraft(); draftReady = false; forgetKey(keyStorage); location.replace(loginAddress()); }
-      const message = payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string'
-        ? payload.error : response.status === 429 ? t('请求太频繁，请稍后再试。') : t('请求失败 ({0})', response.status);
-      throw new ApiError(message, response.status);
-    }
-    if (payload === undefined) throw new Error(t('服务器返回了无法读取的响应'));
-    etag?.(response.headers.get('ETag'));
-    return payload as T;
   } catch (error) {
     if (timeout.signal.aborted) throw timeout.signal.reason;
     throw error;
@@ -2144,6 +2199,7 @@ function renderDetail(force = false) {
     }
     return;
   }
+  chatWorkspace?.observe(run);
   const detail = element('#run-detail');
   const focused = document.activeElement instanceof HTMLElement && detail.contains(document.activeElement)
     ? document.activeElement : undefined;
@@ -2171,7 +2227,6 @@ function renderDetail(force = false) {
 }
 function renderRunHeader(run: WebRun) {
   const value = status(run), progress = runProgress(run), cancelling = state.cancelling.has(run.id);
-  chatWorkspace?.observe(run);
   drawRunHeader(element('#run-detail'), {
     title: run.title, id: run.id, updated: run.updatedAt, error: state.detailError,
     status: { key: `${run.status}:${run.phase}:${value.label}`, ...value },
@@ -2712,8 +2767,10 @@ const currentConnection = (epoch: number) => pageActive && epoch === state.conne
 const sessionFailure = (error: unknown) => error instanceof ApiError
   && (error.status === 401 || error.status === 403 && error.reason.includes('会话校验'));
 function invalidateReads() {
-  runUpdates.stop();
   liveRefreshPending = false;
+  lastRunsReadAt = -Infinity;
+  runUpdates.stop();
+  clearTimeout(pollTimer);
   state.connectionEpoch++;
   state.listGeneration++;
   state.runsEtag = '';
@@ -2748,6 +2805,7 @@ function receiveRunObservation(observation: WebObservation) {
 async function refreshRuns(epoch: number, force = false, listed?: WebSession['runs']) {
   const generation = ++state.listGeneration;
   let etag: string | null = listed?.version ?? null;
+  if (!listed) lastRunsReadAt = Date.now();
   const result = listed ?? await api<{ runs: WebRun[] }>('/api/runs', {
     headers: !force && state.runsEtag ? { 'If-None-Match': state.runsEtag } : {},
   }, value => { etag = value; });
@@ -2805,27 +2863,43 @@ async function poll(force = false) {
   try { await refreshRuns(epoch, force); }
   catch (error) {
     if (!currentConnection(epoch)) return;
+    if (error instanceof ApiError && (error.status === 429 || error.retryAt > 0)) {
+      const notice = element('#runs-error');
+      notice.textContent = error.message; notice.hidden = false;
+      return;
+    }
     disconnected(t('{0}。未提交内容已保留。', message(error)));
     if (sessionFailure(error)) await initialize();
   } finally {
-    if (currentConnection(epoch)) state.refreshing = false;
+    if (currentConnection(epoch)) {
+      state.refreshing = false;
+      schedulePoll();
+    }
     element<HTMLButtonElement>('#refresh-runs').disabled = !pageActive || Boolean(connectionRequest) || state.refreshing;
-    if (currentConnection(epoch) && state.connected && !document.hidden && liveRefreshPending) void poll();
   }
 }
 function requestRunsRefresh() {
   liveRefreshPending = true;
-  void poll();
+  schedulePoll();
 }
 function schedulePoll() {
   clearTimeout(pollTimer);
-  if (!pageActive) return;
+  if (!pageActive || connectionRequest || state.refreshing) return;
   // A hidden tab keeps a slow poll while runs are active, so their end still reaches the title and notifications.
+  const hidden = document.hidden;
   const active = state.connected && state.runs.some(activeRun);
-  pollTimer = setTimeout(async () => {
-    if (!document.hidden || active) await poll();
-    if (pageActive) schedulePoll();
-  }, document.hidden ? active ? 15_000 : 30_000 : runUpdates.connected ? 30_000 : active ? 1800 : 5000);
+  if (hidden && !active) return;
+  const now = Date.now();
+  const runsRetryAt = cooldownFor('GET /api/runs')?.retryAt ?? 0;
+  const sessionRetryAt = cooldownFor('GET /api/session')?.retryAt ?? 0;
+  const retryAt = state.connected ? runsRetryAt : Math.max(sessionRetryAt, state.session ? runsRetryAt : 0);
+  const live = !hidden && state.connected && liveRefreshPending;
+  const interval = hidden ? 15_000 : runUpdates.connected ? 30_000 : active ? 1800 : 5000;
+  // Give live updates a trailing refresh at a fixed interval. New events keep that deadline.
+  const next = live ? lastRunsReadAt + liveRefreshIntervalMs : retryAt > now ? retryAt : now + interval;
+  const delay = Math.max(next, retryAt) - now;
+  if (delay <= 0) { void poll(); return; }
+  pollTimer = setTimeout(() => void poll(), Math.min(delay, 2_147_483_647));
 }
 function initialize(): Promise<void> {
   if (connectionRequest) return connectionRequest;

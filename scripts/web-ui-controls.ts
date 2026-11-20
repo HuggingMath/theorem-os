@@ -39,14 +39,14 @@ export async function openProblemHistory(page: Page) {
   return history;
 }
 
-/** The first problem's budget explanation is optional and separate from its editable settings. */
+/** The first problem's budget and cost summary lives inside Research settings. */
 export async function openChatBudget(page: Page) {
-  const settings = page.locator('#formalize-settings[open]');
-  if (await settings.count()) await settings.locator(':scope > summary').click();
-  const details = page.locator('[data-first-research-start]');
-  await details.waitFor({ state: 'attached' });
+  const settings = page.locator('#formalize-settings');
+  if (!await settings.evaluate(node => (node as HTMLDetailsElement).open)) await settings.locator(':scope > summary').click();
+  const details = settings.locator('[data-first-research-start]');
+  await details.waitFor();
   if (!await details.evaluate(node => (node as HTMLDetailsElement).open)) await details.locator(':scope > summary').click();
-  await page.locator('[data-chat-budget]').waitFor();
+  await details.locator('[data-chat-budget]').waitFor();
   return details;
 }
 
