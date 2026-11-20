@@ -319,12 +319,11 @@ try {
   const search = directory.getByRole('searchbox'), entries = directory.locator('[data-action="contents-jump"]');
   const scroll = page.locator('#explain-prose');
   const folded = await page.locator('.explain-unfold').count();
-  const previousScroll = await scroll.evaluate(node => { node.scrollTop = 200; return node.scrollTop; });
-  assert.ok(previousScroll > 0);
   await contents.focus();
   await page.keyboard.press('Enter');
   await directory.waitFor();
   assert.deepEqual(await directory.getByRole('heading', { level: 3 }).allInnerTexts(), ['主定理', '辅助声明']);
+  assert.equal(await directory.locator('[aria-current]').count(), 0, 'the overview is outside the numbered sections');
   await search.fill(explained.sections[4]!.title);
   assert.equal(await entries.count(), 1);
   await search.fill('no declaration has this name');
@@ -333,6 +332,8 @@ try {
   await page.keyboard.press('Escape');
   await directory.waitFor({ state: 'hidden' });
   await until(() => contents.evaluate(node => node === document.activeElement), 'Escape restores focus to the directory button');
+  const previousScroll = await scroll.evaluate(node => { node.scrollTop = 200; return node.scrollTop; });
+  assert.ok(previousScroll > 0);
   await contents.click();
   await search.fill('STEP_5');
   assert.equal(await entries.count(), 1);
@@ -343,6 +344,33 @@ try {
   assert.equal(await split.getAttribute('data-layout'), 'read', 'the directory stays in reading mode');
   await until(() => page.evaluate(() => document.activeElement?.id === 'explain-section-4'), 'the directory focuses the chosen declaration');
   assert.match(page.url(), /#at=step_5&view=outline$/u);
+
+  const next = page.getByRole('button', { name: `下一节 ${explained.sections[5]!.title}` });
+  await next.scrollIntoViewIfNeeded();
+  await next.focus();
+  await page.screenshot({ path: path.join(output, 'explain-next-1440.png') });
+  const nextOrigin = await scroll.evaluate(node => node.scrollTop);
+  await page.keyboard.press('Enter');
+  await until(() => page.evaluate(() => document.activeElement?.id === 'explain-section-5'), 'Next focuses the following section');
+  await until(() => shown(page, '#explain-section-5'), 'Next reveals the following section');
+  assert.equal(new URL(page.url()).hash, '#at=step_6&view=outline');
+  assert.equal(await page.locator('.explain-unfold').count(), folded - 2, 'Next unfolds the destination');
+  await page.goBack();
+  await until(async () => await next.evaluate(node => node === document.activeElement)
+    && await scroll.evaluate((node, position) => node.scrollTop === position, nextOrigin), 'Back restores focus and scroll at Next');
+  assert.equal(await page.locator('.explain-unfold').count(), folded - 1, 'Back restores the single unfolded section');
+
+  await page.locator('[data-reading-section="2"]').evaluate(section => {
+    const pane = section.closest('.explain-scroll')!;
+    pane.scrollTop += section.getBoundingClientRect().top - pane.getBoundingClientRect().top + 28;
+  });
+  await contents.click();
+  const reading = directory.locator('[aria-current="location"]');
+  await reading.getByText('正在读').waitFor();
+  assert.equal(await reading.getAttribute('data-target'), '2', 'the directory follows reading rather than the former Lean selection');
+  assert.equal(new URL(page.url()).hash, '#at=step_5&view=outline');
+  await page.keyboard.press('Escape');
+  await directory.waitFor({ state: 'hidden' });
   await page.locator('[data-action="detail"][data-detail="steps"]').click();
   await page.locator('[data-action="return"]').click();
   await until(async () => await contents.evaluate(node => node === document.activeElement)
@@ -350,7 +378,66 @@ try {
     'return from the directory restores reading position and focus');
   assert.equal(await page.locator('.explain-unfold').count(), folded, 'the outline folds back to its previous chapters');
   await page.locator('[data-action="detail"][data-detail="steps"]').click();
-  mark('the searchable directory jumps within the outline and returns to the original scroll, folded chapters and focus');
+  mark('the directory marks the visible section; directory and Next jumps restore scroll, folded chapters and keyboard focus');
+
+  const rail = page.getByRole('navigation', { name: '证明章节' });
+  const railCurrent = rail.locator('[aria-current="location"]');
+  const railEntry = rail.locator('[data-target="5"]');
+  assert.deepEqual(await rail.locator('.explain-rail-title').allInnerTexts(), explained.sections.map(section => section.title));
+  await page.locator('[data-action="detail"][data-detail="outline"]').click();
+  const railOrigin = await page.locator('[data-reading-section="2"]').evaluate(section => {
+    const pane = section.closest('.explain-scroll')!;
+    pane.scrollTop += section.getBoundingClientRect().top - pane.getBoundingClientRect().top + 28;
+    return pane.scrollTop;
+  });
+  const beforeRail = new URL(page.url()).hash;
+  await railCurrent.and(rail.locator('[data-target="2"]')).waitFor();
+  assert.equal(new URL(page.url()).hash, beforeRail, 'scrolling changes the reading marker without changing the link');
+  await railEntry.press('Enter');
+  await page.locator('#explain-section-5:focus').waitFor();
+  await railCurrent.and(railEntry).waitFor();
+  assert.match(page.url(), /#at=step_6&view=outline$/u);
+  assert.equal(await split.getAttribute('data-layout'), 'read');
+  await page.screenshot({ path: path.join(output, 'explain-chapters-1440.png') });
+  await page.goBack();
+  await until(async () => await railEntry.evaluate(node => node === document.activeElement)
+    && await scroll.evaluate((node, position) => node.scrollTop === position, railOrigin), 'Back restores the reading position and rail focus');
+  await railCurrent.and(rail.locator('[data-target="2"]')).waitFor();
+  await page.setViewportSize({ width: 1440, height: 390 });
+  await scroll.evaluate(node => {
+    node.focus({ preventScroll: true });
+    node.scrollTop = node.scrollHeight;
+  });
+  const lastRailEntry = railCurrent.and(rail.locator('[data-target="6"]'));
+  await lastRailEntry.waitFor();
+  assert.equal(await lastRailEntry.evaluate(item => {
+    const list = item.closest('.explain-rail-list')!, bounds = list.getBoundingClientRect(), row = item.getBoundingClientRect();
+    return list.scrollTop > 0 && row.top >= bounds.top && row.bottom <= bounds.bottom;
+  }), true, 'the short viewport scrolls the last chapter into the directory');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('[data-action="pane"][data-pane="lean"]').click();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const previousAnchor = page.locator('[data-anchor="4"]:not([data-step])');
+  const previousOffset = await previousAnchor.evaluate(node => {
+    const pane = node.closest('.explain-scroll')!;
+    pane.scrollTop += node.getBoundingClientRect().top - pane.getBoundingClientRect().top + 24;
+    return node.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+  });
+  await railCurrent.and(rail.locator('[data-target="4"]')).waitFor();
+  await railEntry.click();
+  await page.locator('#explain-section-5:focus').waitFor();
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await rail.isVisible(), false, 'the chapters leave room for the proof at a narrower width');
+  await page.locator('[data-action="return"]').click();
+  await until(async () => await contents.evaluate(node => node === document.activeElement)
+    && await previousAnchor.evaluate((node, offset) => {
+      const pane = node.closest('.explain-scroll')!;
+      return Math.abs(node.getBoundingClientRect().top - pane.getBoundingClientRect().top - offset) <= 2;
+    }, previousOffset), 'after resizing, return restores the same chapter and focuses the directory button');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.locator('[data-action="detail"][data-detail="steps"]').click();
+  await scroll.evaluate(node => { node.scrollTop = 0; });
+  mark('the wide chapter list tracks scrolling, reaches the last section and restores focus after jumps');
 
   const legacy = await open(browser, page.url().split('#')[0] + '#explain-section-2', { storageState: await owner.context.storageState() });
   try {
@@ -779,6 +866,24 @@ try {
   assert.equal(await phone.page.locator('[data-explain-route]').getAttribute('open'), null, 'the phone opens directly on prose');
   assert.equal(await phone.page.locator('.solution-route').isVisible(), false);
   await phone.page.screenshot({ path: path.join(output, 'explain-prose-390.png') });
+
+  await phone.page.setViewportSize({ width: 320, height: 520 });
+  await phone.page.locator('[data-reading-section="5"]').evaluate(section => {
+    const pane = section.closest('.explain-scroll')!;
+    pane.scrollTop += section.getBoundingClientRect().top - pane.getBoundingClientRect().top + 28;
+  });
+  await phone.page.getByRole('button', { name: '证明目录' }).click();
+  const phoneDirectory = phone.page.getByRole('dialog', { name: '证明目录' });
+  const phoneCurrent = phoneDirectory.locator('[aria-current="location"][data-target="5"]');
+  assert.equal(await phoneCurrent.evaluate(row => {
+    const list = row.closest('.explain-contents-list')!, listBox = list.getBoundingClientRect(), box = row.getBoundingClientRect();
+    return list.scrollTop > 0 && box.top >= listBox.top && box.bottom <= listBox.bottom + 1 && list.scrollWidth <= list.clientWidth;
+  }), true, 'the phone directory scrolls to the current entry within the modal without horizontal overflow');
+  await phone.page.screenshot({ path: path.join(output, 'explain-contents-320.png') });
+  await phone.page.keyboard.press('Escape');
+  await phoneDirectory.waitFor({ state: 'hidden' });
+  await phone.page.setViewportSize({ width: 390, height: 844 });
+
   // Long formulas stay within the phone pane; an indivisible expression can scroll inside its own box when needed.
   const formulas = await phone.page.locator('#explain-prose').evaluate(pane => {
     const style = getComputedStyle(pane), bounds = pane.getBoundingClientRect();
@@ -847,27 +952,29 @@ try {
   assert.equal(await english.page.locator('[data-explain-route] > summary').innerText(), 'Dependency graph');
   assert.equal(await english.page.locator('#explain-mainline-heading').innerText(), 'Main line of proof');
   assert.equal(await english.page.locator('[data-explain-route]').getAttribute('open'), null);
-  for (const width of [320, 1024]) {
+  for (const width of [320, 390, 430, 1024]) {
     await english.page.setViewportSize({ width, height: 844 });
     await english.page.getByRole('button', { name: 'Read the main proof' }).click();
     const returnToReading = english.page.getByRole('button', { name: 'Back to where you were' });
     await returnToReading.waitFor();
-    const clipped = await english.page.locator('#explain-prose-head').evaluate(header => {
-      const bounds = header.getBoundingClientRect();
-      return [...header.querySelectorAll('button,a,input')].filter(control => control.getClientRects().length)
-        .some(control => {
-          const box = control.getBoundingClientRect();
-          return box.left < bounds.left - 1 || box.right > bounds.right + 1;
-        });
-    });
-    assert.equal(clipped, false, `All explanation toolbar controls fit at ${width}px after a jump`);
+    for (const selector of ['.explain-topbar-inner', '.explain-controls-inner']) {
+      const clipped = await english.page.locator(selector).evaluate(header => {
+        const bounds = header.getBoundingClientRect();
+        return [...header.querySelectorAll('button,a,input')].filter(control => control.getClientRects().length)
+          .some(control => {
+            const box = control.getBoundingClientRect();
+            return box.left < bounds.left - 1 || box.right > bounds.right + 1;
+          });
+      });
+      assert.equal(clipped, false, `All controls in ${selector} fit at ${width}px after a jump`);
+    }
     await returnToReading.click();
     await returnToReading.waitFor({ state: 'detached' });
   }
   await english.page.setViewportSize({ width: 1440, height: 900 });
   const chrome = await english.page.evaluate(() => {
     const han = /\p{Script=Han}/u, found: string[] = [];
-    for (const scope of document.querySelectorAll('.explain-topbar, #explain-toolbar, .explain-pane-head, #explain-lean-legend, .explain-provenance, .explain-section-meta'))
+    for (const scope of document.querySelectorAll('.explain-topbar, .explain-controls, .explain-pane-head, #explain-lean-legend, .explain-provenance, .explain-section-meta'))
       for (const element of scope.querySelectorAll('*')) {
         if (element.closest('[lang="zh-CN"]') || element.children.length) continue;
         const text = element.textContent?.trim() ?? '';

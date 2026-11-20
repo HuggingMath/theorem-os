@@ -3,7 +3,7 @@ import { defaultProofId, type WebEffort, type WebExplanation, type WebExplanatio
   type WebExplanationReport, type WebExplanationSpan, type WebSession } from '../shared';
 import { locale, mountLocaleSwitch, t } from '../i18n';
 import { anchorSpan, leanGutter, proseAt, refLines, stepAtLine, type StepRef } from './explainText';
-import { renderExplain, type ExplainView } from './explainView';
+import { renderContentsRail, renderExplain, type ExplainView } from './explainView';
 import { correspondenceSpans, fragmentLadder } from './correspondence';
 import { buildLeanRows, highlightSpans, reportData, spanScrollLeft } from './leanPane';
 
@@ -15,12 +15,14 @@ import { buildLeanRows, highlightSpans, reportData, spanScrollLeft } from './lea
 createIcons({ icons: { ArrowLeft }, attrs: { 'aria-hidden': 'true' } });
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
 mountLocaleSwitch($<HTMLButtonElement>('#locale-switch'));
+$('#explain-prose-heading').textContent = t('自然语言证明');
 const params = new URLSearchParams(location.search);
 const report = reportData<WebExplanationReport>();
 const hosts = { toolbar: $('#explain-toolbar'), head: $('#explain-prose-head'), prose: $('#explain-prose'), dialog: $('#explain-dialog'),
   legend: $('#explain-lean-legend'), chosen: $('#explain-chosen') };
 const split = $('#explain-split');
 const leanScroll = $('#explain-lean'), proseScroll = $('#explain-prose'), dialog = $<HTMLDialogElement>('#explain-dialog');
+const contentsRail = $('#explain-contents-rail');
 const state = {
   runId: params.get('run') ?? '', target: params.get('target') ?? '',
   language: (params.get('language') === 'en' || params.get('language') === 'zh' ? params.get('language') : locale) as 'zh' | 'en',
@@ -144,6 +146,7 @@ function draw() {
   const layout = state.compare || !explained ? 'compare' : 'read';
   const layoutChanged = split.dataset.layout !== layout && !narrow();
   const reading = layoutChanged ? readingPosition() : undefined;
+  const readingSection = state.dialog === 'contents' ? sectionAtReadingPosition() : undefined;
   if (layoutChanged) driver = undefined;
   renderExplain(hosts, { overview, target: state.target, language: state.language, pane: state.pane, compare: state.compare, sync: state.sync,
     ...(reportLink ? { report: reportLink } : {}),
@@ -152,7 +155,7 @@ function draw() {
     ...(step ? { step } : {}), detail: state.detail, opened: state.opened, ...(state.node ? { node: state.node } : {}),
     routeOpen: state.routeOpen, onRouteToggle: open => { state.routeOpen = open; },
     onRouteSelect: id => { if (id !== state.node) { state.node = id; writeLink(); } },
-    ...(state.dialog ? { dialog: state.dialog } : {}), busy: state.busy,
+    ...(state.dialog ? { dialog: state.dialog } : {}), ...(readingSection === undefined ? {} : { readingSection }), busy: state.busy,
     ...(state.error ? { error: state.error } : {}), canReturn: depth > 0 && explained !== undefined, now: Date.now(),
     onRouteOpen: target => {
       const match = /^(section|step):(\d+)(?::(\d+))?$/u.exec(target);
@@ -170,16 +173,27 @@ function draw() {
     } });
   split.dataset.pane = state.pane;
   split.dataset.layout = layout;
-  if (reading?.anchor.isConnected) {
-    // If a clipped paragraph becomes shorter, keep at least one line visible.
-    const offset = Math.max(reading.offset, Math.min(0, 24 - reading.anchor.getBoundingClientRect().height));
-    proseScroll.scrollTop = offsetIn(proseScroll, reading.anchor) - offset;
+  if (contentsDocument !== explained) {
+    contentsDocument = explained;
+    currentContentsItem?.removeAttribute('aria-current');
+    currentContentsItem = undefined;
+    readingSections = proseScroll.querySelectorAll<HTMLElement>('[data-reading-section]');
+    renderContentsRail(contentsRail, explained);
   }
+  if (reading?.anchor.isConnected) restoreReadingAnchor(reading.anchor, reading.offset);
+  queueContentsPosition();
   markLean(explained);
   // The heading exists only while a dialog is drawn, so the name points at it only then.
   if (state.dialog) dialog.setAttribute('aria-labelledby', 'explain-dialog-heading'); else dialog.removeAttribute('aria-labelledby');
   dialog.classList.toggle('is-contents', state.dialog === 'contents');
-  if (state.dialog && !dialog.open) dialog.showModal();
+  if (state.dialog && !dialog.open) {
+    dialog.showModal();
+    if (state.dialog === 'contents') {
+      const list = dialog.querySelector<HTMLElement>('.explain-contents-list');
+      const current = list?.querySelector<HTMLElement>('[aria-current="location"]');
+      if (list && current) revealContentsItem(list, current);
+    }
+  }
   if (!state.dialog && dialog.open) dialog.close();
 }
 // While the shown explanation is queued or running: poll it, and tick the elapsed time each second.
@@ -233,6 +247,61 @@ function readingPosition() {
     if (box.height && box.bottom > view.top && box.top < view.bottom) return { anchor, offset: box.top - view.top };
   }
 }
+function restoreReadingAnchor(anchor: HTMLElement, offset: number) {
+  // If a clipped paragraph becomes shorter, keep at least one line visible.
+  const visibleOffset = Math.max(offset, Math.min(0, 24 - anchor.getBoundingClientRect().height));
+  proseScroll.scrollTop = offsetIn(proseScroll, anchor) - visibleOffset;
+}
+let contentsDocument: WebExplanationDocument | undefined;
+let readingSections: NodeListOf<HTMLElement> | undefined;
+let currentContentsItem: HTMLElement | undefined, contentsFrame = 0;
+const wideContents = matchMedia('screen and (min-width: 1160px)');
+const contentsRailVisible = () => wideContents.matches && split.dataset.layout === 'read' && !contentsRail.hidden;
+const contentsItem = (section: number) => contentsRail.querySelector<HTMLElement>(`[data-target="${section}"]`) ?? undefined;
+
+/** Find the chapter at the top, leaving space for the scroll margin of a jump. The overview has no chapter. */
+function sectionAtReadingPosition() {
+  if (!readingSections?.length || !proseScroll.clientHeight) return;
+  const { clientHeight, scrollHeight, scrollTop } = proseScroll;
+  // A short final chapter cannot always reach the top of the pane.
+  if (scrollTop > 0 && scrollHeight - clientHeight - scrollTop <= 1) return readingSections.length - 1;
+  const top = proseScroll.getBoundingClientRect().top;
+  let low = 0, high = readingSections.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (readingSections[mid]!.getBoundingClientRect().top <= top + 32) low = mid + 1;
+    else high = mid;
+  }
+  const section = readingSections[low - 1];
+  if (section && section.getBoundingClientRect().bottom > top) return low - 1;
+}
+
+function revealContentsItem(list: HTMLElement, item: HTMLElement) {
+  const row = item.getBoundingClientRect(), area = list.getBoundingClientRect();
+  const start = row.top - area.top, end = row.bottom - area.bottom + 6;
+  if (start < 0) list.scrollTop += start;
+  else if (end > 0) list.scrollTop += Math.min(start, end);
+}
+
+/** Scrolling moves the reading marker independently of the selected Lean declaration and the URL. */
+function queueContentsPosition() {
+  if (contentsFrame || !contentsRailVisible()) return;
+  contentsFrame = requestAnimationFrame(() => {
+    contentsFrame = 0;
+    if (!contentsRailVisible()) return;
+    const section = sectionAtReadingPosition();
+    const next = section === undefined ? undefined : contentsItem(section);
+    if (currentContentsItem === next) return;
+    currentContentsItem?.removeAttribute('aria-current');
+    currentContentsItem = next;
+    if (!next) return;
+    next.setAttribute('aria-current', 'location');
+    const list = contentsRail.querySelector<HTMLElement>('.explain-rail-list')!;
+    if (!contentsRail.contains(document.activeElement)) revealContentsItem(list, next);
+  });
+}
+wideContents.addEventListener('change', queueContentsPosition);
+
 function showLean() {
   if (narrow()) state.pane = 'lean';
   else state.compare = true;
@@ -323,24 +392,31 @@ window.addEventListener('hashchange', () => {
 });
 
 /**
- * A jump from the overview, main line, contents, or a citation remembers where the reader was, and
+ * A jump between sections remembers where the reader was, and
  * the browser's Back (or the head's button) returns there. Entries keep the address, so an offline report keeps its file.
  */
+type RailPlace = { target: number; reading?: { ref: StepRef; offset: number } };
 type Place = { prose: number; lean: number; pane: 'lean' | 'prose'; compare?: boolean; active?: StepRef; gap?: number;
-  detail?: 'outline' | 'steps'; contents?: boolean; opened?: number[];
+  detail?: 'outline' | 'steps'; contents?: boolean; rail?: RailPlace; opened?: number[]; nextFrom?: number;
   mainline?: { stage: string; section: number }; use?: { section: string; step: string; use: string } };
 type Entry = { explain: 'place' | 'jump'; target: string; language: 'zh' | 'en'; depth: number; place?: Place; section?: number; unfold?: boolean };
 // How many jumps the current entry is from the reader's first; the head offers the way back while it is above zero.
 let depth = 0, returning = false;
 const entryOf = (value: unknown) => (value as Partial<Entry> | null)?.explain ? value as Entry : undefined;
 function jump(action: HTMLElement, keyboard: boolean) {
-  const section = Number(action.dataset.target), { section: from = '', step = '', use = '' } = action.dataset;
-  const fromCitation = action.dataset.action === 'use';
-  const fromContents = action.dataset.action === 'contents-jump';
+  const section = Number(action.dataset.target), { action: kind, section: from = '', step = '', use = '' } = action.dataset;
+  const fromCitation = kind === 'use', fromContents = kind === 'contents-jump', fromRail = kind === 'contents-rail-jump';
+  // Remember the visible text as well as its pixels for a return after the reader resizes the window.
+  const rail: RailPlace | undefined = fromRail ? { target: section } : undefined;
+  const railAnchor = rail && readingPosition()?.anchor.closest<HTMLElement>('[data-anchor]');
+  if (rail && railAnchor) rail.reading = { ref: refOf(railAnchor), offset: offsetIn(proseScroll, railAnchor) - proseScroll.scrollTop };
+  if (fromRail) state.pane = 'prose';
   const place: Place = { prose: proseScroll.scrollTop, lean: leanScroll.scrollTop, pane: state.pane, compare: state.compare, detail: state.detail,
     ...(state.active ? { active: state.active } : {}), ...(state.gap !== undefined ? { gap: state.gap } : {}),
     ...(state.detail === 'outline' ? { opened: [...state.opened] } : {}), ...(fromContents ? { contents: true } : {}),
-    ...(action.dataset.action === 'mainline-jump' ? { mainline: { stage: action.dataset.stage!, section } } : {}),
+    ...(rail ? { rail } : {}),
+    ...(kind === 'mainline-jump' ? { mainline: { stage: action.dataset.stage!, section } } : {}),
+    ...(kind === 'section-next' ? { nextFrom: Number(from) } : {}),
     ...(fromCitation ? { use: { section: from, step, use } } : {}) };
   const at = { target: state.target, language: state.language };
   try {
@@ -350,7 +426,7 @@ function jump(action: HTMLElement, keyboard: boolean) {
   } catch { /* A copy opened without history still jumps; there is just no way back. */ }
   if (fromContents) state.dialog = undefined;
   showDeclaration(section, !fromCitation);
-  if (keyboard || fromContents) requestAnimationFrame(() => document.getElementById(`explain-section-${section}`)?.focus({ preventScroll: true }));
+  if (keyboard || fromContents || fromRail) requestAnimationFrame(() => document.getElementById(`explain-section-${section}`)?.focus({ preventScroll: true }));
 }
 function showDeclaration(section: number, unfold = false) {
   if (unfold) state.opened.add(section);
@@ -371,17 +447,24 @@ function restore(place: Place) {
   const refocus = returning;
   requestAnimationFrame(() => {
     holdUntil = performance.now() + 700;
-    const origin = place.contents ? '[data-action="contents"]' : place.use
+    const fromContents = place.contents || place.rail;
+    const railOrigin = place.rail && contentsRailVisible() ? contentsItem(place.rail.target) : undefined;
+    const origin = fromContents ? '[data-action="contents"]' : place.use
       ? `[data-action="use"][data-section="${place.use.section}"][data-step="${place.use.step}"][data-use="${place.use.use}"]`
       : place.mainline ? `[data-action="mainline-jump"][data-stage="${place.mainline.stage}"][data-target="${place.mainline.section}"]`
-        : '[data-action="proof-jump"]';
-    const control = (place.contents ? hosts.head : proseScroll).querySelector<HTMLElement>(origin);
+        : place.nextFrom === undefined ? '[data-action="proof-jump"]' : `[data-action="section-next"][data-section="${place.nextFrom}"]`;
+    const control = railOrigin ?? (fromContents ? hosts.head : proseScroll).querySelector<HTMLElement>(origin);
     const related = place.mainline ? control?.closest<HTMLDetailsElement>('details') : undefined;
     if (related) related.open = true;
-    proseScroll.scrollTop = place.prose; leanScroll.scrollTop = place.lean;
+    const reading = place.rail?.reading, anchor = reading && anchorOf(reading.ref);
+    if (reading && anchor) restoreReadingAnchor(anchor, reading.offset);
+    else proseScroll.scrollTop = place.prose;
+    leanScroll.scrollTop = place.lean;
     const focused = document.activeElement;
-    if (refocus || !focused || focused === document.body || proseScroll.contains(focused))
+    if (refocus || !focused || focused === document.body || proseScroll.contains(focused)) {
+      if (railOrigin) revealContentsItem(contentsRail.querySelector<HTMLElement>('.explain-rail-list')!, railOrigin);
       control?.focus({ preventScroll: true });
+    }
   });
 }
 addEventListener('popstate', event => {
@@ -415,7 +498,7 @@ function follow(from: 'lean' | 'prose') {
   });
 }
 leanScroll.addEventListener('scroll', () => follow('lean'), { passive: true });
-proseScroll.addEventListener('scroll', () => follow('prose'), { passive: true });
+proseScroll.addEventListener('scroll', () => { follow('prose'); queueContentsPosition(); }, { passive: true });
 // Rows have one height, so a line's position is arithmetic; the margin keeps the followed line off the very top.
 const rowHeight = () => leanRows[0]?.offsetHeight || 20, firstRow = () => leanRows[0] ? offsetIn(leanScroll, leanRows[0]) : 0, margin = 24;
 function alignLean(explained: WebExplanationDocument) {
@@ -488,7 +571,7 @@ document.addEventListener('click', event => {
   else if (name === 'lines') select(refOf(action), 'lean');
   // A linked phrase chooses its step or statement and marks where its Lean is written.
   else if (name === 'link') { if (!selecting()) select(refOf(action), 'lean', { spans: linkSpans(action) }); }
-  else if (name === 'use' || name === 'proof-jump' || name === 'contents-jump' || name === 'mainline-jump') jump(action, event.detail === 0);
+  else if (name === 'use' || name === 'proof-jump' || name === 'contents-jump' || name === 'contents-rail-jump' || name === 'mainline-jump' || name === 'section-next') jump(action, event.detail === 0);
   else if (name === 'return') { returning = true; history.back(); }
   else if (name === 'use-lean') select(refOf(action), 'lean', { spans: useSpans(action) });
   else if (name === 'generate' || name === 'cancel' || name === 'delete' || name === 'contents') { state.dialog = name; state.error = undefined; draw(); }

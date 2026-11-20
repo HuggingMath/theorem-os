@@ -105,7 +105,7 @@ const tinted = (page: Page) => page.locator('.formal-original').first().evaluate
 /** Proof lines carrying a row class, as 1-based numbers. */
 const rowsWith = (page: Page, code: string, kind: string) => page.locator(`${code} .lean-row.${kind}`)
   .evaluateAll(rows => rows.map(row => Number((row as HTMLElement).dataset.line)));
-/** Whether the target name and the Lean/讲解 switch share one row of the toolbar. */
+/** Whether the formalization target and the Lean/原题 switch share one row. */
 const oneRow = (page: Page, toolbar: string) => page.locator(toolbar).evaluate(bar => {
   const name = bar.querySelector('.explain-target code')!.getBoundingClientRect(), pane = bar.querySelector('.explain-pane-switch')!.getBoundingClientRect();
   return name.top < pane.bottom && pane.top < name.bottom;
@@ -125,25 +125,49 @@ try {
   await page.locator('#explain-content:not([hidden])').waitFor();
   await page.locator('#explain-prose .explain-document').waitFor();
   const desktopSplit = page.locator('#explain-split');
+  const rail = page.getByRole('navigation', { name: '证明章节' });
   assert.equal(await desktopSplit.getAttribute('data-layout'), 'read');
   assert.equal(await page.locator('#explain-lean').isVisible(), false, 'the offline proof starts in reading mode');
   await page.keyboard.press('Tab');
-  assert.equal(await page.locator('.skip-link:focus').count(), 1, 'the first keyboard stop skips to the proof');
+  const skip = page.locator('.skip-link:focus');
+  assert.equal(await skip.count(), 1, 'the first keyboard stop skips to the proof');
+  assert.equal(await skip.evaluate(link => {
+    const bar = link.closest('header')!.getBoundingClientRect(), box = link.getBoundingClientRect();
+    return box.top >= bar.top && box.bottom <= bar.bottom && getComputedStyle(link).clipPath === 'none';
+  }), true, 'the focused skip link is revealed within the top bar');
   await page.keyboard.press('Enter');
   assert.equal(await page.locator('#explain-prose:focus').count(), 1, 'the skip link focuses the reading pane');
   assert.equal(new URL(page.url()).hash, '', 'the skip link leaves the reading address intact');
-  for (const width of [1440, 820, 768, 390, 320]) {
+  assert.equal(await page.locator('#explain-toolbar .explain-target').count(), 0, 'a single theorem is named in the reading area');
+  for (const width of [1440, 1160, 1024, 820, 768, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });
-    const { alignment, overflow } = await page.locator('.explain-document').evaluate(article => {
-      const edge = article.getBoundingClientRect().left, pane = article.parentElement!;
-      const alignment = ['#explain-toolbar .explain-target', '#explain-prose-head .explain-detail-switch', '.explain-lead-statement']
-        .map(selector => Math.abs(document.querySelector(selector)!.getBoundingClientRect().left - edge));
-      return { alignment, overflow: pane.scrollWidth > pane.clientWidth + 1 || document.documentElement.scrollWidth > innerWidth + 1 };
+    const { alignment, overflow, toolbarOverflows, sameRow, railShown, textWidth, gap } = await page.locator('.explain-document').evaluate(article => {
+      const column = article.getBoundingClientRect(), pane = article.parentElement!;
+      const rail = document.querySelector('#explain-contents-rail')!.getBoundingClientRect();
+      const toolbar = document.querySelector('.explain-controls-inner')!, bar = toolbar.getBoundingClientRect();
+      const masthead = document.querySelector('.explain-topbar-inner')!.getBoundingClientRect();
+      const mode = document.querySelector('#explain-toolbar')!.getBoundingClientRect();
+      const details = document.querySelector('.explain-detail-switch')!.getBoundingClientRect();
+      const alignment = Math.max(...[bar, masthead].flatMap(box => [Math.abs(column.left - box.left), Math.abs((rail.width ? rail : column).right - box.right)]));
+      return { alignment, overflow: pane.scrollWidth > pane.clientWidth + 1 || document.documentElement.scrollWidth > innerWidth + 1,
+        toolbarOverflows: toolbar.scrollWidth > toolbar.clientWidth + 1, sameRow: mode.top < details.bottom && details.top < mode.bottom,
+        railShown: rail.width > 0, textWidth: article.querySelector('.explain-rich')!.getBoundingClientRect().width, gap: rail.left - column.right };
     });
-    assert.ok(alignment.every(offset => offset <= 2), `the toolbar and lead align with the reading column at ${width}px: ${alignment.join(', ')}`);
+    assert.ok(alignment <= 2, `the top bar and toolbar align with the reading layout at ${width}px: ${alignment}`);
+    assert.equal(railShown, width >= 1160, `the chapter list is visible only where it fits, at ${width}px`);
+    if (railShown) assert.ok(gap >= 24 && textWidth >= 735 && textWidth <= 741, 'the chapter list leaves room and keeps the proof at its reading width');
     assert.equal(overflow, false, `the reading column fits at ${width}px`);
+    assert.equal(toolbarOverflows, false, `the reading controls fit at ${width}px`);
+    if (width >= 390) assert.equal(sameRow, true, `the reading controls share a single row at ${width}px`);
   }
   await page.setViewportSize({ width: 1440, height: 900 });
+  const railHelper = rail.getByRole('button', { name: /helper/iu });
+  await railHelper.click();
+  await railHelper.and(rail.locator('[aria-current="location"]')).waitFor();
+  assert.equal(page.url(), `${pathToFileURL(explainFile).href}#at=helper`);
+  await page.locator('[data-action="return"]').click();
+  await railHelper.and(page.locator(':focus')).waitFor();
+  assert.equal(page.url(), pathToFileURL(explainFile).href);
   assert.ok(await page.locator('.explain-document .math[data-math-state="ready"] math').count() > 0, 'offline formulas render semantic MathML');
   assert.equal(await page.locator('.explain-document .math-source').count(), 0, 'the report has all the assets needed to render its formulas');
   assert.deepEqual(outside(requests), [pathToFileURL(explainFile).href], 'the page loads nothing but itself');
@@ -189,6 +213,7 @@ try {
   const chosen = problem.locator('.formal-original .explain-link.is-active');
   await marks.filter({ hasText: '0 = n' }).click();
   assert.equal(await desktopSplit.getAttribute('data-layout'), 'compare', 'a fragment brings up its Lean evidence');
+  assert.equal(await rail.isVisible(), false, 'Lean comparison keeps both columns for the proof and source');
   await page.locator('#explain-lean-code .lean-row.is-use').first().waitFor();
   assert.deepEqual(await rowsWith(page, '#explain-lean-code', 'is-use'), [3]);
   assert.deepEqual(await highlighted(page, 'explain-use'), ['n + 0 = n']);
@@ -319,11 +344,12 @@ try {
   // On a phone the panes switch: a linked phrase or an original fragment opens the proof at its Lean.
   const phone = await open(browser, explainFile, { locale: 'zh', width: 390, height: 844 });
   const split = phone.page.locator('#explain-split');
-  assert.equal(await oneRow(phone.page, '#explain-toolbar'), true, 'the target and the Lean/讲解 switch share a row');
   await phone.page.locator('#explain-prose .explain-document').waitFor();
   assert.equal(await split.getAttribute('data-pane'), 'prose');
   await phone.page.locator(`.explain-section:has(#explain-section-1) .explain-steps [data-action="link"]`).click();
   assert.equal(await split.getAttribute('data-pane'), 'lean');
+  assert.equal(await phone.page.locator('.explain-pane-switch').isVisible(), true, 'the reading switch stays available in Lean');
+  assert.equal(await phone.page.locator('.explain-detail-switch').isVisible(), false, 'prose tools leave more room for Lean');
   await phone.page.locator('#explain-lean-code .lean-row[data-line="4"]').waitFor({ state: 'visible' });
   // A line wider than the phone wraps, hanging 4 characters inside its own indentation (line 4 has 2 spaces, line 3 none).
   assert.equal(await phone.page.locator('#explain-lean').evaluate(pane => pane.scrollWidth <= pane.clientWidth + 1), true, 'the phone Lean pane wraps');

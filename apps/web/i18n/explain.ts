@@ -261,7 +261,11 @@ export const explain: Record<string, string> = {
   "逐步": "Step by step",
   "{0}展开 {1} 步": "{0}Show {1} steps",
   "证明目录": "Proof contents",
+  "证明章节": "Proof sections",
   "辅助声明": "Supporting declarations",
-  "按讲解标题或 Lean 名称查找": "Find by title or Lean name",
+  "标题或 Lean 名称": "Title or Lean name",
   "没有匹配的声明": "No matching declarations",
+  "第 {0} 节，共 {1} 节": "Section {0} of {1}",
+  "下一节": "Next section",
+  "正在读": "Reading now",
 };

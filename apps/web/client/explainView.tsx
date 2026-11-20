@@ -24,6 +24,7 @@ export type ExplainView = {
   dialog?: 'generate' | 'cancel' | 'delete' | 'contents'; busy: boolean; error?: string; now: number;
   /** An offline report: the Markdown is a blob URL, and nothing can be generated or deleted. */ report?: { href: string; filename: string };
   /** A jump has a previous reading position to return to. */ canReturn?: boolean;
+  /** Which declaration was in view when the contents dialog opened. */ readingSection?: number;
   onRouteOpen?: (target: string) => void;
   /** `outline` shows each declaration's statement only; `opened` are the sections whose steps the reader unfolded. */
   detail?: 'outline' | 'steps'; opened?: ReadonlySet<number>;
@@ -46,10 +47,10 @@ function Toolbar(view: ExplainView) {
   const language = (value: 'zh' | 'en', label: string) => <button type="button" data-action="language" data-language={value} aria-pressed={view.language === value}>{label}</button>;
   const pane = (value: 'lean' | 'prose', label: string) => <button type="button" data-action="pane" data-pane={value} aria-pressed={view.pane === value}>{label}</button>;
   return <>
-    <div class="explain-target">{targets.length > 1
+    {(targets.length > 1 || !view.document) && <div class="explain-target">{targets.length > 1
       ? <><label for="explain-target-select">{t('目标定理')}</label><select id="explain-target-select" translate={false} value={view.target}>
         {targets.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select></>
-      : <><span class="explain-target-label">{t('目标定理')}</span><code translate={false}><LeanName name={view.target} /></code></>}</div>
+      : <><span class="explain-target-label">{t('目标定理')}</span><code translate={false}><LeanName name={view.target} /></code></>}</div>}
     {!view.report && <div class="source-switch explain-language-switch" role="group" aria-label={t('讲解语言')}>{language('zh', t('中文'))}{language('en', t('英文'))}</div>}
     {view.document && <div class="source-switch explain-layout-switch" role="group" aria-label={t('阅读布局')}>
       <button type="button" data-action="layout" data-layout="read" aria-pressed={!view.compare}>{t('单栏阅读')}</button>
@@ -59,12 +60,13 @@ function Toolbar(view: ExplainView) {
   </>;
 }
 
-/** The right pane's heading: return to the previous reading position, sync scrolling, and manage the saved document. */
+/** The saved document's reading controls and actions. */
 function ProseHead(view: ExplainView) {
   const approved = view.explanation?.status === 'approved';
+  const canDelete = view.explanation && !view.report && !['queued', 'running'].includes(view.explanation.status);
+  if (!view.document && !approved && !canDelete) return null;
   const query = new URLSearchParams({ target: view.target, language: view.language }).toString();
-  return <>
-    <span class="explain-pane-label" id="explain-prose-heading">{t('自然语言证明')}</span>
+  return (
     <div class="explain-head-actions">
       {view.canReturn && <button type="button" class="text-button explain-return" data-action="return"
         aria-label={t('返回阅读位置')} title={t('回到跳转前的位置，和浏览器的后退一样')}>
@@ -79,10 +81,10 @@ function ProseHead(view: ExplainView) {
         aria-label={t('下载 Markdown')} title={t('下载 Markdown')}><Icon name="download" /></a>
         : approved && <a class="icon-button" href={`/api/runs/${encodeURIComponent(view.overview.run.id)}/explanations/markdown?${query}`} download
         aria-label={t('下载 Markdown')} title={t('下载 Markdown')}><Icon name="download" /></a>}
-      {view.explanation && !view.report && !['queued', 'running'].includes(view.explanation.status) &&
+      {canDelete &&
         <button type="button" class="icon-button" data-action="delete" aria-label={t('删除讲解')} title={t('删除讲解')}><Icon name="trash-2" /></button>}
     </div>
-  </>;
+  );
 }
 
 /** The right pane: what can be generated, the progress of a generation, why it stopped, or the explanation itself. */
@@ -196,17 +198,17 @@ function DocumentView({ document, proof, runId, active, gap, chosen, onRouteOpen
     {target && <header class="explain-lead">
       <h1 class="explain-lead-title"><Rich text={target.title || target.name} /></h1>
       <p class="explain-rich explain-lead-statement"><Rich text={target.statement} /></p>
-      <button type="button" class="text-button explain-lead-jump" data-action="proof-jump" data-target={targetIndex}>
+      <button type="button" class="button explain-lead-jump" data-action="proof-jump" data-target={targetIndex}>
         {t('读主定理证明')}<Icon name="arrow-down" />
       </button>
     </header>}
-    {mainline.length > 0 ? <section class="explain-overview" aria-labelledby="explain-mainline-heading">
+    {mainline.length > 0 ? <section class="explain-overview explain-mainline-section" aria-labelledby="explain-mainline-heading">
       <h2 id="explain-mainline-heading">{t('证明主线')}</h2>
       <ol class="explain-mainline">{mainline.map((stage, index) => {
         const links = <ul class="explain-mainline-links">{stage.sections.map(section => {
           const declaration = document.sections[section]!;
           return <li key={declaration.name}><button type="button" class="text-button" data-action="mainline-jump"
-            data-stage={index} data-target={section}><Rich text={declaration.title || declaration.name} /></button></li>;
+            data-stage={index} data-target={section}><span><Rich text={declaration.title || declaration.name} /></span><Icon name="arrow-down" /></button></li>;
         })}</ul>;
         return <li key={index}>
           <p class="explain-rich explain-mainline-claim"><Rich text={stage.claim} /></p>
@@ -220,7 +222,7 @@ function DocumentView({ document, proof, runId, active, gap, chosen, onRouteOpen
     </section>}
     <div class="explain-reading-options">
       {mainline.length > 0 && overview && <details class="explain-overview-detail explain-disclosure">
-        <summary>{t('思路概述')}</summary><p class="explain-rich"><Rich text={document.overview} /></p>
+        <summary><Icon name="book-open" />{t('思路概述')}</summary><p class="explain-rich"><Rich text={document.overview} /></p>
       </details>}
       <details class="explain-route explain-disclosure" data-explain-route open={routeOpen} onToggle={event => {
         const open = event.currentTarget.open;
@@ -238,25 +240,28 @@ function DocumentView({ document, proof, runId, active, gap, chosen, onRouteOpen
       </details>
     </div>
     {document.problem && <ProblemCard {...document.problem} active={chosen} />}
-    {document.sections.map((section, index) => <CachedSection key={section.name} section={section} index={index} owned={owned} folded={!!outline && !opened?.has(index)}
+    {document.sections.map((section, index) => <CachedSection key={section.name} section={section} index={index}
+      total={document.sections.length} next={document.sections[index + 1]} owned={owned} folded={!!outline && !opened?.has(index)}
       active={active?.section === index ? active : undefined} gap={active?.section === index ? gap : undefined} />)}
   </article>;
 }
-type SectionProps = { section: WebExplanationSection; index: number; owned: Map<string, number>; active?: StepRef; gap?: number; folded?: boolean };
+type SectionProps = { section: WebExplanationSection; index: number; total: number; next?: WebExplanationSection;
+  owned: Map<string, number>; active?: StepRef; gap?: number; folded?: boolean };
 /**
  * A section drawn again only when its props change: a click changes the active step, so a long proof redraws the
  * section it leaves and the one it reaches, not all of them.
  */
 class CachedSection extends Component<SectionProps> {
   override shouldComponentUpdate(next: SectionProps) {
-    const { section, index, owned, active, gap, folded } = this.props;
+    const { section, index, total, next: following, owned, active, gap, folded } = this.props;
     return next.folded !== folded || next.section !== section || next.index !== index || next.owned !== owned || next.gap !== gap
+      || next.total !== total || next.next !== following
       || next.active?.section !== active?.section || next.active?.step !== active?.step || next.active?.statement !== active?.statement;
   }
   override render() { return <SectionView {...this.props} />; }
 }
 function SectionView(props: SectionProps) {
-  const { section, index, active } = props;
+  const { section, index, total, next, active } = props;
   const whole = active && active.step === undefined && !active.statement;
   const summary = props.folded && !active?.statement ? section.summary : undefined;
   // A theorem's statement explains its signature; any other declaration's statement explains all of it.
@@ -268,11 +273,15 @@ function SectionView(props: SectionProps) {
       <button type="button" class="explain-lines" data-action="lines" data-section={index} data-statement="" title={t('在 Lean 中定位定理的陈述')}>
         {t('陈述 · {0}', linesLabel([section.signature]))}</button></div>}
   </>;
-  return <section class={`explain-section${section.target ? ' is-target' : ''}${whole ? ' is-active' : ''}`} aria-labelledby={`explain-section-${index}`}>
+  return <section class={`explain-section${section.target ? ' is-target' : ''}${whole ? ' is-active' : ''}`}
+    data-reading-section={index} aria-labelledby={`explain-section-${index}`}>
     <div class={`explain-statement-block${active?.statement ? ' is-active' : ''}`} data-anchor={index}>
       <header class="explain-section-head">
         <h2 id={`explain-section-${index}`} tabIndex={-1}><Rich text={section.title || section.name} /></h2>
-        <div class="explain-section-meta"><span class="explain-section-kind">{section.target ? t('主定理') : kinds[section.kind]}</span>
+        {total > 1 && <span class="explain-section-position"><span aria-hidden="true">{index + 1} / {total}</span>
+          <span class="sr-only">{t('第 {0} 节，共 {1} 节', index + 1, total)}</span></span>}
+        <div class="explain-section-meta">
+          <span class="explain-section-kind">{section.target ? t('主定理') : kinds[section.kind]}</span>
           <code translate={false}><LeanName name={section.name} /></code>
           <button type="button" class="explain-lines" data-action="lines" data-section={index} title={t('在 Lean 中定位')}>{linesLabel([section.lines])}</button></div>
       </header>
@@ -299,6 +308,11 @@ function SectionView(props: SectionProps) {
         </div>
         <ProofEvidence notes={step.reviews} goals={step.goals} checked={step.goalsChecked} />
       </li>)}</ol>}
+    {!props.folded && next && <button type="button" class="explain-section-next" data-action="section-next" data-section={index} data-target={index + 1}>
+      <span class="explain-next-label">{t('下一节')}</span>
+      <span class="explain-next-title"><Rich text={next.title || next.name} /></span>
+      <Icon name="arrow-down" />
+    </button>}
   </section>;
 }
 /** Lean's goals around the quoted tactics. `checked` auditors compared the step with them. */
@@ -363,9 +377,28 @@ function DocumentFacts({ document }: { document: WebExplanationDocument }) {
   return <dl class="facts explain-facts">{items.map(([label, value, mono, wide]) => <Fact key={label} label={label} value={value} mono={mono} wide={wide} />)}</dl>;
 }
 
+/** The side list follows the order of the proof. The search dialog puts the main theorem first. */
+export function renderContentsRail(host: HTMLElement, document?: WebExplanationDocument) {
+  const show = document && document.sections.length > 1;
+  host.hidden = !show;
+  render(show ? <>
+    <p id="explain-rail-heading" class="explain-rail-heading">{t('证明章节')}</p>
+    <ol class="explain-rail-list" role="list">
+      {document.sections.map((section, index) => <li key={section.name}>
+        <button type="button" data-action="contents-rail-jump" data-target={index}>
+          <span class="explain-rail-number" aria-hidden="true">{index + 1}</span>
+          <span class="explain-rail-title" lang={document.language === 'zh' ? 'zh-CN' : 'en'}><Rich text={section.title || section.name} /></span>
+          {section.target && <span class="explain-rail-target">{t('主定理')}</span>}
+        </button>
+      </li>)}
+    </ol>
+  </> : null, host);
+}
+
 function ProofContents({ document, selected }: { document: WebExplanationDocument; selected?: number }) {
   const [search, setSearch] = useState('');
   const query = search.trim().toLowerCase();
+  const searchLabel = t('标题或 Lean 名称');
   const entries = document.sections.map((section, index) => ({ section, index })).filter(({ section }) =>
     section.title.toLowerCase().includes(query) || section.name.toLowerCase().includes(query));
   const groups = [
@@ -378,8 +411,8 @@ function ProofContents({ document, selected }: { document: WebExplanationDocumen
       <button type="button" class="icon-button" data-action="close-dialog" aria-label={t('关闭')} title={t('关闭')}><Icon name="x" /></button>
     </header>
     <label class="explain-contents-search">
-      <Icon name="search" /><span class="sr-only">{t('按讲解标题或 Lean 名称查找')}</span>
-      <input type="search" value={search} placeholder={t('按讲解标题或 Lean 名称查找')}
+      <Icon name="search" /><span class="sr-only">{searchLabel}</span>
+      <input type="search" value={search} placeholder={searchLabel}
         onInput={event => setSearch(event.currentTarget.value)} />
     </label>
     <div class="explain-contents-list">
@@ -388,11 +421,12 @@ function ProofContents({ document, selected }: { document: WebExplanationDocumen
         <h3>{group.label}</h3>
         <ul>{group.entries.map(({ section, index }) => <li key={section.name}>
           <button type="button" data-action="contents-jump" data-target={index} aria-current={index === selected ? 'location' : undefined}>
+            <span class="explain-contents-number" aria-hidden="true">{index + 1}</span>
             <span class="explain-contents-entry" lang={document.language === 'zh' ? 'zh-CN' : 'en'}>
               <span><Rich text={section.title || section.name} /></span>
               {section.title && section.title !== section.name && <code translate={false}><LeanName name={section.name} /></code>}
             </span>
-            <Icon name="chevron-right" />
+            {index === selected ? <span class="explain-contents-current">{t('正在读')}</span> : <Icon name="chevron-right" />}
           </button>
         </li>)}</ul>
       </section>)}
@@ -402,7 +436,7 @@ function ProofContents({ document, selected }: { document: WebExplanationDocumen
 
 /** Reading navigation and the generate, stop and delete confirmations. */
 function Dialog(view: ExplainView) {
-  if (view.dialog === 'contents' && view.document) return <ProofContents document={view.document} selected={view.active?.section} />;
+  if (view.dialog === 'contents' && view.document) return <ProofContents document={view.document} selected={view.readingSection} />;
   const { generation } = view.overview;
   const header = (title: string) => <header class="confirm-heading"><h2 id="explain-dialog-heading">{title}</h2>
     <button type="button" class="icon-button" data-action="close-dialog" aria-label={t('关闭')} title={t('关闭')}><Icon name="x" /></button></header>;
