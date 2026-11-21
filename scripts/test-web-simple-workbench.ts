@@ -47,12 +47,16 @@ async function toolbarLayout(actor: Page) {
     const style = getComputedStyle(toolbar), bounds = toolbar.getBoundingClientRect();
     const settings = toolbar.querySelector('#formalize-settings > summary')!.getBoundingClientRect();
     const submit = toolbar.querySelector('#formalize-start')!.getBoundingClientRect();
+    const settingsText = document.createRange();
+    settingsText.selectNodeContents(toolbar.querySelector('#formalize-settings > summary > span')!);
     const available = bounds.width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
     const needed = settings.width + submit.width + (parseFloat(style.columnGap) || 0);
     return { available, needed, sameRow: Math.abs(settings.y + settings.height / 2 - submit.y - submit.height / 2) <= 2,
+      settingsLabelFits: [...settingsText.getClientRects()].every(line => line.left >= settings.left && line.right <= settings.right + 1),
       controlsFit: [settings, submit].every(box => box.width > 0 && box.x >= bounds.x - 1 && box.right <= bounds.right + 1) };
   });
   assert.equal(layout.controlsFit, true, `${phase}: settings and submit stay inside their toolbar`);
+  assert.equal(layout.settingsLabelFits, true, `${phase}: the settings label stays within its control`);
   if (actor.viewportSize()!.width >= 390 && layout.needed <= layout.available + 1)
     assert.equal(layout.sameRow, true, `${phase}: controls that fit share one toolbar row: ${JSON.stringify(layout)}`);
   assert.equal(await actor.evaluate(() => Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) <= innerWidth + 1), true);
@@ -86,6 +90,9 @@ try {
     assert.equal(await actor.locator('#formalize-original').inputValue(), '');
     assert.equal(await actor.locator('#formalize-start:visible').count(), 1, 'One send control owns the problem');
     assert.equal(await actor.locator('#formalize-start').isDisabled(), true);
+    const startLabel = actor.locator('#formalize-start > span:not(.spinner)');
+    assert.equal(await startLabel.isVisible(), true, 'A new problem always shows the action label');
+    assert.equal(await startLabel.innerText(), locale === 'en' ? 'Start statement review' : '开始核对题目');
     assert.equal(await actor.locator('#topbar-draft:visible').count(), 1);
     assert.equal(await actor.locator('#topbar .brand').count(), 1, 'The interactive topbar replaces the initial brand');
     assert.equal(await actor.locator('#topbar .brand').getAttribute('id'), 'workbench-home');
@@ -119,6 +126,7 @@ try {
       'Expanding the budget and saved research must leave the opening heading reachable at the top');
     await shot(actor, `saved-research-${locale}-${width}.png`);
     await budget.locator(':scope > summary').click();
+    await actor.locator('[data-chat-close-settings]').click();
     await savedResearch.locator(':scope > summary').click();
     await actor.locator('[data-research-overview]').waitFor({ state: 'detached' });
     mark(`${phase}: the optional saved-research disclosure retains grouping and personal research access`);
@@ -139,7 +147,7 @@ try {
     const configureKey = actor.locator('[data-chat-configure-key]');
     assert.equal(await configureKey.count(), 1, 'One settings summary handles the missing Key');
     assert.equal(await configureKey.evaluate(node => node.tagName === 'SUMMARY' && node.parentElement?.id === 'formalize-settings'), true);
-    assert.equal(await configureKey.locator('.chat-model-label').innerText(), locale === 'en' ? 'Enter API key' : '填写 API Key');
+    assert.equal(await configureKey.getAttribute('aria-label'), locale === 'en' ? 'Enter API key' : '填写 API Key');
     assert.equal(await actor.locator('[data-chat-key-required], .chat-key-next-step').count(), 0, 'The missing-Key entry needs no separate hint card');
     const keyToolbar = await toolbarLayout(actor);
     await shot(actor, `missing-key-${locale}-${width}.png`);
@@ -165,6 +173,8 @@ try {
     await actor.locator('input[name="chat-participation"][value="automatic"]').check();
     assert.equal(await actor.locator('#formalize-settings').evaluate(node => (node as HTMLDetailsElement).open), true,
       'Choosing research mode keeps its settings open');
+    assert.equal(await startLabel.isVisible(), true);
+    assert.equal(await startLabel.innerText(), locale === 'en' ? 'Start solving' : '开始解题');
     await guided.check();
     assert.equal(await actor.locator('#formalize-settings').evaluate(node => (node as HTMLDetailsElement).open), true);
     await actor.locator('#formalize-key').fill('sk-simple-workbench-local-only');

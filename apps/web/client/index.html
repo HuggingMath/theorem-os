@@ -39,7 +39,12 @@
         <div id="research-chat-thread"></div>
         <button type="button" class="chat-latest" data-chat-latest hidden>回到最新</button>
         <div id="research-problem-draft"></div>
-        <section id="natural-research" aria-label="消息输入"></section>
+        <section id="natural-research" aria-label="消息输入">
+          <div id="workbench-connecting" class="chat-connecting" role="status">
+            <span class="spinner" aria-hidden="true"></span>
+            <span>正在连接工作台</span>
+          </div>
+        </section>
       </section>
       <section class="composer" id="compose-panel" aria-labelledby="compose-heading">
   <nav id="research-input-mode" class="workbench-entrypoints" aria-label="题目输入方式">

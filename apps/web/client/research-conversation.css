@@ -54,6 +54,8 @@ body:is([data-view=run],[data-view=draft])[data-output-open=true] .research-outp
 body[data-chat-empty=true] #research-conversation-panel{justify-content:safe center;overflow-y:auto;padding-bottom:clamp(24px,12vh,120px)}
 body[data-chat-empty=true] #research-chat-thread{flex:none;overflow:visible}
 body[data-chat-empty=true] #research-conversation-panel #natural-research{margin:0 auto;padding-top:24px}
+#research-conversation-panel:has(.chat-connecting:not([hidden])){justify-content:safe center}
+#research-conversation-panel:has(.chat-connecting:not([hidden])) #research-chat-thread{flex:none}
 /* Landscape and an open software keyboard leave room to read and reach the saved results. */
 @media(max-height:600px){
   body[data-chat-empty=false] #research-chat-thread{flex:1 1 0;min-height:min(120px,30dvh)}
@@ -136,7 +138,9 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 .chat-error p{margin:0}
 .chat-error .text-button{margin-top:8px}
 #natural-research .chat-composer{width:100%;min-width:0}
-#natural-research .chat-composer #formalize-form{display:block;margin:0;padding:8px;border:1px solid var(--gray-200);border-radius:4px;background:var(--card);box-shadow:0 4px 20px #00000006}
+#natural-research .chat-composer #formalize-form,.chat-connecting{border:1px solid var(--gray-200);border-radius:4px;background:var(--card);box-shadow:0 4px 20px #00000006}
+#natural-research .chat-composer #formalize-form{display:block;margin:0;padding:8px}
+.chat-connecting{display:flex;align-items:center;justify-content:center;gap:10px;min-height:150px;padding:16px;color:var(--muted);font-size:var(--text-base)}
 #natural-research .chat-composer #formalize-form:focus-within{border-color:var(--gray-400)}
 .chat-editing-problem{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;font-size:12px;color:var(--muted);flex-wrap:wrap}
 .chat-editing-problem .text-button{font-size:12px}
@@ -451,6 +455,10 @@ body[data-view=draft][data-entry=natural][data-output-open=true] .runs-workspace
   #natural-research .chat-composer #formalize-original{padding:12px;min-height:92px}
   #natural-research .chat-composer [data-new-problem-shortcut]{padding-inline:12px}
   .chat-composer-toolbar{padding-inline:4px}.chat-settings-fields{padding:16px}.chat-settings-options{gap:12px}
+  .chat-composer-toolbar:has(.chat-send-start){display:grid;grid-template-columns:minmax(min-content,1fr) auto}
+  .chat-composer-toolbar:has(.chat-send-start)>#chat-model-settings{grid-column:1/-1;grid-row:1}
+  .chat-composer-toolbar:has(.chat-send-start)>.chat-composer-settings{justify-self:start;max-width:100%}
+  .chat-composer-toolbar:has(.chat-send-start)>#formalize-settings{white-space:normal}
   body[data-chat-empty=true] #research-conversation-panel{padding-bottom:8vh}
 }
 

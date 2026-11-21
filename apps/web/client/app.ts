@@ -176,6 +176,7 @@ let researchEntry: 'natural' | 'lean' = 'natural';
 document.body.dataset.entry = researchEntry;
 let naturalPage: Promise<void> | undefined;
 let chatWorkspace: ChatSession | undefined;
+const workbenchConnecting = element('#workbench-connecting');
 let linkedLibraryReference = readLibraryReference(new URLSearchParams(location.search));
 let linkedProblemDraft = readResearchProblemDraft(new URLSearchParams(location.search));
 let problemDraftRevision = 0;
@@ -205,6 +206,7 @@ function chooseEntry(mode: 'natural' | 'lean') {
   renderRuntime(); renderPreparation(); renderShell();
 }
 async function loadNaturalResearch() {
+  workbenchConnecting.remove();
   chatWorkspace = new ChatSession({
     request: api,
     session: () => state.session,
@@ -2156,7 +2158,7 @@ function renderDraftPreview(force = false) {
 }
 /**
  * Until the first records arrive the page does not know whether it opens a run (it does whenever the account has one)
- * or the new-research page, so it keeps the run layout's connecting card instead of showing the composer for a moment.
+ * or the new-research page, so the conversation shell shows a connection status until the composer mounts.
  * A failed connection, or the reader starting a draft, settles it on the new-research page.
  */
 function opening() { return !state.resumed && !state.lost && !state.composing || sampleLink && !state.lost; }
@@ -2782,6 +2784,7 @@ function disconnected(text: string) {
   state.connected = false; state.lost = true;
   runUpdates.stop();
   liveRefreshPending = false;
+  workbenchConnecting.hidden = true;
   setGlobalNotice(text);
   element('#runs-error').textContent = t('连接中断，记录可能不是最新状态');
   element('#runs-error').hidden = false;
@@ -2907,6 +2910,7 @@ function initialize(): Promise<void> {
   invalidateReads();
   const epoch = state.connectionEpoch;
   state.connected = false;
+  workbenchConnecting.hidden = false;
   element<HTMLButtonElement>('#retry-connection').disabled = true;
   element<HTMLButtonElement>('#refresh-runs').disabled = true;
   connectionRequest = (async () => {

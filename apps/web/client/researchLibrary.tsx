@@ -107,6 +107,12 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
   const [creatorMounted, setCreatorMounted] = useState(creating), [searchReset, setSearchReset] = useState(0), [offset, setOffset] = useState(Number.isSafeInteger(initialOffset) && initialOffset > 0 ? initialOffset : 0),
     [collection, setCollection] = useState<MathematicsCollection>(installedFile ? 'lean' : selected || initialCollection === 'shared' || hasTarget && !initialCollection ? 'shared' : 'lean');
   const showingAssets = Boolean(selected) || type !== 'mathematics' || collection === 'shared', ownView = mine && showingAssets;
+  let searchLabel: string;
+  if (!showingAssets) searchLabel = tx('Lean 名称或数学主题', 'Lean name or math topic');
+  else if (type === 'agent') searchLabel = ownView ? tx('搜索我的 Agent', 'Search my Agents') : tx('搜索 Agent', 'Search Agents');
+  else if (type === 'skill') searchLabel = ownView ? tx('搜索我的 Skill', 'Search my Skills') : tx('搜索 Skill', 'Search Skills');
+  else if (target) searchLabel = tx('筛选任一关键词；空格分隔', 'Match any keyword; separate with spaces');
+  else searchLabel = ownView ? tx('搜索我的数学库', 'Search my libraries') : tx('搜索共享数学库', 'Search shared libraries');
   const actualEnvironment = environment === 'target' ? target?.environment ?? '' : environment;
   const directory = useResource<Items<ResearchAsset>>(!legacyOpenAI && showingAssets ? `${base}/library?q=${enc(hasTarget && type === 'mathematics' ? '' : query)}&type=${enc(type)}&area=${enc(area)}&author=${enc(author)}${type === 'mathematics' && actualEnvironment ? `&environment=${enc(actualEnvironment)}` : ''}${mine ? '&mine=1' : ''}` : undefined);
   const detail = useResource<Item<ResearchAsset>>(selected ? `${base}/library/${enc(selected)}` : undefined);
@@ -218,7 +224,7 @@ export function LibraryPage({ context }: { context: ResearchContext }) {
     </div> : <div class="research-library-browser">
       {showingAssets && <div class="research-library-section-title"><h2>{type === 'mathematics' ? mine ? tx('我的数学库', 'My libraries') : tx('共享数学库', 'Shared libraries') : `${nameOf(type)}${tx('目录', ' directory')}`}</h2>
         <p>{kindDescription(type)}</p></div>}
-      <div class="research-library-searchbar"><Search key={`${type === 'mathematics' ? collection : type}:${searchReset}`} initial={query} label={target && showingAssets ? tx('筛选任一关键词；空格分隔', 'Match any keyword; separate with spaces') : tx('关键词或 Lean 名称', 'Keyword or Lean name')} onSearch={value => { setQuery(value); setOffset(0); }} />
+      <div class="research-library-searchbar"><Search key={`${type === 'mathematics' ? collection : type}:${searchReset}`} initial={query} label={searchLabel} onSearch={value => { setQuery(value); setOffset(0); }} />
         {type !== 'mathematics' && <Field label={tx('研究领域', 'Research field')} value={area} onInput={value => { setArea(value); setOffset(0); }} placeholder={tx('输入领域', 'Enter a field')} />}
         <details class="research-library-filters" open={Boolean(author || environment)}><summary>{tx('更多筛选', 'More filters')}</summary><div class="research-form research-form-row">
           {type === 'mathematics' && <Field label={tx('研究领域', 'Research field')} value={area} onInput={value => { setArea(value); setOffset(0); }} placeholder={tx('输入领域', 'Enter a field')} />}

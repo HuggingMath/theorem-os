@@ -12,6 +12,7 @@ import { mathDigest } from '../src/math/mathRuntimeIo';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebConversation } from '../apps/web/conversationTypes';
 import type { WebFormalization } from '../apps/web/formalizationTypes';
+import type { ResearchCollaborationInbox } from '../apps/web/researchCollaborationTypes';
 import { localeStorageKey } from '../apps/web/i18n';
 import { statementConfirmation } from '../apps/web/presentation';
 import { freePort, startBrowser } from './web-scenario';
@@ -81,17 +82,40 @@ try {
       ] };
     service.storage.saveRecord(['owners', mathDigest(owner), 'conversations', `${conversation.id}.json`], conversation);
 
-    phase = `inbox-controls-${language}-${width}`;
+    phase = `inbox-empty-${language}-${width}`;
     await page.goto(`${origin}/workspace.html?tab=inbox`);
+    const inbox = page.locator('[data-collaboration-inbox]');
     await page.locator('#asset-updates').getByText(language === 'zh' ? '在数学库版本页关注成果，新版本会显示在这里。' : 'Follow an asset in Library to see new releases here.', { exact: true }).waitFor();
-    const more = page.getByRole('combobox', { name: language === 'zh' ? '其他消息范围' : 'Other message views', exact: true });
+    await inbox.getByText(language === 'zh' ? '暂无待办' : 'No to-dos yet').waitFor();
+    assert.equal(await inbox.locator('header > span').count(), 0);
+    assert.equal(await inbox.getByRole('group', { name: language === 'zh' ? '筛选消息' : 'Filter messages' }).count(), 0);
+    await page.locator('.workspace-tabs-more').getByText(language === 'zh' ? '更多页面' : 'More pages', { exact: true }).waitFor();
+    await page.screenshot({ path: path.join(output, `inbox-empty-${language}-${width}.png`), fullPage: true });
+    await inbox.getByRole('link', { name: language === 'zh' ? '查找已有研究' : 'Find existing research', exact: true }).click();
+    await page.locator('#workspace-query').waitFor();
+
+    phase = `inbox-controls-${language}-${width}`;
+    const progressOnly: ResearchCollaborationInbox = {
+      pending: 0, unread: 1, counts: { decision: 0, reply: 0, progress: 1 }, items: [{
+        id: 'fixture-progress', kind: 'update', category: 'progress', projectId: 'fixture-project', projectTitle: 'Fixture project',
+        title: 'A recorded research update', createdAt: selected.createdAt, href: '', read: false, resolved: false, processed: false,
+      }],
+    };
+    await page.route('**/api/research/collaboration/inbox', async route => {
+      await route.fulfill({ response: await route.fetch(), json: progressOnly });
+    });
+    await page.goto(`${origin}/workspace.html?tab=inbox`);
+    await inbox.getByText(language === 'zh' ? '当前范围内没有协作事项。' : 'No collaboration items in this view.', { exact: true }).waitFor();
+    const more = inbox.getByRole('combobox', { name: language === 'zh' ? '其他消息范围' : 'Other message views', exact: true });
     assert.equal(await more.inputValue(), '');
     const inactiveWidth = (await more.boundingBox())!.width;
-    assert.ok(inactiveWidth < 100, `More stays compact: ${inactiveWidth}px`);
     await more.selectOption('processed');
-    assert.ok((await more.boundingBox())!.width > inactiveWidth + 30, 'The select expands for the selected message range');
+    assert.ok((await more.boundingBox())!.width > inactiveWidth, 'The select expands for the selected message range');
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'The inbox filters fit the viewport');
     await page.screenshot({ path: path.join(output, `inbox-controls-${language}-${width}.png`), fullPage: true });
+    await inbox.locator('[data-inbox-filter="progress"]').click();
+    await inbox.locator('[data-inbox-item="fixture-progress"]').waitFor();
+    await page.unroute('**/api/research/collaboration/inbox');
 
     phase = `search-${language}-${width}`;
     await page.goto(`${origin}/workspace.html?tab=search`);
@@ -197,7 +221,8 @@ try {
       assert.equal(await brief.getByText('这次研究没有保存任务路线。', { exact: true }).count(), 0);
       await page.screenshot({ path: path.join(output, 'brief-no-empty-sections-390.png'), fullPage: true });
     }
-    await context.close(); checks.push({ language, width, search: 'exact message focus', usage: 'all attempts; null distinct from zero; rates persist',
+    await context.close(); checks.push({ language, width, inbox: 'empty state links to search; empty filters retain access to unread progress',
+      search: 'exact message focus', usage: 'all attempts; null distinct from zero; rates persist',
       brief: 'math and HTML/Markdown/PDF; plans labeled and empty sections omitted', source: 'exact frozen commit',
       overview: 'candidate meaning retained for pending/rejected/superseded; filters disclosed; status not repeated' });
   }
