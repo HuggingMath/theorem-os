@@ -49,16 +49,18 @@ async function toolbarLayout(actor: Page) {
     const submit = toolbar.querySelector('#formalize-start')!.getBoundingClientRect();
     const settingsText = document.createRange();
     settingsText.selectNodeContents(toolbar.querySelector('#formalize-settings > summary > span')!);
+    const controls = [...toolbar.querySelectorAll(':scope > details > summary, :scope > button, #formalize-start')]
+      .map(control => control.getBoundingClientRect());
     const available = bounds.width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
     const needed = settings.width + submit.width + (parseFloat(style.columnGap) || 0);
-    return { available, needed, sameRow: Math.abs(settings.y + settings.height / 2 - submit.y - submit.height / 2) <= 2,
+    return { available, needed, sameRow: controls.every(box => Math.abs(box.y + box.height / 2 - submit.y - submit.height / 2) <= 2),
       settingsLabelFits: [...settingsText.getClientRects()].every(line => line.left >= settings.left && line.right <= settings.right + 1),
-      controlsFit: [settings, submit].every(box => box.width > 0 && box.x >= bounds.x - 1 && box.right <= bounds.right + 1) };
+      controlsFit: controls.every((box, index) => box.width > 0 && box.left >= bounds.left - 1 && box.right <= bounds.right + 1
+        && (!index || box.left >= controls[index - 1]!.right - 1)) };
   });
   assert.equal(layout.controlsFit, true, `${phase}: settings and submit stay inside their toolbar`);
   assert.equal(layout.settingsLabelFits, true, `${phase}: the settings label stays within its control`);
-  if (actor.viewportSize()!.width >= 390 && layout.needed <= layout.available + 1)
-    assert.equal(layout.sameRow, true, `${phase}: controls that fit share one toolbar row: ${JSON.stringify(layout)}`);
+  assert.equal(layout.sameRow, true, `${phase}: the settings, preview and send share one row: ${JSON.stringify(layout)}`);
   assert.equal(await actor.evaluate(() => Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) <= innerWidth + 1), true);
   return layout;
 }
@@ -91,8 +93,8 @@ try {
     assert.equal(await actor.locator('#formalize-start:visible').count(), 1, 'One send control owns the problem');
     assert.equal(await actor.locator('#formalize-start').isDisabled(), true);
     const startLabel = actor.locator('#formalize-start > span:not(.spinner)');
-    assert.equal(await startLabel.isVisible(), true, 'A new problem always shows the action label');
-    assert.equal(await startLabel.innerText(), locale === 'en' ? 'Start statement review' : '开始核对题目');
+    assert.equal(await startLabel.isVisible(), width === 1440, 'The full label fits in the wide composer');
+    assert.equal(await actor.locator('#formalize-start').getAttribute('aria-label'), locale === 'en' ? 'Start statement review' : '开始核对题目');
     assert.equal(await actor.locator('#topbar-draft:visible').count(), 1);
     assert.equal(await actor.locator('#topbar .brand').count(), 1, 'The interactive topbar replaces the initial brand');
     assert.equal(await actor.locator('#topbar .brand').getAttribute('id'), 'workbench-home');
@@ -144,6 +146,13 @@ try {
     mark(`${phase}: one keyboard menu reaches the professional pages and restores focus on Escape`);
 
     await actor.locator('#formalize-original').fill(original);
+    const preview = actor.locator('[data-input-view="preview"]');
+    await preview.focus(); await actor.keyboard.press('Enter');
+    await actor.waitForFunction(() => document.activeElement?.hasAttribute('data-input-preview'));
+    assert.equal(await actor.locator('#formalize-original').isVisible(), false);
+    await actor.keyboard.press('Escape');
+    await actor.waitForFunction(() => document.activeElement?.id === 'formalize-original');
+    assert.equal(await actor.locator('#formalize-original').inputValue(), original);
     const configureKey = actor.locator('[data-chat-configure-key]');
     assert.equal(await configureKey.count(), 1, 'One settings summary handles the missing Key');
     assert.equal(await configureKey.evaluate(node => node.tagName === 'SUMMARY' && node.parentElement?.id === 'formalize-settings'), true);
@@ -173,8 +182,7 @@ try {
     await actor.locator('input[name="chat-participation"][value="automatic"]').check();
     assert.equal(await actor.locator('#formalize-settings').evaluate(node => (node as HTMLDetailsElement).open), true,
       'Choosing research mode keeps its settings open');
-    assert.equal(await startLabel.isVisible(), true);
-    assert.equal(await startLabel.innerText(), locale === 'en' ? 'Start solving' : '开始解题');
+    assert.equal(await actor.locator('#formalize-start').getAttribute('aria-label'), locale === 'en' ? 'Start solving' : '开始解题');
     await guided.check();
     assert.equal(await actor.locator('#formalize-settings').evaluate(node => (node as HTMLDetailsElement).open), true);
     await actor.locator('#formalize-key').fill('sk-simple-workbench-local-only');
@@ -290,22 +298,32 @@ try {
       assert.equal(await thread.evaluate(node => node.clientHeight), hiddenHeight, 'Hiding latest never changes the thread height');
     }
     await actor.setViewportSize(viewport);
-    await actor.locator('[data-research-artifact="result"]').click(); await actor.locator('.result-verdict').waitFor();
+    const resultLink = actor.locator('[data-research-artifact="result"]');
+    await resultLink.click(); await actor.locator('.result-verdict').waitFor();
     const closeOutput = actor.locator('#close-research-output'), expandOutput = actor.locator('#expand-research-output');
-    assert.equal(await closeOutput.innerText(), width === 1440 ? locale === 'en' ? 'Hide panel' : '收起面板' : locale === 'en' ? 'Back to chat' : '返回对话');
+    const backLabel = locale === 'en' ? 'Back to chat' : '返回对话';
+    const hideLabel = locale === 'en' ? 'Hide panel' : '收起面板';
+    assert.equal(await closeOutput.getAttribute('aria-label'), width === 1440 ? hideLabel : backLabel);
+    assert.equal(await closeOutput.evaluate(button => {
+      const close = button.getBoundingClientRect(), header = document.querySelector('.detail-heading')!.getBoundingClientRect();
+      return close.top >= header.top && close.bottom <= header.bottom;
+    }), true, 'Panel controls sit in the header');
     if (width === 1440) {
       assert.equal(await closeOutput.evaluate(button => {
         const close = button.getBoundingClientRect(), expand = document.querySelector('#expand-research-output')!.getBoundingClientRect();
-        return Math.abs(close.y + close.height / 2 - expand.y - expand.height / 2) <= 1 && close.right < expand.left;
+        const actions = document.querySelector('.detail-actions')!.getBoundingClientRect();
+        return Math.abs(close.y + close.height / 2 - expand.y - expand.height / 2) <= 1 && actions.right < expand.left && expand.right < close.left;
       }), true, 'Panel controls share one row without overlapping');
-      await expandOutput.click();
-      assert.equal(await closeOutput.innerText(), locale === 'en' ? 'Back to chat' : '返回对话');
+      await expandOutput.focus(); await actor.keyboard.press('Enter');
+      assert.equal(await expandOutput.getAttribute('aria-pressed'), 'true');
+      assert.equal(await closeOutput.getAttribute('aria-label'), backLabel);
       assert.equal(await actor.locator('#research-conversation-panel').isVisible(), false);
-      await expandOutput.click();
-      assert.equal(await closeOutput.innerText(), locale === 'en' ? 'Hide panel' : '收起面板');
+      await actor.keyboard.press('Enter');
+      assert.equal(await expandOutput.getAttribute('aria-pressed'), 'false');
+      assert.equal(await closeOutput.getAttribute('aria-label'), hideLabel);
       for (const breakpoint of [1100, 1101]) {
         await actor.setViewportSize({ width: breakpoint, height: 1000 }); await settled(actor);
-        assert.equal(await closeOutput.innerText(), breakpoint === 1100 ? locale === 'en' ? 'Back to chat' : '返回对话' : locale === 'en' ? 'Hide panel' : '收起面板');
+        assert.equal(await closeOutput.getAttribute('aria-label'), breakpoint === 1100 ? backLabel : hideLabel);
         assert.equal(await actor.locator('#research-conversation-panel').isVisible(), breakpoint === 1101);
       }
       await actor.setViewportSize({ width, height: 1000 });
@@ -316,7 +334,8 @@ try {
     assert.equal(await actor.locator('#detail-panel .result-proof').isVisible(), true, 'The report still presents the accepted proof');
     await shot(actor, `sample-report-${locale}-${width}.png`);
     assert.equal(new URL(actor.url()).searchParams.has('sample'), true);
-    await actor.locator('#close-research-output').click();
+    await closeOutput.click();
+    assert.equal(await resultLink.evaluate(node => node === document.activeElement), true, 'Closing returns to the exact artifact link');
     await newProblem(actor);
     mark(`${phase}: the single examples entry prepares a draft or opens a read-only sample and its report`);
     await context.close();

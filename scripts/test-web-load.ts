@@ -101,6 +101,8 @@ try {
 
     assert.equal(first.resources.some(item => /\/chunks\/(?:runViews|en)-/u.test(item.path)), false,
       'A blank Chinese composer does not load the run workspace or full English dictionary');
+    assert.equal(first.resources.some(item => /\/assets\/(?:fonts\/Noto(?:Sans|Serif)SC-common\.woff2|katex\/katex\.min\.css)$/u.test(item.path)), false,
+      'An empty workbench skips the long-text fonts and math stylesheet');
     const englishContext = await browser.newContext({ locale: 'en-US', viewport: { width: 1440, height: 900 } });
     const english = await englishContext.newPage(), englishErrors: string[] = [];
     english.on('pageerror', error => englishErrors.push(error.message));

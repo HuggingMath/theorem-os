@@ -1,7 +1,7 @@
 import { webSkillWithoutCooperation } from '../researchMode';
 import {
   createIcons, ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, BookOpen, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
-  Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
+  Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Minimize2, Monitor, Moon, Network, PanelRight, Paperclip,
   LogOut, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Sun, Trash2, TriangleAlert, Undo2, Upload, X,
 } from 'lucide';
 import type { WebAdminOverview, WebContinuation, WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebRun, WebRunRequest, WebSavedKey, WebSession } from '../shared';
@@ -93,7 +93,7 @@ import { renderResearchProblemDraft } from './ui/ResearchProblemDraft';
 import { checkPersonalApproval, completePersonalApprovalReview, observedPersonalApproval, personalApprovalNeedsReview, personalApprovalSettled, readPersonalApproval, removePersonalApproval, requirePersonalApprovalReview, savePersonalApproval, type PersonalApprovalAttempt } from './personalApprovalStore';
 
 const iconSet = { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, BookOpen, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
-  Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
+  Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Minimize2, Monitor, Moon, Network, PanelRight, Paperclip,
   LogOut, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Sun, Trash2, TriangleAlert, Undo2, Upload, X };
 function icons(root: Element | Document | DocumentFragment = document) {
   createIcons({ icons: iconSet, root, attrs: { 'aria-hidden': 'true' } });
@@ -183,9 +183,14 @@ let problemDraftRevision = 0;
 const chatArtifacts = new ChatArtifactNavigation(element('#research-chat-thread'));
 const chatArtifactIdentity = () => chatWorkspace?.id || currentRun()?.id || 'home';
 const outputWideQuery = window.matchMedia('(min-width:1101px)');
-function syncOutputCloseLabel() {
-  element('#close-research-output').textContent = !outputWideQuery.matches || document.body.dataset.resultsExpanded === 'true'
-    ? t('返回对话') : t('收起面板');
+function syncOutputControls() {
+  const expanded = document.body.dataset.resultsExpanded === 'true';
+  const close = element('#close-research-output'), resize = element('#expand-research-output');
+  const closeLabel = !outputWideQuery.matches || expanded ? t('返回对话') : t('收起面板');
+  close.title = closeLabel;
+  close.setAttribute('aria-label', closeLabel);
+  resize.title = expanded ? t('恢复分栏') : t('展开成果');
+  resize.setAttribute('aria-pressed', String(expanded));
 }
 function placeInputMode() {
   const mode = currentRun() ? 'natural' : researchEntry;
@@ -237,7 +242,11 @@ async function loadNaturalResearch() {
       const search = withAddressLanguage(parameters.size ? `?${parameters}` : '');
       if (location.search !== search) history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', location.pathname + search);
       // The live workspace belongs to the task, not to one of its stages: a task moving from its statement to its proof keeps it open.
-      if (!id || document.body.dataset.chatArtifact !== 'live') { document.body.dataset.chatArtifact = ''; document.body.dataset.outputOpen = 'false'; }
+      if (!id || document.body.dataset.chatArtifact !== 'live') {
+        document.body.dataset.chatArtifact = ''; document.body.dataset.outputOpen = 'false';
+        document.body.dataset.resultsExpanded = 'false';
+        syncOutputControls();
+      }
       // Arrow keys in the phone history open each run in turn; its conversation arriving must not close the list.
       if (!attached) closeHistoryDialog();
     },
@@ -332,7 +341,7 @@ async function openChatArtifact(kind: ChatArtifactKind, target?: ChatArtifactTar
   if (!auto) chatArtifacts.remember(chatArtifactIdentity(), kind, target);
   document.body.dataset.chatArtifact = kind;
   document.body.dataset.outputOpen = 'true';
-  syncOutputCloseLabel();
+  syncOutputControls();
   if (kind === 'original') { element('#close-research-output').focus({ preventScroll: true }); return; }
   // The live workspace replaces the run detail for the time it is open, on any screen size.
   if (kind === 'live') { if (!auto) element('#close-research-output').focus({ preventScroll: true }); return; }
@@ -739,7 +748,7 @@ async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}
       const retryAt = delay !== undefined && (limited || challenged || retryable) ? now + delay : 0;
       const limitMessage = t('请求太频繁，请稍后再试。');
       let reason = t('请求失败 ({0})', response.status);
-      if (challenged) reason = t('Cloudflare 安全验证拦截了请求，请稍后重试');
+      if (challenged) reason = t('Cloudflare 安全验证阻止了请求，请稍后重试');
       else if (!cloudflare && typeof body?.error === 'string') reason = body.error;
       else if (limited) reason = limitMessage;
       else if (retryable) reason = t('服务暂时不可用，请稍后重试');
@@ -789,7 +798,7 @@ function setMobileView(view: 'compose' | 'runs', focus = false) {
     ? '' : document.body.dataset.chatArtifact;
   document.body.dataset.chatArtifact = panel;
   document.body.dataset.outputOpen = String(panel === 'live' || panel === 'original' || (view === 'runs' && Boolean(currentRun())));
-  syncOutputCloseLabel();
+  syncOutputControls();
   rememberConversationScroll();
   if (changed) { activityReader?.remember(); moduleView?.update(); }
   document.body.dataset.mobileView = view;
@@ -4238,7 +4247,7 @@ element('#run-settings').addEventListener('keydown', event => {
 element('#close-history').addEventListener('click', closeHistoryDialog);
 element('#open-draft').addEventListener('click', openDraft);
 // These disclosures behave like menus: outside clicks keep their own focus, and Escape returns to the trigger.
-const openMenuSelector = '[data-run-menu][open], #chat-model-settings[open]';
+const openMenuSelector = '[data-run-menu][open], #chat-model-settings[open], .chat-history-actions[open]';
 const openResearchSettingsSelector = '#formalize-settings[open]';
 document.addEventListener('click', event => {
   for (const menu of document.querySelectorAll<HTMLDetailsElement>(openMenuSelector)) {
@@ -4292,20 +4301,15 @@ element('#open-draft-preview').addEventListener('click', () => {
   setMobileView('runs'); renderDraftPreview(true);
   element('#close-draft-preview').focus();
 });
-outputWideQuery.addEventListener('change', syncOutputCloseLabel);
-syncOutputCloseLabel();
+outputWideQuery.addEventListener('change', syncOutputControls);
+syncOutputControls();
 element('#expand-research-output').addEventListener('click', () => {
-  const expanded = document.body.dataset.resultsExpanded !== 'true';
-  document.body.dataset.resultsExpanded = String(expanded);
-  element('#expand-research-output').setAttribute('aria-pressed', String(expanded));
-  element('#expand-research-output').textContent = expanded ? t('恢复分栏') : t('展开成果');
-  syncOutputCloseLabel();
+  document.body.dataset.resultsExpanded = String(document.body.dataset.resultsExpanded !== 'true');
+  syncOutputControls();
 });
 element('#close-research-output').addEventListener('click', () => {
   document.body.dataset.resultsExpanded = 'false';
   document.body.dataset.chatArtifact = '';
-  element('#expand-research-output').setAttribute('aria-pressed', 'false');
-  element('#expand-research-output').textContent = t('展开成果');
   setMobileView('compose');
   if (!chatArtifacts.restore(chatArtifactIdentity())) document.querySelector<HTMLElement>('#formalize-original')?.focus({ preventScroll: true });
 });

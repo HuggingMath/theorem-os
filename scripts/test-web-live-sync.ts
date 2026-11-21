@@ -313,7 +313,7 @@ try {
     } finally { await other.close(); }
   });
 
-  await scenario('an active conversation follows the shared run list without a second run poll', async h => {
+  await scenario('an active conversation follows the shared run list and leaves an unchanged thread alone', async h => {
     const { page } = h, run = await postRun(h, input);
     h.runIds.push(run.id);
     await page.goto(`${origin}/?run=${run.id}`); await live(page);
@@ -323,9 +323,25 @@ try {
     assert.ok(chat, 'Opening a run attaches its conversation');
     const detailReads = () => h.requests.filter(r => r.method === 'GET' && r.pathname === `/api/runs/${run.id}`).length;
     const before = detailReads();
-    // Let conversation polling run while the proof is still active.
-    for (let tick = 0; tick < 2; tick++) await page.waitForResponse(response =>
-      response.request().method() === 'GET' && new URL(response.url()).pathname === `/api/conversations/${chat}`);
+    const thread = page.locator('#research-chat-thread');
+    const unchanged = () => page.waitForResponse(response =>
+      response.status() === 304 && new URL(response.url()).pathname === `/api/conversations/${chat}`);
+    // The first conversation read establishes its cache and refreshes the initial capabilities and history.
+    await unchanged();
+    await page.evaluate(() => document.fonts.ready);
+    await settled(page);
+    await thread.evaluate(thread => {
+      let writes = 0;
+      const position = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop')!;
+      Object.defineProperty(thread, 'scrollTop', {
+        configurable: true, get: position.get,
+        set(value: number) { thread.dataset.scrollWrites = String(++writes); position.set!.call(thread, value); },
+      });
+    });
+    // Unchanged conversation reads should leave the thread and its reading position alone.
+    for (let tick = 0; tick < 2; tick++) await unchanged();
+    await settled(page);
+    assert.equal(await thread.getAttribute('data-scroll-writes'), null, 'Unchanged polls must not redraw the thread and restore its scroll');
     await status.locator('[data-research-stop]').click(); await page.locator('#confirm-cancel-run').click();
     await status.getByText('已取消', { exact: true }).waitFor();
     assert.equal(detailReads(), before, 'The conversation follows cancellation without fetching the listed run again');

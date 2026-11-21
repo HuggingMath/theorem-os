@@ -7,21 +7,30 @@ export class ChatReadingPosition {
   private position: Position = { offset: 0, atBottom: true };
   private applying = false;
   private frame = 0;
+  private saveTimer?: ReturnType<typeof setTimeout>;
   private content?: Element;
   private observer: ResizeObserver;
   constructor(private thread: HTMLElement, private latest: HTMLButtonElement, private scope: string) {
     this.observer = new ResizeObserver(() => this.restore());
-    thread.addEventListener('scroll', () => { if (!this.applying) this.capture(); this.updateButton(); }, { passive: true });
-    thread.addEventListener('scroll', () => this.updateButton(), { capture: true, passive: true });
+    thread.addEventListener('scroll', event => {
+      if (event.target === thread) {
+        if (this.applying) return;
+        if (this.measure()) {
+          clearTimeout(this.saveTimer);
+          this.saveTimer = setTimeout(() => this.save(), 200);
+        }
+      }
+      this.updateButton();
+    }, { capture: true, passive: true });
     thread.addEventListener('toggle', () => this.updateButton(), true);
-    // A deliberate jump inside the log replaces the old outer anchor before later content grows.
-    thread.addEventListener(chatReadingReveal, () => { this.applying = false; this.capture(false); this.restore(); });
+    thread.addEventListener(chatReadingReveal, () => this.revealed());
     for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) thread.addEventListener(type, () => { this.applying = false; }, { passive: true });
     latest.addEventListener('click', () => this.bottom());
     window.addEventListener('pagehide', () => this.capture());
   }
   private key() { return `theorem-os.chat-reading.${this.scope}.${this.id}`; }
   bind(scope: string) {
+    clearTimeout(this.saveTimer); this.saveTimer = undefined;
     this.id = ''; this.scope = scope;
     this.position = { offset: 0, atBottom: true };
     this.updateButton();
@@ -37,11 +46,39 @@ export class ChatReadingPosition {
     } catch { /* No stored reading position. */ }
   }
   capture(atBottom?: boolean) {
-    if (!this.id || this.applying || !this.thread.clientHeight || !this.thread.querySelector('[data-message-id]')) return;
+    const measured = this.measure(atBottom);
+    if (measured || this.saveTimer !== undefined) this.save();
+  }
+  /** Keep an explicit jump even if the previous reading position was restored in this frame. */
+  revealed() {
+    this.applying = false;
+    this.capture(false);
+    this.restore();
+  }
+  private measure(atBottom?: boolean): boolean {
+    const content = this.thread.firstElementChild;
+    if (!this.id || this.applying || !this.thread.clientHeight || content?.getAttribute('data-conversation') !== this.id
+      || !content.firstElementChild?.hasAttribute('data-message-id')) return false;
+    const follow = atBottom ?? this.nearBottom();
+    if (follow) { this.position = { offset: 0, atBottom: true }; return true; }
     const top = this.thread.getBoundingClientRect().top;
-    const node = [...this.thread.querySelectorAll<HTMLElement>('[data-message-id]')].find(item => item.getBoundingClientRect().bottom > top + 1);
-    this.position = { messageId: node?.dataset.messageId, offset: node ? node.getBoundingClientRect().top - top : 0,
-      atBottom: atBottom ?? this.thread.scrollHeight - this.thread.scrollTop - this.thread.clientHeight < 80 };
+    // The message articles are direct children in reading order. Only their edges are needed to find the anchor.
+    const children = content.children;
+    let start = 0, end = children.length;
+    while (start < end) {
+      const middle = (start + end) >>> 1;
+      if (children[middle].getBoundingClientRect().bottom <= top + 1) start = middle + 1;
+      else end = middle;
+    }
+    const node = children.item(start) as HTMLElement | null;
+    this.position = node?.dataset.messageId
+      ? { messageId: node.dataset.messageId, offset: node.getBoundingClientRect().top - top, atBottom: false }
+      : { offset: 0, atBottom: false };
+    return true;
+  }
+  private save() {
+    clearTimeout(this.saveTimer); this.saveTimer = undefined;
+    if (!this.id) return;
     try { sessionStorage.setItem(this.key(), JSON.stringify(this.position)); } catch { /* The in-memory anchor remains. */ }
   }
   rendered() {
@@ -65,14 +102,18 @@ export class ChatReadingPosition {
   }
   bottom() {
     this.position = { offset: 0, atBottom: true }; this.restore();
-    try { sessionStorage.setItem(this.key(), JSON.stringify(this.position)); } catch {}
+    this.save();
+  }
+  private nearBottom() {
+    return this.thread.scrollHeight - this.thread.scrollTop - this.thread.clientHeight < 80;
   }
   private updateButton() {
+    if (!this.id || !this.thread.clientHeight || this.nearBottom()) { this.latest.hidden = true; return; }
     const bounds = this.thread.getBoundingClientRect();
     const readingProcess = [...this.thread.querySelectorAll<HTMLElement>('[data-thinking-process][open] .thinking-body')].some(body => {
       const rect = body.getBoundingClientRect();
       return Math.min(rect.bottom, bounds.bottom) - Math.max(rect.top, bounds.top) >= Math.min(80, rect.height);
     });
-    this.latest.hidden = readingProcess || !this.id || !this.thread.clientHeight || this.thread.scrollHeight - this.thread.scrollTop - this.thread.clientHeight < 80;
+    this.latest.hidden = readingProcess;
   }
 }

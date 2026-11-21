@@ -115,12 +115,24 @@ async function outcomes(page: Page) {
   assert.equal(await page.locator('[data-chat-next-action]').count(), 0, 'An automatic task asks nothing of the reader');
 }
 async function historyMetadata(page: Page, id: string) {
-  const row = page.locator(`[data-chat-row="${id}"]`), status = row.locator('[data-chat-history-status]');
-  await status.waitFor(); assert.ok((await status.innerText()).trim(), 'history shows the task or discussion status');
+  const row = page.locator(`[data-chat-row="${id}"]`);
+  await row.locator('.chat-history-item').waitFor();
+  assert.equal(await row.locator('[data-chat-history-status]:visible').count(), 0, 'A settled chat has no routine status line');
   const value = await page.evaluate(async id => (await (await fetch(`/api/conversations/${id}`)).json()).conversation as WebConversation, id);
   const time = row.locator('time.chat-history-time');
+  assert.equal(await time.isVisible(), false, 'Timestamps stay in the secondary menu');
+  const trigger = row.locator('[data-chat-row-actions]');
+  await trigger.click(); await time.waitFor();
   assert.equal(await time.getAttribute('datetime'), value.updatedAt, 'history dates the current saved conversation');
   assert.ok((await time.innerText()).trim(), 'the saved timestamp is formatted for reading');
+  await page.keyboard.press('Tab'); await page.keyboard.press('Escape');
+  assert.equal(await time.isVisible(), false);
+  assert.equal(await trigger.evaluate(node => node === document.activeElement), true, 'Escape stays in history and restores the menu trigger');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Tab'); await page.keyboard.press('Tab');
+  assert.equal(await row.locator('[data-chat-delete]').evaluate(node => node === document.activeElement), true);
+  await page.keyboard.press('Tab');
+  assert.equal(await time.isVisible(), false, 'Tabbing past the menu closes it so it cannot cover the next control');
 }
 async function credentials(page: Page) {
   const automatic = page.locator('input[name="chat-participation"][value="automatic"]');
@@ -659,8 +671,28 @@ try {
       await page.locator('#formalize-start').click();
       await eventually(() => formalizations.length === started + 1, 'The failing formalization starts');
       const pending = formalizations.at(-1)!;
+      await page.waitForURL(url => url.searchParams.has('chat'));
+      const historyRow = page.locator(`[data-chat-row="${(await conversation(page)).id}"]`);
+      await openChatHistory(page);
+      await page.locator('[data-chat-running]').locator(historyRow).waitFor();
+      await historyRow.locator('[data-chat-row-actions]').click();
+      await historyRow.locator('[data-chat-rename]').click();
+      const titleInput = historyRow.locator('[data-chat-title]');
+      const draftTitle = 'Renaming while the task finishes';
+      await titleInput.fill(draftTitle);
+      await titleInput.evaluate((input: HTMLInputElement) => input.setSelectionRange(0, 8));
       pending.send({ type: 'progress', progress: { phase: 'generating', round: 3, tokens: 200_000 } });
       pending.send({ type: 'result', status: 'exhausted', reason: 'formalization_token_limit' }); pending.resolve();
+      await historyRow.locator('[data-tone="danger"]').waitFor();
+      assert.deepEqual(await titleInput.evaluate((input: HTMLInputElement) => ({
+        focused: document.activeElement === input, draft: input.value, selection: [input.selectionStart, input.selectionEnd],
+      })), { focused: true, draft: draftTitle, selection: [0, 8] }, 'A task status update preserves the current title edit and selection');
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => document.activeElement?.hasAttribute('data-chat-row-actions'));
+      assert.equal(await historyRow.locator('[data-chat-row-actions]').evaluate(node => node === document.activeElement), true, 'Cancel returns to the same conversation after it moves');
+      assert.equal(await page.locator('[data-chat-running]').locator(historyRow).count(), 0, 'The conversation moves to its new group after editing');
+      if (width <= 850) await page.locator('#close-history').click();
+      mark(`${width}px: history keeps the title edit and keyboard focus while a background task changes status`);
       await openChatResultDetails(page);
       const details = page.locator('[data-formalization-failure]');
       await details.waitFor();
@@ -717,11 +749,11 @@ try {
       const failed = page.locator('#chat-history-list [role="alert"]');
       await failed.waitFor();
       assert.match(await failed.innerText(), /对话列表暂时没有加载出来。/u, 'A list that failed to load does not read as an empty history');
-      assert.equal(await page.getByText('新对话会保存在这里').count(), 0);
+      assert.equal(await page.getByText('还没有对话').count(), 0);
       assert.deepEqual(await audit(page), []);
       // This browser is a new owner, so the list that loads on retry is genuinely empty.
       await page.locator('[data-chat-history-retry]').click();
-      await page.getByText('新对话会保存在这里').waitFor();
+      await page.getByText('还没有对话').waitFor();
       assert.equal(await failed.count(), 0);
       mark('a failed history load says so and retries');
     } finally { await context.close(); }
@@ -771,7 +803,9 @@ try {
       }, { times: 1 });
       await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
       await eventually(() => historyHeld, 'The history snapshot predates the title change');
+      await row.locator('[data-chat-row-actions]').click();
       await row.locator('[data-chat-rename]').click();
+      assert.equal(await row.locator('[data-chat-title]').evaluate(node => node === document.activeElement), true, 'Rename opens with the title focused');
       await row.locator('[data-chat-title]').fill(title);
       await row.locator('[data-chat-history-confirm]').click();
       await row.locator('a.chat-history-item').filter({ hasText: title }).waitFor();
@@ -809,7 +843,9 @@ try {
       }, { times: 1 });
       await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
       await eventually(() => deletedHistoryHeld, 'A history snapshot predates conversation deletion');
+      await row.locator('[data-chat-row-actions]').click();
       await row.locator('[data-chat-delete]').click();
+      assert.equal(await row.locator('[data-chat-history-cancel]').evaluate(node => node === document.activeElement), true, 'Delete puts initial focus on Cancel');
       assert.match(await row.locator('.chat-history-edit').innerText(), /只删除这段对话，题目、证明任务和分享链接仍保留。/u);
       await row.locator('[data-chat-history-confirm]').click();
       await page.waitForURL(url => !url.search);

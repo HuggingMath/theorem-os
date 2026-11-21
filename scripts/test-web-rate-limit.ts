@@ -128,7 +128,7 @@ try {
   console.log('PASS an idle conversation resumes at the cooldown deadline or when its tab returns');
 
   let challenges = 0;
-  const challengeMessage = failed.filter({ hasText: 'Cloudflare 安全验证拦截了请求' });
+  const challengeMessage = failed.filter({ hasText: 'Cloudflare 安全验证阻止了请求' });
   await page.route(`**/api/conversations/${capped}`, route => ++challenges === 1
     ? route.fulfill({ status: 403, contentType: 'text/html', body: '<html>Security challenge</html>',
       headers: { 'cf-mitigated': 'challenge' } })

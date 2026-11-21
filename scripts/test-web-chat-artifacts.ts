@@ -183,7 +183,9 @@ try {
     assert.deepEqual(command.input.recipient, { kind: 'task', id: 'goal_2' });
     assert.equal(command.input.taskRef?.id, 'goal_2');
     assert.equal(command.input.taskRef?.version, controls.get(run.id)!.observation.inspection.tasks.find(task => task.id === 'goal_2')?.version);
-    assert.equal(await page.locator('#formalize-original').inputValue(), '');
+    assert.equal(await page.locator('[data-chat-discussion-mode]').getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.locator('#formalize-original').inputValue(), '查看路线图后继续提问的草稿',
+      'Sending guidance returns to the independent discussion draft');
     const control = controls.get(run.id)!;
     const delivered = control.observation.guidance.find(item => item.id === command.input.id)!;
     Object.assign(delivered, { status: 'delivered', deliveredTo: ['prover-2'], updatedAt: new Date().toISOString() }); control.emit();

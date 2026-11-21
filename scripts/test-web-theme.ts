@@ -71,7 +71,7 @@ try {
   // No choice: the system theme is on <html> before any script of the app runs, and follows a live system change.
   for (const scheme of ['light', 'dark'] as const) {
     const { context, page, errors } = await open(browser, scheme);
-    await page.route('**/app.js', async route => { await new Promise(resolve => setTimeout(resolve, 400)); await route.continue(); });
+    await page.route(/\/app\.[a-f0-9]{16}\.js$/u, async route => { await new Promise(resolve => setTimeout(resolve, 400)); await route.continue(); });
     await page.goto(origin, { waitUntil: 'domcontentloaded' });
     assert.deepEqual(await theme(page), { theme: scheme, background: paper[scheme], chrome: scheme === 'dark' ? '#1b1a18' : '#f5f4ee' }, `first paint follows the ${scheme} system theme`);
     await ready(page);

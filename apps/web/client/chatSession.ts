@@ -520,7 +520,7 @@ export class ChatSession {
     this.thread.querySelectorAll('.chat-search-target').forEach(element => element.classList.remove('chat-search-target'));
     message.classList.add('chat-search-target'); message.tabIndex = -1;
     message.scrollIntoView({ block: 'center', behavior: 'instant' }); message.focus({ preventScroll: true });
-    this.reading.capture(); return true;
+    this.reading.revealed(); return true;
   }
   includeLibraryReference(reference: ChatLibraryReference) {
     if (!this.options.draftScope || this.loading || this.submitting || this.currentId && !this.conversation) return false;
@@ -720,7 +720,14 @@ export class ChatSession {
           || conversation.formalizationId !== this.conversation?.formalizationId);
         if (conversation) this.setConversation(conversation, etag);
         else if (this.readError) { this.readError = ''; this.draw(); }
-        if (linkChanged || recoveringThreadRead || Date.now() - this.lastTaskRefresh >= 1500) await this.loadTask(generation);
+        const runId = this.conversation?.runId;
+        const runIsSynced = runId && this.run?.id === runId && this.options.connected()
+          && this.options.runs().some(run => run.id === runId);
+        // The shared run list already updates a linked run. Formalization has its own status to poll.
+        const taskNeedsRefresh = this.conversation?.formalizationId || (runId && !runIsSynced);
+        if (linkChanged || recoveringThreadRead || (taskNeedsRefresh && Date.now() - this.lastTaskRefresh >= 1500)) {
+          await this.loadTask(generation);
+        }
       }
       if (generation !== this.generation) return;
       if (Date.now() - this.lastAnswerRefresh >= (this.answers.generating(this.run?.id) ? 5000 : 30_000)) {
@@ -1299,7 +1306,7 @@ export class ChatSession {
         : guidanceRunChanged ? t('指导关联的研究已变化，请重新选择指导对象。')
         : staleTarget ? t('任务版本已变化，请核对指导内容，再确认当前任务版本。')
           : !canGuide ? t('运行尚未开始或已结束，暂时无法发送指导。')
-            : !this.run?.observation ? t('正在等待当前运行的观察记录，收到后即可发送。') : t('无需停止解题：指导会直接送到正在工作的 Agent，送达和采纳状态显示在对话中。')
+            : !this.run?.observation ? t('正在等待当前运行的观察记录，收到后即可发送。') : undefined
         : this.pendingMessage ? t('上一条问题的发送结果尚未确认，重试会先核对原问题；新输入会保留。')
         : this.options.session()?.maintenance ? t('工作台正在维护，暂不开始新任务或回答；已有记录仍可查看和下载。')
         : busyFormalization ? t("当前账号的形式化队列已满，输入内容会保留。")
@@ -1308,9 +1315,9 @@ export class ChatSession {
           : this.options.session()?.runtime.ready
             ? t('当前服务暂不支持自然语言解题，可切换到 Lean 输入。')
             : t('运行环境暂未就绪，原题会保留；恢复后可继续发送。')
-        : newProblem && !this.capabilities ? t("正在连接…") : canGuide ? t('讨论用于交流思路；想调整研究，请切换到「指导 Agent」。')
+        : newProblem && !this.capabilities ? t("正在连接…")
         // A running proof that takes no guidance says so, so a message here is not mistaken for an instruction to the Agent.
-        : this.conversation && this.run?.status === 'running' && !canDecide && !this.options.isSample(this.run)
+        : this.conversation && this.run?.status === 'running' && !showGuidance && !canDecide && !this.options.isSample(this.run)
           ? t('这里发送的是讨论，不会调整正在进行的解题。') : undefined,
       onEnvironment: () => { if (!this.submissionIdentity.unresolved && !this.seed && !this.conversation && !this.run) this.environment = webTaskEnvironment; this.rememberDraft(); this.draw(); }, onEffort: value => { this.effort = value; this.researchEffort = value; this.rememberDraft(); this.draw(); },
       onKey: value => { this.apiKey = value; this.keyNotice = ''; this.clearConnection(); this.draw(); },

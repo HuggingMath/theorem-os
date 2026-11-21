@@ -241,6 +241,7 @@ try {
   browser = await startBrowser(service.server, port);
 
   await scenario('Opening a new run cues only its status and its arriving history row; ordinary list polling never replays an entrance', async h => {
+    await openHistory(h.page);
     const since = await offset(h.page);
     await createRun(h, false);
     await settled(h.page);

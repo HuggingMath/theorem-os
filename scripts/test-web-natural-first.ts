@@ -29,7 +29,7 @@ const mark = (value: string) => { checks.push(value); console.log(`PASS ${value}
 async function openConnectionSettings(page: Page) {
   const settings = page.locator('#formalize-settings');
   if (!await settings.evaluate(node => (node as HTMLDetailsElement).open)) await settings.locator(':scope > summary').click();
-  await page.locator('.chat-settings-fields').waitFor();
+  await settings.locator(':scope > .chat-settings-fields').waitFor();
 }
 async function openExamples(page: Page) {
   const examples = page.locator('[data-chat-examples]');
@@ -80,8 +80,8 @@ try {
     assert.equal(await page.locator('#workbench-home').getAttribute('href'), './');
     const emptyInput = await page.locator('#formalize-original').boundingBox();
     assert.ok(emptyInput && emptyInput.height < 180, 'The initial input is comfortably sized');
-    // The heading, its subtitle and the composer share one centre line.
-    const centres = await page.evaluate(() => ['.chat-start h1', '.chat-start > p', '#natural-research'].map(selector => {
+    // The heading and the composer share one centre line.
+    const centres = await page.evaluate(() => ['.chat-start h1', '#natural-research'].map(selector => {
       const box = document.querySelector(selector)!.getBoundingClientRect(); return box.left + box.width / 2;
     }));
     assert.ok(Math.max(...centres) - Math.min(...centres) <= 2, `The empty-chat heading is off centre: ${centres.map(Math.round).join(', ')}`);
@@ -120,7 +120,7 @@ try {
     assert.equal(await page.locator('#formalize-effort').inputValue(), 'high');
     const placement = await page.evaluate(() => {
       const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
-      return { panel: box('.chat-settings-fields'), toolbar: box('.chat-composer-toolbar'), heading: box('.chat-start h1'), height: innerHeight };
+      return { panel: box('#formalize-settings .chat-settings-fields'), toolbar: box('.chat-composer-toolbar'), heading: box('.chat-start h1'), height: innerHeight };
     });
     assert.ok(placement.panel.top >= placement.toolbar.bottom && placement.panel.top > placement.heading.bottom && placement.panel.bottom <= placement.height + 1,
       `The home settings must open below the composer and on screen: ${JSON.stringify(placement)}`);
@@ -134,18 +134,23 @@ try {
       assert.match(await page.locator('[data-chat-budget]').innerText(), /形式化[\s\S]*不限[\s\S]*证明[\s\S]*不限/u);
       await openConnectionSettings(page);
       await page.locator('#formalize-key').fill('gateway-key-to-clear');
+      const model = page.locator('#chat-model-settings > summary');
+      await model.click();
       await page.locator('#formalize-provider').selectOption('openai');
       assert.equal(await page.locator('#formalize-key').inputValue(), '', 'A gateway key cannot accidentally be sent to OpenAI');
       assert.equal(await page.locator('#chat-key-help a').getAttribute('href'), 'https://platform.openai.com/api-keys');
       assert.equal(await page.locator('#formalize-model').inputValue(), 'gpt-6.1-sol');
+      await openConnectionSettings(page);
       await page.locator('#formalize-key').fill('sk-disposable-check');
       await page.locator('#check-model-connection').click();
       await page.locator('#chat-connection-result[data-status="available"]').waitFor();
       assert.equal(connectionChecks.length, 1);
       assert.equal(connectionChecks[0]?.body.model, 'gpt-6.1-sol');
       assert.equal(connectionChecks[0]?.body.apiKey, 'sk-disposable-check');
+      await model.click();
       await page.locator('#formalize-model').fill('fixture-other-model');
       assert.equal(await page.locator('#chat-connection-result').count(), 0, 'A model change invalidates the prior connection result');
+      await openConnectionSettings(page);
       connectionStatus = 'unknown';
       await page.locator('#check-model-connection').click();
       await page.locator('#chat-connection-result[data-status="unknown"]').waitFor();
@@ -169,18 +174,20 @@ try {
       await page.locator('#formalize-minutes').fill('4');
       await page.locator('#research-minutes').fill('3');
       await page.locator('#research-turns').fill('4');
+      await model.click();
       await page.locator('#formalize-effort').selectOption('max');
       assert.equal(await page.locator('#formalize-start').isEnabled(), true);
       await openChatBudget(page);
       assert.match(await page.locator('[data-chat-budget]').innerText(), /4 分钟[\s\S]*3 分钟/u);
       assert.equal(writes.length, 0, 'Connection checks and budget edits create no paid task');
-      await openConnectionSettings(page);
+      await model.click();
       await page.locator('#formalize-provider').selectOption('sub2api');
       await page.locator('#formalize-original').fill('');
+      await openConnectionSettings(page);
       mark('provider-specific key guidance, key clearing, unlimited defaults, optional finite budgets and two non-generating connection checks');
     }
     await page.locator('#formalize-settings > summary').click();
-    await page.locator('.chat-settings-fields').waitFor({ state: 'hidden' });
+    await page.locator('#formalize-settings .chat-settings-fields').waitFor({ state: 'hidden' });
     if (width === 320) await page.setViewportSize({ width, height: 1000 });
     mark(`${locale} ${width}px: the home settings open below the composer, clear of the heading and the input, and on screen`);
 

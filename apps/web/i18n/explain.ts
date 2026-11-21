@@ -83,7 +83,6 @@ export const explain: Record<string, string> = {
   "正在重新连接模型服务。可以稍后回来看结果。": "Reconnecting to the model service. You can come back later.",
   "模型调用失败，正在重试": "Retrying the failed model request",
   "排队等待生成": "Waiting in the queue",
-  "正在生成讲解": "Generating the explanation",
   "生成在服务器上进行，可以关闭页面，稍后回来查看。": "Generation runs on the server. You can close this page and come back later.",
   "已用时间": "Elapsed",
   "排队位置": "Queue position",

@@ -4,9 +4,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium, type Page } from 'playwright';
+import { chromium, type Browser, type Page } from 'playwright';
 import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
+import type { WebConversation } from '../apps/web/conversationTypes';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebResult, WebRun } from '../apps/web/shared';
 import { closeSettings, fillConfig, openSettings, showArtifacts, showChat, selectConfig } from './web-ui-controls';
@@ -139,6 +140,103 @@ async function sourceMatches(page: Page, selector: string, expected: string) {
 async function screenshot(page: Page, name: string) {
   await page.screenshot({ path: path.join(output, name), fullPage: true });
   screenshots.push(name);
+}
+
+async function checkLongChat(browser: Browser) {
+  const chat = await browser.newPage({ viewport: { width: 1440, height: 900 }, locale: 'zh-CN', reducedMotion: 'reduce' });
+  const id = crypto.randomUUID(), at = new Date().toISOString();
+  const messages: WebConversation['messages'] = Array.from({ length: 160 }, (_, index) => ({
+    id: `message-${index}`, role: index % 2 ? 'assistant' : 'user', kind: 'text', status: 'complete', createdAt: at,
+    text: index % 2 ? '根据 **已有证明** 可得结论。\n\n'.repeat(12) : `请读第 ${index} 段`,
+  }));
+  try {
+    chat.on('pageerror', error => errors.push(error.message));
+    await chat.route(`**/api/conversations/${id}`, route => route.fulfill({ json: { conversation: {
+      id, title: '本地长对话', createdAt: at, updatedAt: at, messages,
+    } } }));
+    await chat.goto(`${origin}/?chat=${id}`);
+    await chat.locator('[data-message-id="message-159"]').waitFor({ state: 'attached' });
+    await chat.evaluate(() => document.fonts.ready); await nextPaint(chat);
+    const reading = await chat.locator('#research-chat-thread').evaluate(async thread => {
+      const rect = Element.prototype.getBoundingClientRect;
+      let reads = 0;
+      Element.prototype.getBoundingClientRect = function () {
+        if (this.hasAttribute('data-message-id')) reads++;
+        return rect.call(this);
+      };
+      try {
+        for (let step = 0; step < 12; step++) {
+          thread.scrollTop = thread.scrollHeight * 0.85 + step * 30;
+          await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        }
+      } finally { Element.prototype.getBoundingClientRect = rect; }
+      const top = thread.getBoundingClientRect().top;
+      const message = [...thread.querySelectorAll<HTMLElement>('[data-message-id]')].find(item => item.getBoundingClientRect().bottom > top + 1)!;
+      return { reads, anchor: message.dataset.messageId, offset: message.getBoundingClientRect().top - top };
+    });
+    assert.ok(reading.reads <= 12 * 12, `12 scroll steps measured ${reading.reads} messages in a 160-message chat`);
+    await chat.reload();
+    await chat.waitForFunction(({ anchor, offset }) => {
+      const thread = document.querySelector('#research-chat-thread')!;
+      const message = thread.querySelector(`[data-message-id="${anchor}"]`);
+      return message && Math.abs(message.getBoundingClientRect().top - thread.getBoundingClientRect().top - offset) < 4;
+    }, reading);
+    await chat.locator('[data-chat-latest]').click();
+    await chat.waitForFunction(() => {
+      const thread = document.querySelector('#research-chat-thread')!;
+      return thread.scrollHeight - thread.scrollTop - thread.clientHeight < 5;
+    });
+    mark(`Long chat scroll checked ${reading.reads} messages, restored its position after reload, and returned to the latest reply`);
+  } finally { await chat.close(); }
+}
+
+async function checkLongChatMath(browser: Browser) {
+  const id = crypto.randomUUID(), at = new Date().toISOString();
+  const messages: WebConversation['messages'] = Array.from({ length: 160 }, (_, index) => ({
+    id: `math-${index}`, role: index % 2 ? 'assistant' : 'user', kind: 'text', status: 'complete', createdAt: at,
+    text: index % 2 ? [
+      '这里要核对公式 $a+b=c$。',
+      '$$\\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}$$',
+      '继续核对这个步骤所用的假设。'.repeat(25),
+    ].join('\n\n') : `请读第 ${index} 段`,
+  }));
+  for (const width of [1440, 390]) {
+    const chat = await browser.newPage({ viewport: { width, height: 900 }, locale: 'zh-CN', reducedMotion: 'reduce' });
+    try {
+      chat.on('pageerror', error => errors.push(error.message));
+      await chat.route(`**/api/conversations/${id}`, route => route.fulfill({ json: { conversation: {
+        id, title: '本地公式长对话', createdAt: at, updatedAt: at, messages,
+      } } }));
+      const thread = chat.locator('#research-chat-thread');
+      const latest = thread.locator('[data-message-id="math-159"]');
+      const earlier = thread.locator('[data-message-id="math-15"]');
+      await chat.goto(`${origin}/?chat=${id}`);
+      await latest.locator('.katex').nth(1).waitFor({ state: 'attached' });
+      await chat.evaluate(() => document.fonts.ready); await nextPaint(chat);
+      const rendered = await thread.locator('.katex').count();
+      assert.ok(rendered <= 20, `The ${width}px chat eagerly typeset ${rendered} of 160 formulas`);
+      assert.equal(await earlier.locator('.katex').count(), 0);
+      assert.match(await earlier.textContent() ?? '', /\$a\+b=c\$/u);
+
+      await earlier.evaluate(node => node.scrollIntoView({ block: 'start', behavior: 'instant' }));
+      await earlier.locator('.katex').nth(1).waitFor({ state: 'attached' });
+      await chat.evaluate(() => document.fonts.ready); await nextPaint(chat);
+      const anchor = (node: Element) => node.getBoundingClientRect().top
+        - document.querySelector('#research-chat-thread')!.getBoundingClientRect().top;
+      const offset = await earlier.evaluate(anchor);
+      assert.ok(Math.abs(offset) < 4, `Formula layout moved the message by ${offset}px`);
+      await chat.reload();
+      await earlier.locator('.katex').nth(1).waitFor({ state: 'attached' });
+      await chat.evaluate(() => document.fonts.ready); await nextPaint(chat);
+      assert.ok(Math.abs(await earlier.evaluate(anchor) - offset) < 4, 'Reload retains the message reading position');
+
+      await chat.goto(`${origin}/?chat=${id}&message=math-51`);
+      const linked = thread.locator('[data-message-id="math-51"].chat-search-target');
+      await linked.locator('.katex').first().waitFor({ state: 'attached' });
+      assert.equal(await linked.evaluate(node => node === document.activeElement), true);
+      mark(`${width}px: first open typeset ${rendered}/160 formulas, and older formulas appeared on scroll, reload and message links`);
+    } finally { await chat.close(); }
+  }
 }
 
 async function writeReport(status: 'passed' | 'failed', error?: unknown) {
@@ -284,6 +382,8 @@ try {
   await page.setViewportSize({ width: 1440, height: 900 });
 
   // The chat-first layout shows no pane separator (#pane-resizer is hidden in every view), so no resize is measured.
+  await checkLongChat(browser);
+  await checkLongChatMath(browser);
   assert.deepEqual(errors, []);
   assert.equal(apiWrites, 1);
   await writeReport('passed');

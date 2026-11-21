@@ -13,7 +13,7 @@ import { buildResearchOverview, overviewProjectHref, researchVerifiedRuns, type 
 import { problemEntryHref } from './researchProblemNavigation';
 import type { ResearchPersonalProblem } from '../researchPersonalTypes';
 import { PersonalNextNote, PersonalProblemControl, personalProblemUrl } from './researchPersonal';
-import { CollaborationMessageSummary } from './collaborationFlow';
+import { CollaborationMessageSummary } from './collaborationMessageSummary';
 
 export type ResearchOverviewProps = {
   owner: string; runs: readonly WebRun[]; conversations: readonly WebConversationSummary[]; formalizations: readonly WebFormalization[];

@@ -45,7 +45,6 @@ export const formalize: Record<string, string> = {
   '发送研究指导': 'Send research guidance',
   '先核对上一条研究指导的回执。': 'Check the receipt for your previous guidance first.',
   '无需停止解题：指导会直接送到正在工作的 Agent，送达和采纳状态显示在对话中。': 'No need to stop: guidance goes straight to the Agent that is working. Delivery and its decision appear in this conversation.',
-  '研究计划建立后，可以在这里指导 Agent。': 'Once the research plan exists, you can guide the Agents here.',
   '这里发送的是讨论，不会调整正在进行的解题。': 'Messages here are discussion and do not change the proof in progress.',
   '不必停止解题：指导会送到正在工作的 Agent': 'No need to stop: guidance reaches the Agent that is working',
   '提问和讨论，不会送到 Agent': 'Questions and discussion; not sent to the Agents',

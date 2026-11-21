@@ -35,27 +35,6 @@ const inboxLabel = (kind: string) => ({ invitation: tx('协作邀请', 'Invitati
   handoff: tx('任务交接', 'Handoff'), claim: tx('我的认领', 'My claim'), review: tx('待我评审', 'Needs my review'),
   'needs-info': tx('待我补充', 'Needs my input'), reply: tx('议题回复', 'Issue reply'), annotation: tx('片段批注', 'Passage comment'), update: tx('研究更新', 'Research update') })[kind] ?? kind;
 
-export function CollaborationMessageSummary({ request = api }: { request?: WebApi } = {}) {
-  const [data, setData] = useState<ResearchCollaborationInbox>(), [error, setError] = useState(''), [revision, setRevision] = useState(0);
-  useEffect(() => {
-    let live = true, timer: ReturnType<typeof setTimeout>;
-    const controller = new AbortController(); setData(undefined);
-    const read = async () => {
-      try { const result = await request<ResearchCollaborationInbox>(`${base}/collaboration/inbox`, { signal: controller.signal }); if (live) { setData(result); setError(''); } }
-      catch (cause) { if (live && !controller.signal.aborted) setError(errorText(cause)); }
-      if (live) timer = setTimeout(() => void read(), 15000);
-    };
-    void read(); return () => { live = false; controller.abort(); clearTimeout(timer); };
-  }, [request, revision]);
-  return <div class="collaboration-message-summary" data-inbox-summary>
-    <ErrorBox message={error} />{error && <button class="text-button" type="button" onClick={() => setRevision(value => value + 1)}>{tx('重新读取消息', 'Reload messages')}</button>}
-    {!data && !error && <p role="status">{tx('正在读取待办与消息…', 'Loading decisions and messages…')}</p>}
-    {data && <><div>{(['decision', 'reply', 'progress'] as const).map(category => <a key={category} href={`workspace.html?tab=inbox&inbox=${category}#collaboration-inbox`}>
-      <strong>{data.counts[category]}</strong><span>{category === 'decision' ? tx('待决定', 'Decisions') : category === 'reply' ? tx('待回复', 'Replies') : tx('未读进展', 'Unread progress')}</span></a>)}</div>
-      <a class="research-inline-link" href="workspace.html?tab=inbox&inbox=unread#collaboration-inbox">{tx(`查看全部消息 · ${data.unread} 条未读`, `All messages · ${data.unread} unread`)}</a></>}
-  </div>;
-}
-
 /** A personal view; injected WebApi retains the workbench's existing owner/CSRF boundary. */
 export function CollaborationInbox({ context, request = api, heading = true, emptyState }: {
   context: ResearchContext; request?: WebApi; heading?: boolean; emptyState?: ComponentChildren;

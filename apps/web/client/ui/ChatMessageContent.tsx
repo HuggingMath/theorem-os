@@ -1,5 +1,6 @@
-import { Fragment, type ComponentChildren } from 'preact';
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { createContext, Fragment, type ComponentChildren } from 'preact';
+import { memo } from 'preact/compat';
+import { useContext, useEffect, useMemo, useState } from 'preact/hooks';
 import { Marked, type Token, type Tokens, type TokenizerExtension } from 'marked';
 import { t } from '../../i18n';
 import { proseMathEnvironment } from '../explainText';
@@ -47,9 +48,10 @@ function safeLink(href: string): string | undefined {
   return /^(?:https?:\/\/|mailto:|\/(?![\/\\])|#)/iu.test(value) && !/[\u0000-\u0020\u007f]/u.test(value) ? value : undefined;
 }
 
+const FormulaReadingArea = createContext<Element | undefined>(undefined);
 function Formula({ token, suffix }: { token: MathToken; suffix?: string }) {
   return <MathFormula source={token.text} fallback={token.raw} display={token.display} complete={token.closed}
-    className={`chat-math${token.display ? ' chat-math-display' : ''}`} suffix={suffix} />;
+    className={`chat-math${token.display ? ' chat-math-display' : ''}`} suffix={suffix} readingArea={useContext(FormulaReadingArea)} />;
 }
 
 function highlightedLean(source: string): ComponentChildren[] {
@@ -166,7 +168,9 @@ function renderToken(token: Token, suffix?: string): ComponentChildren {
 }
 
 /** Display-only: messages stay unchanged in conversation storage, including unfinished streamed text. */
-export function ChatMessageContent({ text }: { text: string }) {
-  const tokens = useMemo(() => markdown.lexer(text), [text]);
-  return <div class="chat-message-content" data-chat-markdown translate={false}><Inline tokens={tokens} /></div>;
-}
+export const ChatMessageContent = memo(function ChatMessageContent({ text, readingArea }: { text: string; readingArea?: Element }) {
+  const tokens = markdown.lexer(text);
+  return <div class="chat-message-content" data-chat-markdown translate={false}>
+    <FormulaReadingArea.Provider value={readingArea}><Inline tokens={tokens} /></FormulaReadingArea.Provider>
+  </div>;
+});
