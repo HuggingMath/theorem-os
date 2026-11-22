@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { decodeChatDraft, editableChatSettings, encodeChatDraft, historicalChatSettings, readEditedProblemId, type ChatDraftSettings } from '../apps/web/client/chatDraft';
 import { decodeLibraryReferences, libraryReferenceId, withLibraryReferences, type ChatLibraryReference } from '../apps/web/client/chatReference';
 import type { WebFormalization } from '../apps/web/formalizationTypes';
@@ -88,14 +88,29 @@ it('retains one recoverable original with its settings while excluding nested ba
 });
 
 it('restores guidance to the exact run and task version together with an independently pending question', () => {
-  const draft = { text: '新的指导草稿', settings, guidance: { runId: 'run-a', taskRef: { id: 'goal', version: 'goal-v1' }, apiKey: 'secret-guidance-key' },
+  const draft = { text: '尚未发送的讨论草稿', settings,
+    guidanceDraft: { text: '新的指导草稿', active: false, runId: 'run-a', taskRef: { id: 'goal', version: 'goal-v1' }, apiKey: 'secret-guidance-key' },
     pendingMessage: { requestId: 'send-1', text: '原来尚未确认的问题', apiKey: 'secret-message-key' } };
   const encoded = encodeChatDraft(draft);
   expect(encoded).not.toContain('secret');
   expect(decodeChatDraft(encoded)).toEqual({ text: draft.text, settings,
-    guidance: { runId: 'run-a', taskRef: { id: 'goal', version: 'goal-v1' } }, pendingMessage: { requestId: 'send-1', text: draft.pendingMessage.text } });
-  expect(decodeChatDraft(encodeChatDraft({ text: 'lead guidance', guidance: { runId: 'run-a' } })))
-    .toEqual({ text: 'lead guidance', guidance: { runId: 'run-a' } });
+    guidanceDraft: { text: draft.guidanceDraft.text, active: false, runId: 'run-a', taskRef: { id: 'goal', version: 'goal-v1' } },
+    pendingMessage: { requestId: 'send-1', text: draft.pendingMessage.text } });
+});
+
+it('moves a saved shared-editor draft into guidance without moving the independently pending question', () => {
+  const pendingMessage = { requestId: 'send-1', text: 'Pending discussion' };
+  const text = '  Saved guidance\n';
+  for (const destination of [{ runId: 'run-a' }, { runId: 'run-b', taskRef: { id: 'goal', version: 'goal-v1' } }]) {
+    const legacy = JSON.stringify({ schema: 'theorem-os.chat-draft.v1', text, settings, guidance: destination, pendingMessage });
+    const migratePosition = vi.fn();
+    const restored = decodeChatDraft(legacy, migratePosition);
+    expect(restored).toEqual({ text: '', settings, pendingMessage, guidanceDraft: { text, active: true, ...destination } });
+    expect(migratePosition).toHaveBeenCalledTimes(1);
+    migratePosition.mockClear();
+    expect(decodeChatDraft(encodeChatDraft(restored), migratePosition)).toEqual(restored);
+    expect(migratePosition).not.toHaveBeenCalled();
+  }
 });
 
 it('discards incomplete task references and invalid pending sends without losing the typed draft', () => {

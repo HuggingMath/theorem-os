@@ -19,7 +19,7 @@ const parse = (file: string) => ts.createSourceFile(file, read(file), ts.ScriptT
 export function bundleSources() {
   const client = fs.readdirSync(web('client'), { recursive: true, encoding: 'utf8' })
     .filter(name => /\.tsx?$/u.test(name) && !/\.test\./u.test(name)).map(name => web('client', name));
-  return [...client, web('presentation.ts'), web('report.ts')].sort();
+  return [...client, web('formalizationReasons.ts'), web('presentation.ts'), web('report.ts')].sort();
 }
 
 // These existing tables feed tx() with a Chinese/English pair rather than literal arguments.
@@ -35,9 +35,21 @@ export function scanBundle(files = bundleSources()) {
   const keys = new Map<string, string>(), stray: string[] = [];
   for (const file of files) {
     const source = parse(file);
-    const where = (node: ts.Node) => `${path.relative(root, file)}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`;
+    const relative = path.relative(root, file);
+    const where = (node: ts.Node) => `${relative}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}`;
+    const addKey = (key: ts.StringLiteralLike) => { if (!keys.has(key.text)) keys.set(key.text, where(key)); };
+    const formalizationReasons = relative === 'apps/web/formalizationReasons.ts';
     const visit = (node: ts.Node) => {
-      if (ts.isVariableDeclaration(node) && bilingualTables.get(path.relative(root, file)) === node.name.getText(source) && node.initializer) {
+      // This shared module looks up stop reasons before translating them in the browser or on the server.
+      if (formalizationReasons && ts.isVariableDeclaration(node) && node.name.getText(source) === 'reasons'
+          && node.initializer && ts.isObjectLiteralExpression(node.initializer)) {
+        for (const property of node.initializer.properties) {
+          if (ts.isPropertyAssignment(property) && ts.isStringLiteralLike(property.initializer)) addKey(property.initializer);
+          else visit(property);
+        }
+        return;
+      }
+      if (ts.isVariableDeclaration(node) && bilingualTables.get(relative) === node.name.getText(source) && node.initializer) {
         const pairs = (value: ts.Node) => {
           if (ts.isArrayLiteralExpression(value) && value.elements.every(ts.isStringLiteralLike)) {
             const english = value.elements.at(-1);
@@ -59,15 +71,18 @@ export function scanBundle(files = bundleSources()) {
         if (english) visit(english);
         return;
       }
-      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 't') {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && (node.expression.text === 't'
+          || formalizationReasons && ['translate', 'tOverride'].includes(node.expression.text))) {
         const [key, ...rest] = node.arguments;
-        if (key && ts.isStringLiteralLike(key)) { if (!keys.has(key.text)) keys.set(key.text, where(key)); }
-        else stray.push(`${where(node)} t() needs a literal key`);
+        if (key && ts.isStringLiteralLike(key)) addKey(key);
+        else if (formalizationReasons && node.expression.text === 'tOverride' && key && ts.isConditionalExpression(key)
+            && key.whenTrue.getText(source) === 'reasons[key]' && ts.isStringLiteralLike(key.whenFalse)) addKey(key.whenFalse);
+        else stray.push(`${where(node)} ${node.expression.text}() needs a literal key`);
         rest.forEach(visit);
         return;
       }
       const literal = ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node) || ts.isRegularExpressionLiteral(node) || ts.isJsxText(node);
-      if (literal && han.test(node.getText(source)) && !allowed(node, source)) stray.push(`${where(node)} ${node.getText(source).slice(0, 80)}`);
+      if (literal && han.test(node.getText(source)) && !allowed(node.getText(source), relative)) stray.push(`${where(node)} ${node.getText(source).slice(0, 80)}`);
       ts.forEachChild(node, visit);
     };
     visit(source);
@@ -89,7 +104,15 @@ const allowedText = new Set(['/会话/u', '/[，,\\s]+/u', '/[,，\\n]/u', "'会
   "'knowledge search library 知识 检索 知识库'", "'archive records 归档 记录'", "'guidance feedback history 指导 历史 人工'",
   "'roadmap trajectory steps timeline route 研究路线图 轨迹 步骤 过程 路线'",
   "'collaboration agents plan tasks dependencies reviews 协作 计划 任务 分工 依赖 审阅 Agent'"]);
-const allowed = (node: ts.Node, source: ts.SourceFile) => allowedText.has(node.getText(source));
+// These patterns and phrases normalize the saved proof text in its own language.
+const savedExplanationText = new Set([
+  "'|(迹条件|维数条件|交换条件|交换性|假设|条件|等式|不等式|结论)'",
+  "`(?![ \\t]*(?:是|为|表示|代表))([ \\t]+说)?`",
+  "/[ \\t]说$/u",
+  "'维数等式'", "'假设'", "'由题设可知，'",
+]);
+const allowed = (text: string, file: string) => allowedText.has(text)
+  || (file === 'apps/web/client/readableExplanation.ts' && savedExplanationText.has(text));
 
 /** Text nodes and readable attributes of the static pages, with whitespace collapsed as localizeDocument does. */
 export function pageKeys() {

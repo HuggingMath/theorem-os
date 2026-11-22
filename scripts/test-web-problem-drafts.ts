@@ -10,7 +10,7 @@ import type { WebRunner } from '../apps/web/runner';
 import type { ResearchAccountDraftResult } from '../apps/web/researchPersonalTypes';
 import type { ProblemDraftValue } from '../apps/web/problemDraftTypes';
 import { freePort, startBrowser } from './web-scenario';
-import { enterLean, closeSettings, openAdvancedChatSettings } from './web-ui-controls';
+import { enterLean, closeSettings, openAdvancedChatSettings, openChatModelSettings } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..'), output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/product-continuity/research-followthrough/entry');
 const staticRoot = process.env.THEOREMOS_FRONTEND_TEST_STATIC_ROOT ?? path.join(root, 'out/web');
@@ -92,9 +92,10 @@ try {
   release = await page.evaluate(async () => (await (await fetch('/api/product/status')).json()).release);
   phase = 'original-recovery';
   const original = '  原题：设 $n \\in \\mathbb{N}$，证明 $n+0=n$。\n先比较归纳法与化简法，再选一条路线。\n';
-  await page.locator('#formalize-original').fill(original); await settings(page);
-  await page.locator('#formalize-model').fill('original-model'); await page.locator('#formalize-environment').selectOption('mathlib');
-  await page.locator('#formalize-effort').selectOption('high'); await page.locator('#formalize-key').fill('sk-disposable-key');
+  await page.locator('#formalize-original').fill(original); await openChatModelSettings(page);
+  await page.locator('#formalize-model').fill('original-model'); await page.locator('#formalize-effort').selectOption('high');
+  await settings(page);
+  await page.locator('#formalize-environment').selectOption('mathlib'); await page.locator('#formalize-key').fill('sk-disposable-key');
   await closeNaturalSettings(page);
   await page.locator('.chat-examples > summary').click(); await page.locator('#formalize-example').selectOption('add-zero');
   const choices = await page.locator('#formalize-example option').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value).filter(Boolean));

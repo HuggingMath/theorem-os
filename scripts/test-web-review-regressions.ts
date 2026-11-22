@@ -95,6 +95,13 @@ async function form(page: Page, task: string) {
   await withSettings(page, () => page.locator('#api-key').fill(fixtureKey));
   await page.locator('#task').fill(task);
 }
+async function fillNaturalKey(page: Page) {
+  const settings = page.locator('#formalize-settings');
+  if (!await settings.evaluate(node => (node as HTMLDetailsElement).open)) {
+    await settings.locator(':scope > summary').click();
+  }
+  await settings.locator('#formalize-key').fill(fixtureKey);
+}
 try {
   const h = await harness(2);
   const alice = await h.login(), sameAccount = await h.login(), bob = await h.login('bob@example.org');
@@ -228,8 +235,7 @@ try {
   await form(stale, 'alice_cookie_switch_private');
   await stale.locator('#open-natural-language').click();
   await stale.locator('#formalize-original').fill('alice_chat_cookie_switch_private');
-  await stale.locator('#formalize-settings > summary').click();
-  await stale.locator('#formalize-key').fill(fixtureKey);
+  await fillNaturalKey(stale);
   await stale.evaluate(() => window.dispatchEvent(new Event('offline')));
   await stale.evaluate(() => window.dispatchEvent(new Event('online')));
   await ready(stale);
@@ -237,7 +243,7 @@ try {
   assert.equal(await stale.locator('#formalize-original').inputValue(), 'alice_chat_cookie_switch_private',
     'Reconnecting the same owner preserves the natural-language draft');
   checks.push({ name: 'Same-owner reconnect preserves the natural-language draft', result: 'passed' });
-  await stale.locator('#formalize-key').fill(fixtureKey);
+  await fillNaturalKey(stale);
   await changed.login('bob@example.org', owner.context);
   await stale.evaluate(() => window.dispatchEvent(new Event('offline')));
   await stale.evaluate(() => window.dispatchEvent(new Event('online')));
@@ -277,8 +283,7 @@ try {
     };
   }, aliceText);
   await latePage.locator('#formalize-original').fill(aliceText);
-  await latePage.locator('#formalize-settings > summary').click();
-  await latePage.locator('#formalize-key').fill(fixtureKey);
+  await fillNaturalKey(latePage);
   await latePage.locator('#formalize-start:enabled').click();
   await latePage.waitForFunction(() => Boolean((window as any).__releaseAliceBody));
   await late.login('bob@example.org', lateAlice.context);

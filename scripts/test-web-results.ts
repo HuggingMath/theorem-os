@@ -228,7 +228,7 @@ try {
       await more.locator(':scope > summary').click();
       await report.waitFor({ state: 'visible' });
       assert.equal((await report.innerText()).trim(), '查看验收报告');
-      await assertHorizontalFit(h.page, '.chat-task-actions:has([data-chat-result-more])', width);
+      await assertHorizontalFit(h.page, '[data-chat-result-more]', width);
       await report.scrollIntoViewIfNeeded();
       await screenshot(h.page, `results-${width}-accepted-more.png`);
       await report.click();

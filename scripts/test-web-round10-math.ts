@@ -12,6 +12,7 @@ import { localeStorageKey, translator } from '../apps/web/i18n';
 import type { WebFormalizationReport } from '../apps/web/shared';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { freePort, postRun, readRun, startBrowser } from './web-scenario';
+import { openChatResultDetails } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..');
 const output = process.env.THEOREMOS_ROUND10_MATH_OUTPUT || path.join(root, 'out/web-round10-math');
@@ -93,7 +94,8 @@ try {
           { id: crypto.randomUUID(), role: 'assistant', kind: 'task', text: '', createdAt: at, status: 'complete' }] });
       await page.goto(`${origin}/?chat=${chatId}`); await page.locator(`[data-conversation="${chatId}"]`).waitFor();
       const messageMath = await readyMath(page.locator(`[data-conversation="${chatId}"] .chat-message-content`).first(), 3);
-      await page.locator('[data-research-artifact="original"]').first().click();
+      const details = await openChatResultDetails(page);
+      await details.locator('[data-research-artifact="original"]').click();
       const panel = page.locator('#chat-original-panel');
       const originalMath = await readyMath(panel.locator('.chat-original-columns .chat-message-text').first(), 3);
       const translationMath = await readyMath(panel.locator('.chat-backtranslation'), 4);

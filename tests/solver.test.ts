@@ -1496,7 +1496,8 @@ describe('isolated solver and host acceptance', () => {
     host.verify.mockImplementation(async request => turn === 1 ? failed(verified(request), { stdoutPreview: unsolved }) : verified(request));
     host.createSession.mockImplementation(async (options: MathAgentOptions) => {
       const first = host.createSession.mock.calls.length === 1;
-      return { threadId: first ? 'large-thread' : 'continued-thread', lastInputTokens: first ? 100_000 : 1000,
+      const threadId = options.threadId ?? (first ? 'large-thread' : 'continued-thread');
+      return { threadId, lastInputTokens: first ? 100_000 : 1000,
         close: first ? closes[0] : closes[1], interrupt: vi.fn(), run: async (message: string) => {
           messages.push(message); turn++;
           if (first) {

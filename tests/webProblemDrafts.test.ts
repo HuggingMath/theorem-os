@@ -41,10 +41,12 @@ describe('unsubmitted account problem drafts', () => {
   });
   it('keeps independently named problems with exact text and safe settings without a project or run', () => {
     const { personal, get } = fixture();
-    const first = personal.saveDraft(alice, input('natural-one'));
+    const withPreferences: ProblemDraftValue = { ...natural, settings: { ...natural.settings, autoExplain: false, explanationLanguage: 'en' } };
+    const first = personal.saveDraft(alice, input('natural-one', withPreferences));
     const second = personal.saveDraft(alice, { ...input('natural-two'), summary: '第二份原题' });
     expect(first.draft.id).not.toBe(second.draft.id);
-    expect(personal.draft(alice, first.draft.id).version.value).toEqual(natural);
+    expect(personal.draft(alice, first.draft.id).version.value).toEqual(withPreferences);
+    expect(personal.draft(alice, second.draft.id).version.value).toEqual(natural);
     expect(personal.drafts(alice, undefined, 'problem').items).toHaveLength(2);
     expect(personal.drafts(bob, undefined, 'problem').items).toEqual([]);
     expect(() => personal.draft(bob, first.draft.id)).toThrow('不存在');

@@ -39,6 +39,7 @@ const values = {
   problem: z.discriminatedUnion('mode', [
     z.object({ mode: z.literal('natural'), text: text(32768), settings: z.object({ providerId: text(64), model: text(128),
       environment: z.enum(['standard', 'mathlib']), effort: z.enum(['low', 'high', 'max']), participation: z.enum(['guided', 'automatic']),
+      autoExplain: z.boolean().optional(), explanationLanguage: z.enum(['zh', 'en']).optional(),
       researchEffort: z.enum(['low', 'high', 'max']).optional(),
       maxRunSeconds: z.number().finite().nonnegative(), maxTotalTokens: z.number().finite().nonnegative(),
       research: z.object({ maxRunSeconds: z.number().finite().nonnegative(), maxTotalTokens: z.number().finite().nonnegative(), maxTurns: z.number().finite().nonnegative() }).strict() }).strict() }).strict(),

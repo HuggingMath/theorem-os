@@ -11,7 +11,7 @@ import { WebStorage } from '../apps/web/storage';
 import type { WebRunner } from '../apps/web/runner';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { freePort, startBrowser } from './web-scenario';
-import { openAdvancedChatSettings, openChatBudget } from './web-ui-controls';
+import { openAdvancedChatSettings, openChatBudget, openChatModelSettings } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..'), output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/product-continuity/research-closure/planning-browser');
 const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-start-planning-'));
@@ -49,10 +49,10 @@ try {
     });
     const page = await context.newPage(); active = page; page.setDefaultTimeout(15000); page.on('pageerror', error => errors.push(error.message));
     phase = `new-account-rate-${language}`;
-    await page.goto(`${origin}/?lang=${language}`); await page.locator('[data-first-research-start]').waitFor();
+    await page.goto(`${origin}/?lang=${language}`); await page.locator('#formalize-original').waitFor();
     const runs = await page.evaluate(async () => (await (await fetch('/api/runs')).json()).runs);
     assert.equal(runs.length, 0, 'Rate entry works before the first run');
-    await page.locator('#formalize-settings > summary').click();
+    await openChatModelSettings(page);
     await page.locator('#formalize-model').fill('planned-model');
     const cost = page.locator('#natural-research [data-start-cost]');
     // Quota and cost sit behind one closed line under the limits.
@@ -101,7 +101,7 @@ try {
     assert.match(await cost.locator('[data-cost-total]').innerText(), /USD 6\.00/u);
     assert.equal(await page.locator('#formalize-original').inputValue(), formula);
     phase = `rate-isolation-${language}`;
-    await page.locator('#formalize-settings > summary').click();
+    await openChatModelSettings(page);
     await page.locator('#formalize-model').fill('other-model'); await openChatBudget(page);
     await cost.locator('[data-cost-unavailable]').waitFor(); assert.equal(await cost.locator('[data-cost-total]').count(), 0);
     await cost.locator('[data-start-rate] > summary').click(); await cost.locator('[data-start-rate-value]').fill('0');

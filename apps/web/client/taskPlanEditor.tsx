@@ -9,7 +9,8 @@ import { DecisionSummary } from './decisionSummary';
 const tx = (zh: string, en: string) => locale === 'en' ? en : zh;
 
 type PlanDraft = { text: string; receipt?: WebCommandResult; previewText?: string; error?: string; notice?: string; submitted?: boolean;
-  busy?: boolean; observation?: WebObservation; comparison?: WebObservation['plan']; pending?: { proposal: WebPlanProposal; missing?: boolean } };
+  busy?: boolean; observation?: WebObservation; comparison?: WebObservation['plan']; pending?: { proposal: WebPlanProposal; missing?: boolean };
+  receiptRead?: AbortController };
 const responseStatus = (error: unknown) => error && typeof error === 'object' && 'status' in error ? error.status : undefined;
 const scheduling = () => <><option value="active">{t('继续')}</option><option value="paused">{t('暂停')}</option><option value="stopped">{t('停止')}</option></>;
 type PlanEditorAccess = { runId?: string; status?: WebRun['status']; connected: boolean; readOnly: boolean; edit?: boolean };
@@ -114,11 +115,13 @@ export class TaskPlanEditor {
   }
   /** An owner change discards local plans and prevents an old command from recovering with the next owner's session. */
   dispose() {
+    for (const draft of this.drafts.values()) draft.receiptRead?.abort();
     this.disposed = true; this.runId = ''; this.observation = undefined; this.drafts.clear();
     this.dialog.close(); this.dialog.remove();
   }
   /** A new frozen solver round retires only this research's drafts and pending commands. */
   retireRun(runId: string) {
+    this.drafts.get(runId)?.receiptRead?.abort();
     this.drafts.delete(runId);
     if (this.runId === runId) { this.runId = ''; this.observation = undefined; this.dialog.close(); }
   }
@@ -162,6 +165,8 @@ export class TaskPlanEditor {
       draft.receipt = this.observedReceipt(draft, draft.receipt?.id === edit.id ? draft.receipt : { id: edit.id, status: 'unknown' });
       draft.pending = undefined;
       if (pending) {
+        // Live evidence has settled the command, so stop reading the now-obsolete receipt.
+        draft.receiptRead?.abort();
         draft.error = undefined;
         draft.notice = t('提交回执不代表证明已重新检查，请在计划记录中查看应用状态与重新检查结果。');
       }
@@ -489,15 +494,17 @@ export class TaskPlanEditor {
   }
   private async readReceipt(runId: string, draft: PlanDraft) {
     const pending = draft.pending; if (!pending) return;
+    const controller = new AbortController();
+    draft.receiptRead = controller;
     try {
-      const { receipt } = await this.api<{ receipt: WebCommandResult }>(`/api/runs/${encodeURIComponent(runId)}/commands/${encodeURIComponent(pending.proposal.id)}`);
+      const { receipt } = await this.api<{ receipt: WebCommandResult }>(`/api/runs/${encodeURIComponent(runId)}/commands/${encodeURIComponent(pending.proposal.id)}`, { signal: controller.signal });
       if (!this.owns(runId, draft) || draft.pending !== pending) return true;
       this.recordReceipt(runId, draft, receipt); return true;
     } catch (error) {
       if (!this.owns(runId, draft) || draft.pending !== pending) return true;
       pending.missing = responseStatus(error) === 404;
       draft.error = errorText(error); return false;
-    }
+    } finally { draft.receiptRead = undefined; }
   }
   private async recover(retryMissing: boolean) {
     const runId = this.runId, draft = this.draft(); if (draft.busy || !draft.pending || retryMissing && this.currentEditUnavailableReason()) return;

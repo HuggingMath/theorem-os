@@ -11,8 +11,8 @@ import { readWebConfig } from '../apps/web/config';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebObservation, WebInspection } from '../apps/web/collaboration';
 import type { WorkerMessage } from '../apps/web/shared';
-import { freePort, startBrowser, postRun, settled, deferred } from './web-scenario';
-import { openTab } from './web-ui-controls';
+import { freePort, startBrowser, postRun, settled } from './web-scenario';
+import { openTab, refresh } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..');
 const output = path.join(root, 'out/frontend-round5/workbench');
@@ -75,7 +75,6 @@ try {
       if (new URL(route.request().url()).origin !== origin) { external.push(route.request().url()); await route.abort(); }
       else await route.continue();
     });
-    const release = deferred(), held = deferred();
     let control: Control | undefined;
     try {
       await page.goto(origin); await page.locator('#formalize-original').waitFor();
@@ -83,26 +82,19 @@ try {
         source, task: 'Observe plan state synchronization', maxTurns: 2, maxRunSeconds: 300, workers: 2, coordination: 'cooperative', planApproval: true });
       await page.goto(origin + '/?run=' + run.id);
       await page.waitForURL(url => url.searchParams.has('chat'));
-      await page.locator('[data-chat-plan-decision][data-waiting="true"]').waitFor();
-      // The status adds one line only while the task waits for the reader.
-      assert.equal((await page.locator('[data-chat-next-action] strong').innerText()).trim(), '查看并确认研究计划');
+      const waiting = page.locator('[data-chat-plan-decision][data-waiting="true"]');
+      await waiting.waitFor();
+      assert.equal((await waiting.locator('h3').innerText()).trim(), '研究计划，等你决定');
       await openTab(page, 'collaboration');
       await page.locator('[data-collab-observation]').waitFor({ state: 'attached' });
       control = controls.get(run.id)!;
-      let hold = true;
-      await page.route(origin + '/api/runs/' + run.id, async route => {
-        if (!hold || route.request().method() !== 'GET') { await route.continue(); return; }
-        hold = false;
-        const response = await route.fetch();
-        assert.equal((await response.json()).run.observation.sequence, 2);
-        held.resolve(); await release.promise; await route.fulfill({ response });
-      });
-      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await held.promise;
+      const stale = await page.evaluate(async () => (await fetch('/api/runs')).json());
+      assert.equal(stale.runs.find((item: { id: string }) => item.id === run.id).observation.sequence, 2);
       if (kind === 'approval') {
         Object.assign(control.observation.inspection.planApproval!, { status: 'approved', approvedId: crypto.randomUUID(), approvedVersion: 'fixture-plan-v1', approvedAt: Date.now() });
         control.emit();
-        await page.locator('[data-chat-plan-decision][data-waiting="false"]').waitFor({ state: 'attached' });
-        assert.equal(await page.locator('[data-chat-next-action]').count(), 0, 'An approved plan asks nothing more of the reader');
+        await waiting.waitFor({ state: 'detached' });
+        assert.equal(await page.locator('[data-chat-approve-plan]').count(), 0, 'An approved plan asks nothing more of the reader');
       } else if (kind === 'restart') {
         const before = control.observation.solverRunId, next = before + '-round2';
         control.observation.solverRunId = next;
@@ -121,10 +113,10 @@ try {
         await page.locator('[data-research-stop]').waitFor({ state: 'detached' });
       }
       if (kind !== 'completion') await page.waitForFunction(() => document.querySelector('[data-collab-observation]')?.textContent?.includes('观察 #3'));
-      const response = page.waitForResponse(reply => reply.request().method() === 'GET' && new URL(reply.url()).pathname === '/api/runs/' + run.id);
-      release.resolve(); await response; await settled(page);
+      await page.route(origin + '/api/runs', route => route.fulfill({ json: stale }));
+      await refresh({ page }); await settled(page);
       if (kind === 'approval') {
-        assert.equal(await page.locator('[data-chat-plan-decision]').getAttribute('data-waiting'), 'false');
+        assert.equal(await waiting.count(), 0, 'A stale read cannot bring back the approval prompt');
         assert.equal(await page.locator('[data-chat-approve-plan]').count(), 0);
       } else if (kind === 'restart') {
         assert.ok((await page.locator('[data-chat-plan-decision]').innerText()).includes('Round 2 supporting task'));
@@ -136,9 +128,9 @@ try {
       }
       await page.screenshot({ path: path.join(output, `${kind}-${width}.png`) });
       checks.push({ kind, width, heldObservation: 2, retainedObservation: kind === 'completion' ? 2 : 3,
-        planDecision: await page.locator('[data-chat-plan-decision]').textContent().catch(() => null) });
+        planDecision: (await page.locator('[data-chat-plan-decision]').allTextContents())[0] ?? null });
       console.log(`PASS ${current}: late chat read preserves the live state`);
-    } finally { release.resolve(); control?.finish(); await context.close(); }
+    } finally { control?.finish(); await context.close(); }
   }
   assert.deepEqual(errors, []); assert.deepEqual(external, []);
 } catch (error) { failure = String(error); await active?.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {}); throw error; }

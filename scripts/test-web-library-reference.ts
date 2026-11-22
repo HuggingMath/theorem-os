@@ -15,7 +15,7 @@ import type { WebConversation } from '../apps/web/conversationTypes';
 import type { InstalledLibraryDetail, InstalledLibraryDirectory, InstalledLibraryEntry } from '../apps/web/installedLibraryTypes';
 import { audit } from './web-a11y';
 import { freePort } from './web-scenario';
-import { clickWorkbenchAction } from './web-ui-controls';
+import { clickWorkbenchAction, openNavigationMenu } from './web-ui-controls';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), output = path.join(root, 'out/web-library-reference');
 await fs.mkdir(output, { recursive: true });
@@ -89,12 +89,8 @@ function metadataRequests() {
   return requests.filter(request => request.scenario === scenarioName && request.pathname === '/api/research/library/installed/module');
 }
 async function openLibrary(page: Page, chat = '', editedProblem = '') {
-  let link = page.locator('[data-workbench-library]');
-  if (!await link.isVisible()) {
-    const menu = page.locator('[data-research-mobile-navigation]');
-    if (!await menu.evaluate(node => (node as HTMLDetailsElement).open)) await menu.locator('summary').click({ timeout: 0 });
-    link = menu.locator('[data-research-mobile-link="library"]');
-  }
+  const menu = await openNavigationMenu(page);
+  const link = menu.locator('[data-workbench-library]');
   await visible(link);
   const url = new URL(await link.getAttribute('href') ?? '', page.url());
   assert.equal(url.pathname, '/library.html'); assert.equal(url.searchParams.get('workbenchChat') ?? '', chat);

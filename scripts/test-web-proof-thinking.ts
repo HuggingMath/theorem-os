@@ -18,6 +18,7 @@ import { proofOutline } from '../apps/web/verificationKit';
 import { taskVersion } from '../src/solver/tasks';
 import { audit } from './web-a11y';
 import { freePort, preferFullCollaboration, settled } from './web-scenario';
+import { openChatResultDetails } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..');
 const completionReadingOnly = process.argv.includes('--completion-reading-only');
@@ -400,6 +401,15 @@ try {
     const contains = async (value: string) => {
       await page.waitForFunction(expected => document.querySelector('#research-chat-thread [data-thinking-process]')?.textContent?.includes(expected), value);
       const content = await thinking.textContent(); assert.ok(!content?.includes(hiddenReasoning)); assert.ok(!content?.includes(finalPayload));
+    };
+    const waitForRunListRefresh = async () => {
+      const updatedAt = run.updatedAt;
+      await page.waitForResponse(async response => {
+        if (new URL(response.url()).pathname !== '/api/runs' || response.status() !== 200) return false;
+        const { runs: listed } = await response.json() as { runs: WebRun[] };
+        return listed.some(item => item.id === run.id && item.updatedAt === updatedAt);
+      });
+      await settled(page);
     };
     const capture = async (name: string, focus?: string, preserveView = false) => {
       stage = name;
@@ -897,9 +907,8 @@ try {
     assert.equal(await goalVersions.getAttribute('open'), '');
     assert.equal(await goalPlan.locator('[data-thinking-detail]').getAttribute('open'), null, 'Version metadata can remain open while the mathematics is folded');
     const quotedDraftPosition = await selectDraftPosition(0.47, 'backward');
-    const readsBeforeQuote = detailReads;
     touch(); summary('lead', 'public-summary', copy.expanded, true);
-    while (detailReads <= readsBeforeQuote) await settled(page);
+    await waitForRunListRefresh();
     assert.equal(await composer.inputValue(), workDraft, 'Polling preserves the editable quoted draft');
     await expectQuoteCount(2);
     assert.ok(await composer.evaluate(node => document.activeElement === node), 'Polling preserves discussion input focus');
@@ -956,7 +965,7 @@ try {
     assert.equal(await thinking.locator('[data-thinking-question]').count(), 0, 'Guidance mode hides ordinary discussion quote actions');
     assert.equal(await quoteBar.count(), 0, 'Guidance mode hides the discussion quote undo controls');
     assert.equal(await quoteUndo.count(), 0);
-    assert.equal(await composer.inputValue(), workDraft);
+    assert.equal(await composer.inputValue(), '', 'The guidance editor starts independently of the quoted discussion draft');
     await page.locator('[data-chat-guidance-target]').selectOption('goal');
     assert.equal(await page.locator('[data-chat-guidance-target]').inputValue(), 'goal', 'The existing task guidance selector keeps its meaning');
     await page.locator('[data-chat-guidance-cancel]').click(); await settled(page);
@@ -1055,10 +1064,9 @@ try {
     await query.press('Meta+f'); await settled(page);
     assert.deepEqual(await query.evaluate(node => ({ start: (node as HTMLInputElement).selectionStart, end: (node as HTMLInputElement).selectionEnd })),
       { start: 0, end: 'ui_fixture_proof_search_output_tail'.length }, 'Command+F selects the current query');
-    const readsBeforeSearch = detailReads;
     touch(); summary('lead', 'public-summary', copy.expanded, true);
+    await waitForRunListRefresh();
     await page.waitForFunction(() => document.querySelector('[data-thinking-process]')?.getAttribute('data-thinking-following') === 'false');
-    while (detailReads <= readsBeforeSearch) await settled(page);
     assert.equal(await query.inputValue(), 'ui_fixture_proof_search_output_tail', 'Polling preserves the search input');
     assert.equal(await thinking.locator('[data-thinking-entry]').count(), 1);
     assert.equal(await thinking.getAttribute('data-thinking-following'), 'false');
@@ -1133,7 +1141,10 @@ try {
     assert.equal(await thinking.locator('[data-thinking-selected="true"]').count(), 0, 'Clearing the query resets the selected result');
     assert.equal(await thinking.locator('[data-thinking-search-position]').count(), 0);
     assert.equal(await previousMatch.isDisabled(), true); assert.equal(await nextMatch.isDisabled(), true);
-    assert.equal(await thinking.locator('[data-thinking-entry]').count(), 40);
+    assert.equal(await thinking.locator('[data-thinking-entry]').first().getAttribute('data-thinking-entry'), historyAnchor.id,
+      'Clearing a query restores the original reading window even when updated records extend it');
+    assert.equal(await thinking.locator('[data-thinking-entry="prove:researcher:history-43"]').count(), 1);
+    assert.equal(await thinking.locator('.thinking-earlier').isVisible(), true, 'Clearing a query keeps earlier records available on demand');
     assert.equal(await thinking.getAttribute('data-thinking-following'), 'false', 'Clearing a query keeps reading paused');
     await findRecords('ui_fixture_proof_search_output_tail', 1);
     await searchClose.click(); await settled(page);
@@ -1177,9 +1188,8 @@ try {
     assert.equal(await searchToggle.count(), 0, 'The context return action replaces opening a fresh search');
     if (width === 390) assert.equal(await searchBack.locator('span').isVisible(), false, 'The mobile return action keeps its text label out of the compact toolbar');
     await capture('proof-search-context', undefined, true);
-    const readsBeforeContext = detailReads;
     touch(); summary('lead', 'public-summary', copy.expanded, true);
-    while (detailReads <= readsBeforeContext) await settled(page);
+    await waitForRunListRefresh();
     assert.equal(await searchBack.isVisible(), true, 'Polling preserves the context return path');
     await thinking.locator(':scope > summary').click(); await settled(page);
     await thinking.locator(':scope > summary').click(); await settled(page);
@@ -1224,14 +1234,23 @@ try {
     await searchToggle.click(); await settled(page);
     assert.equal(await query.inputValue(), '', 'A new search after resuming follow starts with an empty query');
     await searchClose.click(); await scrollBody('top');
-    await thinking.locator('.thinking-earlier').click();
+    const earlier = thinking.locator('.thinking-earlier');
+    await earlier.focus(); await settled(page);
+    const beforeLoading = await thinkingBody.evaluate(body => {
+      const toolbar = body.closest('[data-thinking-process]')!.querySelector('.thinking-controls')!.getBoundingClientRect();
+      const thread = document.querySelector('#research-chat-thread')!.getBoundingClientRect();
+      const top = Math.max(body.getBoundingClientRect().top, toolbar.bottom, thread.top);
+      const entry = [...body.querySelectorAll<HTMLElement>('.thinking-entries > [data-thinking-entry]')].find(node => node.getBoundingClientRect().bottom > top + 1)!;
+      return { id: entry.dataset.thinkingEntry!, offset: entry.getBoundingClientRect().top - body.getBoundingClientRect().top };
+    });
+    await earlier.press('Enter');
     await page.waitForFunction(() => document.querySelector('[data-thinking-entry="prove:researcher:history-0"]'));
     await settled(page);
     assert.ok(await thinkingBody.evaluate(node => document.activeElement === node), 'Loading history returns keyboard focus to the log');
     assert.ok(await thinking.locator('[data-thinking-entry]').count() > 40);
-    const loadedAnchorTop = await thinking.locator(`[data-thinking-entry="${historyAnchor.id}"]`).evaluate(entry =>
+    const loadedAnchorTop = await thinking.locator(`[data-thinking-entry="${beforeLoading.id}"]`).evaluate(entry =>
       entry.getBoundingClientRect().top - entry.closest('.thinking-body')!.getBoundingClientRect().top);
-    historyAnchorDelta = Math.abs(loadedAnchorTop - historyAnchor.top);
+    historyAnchorDelta = Math.abs(loadedAnchorTop - beforeLoading.offset);
     assert.ok(historyAnchorDelta <= 4, `Loading earlier records preserves the current reading anchor: ${historyAnchorDelta}px`);
     assert.equal(await thinking.getAttribute('data-thinking-following'), 'false');
     await chooseRecords(true);
@@ -1515,9 +1534,8 @@ try {
     const candidate = run.observation!.inspection.review!;
     await expectVersionCopy(candidateVersions, 'commit', candidate.commit);
     await expectVersionCopy(candidateVersions, 'source', candidate.sourceDigest);
-    const readsBeforeCandidateVersions = detailReads;
     touch(); summary('reviewer', 'review-summary', copy.reviewerSummary);
-    while (detailReads <= readsBeforeCandidateVersions) await settled(page);
+    await waitForRunListRefresh();
     assert.equal(await candidateVersions.getAttribute('open'), '', 'Polling preserves the expanded candidate versions');
     assert.equal(await candidateVersions.locator('[data-thinking-version-field="source"] dd code').textContent(), candidate.sourceDigest);
     await composer.fill(''); await settled(page);
@@ -1550,7 +1568,7 @@ try {
     run.result = { status: 'evaluated_passed', proof: correctedSource, report: { fixture: 'Synthetic acceptance only; no verification process ran.' } };
     await page.waitForFunction(() => document.querySelector('.research-conversation-status')?.getAttribute('data-accepted') === 'true');
     assert.equal(await thinking.getAttribute('open'), '', 'An explicit choice to keep proof history open survives completion');
-    if (!await thinking.evaluate(node => (node as HTMLDetailsElement).open)) await thinking.locator(':scope > summary').click();
+    await openChatResultDetails(page);
     await capture('proof-completed', '[data-thinking-detail="check:v:evaluation"] > summary');
     assert.equal(await page.locator('[data-research-stop]').count(), 0);
 
@@ -1575,6 +1593,7 @@ try {
     assert.equal(await thinking.locator('[data-thinking-entry="check:v:evaluation"]').count(), 0, 'Cancellation does not invent an independent acceptance result');
     await capture('proof-stopped');
     await openConversation(conversation.id);
+    await openChatResultDetails(page);
     await thinking.waitFor();
     assert.equal(await thinking.getAttribute('open'), '', 'Returning to a task restores the reader\'s open history');
     assert.equal(await explanationsFilter.getAttribute('aria-pressed'), 'true', 'The explanations filter is remembered separately for each proof');

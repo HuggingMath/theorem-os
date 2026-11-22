@@ -63,6 +63,7 @@ try {
           await route.continue();
         });
         const page = await context.newPage(); page.setDefaultTimeout(12_000);
+        if (kind === 'offline') await page.clock.install();
         page.on('pageerror', error => errors.push(`${phase}: ${error.message}`));
         try {
           const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/formalizations');
@@ -87,6 +88,8 @@ try {
             assert.equal(await page.locator('#formalize-original').inputValue(), original, 'The original survives checking the Lean alternative');
           } else {
             runtimeReady = true;
+            // A visibility refresh respects the workbench's list refresh interval.
+            await page.clock.fastForward(6_001);
             const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/formalizations');
             await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
             await refreshed;

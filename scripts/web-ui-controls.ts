@@ -50,12 +50,19 @@ export async function openChatBudget(page: Page) {
   return details;
 }
 
-/** Open the composer's optional environment, reasoning and budget fields through their visible disclosure. */
+/** Open the composer's optional environment and budget fields through their visible disclosure. */
 export async function openAdvancedChatSettings(page: Page) {
   const settings = page.locator('#formalize-settings');
   if (!await settings.evaluate(node => (node as HTMLDetailsElement).open)) await settings.locator(':scope > summary').click();
   const advanced = settings.locator('[data-chat-advanced-settings]');
   if (!await advanced.evaluate(node => (node as HTMLDetailsElement).open)) await advanced.locator(':scope > summary').click();
+}
+
+/** Provider, model and reasoning strength use their own composer disclosure. */
+export async function openChatModelSettings(page: Page) {
+  const model = page.locator('#chat-model-settings');
+  if (!await model.evaluate(node => (node as HTMLDetailsElement).open)) await model.locator(':scope > summary').click();
+  await model.locator('#formalize-model').waitFor();
 }
 
 /** Research mode lives with the connection fields inside the composer's settings. */

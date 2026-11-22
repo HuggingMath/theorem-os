@@ -251,8 +251,10 @@ try {
       }
       const newerText = await json(page), held = deferred(), release = deferred(), completed = deferred();
       const target = holdPost ? `/api/runs/${run.id}/edits` : `/api/runs/${run.id}/commands/${original.id}`;
+      const matches = (request: { url(): string; method(): string }) =>
+        new URL(request.url()).pathname === target && request.method() === (holdPost ? 'POST' : 'GET');
       h.effect = async route => {
-        if (new URL(route.request().url()).pathname !== target || route.request().method() !== (holdPost ? 'POST' : 'GET')) return false;
+        if (!matches(route.request())) return false;
         const response = await route.fetch(); assert.equal(response.status(), 200); held.resolve();
         await release.promise;
         if (operation === 'receipt-error') await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'fixture_late_read_failure' }) });
@@ -262,7 +264,13 @@ try {
       try {
         await page.locator(holdPost ? '[data-plan-apply]' : refresh).click(); await held.promise;
         const beforeReads = reads(h, run.id).length;
+        const canceled = !holdPost ? page.waitForEvent('requestfailed', matches) : undefined;
         hostReceipt(run.id, original, 'applied'); await applied(page, original.id);
+        if (canceled) {
+          const request = await canceled;
+          assert.match(request.failure()?.errorText ?? '', /ERR_ABORTED/, 'a live receipt cancels the obsolete pending read');
+          await page.locator('[data-plan-objective]:enabled').waitFor();
+        }
         await page.locator('[data-plan-recheck]').getByText('待重新检查', { exact: true }).waitFor();
         await page.locator('[data-plan-recheck] summary').click();
         const edit = control.observation.inspection.edits.find(edit => edit.id === original.id)!;
@@ -274,7 +282,7 @@ try {
         assert.equal(await page.locator('[data-plan-recheck] details').evaluate((node: HTMLDetailsElement) => node.open), true, 'live recheck updates preserve the open evidence details');
         const finishedRecheck = await page.locator('[data-plan-recheck]').innerText();
         assert.match(finishedRecheck, /fixture-recheck-receipt/);
-        const response = page.waitForResponse(response => new URL(response.url()).pathname === target && response.request().method() === (holdPost ? 'POST' : 'GET'));
+        const response = holdPost ? page.waitForResponse(response => matches(response.request())) : undefined;
         release.resolve(); await completed.promise; await response; await settled(page);
         await page.locator('[data-plan-objective]:enabled').waitFor();
         await applied(page, original.id);

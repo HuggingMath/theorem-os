@@ -16,7 +16,7 @@ import type { WebExplanation, WebSession } from '../apps/web/shared';
 import { readingCommit, readingEvidence, readingRun } from '../tests/helpers/shareReadingFixture';
 import { audit } from './web-a11y';
 import { freePort, postRun, startBrowser, waitForRun } from './web-scenario';
-import { openChatBudget, openChatParticipation } from './web-ui-controls';
+import { openChatBudget, openChatModelSettings, openChatParticipation } from './web-ui-controls';
 
 const root = path.resolve(import.meta.dirname, '..');
 const output = process.env.THEOREMOS_TEST_OUTPUT ?? path.join(root, 'out/product-continuity/first-research-sharing');
@@ -100,7 +100,7 @@ try {
         }
         await route.continue();
       });
-      await page.goto(origin); await page.locator('[data-first-research-start]').waitFor();
+      await page.goto(origin); await page.locator('#formalize-original').waitFor();
       assert.equal(await page.locator('#formalize-start').isDisabled(), true);
       assert.equal(await page.locator('#formalize-settings[open]').count(), 0);
       assert.equal(await page.locator('[data-first-research-more][open]').count(), 0);
@@ -110,25 +110,25 @@ try {
       assert.match(await page.locator('[data-first-research-quota]').innerText(), /3[\s\S]*4/u);
       await page.locator('[data-first-research-more] > summary').click();
       await noOverflow(page);
-      await page.locator('#formalize-settings > summary').click();
+      await openChatParticipation(page);
       await page.locator('#formalize-key').fill(credential);
+      await openChatModelSettings(page);
       await page.locator('#formalize-provider').selectOption('fixture-b');
       assert.equal(await page.locator('#formalize-key').inputValue(), '', 'Changing provider clears a provider-specific key');
-      await page.locator('#formalize-key').fill(credential);
       await page.locator('#formalize-model').fill('fixture-model');
+      await openChatParticipation(page);
+      await page.locator('#formalize-key').fill(credential);
       for (const status of ['available', 'unknown', 'error'] as const) {
         connection = status; await page.locator('#check-model-connection').click();
-        await page.locator(`#chat-connection-result[data-status=${status}]`).waitFor();
-        assert.match(await page.locator('#formalize-settings > summary').getAttribute('aria-label') ?? '', {
-          available: /模型列表可访问|Model list accessible/u, unknown: /仍需核对|Needs confirmation/u,
-          error: /连接需处理|Connection needs attention/u,
-        }[status]);
+        const result = page.locator(`#chat-connection-result[data-status=${status}][role=status]`);
+        await result.waitFor();
+        assert.equal(await result.innerText(), `Fixture model-list result: ${status}`);
       }
       assert.equal(connectionChecks.length, 3);
       assert.equal(connectionChecks[0]!.apiKey, credential); assert.equal(connectionChecks[0]!.model, 'fixture-model');
+      await openChatModelSettings(page);
       await page.locator('#formalize-model').fill('fixture-model-v2');
       assert.equal(await page.locator('#chat-connection-result').count(), 0, 'Editing the model invalidates the check');
-      await page.locator('#formalize-settings > summary').click();
       await openChatBudget(page);
       assert.equal(await page.locator('[data-first-budget]:not([data-first-budget=custom])').count(), 0, 'No preset budgets');
       assert.equal(await page.locator('#formalize-minutes').inputValue(), '');
@@ -144,7 +144,7 @@ try {
         : language === 'zh' ? /自动开始证明/u : /automatically/u);
       await page.locator('#formalize-original').fill('Prove $n+0=n$ for every natural number $n$.');
       assert.equal(await page.locator('#formalize-start').isEnabled(), true, 'Model-list checks are optional');
-      assert.match(await page.locator('#formalize-start').innerText(), participation === 'guided'
+      assert.match(await page.locator('#formalize-start').getAttribute('aria-label') ?? '', participation === 'guided'
         ? language === 'zh' ? /开始核对题目/u : /Start statement review/u : language === 'zh' ? /开始解题/u : /Start solving/u);
       await noOverflow(page); assert.deepEqual(await audit(page), []);
       await page.screenshot({ path: path.join(output, `first-${language}-${width}-${participation}-prepared.png`), fullPage: true });

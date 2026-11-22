@@ -37,7 +37,11 @@ export function SideViewer(props: SideViewerProps) {
     };
     place();
     // Only opening moves it; switching between a column and a dialog as the host resizes does not.
-    if (dialog.open) revealViewer(dialog, dialog.matches(':modal'));
+    if (dialog.open) {
+      const modal = dialog.matches(':modal');
+      if (!modal) dialog.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      revealViewer(dialog, modal);
+    }
     const observer = new ResizeObserver(place);
     observer.observe(host);
     if (scroller) observer.observe(scroller);

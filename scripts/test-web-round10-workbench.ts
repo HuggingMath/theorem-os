@@ -143,7 +143,8 @@ try {
       c = await task(page, ctx); const original = 'Unsent guidance: prove the helper before the main target.';
       await page.locator('[data-chat-guidance-mode-open]').click(); await page.locator('[data-chat-guidance-target]').selectOption('goal');
       await page.locator('#formalize-original').fill(original);
-      assert.deepEqual((await draft(page, c)).guidance, { runId: c.runId, taskRef: { id: 'goal', version: 'goal-v1' } });
+      assert.deepEqual((await draft(page, c)).guidanceDraft,
+        { text: original, active: true, runId: c.runId, taskRef: { id: 'goal', version: 'goal-v1' } });
       await page.locator('#topbar-draft').click(); await page.waitForURL(origin + '/');
       await page.goBack(); await page.locator(`[data-conversation="${c.id}"]`).waitFor();
       await page.locator('[data-chat-guidance-mode-open][aria-pressed="true"]').waitFor();
@@ -151,26 +152,31 @@ try {
       assert.equal(await page.locator('#formalize-original').inputValue(), original);
       await page.reload(); await page.locator('[data-chat-guidance-mode-open][aria-pressed="true"]').waitFor();
       assert.equal(await page.locator('[data-chat-guidance-target]').inputValue(), 'goal');
-      assert.deepEqual((await draft(page, c)).guidance.taskRef, { id: 'goal', version: 'goal-v1' });
+      assert.deepEqual((await draft(page, c)).guidanceDraft?.taskRef, { id: 'goal', version: 'goal-v1' });
       const control = controls.get(c.runId)!; control.observation.inspection.tasks[0]!.version = 'goal-v2'; control.emit();
       await page.reload(); await page.locator('[data-chat-guidance-mode-open][aria-pressed="true"]').waitFor();
       const confirm = page.locator('[data-chat-guidance-mode] button:not([data-chat-guidance-cancel])'); await confirm.waitFor();
       assert.equal(await page.locator('#formalize-start').isDisabled(), true);
-      assert.deepEqual((await draft(page, c)).guidance.taskRef, { id: 'goal', version: 'goal-v1' }, 'refresh never silently rebinds the observed task');
+      assert.deepEqual((await draft(page, c)).guidanceDraft?.taskRef, { id: 'goal', version: 'goal-v1' }, 'refresh never silently rebinds the observed task');
       await page.screenshot({ path: path.join(output, `guidance-stale-${locale}-${width}.png`) });
       await confirm.click(); assert.equal(await page.locator('#formalize-start').isEnabled(), true);
-      assert.deepEqual((await draft(page, c)).guidance.taskRef, { id: 'goal', version: 'goal-v2' });
+      assert.deepEqual((await draft(page, c)).guidanceDraft?.taskRef, { id: 'goal', version: 'goal-v2' });
       const commandBefore = commands.length, providerBefore = providerCalls.length;
       if (width > 850) await page.locator('#formalize-original').press('Enter'); else await page.locator('#formalize-start').click();
       await page.locator('[data-chat-guidance-receipt][data-guidance-status="delivered"]').waitFor();
       assert.equal(commands.length, commandBefore + 1); assert.equal(providerCalls.length, providerBefore);
       assert.deepEqual((commands.at(-1) as any).input.taskRef, { id: 'goal', version: 'goal-v2' });
-      await page.locator('[data-chat-guidance-mode-open]').click(); await page.locator('#formalize-original').fill('Guidance to the lead survives refresh.');
+      const leadGuidance = 'Guidance to the lead survives refresh.';
+      await page.locator('[data-chat-guidance-mode-open]').click(); await page.locator('#formalize-original').fill(leadGuidance);
       await page.reload(); await page.locator('[data-chat-guidance-mode-open][aria-pressed="true"]').waitFor();
       assert.equal(await page.locator('[data-chat-guidance-target]').inputValue(), '');
       await page.locator('[data-chat-guidance-cancel]').click(); await page.reload();
       await page.locator('[data-chat-discussion-mode][aria-pressed="true"]').waitFor();
-      assert.equal(await page.locator('[data-chat-guidance-target]').count(), 0); assert.equal((await draft(page, c)).guidance, undefined);
+      assert.equal(await page.locator('[data-chat-guidance-target]').count(), 0);
+      assert.equal(await page.locator('#formalize-original').inputValue(), '');
+      assert.deepEqual((await draft(page, c)).guidanceDraft, { text: leadGuidance, active: false, runId: c.runId });
+      await page.locator('[data-chat-guidance-mode-open]').click();
+      assert.equal(await page.locator('#formalize-original').inputValue(), leadGuidance);
       await privacy(page); mark({ restoredAfterBackAndRefresh: true, restoredTaskVersion: 'goal-v1', explicitConfirmedVersion: 'goal-v2',
         guidanceCommands: 1, discussionCalls: 0, leadModeRestored: true, explicitDiscussionPersists: true });
     } finally { if (c) controls.get(c.runId)?.finish(); await ctx.close(); }
@@ -210,7 +216,8 @@ try {
       await page.locator('[data-chat-guidance-mode-open][aria-pressed="true"]').waitFor();
       assert.equal(await page.locator('[data-chat-guidance-target]').inputValue(), 'goal');
       assert.equal(await page.locator('#formalize-original').isVisible(), true, 'Guiding a task leaves the reader at the composer');
-      assert.deepEqual((await draft(page, c)).guidance, { runId: c.runId, taskRef: { id: 'goal', version: 'goal-v1' } });
+      assert.deepEqual((await draft(page, c)).guidanceDraft,
+        { text: '', active: true, runId: c.runId, taskRef: { id: 'goal', version: 'goal-v1' } });
       const text = 'Workspace guidance: settle the helper first.';
       const commandBefore = commands.length, providerBefore = providerCalls.length;
       await page.locator('#formalize-original').fill(text); await page.locator('#formalize-start:enabled').click();
@@ -310,7 +317,7 @@ try {
       release.resolve(); await complete(c, 'Accepted question before opening a different draft.'); await settled(page);
       assert.equal(new URL(page.url()).search, ''); assert.equal(await page.locator('#formalize-original').inputValue(), home);
       await page.goBack(); await page.locator(`[data-conversation="${c.id}"]`).waitFor();
-      assert.equal(await page.locator('#formalize-original').inputValue(), '');
+      await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('#formalize-original')?.value === '');
       assert.equal((await draft(page, c)).pendingMessage, undefined); assert.equal(providerCalls.length - before, 1);
       await page.goForward(); await page.waitForURL(origin + '/');
       assert.equal(await page.locator('#formalize-original').inputValue(), home); await privacy(page);

@@ -151,6 +151,7 @@ try {
     const back = (await page.locator('[data-classic-origin] a').getAttribute('href'))!;
     assert.equal(new URL(back, origin).hash.includes(destination.searchParams.get('fromClassic')!), true);
     assert.deepEqual(forbiddenWrites, []); await noOverflow(page);
+    await page.locator('[data-chat-research-overview] > summary').click();
     await page.locator('[data-inbox-summary] > div > a').first().waitFor();
     assert.ok(await page.locator('[data-inbox-summary] > div > a').evaluateAll(links => links.length === 3 && links.every(link => {
       const count = link.querySelector('strong')!.getBoundingClientRect(), label = link.querySelector('span')!.getBoundingClientRect();

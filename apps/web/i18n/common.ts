@@ -106,7 +106,6 @@ export const common: Record<string, string> = {
   "复用任务配置": "Reuse task settings",
   "示例 · 只读": "Sample · read-only",
   "复制运行 ID": "Copy run ID",
-  "这是一份已完成的运行记录：环境、任务协作、Lean 检查和独立验收的记录都可以查看。可以浏览每个标签页；点「用这道题开始研究」会把题目和配置填进新草稿，填入自己的 API Key 即可提交。": "This is a completed run record: the records of the environment, task collaboration, Lean checks and independent acceptance can all be viewed. Browse every tab; “Start research with this problem” copies the problem and settings into a new draft, and you only need to add your own API key to submit.",
   "忽略结束提醒：{0}": "Dismiss finish notice: {0}",
   "研究用时": "Research time",
   "下载报告": "Download report",
