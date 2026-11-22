@@ -4,7 +4,7 @@
 
 ## 发布镜像
 
-`Verify TheoremOS` 在面向 `main` 的 pull request 和 `main` 推送上运行，也可手动运行。它以只读仓库权限执行 TypeScript 检查、运行时与网页构建、离线浏览器回归，以及 Lean 4.33.0 和 4.34.1 上的求解器回归。
+`Verify TheoremOS` 在面向 `main` 的 pull request 和 `main` 推送上运行，也可手动运行。它以只读仓库权限执行 TypeScript 检查、运行时与网页构建、离线浏览器回归，以及 Lean 4.33.0 和 4.34.1 上的求解器回归。验证和镜像发布均使用 Ubuntu 24.04。
 
 推送 `v*` 标签或运行 `gh workflow run images.yml --ref main` 会触发 `Publish workbench images`。发布流程在同一提交上调用上述验证，通过后分别构建和推送 web、worker。两个镜像都使用完整源码 SHA 作为 GHCR 标签，并写入 OCI revision 和 `THEOREMOS_SOURCE_COMMIT`。Web 前端的 `build-info.json` 也记录这个 SHA。两张镜像均推送成功后，流程才上传 `image-release-<SHA>`，其中 `image-release.json` 记录提交及两个 registry digest。
 
