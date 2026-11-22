@@ -101,8 +101,8 @@ COPY docs/web ./docs/web
 COPY docs/archive.html docs/site.css docs/process.css docs/replay.css ./docs/
 COPY docs/en/archive.html ./docs/en/archive.html
 COPY research/openai-math ./research/openai-math
-RUN bun scripts/build-web.ts
 ARG THEOREMOS_SOURCE_COMMIT=unknown
+RUN bun scripts/build-web.ts
 LABEL org.opencontainers.image.revision=$THEOREMOS_SOURCE_COMMIT
 ENV THEOREMOS_WEB_HOST=0.0.0.0 THEOREMOS_WEB_PORT=8787 THEOREMOS_SOURCE_COMMIT=$THEOREMOS_SOURCE_COMMIT
 EXPOSE 8787

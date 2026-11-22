@@ -103,12 +103,14 @@ for (const name of fs.readdirSync(output, { recursive: true, encoding: 'utf8' })
   buildDigest.update(name).update('\0').update(fs.readFileSync(file)).update('\0');
 }
 const digest = buildDigest.digest('hex');
-let commit: string | undefined, modified = false;
+const buildCommit = process.env.THEOREMOS_SOURCE_COMMIT ?? '';
+let commit = /^[a-f0-9]{40}$/u.test(buildCommit) ? buildCommit : undefined;
+let modified = false;
 try {
   const value = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   if (/^[a-f0-9]{40}$/u.test(value)) commit = value;
   modified = Boolean(execFileSync('git', ['status', '--porcelain', '--untracked-files=normal', '--', 'apps/web', 'scripts/build-web.ts'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
-} catch { /* Container builds may omit Git; the frontend digest still identifies the built bytes. */ }
+} catch { /* Container builds may omit Git and supply the commit as a build argument. */ }
 fs.writeFileSync(path.join(output, 'build-info.json'), JSON.stringify({ schema: 'theorem-os.web-build.v1', builtAt: new Date().toISOString(), digest, ...(commit ? { commit } : {}), ...(modified ? { modified: true } : {}) }));
 for (const name of pages) {
   const file = path.join(output, name), html = fs.readFileSync(file, 'utf8');

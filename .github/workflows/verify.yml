@@ -1,0 +1,142 @@
+name: Verify TheoremOS
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck && bun run typecheck:web
+      - name: Verify account, job, persistence and operations boundaries without models
+        run: bunx vitest run --maxWorkers=4 tests/webAuth.test.ts tests/webSignup.test.ts tests/webAuthPolicy.test.ts tests/webQuota.test.ts tests/webAdmission.test.ts tests/webAdmissionRace.test.ts tests/webProviderCheck.test.ts tests/webI18n.test.ts tests/webFonts.test.ts tests/webKeyVault.test.ts tests/webJobs.test.ts tests/webLifecyclePersistence.test.ts tests/webCollaboration.test.ts tests/webConversations.test.ts tests/webExplain.test.ts tests/webPersistence.test.ts tests/webFormalizations.test.ts tests/webExplanation.test.ts tests/webExplanationServer.test.ts tests/webServer.test.ts tests/webRunStream.test.ts tests/webRunner.test.ts tests/webPrecheck.test.ts tests/webOperations.test.ts tests/webOperationsApi.test.ts tests/webOperationsScheduled.test.ts tests/webOperationsMonitor.test.ts
+      - name: Verify isolated provider routing and usage accounting without models
+        run: bunx vitest run --maxWorkers=4 tests/formalizationRelay.test.ts tests/formalizationReviewIsolation.test.ts tests/webFormalizationWorker.test.ts tests/codexSession.test.ts tests/codexSessionLifecycle.test.ts tests/codexSessionCheckpoint.test.ts tests/codexStreamIdle.test.ts tests/codexSessionNotifications.test.ts tests/mathProcess.test.ts tests/mathRuntimeLease.test.ts tests/mathRuntimeLeaseProcess.test.ts tests/formalization.test.ts tests/formalizationRecovery.test.ts tests/formalizationWorkflow.test.ts tests/formalizationLimits.test.ts tests/formalizationFidelityReference.test.ts
+      - name: Verify research recovery, participation and shared run snapshots
+        run: bunx vitest run --maxWorkers=4 tests/webRunSnapshot.test.ts tests/webResearchProjects.test.ts tests/webResearchApi.test.ts tests/webResearchAssets.test.ts tests/webResearchMathematics.test.ts tests/libraryPacks.test.ts tests/leanSource.test.ts
+      - name: Verify direct formalization and independent background review without models
+        run: bunx vitest run --maxWorkers=4 tests/directFormalizationEvidence.test.ts tests/directFormalizationWorkflow.test.ts tests/formalizationCoverage.test.ts tests/formalizationAudit.test.ts tests/formalizationContext.test.ts tests/formalizationPackagesWarmup.test.ts tests/mathProofEnvironmentSeed.test.ts tests/webFormalizationAuditWorker.test.ts tests/webFormalizationBackgroundReview.test.ts tests/webBackgroundReview.test.ts tests/webFormalizationProgress.test.ts tests/webThinkingProcess.test.ts tests/codexSessionInstructions.test.ts
+      - run: bun run build && bun run build:web
+      - run: bunx playwright install --with-deps chromium
+      - name: Verify the browser's login and research flows with local fixtures
+        run: bun run test:web-login && bun run test:web-natural-first && bun run test:web-chat-session && bun run test:web-chat-cancel-recovery && bun run test:web-key-memory && bun run test:web-saved-key && bun run test:web-solve-process && bun run test:web-review-regressions && bun run test:web-plan-recovery && bun run test:web-plan-ownership && bun run test:web-explain && bun run test:web-explain-recovery
+      - name: Verify research account switching and interrupted frontend operations
+        run: bun run test:frontend-round5
+      - name: Verify session renewal, candidate review and route evidence readers
+        run: bun run test:frontend-round6
+      - name: Verify delayed session responses and draft recovery
+        run: bunx vitest run --maxWorkers=4 tests/webSessionCookies.test.ts tests/webResearchSession.test.ts && bun run test:frontend-round7
+      - name: Verify archive budgets, saved keys, plan approvals and historical record navigation
+        run: bunx vitest run --maxWorkers=4 tests/webDraft.test.ts tests/webLongRun.test.ts tests/researchPlanApproval.test.ts tests/archiveRecordNavigation.test.ts tests/globalTrajectory.test.ts && bun run test:frontend-round8
+      - name: Verify historical guidance, mobile controls and native route search input
+        run: bun run test:frontend-round9
+      - name: Verify recovered guidance, message receipts, math readers and source links
+        run: bunx vitest run --maxWorkers=4 tests/webChatDraft.test.ts tests/webConversations.test.ts tests/archiveSourceLocation.test.ts tests/taskPlanEditorAccess.test.ts && bun run test:frontend-round10
+      - name: Verify formalization progress and proof thinking in the browser
+        run: bun scripts/test-web-formalization-progress.ts && bun scripts/test-web-proof-thinking.ts && bunx vitest run tests/webBackgroundReviewWorkflow.test.ts
+
+  verify-research-workflows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - name: Verify product continuity, fixed proof reading and research navigation without models
+        run: bun run test:frontend-research-unit
+      - run: bun run build:web && bun run build:site
+      - run: bunx playwright install --with-deps chromium
+      - name: Verify single-step proof reading in the website and workbench archives
+        run: bun run test:proof-reading-navigation
+      - name: Verify the problem workspace, collaboration, library trials and public reading with disposable fixtures
+        run: bun run test:frontend-product-continuity
+      - name: Verify installed libraries, archived problems, mathematical reading and login returns with disposable fixtures
+        run: bun run test:frontend-research-redesign && bun run test:site-research-entry
+
+  verify-solver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        lean: ['4.33.0', '4.34.1']
+    env:
+      THEOREMOS_TEST_LEAN_VERSION: ${{ matrix.lean }}
+      # Mocked project fixtures also probe elan; use the installed matrix release.
+      ELAN_TOOLCHAIN: leanprover/lean4:v${{ matrix.lean }}
+    steps:
+      - name: Free disk for the native Lean toolchain and solver fixtures
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune --all --force
+          df -h /
+      - name: Prepare namespace sandboxes for native Lean checks
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          # Ubuntu 24.04 restricts unprivileged user namespaces by default.
+          # Allow the verifier to create its isolated namespaces on this disposable CI VM.
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          unshare --user --map-root-user --net --mount --pid --fork --kill-child=SIGKILL /bin/true
+          bwrap --unshare-all --die-with-parent --ro-bind / / --proc /proc --dev /dev -- /bin/true
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --frozen-lockfile
+      - name: Install the pinned elan release
+        run: |
+          sh scripts/install-elan.sh
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.elan/toolchains
+          key: ${{ runner.os }}-solver-lean-${{ matrix.lean }}
+      - run: elan toolchain install "leanprover/lean4:v$THEOREMOS_TEST_LEAN_VERSION"
+      - run: elan run "leanprover/lean4:v$THEOREMOS_TEST_LEAN_VERSION" lean --version
+      - name: Verify solver timeout, recovery, projection and acceptance without models
+        run: bun run test:solver-reliability
+      - name: Verify dependency snapshots and receipt cache bindings
+        run: bunx vitest run --maxWorkers=4 tests/verifierSealedEnvironmentCache.test.ts tests/mathProofEnvironment.test.ts tests/leanProbeSnapshot.test.ts
+      - name: Verify sealed roles, independent audits and native delegation without models
+        if: matrix.lean == '4.33.0'
+        run: bunx vitest run --maxWorkers=1 tests/formalizationSandbox.test.ts tests/formalizationAudit.test.ts tests/agentSessionPlan.test.ts tests/nativeInvestigations.test.ts tests/nativeDelegation.test.ts tests/workflowHarness.test.ts
+      - name: Verify projected proof contracts and retained source contexts
+        run: bunx vitest run --maxWorkers=4 tests/taskTypeContract.test.ts tests/projectionNotation.test.ts tests/taskSourceImplicitInstances.test.ts tests/taskSourceMacroProjection.test.ts tests/taskSourceNotationHints.test.ts tests/taskSourceNotationContext.test.ts tests/solverRetainedSourceGoals.test.ts tests/solverConditionalLibraryImports.test.ts tests/solverCanonicalGoalProof.test.ts
+      - name: Verify search tools, failure reuse and completed research delivery
+        run: bunx vitest run --maxWorkers=4 tests/declarationSearch.test.ts tests/continuationSearch.test.ts tests/tacticBatteryFailureCache.test.ts tests/solverAssemblyLeadYield.test.ts tests/solverCompletedGuidance.test.ts tests/codexCompletedResponse.test.ts
+      - name: Verify definition contracts, conditional publication and research continuation
+        run: bunx vitest run --maxWorkers=4 tests/conditionalProjectionElaborator.test.ts tests/customSolverModules.test.ts tests/definitionContractChecks.test.ts tests/nextCheckNegativeDecisions.test.ts tests/planResearchConnections.test.ts tests/planningEvidence.test.ts tests/researchDurableCheckpoint.test.ts tests/solver.test.ts tests/solverDefinitionContractChecks.test.ts tests/solverKnowledgeConcurrency.test.ts tests/solverNextCheckPlanLifecycle.test.ts tests/solverResearchPublication.test.ts tests/solverResearchTransfer.test.ts tests/taskConditionalUniverses.test.ts tests/taskSourceConditionalContext.test.ts tests/verifiedProofPublication.test.ts tests/webModuleIdentity.test.ts
