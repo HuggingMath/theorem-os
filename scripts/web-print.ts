@@ -23,7 +23,7 @@ export async function printLayout(page: Page, line = 1) {
     const lines = text ? new Set([...range.getClientRects()].map(rect => Math.round(rect.top))).size : 0;
     const wide = [...document.querySelectorAll('.lean-text')].filter(item => item.getBoundingClientRect().right > edge + 1).length;
     const controls = [...document.querySelectorAll('#locale-switch, #explain-back, .source-switch, .explain-sync, .explain-head-actions a, '
-      + '[data-action="delete"], .formal-unplaced-toggle, .toast, dialog')].filter(shown).map(item => item.id || item.className || item.tagName);
+      + '[data-action="delete"], .explain-section-next, .explain-contents-rail, .formal-unplaced-toggle, .toast, dialog')].filter(shown).map(item => item.id || item.className || item.tagName);
     const wrap = text ? getComputedStyle(text).whiteSpace : '';
     return { clipped, panes, leanBreak: getComputedStyle(lean).breakBefore, wrap, lines, wide, controls,
       paper: getComputedStyle(document.body).backgroundColor };

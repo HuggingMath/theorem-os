@@ -5,7 +5,7 @@ import { summarizeReport } from '../report';
 import { localizeText, t } from '../i18n';
 import { checkLeanFile, routeStepLabel, taskNames, type AgentRoute, type RouteItem } from './agentRoute';
 import { workerNames } from './collaborationUi';
-import { formalizationReasonText } from './formalizationReasons';
+import { formalizationReasonText } from '../formalizationReasons';
 import { buildThinkingEntries, type ThinkingEntry } from './thinkingProcess';
 
 /**

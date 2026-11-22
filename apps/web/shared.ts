@@ -49,6 +49,9 @@ export type WebEnvironmentOption = { id: WebEnvironment; name: string; descripti
   toolchain: string; mathlibRevision?: string };
 export type WebTemplate = { id: string; name: string; environment: WebEnvironment; source: string; task: string };
 export type WebSavedKey = { providerId: string; ending: string };
+/** A login identity is either a verified email or a locally provisioned username. */
+export type WebAccountIdentity = { email: string; username?: never } | { email?: never; username: string };
+export const accountLogin = (account: WebAccountIdentity): string => account.username ?? account.email;
 /** Omitted budgets normalize to 0 (unlimited); `saveKey` stays with this account and never reaches the run. */
 export type WebRunRequest = Omit<WebRunInput, 'maxTurns' | 'maxRunSeconds'> & {
   maxTurns?: number; maxRunSeconds?: number; saveKey?: boolean; requestId?: string };
@@ -214,7 +217,7 @@ export type WebSession = {
   /** `completionEmail: false` means the account turned off the mail sent when one of its runs ends; absent means on. */
   /** `serverKeys` lists the providers whose key the server fills in for this admin account when the field is left empty. */
   /** `keyVault` means this account may save its own keys; `savedKeys` names them by provider and last four characters. */
-  account?: { email: string; admin?: boolean; completionEmail?: boolean; passwordSet?: boolean; passwordResetAllowed?: boolean;
+  account?: WebAccountIdentity & { admin?: boolean; completionEmail?: boolean; passwordSet?: boolean; passwordResetAllowed?: boolean;
     serverKeys?: string[]; keyVault?: boolean; savedKeys?: WebSavedKey[] };
   providers: WebProvider[];
   environments: WebEnvironmentOption[];
@@ -424,7 +427,7 @@ export const defaultProofId = (target: string) => target.replace(/[^A-Za-z0-9_-]
 export type WebExplanationReport = { schema: 'theorem-os.web-explanation-report.v1'; title: string; environment: WebEnvironment;
   proof: string; document: WebExplanationDocument; markdown: string; filename: string };
 export type WebExplanationProgress = { phase: WebExplanationPhase; batches?: number; approvedBatches?: number; round?: number;
-  tokens?: number; updatedAt: string };
+  tokens?: number; modelRequestFailures?: number; updatedAt: string };
 export type WebExplanation = {
   id: string; runId: string; target: string; language: WebExplanationLanguage; status: WebExplanationStatus;
   /** Created as part of the solve workflow, without a separate generation request. */
@@ -446,13 +449,17 @@ export type WebExplanationOverview = {
     maxRunSeconds: number; maxTotalTokens: number; reference: { declarations: number; seconds: number; tokens: number } }
     | { available: false; reason: 'sample' | 'not_accepted' | 'provider' | 'model' | 'runtime' };
 };
+/** Private container protocol data, never part of a WebExplanation. */
+export type WorkerExplanationCheckpoint = { schema: 'theorem-os.web-explanation-checkpoint.v1'; state: string; outline: string;
+  workspaces: Record<string, { 'INPUT.json': string; 'ROLE.md': string; 'OUTPUT.schema.json': string; 'OUTPUT.json': string }> };
 export type WorkerExplanationInput = { id: string; proof: string; target: string; language: WebExplanationLanguage;
   environment: WebEnvironment; model: string; effort: 'low' | 'high' | 'max'; apiKey: string; provider: WebWorkerProvider;
-  maxRunSeconds: number; maxTotalTokens: number; maxRoundsPerBatch: number; auditors: number };
+  maxRunSeconds: number; maxTotalTokens: number; maxRoundsPerBatch: number; auditors: number;
+  checkpoint?: WorkerExplanationCheckpoint };
 export type WorkerExplanationMessage =
   | { type: 'progress'; progress: Omit<WebExplanationProgress, 'updatedAt'> }
   | { type: 'result'; status: 'approved'; evidence: unknown }
-  | { type: 'result'; status: 'exhausted' | 'error'; reason: string };
+  | { type: 'result'; status: 'exhausted' | 'error'; reason: string; checkpoint?: WorkerExplanationCheckpoint };
 export const webExplanationReason = /^(?:explanation|informalization)_[a-z0-9_]{1,80}$/u;
 /** The id of the read-only sample run (apps/web/sample.ts); fixed so links and saved positions never collide with real runs. */
 export const webSampleRunId = '00000000-0000-4000-8000-00000000a001';
@@ -473,9 +480,9 @@ export type WebAdminQuota = { windowHours: number; limits: { research: number; f
 export type WebAdminUsage = { research: number; formalizations: number; explanations: number };
 export type WebAdminOverview = {
   allowlist: { email: string; source: 'admin' | 'config' | 'file'; account: boolean }[];
-  accounts: { email: string; admin: boolean; createdAt: string; firstRunAt?: string; firstAcceptedAt?: string; allowed: boolean; suspended?: boolean;
+  accounts: (WebAccountIdentity & { admin: boolean; createdAt: string; firstRunAt?: string; firstAcceptedAt?: string; allowed: boolean; suspended?: boolean;
     /** Absent without a quota configuration (an anonymous loopback preview). */
-    usage?: WebAdminUsage }[];
+    usage?: WebAdminUsage })[];
   funnel: { step: string; count: number; ofPrevious?: number }[];
   /** False when the service has no allowlist file, so only the deployment configuration can change who signs in. */
   editable: boolean;

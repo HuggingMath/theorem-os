@@ -1,5 +1,5 @@
 import { createIcons, LogIn, MailCheck, RefreshCw } from 'lucide';
-import { loginReturn, type WebSession } from '../shared';
+import { accountLogin, loginReturn, type WebSession } from '../shared';
 import { localizeMessage, mountLocaleSwitch, t } from '../i18n';
 import { localizeSiteLinks } from './feedback';
 import { forgetKey } from './keyMemory';
@@ -13,7 +13,7 @@ localizeSiteLinks();
 const emailStep = $<HTMLFormElement>('#email-step'), codeStep = $<HTMLFormElement>('#code-step'), passwordStep = $<HTMLFormElement>('#password-step');
 const email = $<HTMLInputElement>('#login-email'), captcha = $<HTMLInputElement>('#login-captcha'), code = $<HTMLInputElement>('#login-code');
 const sendCode = $<HTMLButtonElement>('#send-code'), verify = $<HTMLButtonElement>('#verify-code'), resend = $<HTMLButtonElement>('#resend-code');
-const passwordEmail = $<HTMLInputElement>('#password-email'), password = $<HTMLInputElement>('#login-password');
+const passwordLogin = $<HTMLInputElement>('#password-email'), password = $<HTMLInputElement>('#login-password');
 const passwordSubmit = $<HTMLButtonElement>('#password-submit');
 const termsOption = $('#terms-option'), acceptTerms = $<HTMLInputElement>('#accept-terms');
 const termsStep = $<HTMLFormElement>('#terms-step');
@@ -52,7 +52,7 @@ function rememberLogin() {
   if (!progressOwner) return;
   try {
     sessionStorage.setItem(progressKey, JSON.stringify({ owner: progressOwner, step, termsVersion,
-      email: step === 'password' ? passwordEmail.value : email.value, challenge }));
+      email: step === 'password' ? passwordLogin.value : email.value, challenge }));
   } catch { /* The current form remains usable when storage is unavailable. */ }
 }
 function setStep(next: LoginStep) {
@@ -81,7 +81,10 @@ function restoreLogin() {
       owner?: unknown; step?: unknown; email?: unknown; termsVersion?: unknown; challenge?: CodeChallenge;
     } | null;
     if (!saved || saved.owner !== progressOwner || saved.termsVersion !== termsVersion) { clearLogin(); setStep('email'); return; }
-    if (typeof saved.email === 'string') email.value = passwordEmail.value = saved.email.slice(0, 254);
+    if (typeof saved.email === 'string') {
+      passwordLogin.value = saved.email.slice(0, 254);
+      if (saved.email.includes('@')) email.value = passwordLogin.value;
+    }
     const pending = saved.challenge;
     if (pending && typeof pending.email === 'string' && Number.isFinite(pending.expiresAt) && Number.isFinite(pending.resendAt)
       && pending.expiresAt > Date.now()) challenge = pending;
@@ -105,8 +108,8 @@ async function start() {
   progressOwner = session.draftOwner ?? '';
   if (termsVersion !== session.termsVersion) acceptTerms.checked = false;
   termsVersion = session.termsVersion;
-  termsAccount = session.account?.email;
-  termsOwner = session.draftOwner ?? (session.account ? `account:${session.account.email}` : undefined);
+  termsAccount = session.account && accountLogin(session.account);
+  termsOwner = session.draftOwner ?? (session.account ? `account:${accountLogin(session.account)}` : undefined);
   termsOption.hidden = !termsVersion;
   const wasTerms = !termsStep.hidden;
   termsStep.hidden = !session.termsRequired;
@@ -126,7 +129,7 @@ async function start() {
   const openSignup = session.signup === 'open';
   $('#login-lead').textContent = openSignup
     ? t('用邮箱登录，新用户会自动创建账号。')
-    : t('请使用已获准的内测邮箱。');
+    : t('可使用已分配的用户名和密码，或已获准邮箱的验证码登录。');
   // The password form waits for the session cookie and CSRF token; sent earlier, it reads as an expired page.
   passwordSubmit.disabled = false;
   if (stepRevision === revision) restoreLogin();
@@ -155,9 +158,9 @@ function showEmailStep(focus: HTMLInputElement) {
   void guarded(loadCaptcha).then(() => { if (stepRevision === revision) focus.focus(); });
 }
 function showPasswordStep() {
-  passwordEmail.value = email.value || sentTo;
+  passwordLogin.value = email.value || sentTo || passwordLogin.value;
   setStep('password');
-  showError(); passwordEmail.focus();
+  showError(); passwordLogin.focus();
 }
 
 emailStep.addEventListener('submit', event => {
@@ -199,13 +202,13 @@ codeStep.addEventListener('submit', event => {
 passwordStep.addEventListener('submit', event => {
   event.preventDefault();
   if (passwordSubmit.disabled) return;
-  if (!passwordEmail.checkValidity() || !passwordEmail.value.trim()) { showError(t('请输入有效的邮箱地址。')); passwordEmail.focus(); return; }
+  if (!passwordLogin.checkValidity() || !passwordLogin.value.trim()) { showError(t('请输入用户名或邮箱。')); passwordLogin.focus(); return; }
   if (!password.value) { showError(t('请输入密码。')); password.focus(); return; }
   if (termsVersion && !acceptTerms.checked) { showError(t('请先阅读并同意使用条款与隐私说明。')); acceptTerms.focus(); return; }
   passwordSubmit.disabled = true;
   void guarded(async () => {
     try {
-      await call('/api/auth/password/login', { email: passwordEmail.value, password: password.value,
+      await call('/api/auth/password/login', { login: passwordLogin.value.trim(), password: password.value,
         ...(termsVersion ? { terms: acceptTerms.checked, termsVersion } : {}) });
       password.value = '';
       clearLogin();
@@ -241,13 +244,13 @@ $('#terms-logout').addEventListener('click', () => void guarded(async () => {
 $('#terms-delete-account').addEventListener('click', () => void guarded(async () => {
   const confirmation = $<HTMLInputElement>('#terms-delete-email');
   if (!termsAccount || confirmation.value.trim().toLowerCase() !== termsAccount) {
-    showError(t('请输入当前账号的邮箱以确认删除。')); confirmation.focus(); return;
+    showError(t('请输入当前账号的用户名或邮箱以确认删除。')); confirmation.focus(); return;
   }
   const button = $<HTMLButtonElement>('#terms-delete-account');
   if (button.disabled) return;
   button.disabled = true;
   try {
-    await call('/api/auth/account', { email: termsAccount }, 'DELETE');
+    await call('/api/auth/account', { login: termsAccount }, 'DELETE');
     forgetAccountDrafts(); confirmation.value = ''; acceptTerms.checked = false; await start();
   } finally { button.disabled = false; }
 }));
@@ -258,7 +261,7 @@ $('#change-email').addEventListener('click', () => showEmailStep(email));
 resend.addEventListener('click', () => showEmailStep(captcha));
 $('#use-password').addEventListener('click', showPasswordStep);
 $('#use-code').addEventListener('click', () => {
-  email.value = passwordEmail.value;
+  if (passwordLogin.value.includes('@')) email.value = passwordLogin.value;
   showError();
   if (challenge?.email === email.value.trim().toLowerCase() && showCodeStep()) return;
   showEmailStep(email);

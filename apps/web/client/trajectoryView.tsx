@@ -93,6 +93,7 @@ type AskThread = { turns: AskTurn[]; draft: string; pending?: { question: string
 type Built = { key: string; steps: TrajectoryStep[]; keys: string[]; names: Map<string, string> };
 type RunState = {
   data: TrajectoryData; loaded: boolean; error?: string; inFlight: boolean; lastFetch: number; fetchedFor?: string; timer?: ReturnType<typeof setTimeout>;
+  retryAt?: number;
   /** The read in flight, for a caller that needs its result. */ pending?: Promise<void>;
   task: string; all: boolean; folded: boolean; panel?: Panel; versions: Map<string, Loaded>; asks: Map<string, AskThread>; built?: Built;
   /** The open version's code: its lines, the number column (blank rows where Lean's messages sit) and the coloured text. */
@@ -395,6 +396,12 @@ export class TrajectoryView {
   constructor(private readonly api: WebApi, private readonly guide?: (run: WebRun, text: string, taskId?: string) => void,
     private readonly own?: OwnRunActions) {
     onDetailLevel(() => this.render());
+    document.addEventListener('visibilitychange', () => this.resumeRead());
+    window.addEventListener('offline', () => this.resumeRead());
+  }
+
+  resumeRead() {
+    if (this.run && this.states.get(this.run.id)?.retryAt !== undefined) this.schedule(this.run);
   }
 
   /** Shows `run` in `root`; without them the view stops drawing but keeps each run's trajectory for the next visit. */
@@ -520,20 +527,31 @@ export class TrajectoryView {
 
   private schedule(run: WebRun) {
     const state = this.state(run.id);
-    if (state.inFlight || state.timer || state.fetchedFor === this.mark(run)) return;
-    const wait = state.lastFetch + pollMs - Date.now();
+    if (state.inFlight) return;
+    const retryAt = state.retryAt;
+    if (retryAt !== undefined && (document.hidden || !navigator.onLine || !this.root?.getClientRects().length)) {
+      clearTimeout(state.timer);
+      state.timer = undefined;
+      return;
+    }
+    if (state.timer || (retryAt === undefined && state.fetchedFor === this.mark(run))) return;
+    const wait = Math.max(state.lastFetch + pollMs, retryAt ?? 0) - Date.now();
     if (wait <= 0) { void this.fetch(run.id); return; }
     state.timer = setTimeout(() => {
       state.timer = undefined;
       if (this.run?.id === run.id) this.schedule(this.run);
-    }, wait);
+    }, Math.min(wait, 2_147_483_647));
   }
 
   private fetch(id: string, run = this.run?.id === id ? this.run : undefined) {
     const state = this.state(id);
-    return state.pending ??= this.read(id, state, run && this.mark(run));
+    if (state.pending) return state.pending;
+    if (state.retryAt !== undefined && state.retryAt > Date.now()) return Promise.resolve();
+    const recovering = state.retryAt !== undefined;
+    state.retryAt = undefined;
+    return state.pending = this.read(id, state, run && this.mark(run), recovering);
   }
-  private async read(id: string, state: RunState, wanted?: string) {
+  private async read(id: string, state: RunState, wanted: string | undefined, recovering: boolean) {
     state.inFlight = true; state.lastFetch = Date.now();
     let complete = false;
     try {
@@ -547,7 +565,9 @@ export class TrajectoryView {
       }
     } catch (error) {
       state.error = errorText(error);
-      // A failed read is retried when the run changes or on request, not in a loop.
+      const retryAt = error && typeof error === 'object' && 'retryAt' in error ? error.retryAt : undefined;
+      // Retry a temporary refusal once at the advertised time. Persistent errors follow the usual manual retry path.
+      if (!recovering && typeof retryAt === 'number' && retryAt > Date.now()) state.retryAt = retryAt;
       complete = true;
     } finally {
       // Cleared before scheduling, so a read the run's next change asks for is a new one.
@@ -622,7 +642,7 @@ export class TrajectoryView {
           <Icon name={mode === 'roadmap' ? 'git-branch' : 'list-ordered'} />{mode === 'roadmap' ? t('路线图') : t('事件明细')}</button>)}</div>
       {state.mode === 'steps' && level}</div>;
     const failure = state.error && <p class="trajectory-error" role="status">{t('读取失败：{0}', state.error)}
-      <button type="button" class="text-button" data-focus-key="trajectory-retry" onClick={retry}>{t('重试')}</button></p>;
+      {state.retryAt === undefined && !state.inFlight && <button type="button" class="text-button" data-focus-key="trajectory-retry" onClick={retry}>{t('重试')}</button>}</p>;
     if (!state.loaded) return <section class="trajectory" aria-busy={!state.error}>{!this.overviewAction && heading()}
       {failure || <StepsLoading />}</section>;
 

@@ -1,5 +1,3 @@
-import { gsap } from 'gsap';
-
 /** Entrances fast at first and settling long, the way a page turns rather than a slide. */
 export const easeExpo = 'cubic-bezier(.16,1,.3,1)';
 const easeReel = 'cubic-bezier(.19,1,.22,1)';
@@ -52,19 +50,25 @@ function track(target: HTMLElement, kind: MotionKind, animations: Animation[], c
 export function animateEntrance(target: HTMLElement, kind: 'workspace' | 'panel' | 'dialog', sections = false) {
   finish(target);
   if (!allowed(target)) return;
-  target.dataset.motion = kind;
-  // Revert the context on completion as well as interruption so original inline styles survive.
-  const context = gsap.context(() => {
-    const timeline = gsap.timeline({ onComplete: () => finish(target) });
-    if (kind === 'dialog' && target.classList.contains('history-dialog')) {
-      timeline.fromTo(target, { opacity: .6, clipPath: 'inset(0% 100% 0% 0%)' }, { opacity: 1, clipPath: 'inset(0% 0% 0% 0%)', duration: .46, ease: 'expo.out' });
-    } else if (kind === 'dialog') timeline.fromTo(target, { opacity: 0, scale: .97 }, { opacity: 1, scale: 1, duration: .32, ease: 'expo.out' });
-    else timeline.fromTo(target, { opacity: .35, y: kind === 'panel' ? 8 : 0 }, { opacity: 1, y: 0, duration: kind === 'panel' ? .4 : .24, ease: 'expo.out' });
-    // Code is never among the sections.
-    const parts = kind === 'panel' && sections ? panelParts(target) : [];
-    if (parts.length) timeline.fromTo(parts, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: .5, ease: 'expo.out', stagger: .055 }, .04);
-  });
-  active.set(target, () => context.revert());
+  // Measure visible sections before starting the panel's own translation.
+  const parts = kind === 'panel' && sections ? panelParts(target) : [];
+  const timing = { easing: easeExpo, fill: 'backwards' as const };
+  let entrance: Animation;
+  if (kind === 'dialog' && target.classList.contains('history-dialog')) {
+    entrance = target.animate([
+      { opacity: .6, clipPath: 'inset(0 100% 0 0)' }, { opacity: 1, clipPath: 'inset(0 -60px 0 0)' },
+    ], { ...timing, duration: 460 });
+  } else if (kind === 'dialog') {
+    entrance = target.animate([{ opacity: 0, scale: '.97' }, { opacity: 1, scale: '1' }], { ...timing, duration: 320 });
+  } else if (kind === 'panel') {
+    entrance = target.animate([{ opacity: .35, translate: '0 8px' }, { opacity: 1, translate: '0 0' }], { ...timing, duration: 400 });
+  } else {
+    entrance = target.animate([{ opacity: .35 }, { opacity: 1 }], { ...timing, duration: 240 });
+  }
+  const reveals = parts.map((part, index) => part.animate([
+    { opacity: 0, translate: '0 10px' }, { opacity: 1, translate: '0 0' },
+  ], { ...timing, duration: 500, delay: 40 + index * 55 }));
+  track(target, kind, [entrance, ...reveals]);
 }
 /** The result document's sections that start in view; those further down are already in place when the reader gets there. */
 function panelParts(panel: HTMLElement) {

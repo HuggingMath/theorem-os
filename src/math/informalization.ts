@@ -13,6 +13,7 @@ import { localModuleFile, mathLocalModuleGraph } from './mathConstructionSources
 import { isAllowedMathProofSource } from './mathProofSourcePolicy';
 import { formalizationModelConfigurationSchema } from './formalizationWorkflow';
 import { deriveFormalizationRoleOutputJsonSchema } from './formalizationRoleContract';
+import { READABLE_MATH_NOTATION } from './readableMath';
 import { incidentalLibraryName, informalizationLibraryContext, informalizationOutlineSchema,
   type InformalizationOutline, type InformalizationUnit } from './informalizationExtraction';
 import { findWithin, lineEnds, placeExcerpts, sectionStepGoals, statementRegion, type StepGoalsOptions } from './informalizationAlignment';
@@ -32,8 +33,9 @@ import { findWithin, lineEnds, placeExcerpts, sectionStepGoals, statementRegion,
  * The Lean proof is the authority. The prose is model-written and model-reviewed.
  */
 export const INFORMALIZATION_PROTOCOL = 'lean-proof-informalization-v1';
-/** Opted into by new entry points; absent on requests whose original role contracts must remain unchanged. */
-export const INFORMALIZATION_EXPLANATION_POLICY = 'mathematical-steps-v1';
+/** The request freezes its role instructions, including for resumed jobs. */
+export const INFORMALIZATION_EXPLANATION_POLICIES = ['mathematical-steps-v1', 'mathematical-steps-v2'] as const;
+export const INFORMALIZATION_EXPLANATION_POLICY = INFORMALIZATION_EXPLANATION_POLICIES[1];
 /**
  * Opted into per request: the writer also gives each declaration a one-sentence summary and, in the final batch, a short
  * route that narrows the target to what the proof checks; auditors judge both against the Lean. Requests without it keep
@@ -83,7 +85,7 @@ export const informalizationRequestSchema = z.object({
   formalization: z.object({ problemId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/u), evidenceSha256: hash,
     statementSha256: hash, originalSha256: hash }).strict().optional(),
   alignment: z.enum(INFORMALIZATION_ALIGNMENTS).optional(),
-  explanationPolicy: z.literal(INFORMALIZATION_EXPLANATION_POLICY).optional(),
+  explanationPolicy: z.enum(INFORMALIZATION_EXPLANATION_POLICIES).optional(),
   outlinePolicy: z.literal(INFORMALIZATION_OUTLINE_POLICY).optional(),
   language: z.enum(['zh', 'en']),
   writer: formalizationModelConfigurationSchema,
@@ -901,6 +903,14 @@ const MATHEMATICAL_AUDITOR_LINES = [
   'overview.verdict is absent when INPUT.explanation.overview is null; otherwise consistent if it explains how these declarations combine to prove the target, and inconsistent if not.',
   'Judge correctness, fidelity and completeness of the mathematical argument. Concise steps may combine multiple routine commands; do not require a tactic-by-tactic narration or decorative labels. Missing reasoning is a gap even when the conclusion is true. summary states the concrete problems, or that there are none.',
 ];
+const readableRoleLines = (role: InformalizationRole, lines: readonly string[]) => [
+  lines[0]!.replace(INFORMALIZATION_EXPLANATION_POLICIES[0], INFORMALIZATION_EXPLANATION_POLICY),
+  ...lines.slice(1),
+  READABLE_MATH_NOTATION,
+  role === 'write'
+    ? 'Use the same reading standard for all prose, including the overview, summaries and the proof route. Phrase links still quote the exact Lean text opposite the mathematical explanation.'
+    : 'Check that the statement and steps make sense without knowing Lean. If a hypothesis or an intermediate result is used by its implementation name alone, the justification is a gap. Say what mathematical condition or inference the writer must spell out.',
+];
 const auditorAlignmentLines = (alignment: NonNullable<Alignment>) => [
   `INPUT.alignment is ${alignment}: statements and steps carry links pairing a phrase of the prose with the Lean text it translates. A statement link whose phrase means something other than its Lean makes the statement a mismatch; such a step link makes the step invented. Explain which link is wrong.`,
   'INPUT.stepGoals gives, for each explanation step, the goals before the first and after the last tactic it quotes, as the explanation page shows them beside the step (null when none are recorded). '
@@ -922,7 +932,8 @@ export const INFORMALIZATION_AUDITOR_INSTRUCTIONS = instructions(AUDITOR_LINES, 
 /** ROLE.md for a role; absent policy preserves legacy bytes, and alignment adds its independent rules. */
 export const informalizationRoleInstructions = (role: InformalizationRole, alignment?: Alignment, explanationPolicy?: ExplanationPolicy,
   outlinePolicy?: OutlinePolicy) => {
-  const mathematical = explanationPolicy === INFORMALIZATION_EXPLANATION_POLICY;
-  return role === 'write' ? instructions(mathematical ? MATHEMATICAL_WRITER_LINES : WRITER_LINES, alignment, writerAlignmentLines, outlinePolicy ? WRITER_OUTLINE_LINES : []) :
-    instructions(mathematical ? MATHEMATICAL_AUDITOR_LINES : AUDITOR_LINES, alignment, auditorAlignmentLines, outlinePolicy ? AUDITOR_OUTLINE_LINES : []);
+  const writing = role === 'write';
+  const lines = explanationPolicy ? (writing ? MATHEMATICAL_WRITER_LINES : MATHEMATICAL_AUDITOR_LINES) : (writing ? WRITER_LINES : AUDITOR_LINES);
+  return instructions(explanationPolicy === INFORMALIZATION_EXPLANATION_POLICY ? readableRoleLines(role, lines) : lines,
+    alignment, writing ? writerAlignmentLines : auditorAlignmentLines, outlinePolicy ? (writing ? WRITER_OUTLINE_LINES : AUDITOR_OUTLINE_LINES) : []);
 };

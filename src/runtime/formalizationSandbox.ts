@@ -156,6 +156,7 @@ type Input = Readonly<{
   environment: LeanTaskEnvironment; env?: NodeJS.ProcessEnv; signal?: AbortSignal;
   packages?: 'none' | 'sources';
   library?: FormalizationLibraryAccess;
+  upstreamIdleTimeoutMs?: number;
   outputSchema?: Record<string, unknown>;
   requestGate?: ModelRequestGate; onUsageIncomplete?: () => void;
   runtime?: SealedRuntimeProjection;
@@ -329,7 +330,7 @@ export async function prepareFormalizationSandbox(input: Input): Promise<Formali
     input.signal?.throwIfAborted();
     relay = await startFormalizationRelay({ socketPath: path.join(temporary, 'model.sock'), profile: input.profile,
       model: input.model, effort: input.effort, env: environment, signal: input.signal,
-      outputSchema: input.outputSchema,
+      outputSchema: input.outputSchema, upstreamIdleTimeoutMs: input.upstreamIdleTimeoutMs,
       requestGate: input.requestGate, onUsageIncomplete: input.onUsageIncomplete, ...(input.runtime ? { native: input.runtime.relay } : {}) });
     const providerId = relay.receipt.providerId, modelCatalog = !input.runtime && providerId === 'sub2api' ? '/profile/models.json' : undefined;
     const profileConfig = stringifyToml({ model: input.model, model_provider: providerId,

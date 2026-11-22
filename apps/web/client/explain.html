@@ -12,37 +12,49 @@
   <link rel="stylesheet" href="app.css">
 </head>
 <body class="explain-page">
-  <header class="topbar explain-topbar">
-    <a class="brand" href="./" aria-label="TheoremOS 工作台"><img src="assets/mark.svg" alt="" width="26" height="26"><span>Theorem<span class="brand-os">OS</span></span></a>
-    <span class="topbar-divider" aria-hidden="true"></span>
-    <span class="explain-kind">证明讲解</span>
-    <span id="explain-run-title" class="workspace-name" translate="no"></span>
-    <div class="topbar-actions">
-      <button type="button" id="locale-switch" class="text-button locale-switch" hidden></button>
-      <a id="explain-back" class="button" href="./"><i data-lucide="arrow-left"></i>返回工作台</a>
+  <header class="topbar explain-topbar nav">
+    <div class="explain-topbar-inner wrap">
+      <a class="skip-link" href="#main" data-action="skip-proof">跳到正文</a>
+      <a class="brand" href="./" aria-label="TheoremOS 工作台"><img src="assets/mark.svg" alt="" width="26" height="26"><span>Theorem<span class="brand-os">OS</span></span></a>
+      <span class="topbar-divider" aria-hidden="true"></span>
+      <span class="explain-kind">证明讲解</span>
+      <span id="explain-run-title" class="workspace-name" translate="no"></span>
+      <div class="topbar-actions">
+        <button type="button" id="locale-switch" class="text-button locale-switch" hidden></button>
+        <a id="explain-back" class="button" href="./"><i data-lucide="arrow-left"></i>返回工作台</a>
+      </div>
     </div>
   </header>
-  <main class="explain-shell" id="main">
+  <main class="explain-shell" id="main" tabindex="-1">
+    <h1 id="explain-page-heading" class="sr-only">证明讲解</h1>
     <p id="explain-loading" class="explain-state" role="status">正在读取证明…</p>
     <section id="explain-missing" class="share-card share-state-card explain-missing" hidden aria-labelledby="explain-missing-heading">
       <h1 id="explain-missing-heading">无法打开证明讲解</h1>
       <p id="explain-missing-text"></p>
     </section>
-    <div id="explain-content" class="explain-content" hidden>
-      <div id="explain-toolbar" class="explain-toolbar"></div>
-      <div id="explain-split" class="explain-split" data-pane="prose">
-        <section class="explain-pane explain-pane-lean" aria-labelledby="explain-lean-heading">
-          <header class="explain-pane-head"><h2 id="explain-lean-heading">Lean 证明</h2><span id="explain-lean-count" class="mono explain-count"></span></header>
-          <p id="explain-lean-legend" class="explain-legend" hidden></p>
-          <div id="explain-chosen" class="formal-chosen" aria-live="polite"></div>
-          <div id="explain-lean" class="explain-scroll explain-lean" tabindex="0" aria-labelledby="explain-lean-heading"><div id="explain-lean-code" class="lean-code" translate="no"></div></div>
-        </section>
-        <section class="explain-pane explain-pane-prose" aria-labelledby="explain-prose-heading">
-          <header id="explain-prose-head" class="explain-pane-head"></header>
-          <div id="explain-prose" class="explain-scroll explain-prose" tabindex="0" aria-labelledby="explain-prose-heading"></div>
-        </section>
+    <section id="explain-content" class="explain-content" hidden>
+      <div class="explain-workspace wrap">
+        <header class="explain-controls">
+          <div class="explain-controls-inner">
+            <div id="explain-toolbar" class="explain-toolbar"></div>
+            <div id="explain-prose-head"></div>
+          </div>
+        </header>
+        <div id="explain-split" class="explain-split" data-pane="prose" data-layout="compare">
+          <section class="explain-pane explain-pane-lean" aria-labelledby="explain-lean-heading">
+            <header class="explain-pane-head"><span id="explain-lean-heading" class="explain-pane-label">Lean 证明</span><span id="explain-lean-count" class="mono explain-count"></span></header>
+            <p id="explain-lean-legend" class="explain-legend" hidden></p>
+            <div id="explain-chosen" class="formal-chosen" aria-live="polite"></div>
+            <div id="explain-lean" class="explain-scroll explain-lean" tabindex="0" aria-labelledby="explain-lean-heading"><div id="explain-lean-code" class="lean-code" translate="no"></div></div>
+          </section>
+          <nav id="explain-contents-rail" class="explain-contents-rail" aria-labelledby="explain-rail-heading" hidden></nav>
+          <section class="explain-pane explain-pane-prose" aria-labelledby="explain-prose-heading">
+            <span id="explain-prose-heading" class="sr-only">自然语言证明</span>
+            <div id="explain-prose" class="explain-scroll explain-prose" tabindex="0" aria-labelledby="explain-prose-heading"></div>
+          </section>
+        </div>
       </div>
-    </div>
+    </section>
     <dialog id="explain-dialog" class="confirm-dialog explain-dialog"></dialog>
     <div id="explain-toast" class="toast" role="status" hidden></div>
   </main>

@@ -232,12 +232,14 @@ try {
     const accepted = run('completed'), missing = run('completed'), working = run('running'), unavailable = run('completed'),
       queued = run('completed'), generating = run('completed'), failed = run('completed'), cancelled = run('completed'), exhausted = run('completed'),
       missingTarget = run('completed'), emptyStatement = run('completed'), unrecorded = run('running'), singleTarget = run('completed'),
-      repeatedStatement = run('running'), refinedStatement = run('running'), findingOnly = run('running');
+      repeatedStatement = run('running'), refinedStatement = run('running'), findingOnly = run('running'), waitingReview = run('completed');
+    waitingReview.formalization = { id: crypto.randomUUID(), original: originalTask, confirmation: 'pending' };
     delete unrecorded.observation;
     delete repeatedStatement.observation; delete refinedStatement.observation;
     findingOnly.observation!.inspection.tasks = [task('recorded_finding', { kind: 'research', proof: { status: 'not-applicable' }, finding: originalTask })];
     findingOnly.observation!.inspection.progress = { checkedProofTasks: 0, conditionalProofTasks: 0, completedResearchTasks: 1, openProofTasks: [] };
-    const runs = [accepted, missing, working, unavailable, queued, generating, failed, cancelled, exhausted, missingTarget, emptyStatement, unrecorded, singleTarget, repeatedStatement, refinedStatement, findingOnly],
+    const runs = [accepted, missing, working, unavailable, queued, generating, failed, cancelled, exhausted, missingTarget, emptyStatement, unrecorded, singleTarget,
+      repeatedStatement, refinedStatement, findingOnly, waitingReview],
       conversations = runs.map(conversation);
     const statementFixtures = [{ run: repeatedStatement, text: ` \n${originalTask}\n ` },
       { run: refinedStatement, text: '对任意自然数 a、b，还需要说明 b + a = a + b 的逆向等式。' }].map(({ run: value, text }) => {
@@ -250,7 +252,8 @@ try {
         createdAt: at, status: 'complete' });
       return { item, activity, run: value, text };
     });
-    let generated = false, failAcceptedOverview = false, explanationLanguage: 'zh' | 'en' = 'zh';
+    let generated = false, failAcceptedOverview = false, legacyMath = false, explanationLanguage: 'zh' | 'en' = 'zh';
+    let generatingPhase: 'auditing' | 'retrying' = 'auditing', slowProgress: Promise<void> | undefined, failProgress = false;
     let browsingSaved = false;
     await context.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url());
@@ -277,14 +280,21 @@ try {
           if (selectedRun === accepted && failAcceptedOverview) {
             await route.fulfill({ status: 503, json: { error: '临时读取失败（本地模拟）' } }); return;
           }
-          const fixtureStatus = selectedRun === queued ? 'queued' : selectedRun === generating && !generated ? 'running'
+          if (selectedRun === generating) {
+            if (slowProgress) await slowProgress;
+            if (failProgress) { await route.fulfill({ status: 503, json: { error: '临时读取进度失败（本地模拟）' } }); return; }
+          }
+          const fixtureStatus = selectedRun === queued || selectedRun === waitingReview ? 'queued' : selectedRun === generating && !generated ? 'running'
             : selectedRun === failed ? 'error' : selectedRun === cancelled ? 'cancelled' : selectedRun === exhausted ? 'exhausted' : undefined;
           const entries = fixtureStatus ? [{ ...explanation(selectedRun, 'swap_sum', explanationLanguage), document: undefined, status: fixtureStatus,
-            ...(fixtureStatus === 'queued' ? { queue: { position: 3, ahead: 2 } } : fixtureStatus === 'running'
-              ? { progress: { phase: 'auditing', batches: 3, approvedBatches: 1, updatedAt: at } }
-              : { reason: 'explanation_gateway_unavailable' }) } as WebExplanation] : undefined;
+            ...(selectedRun === waitingReview ? { automatic: true, progress: { phase: 'waiting_review', updatedAt: at } }
+              : fixtureStatus === 'queued' ? { queue: { position: 3, ahead: 2 } } : fixtureStatus === 'running'
+              ? { progress: { phase: generatingPhase, batches: 3, approvedBatches: 1, round: 2, modelRequestFailures: 2, updatedAt: at } }
+              : fixtureStatus === 'error' ? { reason: 'informalization_role_retries_exhausted',
+                progress: { phase: 'auditing', modelRequestFailures: 3, updatedAt: at } } : { reason: 'explanation_gateway_unavailable' }) } as WebExplanation] : undefined;
           const savedOverview = overview(selectedRun, [accepted, missingTarget, emptyStatement, singleTarget].includes(selectedRun) || selectedRun === generating && generated, entries,
             selectedRun !== unavailable && selectedRun !== accepted && selectedRun !== working, explanationLanguage);
+          if (selectedRun === waitingReview) savedOverview.generation = { available: false, reason: 'not_accepted' };
           if (selectedRun === singleTarget) {
             savedOverview.targets = savedOverview.targets.filter(target => target.name === 'swap_sum');
             savedOverview.explanations = savedOverview.explanations.filter(item => item.target === 'swap_sum');
@@ -302,6 +312,15 @@ try {
             else selected.statement = '';
             saved.document!.sections.unshift({ ...explanationDocument('identity_sum').sections[0]!,
               statement: '这是另一目标的已保存陈述，不能作为当前目标的结论。' });
+          }
+          if (legacyMath && selectedRun === singleTarget) {
+            const [main, support] = saved.document!.sections;
+            main.title = '**二次关系下换位子的 $n$ 次幂为零**';
+            main.statement = 'A²B − (2:ℂ)•(ABA) + BA² = 0';
+            main.steps[0].text = '迹条件 htrace 对 $0<k\\le n$ 成立。假设 h 说右端为零。';
+            main.steps[0].uses.push({ name: 'matrix_trace', place: 'declaration', spans: [] });
+            support.title = '二次关系推出 $A$ 与换位子可交换';
+            saved.document!.sections.push({ ...support, name: 'matrix_trace', title: '矩阵版本：迹条件推出 $C^n=0$' });
           }
           await route.fulfill({ json: { explanation: saved } }); return;
         }
@@ -328,9 +347,9 @@ try {
     assert.equal(await participation.isVisible(), true);
     const advanced = page.locator('[data-chat-advanced-settings]');
     assert.equal(await advanced.evaluate((node: HTMLDetailsElement) => node.open), false, 'optional settings start collapsed');
-    for (const selector of ['#formalize-provider', '#formalize-model', '#formalize-key', '#check-model-connection'])
-      assert.equal(await page.locator(selector).isVisible(), true, `${selector} is available in primary setup`);
-    for (const selector of ['#formalize-environment', '#formalize-effort', ...budgetInputs])
+    for (const selector of ['#formalize-key', '#check-model-connection'])
+      assert.equal(await page.locator(selector).isVisible(), true, `${selector} is available in research settings`);
+    for (const selector of ['#formalize-environment', ...budgetInputs])
       assert.equal(await page.locator(selector).isVisible(), false, `${selector} belongs to optional advanced setup`);
     await screenshot(page, `${width}-simple-settings.png`);
     await advanced.locator(':scope > summary').click({ timeout: 15_000 });
@@ -338,7 +357,12 @@ try {
     await fit(page); await screenshot(page, `${width}-unlimited-settings.png`);
     await advanced.locator(':scope > summary').click({ timeout: 15_000 });
     mark(`${width}: visible task input, collapsed guided participation and empty unlimited budgets`);
-    await page.locator('#formalize-settings > summary').click();
+    const modelMenu = page.locator('#chat-model-settings > summary');
+    await modelMenu.click();
+    for (const selector of ['#formalize-provider', '#formalize-model', '#formalize-effort'])
+      assert.equal(await page.locator(selector).isVisible(), true, `${selector} is available in model settings`);
+    assert.equal(await page.locator('#formalize-key').isVisible(), false, 'model settings never opens the key field');
+    await modelMenu.click();
     const draft = '保留这份题目草稿，在配置 Key 后再发送。';
     await input.fill(draft);
     await page.locator('[data-chat-configure-key]').click();
@@ -381,7 +405,16 @@ try {
     const followup = await input.inputValue();
     assert.ok(followup.startsWith('保留已写的独立追问。\n\n'));
     for (const text of ['加法交换律', '第 1 步', '对任意自然数', '将自然数 a 和 b', 'Nat.add_comm', accepted.id]) assert.ok(followup.includes(text));
-    assert.ok(followup.includes(`${origin}/explain.html?run=${accepted.id}&target=swap_sum#explain-section-0`));
+    const stepUrl = `${origin}/explain.html?run=${accepted.id}&target=swap_sum&language=zh#at=swap_sum&step=1`;
+    assert.ok(followup.includes(stepUrl));
+    if (width === 1440) {
+      const reader = await context.newPage();
+      reader.on('pageerror', error => errors.push(error.message));
+      try {
+        await reader.goto(stepUrl);
+        await reader.locator('.explain-section.is-target .explain-steps > li.is-active').filter({ hasText: '将自然数 a 和 b 代入加法交换律' }).waitFor();
+      } finally { await reader.close(); }
+    }
     assert.deepEqual(writes, [], 'step questioning prepares a draft without sending it');
     await answer.locator('[data-chat-answer-use="supporting_identity"]').click();
     assert.equal(await answer.locator('.chat-answer-support').evaluate((element: HTMLDetailsElement) => element.open), true);
@@ -495,7 +528,7 @@ try {
 
     for (const [value, status, text] of [
       [unavailable, 'unavailable', '当前服务不提供证明讲解。'], [queued, 'queued', '前面 2 份'],
-      [generating, 'running', '正在核对讲解与证明'], [failed, 'error', '无法连接模型服务，请稍后重试。'],
+      [generating, 'running', '正在核对讲解与证明'], [failed, 'error', '模型请求反复失败，自动重试已停止。'],
       [cancelled, 'cancelled', '已停止生成'], [exhausted, 'exhausted', '讲解没有完成'],
     ] as const) {
       await page.goto(`${origin}/?chat=${conversations[runs.indexOf(value)]!.id}`, { timeout: 15_000 });
@@ -510,12 +543,67 @@ try {
       }
       if (status === 'running') {
         assert.match(await state.innerText(), /已通过批次\s+1\s*\/\s*3/u);
+        assert.equal(await state.getByText('讲解第 2 轮').isVisible(), true);
+        assert.equal(await state.getByText('模型请求失败 2 次').isVisible(), true);
+        if (width === 390) {
+          let releaseSlowProgress!: () => void;
+          slowProgress = new Promise<void>(resolve => { releaseSlowProgress = resolve; });
+          try {
+            const overviewPath = `/api/runs/${generating.id}/explanations`;
+            await page.waitForRequest(request => new URL(request.url()).pathname === overviewPath);
+            await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('[data-chat-answer-refresh]')?.disabled === true);
+            assert.equal(await state.getByText('正在核对讲解与证明').isVisible(), true);
+            assert.equal(await state.getByText('模型请求失败 2 次').isVisible(), true);
+            assert.equal(await state.getByText('正在读取已有讲解…').count(), 0);
+            failProgress = true;
+          } finally {
+            slowProgress = undefined;
+            releaseSlowProgress();
+          }
+          await state.getByText('讲解状态暂时无法更新，下面显示上次获取的进度。').waitFor();
+          assert.equal(await state.getByText('讲解第 2 轮').isVisible(), true);
+          failProgress = false; generatingPhase = 'retrying';
+          await state.locator('[data-chat-answer-retry]').click();
+          await state.getByText('模型请求失败，正在自动重试').waitFor();
+          assert.equal(await state.getByText('讲解第 2 轮').isVisible(), true);
+          await fit(page); await screenshot(page, `${width}-explanation-retrying.png`);
+        }
         generated = true;
         await page.locator('[data-chat-answer-document="swap_sum"]').waitFor({ timeout: 15_000 });
       }
+      if (status === 'error') assert.equal(await state.getByText('模型请求失败 3 次').isVisible(), true);
       await fit(page); await screenshot(page, `${width}-explanation-${status}.png`);
     }
     mark(`${width}: unavailable, queued, running, failed, cancelled and incomplete explanations show accurate states; the finished document appears automatically without generation`);
+
+    if (width === 390) {
+      await page.goto(`${origin}/?chat=${conversations[runs.indexOf(waitingReview)]!.id}`, { timeout: 15_000 });
+      const waiting = page.locator('[data-chat-answer-status="queued"]');
+      await waiting.getByText('题意审核通过后，讲解会自动进入生成队列。').waitFor();
+      assert.equal(await waiting.getByText('等待原题含义审核').isVisible(), true);
+      assert.equal(await waiting.locator('.spinner').count(), 0);
+      assert.equal(await waiting.getByText('讲解会在后台继续，完成后自动显示。').count(), 0);
+      await fit(page); await screenshot(page, `${width}-explanation-waiting-review.png`);
+      waitingReview.formalization!.confirmation = 'rejected';
+      await page.reload();
+      await page.getByText('原题含义审核尚未通过，暂未生成讲解。').waitFor();
+      assert.equal(await page.locator('[data-chat-answer] [data-chat-explain]').count(), 0);
+      assert.equal(await page.locator('[data-research-artifact="source"]').isVisible(), true);
+      const reviewFailure: WebFormalization = { id: waitingReview.formalization!.id, original: originalTask, environment: 'standard',
+        model: 'recorded-fixture', effort: 'high', status: 'error', createdAt: at, updatedAt: at, runId: waitingReview.id,
+        reason: 'formalization_role_incomplete', progress: { phase: 'reviewing' },
+        compiled: { digest: 'fixture', source, sourceSha256: 'fixture', round: 1 } };
+      await page.route(`${origin}/api/formalizations/${reviewFailure.id}`, route => route.fulfill({ json: { formalization: reviewFailure } }));
+      conversations[runs.indexOf(waitingReview)]!.formalizationId = reviewFailure.id;
+      waitingReview.formalization!.confirmation = 'interrupted';
+      await page.reload();
+      const failure = page.locator('[data-formalization-failure]');
+      await failure.getByText('formalization_role_incomplete').waitFor();
+      assert.equal(await page.locator('.research-conversation-status').getAttribute('data-accepted'), 'true');
+      assert.equal(await page.locator('[data-chat-result-more]').evaluate(node => (node as HTMLDetailsElement).open), false);
+      assert.equal(await failure.locator('[data-research-artifact="original"]').isVisible(), true);
+      mark(`${width}: waiting for statement review, model retries, and a failed status refresh show distinct states without concealing progress`);
+    }
 
     for (const [value, kind] of [[missingTarget, 'missing-target'], [emptyStatement, 'empty-statement']] as const) {
       await page.goto(`${origin}/?chat=${conversations[runs.indexOf(value)]!.id}`, { timeout: 15_000 });
@@ -534,7 +622,7 @@ try {
           'both target titles remain visible in a document with multiple target sections');
         assert.equal(await document.locator('[data-chat-answer-target="swap_sum"]').getAttribute('id'), `chat-answer-${value.id}-swap_sum-swap_sum`);
         await answer.locator('[data-chat-answer-question="swap_sum:0"]').click();
-        assert.ok((await input.inputValue()).includes(`${origin}/explain.html?run=${value.id}&target=swap_sum#explain-section-1`),
+        assert.ok((await input.inputValue()).includes(`${origin}/explain.html?run=${value.id}&target=swap_sum&language=zh#at=swap_sum&step=1`),
           'the selected step retains the original saved section index after other target sections');
       }
       assert.deepEqual(writes, []); assert.deepEqual(forbiddenCalls, []);
@@ -553,12 +641,35 @@ try {
     await page.keyboard.press('Enter');
     const singleFollowup = await input.inputValue();
     assert.ok(singleFollowup.startsWith('保留只有一个阅读目标的追问。\n\n'));
-    for (const text of ['加法交换律', '对任意自然数', 'Nat.add_comm', `${origin}/explain.html?run=${singleTarget.id}&target=swap_sum#explain-section-0`])
+    for (const text of ['加法交换律', '对任意自然数', 'Nat.add_comm', `${origin}/explain.html?run=${singleTarget.id}&target=swap_sum&language=zh#at=swap_sum&step=1`])
       assert.ok(singleFollowup.includes(text));
     assert.deepEqual(writes, []); assert.deepEqual(forbiddenCalls, []);
     await answer.locator('h3').scrollIntoViewIfNeeded();
     await fit(page); await screenshot(page, `${width}-single-target-name.png`);
     mark(`${width}: a saved answer with one selectable target retains its visible target name and keyboard step questions without a selector`);
+
+    legacyMath = true;
+    singleTarget.observation = observation(singleTarget.id);
+    await page.reload();
+    const matrix = answer.locator('[data-chat-answer-document="swap_sum"]');
+    await matrix.locator('h4 strong .math[data-math-state="ready"]').waitFor();
+    assert.equal(await matrix.locator('h4 strong .math').getAttribute('title'), 'n');
+    for (const [name, formula] of [['supporting_identity', 'A'], ['matrix_trace', 'C^n=0']]) {
+      const link = matrix.locator(`[data-chat-answer-use="${name}"]`);
+      await link.locator('.math[data-math-state="ready"]').waitFor();
+      assert.equal(await link.locator('.math').getAttribute('title'), formula);
+      await link.focus(); await page.keyboard.press('Enter');
+      const section = matrix.locator(`details[id$="-${name}"]`);
+      await section.locator('summary .math[data-math-state="ready"]').waitFor();
+      assert.equal(await section.locator('summary .math').getAttribute('title'), formula);
+      assert.equal(await section.evaluate((node: HTMLDetailsElement) => node.open && document.activeElement === node), true);
+    }
+    assert.match(await matrix.locator('[data-chat-answer-conclusion]').innerText(), /A²B − 2ABA \+ BA² = 0/u);
+    assert.doesNotMatch(await matrix.locator('.chat-answer-steps').innerText(), /\bh(?:trace)?\b/u);
+    assert.equal(await page.locator('[data-chat-plan-progress]').count(), 0, 'An accepted run with recorded plan tasks never shows an incomplete-looking counter');
+    await fit(page);
+    mark(`${width}: formula titles, keyboard citations and readable notation in a legacy explanation, with a clear final verdict`);
+    legacyMath = false;
 
     await page.goto(`${origin}/?chat=${conversations[2].id}`, { timeout: 15_000 });
     const mathematics = page.locator('[data-chat-mathematics]');
@@ -665,7 +776,7 @@ try {
     await answer.locator('[data-chat-answer-question="swap_sum:0"]').click();
     const simpleFollowup = await input.inputValue();
     assert.ok(simpleFollowup.startsWith('保留简洁模式的独立追问。\n\n'));
-    assert.ok(simpleFollowup.includes(`${origin}/explain.html?run=${accepted.id}&target=swap_sum#explain-section-0`));
+    assert.ok(simpleFollowup.includes(stepUrl));
     await acceptedStatus.scrollIntoViewIfNeeded();
     await fit(page); await screenshot(page, `${width}-simple-accepted-solution.png`);
     await more.locator(':scope > summary').click();

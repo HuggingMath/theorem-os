@@ -327,9 +327,10 @@ try {
     assert.equal(count(h, 'GET', '/api/session'), sessions, 'stale 401 triggered another recovery');
   });
 
-  await scenario('A hung GET times out within the request limit and permits subsequent recovery', async h => {
+  await scenario('A hung list refresh keeps the editor usable and recovers without reconnecting', async h => {
     await open(h);
     const values = await draft(h.page);
+    const sessions = count(h, 'GET', '/api/session');
     const held = deferred(), release = deferred();
     h.releases.push(release.resolve);
     let hold = true;
@@ -342,14 +343,20 @@ try {
     await refreshHistory(h.page);
     await held.promise;
     const started = performance.now();
-    await h.page.locator('#global-notice').waitFor({ state: 'visible', timeout: 19_000 });
+    await h.page.waitForFunction(() => {
+      const notice = document.querySelector<HTMLElement>('#runs-error');
+      return notice && !notice.hidden && notice.textContent === '研究记录暂未更新';
+    }, undefined, { timeout: 19_000 });
     timeoutElapsedMs = Math.round(performance.now() - started);
     assert.ok(timeoutElapsedMs >= 14_000 && timeoutElapsedMs <= 18_500, `unexpected timeout duration ${timeoutElapsedMs}ms`);
-    await disconnected(h.page);
-    release.resolve();
-    await h.page.locator('#retry-connection').click();
-    await ready(h.page);
+    assert.equal(await h.page.locator('#global-notice').isHidden(), true);
+    assert.equal(await h.page.locator('#submit-run').isEnabled(), true);
     await assertDraft(h.page, values);
+    release.resolve();
+    await h.page.waitForFunction(() => document.querySelector<HTMLElement>('#runs-error')?.hidden, undefined, { timeout: 8000 });
+    await assertDraft(h.page, values);
+    assert.equal(count(h, 'GET', '/api/session'), sessions);
+    assert.equal(count(h, 'POST', '/api/runs'), 0);
   });
 
   await writeReport('passed');

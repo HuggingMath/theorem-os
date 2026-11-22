@@ -70,7 +70,8 @@ export function staticReportHtml(root: string, report: StaticReportPage): string
     style: `<style>${stylesheet(web)}</style><style data-theoremos-math-style>${mathStylesheet(web)}</style>`,
     data: `<script type="application/json" id="report-data">${embeddedJson(report.data)}</script>`,
     bundle: `<script>${scriptText(read(path.join(web, 'math.js')))}</script><script>${scriptText(read(path.join(pages, `${report.page}.js`)))}</script>` };
-  let html = read(path.join(pages, `${report.page}.html`));
+  const reportTemplate = path.join(root, 'out/web-report', `${report.page}.html`);
+  let html = read(fs.existsSync(reportTemplate) ? reportTemplate : path.join(pages, `${report.page}.html`));
   if (html.includes('\0')) throw new Error('static_report_template_changed');
   html = once(html, '<meta charset="utf-8">', `<meta charset="utf-8">\n  <meta http-equiv="Content-Security-Policy" content="${policy}">`);
   html = once(html, '<link rel="icon" type="image/svg+xml" href="assets/mark.svg">', `<link rel="icon" type="image/svg+xml" href="${mark}">`);

@@ -101,7 +101,7 @@ try {
   // The sample opens without a key, says it is read-only, and offers no destructive or sharing action.
   await openSample(page);
   assert.equal(new URL(page.url()).searchParams.has('sample'), true, 'The sample has its own address');
-  assert.match(await page.locator('[data-sample-note]').innerText(), /已完成的运行记录[\s\S]*独立验收/u);
+  assert.match(await page.locator('[data-sample-badge]').innerText(), /示例 · 只读/u);
   assert.equal(await page.locator('#detail-tab-result').getAttribute('aria-selected'), 'true');
   for (const action of ['delete-run', 'cancel', 'share-run']) assert.equal(await page.locator(`[data-action="${action}"]`).count(), 0, `Sample offers ${action}`);
   assert.match(await page.locator('[data-action="reuse-run"]').innerText(), /用这道题开始研究/u);

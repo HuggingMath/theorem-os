@@ -3,11 +3,11 @@ import { renderPersonalExpertPicker, renderTeamProfilePicker } from './teamProfi
 import type { WebTeamProfile } from '../shared';
 import {
   createIcons, ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, BookOpen, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
-  Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
+  Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Minimize2, Monitor, Moon, Network, PanelRight, Paperclip,
   LogOut, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Sun, Trash2, TriangleAlert, Undo2, Upload, X,
 } from 'lucide';
 import type { WebAdminOverview, WebContinuation, WebCoordination, WebEffort, WebEnvironment, WebPrecheck, WebPrecheckDiagnostic, WebProofOutline, WebRun, WebRunRequest, WebSavedKey, WebSession } from '../shared';
-import { loginHref } from '../shared';
+import { accountLogin, loginHref } from '../shared';
 import { webTaskEnvironment } from '../environment';
 import { configurationRefs, ResearchSelection } from './researchSelection';
 import type { ResearchAsset } from '../researchAssetTypes';
@@ -96,7 +96,7 @@ import { renderResearchProblemDraft } from './ui/ResearchProblemDraft';
 import { checkPersonalApproval, completePersonalApprovalReview, observedPersonalApproval, personalApprovalNeedsReview, personalApprovalSettled, readPersonalApproval, removePersonalApproval, requirePersonalApprovalReview, savePersonalApproval, type PersonalApprovalAttempt } from './personalApprovalStore';
 
 const iconSet = { ArrowDown, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUp, BookOpen, ChevronDown, ChevronUp, CircleAlert, Copy, CopyPlus, CornerDownLeft, Cpu,
-  Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Monitor, Moon, Network, PanelRight, Paperclip,
+  Download, ExternalLink, Eye, FileCode2, FolderOpen, GitBranch, IndentDecrease, IndentIncrease, ListOrdered, Link2, Link2Off, Maximize2, MessageSquare, Minimize2, Monitor, Moon, Network, PanelRight, Paperclip,
   LogOut, Plus, RefreshCw, RotateCcw, Save, Search, ShieldCheck, SlidersHorizontal, Square, SquarePen, Sun, Trash2, TriangleAlert, Undo2, Upload, X };
 function icons(root: Element | Document | DocumentFragment = document) {
   createIcons({ icons: iconSet, root, attrs: { 'aria-hidden': 'true' } });
@@ -179,15 +179,21 @@ let researchEntry: 'natural' | 'lean' = 'natural';
 document.body.dataset.entry = researchEntry;
 let naturalPage: Promise<void> | undefined;
 let chatWorkspace: ChatSession | undefined;
+const workbenchConnecting = element('#workbench-connecting');
 let linkedLibraryReference = readLibraryReference(new URLSearchParams(location.search));
 let linkedProblemDraft = readResearchProblemDraft(new URLSearchParams(location.search));
 let problemDraftRevision = 0;
 const chatArtifacts = new ChatArtifactNavigation(element('#research-chat-thread'));
 const chatArtifactIdentity = () => chatWorkspace?.id || currentRun()?.id || 'home';
 const outputWideQuery = window.matchMedia('(min-width:1101px)');
-function syncOutputCloseLabel() {
-  element('#close-research-output').textContent = !outputWideQuery.matches || document.body.dataset.resultsExpanded === 'true'
-    ? t('返回对话') : t('收起面板');
+function syncOutputControls() {
+  const expanded = document.body.dataset.resultsExpanded === 'true';
+  const close = element('#close-research-output'), resize = element('#expand-research-output');
+  const closeLabel = !outputWideQuery.matches || expanded ? t('返回对话') : t('收起面板');
+  close.title = closeLabel;
+  close.setAttribute('aria-label', closeLabel);
+  resize.title = expanded ? t('恢复分栏') : t('展开成果');
+  resize.setAttribute('aria-pressed', String(expanded));
 }
 function placeInputMode() {
   const mode = currentRun() ? 'natural' : researchEntry;
@@ -208,6 +214,7 @@ function chooseEntry(mode: 'natural' | 'lean') {
   renderRuntime(); renderPreparation(); renderShell();
 }
 async function loadNaturalResearch() {
+  workbenchConnecting.remove();
   chatWorkspace = new ChatSession({
     request: api,
     session: () => state.session,
@@ -238,7 +245,11 @@ async function loadNaturalResearch() {
       const search = withAddressLanguage(parameters.size ? `?${parameters}` : '');
       if (location.search !== search) history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', location.pathname + search);
       // The live workspace belongs to the task, not to one of its stages: a task moving from its statement to its proof keeps it open.
-      if (!id || document.body.dataset.chatArtifact !== 'live') { document.body.dataset.chatArtifact = ''; document.body.dataset.outputOpen = 'false'; }
+      if (!id || document.body.dataset.chatArtifact !== 'live') {
+        document.body.dataset.chatArtifact = ''; document.body.dataset.outputOpen = 'false';
+        document.body.dataset.resultsExpanded = 'false';
+        syncOutputControls();
+      }
       // Arrow keys in the phone history open each run in turn; its conversation arriving must not close the list.
       if (!attached) closeHistoryDialog();
     },
@@ -333,7 +344,7 @@ async function openChatArtifact(kind: ChatArtifactKind, target?: ChatArtifactTar
   if (!auto) chatArtifacts.remember(chatArtifactIdentity(), kind, target);
   document.body.dataset.chatArtifact = kind;
   document.body.dataset.outputOpen = 'true';
-  syncOutputCloseLabel();
+  syncOutputControls();
   if (kind === 'original') { element('#close-research-output').focus({ preventScroll: true }); return; }
   // The live workspace replaces the run detail for the time it is open, on any screen size.
   if (kind === 'live') { if (!auto) element('#close-research-output').focus({ preventScroll: true }); return; }
@@ -439,6 +450,9 @@ let toastTimer: ReturnType<typeof setTimeout> | undefined;
 let clockTimer: ReturnType<typeof setInterval> | undefined;
 let connectionRequest: Promise<void> | undefined;
 let liveRefreshPending = false;
+let lastRunsReadAt = -Infinity;
+let runsReadRetryAt = 0;
+const liveRefreshIntervalMs = 750;
 let readController = new AbortController();
 let pageActive = true;
 let sourceRevision = 0;
@@ -656,12 +670,17 @@ let historyCriteria = '';
 const arrivals = new Set<string>();
 let historyReading: { top: number; anchors: Array<{ id: string; offset: number }> } = { top: 0, anchors: [] };
 
-const edgeThrottled = (response: Response, method?: string) => (!method || method === 'GET')
-  && (response.status === 429 || response.status === 503) && !response.headers.get('Content-Type')?.includes('json');
-/** Retry-After in seconds when the edge gives one, otherwise 1.5 s then 3 s; never more than 6 s inside the 15 s request budget. */
-const retryDelay = (header: string | null, attempt: number) => {
-  const seconds = Number(header);
-  return Math.min(6_000, Number.isFinite(seconds) && seconds > 0 ? seconds * 1_000 : 1_500 * attempt);
+// Edge limits can apply to one route. The workbench's own address limit covers all API requests.
+const routeCooldowns = new Map<string, ApiError>();
+let addressCooldown: ApiError | undefined;
+function cooldownFor(route: string) {
+  const local = routeCooldowns.get(route);
+  return local && local.retryAt > (addressCooldown?.retryAt ?? 0) ? local : addressCooldown;
+}
+const retryAfterMs = (header: string | null, now: number) => {
+  if (!header) return;
+  const delay = /^\d+$/u.test(header) ? Number(header) * 1_000 : Date.parse(header) - now;
+  if (Number.isFinite(delay)) return Math.max(0, delay);
 };
 const pause = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
   if (signal.aborted) { reject(signal.reason); return; }
@@ -671,14 +690,14 @@ const pause = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, r
 });
 /** `message` is what the reader sees; `reason` keeps the server's own text for checks such as sessionFailure. */
 class ApiError extends Error {
-  constructor(readonly reason: string, readonly status: number) { super(localizeMessage(reason)); }
+  constructor(readonly reason: string, readonly status: number, readonly retryAt = 0) { super(localizeMessage(reason)); }
 }
-type ApiInit = RequestInit & { timeoutMs?: number };
+type ApiInit = RequestInit & { timeoutMs?: number; firstResponseTimeoutMs?: number };
 const sameSession = (session: WebSession | undefined) => session?.draftOwner === state.session?.draftOwner && session?.csrfToken === state.session?.csrfToken;
 let keyChangeSession: WebSession | undefined, keyChangeTail: Promise<void> = Promise.resolve();
 function api<T>(url: string, init?: ApiInit): Promise<T>;
 function api<T>(url: string, init: ApiInit, etag: (value: string | null) => void): Promise<T | undefined>;
-async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}, etag?: (value: string | null) => void): Promise<T | undefined> {
+async function api<T>(url: string, { timeoutMs = 15_000, firstResponseTimeoutMs, ...init }: ApiInit = {}, etag?: (value: string | null) => void): Promise<T | undefined> {
   const requestSession = state.session, requestOwner = requestSession?.draftOwner;
   // Both input modes update the same saved-key metadata. Send their changes in order, including runs
   // whose response carries that metadata, so a slow deletion cannot replace a later saved key.
@@ -692,50 +711,124 @@ async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}
     keyChangeTail = new Promise<void>(resolve => { finishKeyChange = resolve; });
     await previous;
   }
+  const method = init.method?.toUpperCase() ?? 'GET';
+  const read = method === 'GET';
+  const route = `${method} ${url.split('?', 1)[0]}`;
+  const deadline = Date.now() + timeoutMs;
   const timeout = new AbortController();
-  const timer = setTimeout(() => timeout.abort(new Error(t('请求超时，请重新连接'))), timeoutMs);
+  const transportError = (text: string) => read ? new ApiError(text, 0) : new Error(text);
+  const timedOut = () => transportError(t('请求超时，请重新连接'));
+  const timer = setTimeout(() => timeout.abort(timedOut()), timeoutMs);
   const signals = [timeout.signal];
-  if (!init.method || init.method === 'GET') signals.push(readController.signal);
+  if (read) signals.push(readController.signal);
   if (init.signal) signals.push(init.signal);
   try {
     // A queued change still belongs to the identity that requested it, even after another tab logs in.
     if (keyChange && !sameSession(requestSession)) throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
-    // fetch rejects with a TypeError when the server cannot be reached; its text ("Failed to fetch") means nothing to a reader.
     const signal = AbortSignal.any(signals);
-    const send = () => fetch(url, { ...init, credentials: 'same-origin', cache: 'no-store', signal,
-      headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}),
-        ...(init.method && init.method !== 'GET' ? { 'X-CSRF-Token': state.session?.csrfToken ?? '' } : {}), ...init.headers } })
-      .catch((error: unknown) => { throw error instanceof TypeError ? new Error(t('无法连接服务器')) : error; });
-    let response = await send();
-    // The edge throttles bursts (opening a chat reads several records at once) with a 429/503 that has no JSON body.
-    // A read waits briefly and asks again before the reader sees an error; the server's own limits carry JSON and still surface.
-    for (let attempt = 1; attempt <= 2 && edgeThrottled(response, init.method); attempt++) {
-      await response.body?.cancel().catch(() => undefined);
-      await pause(retryDelay(response.headers.get('Retry-After'), attempt), signal);
-      response = await send();
+    const retryDelay = 400;
+    const canRetryRead = (attempt: number) => read && attempt === 0 && navigator.onLine && Date.now() + retryDelay < deadline;
+    const send = async (attempt: number) => {
+      signal.throwIfAborted();
+      if (read && !navigator.onLine) throw transportError(t('网络已断开'));
+      let cooldown = cooldownFor(route);
+      while (cooldown && cooldown.retryAt > Date.now()) {
+        if (!read || cooldown.retryAt >= deadline) throw cooldown;
+        await pause(cooldown.retryAt - Date.now(), signal);
+        cooldown = cooldownFor(route);
+      }
+      routeCooldowns.delete(route);
+      const request = (requestSignal: AbortSignal) => fetch(url, { ...init, credentials: 'same-origin', cache: 'no-store', signal: requestSignal,
+        headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+          ...(!read ? { 'X-CSRF-Token': state.session?.csrfToken ?? '' } : {}), ...init.headers } });
+      if (!read || attempt || !firstResponseTimeoutMs) return request(signal);
+      // A stalled connection can recover within the original deadline. A response already downloading gets the full time.
+      const firstResponse = new AbortController();
+      const timer = setTimeout(() => firstResponse.abort(timedOut()), firstResponseTimeoutMs);
+      try { return await request(AbortSignal.any([signal, firstResponse.signal])); }
+      finally { clearTimeout(timer); }
+    };
+    for (let attempt = 0; ; attempt++) {
+      let response: Response;
+      try { response = await send(attempt); }
+      catch (error) {
+        signal.throwIfAborted();
+        const failure = error instanceof TypeError ? transportError(t('无法连接服务器')) : error;
+        if (!(failure instanceof ApiError && failure.status === 0 && canRetryRead(attempt))) throw failure;
+        await pause(retryDelay, signal);
+        continue;
+      }
+      const responseOwner = response.headers.get('X-Theoremos-Owner');
+      if (!url.startsWith('/api/session') && responseOwner && state.session?.draftOwner && responseOwner !== state.session.draftOwner) {
+        if (requestOwner === state.session.draftOwner) { clearOwnedDrafts(); state.submitting = false; void initialize(); }
+        throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
+      }
+      if (etag && response.status === 304) {
+        if (!sameSession(requestSession)) throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
+        etag(response.headers.get('ETag'));
+        return;
+      }
+
+      const challenged = response.headers.get('cf-mitigated') === 'challenge';
+      const json = response.headers.get('Content-Type')?.includes('json');
+      let payload: unknown;
+      if (!challenged && (response.ok || json)) payload = await response.json().catch(() => undefined);
+      else void response.body?.cancel().catch(() => undefined);
+      signal.throwIfAborted();
+      // The headers may have arrived before another tab's login; a slow body still belongs to its original session.
+      if (!url.startsWith('/api/session') && !sameSession(requestSession)) throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
+      if (!challenged && response.ok) {
+        if (payload === undefined) {
+          if (!json || !canRetryRead(attempt)) throw transportError(t('服务器返回了无法读取的响应'));
+          await pause(retryDelay, signal);
+          continue;
+        }
+        etag?.(response.headers.get('ETag'));
+        return payload as T;
+      }
+
+      const body = payload && typeof payload === 'object'
+        ? payload as { error?: unknown; cloudflare_error?: unknown; error_code?: unknown; retryable?: unknown; retry_after?: unknown }
+        : undefined;
+      const cloudflare = body?.cloudflare_error === true ? body : undefined;
+      const limited = response.status === 429 || cloudflare?.error_code === 1015;
+      const gatewayFailure = !cloudflare && [502, 503, 504].includes(response.status);
+      const retryable = !challenged && (cloudflare ? cloudflare.retryable === true
+        : gatewayFailure || !json && limited);
+      const now = Date.now();
+      const headerDelay = retryAfterMs(response.headers.get('Retry-After'), now);
+      let delay = headerDelay;
+      if (delay === undefined && cloudflare?.retryable === true && typeof cloudflare.retry_after === 'number'
+        && Number.isSafeInteger(cloudflare.retry_after) && cloudflare.retry_after >= 0) delay = cloudflare.retry_after * 1_000;
+      if (delay === undefined && (challenged || cloudflare && limited)) delay = 30_000;
+      if (delay === undefined && retryable && !gatewayFailure) delay = limited && attempt ? 5_000 : 1_500 * (attempt + 1);
+      const retryAt = delay !== undefined && (limited || challenged || retryable) ? now + delay : 0;
+      const limitMessage = t('请求太频繁，请稍后再试。');
+      let reason = t('请求失败 ({0})', response.status);
+      if (challenged) reason = t('Cloudflare 安全验证阻止了请求，请稍后重试');
+      else if (!cloudflare && typeof body?.error === 'string') reason = body.error;
+      else if (limited) reason = limitMessage;
+      else if (retryable) reason = t('服务暂时不可用，请稍后重试');
+      const error = new ApiError(reason, limited && !challenged ? 429 : response.status, retryAt);
+
+      if (retryAt > now) {
+        if (!challenged && !cloudflare && limited && response.headers.get('X-Theoremos-Rate-Limit-Scope') === 'api') {
+          if (retryAt > (addressCooldown?.retryAt ?? 0)) addressCooldown = new ApiError(limitMessage, 429, retryAt);
+        } else if (retryAt > (routeCooldowns.get(route)?.retryAt ?? 0)) {
+          for (const [key, previous] of routeCooldowns) if (previous.retryAt <= now) routeCooldowns.delete(key);
+          routeCooldowns.set(route, error);
+        }
+      }
+      if (!challenged && !cloudflare && response.status === 428) {
+        saveDraft(); draftReady = false; forgetKey(keyStorage); location.replace(loginAddress());
+      }
+      // Requests that change data are only retried by the reader. Longer waits remain in force for future reads.
+      if (!read || !retryable || attempt >= (limited || gatewayFailure ? 1 : 2) || retryAt >= deadline) throw error;
+      if (gatewayFailure && !retryAt) {
+        if (!canRetryRead(attempt)) throw error;
+        await pause(retryDelay, signal);
+      }
     }
-    const responseOwner = response.headers.get('X-Theoremos-Owner');
-    if (!url.startsWith('/api/session') && responseOwner && state.session?.draftOwner && responseOwner !== state.session.draftOwner) {
-      if (requestOwner === state.session.draftOwner) { clearOwnedDrafts(); state.submitting = false; void initialize(); }
-      throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
-    }
-    if (etag && response.status === 304) { etag(response.headers.get('ETag')); return; }
-    const payload: unknown = await response.json().catch(error => {
-      if (timeout.signal.aborted) throw timeout.signal.reason;
-      if (!response.ok) return undefined;
-      throw error;
-    });
-    // The headers may have arrived before another tab's login; a slow body still belongs to its original session.
-    if (!url.startsWith('/api/session') && !sameSession(requestSession)) throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
-    if (!response.ok) {
-      if (response.status === 428) { saveDraft(); draftReady = false; forgetKey(keyStorage); location.replace(loginAddress()); }
-      const message = payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string'
-        ? payload.error : response.status === 429 ? t('请求太频繁，请稍后再试。') : t('请求失败 ({0})', response.status);
-      throw new ApiError(message, response.status);
-    }
-    if (payload === undefined) throw new Error(t('服务器返回了无法读取的响应'));
-    etag?.(response.headers.get('ETag'));
-    return payload as T;
   } catch (error) {
     if (timeout.signal.aborted) throw timeout.signal.reason;
     throw error;
@@ -766,7 +859,7 @@ function setMobileView(view: 'compose' | 'runs', focus = false) {
     ? '' : document.body.dataset.chatArtifact;
   document.body.dataset.chatArtifact = panel;
   document.body.dataset.outputOpen = String(panel === 'live' || panel === 'original' || (view === 'runs' && Boolean(currentRun())));
-  syncOutputCloseLabel();
+  syncOutputControls();
   rememberConversationScroll();
   if (changed) { activityReader?.remember(); moduleView?.update(); }
   document.body.dataset.mobileView = view;
@@ -828,8 +921,8 @@ function openSettings(focusId?: string) {
     void (naturalPage ?? openNaturalResearch()).then(() => {
       const settings = document.querySelector<HTMLDetailsElement>('#formalize-settings');
       if (settings) settings.open = true;
-      const key = document.querySelector<HTMLElement>('#formalize-key');
-      key?.focus(); key?.scrollIntoView({ block: 'center' });
+      const target = settings?.querySelector<HTMLElement>(focusId === 'api-key' ? '#formalize-key' : 'summary');
+      target?.focus(); target?.scrollIntoView({ block: 'nearest' });
     });
     return;
   }
@@ -1839,7 +1932,7 @@ const currentRun = () => state.selectedRun?.id === state.selectedId ? state.sele
   : sampleSelected() ? state.sample : state.runs.find(run => run.id === state.selectedId);
 const downloadUrl = (id: string) => `/api/runs/${encodeURIComponent(id)}/download`;
 /** A run keeps going on the server; say so, and how its end reaches the reader (the account's mail, else this list). */
-const awayNote = () => state.session?.account && state.session.account.completionEmail !== false
+const awayNote = () => state.session?.account?.email && state.session.account.completionEmail !== false
   ? t('可以关闭页面，运行会在服务器上继续；结束后会发邮件到 {0}。', state.session.account.email)
   : t('可以关闭页面，运行会在服务器上继续；结束后回到研究记录查看结果。');
 function resultTitle(run: WebRun) {
@@ -2158,7 +2251,7 @@ function renderDraftPreview(force = false) {
 }
 /**
  * Until the first records arrive the page does not know whether it opens a run (it does whenever the account has one)
- * or the new-research page, so it keeps the run layout's connecting card instead of showing the composer for a moment.
+ * or the new-research page, so the conversation shell shows a connection status until the composer mounts.
  * A failed connection, or the reader starting a draft, settles it on the new-research page.
  */
 function opening() { return !state.resumed && !state.lost && !state.composing || sampleLink && !state.lost; }
@@ -2201,6 +2294,7 @@ function renderDetail(force = false) {
     }
     return;
   }
+  chatWorkspace?.observe(run);
   const detail = element('#run-detail');
   const focused = document.activeElement instanceof HTMLElement && detail.contains(document.activeElement)
     ? document.activeElement : undefined;
@@ -2228,7 +2322,6 @@ function renderDetail(force = false) {
 }
 function renderRunHeader(run: WebRun) {
   const value = status(run), progress = runProgress(run), cancelling = state.cancelling.has(run.id);
-  chatWorkspace?.observe(run);
   drawRunHeader(element('#run-detail'), {
     title: run.title, id: run.id, updated: run.updatedAt, error: state.detailError,
     status: { key: `${run.status}:${run.phase}:${value.label}`, ...value },
@@ -2769,8 +2862,11 @@ const currentConnection = (epoch: number) => pageActive && epoch === state.conne
 const sessionFailure = (error: unknown) => error instanceof ApiError
   && (error.status === 401 || error.status === 403 && error.reason.includes('会话校验'));
 function invalidateReads() {
-  runUpdates.stop();
   liveRefreshPending = false;
+  lastRunsReadAt = -Infinity;
+  runsReadRetryAt = 0;
+  runUpdates.stop();
+  clearTimeout(pollTimer);
   state.connectionEpoch++;
   state.listGeneration++;
   state.runsEtag = '';
@@ -2782,6 +2878,7 @@ function disconnected(text: string) {
   state.connected = false; state.lost = true;
   runUpdates.stop();
   liveRefreshPending = false;
+  workbenchConnecting.hidden = true;
   setGlobalNotice(text);
   element('#runs-error').textContent = t('连接中断，记录可能不是最新状态');
   element('#runs-error').hidden = false;
@@ -2805,11 +2902,13 @@ function receiveRunObservation(observation: WebObservation) {
 async function refreshRuns(epoch: number, force = false, listed?: WebSession['runs']) {
   const generation = ++state.listGeneration;
   let etag: string | null = listed?.version ?? null;
+  if (!listed) lastRunsReadAt = Date.now();
   const result = listed ?? await api<{ runs: WebRun[] }>('/api/runs', {
     headers: !force && state.runsEtag ? { 'If-None-Match': state.runsEtag } : {},
   }, value => { etag = value; });
   if (generation !== state.listGeneration || !currentConnection(epoch)) return;
   state.runsEtag = etag ?? '';
+  runsReadRetryAt = 0;
   element('#runs-error').hidden = true;
   if (!result) return;
   const previous = state.runs;
@@ -2851,10 +2950,11 @@ async function refreshRuns(epoch: number, force = false, listed?: WebSession['ru
   renderRunList(); renderDetail(); renderDeleteState(); renderCancelState(); renderBudgetEstimate();
 }
 async function poll(force = false) {
-  if (!pageActive) return;
+  if (!pageActive || !navigator.onLine) return;
   if (connectionRequest) return connectionRequest;
   if (!state.connected) return initialize();
   if (state.refreshing) return;
+  if (!force && runsReadRetryAt > Date.now()) { schedulePoll(); return; }
   const epoch = state.connectionEpoch;
   liveRefreshPending = false;
   state.refreshing = true;
@@ -2862,34 +2962,59 @@ async function poll(force = false) {
   try { await refreshRuns(epoch, force); }
   catch (error) {
     if (!currentConnection(epoch)) return;
-    disconnected(t('{0}。未提交内容已保留。', message(error)));
-    if (sessionFailure(error)) await initialize();
+    if (sessionFailure(error)) {
+      disconnected(t('{0}。未提交内容已保留。', message(error)));
+      await initialize();
+      return;
+    }
+    // A failed list refresh leaves the last list and the open conversation usable.
+    const cooldown = error instanceof ApiError ? error.retryAt : 0;
+    const now = Date.now();
+    const retryDelay = runsReadRetryAt ? 30_000 : document.hidden ? 15_000 : 5000;
+    runsReadRetryAt = cooldown > now ? cooldown : now + retryDelay;
+    const notice = element('#runs-error');
+    notice.textContent = error instanceof ApiError && (error.status === 429 || cooldown)
+      ? error.message : t('研究记录暂未更新');
+    notice.hidden = false;
   } finally {
-    if (currentConnection(epoch)) state.refreshing = false;
+    if (currentConnection(epoch)) {
+      state.refreshing = false;
+      schedulePoll();
+    }
     element<HTMLButtonElement>('#refresh-runs').disabled = !pageActive || Boolean(connectionRequest) || state.refreshing;
-    if (currentConnection(epoch) && state.connected && !document.hidden && liveRefreshPending) void poll();
   }
 }
 function requestRunsRefresh() {
   liveRefreshPending = true;
-  void poll();
+  schedulePoll();
 }
 function schedulePoll() {
   clearTimeout(pollTimer);
-  if (!pageActive) return;
+  if (!pageActive || !navigator.onLine || connectionRequest || state.refreshing) return;
   // A hidden tab keeps a slow poll while runs are active, so their end still reaches the title and notifications.
+  const hidden = document.hidden;
   const active = state.connected && state.runs.some(activeRun);
-  pollTimer = setTimeout(async () => {
-    if (!document.hidden || active) await poll();
-    if (pageActive) schedulePoll();
-  }, document.hidden ? active ? 15_000 : 30_000 : runUpdates.connected ? 30_000 : active ? 1800 : 5000);
+  if (hidden && !active) return;
+  const now = Date.now();
+  const runsRetryAt = Math.max(runsReadRetryAt, cooldownFor('GET /api/runs')?.retryAt ?? 0);
+  const sessionRetryAt = cooldownFor('GET /api/session')?.retryAt ?? 0;
+  const retryAt = state.connected ? runsRetryAt : Math.max(sessionRetryAt, state.session ? runsRetryAt : 0);
+  const live = !hidden && state.connected && liveRefreshPending;
+  const interval = hidden ? 15_000 : runUpdates.connected ? 30_000 : active ? 1800 : 5000;
+  // Give live updates a trailing refresh at a fixed interval. New events keep that deadline.
+  const next = live ? lastRunsReadAt + liveRefreshIntervalMs : retryAt > now ? retryAt : now + interval;
+  const delay = Math.max(next, retryAt) - now;
+  if (delay <= 0) { void poll(); return; }
+  pollTimer = setTimeout(() => void poll(), Math.min(delay, 2_147_483_647));
 }
 function initialize(): Promise<void> {
   if (connectionRequest) return connectionRequest;
   if (!pageActive) return Promise.resolve();
+  const reconnecting = Boolean(state.session);
   invalidateReads();
   const epoch = state.connectionEpoch;
   state.connected = false;
+  workbenchConnecting.hidden = false;
   element<HTMLButtonElement>('#retry-connection').disabled = true;
   element<HTMLButtonElement>('#refresh-runs').disabled = true;
   connectionRequest = (async () => {
@@ -2897,7 +3022,7 @@ function initialize(): Promise<void> {
       if (!navigator.onLine) throw new Error(t('网络已断开'));
       // The first connection takes the run list in the session reply, one round trip instead of two. A reconnect may bring
       // another session (and account), and reads the list itself, as a 304 when nothing changed.
-      const { runs: listed, ...reply } = await api<WebSession>(state.session ? '/api/session' : '/api/session?runs');
+      const { runs: listed, ...reply } = await api<WebSession>(state.session ? '/api/session' : '/api/session?runs', { firstResponseTimeoutMs: 6000 });
       const session = localizeSession(reply);
       if (!currentConnection(epoch)) return;
       if (session.auth === 'email' && (!session.account || session.termsRequired)) {
@@ -2911,7 +3036,7 @@ function initialize(): Promise<void> {
         try { storedOwnerChanged = sessionStorage.getItem(draftOwnerStorageKey) !== ownerOfSession(session); }
         catch { /* Unavailable storage cannot restore a previous owner's draft. */ }
         // Only the signed-in account's former email scope identifies an owner; old anonymous keys are unbound.
-        if (session.account && !storedOwnerChanged) try {
+        if (session.account?.email && !storedOwnerChanged) try {
           const previous = session.account.email, owner = ownerOfSession(session);
           for (const key of Object.keys(sessionStorage)) {
             const prefix = ['theorem-os.chat-draft.', 'theorem-os.chat-reading.'].find(value => key.startsWith(`${value}${previous}.`));
@@ -2927,6 +3052,7 @@ function initialize(): Promise<void> {
       if (ownerChanged || storedOwnerChanged) { clearOwnedDrafts(); state.submitting = false; }
       ownedDrafts.bind(ownerOfSession(session));
       if (state.session && state.session.csrfToken !== session.csrfToken) {
+        chatWorkspace?.clearRecentConversations();
         state.runs = []; state.selectedId = ''; state.selectedRun = undefined;
         state.finishedRuns.clear(); state.cancelling.clear();
         state.detailError = ''; state.panelSignature = '';
@@ -3036,7 +3162,13 @@ function initialize(): Promise<void> {
     element<HTMLButtonElement>('#refresh-runs').disabled = !pageActive;
     renderRuntime(); renderDetail();
     if (pageActive && !clockTimer) clockTimer = setInterval(updateClocks, 1000);
-    if (pageActive && state.connected && !document.hidden) runUpdates.start();
+    if (currentConnection(epoch) && state.connected) {
+      if (!document.hidden) runUpdates.start();
+      if (reconnecting) {
+        trajectoryView?.resumeRead();
+        void chatWorkspace?.refresh();
+      }
+    }
     schedulePoll();
   });
   renderRuntime(); renderDetail();
@@ -3061,7 +3193,7 @@ function renderShell() {
       : chatWorkspace?.editingProblem ? `library.html?${new URLSearchParams({ workbenchEdit: chatWorkspace.editingProblem })}` : 'library.html',
     history: { docked: historyDocked(), expanded: !historyCollapsed() },
     connection: { tone: ready ? 'ready' : 'offline', label: !state.connected ? connectionRequest ? t('连接中') : t('连接中断') : ready ? t('环境就绪') : t('环境未就绪') },
-    settingsDisabled: !session || state.submitting, account: session?.account?.email, onAccount: openAccount,
+    settingsDisabled: !session || state.submitting, account: session?.account && accountLogin(session.account), onAccount: openAccount,
     onHistory: toggleHistory, onHome: () => { void openNaturalResearch(); }, onDraft: openDraft, onSettings: () => openSettings(), onPalette: () => palette.open(), onGlossary: () => openGlossary(), onLocale: changeLocale,
     onLive: () => {
       const target = state.runs.filter(item => activeRun(item) && item.id !== run?.id).at(-1);
@@ -3077,7 +3209,7 @@ function renderShell() {
 /** Switching reloads the page; the draft is saved first, as on any page exit. The API key is never kept. */
 function changeLocale() { saveDraft(); switchLocale(otherLocale.locale); }
 function openAccount() {
-  element('#account-email').textContent = state.session?.account?.email ?? '';
+  element('#account-email').textContent = state.session?.account ? accountLogin(state.session.account) : '';
   // The allowance is only sent for signed-in accounts that are not admins; anything else leaves the line out.
   const quota = state.session?.quota, quotaLine = element('#account-quota');
   quotaLine.hidden = !quota;
@@ -3085,11 +3217,13 @@ function openAccount() {
     Math.max(0, quota.runs.limit - quota.runs.used), Math.max(0, quota.formalizations.limit - quota.formalizations.used),
     Math.max(0, quota.explanations.limit - quota.explanations.used)) : '';
   element<HTMLInputElement>('#completion-email').checked = state.session?.account?.completionEmail !== false;
+  element('.completion-email').hidden = !state.session?.account?.email;
   element('#open-admin').hidden = !state.session?.account?.admin;
   const account = state.session?.account, recentCode = account?.passwordResetAllowed;
   element('#account-current-wrap').hidden = !account?.passwordSet || Boolean(recentCode);
   element('#account-password-note').textContent = recentCode ? t('刚通过邮箱验证，可在 10 分钟内设置或重设密码。')
-    : account?.passwordSet ? t('输入当前密码和至少 12 位的新密码。忘记密码请用邮箱验证码重新登录。')
+    : !account?.email ? t('输入当前密码和至少 12 位的新密码。忘记密码请联系管理员重置。')
+    : account.passwordSet ? t('输入当前密码和至少 12 位的新密码。忘记密码请用邮箱验证码重新登录。')
       : t('请用邮箱验证码重新登录，在 10 分钟内设置至少 12 位的密码。');
   element<HTMLButtonElement>('#save-password').textContent = account?.passwordSet ? t('修改密码') : t('设置密码');
   for (const id of ['account-current-password', 'account-new-password', 'account-repeat-password']) field(id).value = '';
@@ -3104,10 +3238,10 @@ function renderAdmin() {
   renderAdminPanel(element('#admin-content'), { ...admin, onAdd: email => changeAllowlist('POST', email),
     onRemove: email => void changeAllowlist('DELETE', email), onSuspend: (email, suspended) => void changeSuspended(email, suspended) });
 }
-async function changeSuspended(email: string, suspended: boolean) {
-  admin.busy = email; admin.error = undefined; renderAdmin();
+async function changeSuspended(login: string, suspended: boolean) {
+  admin.busy = login; admin.error = undefined; renderAdmin();
   try {
-    admin.overview = await api<WebAdminOverview>('/api/admin/accounts', { method: 'PATCH', body: JSON.stringify({ email, suspended }) });
+    admin.overview = await api<WebAdminOverview>('/api/admin/accounts', { method: 'PATCH', body: JSON.stringify({ login, suspended }) });
     toast(suspended ? t('账号已暂停') : t('账号已恢复'));
   }
   catch (error) { admin.error = message(error); }
@@ -3149,7 +3283,9 @@ async function changePassword(event: Event) {
     if (!sameSession(session)) return;
     if (state.session?.account) { state.session.account.passwordSet = true; state.session.account.passwordResetAllowed = false; }
     element('#account-current-wrap').hidden = false;
-    element('#account-password-note').textContent = t('输入当前密码和至少 12 位的新密码。忘记密码请用邮箱验证码重新登录。');
+    element('#account-password-note').textContent = state.session?.account?.email
+      ? t('输入当前密码和至少 12 位的新密码。忘记密码请用邮箱验证码重新登录。')
+      : t('输入当前密码和至少 12 位的新密码。忘记密码请联系管理员重置。');
     button.textContent = t('修改密码');
     toast(t('密码已更新；其他设备需要重新登录'));
   } catch (cause) { if (sameSession(session)) { error.textContent = message(cause); error.hidden = false; } }
@@ -4214,14 +4350,26 @@ element('#run-settings').addEventListener('keydown', event => {
 });
 element('#close-history').addEventListener('click', closeHistoryDialog);
 element('#open-draft').addEventListener('click', openDraft);
-// The run menu closes on a click elsewhere and on Escape, like the browser's own menus.
+// These disclosures behave like menus: outside clicks keep their own focus, and Escape returns to the trigger.
+const openMenuSelector = '[data-run-menu][open], #chat-model-settings[open], .chat-history-actions[open]';
+const openResearchSettingsSelector = '#formalize-settings[open]';
 document.addEventListener('click', event => {
-  for (const menu of document.querySelectorAll<HTMLDetailsElement>('[data-run-menu][open]')) if (!menu.contains(event.target as Node)) menu.open = false;
+  for (const menu of document.querySelectorAll<HTMLDetailsElement>(openMenuSelector)) {
+    if (!menu.contains(event.target as Node)) menu.open = false;
+  }
 });
+// Close the previous panel before running any outside control that opens it and focuses a field.
+document.addEventListener('click', event => {
+  const settings = document.querySelector<HTMLDetailsElement>(openResearchSettingsSelector);
+  if (settings && !settings.contains(event.target as Node)) settings.open = false;
+}, { capture: true });
 document.addEventListener('keydown', event => {
-  const menu = event.target instanceof Element ? event.target.closest<HTMLDetailsElement>('[data-run-menu][open]') : null;
-  if (event.key !== 'Escape' || !menu) return;
-  event.preventDefault(); menu.open = false; menu.querySelector('summary')?.focus();
+  if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || !(event.target instanceof Element)) return;
+  const menu = event.target.closest<HTMLDetailsElement>(`${openMenuSelector}, ${openResearchSettingsSelector}`);
+  if (!menu) return;
+  event.preventDefault();
+  menu.open = false;
+  menu.querySelector('summary')?.focus({ preventScroll: menu.id !== 'formalize-settings' });
 });
 document.addEventListener('keydown', event => {
   if (event.key !== 'Escape' || event.defaultPrevented || !historyDocked() || historyCollapsed()) return;
@@ -4257,20 +4405,15 @@ element('#open-draft-preview').addEventListener('click', () => {
   setMobileView('runs'); renderDraftPreview(true);
   element('#close-draft-preview').focus();
 });
-outputWideQuery.addEventListener('change', syncOutputCloseLabel);
-syncOutputCloseLabel();
+outputWideQuery.addEventListener('change', syncOutputControls);
+syncOutputControls();
 element('#expand-research-output').addEventListener('click', () => {
-  const expanded = document.body.dataset.resultsExpanded !== 'true';
-  document.body.dataset.resultsExpanded = String(expanded);
-  element('#expand-research-output').setAttribute('aria-pressed', String(expanded));
-  element('#expand-research-output').textContent = expanded ? t('恢复分栏') : t('展开成果');
-  syncOutputCloseLabel();
+  document.body.dataset.resultsExpanded = String(document.body.dataset.resultsExpanded !== 'true');
+  syncOutputControls();
 });
 element('#close-research-output').addEventListener('click', () => {
   document.body.dataset.resultsExpanded = 'false';
   document.body.dataset.chatArtifact = '';
-  element('#expand-research-output').setAttribute('aria-pressed', 'false');
-  element('#expand-research-output').textContent = t('展开成果');
   setMobileView('compose');
   if (!chatArtifacts.restore(chatArtifactIdentity())) document.querySelector<HTMLElement>('#formalize-original')?.focus({ preventScroll: true });
 });
@@ -4401,7 +4544,7 @@ window.addEventListener('offline', () => {
 });
 async function resumeConnection() {
   await connectionRequest;
-  if (pageActive && !state.connected) await initialize();
+  if (pageActive && navigator.onLine && !state.connected) await initialize();
 }
 window.addEventListener('online', () => void resumeConnection());
 // Back and Forward open the run the address names, or the new-research page; they never add entries themselves.
@@ -4458,10 +4601,11 @@ element('#close-admin').addEventListener('click', () => element<HTMLDialogElemen
 element('#close-glossary').addEventListener('click', () => element<HTMLDialogElement>('#glossary-dialog').close());
 element('#logout').addEventListener('click', event => void leaveAccount(() => api('/api/auth/logout', { method: 'POST', body: '{}' }), event.currentTarget as HTMLButtonElement));
 field('account-confirm').addEventListener('input', () => {
-  element<HTMLButtonElement>('#delete-account').disabled = field('account-confirm').value.trim().toLowerCase() !== state.session?.account?.email;
+  element<HTMLButtonElement>('#delete-account').disabled = !state.session?.account
+    || field('account-confirm').value.trim().toLowerCase() !== accountLogin(state.session.account);
 });
 element('#delete-account').addEventListener('click', event => void leaveAccount(() => api('/api/auth/account',
-  { method: 'DELETE', body: JSON.stringify({ email: field('account-confirm').value.trim() }) }), event.currentTarget as HTMLButtonElement));
+  { method: 'DELETE', body: JSON.stringify({ login: field('account-confirm').value.trim() }) }), event.currentTarget as HTMLButtonElement));
 if (readHistoryCollapsed(() => localStorage)) document.body.dataset.historyCollapsed = 'true';
 placeHistory();
 icons();

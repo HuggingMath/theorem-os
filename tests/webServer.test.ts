@@ -83,6 +83,24 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
         ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }), ...options.headers },
       body: options.body === undefined ? undefined : JSON.stringify(options.body) });
   }
+  it('advertises when an address can read again after reaching the general request limit', async () => {
+    config.clientIpHeader = 'x-fixture-client-ip';
+    const read = (ip: string) => request('/api/share/invalid', undefined, { headers: { [config.clientIpHeader!]: ip } });
+    for (let batch = 0; batch < 20; batch++) {
+      await Promise.all(Array.from({ length: 30 }, async () => {
+        const response = await read('192.0.2.1');
+        expect(response.status).toBe(404);
+        await response.body?.cancel();
+      }));
+    }
+    const limited = await read('192.0.2.1');
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get('X-Theoremos-Rate-Limit-Scope')).toBe('api');
+    const retry = Number(limited.headers.get('Retry-After'));
+    expect(retry).toBeGreaterThan(0);
+    expect(retry).toBeLessThanOrEqual(60);
+    expect((await read('192.0.2.2')).status).toBe(404);
+  });
   it('deduplicates concurrent HTTP retries, validates identity conflicts and replays while runtime is unavailable', async () => {
     const alice = await session(), bob = await session();
     const options = { body: { ...input(), requestId: 'http-retry' } };
@@ -1018,7 +1036,7 @@ describe('web HTTP boundary with disposable local servers and no model calls', (
   it('serves only files within the static root and sends browser security headers', async () => {
     const home = await request('/');
     expect(home.status).toBe(200);
-    // Static files revalidate on every use; API answers are never stored.
+    // The HTML revalidates on every use. The browser discards API answers from its cache.
     expect(home.headers.get('cache-control')).toBe('no-cache, no-transform');
     expect(home.headers.get('etag')).toMatch(/^"[\w-]+"$/u);
     expect((await request('/', undefined, { headers: { 'If-None-Match': home.headers.get('etag')! } })).status).toBe(304);

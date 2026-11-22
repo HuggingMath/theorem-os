@@ -142,7 +142,7 @@ export type FrozenResearchConfiguration = {
   skills: { ref: ResearchReleaseRef; content: ResearchSkillDraft }[];
   /** Explicit release choices, excluding dependencies, for native-team drafts and re-use. */
   personalExpertSelection?: ResearchConfigurationSelection;
-  personalExperts?: import('../../src/solver/personalExperts').FrozenPersonalExpert[];
+  personalExperts?: import('../../src/solver/personalExpertSchema').FrozenPersonalExpert[];
   libraries: { ref: ResearchReleaseRef; mathematics: ResearchVerifiedMathematics }[];
   libraryPack?: ResearchLibraryPack;
   digest: string;

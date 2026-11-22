@@ -231,6 +231,7 @@ describe('chat reads existing approved explanations without model or generation 
     const value = answers.sync(run())!; await settle(); expect(value.document).toBeDefined();
     mismatch = true; answers.refresh(run()); await settle();
     expect(value.document).toBeUndefined(); expect(value.error).toBeTruthy();
+    expect(value.explanation).toBeUndefined(); expect(value.overview).toBeUndefined();
   });
 
   it('discards the previous target and rejected item rather than retaining their mathematics', async () => {

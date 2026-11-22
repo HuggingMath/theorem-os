@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import nodemailer from 'nodemailer';
 import type { WebStorage } from './storage';
+import { accountLogin, type WebAccountIdentity } from './shared';
 
 /**
  * `admins` may always sign in and manage the allowlist file; they see no other account's runs.
@@ -15,11 +16,11 @@ export type WebSignupMode = 'allowlist' | 'open';
 /** Where an address is admitted from: only `file` entries can be removed in the workbench. */
 export type WebAllowlistEntry = { email: string; source: 'admin' | 'config' | 'file' };
 /**
- * `createdAt` is the first login. The two milestones record when the account first submitted a run and first had one pass
+ * `createdAt` is account creation. The two milestones record when the account first submitted a run and first had one pass
  * acceptance; scripts/web-funnel.ts reports them only as totals, and they go with the account when it is deleted.
  * `completionEmail: false` turns off the mail sent when a run ends; absent means on.
  */
-export type WebAccount = { id: string; email: string; createdAt: string; firstRunAt?: string; firstAcceptedAt?: string; completionEmail?: boolean;
+export type WebAccount = WebAccountIdentity & { id: string; createdAt: string; firstLoginAt?: string; firstRunAt?: string; firstAcceptedAt?: string; completionEmail?: boolean;
   /** When this account accepted the terms, and which version; an open signup records it before the account exists. */
   termsAt?: string; termsVersion?: string; suspendedAt?: string };
 export type WebMilestone = 'firstRunAt' | 'firstAcceptedAt';
@@ -41,6 +42,13 @@ export const normalizeEmail = (value: unknown) => {
   const email = typeof value === 'string' ? value.trim().toLowerCase() : '';
   if (email.length > 254 || !emailPattern.test(email)) throw new WebAuthError(400, '请输入有效的邮箱地址。');
   return email;
+};
+export const normalizeLogin = (value: unknown): string => {
+  const login = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (login.includes('@')) return normalizeEmail(login);
+  if (!/^[a-z][a-z0-9_-]{2,31}$/u.test(login))
+    throw new WebAuthError(400, '用户名需为 3–32 位，以字母开头，仅包含字母、数字、下划线或连字符。');
+  return login;
 };
 
 /** Seven-segment strokes on a 20×36 cell; jitter and noise keep the answer out of the markup. */
@@ -102,9 +110,12 @@ export class WebAuth {
     return new Set([...this.admins(), ...this.config.allowlist, ...this.fileEntries()]);
   }
   /** True when this address may sign in: an open signup takes any address, otherwise only the allowlist does. */
-  allowed(email: string): boolean {
-    if (this.isAdmin(email)) return true;
-    return !this.getAccount(email)?.suspendedAt && (this.config.signup === 'open' || this.allowlist().has(email));
+  allowed(login: string): boolean {
+    if (this.isAdmin(login)) return true;
+    const account = this.getAccount(login);
+    if (account?.suspendedAt) return false;
+    if (!login.includes('@')) return Boolean(account?.username);
+    return this.config.signup === 'open' || this.allowlist().has(login);
   }
   admins(): Set<string> { return new Set(this.config.admins ?? []); }
   isAdmin(email: string): boolean { return this.admins().has(email); }
@@ -123,21 +134,21 @@ export class WebAuth {
     return version;
   }
   /** A signed-in account can accept the current terms without losing its running work or verifying its inbox again. */
-  acceptTerms(email: string, body: { terms?: unknown; termsVersion?: unknown }): WebAccount {
-    const account = this.getAccount(email);
-    if (!account || !this.allowed(email)) throw new WebAuthError(403, '这个账号目前无法使用，请联系支持。');
+  acceptTerms(login: string, body: { terms?: unknown; termsVersion?: unknown }): WebAccount {
+    const account = this.getAccount(login);
+    if (!account || !this.allowed(login)) throw new WebAuthError(403, '这个账号目前无法使用，请联系支持。');
     const version = this.checkTerms(body, account);
-    return version ? this.account(email, version) : account;
+    return this.recordTerms(account, version);
   }
   /** Suspension keeps records for restoration, blocks both login methods and invalidates admission on the next request. */
   setSuspended(value: unknown, suspended: boolean): WebAccount {
-    const email = normalizeEmail(value), account = this.getAccount(email);
+    const login = normalizeLogin(value), account = this.getAccount(login);
     if (!account) throw new WebAuthError(404, '账号不存在。');
-    if (this.isAdmin(email) && suspended) throw new WebAuthError(400, '管理员账号不能暂停。');
+    if (this.isAdmin(login) && suspended) throw new WebAuthError(400, '管理员账号不能暂停。');
     const { suspendedAt: _previous, ...rest } = account;
     const updated = suspended ? { ...rest, suspendedAt: account.suspendedAt ?? new Date().toISOString() } : rest;
-    this.storage.saveRecord(this.accountPath(email), updated);
-    if (suspended) this.codes.delete(email);
+    this.storage.saveRecord(this.accountPath(login), updated);
+    if (suspended) this.codes.delete(login);
     return updated;
   }
   private fileLines(): string[] {
@@ -229,66 +240,93 @@ export class WebAuth {
     return this.account(email, this.checkTerms(body, this.getAccount(email)));
   }
 
-  private accountPath(email: string) { return ['accounts', `${crypto.createHash('sha256').update(email).digest('hex')}.json`]; }
+  private accountPath(login: string) { return ['accounts', `${crypto.createHash('sha256').update(login).digest('hex')}.json`]; }
+  private recordTerms(account: WebAccount, termsVersion?: string): WebAccount {
+    if (!termsVersion || account.termsVersion === termsVersion) return account;
+    const updated = { ...account, termsAt: new Date().toISOString(), termsVersion };
+    this.storage.saveRecord(this.accountPath(accountLogin(account)), updated);
+    return updated;
+  }
   private account(email: string, termsVersion?: string): WebAccount {
     const existing = this.storage.getRecord<WebAccount>(this.accountPath(email));
     // An account that signed in before the terms existed records them at its next code login.
-    if (existing) {
-      if (!termsVersion || existing.termsVersion === termsVersion) return existing;
-      const updated = { ...existing, termsAt: new Date().toISOString(), termsVersion };
-      this.storage.saveRecord(this.accountPath(email), updated);
-      return updated;
-    }
+    if (existing) return this.recordTerms(existing, termsVersion);
     const account = { id: crypto.randomUUID(), email, createdAt: new Date().toISOString(),
       ...(termsVersion ? { termsAt: new Date().toISOString(), termsVersion } : {}) };
     this.storage.saveRecord(this.accountPath(email), account);
     return account;
   }
-  getAccount(email: string): WebAccount | undefined { return this.storage.getRecord(this.accountPath(email)); }
-  private passwordPath(email: string) { return ['passwords', this.accountPath(email)[1]!]; }
-  private passwordRecord(email: string): PasswordRecord | undefined {
-    const record = this.storage.getRecord<PasswordRecord>(this.passwordPath(email));
+  /** Local operator provisioning only; there is no HTTP username signup endpoint. */
+  async createUsernameAccount(value: unknown, password: unknown): Promise<WebAccount> {
+    const username = normalizeLogin(value);
+    if (username.includes('@')) throw new WebAuthError(400, '请输入用户名，不要使用邮箱地址。');
+    if (!validPassword(password)) throw new WebAuthError(400, '密码至少 12 位且不超过 256 字节。');
+    if (this.getAccount(username)) throw new WebAuthError(409, '这个用户名已存在。');
+    const salt = crypto.randomBytes(16), digest = await derivePassword(password, salt);
+    const account: WebAccount = { id: crypto.randomUUID(), username, createdAt: new Date().toISOString(), completionEmail: false };
+    const passwordPath = this.passwordPath(username);
+    if (!this.storage.createRecord(passwordPath, { algorithm: 'scrypt', salt: salt.toString('hex'), digest: digest.toString('hex') } satisfies PasswordRecord))
+      throw new WebAuthError(409, '这个用户名已存在。');
+    try {
+      if (!this.storage.createRecord(this.accountPath(username), account)) throw new WebAuthError(409, '这个用户名已存在。');
+    } catch (error) {
+      this.storage.deleteRecord(passwordPath);
+      throw error;
+    }
+    return account;
+  }
+  getAccount(login: string): WebAccount | undefined { return this.storage.getRecord(this.accountPath(login)); }
+  private passwordPath(login: string) { return ['passwords', this.accountPath(login)[1]!]; }
+  private passwordRecord(login: string): PasswordRecord | undefined {
+    const record = this.storage.getRecord<PasswordRecord>(this.passwordPath(login));
     return record?.algorithm === 'scrypt' && /^[a-f0-9]{32}$/u.test(record.salt) && /^[a-f0-9]{128}$/u.test(record.digest)
       ? record : undefined;
   }
-  hasPassword(email: string): boolean { return Boolean(this.passwordRecord(email)); }
+  hasPassword(login: string): boolean { return Boolean(this.passwordRecord(login)); }
   private async matchesPassword(value: string, record?: PasswordRecord): Promise<boolean> {
     const salt = record ? Buffer.from(record.salt, 'hex') : Buffer.alloc(16);
     const expected = record ? Buffer.from(record.digest, 'hex') : Buffer.alloc(64);
     const actual = await derivePassword(value, salt);
     return Boolean(record) && crypto.timingSafeEqual(actual, expected);
   }
-  async loginPassword(ip: string, body: { email?: unknown; password?: unknown; terms?: unknown; termsVersion?: unknown }, authorize?: () => void): Promise<WebAccount> {
-    const email = normalizeEmail(body.email);
-    if (!this.allow('password-ip:' + ip, 20, 60 * 60_000) || !this.allow('password-email:' + email, 5, 60 * 60_000))
-      throw new WebAuthError(429, '密码尝试过多，请一小时后再试，或使用邮箱验证码登录。');
+  async loginPassword(ip: string, body: { login?: unknown; username?: unknown; email?: unknown; password?: unknown; terms?: unknown; termsVersion?: unknown }, authorize?: () => void): Promise<WebAccount> {
+    const login = normalizeLogin(body.login ?? body.username ?? body.email);
+    if (!this.allow('password-ip:' + ip, 20, 60 * 60_000) || !this.allow('password-email:' + login, 5, 60 * 60_000))
+      throw new WebAuthError(429, login.includes('@') ? '密码尝试过多，请一小时后再试，或使用邮箱验证码登录。' : '密码尝试过多，请一小时后再试。');
     if (typeof body.password !== 'string' || Buffer.byteLength(body.password, 'utf8') > 256)
-      throw new WebAuthError(401, '邮箱或密码不正确。');
-    const initialAccount = this.getAccount(email), record = this.passwordRecord(email);
+      throw new WebAuthError(401, login.includes('@') ? '邮箱或密码不正确。' : '账号或密码不正确。');
+    const initialAccount = this.getAccount(login), record = this.passwordRecord(login);
     const matches = await this.matchesPassword(body.password, record);
     authorize?.();
-    const account = this.getAccount(email);
-    if (!matches || !account || account.id !== initialAccount?.id || !this.allowed(email)
-      || !samePasswordRecord(record, this.passwordRecord(email))) throw new WebAuthError(401, '邮箱或密码不正确。');
+    const account = this.getAccount(login);
+    if (!matches || !account || account.id !== initialAccount?.id || !this.allowed(login)
+      || !samePasswordRecord(record, this.passwordRecord(login)))
+      throw new WebAuthError(401, login.includes('@') ? '邮箱或密码不正确。' : '账号或密码不正确。');
     const version = this.checkTerms(body, account);
-    return version ? this.account(email, version) : account;
+    const admitted = this.recordTerms(account, version);
+    if (admitted.username && !admitted.firstLoginAt) {
+      const signedIn = { ...admitted, firstLoginAt: new Date().toISOString() };
+      this.storage.saveRecord(this.accountPath(login), signedIn);
+      return signedIn;
+    }
+    return admitted;
   }
-  async setPassword(email: string, next: unknown, current: unknown, verifiedByEmail: boolean, authorize?: () => void) {
-    const account = this.getAccount(email);
+  async setPassword(login: string, next: unknown, current: unknown, verifiedByEmail: boolean, authorize?: () => void) {
+    const account = this.getAccount(login);
     if (!account) throw new WebAuthError(404, '账号不存在。');
     if (!validPassword(next)) throw new WebAuthError(400, '密码至少 12 位且不超过 256 字节。');
-    if (!this.allow('password-change:' + email, 5, 60 * 60_000)) throw new WebAuthError(429, '密码修改过于频繁，请一小时后再试。');
-    const record = this.passwordRecord(email);
-    if (!verifiedByEmail && (!record || typeof current !== 'string' || !(await this.matchesPassword(current, record))))
-      throw new WebAuthError(403, '请输入当前密码；忘记密码请用邮箱验证码重新登录后设置。');
+    if (!this.allow('password-change:' + login, 5, 60 * 60_000)) throw new WebAuthError(429, '密码修改过于频繁，请一小时后再试。');
+    const record = this.passwordRecord(login);
+    if (!(verifiedByEmail && account.email) && (!record || typeof current !== 'string' || !(await this.matchesPassword(current, record))))
+      throw new WebAuthError(403, account.email ? '请输入当前密码；忘记密码请用邮箱验证码重新登录后设置。' : '请输入当前密码；忘记密码请联系管理员。');
     const salt = crypto.randomBytes(16);
     const digest = await derivePassword(next, salt);
     // Derivation yields; deletion, recreation or suspension must not leave a password written by the old session.
     authorize?.();
-    if (this.getAccount(email)?.id !== account.id) throw new WebAuthError(404, '账号不存在。');
-    if (!this.allowed(email)) throw new WebAuthError(403, '这个账号目前无法使用，请联系支持。');
-    if (!samePasswordRecord(record, this.passwordRecord(email))) throw new WebAuthError(409, '密码已变更，请刷新页面后重试。');
-    this.storage.saveRecord(this.passwordPath(email), { algorithm: 'scrypt', salt: salt.toString('hex'), digest: digest.toString('hex') } satisfies PasswordRecord);
+    if (this.getAccount(login)?.id !== account.id) throw new WebAuthError(404, '账号不存在。');
+    if (!this.allowed(login)) throw new WebAuthError(403, '这个账号目前无法使用，请联系支持。');
+    if (!samePasswordRecord(record, this.passwordRecord(login))) throw new WebAuthError(409, '密码已变更，请刷新页面后重试。');
+    this.storage.saveRecord(this.passwordPath(login), { algorithm: 'scrypt', salt: salt.toString('hex'), digest: digest.toString('hex') } satisfies PasswordRecord);
   }
   /** Every account record; the funnel report and run milestones read these (a closed beta keeps the list short). */
   listAccounts(): WebAccount[] {
@@ -298,25 +336,26 @@ export class WebAuth {
   /** Stamps a milestone the first time it happens; later runs leave the first time unchanged. */
   markMilestone(accountId: string, milestone: WebMilestone, at = new Date().toISOString()) {
     const account = this.listAccounts().find(item => item.id === accountId);
-    if (account && !account[milestone]) this.storage.saveRecord(this.accountPath(account.email), { ...account, [milestone]: at });
+    if (account && !account[milestone]) this.storage.saveRecord(this.accountPath(accountLogin(account)), { ...account, [milestone]: at });
   }
   /** The address to tell when a run ends, unless the account turned the mail off or lost its allowlist entry. */
   completionRecipient(accountId: string): string | undefined {
     const account = this.listAccounts().find(item => item.id === accountId);
-    return account && account.completionEmail !== false && this.allowed(account.email) ? account.email : undefined;
+    return account?.email && account.completionEmail !== false && this.allowed(account.email) ? account.email : undefined;
   }
-  setCompletionEmail(email: string, enabled: boolean) {
-    const account = this.getAccount(email);
+  setCompletionEmail(login: string, enabled: boolean) {
+    const account = this.getAccount(login);
     if (!account) throw new WebAuthError(404, '账号不存在。');
+    if (!account.email && enabled) throw new WebAuthError(400, '用户名账号未绑定邮箱，无法开启邮件提醒。');
     const { completionEmail: _previous, ...rest } = account;
-    this.storage.saveRecord(this.accountPath(email), enabled ? rest : { ...rest, completionEmail: false });
+    this.storage.saveRecord(this.accountPath(login), enabled ? rest : { ...rest, completionEmail: false });
   }
   async sendCompletion(to: string, message: { subject: string; text: string }) { await this.mailer({ to, ...message }); }
-  deleteAccount(email: string) {
+  deleteAccount(login: string) {
     // Keep the account retryable if credential deletion fails; a recreated account must never inherit its password.
-    this.storage.deleteRecord(this.passwordPath(email));
-    this.storage.deleteRecord(this.accountPath(email));
-    this.codes.delete(email);
+    this.storage.deleteRecord(this.passwordPath(login));
+    this.storage.deleteRecord(this.accountPath(login));
+    this.codes.delete(login);
   }
 }
 

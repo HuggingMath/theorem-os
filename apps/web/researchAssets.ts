@@ -3,7 +3,7 @@ import { canonicalMathJson, mathDigest } from '../../src/math/mathRuntimeIo';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { LIBRARY_PACK_SCHEMA, libraryPackDigest, parseLibraryPack, type LibraryPack } from '../../src/math/libraryPacks';
 import { defaultResearchModulePlan, researchModulePlanSchema, type ResearchModulePlan } from '../../src/solver/modules/policy';
-import { personalExpertSchema, type FrozenPersonalExpert } from '../../src/solver/personalExperts';
+import { personalExpertSchema, type FrozenPersonalExpert } from '../../src/solver/personalExpertSchema';
 import { WebStorage, WebStorageError } from './storage';
 import type { FrozenResearchConfiguration, ResearchAgentDraft, ResearchAsset, ResearchAssetContent, ResearchAssetKind, ResearchAssetPreview,
   ResearchAssetRelease, ResearchConfigurationSelection, ResearchMathDeclaration, ResearchMathDraft, ResearchMathSource, ResearchPublication,

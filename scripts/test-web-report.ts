@@ -105,7 +105,7 @@ const tinted = (page: Page) => page.locator('.formal-original').first().evaluate
 /** Proof lines carrying a row class, as 1-based numbers. */
 const rowsWith = (page: Page, code: string, kind: string) => page.locator(`${code} .lean-row.${kind}`)
   .evaluateAll(rows => rows.map(row => Number((row as HTMLElement).dataset.line)));
-/** Whether the target name and the Lean/讲解 switch share one row of the toolbar. */
+/** Whether the formalization target and the Lean/原题 switch share one row. */
 const oneRow = (page: Page, toolbar: string) => page.locator(toolbar).evaluate(bar => {
   const name = bar.querySelector('.explain-target code')!.getBoundingClientRect(), pane = bar.querySelector('.explain-pane-switch')!.getBoundingClientRect();
   return name.top < pane.bottom && pane.top < name.bottom;
@@ -124,6 +124,50 @@ try {
   const { page, requests } = await open(browser, explainFile, { locale: 'zh' });
   await page.locator('#explain-content:not([hidden])').waitFor();
   await page.locator('#explain-prose .explain-document').waitFor();
+  const desktopSplit = page.locator('#explain-split');
+  const rail = page.getByRole('navigation', { name: '证明章节' });
+  assert.equal(await desktopSplit.getAttribute('data-layout'), 'read');
+  assert.equal(await page.locator('#explain-lean').isVisible(), false, 'the offline proof starts in reading mode');
+  await page.keyboard.press('Tab');
+  const skip = page.locator('.skip-link:focus');
+  assert.equal(await skip.count(), 1, 'the first keyboard stop skips to the proof');
+  assert.equal(await skip.evaluate(link => {
+    const bar = link.closest('header')!.getBoundingClientRect(), box = link.getBoundingClientRect();
+    return box.top >= bar.top && box.bottom <= bar.bottom && getComputedStyle(link).clipPath === 'none';
+  }), true, 'the focused skip link is revealed within the top bar');
+  await page.keyboard.press('Enter');
+  assert.equal(await page.locator('#explain-prose:focus').count(), 1, 'the skip link focuses the reading pane');
+  assert.equal(new URL(page.url()).hash, '', 'the skip link leaves the reading address intact');
+  assert.equal(await page.locator('#explain-toolbar .explain-target').count(), 0, 'a single theorem is named in the reading area');
+  for (const width of [1440, 1160, 1024, 820, 768, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    const { alignment, overflow, toolbarOverflows, sameRow, railShown, textWidth, gap } = await page.locator('.explain-document').evaluate(article => {
+      const column = article.getBoundingClientRect(), pane = article.parentElement!;
+      const rail = document.querySelector('#explain-contents-rail')!.getBoundingClientRect();
+      const toolbar = document.querySelector('.explain-controls-inner')!, bar = toolbar.getBoundingClientRect();
+      const masthead = document.querySelector('.explain-topbar-inner')!.getBoundingClientRect();
+      const mode = document.querySelector('#explain-toolbar')!.getBoundingClientRect();
+      const details = document.querySelector('.explain-detail-switch')!.getBoundingClientRect();
+      const alignment = Math.max(...[bar, masthead].flatMap(box => [Math.abs(column.left - box.left), Math.abs((rail.width ? rail : column).right - box.right)]));
+      return { alignment, overflow: pane.scrollWidth > pane.clientWidth + 1 || document.documentElement.scrollWidth > innerWidth + 1,
+        toolbarOverflows: toolbar.scrollWidth > toolbar.clientWidth + 1, sameRow: mode.top < details.bottom && details.top < mode.bottom,
+        railShown: rail.width > 0, textWidth: article.querySelector('.explain-rich')!.getBoundingClientRect().width, gap: rail.left - column.right };
+    });
+    assert.ok(alignment <= 2, `the top bar and toolbar align with the reading layout at ${width}px: ${alignment}`);
+    assert.equal(railShown, width >= 1160, `the chapter list is visible only where it fits, at ${width}px`);
+    if (railShown) assert.ok(gap >= 24 && textWidth >= 735 && textWidth <= 741, 'the chapter list leaves room and keeps the proof at its reading width');
+    assert.equal(overflow, false, `the reading column fits at ${width}px`);
+    assert.equal(toolbarOverflows, false, `the reading controls fit at ${width}px`);
+    if (width >= 390) assert.equal(sameRow, true, `the reading controls share a single row at ${width}px`);
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const railHelper = rail.getByRole('button', { name: /helper/iu });
+  await railHelper.click();
+  await railHelper.and(rail.locator('[aria-current="location"]')).waitFor();
+  assert.equal(page.url(), `${pathToFileURL(explainFile).href}#at=helper`);
+  await page.locator('[data-action="return"]').click();
+  await railHelper.and(page.locator(':focus')).waitFor();
+  assert.equal(page.url(), pathToFileURL(explainFile).href);
   assert.ok(await page.locator('.explain-document .math[data-math-state="ready"] math').count() > 0, 'offline formulas render semantic MathML');
   assert.equal(await page.locator('.explain-document .math-source').count(), 0, 'the report has all the assets needed to render its formulas');
   assert.deepEqual(outside(requests), [pathToFileURL(explainFile).href], 'the page loads nothing but itself');
@@ -168,6 +212,8 @@ try {
   // The chosen pair's text is tinted, '+' inside it too, and the pieces standing for it are underlined solid.
   const chosen = problem.locator('.formal-original .explain-link.is-active');
   await marks.filter({ hasText: '0 = n' }).click();
+  assert.equal(await desktopSplit.getAttribute('data-layout'), 'compare', 'a fragment brings up its Lean evidence');
+  assert.equal(await rail.isVisible(), false, 'Lean comparison keeps both columns for the proof and source');
   await page.locator('#explain-lean-code .lean-row.is-use').first().waitFor();
   assert.deepEqual(await rowsWith(page, '#explain-lean-code', 'is-use'), [3]);
   assert.deepEqual(await highlighted(page, 'explain-use'), ['n + 0 = n']);
@@ -203,7 +249,10 @@ try {
     page.locator(`.explain-section:has(#explain-section-${explained.sections.findIndex(item => item.name === name)})`);
   const addition = section('addition'), helper = section('helper');
   const statementLink = addition.locator('.explain-statement [data-action="link"]');
+  await page.locator('[data-action="layout"][data-layout="read"]').click();
   assert.equal(await statementLink.count(), 1);
+  assert.equal(await statementLink.isVisible(), false, 'the repeated statement is folded');
+  await addition.locator('.explain-statement-details > summary').press('Enter');
   assert.equal(await statementLink.locator('.math').count(), 1, 'a phrase and a formula form one link');
   assert.equal(await statementLink.evaluate(link => {
     const prose = link.cloneNode(true) as HTMLElement;
@@ -211,6 +260,7 @@ try {
     return prose.textContent?.replace(/\s+/gu, ' ');
   }), '自然数 n', 'the linked phrase retains its original text and formula');
   await statementLink.click();
+  assert.equal(await desktopSplit.getAttribute('data-layout'), 'compare', 'a linked phrase reopens Lean comparison');
   assert.deepEqual(await highlighted(page, 'explain-use'), ['(n : Nat)']);
   assert.deepEqual(await rowsWith(page, '#explain-lean-code', 'is-active'), [3]);
   assert.equal(await chosen.count(), 0, 'choosing a statement clears the chosen 原题 fragment');
@@ -236,8 +286,12 @@ try {
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => document.querySelector('#explain-lean-code .lean-row[data-line="4"]')?.classList.contains('is-active'));
   assert.deepEqual(await rowsWith(page, '#explain-lean-code', 'is-active'), [4]);
+  const checkStep = addition.locator('.explain-steps > li > details > summary');
+  await checkStep.click();
+  assert.ok(await addition.locator('.explain-goal-checked').isVisible());
   assert.equal(await addition.locator('.explain-goal-checked').innerText(), '2 个审核模型对照过');
   assert.equal(await helper.locator('.explain-goals').count(), 0, 'no goals were recorded for the helper');
+  await checkStep.click();
   // The note on dotted phrases sits with the source and review context, folded until asked for.
   const provenance = page.locator('.explain-provenance');
   await provenance.locator('summary').click();
@@ -261,6 +315,24 @@ try {
   assert.deepEqual(await rowsWith(page, '#explain-lean-code', 'is-active'), [4], 'Back chooses the step it left');
   assert.ok(await cite.evaluate(node => node === document.activeElement));
   mark('in the report, Back after a cited lemma returns to the citation and stays on the page');
+
+  const contents = page.getByRole('button', { name: '证明目录' });
+  await contents.click();
+  const directory = page.getByRole('dialog', { name: '证明目录' });
+  const directorySearch = directory.getByRole('searchbox');
+  await directorySearch.focus();
+  assert.equal(await directorySearch.evaluate(input => getComputedStyle(input).outlineWidth), '2px', 'the focused directory input has a visible ring');
+  await directorySearch.fill('helper');
+  await directory.getByRole('button', { name: /helper/u }).click();
+  await helper.and(page.locator('.is-active')).waitFor();
+  assert.match(page.url(), /#at=helper$/u);
+  await back.click();
+  await back.waitFor({ state: 'detached' });
+  assert.match(page.url(), /#at=addition&step=1$/u);
+  await page.locator('[data-action="contents"]:focus').waitFor();
+  assert.deepEqual(outside(requests), [pathToFileURL(explainFile).href], 'using the directory does not fetch anything');
+  mark('the offline proof directory jumps to a declaration and returns to the step it left');
+
   await page.screenshot({ path: path.join(shots, 'explain-report-1440.png') });
   const dark = await open(browser, explainFile, { locale: 'zh', theme: 'dark' });
   await dark.page.locator('#explain-prose .explain-document').waitFor();
@@ -272,11 +344,12 @@ try {
   // On a phone the panes switch: a linked phrase or an original fragment opens the proof at its Lean.
   const phone = await open(browser, explainFile, { locale: 'zh', width: 390, height: 844 });
   const split = phone.page.locator('#explain-split');
-  assert.equal(await oneRow(phone.page, '#explain-toolbar'), true, 'the target and the Lean/讲解 switch share a row');
   await phone.page.locator('#explain-prose .explain-document').waitFor();
   assert.equal(await split.getAttribute('data-pane'), 'prose');
   await phone.page.locator(`.explain-section:has(#explain-section-1) .explain-steps [data-action="link"]`).click();
   assert.equal(await split.getAttribute('data-pane'), 'lean');
+  assert.equal(await phone.page.locator('.explain-pane-switch').isVisible(), true, 'the reading switch stays available in Lean');
+  assert.equal(await phone.page.locator('.explain-detail-switch').isVisible(), false, 'prose tools leave more room for Lean');
   await phone.page.locator('#explain-lean-code .lean-row[data-line="4"]').waitFor({ state: 'visible' });
   // A line wider than the phone wraps, hanging 4 characters inside its own indentation (line 4 has 2 spaces, line 3 none).
   assert.equal(await phone.page.locator('#explain-lean').evaluate(pane => pane.scrollWidth <= pane.clientWidth + 1), true, 'the phone Lean pane wraps');
@@ -313,9 +386,12 @@ try {
   const english = await open(browser, explainFile, { locale: 'en' });
   await english.page.locator('#explain-prose .explain-document').waitFor();
   assert.equal(await english.page.title(), 'synthetic_addition · Proof explanation · TheoremOS');
+  assert.equal(await english.page.getByRole('heading', { level: 1 }).innerText(), explained.sections.find(section => section.target)!.title);
+  assert.equal(await english.page.locator('.explain-topbar .explain-kind').innerText(), 'Proof explanation');
   assert.equal(await english.page.locator('#explain-problem-heading').innerText(), 'Original problem');
   await english.page.locator('.explain-provenance > summary').click();
   assert.ok(await english.page.locator('.explain-provenance').getByText(/^Each phrase with a dotted underline/u).isVisible());
+  await english.page.locator('.explain-steps > li > details:has(.explain-goals) > summary').click();
   assert.match(await english.page.locator('.explain-goal-checked').innerText(), /^checked by 2 auditors$/u);
   await english.context.close();
   mark('English chrome is English on the explanation report');

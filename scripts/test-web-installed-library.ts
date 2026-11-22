@@ -249,7 +249,8 @@ async function mathematicalAliasesAndReset(page: Page, check: typeof checks[numb
   const opening = responseFor(page, '/api/research/library/installed', { q: '', area: '', environment: '', offset: '0' });
   await page.goto(scopeUrl, { waitUntil: 'domcontentloaded', timeout: 0 }); await received<InstalledLibraryDirectory>(opening);
   await visible(cards(page).first());
-  const search = page.getByRole('searchbox', { name: en ? 'Keyword or Lean name' : '关键词或 Lean 名称', exact: true });
+  const searchBox = (zh: string, english: string) => page.getByRole('searchbox', { name: en ? english : zh, exact: true });
+  const search = searchBox('Lean 名称或数学主题', 'Lean name or math topic');
   for (const alias of [
     { query: en ? 'independent tail bounds' : '尾概率 独立', module: 'TheoremOS.Probability.Concentration', screenshot: 'tail-probability' },
     { query: en ? 'sums of recurrences' : '求递推数列的和', module: 'TheoremOS.Algebra.FiniteSums', screenshot: 'recurrence-sums' },
@@ -307,28 +308,30 @@ async function mathematicalAliasesAndReset(page: Page, check: typeof checks[numb
   assert.equal(await search.inputValue(), rememberedQuery); urlFilters(page, { ...scope, q: rememberedQuery });
   assert.equal(requests.length, countBeforeRepeat, 're-clicking current type and collection preserves filters without another directory request');
   const agentQuery = 'remember-agent-query', skillQuery = 'remember-skill-query', sharedQuery = 'remember-shared-query';
+  const agentSearch = searchBox('搜索 Agent', 'Search Agents'), skillSearch = searchBox('搜索 Skill', 'Search Skills'),
+    sharedSearch = searchBox('搜索共享数学库', 'Search shared libraries');
   const assetChange = async (type: string, q: string, action: () => Promise<unknown>) => {
     const loaded = responseFor(page, '/api/research/library', { type, q });
     await action(); await received<{ items: ResearchAsset[] }>(loaded); await settled(page);
   };
   await assetChange('agent', '', () => page.locator('.research-library-type-tabs button').nth(1).click({ timeout: 0 }));
-  await assetChange('agent', agentQuery, async () => { await search.fill(agentQuery, { timeout: 0 }); await search.press('Enter', { timeout: 0 }); });
+  await assetChange('agent', agentQuery, async () => { await agentSearch.fill(agentQuery, { timeout: 0 }); await agentSearch.press('Enter', { timeout: 0 }); });
   await page.locator('.research-library-type-tabs button').nth(1).click({ timeout: 0 }); await settled(page);
-  assert.equal(await search.inputValue(), agentQuery, 're-clicking Agent preserves its query');
+  assert.equal(await agentSearch.inputValue(), agentQuery, 're-clicking Agent preserves its query');
   await assetChange('skill', '', () => page.locator('.research-library-type-tabs button').nth(2).click({ timeout: 0 }));
-  await assetChange('skill', skillQuery, async () => { await search.fill(skillQuery, { timeout: 0 }); await search.press('Enter', { timeout: 0 }); });
+  await assetChange('skill', skillQuery, async () => { await skillSearch.fill(skillQuery, { timeout: 0 }); await skillSearch.press('Enter', { timeout: 0 }); });
   await assetChange('agent', agentQuery, () => page.locator('.research-library-type-tabs button').nth(1).click({ timeout: 0 }));
-  assert.equal(await search.inputValue(), agentQuery);
+  assert.equal(await agentSearch.inputValue(), agentQuery);
   await changeDirectory(page, { q: rememberedQuery }, () => page.locator('.research-library-type-tabs button').first().click({ timeout: 0 }));
   assert.equal(await search.inputValue(), rememberedQuery); urlFilters(page, { ...scope, q: rememberedQuery });
   await assetChange('mathematics', '', () => page.locator('[data-library-collection="shared"]').click({ timeout: 0 }));
-  await assetChange('mathematics', sharedQuery, async () => { await search.fill(sharedQuery, { timeout: 0 }); await search.press('Enter', { timeout: 0 }); });
+  await assetChange('mathematics', sharedQuery, async () => { await sharedSearch.fill(sharedQuery, { timeout: 0 }); await sharedSearch.press('Enter', { timeout: 0 }); });
   await changeDirectory(page, { q: rememberedQuery }, () => page.locator('[data-library-collection="lean"]').click({ timeout: 0 }));
   await assetChange('mathematics', sharedQuery, () => page.locator('[data-library-collection="shared"]').click({ timeout: 0 }));
-  assert.equal(await search.inputValue(), sharedQuery, 'shared mathematics remembers its own query');
+  assert.equal(await sharedSearch.inputValue(), sharedQuery, 'shared mathematics remembers its own query');
   await changeDirectory(page, { q: rememberedQuery }, () => page.locator('[data-library-collection="lean"]').click({ timeout: 0 }));
   await assetChange('skill', skillQuery, () => page.locator('.research-library-type-tabs button').nth(2).click({ timeout: 0 }));
-  assert.equal(await search.inputValue(), skillQuery);
+  assert.equal(await skillSearch.inputValue(), skillQuery);
   await changeDirectory(page, { q: rememberedQuery }, () => page.locator('.research-library-type-tabs button').first().click({ timeout: 0 }));
   urlFilters(page, { ...scope, q: rememberedQuery });
   check.assertions.push('Repeated active tabs preserve filters; Lean, shared mathematics, Agent and Skill restore their own queries when switching categories, while workbenchChat remains attached.');
@@ -510,6 +513,7 @@ try {
     await page.getByRole('button', { name: text('我的资源', 'My resources'), exact: true }).click({ timeout: 0 });
     assert.deepEqual((await received<{ items: ResearchAsset[] }>(mineLoaded)).items, []);
     urlFilters(page, { collection: 'shared', mine: '1' });
+    await visible(page.getByRole('searchbox', { name: text('搜索我的数学库', 'Search my libraries'), exact: true }));
     assert.equal(await directory(page).count(), 0, 'My resources opens the personal shared-asset view');
     await changeDirectory(page, { q: '', area: '', environment: '', offset: '0' }, () => page.locator('[data-library-collection="lean"]').click({ timeout: 0 }));
     await visible(cards(page).first()); urlFilters(page, { collection: 'lean' });
@@ -524,7 +528,7 @@ try {
 
     phase = `${scenario.name}: search real module and theorem names, filter area and environment`;
     const picked = initial.items.find(module => module.preview.length > 0)!; assert(picked, 'catalog includes interface previews');
-    const search = page.getByRole('searchbox', { name: text('关键词或 Lean 名称', 'Keyword or Lean name'), exact: true });
+    const search = page.getByRole('searchbox', { name: text('Lean 名称或数学主题', 'Lean name or math topic'), exact: true });
     const labels = installedLibraryLabels(picked.name); assert(labels);
     const mathematicalQuery = en ? labels.en.title : labels.zh.title;
     const localizedMatches = await changeDirectory(page, { q: mathematicalQuery }, async () => { await search.fill(mathematicalQuery, { timeout: 0 }); await search.press('Enter', { timeout: 0 }); });

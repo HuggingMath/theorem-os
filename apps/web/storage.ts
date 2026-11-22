@@ -3,13 +3,14 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { canonicalMathJson, mathDigest, syncMathDirectory, writeMathFrozen } from '../../src/math/mathRuntimeIo';
 import type { WebArchive, WebCheckReceipt, WebCommandResult, WebObservation, WebTaskSource } from './collaboration';
-import type { WebAgentAction, WebEvent, WebExplanation, WebRun } from './shared';
+import type { WebAccountIdentity, WebAgentAction, WebEvent, WebExplanation, WebRun, WorkerExplanationCheckpoint } from './shared';
 import type { WebShareSnapshot } from './share';
 
 export type WebCreation = { schema: 'theorem-os.web-creation.v1'; requestId: string; digest: string };
 type StoredRun = { owner: string; run: WebRun; creation?: WebCreation };
+type StoredExplanationCheckpoint = { binding: string; checkpoint: WorkerExplanationCheckpoint };
 
-export type StoredWebSession = { id: string; csrf: string; touchedAt: number; account?: { id: string; email: string }; passwordResetUntil?: number };
+export type StoredWebSession = { id: string; csrf: string; touchedAt: number; account?: WebAccountIdentity & { id: string }; passwordResetUntil?: number };
 export type StoredWebArchive = {
   schema: 'theorem-os.web-archive.v1';
   summary: WebArchive;
@@ -96,6 +97,22 @@ export class WebStorage {
     const key = this.key(segments), file = this.root ? path.join(this.root, key) : undefined;
     const text = file ? (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : undefined) : this.memory.get(key);
     return text === undefined ? undefined : JSON.parse(text) as T;
+  }
+  /** Exclusively create a record; account provisioning must never replace another process's credentials. */
+  createRecord(segments: string[], value: unknown): boolean {
+    const key = this.key(segments), text = encoded(publicRecord(value));
+    if (!this.root) {
+      if (this.memory.has(key)) return false;
+      this.memory.set(key, text); return true;
+    }
+    const file = path.join(this.root, key);
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    let fd: number;
+    try { fd = fs.openSync(file, 'wx', 0o600); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false; throw error; }
+    try { fs.writeFileSync(fd, text); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    syncMathDirectory(path.dirname(file));
+    return true;
   }
   saveRecord(segments: string[], value: unknown, immutable = false): void {
     const key = this.key(segments), text = encoded(publicRecord(value));
@@ -249,6 +266,18 @@ export class WebStorage {
   }
   getExplanationEvidence(owner: string, runId: string, key: string): unknown {
     return this.getRecord([...this.explanationPath(owner, runId, key), 'evidence.json']);
+  }
+  deleteExplanationEvidence(owner: string, runId: string, key: string): void {
+    this.deleteRecord([...this.explanationPath(owner, runId, key), 'evidence.json']);
+  }
+  saveExplanationCheckpoint(owner: string, runId: string, key: string, checkpoint: StoredExplanationCheckpoint): void {
+    this.saveRecord([...this.explanationPath(owner, runId, key), 'checkpoint.json'], checkpoint);
+  }
+  getExplanationCheckpoint(owner: string, runId: string, key: string): StoredExplanationCheckpoint | undefined {
+    return this.getRecord([...this.explanationPath(owner, runId, key), 'checkpoint.json']);
+  }
+  deleteExplanationCheckpoint(owner: string, runId: string, key: string): void {
+    this.deleteRecord([...this.explanationPath(owner, runId, key), 'checkpoint.json']);
   }
   deleteExplanation(owner: string, runId: string, key: string): void { this.deleteRecord(this.explanationPath(owner, runId, key)); }
   listEvents(owner: string, runId: string): WebEvent[] {

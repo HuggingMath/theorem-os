@@ -65,7 +65,7 @@ export function WorkspacePage({ context }: { context: ResearchContext }) {
       {(Object.keys(tabs) as Tab[]).filter(id => primaryTabs.includes(id) || id === tab).map(id => <a key={id} href={`workspace.html?tab=${id}`} aria-current={tab === id ? 'page' : undefined}
         onClick={event => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); choose(id); }}>{tabs[id]}</a>)}
     </nav>
-      <details class="workspace-tabs-more"><summary>{tx('更多', 'More')}</summary><div>
+      <details class="workspace-tabs-more"><summary>{tx('更多页面', 'More pages')}</summary><div>
         {(Object.keys(tabs) as Tab[]).filter(id => !primaryTabs.includes(id) && id !== tab).map(id => <a key={id} href={`workspace.html?tab=${id}`}
           onClick={event => { if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); event.currentTarget.closest('details')!.open = false; choose(id); }}>{tabs[id]}</a>)}
       </div></details></div>
@@ -73,7 +73,12 @@ export function WorkspacePage({ context }: { context: ResearchContext }) {
       <p>{tx('待办、搜索、用量和资料夹保存在你的账号中。', 'Your inbox, search, usage and collections belong to your account.')}</p>
       <div class="research-actions"><a class="button button-primary" href={`login.html${workbenchReturn(loginParameters.toString())}`}>{tx('登录', 'Sign in')}</a>
         <a href={`practice.html?lang=${locale}`}>{tx('先体验一次完整参与流程', 'Try the participation flow first')}</a></div></Panel>
-      : <div class="workspace-content" key={tab}>{tab === 'inbox' ? <><CollaborationInbox context={context} heading={false} /><AssetUpdatesPanel context={context} /></>
+      : <div class="workspace-content" key={tab}>{tab === 'inbox' ? <>
+        <CollaborationInbox context={context} heading={false} emptyState={<Empty>
+          {tx('暂无待办', 'No to-dos yet')} · <a class="text-button" href={`workspace.html?tab=search&lang=${locale}`}>{tx('查找已有研究', 'Find existing research')}</a>
+        </Empty>} />
+        <AssetUpdatesPanel context={context} />
+      </>
         : tab === 'search' ? <WorkspaceSearch context={context} /> : tab === 'usage' ? <WorkspaceUsage context={context} />
           : tab === 'brief' ? <WorkspaceBrief context={context} /> : tab === 'drafts' ? <PersonalDraftsPanel context={context} /> : tab === 'trials' ? <LibraryTrialHistory context={context} /> : <><SaveIncomingTarget context={context} /><CollectionsPanel context={context} /></>}</div>}
   </div>;

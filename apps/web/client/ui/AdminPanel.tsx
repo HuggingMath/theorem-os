@@ -3,12 +3,12 @@ import { useState } from 'preact/hooks';
 import { Icon } from './Icon';
 import { t } from '../../i18n';
 import { formatDateTime } from '../../presentation';
-import type { WebAdminOverview } from '../../shared';
+import { accountLogin, type WebAdminOverview } from '../../shared';
 
 export type AdminPanelProps = {
   overview?: WebAdminOverview; error?: string; busy?: string;
   onAdd(email: string): Promise<boolean>; onRemove(email: string): void;
-  onSuspend?(email: string, suspended: boolean): void;
+  onSuspend?(login: string, suspended: boolean): void;
 };
 const sourceLabels = { admin: t('管理员'), config: t('部署配置'), file: t('白名单文件') };
 const stepLabels: Record<string, string> = { allowlisted: t('白名单内'), logged_in: t('首次登录'), submitted: t('首次提交运行'), accepted: t('首次通过验收') };
@@ -51,17 +51,20 @@ function Accounts({ accounts, busy, onSuspend }: { accounts: WebAdminOverview['a
   const usage = (account: WebAdminOverview['accounts'][number]) => account.usage
     ? t('研究 {0} · 形式化 {1} · 讲解 {2}', account.usage.research, account.usage.formalizations, account.usage.explanations) : '—';
   return <div class="admin-table-scroll" tabindex={0} aria-label={t('账号列表')}><table class="admin-table">
-    <thead><tr><th scope="col">{t('邮箱')}</th><th scope="col">{t('首次登录')}</th><th scope="col">{t('首次提交运行')}</th><th scope="col">{t('首次通过验收')}</th><th scope="col">{t('本窗口用量')}</th>{onSuspend && <th scope="col">{t('账号状态')}</th>}</tr></thead>
-    <tbody>{accounts.map(account => <tr key={account.email}>
-      <th scope="row"><span translate={false}>{account.email}</span>{account.admin && <span class="badge" data-source="admin">{t('管理员')}</span>}
+    <thead><tr><th scope="col">{t('用户名或邮箱')}</th><th scope="col">{t('账号创建')}</th><th scope="col">{t('首次提交运行')}</th><th scope="col">{t('首次通过验收')}</th><th scope="col">{t('本窗口用量')}</th>{onSuspend && <th scope="col">{t('账号状态')}</th>}</tr></thead>
+    <tbody>{accounts.map(account => {
+      const login = accountLogin(account);
+      return <tr key={login}>
+      <th scope="row"><span translate={false}>{login}</span>{account.admin && <span class="badge" data-source="admin">{t('管理员')}</span>}
         {account.suspended ? <span class="badge warning">{t('已暂停')}</span> : !account.allowed && <span class="badge warning">{t('已移出白名单')}</span>}</th>
       <td>{date(account.createdAt)}</td><td>{date(account.firstRunAt)}</td><td>{date(account.firstAcceptedAt)}</td>
-      <td class="admin-usage">{usage(account)}</td>{onSuspend && <td>{!account.admin && (confirming === account.email
+      <td class="admin-usage">{usage(account)}</td>{onSuspend && <td>{!account.admin && (confirming === login
         ? <span class="admin-confirm"><button type="button" class="button button-destructive" disabled={Boolean(busy)}
-          onClick={() => { setConfirming(undefined); onSuspend(account.email, !account.suspended); }}>{account.suspended ? t('确认恢复') : t('确认暂停')}</button>
+          onClick={() => { setConfirming(undefined); onSuspend(login, !account.suspended); }}>{account.suspended ? t('确认恢复') : t('确认暂停')}</button>
           <button type="button" class="text-button" onClick={() => setConfirming(undefined)}>{t('取消')}</button></span>
-        : <button type="button" class="text-button" disabled={Boolean(busy)} aria-label={account.suspended ? t('恢复 {0}', account.email) : t('暂停 {0}', account.email)}
-          onClick={() => setConfirming(account.email)}>{account.suspended ? t('恢复账号') : t('暂停账号')}</button>)}</td>}</tr>)}</tbody>
+        : <button type="button" class="text-button" disabled={Boolean(busy)} aria-label={account.suspended ? t('恢复 {0}', login) : t('暂停 {0}', login)}
+          onClick={() => setConfirming(login)}>{account.suspended ? t('恢复账号') : t('暂停账号')}</button>)}</td>}</tr>;
+    })}</tbody>
   </table></div>;
 }
 
@@ -78,7 +81,7 @@ function AdminPanel(props: AdminPanelProps) {
         <Allowlist {...props} overview={overview} /></section>
       <section aria-labelledby="admin-accounts-heading"><h3 id="admin-accounts-heading">{t('账号')}</h3><Accounts accounts={overview.accounts} busy={props.busy} onSuspend={props.onSuspend} />
         {props.onSuspend && <p class="field-note">{t('暂停会阻止登录并停止正在进行的任务，已有记录保留；恢复后可重新登录。管理员账号不能暂停。')}</p>}
-        <p class="field-note admin-scope">{t('管理员只能看到邮箱和这几个时间，看不到其他账号的题目、证明和运行记录。')}</p></section>
+        <p class="field-note admin-scope">{t('管理员可查看用户名或邮箱、账号状态、用量和使用时间，看不到其他账号的题目、证明和运行记录。')}</p></section>
     </>}
   </>;
 }

@@ -4,15 +4,18 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { INFORMALIZATION_ALIGNMENT, INFORMALIZATION_EXPLANATION_POLICY, INFORMALIZATION_OUTLINE_POLICY, prepareInformalization, readInformalizationArtifact } from '../../src/math/informalization';
+import { INFORMALIZATION_ALIGNMENT, INFORMALIZATION_EXPLANATION_POLICY, INFORMALIZATION_OUTLINE_POLICY, informalizationDigest, prepareInformalization, readInformalizationArtifact } from '../../src/math/informalization';
 import { readMathBuildManifest } from '../../src/math/mathBuildManifest';
 import { readMathJson } from '../../src/math/mathRuntimeIo';
 import { createCodexMathSession } from '../../src/runtime/codexSession';
 import { prepareSub2apiProfile, SUB2API_PROVIDER } from '../../src/runtime/sub2api';
-import { readInformalizationState, runInformalization } from '../../src/solver/informalization';
+import { informalizationRetryLimit, isRetryableInformalizationFailure, readInformalizationState,
+  runInformalization } from '../../src/solver/informalization';
 import { reportedTotalTokens } from '../../src/solver/usageBudget';
-import { webExplanationReason, type WebExplanationPhase, type WorkerExplanationInput,
+import { webExplanationReason, type WebExplanationPhase, type WorkerExplanationCheckpoint, type WorkerExplanationInput,
   type WorkerExplanationMessage } from './shared';
+import { captureExplanationCheckpoint, explanationCheckpointSchema, maxExplanationMessageBytes,
+  restoreExplanationCheckpoint } from './explanationCheckpoint';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const inputSchema = z.object({
@@ -23,9 +26,12 @@ const inputSchema = z.object({
     execution: z.object({ executable: z.string().min(1).max(4096).optional() }).strict().optional() }).strict(),
   maxRunSeconds: z.number().int().nonnegative().max(24 * 60 * 60), maxTotalTokens: z.number().int().nonnegative(),
   maxRoundsPerBatch: z.number().int().min(0).max(20), auditors: z.number().int().min(1).max(5),
+  checkpoint: explanationCheckpointSchema.optional(),
 }).strict();
 
 const relayUrl = new URL(SUB2API_PROVIDER.baseUrl);
+const MODEL_REQUEST_IDLE_TIMEOUT_MS = 5 * 60 * 1_000;
+
 /**
  * Explanation roles call the fixed sub2api address 127.0.0.1:8080 (src/runtime/formalizationRelay.ts). Inside the
  * container that address forwards bytes to the configured gateway; the role sandboxes themselves have no network.
@@ -71,7 +77,7 @@ async function readInput(): Promise<WorkerExplanationInput> {
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
     bytes += chunk.length;
-    if (bytes > 4 * 1024 * 1024) throw new Error('explanation_input_too_large');
+    if (bytes > maxExplanationMessageBytes + 4 * 1024 * 1024) throw new Error('explanation_input_too_large');
     chunks.push(chunk);
   }
   return inputSchema.parse(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)))) as WorkerExplanationInput;
@@ -85,7 +91,10 @@ async function main() {
   // Runtime and Codex diagnostics stay inside this disposable container; stdout carries protocol lines only.
   const originalLog = console.log, originalError = console.error;
   console.log = () => {}; console.error = () => {};
-  const scratch = fs.realpathSync(fs.mkdtempSync(path.join(process.env.THEOREMOS_EXPLAIN_ROOT || os.tmpdir(), 'explain-')));
+  // The worker entrypoint gives each container a fresh disk volume at the same path. The frozen
+  // request and environment include absolute profile and env-file paths, which must match on retry.
+  const scratch = path.join(fs.realpathSync(process.env.THEOREMOS_EXPLAIN_ROOT || os.tmpdir()), 'explanation');
+  fs.mkdirSync(scratch, { mode: 0o700 });
   const directory = path.join(scratch, 'run'), project = path.join(scratch, 'project'), profile = path.join(scratch, 'profile');
   const startedAt = Date.now();
   let gateway: net.Server | undefined, poll: ReturnType<typeof setInterval> | undefined;
@@ -101,6 +110,7 @@ async function main() {
       if (state.batches.length) progress.batches = state.batches.length;
       progress.approvedBatches = state.batches.filter(batch => batch.status === 'approved').length;
       progress.tokens = state.sessions.reduce((sum, session) => sum + (reportedTotalTokens(session.usage) ?? 0), 0);
+      progress.modelRequestFailures = state.sessions.filter(session => isRetryableInformalizationFailure(session.failureDiagnostic)).length;
     } catch { /* The next poll reads the state after its atomic replacement. */ }
   };
   try {
@@ -118,7 +128,7 @@ async function main() {
     readMathBuildManifest(buildIndex.buildManifestRef, root, path.join(root, 'out/main'));
     const writer = { model: input.model, effort: input.effort, profile,
       executable: input.provider.execution?.executable ?? process.env.DEEPSCIENTIST_MATH_CODEX_EXECUTABLE ?? 'codex' };
-    prepareInformalization(directory, {
+    const request = prepareInformalization(directory, {
       proofId: input.target.replace(/[^A-Za-z0-9_-]+/gu, '_').slice(0, 128), proofFile, projectRoot: project,
       target: input.target, environment: input.environment, statement: null, alignment: INFORMALIZATION_ALIGNMENT,
       explanationPolicy: INFORMALIZATION_EXPLANATION_POLICY, outlinePolicy: INFORMALIZATION_OUTLINE_POLICY, language: input.language, writer,
@@ -126,25 +136,52 @@ async function main() {
       batching: { maxUnits: 12, maxSourceBytes: 60_000 }, maxRoundsPerBatch: input.maxRoundsPerBatch,
       maxRunSeconds: input.maxRunSeconds, maxTurnSeconds: 0, maxCompileSeconds: 0, maxTotalTokens: input.maxTotalTokens,
       buildManifestRef: buildIndex.buildManifestRef });
+    const restored = input.checkpoint && restoreExplanationCheckpoint(directory, informalizationDigest(request), input.checkpoint);
+    delete input.checkpoint;
+    let refreshOnResume = restored;
     poll = setInterval(() => { refresh(); report(); }, 10_000);
-    const result = await runInformalization(directory, root, {
+    const run = () => runInformalization(directory, root, {
       openSession: options => createCodexMathSession({ ...options,
+        readIsolation: { environment: input.environment, ...options.readIsolation,
+          upstreamIdleTimeoutMs: MODEL_REQUEST_IDLE_TIMEOUT_MS },
         environment: { ...options.environment, [SUB2API_PROVIDER.apiKeyEnvironment]: key } }),
       onEvent: event => {
+        if (refreshOnResume) { refresh(); refreshOnResume = false; }
         if (event.round) progress.round = event.round;
         if (event.event === 'informalization_extraction_started') report('extracting');
         else if (event.event === 'informalization_role_started')
           report(event.role === 'audit' ? 'auditing' : (event.round ?? 1) > 1 ? 'revising' : 'writing');
         else if (event.event === 'informalization_role_retrying') report('retrying');
-        else if (event.event === 'informalization_extraction_finished' || event.event === 'informalization_batch_approved') {
+        else if (event.event === 'informalization_role_finished' && isRetryableInformalizationFailure(event.failureDiagnostic)) {
+          progress.modelRequestFailures = (progress.modelRequestFailures ?? 0) + 1;
+          report();
+        } else if (event.event === 'informalization_extraction_finished' || event.event === 'informalization_batch_approved') {
           refresh(); report();
         } else if (event.event === 'informalization_approved') { refresh(); report('finishing'); }
       } });
+    let result;
+    try { result = await run(); }
+    catch (error) {
+      // Profile or runtime changes can invalidate a matching request before a role opens.
+      if (!restored || !(error instanceof Error) || error.message !== 'informalization_resume_identity_changed') throw error;
+      for (const name of ['state.json', 'outline.json', 'batches'])
+        fs.rmSync(path.join(directory, name), { recursive: true, force: true });
+      refreshOnResume = false;
+      result = await run();
+    }
     clearInterval(poll);
     if (result.status === 'approved')
       await send({ type: 'result', status: 'approved', evidence: readInformalizationArtifact(path.join(directory, 'artifact')) });
-    else await send({ type: 'result', ...explanationStopReason(result.status, result.error,
-      input.maxRunSeconds > 0 && Date.now() - startedAt >= input.maxRunSeconds * 1_000) });
+    else {
+      const outcome = explanationStopReason(result.status, result.error,
+        input.maxRunSeconds > 0 && Date.now() - startedAt >= input.maxRunSeconds * 1_000);
+      let checkpoint: WorkerExplanationCheckpoint | undefined;
+      if (outcome.reason === informalizationRetryLimit) {
+        try { checkpoint = captureExplanationCheckpoint(directory, key); }
+        catch { /* The stop reason is still useful if the scratch checkpoint could not be read. */ }
+      }
+      await send({ type: 'result', ...outcome, ...(checkpoint ? { checkpoint } : {}) });
+    }
   } catch (error) {
     await send({ type: 'result', ...explanationStopReason('stopped', error instanceof Error ? error.message : undefined, false) });
     process.exitCode = 1;

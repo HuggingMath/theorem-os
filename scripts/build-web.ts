@@ -6,7 +6,7 @@ import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { build } from 'esbuild';
-import { compressible, precompressed } from '../apps/web/staticFiles';
+import { compressible, precompressed, versionedEntryFile } from '../apps/web/staticFiles';
 import { buildWorkbenchClassics } from './build-workbench-classics';
 import { bundleSources, scanBundle } from './web-i18n';
 import { en } from '../apps/web/i18n/en';
@@ -17,6 +17,9 @@ const output = path.join(root, 'out/web');
 const reports = path.join(root, 'out/web-report');
 fs.mkdirSync(output, { recursive: true });
 fs.rmSync(path.join(output, 'chunks'), { recursive: true, force: true });
+for (const name of fs.readdirSync(output)) {
+  if (versionedEntryFile.test(name.replace(/\.br$/u, ''))) fs.rmSync(path.join(output, name));
+}
 fs.mkdirSync(reports, { recursive: true });
 // Saved mathematical content can choose English independently of the interface. Keep those callers' keys available
 // in Chinese pages too; the rest of the English interface is loaded only when the page itself needs it.
@@ -38,7 +41,8 @@ for (const entry of ['theme', 'app', 'login', 'share', 'guide', 'legal', 'explai
 // One classic script supports lazy formulas in online pages and self-contained offline reports.
 await bundle('math', output);
 await bundle('formalization', reports);
-fs.copyFileSync(path.join(root, 'apps/web/client/formalization.html'), path.join(reports, 'formalization.html'));
+for (const page of ['formalization.html', 'explain.html'])
+  fs.copyFileSync(path.join(root, 'apps/web/client', page), path.join(reports, page));
 for (const [source, destination] of [['index.html', 'index.html'], ['login.html', 'login.html'], ['share.html', 'share.html'], ['guide.html', 'guide.html'], ['terms.html', 'terms.html'], ['privacy.html', 'privacy.html'], ['explain.html', 'explain.html'], ['app.css', 'app.css'], ['formalize.html', 'formalize.html'], ['formalize.css', 'formalize.css'], ['research-conversation.css', 'research-conversation.css']])
   if (source === 'app.css') fs.writeFileSync(path.join(output, destination), fs.readFileSync(path.join(root, 'apps/web/client', source), 'utf8')
     + '\n' + fs.readFileSync(path.join(root, 'apps/web/solutionRoute.css'), 'utf8')
@@ -56,6 +60,7 @@ for (const file of ['people.html', 'theorems.html', 'library.html', 'workspace.h
 fs.writeFileSync(path.join(output, 'research.css'), ['research.css', 'collaborationFlow.css', 'researchCollections.css', 'researchWorkspace.css', 'researchProblem.css', 'researchLibraryTrials.css', 'researchCandidateContinuity.css', 'researchJourney.css', 'researchInlineActions.css', 'researchPersonal.css', 'researchBudget.css']
   .map(file => fs.readFileSync(path.join(root, 'apps/web/client', file), 'utf8')).join('\n'));
 const fonts = ['Geist-latin.woff2', 'Geist-OFL.txt', 'TheoremOSSerif-latin.woff2', 'Lora-OFL.txt', 'JetBrainsMono.woff2', 'JetBrainsMono-OFL.txt',
+  'TheoremOSWorkbenchHeading.woff2',
   'NotoSerifSC-ui.woff2', 'NotoSerifSC-ui-extra.woff2', 'NotoSerifSC-common.woff2', 'NotoSerifSC-OFL.txt', 'NotoSansSC-ui.woff2', 'NotoSansSC-ui-extra.woff2', 'NotoSansSC-common.woff2', 'NotoSansSC-OFL.txt'];
 for (const file of ['mark.svg', ...fonts.map(font => `fonts/${font}`)])
   fs.copyFileSync(path.join(root, 'docs/assets', file), path.join(output, 'assets', file));
@@ -68,6 +73,27 @@ fs.copyFileSync(path.join(root, 'node_modules/diff/LICENSE'), path.join(output, 
 fs.copyFileSync(path.join(root, 'docs/assets/licenses/gsap-NOTICE.txt'), path.join(output, 'assets/licenses/gsap-NOTICE.txt'));
 fs.copyFileSync(path.join(root, 'LICENSE'), path.join(output, 'LICENSE.txt'));
 const classics = await buildWorkbenchClassics(root, output);
+// Every page opening from a new deployment gets its matching scripts and styles, even through a browser cache.
+const pages = fs.readdirSync(output).filter(name => name.endsWith('.html'));
+const versioned = new Map<string, string>();
+for (const page of pages) {
+  const file = path.join(output, page);
+  const html = fs.readFileSync(file, 'utf8').replace(
+    /(<(?:script\b[^>]*?\bsrc|link\b[^>]*?\bhref)=")([a-z][a-z0-9-]*\.(?:js|css))"/gu,
+    (_match, attribute: string, name: string) => {
+      let asset = versioned.get(name);
+      if (!asset) {
+        const bytes = fs.readFileSync(path.join(output, name));
+        const hash = crypto.createHash('sha256').update(bytes).digest('hex').slice(0, 16);
+        const extension = path.extname(name);
+        asset = `${path.basename(name, extension)}.${hash}${extension}`;
+        fs.writeFileSync(path.join(output, asset), bytes);
+        versioned.set(name, asset);
+      }
+      return `${attribute}${asset}"`;
+    });
+  fs.writeFileSync(file, html);
+}
 const buildDigest = crypto.createHash('sha256');
 // Identify the complete shipped frontend, including page text, fonts and classic records.
 // Compression and the derived identity file do not change the content identity.
@@ -84,7 +110,7 @@ try {
   modified = Boolean(execFileSync('git', ['status', '--porcelain', '--untracked-files=normal', '--', 'apps/web', 'scripts/build-web.ts'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
 } catch { /* Container builds may omit Git; the frontend digest still identifies the built bytes. */ }
 fs.writeFileSync(path.join(output, 'build-info.json'), JSON.stringify({ schema: 'theorem-os.web-build.v1', builtAt: new Date().toISOString(), digest, ...(commit ? { commit } : {}), ...(modified ? { modified: true } : {}) }));
-for (const name of fs.readdirSync(output).filter(name => name.endsWith('.html'))) {
+for (const name of pages) {
   const file = path.join(output, name), html = fs.readFileSync(file, 'utf8');
   fs.writeFileSync(file, html.replace('</head>', `<meta name="theoremos-build" content="${digest}"></head>`));
 }

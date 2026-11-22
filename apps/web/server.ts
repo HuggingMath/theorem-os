@@ -8,10 +8,10 @@ import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import zlib from 'node:zlib';
 import { z } from 'zod';
-import { getWebEnvironments, readWebConfig, webDefaults, webExplanationLimits, webLimits, webTemplates, type WebConfig } from './config';
+import { getWebEnvironments, readWebConfig, webDefaults, webExplanationLimits, webLimits, webTemplates, webProvidersForAccount, type WebConfig } from './config';
 import { DockerWebRunner, type WebRunner } from './runner';
 import { WebJobs } from './jobs';
-import { webAgentActionLimits, webContinuationLabelMax, type WebAdminOverview, type WebContinuation, type WebEffort,
+import { accountLogin, webAgentActionLimits, webContinuationLabelMax, type WebAccountIdentity, type WebAdminOverview, type WebContinuation, type WebEffort,
   type WebExplanationLanguage, type WebExplanationOverview, type WebProvider, type WebRun, type WebRunInput, type WebSession, workbenchReturn } from './shared';
 import { researchModulePlanSchema, type ResearchModulePlan } from '../../src/solver/modules/policy';
 import { WebStorage, WebStorageError } from './storage';
@@ -149,8 +149,23 @@ const jsonEncodings = new WeakMap<ServerResponse, 'br' | 'gzip'>();
 // A run carries its sources and report, so the list and the Agents' actions run to tens of KB each. no-transform keeps
 // Cloudflare from compressing them, so the server does: a fast brotli level costs a few ms even for MBs of JSON.
 const jsonBrotli = { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } };
-function json(response: ServerResponse, status: number, body: unknown) {
-  const text = JSON.stringify(body), encoding = text.length >= 2048 ? jsonEncodings.get(response) : undefined;
+function json(response: ServerResponse, status: number, body: unknown, revalidate?: IncomingMessage) {
+  const text = JSON.stringify(body);
+  if (revalidate) {
+    // Hash the response itself: streamed text and linked records can change within the same millisecond.
+    const tag = `"${crypto.createHash('sha256').update(text).digest('hex')}"`;
+    response.setHeader('ETag', `W/${tag}`);
+    if (text.length >= 2048) response.setHeader('Vary', 'Accept-Encoding');
+    if (revalidate.headers['if-none-match']?.split(',').some(candidate => {
+      const value = candidate.trim();
+      return value === '*' || value.replace(/^W\//u, '') === tag;
+    })) {
+      response.writeHead(304);
+      response.end();
+      return;
+    }
+  }
+  const encoding = text.length >= 2048 ? jsonEncodings.get(response) : undefined;
   if (!encoding) {
     response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
     response.end(text);
@@ -183,14 +198,17 @@ function readJson(request: IncomingMessage): Promise<unknown> {
 }
 
 /** Addresses, accounts, milestones and this window's usage for the admin dialog; never a run, a key or anything written. */
+const accountIdentity = (account: WebAccountIdentity): WebAccountIdentity =>
+  account.username === undefined ? { email: account.email } : { username: account.username };
 function adminOverview(auth: WebAuth, quota?: WebQuota): WebAdminOverview {
-  const accounts = auth.listAccounts(), allowed = auth.allowlist(), signedUp = new Set(accounts.map(account => account.email));
+  const accounts = auth.listAccounts(), allowed = auth.allowlist(), signedUp = new Set(accounts.map(accountLogin));
   return {
     allowlist: auth.allowlistEntries().map(entry => ({ ...entry, account: signedUp.has(entry.email) })),
-    accounts: accounts.map(({ email, id, createdAt, firstRunAt, firstAcceptedAt, suspendedAt }) => {
-      const view = quota && !auth.isAdmin(email) ? quota.view(id) : undefined;
-      return { email, admin: auth.isAdmin(email), createdAt,
-        ...(firstRunAt ? { firstRunAt } : {}), ...(firstAcceptedAt ? { firstAcceptedAt } : {}), allowed: auth.allowed(email),
+    accounts: accounts.map(account => {
+      const { id, createdAt, firstRunAt, firstAcceptedAt, suspendedAt } = account, login = accountLogin(account);
+      const view = quota && !auth.isAdmin(login) ? quota.view(id) : undefined;
+      return { ...accountIdentity(account), admin: auth.isAdmin(login), createdAt,
+        ...(firstRunAt ? { firstRunAt } : {}), ...(firstAcceptedAt ? { firstAcceptedAt } : {}), allowed: auth.allowed(login),
         ...(suspendedAt ? { suspended: true } : {}),
         ...(view ? { usage: { research: view.runs.used, formalizations: view.formalizations.used, explanations: view.explanations.used } } : {}) };
     }).sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
@@ -200,7 +218,7 @@ function adminOverview(auth: WebAuth, quota?: WebQuota): WebAdminOverview {
   };
 }
 
-type Session = { id: string; csrf: string; touchedAt: number; account?: { id: string; email: string }; passwordResetUntil?: number };
+type Session = { id: string; csrf: string; touchedAt: number; account?: WebAccountIdentity & { id: string }; passwordResetUntil?: number };
 const objectBody = (value: unknown) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {}) as Record<string, unknown>;
 export function createWebService(config: WebConfig, runner: WebRunner = new DockerWebRunner(config),
   options: { mailer?: WebMailer; captchaAnswer?: () => string; sample?: WebSampleFile | null } = {}) {
@@ -215,15 +233,18 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   const sessions = new Map<string, Session>(storage.listSessions().map(session => [session.id, session]));
   const auth = config.auth ? new WebAuth(config.auth, storage, options.mailer, options.captchaAnswer) : undefined;
   const quota = auth && config.quota ? new WebQuota(storage, config.quota) : undefined;
+  const providersFor = (session: Session) => webProvidersForAccount(config, session.account?.id);
   // With login enabled, records belong to the account; otherwise to the anonymous browser session.
   // Provider IDs, never keys, that the server can fill in for this session's admin account.
   const serverKeysFor = (session: Session) => {
-    const ids = config.adminKeys && session.account && auth?.isAdmin(session.account.email) ? Object.keys(config.adminKeys) : [];
+    const ids = config.adminKeys && session.account && auth?.isAdmin(accountLogin(session.account))
+      ? Object.keys(config.adminKeys).filter(id => providersFor(session).find(provider => provider.id === id)?.baseUrl ===
+        config.providers.find(provider => provider.id === id)?.baseUrl) : [];
     return ids.length ? ids : undefined;
   };
   // Each account reads and replaces only its own saved keys.
   const vault = auth && config.keySecret ? new WebKeyVault(config.keySecret, storage) : undefined;
-  const savedKeysFor = (session: Session) => vault && session.account ? vault.list(session.account.id, config.providers) : [];
+  const savedKeysFor = (session: Session) => vault && session.account ? vault.list(session.account.id, providersFor(session)) : [];
   // What an empty key field stands for: the account's saved key, then the server's key for admins.
   const heldKey = (session: Session, provider: WebProvider) =>
     (vault && session.account ? vault.get(session.account.id, provider.id, provider.baseUrl) : undefined)
@@ -237,7 +258,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
   const explanationGeneration = (session: Session, run: WebRun, isSample: boolean): WebExplanationOverview['generation'] => {
     if (isSample) return { available: false, reason: 'sample' };
     if (run.status !== 'completed' || run.result?.status !== 'evaluated_passed' || !isStatementReviewed(run)) return { available: false, reason: 'not_accepted' };
-    const provider = config.providers.find(item => item.id === run.providerId);
+    const provider = providersFor(session).find(item => item.id === run.providerId);
     if (!gatewayProvider(provider)) return { available: false, reason: 'provider' };
     if (run.model !== SUB2API_PROVIDER.defaultModel) return { available: false, reason: 'model' };
     if (!runner.explain) return { available: false, reason: 'runtime' };
@@ -252,13 +273,13 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
    * Admins and anonymous loopback previews are not counted; a refusal is the 429 the reader sees.
    */
   const spend = (session: Session, kind: WebQuotaKind): (() => void) => {
-    if (!quota || !auth || !session.account || auth.isAdmin(session.account.email)) return () => undefined;
+    if (!quota || !auth || !session.account || auth.isAdmin(accountLogin(session.account))) return () => undefined;
     try { quota.take(session.account.id, kind); }
     catch (error) { throw error instanceof WebQuotaError ? new HttpError(error.status, error.message) : error; }
     const id = session.account.id;
     return () => quota.refund(id, kind);
   };
-  const usageOf = (session: Session) => quota && session.account && !auth?.isAdmin(session.account.email) ? quota.view(session.account.id) : undefined;
+  const usageOf = (session: Session) => quota && session.account && !auth?.isAdmin(accountLogin(session.account)) ? quota.view(session.account.id) : undefined;
   // Beta funnel milestones exist only for accounts; anonymous loopback previews record nothing.
   const milestone = (owner: string, name: WebMilestone) => {
     if (auth && owner.startsWith('account:')) try { auth.markMilestone(owner.slice(8), name); } catch { /* A milestone never fails a run. */ }
@@ -276,7 +297,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     if (!auth || !quota || !owner.startsWith('account:')) return;
     const account = auth.listAccounts().find(item => item.id === owner.slice(8));
     if (!account) throw new Error('explanation_account_unavailable');
-    if (auth.isAdmin(account.email)) return;
+    if (auth.isAdmin(accountLogin(account))) return;
     try { quota.take(account.id, 'explanations'); }
     catch (error) { throw error instanceof WebQuotaError ? new Error('explanation_quota_exhausted') : error; }
   });
@@ -412,7 +433,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
     };
     let session = read(sessionCookie);
     if (!auth) return session;
-    if (session?.account && !(auth.allowed(session.account.email) && auth.getAccount(session.account.email)?.id === session.account.id)) {
+    if (session?.account && !(auth.allowed(accountLogin(session.account)) && auth.getAccount(accountLogin(session.account))?.id === session.account.id)) {
       endSession(session.id); session = undefined;
     }
     if (session?.account) return session;
@@ -452,7 +473,11 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (rates.size >= 2_000) throw new HttpError(429, '请求较多，请稍后重试。');
           rates.set(ip, rate = { count: 0, expiresAt: Date.now() + 60_000 });
         }
-        if (++rate.count > 600) throw new HttpError(429, '请求过于频繁，请稍后重试。');
+        if (++rate.count > 600) {
+          response.setHeader('Retry-After', Math.max(1, Math.ceil((rate.expiresAt - Date.now()) / 1000)));
+          response.setHeader('X-Theoremos-Rate-Limit-Scope', 'api');
+          throw new HttpError(429, '请求过于频繁，请稍后重试。');
+        }
         // Share links are public read-only snapshots: no session, no cookie, nothing beyond the stored whitelist.
         const shared = /^\/api\/share\/([^/]+)$/u.exec(url.pathname);
         if (shared) {
@@ -479,14 +504,14 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const body: WebSession = { draftOwner: crypto.createHash('sha256').update(ownerOf(session) || session.id).digest('hex'), csrfToken: session.csrf, auth: auth ? 'email' : 'none',
             ...(operations.maintenance ? { maintenance: true } : {}),
             ...(auth?.termsVersion ? { termsVersion: auth.termsVersion } : {}),
-            ...(auth && session.account && auth.needsTerms(session.account.email) ? { termsRequired: true } : {}),
+            ...(auth && session.account && auth.needsTerms(accountLogin(session.account)) ? { termsRequired: true } : {}),
             ...(auth?.signup() === 'open' ? { signup: 'open' as const } : {}),
             ...(usage ? { quota: usage } : {}),
-            ...(session.account ? { account: { email: session.account.email, ...(auth?.isAdmin(session.account.email) ? { admin: true } : {}),
-              ...(auth ? { passwordSet: auth.hasPassword(session.account.email), passwordResetAllowed: Boolean(session.passwordResetUntil && session.passwordResetUntil > Date.now()) } : {}),
+            ...(session.account ? { account: { ...accountIdentity(session.account), ...(auth?.isAdmin(accountLogin(session.account)) ? { admin: true } : {}),
+              ...(auth ? { passwordSet: auth.hasPassword(accountLogin(session.account)), passwordResetAllowed: Boolean(session.passwordResetUntil && session.passwordResetUntil > Date.now()) } : {}),
               ...(serverKeysFor(session) ? { serverKeys: serverKeysFor(session) } : {}),
               ...(vault ? { keyVault: true, ...(savedKeysFor(session).length ? { savedKeys: savedKeysFor(session) } : {}) } : {}),
-              ...(auth?.getAccount(session.account.email)?.completionEmail === false ? { completionEmail: false } : {}) } } : {}), providers: config.providers.map(publicWebProvider), environments: getWebEnvironments(),
+              ...(auth?.getAccount(accountLogin(session.account))?.completionEmail === false ? { completionEmail: false } : {}) } } : {}), providers: providersFor(session).map(publicWebProvider), environments: getWebEnvironments(),
             templates: webTemplates, defaults: webDefaults, limits: webLimits, runtime: await runner.readiness(),
             ...(sample ? { sample: { id: sample.run.id, title: sample.run.title } } : {}), ...(prechecker ? { precheck: true } : {}) };
           const owner = url.searchParams.has('runs') ? ownerOf(session) : undefined;
@@ -531,40 +556,40 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           }
           if (url.pathname === '/api/auth/verify' && request.method === 'POST') {
             const account = auth.verifyCode(objectBody(await readBody()));
-            quota?.restore(account.id, account.email);
+            quota?.restore(account.id, accountLogin(account));
             // A fresh identifier and CSRF token after login; the pre-login cookie stops working.
             endSession(session.id);
-            const next = startSession({ id: account.id, email: account.email }, true);
+            const next = startSession({ id: account.id, ...accountIdentity(account) }, true);
             storage.saveSession(next); setSessionCookie(response, next);
-            json(response, 200, { account: { email: account.email }, csrfToken: next.csrf }); return;
+            json(response, 200, { account: accountIdentity(account), csrfToken: next.csrf }); return;
           }
           if (url.pathname === '/api/auth/password/login' && request.method === 'POST') {
             const account = await auth.loginPassword(ip, objectBody(await readBody()), requireSession);
-            quota?.restore(account.id, account.email);
+            quota?.restore(account.id, accountLogin(account));
             endSession(session.id);
-            const next = startSession({ id: account.id, email: account.email });
+            const next = startSession({ id: account.id, ...accountIdentity(account) });
             storage.saveSession(next); setSessionCookie(response, next);
-            json(response, 200, { account: { email: account.email }, csrfToken: next.csrf }); return;
+            json(response, 200, { account: accountIdentity(account), csrfToken: next.csrf }); return;
           }
           if (url.pathname === '/api/auth/logout' && request.method === 'POST') {
             endSession(session.id); clearSessionCookie(response); json(response, 200, { ok: true }); return;
           }
           if (url.pathname === '/api/auth/terms' && request.method === 'POST') {
             if (!session.account) throw new HttpError(401, '请先登录。');
-            auth.acceptTerms(session.account.email, objectBody(await readBody()));
+            auth.acceptTerms(accountLogin(session.account), objectBody(await readBody()));
             json(response, 200, { ok: true }); return;
           }
           if (url.pathname === '/api/auth/account' && request.method === 'PATCH') {
             if (!session.account) throw new HttpError(401, '请先登录。');
             const completionEmail = objectBody(await readBody()).completionEmail;
             if (typeof completionEmail !== 'boolean') throw new HttpError(400, '设置格式不正确。');
-            auth.setCompletionEmail(session.account.email, completionEmail);
+            auth.setCompletionEmail(accountLogin(session.account), completionEmail);
             json(response, 200, { completionEmail }); return;
           }
           if (url.pathname === '/api/auth/password' && request.method === 'PATCH') {
             if (!session.account) throw new HttpError(401, '请先登录。');
             const body = objectBody(await readBody());
-            await auth.setPassword(session.account.email, body.password, body.currentPassword,
+            await auth.setPassword(accountLogin(session.account), body.password, body.currentPassword,
               Boolean(session.passwordResetUntil && session.passwordResetUntil > Date.now()), requireSession);
             session.passwordResetUntil = undefined;
             let failure: unknown;
@@ -577,14 +602,14 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           if (url.pathname === '/api/auth/account' && request.method === 'DELETE') {
             const account = session.account;
             if (!account) throw new HttpError(401, '请先登录。');
-            const confirmation = objectBody(await readBody()).email;
-            if (typeof confirmation !== 'string' || confirmation.trim().toLowerCase() !== account.email)
-              throw new HttpError(400, '请输入当前账号的邮箱以确认删除。');
+            const body = objectBody(await readBody()), confirmation = body.login ?? body.username ?? body.email;
+            if (typeof confirmation !== 'string' || confirmation.trim().toLowerCase() !== accountLogin(account))
+              throw new HttpError(400, account.username ? '请输入当前账号的用户名以确认删除。' : '请输入当前账号的邮箱以确认删除。');
             const owner = ownerOf(session)!;
             research.projects.forgetOwner(owner); await research.assets.deleteOwner(owner);
             conversations.forget(owner); formalizations.forget(owner); explanations.forget(owner); jobs.forget(owner); storage.deleteOwner(owner); trajectories.forgetOwner(owner); vault?.forgetAccount(account.id);
-            quota?.forget(account.id, account.email);
-            auth.deleteAccount(account.email);
+            quota?.forget(account.id, accountLogin(account));
+            auth.deleteAccount(accountLogin(account));
             endSessions(other => other.account?.id === account.id);
             clearSessionCookie(response); json(response, 200, { deleted: true }); return;
           }
@@ -593,23 +618,23 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             if (!session.account) throw new HttpError(401, '请先登录。');
             if (!vault) throw new HttpError(404, '当前服务未启用保存 Key。');
             if (request.method === 'PUT') {
-              if (auth.needsTerms(session.account.email)) throw new HttpError(428, '使用条款已更新，请先确认后继续。');
-              const provider = config.providers.find(item => item.id === savedKey[1]);
+              if (auth.needsTerms(accountLogin(session.account))) throw new HttpError(428, '使用条款已更新，请先确认后继续。');
+              const provider = providersFor(session).find(item => item.id === savedKey[1]);
               if (!provider) throw new HttpError(400, '请选择可用的服务商');
               const body = z.object({ apiKey: inputSchema.shape.apiKey.min(8) }).strict().safeParse(await readBody());
               if (!body.success) throw new HttpError(400, '请填写有效的 API Key。');
-              if (auth.needsTerms(session.account.email)) throw new HttpError(428, '使用条款已更新，请先确认后继续。');
+              if (auth.needsTerms(accountLogin(session.account))) throw new HttpError(428, '使用条款已更新，请先确认后继续。');
               vault.save(session.account.id, provider.id, provider.baseUrl, body.data.apiKey);
             } else vault.forget(session.account.id, savedKey[1]);
             json(response, 200, { savedKeys: savedKeysFor(session) }); return;
           }
           throw new HttpError(405, '请求方法不受支持。');
         }
-        if (auth && session.account && auth.needsTerms(session.account.email))
+        if (auth && session.account && auth.needsTerms(accountLogin(session.account)))
           throw new HttpError(428, '使用条款已更新，请先确认后继续。');
         if (url.pathname.startsWith('/api/admin/')) {
           // Checked on every request, so removing an address from THEOREMOS_WEB_ADMINS takes effect at the next restart.
-          if (!auth || !session.account || !auth.isAdmin(session.account.email)) throw new HttpError(403, '需要管理员账号。');
+          if (!auth || !session.account || !auth.isAdmin(accountLogin(session.account))) throw new HttpError(403, '需要管理员账号。');
           if (url.pathname === '/api/admin/overview' && request.method === 'GET') { json(response, 200, adminOverview(auth, quota)); return; }
           if (url.pathname === '/api/admin/operations' && request.method === 'GET') {
             const ready = operations.writable() && (await runner.readiness()).ready;
@@ -626,8 +651,9 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           }
           if (url.pathname === '/api/admin/accounts' && request.method === 'PATCH') {
             const body = objectBody(await readBody());
-            if (typeof body.email !== 'string' || typeof body.suspended !== 'boolean') throw new HttpError(400, '请检查账号与暂停状态。');
-            const account = auth.setSuspended(body.email, body.suspended);
+            const login = body.login ?? body.username ?? body.email;
+            if (typeof login !== 'string' || typeof body.suspended !== 'boolean') throw new HttpError(400, '请检查账号与暂停状态。');
+            const account = auth.setSuspended(login, body.suspended);
             if (body.suspended) {
               const owner = `account:${account.id}`;
               for (const run of jobs.list(owner)) {
@@ -646,7 +672,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             else {
               auth.removeFromAllowlist(email);
               // The removed address is signed out now, not at its next request.
-              endSessions(other => Boolean(other.account && !auth.allowed(other.account.email)));
+              endSessions(other => Boolean(other.account && !auth.allowed(accountLogin(other.account))));
             }
             json(response, 200, adminOverview(auth, quota)); return;
           }
@@ -657,7 +683,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           const writable = () => {
             requireSession();
             if (!owner) throw new HttpError(401, '请先登录。');
-            if (auth && session.account && auth.needsTerms(session.account.email)) throw new HttpError(428, '使用条款已更新，请先确认后继续。');
+            if (auth && session.account && auth.needsTerms(accountLogin(session.account))) throw new HttpError(428, '使用条款已更新，请先确认后继续。');
             if (operations.maintenance || !operations.writable()) throw new HttpError(503, '服务暂不接收研究修改，请稍后重试。');
           };
           const result = await research.handle(url, request.method ?? 'GET', owner, readBody, writable);
@@ -675,14 +701,14 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         // submission cannot start work after logout, suspension, account deletion or maintenance activation.
         const admitWork = () => {
           requireSession();
-          if (auth && session.account && auth.needsTerms(session.account.email)) throw new HttpError(428, '使用条款已更新，请先确认后继续。');
+          if (auth && session.account && auth.needsTerms(accountLogin(session.account))) throw new HttpError(428, '使用条款已更新，请先确认后继续。');
           if (operations.maintenance) throw new HttpError(503, '服务正在维护，暂不接收新任务；已有任务会继续，历史与下载仍可使用。');
           if (!operations.writable()) throw new HttpError(503, '存储空间暂时不足，请稍后重试。');
         };
         if (newWork) admitWork();
         const connection = /^\/api\/providers\/([a-z][a-z0-9-]{0,39})\/check$/u.exec(url.pathname);
         if (connection && request.method === 'POST') {
-          const provider = config.providers.find(item => item.id === connection[1]);
+          const provider = providersFor(session).find(item => item.id === connection[1]);
           const body = z.object({ apiKey: formalizationSchema.shape.apiKey, model: inputSchema.shape.model }).strict().safeParse(await readBody());
           if (!provider || !body.success) throw new HttpError(400, '请检查服务商、模型名与 API Key。');
           const key = body.data.apiKey || heldKey(session, provider);
@@ -702,7 +728,10 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         const conversationMatch = /^\/api\/conversations\/([a-f0-9-]{36})(?:\/(messages|stop|guidance|guidance-withdraw))?$/u.exec(url.pathname);
         if (conversationMatch) {
           const [, id, action] = conversationMatch;
-          if (!action && request.method === 'GET') { json(response, 200, { conversation: conversations.read(owner, id) }); return; }
+          if (!action && request.method === 'GET') {
+            json(response, 200, { conversation: conversations.read(owner, id) }, request);
+            return;
+          }
           if (!action && request.method === 'PATCH') {
             conversations.read(owner, id);
             const parsed = z.object({ title: z.string() }).strict().safeParse(await readBody());
@@ -714,9 +743,12 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           }
           if (action === 'stop' && request.method === 'POST') { json(response, 200, { conversation: conversations.stop(owner, id) }); return; }
           if (action === 'guidance' && request.method === 'POST') {
-            const parsed = webGuidanceSchema.safeParse(await readBody());
-            if (!parsed.success) throw new HttpError(400, '请检查指导对象、任务版本与内容。');
-            const conversation = await conversations.guide(owner, id, parsed.data, (runId, guidance) => jobs.command(owner, runId, { type: 'guidance', guidance }));
+            const { runId, ...input } = objectBody(await readBody());
+            const expectedRun = z.string().uuid().optional().safeParse(runId);
+            const parsed = webGuidanceSchema.safeParse(input);
+            if (!parsed.success || !expectedRun.success) throw new HttpError(400, '请检查指导对象、任务版本与内容。');
+            const conversation = await conversations.guide(owner, id, parsed.data,
+              (runId, guidance) => jobs.command(owner, runId, { type: 'guidance', guidance }), expectedRun.data);
             json(response, 200, { conversation }); return;
           }
           if (action === 'guidance-withdraw' && request.method === 'POST') {
@@ -734,7 +766,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             if (accepted) { json(response, 202, { conversation: accepted }); return; }
             const run = conversation.runId ? jobs.get(owner, conversation.runId) : undefined;
             const formalization = conversation.formalizationId ? formalizations.read(owner, conversation.formalizationId) : undefined;
-            const provider = config.providers.find(item => item.id === (run?.providerId ?? formalization?.providerId ?? SUB2API_PROVIDER.id));
+            const provider = providersFor(session).find(item => item.id === (run?.providerId ?? formalization?.providerId ?? SUB2API_PROVIDER.id));
             if (!provider) throw new HttpError(400, '当前服务没有配置这个题目使用的模型服务。');
             const apiKey = parsed.data.apiKey || heldKey(session, provider);
             if (!apiKey) throw new HttpError(400, '请填写 API Key。');
@@ -745,7 +777,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
           throw new HttpError(405, '请求方法不受支持。');
         }
         if (url.pathname === '/api/formalizations') {
-          const providers = config.providers.filter(formalizationProvider);
+          const providers = providersFor(session).filter(formalizationProvider);
           const defaultProvider = providers[0];
           const keyKind = (provider: WebProvider): 'saved' | 'server' | 'required' =>
             savedKeysFor(session).some(item => item.providerId === provider.id) ? 'saved'
@@ -815,7 +847,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
             if (!parsed.success) throw new HttpError(400, '请检查 API Key。');
             const item = formalizations.read(owner, id);
             if (item.runId) { json(response, 200, { formalization: item }); return; }
-            const provider = config.providers.find(provider => provider.id === (item.providerId ?? SUB2API_PROVIDER.id));
+            const provider = providersFor(session).find(provider => provider.id === (item.providerId ?? SUB2API_PROVIDER.id));
             if (!provider) throw new HttpError(409, '这次运行的模型服务已不在配置中。');
             const apiKey = parsed.data.apiKey || heldKey(session, provider);
             if (!apiKey) throw new HttpError(400, '请填写 API Key。');
@@ -945,7 +977,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         if (url.pathname === '/api/runs' && request.method === 'POST') {
           const parsed = inputSchema.safeParse(await readBody());
           if (!parsed.success) throw new HttpError(400, '请检查题目、API Key、模型、模块方案及运行预算。');
-          const provider = config.providers.find(item => item.id === parsed.data.providerId);
+          const provider = providersFor(session).find(item => item.id === parsed.data.providerId);
           if (!provider) throw new HttpError(400, '该模型服务尚未配置。');
           const { saveKey, requestId: bodyRequestId, ...input } = parsed.data;
           const legacyEnvironmentOmitted = input.environment === undefined;
@@ -1084,7 +1116,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
               provider: '证明讲解目前只支持 Sub2API 模型服务。', model: '证明讲解目前只支持 deepseek-flash 模型。',
               runtime: '当前服务不提供证明讲解。' }[generation.reason]);
             if (!targets.some(item => item.name === parsed.data.target)) throw new HttpError(400, '目标定理不在原题中。');
-            const provider = config.providers.find(item => item.id === run.providerId)!;
+            const provider = providersFor(session).find(item => item.id === run.providerId)!;
             let apiKey = parsed.data.apiKey;
             if (!apiKey) {
               const saved = vault && session.account ? vault.get(session.account.id, provider.id, provider.baseUrl) : undefined;
@@ -1182,7 +1214,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         if (operation === 'explain' && request.method === 'POST') {
           const parsed = explainSchema.safeParse(await readBody());
           if (!parsed.success) throw new HttpError(400, '请检查问题、版本与 API Key。');
-          const provider = config.providers.find(item => item.id === run.providerId);
+          const provider = providersFor(session).find(item => item.id === run.providerId);
           if (!provider) throw new HttpError(409, '这次运行的模型服务已不在配置中。');
           const apiKey = parsed.data.apiKey || heldKey(session, provider);
           if (!apiKey) throw new HttpError(400, '请填写 API Key。');
@@ -1331,7 +1363,7 @@ export function createWebService(config: WebConfig, runner: WebRunner = new Dock
         : undefined;
       const contentType = allowed[extension] ?? archiveType;
       if (!contentType) throw new HttpError(404, '文件不存在。');
-      sendStatic(request, response, file, path.extname(file), contentType);
+      sendStatic(request, response, file, extension, contentType, path.relative(config.staticRoot, file).split(path.sep).join('/'));
     } catch (error) {
       const invalidKnowledgeInput = error instanceof Error && /^math_knowledge_(?:invalid_query|invalid_dependency_options|(?:source|metadata|consumers|finding)_(?:options_invalid|position_invalid|budget_too_small))$/u.test(error.message);
       const known = error instanceof HttpError || error instanceof WebStorageError || error instanceof WebAuthError

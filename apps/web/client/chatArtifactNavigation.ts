@@ -26,6 +26,8 @@ export class ChatArtifactNavigation {
   remember(key: string, kind: ChatArtifactKind, target?: ChatArtifactTarget) {
     const focus = document.activeElement instanceof HTMLElement && this.thread.contains(document.activeElement)
       ? document.activeElement : undefined;
+    // A link inside an open artifact must not replace the return point in the conversation.
+    if (!this.thread.clientHeight || (this.origin?.key === key && !focus && !target?.messageId)) return;
     const messages = [...this.thread.querySelectorAll<HTMLElement>('[data-message-id]')];
     const top = this.thread.getBoundingClientRect().top;
     const message = (target?.messageId && messages.find(node => node.dataset.messageId === target.messageId))

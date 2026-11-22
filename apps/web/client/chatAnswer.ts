@@ -1,19 +1,20 @@
 import type { WebExplanation, WebExplanationDocument, WebExplanationLanguage, WebExplanationOverview, WebExplanationSection, WebRun } from '../shared';
 import { isAcceptedRun, isStatementReviewed } from '../presentation';
 import { t } from '../i18n';
+import { normalizeExplanationNotation } from './readableExplanation';
 
 export type ChatAnswer = { runId: string; target: string; loading: boolean; overview?: WebExplanationOverview;
   explanation?: WebExplanation; document?: WebExplanationDocument; error?: string; targetTitles?: Record<string, string> };
 type Entry = { proof: string; reviewed: boolean; value: ChatAnswer; revision: number; documentVersion?: string };
 type Request = <T>(url: string) => Promise<T>;
 
-export function explanationStepQuestion(section: WebExplanationSection, index: number, source: string, language: WebExplanationLanguage): string {
+export function explanationStepQuestion(section: WebExplanationSection, index: number, source: string, language: WebExplanationLanguage, displayedStep?: string): string {
   const step = section.steps[index];
   if (!step) return '';
   const tx = (zh: string, en: string) => language === 'zh' ? zh : en;
   return [tx('请解释以下证明步骤，并说明所用引理的适用条件。', 'Explain this proof step and the conditions required by its lemmas.'),
     `${section.title || section.name} · ${tx(`第 ${index + 1} 步`, `Step ${index + 1}`)}`,
-    section.statement, step.text,
+    normalizeExplanationNotation(section.statement), displayedStep ?? step.text,
     ...(step.uses.length ? [`${tx('用到', 'Uses')}: ${step.uses.map(use => use.name).join(', ')}`] : []),
     `${tx('讲解来源', 'Explanation source')}: ${source}`].filter(Boolean).join('\n\n');
 }
@@ -52,19 +53,24 @@ export class ChatAnswers {
   select(runId: string, target: string) {
     const entry = this.entries.get(runId);
     if (!entry?.value.overview?.targets.some(item => item.name === target) || entry.value.target === target) return;
-    entry.value.target = target; entry.value.explanation = undefined; entry.value.document = undefined; entry.documentVersion = undefined;
+    entry.value.target = target; entry.value.explanation = undefined; entry.value.document = undefined;
+    entry.value.error = undefined; entry.documentVersion = undefined;
     void this.load(entry, false);
   }
   private async load(entry: Entry, readOverview: boolean) {
     const revision = ++entry.revision, state = entry.value, base = `/api/runs/${encodeURIComponent(state.runId)}/explanations`;
     const current = () => this.entries.get(state.runId) === entry && entry.revision === revision;
     const discard = () => { state.document = undefined; entry.documentVersion = undefined; };
-    state.loading = true; state.error = undefined; this.changed();
+    let readError: string | undefined;
+    state.loading = true; this.changed();
     try {
       if (readOverview) {
         const overview = await this.request<WebExplanationOverview>(base);
         if (!current()) return;
-        if (overview.run.id !== state.runId || overview.run.proof !== entry.proof) { discard(); throw new Error(t('讲解与当前验收证明不一致。')); }
+        if (overview.run.id !== state.runId || overview.run.proof !== entry.proof) {
+          discard(); state.overview = undefined; state.explanation = undefined;
+          throw new Error(t('讲解与当前验收证明不一致。'));
+        }
         state.overview = overview;
         if (!overview.targets.some(item => item.name === state.target)) {
           const available = overview.explanations.filter(item => overview.targets.some(target => target.name === item.target));
@@ -93,9 +99,9 @@ export class ChatAnswers {
       for (const section of explanation.document.sections) if (section.target && section.title)
         (state.targetTitles ??= {})[section.name] = section.title;
     } catch (error) {
-      if (current()) state.error = error instanceof Error ? error.message : String(error);
+      readError = error instanceof Error ? error.message : String(error);
     } finally {
-      if (current()) { state.loading = false; this.changed(); }
+      if (current()) { state.error = readError; state.loading = false; this.changed(); }
     }
   }
 }

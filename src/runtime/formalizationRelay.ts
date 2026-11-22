@@ -44,13 +44,15 @@ function nativeRequestThread(body: Record<string, unknown>, request: IncomingMes
 }
 
 /** Observe the existing Responses wire stream without changing its bytes or accepting model claims. */
-export function responseUsageObserver(streaming: boolean) {
+export function responseUsageObserver(streaming: boolean, onProgress?: () => void) {
   let usage: ModelRequestReceipt['usage'], outcome: ModelRequestReceipt['outcome'], providerRequestId: string | undefined;
   let terminal = false, invalid = false, limited = false, pendingBytes = 0;
   const chunks: Uint8Array[] = [], decoder = new TextDecoder('utf-8', { fatal: true });
   const inspect = (value: unknown) => {
     if (!value || typeof value !== 'object') return;
     const event = value as Record<string, any>;
+    // Status events and SSE keepalives do not tell us the model produced output.
+    if (streaming && typeof event.type === 'string' && /^response\..+\.(?:added|delta|done)$/u.test(event.type)) onProgress?.();
     const response = streaming ? event.response : event;
     const status = streaming ? ({ 'response.completed': 'completed', 'response.incomplete': 'incomplete',
       'response.failed': 'failed', 'response.cancelled': 'cancelled' } as Record<string, string>)[event.type] : response.status;
@@ -104,6 +106,7 @@ export function responseUsageObserver(streaming: boolean) {
 export class RelayError extends Error {
   constructor(readonly status: number, readonly code: string) { super(code); }
 }
+const upstreamIdleTimeout = new RelayError(504, 'upstream_request_timeout');
 type AuthCommand = { command: string; args: string[]; timeoutMs: number; refreshMs: number };
 type Profile = { providerId: 'sub2api' | 'web_provider'; endpoint: string; envKey?: string; command?: AuthCommand };
 
@@ -328,12 +331,12 @@ function redactor(secret: string) {
 /**
  * Host-only credential relay for one isolated formalization role. It exposes a Unix HTTP
  * socket, never arbitrary networking. The trusted sandbox helper must set Host to httpHost.
- * There is no default model deadline; timeoutMs, when supplied, is a host-selected limit.
+ * The host may set a request deadline or an idle limit on upstream model output.
  */
 export async function startFormalizationRelay(input: {
   socketPath?: string; transport?: 'unix-http' | 'loopback-http'; profile: string; model: string; effort: string;
   outputSchema?: Record<string, unknown>;
-  env?: NodeJS.ProcessEnv; signal?: AbortSignal; timeoutMs?: number;
+  env?: NodeJS.ProcessEnv; signal?: AbortSignal; timeoutMs?: number; upstreamIdleTimeoutMs?: number;
   requestGate?: ModelRequestGate; onUsageIncomplete?: () => void;
   native?: NativeRelayProtocol;
 }): Promise<FormalizationRelay> {
@@ -343,6 +346,9 @@ export async function startFormalizationRelay(input: {
     throw new Error('formalization_relay_effort_invalid');
   if (input.timeoutMs !== undefined && (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs <= 0))
     throw new Error('formalization_relay_timeout_invalid');
+  const idleMs = input.upstreamIdleTimeoutMs;
+  if (idleMs !== undefined && (input.native || !Number.isSafeInteger(idleMs) || idleMs <= 0 || idleMs > 2_147_483_647))
+    throw new Error('formalization_relay_idle_timeout_invalid');
   input.signal?.throwIfAborted();
   const loopback = input.transport === 'loopback-http';
   const socketPath = !loopback && input.socketPath ? path.resolve(input.socketPath) : undefined;
@@ -418,6 +424,13 @@ export async function startFormalizationRelay(input: {
     request.once('aborted', abort); response.once('close', abort);
     const timer = input.timeoutMs === undefined ? undefined : setTimeout(() => controller.abort(), input.timeoutMs);
     timer?.unref();
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const renewIdleTimeout = () => {
+      if (idleMs === undefined || controller.signal.aborted) return;
+      if (idleTimer) { idleTimer.refresh(); return; }
+      idleTimer = setTimeout(() => controller.abort(upstreamIdleTimeout), idleMs);
+      idleTimer.unref();
+    };
     try {
       let body = await readRequest(request);
       if (input.native) body = input.native.admit(body, request.url!);
@@ -438,7 +451,9 @@ export async function startFormalizationRelay(input: {
           ...input.native?.headers, 'Content-Type': 'application/json',
           Accept: body.stream === true ? 'text/event-stream' : 'application/json' }, body: JSON.stringify(body) };
       upstreamAttempted = true;
+      renewIdleTimeout();
       const upstream = await globalThis.fetch(profile.endpoint, upstreamInit);
+      controller.signal.throwIfAborted();
       if (!upstream.ok) {
         failure = 'upstream-http-error';
         void upstream.body?.cancel().catch(() => {});
@@ -452,12 +467,19 @@ export async function startFormalizationRelay(input: {
       }
       response.writeHead(200, { 'Content-Type': contentType!, 'Cache-Control': 'no-store', Connection: 'close' });
       response.flushHeaders();
-      observer = (input.native?.observe ?? responseUsageObserver)(contentType === 'text/event-stream');
+      const streaming = contentType === 'text/event-stream';
+      observer = input.native
+        ? input.native.observe(streaming)
+        : responseUsageObserver(streaming, renewIdleTimeout);
       const filter = redactor(key);
       reader = upstream.body.getReader();
       while (true) {
         const chunk = await reader.read();
-        if (!chunk.done) observer.accept(chunk.value);
+        controller.signal.throwIfAborted();
+        if (!chunk.done) {
+          if (!streaming && chunk.value.byteLength) renewIdleTimeout();
+          observer.accept(chunk.value);
+        }
         const forwarded = filter(chunk.done ? undefined : chunk.value);
         // A Responses terminal event ends generation even if the provider keeps its
         // HTTP stream open. Flush the redactor's tail so Codex sees that full event,
@@ -471,9 +493,12 @@ export async function startFormalizationRelay(input: {
       }
       response.end();
     } catch (cause) {
-      failure ??= controller.signal.aborted ? 'request-cancelled' : 'upstream-transport-error';
-      errorResponse(response, controller.signal.aborted ? 499 : cause instanceof RelayError ? cause.status : 502,
-        controller.signal.aborted ? 'relay_request_cancelled' : cause instanceof RelayError ? cause.code : 'upstream_transport_failed');
+      const timedOut = controller.signal.reason === upstreamIdleTimeout;
+      const cancelled = controller.signal.aborted && !timedOut;
+      failure ??= cancelled ? 'request-cancelled' : 'upstream-transport-error';
+      if (timedOut) errorResponse(response, upstreamIdleTimeout.status, upstreamIdleTimeout.code);
+      else errorResponse(response, cancelled ? 499 : cause instanceof RelayError ? cause.status : 502,
+        cancelled ? 'relay_request_cancelled' : cause instanceof RelayError ? cause.code : 'upstream_transport_failed');
     } finally {
       try {
         if (upstreamAttempted) {
@@ -483,7 +508,7 @@ export async function startFormalizationRelay(input: {
           if (!receipt.complete) input.onUsageIncomplete?.();
         }
       } finally {
-        clearTimeout(timer); controller.abort();
+        clearTimeout(timer); clearTimeout(idleTimer); controller.abort();
         await reader?.cancel().catch(() => {});
         controller.signal.removeEventListener('abort', cancelRead);
         active.delete(controller); request.off('aborted', abort); response.off('close', abort);

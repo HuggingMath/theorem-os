@@ -518,7 +518,7 @@ describe('persistent conversations use saved owned task context', () => {
     finish({ answer: '迟到的旧回答' }); await tick();
     expect(inputs).toHaveLength(2);
     const context = JSON.stringify(inputs[1]!.input);
-    for (const part of [run.source, run.result.proof, 'confirmed', 'evaluated_passed']) expect(context).toContain(part);
+    for (const part of [run.source, run.result.proof, 'Statement generation has finished', 'passed independent Lean acceptance']) expect(context).toContain(part);
     expect(storedConversation(storage, conversation.id)).toMatchObject({ runId: run.id });
     expect(storedConversation(storage, conversation.id).messages.at(-1)).toMatchObject({ status: 'complete', text: '依据最新研究回答。' });
   });
@@ -671,10 +671,10 @@ describe('persistent conversations use saved owned task context', () => {
     service.create('alice', { formalizationId: formalization.id });
     const historical = service.create('alice', { runId: run.id });
     service.send('alice', historical.id, '解释这份旧证明', call); await tick();
-    const context = JSON.parse((calls[0]!.input[0] as any).content[0].text.split('Recorded task context:\n')[1].split('\n\nQuestion:')[0]);
-    expect(context.original).toBe(run.formalization.original);
-    expect(context.formalization).toBeUndefined();
-    expect(context.run).toMatchObject({ source: run.source, proof: run.result.proof, accepted: true, statementReview: 'superseded' });
+    const context = JSON.stringify(calls[0]!.input);
+    for (const fact of [run.formalization.original, run.source, run.result.proof, 'passed independent Lean acceptance',
+      'a newer statement replaced this one', 'Research guidance is unavailable']) expect(context).toContain(fact);
+    expect(context).not.toMatch(/statementReview|evaluated_passed|superseded|supportsGuidance/u);
     expect(JSON.stringify(calls[0]!.input)).not.toContain(next.source);
     expect(JSON.stringify(calls[0]!.input)).not.toContain(formalization.original);
     const delivered: string[] = [];
@@ -742,9 +742,27 @@ describe('persistent conversations use saved owned task context', () => {
     restarted.send('alice', created.id, '你刚才提到的假设是什么？', call); await tick();
     expect(calls[1]?.instructions).toBe(webConversationInstructions);
     const input = JSON.stringify(calls[1]?.input);
-    for (const text of [run.source, run.result.proof, '为什么需要引理 B？', '从假设 A 使用引理 B。', '你刚才提到的假设是什么？', 'accepted']) expect(input).toContain(text);
+    for (const text of [run.source, run.result.proof, '为什么需要引理 B？', '从假设 A 使用引理 B。', '你刚才提到的假设是什么？',
+      'passed independent Lean acceptance']) expect(input).toContain(text);
     expect(restarted.read('alice', created.id).messages).toHaveLength(6);
     expect(JSON.stringify(new WebStorage(root).getRecord(['owners', mathDigest('alice'), 'conversations', `${created.id}.json`]))).not.toContain(key);
+  });
+
+  it('gives a follow-up the stage, stopping reason and saved work without runtime fields', async () => {
+    const { service, formalization, calls } = fixture();
+    cleanups.push(() => service.close());
+    formalization.status = 'error';
+    formalization.reason = 'formalization_role_incomplete';
+    formalization.progress = { phase: 'generating', round: 2, tokens: 42 };
+    const created = service.create('alice', { formalizationId: formalization.id });
+    service.send('alice', created.id, '出了什么问题？', call);
+    await tick();
+    const sent = JSON.stringify(calls[0]?.input);
+    for (const text of [formalization.original, 'Generate Lean statement', 'did not return a complete result',
+      'No compiled Lean statement is saved', 'No linked proof run is available', '出了什么问题？']) expect(sent).toContain(text);
+    expect(sent).not.toMatch(/\b(?:status|phase|reason|round|tokens|formalization_role_incomplete|supportsGuidance|evaluated_passed)\b/u);
+    expect(calls[0]?.instructions).toContain('Do not quote internal field names');
+    expect(calls[0]?.instructions).toContain('language of the latest question');
   });
 
   it('persists failure and supports retry without using failed attempts as completed history', async () => {
@@ -861,6 +879,15 @@ describe('conversation HTTP boundary with local fake provider only', () => {
     expect(created.status).toBe(201);
     const { conversation } = await created.json() as { conversation: WebConversation };
     const route = `${base}/api/conversations/${conversation.id}`;
+    const initial = await fetch(route, { headers });
+    expect((await initial.json()).conversation).toEqual(conversation);
+    const validator = initial.headers.get('etag')!;
+    expect(validator).toMatch(/^W\/"[a-f0-9]{64}"$/u);
+    const revalidate = { ...headers, 'If-None-Match': validator };
+    const unchanged = await fetch(route, { headers: revalidate });
+    expect(unchanged.status).toBe(304);
+    expect(unchanged.headers.get('cache-control')).toContain('no-store');
+    expect(await unchanged.text()).toBe('');
     expect((await fetch(route + '/messages', { method: 'POST', headers, body: JSON.stringify({ text: '为什么', apiKey: key, turns: [] }) })).status).toBe(400);
     expect((await fetch(route + '/messages', { method: 'POST', headers, body: JSON.stringify({ text: '为什么', apiKey: key }) })).status).toBe(202);
     let saved: WebConversation = conversation;
@@ -870,6 +897,10 @@ describe('conversation HTTP boundary with local fake provider only', () => {
       await tick();
     }
     expect(saved.messages.at(-1)).toMatchObject({ status: 'complete', text: '来自本地模拟服务的回答。' });
+    const changed = await fetch(route, { headers: revalidate });
+    expect(changed.status).toBe(200);
+    expect(changed.headers.get('etag')).not.toBe(validator);
+    expect((await changed.json()).conversation).toEqual(saved);
     expect(seen[0]?.instructions).toBe(webConversationInstructions);
     expect(JSON.stringify(seen[0]?.input)).toContain(run.source);
     const identified = { text: '按发送身份恢复', apiKey: key, requestId: 'http-send-1' };
@@ -894,7 +925,7 @@ describe('conversation HTTP boundary with local fake provider only', () => {
     }
     expect(seen).toHaveLength(2);
     const other = await fetch(`${base}/api/session`), otherCookie = other.headers.get('set-cookie')!.split(';')[0]!;
-    expect((await fetch(route, { headers: { Cookie: otherCookie } })).status).toBe(404);
+    expect((await fetch(route, { headers: { Cookie: otherCookie, 'If-None-Match': validator } })).status).toBe(404);
     const otherSession = await other.json() as WebSession;
     const guidance = guidanceInput();
     expect((await fetch(route + '/guidance', { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify(guidance) })).status).toBe(403);

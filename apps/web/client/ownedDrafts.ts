@@ -1,6 +1,6 @@
 import { taskDraftStorageKey } from './draft';
 import { draftRecoveryStorageKey } from './draftRecovery';
-import type { WebSession } from '../shared';
+import { accountLogin, type WebSession } from '../shared';
 
 export const draftOwnerStorageKey = 'theorem-os.web-draft-owner.v1';
 export const submissionStorageKey = 'theorem-os.web-submission.v1';
@@ -8,7 +8,7 @@ export const researchSelectionStorageKey = 'theoremos.research.selection';
 export const researchEnvironmentStorageKey = 'theoremos.research.selection.environment';
 export const researchEntryStorageKey = 'theorem-os.research-entry.v1';
 const keys = [taskDraftStorageKey, draftRecoveryStorageKey, submissionStorageKey, researchSelectionStorageKey, researchEnvironmentStorageKey, researchEntryStorageKey];
-export const webDraftOwner = (session: WebSession) => session.draftOwner ?? (session.account ? `account:${session.account.email}` : session.csrfToken);
+export const webDraftOwner = (session: WebSession) => session.draftOwner ?? (session.account ? `account:${accountLogin(session.account)}` : session.csrfToken);
 type StorageAccess = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
 /** One owner per tab; unbound legacy drafts are discarded instead of assigned to the next login. */

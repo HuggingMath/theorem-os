@@ -406,44 +406,59 @@ try {
     for (const failure of current.checks.filter(item => !item.pass)) console.log(`FAIL ${failure.name}: ${JSON.stringify(failure.detail)}`);
     await context.close(); await fs.writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n');
   }
-  for (const asset of ['math.js', 'katex.min.css']) {
-    const current = { width: 390, theme: `recovery-${asset}`, path: '/fixture.html', checks: [] as Check[], errors: [] as string[], csp: [] as unknown[], screenshots: [] as string[] };
+  for (const { asset, persistent } of [{ asset: 'math.js' }, { asset: 'katex.min.css' }, { asset: 'math.js', persistent: true }]) {
+    const current = { width: 390, theme: `${persistent ? 'limited' : 'recovery'}-${asset}`, path: '/fixture.html', checks: [] as Check[], errors: [] as string[], csp: [] as unknown[], screenshots: [] as string[] };
     report.cases.push(current);
     const context = await browser.newContext({ viewport: { width: 390, height: 1000 }, reducedMotion: 'reduce' });
-    let failed = false;
+    const loads = new Map<string, number>();
     await context.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url());
       if (!request.url().startsWith(origin + '/') || !['GET', 'HEAD'].includes(request.method()) || url.pathname.includes('/api/')) {
         report.blocked.push(`${request.method()} ${request.url()}`); await route.abort();
-      } else if (!failed && url.pathname.endsWith('/' + asset)) {
-        failed = true; await route.fulfill({ status: 503, contentType: 'text/plain', body: 'Local fixture: temporarily unavailable' });
-      } else await route.continue();
+      } else {
+        const file = url.pathname.split('/').at(-1)!;
+        const count = (loads.get(file) ?? 0) + 1;
+        loads.set(file, count);
+        if (file === asset && (persistent || count === 1)) {
+          await route.fulfill({ status: 429, contentType: 'text/plain', body: 'Local fixture: rate limited' });
+        } else await route.continue();
+      }
     });
     const page = await context.newPage(); page.setDefaultTimeout(8000);
     page.on('pageerror', error => current.errors.push(error.message));
     try {
       await page.goto(`${origin}/fixture.html`); await page.waitForFunction(() => (window as any).fixtureReady);
-      await page.locator('#render-fixture').click(); await settledMath(page);
-      assert.equal(failed, true);
+      await Promise.all([
+        page.waitForResponse(response => response.url().endsWith('/' + asset) && response.status() === 429),
+        page.locator('#render-fixture').click(),
+      ]);
       assert.equal(await page.locator('#cases .katex').count(), 0);
-      assert.ok(await page.locator('#cases [data-math-state="source"]').count() >= cases.length);
       const original = await page.locator('#cases .math').first().elementHandle(); assert.ok(original);
-      await page.evaluate(() => (window as any).mathFixture.retryRecovery());
-      await page.waitForFunction(() => document.querySelector('#recovery .math')?.getAttribute('data-math-state') === 'ready');
-      assert.equal(await page.locator('#cases [data-math-state="source"],#cases [data-math-state="loading"]').count(), 0);
-      assert.equal(await original.evaluate(element => element === document.querySelector('#cases .math') && element.dataset.mathState === 'ready'), true);
-      for (const item of cases.filter(item => item.id.startsWith('legacy-'))) {
-        assert.equal(await page.locator(`[data-formula-case="${item.id}"] annotation`).textContent(), item.text);
-      }
-      assert.equal(await page.locator('#unknown [data-math-state="source"]').count(), 1);
-      assert.equal(await page.locator('#environment-stream [data-math-state="pending"]').count(), 1);
+      await settledMath(page);
+      assert.equal(loads.get(asset), 2, 'All formulas share one retry');
+      assert.equal(loads.get(asset === 'math.js' ? 'katex.min.css' : 'math.js'), 1, 'The asset that loaded is retained');
       assert.deepEqual(current.errors, []);
-      current.checks.push({ name: `Existing formulas recover after ${asset} becomes available, with original DOM and source preserved`, pass: true });
-      const file = path.join(output, `390-recovered-${asset}.png`);
-      await page.locator('[data-formula-case="legacy-subscripts"]').scrollIntoViewIfNeeded();
-      await page.screenshot({ path: file }); current.screenshots.push(file);
+      if (persistent) {
+        assert.equal(await page.locator('#cases [data-math-state="source"]').count(), await page.locator('#cases .math').count());
+        await page.evaluate(() => (window as any).mathFixture.retryRecovery());
+        await page.locator('#recovery [data-math-state="source"]').waitFor();
+        assert.equal(loads.get(asset), 2, 'New formulas respect the cooldown after a second failure');
+        current.checks.push({ name: 'Persistent 429 leaves formulas readable and pauses requests from new formulas', pass: true });
+      } else {
+        assert.equal(await page.locator('#cases [data-math-state="source"],#cases [data-math-state="loading"]').count(), 0);
+        assert.equal(await original.evaluate(element => element === document.querySelector('#cases .math') && element.dataset.mathState === 'ready'), true);
+        for (const item of cases.filter(item => item.id.startsWith('legacy-'))) {
+          assert.equal(await page.locator(`[data-formula-case="${item.id}"] annotation`).textContent(), item.text);
+        }
+        assert.equal(await page.locator('#unknown [data-math-state="source"]').count(), 1);
+        assert.equal(await page.locator('#environment-stream [data-math-state="pending"]').count(), 1);
+        current.checks.push({ name: `Existing formulas recover automatically after a 429 for ${asset}, with original DOM and source preserved`, pass: true });
+        const file = path.join(output, `390-recovered-${asset}.png`);
+        await page.locator('[data-formula-case="legacy-subscripts"]').scrollIntoViewIfNeeded();
+        await page.screenshot({ path: file }); current.screenshots.push(file);
+      }
     } catch (error) {
-      current.checks.push({ name: `Existing formulas recover after ${asset} becomes available`, pass: false, detail: error instanceof Error ? error.message : String(error) });
+      current.checks.push({ name: `Formula behavior after a 429 for ${asset}`, pass: false, detail: error instanceof Error ? error.message : String(error) });
     } finally { await context.close(); }
     console.log(`${current.theme}: ${current.checks.filter(item => item.pass).length}/${current.checks.length} checks passed`);
     for (const failure of current.checks.filter(item => !item.pass)) console.log(`FAIL ${failure.name}: ${JSON.stringify(failure.detail)}`);

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { isIP } from 'node:net';
 import { z } from 'zod';
 import { getLeanTaskEnvironment } from '../../src/math/leanTaskEnvironment';
 import { webLimits, type WebEnvironment, type WebEnvironmentOption, type WebWorkerProvider, type WebTemplate } from './shared';
@@ -42,6 +43,8 @@ export type WebConfig = {
   queueLimit: number;
   sessionTtlMs: number;
   providers: WebWorkerProvider[];
+  /** Operator-selected endpoints for particular accounts; keys remain bound to the account, provider and URL. */
+  accountProviderUrls?: Record<string, Record<string, string>>;
   /** Present when every workbench request needs an email login; see `auth.signup` for who may register. */
   auth?: WebAuthConfig;
   /** What one account may start per window; absent when accounts do not exist (loopback preview). */
@@ -60,6 +63,21 @@ function integer(value: string | undefined, fallback: number, min: number, max: 
   return parsed;
 }
 
+function providerBaseUrl(value: string): string {
+  const url = new URL(value), [first, second] = url.hostname.split('.').map(Number);
+  const privateIPv4 = isIP(url.hostname) === 4 && (first === 10 || first === 172 && second >= 16 && second <= 31 || first === 192 && second === 168);
+  const internalHttp = url.protocol === 'http:' && (url.hostname === 'host.docker.internal' || privateIPv4);
+  if ((!internalHttp && url.protocol !== 'https:') || url.username || url.password || url.search || url.hash)
+    throw new Error('Provider base URLs must use HTTPS or HTTP on host.docker.internal or a private IPv4 address, without credentials, queries or fragments.');
+  return url.href.replace(/\/$/, '');
+}
+
+/** Resolve only the signed-in account's operator configuration, preserving provider identity and execution settings. */
+export function webProvidersForAccount(config: Pick<WebConfig, 'providers' | 'accountProviderUrls'>, accountId?: string): WebWorkerProvider[] {
+  const urls = accountId ? config.accountProviderUrls?.[accountId] : undefined;
+  return urls ? config.providers.map(provider => urls[provider.id] ? { ...provider, baseUrl: urls[provider.id] } : provider) : config.providers;
+}
+
 export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
   const port = integer(env.THEOREMOS_WEB_PORT, 8787, 1, 65535);
   const publicUrl = new URL(env.THEOREMOS_WEB_PUBLIC_URL || `http://127.0.0.1:${port}`);
@@ -69,17 +87,19 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
     '[{"id":"sub2api","name":"Sub2API · DeepSeek","baseUrl":"http://host.docker.internal:8080/v1"},'
     + '{"id":"openai","name":"OpenAI","baseUrl":"https://api.openai.com/v1"}]')) as WebWorkerProvider[];
   if (new Set(providers.map(provider => provider.id)).size !== providers.length) throw new Error('Provider IDs must be unique.');
-  for (const provider of providers) {
-    const url = new URL(provider.baseUrl);
-    const hostGateway = url.protocol === 'http:' && url.hostname === 'host.docker.internal';
-    if ((!hostGateway && url.protocol !== 'https:') || url.username || url.password || url.search || url.hash)
-      throw new Error('Provider base URLs must use HTTPS or HTTP on host.docker.internal, without credentials, queries or fragments.');
-    provider.baseUrl = url.href.replace(/\/$/, '');
+  for (const provider of providers) provider.baseUrl = providerBaseUrl(provider.baseUrl);
+  const accountProviderUrls = env.THEOREMOS_WEB_ACCOUNT_PROVIDER_URLS
+    ? z.record(z.string().uuid(), z.record(z.string(), z.string().url().max(512))).parse(JSON.parse(env.THEOREMOS_WEB_ACCOUNT_PROVIDER_URLS))
+    : undefined;
+  for (const urls of Object.values(accountProviderUrls ?? {})) for (const [id, baseUrl] of Object.entries(urls)) {
+    if (!providers.some(provider => provider.id === id)) throw new Error('THEOREMOS_WEB_ACCOUNT_PROVIDER_URLS names an unknown provider.');
+    urls[id] = providerBaseUrl(baseUrl);
   }
   // A public address requires login unless the operator opts out explicitly; loopback previews stay anonymous.
   const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(publicUrl.hostname);
   const authMode = env.THEOREMOS_WEB_AUTH || (loopback ? 'none' : 'email');
   if (!['none', 'email'].includes(authMode)) throw new Error('THEOREMOS_WEB_AUTH must be none or email.');
+  if (accountProviderUrls && authMode !== 'email') throw new Error('THEOREMOS_WEB_ACCOUNT_PROVIDER_URLS needs THEOREMOS_WEB_AUTH=email.');
   // An allowlist is the default: one address at a time is admitted until the operator opens signup.
   const signup = (env.THEOREMOS_WEB_SIGNUP || 'allowlist') as WebSignupMode;
   if (!['allowlist', 'open'].includes(signup)) throw new Error('THEOREMOS_WEB_SIGNUP must be allowlist or open.');
@@ -136,6 +156,7 @@ export function readWebConfig(env: NodeJS.ProcessEnv = process.env): WebConfig {
     queueLimit: integer(env.THEOREMOS_WEB_QUEUE_LIMIT, 8, 1, 32),
     sessionTtlMs: 1000 * integer(env.THEOREMOS_WEB_SESSION_TTL_SECONDS,
       env.THEOREMOS_WEB_DATA_ROOT ? 30 * 24 * 60 * 60 : 60 * 60, 60, 365 * 24 * 60 * 60), providers,
+    ...(accountProviderUrls ? { accountProviderUrls } : {}),
     ...(auth ? { auth } : {}),
     ...(quota ? { quota } : {}),
     ...(clientIpHeader ? { clientIpHeader } : {}),

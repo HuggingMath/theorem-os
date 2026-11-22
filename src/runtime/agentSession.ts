@@ -59,7 +59,10 @@ export type MathAgentOptions = {
   hiddenRoots?: readonly string[];
   /** Hide present and future peer directories, then expose only this workspace below its direct parent. */
   isolatedWorkspaceParent?: string;
-  readIsolation?: { environment: LeanTaskEnvironment; packages?: 'none' | 'sources'; library?: { file: string; digest: string } };
+  readIsolation?: {
+    environment: LeanTaskEnvironment; packages?: 'none' | 'sources'; library?: { file: string; digest: string };
+    upstreamIdleTimeoutMs?: number;
+  };
   completedOutput?: {
     file: string;
     validate: (value: unknown) => void;

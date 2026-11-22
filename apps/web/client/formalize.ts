@@ -6,7 +6,7 @@ import { locale, localeTag, localizeDocument, localizeMessage, mountLocaleSwitch
 import { researchExamples } from '../problemExamples';
 import { webTaskEnvironment } from '../environment';
 import { renderFormalization } from './formalizationView';
-import { formalizationReasonText, formalizationNextStep } from './formalizationReasons';
+import { formalizationReasonText, formalizationNextStep } from '../formalizationReasons';
 import { correspondenceSpans, fragmentLadder } from './correspondence';
 import { buildLeanRows, highlightSpans } from './leanPane';
 import { backgroundReviewPending } from './backgroundReview';

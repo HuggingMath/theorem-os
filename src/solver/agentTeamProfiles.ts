@@ -5,7 +5,7 @@ import { assertMathAgentSkillsCurrent, type MathAgentSkill } from '../runtime/ag
 import { NativeAgentControlInputError } from '../runtime/nativeAgentControl';
 import { mathDigest } from '../math/mathRuntimeIo';
 import type { ContextSection } from './contextCompiler';
-import type { FrozenPersonalExpert } from './personalExperts';
+import type { FrozenPersonalExpert } from './personalExpertSchema';
 
 type Profile = { id: string; name: string; nameZh?: string; alias?: string; file: string; heading: string; anchor: string };
 

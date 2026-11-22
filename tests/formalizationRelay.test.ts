@@ -835,6 +835,67 @@ describe('host credential relay for isolated formalization roles', () => {
     expect(result.status).toBe(499); expect(signal!.aborted).toBe(true); expect(result.text).not.toContain(secret);
   });
 
+  it('reports an upstream timeout when the model never sends response headers', async () => {
+    let signal: AbortSignal | undefined;
+    vi.stubGlobal('fetch', vi.fn((_url, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      signal = init.signal as AbortSignal;
+      signal.addEventListener('abort', () => reject(new Error(secret)), { once: true });
+    })));
+    const settle = vi.fn();
+    const relay = await start({ upstreamIdleTimeoutMs: 30, requestGate: () => ({ allowed: true, settle }) });
+    const result = await send(relay);
+    expect(result.status).toBe(504);
+    expect(JSON.parse(result.text).error.code).toBe('upstream_request_timeout');
+    expect(result.text).not.toContain(secret);
+    expect(signal?.aborted).toBe(true);
+    expect(settle).toHaveBeenCalledExactlyOnceWith({ complete: false, outcome: 'failed', missingReason: 'upstream-transport-error' });
+  });
+
+  it('cuts off a stalled model stream even when the gateway sends keepalives and status', async () => {
+    const cancelled = vi.fn();
+    let keepalive: ReturnType<typeof setInterval> | undefined;
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+      start(stream) {
+        stream.enqueue(Buffer.from('data: {"type":"response.output_text.delta","delta":"First part"}\n\n'));
+        keepalive = setInterval(() => {
+          stream.enqueue(Buffer.from(': keepalive\n\ndata: {"type":"response.in_progress"}\n\n'));
+        }, 20);
+      },
+      cancel() { clearInterval(keepalive); cancelled(); },
+    }), { headers: { 'Content-Type': 'text/event-stream' } })));
+    const settle = vi.fn();
+    const relay = await start({ upstreamIdleTimeoutMs: 150, requestGate: () => ({ allowed: true, settle }) });
+    try {
+      await expect(send(relay)).rejects.toThrow(/aborted|socket hang up/u);
+      expect(cancelled).toHaveBeenCalledOnce();
+      expect(settle).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        complete: false, outcome: 'failed', missingReason: 'upstream-transport-error',
+      }));
+    } finally { clearInterval(keepalive); }
+  });
+
+  it('lets a model finish beyond the idle limit when it keeps making progress', async () => {
+    const terminal = 'data: {"type":"response.completed","response":{"id":"result","usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}\n\n';
+    let ticker: ReturnType<typeof setInterval> | undefined;
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+      start(stream) {
+        let events = 0;
+        ticker = setInterval(() => {
+          stream.enqueue(Buffer.from('data: {"type":"response.output_text.delta","delta":"step ' + ++events + '"}\n\n'));
+          if (events === 7) { clearInterval(ticker); stream.enqueue(Buffer.from(terminal)); }
+        }, 90);
+      },
+      cancel() { clearInterval(ticker); },
+    }), { headers: { 'Content-Type': 'text/event-stream' } })));
+    const relay = await start({ upstreamIdleTimeoutMs: 500 });
+    try {
+      const result = await send(relay);
+      expect(result.status).toBe(200);
+      expect(result.text.match(/response\.output_text\.delta/gu)).toHaveLength(7);
+      expect(result.text.endsWith(terminal)).toBe(true);
+    } finally { clearInterval(ticker); }
+  });
+
   it('interrupts a stalled request body at an explicitly selected deadline', async () => {
     const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
     const relay = await start({ timeoutMs: 20 });

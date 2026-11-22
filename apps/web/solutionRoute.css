@@ -1,9 +1,14 @@
 .solution-route { --solution-ink:var(--ink,#262b25); --solution-green:var(--green,#3c5229); --solution-line:var(--line,#deded4); --solution-card:var(--card,#fffefa); --solution-canvas:var(--surface,#f6f6ef); --solution-muted:var(--muted,#777568); color:var(--solution-ink); min-width:0; margin:22px 0; }
 .solution-route * { box-sizing:border-box; }
-.solution-route-heading { display:flex; justify-content:space-between; gap:16px; align-items:start; margin-bottom:16px; }
+.solution-route-heading { display:flex; flex-wrap:wrap; justify-content:space-between; gap:12px 16px; align-items:start; margin-bottom:16px; }
+.solution-route-title { flex:1 1 220px; min-width:0; }
 .solution-route-heading h3 { font-size:21px; line-height:1.45; margin:0; font-weight:500; }
 .solution-route-heading p { margin:6px 0 0; font-size:13px; line-height:1.8; color:var(--solution-muted); }
-.solution-route-heading > span { font-size:12px; white-space:nowrap; padding-top:7px; color:var(--solution-muted); }
+.solution-route-heading-actions { display:flex; align-items:center; gap:12px; margin-left:auto; }
+.solution-route-heading-actions > span { font-size:12px; white-space:nowrap; color:var(--solution-muted); }
+.solution-route-expand { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:36px; padding:7px 10px; border:1px solid var(--solution-line); border-radius:8px; background:transparent; color:var(--solution-ink); font:inherit; font-size:12px; line-height:1.5; white-space:nowrap; cursor:pointer; }
+.solution-route-expand svg { flex:none; }
+.solution-route-expand:hover { background:var(--solution-canvas); }
 .solution-route-overview { margin-bottom:22px; padding-bottom:18px; border-bottom:1px solid var(--solution-line); }
 .solution-route-overview section + section { margin-top:14px; }
 .solution-route-overview h4 { margin:0 0 5px; color:var(--solution-muted); font-size:12px; font-weight:400; }
@@ -140,7 +145,7 @@
 @media (max-width:520px) {
   .solution-route-heading h3 { font-size:19px; }
   .solution-route-heading p { font-size:12px; }
-  .solution-route-heading > span { font-size:10px; }
+  .solution-route-heading-actions > span { font-size:10px; }
   .solution-route-tools { gap:6px; }
   .solution-route-tools > div { width:100%; }
   .solution-route-viewport { height:330px; }

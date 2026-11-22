@@ -15,7 +15,7 @@
     <a class="brand" href="https://theoremos.top/" data-site="" aria-label="TheoremOS 官网"><img src="assets/mark.svg" alt="" width="26" height="26"><span>Theorem<span class="brand-os">OS</span></span></a>
     <section class="login-card" aria-labelledby="login-heading">
       <h1 id="login-heading">登录研究工作台</h1>
-      <p class="login-lead" id="login-lead">输入邮箱收验证码即可登录；第一次登录会自动创建账号。</p>
+      <p class="login-lead" id="login-lead">可使用已分配的用户名和密码，或已获准邮箱的验证码登录。</p>
       <p class="login-access" id="login-access" hidden><span>还没有内测资格？</span><a class="text-button" href="https://theoremos.top/#start" data-site="#start">申请内测</a></p>
       <div id="login-error" class="inline-error" role="alert" hidden></div>
       <label class="checkbox-option login-terms" id="terms-option" hidden><input type="checkbox" id="accept-terms"><span>我已阅读并同意<a href="terms.html" target="_blank" rel="noopener">使用条款</a>与<a href="privacy.html" target="_blank" rel="noopener">隐私说明</a></span></label>
@@ -24,8 +24,8 @@
         <button type="button" id="terms-logout" class="text-button">退出登录</button>
         <details><summary>删除账号</summary>
           <p class="field-note">不同意更新后的条款时，你仍可以退出或删除账号。删除会清除账号下的记录，无法恢复。</p>
-          <label for="terms-delete-email">输入账号邮箱确认删除</label>
-          <input id="terms-delete-email" type="email" autocomplete="off" inputmode="email" spellcheck="false">
+          <label for="terms-delete-email">输入用户名或邮箱确认删除</label>
+          <input id="terms-delete-email" type="text" autocomplete="off" spellcheck="false">
           <button type="button" id="terms-delete-account" class="button button-destructive">删除账号</button>
         </details>
       </form>
@@ -40,13 +40,14 @@
         </div>
         <p class="field-note" id="captcha-note">输入图中的 5 位数字</p>
         <button type="submit" id="send-code" class="button button-primary login-submit" disabled><i data-lucide="mail-check"></i><span>发送验证码</span></button>
-        <div class="login-secondary"><button type="button" id="use-password" class="text-button">使用密码登录</button></div>
+        <div class="login-secondary"><button type="button" id="use-password" class="text-button">使用用户名或邮箱密码登录</button></div>
       </form>
       <form id="password-step" class="login-form" novalidate hidden>
-        <label for="password-email">邮箱</label>
-        <input id="password-email" type="email" name="email" autocomplete="email" inputmode="email" maxlength="254" required spellcheck="false">
+        <label for="password-email">用户名或邮箱</label>
+        <input id="password-email" type="text" name="username" autocomplete="username" autocapitalize="none" maxlength="254" required spellcheck="false">
         <label for="login-password">密码</label>
         <input id="login-password" type="password" name="password" autocomplete="current-password" required>
+        <p class="field-note">用户名账号由管理员分配；忘记密码请联系管理员。邮箱账号可用验证码找回。</p>
         <button type="submit" id="password-submit" class="button button-primary login-submit" disabled><i data-lucide="log-in"></i><span>登录</span></button>
         <div class="login-secondary"><button type="button" id="use-code" class="text-button">使用邮箱验证码登录或找回密码</button></div>
       </form>

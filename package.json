@@ -106,6 +106,7 @@
     "test:web-classics": "bun scripts/test-web-classics.ts",
     "test:web-formalize": "bun scripts/test-web-formalize.ts",
     "test:web-chat-session": "bun scripts/test-web-chat-session.ts",
+    "test:web-rate-limit": "bun scripts/test-web-rate-limit.ts",
     "test:web-chat-mathematics": "bun scripts/test-web-chat-mathematics.ts",
     "test:web-research-login-navigation": "bun scripts/test-web-research-login-navigation.ts",
     "test:web-chat-recovery": "bun scripts/test-web-chat-recovery.ts",
