@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { collaborationDetailStorageKey } from '../apps/web/client/runAwareness';
 import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import { loadWebSample } from '../apps/web/sample';
@@ -11,7 +12,7 @@ import type { WebRunInput, WorkerMessage } from '../apps/web/shared';
 import { audit } from './web-a11y';
 import { contrastProblems } from './web-contrast';
 import { freePort, postRun, settled, startBrowser, waitForRun } from './web-scenario';
-import { openTab, revealRouteControls, selectHistoryRun, showArtifacts } from './web-ui-controls';
+import { openChatResultDetails, openTab, revealRouteControls, selectHistoryRun, showArtifacts } from './web-ui-controls';
 import { replaySample, withFailedAttempt } from './web-trajectory-fixture';
 
 const root = path.resolve(import.meta.dirname, '..'), output = path.join(root, 'out/web-roadmap');
@@ -35,7 +36,12 @@ const runner: WebRunner = { async readiness() { return { ready: true, message: '
 const service = createWebService(readWebConfig({ THEOREMOS_WEB_PORT: String(port), THEOREMOS_WEB_PUBLIC_URL: origin,
   THEOREMOS_WEB_STATIC_ROOT: path.join(root, 'out/web') }), runner, { sample: recording });
 const browser = await startBrowser(service.server, port);
-const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce', locale: 'zh-CN' });
+async function roadmapContext() {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce', locale: 'zh-CN' });
+  await context.addInitScript(key => { localStorage.setItem(key, 'full'); }, collaborationDetailStorageKey);
+  return context;
+}
+const context = await roadmapContext();
 const page = await context.newPage(), errors: string[] = [], writes: string[] = [];
 page.setDefaultTimeout(10_000);
 page.on('pageerror', error => errors.push(error.message));
@@ -47,9 +53,48 @@ const shot = async (name: string) => { await page.locator('#detail-panel').evalu
   await settled(page); await page.screenshot({ path: path.join(output, name) }); };
 const fits = () => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth
   && document.querySelector('.solution-route')!.getBoundingClientRect().right <= innerWidth + 1);
+const trajectoryRequest = /\/api\/runs\/[^/]+\/trajectory(?:\?|$)/u;
 try {
-  await page.route(/\/api\/runs\/[^/]+\/trajectory(?:\?|$)/u,
-    route => route.fulfill({ status: 503, json: { error: 'Recorded read failure' } }), { times: 1 });
+  for (const scope of ['tab', 'panel'] as const) {
+    const recoveryContext = await roadmapContext();
+    try {
+      const recovering = await recoveryContext.newPage();
+      let reads = 0;
+      await recovering.clock.install();
+      await recovering.route(trajectoryRequest, route => ++reads === 1
+        ? route.fulfill({ status: 429, json: { error: '本地路线图限流' }, headers: { 'Retry-After': '20' } })
+        : route.continue());
+      await recovering.goto(`${origin}/?sample`);
+      await openTab(recovering, 'result');
+      const overview = recovering.locator('[data-result-roadmap]');
+      await overview.locator('.trajectory-error').filter({ hasText: '本地路线图限流' }).waitFor({ timeout: 6_000 });
+      assert.equal(await overview.getByRole('button', { name: '重试', exact: true }).count(), 0, 'the panel will retry without a click');
+      await recovering.clock.pauseAt(await recovering.evaluate(() => Date.now() + 100));
+      await recovering.clock.runFor(17_000);
+      assert.equal(reads, 1, 'the route stays quiet before Retry-After expires');
+      const visible = (value: boolean) => recovering.evaluate(visible => {
+        Object.defineProperty(document, 'hidden', { configurable: true, value: !visible });
+        document.dispatchEvent(new Event('visibilitychange'));
+      }, value);
+      if (scope === 'tab') await visible(false);
+      else await recovering.locator('#close-research-output').evaluate(button => (button as HTMLButtonElement).click());
+      await recovering.clock.runFor(5_000);
+      assert.equal(reads, 1, `a hidden ${scope} does not retry at the deadline`);
+      if (scope === 'tab') await visible(true);
+      else {
+        await recovering.clock.resume();
+        await openChatResultDetails(recovering);
+        await recovering.locator('[data-research-artifact="result"]').click();
+      }
+      await overview.locator('[data-roadmap-node="evaluation"]').waitFor();
+      assert.equal(reads, 2, `the same result panel recovers automatically as soon as the ${scope} returns`);
+      assert.equal(await overview.locator('.trajectory-error').count(), 0);
+      console.log(`PASS a rate-limited roadmap waits until Retry-After and resumes when the ${scope} returns`);
+    } finally { await recoveryContext.close(); }
+  }
+
+  await page.route(trajectoryRequest,
+    route => route.fulfill({ status: 500, json: { error: 'Recorded read failure' } }), { times: 1 });
   await page.goto(`${origin}/?sample`); await page.locator('#research-conversation-panel').waitFor();
   await page.locator('body[data-view="run"]').waitFor({ state: 'attached' }); await showArtifacts(page);
   await openTab(page, 'result');
@@ -192,6 +237,8 @@ try {
     return box.top >= viewport.top && box.bottom <= viewport.bottom && box.left >= viewport.left && box.right <= viewport.right;
   }), 'the original problem is visible when the mobile roadmap opens');
   await shot('roadmap-mobile.png');
+  const closeInspector = map().locator('[data-solution-detail-close]');
+  if (await closeInspector.isVisible()) await closeInspector.click();
   await revealRouteControls(map()); await map().locator('[data-solution-zoom="reset"]').click();
   const viewport = page.locator('.solution-route-viewport');
   await viewport.scrollIntoViewIfNeeded();
@@ -223,6 +270,7 @@ try {
   assert.equal(await page.locator('[data-guidance-target]').inputValue(), 'goal_2');
   assert.equal(await page.locator('[data-guidance-text]').inputValue(), '', 'opening guidance does not send or invent a message');
   await openTab(page, 'trajectory');
+  await revealRouteControls(map());
   await map().getByRole('button', { name: '放大', exact: true }).click();
   const liveZoom = await map().locator('output').innerText();
   beforeFailure.release(); await beforePass.reached;
@@ -248,7 +296,7 @@ try {
   assert.equal(writes.length, 1, 'only the explicit local replay creates a run');
   console.log('PASS recorded live work updates failed → passed → integrated → accepted, preserving selection and zoom');
   await fs.writeFile(path.join(output, 'report.json'), JSON.stringify({ status: 'passed', paidModelCalls: false,
-    checks: ['default graph', 'recorded branches and hint', 'failed retry', 'independent acceptance', 'saved check feedback', 'keyboard', 'zoom',
+    checks: ['default graph', 'recorded branches and hint', 'failed retry', 'rate-limit recovery', 'independent acceptance', 'saved check feedback', 'keyboard', 'zoom',
       'readable default size', 'theorem names and propositions', 'expanded canvas and keyboard close', 'view memory', 'source panel cleanup',
       'dark theme', 'mobile panning', 'read-only browsing', 'task and statement review navigation', 'task guidance draft', 'feature command search',
       'recorded live progression', 'live selection and zoom'], errors }, null, 2) + '\n');

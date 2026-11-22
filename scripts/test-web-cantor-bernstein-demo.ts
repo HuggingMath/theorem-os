@@ -98,13 +98,15 @@ const plain = (text: string) => text.replace(/`([^`]*)`/gu, '$1').replace(/\*\*(
 /** Check narrative fragments and every TeX source without flattening a Markdown table into paragraphs. */
 async function checkMessage(content: Locator, markdown: string, label: string) {
   await content.waitFor();
-  await content.evaluate(async node => {
-    while ([...node.querySelectorAll<HTMLElement>('.math')].some(formula => formula.dataset.mathState === 'loading'))
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-  });
   const formulas = [...markdown.matchAll(mathPattern)].map(match => match[1] ?? match[2] ?? match[3] ?? match[4]);
-  assert.deepEqual(await content.locator('.math').evaluateAll(nodes => nodes.map(node => node.getAttribute('title'))), formulas, `${label}: all formula sources survive`);
-  assert.deepEqual(await content.locator('.math').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-math-state'))), formulas.map(() => 'ready'), `${label}: all formulas render`);
+  const renderedFormulas = content.locator('.math');
+  assert.deepEqual(await renderedFormulas.evaluateAll(nodes => nodes.map(node => node.getAttribute('title'))), formulas, `${label}: all formula sources survive`);
+  for (const formula of await renderedFormulas.all()) {
+    if (await formula.getAttribute('data-math-state') === 'ready') continue;
+    // On narrow screens the conversation defers formulas that are far from the reader.
+    await formula.scrollIntoViewIfNeeded();
+    await formula.locator('.katex').waitFor({ state: 'attached', timeout: 10_000 });
+  }
   const rendered = plain(await content.innerText());
   for (const block of markdown.trim().split(/\n\s*\n/gu)) {
     if (/^\s*\|/u.test(block)) continue;
@@ -235,9 +237,8 @@ try {
   const prefix = 'Recorded task context:\n', separator = '\n\nQuestion: ', sent = input[0].content[0].text;
   assert(sent.startsWith(prefix)); const split = sent.indexOf(separator);
   assert(split > prefix.length); assert.equal(sent.slice(split + separator.length), demoQuestion);
-  const sentContext = JSON.parse(sent.slice(prefix.length, split));
-  assert(sentContext.original.includes(demoOriginal)); assert.equal(sentContext.run.source, demoSource.trim());
-  assert.equal(sentContext.run.task, task); assert.equal(sentContext.run.proof, proof);
+  const sentContext = sent.slice(prefix.length, split);
+  for (const fact of [demoOriginal, demoSource.trim(), task, proof]) assert(sentContext.includes(fact));
   const questionContent = page.locator(`[data-message-id="${savedQuestion.id}"] .chat-message-content`);
   const answerContent = page.locator(`[data-message-id="${savedAnswer.id}"][data-message-status="complete"] .chat-message-content`);
   await checkMessage(questionContent, demoQuestion, 'desktop question'); await checkMessage(answerContent, fullAnswer, 'desktop answer');

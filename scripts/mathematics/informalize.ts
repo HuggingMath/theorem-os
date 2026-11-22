@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseFlags, required } from './arguments';
 import { withWorkflowHarness, workflowHarnessFlags } from './workflowHarness';
-import { INFORMALIZATION_ALIGNMENT, INFORMALIZATION_EXPLANATION_POLICY, INFORMALIZATION_OUTLINE_POLICY, informalizationDigest, prepareInformalization, readInformalizationArtifact,
+import { INFORMALIZATION_ALIGNMENT, INFORMALIZATION_EXPLANATION_POLICIES, INFORMALIZATION_EXPLANATION_POLICY, INFORMALIZATION_OUTLINE_POLICY, informalizationDigest, prepareInformalization, readInformalizationArtifact,
   readInformalizationRequest, informalizationRequestSchema, type InformalizationRequest } from '../../src/math/informalization';
 import { leanSourceSlice } from '../../src/math/informalizationExtraction';
 import { lineEnds } from '../../src/math/informalizationAlignment';
@@ -84,9 +84,10 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
   }
   const alignment = flags.get('alignment') ?? INFORMALIZATION_ALIGNMENT;
   if (alignment !== INFORMALIZATION_ALIGNMENT && alignment !== 'none') throw new Error(`--alignment must be ${INFORMALIZATION_ALIGNMENT} or none`);
-  const explanationPolicy = flags.get('explanation-policy') ?? INFORMALIZATION_EXPLANATION_POLICY;
-  if (explanationPolicy !== INFORMALIZATION_EXPLANATION_POLICY && explanationPolicy !== 'none')
-    throw new Error('--explanation-policy must be ' + INFORMALIZATION_EXPLANATION_POLICY + ' or none');
+  const policyFlag = flags.get('explanation-policy') ?? INFORMALIZATION_EXPLANATION_POLICY;
+  const policy = informalizationRequestSchema.shape.explanationPolicy.safeParse(policyFlag === 'none' ? undefined : policyFlag);
+  if (!policy.success) throw new Error('--explanation-policy must be ' + [...INFORMALIZATION_EXPLANATION_POLICIES, 'none'].join(', '));
+  const explanationPolicy = policy.data;
   const outlinePolicy = flags.get('outline-policy') ?? INFORMALIZATION_OUTLINE_POLICY;
   if (outlinePolicy !== INFORMALIZATION_OUTLINE_POLICY && outlinePolicy !== 'none')
     throw new Error('--outline-policy must be ' + INFORMALIZATION_OUTLINE_POLICY + ' or none');
@@ -102,7 +103,7 @@ function prepare(flags: ReadonlyMap<string, string>, directory: string) {
     proofId: flags.get('proof-id') ?? defaultProofId(target),
     proofFile, projectRoot: path.resolve(flags.get('project-root') ?? path.dirname(proofFile)),
     target, environment, statement, language, writer,
-    ...explanationPolicy === 'none' ? {} : { explanationPolicy },
+    ...explanationPolicy ? { explanationPolicy } : {},
     ...outlinePolicy === 'none' ? {} : { outlinePolicy },
     ...flags.has('formalization') ? { formalizationArtifact: formalizationArtifact(required(flags, 'formalization')) } : {},
     ...alignment === 'none' ? {} : { alignment },
@@ -187,7 +188,7 @@ export async function informalize(argv: string[]): Promise<number> {
       + '    the proof must keep its declarations; excludes --statement-file)\n'
       + `  [--alignment ${INFORMALIZATION_ALIGNMENT}|none] (default ${INFORMALIZATION_ALIGNMENT}: phrases paired with Lean, steps checked against goals)\n`
       + '  [--language zh|en] [--model deepseek-flash] [--effort max] [--profile DIR] [--codex FILE] [--harness codex|claude-code|opencode|cli --harness-profile DIR --harness-executable FILE] [--auditors 2]\n'
-      + '  [--explanation-policy mathematical-steps-v1|none] (default mathematical-steps-v1: reasons, conditions and connected mathematical steps)\n'
+      + '  [--explanation-policy mathematical-steps-v1|mathematical-steps-v2|none] (default mathematical-steps-v2: connected reasoning in ordinary mathematical notation)\n'
       + '  [--outline-policy proof-outline-v1|none] (default proof-outline-v1: a one-sentence summary per declaration and a short route to the target, both audited)\n'
       + '  [--max-rounds-per-batch 6] [--max-units-per-batch 12] [--max-batch-source-bytes 60000]\n'
       + '  [--max-run-seconds 0] [--max-turn-seconds 0] [--max-compile-seconds 0] [--max-total-tokens 0] (0 = unlimited)\n'

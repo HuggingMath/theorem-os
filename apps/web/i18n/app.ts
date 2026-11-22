@@ -433,6 +433,7 @@ export const app: Record<string, string> = {
   "研究任务已载入": "Research task loaded",
   "分享链接已复制": "Share link copied",
   "网络已断开，未提交内容已保留。": "Network disconnected; unsubmitted work was kept.",
+  "研究记录暂未更新": "Research history hasn’t refreshed yet",
   "活动记录": "Activity log",
   "跟随最新活动；向下阅读时自动暂停": "Follow the latest activity; pauses when you scroll down to read",
   "跟随最新": "Follow latest",

@@ -137,6 +137,40 @@ try {
     }
     console.log('PASS conversation history appears while formalization records are still loading');
 
+    const startContext = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } });
+    try {
+      for (const fault of ['network', 'body', 'gateway', 'stalled'] as const) {
+        const startup = await startContext.newPage();
+        const firstAttempt = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+        let reads = 0;
+        await startup.clock.install();
+        await startup.route(/\/api\/session\?runs$/u, async route => {
+          if (++reads !== 1) return route.continue();
+          firstAttempt.resolve();
+          if (fault === 'network') return route.abort('connectionreset');
+          if (fault === 'body') return route.fulfill({ contentType: 'application/json', body: '{"auth":' });
+          if (fault === 'gateway') return route.fulfill({ status: 503, json: { error: 'Local fixture unavailable' } });
+          await release.promise;
+          return route.abort('failed').catch(() => {});
+        });
+        try {
+          await startup.goto(origin, { waitUntil: 'domcontentloaded' });
+          await firstAttempt.promise;
+          if (fault === 'stalled') {
+            await startup.locator('#workbench-connecting').waitFor();
+            await startup.clock.runFor(6500);
+          }
+          await startup.locator('#formalize-original:enabled').waitFor({ timeout: 3500 });
+          assert.equal(reads, 2, `Startup recovers from a ${fault} failure with one replacement request`);
+          assert.equal(await startup.locator('#global-notice').isHidden(), true);
+        } finally {
+          release.resolve();
+          await startup.close();
+        }
+      }
+    } finally { await startContext.close(); }
+    console.log('PASS initial connection recovers from a dropped fetch, truncated JSON, 503, or stalled first response');
+
     const retryContext = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1440, height: 900 } });
     const retry = await retryContext.newPage();
     await retry.route('**/chunks/runViews-*.js', route => route.abort('failed'));

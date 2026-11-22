@@ -11,7 +11,7 @@ import { locale, localizeText, t } from '../../i18n';
 import { detailLevel, onDetailLevel } from '../detailLevel';
 import type { SolveProcess } from '../solveProcess';
 import type { ThinkingStep } from '../thinkingProcess';
-import { formalizationReasonText, formalizationNextStep } from '../formalizationReasons';
+import { formalizationPhaseText, formalizationReasonText, formalizationNextStep } from '../../formalizationReasons';
 import { Icon } from './Icon';
 import { ChatMessageContent } from './ChatMessageContent';
 import { Rich, RichProse } from '../richText';
@@ -70,6 +70,7 @@ export type ChatThreadProps = {
   planDecision?: { approval?: PlanApprovalProps; connected: boolean; onReview(): void; onEdit(): void; onApprove(): void };
   startingResearch?: boolean;
   onRetry?(): void;
+  onRetryAnswer?(message: WebConversationMessage): void;
   onConfigure?(): void;
   onFirstExample?(): void;
   startGuide?: { onTemplate(): void; onLean(): void; ready: boolean };
@@ -137,23 +138,19 @@ function PlanDecision(props: ChatThreadProps & { simple: boolean }) {
 }
 
 /** Where a formalization stopped, why, what was kept and what the reader can do; the code is the diagnostic. */
-function FormalizationFailure({ item }: { item: WebFormalization }) {
-  const code = item.researchError || item.reason!;
-  const phases: Record<string, string> = { queued: t("等待开始"), preparing: t("准备证明环境"), planning: t("理解题目与定义"),
-    generating: t("生成 Lean 陈述"), compiling: t("检查 Lean 陈述"), translating: t("核对自然语言与 Lean"),
-    reviewing: t("审核原题一致性"), finishing: t("整理形式化结果") };
-  const stage = item.researchError ? t('启动证明研究') : phases[item.progress?.phase ?? ''] ?? t('形式化');
-  const kept = item.report || item.compiled ? t('已保存这次生成的 Lean 陈述与检查记录，可在“原题 / Lean”中查看。') : t('没有保存可用的 Lean 陈述。');
-  return <details class="chat-task-details" data-formalization-failure open>
-    <summary>{t("查看详情")}</summary>
+function FormalizationFailure({ item, code, onOriginal }: { item: WebFormalization; code: string; onOriginal(): void }) {
+  const stage = item.researchError ? t('启动证明研究') : formalizationPhaseText(item.progress?.phase);
+  const kept = Boolean(item.report || item.compiled);
+  return <div class="chat-task-failure" data-formalization-failure>
+    <p>{formalizationReasonText(code)}</p>
     <dl>
+      <dt>{t('错误代码')}</dt><dd><code translate={false}>{code}</code></dd>
       <dt>{t('停止阶段')}</dt><dd>{stage}</dd>
-      <dt>{t('原因')}</dt><dd>{formalizationReasonText(code)}</dd>
-      <dt>{t('保留成果')}</dt><dd>{kept}</dd>
-      <dt>{t('下一步')}</dt><dd>{formalizationNextStep(code)}</dd>
-      <dt>{t('错误代码')}</dt><dd><code>{code}</code></dd>
+      <dt>{t('保留成果')}</dt><dd>{kept ? <button type="button" class="text-button" data-research-artifact="original"
+        onClick={onOriginal}>{t('查看原题与 Lean 陈述')}</button> : t('没有保存可用的 Lean 陈述。')}</dd>
     </dl>
-  </details>;
+    <p class="chat-failure-next">{formalizationNextStep(code)}</p>
+  </div>;
 }
 
 function TaskMessage(props: ChatThreadProps) {
@@ -184,31 +181,27 @@ function TaskMessage(props: ChatThreadProps) {
   const direct = reviewMode === 'direct' || item?.report?.semanticReview === 'not-performed';
   const formalProgress = item && formalizationProgress(item, props.solve?.process);
   const backgroundReview = item?.backgroundReview ?? item?.report?.backgroundReview;
-  const failed = run ? isFaultedRun(run) || isRejectedRun(run) : !!item && (['error', 'exhausted'].includes(item.status) || !!item.researchError);
-  const phaseNames: Record<string, string> = {
-    queued: t("等待开始"), preparing: t("准备证明环境"),
-    planning: t("理解题目与定义"), generating: t("生成 Lean 陈述"),
-    compiling: t("检查 Lean 陈述"), translating: t("核对自然语言与 Lean"),
-    reviewing: t("审核原题一致性"), finishing: t("整理形式化结果"),
-  };
+  const formalizationFailed = !!item && (['error', 'exhausted'].includes(item.status) || !!item.researchError);
+  const failed = run ? isFaultedRun(run) || isRejectedRun(run) : formalizationFailed;
+  const failureCode = formalizationFailed ? item.researchError || item.reason : undefined;
+  const originalInFailure = !!failureCode && !!(item?.report || item?.compiled);
+  const formalizationPhase = formalizationPhaseText(item?.progress?.phase ?? 'queued');
   const title = run ? accepted ? acceptedTitle(run) : proofActive ? runProgress(run).phaseLabel
-    : reviewActive ? phaseNames[item?.progress?.phase ?? 'queued']
+    : reviewActive ? formalizationPhase
     : run.status === 'cancelled' ? t('已取消') : failed ? t('运行失败') : stoppedLabel(run)
-    : failed ? t("形式化未完成") : item?.status === 'cancelled' ? t('已取消')
-      : active ? formalProgress?.revising ? t('根据 Lean 报错修改陈述') : phaseNames[item?.progress?.phase ?? 'queued']
+    : failed ? item?.researchError ? t('证明研究未能启动') : t("形式化未完成") : item?.status === 'cancelled' ? t('已取消')
+      : active ? formalProgress?.revising ? t('根据 Lean 报错修改陈述') : formalizationPhase
         : item?.status === 'review' ? direct ? t('Lean 代码已就绪') : t("陈述待核对")
           : item?.status === 'confirmed' ? direct ? t('Lean 代码已就绪') : t("陈述已确认") : props.missingTask ? t('关联任务记录已删除') : t("正在读取任务");
   const description = props.missingTask ? t('原题和对话仍保留，可以修改题目后重新发送。') : run ? acceptance?.description ?? resultDescription(run) : failed
-    ? item?.researchError ? t("Lean 陈述已生成，但证明研究未能启动。")
-      : item?.reason ? `${formalizationReasonText(item.reason)} ${formalizationNextStep(item.reason)}`
-        : t("本次未能完成原题形式化，请查看详情中的原因和下一步。")
+    ? t('本次生成未完成。')
     : item?.status === 'cancelled' ? t("任务已停止，已保存的消息仍可查看。")
       : active && item?.compiled ? t('Lean 陈述已编译，可以查看和下载；原题含义正在后台审核。')
         : formalProgress?.description ?? t("陈述检查不代表证明通过，最终结果以 Lean 独立验收为准。");
   const proof = run?.result?.proof || run?.artifact?.source;
   const solve = props.solve;
   const planTasks = solve?.process.tasks ?? [];
-  const showPlanProgress = planTasks.length > 0 && !props.planDecision?.approval && props.onOpenLivePlan;
+  const showPlanProgress = proofActive && planTasks.length > 0 && !props.planDecision?.approval && props.onOpenLivePlan;
   const hasSource = solve?.process.current !== undefined || solve?.process.checks.some(check => check.source !== undefined);
   const liveAvailable = Boolean(solve && (solve.process.active || hasSource));
   const detailedAcceptance = simple && accepted && !props.missingTask;
@@ -239,7 +232,8 @@ function TaskMessage(props: ChatThreadProps) {
       {simple && solve && active && props.onCancelTask && <button type="button" class="text-button" data-research-stop onClick={props.onCancelTask}>{t("停止解题")}</button>}
       </div>
       {!simple && metadata}
-      {(!statementDecision || failed) && !detailedAcceptance && <p class="research-conversation-description">{description}</p>}
+      {(run || !failureCode) && (!statementDecision || failed) && !detailedAcceptance && <p class="research-conversation-description">{description}</p>}
+      {item && failureCode && <FormalizationFailure item={item} code={failureCode} onOriginal={() => props.onArtifact('original')} />}
       {!run && item?.status === 'queued' && item.queue && <p class="research-conversation-latest" data-formalization-queue>{t('排队第 {0} 位 · 前方 {1} 项等待 · {2} 项执行中', item.queue.position, item.queue.ahead, item.queue.running)}</p>}
       {item?.compiled && reviewActive && <p class="chat-statement-verdict" data-chat-background-review role="status">
         {accepted ? t('候选 Lean 陈述已证明，原题含义仍在后台审核。') : proofActive ? t('证明与原题含义审核同时进行，已有代码可以立即使用。')
@@ -282,12 +276,11 @@ function TaskMessage(props: ChatThreadProps) {
       {solve && <ThinkingProcess process={solve.process} time={solve.time} onCheck={solve.onCheck} onQuestion={props.onQuestion} />}
       {solve && <SolveProcessView process={solve.process} wide={solve.wide} time={solve.time} onCheck={solve.onCheck}
         loading={solve.loading} failed={solve.failed} onRetry={solve.onRetry} />}
-      {item && (['error', 'exhausted'].includes(item.status) || item.researchError) && (item.reason || item.researchError) && <FormalizationFailure item={item} />}
       {liveAvailable && !active && <button type="button" class="text-button" data-research-artifact="live" onClick={() => props.onArtifact('live')}>
         <Icon name="panel-right" />{tx('查看工作区', 'View workspace')}</button>}
-      {(run || item?.report || item?.compiled) && <div class="research-conversation-artifacts" role="group" aria-label={t('结果')}>
+      {(run && !accepted || !originalInFailure && (run || item?.report || item?.compiled)) && <div class="research-conversation-artifacts" role="group" aria-label={t('结果')}>
       {run && !accepted && <button type="button" data-research-artifact="roadmap" onClick={() => props.onArtifact('roadmap')}><Icon name="network" /><span>{t('路线图')}</span><Icon name="arrow-up-right" /></button>}
-      <button type="button" data-research-artifact="original" onClick={() => props.onArtifact('original')}><Icon name="languages" /><span>{t('原题')} / Lean</span><Icon name="arrow-up-right" /></button>
+      {!originalInFailure && <button type="button" data-research-artifact="original" onClick={() => props.onArtifact('original')}><Icon name="languages" /><span>{t('原题')} / Lean</span><Icon name="arrow-up-right" /></button>}
       {run && !accepted && <button type="button" data-research-artifact="source" disabled={!proof} onClick={() => props.onArtifact('source')}><Icon name="file-code-2" /><span>{t('候选源码')}</span><Icon name="arrow-up-right" /></button>}
       </div>}
       <div class="chat-result-more-actions">{resultActions}</div>
@@ -347,7 +340,7 @@ function ChatThread(props: ChatThreadProps & { readingArea: HTMLElement }) {
     </div>;
   }
   if (!conversation) return <div class="chat-start">
-    {loading ? <p role="status">{t("正在读取对话…")}</p> : <h1>{t("今天想证明什么？")}</h1>}
+    {loading ? <p role="status">{t("正在读取对话…")}</p> : !error && <h1>{t("今天想证明什么？")}</h1>}
     {errorNotice}
   </div>;
   return <div class="chat-messages" data-conversation={conversation.id}>
@@ -365,7 +358,7 @@ function ChatThread(props: ChatThreadProps & { readingArea: HTMLElement }) {
         {message.kind === 'text' && message.status === 'pending' && <p class="chat-answer-state" role="status"><span class="spinner" />{message.text ? t('正在回答…') : t("正在思考…")}</p>}
         {message.status === 'interrupted' && <p class="chat-answer-state">{t("已停止回答")}</p>}
         {message.kind === 'text' && message.status === 'error' && <div class="chat-error" role="alert"><p>{localizeText(message.error || t("回答未完成，请重试。"))}</p>
-          {props.onRetry && conversation.messages.at(-1)?.id === message.id && <button class="text-button" type="button" onClick={props.onRetry}>{t("重新回答")}</button>}</div>}
+          {props.onRetryAnswer && conversation.messages.at(-1)?.id === message.id && <button class="text-button" type="button" onClick={() => props.onRetryAnswer?.(message)}>{t("重新回答")}</button>}</div>}
         {message.truncated && <p class="chat-answer-state">{t("回答已达到长度上限，可继续追问。")}</p>}
         {message.kind === 'text' && message.role === 'user' && message.id !== conversation.messages[0]?.id && props.onGuidance
           && <button type="button" class="text-button chat-message-action" data-chat-use-guidance onClick={() => props.onGuidance?.(message.text)}>{t('转为研究指导')}</button>}

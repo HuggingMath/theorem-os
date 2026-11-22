@@ -349,6 +349,14 @@ describe('host checks', () => {
     expect(mathDigest(informalizationRoleInstructions('audit', alignment))).toBe(auditor);
   });
 
+  it('preserves the original mathematical role contracts for already prepared jobs', () => {
+    const originalPolicy = 'mathematical-steps-v1';
+    expect(mathDigest(informalizationRoleInstructions('write', INFORMALIZATION_ALIGNMENT, originalPolicy, INFORMALIZATION_OUTLINE_POLICY)))
+      .toBe('b2aff502967bce1e99afbfa97c955547cb1220a4cdc81409ed82f60742bc070a');
+    expect(mathDigest(informalizationRoleInstructions('audit', INFORMALIZATION_ALIGNMENT, originalPolicy, INFORMALIZATION_OUTLINE_POLICY)))
+      .toBe('12ffe01902272d80dbe3a0e4f3185d780a27e3cad1d9cbe3889790e42bb95a81');
+  });
+
   it('binds the opted-in explanation policy to writer and auditor inputs without changing their output shape', () => {
     const context = { outline, batch: batchesOf()[1]!, accepted: new Map<string, InformalizationSection>(),
       sources: informalizationSources(), language: 'zh' as const };
@@ -369,7 +377,7 @@ describe('host checks', () => {
     expect(informalizationAuditRejections(auditCurrent, review(auditCurrent))).toEqual([]);
     for (const role of ['write', 'audit'] as const) {
       expect(informalizationRoleInstructions(role, undefined, current.explanationPolicy)).not.toBe(informalizationRoleInstructions(role));
-      expect(informalizationRoleInstructions(role, undefined, current.explanationPolicy)).toContain('mathematical-steps-v1');
+      expect(informalizationRoleInstructions(role, undefined, current.explanationPolicy)).toContain('mathematical-steps-v2');
     }
   });
 });

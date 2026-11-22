@@ -413,7 +413,9 @@ try {
     assert.equal(writes.filter(path => path === '/api/runs').length, 0, 'Browser does not silently launch a new proof for follow-up text');
     assert.equal((await conversation(page)).id, id);
     assert.ok(JSON.stringify(providerCalls.at(-1)?.input).includes(webFormalizationStatement));
-    assert.ok(providerCalls.at(-1)?.input[0].content[0].text.includes(`"accepted":${width === 390}`));
+    const taskContext = providerCalls.at(-1)?.input[0].content[0].text;
+    assert.match(taskContext, width === 390 ? /passed independent Lean acceptance/u : /ended without an independently accepted proof/u);
+    assert.doesNotMatch(taskContext, /evaluated_passed|supportsGuidance|resultStatus/u);
     assert.equal(await page.locator('#formalize-key').inputValue(), 'sk-disposable-browser-fixture', 'The key remains in memory for continuous conversation');
     assert.equal(await page.evaluate(() => JSON.stringify([localStorage, sessionStorage]).includes('sk-disposable-browser-fixture')), false);
     let releaseRead: (() => void) | undefined, readHeld = false, readDelivered = false;
@@ -498,6 +500,64 @@ try {
     await screenshot(page, `conversation-${width}.png`);
     mark(`${width}px: home, new chat, history, browser back, refresh and per-session drafts`);
 
+    if (width === 1440) {
+      const input = page.locator('#formalize-original');
+      const homeDraft = '一份尚未发送的新题草稿';
+      const row = page.locator(`[data-chat-row="${id}"] .chat-history-item`);
+      const thread = page.locator(`[data-conversation="${id}"]`);
+      const readError = page.locator('#formalize-error');
+      const threadPath = `**/api/conversations/${id}`;
+      const writeCount = writes.length;
+      await page.locator('#workbench-home').click(); await page.waitForURL(origin + '/');
+      await input.fill(homeDraft);
+      await openChatHistory(page);
+
+      const read = Promise.withResolvers<string | undefined>(), release = Promise.withResolvers<void>();
+      await page.route(threadPath, async route => {
+        read.resolve(route.request().headers()['if-none-match']);
+        await release.promise;
+        await route.continue();
+      }, { times: 1 });
+      const validated = page.waitForResponse(response => response.url().endsWith(`/api/conversations/${id}`));
+      try {
+        await row.click();
+        await thread.getByText(followup, { exact: true }).waitFor({ timeout: 2500 });
+        assert.equal(await input.inputValue(), draft, 'The requested draft is editable before the server replies');
+        assert.ok(await read.promise, 'Reopening a conversation checks the revision already in memory');
+      } finally { release.resolve(); }
+      assert.equal((await validated).status(), 304, 'An unchanged conversation needs no response body');
+      mark('returning to a conversation restores its messages and draft before the server response');
+
+      await page.locator('#workbench-home').click(); await page.waitForURL(origin + '/');
+      await openChatHistory(page);
+      await page.route(threadPath, route => route.fulfill({
+        status: 500, json: { error: '本地测试：对话读取暂时失败' },
+      }), { times: 1 });
+      await row.click(); await readError.filter({ hasText: '本地测试：对话读取暂时失败' }).waitFor();
+      assert.equal(await page.locator('#research-chat-thread h1').count(), 0);
+      assert.equal(await input.inputValue(), draft);
+      assert.equal(await thread.getByText(followup, { exact: true }).isVisible(), true, 'Brief failures keep the last available messages readable');
+      await readError.waitFor({ state: 'detached', timeout: 5000 });
+
+      await page.locator('#workbench-home').click(); await page.waitForURL(origin + '/');
+      assert.equal(await input.inputValue(), homeDraft);
+      await openChatHistory(page);
+      await page.route(threadPath, route => route.fulfill({
+        status: 404, json: { error: '本地测试：找不到对话' },
+      }), { times: 1 });
+      await row.click(); await readError.filter({ hasText: '本地测试：找不到对话' }).waitFor();
+      assert.equal(await thread.count(), 0, 'A missing conversation is removed from the preview');
+      await readError.getByRole('button', { name: '重试', exact: true }).click();
+      await expectMessage(page, followup);
+      assert.equal(await input.inputValue(), draft);
+      await page.locator('#workbench-home').click(); await page.waitForURL(origin + '/');
+      assert.equal(await input.inputValue(), homeDraft, 'Loading a conversation never replaces the home draft');
+      await page.goBack(); await expectMessage(page, followup);
+      assert.equal(await input.inputValue(), draft);
+      assert.equal(writes.length, writeCount, 'Automatic and explicit history reads send no writes');
+      mark('temporary history failures recover promptly and manual retries retain the selected chat and both drafts');
+    }
+
     // In a conversation the composer is at the bottom, so its settings open upwards, above the settings button and on screen.
     const settings = page.locator('#formalize-settings'), settingsOpen = await settings.evaluate(details => (details as HTMLDetailsElement).open);
     await settings.evaluate(details => { (details as HTMLDetailsElement).open = true; });
@@ -527,6 +587,28 @@ try {
       assert.equal(formalizations.length, 1); assert.equal(runs.length, 1);
       await expectMessage(page, '已停止');
       mark('failed send retains draft; stop interrupts the answer without starting or cancelling proof tasks');
+
+      const formalizationId = (await conversation(page)).formalizationId;
+      assert.ok(formalizationId);
+      const taskPath = `**/api/formalizations/${formalizationId}`, listPath = '**/api/formalizations';
+      let releaseReads!: () => void, taskReads = 0, listReads = 0;
+      const heldReads = new Promise<void>(resolve => { releaseReads = resolve; });
+      await page.route(taskPath, async route => { taskReads++; await heldReads; await route.continue(); });
+      await page.route(listPath, async route => { listReads++; await heldReads; await route.continue(); });
+      try {
+        const streaming = await openStream(page, '请继续解释证明中的归纳步骤。');
+        await eventually(() => taskReads > 0 && listReads > 0, 'The task and record list reads are both pending');
+        const partial = '任务和历史仍在加载时显示这段回答。';
+        streaming.reply.delta(partial);
+        await streaming.message.getByText(partial, { exact: true }).waitFor({ timeout: 4000 });
+        assert.deepEqual([taskReads, listReads], [1, 1], 'Polling the answer does not start duplicate task or list reads');
+        await page.locator('#chat-stop').click();
+        await streaming.message.and(page.locator('[data-message-status="interrupted"]')).waitFor({ timeout: 4000 });
+        assert.equal((await conversation(page)).messages.at(-1)?.text, partial);
+        mark('a reply shows incoming text and can be stopped while the task and record lists are still loading');
+      } finally {
+        releaseReads(); await page.unroute(taskPath); await page.unroute(listPath);
+      }
     }
     {
       const { reply, message } = await openStream(page, '请给出带公式和完整 Lean 示例的证明说明。');
@@ -605,7 +687,6 @@ try {
         continueCalls++; resumed = true; return route.fulfill({ json: { formalization: saved } });
       });
       await page.reload(); await page.locator('[data-research-continue]').waitFor();
-      await openChatResultDetails(page);
       assert.match(await page.locator('[data-formalization-failure]').innerText(), /继续证明/u);
       await page.locator('[data-research-continue]').click();
       await page.locator('#formalize-key').waitFor(); await page.locator('#formalize-key').fill('sk-disposable-browser-fixture');
@@ -693,20 +774,21 @@ try {
       assert.equal(await page.locator('[data-chat-running]').locator(historyRow).count(), 0, 'The conversation moves to its new group after editing');
       if (width <= 850) await page.locator('#close-history').click();
       mark(`${width}px: history keeps the title edit and keyboard focus while a background task changes status`);
-      await openChatResultDetails(page);
       const details = page.locator('[data-formalization-failure]');
       await details.waitFor();
+      assert.equal(await page.locator('[data-chat-result-more]').evaluate((element: HTMLDetailsElement) => element.open), false);
       const rows = await details.locator('dt').evaluateAll(nodes => nodes.map(node => [node.textContent,
         node.nextElementSibling?.textContent]));
-      assert.deepEqual(rows, [['停止阶段', '生成 Lean 陈述'], ['原因', '已用完本次 Token 预算，尚未完成形式化。'],
-        ['保留成果', '没有保存可用的 Lean 陈述。'], ['下一步', '先核对本次用量和预算；如需再试，可重新发送原题。不会自动重试，也不会自动增加预算。'],
-        ['错误代码', 'formalization_token_limit']]);
+      assert.deepEqual(rows, [['错误代码', 'formalization_token_limit'], ['停止阶段', '生成 Lean 陈述'],
+        ['保留成果', '没有保存可用的 Lean 陈述。']]);
+      assert.match(await details.innerText(), /已用完本次 Token 预算，尚未完成形式化。/u);
+      assert.match(await details.innerText(), /先核对本次用量和预算/u);
       assert.equal(runs.length, proofs, 'A failed formalization starts no proof');
       // With no proof run, the page is named after the conversation, as a run would name it.
       const named = [...(await conversation(page)).title];
       const pageTitle = `${named.length > 30 ? `${named.slice(0, 29).join('')}…` : named.join('')} · TheoremOS`;
       assert.equal(await page.title(), pageTitle, 'A conversation without a run names the page');
-      await page.reload(); await openChatResultDetails(page); await details.waitFor();
+      await page.reload(); await details.waitFor();
       assert.equal(await page.title(), pageTitle, 'A reopened conversation names the page');
       if (width === 1440) {
         const id = (await conversation(page)).id, reads: string[] = [];
@@ -716,18 +798,19 @@ try {
         await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
         await eventually(() => reads.length === 1, 'Returning to the tab reads the conversation at once');
         mark('an idle conversation polls slowly and returning to the tab refreshes it at once');
-        // A read that fails while the network is down says so; the read after the connection returns clears it.
-        let dropped = false;
-        await page.route(`**/api/conversations/${id}`, route => { dropped = true; return route.abort('internetdisconnected'); }, { times: 1 });
+        // The initial request and its transport retry fail. The next successful conditional read clears the error.
+        let drops = 0;
+        await page.route(`**/api/conversations/${id}`, route => { drops++; return route.abort('internetdisconnected'); }, { times: 2 });
         // The refresh started above may still be running, and a refresh never overlaps another; ask until one reaches the network.
         const readDeadline = Date.now() + 15_000;
-        while (!dropped) {
+        while (!drops) {
           assert.ok(Date.now() < readDeadline, 'The next background refresh reaches the network');
           await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await page.waitForTimeout(200);
         }
         await page.locator('#formalize-error').filter({ hasText: '无法连接服务器' }).waitFor();
+        assert.equal(drops, 2);
         const revalidated = page.waitForResponse(response => response.url().endsWith(`/api/conversations/${id}`) && response.status() === 304);
-        await page.evaluate(() => window.dispatchEvent(new Event('online'))); await revalidated;
+        await revalidated;
         await page.locator('#formalize-error').waitFor({ state: 'detached' });
         mark('an unchanged conversation needs no response body and a successful 304 clears a previous background read error');
       }
@@ -743,7 +826,7 @@ try {
     page.on('pageerror', error => errors.push(error.message));
     try {
       await page.route('**/api/conversations', route => route.request().method() === 'GET'
-        ? route.fulfill({ status: 503, json: { error: '本地测试：暂时不可用' } }) : route.continue(), { times: 1 });
+        ? route.fulfill({ status: 503, json: { error: '本地测试：暂时不可用' } }) : route.continue(), { times: 2 });
       await page.goto(origin); await page.locator('#formalize-original').waitFor();
       if (await page.locator('body').getAttribute('data-history-collapsed') === 'true') await page.locator('#open-history').click();
       const failed = page.locator('#chat-history-list [role="alert"]');
@@ -795,13 +878,19 @@ try {
       await openChatHistory(page);
       const row = page.locator(`[data-chat-row="${saved.id}"]`), title = `History ${width}: additive identity`;
       await historyMetadata(page, saved.id);
+      await page.clock.install();
+      const refreshVisibleHistory = async () => {
+        // Allow the previous history refresh to remain fresh for its full interval.
+        await page.clock.setSystemTime(await page.evaluate(() => Date.now() + 6100));
+        await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      };
       let releaseHistory!: () => void, historyHeld = false, historyDelivered = false;
       const historyGate = new Promise<void>(resolve => { releaseHistory = resolve; });
       await page.route('**/api/conversations', async route => {
         const response = await route.fetch({ timeout: 15_000 }); historyHeld = true;
         await historyGate; await route.fulfill({ response }); historyDelivered = true;
       }, { times: 1 });
-      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await refreshVisibleHistory();
       await eventually(() => historyHeld, 'The history snapshot predates the title change');
       await row.locator('[data-chat-row-actions]').click();
       await row.locator('[data-chat-rename]').click();
@@ -841,7 +930,7 @@ try {
         const response = await route.fetch({ timeout: 15_000 }); deletedHistoryHeld = true;
         await deletedHistoryGate; await route.fulfill({ response }); deletedHistoryDelivered = true;
       }, { times: 1 });
-      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await refreshVisibleHistory();
       await eventually(() => deletedHistoryHeld, 'A history snapshot predates conversation deletion');
       await row.locator('[data-chat-row-actions]').click();
       await row.locator('[data-chat-delete]').click();

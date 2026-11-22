@@ -32,11 +32,16 @@ import { detailLevel } from './detailLevel';
 
 const running = (item?: { status: string }) => item?.status === 'queued' || item?.status === 'running';
 const reason = (error: unknown) => localizeMessage(error instanceof Error ? error.message : String(error));
+type TaskLinks = Pick<WebConversation, 'runId' | 'formalizationId' | 'followFormalization'>;
+const sameTaskLinks = (left?: TaskLinks, right?: TaskLinks) => left?.runId === right?.runId
+  && left?.formalizationId === right?.formalizationId && left?.followFormalization === right?.followFormalization;
+type ReadOptions = RequestInit & { firstResponseTimeoutMs?: number };
 type Request = {
-  <T>(url: string, init?: RequestInit): Promise<T>;
-  <T>(url: string, init: RequestInit, etag: (value: string | null) => void): Promise<T | undefined>;
+  <T>(url: string, init?: ReadOptions): Promise<T>;
+  <T>(url: string, init: ReadOptions, etag: (value: string | null) => void): Promise<T | undefined>;
 };
 type DraftPosition = { start: number; end: number; direction: 'forward' | 'backward' | 'none'; top: number };
+type ConversationSnapshot = { conversation: WebConversation; etag: string | null };
 type Options = {
   request: Request;
   draftScope: string;
@@ -73,7 +78,8 @@ type Options = {
 /** Owns the conversation and its draft. Proof tasks remain independent server jobs. */
 export class ChatSession {
   private conversation?: WebConversation;
-  private conversationEtag: string | null = null;
+  // Only the current tab keeps recent messages. Actions use the conversation confirmed by the server.
+  private readonly recentConversations = new Map<string, ConversationSnapshot>();
   private summaries: WebConversationSummary[] = [];
   private historyLoaded = false;
   private historyFailed = false;
@@ -109,6 +115,7 @@ export class ChatSession {
   private error = '';
   // A failed read shows until a later read succeeds; a failed send, stop or guidance keeps `error` until the next action.
   private readError = '';
+  private taskReadError = '';
   private threadRetryAt = 0;
   private guidanceDraft?: ChatGuidanceDraft;
   private pendingGuidance?: ChatPendingGuidance;
@@ -121,6 +128,8 @@ export class ChatSession {
   private readRevision = 0;
   private timer?: ReturnType<typeof setTimeout>;
   private refreshing = false;
+  private taskRead?: { links: TaskLinks; revision: number; controller: AbortController; pending: Promise<void> };
+  private listRead?: Promise<unknown>;
   private lastTaskRefresh = 0;
   private lastListRefresh = 0;
   private attachRunId = '';
@@ -168,9 +177,14 @@ export class ChatSession {
     options.agentActivity.subscribe(id => { if (id === this.run?.id) this.redraw(); });
     options.formalizationActivity.subscribe(id => { if (id === (this.formalization ?? this.seed)?.id) this.redraw(); });
     this.wide.addEventListener('change', () => this.draw());
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) void this.refresh(); });
-    window.addEventListener('online', () => void this.refresh());
-    window.addEventListener('pagehide', () => { this.rememberDraft(); this.apiKey = ''; clearTimeout(this.timer); });
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) this.schedule();
+      else void this.refresh();
+    });
+    window.addEventListener('offline', () => clearTimeout(this.timer));
+    window.addEventListener('pagehide', () => {
+      this.rememberDraft(); this.apiKey = ''; clearTimeout(this.timer); this.clearRecentConversations();
+    });
     window.addEventListener('beforeunload', event => {
       if (![...this.unsavedDrafts].some(id => {
         const draft = this.drafts.get(id);
@@ -178,7 +192,6 @@ export class ChatSession {
       })) return;
       event.preventDefault(); event.returnValue = '';
     });
-    window.addEventListener('pageshow', event => { if (event.persisted) void this.refresh(); });
   }
   get id() { return this.currentId; }
   get runId() { return this.formalization?.runId ?? this.conversation?.runId ?? this.run?.id; }
@@ -189,12 +202,16 @@ export class ChatSession {
   private get activeGuidance() { return this.guidanceDraft?.active ? this.guidanceDraft : undefined; }
   private get editorDraftId() { return this.activeGuidance ? `${this.draftId}.guidance` : this.draftId; }
   private get editorText() { return this.activeGuidance?.text ?? this.draft; }
+  private get awaitingDiscussionModel() { return Boolean(this.taskRead || this.taskReadError) && !this.run && !this.formalization; }
+  clearRecentConversations() { this.recentConversations.clear(); }
   /** An empty scope revokes the current owner while the workbench reconnects. */
   bindOwner(scope: string) {
     if (scope === this.options.draftScope) return;
     const previous = this.options.draftScope;
     this.ownerRevision++; this.readRevision++; this.historyRevision++; this.capabilitiesRevision++;
+    this.clearRecentConversations();
     this.answers.clear(); this.lastAnswerRefresh = 0;
+    this.listRead = undefined;
     clearTimeout(this.timer); this.refreshing = false;
     this.home(true, false);
     this.drafts.clear(); this.unsavedDrafts.clear(); this.quotedDrafts.clear(); this.draftPositions.clear(); this.renderedDraftId = undefined; this.options.draftScope = scope; this.reading.bind(scope);
@@ -221,12 +238,13 @@ export class ChatSession {
   async start(run?: WebRun) {
     const owner = this.ownerRevision;
     const route = this.currentId;
-    const capabilities = this.loadCapabilities();
     if (route || !run) {
       const conversation = route ? this.open(route, 'replace') : undefined;
-      await Promise.all([capabilities, conversation, this.refreshHistory()]);
+      await Promise.all([this.refreshLists(), conversation]);
     } else {
       // A successful attachment already refreshes the history. Sample runs do not attach.
+      this.lastListRefresh = Date.now();
+      const capabilities = this.loadCapabilities();
       await this.openRun(run);
       await capabilities;
       if (owner !== this.ownerRevision) return;
@@ -239,16 +257,18 @@ export class ChatSession {
     try {
       const data = await this.options.request<{ formalizations: WebFormalization[]; generation: WebFormalizationCapabilities }>('/api/formalizations');
       if (revision !== this.capabilitiesRevision) return;
+      const changed = JSON.stringify(data.generation) !== JSON.stringify(this.capabilities);
       this.capabilities = data.generation; this.formalizations = data.formalizations;
       if (!this.providerId) {
         this.providerId = data.generation.providerId ?? data.generation.providers?.[0]?.id ?? this.options.session()?.providers[0]?.id ?? '';
         if (!this.model) this.model = data.generation.model;
         if (!this.hasDraftSettings && data.generation.defaults) this.budgets = structuredClone(data.generation.defaults);
       }
-      // A conversation that failed to open keeps its own error.
-      if (!this.currentId || this.conversation) this.readError = '';
-      this.draw();
-    } catch (error) { if (revision === this.capabilitiesRevision) { this.readError = reason(error); this.draw(); } }
+      if (!this.currentId) this.readError = '';
+      // A record list refresh should leave a conversation's reading position alone.
+      if (!this.currentId || changed) this.draw();
+      else this.drawHistory();
+    } catch (error) { if (revision === this.capabilitiesRevision && !this.currentId) { this.readError = reason(error); this.draw(); } }
   }
   private rememberDraft() {
     // Samples and a run whose conversation is still attaching do not own the home draft.
@@ -542,18 +562,27 @@ export class ChatSession {
   libraryReferenceFailed(message: string) { this.error = message; this.draw(); }
   useRunKey(id: string, key: string) { if (this.runId === id) { this.apiKey = key; this.clearConnection(); this.draw(); } }
   focus() { this.composer.querySelector<HTMLTextAreaElement>('textarea')?.focus({ preventScroll: true }); }
-  private async readConversation(id: string, knownTag: string | null = null) {
+  private async readConversation(id: string): Promise<ConversationSnapshot> {
+    const previous = this.recentConversations.get(id);
+    const knownTag = previous?.etag;
     let etag: string | null = null;
     const result = await this.options.request<{ conversation: WebConversation }>(`/api/conversations/${encodeURIComponent(id)}`, {
       signal: this.threadReads.signal,
+      firstResponseTimeoutMs: 6000,
       ...(knownTag ? { headers: { 'If-None-Match': knownTag } } : {}),
     }, value => { etag = value; });
-    if (!result?.conversation && (result !== undefined || !knownTag)) throw new Error(t('服务器返回了无法读取的响应'));
-    return { conversation: result?.conversation, etag };
+    if (result?.conversation) return { conversation: result.conversation, etag };
+    if (result === undefined && previous && knownTag && this.recentConversations.get(id) === previous) return previous;
+    throw Object.assign(new Error(t('服务器返回了无法读取的响应')), { status: 0 });
   }
   private setConversation(conversation: WebConversation, etag: string | null = null) {
     this.reading.select(conversation.id);
-    this.conversationEtag = etag;
+    this.recentConversations.delete(conversation.id);
+    this.recentConversations.set(conversation.id, { conversation, etag });
+    if (this.recentConversations.size > 8) {
+      const oldest = this.recentConversations.keys().next().value;
+      if (oldest) this.recentConversations.delete(oldest);
+    }
     this.conversation = conversation; this.currentId = conversation.id; this.readError = ''; this.options.onConversation();
     const message = this.pendingMessage;
     if (message && conversation.messages.some(item => item.role === 'user' && item.kind === 'text' && item.requestId === message.requestId)) {
@@ -581,15 +610,31 @@ export class ChatSession {
   private changeThread() {
     this.threadReads.abort();
     this.threadReads = new AbortController();
-    this.conversationEtag = null;
     this.threadRetryAt = 0;
+    this.taskRead = undefined;
+    this.taskReadError = '';
+    this.lastTaskRefresh = 0;
     return ++this.generation;
   }
   private threadReadFailed(error: unknown) {
+    const status = error && typeof error === 'object' && 'status' in error ? error.status : undefined;
     this.readError = reason(error);
     const retryAt = error && typeof error === 'object' && 'retryAt' in error && typeof error.retryAt === 'number'
       ? error.retryAt : 0;
-    this.threadRetryAt = retryAt > Date.now() ? retryAt : 0;
+    if (status === 401 || status === 404 || (status === 403 && !retryAt)) {
+      if (status === 401) this.clearRecentConversations();
+      else this.recentConversations.delete(this.currentId);
+      if (this.conversation) {
+        this.conversation = undefined; this.run = undefined; this.formalization = undefined;
+        this.taskRead?.controller.abort(); this.taskRead = undefined; this.taskReadError = '';
+        this.options.onSelection();
+      }
+    }
+    const now = Date.now();
+    // Give a temporary failure one prompt recovery attempt before returning to the normal refresh interval.
+    const transient = status === 0 || typeof status === 'number' && status >= 500 && status < 600;
+    const retrySoon = transient && !this.threadRetryAt;
+    this.threadRetryAt = retryAt > now ? retryAt : retrySoon ? now + 1200 : 0;
   }
   async open(id: string, mode: 'push' | 'replace' = 'push') {
     if (this.currentId === id && (this.conversation || this.loading)) {
@@ -608,8 +653,10 @@ export class ChatSession {
     try {
       const { conversation, etag } = await this.readConversation(id);
       if (generation !== this.generation) return;
-      if (conversation) this.setConversation(conversation, etag);
-      await this.loadTask(generation);
+      this.setConversation(conversation, etag);
+      const task = this.loadTask(generation);
+      this.loading = false; this.draw(); this.schedule();
+      await task;
     } catch (error) { if (generation === this.generation) this.threadReadFailed(error); }
     finally { if (generation === this.generation) { this.loading = false; this.draw(); this.schedule(); } }
   }
@@ -630,8 +677,9 @@ export class ChatSession {
       if (generation !== this.generation) return;
       this.draft = this.restoredDraft(conversation.id); this.setConversation(conversation);
       this.options.onNavigate(conversation.id, 'replace', true);
-      await this.loadTask(generation);
-      if (owner === this.ownerRevision) await this.refreshHistory();
+      const task = this.loadTask(generation);
+      this.loading = false; this.draw(); this.schedule();
+      await Promise.all([task, owner === this.ownerRevision ? this.refreshHistory() : undefined]);
     } catch (error) { if (generation === this.generation) this.error = reason(error); }
     finally { if (generation === this.generation) { this.loading = false; this.draw(); this.schedule(); } }
   }
@@ -639,40 +687,58 @@ export class ChatSession {
     if (this.runId !== run.id) return;
     this.run = retainLatestRun(run, this.run); this.draw();
   }
-  private async loadTask(generation: number) {
+  private loadTask(generation: number) {
     const conversation = this.conversation, revision = this.readRevision;
-    if (!conversation) return;
-    const init = { signal: this.threadReads.signal };
+    if (!conversation || generation !== this.generation) return;
+    if (this.taskRead?.revision === revision && sameTaskLinks(this.taskRead.links, conversation)) return this.taskRead.pending;
+    this.taskRead?.controller.abort();
+    const controller = new AbortController();
+    const signal = AbortSignal.any([this.threadReads.signal, controller.signal]);
+    const current = () => !signal.aborted && generation === this.generation && revision === this.readRevision
+      && sameTaskLinks(conversation, this.conversation);
+    this.lastTaskRefresh = Date.now();
+    const pending = this.readTask(conversation, signal, current).then(() => {
+      if (current()) this.taskReadError = '';
+    }).catch(error => {
+      if (current()) this.taskReadError = reason(error);
+    }).finally(() => {
+      if (this.taskRead?.pending !== pending) return;
+      this.taskRead = undefined;
+      this.draw(); this.schedule();
+    });
+    this.taskRead = { links: conversation, revision, controller, pending };
+    return pending;
+  }
+  private async readTask(conversation: WebConversation, signal: AbortSignal, current: () => boolean) {
+    const init = { signal };
     const readRun = async (id: string) => {
       // Live updates and the workbench's fallback poll already maintain this list.
       const listed = this.options.connected() && this.options.runs().find(run => run.id === id);
       return listed || (await this.options.request<{ run: WebRun }>(`/api/runs/${id}`, init)).run;
     };
-    this.lastTaskRefresh = Date.now();
     const [formal, run] = await Promise.allSettled([
       conversation.formalizationId ? this.options.request<{ formalization: WebFormalization }>(`/api/formalizations/${conversation.formalizationId}`, init) : undefined,
       conversation.runId ? readRun(conversation.runId) : undefined,
     ]);
-    if (generation !== this.generation || revision !== this.readRevision) return;
+    if (!current()) return;
     const failed = [formal, run].find(result => result.status === 'rejected'
       && !(result.reason && typeof result.reason === 'object' && result.reason.status === 404));
     if (failed?.status === 'rejected') throw failed.reason;
-    this.formalization = formal.status === 'fulfilled' ? formal.value?.formalization : undefined;
-    if (!conversation.followFormalization && conversation.runId && this.formalization?.runId !== conversation.runId)
-      this.formalization = undefined;
-    if (this.formalization) this.formalizations = [this.formalization, ...this.formalizations.filter(item => item.id !== this.formalization!.id)];
+    let formalization = formal.status === 'fulfilled' ? formal.value?.formalization : undefined;
+    if (!conversation.followFormalization && conversation.runId && formalization?.runId !== conversation.runId) formalization = undefined;
     let received = run.status === 'fulfilled' ? run.value : undefined;
     // A compiled revision can be published while the conversation response still names the previous candidate.
-    const currentRunId = this.formalization?.runId ?? conversation.runId;
+    const currentRunId = formalization?.runId ?? conversation.runId;
     if (currentRunId && currentRunId !== conversation.runId) {
       received = await readRun(currentRunId);
-      if (generation !== this.generation || revision !== this.readRevision) return;
+      if (!current()) return;
     } else if (currentRunId && run.status === 'rejected') throw run.reason;
     const next = received && retainLatestRun(received, this.run);
     const hadRun = this.run;
+    this.formalization = formalization;
+    if (formalization) this.formalizations = [formalization, ...this.formalizations.filter(item => item.id !== formalization.id)];
     this.run = next;
     if (next || hadRun) this.options.onSelection(next);
-    this.draw();
   }
   async refreshHistory() {
     const revision = ++this.historyRevision;
@@ -685,12 +751,20 @@ export class ChatSession {
       if (revision === this.historyRevision && !this.historyLoaded) { this.historyFailed = true; this.drawHistory(); }
     }
   }
+  private refreshLists() {
+    if (this.listRead) return this.listRead;
+    this.lastListRefresh = Date.now();
+    const pending = Promise.all([this.loadCapabilities(), this.refreshHistory()]).finally(() => {
+      if (this.listRead === pending) this.listRead = undefined;
+    });
+    return this.listRead = pending;
+  }
   private schedule() {
     clearTimeout(this.timer);
-    if (!this.options.draftScope) return;
+    if (!this.options.draftScope || !navigator.onLine) return;
     const pending = this.conversation?.messages.some(message => message.status === 'pending');
     const reviewing = backgroundReviewPending(this.formalization?.backgroundReview ?? this.formalization?.report?.backgroundReview);
-    if (document.hidden && !reviewing) return;
+    if (document.hidden && (!reviewing || this.readError)) return;
     // A completed formalization can overtake the conversation response that first linked it.
     // Keep refreshing until that conversation has also attached the proof run.
     const unlinkedRun = Boolean(this.formalization?.runId && this.conversation && this.conversation.runId !== this.formalization.runId);
@@ -707,44 +781,39 @@ export class ChatSession {
   async refresh() {
     if (!this.options.draftScope) return;
     const reviewing = backgroundReviewPending(this.formalization?.backgroundReview ?? this.formalization?.report?.backgroundReview);
-    if (this.refreshing || this.submitting || this.startingResearch || this.threadRetryAt > Date.now()
-      || document.hidden && !reviewing) { this.schedule(); return; }
+    if (!navigator.onLine || this.refreshing || this.loading || this.submitting || this.startingResearch || this.threadRetryAt > Date.now()
+      || document.hidden && (!reviewing || this.readError)) { this.schedule(); return; }
     this.refreshing = true; const generation = this.generation, revision = this.readRevision, owner = this.ownerRevision;
     try {
-      if (this.currentId && !this.loading) {
-        const { conversation, etag } = await this.readConversation(this.currentId, this.conversationEtag);
+      if (this.currentId) {
+        const { conversation, etag } = await this.readConversation(this.currentId);
         if (generation !== this.generation || revision !== this.readRevision) return;
-        const recoveringThreadRead = this.threadRetryAt > 0;
-        this.threadRetryAt = 0;
-        const linkChanged = conversation && (conversation.runId !== this.conversation?.runId
-          || conversation.formalizationId !== this.conversation?.formalizationId);
-        if (conversation) this.setConversation(conversation, etag);
+        const linkChanged = !this.conversation || !sameTaskLinks(conversation, this.conversation);
+        if (conversation !== this.conversation) this.setConversation(conversation, etag);
         else if (this.readError) { this.readError = ''; this.draw(); }
         const runId = this.conversation?.runId;
         const runIsSynced = runId && this.run?.id === runId && this.options.connected()
           && this.options.runs().some(run => run.id === runId);
         // The shared run list already updates a linked run. Formalization has its own status to poll.
         const taskNeedsRefresh = this.conversation?.formalizationId || (runId && !runIsSynced);
-        if (linkChanged || recoveringThreadRead || (taskNeedsRefresh && Date.now() - this.lastTaskRefresh >= 1500)) {
-          await this.loadTask(generation);
+        if (linkChanged || (taskNeedsRefresh && Date.now() - this.lastTaskRefresh >= 1500)) {
+          void this.loadTask(generation);
         }
+        this.threadRetryAt = 0;
       }
       if (generation !== this.generation) return;
       if (Date.now() - this.lastAnswerRefresh >= (this.answers.generating(this.run?.id) ? 5000 : 30_000)) {
         this.lastAnswerRefresh = Date.now(); this.answers.refresh(this.run);
       }
-      if (Date.now() - this.lastListRefresh >= 6000) {
-        this.lastListRefresh = Date.now();
-        await this.loadCapabilities();
-        if (owner === this.ownerRevision) await this.refreshHistory();
-      }
+      if (Date.now() - this.lastListRefresh >= 6000) void this.refreshLists();
     } catch (error) { if (generation === this.generation && revision === this.readRevision) { this.threadReadFailed(error); this.draw(); } }
     finally { if (owner === this.ownerRevision) { this.refreshing = false; this.schedule(); } }
   }
   private async submit(retryText?: string, prepareEditedProblem = false) {
     if (!this.options.draftScope) return;
     if (this.activeGuidance && retryText === undefined) { await this.sendGuidance(); return; }
-    if (this.loading || this.submitting || !(this.pendingMessage?.text ?? retryText ?? this.draft).trim()) return;
+    if (this.loading || (this.currentId && !this.conversation) || this.awaitingDiscussionModel || this.submitting
+      || !(this.pendingMessage?.text ?? retryText ?? this.draft).trim()) return;
     // A received task can be reattached without starting it again. Editing its original instead needs an explicit choice.
     if (this.seed && retryText === undefined && withLibraryReferences(this.draft, this.references, locale) !== this.seed.original) { this.draw(); return; }
     const generation = this.generation, owner = this.ownerRevision, seed = this.seed, conversation = this.conversation, key = this.apiKey,
@@ -802,8 +871,7 @@ export class ChatSession {
       this.options.onNavigate(next.id, conversation ? 'replace' : 'push');
       const settings = this.composer.querySelector<HTMLDetailsElement>('.chat-composer-settings[open]');
       if (settings) settings.open = false;
-      await this.loadTask(generation);
-      if (generation !== this.generation) return;
+      if (!conversation || !sameTaskLinks(conversation, next)) void this.loadTask(generation);
       if (prepareEditedProblem && editedProblem) {
         this.home(false); this.options.onNavigate('', 'push'); this.options.onSelection(); this.focus(); this.schedule();
         return;
@@ -933,7 +1001,7 @@ export class ChatSession {
       void this.refreshHistory();
       if (generation !== this.generation) return;
       this.setConversation(next);
-      await this.loadTask(generation).catch(error => { if (generation === this.generation) this.readError = reason(error); });
+      await this.loadTask(generation);
       if (generation === this.generation) this.reading.bottom();
     } catch (error) {
       if (generation !== this.generation) return;
@@ -1013,6 +1081,7 @@ export class ChatSession {
       this.historyRevision++;
       this.summaries = this.summaries.map(item => item.id === id ? { ...item, title: conversation.title, updatedAt: conversation.updatedAt } : item);
       if (this.currentId === id && this.conversation) this.setConversation({ ...this.conversation, title: conversation.title });
+      else this.recentConversations.delete(id);
       this.drawHistory();
     } catch (error) { if (owner === this.ownerRevision) throw new Error(reason(error)); }
   }
@@ -1031,6 +1100,7 @@ export class ChatSession {
       if (owner !== this.ownerRevision) return;
       this.historyRevision++;
       this.summaries = this.summaries.filter(item => item.id !== id);
+      this.recentConversations.delete(id);
       if (this.currentId === id) { this.home(false); this.options.onNavigate('', 'replace'); this.options.onSelection(); }
       this.drafts.delete(id);
       this.quotedDrafts.delete(id);
@@ -1141,14 +1211,14 @@ export class ChatSession {
     const pendingGuidance = this.pendingGuidance, conversation = this.conversation;
     const recoverableGuidance = pendingGuidance && conversation?.runId === pendingGuidance.runId && !this.guidanceMessage(conversation, pendingGuidance);
     const unresolvedGuidance = !!pendingGuidance || conversation?.messages.some(message => message.guidance && message.guidance.runId === conversation.runId && message.status === 'pending');
-    const newProblem = !this.conversation && !this.run;
+    const newProblem = !this.currentId && !this.conversation && !this.run;
     const editedSubmission = newProblem && !!this.seed && withLibraryReferences(this.draft, this.references, locale) !== this.seed.original;
     const pendingSubmission = newProblem && this.submissionIdentity.unresolved;
     if (newProblem && !this.seed && !pendingSubmission) this.environment = webTaskEnvironment;
     const busyFormalization = newProblem && !this.seed && !pendingSubmission && !!this.capabilities
       && this.formalizations.filter(item => running(item)).length >= this.capabilities.limits.perOwner;
     const unavailable = newProblem && !pendingSubmission && this.capabilities?.available === false;
-    document.body.dataset.chatEmpty = String(!this.conversation && !this.run && !this.loading && !this.seed);
+    document.body.dataset.chatEmpty = String(newProblem && !this.loading && !this.seed);
     const solve = this.solve();
     const formalization = this.formalization ?? this.seed;
     const mathematics = solve ? chatMathematics(this.run, formalization ? this.options.formalizationActivity.activity(formalization.id) : []) : undefined;
@@ -1180,10 +1250,12 @@ export class ChatSession {
         request: this.options.request, onOpenRun: this.options.onOpenRun, onOpenConversation: (id: string) => void this.open(id) },
     };
     renderChatThread(this.thread, {
-      conversation: this.conversation, run: this.run, formalization: this.formalization ?? this.seed,
+      conversation: conversation ?? this.recentConversations.get(this.currentId)?.conversation,
+      run: this.run, formalization: this.formalization ?? this.seed,
       sample: !!this.run && this.options.isSample(this.run),
-      missingTask: !!this.conversation && !this.loading && !this.submitting && !this.readError && !this.formalization && !this.run,
-      loading: this.loading, error: this.error || this.readError, ...(solve ? { solve } : {}),
+      missingTask: !!this.conversation && !this.loading && !this.submitting && !this.taskRead && !this.readError
+        && !this.taskReadError && !this.formalization && !this.run,
+      loading: this.loading, error: this.error || this.readError || this.taskReadError, ...(solve ? { solve } : {}),
       mathematics, answer, onAnswerRetry: () => this.answers.refresh(this.run),
       onAnswerTarget: target => { if (this.run) this.answers.select(this.run.id, target); },
       ...(this.conversation && (!this.run || !this.options.isSample(this.run)) ? { onAnswerQuestion: (text: string) => {
@@ -1207,8 +1279,9 @@ export class ChatSession {
         onApprove: () => this.options.onApprovePlan(this.run!) } } : {}),
       ...(this.conversation && !this.loading && !this.submitting && !guidance && !(this.run && this.options.isSample(this.run))
         ? { onQuestion: (entry: ThinkingStep) => this.questionStep(entry) } : {}),
-      onGuidanceReceipt: message => this.recoverGuidance(message),
-      onWithdrawGuidance: message => void this.withdrawGuidance(message), withdrawingGuidance: [...this.withdrawing],
+      ...(conversation ? { onGuidanceReceipt: (message: WebConversationMessage) => this.recoverGuidance(message),
+        onWithdrawGuidance: (message: WebConversationMessage) => void this.withdrawGuidance(message) } : {}),
+      withdrawingGuidance: [...this.withdrawing],
       withdrawalNotes: Object.fromEntries(this.withdrawalNotes),
       guidanceFeedback: { ...this.guidanceFeedback, records: this.guidanceFeedback.runId === this.run?.id ? this.guidanceFeedback.records : [],
         onRetry: () => { this.refreshGuidanceFeedback(true); this.draw(); } },
@@ -1217,23 +1290,25 @@ export class ChatSession {
       ...(this.formalization?.status === 'confirmed' && !this.formalization.runId && (this.formalization.humanReview || this.formalization.researchError)
         ? { onStartResearch: () => void this.startResearch(), startingResearch: this.startingResearch } : {}),
       ...(running(this.formalization) || running(this.run) && !this.options.isSample(this.run!) ? { onCancelTask: () => void this.cancelTask() } : {}),
-      onEditProblem: () => {
+      onEditProblem: this.currentId && !conversation ? undefined : () => {
         const original = this.formalization?.original ?? this.run?.formalization?.original ?? this.conversation?.messages.find(message => message.role === 'user')?.text ?? '';
         const id = this.conversation?.id ?? this.formalization?.id ?? this.run?.id;
         if (id) this.openEditedProblem(id, original);
       },
       onRetry: editedSubmission ? undefined : () => {
-        if (this.pendingGuidance && this.guidanceErrorId === this.pendingGuidance.input.id) void this.sendGuidance(this.pendingGuidance);
+        if (!this.error && this.readError) { this.lastListRefresh = 0; void this.refresh(); }
+        else if (!this.error && this.taskReadError) void this.loadTask(this.generation);
+        else if (this.pendingGuidance && this.guidanceErrorId === this.pendingGuidance.input.id) void this.sendGuidance(this.pendingGuidance);
         else if (this.pendingMessage && this.conversation) void this.submit(this.pendingMessage.text);
-        else if (this.currentId && !this.conversation) { const id = this.currentId; this.currentId = ''; void this.open(id, 'replace'); }
+        else if (this.currentId && !this.conversation) void this.open(this.currentId, 'replace');
         else if (this.run && !this.conversation) { const run = this.run; this.attachRunId = ''; void this.openRun(run); }
         else if (this.seed) void this.submit(this.seed.original);
         else if (!this.conversation && !this.run && this.submissionIdentity.unresolved) void this.submit();
-        else if (this.conversation?.messages.at(-1)?.status === 'error') {
-          const last = this.conversation.messages.at(-1)!;
-          const question = this.conversation.messages.find(message => message.id === last.replyTo);
-          if (question) void this.submit(question.text);
-        } else { this.lastListRefresh = 0; void this.refresh(); }
+        else { this.lastListRefresh = 0; void this.refresh(); }
+      },
+      onRetryAnswer: !conversation || this.awaitingDiscussionModel ? undefined : last => {
+        const question = this.conversation?.messages.find(message => message.id === last.replyTo);
+        if (question) void this.submit(question.text);
       },
     });
     const quotedBlocks = this.draftQuoteBlocks();
@@ -1264,11 +1339,12 @@ export class ChatSession {
       } } } : {}),
       onSubmit: () => void this.submit(), onStop: () => void this.stop(), pending: pending && !guidance, submitting: this.submitting,
       disabled: this.loading || Boolean(this.run && this.options.isSample(this.run)) || Boolean(this.currentId && !this.conversation)
+        || this.awaitingDiscussionModel
         || editedSubmission
         || !guidance && !pendingSubmission && !this.pendingMessage && Boolean(this.options.session()?.maintenance)
         || newProblem && ((!this.capabilities?.available && !pendingSubmission) || busyFormalization)
         || !!guidance && (!canGuide || !this.run?.observation || guidanceRunChanged || staleTarget || !!unresolvedGuidance),
-      hasConversation: Boolean(this.conversation), newProblem, environment: this.environment,
+      hasConversation: Boolean(this.currentId || this.conversation), newProblem, environment: this.environment,
       effort: this.run?.effort ?? this.formalization?.effort ?? this.effort, apiKey: this.apiKey,
       ...(editedSubmission ? { submissionRecovery: { busy: this.submitting,
         onRecover: () => void this.submit(this.seed!.original),

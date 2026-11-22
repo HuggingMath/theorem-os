@@ -289,8 +289,8 @@ try {
       assert.equal(await latest.evaluate(button => {
         const box = button.getBoundingClientRect(), thread = document.querySelector('#research-chat-thread')!.getBoundingClientRect(),
           composer = document.querySelector('#natural-research')!.getBoundingClientRect();
-        return box.top >= thread.top && box.bottom <= composer.top && button.scrollHeight <= button.clientHeight;
-      }), true, 'The latest pill floats inside the thread above the composer without clipping text');
+        return box.top >= thread.bottom - 1 && box.bottom <= composer.top + 1 && button.scrollHeight <= button.clientHeight;
+      }), true, 'The latest button has its own row outside the thread and above the composer');
       assert.equal((await latest.boundingBox())!.height, height <= 600 ? 30 : 34, 'Latest keeps its compact viewport-specific height');
       await latest.click();
       await settled(actor);

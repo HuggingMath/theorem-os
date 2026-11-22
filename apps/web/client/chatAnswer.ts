@@ -1,19 +1,20 @@
 import type { WebExplanation, WebExplanationDocument, WebExplanationLanguage, WebExplanationOverview, WebExplanationSection, WebRun } from '../shared';
 import { isAcceptedRun, isStatementReviewed } from '../presentation';
 import { t } from '../i18n';
+import { normalizeExplanationNotation } from './readableExplanation';
 
 export type ChatAnswer = { runId: string; target: string; loading: boolean; overview?: WebExplanationOverview;
   explanation?: WebExplanation; document?: WebExplanationDocument; error?: string; targetTitles?: Record<string, string> };
 type Entry = { proof: string; reviewed: boolean; value: ChatAnswer; revision: number; documentVersion?: string };
 type Request = <T>(url: string) => Promise<T>;
 
-export function explanationStepQuestion(section: WebExplanationSection, index: number, source: string, language: WebExplanationLanguage): string {
+export function explanationStepQuestion(section: WebExplanationSection, index: number, source: string, language: WebExplanationLanguage, displayedStep?: string): string {
   const step = section.steps[index];
   if (!step) return '';
   const tx = (zh: string, en: string) => language === 'zh' ? zh : en;
   return [tx('请解释以下证明步骤，并说明所用引理的适用条件。', 'Explain this proof step and the conditions required by its lemmas.'),
     `${section.title || section.name} · ${tx(`第 ${index + 1} 步`, `Step ${index + 1}`)}`,
-    section.statement, step.text,
+    normalizeExplanationNotation(section.statement), displayedStep ?? step.text,
     ...(step.uses.length ? [`${tx('用到', 'Uses')}: ${step.uses.map(use => use.name).join(', ')}`] : []),
     `${tx('讲解来源', 'Explanation source')}: ${source}`].filter(Boolean).join('\n\n');
 }

@@ -127,6 +127,35 @@ try {
   await page.clock.resume();
   console.log('PASS an idle conversation resumes at the cooldown deadline or when its tab returns');
 
+  const reconnectDraft = page.locator('#formalize-original');
+  const notice = page.locator('#global-notice-text');
+  await reconnectDraft.fill('网络断开时保留这条草稿');
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 100));
+  let reconnects = 0, recoveredReads = 0;
+  await page.route('**/api/session', route => ++reconnects === 1
+    ? route.fulfill({ status: 429, json: { error: '本地测试：会话暂时限流' }, headers: { 'Retry-After': '20' } })
+    : route.continue());
+  await page.route(`**/api/conversations/${waiting}`, route => {
+    recoveredReads++;
+    const conversation = loaded(waiting);
+    conversation.messages[0]!.text = '网络恢复后的对话记录';
+    return route.fulfill({ json: { conversation } });
+  });
+  await page.context().setOffline(true);
+  await notice.filter({ hasText: '网络已断开' }).waitFor({ state: 'attached' });
+  await page.context().setOffline(false);
+  await notice.filter({ hasText: '本地测试：会话暂时限流' }).waitFor({ state: 'attached' });
+  await page.clock.runFor(19_500);
+  assert.deepEqual([reconnects, recoveredReads], [1, 0]);
+  await page.clock.runFor(1000);
+  await notice.filter({ hasText: /^$/u }).waitFor({ state: 'attached' });
+  await message('网络恢复后的对话记录').waitFor({ timeout: 4000 });
+  assert.deepEqual([reconnects, recoveredReads], [2, 1]);
+  assert.equal(await reconnectDraft.inputValue(), '网络断开时保留这条草稿');
+  await page.unroute('**/api/session');
+  await page.clock.resume();
+  console.log('PASS a later session recovery resumes the open conversation after an offline interval and a limit');
+
   let challenges = 0;
   const challengeMessage = failed.filter({ hasText: 'Cloudflare 安全验证阻止了请求' });
   await page.route(`**/api/conversations/${capped}`, route => ++challenges === 1

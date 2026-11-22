@@ -148,14 +148,12 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 .chat-answer-uses a{color:var(--blue);text-decoration:underline;text-underline-offset:3px;font-size:12px}
 .chat-task-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:16px}
 .chat-task-actions:empty{display:none}
-.chat-task-details{margin-top:16px;font-size:13px;color:var(--muted)}
-.chat-task-details summary{cursor:pointer}
-.chat-task-details p{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:10px}
-.chat-task-details dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;margin:10px 0 0}
-.chat-task-details dt{color:var(--muted);font-weight:500}
-.chat-task-details dd{margin:0;color:var(--gray-800);overflow-wrap:anywhere}
-.chat-task-details code{font-size:12px}
-@media (max-width:480px){.chat-task-details dl{grid-template-columns:1fr;gap:2px}.chat-task-details dd{margin-bottom:8px}}
+.chat-task-failure{margin-top:10px;overflow-wrap:anywhere}
+.chat-task-failure dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:2px 12px;margin:8px 0;font-size:13px}
+.chat-task-failure dt{color:var(--muted)}
+.chat-task-failure dd{margin:0}
+.chat-task-failure code{font-size:12px}
+.chat-task-failure .chat-failure-next{font-size:13px;color:var(--muted)}
 .chat-error{margin:16px 0 0!important;padding:12px 16px;color:var(--red-700)!important;background:var(--red-50);border:1px solid var(--red-200);border-radius:4px;overflow-wrap:anywhere;font-size:13px;line-height:1.8}
 .chat-error p{margin:0}
 .chat-error .text-button{margin-top:8px}
@@ -511,9 +509,11 @@ body[data-view=draft][data-entry=natural][data-output-open=true] .runs-workspace
 .chat-task-history[open],.chat-task-history[open]::details-content{display:flex;flex-direction:column;flex:1;min-height:0}
 .chat-task-history>summary{padding:10px 12px;cursor:pointer;color:var(--muted);font-size:12px}
 
-.chat-latest{display:inline-flex;align-items:center;justify-content:center;align-self:center;position:relative;z-index:3;flex:none;height:34px;margin:-42px auto 8px;padding:6px 14px;border:1px solid var(--line);border-radius:4px;background:var(--card);box-shadow:var(--shadow-md);color:var(--ink);font-size:12px;line-height:1.5}
+.chat-latest-slot{display:none;flex:none;place-items:center;height:34px}
+body[data-chat-empty=false] #research-conversation-panel:not(:has(.chat-connecting:not([hidden]))) .chat-latest-slot{display:grid}
+.chat-latest{display:inline-flex;align-items:center;justify-content:center;height:100%;padding:4px 14px;border:1px solid var(--line);border-radius:4px;background:var(--card);color:var(--ink);font-size:12px;line-height:1.5}
 .chat-latest:hover{border-color:var(--gray-300);background:var(--gray-50)}
-@media(max-height:600px){.chat-messages,.research-conversation{padding-bottom:28px}.chat-result-details{padding-bottom:12px}.chat-latest{height:30px;margin:-36px auto 6px;padding:4px 12px}}
+@media(max-height:600px){.chat-messages,.research-conversation{padding-bottom:28px}.chat-result-details{padding-bottom:12px}.chat-latest-slot{height:30px}}
 .chat-latest[hidden]{display:none}
 #research-chat-thread{overflow-anchor:none}
 .chat-task-links{display:flex;flex-wrap:wrap;gap:8px 16px;margin:14px 0 0;font-size:12px}

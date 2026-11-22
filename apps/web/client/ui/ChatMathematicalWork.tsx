@@ -1,8 +1,12 @@
-import type { WebExplanationPhase, WebExplanationSection } from '../../shared';
+import type { WebExplanationLanguage, WebExplanationPhase, WebExplanationSection } from '../../shared';
 import { locale, t } from '../../i18n';
 import { explanationStepQuestion, type ChatAnswer } from '../chatAnswer';
 import type { ChatMathematicalTask, ChatMathematics } from '../chatMathematics';
 import { explanationModelRequestFailuresText, explanationReasonText, explanationUnavailableText } from '../explanationState';
+import { proseSegments } from '../explainText';
+import { normalizeExplanationNotation, readableExplanationSteps } from '../readableExplanation';
+import { Rich } from '../richText';
+import { chatReadingReveal } from '../chatReadingPosition';
 import { ChatMessageContent } from './ChatMessageContent';
 import { Icon } from './Icon';
 
@@ -48,33 +52,44 @@ export function ChatMathematicalSummary({ work }: { work: ChatMathematics }) {
   </section>;
 }
 
-function AnswerSection({ section, sections, anchor, explanationUrl, showStatement = true, showTitle = true, onQuestion }: { section: WebExplanationSection; sections: WebExplanationSection[];
+// The native target picker can only show text. The full mathematical title appears in the section.
+const optionLabel = (title: string): string => proseSegments(title)
+  .map(segment => segment.kind === 'strong' ? optionLabel(segment.text) : segment.text).join('');
+
+function AnswerSection({ section, sections, language, anchor, explanationUrl, showStatement = true, showTitle = true, onQuestion }: { section: WebExplanationSection; sections: WebExplanationSection[];
+  language: WebExplanationLanguage;
   anchor(name: string): string; explanationUrl: string; showStatement?: boolean; showTitle?: boolean; onQuestion?(text: string): void }) {
+  const title = <Rich text={section.title || section.name} inline />;
+  const steps = readableExplanationSteps(section, language);
   const content = <>
-    {showStatement && section.statement && <div class="chat-answer-statement"><ChatMessageContent text={section.statement} /></div>}
+    {showStatement && section.statement && <div class="chat-answer-statement"><ChatMessageContent text={normalizeExplanationNotation(section.statement)} /></div>}
     {section.steps.length > 0 && <ol class="chat-answer-steps">{section.steps.map((step, index) => <li key={index}>
-      <ChatMessageContent text={step.text} />
+      <ChatMessageContent text={steps[index]} />
       {step.uses.length > 0 && <p class="chat-answer-uses"><span>{t('用到')}</span>{step.uses.map(use => {
         const matches = sections.filter(item => item.name === use.name || item.name.split('.').at(-1) === use.name);
         const local = matches.length === 1 ? matches[0] : undefined;
         return local ? <a key={use.name} href={`#${anchor(local.name)}`} title={use.name} data-chat-answer-use={local.name} onClick={event => {
           event.preventDefault();
           const node = window.document.getElementById(anchor(local.name));
+          if (!node) return;
           if (node instanceof HTMLDetailsElement) node.open = true;
-          node?.scrollIntoView({ block: 'nearest' }); node?.focus({ preventScroll: true });
-        }}>{local.title || local.name}</a> : <code key={use.name} translate={false}>{use.name}</code>;
+          (node.firstElementChild ?? node).scrollIntoView({ block: 'nearest' });
+          node.focus({ preventScroll: true });
+          node.dispatchEvent(new Event(chatReadingReveal, { bubbles: true }));
+        }}><Rich text={local.title || local.name} inline /></a> : <code key={use.name} translate={false}>{use.name}</code>;
       })}</p>}
       {onQuestion && <button type="button" class="text-button chat-answer-question" data-chat-answer-question={`${section.name}:${index}`}
         onClick={() => {
           const location = new URLSearchParams({ at: section.name, step: String(index + 1) });
-          onQuestion(explanationStepQuestion(section, index, `${explanationUrl}#${location}`, locale));
+          onQuestion(explanationStepQuestion(section, index, `${explanationUrl}#${location}`, locale, steps[index]));
         }}>{t('解释这一步')}</button>}
     </li>)}</ol>}
   </>;
-  return section.target ? <section id={anchor(section.name)} tabIndex={-1} class="chat-answer-target" data-chat-answer-target={section.name}
-    aria-label={section.title || section.name}>
-    {showTitle && <h4 translate={false}>{section.title || section.name}</h4>}{content}
-  </section> : <details id={anchor(section.name)} tabIndex={-1} class="chat-answer-support"><summary translate={false}>{section.title || section.name}</summary>{content}</details>;
+  const id = anchor(section.name), titleId = `${id}-title`;
+  return section.target ? <section id={id} tabIndex={-1} class="chat-answer-target" data-chat-answer-target={section.name}
+    aria-labelledby={showTitle ? titleId : undefined} aria-label={showTitle ? undefined : optionLabel(section.title || section.name)}>
+    {showTitle && <h4 id={titleId} translate={false}>{title}</h4>}{content}
+  </section> : <details id={id} tabIndex={-1} class="chat-answer-support"><summary translate={false}>{title}</summary>{content}</details>;
 }
 
 export function ChatAnswerActions({ runId, answer, onRetry }: { runId: string; answer?: ChatAnswer; onRetry(): void }) {
@@ -114,13 +129,14 @@ export function ChatMathematicalAnswer({ runId, answer, onRetry, onTarget, onQue
   const targetSection = document?.sections.find(section => section.target && section.name === document.target);
   const conclusion = targetSection?.statement.trim() ? targetSection : undefined;
   const repeatedTitle = document && targets.length > 1 && answer?.target === document.target
-    && document.sections.filter(section => section.target).length === 1 ? targetSection : undefined;
+    && document.sections.filter(section => section.target).length === 1 && targetSection
+    && optionLabel(targetSection.title) === targetSection.title ? targetSection : undefined;
   return <section class="chat-mathematical-answer" data-chat-answer data-chat-answer-status={document ? 'ready' : showStatus ? explanation?.status
     : answer?.error ? 'read-error' : reading ? 'reading' : generation?.available ? 'missing' : 'unavailable'}
     aria-labelledby="chat-answer-heading" aria-busy={reading}>
     <div class="chat-answer-header"><h3 id="chat-answer-heading">{t('详细解答')}</h3>
       {targets.length > 1 && <label class="chat-answer-selection"><span class="sr-only">{t('阅读目标')}</span><select data-chat-answer-select value={answer?.target} onChange={event => onTarget(event.currentTarget.value)}>
-        {targets.map(target => <option key={target.name} value={target.name}>{answer?.targetTitles?.[target.name] || target.name}</option>)}
+        {targets.map(target => <option key={target.name} value={target.name}>{optionLabel(answer?.targetTitles?.[target.name] || target.name)}</option>)}
       </select></label>}
     </div>
     {reading && !answer?.error && <p class="chat-answer-state" role="status"><span class="spinner" />{t('正在读取已有讲解…')}</p>}
@@ -131,10 +147,10 @@ export function ChatMathematicalAnswer({ runId, answer, onRetry, onTarget, onQue
       <button type="button" class="text-button" data-chat-answer-retry disabled={answer.loading} onClick={onRetry}>{t('重新读取讲解')}</button>
     </div>}
     {document && <div data-chat-answer-document={document.target}>
-      {conclusion && <div class="chat-answer-conclusion" data-chat-answer-conclusion><h4>{t('结论')}</h4><ChatMessageContent text={conclusion.statement} /></div>}
-      {document.overview.trim() && <div class="chat-answer-idea" data-chat-answer-idea><h4>{t('证明思路')}</h4><ChatMessageContent text={document.overview} /></div>}
+      {conclusion && <div class="chat-answer-conclusion" data-chat-answer-conclusion><h4>{t('结论')}</h4><ChatMessageContent text={normalizeExplanationNotation(conclusion.statement)} /></div>}
+      {document.overview.trim() && <div class="chat-answer-idea" data-chat-answer-idea><h4>{t('证明思路')}</h4><ChatMessageContent text={normalizeExplanationNotation(document.overview)} /></div>}
       {document.sections.length > 0 && <div class="chat-answer-derivation" data-chat-answer-derivation><h4>{t('推导过程')}</h4>
-        {document.sections.map(section => <AnswerSection key={section.name} section={section} sections={document.sections} anchor={anchor}
+        {document.sections.map(section => <AnswerSection key={section.name} section={section} sections={document.sections} language={document.language} anchor={anchor}
           showStatement={section !== conclusion} showTitle={section !== repeatedTitle}
           explanationUrl={new URL(explanationUrl, location.href).href} onQuestion={onQuestion} />)}
       </div>}

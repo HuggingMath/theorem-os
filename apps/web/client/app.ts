@@ -448,6 +448,7 @@ let clockTimer: ReturnType<typeof setInterval> | undefined;
 let connectionRequest: Promise<void> | undefined;
 let liveRefreshPending = false;
 let lastRunsReadAt = -Infinity;
+let runsReadRetryAt = 0;
 const liveRefreshIntervalMs = 750;
 let readController = new AbortController();
 let pageActive = true;
@@ -657,12 +658,12 @@ const pause = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, r
 class ApiError extends Error {
   constructor(readonly reason: string, readonly status: number, readonly retryAt = 0) { super(localizeMessage(reason)); }
 }
-type ApiInit = RequestInit & { timeoutMs?: number };
+type ApiInit = RequestInit & { timeoutMs?: number; firstResponseTimeoutMs?: number };
 const sameSession = (session: WebSession | undefined) => session?.draftOwner === state.session?.draftOwner && session?.csrfToken === state.session?.csrfToken;
 let keyChangeSession: WebSession | undefined, keyChangeTail: Promise<void> = Promise.resolve();
 function api<T>(url: string, init?: ApiInit): Promise<T>;
 function api<T>(url: string, init: ApiInit, etag: (value: string | null) => void): Promise<T | undefined>;
-async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}, etag?: (value: string | null) => void): Promise<T | undefined> {
+async function api<T>(url: string, { timeoutMs = 15_000, firstResponseTimeoutMs, ...init }: ApiInit = {}, etag?: (value: string | null) => void): Promise<T | undefined> {
   const requestSession = state.session, requestOwner = requestSession?.draftOwner;
   // Both input modes update the same saved-key metadata. Send their changes in order, including runs
   // whose response carries that metadata, so a slow deletion cannot replace a later saved key.
@@ -681,17 +682,21 @@ async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}
   const route = `${method} ${url.split('?', 1)[0]}`;
   const deadline = Date.now() + timeoutMs;
   const timeout = new AbortController();
-  const timer = setTimeout(() => timeout.abort(new Error(t('请求超时，请重新连接'))), timeoutMs);
+  const transportError = (text: string) => read ? new ApiError(text, 0) : new Error(text);
+  const timedOut = () => transportError(t('请求超时，请重新连接'));
+  const timer = setTimeout(() => timeout.abort(timedOut()), timeoutMs);
   const signals = [timeout.signal];
   if (read) signals.push(readController.signal);
   if (init.signal) signals.push(init.signal);
   try {
     // A queued change still belongs to the identity that requested it, even after another tab logs in.
     if (keyChange && !sameSession(requestSession)) throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
-    // fetch rejects with a TypeError when the server cannot be reached; its text ("Failed to fetch") means nothing to a reader.
     const signal = AbortSignal.any(signals);
-    const send = async () => {
+    const retryDelay = 400;
+    const canRetryRead = (attempt: number) => read && attempt === 0 && navigator.onLine && Date.now() + retryDelay < deadline;
+    const send = async (attempt: number) => {
       signal.throwIfAborted();
+      if (read && !navigator.onLine) throw transportError(t('网络已断开'));
       let cooldown = cooldownFor(route);
       while (cooldown && cooldown.retryAt > Date.now()) {
         if (!read || cooldown.retryAt >= deadline) throw cooldown;
@@ -699,13 +704,26 @@ async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}
         cooldown = cooldownFor(route);
       }
       routeCooldowns.delete(route);
-      return fetch(url, { ...init, credentials: 'same-origin', cache: 'no-store', signal,
+      const request = (requestSignal: AbortSignal) => fetch(url, { ...init, credentials: 'same-origin', cache: 'no-store', signal: requestSignal,
         headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}),
-          ...(!read ? { 'X-CSRF-Token': state.session?.csrfToken ?? '' } : {}), ...init.headers } })
-        .catch((error: unknown) => { throw error instanceof TypeError ? new Error(t('无法连接服务器')) : error; });
+          ...(!read ? { 'X-CSRF-Token': state.session?.csrfToken ?? '' } : {}), ...init.headers } });
+      if (!read || attempt || !firstResponseTimeoutMs) return request(signal);
+      // A stalled connection can recover within the original deadline. A response already downloading gets the full time.
+      const firstResponse = new AbortController();
+      const timer = setTimeout(() => firstResponse.abort(timedOut()), firstResponseTimeoutMs);
+      try { return await request(AbortSignal.any([signal, firstResponse.signal])); }
+      finally { clearTimeout(timer); }
     };
     for (let attempt = 0; ; attempt++) {
-      const response = await send();
+      let response: Response;
+      try { response = await send(attempt); }
+      catch (error) {
+        signal.throwIfAborted();
+        const failure = error instanceof TypeError ? transportError(t('无法连接服务器')) : error;
+        if (!(failure instanceof ApiError && failure.status === 0 && canRetryRead(attempt))) throw failure;
+        await pause(retryDelay, signal);
+        continue;
+      }
       const responseOwner = response.headers.get('X-Theoremos-Owner');
       if (!url.startsWith('/api/session') && responseOwner && state.session?.draftOwner && responseOwner !== state.session.draftOwner) {
         if (requestOwner === state.session.draftOwner) { clearOwnedDrafts(); state.submitting = false; void initialize(); }
@@ -726,7 +744,11 @@ async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}
       // The headers may have arrived before another tab's login; a slow body still belongs to its original session.
       if (!url.startsWith('/api/session') && !sameSession(requestSession)) throw new ApiError(t('会话校验失败，请刷新页面。'), 401);
       if (!challenged && response.ok) {
-        if (payload === undefined) throw new Error(t('服务器返回了无法读取的响应'));
+        if (payload === undefined) {
+          if (!json || !canRetryRead(attempt)) throw transportError(t('服务器返回了无法读取的响应'));
+          await pause(retryDelay, signal);
+          continue;
+        }
         etag?.(response.headers.get('ETag'));
         return payload as T;
       }
@@ -736,15 +758,16 @@ async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}
         : undefined;
       const cloudflare = body?.cloudflare_error === true ? body : undefined;
       const limited = response.status === 429 || cloudflare?.error_code === 1015;
+      const gatewayFailure = !cloudflare && [502, 503, 504].includes(response.status);
       const retryable = !challenged && (cloudflare ? cloudflare.retryable === true
-        : !json && (limited || response.status === 503));
+        : gatewayFailure || !json && limited);
       const now = Date.now();
       const headerDelay = retryAfterMs(response.headers.get('Retry-After'), now);
       let delay = headerDelay;
       if (delay === undefined && cloudflare?.retryable === true && typeof cloudflare.retry_after === 'number'
         && Number.isSafeInteger(cloudflare.retry_after) && cloudflare.retry_after >= 0) delay = cloudflare.retry_after * 1_000;
       if (delay === undefined && (challenged || cloudflare && limited)) delay = 30_000;
-      if (delay === undefined && retryable) delay = limited && attempt ? 5_000 : 1_500 * (attempt + 1);
+      if (delay === undefined && retryable && !gatewayFailure) delay = limited && attempt ? 5_000 : 1_500 * (attempt + 1);
       const retryAt = delay !== undefined && (limited || challenged || retryable) ? now + delay : 0;
       const limitMessage = t('请求太频繁，请稍后再试。');
       let reason = t('请求失败 ({0})', response.status);
@@ -766,7 +789,11 @@ async function api<T>(url: string, { timeoutMs = 15_000, ...init }: ApiInit = {}
         saveDraft(); draftReady = false; forgetKey(keyStorage); location.replace(loginAddress());
       }
       // Requests that change data are only retried by the reader. Longer waits remain in force for future reads.
-      if (!read || !retryable || attempt >= (limited ? 1 : 2) || retryAt >= deadline) throw error;
+      if (!read || !retryable || attempt >= (limited || gatewayFailure ? 1 : 2) || retryAt >= deadline) throw error;
+      if (gatewayFailure && !retryAt) {
+        if (!canRetryRead(attempt)) throw error;
+        await pause(retryDelay, signal);
+      }
     }
   } catch (error) {
     if (timeout.signal.aborted) throw timeout.signal.reason;
@@ -2780,6 +2807,7 @@ const sessionFailure = (error: unknown) => error instanceof ApiError
 function invalidateReads() {
   liveRefreshPending = false;
   lastRunsReadAt = -Infinity;
+  runsReadRetryAt = 0;
   runUpdates.stop();
   clearTimeout(pollTimer);
   state.connectionEpoch++;
@@ -2823,6 +2851,7 @@ async function refreshRuns(epoch: number, force = false, listed?: WebSession['ru
   }, value => { etag = value; });
   if (generation !== state.listGeneration || !currentConnection(epoch)) return;
   state.runsEtag = etag ?? '';
+  runsReadRetryAt = 0;
   element('#runs-error').hidden = true;
   if (!result) return;
   const previous = state.runs;
@@ -2864,10 +2893,11 @@ async function refreshRuns(epoch: number, force = false, listed?: WebSession['ru
   renderRunList(); renderDetail(); renderDeleteState(); renderCancelState(); renderBudgetEstimate();
 }
 async function poll(force = false) {
-  if (!pageActive) return;
+  if (!pageActive || !navigator.onLine) return;
   if (connectionRequest) return connectionRequest;
   if (!state.connected) return initialize();
   if (state.refreshing) return;
+  if (!force && runsReadRetryAt > Date.now()) { schedulePoll(); return; }
   const epoch = state.connectionEpoch;
   liveRefreshPending = false;
   state.refreshing = true;
@@ -2875,13 +2905,20 @@ async function poll(force = false) {
   try { await refreshRuns(epoch, force); }
   catch (error) {
     if (!currentConnection(epoch)) return;
-    if (error instanceof ApiError && (error.status === 429 || error.retryAt > 0)) {
-      const notice = element('#runs-error');
-      notice.textContent = error.message; notice.hidden = false;
+    if (sessionFailure(error)) {
+      disconnected(t('{0}。未提交内容已保留。', message(error)));
+      await initialize();
       return;
     }
-    disconnected(t('{0}。未提交内容已保留。', message(error)));
-    if (sessionFailure(error)) await initialize();
+    // A failed list refresh leaves the last list and the open conversation usable.
+    const cooldown = error instanceof ApiError ? error.retryAt : 0;
+    const now = Date.now();
+    const retryDelay = runsReadRetryAt ? 30_000 : document.hidden ? 15_000 : 5000;
+    runsReadRetryAt = cooldown > now ? cooldown : now + retryDelay;
+    const notice = element('#runs-error');
+    notice.textContent = error instanceof ApiError && (error.status === 429 || cooldown)
+      ? error.message : t('研究记录暂未更新');
+    notice.hidden = false;
   } finally {
     if (currentConnection(epoch)) {
       state.refreshing = false;
@@ -2896,13 +2933,13 @@ function requestRunsRefresh() {
 }
 function schedulePoll() {
   clearTimeout(pollTimer);
-  if (!pageActive || connectionRequest || state.refreshing) return;
+  if (!pageActive || !navigator.onLine || connectionRequest || state.refreshing) return;
   // A hidden tab keeps a slow poll while runs are active, so their end still reaches the title and notifications.
   const hidden = document.hidden;
   const active = state.connected && state.runs.some(activeRun);
   if (hidden && !active) return;
   const now = Date.now();
-  const runsRetryAt = cooldownFor('GET /api/runs')?.retryAt ?? 0;
+  const runsRetryAt = Math.max(runsReadRetryAt, cooldownFor('GET /api/runs')?.retryAt ?? 0);
   const sessionRetryAt = cooldownFor('GET /api/session')?.retryAt ?? 0;
   const retryAt = state.connected ? runsRetryAt : Math.max(sessionRetryAt, state.session ? runsRetryAt : 0);
   const live = !hidden && state.connected && liveRefreshPending;
@@ -2916,6 +2953,7 @@ function schedulePoll() {
 function initialize(): Promise<void> {
   if (connectionRequest) return connectionRequest;
   if (!pageActive) return Promise.resolve();
+  const reconnecting = Boolean(state.session);
   invalidateReads();
   const epoch = state.connectionEpoch;
   state.connected = false;
@@ -2927,7 +2965,7 @@ function initialize(): Promise<void> {
       if (!navigator.onLine) throw new Error(t('网络已断开'));
       // The first connection takes the run list in the session reply, one round trip instead of two. A reconnect may bring
       // another session (and account), and reads the list itself, as a 304 when nothing changed.
-      const { runs: listed, ...reply } = await api<WebSession>(state.session ? '/api/session' : '/api/session?runs');
+      const { runs: listed, ...reply } = await api<WebSession>(state.session ? '/api/session' : '/api/session?runs', { firstResponseTimeoutMs: 6000 });
       const session = localizeSession(reply);
       if (!currentConnection(epoch)) return;
       if (session.auth === 'email' && (!session.account || session.termsRequired)) {
@@ -2957,6 +2995,7 @@ function initialize(): Promise<void> {
       if (ownerChanged || storedOwnerChanged) { clearOwnedDrafts(); state.submitting = false; }
       ownedDrafts.bind(ownerOfSession(session));
       if (state.session && state.session.csrfToken !== session.csrfToken) {
+        chatWorkspace?.clearRecentConversations();
         state.runs = []; state.selectedId = ''; state.selectedRun = undefined;
         state.finishedRuns.clear(); state.cancelling.clear();
         state.detailError = ''; state.panelSignature = '';
@@ -3066,7 +3105,13 @@ function initialize(): Promise<void> {
     element<HTMLButtonElement>('#refresh-runs').disabled = !pageActive;
     renderRuntime(); renderDetail();
     if (pageActive && !clockTimer) clockTimer = setInterval(updateClocks, 1000);
-    if (pageActive && state.connected && !document.hidden) runUpdates.start();
+    if (currentConnection(epoch) && state.connected) {
+      if (!document.hidden) runUpdates.start();
+      if (reconnecting) {
+        trajectoryView?.resumeRead();
+        void chatWorkspace?.refresh();
+      }
+    }
     schedulePoll();
   });
   renderRuntime(); renderDetail();
@@ -4440,7 +4485,7 @@ window.addEventListener('offline', () => {
 });
 async function resumeConnection() {
   await connectionRequest;
-  if (pageActive && !state.connected) await initialize();
+  if (pageActive && navigator.onLine && !state.connected) await initialize();
 }
 window.addEventListener('online', () => void resumeConnection());
 // Back and Forward open the run the address names, or the new-research page; they never add entries themselves.

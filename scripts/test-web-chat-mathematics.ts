@@ -252,7 +252,7 @@ try {
         createdAt: at, status: 'complete' });
       return { item, activity, run: value, text };
     });
-    let generated = false, failAcceptedOverview = false, explanationLanguage: 'zh' | 'en' = 'zh';
+    let generated = false, failAcceptedOverview = false, legacyMath = false, explanationLanguage: 'zh' | 'en' = 'zh';
     let generatingPhase: 'auditing' | 'retrying' = 'auditing', slowProgress: Promise<void> | undefined, failProgress = false;
     let browsingSaved = false;
     await context.route('**/*', async route => {
@@ -312,6 +312,15 @@ try {
             else selected.statement = '';
             saved.document!.sections.unshift({ ...explanationDocument('identity_sum').sections[0]!,
               statement: '这是另一目标的已保存陈述，不能作为当前目标的结论。' });
+          }
+          if (legacyMath && selectedRun === singleTarget) {
+            const [main, support] = saved.document!.sections;
+            main.title = '**二次关系下换位子的 $n$ 次幂为零**';
+            main.statement = 'A²B − (2:ℂ)•(ABA) + BA² = 0';
+            main.steps[0].text = '迹条件 htrace 对 $0<k\\le n$ 成立。假设 h 说右端为零。';
+            main.steps[0].uses.push({ name: 'matrix_trace', place: 'declaration', spans: [] });
+            support.title = '二次关系推出 $A$ 与换位子可交换';
+            saved.document!.sections.push({ ...support, name: 'matrix_trace', title: '矩阵版本：迹条件推出 $C^n=0$' });
           }
           await route.fulfill({ json: { explanation: saved } }); return;
         }
@@ -580,6 +589,19 @@ try {
       await page.getByText('原题含义审核尚未通过，暂未生成讲解。').waitFor();
       assert.equal(await page.locator('[data-chat-answer] [data-chat-explain]').count(), 0);
       assert.equal(await page.locator('[data-research-artifact="source"]').isVisible(), true);
+      const reviewFailure: WebFormalization = { id: waitingReview.formalization!.id, original: originalTask, environment: 'standard',
+        model: 'recorded-fixture', effort: 'high', status: 'error', createdAt: at, updatedAt: at, runId: waitingReview.id,
+        reason: 'formalization_role_incomplete', progress: { phase: 'reviewing' },
+        compiled: { digest: 'fixture', source, sourceSha256: 'fixture', round: 1 } };
+      await page.route(`${origin}/api/formalizations/${reviewFailure.id}`, route => route.fulfill({ json: { formalization: reviewFailure } }));
+      conversations[runs.indexOf(waitingReview)]!.formalizationId = reviewFailure.id;
+      waitingReview.formalization!.confirmation = 'interrupted';
+      await page.reload();
+      const failure = page.locator('[data-formalization-failure]');
+      await failure.getByText('formalization_role_incomplete').waitFor();
+      assert.equal(await page.locator('.research-conversation-status').getAttribute('data-accepted'), 'true');
+      assert.equal(await page.locator('[data-chat-result-more]').evaluate(node => (node as HTMLDetailsElement).open), false);
+      assert.equal(await failure.locator('[data-research-artifact="original"]').isVisible(), true);
       mark(`${width}: waiting for statement review, model retries, and a failed status refresh show distinct states without concealing progress`);
     }
 
@@ -625,6 +647,29 @@ try {
     await answer.locator('h3').scrollIntoViewIfNeeded();
     await fit(page); await screenshot(page, `${width}-single-target-name.png`);
     mark(`${width}: a saved answer with one selectable target retains its visible target name and keyboard step questions without a selector`);
+
+    legacyMath = true;
+    singleTarget.observation = observation(singleTarget.id);
+    await page.reload();
+    const matrix = answer.locator('[data-chat-answer-document="swap_sum"]');
+    await matrix.locator('h4 strong .math[data-math-state="ready"]').waitFor();
+    assert.equal(await matrix.locator('h4 strong .math').getAttribute('title'), 'n');
+    for (const [name, formula] of [['supporting_identity', 'A'], ['matrix_trace', 'C^n=0']]) {
+      const link = matrix.locator(`[data-chat-answer-use="${name}"]`);
+      await link.locator('.math[data-math-state="ready"]').waitFor();
+      assert.equal(await link.locator('.math').getAttribute('title'), formula);
+      await link.focus(); await page.keyboard.press('Enter');
+      const section = matrix.locator(`details[id$="-${name}"]`);
+      await section.locator('summary .math[data-math-state="ready"]').waitFor();
+      assert.equal(await section.locator('summary .math').getAttribute('title'), formula);
+      assert.equal(await section.evaluate((node: HTMLDetailsElement) => node.open && document.activeElement === node), true);
+    }
+    assert.match(await matrix.locator('[data-chat-answer-conclusion]').innerText(), /A²B − 2ABA \+ BA² = 0/u);
+    assert.doesNotMatch(await matrix.locator('.chat-answer-steps').innerText(), /\bh(?:trace)?\b/u);
+    assert.equal(await page.locator('[data-chat-plan-progress]').count(), 0, 'An accepted run with recorded plan tasks never shows an incomplete-looking counter');
+    await fit(page);
+    mark(`${width}: formula titles, keyboard citations and readable notation in a legacy explanation, with a clear final verdict`);
+    legacyMath = false;
 
     await page.goto(`${origin}/?chat=${conversations[2].id}`, { timeout: 15_000 });
     const mathematics = page.locator('[data-chat-mathematics]');

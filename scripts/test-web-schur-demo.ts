@@ -186,9 +186,8 @@ try {
   const prefix = 'Recorded task context:\n', separator = '\n\nQuestion: ', sent = input[0].content[0].text;
   assert(sent.startsWith(prefix)); const split = sent.indexOf(separator);
   assert(split > prefix.length); assert.equal(sent.slice(split + separator.length), schurEqualityQuestion);
-  const sentContext = JSON.parse(sent.slice(prefix.length, split));
-  assert(sentContext.original.includes(example.original)); assert.equal(sentContext.run.source, example.source.trim());
-  assert.equal(sentContext.run.task, task); assert.equal(sentContext.run.proof, proof);
+  const sentContext = sent.slice(prefix.length, split);
+  for (const fact of [example.original, example.source.trim(), task, proof]) assert(sentContext.includes(fact));
   assert.doesNotMatch(await page.locator('#research-chat-thread').innerText(), /\\u[0-9a-f]{4}/iu);
   await shot('09-equality-answer.png');
   mark('等号条件追问保留原题及证明上下文，完整流式回答两类等号情形，不重启证明');

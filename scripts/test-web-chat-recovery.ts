@@ -57,13 +57,13 @@ async function participation(value: 'automatic' | 'guided') {
 try {
   browser = await startBrowser(service.server, port);
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce', locale: 'zh-CN' });
-  context.setDefaultTimeout(0); context.setDefaultNavigationTimeout(0);
+  context.setDefaultTimeout(15_000); context.setDefaultNavigationTimeout(30_000);
   await context.addInitScript(() => localStorage.setItem('theorem-os.locale.v1', 'zh'));
   await context.route(/^https?:\/\//, async route => {
     if (new URL(route.request().url()).origin !== origin) { external.push(route.request().url()); await route.abort(); }
     else await route.continue();
   });
-  page = await context.newPage(); page.setDefaultTimeout(0); page.setDefaultNavigationTimeout(0);
+  page = await context.newPage();
   await page.goto(origin);
   await page.locator('#send-code:enabled').waitFor();
   await page.locator('#login-email').fill('recovery@example.org');
@@ -73,10 +73,13 @@ try {
   await page.locator('#verify-code').click(); await page.waitForURL(origin + '/'); await initialized();
   await openChatParticipation(page);
   await page.locator('input[name="chat-participation"][value="automatic"]').check();
-  await clickWorkbenchAction(page, '#open-settings');
+  await page.locator('#chat-model-settings > summary').click();
+  await page.locator('#formalize-provider').selectOption(selected['formalize-provider']);
+  await page.locator('#formalize-effort').selectOption(selected['formalize-effort']);
+  await page.locator('#formalize-model').fill(selected['formalize-model']);
   await openAdvancedChatSettings(page);
-  for (const id of ['formalize-provider', 'formalize-environment', 'formalize-effort'] as const) await page.locator(`#${id}`).selectOption(selected[id]);
-  for (const id of ['formalize-model', 'formalize-minutes', 'formalize-tokens', 'research-minutes', 'research-tokens', 'research-turns'] as const) await page.locator(`#${id}`).fill(selected[id]);
+  await page.locator('#formalize-environment').selectOption(selected['formalize-environment']);
+  for (const id of ['formalize-minutes', 'formalize-tokens', 'research-minutes', 'research-tokens', 'research-turns'] as const) await page.locator(`#${id}`).fill(selected[id]);
   await page.locator('#formalize-original').fill(original); await page.locator('#formalize-key').fill(credential);
   await assertNoStoredKey();
   await page.locator('#chat-save-key').click(); await page.locator('#chat-key-notice').filter({ hasText: 'Key 已保存' }).waitFor();
@@ -153,7 +156,7 @@ try {
 
   // The first send must also recover when no earlier refresh normalized the default budget object's field order.
   const defaultsContext = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce', locale: 'zh-CN' });
-  defaultsContext.setDefaultTimeout(0); defaultsContext.setDefaultNavigationTimeout(0);
+  defaultsContext.setDefaultTimeout(15_000); defaultsContext.setDefaultNavigationTimeout(30_000);
   await defaultsContext.addCookies(cookies);
   page = await defaultsContext.newPage(); await page.goto(origin); await initialized();
   await page.locator('#formalize-original').fill(webFormalizationStatement);
@@ -206,7 +209,7 @@ try {
 
   for (const [width, height] of [[812, 375], [390, 480], [390, 844], [1440, 900]]) {
     const sampleContext = await browser.newContext({ viewport: { width, height }, reducedMotion: 'reduce', locale: 'zh-CN' });
-    sampleContext.setDefaultTimeout(0); sampleContext.setDefaultNavigationTimeout(0);
+    sampleContext.setDefaultTimeout(15_000); sampleContext.setDefaultNavigationTimeout(30_000);
     await sampleContext.addCookies(cookies);
     const samplePage = await sampleContext.newPage(); page = samplePage;
     await samplePage.goto(origin);
