@@ -2,7 +2,7 @@
 
 Version: v1
 Status: Implemented（隔离分支的本地功能验收；未启用真实求解）
-Updated: 2026-11-16
+Updated: 2026-11-23
 
 ## 已确认的目标
 
@@ -42,6 +42,8 @@ Updated: 2026-11-16
 本轮只记录用户已确认的方向，没有修改运行源码、固定 Skill 或已有求解配置。此前功能测试结果对应现有实现，不构成这两项新目标已经实现的证据。
 
 ## 当前阶段与最小功能验收场景
+
+数学工具的首轮功能验收在本地原生团队进行：检查 Lead 和成员能否按任务选用当前环境中的工具、实际执行并使用结果。Web worker 的依赖与部署单独验收；本地协议回放也不能说明真实模型的选用质量。另以两道不点名工具的新题观察真实模型，一题适合精确计算、一题直接 Lean 证明即可，分别报告自主选用与整题验收。见[决策 0006](decisions/0006-local-native-math-tools-first.md)、[决策 0007](decisions/0007-blind-local-tool-selection.md)。
 
 当前先验收协作功能。以下场景由已确认目标和既有验收保证导出；本地验证使用受控会话和实际协议进程，不调用真实模型。
 
@@ -91,8 +93,11 @@ Updated: 2026-11-16
 
 ## 本地验收证据
 
+2026-11-23 调整工具指引后，本机扩展配置的常驻工具摘要为 315 字节；完整清单和样例移入各自工作区帮助，Lean 命令使用实际工作区和项目相对文件名。在[新版两道真实模型盲测](/data/lzh/workspace/outputs/theoremos/20261123-native-tools-v2-blind.KBKkrtQX/report.md)中，3 次 `check-lean` 都选对文件，两题均独立通过：整数题用标准库 Python 求出见证并写入 Lean，命题题直接使用假设。两题均由 Lead 完成，未调用扩展数学命令。另一次[受控原生回放](/data/lzh/workspace/outputs/theoremos/20261123-native-tools-v2-blind.KBKkrtQX/native-replay/attempt-1/report.json)中，成员从自己的帮助发现 Gfan 并执行，Lead 用 SymPy 复核收件结果并拒绝错误候选；这项记录说明工具可被发现、交接和使用，不代表真实模型自发派工。
+
 | 范围 | 验证 |
 | --- | --- |
+| 本地数学工具（2026-11-23） | 真实模型在同一构建、扩展工具配置和 Skill 下完成两道新题，均通过本地独立 Lean 验收。整数题用系统 Python 自写计算得到见证，曾因未使用 `math-python` 导入 SymPy 失败；命题题仅用假设。两题均未派工。另一次脚本回放验证原生成员用 Gfan 计算、Lead 收件后用 SymPy 复核，不能据此认定模型会自主协作。[盲测报告](/data/lzh/workspace/outputs/theoremos/20261123-native-tool-blind.Kq7sliPu/report.md) |
 | 持续协作 | [管理层测试](../tests/agentResearchTeam.test.ts)：真实 Git/Lean，受控会话；覆盖异步到达、线程跟进、消息、成员复用、预算、恢复、错误反馈与停写。 |
 | 正式交付 | [证明测试](../tests/agentTeamProof.test.ts)：真实 Git/Lean；覆盖精确声明、未授权改动、冲突、过期证据、来源变更及合并前后退出恢复。 |
 | 原生执行 | [协议端到端测试](../tests/agentTeamSolver.test.ts)：实际 Codex adapter、动态工具 RPC、bwrap 和四份冻结 bundle；双子 Agent 提交 helper，Lead 两次恢复并采纳。错误 helper 经真实 Lean 拒绝后，Lead 显式派工，同一 child thread 收到自身错误及新任务并修正，Lead 采纳后完成原题；同时核对身份及角色工具。实际 CLI 入口完成 Lead/子 Agent 依赖准备、环境投影、全部原目标的独立 S3 Lean 验收及结果保存。回复由本地协议 peer 控制，健康检查仅访问临时本机服务。 |

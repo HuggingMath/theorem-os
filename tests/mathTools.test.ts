@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { bootstrapLocalExample } from '../src/math/localExample';
 import { mathDigest } from '../src/math/mathRuntimeIo';
-import { mathToolsInstruction, readMathTools, type MathTools } from '../src/math/mathTools';
+import { mathToolGuide, mathToolsInstruction, readMathTools, MATH_TOOLS_ROOT_ENV, type MathTools } from '../src/math/mathTools';
 import { projectMathematicsRuntimeEnvironment, resolveMathematicsRuntimeEnvironment } from '../src/math/mathRuntimeEnvironment';
 import type { SolverRunState } from '../src/solver/archive';
 import { frozenSourceContext } from '../src/solver/contextCompiler';
@@ -39,6 +39,32 @@ describe('math tools manifest', () => {
     expect(text).toContain('never proof acceptance');
     expect(text).toContain('$TMPDIR');
     expect(text).toContain('timeout SECONDS');
+  });
+
+  it('keeps an unfamiliar executable discoverable and runs the examples from the offered profile', () => {
+    const entries = [
+      { name: 'python-stack', version: '1', purpose: 'Includes SymPy.', commands: ['math-python'] },
+      { name: 'smt', version: '2', purpose: 'Integer constraints.', commands: ['cvc5'] },
+      { name: 'experimental', version: '3', purpose: 'Computes a specialized invariant.', commands: ['my-invariant'] },
+    ];
+    const root = toolsRoot(manifest(entries), entries.flatMap(entry => entry.commands));
+    const { summary, detail } = mathToolGuide(readMathTools(root), root);
+    expect(summary).toMatch(/math-python.*SymPy/u);
+    expect(summary).not.toMatch(/my-invariant|\bz3\b|visual-python/u);
+    expect(detail).toContain('experimental 3 [my-invariant]: Computes a specialized invariant.');
+    const example = detail.match(/```sh\n([\s\S]*?)\n```/u)![1]!;
+    const ran = spawnSync('sh', ['-ec', example], { cwd: root, encoding: 'utf8',
+      env: { PATH: '/usr/bin:/bin', [MATH_TOOLS_ROOT_ENV]: root }, timeout: 5_000 });
+    expect(ran.status, ran.stderr).toBe(0);
+    expect(ran.stdout).toContain('math-python-ran -c from sympy import');
+    expect(ran.stdout).toContain('cvc5-ran --lang smt2');
+  });
+
+  it('does not assume that a custom math-python ships scientific packages', () => {
+    const root = toolsRoot(manifest([{ name: 'math-python', version: '1', purpose: 'Standard library only.', commands: ['math-python'] }]), ['math-python']);
+    const { summary, detail } = mathToolGuide(readMathTools(root), root);
+    expect(summary).toContain('math-python');
+    expect(summary + detail).not.toMatch(/sympy|numpy|sage|visual-python|cvc5/iu);
   });
 
   it.each([

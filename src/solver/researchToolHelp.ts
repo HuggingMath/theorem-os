@@ -26,7 +26,7 @@ export class ResearchToolHelpBuilder {
     const text = '# TheoremOS local tool help\n\n' +
       'Host-prepared command and schema reference for the current dispatch. Leave this file unchanged. ' +
       'The frozen problem, current assignment and mandatory instructions retain authority. ' +
-      'Examples are placeholders, historical evidence is advisory, and only independent host checks accept proofs.\n\n' +
+      'Use the supplied paths as written; replace sample inputs and reference IDs. Historical evidence is advisory, and only independent host checks accept proofs.\n\n' +
       this.sections.map(section => '## ' + section.id + '\n\n' + section.text + '\n').join('\n');
     return { path: RESEARCH_TOOL_HELP_FILE, text, digest: mathDigest(text) };
   }

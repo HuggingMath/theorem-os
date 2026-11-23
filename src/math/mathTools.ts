@@ -46,29 +46,64 @@ export function readMathTools(root: string): MathTools {
 }
 
 /** Per-worker tool state must keep the same anchor even when the shell changes directories. */
-export function mathToolsUsageInstruction(tools: MathTools, worktree?: string): string {
-  const commands = new Set(tools.tools.flatMap(tool => tool.commands));
+function referenceSearchUsage(tools: MathTools, worktree?: string): string {
+  if (!tools.tools.some(tool => tool.commands.includes('reference-search'))) return '';
   const runDir = path.join(worktree ?? '/ABSOLUTE_WORKER_WORKTREE', '.scratch/reference-search');
   const quotedRunDir = "'" + runDir.replaceAll("'", "'\\''") + "'";
-  return (commands.has('math-python')
-    ? 'Use math-python for the installed NumPy, SciPy, SymPy and PySAT dependencies; /usr/bin/python3 is suitable for standard-library-only scripts. A missing module in system Python does not mean the mathematics environment lacks it.\n' : '') +
-    (commands.has('reference-search')
-      ? `Keep reference-search state under this worker's fixed absolute directory: reference-search --run-dir ${quotedRunDir} search 'QUERY' --limit 6, then reference-search --run-dir ${quotedRunDir} read REF-0123456789ABCDEF --term 'KEYWORD' --window 650. Replace the example REF id with a returned id. Reuse the identical --run-dir prefix for every stateful command, including after cd and for subcommand help. ` +
+  return `Keep reference-search state under this worker's fixed absolute directory: reference-search --run-dir ${quotedRunDir} search 'QUERY' --limit 6, then reference-search --run-dir ${quotedRunDir} read REF-0123456789ABCDEF --term 'KEYWORD' --window 650. Replace the example REF id with a returned id. Reuse the identical --run-dir prefix for every stateful command, including after cd and for subcommand help. ` +
         'Reuse saved text with find REF --term \'KEYWORD\' --offset 0 or open REF --start-line 1 --count 80; continue returned next_offset or line handles to inspect the relevant proof and its limitations. ' +
         'For independent queries, use search-batch PLAN.json --workers 2 with {"searches":[{"query":"PUBLIC_MATHEMATICAL_QUERY","reason":"specific missing inference"}]}; dependent queries follow the newly read evidence. ' +
         'For a relevant paper, follow REF --direction references --limit 4 (or --direction citations) discovers additional unread leads. Read a useful lead before citing it. ' +
         'Provider errors are failed retrievals, not evidence that no paper or theorem exists. A partial search retains useful hits; read those hits and use the same search with --retry-failed only for failed provider requests. Use --refresh when new retrieval is needed. ' +
-        'Search titles/snippets, abstract and page_text reads do not establish that the complete proof was read. Inspect content_scope; use read REF --refresh to retry a saved abstract when a full-text route is available, then save the source URL, locator, assumptions and exact consumer adaptation.\n' : '') +
+        'Search titles/snippets, abstract and page_text reads do not establish that the complete proof was read. Inspect content_scope; use read REF --refresh to retry a saved abstract when a full-text route is available, then save the source URL, locator, assumptions and exact consumer adaptation.\n';
+}
+
+export function mathToolsUsageInstruction(tools: MathTools, worktree?: string): string {
+  return (tools.tools.some(tool => tool.commands.includes('math-python'))
+    ? 'Use math-python for the installed NumPy, SciPy, SymPy and PySAT dependencies; /usr/bin/python3 is suitable for standard-library-only scripts. A missing module in system Python does not mean the mathematics environment lacks it.\n' : '') +
+    referenceSearchUsage(tools, worktree) +
     'For check-lean JSON, save stdout separately from stderr progress (for example, > "$TMPDIR/check.json" 2> "$TMPDIR/check.log") and parse only stdout. Its --file is relative to --workspace; do not repeat the Lean project prefix.\n';
 }
 
-/** Worker guidance: tools explore and find certificates; only Lean grants acceptance. */
-export function mathToolsInstruction(tools: MathTools, worktree?: string): string {
+function mathToolsCatalog(tools: MathTools): string {
   return `Installed mathematics tools (on PATH, manifest ${path.join(tools.root, 'manifest.json')}):\n` +
     tools.tools.map(tool => `- ${tool.name} ${tool.version} [${tool.commands.join(', ')}]: ${tool.purpose}`).join('\n') +
     '\nUse them to compute examples, test conjectures, search counterexamples, simplify expressions and find certificates or witnesses. ' +
     'Run them from a directory under $TMPDIR after mkdir -p "$TMPDIR": some write output beside their input or in the current directory. ' +
     'Bound every run with timeout SECONDS and at most 4 threads, and keep printed output small. ' +
     'Their results are advisory and never proof acceptance: restate a useful finding as a Lean statement and prove it, using the computed certificate or witness where it helps. ' +
-    'Record the command, input and decisive output in RESEARCH.md.\n' + mathToolsUsageInstruction(tools, worktree);
+    'Record the command, input and decisive output in RESEARCH.md.\n';
+}
+
+/** Worker guidance: tools explore and find certificates; only Lean grants acceptance. */
+export function mathToolsInstruction(tools: MathTools, worktree?: string): string {
+  return mathToolsCatalog(tools) + mathToolsUsageInstruction(tools, worktree);
+}
+
+/** Short choices for a native team; complete manifest and runnable examples for its worktree help. */
+export function mathToolGuide(tools: MathTools, worktree: string): { summary: string; detail: string } {
+  const commands = new Set(tools.tools.flatMap(tool => tool.commands));
+  const routes: string[] = [], examples: string[] = [];
+  const python = tools.tools.find(tool => tool.commands.includes('math-python'));
+  const bin = '"$' + MATH_TOOLS_ROOT_ENV + '/bin/';
+  if (python && /\bsympy\b/iu.test(python.purpose)) {
+    routes.push('Exact or symbolic calculation: use math-python for SymPy; python3 is the system interpreter.');
+    examples.push('# Exact prime factors (prime: exponent)\ntimeout 20 ' + bin + 'math-python" -c \'from sympy import factorint; print(factorint(84))\'');
+  } else if (python) routes.push('For the Python modules listed in this profile, use math-python; python3 is the system interpreter.');
+  else if (commands.has('sage')) routes.push('Exact algebra: sage.');
+  else if (commands.has('gp')) routes.push('Number-theoretic computations: gp.');
+
+  const smt = ['z3', 'cvc5'].find(command => commands.has(command));
+  if (smt) {
+    routes.push(`To test a constraint or find a counterexample: ${smt}.`);
+    examples.push('# Is there an integer strictly between zero and one? Expected: unsat.\n' +
+      "printf '%s\\n' '(set-logic QF_LIA)' '(declare-const x Int)' '(assert (and (< 0 x) (< x 1)))' '(check-sat)' | timeout 20 " +
+      bin + smt + '" ' + (smt === 'z3' ? '-in' : '--lang smt2'));
+  }
+  if (commands.has('loogle-search')) routes.push('To look for a Lean declaration by its type: loogle-search.');
+  if (commands.has('visual-python')) routes.push('If a plot can reveal a boundary case or test a geometric guess: visual-python.');
+  else if (commands.has('dot')) routes.push('If a diagram can clarify graph structure: dot.');
+  const exampleText = examples.length ? '\nExamples (substitute the inputs for your question):\n```sh\n' + examples.join('\n\n') + '\n```\n' : '';
+  return { summary: ['Optional math tools for this run.', ...routes].join(' '),
+    detail: mathToolsCatalog(tools) + referenceSearchUsage(tools, worktree) + exampleText };
 }
