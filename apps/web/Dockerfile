@@ -34,7 +34,9 @@ COPY skills ./skills
 COPY resources ./resources
 COPY apps ./apps
 COPY docs/assets ./docs/assets
-COPY LICENSE ./LICENSE
+COPY LICENSE NOTICE CITATION.cff ./
+COPY LICENSES ./LICENSES
+COPY third_party ./third_party
 
 FROM base AS worker-tools
 ENV ELAN_HOME=/opt/elan \

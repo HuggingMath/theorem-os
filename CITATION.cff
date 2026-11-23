@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+type: software
+title: TheoremOS
+license: AGPL-3.0-only
+message: "When citing TheoremOS, please include the release tag or commit you used. Cite any third-party software, problems or datasets separately."
+authors:
+  - family-names: Liu
+    given-names: Zhenhao
+  - name: TheoremOS contributors
+repository-code: "https://github.com/HuggingMath/theorem-os"
+url: "https://theoremos.top"

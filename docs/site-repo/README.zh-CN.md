@@ -210,7 +210,7 @@ TheoremOS 目前通过邮箱白名单机制开放研究内测。**内测期间�
 
 ## 仓库内容
 
-本仓库公开官网页面、证明源码和研究记录；TheoremOS 运行时的源码不公开。
+本仓库公开官网页面、证明源码和研究记录。[TheoremOS 运行时](https://github.com/HuggingMath/theorem-os)在单独的仓库中维护。
 
 <details>
 <summary><b>📂 仓库目录与许可</b></summary>
@@ -224,6 +224,6 @@ TheoremOS 目前通过邮箱白名单机制开放研究内测。**内测期间�
 | [data/catalog.json](data/catalog.json) | 证明档案目录，含进展与检查结果链接 |
 | `index.html`, `archive.html`, `feedback.html`, `en/`, `assets/` | 官网、英文页面和工作台截图 |
 
-TheoremOS 保留运行时的所有权利。第三方字体与图标沿用 [assets/fonts/](assets/fonts/)、[assets/licenses/](assets/licenses/) 和 [lucide-LICENSE.txt](lucide-LICENSE.txt) 中随附的许可。
+运行时有[独立的许可证](https://github.com/HuggingMath/theorem-os/blob/main/LICENSE)。第三方字体与图标沿用 [assets/fonts/](assets/fonts/)、[assets/licenses/](assets/licenses/) 和 [lucide-LICENSE.txt](lucide-LICENSE.txt) 中随附的许可。
 
 </details>

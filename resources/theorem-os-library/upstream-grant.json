@@ -1,0 +1,239 @@
+{
+  "schema": "theorem-os.library-redistribution.v1",
+  "license": "AGPL-3.0-only",
+  "upstreamRepository": "theorem-os-library",
+  "upstreamCommit": "2902dec1e973bd70dad0444a8dc2320cf81d90fd",
+  "catalogId": "theorem-os/core",
+  "catalogRevision": "2902dec1e973bd70dad0444a8dc2320cf81d90fd-lean4.33.0-r4",
+  "catalogSha256": "615d45c2236296bb3e3bb7f22b0516022f7fb2d02f3444a55898a7250c728e6f",
+  "modules": [
+    {
+      "upstreamPath": "TheoremOS/Analysis/AsymptoticModuli.lean",
+      "upstreamSha256": "14c8c655a1521ffdd91bed3b4afd7d15092bee9a2feba77d6279fc70ff023f7e",
+      "snapshotSha256": "14c8c655a1521ffdd91bed3b4afd7d15092bee9a2feba77d6279fc70ff023f7e"
+    },
+    {
+      "upstreamPath": "TheoremOS/Analysis/Daugavet.lean",
+      "upstreamSha256": "5ee31788907ce7b812c786c35cb2ccb5b300d60f843b9d18dd2645d16324271c",
+      "snapshotSha256": "5ee31788907ce7b812c786c35cb2ccb5b300d60f843b9d18dd2645d16324271c"
+    },
+    {
+      "upstreamPath": "TheoremOS/Analysis/LittlewoodPolynomial.lean",
+      "upstreamSha256": "b6848444e02449f5585d89b75fcaa351d7f57c1384bd57792a6b8b747ed86870",
+      "snapshotSha256": "2749040850b6f2e4f7de1abf7317911b62bdd5da4b7b4feccf7ceab30ec313df"
+    },
+    {
+      "upstreamPath": "TheoremOS/Analysis/MetricDistortion.lean",
+      "upstreamSha256": "15c5ebcc9242df00be1df9b967439f748b85879a5bb5a4060002ab96427503f5",
+      "snapshotSha256": "15c5ebcc9242df00be1df9b967439f748b85879a5bb5a4060002ab96427503f5"
+    },
+    {
+      "upstreamPath": "TheoremOS/BooleanCube/Fourier.lean",
+      "upstreamSha256": "f0a09eb8c04aca84e36c01734425cd07319a122ae516b2da471bcac6c47a6260",
+      "snapshotSha256": "f0a09eb8c04aca84e36c01734425cd07319a122ae516b2da471bcac6c47a6260"
+    },
+    {
+      "upstreamPath": "TheoremOS/BooleanCube/Hypercontractivity.lean",
+      "upstreamSha256": "01b36de486dab65d6b96349770b0c99ae0ac01b86be7fd91cb098399c74dd9fb",
+      "importRenamedSha256": "07cbd5eef79ee9febf6864dea2e2435f24144c2f6856ca07242768968c776997",
+      "snapshotSha256": "e34f3798611240512dd609201870b46747be4a937b97055d6ec2beb75604c8c0"
+    },
+    {
+      "upstreamPath": "TheoremOS/BooleanCube/Influence.lean",
+      "upstreamSha256": "a54a6fdd5443ae46c4a7e84f1054deaa38258711a616a24a2be9e17d4d3b5d88",
+      "snapshotSha256": "948c2b58a58dbdb44609c0f924fa76e87c2307f9407b0162b68847201d91f015"
+    },
+    {
+      "upstreamPath": "TheoremOS/BooleanCube/LevelOne.lean",
+      "upstreamSha256": "63ff38600ba9fa4415aee352f77fa320b9ebdb852191b2c6ad00e62ce3770938",
+      "snapshotSha256": "c55d83aea93df19b8b242ee95734a6a86135e1ddbfa9dc6d90b24825ea1bc7a2"
+    },
+    {
+      "upstreamPath": "TheoremOS/BooleanCube/Polynomial.lean",
+      "upstreamSha256": "56ac634ff57a097174bc40bc27d8dfbdf824ec966287403c975e28e79d298f99",
+      "snapshotSha256": "ddf9fa8a20af3cca00c9fb40095d3791dcc3a72067f1bf0c92775e34f68ad970"
+    },
+    {
+      "upstreamPath": "TheoremOS/BooleanCube/Product.lean",
+      "upstreamSha256": "c2d0e8a03c95f8142cfbd7d69211d06c16de45d003001f994890ba0687e65ceb",
+      "snapshotSha256": "142e451051fe7cf9ed644efabe8040bd44b7ed461575245ceefb3e6eb4c31ad6"
+    },
+    {
+      "upstreamPath": "TheoremOS/BooleanCube/Relabel.lean",
+      "upstreamSha256": "00161bccc37e80eab814f51657d26caab9646469334c1abc50f96b10245d8dd7",
+      "snapshotSha256": "ae5bba44af2f246084cfdafd70cb0d53110c3a8559783c384c20f33bb44e43ff"
+    },
+    {
+      "upstreamPath": "TheoremOS/BooleanCube/Sensitivity.lean",
+      "upstreamSha256": "e8e193b0b5c57248266a0d16e2eb0de386f505245591513a0fee29b85bc26e3c",
+      "snapshotSha256": "3d9eb595c51e9576bd7f0498ef3e3e8e2669090c0bcaa4e8fc1778635d495454"
+    },
+    {
+      "upstreamPath": "TheoremOS/Combinatorics/BinomialEntropy.lean",
+      "upstreamSha256": "c546fd714c5453bf84350a57b70a4e9edca7ecfe46775334c4fc4d8d9f05924e",
+      "snapshotSha256": "c546fd714c5453bf84350a57b70a4e9edca7ecfe46775334c4fc4d8d9f05924e"
+    },
+    {
+      "upstreamPath": "TheoremOS/Combinatorics/EditDistance.lean",
+      "upstreamSha256": "4a6c2af4d563d6adb5e87f5805286d29e52b0be11ea55acaac4b7fe3a12daa0e",
+      "snapshotSha256": "4a6c2af4d563d6adb5e87f5805286d29e52b0be11ea55acaac4b7fe3a12daa0e"
+    },
+    {
+      "upstreamPath": "TheoremOS/Combinatorics/GraphIndependence.lean",
+      "upstreamSha256": "8fe8bb8b33dd9da1441c8aa2b7eb6b414295f3aff14b0777b6e0ce06ab7bcad7",
+      "snapshotSha256": "8fe8bb8b33dd9da1441c8aa2b7eb6b414295f3aff14b0777b6e0ce06ab7bcad7"
+    },
+    {
+      "upstreamPath": "TheoremOS/Combinatorics/PerfectMatching.lean",
+      "upstreamSha256": "392e006404397d6d31eb47eb3c8bd67da5b19db2baaa76a0f3e0398addb571bc",
+      "snapshotSha256": "2c2b235dc645d6e9e7cecb03a70fa955d4932c214e3772a2749f76dde4b5cfa1"
+    },
+    {
+      "upstreamPath": "TheoremOS/Combinatorics/Ramsey.lean",
+      "upstreamSha256": "f4074b6622c28fd6146e4a8f8337811ab4544003064c86a0fff7c4d7a415fe47",
+      "snapshotSha256": "f4074b6622c28fd6146e4a8f8337811ab4544003064c86a0fff7c4d7a415fe47"
+    },
+    {
+      "upstreamPath": "TheoremOS/Combinatorics/RamseyLower.lean",
+      "upstreamSha256": "d21f804760eb6321cc881d37e13677b16b3f8bb37626b351d96d850a2072bd45",
+      "importRenamedSha256": "33e40b8f4fc1220369dc0082e90a02a27e13b56459044a13fd10f636e6756321",
+      "snapshotSha256": "0bfbea4f2cc0fb14068bce3c50c736727707bf79359aaf1f1b229d1df5f3d81b"
+    },
+    {
+      "upstreamPath": "TheoremOS/Geometry/EuclideanCoordinates.lean",
+      "upstreamSha256": "c952ba750cd589d52b0127557fa81f9b6f904ac4cb56f983685e716188b0a248",
+      "snapshotSha256": "c952ba750cd589d52b0127557fa81f9b6f904ac4cb56f983685e716188b0a248"
+    },
+    {
+      "upstreamPath": "TheoremOS/Geometry/EuclideanRamsey.lean",
+      "upstreamSha256": "0dd86e82f255fa60d7612736135cbfc69111f776bff5c93ea949d3194bd2d3d6",
+      "snapshotSha256": "0dd86e82f255fa60d7612736135cbfc69111f776bff5c93ea949d3194bd2d3d6"
+    },
+    {
+      "upstreamPath": "TheoremOS/Geometry/TranslativeCovering.lean",
+      "upstreamSha256": "4933683c1669980bd906d1ed2edc6238b733f1dcf5aba56a14d4b0bcffc0ef09",
+      "snapshotSha256": "4933683c1669980bd906d1ed2edc6238b733f1dcf5aba56a14d4b0bcffc0ef09"
+    },
+    {
+      "upstreamPath": "TheoremOS/InformationTheory/Divergence.lean",
+      "upstreamSha256": "156fa27cb115f43ee861be8def872b3d70b312dcf1d90d4cf87c1867b06fddc8",
+      "snapshotSha256": "8e5eb6a47f74d0e1aa5e1e41cc6ecc61e5affe8aee75661c5c8d6b88fd9ff36c"
+    },
+    {
+      "upstreamPath": "TheoremOS/InformationTheory/Entropy.lean",
+      "upstreamSha256": "cdf2132bbaf741c0317d68dffba14a23bdcc6dd5ac363de905960b1230742f5f",
+      "snapshotSha256": "cdf2132bbaf741c0317d68dffba14a23bdcc6dd5ac363de905960b1230742f5f"
+    },
+    {
+      "upstreamPath": "TheoremOS/InformationTheory/Shearer.lean",
+      "upstreamSha256": "b3098600cb960f126694f7e42723e44410aa98b33d0f69ecc9987ab92539664c",
+      "importRenamedSha256": "6a0a84121b0623fc6763a40f3fc3fa4c3a0633571a52f1f27f8f032d1b6ec1b2",
+      "snapshotSha256": "667be8cc1e4a268fb0bc2755c87c47cff7b0ff15c320462d0f66533d2cb14ad8"
+    },
+    {
+      "upstreamPath": "TheoremOS/LinearAlgebra/DensityMatrix.lean",
+      "upstreamSha256": "6fb397e17653e3c49c35144667610ee3f71087d962156b46c141be6c387f2f1b",
+      "snapshotSha256": "41142f65813bb7e375d2df4d03517395a340cfe2a080dbbd65ad37c2f135ea4b"
+    },
+    {
+      "upstreamPath": "TheoremOS/LinearAlgebra/NumericalRange.lean",
+      "upstreamSha256": "b8ec1a3f74d2d6602c8800b85dcdbba64816597bbc50e6f12417b3fd0c123f9a",
+      "snapshotSha256": "b8ec1a3f74d2d6602c8800b85dcdbba64816597bbc50e6f12417b3fd0c123f9a"
+    },
+    {
+      "upstreamPath": "TheoremOS/LinearAlgebra/Pauli.lean",
+      "upstreamSha256": "e14f08c0f98127e41b5403b98bca599af79806b86de2fffe69d76548e52ffee5",
+      "importRenamedSha256": "e074d65184d8bf4e6795d88f986c85dc45fdf9ba44013b3f766e9190bf740f84",
+      "snapshotSha256": "ed6621adf73595592cae28590f633f3066371e2e2166ce06b923d67b6750249d"
+    },
+    {
+      "upstreamPath": "TheoremOS/LinearAlgebra/PiTensor.lean",
+      "upstreamSha256": "507c05b5a2ad7bf864948001dffa47a1f4a88683a6373b0982a4c0be0d512e62",
+      "snapshotSha256": "22c52b5262712c46c1a5ec9dae24ede60be864b9d1f682cd817eb4fa9e1b3859"
+    },
+    {
+      "upstreamPath": "TheoremOS/LinearAlgebra/VonNeumannEntropy.lean",
+      "upstreamSha256": "34ac030a78cef7f0aac320b0b8608edf2adab3c7800ed7f5b156e807871096e7",
+      "snapshotSha256": "c67cd4d888ca9d6e5e65541824ded0f75094eff904a12c535fa35926a8cd7439"
+    },
+    {
+      "upstreamPath": "TheoremOS/Probability/BiasedProduct.lean",
+      "upstreamSha256": "e2894cb5ee689c12b30e6aedb2a0f5f2f9938ed6940b1fe48d4111eb0d7ae6c5",
+      "importRenamedSha256": "3aba352332d21d1e23cd5129c31c5e2324001b565e172d08e61052e3aaf9e86a",
+      "snapshotSha256": "a8739fbeb0615c8fcd1f6aef183bf15b2b9eb7f151789a3608e0b6d30f957278"
+    },
+    {
+      "upstreamPath": "TheoremOS/Probability/Concentration.lean",
+      "upstreamSha256": "67a3444833069538a7de9c07c09926510e88ddc6a50b4dbddeba95078228c189",
+      "importRenamedSha256": "7f4b81c456990832101e726c12a45c08688f8d075000327d147caeed75c56c23",
+      "snapshotSha256": "7bc2540161cb898e92a1fd4c822dc8f5048d9cc5dcb2086e20ba27a13a4046b1"
+    },
+    {
+      "upstreamPath": "TheoremOS/Probability/Coupling.lean",
+      "upstreamSha256": "0d7611a67534ae0c487c55d1c1c1120ee088b28f13f720fcf776f700cc8af9a0",
+      "snapshotSha256": "10de7c80bb5f163ed6035c1ab44c670affab89ae66e1f3f01ea6644cc91cea23"
+    },
+    {
+      "upstreamPath": "TheoremOS/Probability/Dobrushin.lean",
+      "upstreamSha256": "ba60c8270199d043b03ec36290b2f14ead9731b5f8be379c9f580ec4175d39b7",
+      "snapshotSha256": "1f2fb5d31e153c880e3e9dfeb76e1ab46dd2501010520d17cb511ba4f2594450"
+    },
+    {
+      "upstreamPath": "TheoremOS/Probability/FiniteProbability.lean",
+      "upstreamSha256": "343aa4746e18563543f790d4a7c2363783782157c1d5fb76c88a3767fe4f575f",
+      "snapshotSha256": "92b0f51cf0d792ded51aad74d7f7c263edd78604f84cdc9ff62acdf631cbb996"
+    },
+    {
+      "upstreamPath": "TheoremOS/Probability/GaussianIBP.lean",
+      "upstreamSha256": "bca8177980d05aac4b341ee355c6d72df55fee3aed8e9c85978906ef996c8a9a",
+      "importRenamedSha256": "819c32889631651e2301ce86f1b1edb90681da9500ebb8cf3bb8eee253c05e47",
+      "snapshotSha256": "cf278a6410cf6e19609002b889d756c8e5ed425f57c7bc822f73ac1a7344f4bf"
+    },
+    {
+      "upstreamPath": "TheoremOS/Probability/LocalLemma.lean",
+      "upstreamSha256": "3b411fad6d2db4b8fe26b7c6958cdc198918f04f4429da74acddcc5cfeb19633",
+      "importRenamedSha256": "50c6809fcf8d04d37f724b2880ff81a6deef29fbb4773489c9581c711d39e28a",
+      "snapshotSha256": "db500be9d975635235705897769f341628251a3068b3248233b3fde9aab00e89"
+    },
+    {
+      "upstreamPath": "TheoremOS/Probability/MixingLowerBound.lean",
+      "upstreamSha256": "a89b0d47619b818190ca8ed81fa77693b4709258e43436b349c4d0caf1970dc1",
+      "snapshotSha256": "5542c32827d6ace88a20086974a6b00647e197f9544babfbfb9f8f7bf7835f4d"
+    },
+    {
+      "upstreamPath": "TheoremOS/Probability/RandomKSAT.lean",
+      "upstreamSha256": "537759213f92186ddb2f8421c004248f1b743f6a7ccb0e62396bfb015ae98b98",
+      "snapshotSha256": "537759213f92186ddb2f8421c004248f1b743f6a7ccb0e62396bfb015ae98b98"
+    },
+    {
+      "upstreamPath": "TheoremOS/Probability/RandomKSATThreshold.lean",
+      "upstreamSha256": "dfb2e2ed7ea6be059ecd1638e97d559ce256cad29a0c70eb6109e4e6a6ff81b4",
+      "snapshotSha256": "4b4ca067b54b97c4dc1de10f6188e6ed341bf47c1e4810e3d90a87e7ad551685"
+    },
+    {
+      "upstreamPath": "TheoremOS/Probability/SpectralGap.lean",
+      "upstreamSha256": "6ef128422d328bd922b646217107759ec794b1c7960eb3f4e15f0ff7b6c09fc7",
+      "snapshotSha256": "3902b6999f3f6a115feaed05e0b2034e948892c233b410e913ae1b3ba3490eb4"
+    },
+    {
+      "upstreamPath": "TheoremOS/Probability/SphereLaw.lean",
+      "upstreamSha256": "8da2473c0e75d137696cdff9115e38b658402ba3bd7ba03d5521d1344e86cc0c",
+      "snapshotSha256": "3c569900ec867ad38d4f388aca9b648c3bfd18710a1280d506699e3659acce4a"
+    },
+    {
+      "upstreamPath": "TheoremOS/Probability/TreeReconstruction.lean",
+      "upstreamSha256": "cf91591ad7ab77463ba4c64dee04529a87e730716380bc87a569359d2485f54e",
+      "snapshotSha256": "68ac1bf40522a747f5905b2ffa7ed7de2d9ae19d3415abdcf0d92ea43552beba"
+    },
+    {
+      "upstreamPath": "TheoremOS/RepresentationTheory/GroupFourier.lean",
+      "upstreamSha256": "94c545e293e3b3d581db87b314074387adc3cf78385e00a2b0b08433b7802513",
+      "snapshotSha256": "1c7941dad0d9e6c4a998b9bca99057d78a18a2b093364df4c401f1656e6a1ea7"
+    },
+    {
+      "upstreamPath": "TheoremOS/RepresentationTheory/Plancherel.lean",
+      "upstreamSha256": "21c6faf31816d50fa75049d8b875e01cd68e9672f9af45597e0c6c369286d3fc",
+      "snapshotSha256": "8bc8e66a977c0163e4dbec79746e899738537415d10558008654ceb30266a06e"
+    }
+  ]
+}

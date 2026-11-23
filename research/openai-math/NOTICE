@@ -1,0 +1,10 @@
+The 18 */Challenge.lean files and 69 */OAI/**/*.lean files in this
+research collection reproduce challenge definitions and support sources
+from OpenAI math, commit 1581d4cbdd69a0faf34b2089614fe2a814316a6a:
+https://github.com/openai/math/tree/1581d4cbdd69a0faf34b2089614fe2a814316a6a/lean
+These sources are licensed under the Apache License, Version 2.0.
+The upstream license is reproduced in LICENSE.openai-math.
+
+The companion submissions, verification reports, and packaged TheoremOS
+library modules have their own provenance. They are not covered by this
+notice merely because they appear in the same directory.

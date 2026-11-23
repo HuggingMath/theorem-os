@@ -1,3 +1,10 @@
+/**
+ * @license
+ * Copyright 2026 DeepScientist contributors
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Modified by TheoremOS to retain only classification from public catalog metadata.
+ */
 
 import type { LeanEvalCatalogProblem } from "./leanEvalCatalogAdapter";
 

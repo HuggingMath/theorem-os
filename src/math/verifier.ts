@@ -12,6 +12,7 @@ import { resolveMathProofEnvironment, acquireMathProofEnvironmentLease, MathProo
  * @license
  * Copyright 2026 DeepScientist contributors
  * SPDX-License-Identifier: Apache-2.0
+ * Modified by TheoremOS from the DeepScientist source.
  */
 
 import crypto from 'node:crypto';

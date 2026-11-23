@@ -9,11 +9,11 @@
 </div>
 
 [![Lean 4 · Mathlib](https://img.shields.io/badge/Lean_4-Mathlib-315cf5.svg)](./docs/web-workbench.md)
-[![License: proprietary](https://img.shields.io/badge/license-proprietary-555.svg)](./LICENSE)
+[![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue.svg)](./LICENSE)
 
 ![The TheoremOS workbench with problem input, model selection, and budget settings](./docs/assets/workbench-desktop.png)
 
-This repository contains the internal TheoremOS workbench and CLI. Start with natural language, TeX, or Lean. Inspect the generated Lean statement, follow proof candidates and diagnostics, and download the proof and its acceptance report. Researchers can compare retrieval, context, and collaboration strategies against a fixed acceptance check. The [public TheoremOS repository](https://github.com/HuggingMath/TheoremOS) provides the website source, proof archive, and local verification materials. Each repository has its own license.
+This repository contains the TheoremOS workbench and CLI. Start with natural language, TeX, or Lean. Inspect the generated Lean statement, follow proof candidates and diagnostics, and download the proof and its acceptance report. Researchers can compare retrieval, context, and collaboration strategies against a fixed acceptance check. The [TheoremOS website repository](https://github.com/HuggingMath/TheoremOS) provides the website source, proof archive, and local verification materials. Each repository has its own license.
 
 ## Quick start
 
@@ -22,7 +22,7 @@ This repository contains the internal TheoremOS workbench and CLI. Start with na
 | Browse examples, replays, and published proofs | [Workbench](https://app.theoremos.top/) · [Public archive](https://theoremos.top/archive.html) | Browser; sign-in requires an approved email |
 | Start research on a problem | [Workbench guide](./docs/web-workbench.md) | Approved email and an API key for your model provider |
 | Check a prerecorded Lean replay locally | [Getting started example](./examples/getting-started/README.md) | Local Lean; no model key |
-| Maintain a deployment or swap a research component | [CLI guide](./docs/usage.md) · [Component example](./examples/components/README.md) | Source access and separate credentials for model runs |
+| Maintain a deployment or swap a research component | [CLI guide](./docs/usage.md) · [Component example](./examples/components/README.md) | Local runtime and separate credentials for model runs |
 
 The hosted workbench is an allowlisted beta. The [project site](https://theoremos.top/) has an access request link. Set the model and any budget limits before submitting. Blank limits are not enforced, and the provider bills model requests to your API account. Lean checks the proof of the supplied statement; a researcher should still check that the statement captures the intended problem. You can inspect a compiled statement while a separate semantic review runs.
 
@@ -43,7 +43,7 @@ Choose an unused directory for the replay. The proof candidates are prerecorded;
 
 ### Deploy the workbench
 
-For maintainers and authorized operators. Use Linux with Docker Compose and user namespace support. Mathlib jobs also require `/dev/fuse`.
+Use Linux with Docker Compose and user namespace support. Mathlib jobs also require `/dev/fuse`.
 
 ```bash
 git clone https://github.com/HuggingMath/theorem-os.git
@@ -74,4 +74,8 @@ M1 executes work in isolation, M2 returns Lean evidence, M3 chooses ready tasks,
 
 ## License and credits
 
-The current internal source is governed by the proprietary [LICENSE](./LICENSE). Earlier AGPL-3.0-only copies retain their original license. DeepScientist-derived files marked Apache-2.0 remain under the [Apache-2.0 terms](./LICENSES/Apache-2.0.txt). See [NOTICE](./NOTICE) for provenance and third-party terms. Thanks to [Lean](https://lean-lang.org/), [Mathlib](https://github.com/leanprover-community/mathlib4), and [Lean-Eval](https://github.com/leanprover/lean-eval) for the tools and evaluation resources.
+The project-owned source is licensed under [AGPL-3.0-only](./LICENSE). The [scope record](./LICENSES/project-scope.md) identifies contributions with their original attribution. A separate [grant for 44 upstream Lean modules and their adaptations](./resources/theorem-os-library/REDISTRIBUTION.md) uses the same license. Problem texts, papers, data and third-party components retain their own terms; see [NOTICE](./NOTICE) and their accompanying notices.
+
+When using TheoremOS in a paper, report or demonstration, please cite [CITATION.cff](./CITATION.cff) and include the release tag or commit. Credit the original authors of problems, data and third-party software separately. Identify independent modifications so readers can distinguish them from official releases and understand who maintains them.
+
+Thanks to [Lean](https://lean-lang.org/), [Mathlib](https://github.com/leanprover-community/mathlib4), and [Lean-Eval](https://github.com/leanprover/lean-eval) for the tools and evaluation resources.
