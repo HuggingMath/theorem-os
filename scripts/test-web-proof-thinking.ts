@@ -568,6 +568,9 @@ try {
           { severity: 'warning', line: 4, text: warning }, { severity: 'error', line: 5, column: 9, text: diagnostic },
         ]) });
       await page.goto(`${origin}/?chat=${conversation.id}`, { timeout: 0 });
+      const resultDetails = page.locator('[data-chat-result-more]');
+      assert.equal(await resultDetails.getAttribute('open'), null, 'Simple reading starts with proof progress folded');
+      await openChatResultDetails(page);
       await contains(copy.engineerSummary.split('\n')[1]!); await failedCheck.waitFor(); await settled(page);
       assert.equal(await detail(), null, 'A new browser has made no choice');
       assert.equal(await thinking.getAttribute('data-detail'), 'simple', 'A new browser reads the conversation in 简洁');
@@ -629,7 +632,10 @@ try {
       assert.equal(await group.count(), 1); assert.equal(await group.locator(':scope > details').getAttribute('open'), null, 'Returning to 简洁 folds again');
       assert.equal(await failedCheck.getAttribute('open'), null); assert.equal(await brief.count(), 1);
       assert.equal(await process.getAttribute('open'), null);
-      await page.reload({ timeout: 0 }); await failedCheck.waitFor(); await settled(page);
+      await page.reload({ timeout: 0 });
+      assert.equal(await resultDetails.getAttribute('open'), null, 'Reloading simple reading folds proof progress again');
+      await openChatResultDetails(page);
+      await failedCheck.waitFor(); await settled(page);
       assert.equal(await thinking.getAttribute('data-detail'), 'simple', 'The choice survives a refresh');
 
       // A long task shows its latest twelve rows; the rest is one click away.
