@@ -284,7 +284,7 @@ export type WebAgentLeanCheck = {
   classification?: typeof webLeanClassifications[number]; sourceDigest?: string; environmentDigest?: string;
   artifacts?: { path: string; digest: string; sourceDigest: string; environmentDigest: string }[];
   checkedSource?: { file: string; digest: string; text: string; artifact: string };
-  candidate?: { ref: string; solverRunId: string };
+  candidate?: { ref: string; solverRunId: string; nativeRole?: 'lead' | 'member' };
 };
 /** What `math search-lean` found, per query: how many matches and the first declaration names. */
 export type WebAgentLeanSearch = { query: string; total: number; names: string[] }[];

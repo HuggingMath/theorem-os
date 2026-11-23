@@ -551,17 +551,19 @@ try {
       const live = await openLiveWorkspace(page), map = live.locator('[data-pm-mode="native"]');
       await map.getByText('尚未派工', { exact: true }).waitFor();
       const control = controls.get(runId)!, team = control.observation.inspection.nativeTeam!;
-      team.memberCount = 2; team.taskCount = 2;
+      team.memberCount = 3; team.taskCount = 3;
       team.tasks = [
         { id: 'helper', memberId: 'prover', objective: 'Supply the auxiliary declaration.', revision: 1, profiles: ['prover'], status: 'running' },
         { id: 'consumer', memberId: 'engineer', objective: 'Apply the proposed helper.', revision: 1, profiles: ['engineer'], status: 'checking' },
+        { id: 'second-consumer', memberId: 'solver', objective: 'Check the private suggestion.', revision: 1, profiles: ['prover'], status: 'running' },
       ];
       control.emit();
       await map.locator('[data-team-task="helper"]').getByText('推进中，尚无发现记录').waitFor();
       await map.locator('[data-team-task="consumer"]').getByText('宿主正在检查交付').waitFor();
       assert.equal(await map.locator('[data-pm-edge]').count(), 0);
       const sourceDigest = mathDigest('saved source'), environmentDigest = mathDigest('environment'), commit = 'a'.repeat(40);
-      team.findings.push({ ref: 'message:' + mathDigest('queued message'), from: 'prover', to: 'lead', taskId: 'helper',
+      const leadRef = 'message:' + crypto.randomUUID(), memberRef = 'message:' + crypto.randomUUID();
+      team.findings.push({ ref: leadRef, from: 'prover', to: 'lead', taskId: 'helper',
         status: 'accepted', text: 'Still searching the library.' });
       control.emit();
       const helperTask = map.locator('[data-team-task="helper"]');
@@ -598,13 +600,16 @@ try {
       await map.getByText('原题尚未通过验收', { exact: true }).first().waitFor();
 
       const file = 'Trial.lean', probe = 'example : False := by\n  trivial\n', artifact = mathDigest('diagnostic'), otherRun = 'old-round';
-      const probeAction = (solverRunId: string, checkedSource: boolean): WorkerMessage => ({ type: 'action', action: {
-        workerId: 'engineer', itemId: solverRunId + String(checkedSource), phase: 'completed', kind: 'command', status: 'failed',
+      let probeNumber = 0;
+      const probeAction = (solverRunId: string, checkedSource: boolean, workerId = 'engineer', candidateRef = ref,
+        nativeRole?: 'lead' | 'member'): WorkerMessage => ({ type: 'action', action: {
+        workerId, itemId: 'probe-' + ++probeNumber, phase: 'completed', kind: 'command', status: 'failed',
         command: 'math check-lean --file ' + file, exitCode: 1,
         lean: { passed: false, classification: 'lean', sourceDigest, environmentDigest, messages: [],
           firstBlocking: { severity: 'error', file, line: 2, text: 'unsolved goals', goalText: '⊢ False' },
           artifacts: [{ path: '.lake/diagnostic-artifacts/' + artifact + '.json', digest: artifact, sourceDigest, environmentDigest }],
-          ...(checkedSource && { checkedSource: { file, digest: mathDigest(probe), text: probe, artifact }, candidate: { ref, solverRunId } }),
+          ...(checkedSource && { checkedSource: { file, digest: mathDigest(probe), text: probe, artifact },
+            candidate: { ref: candidateRef, solverRunId, nativeRole } }),
         },
       } });
       control.publish(probeAction(otherRun, true));
@@ -622,6 +627,18 @@ try {
       await task.getByRole('button', { name: '查看 Lean 检查' }).click();
       await live.locator('[data-marks="2"]').waitFor();
       await live.locator('[data-live-tab="plan"]').click();
+      // The root uses the process identity "solver". A child with that same name receives different private messages.
+      team.findings.push({ ref: memberRef, from: 'prover', to: 'solver', taskId: 'helper', status: 'accepted', text: 'Check the premise.' });
+      control.emit();
+      control.publish(probeAction(team.runId, true, 'solver', leadRef, 'member'));
+      control.publish(probeAction(team.runId, true, 'solver', memberRef, 'lead'));
+      control.publish(probeAction(team.runId, true, 'solver', leadRef)); // Historical ambiguous actor.
+      control.publish(probeAction(team.runId, true, 'solver', memberRef, 'member'));
+      control.publish(probeAction(team.runId, true, 'solver', leadRef, 'lead'));
+      const trials = task.locator('[data-team-candidate-trial]');
+      await trials.getByText('lead', { exact: true }).waitFor();
+      await trials.getByText('solver', { exact: true }).waitFor();
+      assert.equal(await trials.count(), 3, 'one public trial and one for each private recipient');
       team.deliveries[0]!.references = [{ file: 'Submission.lean', name: 'helper', target: 'goal', relation: 'direct' }];
       control.emit();
       control.publish({ type: 'result', result: { status: 'evaluated_passed', proof: source, report: { theoremNames: ['goal'] } } });

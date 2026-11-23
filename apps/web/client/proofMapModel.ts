@@ -215,10 +215,13 @@ function nativeTeamMap(process: SolveProcess, theoremNames: string[], tx: (zh: s
   const trials = process.checks.flatMap(check => {
     const candidate = check.lean?.candidate;
     if (!team || !candidate || candidate.solverRunId !== team.runId || !check.lean?.checkedSource || !check.workerId) return [];
+    // The Lead runs as "solver", which is also a valid member name. Older checks cannot distinguish the two.
+    if (check.workerId === 'solver' && !candidate.nativeRole) return [];
+    const consumer = candidate.nativeRole === 'lead' ? 'lead' : check.workerId;
     const source = findings.find(finding => finding.ref === candidate.ref);
-    if (!source || source.from === check.workerId || source.to && source.to !== check.workerId ||
+    if (!source || source.from === consumer || source.to && source.to !== consumer ||
         source.at !== undefined && source.at > Date.parse(check.at)) return [];
-    return [{ id: check.id, ref: candidate.ref, consumer: check.workerId, passed: check.state === 'passed' }];
+    return [{ id: check.id, ref: candidate.ref, consumer, passed: check.state === 'passed' }];
   });
   const stage = (title: string, nodesForStage: ProofMapNode[]) => {
     if (!nodesForStage.length) return;

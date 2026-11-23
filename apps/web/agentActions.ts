@@ -16,6 +16,7 @@ export type AgentActionContext = {
   /** The Agent commands' file; `bun '<tool>' check-lean` reads `math check-lean`. */ tool?: string;
   apiKey?: string;
   solverRunId?: string;
+  nativeRole?: 'lead' | 'member';
 };
 
 const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
@@ -235,7 +236,7 @@ export function sanitizeAgentItem(phase: 'started' | 'completed', item: Item, co
         const work = object(result.candidate), candidate = teamEvidenceRefSchema.safeParse(work?.ref);
         // Only a saved source and its check can substantiate a trial, including a Lean failure.
         if (lean.checkedSource && work?.file === lean.checkedSource.file && context.solverRunId && candidate.success && raw.includes(candidate.data))
-          lean.candidate = { ref: candidate.data, solverRunId: context.solverRunId };
+          lean.candidate = { ref: candidate.data, solverRunId: context.solverRunId, ...(context.nativeRole && { nativeRole: context.nativeRole }) };
       }
       const found = result && !library && !lean && /\bsearch-lean\b/u.test(command.text) ? leanSearch(result, masked) : undefined;
       const withheld = !library && !lean && !found && (command.hidden || output.hidden || outsideCwd);
@@ -337,7 +338,8 @@ export function isWebAgentLeanCheck(value: unknown): value is WebAgentLeanCheck 
       !Array.isArray(lean.artifacts) || !lean.artifacts.some(ref => ref.digest === checked.artifact &&
         ref.sourceDigest === lean.sourceDigest && ref.environmentDigest === lean.environmentDigest))) return false;
   const candidate = object(lean.candidate);
-  return lean.candidate === undefined || Boolean(checked && candidate && only(candidate, ['ref', 'solverRunId']) &&
+  return lean.candidate === undefined || Boolean(checked && candidate && only(candidate, ['ref', 'solverRunId', 'nativeRole']) &&
+    (candidate.nativeRole === undefined || candidate.nativeRole === 'lead' || candidate.nativeRole === 'member') &&
     teamEvidenceRefSchema.safeParse(candidate.ref).success && typeof candidate.solverRunId === 'string' &&
     candidate.solverRunId.length > 0 && candidate.solverRunId.length <= 128);
 }

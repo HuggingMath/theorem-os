@@ -36,7 +36,7 @@ const libraryCommand = (operation: string, result: unknown, extra: Record<string
   cwd: own, command: `bun '${tools}' library ${operation}`, aggregatedOutput: JSON.stringify(result), ...extra });
 
 describe('Agent actions as the run owner sees them', () => {
-  test('retains the matching Lean source and a same-run trial, but keeps stale diagnostics detached', () => {
+  test('retains the matching Lean source and native recipient identity, but keeps stale diagnostics detached', async () => {
     const root = temporaryDirectory('web-check-probe-');
     try {
       const project = path.join(root, 'proof'), file = 'Probe.lean', absolute = path.join(project, file);
@@ -54,15 +54,26 @@ describe('Agent actions as the run owner sees them', () => {
       const ref = 'research:' + mathDigest('peer finding');
       const result = { timedOut: false, exitCode: 1, classification: 'lean', sourceDigest, environmentDigest,
         firstBlocking, messages: [], candidate: { ref, file }, diagnosticArtifacts: [{ path: relative, digest: artifact, sourceDigest, environmentDigest }] };
-      const action = () => sanitizeAgentItem('completed', { id: 'probe', type: 'commandExecution', cwd: root, exitCode: 1,
-        command: `math check-lean --file ${file} --candidate ${ref}`, aggregatedOutput: JSON.stringify(result) },
-      { workerId: 'consumer', worktree: root, hidden: [], solverRunId: 'solver-a' });
+      const item = () => ({ id: 'probe', type: 'commandExecution', cwd: root, exitCode: 1,
+        command: `math check-lean --file ${file} --candidate ${ref}`, aggregatedOutput: JSON.stringify(result) });
+      const action = () => sanitizeAgentItem('completed', item(), { workerId: 'consumer', worktree: root, hidden: [], solverRunId: 'solver-a' });
       const saved = action();
       expect(isWebAgentActionBody(saved)).toBe(true);
       expect(saved?.lean).toMatchObject({
         classification: 'lean', checkedSource: { file, text: source, artifact }, candidate: { ref, solverRunId: 'solver-a' },
         firstBlocking: { file, line: 2, goalText: '⊢ False' }, sourceDigest, environmentDigest,
       });
+      // The root and a native child called "solver" have the same process ID; only the child has attributed initial input.
+      const sent: WebAgentActionBody[] = [];
+      const request = { id: 'fixture', provider, input: { apiKey: key, workers: 1, coordination: 'cooperative' } } as unknown as WorkerInput;
+      const modules = webSolverModules(request, { sink: action => sent.push(action), hidden: [], solverRunId: () => 'solver-a' });
+      for (const nativeAgentControl of [{}, { initialInput: { author: '/root' } }]) {
+        const session = await modules.M1.open({ workspace: root, nativeAgentControl,
+          environment: { DEEPSCIENTIST_MATH_WORKER_ID: 'solver' } } as unknown as MathAgentOptions);
+        try { opened.at(-1)!.onItem!('completed', item()); } finally { await session.close(); }
+      }
+      expect(sent.every(isWebAgentActionBody)).toBe(true);
+      expect(sent.map(action => [action.workerId, action.lean?.candidate?.nativeRole])).toEqual([['solver', 'lead'], ['solver', 'member']]);
       result.candidate.file = 'DifferentProbe.lean';
       expect(action()?.lean?.candidate).toBeUndefined();
       fs.writeFileSync(absolute, 'example : True := by trivial\n');

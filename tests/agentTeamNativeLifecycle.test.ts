@@ -198,6 +198,12 @@ describe('native AgentControl preserves the mathematical team lifecycle', () => 
     expect(latest.inspection.nativeTeam!.deliveries[0]).toEqual(delivered);
     expect(latest.inspection.nativeTeam!.adoptions[0]).toMatchObject({ targetId: 'consumer', deliveryId: delivered.id,
       status: 'completed', receiptId: expect.any(String), proof: { sources: [{ source: expect.stringContaining(draft) }] } });
+    // The same delivery and commit do not prove adoption in another member's worktree.
+    adoption.targetId = 'producer';
+    const otherMember = (await capture()).inspection.nativeTeam!.adoptions[0]!;
+    expect(otherMember.proof).toBeUndefined();
+    expect(otherMember.receiptId).toBeUndefined();
+    adoption.targetId = 'consumer';
     // Older completed records use the same finalized receipt, found via the persisted checked intent.
     f.state.agentTeam!.adoptions[0]!.receiptId = undefined;
     expect((await capture()).inspection.nativeTeam!.adoptions[0]).toEqual(latest.inspection.nativeTeam!.adoptions[0]);

@@ -144,9 +144,11 @@ function readIntent(input: AdoptionLocation, delivery: AgentTeamProofDelivery): 
 /** Read the finalized checked transition, including historical journals without a receipt ID. */
 export function readRecordedAgentTeamAdoption(input: AdoptionLocation & { commit: string; receiptId?: string },
   delivery: AgentTeamProofDelivery): AgentTeamProofAdoption | undefined {
-  const id = input.receiptId ?? readIntent(input, delivery)?.id;
+  // The final receipt identifies the checked commit; the intent binds it to this receiver's worktree.
+  const id = readIntent(input, delivery)?.id;
   if (!id) return;
-  const file = evidenceFile(input, 'adoptions', hash.parse(id), input.worktree);
+  if (input.receiptId !== undefined && input.receiptId !== id) return fail('adoption_identity_changed');
+  const file = evidenceFile(input, 'adoptions', id, input.worktree);
   const receipt = validateAdoption(JSON.parse(readMathText(file)), input.state, delivery);
   if (receipt.id !== id || receipt.commit !== input.commit || receipt.beforeCommit !== input.expectedCommit)
     return fail('adoption_identity_changed');

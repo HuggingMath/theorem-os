@@ -214,7 +214,9 @@ export function webSolverModules(request: WorkerInput,
         // Each item is sanitized here, inside the container, before it is written to the host.
         const context = actions && workerId ? { workerId, worktree: options.workspace, hidden: actions.hidden,
           tool: isolation?.tools ?? path.join(root, 'bin/math.ts'), apiKey: request.input.apiKey,
-          solverRunId: actions.solverRunId?.() } : undefined;
+          solverRunId: actions.solverRunId?.(), ...(options.nativeAgentControl && {
+            nativeRole: options.nativeAgentControl.initialInput ? 'member' as const : 'lead' as const,
+          }) } : undefined;
         // Native item ids are scoped to one session; a restarted session may number its own.
         const session = ++sessions;
         const stream = context ? createAgentActionStream(actions!.sink) : undefined;
