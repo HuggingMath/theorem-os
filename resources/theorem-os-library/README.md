@@ -1,10 +1,11 @@
-# Private Web library snapshot
+# Web library snapshot
 
-`release/catalog.json` freezes a private release containing 44 upstream modules
-from commit `2902dec1e973bd70dad0444a8dc2320cf81d90fd` and nine locally authored
-modules. The upstream repository is closed source and has no separate license
-grant. Keep this snapshot private; do not include it in the public site export
-or publish it to a public remote.
+[`release/catalog.json`](release/catalog.json) freezes 44 upstream modules and
+nine locally authored modules. The rights holder licenses the 44 listed modules
+under AGPL-3.0-only for public redistribution; see the
+[grant](REDISTRIBUTION.md) and [exact paths and hashes](upstream-grant.json).
+The nine local modules follow the [project license](../../LICENSE). The grant
+for the 44 modules does not change the license of the rest of the upstream repository.
 
 The upstream library targets Lean 4.34.1. The current release,
 `2902dec1e973bd70dad0444a8dc2320cf81d90fd-lean4.33.0-r4`, includes 53 modules

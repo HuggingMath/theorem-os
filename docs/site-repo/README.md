@@ -209,7 +209,7 @@ The following 18 proof records have been rigorously checked by our independent L
 
 ## Repository Contents
 
-This repository publishes the official website pages, formal proof source files, and research process records; the TheoremOS runtime source code is proprietary.
+This repository publishes the official website pages, formal proof source files, and research process records. The [TheoremOS runtime](https://github.com/HuggingMath/theorem-os) is maintained separately.
 
 <details>
 <summary><b>📂 Directory Structure & Licensing</b></summary>
@@ -223,6 +223,6 @@ This repository publishes the official website pages, formal proof source files,
 | [data/catalog.json](data/catalog.json) | Proof archive catalog with links to progress logs and verification results |
 | `index.html`, `archive.html`, `feedback.html`, `en/`, `assets/` | Website pages, English localization, and workbench screenshots |
 
-All rights to the TheoremOS runtime are reserved. Third-party fonts and icons are distributed under their respective licenses in [assets/fonts/](assets/fonts/), [assets/licenses/](assets/licenses/), and [lucide-LICENSE.txt](lucide-LICENSE.txt).
+The runtime has its [own license](https://github.com/HuggingMath/theorem-os/blob/main/LICENSE). Third-party fonts and icons are distributed under their respective licenses in [assets/fonts/](assets/fonts/), [assets/licenses/](assets/licenses/), and [lucide-LICENSE.txt](lucide-LICENSE.txt).
 
 </details>

@@ -2,6 +2,7 @@
  * @license
  * Copyright 2025 DeepScientist (deepscientist.cc)
  * SPDX-License-Identifier: Apache-2.0
+ * Modified by TheoremOS from the DeepScientist source.
  */
 
 const joined = (...parts: string[]): string => parts.join('');

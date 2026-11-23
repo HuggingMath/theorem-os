@@ -1,11 +1,17 @@
 TheoremOS
 
-Copyright 2026 Zhenhao Liu. All rights reserved. See LICENSE.
+Copyright 2026 Zhenhao Liu and the respective contributors.
+Project-owned source code is licensed under the GNU Affero General Public
+License, version 3 only (AGPL-3.0-only). See LICENSE. Authorship is
+preserved in Git. LICENSES/project-scope.md describes the 18 contributions
+credited to yiran and distinguishes separate third-party terms.
 
 TheoremOS is the mathematical research runtime extracted from
 DeepScientist (https://github.com/ResearAI/DeepScientist), of which the
 TheoremOS author is a co-author. The files listed in extraction.json were
-taken from DeepScientist at commit 232fd23 and have since been modified.
+taken from the DeepScientist mathematics fork at commit 232fd23 and have
+since been modified. That revision used AGPL-3.0-only by default, with
+per-file and third-party exceptions. Its authors retain their rights.
 
 Apache-2.0 material:
   Files carrying "SPDX-License-Identifier: Apache-2.0" come from the
@@ -20,9 +26,40 @@ No endorsement:
   AionUi, iOfficeAI, DeepScientist, ResearAI and their contributors do not
   endorse TheoremOS unless expressly stated.
 
+Project attribution:
+  TheoremOS is maintained at https://github.com/HuggingMath/theorem-os.
+  CITATION.cff supplies the preferred software citation. A citation is a
+  request for scholarly credit, not a separate software license. Preserve
+  the notices required by each component's license. Attribution to this
+  project does not imply that an independent fork is an official release
+  or that its maintainers endorse it.
+
 Third-party components:
+  The formalization helpers adapted from LeanAide and autoform-bot have
+  additional attribution in third_party/LeanAide-LICENSE.txt and
+  third_party/autoform-bot-LICENSE.txt.
+
   Dependencies, bundled fonts (Inter, Lora, Noto Serif SC, Noto Sans SC,
-  JetBrains Mono, Hanken Grotesk, Fira Code), icons (Lucide) and other
+  JetBrains Mono, Hanken Grotesk, Fira Code, Geist, Instrument Serif),
+  icons (Lucide) and other
   files with their own license notices remain under their respective
   terms; their license files ship with them (docs/assets/fonts,
   docs/assets/licenses, or the package itself).
+
+  The 44 specified upstream Lean modules and their listed adaptations
+  are licensed under AGPL-3.0-only: see
+  resources/theorem-os-library/REDISTRIBUTION.md. The grant is limited
+  to those sources; citing a paper or problem does not license its text.
+
+  The modified Codex backend is based on OpenAI Codex. The pinned
+  revision, TheoremOS modifications and upstream notices, including
+  Ratatui credits, are in scripts/codex-backend/README.md,
+  LICENSE.codex and NOTICE.codex in that directory.
+
+  The First Proof batch 3 problem texts have their own attribution and
+  CC BY-SA 4.0 terms in examples/first-proof/batch3/DATA-LICENSE.md.
+  The six AxiomMath IMO 2026 formal statements carry the MIT license in
+  examples/imo2026/LICENSE.AxiomMath; see that directory's README for the
+  distinction between formal statements and original competition problems.
+  GSAP in the optional frontend has separate terms; see
+  docs/assets/licenses/gsap-NOTICE.txt. Neither is relicensed here.

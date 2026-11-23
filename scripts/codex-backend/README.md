@@ -10,6 +10,14 @@ The build applies two reviewable patches:
 - `agent-control.patch` adds the TheoremOS protocol adapter to the official
   AgentControl implementation. It excludes `Cargo.lock`.
 
+These patches are changes made by TheoremOS. The upstream code shown in them
+comes from [OpenAI Codex at the pinned revision](https://github.com/openai/codex/tree/d32063f96c2dff1dc96af839b3952abb6acfeda4).
+This directory includes the upstream [Apache-2.0 license](LICENSE.codex) and
+[NOTICE](NOTICE.codex), including its credit to Ratatui. Both files also ship in
+the Web worker at `/opt/theorem-os/scripts/codex-backend/`. For a separate
+distribution of the patched binary, include these files and the applicable
+notices for the dependencies included in that build.
+
 Run from the repository root:
 
 ```bash

@@ -9,11 +9,11 @@
 </div>
 
 [![Lean 4 · Mathlib](https://img.shields.io/badge/Lean_4-Mathlib-315cf5.svg)](./docs/web-workbench.md)
-[![License: proprietary](https://img.shields.io/badge/license-proprietary-555.svg)](./LICENSE)
+[![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue.svg)](./LICENSE)
 
 ![原题输入、模型和预算设置的真实工作台界面](./docs/assets/workbench-desktop.png)
 
-本仓库包含 TheoremOS 的内部工作台与 CLI。输入自然语言、TeX 或 Lean 题面后，可以查看生成的 Lean 陈述、候选证明和诊断，再下载证明及验收报告。研究者可在同一验收规则下比较不同的检索、上下文和协作策略。[TheoremOS 公开仓库](https://github.com/HuggingMath/TheoremOS)提供官网源码、公开证明档案和本地复核材料。两仓库各有自己的许可证。
+本仓库包含 TheoremOS 的工作台与 CLI。输入自然语言、TeX 或 Lean 题面后，可以查看生成的 Lean 陈述、候选证明和诊断，再下载证明及验收报告。研究者可在同一验收规则下比较不同的检索、上下文和协作策略。[TheoremOS 官网仓库](https://github.com/HuggingMath/TheoremOS)提供官网源码、公开证明档案和本地复核材料。两仓库各有自己的许可证。
 
 ## 快速开始
 
@@ -22,7 +22,7 @@
 | 在线看例题、回放或证明 | [工作台](https://app.theoremos.top/) · [公开档案](https://theoremos.top/archive.html) | 浏览器；登录工作台需获准邮箱 |
 | 用自己的题目开始研究 | [工作台指南](./docs/web-workbench.md) | 获准邮箱、所选模型服务的 API Key |
 | 在本机核验一次预设回放 | [小题示例](./examples/getting-started/README.md) | 本机 Lean；无需模型 Key |
-| 维护部署或替换研究组件 | [运行指南](./docs/usage.md) · [组件示例](./examples/components/README.md) | 源码使用权限；模型调用另需认证 |
+| 维护部署或替换研究组件 | [运行指南](./docs/usage.md) · [组件示例](./examples/components/README.md) | 本地运行环境；模型调用另需认证 |
 
 工作台采用白名单 Beta，[官网](https://theoremos.top/)提供申请入口。提交前请设置模型和所需的预算限制；空白限制不生效，模型调用由服务商计费。Lean 能检查给定陈述的证明，原意是否准确仍应由研究者复核。编译通过后可以先查看陈述，后台语义审核单独提供意见。
 
@@ -45,7 +45,7 @@ bun run math inspect --run "$THEOREMOS_CASE/result.json"
 
 ### 部署网页工作台
 
-供维护者和获授权的部署者使用。需要 Linux、Docker Compose 和用户命名空间支持；运行 Mathlib 任务还需要 `/dev/fuse`。
+自行部署需要 Linux、Docker Compose 和用户命名空间支持；运行 Mathlib 任务还需要 `/dev/fuse`。
 
 ```bash
 git clone https://github.com/HuggingMath/theorem-os.git
@@ -77,4 +77,8 @@ M1 在隔离工作区执行，M2 返回 Lean 证据，M3 选择就绪任务，M4
 
 ## 许可证与致谢
 
-当前内部源码遵循专有 [LICENSE](./LICENSE)。较早发布的 AGPL-3.0-only 副本保留原有许可；带 Apache-2.0 标识的 DeepScientist 来源文件遵循 [Apache-2.0 条款](./LICENSES/Apache-2.0.txt)。[NOTICE](./NOTICE)记录代码谱系和第三方材料。感谢 [Lean](https://lean-lang.org/)、[Mathlib](https://github.com/leanprover-community/mathlib4) 和 [Lean-Eval](https://github.com/leanprover/lean-eval) 提供工具与评测资源。
+TheoremOS 自有源码采用 [AGPL-3.0-only](./LICENSE)。[授权范围](./LICENSES/project-scope.md)列出保留原署名的贡献；Web 数学库的 [44 个上游 Lean 模块及其适配版本](./resources/theorem-os-library/REDISTRIBUTION.md)按同一许可证单独授权。题目、论文、数据和第三方组件保留各自条款，见 [NOTICE](./NOTICE) 和相应目录的说明。
+
+在论文、报告或演示中使用 TheoremOS 时，建议按 [CITATION.cff](./CITATION.cff) 引用，并注明所用版本或提交。题目、数据和第三方软件请分别注明原作者与出处。独立修改版请说明与官方版本的关系，避免被误认为官方发布或得到上游背书。
+
+感谢 [Lean](https://lean-lang.org/)、[Mathlib](https://github.com/leanprover-community/mathlib4) 和 [Lean-Eval](https://github.com/leanprover/lean-eval) 提供工具与评测资源。

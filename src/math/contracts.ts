@@ -1,6 +1,7 @@
 /**
  * Copyright 2026 DeepScientist contributors
  * SPDX-License-Identifier: Apache-2.0
+ * Modified by TheoremOS from the DeepScientist source.
  */
 
 import { repositoryRelativePath } from './paths';

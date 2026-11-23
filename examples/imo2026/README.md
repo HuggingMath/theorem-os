@@ -11,6 +11,14 @@ This example runs the ordinary solver on all five public Q1 targets from
 The adapter copies public statements and project metadata. It starts with
 unfinished proofs and does not seed answers from previous runs.
 
+The six archived `results/20261024/Q*/problem.lean` files reproduce
+the [AxiomMath formal statements](https://github.com/AxiomMath/IMO2026/tree/c5a6a089d06d3619afe7ff45c5ccab9e2a30d5d2/IMO2026),
+via the pinned Humanfia snapshot. They carry the [MIT License, copyright
+2026 Axiom Math](./LICENSE.AxiomMath). Retain that license when distributing
+these formalizations. The underlying Olympiad problems belong to the
+International Mathematical Olympiad. This notice grants no new rights in
+the original problem texts.
+
 The case uses `gpt-6.1-sol`, `xhigh`, four agents, the direct method, a shared
 30-minute solving limit and 20 total turns. A completed run is accepted only if
 all original targets pass host Lean verification after integration. This is a
