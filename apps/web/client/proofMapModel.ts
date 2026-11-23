@@ -1,4 +1,4 @@
-import type { WebInspectedTask } from '../collaboration';
+import type { WebInspectedTask, WebNativeTeamTask, WebTeamAdoption, WebTeamDelivery, WebTeamFinding } from '../collaboration';
 import type { WebFormalization } from '../formalizationTypes';
 import type { WebRun } from '../shared';
 import { locale as currentLocale, t, translator } from '../i18n';
@@ -58,6 +58,10 @@ export type ProofMapNode = {
   who?: string;
   attempts?: number;
   canGuide: boolean;
+  native?: {
+    task?: WebNativeTeamTask; delivery?: WebTeamDelivery; adoptions: WebTeamAdoption[];
+    findings: WebTeamFinding[]; trials: { id: string; ref: string; consumer: string; passed: boolean }[];
+  };
 };
 
 export type ProofMapStage = {
@@ -102,7 +106,7 @@ export type ProofMapExternalCitation = {
 
 export type ProofMapModel = {
   key: string;
-  mode: 'planned' | 'pipeline';
+  mode: 'planned' | 'pipeline' | 'native';
   active: boolean;
   goalBridge?: ProofMapGoalBridge;
   reduction: ProofMapReductionStep[];
@@ -204,6 +208,93 @@ function taskLayers(tasks: readonly LiveTask[], dependencies: ReadonlyMap<string
   return new Map([...depths].map(([id, value]) => [id, stage(value)]));
 }
 
+function nativeTeamMap(process: SolveProcess, theoremNames: string[], tx: (zh: string, en: string) => string) {
+  const team = process.nativeTeam, nodes: ProofMapNode[] = [], stages: ProofMapStage[] = [], edges: ProofMapEdge[] = [];
+  const accepted = process.state === 'accepted';
+  const findings = team?.findings ?? [];
+  const trials = process.checks.flatMap(check => {
+    const candidate = check.lean?.candidate;
+    if (!team || !candidate || candidate.solverRunId !== team.runId || !check.lean?.checkedSource || !check.workerId) return [];
+    const source = findings.find(finding => finding.ref === candidate.ref);
+    if (!source || source.from === check.workerId || source.to && source.to !== check.workerId ||
+        source.at !== undefined && source.at > Date.parse(check.at)) return [];
+    return [{ id: check.id, ref: candidate.ref, consumer: check.workerId, passed: check.state === 'passed' }];
+  });
+  const stage = (title: string, nodesForStage: ProofMapNode[]) => {
+    if (!nodesForStage.length) return;
+    const index = stages.length;
+    nodesForStage.forEach(node => { node.stageIndex = index; });
+    stages.push({ title, index, number: String(index + 1).padStart(2, '0'), tone: aggregateTone(nodesForStage), nodeIds: nodesForStage.map(node => node.id) });
+    nodes.push(...nodesForStage);
+  };
+  const node = (id: string, title: string, kindLabel: string, statusLabel: string, tone: ProcessTone): ProofMapNode => ({
+    id, title, stageIndex: 0, kind: 'pipeline', kindLabel, statusLabel, tone,
+    origin: tone === 'failed' ? 'blocked' : tone === 'active' ? 'active' : 'pending',
+    checkpointsIn: [], handoffsOut: [], useSummary: '', proveSummary: title, conditions: [], canGuide: false,
+  });
+  const taskTitle = tx('成员任务', 'Member assignments');
+  const noTask = team?.taskCount === 0 ? tx('尚未派工', 'No assignments yet') : tx('任务记录未提供', 'Assignment evidence unavailable');
+  const tasks = process.tasks.filter(task => task.native).map(live => {
+    const task = live.native!;
+    const item = node(task.id, live.label, tx('成员任务', 'Assignment'), live.status, live.tone);
+    const related = findings.filter(entry => !entry.ref.startsWith('delivery:') &&
+      (entry.taskId === task.id || entry.ref === task.reassignment?.ref));
+    return { ...item, statement: live.statement, reason: live.reason, finding: live.finding, who: live.who,
+      useSummary: [task.memberId, ...task.profiles].join(' · '),
+      note: task.researchRef && !findings.some(entry => entry.ref === task.researchRef) ? tx('研究产物未记录', 'Research artifact unavailable') : undefined,
+      native: { task, adoptions: [], findings: related, trials: trials.filter(trial =>
+        related.some(entry => entry.ref === trial.ref && entry.taskId === task.id)).slice(-8) } };
+  });
+  stage(taskTitle, tasks.length ? tasks : [node('native-unassigned', noTask, taskTitle, tx('等待记录', 'Awaiting evidence'), 'pending')]);
+  const deliveries = (team?.deliveries ?? []).map(record => {
+    const delivery = accepted ? record : { ...record, references: [] };
+    const adoptions = team!.adoptions.filter(adoption => adoption.deliveryId === delivery.id);
+    const recordedAdoption = adoptions.some(adoption => adoption.status === 'completed' && adoption.receiptId);
+    const status = recordedAdoption ? tx('已采纳', 'Adopted') : delivery.proof ? tx('交付已核验', 'Delivery checked') : tx('交付证据未记录', 'Delivery evidence unavailable');
+    const names = delivery.proof?.declarations.map(item => item.name);
+    const title = names?.length ? names.slice(0, 3).join(', ') : tx('成员交付', 'Member delivery');
+    const item = node('delivery:' + delivery.id, title, tx('成员交付', 'Member delivery'), status, delivery.proof ? 'done' : 'pending');
+    return { ...item, origin: delivery.proof ? 'checked' as const : item.origin, useSummary: delivery.memberId, proveSummary: status,
+      native: { delivery, adoptions, findings: [], trials: trials.filter(trial => trial.ref === 'delivery:' + delivery.id).slice(-8) } };
+  });
+  stage(tx('已记录交付', 'Recorded deliveries'), deliveries);
+  const finalStage = process.stages.find(item => item.id === 'verify');
+  const finalTitle = tx('独立 Lean 验收', 'Independent Lean acceptance');
+  const finalStatus = accepted ? tx('原题已通过验收', 'Original problem accepted') : tx('原题尚未通过验收', 'Original problem not yet accepted');
+  const final = node('native-final', theoremNames.join(', ') || finalTitle, finalTitle, finalStatus,
+    accepted ? 'done' : finalStage?.tone === 'done' ? 'pending' : finalStage?.tone ?? 'pending');
+  final.origin = accepted ? 'checked' : final.origin;
+  stage(finalTitle, [final]);
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  const connect = (source: string, target: string, kind: ProofMapEdgeKind) => {
+    const a = byId.get(source), b = byId.get(target);
+    if (!a || !b || a === b) return;
+    edges.push({ id: source + '->' + target, from: source, to: target, kind });
+    a.handoffsOut.push({ id: target, label: b.title, settled: kind === 'settled' });
+    b.checkpointsIn.push({ id: source, label: a.title, settled: kind === 'settled' });
+  };
+  for (const item of deliveries) {
+    const delivery = item.native.delivery;
+    if (delivery.proof) connect(delivery.taskId, item.id, 'settled');
+    if (accepted && delivery.proof && delivery.references.length) connect(item.id, final.id, 'settled');
+  }
+  for (const item of tasks) {
+    const basis = item.native.task.reassignment;
+    const source = basis && findings.find(entry => entry.ref === basis.ref);
+    if (source?.taskId) connect(source.taskId, item.id, 'dependency');
+  }
+  const reduction: ProofMapReductionStep[] = [
+    { step: '01', title: taskTitle, value: team ? `${team.memberCount} / ${Math.max(0, team.maxAgents - 1)} · ${team.taskCount} ${tx('项任务', 'assignments')}` : noTask,
+      detail: team?.taskOmissions ? tx(`另有 ${team.taskOmissions} 项历史任务`, `${team.taskOmissions} earlier assignments`) :
+        tx('成员由 Lead 按缺口派工。', 'Lead assigns members to proof gaps.'), tone: stages[0]!.tone },
+    { step: '02', title: tx('成员交付与采纳', 'Deliveries and adoptions'),
+      value: `${deliveries.filter(item => item.native.delivery.proof).length} ${tx('项交付已核验', 'deliveries checked')} · ${team?.adoptions.filter(item => item.receiptId).length ?? 0} ${tx('项已采纳', 'adoptions')}`,
+      detail: tx('采纳以宿主保存的整合回执为准。', 'Adoption is shown when its integration receipt is recorded.'), tone: deliveries.some(item => item.tone === 'done') ? 'done' : 'pending' },
+    { step: '03', title: finalTitle, value: finalStatus, detail: theoremNames.join(', '), tone: final.tone },
+  ];
+  return { nodes, stages, edges, reduction };
+}
+
 export function buildProofMap(input: BuildProofMapInput): ProofMapModel {
   const activeLocale = input.locale ?? currentLocale;
   const tx = (zh: string, en: string) => (activeLocale === 'en' ? en : zh);
@@ -249,9 +340,11 @@ export function buildProofMap(input: BuildProofMapInput): ProofMapModel {
   }
 
   let nodes: ProofMapNode[], stages: ProofMapStage[], edges: ProofMapEdge[];
-  const mode = process.tasks.length ? 'planned' : 'pipeline';
+  const mode = process.nativeTeam || run?.nativeTeamCapacity ? 'native' : process.tasks.length ? 'planned' : 'pipeline';
+  const native = mode === 'native' ? nativeTeamMap(process, theoremNames, tx) : undefined;
   const baseContext = tx('原始命题假设与基础 Mathlib 环境', 'Problem hypotheses and base Mathlib context');
-  if (mode === 'planned') {
+  if (native) ({ nodes, stages, edges } = native);
+  else if (mode === 'planned') {
     const dependencies = new Map(process.tasks.map(live => {
       const agent = agents.get(live.id);
       const upstream = agent?.dependsOn ?? agent?.plannedDependencies ?? planned.get(live.id)?.dependsOn
@@ -277,24 +370,29 @@ export function buildProofMap(input: BuildProofMapInput): ProofMapModel {
           research: tx('研究', 'Research'), sketch: tx('草图', 'Sketch'), lemma: tx('引理', 'Lemma'), goal: tx('原始目标', 'Original goal'),
         })[key]) ?? 'lemma';
       const recordedProof = agentTask?.proof;
+      const conditionalCheck = recordedProof?.status === 'conditional';
       const verified = agentTask?.verifiedArtifact !== undefined ? Boolean(agentTask.verifiedArtifact)
         : Boolean(recordedProof && ['checked', 'verified', 'integrated'].includes(recordedProof.status) && !recordedProof.conditions?.length);
-      const origin: ProofMapOrigin = liveTask.tone === 'done'
-        ? !agentTask || agentTask.kind === 'research' || verified ? 'checked' : 'conditional'
-        : liveTask.tone === 'failed' || agentTask?.status === 'blocked' ? 'blocked'
-          : liveTask.tone === 'active' ? 'active' : kind === 'sketch' && recordedProof?.status === 'conditional' ? 'conditional' : 'pending';
-      const checkpointsIn = (dependencies.get(liveTask.id) ?? []).map(id => ({ id, label: liveById.get(id)?.label ?? id, settled: liveById.get(id)?.tone === 'done' }));
-      const handoffsOut: ProofMapHandoff[] = (dependents.get(liveTask.id) ?? []).map(id => ({ id, label: liveById.get(id)!.label, settled: liveTask.tone === 'done' }));
-      if (!handoffsOut.length && kind === 'goal') handoffsOut.push({ id: '__closure__', label: tx('目标定理闭合', 'Target theorem closure'), settled: liveTask.tone === 'done' });
+      const origin: ProofMapOrigin = liveTask.tone === 'failed' || agentTask?.status === 'blocked' ? 'blocked'
+        : conditionalCheck ? 'conditional'
+          : liveTask.tone === 'done' ? !agentTask || agentTask.kind === 'research' || verified ? 'checked' : 'conditional'
+            : liveTask.tone === 'active' ? 'active' : 'pending';
+      const checkpointsIn = (dependencies.get(liveTask.id) ?? []).map(id => ({ id, label: liveById.get(id)?.label ?? id,
+        settled: liveById.get(id)?.tone === 'done' && agents.get(id)?.proof?.status !== 'conditional' }));
+      const settled = liveTask.tone === 'done' && !conditionalCheck;
+      const handoffsOut: ProofMapHandoff[] = (dependents.get(liveTask.id) ?? []).map(id => ({ id, label: liveById.get(id)!.label, settled }));
+      if (!handoffsOut.length && kind === 'goal') handoffsOut.push({ id: '__closure__', label: tx('目标定理闭合', 'Target theorem closure'), settled });
       const files = agentTask?.files ?? recordedProof?.actualReferences?.inputs.map(item => item.file) ?? (planTask?.proofPath ? [planTask.proofPath] : []);
       const declaration = agentTask?.declaration ?? agentTask?.type ?? planTask?.type;
       const conditions = unique([...(liveTask.waits ?? []), ...(recordedProof?.conditions ?? []).map(item => liveById.get(item.taskId)?.label ?? item.taskId),
         ...(kind === 'sketch' && origin !== 'checked' ? [tx('路线草稿仍需下游引理验证', 'Proof sketch still needs downstream lemma verification')] : []),
-        ...(origin === 'conditional' && kind !== 'sketch' ? [tx('尚未记录该任务的 Lean 核验', 'No Lean verification is recorded for this task')] : []),
+        ...(origin === 'conditional' && !conditionalCheck && kind !== 'sketch' ? [tx('尚未记录该任务的 Lean 核验', 'No Lean verification is recorded for this task')] : []),
         ...(liveTask.reason ? [liveTask.reason] : [])]);
       return {
         id: liveTask.id, taskId: liveTask.id, version: agentTask?.version, stageIndex: layers.get(liveTask.id)!, kind,
-        kindLabel: liveTask.kind, origin, tone: liveTask.tone, statusLabel: liveTask.status, title: liveTask.label,
+        kindLabel: liveTask.kind, origin, tone: liveTask.tone,
+        statusLabel: origin === 'conditional' && conditionalCheck ? tx('条件核验通过', 'Checked with open premises') : liveTask.status,
+        title: liveTask.label,
         codeName: agentTask?.theorem ?? planTask?.theoremName ?? (declaration ? declarationNames(declaration)[0] : undefined),
         statement: liveTask.statement, formulaOrType: declaration ?? liveTask.statement, checkpointsIn, handoffsOut,
         useSummary: checkpointsIn.length ? checkpointsIn.map(item => item.label).join(', ') : files.length ? files.join(', ') : baseContext,
@@ -359,7 +457,7 @@ export function buildProofMap(input: BuildProofMapInput): ProofMapModel {
   const bottleneck = deepest.find(node => node.origin === 'blocked')
     ?? deepest.find(node => node.tone === 'active' && node.kind === 'lemma') ?? deepest.find(node => node.tone === 'active')
     ?? deepest.find(node => node.origin === 'conditional') ?? deepest.find(node => node.tone !== 'done');
-  const reduction: ProofMapReductionStep[] = [
+  const reduction: ProofMapReductionStep[] = native?.reduction ?? [
     { step: '01', title: tx('全局证明义务', 'Planned obligations'), value: `${nodes.length} ${mode === 'planned' ? (nodes.length === 1 ? tx('项任务', 'task') : tx('项任务', 'tasks')) : (nodes.length === 1 ? tx('个证明阶段', 'proof stage') : tx('个证明阶段', 'proof stages'))} · ${edges.length} ${edges.length === 1 ? tx('条依赖', 'dependency') : tx('条依赖', 'dependencies')}`,
       detail: tx('按依赖组织输入、引理与目标定理。', 'Inputs, lemmas, and the target theorem organized by dependency.'), tone: closed ? 'done' : 'pending' },
     { step: '02', title: tx('已核验供给', 'Verified supply'), value: `${checked} ${tx('项已核验', 'verified')} · ${passed} ${passed === 1 ? tx('次 Lean 检查通过', 'passed Lean check') : tx('次 Lean 检查通过', 'passed Lean checks')}`,

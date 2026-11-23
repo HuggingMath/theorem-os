@@ -71,7 +71,7 @@ function WorkVersions({ entry, memory, refresh }: {
 
 /** What Lean objected to first, for a failed check that stays folded to one line. */
 function firstError(check: Extract<ThinkingEntry, { kind: 'check' }>['check']) {
-  const message = check.lean?.messages.find(item => item.severity === 'error');
+  const message = check.lean?.firstBlocking ?? check.lean?.messages.find(item => item.severity === 'error');
   const text = firstLine(message?.text ?? check.text ?? '', 140);
   return text ? { text, ...(message?.line !== undefined ? { line: message.line } : {}) } : undefined;
 }
@@ -153,7 +153,6 @@ function Entry({ entry, ctx, memory, onCheck, match, onContext, onQuestion, sele
         {!check.lean && !check.text && !action && <p class="route-item-note">{stopped ? t('这次检查没有返回结果。')
           : check.state === 'running' ? t('等待 Lean 返回检查结果。') : t('Lean 没有报告任何消息。')}</p>}
         {check.source !== undefined && <div class="thinking-source">
-          {check.sourceNote === 'changed' && <p class="route-item-note">{t('这份文件在这次检查之后又改过，Lean 指出的行可能已经移动。')}</p>}
           <ChatCodeBlock text={check.source} language="lean" label={check.file ?? 'Submission.lean'} preview={false} />
           {check.sourceClipped && <p class="route-item-note">{t('文件较长，后面的部分没有保存。')}</p>}
         </div>}

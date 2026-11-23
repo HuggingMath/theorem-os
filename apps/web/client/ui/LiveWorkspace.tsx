@@ -31,10 +31,13 @@ function leanMarks(lean: WebAgentLeanCheck | undefined, file: string, count: num
   const lines = new Map<number, Mark[]>();
   let elsewhere = 0;
   const errors = lean?.messages.filter(message => message.severity === 'error') ?? [];
+  if (lean?.firstBlocking && !errors.some(message => message.file === lean.firstBlocking?.file &&
+      message.line === lean.firstBlocking?.line && message.text === lean.firstBlocking?.text)) errors.unshift(lean.firstBlocking);
   const shown = errors.length ? errors : lean?.messages.filter(message => message.severity === 'warning') ?? [];
   for (const message of shown) {
     const line = message.line;
-    if (line === undefined || line < 1 || line > count || (message.file && base(message.file) !== file)) { elsewhere++; continue; }
+    const where = lean?.checkedSource ? message.file?.replace(/^\.\//u, '') : message.file && base(message.file);
+    if (line === undefined || line < 1 || line > count || (lean?.checkedSource ? where !== file : where && where !== file)) { elsewhere++; continue; }
     const items = lines.get(line) ?? [];
     items.push({ severity: message.severity as Mark['severity'], text: message.text });
     lines.set(line, items);
@@ -55,9 +58,8 @@ function fileView(process: SolveProcess, check: LiveCheck | undefined, time: (at
   const kinds = { statement: t('当前 Lean 陈述'), candidate: t('当前候选'), proof: t('验收证明') };
   const own = current && current.kind === 'candidate' && current.who ? `${kinds.candidate} · ${current.who}` : current ? kinds[current.kind] : '';
   if (check?.source !== undefined) {
-    const changed = check.sourceNote === 'changed';
-    return { file: check.file ?? 'Submission.lean', source: check.source, ...(check.sourceClipped ? { clipped: true } : {}), inline: !changed,
-      caption: `${check.label} · ${time(check.at)}`, ...(changed ? { note: t('这份文件在这次检查之后又改过，Lean 指出的行可能已经移动。') } : {}) };
+    return { file: check.file ?? 'Submission.lean', source: check.source, ...(check.sourceClipped ? { clipped: true } : {}), inline: true,
+      caption: `${check.label} · ${time(check.at)}` };
   }
   if (!current) return;
   return { file: current.file, source: current.source, ...(current.clipped ? { clipped: true } : {}), inline: false,
@@ -154,10 +156,12 @@ function Now({ process, onTask }: { process: SolveProcess; onTask?: (id: string)
 }
 
 /** The research plan's tasks, in plan order, with where each one stands. */
-function Plan({ process, proofMap, props, hidden }: { process: SolveProcess; proofMap: ProofMapModel; props: LiveWorkspaceProps; hidden: boolean }) {
+function Plan({ process, proofMap, props, hidden, onCheck }: {
+  process: SolveProcess; proofMap: ProofMapModel; props: LiveWorkspaceProps; hidden: boolean; onCheck(id: string): void;
+}) {
   const planned = process.tasks.length > 0;
   return <section class="live-plan" data-live-plan id="chat-live-plan-panel" role="tabpanel" aria-labelledby="chat-live-tab-plan" hidden={hidden}>
-    <ProofMap key={process.key} model={proofMap} variant="workspace" idPrefix="live-pm" time={props.time} onCheck={id => props.onSelect(id)}
+    <ProofMap key={process.key} model={proofMap} variant="workspace" idPrefix="live-pm" time={props.time} onCheck={onCheck}
       {...(props.onGuide ? { onGuide: props.onGuide } : {})} {...(props.onTask ? { onTask: props.onTask } : {})}
       {...(props.onEditPlan && planned ? { onEditPlan: props.onEditPlan } : {})} />
   </section>;
@@ -196,13 +200,15 @@ function LiveWorkspace(props: LiveWorkspaceProps) {
   const following = !picked, check = picked ?? checks.at(-1), view = fileView(process, check, props.time);
   const failedChecks = checks.filter(item => item.state === 'failed').length;
   // Messages the file cannot show under its lines are listed above it.
-  const listed = check && (check.lean ? !view?.inline && <LeanReport lean={check.lean} />
+  const listed = check && (check.lean ? view?.inline
+    ? <details class="route-lean"><summary>{t('Lean 诊断与版本')}</summary><LeanReport lean={check.lean} /></details>
+    : <LeanReport lean={check.lean} />
     : check.text && <pre class="solve-feedback" tabIndex={0} aria-label={t('反馈全文')} translate={false}>{check.text}</pre>);
   // The route and the Lean file take turns in the space below, so neither is squeezed. With a plan the route opens
   // first; picking a Lean check brings its file forward, and the reader's own choice of tab stays for this task.
   const planned = process.tasks.length > 0;
   const [chosen, setChosen] = useState<{ key: string; tab: Tab }>();
-  const tab: Tab = chosen?.key === process.key ? chosen.tab : (planned ? 'plan' : 'file');
+  const tab: Tab = chosen?.key === process.key ? chosen.tab : (planned || proofMap?.mode === 'native' ? 'plan' : 'file');
   const show = (next: Tab) => setChosen({ key: process.key, tab: next });
   const pickedBefore = useRef(props.selected);
   useLayoutEffect(() => {
@@ -224,14 +230,15 @@ function LiveWorkspace(props: LiveWorkspaceProps) {
     <ol class="live-stages" aria-label={t('阶段')}>{process.stages.map(stage => <li key={stage.id} data-live-stage={stage.id} data-tone={stage.tone}
       aria-current={stage.tone === 'active' ? 'step' : undefined}><ToneMark tone={stage.tone} /><span>{stage.label}</span></li>)}</ol>
     <Progress tasks={process.tasks} />
-    <Now process={process} {...(props.onTask ? { onTask: props.onTask } : {})} />
+    <Now process={process} {...(props.onTask && proofMap?.mode !== 'native' ? { onTask: props.onTask } : {})} />
     <div class="live-tabs" role="tablist" aria-label={t('实时工作区')}>
       <button type="button" role="tab" id="chat-live-tab-plan" data-live-tab="plan" aria-selected={tab === 'plan'} aria-controls="chat-live-plan-panel"
         onClick={() => show('plan')}>{t('路线图')}{planned && <span class="live-tab-count">{done}/{process.tasks.length}</span>}</button>
       <button type="button" role="tab" id="chat-live-tab-file" data-live-tab="file" aria-selected={tab === 'file'} aria-controls="chat-live-file-panel"
         onClick={() => show('file')}>{t('Lean 文件')}{outcome && <span class="live-tab-outcome" data-tone={outcome.tone}>{outcome.text}</span>}</button>
     </div>
-    {proofMap && <Plan key={process.key} process={process} proofMap={proofMap} props={props} hidden={tab !== 'plan'} />}
+    {proofMap && <Plan key={process.key} process={process} proofMap={proofMap} props={props} hidden={tab !== 'plan'}
+      onCheck={id => { props.onSelect(id); show('file'); }} />}
     <div class="live-file-panel" id="chat-live-file-panel" role="tabpanel" aria-labelledby="chat-live-tab-file" hidden={tab !== 'file'}>
     <section class="live-file" aria-labelledby="chat-live-file">
       {view ? <div class="live-file-toolbar">

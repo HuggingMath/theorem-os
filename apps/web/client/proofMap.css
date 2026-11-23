@@ -160,6 +160,12 @@
 .pm-detail-conditions li + li { margin-top: 5px; }
 .pm-root .pm-detail-reason { margin: 14px 0 0; padding: 9px 10px; border-left: 2px solid var(--pm-danger); border-radius: 0 4px 4px 0; background: var(--pm-danger-soft); color: var(--pm-danger); font-size: 13px; line-height: 1.7; white-space: pre-wrap; max-height: none; overflow-wrap: anywhere; }
 .pm-detail-finding > div { white-space: pre-wrap; }
+.pm-team-evidence { display: grid; gap: 8px; overflow-wrap: anywhere; }
+.pm-team-evidence:empty { display: none; }
+.pm-team-proof, .pm-team-source { padding: 8px; border: 1px solid var(--pm-line); border-radius: 4px; }
+.pm-team-proof > summary, .pm-team-source > summary { cursor: pointer; }
+.pm-team-proof pre { overflow: auto; max-height: 18rem; white-space: pre; }
+.pm-team-declaration { margin-block: 8px; }
 .pm-root .pm-detail-note { margin-top: 12px; color: var(--pm-muted); font-size: 12px; white-space: pre-wrap; }
 .pm-detail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 

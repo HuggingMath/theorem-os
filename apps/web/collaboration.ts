@@ -83,6 +83,28 @@ export type WebMathematicalChange = {
   advisory: { proposed: WebRecordedAdvisory[]; completed: WebChange<WebRecordedAdvisory>[]; reopened: WebChange<WebRecordedAdvisory>[];
     removed: WebRecordedAdvisory[]; changed: WebChange<WebRecordedAdvisory>[] };
 };
+export type WebTeamFinding = { ref: string; from: string; to?: string; taskId?: string; at?: number;
+  status: 'queued' | 'accepted' | 'uncertain' | 'recorded'; text?: string };
+export type WebTeamProof = {
+  commit: string; sourceDigest: string; environmentDigest: string;
+  sources: { file: string; source: string }[];
+  declarations: { file: string; name: string; type?: string; checkedCommit?: string; checkedSource?: string;
+    receipts: { id: string; status: string; diagnostic?: string }[] }[];
+};
+export type WebTeamDelivery = { id: string; taskId: string; memberId: string; proof?: WebTeamProof;
+  references: { file: string; name: string; target: string; relation: 'direct' | 'indirect' | 'referenced' | 'target-proof' }[] };
+export type WebTeamAdoption = { id: string; deliveryId: string; targetId: string;
+  status: 'queued' | 'integrating' | 'completed' | 'failed'; commit?: string; receiptId?: string; proof?: WebTeamProof; error?: string };
+export type WebNativeTeamTask = { id: string; memberId: string; objective: string; revision: number;
+  profiles: string[]; status: 'queued' | 'preparing' | 'running' | 'paused' | 'stopping' | 'checking' |
+    'rejected' | 'delivered' | 'completed' | 'failed' | 'interrupted' | 'cancelled';
+  finding?: string; researchRef?: string; deliveryId?: string; rejection?: WebTeamProof; reason?: string;
+  reassignment?: { ref: string; revision: number } };
+export type WebNativeTeam = {
+  schema: 'theorem-os.web-native-team.v1'; runId: string;
+  maxAgents: number; memberCount: number; taskCount: number; taskOmissions: number;
+  tasks: WebNativeTeamTask[]; findings: WebTeamFinding[]; deliveries: WebTeamDelivery[]; adoptions: WebTeamAdoption[];
+};
 export type WebInspection = {
   schema: string; runId: string; snapshot: { schema: string; runId: string; stateDigest: string; resultDigest: string | null };
   evidence: string; phase: string; recordedOutcome?: unknown; evaluator?: { status: unknown; method: unknown; official: unknown };
@@ -102,6 +124,7 @@ export type WebInspection = {
   knowledge: { status: string; catalogDigest?: string; evidence: string; attribution: string;
     retrievalCoverage: string; droppedRetrievals: number; retrievals: unknown[]; originalUses: unknown[]; uses: unknown[] };
   tokenBudget: unknown; continuation: unknown;
+  nativeTeam?: WebNativeTeam;
   mathematics: { snapshot: { schema: string; evidence: string; acceptance: string; digest: string; environmentDigest?: string;
     obligations: WebRecordedObligation[]; goals: WebGoalFrontier[]; blockers: WebRecordedBlocker[];
     routes: WebRouteObservation[]; advisory: unknown[] };

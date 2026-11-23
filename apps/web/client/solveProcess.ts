@@ -1,5 +1,6 @@
 import type { WebFormalization, WebFormalizationActivity, WebFormalizationRole, WebFormalizationRoleSummary } from '../formalizationTypes';
 import type { WebAgentAction, WebAgentLeanCheck, WebEvent, WebRun } from '../shared';
+import type { WebNativeTeam, WebNativeTeamTask } from '../collaboration';
 import { acceptedTitle, checkReason, isAcceptedRun, isFaultedRun, isRejectedRun, planGated, queueDescription, readableDuration, runProgress, runStages, runTokens, stoppedLabel } from '../presentation';
 import { summarizeReport } from '../report';
 import { localizeText, t } from '../i18n';
@@ -35,7 +36,7 @@ export type ProcessStage = { id: ProcessStageId; label: string; tone: ProcessTon
 export type LiveCheck = {
   id: string; stage: ProcessStageId; label: string; who?: string; at: string; state: 'running' | 'passed' | 'failed';
   lean?: WebAgentLeanCheck; text?: string; file?: string; source?: string; sourceClipped?: boolean;
-  /** `changed`: the file shown was saved after this check, so its lines may have moved. */ sourceNote?: 'changed';
+  workerId?: string;
 };
 /** What an Agent or the platform is doing at this moment, one line each, for the workspace beside the conversation. */
 export type LiveNow = { id: string; who?: string; text: string; code?: string; task?: { id: string; label: string } };
@@ -45,6 +46,7 @@ export type LiveTask = {
   /** Tried more than once. */ attempts?: number; /** Why it is blocked or failed, as recorded. */ reason?: string;
   /** What a task that did not fail reported. */ finding?: string;
   /** The unfinished tasks it waits for. */ waits?: string[];
+  native?: WebNativeTeamTask;
 };
 export type SolveState = 'queued' | 'formalizing' | 'review' | 'proving' | 'verifying' | 'accepted' | 'failed' | 'stopped' | 'cancelled';
 export type SolveProcess = {
@@ -57,6 +59,7 @@ export type SolveProcess = {
   thinking?: ThinkingEntry[];
   /** What runs at this moment; empty once the task ended or between two steps. */ now: LiveNow[];
   /** The research plan's tasks, in plan order; empty before a plan exists. */ tasks: LiveTask[];
+  nativeTeam?: WebNativeTeam;
 };
 export type SolveProcessInput = {
   formalization?: WebFormalization; activity?: readonly WebFormalizationActivity[]; activityDropped?: number;
@@ -64,11 +67,14 @@ export type SolveProcessInput = {
 };
 
 const base = (file: string) => file.split('/').filter(Boolean).at(-1) ?? file;
-const firstError = (lean?: WebAgentLeanCheck) => lean?.messages.find(message => message.severity === 'error');
+const firstError = (lean?: WebAgentLeanCheck) => lean?.firstBlocking ?? lean?.messages.find(message => message.severity === 'error');
 /** How a failed Lean check reads in a row: where Lean stopped, if it said. */
 function leanOutcome(lean: WebAgentLeanCheck | undefined, passed: boolean): ProcessOutcome {
   if (passed) return { text: t('通过'), tone: 'passed' };
   if (lean?.timedOut) return { text: t('超时'), tone: 'failed' };
+  if (lean?.classification === 'source') return { text: t('源码预检失败'), tone: 'failed' };
+  if (lean?.classification === 'infrastructure' || lean?.classification === 'tooling')
+    return { text: t('Lean 环境或工具出错'), tone: 'failed' };
   const line = firstError(lean)?.line;
   return { text: line !== undefined ? t('第 {0} 行出错', line) : t('未通过'), tone: 'failed' };
 }
@@ -238,6 +244,30 @@ function taskFindingText(raw?: string): string {
 function liveTasks(run: WebRun): LiveTask[] {
   const inspection = run.observation?.inspection, tasks = inspection?.tasks ?? [];
   const live = run.status === 'queued' || run.status === 'running', names = taskNames(tasks), workers = workerNames(inspection?.workers ?? []);
+  if (inspection?.nativeTeam) {
+    const team = inspection.nativeTeam;
+    return team.tasks.map(task => {
+      const delivery = team.deliveries.find(delivery => delivery.id === task.deliveryId && delivery.taskId === task.id);
+      const adoption = team.adoptions.find(adoption => adoption.deliveryId === delivery?.id && adoption.status === 'completed' && adoption.receiptId);
+      const hasFinding = Boolean(task.finding || team.findings.some(finding =>
+        finding.ref === task.researchRef && finding.status === 'recorded'));
+      const status: Record<WebNativeTeamTask['status'], string> = {
+        queued: t('等待派工启动'), preparing: t('准备工作区'), running: hasFinding ? t('推进中，已有发现') : t('推进中，尚无发现记录'),
+        paused: t('已暂停并保留任务'), stopping: t('等待写入停止'), checking: t('宿主正在检查交付'),
+        rejected: t('交付检查未通过'), delivered: adoption ? t('已采纳') : delivery?.proof ? t('交付已核验') : t('交付证据未记录'),
+        completed: hasFinding ? t('研究已返回') : t('已返回，成果未记录'), failed: t('任务失败'),
+        interrupted: t('会话已中断'), cancelled: t('任务已取消'),
+      };
+      const tone: ProcessTone = ['rejected', 'failed'].includes(task.status) ? 'failed'
+        : task.status === 'delivered' && delivery?.proof || task.status === 'completed' && hasFinding ? 'done'
+          : ['running', 'checking', 'preparing', 'stopping'].includes(task.status) ? live ? 'active' : 'stopped'
+            : ['interrupted', 'cancelled'].includes(task.status) ? 'stopped' : 'pending';
+      const objective = task.objective.split('\n').filter(line => !/^(?:Profiles:|Based on:)/u.test(line)).join('\n').trim();
+      return { id: task.id, native: task, label: objective.split('\n')[0]?.slice(0, 140) || task.id,
+        statement: objective, who: task.memberId, kind: t('成员任务'), tone, status: status[task.status],
+        finding: task.finding, reason: task.reason };
+    });
+  }
   const byId = new Map(tasks.map(task => [task.id, task]));
   return tasks.map((task): LiveTask => {
     const state = taskState(task), tone = taskTone(state, live), label = taskLabel(task, names);
@@ -292,20 +322,14 @@ function planRow(run: WebRun, live: boolean): ProcessRow | undefined {
     tone: settled === tasks.length ? 'done' : live ? 'active' : 'stopped', meta: t('已完成 {0}/{1}', settled, tasks.length), details: [], rows };
 }
 
-/** An Agent's own `check-lean`; the file is shown when it is the candidate the run saved from that Agent. */
-function selfCheck(action: WebAgentAction, file: string, run: WebRun, who: string, live: boolean): LiveCheck {
-  const lean = action.lean, name = base(file || 'Submission.lean');
+/** An Agent's own `check-lean`; only the captured source can carry this check's line annotations. */
+function selfCheck(action: WebAgentAction, file: string, who: string, live: boolean): LiveCheck {
+  const lean = action.lean, name = lean?.checkedSource?.file || base(file || 'Submission.lean');
   const passed = lean?.passed ?? action.status === 'done';
   const state = action.status === 'running' ? live ? 'running' : 'failed' : passed ? 'passed' : 'failed';
-  const check: LiveCheck = { id: `p:${action.workerId}:${action.itemId}`, stage: 'prove', label: t('{0} 自查 {1}', who, name), who, at: action.at, state, file: name,
+  return { id: `p:${action.workerId}:${action.itemId}`, stage: 'prove', label: t('{0} 自查 {1}', who, name), who,
+    workerId: action.workerId, at: action.at, state, file: name, ...(lean?.checkedSource && { source: lean.checkedSource.text }),
     ...(lean ? { lean } : !passed && action.output ? { text: action.output } : {}) };
-  const artifact = run.artifact;
-  if (artifact && artifact.workerId === action.workerId && name === 'Submission.lean') {
-    check.source = artifact.source;
-    // Saved well after this check ended: the lines Lean names may have moved since.
-    if (Date.parse(artifact.capturedAt) > Date.parse(action.at) + (action.durationMs ?? 0) + 3_000) check.sourceNote = 'changed';
-  }
-  return check;
 }
 const selfOutcome = (check: LiveCheck): ProcessOutcome => check.state === 'running' ? { text: t('检查中…'), tone: 'muted' }
   : check.state === 'failed' ? leanOutcome(check.lean, false)
@@ -313,7 +337,7 @@ const selfOutcome = (check: LiveCheck): ProcessOutcome => check.state === 'runni
 
 // A lane shows its newest steps; the roadmap has all of them.
 const shownSteps = 6;
-type LaneContext = { run: WebRun; live: boolean; name: string; tasks: ReadonlyMap<string, string>; checks: LiveCheck[] };
+type LaneContext = { live: boolean; name: string; tasks: ReadonlyMap<string, string>; checks: LiveCheck[] };
 /**
  * One Agent's lane: the row says what it is on now, its latest steps sit inside, each opening to what the Agent did.
  * Acceptance steps are left to the acceptance stage. `attempts` counts the steps in which it wrote proof code.
@@ -337,7 +361,7 @@ function laneRow(route: AgentRoute, ctx: LaneContext): { row: ProcessRow; attemp
     for (const action of actions) {
       const file = checkLeanFile(action);
       if (file === undefined) continue;
-      const self = selfCheck(action, file, ctx.run, ctx.name, ctx.live);
+      const self = selfCheck(action, file, ctx.name, ctx.live);
       ctx.checks.push(self); check = self.id; outcome = selfOutcome(self);
     }
     for (const item of step.items) {
@@ -392,7 +416,7 @@ function proveStage(run: WebRun, events: readonly WebEvent[], routes: readonly A
   const ordered = [...routes].sort((a, b) => Number(b.workerId === lead) - Number(a.workerId === lead));
   let attempts = 0, agents = 0;
   for (const route of ordered) {
-    const lane = laneRow(route, { run, live, name: names.get(route.workerId) ?? route.workerId, tasks, checks });
+    const lane = laneRow(route, { live, name: names.get(route.workerId) ?? route.workerId, tasks, checks });
     if (!lane) continue;
     rows.push(lane.row); attempts += lane.attempts; agents++;
   }
@@ -506,6 +530,6 @@ export function buildSolveProcess(input: SolveProcessInput): SolveProcess {
     ...(item?.createdAt ?? run?.createdAt ? { startedAt: item?.createdAt ?? run?.createdAt } : {}), ...(endedAt ? { endedAt } : {}), ...(tokens ? { tokens } : {}),
     stages, checks, counts: { checks: checks.length, attempts, agents }, ...(current ? { current } : {}),
     dropped: (input.activityDropped ?? 0) + (input.actionsDropped ?? 0), thinking: buildThinkingEntries(input, checks),
-    now: active ? liveNow(stages, run, tasks) : [], tasks };
+    now: active ? liveNow(stages, run, tasks) : [], tasks, nativeTeam: run?.observation?.inspection.nativeTeam };
 }
 

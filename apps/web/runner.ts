@@ -57,6 +57,9 @@ export function isWebObservation(value: unknown): value is WebObservation {
       !Array.isArray(value.inspection.tasks) || !Array.isArray(value.inspection.workers) ||
       !Array.isArray(value.sources) || !Array.isArray(value.checks) || !Array.isArray(value.guidance) ||
       !object(value.coverage) || value.declarations !== undefined && !webDeclarationArtifactsSchema.safeParse(value.declarations).success) return false;
+  const team = value.inspection.nativeTeam;
+  if (team !== undefined && (!object(team) || team.schema !== 'theorem-os.web-native-team.v1' || team.runId !== value.solverRunId ||
+      !Array.isArray(team.tasks) || !Array.isArray(team.findings) || !Array.isArray(team.deliveries) || !Array.isArray(team.adoptions))) return false;
   const configuration = value.inspection.configuration;
   if (object(configuration)) {
     if (configuration.agentHarness !== undefined && !z.object({ id: z.enum(['codex', 'claude-code', 'opencode', 'cli']),

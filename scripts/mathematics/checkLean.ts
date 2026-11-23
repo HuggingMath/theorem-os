@@ -9,6 +9,7 @@ import { assertSolverProjectSources, SolverSourceError, type SolverSourceConstra
 import { currentWorkerProject, WorkerProjectArgumentError } from '../../src/solver/workerProject';
 import { checkLeanEnvironmentHealth, leanEnvironmentFailure } from '../../src/math/leanEnvironmentHealth';
 import { assertMathConstructionSources } from '../../src/math/mathConstructionSources';
+import { teamEvidenceRefSchema } from '../../src/solver/agentTeamEvidenceRef';
 
 let stage: 'usage' | 'project' | 'source' | 'diagnostics' = 'usage';
 let project: string | undefined;
@@ -25,6 +26,7 @@ async function main() {
   const { values } = parseArgs({ args, options: {
     workspace: { type: 'string' }, worktree: { type: 'string' }, file: { type: 'string', multiple: true },
     type: { type: 'string' }, context: { type: 'string' }, expression: { type: 'string' },
+    candidate: { type: 'string' },
     'timeout-seconds': { type: 'string', default: '0' }, health: { type: 'boolean' }, help: { type: 'boolean' },
   } });
   if (values.help) console.log('Usage: theorem-os check-lean (--workspace DIR | --worktree ROOT) --file FILE [--file FILE --timeout-seconds N]\n'
@@ -33,6 +35,7 @@ async function main() {
     + 'Optional: --type TYPE --context DECLARATION elaborates one closed type in a proof-erased snapshot of the single --file context.\n'
     + 'Add --expression TERM to check one selected closed application against that type. Local theorem bodies are erased; this is advisory sufficiency, not proof acceptance.\n'
     + 'Use --health instead of --file to verify the current namespace, sealed lease and pinned compiler without compiling sources.\n'
+    + 'Use --candidate REF to record which peer result a saved single-file probe tests. REF is message:ID, research:ID or delivery:ID.\n'
     + 'Checks saved sources against pinned packages. Timeout 0 waits until completion. Diagnostics and type elaboration are advisory, not proof acceptance.');
   else {
     const timeout = Number(values['timeout-seconds']);
@@ -43,6 +46,9 @@ async function main() {
     if ((values.type !== undefined || values.context !== undefined) && (!values.type || !values.context || values.file?.length !== 1))
       throw new Error('--type requires --context and exactly one --file');
     if (values.expression !== undefined && !values.type) throw new Error('--expression requires --type and --context');
+    if (values.candidate !== undefined && (values.file?.length !== 1 || values.type !== undefined ||
+        !teamEvidenceRefSchema.safeParse(values.candidate).success))
+      throw new Error('--candidate requires a team evidence reference and one saved --file probe');
     stage = 'project';
     project = values.workspace ? fs.realpathSync(values.workspace) : currentWorkerProject(values.worktree!);
     stage = 'source';
@@ -68,6 +74,7 @@ async function main() {
     const startupFailed = !result.timedOut && !result.aborted && 'started' in result && result.started === false;
     publish({ ...result, classification: result.timedOut ? 'timeout' : result.aborted ? 'cancelled' :
       result.exitCode === 0 ? 'success' : startupFailed ? 'infrastructure' : 'lean',
+      ...(values.candidate && { candidate: { ref: values.candidate, file: values.file![0] } }),
       ...(startupFailed ? { status: 'infrastructure-error', leanStarted: false,
         error: leanEnvironmentFailure('toolchain', new Error(result.stderr || 'Lean compiler process did not start')) } : {}) },
     result.timedOut ? 124 : result.exitCode ?? 1);

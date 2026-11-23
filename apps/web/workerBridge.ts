@@ -17,6 +17,7 @@ import type { ProofCheck } from '../../src/solver/modules/evidence';
 import type { WebCheckReceipt, WebCommand, WebCommandResult, WebObservation, WebTaskSource } from './collaboration';
 import type { WorkerMessage } from './shared';
 import { projectWebDeclarationArtifacts } from './declarationArtifacts';
+import { projectWebNativeTeam } from './nativeTeamObservation';
 
 export const webActiveRunFile = '/work/active-run.json';
 const activeRunSchema = z.object({ schema: z.literal('theorem-os.web-active-run.v1'),
@@ -92,7 +93,7 @@ function committedOwnedSources(state: SolverRunState, roots: readonly string[], 
           { maxBuffer: 8_192, timeout: 3_000 }).toString('utf8');
         if (!new RegExp('^100(?:644|755) blob [a-f0-9]+\\t' + full.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&') + '\\0$', 'u').test(tree))
           throw new Error('web_bridge_source_not_regular_file');
-        files[file] = new TextDecoder('utf-8', { fatal: true }).decode(mathGitBytes(root, ['show', `${commit}:${full}`],
+        files[file] = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(mathGitBytes(root, ['show', `${commit}:${full}`],
           { maxBuffer: maxSourceBytes, timeout: 3_000, errorMessage: 'web_bridge_source_unavailable' }));
       }
       return { files, digest: mathDigest(canonicalMathJson(problem.ownedFiles.map(file => [file, mathDigest(files[file])]))) };
@@ -197,7 +198,19 @@ export function createWebWorkerBridge(options: {
     const result = await withMathRuntimeLease({ lockPath: path.join(directory, 'web-bridge.lock'), flockExecutable: '/usr/bin/flock' }, async lease => {
       const stored = readRunInspection(options.output), { state, stateFile } = stored;
       if (options.libraryRestart?.previousSolverRunId === state.runId) throw new Error('web_bridge_run_identity_changed');
-      const inspection = buildRunInspection(state, stored.result), previous = bridgeMeta(metaFile, options.webRunId, state.runId, options.libraryRestart);
+      const { agentTeam, ...report } = buildRunInspection(state, stored.result);
+      const teamSources = new Map<string, ReturnType<typeof committedOwnedSources>>();
+      const nativeTeam = agentTeam && projectWebNativeTeam(state, directory, agentTeam, (archive, commit) => {
+        const key = archive + '\0' + commit, cached = teamSources.get(key);
+        if (cached) return cached;
+        const snapshot = committedOwnedSources(state, [archive], commit);
+        const source = options.apiKey ? { ...snapshot,
+          files: Object.fromEntries(Object.entries(snapshot.files).filter(([, text]) => !text.includes(options.apiKey!))) } : snapshot;
+        teamSources.set(key, source);
+        return source;
+      });
+      const inspection = { ...report, ...(nativeTeam ? { nativeTeam } : agentTeam ? { agentTeam } : {}) };
+      const previous = bridgeMeta(metaFile, options.webRunId, state.runId, options.libraryRestart);
       const restarted = Boolean(previous && previous.solverRunId !== state.runId);
       const projection = sourceProjection(state, directory);
       const declarations = projectWebDeclarationArtifacts(stateFile, state);

@@ -5,6 +5,7 @@ import { routeProofMapEdges } from '../proofMapModel';
 import type { ProofMapBox, ProofMapChannel, ProofMapModel, ProofMapNode, RoutedProofEdge } from '../proofMapModel';
 import { Rich } from '../richText';
 import { Icon } from './Icon';
+import type { WebTeamProof } from '../../collaboration';
 
 const tx = (zh: string, en: string) => (locale === 'en' ? en : zh);
 
@@ -32,6 +33,69 @@ function ToneMark({ tone }: { tone: ProofMapNode['tone'] }) {
 
 // Encoding every code point preserves distinct task ids, including punctuation and non-Latin names.
 const safeNodeId = (id: string) => Array.from(id, character => character.codePointAt(0)!.toString(16)).join('-') || 'node';
+
+function TeamProof({ proof, label, receipt }: { proof: WebTeamProof; label: string; receipt?: string }) {
+  return <details class="pm-team-proof" data-team-proof={proof.commit}>
+    <summary>{label} <code>{proof.commit.slice(0, 12)}</code></summary>
+    <dl class="pm-detail-io">
+      <div><dt>{tx('源码提交', 'Source commit')}</dt><dd><code>{proof.commit}</code></dd></div>
+      <div><dt>{tx('源码摘要', 'Source digest')}</dt><dd><code>{proof.sourceDigest}</code></dd></div>
+      <div><dt>{tx('检查环境', 'Check environment')}</dt><dd><code>{proof.environmentDigest}</code></dd></div>
+      {receipt && <div><dt>{tx('整合回执', 'Integration receipt')}</dt><dd><code data-team-adoption-receipt>{receipt}</code></dd></div>}
+    </dl>
+    {proof.declarations.map(declaration => <div key={declaration.file + ':' + declaration.name} class="pm-team-declaration" data-team-declaration={declaration.name}>
+      <p><code>{declaration.name}</code> · <code>{declaration.file}</code></p>
+      {declaration.type && <pre>{declaration.type}</pre>}
+      {declaration.checkedCommit && <p>{tx('Lean 检查提交', 'Lean check commit')} <code>{declaration.checkedCommit}</code></p>}
+      {declaration.checkedSource !== undefined && <details class="pm-team-source">
+        <summary>{tx('查看检查源码', 'View checked source')}</summary><pre>{declaration.checkedSource}</pre>
+      </details>}
+      {declaration.receipts.map(item => <div key={item.id} data-team-check-receipt={item.id}>
+        <span>{item.status === 'kernel_verified' ? tx('内核通过', 'Kernel verified') : item.status}</span> <code>{item.id}</code>
+        {item.diagnostic && <pre>{item.diagnostic}</pre>}
+      </div>)}
+    </div>)}
+    {proof.sources.length ? proof.sources.map(source => <details key={source.file} class="pm-team-source">
+      <summary>{tx('查看固定源码', 'View frozen source')} <code>{source.file}</code></summary>
+      <pre data-team-frozen-source={source.file}>{source.source}</pre>
+    </details>) : <p>{tx('此版本的源码未保存到工作台。', 'Source for this version is unavailable in this workbench.')}</p>}
+  </details>;
+}
+
+function TeamEvidence({ evidence, onCheck }: { evidence: NonNullable<ProofMapNode['native']>; onCheck?: (id: string) => void }) {
+  const { task, delivery, adoptions, findings, trials } = evidence;
+  const state = { queued: tx('等待整合', 'Awaiting integration'), integrating: tx('正在整合', 'Integrating'),
+    completed: tx('整合回执未记录', 'Integration receipt unavailable'), failed: tx('整合失败', 'Integration failed') };
+  const relation = { direct: tx('直接引用', 'Direct reference'), indirect: tx('间接引用', 'Indirect reference'),
+    referenced: tx('已引用', 'Referenced'), 'target-proof': tx('目标定理证明', 'Target proof') };
+  return <div class="pm-team-evidence">
+    {task?.reassignment && <p data-team-reassignment>
+      {tx('据发现派工或修改任务', 'Assignment based on a finding')} · {tx('任务版本', 'Assignment revision')} {task.reassignment.revision}
+      <br /><code>{task.reassignment.ref}</code>
+    </p>}
+    {findings.map(finding => <details key={finding.ref} class="pm-team-proof">
+      <summary>{finding.status === 'accepted' ? tx('消息已入队', 'Message queued by Codex')
+        : finding.status === 'queued' ? tx('等待消息入队', 'Message awaiting queue acceptance')
+          : finding.status === 'uncertain' ? tx('消息入队状态不明', 'Queue acceptance uncertain')
+            : tx('固定研究产物', 'Saved research artifact')} · <code>{finding.from}</code></summary>
+      <code>{finding.ref}</code>{finding.text && <p>{finding.text}</p>}
+    </details>)}
+    {trials.map(trial => <div key={trial.id} data-team-candidate-trial={trial.id}>
+      <span>{tx('候选已试用', 'Candidate tried')} · <code>{trial.consumer}</code> · {trial.passed ? tx('探针通过', 'Probe passed') : tx('探针未通过', 'Probe failed')}</span>
+      {onCheck && <button type="button" class="pm-action" onClick={() => onCheck(trial.id)}>{tx('查看 Lean 检查', 'View Lean check')}</button>}
+    </div>)}
+    {task?.rejection && <TeamProof proof={task.rejection} label={tx('被拒提交的检查记录', 'Rejected submission check')} />}
+    {delivery?.proof && <TeamProof proof={delivery.proof} label={tx('交付回执与源码', 'Delivery receipts and source')} />}
+    {adoptions.map(adoption => <div key={adoption.id} data-team-adoption={adoption.id}>
+      {adoption.proof && adoption.receiptId ? <TeamProof proof={adoption.proof} receipt={adoption.receiptId}
+        label={tx('已采纳至', 'Adopted into') + ' ' + adoption.targetId} /> :
+        <p>{state[adoption.status]} · <code>{adoption.targetId}</code>{adoption.error && <> · {adoption.error}</>}</p>}
+    </div>)}
+    {delivery?.references.map(ref => <p key={[ref.file, ref.name, ref.target].join(':')} data-team-final-reference={ref.relation}>
+      {relation[ref.relation]} · <code>{ref.name}</code> → <code>{ref.target}</code>
+    </p>)}
+  </div>;
+}
 
 export function ProofMap(props: ProofMapProps) {
   const { model } = props, workspace = props.variant === 'workspace';
@@ -102,7 +166,8 @@ export function ProofMap(props: ProofMapProps) {
       <div class="pm-heading"><span class="pm-eyebrow">{tx('证明结构', 'Structure of the argument')}</span>
         <h3>{tx('解题进展地图', 'Solving progress map')}</h3>
       </div>
-      <span class="pm-mode">{model.mode === 'planned' ? tx('依赖归约图', 'Dependency reduction DAG') : tx('三阶段验证管线', '3-stage verification pipeline')}</span>
+      <span class="pm-mode">{model.mode === 'native' ? tx('Codex 团队', 'Codex team')
+        : model.mode === 'planned' ? tx('依赖归约图', 'Dependency reduction DAG') : tx('三阶段验证管线', '3-stage verification pipeline')}</span>
       {!workspace && props.onOpenWorkspace && <button type="button" class="pm-action" data-pm-open-workspace onClick={props.onOpenWorkspace}>
         <Icon name="panel-right" />{tx('在右侧工作区展开', 'Open in live workspace')}
       </button>}
@@ -136,12 +201,12 @@ export function ProofMap(props: ProofMapProps) {
         </li>)}</ol>
     </section>
 
-    <div class="pm-legend">
+    {model.mode !== 'native' && <div class="pm-legend">
       <span><i class="pm-legend-line pm-line-settled" aria-hidden="true" />{tx('已核验供给', 'Verified supply')}</span>
       <span><i class="pm-legend-line pm-line-dependency" aria-hidden="true" />{tx('待完成依赖', 'Pending dependency')}</span>
       <span><i class="pm-legend-line pm-line-conditional" aria-hidden="true" />{tx('条件性推进', 'Conditional step')}</span>
       <span class="pm-legend-hint">{tx('点击节点展开输入前提与待证目标', 'Click a node to inspect inputs and proof obligation')}</span>
-    </div>
+    </div>}
 
     <div class="pm-flow" data-has-external={externalCount > 0 ? 'true' : undefined}>
       <div class="pm-map" ref={mapRef}>
@@ -165,7 +230,9 @@ export function ProofMap(props: ProofMapProps) {
                 const taskId = node.taskId, preview = node.formulaOrType || node.statement;
                 return <article key={node.id} class="pm-node" data-pm-box={node.id} data-pm-node={node.id} data-pm-origin={node.origin} data-pm-tone={node.tone}
                   data-live-task={workspace ? taskId : undefined} data-tone={workspace && taskId !== undefined ? node.tone : undefined}
-                  data-open={open ? 'true' : undefined} data-highlighted={hovered === node.id ? 'true' : undefined}
+                  data-team-task={node.native?.task?.id} data-team-status={node.native?.task?.status}
+                  data-team-delivery={node.native?.delivery?.id} data-open={open ? 'true' : undefined}
+                  data-highlighted={hovered === node.id ? 'true' : undefined}
                   onMouseEnter={() => setHovered(node.id)} onMouseLeave={() => setHovered(undefined)} onFocus={() => setHovered(node.id)}
                   onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setHovered(undefined); }}>
                   <button type="button" class={props.variant === 'workspace' ? 'pm-node-head live-task-head' : 'pm-node-head'} aria-expanded={open}
@@ -182,10 +249,10 @@ export function ProofMap(props: ProofMapProps) {
                   </button>
                   {open && <div class="pm-detail" id={detailId}>
                     {node.statement && <div class="pm-detail-statement" translate={false}><Rich text={node.statement} /></div>}
-                    <dl class="pm-detail-io">
+                    {model.mode === 'native' ? node.useSummary && <p class="pm-detail-note">{node.useSummary}</p> : <dl class="pm-detail-io">
                       <div><dt>{tx('输入前提 (Use)', 'Inputs (Use)')}</dt><dd translate={false}>{node.useSummary}</dd></div>
                       <div><dt>{tx('待证目标 (Prove)', 'Obligation (Prove)')}</dt><dd translate={false}>{node.proveSummary}</dd></div>
-                    </dl>
+                    </dl>}
                     {node.checkpointsIn.length > 0 && <section class="pm-detail-transfers"><h5>{tx('上游前提', 'Upstream inputs')}</h5>
                       <div class="pm-chips">{node.checkpointsIn.map(input => nodeById.has(input.id)
                         ? <button key={input.id} type="button" class="pm-chip" data-settled={input.settled ? 'true' : undefined} onClick={() => jumpTo(input.id)}>
@@ -206,6 +273,7 @@ export function ProofMap(props: ProofMapProps) {
                       : <p class="pm-detail-reason" data-pm-reason translate={false}>{node.reason}</p>)}
                     {node.finding && <section class="pm-detail-finding"><h5>{tx('研究发现', 'Research finding')}</h5><div translate={false}><Rich text={node.finding} /></div></section>}
                     {node.note && <p class="pm-detail-note" translate={false}>{node.note}</p>}
+                    {node.native && <TeamEvidence evidence={node.native} onCheck={props.onCheck} />}
                     {taskId !== undefined && (props.onGuide && node.canGuide || props.onTask) && <div class="pm-detail-actions">
                       {props.onGuide && node.canGuide && <button type="button" class="pm-action" data-live-guide={workspace ? taskId : undefined} data-pm-guide={!workspace ? taskId : undefined}
                         onClick={() => props.onGuide!(taskId)}><Icon name="message-square-text" />{t('指导这项任务')}</button>}

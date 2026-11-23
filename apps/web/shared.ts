@@ -275,10 +275,16 @@ export type WebAgentActionKind = typeof webAgentActionKinds[number];
 export type WebAgentActionIntent = { type: 'read' | 'list' | 'search'; path?: string; query?: string };
 export type WebAgentFileChange = { path: string; change: 'add' | 'delete' | 'update'; movedTo?: string; diff?: string; clipped?: boolean };
 /** What `math check-lean` reported, read from its JSON instead of shown as it. */
+export type WebLeanMessage = { severity: 'error' | 'warning' | 'info'; file?: string; line?: number; column?: number;
+  text: string; goalText?: string };
+export const webLeanClassifications = ['success', 'lean', 'timeout', 'cancelled', 'source', 'infrastructure', 'tooling', 'usage'] as const;
 export type WebAgentLeanCheck = {
   passed: boolean; timedOut?: boolean;
-  messages: { severity: 'error' | 'warning' | 'info'; file?: string; line?: number; column?: number; text: string }[];
-  omittedMessages?: number;
+  messages: WebLeanMessage[]; omittedMessages?: number; firstBlocking?: WebLeanMessage;
+  classification?: typeof webLeanClassifications[number]; sourceDigest?: string; environmentDigest?: string;
+  artifacts?: { path: string; digest: string; sourceDigest: string; environmentDigest: string }[];
+  checkedSource?: { file: string; digest: string; text: string; artifact: string };
+  candidate?: { ref: string; solverRunId: string };
 };
 /** What `math search-lean` found, per query: how many matches and the first declaration names. */
 export type WebAgentLeanSearch = { query: string; total: number; names: string[] }[];
@@ -305,7 +311,7 @@ export type WebAgentAction = WebAgentActionBody & { sequence: number; at: string
 /** Per action field and per run; encoded allows JSON's six-character escapes, including long Lean diagnostics and paths. */
 export const webAgentActionLimits = Object.freeze({ perRun: 3_000, page: 500, command: 8_192, output: 32_768, outputHead: 8_192,
   diff: 32_768, diffs: 65_536, changes: 20, text: 32_768, intents: 8, query: 400, arguments: 8_192, encoded: 1536 * 1024,
-  leanMessages: 64, leanMessage: 2_000, queries: 8, names: 8, name: 200 });
+  leanMessages: 64, leanMessage: 2_000, leanSource: 64 * 1024, leanArtifacts: 16, queries: 8, names: 8, name: 200 });
 export type WorkerMessage =
   | { type: 'progress'; event: string; message: string; details?: WebEventDetails }
   | { type: 'action'; action: WebAgentActionBody }

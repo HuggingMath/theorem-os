@@ -1115,7 +1115,7 @@ export class AgentResearchTeam {
             if (this.live.get(targetId)?.session || target?.writerStopUnconfirmed || targetId === 'lead' && state.writerStopUnconfirmed)
               throw new Error('math_team_target_writing');
           } }));
-        adoption.status = 'completed'; adoption.commit = result.commit; adoption.error = undefined;
+        adoption.status = 'completed'; adoption.commit = result.commit; adoption.receiptId = result.id; adoption.error = undefined;
         this.recordExposure(targetId, reference, delivery.commit, 'adopted');
         if (targetId === 'lead') {
           state.check = undefined;
