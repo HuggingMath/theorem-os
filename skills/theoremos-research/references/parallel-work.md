@@ -66,6 +66,8 @@ For example, send the consumer the exact candidate type, the hypotheses that wor
 - When a finding changes an assignment, put one line such as `Based on: research:<artifactId>` in the native spawn or `followup_task` message. Give the new scope in the body. Keep any `Profiles:` header on the first line.
 - For formal reuse, use `adopt` with the checked delivery ID and the consumer workspace. The host records the integration receipt when the write succeeds.
 
+For a computational finding, send its intended consumer the domain and assumptions, the input and command, and the decisive output (for example, a witness or a failed constraint). A plotted pattern is a conjecture until checked. Keep reproducible details in `RESEARCH.md`; a path into your private scratch directory alone is unusable by a peer.
+
 Use a fixed research or delivery ID when you do not have the message ID. If another member takes over, give them that fixed reference and the first open goal so they can continue without access to the earlier member's working files.
 
 Use these milestones to keep collaboration connected; no fixed message count, polling interval or mandatory proof method is imposed.

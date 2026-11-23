@@ -2,11 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { mathDigest } from '../src/math/mathRuntimeIo';
+import type { MathTools } from '../src/math/mathTools';
 import { readMathAgentSkill } from '../src/runtime/codexSkills';
 import { buildResearchContext, finalizeResearchDispatch, type ContextBundle } from '../src/solver/modules/context';
 import { researchSkillIdentity } from '../src/solver/researchSkill';
 import { buildSkillResearchContext, teamTurnTiming } from '../src/solver/skillResearchContext';
-import { localExample, solverState } from './helpers/solver';
+import { localExample, peerWorker, solverState } from './helpers/solver';
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -30,6 +31,39 @@ function fixture(common: boolean) {
   };
   return { ...base, state, taskText, access, build };
 }
+
+it('gives both native roles their own Lean command and keeps the complete tool catalog in worktree help', () => {
+  const f = fixture(false), peer = peerWorker(f, 'analyst'), message = 'Find a concrete input for the inference.';
+  const sourceCommit = f.problem.baseCommit;
+  f.state.researchDelegation = { mode: 'team', maxAgents: 2 };
+  f.state.agentTeam = { schema: 'theorem-os.agent-team.v1', transport: 'native-agent-control',
+    workers: [{ id: peer.id, role: 'researcher', worktree: peer.worktree, phase: 'running', status: 'running',
+      turns: 1, cursor: 0, seedCommit: sourceCommit, tasks: [{ id: 'witness', status: 'running', message }] }],
+    events: [], deliveries: [], adoptions: [], operations: [] };
+  const tools: MathTools = { root: '/tools', digest: mathDigest('test manifest'), tools: [
+    { name: 'math-python', version: '1', purpose: 'SymPy for exact arithmetic.', commands: ['math-python'] },
+    { name: 'custom', version: '1', purpose: 'Custom geometry fixture.', commands: ['rare-geometry-tool'] },
+  ] };
+  for (const member of [false, true]) {
+    const worktree = member ? peer.worktree : f.workspace;
+    const access = { ...f.access, worktree, ...(member ? { teamRole: { id: peer.id, role: 'worker' as const },
+      teamAssignment: { taskId: 'witness', message, sourceCommit } } : {}) };
+    const help = () => fs.readFileSync(path.join(worktree, '.scratch/theoremos-help.md'), 'utf8');
+    const plain = buildSkillResearchContext(f.problem, f.state, access);
+    expect(plain.instructions).not.toContain('math-python');
+    expect(help()).not.toContain('## math-tools');
+    const withTools = buildSkillResearchContext(f.problem, f.state, { ...access, mathTools: tools });
+    const check = help().split('\n').find(line => line.startsWith('bun ') && line.includes(' check-lean '));
+    expect(check).toContain(`--worktree '${worktree}' --file '${f.problem.targets[0]!.proofPath}'`);
+    expect(help()).toContain('rare-geometry-tool');
+    for (const continuation of [false, true]) {
+      const { instructions } = finalizeResearchDispatch(withTools, { continuation });
+      expect(instructions).toContain(check!);
+      expect(instructions).toContain('math-python');
+      expect(instructions).not.toContain('rare-geometry-tool');
+    }
+  }
+});
 
 it('retains source research and failure feedback on native continuation with a saved coordination presentation', () => {
   const f = fixture(false);

@@ -7,7 +7,7 @@ description: Conduct sustained mathematical research in a TheoremOS workspace, u
 
 Work toward the frozen original statement. Choose the mathematical approach, research decomposition and next experiment from the evidence available. Read the actual owned sources and relevant definitions early. Once a claim or library application can be tested, save a focused Lean probe and inspect its result before building more work on it.
 
-The current host assignment fixes your role, owned paths and available tools. Use native editing, shell and search within its permissions; delegation also requires an exposed, permitted tool. Read `.scratch/theoremos-help.md` for this run's commands and delivery interface.
+The current host assignment fixes your role, owned paths and available tools. Use native editing, shell and search within its permissions; delegation also requires an exposed, permitted tool. Choose a tool when its answer would change the next step. A direct proof can go straight to the supplied Lean check. For an experiment, look up the relevant command in this run's `.scratch/theoremos-help.md`, which also gives the delivery interface.
 
 When the host selects native AgentControl, use the exposed native collaboration tools for spawn, followup, message, wait, listing and interruption. `theoremos_team` then handles mathematical tasks, source handoffs and checked-result adoption. Historical `theoremos_team` transport examples below apply only when those operations are advertised. Follow the run's current transport and target identities.
 

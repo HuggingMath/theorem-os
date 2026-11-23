@@ -8,15 +8,20 @@ import { ResearchToolHelpBuilder } from './researchToolHelp';
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
 /** Shared optional tool reference; callers retain their own mandatory delivery contracts. */
-export function buildResearchToolGuide(problem: Pick<SolverProblem, 'receiptDigest'>,
+export function buildResearchToolGuide(problem: Pick<SolverProblem, 'receiptDigest' | 'projectRelative' | 'targets' | 'ownedFiles' | 'frozenFiles'>,
   access: Pick<ContextAccess, 'root' | 'tools' | 'worktree' | 'retrievalRoot' | 'corpusFile' |
     'knowledgeFile' | 'knowledgeDigest' | 'libraryCatalog' | 'teamRole'>, environmentDigest: string,
   teamTransport?: AgentTeamTransport) {
   const command = `bun ${quote(access.tools ?? path.join(access.root, 'bin/math.ts'))}`;
   const help = new ResearchToolHelpBuilder();
+  const editable = new Set(problem.ownedFiles.filter(file => file.endsWith('.lean') && !Object.hasOwn(problem.frozenFiles ?? {}, file)));
+  const file = problem.targets.find(target => editable.has(target.proofPath))?.proofPath ?? editable.values().next().value;
+  const leanCheckCommand = file && `${command} check-lean --worktree ${quote(access.worktree)} --file ${quote(file)} --timeout-seconds 0`;
   const report = teamTransport === 'native-agent-control' ? 'native send_message' :
     teamTransport === 'host-tools' ? 'theoremos_team ' + (access.teamRole?.role === 'worker' ? 'progress' : 'message') : undefined;
-  help.section('lean', `${command} check-lean --worktree ${quote(access.worktree)} --file 'OWNED_FILE.lean' --timeout-seconds 0\n` +
+  help.section('lean', (file && leanCheckCommand ? `${leanCheckCommand}\n` +
+    `Edit ${quote(path.join(problem.projectRelative, file))} from the worktree root; pass ${quote(file)} to --file. ` +
+    (teamTransport ? 'To test a peer result, append --candidate followed by its actual message:, research: or delivery: reference to this single-file check. ' : '') : '') +
     'Repeat --file for all relevant saved source files. Paths are relative to the Lean project, without its prefix. ' +
     'For a concrete claim or library application, save a focused probe and check it before expanding the surrounding proof. ' +
     'Read classification, firstBlocking and diagnosticArtifacts; stdout is JSON and stderr is progress. Poll unfinished processes. ' +
@@ -62,5 +67,5 @@ export function buildResearchToolGuide(problem: Pick<SolverProblem, 'receiptDige
   help.section('other-tools', `${command} --help lists available commands. Read COMMAND --help before using an unfamiliar interface. ` +
     'Use native web search when actually exposed. Finite checks, proof-search and kernel-certificate do not call a model or accept the original problem. ' +
     'Their exact input formats are available from their existing --help commands.', '');
-  return { command, help };
+  return { command, help, leanCheckCommand };
 }
