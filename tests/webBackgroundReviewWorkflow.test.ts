@@ -79,15 +79,15 @@ beforeAll(async () => {
   service = http.createServer(async (request, response) => {
     const pathname = new URL(request.url!, 'http://fixture').pathname;
     const bundle = bundles.get(pathname);
-    if (bundle) { response.writeHead(200, { 'Content-Type': pathname.endsWith('.css') ? 'text/css' : 'text/javascript' }); response.end(bundle); return; }
+    if (bundle) { response.writeHead(200, { 'Content-Type': pathname.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8' }); response.end(bundle); return; }
     if (pathname === '/chat-fixture.html') {
-      response.writeHead(200, { 'Content-Type': 'text/html' });
+      response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       response.end('<!doctype html><html><head><link rel="stylesheet" href="app.css"><link rel="stylesheet" href="research-conversation.css"><link rel="stylesheet" href="fixture-chat.css"></head><body><main><div id="research-chat-thread"></div><button data-chat-latest hidden>Latest</button><section id="natural-research"></section><nav id="chat-history-list"></nav><section id="chat-original-panel"></section><section id="chat-live-panel"></section></main><script src="fixture-chat.js"></script></body></html>'); return;
     }
-    if (pathname === '/theme.js') { response.writeHead(200, { 'Content-Type': 'text/javascript' }); response.end(); return; }
+    if (pathname === '/theme.js') { response.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); response.end(); return; }
     const file = pathname === '/formalize.html' ? 'formalize.html' : pathname.slice(1);
     if (['formalize.html', 'app.css', 'formalize.css', 'research-conversation.css'].includes(file)) {
-      response.writeHead(200, { 'Content-Type': file.endsWith('.html') ? 'text/html' : 'text/css' }); response.end(await fs.readFile(path.join(client, file))); return;
+      response.writeHead(200, { 'Content-Type': file.endsWith('.html') ? 'text/html; charset=utf-8' : 'text/css; charset=utf-8' }); response.end(await fs.readFile(path.join(client, file))); return;
     }
     response.writeHead(204); response.end();
   });

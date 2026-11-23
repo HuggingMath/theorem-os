@@ -924,7 +924,7 @@ export class CooperativeResearch extends CooperationInputs {
             projectRoot: project,
             // A family type never names its own members, which do not exist in source until they are proved.
             dependencies: this.dependencies(task).map(item => item.task).filter(input => input.familyMember !== task.id), environmentDigest: environment,
-            env: workerAccess.environment, signal,
+            env: workerAccess.environment, installedLibrary: workerAccess.installedLibrary, signal,
             timeoutMs: this.input.timeoutMs ?? Infinity }) : {
               result: { status: 'unavailable', inputDigest: mathDigest(canonicalMathJson([taskDigest, environment, 'worker-environment-unavailable'])),
                 taskDigest, reason: 'worker-environment-unavailable', evidence: 'advisory-type-elaboration', proofAcceptance: 'not-assessed' },

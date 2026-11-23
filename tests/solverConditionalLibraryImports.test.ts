@@ -5,10 +5,11 @@ import { bootstrapLeanTask } from '../src/math/leanTask';
 import { LIBRARY_PACK_SCHEMA } from '../src/math/libraryPacks';
 import type { MathematicsVerifierBatchRequest } from '../src/math/verifier';
 import type { CooperativeResearch } from '../src/solver/cooperation';
+import { readInstalledLibrarySnapshot } from '../src/solver/installedLibraryContext';
 import { committedSource, commitSolverSources, readSolverProblem, withSolverWorktree } from '../src/solver/problem';
 import { applyTaskChanges, createTaskSourceProjector } from '../src/solver/cooperativeProof';
 import { taskVersion, type CooperativeTask } from '../src/solver/tasks';
-import { cooperativeResearch } from './helpers/cooperation';
+import { cooperativeResearch, workerAccess, workerDeliveryModules } from './helpers/cooperation';
 import { temporaryDirectory } from './helpers/files';
 import { leadWorker, peerWorker, solverState } from './helpers/solver';
 import { verifiedBatch } from './helpers/verifier';
@@ -64,7 +65,11 @@ describe('conditional consumer with an older library import context', () => {
       return verifiedBatch(request, { sessionId: 'conditional-library-fixture' });
     });
     const controller = new AbortController();
-    const cooperative = cooperativeResearch({ state, workers, retrievalRoot: directory, signal: controller.signal });
+    const access = workerAccess(workers, directory);
+    const library = readInstalledLibrarySnapshot(problem, state.environmentDigest);
+    for (const grant of access.values()) grant.installedLibrary = library;
+    const cooperative = cooperativeResearch({ state, workers, access, modules: workerDeliveryModules,
+      retrievalRoot: directory, signal: controller.signal });
     instances.push({ controller, cooperative });
     await cooperative.restore();
     const budget = { maxTurns: Infinity, remainingMs: Infinity };

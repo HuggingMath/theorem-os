@@ -13,6 +13,7 @@ import type { WebRunner } from '../apps/web/runner';
 import type { WorkerFormalizationInput, WorkerFormalizationMessage } from '../apps/web/formalizationTypes';
 import type { WorkerInput, WorkerMessage } from '../apps/web/shared';
 import { localeStorageKey } from '../apps/web/i18n';
+import { webCheckedLeanFixture } from '../tests/helpers/webCheckedLeanFixture';
 import { webFormalizationEvidence, webFormalizationStatement } from '../tests/helpers/webFormalizationFixture';
 import { audit } from './web-a11y';
 import { deferred, freePort, settled, startBrowser } from './web-scenario';
@@ -44,11 +45,12 @@ const runner: WebRunner = {
     progress('research_action', '直接求解', { workerId: 'solver', operation: 'direct' });
     await sleep(20);
     progress('turn_started', '第 1 轮', { workerId: 'solver', turn: 1 });
-    // The Agent's file is saved as a candidate before it checks it, so the check arrives with the source Lean named its error in.
-    send({ type: 'artifact', artifact: { source: statement, workerId: 'solver', capturedAt: new Date().toISOString(), status: 'candidate' } } as WorkerMessage);
+    const checkedText = statement.replace('sorry', 'unknown_tactic');
+    send({ type: 'artifact', artifact: { source: checkedText, workerId: 'solver', capturedAt: new Date().toISOString(), status: 'candidate' } } as WorkerMessage);
     action({ workerId: 'solver', itemId: '1:c1', phase: 'started', kind: 'command', status: 'running', command: "theorem-os check-lean --file 'Submission.lean'" });
     action({ workerId: 'solver', itemId: '1:c1', phase: 'completed', kind: 'command', status: 'failed', exitCode: 1,
-      command: "theorem-os check-lean --file 'Submission.lean'", output: 'error: unknown tactic', lean: lean(false, 2) });
+      command: "theorem-os check-lean --file 'Submission.lean'", output: 'error: unknown tactic',
+      lean: webCheckedLeanFixture(checkedText, false, [{ severity: 'error', line: 2, text: 'unknown tactic' }]) });
     progress('proof_check_started', 'Lean 检查', { workerId: 'solver', turn: 1 });
     const held = deferred(); releaseRun = held.resolve;
     await Promise.race([held.promise, new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }))]);

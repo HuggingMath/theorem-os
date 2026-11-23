@@ -7,6 +7,11 @@ import type { SolverRunState } from '../../src/solver/archive';
 
 type Input = ConstructorParameters<typeof CooperativeResearch>[0];
 
+// Worker-delivery fixtures must keep their helper open even when real Lean can solve it at dispatch.
+export const workerDeliveryModules: Input['modules'] = {
+  ...directSolverModules, M2: { ...directSolverModules.M2, closeTask: undefined },
+};
+
 /** Access for every worker with an empty environment and a shared retrieval root. */
 export function workerAccess(workers: readonly ResearchWorker[], retrievalRoot: string): Map<string, WorkerAccess> {
   return new Map(workers.map(worker => [worker.id, { environment: {}, retrievalRoot }]));
