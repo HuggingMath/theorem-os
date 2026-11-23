@@ -316,6 +316,33 @@ describe('content-bound typed helper preflight', () => {
     await cache.check(request()); expect(check).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ['Frozen.value', 'available', 'deferred'], ['_root_.Frozen.value', 'available', 'deferred'],
+    ['Frozen.typo', 'available', 'invalid'], ['value', 'available', 'invalid'],
+    ['Frozen.value', 'not-frozen', 'invalid'], ['Frozen.value', 'different-digest', 'invalid'],
+    ['Frozen.value', 'transitively-imported', 'invalid'],
+  ])('classifies an unknown name %s against the %s library as %s', async (name, context, status) => {
+    const file = 'Submission/Library/Bounds.lean', module = 'Submission.Library.Bounds';
+    const frozen = 'namespace Frozen\ndef value : Nat := 0\nend Frozen\n', digest = mathDigest(frozen);
+    fs.mkdirSync(path.join(root, 'Submission/Library'), { recursive: true });
+    fs.writeFileSync(path.join(root, file), frozen);
+    if (context === 'transitively-imported') {
+      fs.writeFileSync(path.join(root, 'Base.lean'), `import ${module}\n`);
+      fs.writeFileSync(path.join(root, 'Submission.lean'), 'import Base\n' + source);
+    }
+    const type = `${name} = 0`, input = { task: { ...task, type }, problem: { ...problem,
+      frozenFiles: context === 'not-frozen' ? {} : { [file]: digest } } };
+    const library = { digest, base: { entries: [{ name: 'Frozen.value', file, contextDigest: 'ctx' }],
+      contexts: { ctx: { [file]: context === 'different-digest' ? mathDigest('other') : digest } } } };
+    check.mockImplementation(async () => failure({ projectionDigest: projection(root, type).digest, firstBlocking: {
+      severity: 'error', format: 'lean-json', file: 'TypeDiagnostic.lean', message: `Unknown identifier \`${name}\`` } }));
+    // A cached error before the installed snapshot arrived must not hide a newly identified legal import.
+    expect((await cache.check(request(input))).result.status).toBe('invalid');
+    const { result } = await cache.check(request({ ...input, installedLibrary: library }));
+    expect(result).toMatchObject({ status, proofAcceptance: 'not-assessed' });
+    if (status === 'deferred') expect(result.reason).toContain(`import ${module}`);
+  });
+
   it.each(['(deterministic) timeout at `whnf`, maximum number of heartbeats (200000) has been reached',
     'maximum recursion depth has been reached; use set_option maxRecDepth to increase the limit',
     'internal exception: unreachable code', 'IO error: failed to read object file',

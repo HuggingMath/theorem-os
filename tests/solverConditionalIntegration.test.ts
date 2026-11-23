@@ -9,7 +9,7 @@ import { readCooperationPlan, type CooperativeResearch } from '../src/solver/coo
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import { committedSource, commitSolverSources, git, readSolverProblem, type SolverProblem } from '../src/solver/problem';
 import type { CooperativeAction, CooperativeTask } from '../src/solver/tasks';
-import { cooperativeResearch } from './helpers/cooperation';
+import { cooperativeResearch, workerDeliveryModules } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 import { failedBatch, verifiedBatch } from './helpers/verifier';
 
@@ -37,7 +37,8 @@ describe('conditional proof declaration ownership', () => {
   const node = (id: string) => state.cooperation!.tasks.find(node => node.task.id === id)!;
   const create = () => {
     const controller = new AbortController();
-    const cooperative = cooperativeResearch({ state, workers, retrievalRoot: directory, signal: controller.signal });
+    const cooperative = cooperativeResearch({ state, workers, retrievalRoot: directory, signal: controller.signal,
+      modules: workerDeliveryModules });
     instances.push({ cooperative, controller });
     return cooperative;
   };

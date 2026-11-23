@@ -16,6 +16,7 @@ import { webLimits, type WebAgentAction, type WebAgentActionBody, type WebEventD
 import { extendTrajectory, recordedTrajectory, trajectoryPage } from '../apps/web/trajectory';
 import { proofOutline } from '../apps/web/verificationKit';
 import { taskVersion } from '../src/solver/tasks';
+import { webCheckedLeanFixture } from '../tests/helpers/webCheckedLeanFixture';
 import { audit } from './web-a11y';
 import { freePort, preferFullCollaboration, settled } from './web-scenario';
 import { openChatResultDetails } from './web-ui-controls';
@@ -563,9 +564,9 @@ try {
       touch(); summary('engineer', 'proof-summary', copy.engineerSummary, true);
       touch(); run.artifact = { source: failedSource, workerId: 'engineer', status: 'candidate', capturedAt: run.updatedAt };
       action({ workerId: 'engineer', itemId: 'proof-check-1', kind: 'command', phase: 'completed', status: 'failed', exitCode: 1,
-        command: 'theorem-os check-lean --file Submission.lean', output: checkOutput, lean: { passed: false, messages: [
+        command: 'theorem-os check-lean --file Submission.lean', output: checkOutput, lean: webCheckedLeanFixture(failedSource, false, [
           { severity: 'warning', line: 4, text: warning }, { severity: 'error', line: 5, column: 9, text: diagnostic },
-        ] } });
+        ]) });
       await page.goto(`${origin}/?chat=${conversation.id}`, { timeout: 0 });
       await contains(copy.engineerSummary.split('\n')[1]!); await failedCheck.waitFor(); await settled(page);
       assert.equal(await detail(), null, 'A new browser has made no choice');
@@ -1454,9 +1455,9 @@ try {
     action({ workerId: 'engineer', itemId: 'public-commentary', kind: 'message', textSource: 'commentary', phase: 'completed', status: 'done', text: copy.commentary });
     run.artifact = { source: failedSource, workerId: 'engineer', status: 'candidate', capturedAt: run.updatedAt };
     action({ workerId: 'engineer', itemId: 'proof-check-1', kind: 'command', phase: 'completed', status: 'failed', exitCode: 1,
-      command: 'theorem-os check-lean --file Submission.lean', output: checkOutput, lean: { passed: false, messages: [
+      command: 'theorem-os check-lean --file Submission.lean', output: checkOutput, lean: webCheckedLeanFixture(failedSource, false, [
         { severity: 'error', line: 5, column: 9, text: diagnostic }, { severity: 'warning', line: 4, text: warning }, { severity: 'info', line: 5, text: info },
-      ] } });
+      ]) });
     await contains(copy.commentary);
     assert.equal(await thinking.locator('[data-thinking-work="research"][data-thinking-task="research"]').count(), 1,
       'A matching delivery replaces the same task version\'s finding instead of repeating it');
@@ -1480,7 +1481,7 @@ try {
       diff: '@@ -4,2 +4,4 @@\n theorem ui_fixture_add_identity (n : Nat) : n + 0 = n ∧ 0 + n = n := by\n-  exact Nat.add_zero n\n+  constructor\n+  · exact Nat.add_zero n\n+  · exact Nat.zero_add n' }] });
     run.artifact = { source: correctedSource, workerId: 'engineer', status: 'candidate', capturedAt: run.updatedAt };
     action({ workerId: 'engineer', itemId: 'proof-check-2', kind: 'command', phase: 'completed', status: 'done', exitCode: 0,
-      command: 'theorem-os check-lean --file Submission.lean', output: 'Synthetic check passed. No Lean process ran.', lean: { passed: true, messages: [] } });
+      command: 'theorem-os check-lean --file Submission.lean', output: 'Synthetic check passed. No Lean process ran.', lean: webCheckedLeanFixture(correctedSource, true) });
     await contains(copy.revision.split('\n')[1]!);
     const passedCheck = thinking.locator('[data-thinking-detail="check:p:engineer:proof-check-2"]');
     await page.waitForFunction(source => document.querySelector('[data-thinking-detail="check:p:engineer:proof-check-2"] .thinking-source pre code')?.textContent === source, correctedSource);

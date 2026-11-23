@@ -9,7 +9,7 @@ import { commitSolverSources, git, type SolverProblem } from '../src/solver/prob
 import type { ResearchWorker } from '../src/solver/modules/organization';
 import { proofReadyRecordSchema } from '../src/solver/proofReady';
 import { setWorkerResearchPhase, WorkerProofLifecycle } from '../src/solver/workerProofLifecycle';
-import { cooperativeResearch } from './helpers/cooperation';
+import { cooperativeResearch, workerDeliveryModules } from './helpers/cooperation';
 import { leadWorker, localExample, peerWorker, solverState } from './helpers/solver';
 import { verifiedBatch } from './helpers/verifier';
 import { deferred } from './helpers/async';
@@ -29,6 +29,7 @@ describe('host-owned proof readiness intake', () => {
   const create = () => {
     const controller = new AbortController();
     const value = cooperativeResearch({ state, workers, retrievalRoot: directory, signal: controller.signal,
+      modules: workerDeliveryModules,
       save: () => saves.push(structuredClone(state)), emit: (event, details) => events.push({ event, details }) });
     instances.push({ cooperative: value, controller }); return value;
   };

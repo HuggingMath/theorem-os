@@ -7,6 +7,7 @@ import { leanScopeCommands, leanScopeNamespace, maskLeanCommentsAndStrings, upda
 import { checkLeanType, leanTypeDiagnosticProjection } from '../math/leanTypeDiagnostics';
 import { formalVerificationToolIdentity } from '../math/verifier';
 import { renderLeanDiagnosticMessage } from '../math/leanDiagnosticMessages';
+import type { KnowledgeContextSnapshot } from './knowledgeContext';
 import { proofReuseEnvironment } from './proofReuse';
 import type { SolverProblem } from './problem';
 import { taskVersion, type CooperativeTask } from './tasks';
@@ -19,7 +20,7 @@ export type TaskTypePreflight = {
   projectionReuse?: { originInputDigest: string; originSourceDigest: string; sourceDigest: string; projectionDigest: string };
 };
 type Input = { problem: SolverProblem; task: CooperativeTask; projectRoot: string; dependencies: readonly CooperativeTask[];
-  environmentDigest: string; env: NodeJS.ProcessEnv; signal?: AbortSignal; timeoutMs: number };
+  environmentDigest: string; env: NodeJS.ProcessEnv; signal?: AbortSignal; timeoutMs: number; installedLibrary?: KnowledgeContextSnapshot };
 
 /** Later independent source edits must not reopen an unchanged invalid canonical contract. */
 export function taskTypePreflightEnvironmentIdentity(projectRoot: string, env: NodeJS.ProcessEnv): string | undefined {
@@ -43,9 +44,11 @@ function unsupportedScope(source: string, offset: number): boolean {
   return frames.some(Boolean);
 }
 
+const unknownIdentifier = (message: string) => /^unknown (?:identifier|constant) `([^`\n]+)`/iu.exec(message.trim())?.[1];
+
 /** Imports do not restore aliases for private declarations in the queried file. */
 function privateLookupError(source: string, context: string, offset: number, namespace: string, message: string): boolean {
-  const unknown = /^unknown (?:identifier|constant) `([^`\n]+)`/iu.exec(message.trim())?.[1];
+  const unknown = unknownIdentifier(message);
   if (!unknown) return false;
   const prefixes = (name: string) => ['', ...name.split('.').filter(Boolean).map((_, index, parts) => parts.slice(0, index + 1).join('.'))];
   const lookups = new Set(prefixes(namespace)), lookupScopes: LeanScope[] = [];
@@ -120,6 +123,7 @@ function prepare(input: Input) {
     file: input.task.proofPath!, context: anchor.qualifiedName, type: input.task.type! }) : undefined;
   const binding = { project, taskDigest, context: anchor?.qualifiedName,
     dependencies: input.dependencies.map(task => [task.id, taskVersion(task)]), environmentDigest: input.environmentDigest,
+    installedLibraryDigest: input.installedLibrary?.digest,
     timeoutMs: Number.isFinite(input.timeoutMs) ? input.timeoutMs : 'unlimited',
     environment: environment.digest ?? mathDigest(canonicalMathJson(environment.env)), tools: tools ?? null };
   const key = mathDigest(canonicalMathJson({ ...binding, sourceDigest }));
@@ -136,7 +140,15 @@ function prepare(input: Input) {
           canonicalMathJson(files.filter(file => configs.includes(file)));
     } catch { return false; }
   };
-  return { key, projectionKey, projection, project, taskDigest, sourceDigest, environment, tools, context: anchor?.qualifiedName, reason, current,
+  const missingFrozenImport = (message: string) => {
+    const name = unknownIdentifier(message)?.replace(/^_root_\./u, ''), library = input.installedLibrary;
+    if (!name?.includes('.') || !library) return;
+    // The installed index contains public declarations only. A worker can import a pinned module outside the current closure.
+    const entry = library.base.entries.find(item => item.name === name && !files.includes(item.file) &&
+      input.problem.frozenFiles?.[item.file] && input.problem.frozenFiles[item.file] === library.base.contexts[item.contextDigest]?.[item.file]);
+    return entry?.file.slice(0, -'.lean'.length).replaceAll('/', '.');
+  };
+  return { key, projectionKey, projection, project, taskDigest, sourceDigest, environment, tools, context: anchor?.qualifiedName, reason, current, missingFrozenImport,
     privateLookupError: (message: string) => Boolean(anchor && privateLookupError(source, anchor.qualifiedName, anchor.startOffset, anchor.namespace, message)) };
 }
 
@@ -245,9 +257,10 @@ export class TaskTypePreflightCache {
           checked.firstBlocking.file && path.basename(checked.firstBlocking.file) === 'TypeDiagnostic.lean' &&
           definiteTypeError(checked.firstBlocking.message) &&
           checked.diagnosticArtifacts.length > 0 && checked.diagnosticArtifacts.every(item => item.captureComplete === true)) {
-        const privateContext = snapshot.privateLookupError(checked.firstBlocking.message);
-        value = result(privateContext ? 'deferred' : 'invalid',
-          (privateContext ? 'declaration-private-context-not-reproducible\n' : '') +
+        const missingImport = snapshot.missingFrozenImport(checked.firstBlocking.message);
+        const defer = missingImport ? `declaration-needs-frozen-import: import ${missingImport}` :
+          snapshot.privateLookupError(checked.firstBlocking.message) ? 'declaration-private-context-not-reproducible' : undefined;
+        value = result(defer ? 'deferred' : 'invalid', (defer ? defer + '\n' : '') +
           renderLeanDiagnosticMessage(checked.firstBlocking), { artifact: checked.artifact });
       } else value = result(checked.exitCode === 1 && !checked.timedOut ? 'deferred' : 'unavailable',
         checked.firstBlocking ? renderLeanDiagnosticMessage(checked.firstBlocking) : 'type-check-inconclusive', { artifact: checked.artifact });

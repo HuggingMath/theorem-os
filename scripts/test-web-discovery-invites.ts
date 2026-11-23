@@ -102,7 +102,7 @@ try {
     phase = `task-discovery-${width}`; await page.goto(`${origin}/library.html?${entry}`);
     const discovery = page.locator('[data-library-discovery]'); await discovery.waitFor();
     await discovery.getByRole('heading', { name: tx('这一步已有的前提', 'Premises recorded for this step'), exact: true }).waitFor();
-    assert.ok(await discovery.locator('.katex').count(), 'Task formulas render as mathematics');
+    await discovery.locator('.katex').first().waitFor();
     assert.equal(await page.locator('[data-library-environment]').inputValue(), 'target');
     await page.locator(`[data-library-match="${standard.id}"]`).waitFor();
     assert.equal(await page.locator(`[data-library-match="${mathlib.id}"]`).count(), 0, 'Mathlib asset stays outside the standard task environment');
