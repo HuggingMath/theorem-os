@@ -187,13 +187,21 @@ function Diff({ change }: { change: NonNullable<WebAgentAction['changes']>[numbe
 }
 /** What Lean said in one check: each message with where it points, or why there is none. */
 export function LeanReport({ lean }: { lean: WebAgentLeanCheck }) {
+  const first = lean.firstBlocking;
+  const messages = first && !lean.messages.some(message => message.file === first.file && message.line === first.line && message.text === first.text)
+    ? [first, ...lean.messages] : lean.messages;
   return <div class="route-lean">
-    {lean.messages.length ? <ul>{lean.messages.map((message, index) => <li key={index} data-severity={message.severity}>
+    {messages.length ? <ul>{messages.map((message, index) => <li key={index} data-severity={message.severity}>
       <span class="route-lean-where">{message.severity === 'error' ? t('错误') : message.severity === 'warning' ? t('警告') : t('信息')}
         {message.line !== undefined && ` · ${message.file ? base(message.file) : ''}:${message.line}${message.column !== undefined ? `:${message.column}` : ''}`}</span>
-      <pre>{message.text}</pre></li>)}</ul>
+      <pre>{message.text}</pre>
+      {message.goalText && !message.text.includes(message.goalText) && <><span>{t('待证目标')}</span><pre>{message.goalText}</pre></>}
+    </li>)}</ul>
       : <Note>{lean.passed ? t('Lean 没有报告任何消息。') : lean.timedOut ? t('Lean 在时限内没有检查完。') : t('Lean 没有给出具体消息。')}</Note>}
     {lean.omittedMessages ? <Note>{t('另有 {0} 条消息没有显示。', lean.omittedMessages)}</Note> : null}
+    {lean.sourceDigest && <p>{t('源码摘要')} <code data-lean-source-digest>{lean.sourceDigest}</code></p>}
+    {lean.environmentDigest && <p>{t('检查环境')} <code>{lean.environmentDigest}</code></p>}
+    {lean.artifacts?.map(ref => <p key={ref.digest}>{t('诊断产物')} <code>{ref.path}</code></p>)}
   </div>;
 }
 const installationLabel = (entry: WebAgentLibraryDeclaration) => entry.installation === 'installed-frozen' ? t('已冻结装入') : t('未装入');

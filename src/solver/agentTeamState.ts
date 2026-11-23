@@ -64,6 +64,7 @@ export const agentTeamStateSchema = z.object({ schema: z.literal('theorem-os.age
     mailbox: z.array(z.object({ id: z.string(), threadId: z.string(), author: z.string(), recipient: z.string(),
       message: z.record(z.unknown()).optional(), communication: z.record(z.unknown()).optional(),
       status: z.enum(['queued', 'accepted', 'uncertain']),
+      sentAt: z.number().optional(), originTaskId: z.string().optional(),
       sequence: z.number().int().positive().optional(), hostEventSequence: z.number().int().positive().optional() }).strict()),
   }).strict().optional(),
   completionRequested: z.object({ at: z.number(), summary: z.string() }).strict().optional(),
@@ -119,7 +120,7 @@ export const agentTeamStateSchema = z.object({ schema: z.literal('theorem-os.age
   deliveries: z.array(z.object({ id: z.string(), agentId: identifier, taskId: z.string(), path: z.string() }).strict()),
   adoptions: z.array(z.object({ id: z.string(), deliveryId: z.string(), targetId: z.string(),
     status: z.enum(['queued', 'integrating', 'completed', 'failed']), expectedCommit: z.string().optional(),
-    commit: z.string().optional(), error: z.string().optional() }).strict()),
+    commit: z.string().optional(), receiptId: z.string().regex(/^[a-f0-9]{64}$/u).optional(), error: z.string().optional() }).strict()),
   operations: z.array(z.object({ key: z.string(), digest: z.string(), result: z.unknown() }).strict()),
 }).strict();
 

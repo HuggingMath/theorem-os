@@ -116,7 +116,8 @@ function contextBudget(state: Readonly<SolverRunState>, focusAgentId?: string) {
 }
 
 /** A bounded observation shared by poll/wait and both kinds of dispatch context. */
-export function agentTeamOverview(state: Readonly<SolverRunState>, options: { focusAgentId?: string; assignmentTaskId?: string; budget?: unknown } = {}) {
+export function agentTeamOverview(state: Readonly<SolverRunState>,
+  options: { focusAgentId?: string; assignmentTaskId?: string; budget?: unknown; workerLimit?: number } = {}) {
   const team = state.agentTeam;
   const workers = team?.workers ?? [];
   const selected = [...workers].sort((left, right) => {
@@ -125,7 +126,7 @@ export function agentTeamOverview(state: Readonly<SolverRunState>, options: { fo
       team!.adoptions.some(item => item.targetId === worker.id && ['queued', 'integrating'].includes(item.status)) ? 1 :
       worker.status === 'stopped' ? 3 : 2;
     return rank(left) - rank(right) || workers.indexOf(right) - workers.indexOf(left);
-  }).slice(0, WORKERS);
+  }).slice(0, options.workerLimit ?? WORKERS);
   const visible = new Set(selected.map(worker => worker.id));
   const research = team?.researchState;
   const researchPreview = research && preview(research.summary, RESEARCH_TEXT);

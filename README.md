@@ -72,6 +72,7 @@ M1 在隔离工作区执行，M2 返回 Lean 证据，M3 选择就绪任务，M4
 
 - [组件与交接协议](./docs/solver-modules.md) · [TypeScript 接口](./src/solver/modules/index.ts) · [独立验收入口](./src/solver/evaluation.ts)
 - [形式化](./docs/formalization.md) · [证明讲解](./docs/informalization.md) · [定理索引](./docs/theorem-knowledge.md)
+- [数学工具目录、配置与示例](./docs/math-tools/README.md)
 - [项目与维护文档](./docs/README.md)
 
 ## 许可证与致谢

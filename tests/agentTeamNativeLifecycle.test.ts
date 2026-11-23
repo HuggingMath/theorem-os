@@ -19,6 +19,7 @@ import { prepareResearchSkill, researchSkillIdentity } from '../src/solver/resea
 import { deferred } from './helpers/async';
 import { temporaryDirectory } from './helpers/files';
 import { solverState } from './helpers/solver';
+import { createWebWorkerBridge } from '../apps/web/workerBridge';
 
 vi.mock('../src/math/mathBuildManifest', async importOriginal => ({
   ...await importOriginal<typeof import('../src/math/mathBuildManifest')>(), readMathBuildManifest: vi.fn(),
@@ -145,6 +146,77 @@ afterEach(async () => {
 });
 
 describe('native AgentControl preserves the mathematical team lifecycle', () => {
+  it('projects native activity, finding-based dispatch, and stable checked delivery and adoption evidence', async () => {
+    const f = fixture(), output = path.join(f.directory, 'view.json');
+    const stateFile = output + '.runtime/state.json';
+    fs.mkdirSync(path.dirname(stateFile));
+    const bridge = createWebWorkerBridge({ webRunId: 'web-native-team', output, directory: f.directory });
+    const capture = async () => {
+      writeSolverRunState(stateFile, f.state);
+      return (await bridge.capture()).observation;
+    };
+    expect((await capture()).inspection.nativeTeam).toMatchObject({ memberCount: 0, tasks: [], findings: [] });
+    await f.spawn('producer', 'Prove the helper.');
+    const [producer] = f.state.agentTeam!.workers;
+    const producerTask = producer!.tasks[0]!, session = f.sessions[0]!;
+    expect((await capture()).inspection.nativeTeam?.tasks).toMatchObject([{ id: producerTask.id, status: 'running' }]);
+    const sent = await session.native('send', { caller: producer!.native!.threadId, target: { kind: 'id', threadId: ROOT },
+      input: { kind: 'message', mode: 'queueOnly', message: { kind: 'plaintext', text: 'Use the candidate hypothesis True.' } } });
+    const ref = 'message:' + sent.result.submissionId;
+    const received = (await capture()).inspection.nativeTeam!;
+    expect(received.findings).toContainEqual(expect.objectContaining({ ref, from: 'producer', to: 'lead', status: 'accepted' }));
+    expect(received.tasks[0]!.reassignment).toBeUndefined();
+    await f.spawn('consumer', 'Profiles: engineer\nBased on: ' + ref + '\nTest the consumer with the proposed input.');
+    const [ , consumer] = f.state.agentTeam!.workers;
+    const consumerTask = consumer!.tasks[0]!, originalThread = consumer!.native!.threadId;
+    expect((await capture()).inspection.nativeTeam?.tasks.find(task => task.id === consumerTask.id)?.reassignment)
+      .toEqual({ ref, revision: 1 });
+    const source = fs.readFileSync(f.source(producer!.worktree), 'utf8').replace('theorem original',
+      'theorem helper : True := by trivial\ntheorem original');
+    fs.writeFileSync(f.source(producer!.worktree), source);
+    await f.tool({ operation: 'submit', summary: 'The helper is ready.', declarations: [
+      { file: 'Submission.lean', name: 'NativeTeam.helper', type: 'True' }] }, 'producer');
+    expect((await capture()).inspection.nativeTeam?.tasks.find(task => task.id === producerTask.id)?.status).toBe('stopping');
+    await session.complete();
+    await expect.poll(() => f.state.agentTeam!.deliveries.length, { timeout: 30_000 }).toBe(1);
+    const first = await capture(), delivered = first.inspection.nativeTeam!.deliveries[0]!;
+    expect(delivered).toMatchObject({ taskId: producerTask.id, proof: { sources: [{ file: 'Submission.lean', source }],
+      declarations: [{ name: 'NativeTeam.helper', receipts: [{ status: 'kernel_verified' }] }] } });
+    const draft = 'theorem downstream : True := by exact helper\n';
+    fs.writeFileSync(f.source(consumer!.worktree), fs.readFileSync(f.source(consumer!.worktree), 'utf8')
+      .replace('end NativeTeam', draft + 'end NativeTeam'));
+    expect(await f.tool({ operation: 'yield', reason: 'Waiting for helper.' }, 'consumer')).toMatchObject({ ok: true });
+    await f.sessions.find(item => item.id === 'consumer')!.complete();
+    await expect.poll(() => f.team.hasActiveWorkers, { timeout: 30_000 }).toBe(false);
+    expect(consumerTask.status).toBe('paused');
+    expect(await f.tool({ operation: 'adopt', deliveryId: delivered.id, targetId: 'consumer' })).toMatchObject({ ok: true });
+    const adoption = f.state.agentTeam!.adoptions.at(-1)!;
+    await expect.poll(() => ['completed', 'failed'].includes(adoption.status), { timeout: 30_000 }).toBe(true);
+    expect(adoption.status, adoption.error).toBe('completed');
+    const latest = await capture();
+    expect(latest.sequence).toBeGreaterThan(first.sequence);
+    expect(latest.inspection.nativeTeam!.deliveries[0]).toEqual(delivered);
+    expect(latest.inspection.nativeTeam!.adoptions[0]).toMatchObject({ targetId: 'consumer', deliveryId: delivered.id,
+      status: 'completed', receiptId: expect.any(String), proof: { sources: [{ source: expect.stringContaining(draft) }] } });
+    // The same delivery and commit do not prove adoption in another member's worktree.
+    adoption.targetId = 'producer';
+    const otherMember = (await capture()).inspection.nativeTeam!.adoptions[0]!;
+    expect(otherMember.proof).toBeUndefined();
+    expect(otherMember.receiptId).toBeUndefined();
+    adoption.targetId = 'consumer';
+    // Older completed records use the same finalized receipt, found via the persisted checked intent.
+    f.state.agentTeam!.adoptions[0]!.receiptId = undefined;
+    expect((await capture()).inspection.nativeTeam!.adoptions[0]).toEqual(latest.inspection.nativeTeam!.adoptions[0]);
+
+    await f.native('send', { caller: ROOT, target: { kind: 'id', threadId: originalThread },
+      input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: 'Continue with the checked helper.' } }, startOptions: {} });
+    expect(consumer!.native!.threadId).toBe(originalThread);
+    expect(consumer!.tasks.map(task => task.id)).toEqual([consumerTask.id]);
+    const resumed = fs.readFileSync(f.source(consumer!.worktree), 'utf8');
+    expect(resumed).toContain(draft);
+    expect(resumed).toContain('theorem helper : True := by trivial');
+  }, 90_000);
+
   it.each([
     ['fresh', 'New'], ['unknown', undefined], ['unknown', { Resumed: {} }],
   ])('does not infer parent inspection for %s child history (%j)', async (expected, initialHistory) => {

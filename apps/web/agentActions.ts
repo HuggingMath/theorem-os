@@ -1,6 +1,11 @@
 import path from 'node:path';
-import { webAgentActionKinds, webAgentActionLimits as limits, type WebAgentActionBody, type WebAgentActionIntent, type WebAgentFileChange,
-  type WebAgentLeanCheck, type WebAgentLeanSearch, type WebAgentLibraryAction, type WebAgentLibraryDeclaration } from './shared';
+import { assertMathCanonicalPath, repositoryRelativePath } from '../../src/math/paths';
+import { mathDigest, readMathFile, readMathText } from '../../src/math/mathRuntimeIo';
+import { currentWorkerProject } from '../../src/solver/workerProject';
+import { teamEvidenceRefSchema } from '../../src/solver/agentTeamEvidenceRef';
+import { webAgentActionKinds, webAgentActionLimits as limits, webLeanClassifications, type WebAgentActionBody,
+  type WebAgentActionIntent, type WebAgentFileChange, type WebAgentLeanCheck, type WebLeanMessage,
+  type WebAgentLeanSearch, type WebAgentLibraryAction, type WebAgentLibraryDeclaration } from './shared';
 
 type Item = Record<string, unknown>;
 export type AgentActionContext = {
@@ -10,6 +15,8 @@ export type AgentActionContext = {
   hidden: readonly string[];
   /** The Agent commands' file; `bun '<tool>' check-lean` reads `math check-lean`. */ tool?: string;
   apiKey?: string;
+  solverRunId?: string;
+  nativeRole?: 'lead' | 'member';
 };
 
 const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
@@ -63,21 +70,85 @@ function lastJson(output: string): Item | undefined {
   const line = output.trimEnd().split('\n').reverse().find(value => value.startsWith('{'));
   try { return line ? object(JSON.parse(line)) : undefined; } catch { return; }
 }
+const digest = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value);
+const classification = (value: unknown) => webLeanClassifications.find(item => item === value);
+
 export function sanitizeAgentLeanCheck(result: Item, mask: (value: string) => string): WebAgentLeanCheck | undefined {
-  if (typeof result.timedOut !== 'boolean' || !Array.isArray(result.messages)) return;
-  const all = result.messages.flatMap((value): WebAgentLeanCheck['messages'] => {
-    const message = object(value), severity = string(message?.severity), text = string(message?.message);
-    if (!message || !text || (severity !== 'error' && severity !== 'warning' && severity !== 'info')) return [];
-    const file = string(message.file), line = count(message.line), column = count(message.column);
-    return [{ severity, ...(file ? { file: clip(mask(file), 1_000).text } : {}), ...(line !== undefined ? { line } : {}),
-      ...(column !== undefined ? { column } : {}), text: clip(mask(text).trim(), limits.leanMessage).text }];
+  const classified = classification(result.classification);
+  if (typeof result.timedOut !== 'boolean' || !Array.isArray(result.messages) && !classified) return;
+  const messageView = (value: unknown): WebLeanMessage | undefined => {
+    const message = object(value), severity = message?.severity, text = string(message?.message);
+    if (!message || !text || (severity !== 'error' && severity !== 'warning' && severity !== 'info')) return;
+    const file = string(message.file), line = count(message.line), column = count(message.column), goalText = string(message.goalText);
+    return { severity, ...(file ? { file: clip(mask(file), 1_000).text } : {}), ...(line !== undefined ? { line } : {}),
+      ...(column !== undefined ? { column } : {}), text: clip(mask(text).trim(), limits.leanMessage).text,
+      ...(goalText && { goalText: clip(mask(goalText), limits.leanMessage).text }) };
+  };
+  const all = (Array.isArray(result.messages) ? result.messages : []).flatMap(value => {
+    const message = messageView(value);
+    return message ? [message] : [];
   });
+  const error = object(result.error);
+  if (!all.length && error) {
+    const message = messageView({ ...error, severity: 'error' });
+    if (message) all.push(message);
+  }
+  const firstBlocking = messageView(result.firstBlocking);
   // Errors first: a reader wants what blocks the proof before its warnings.
   const ordered = [...all.filter(message => message.severity === 'error'), ...all.filter(message => message.severity !== 'error')];
   const messages = ordered.slice(0, limits.leanMessages);
+  const artifacts = (Array.isArray(result.diagnosticArtifacts) ? result.diagnosticArtifacts : []).flatMap(value => {
+    const ref = object(value), file = string(ref?.path);
+    if (!ref || !file || !repositoryRelativePath(file) || !file.startsWith('.lake/') || file.length > 1_000 ||
+        !digest(ref.digest) || !digest(ref.sourceDigest) || !digest(ref.environmentDigest)) return [];
+    return [{ path: file, digest: ref.digest, sourceDigest: ref.sourceDigest, environmentDigest: ref.environmentDigest }];
+  }).slice(-limits.leanArtifacts);
   const omitted = all.length - messages.length + (count(result.omittedMessages) ?? 0);
   return { passed: result.exitCode === 0 && !result.timedOut, ...(result.timedOut ? { timedOut: true } : {}), messages,
-    ...(omitted ? { omittedMessages: omitted } : {}) };
+    ...(omitted ? { omittedMessages: omitted } : {}), ...(firstBlocking && { firstBlocking }),
+    ...(classified && { classification: classified }), ...(digest(result.sourceDigest) && { sourceDigest: result.sourceDigest }),
+    ...(digest(result.environmentDigest) && { environmentDigest: result.environmentDigest }),
+    ...(artifacts.length && { artifacts }) };
+}
+
+/** Copy a bounded source only while its exact bytes still match the saved diagnostic artifact. */
+function checkedLeanSource(lean: WebAgentLeanCheck, result: Item, context: AgentActionContext,
+  mask: (value: string) => string): WebAgentLeanCheck['checkedSource'] {
+  if (!lean.artifacts?.length || !lean.sourceDigest || !lean.environmentDigest ||
+      lean.classification !== 'lean' && lean.classification !== 'success') return;
+  try {
+    const project = currentWorkerProject(context.worktree);
+    const projectPrefix = mask(project).replace(/\/$/u, '') + '/';
+    const localPath = (file?: string) => file?.startsWith(projectPrefix)
+      ? file.slice(projectPrefix.length) : file?.replace(/^\.\//u, '');
+    const blocking = localPath(lean.firstBlocking?.file);
+    for (const ref of lean.artifacts.toReversed()) {
+      if (ref.sourceDigest !== lean.sourceDigest || ref.environmentDigest !== lean.environmentDigest) continue;
+      const artifact = path.join(project, ref.path);
+      assertMathCanonicalPath(artifact);
+      const text = readMathText(artifact, 10 * 1024 * 1024);
+      if (mathDigest(text) !== ref.digest) continue;
+      const record = object(JSON.parse(text)), file = string(record?.file);
+      if (!record || record.schema !== 'theoremos.lean-diagnostics.v1' || record.sourceCurrent !== true ||
+          record.sourceDigest !== lean.sourceDigest || record.environmentDigest !== lean.environmentDigest ||
+          record.exitCode !== result.exitCode || !file || !file.endsWith('.lean') || !repositoryRelativePath(file) ||
+          blocking && blocking !== file) continue;
+      const suffix = '.lake/diagnostic-artifacts/' + ref.digest + '.json';
+      if (!ref.path.endsWith(suffix)) continue;
+      const root = path.join(project, ref.path.slice(0, -suffix.length));
+      const identity = Array.isArray(record.sourceFiles) && record.sourceFiles.map(object).find(source => source?.file === file);
+      if (!identity || !digest(identity.digest)) continue;
+      const absolute = path.join(root, file);
+      assertMathCanonicalPath(absolute);
+      const bytes = readMathFile(absolute, limits.leanSource).bytes;
+      if (mathDigest(bytes) !== identity.digest) continue;
+      const source = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+      if (mask(source) !== source) continue;
+      for (const message of [...lean.messages, ...(lean.firstBlocking ? [lean.firstBlocking] : [])])
+        if (localPath(message.file) === file) message.file = file;
+      return { file, digest: identity.digest, text: source, artifact: ref.digest };
+    }
+  } catch { /* The diagnostic remains readable when the source is gone, moved or changed. */ }
 }
 function leanSearch(result: Item, mask: (value: string) => string): WebAgentLeanSearch | undefined {
   const queries = Array.isArray(result.queries) ? result.queries : string(result.query) !== undefined ? [result] : undefined;
@@ -159,6 +230,14 @@ export function sanitizeAgentItem(phase: 'started' | 'completed', item: Item, co
       const masked = (value: string) => mask(value).text;
       const library = result ? libraryAction(result, command.text, masked) : undefined;
       const lean = result && !library && /\bcheck-lean\b/u.test(command.text) ? sanitizeAgentLeanCheck(result, masked) : undefined;
+      if (lean && result) {
+        const source = checkedLeanSource(lean, result, context, masked);
+        if (source) lean.checkedSource = source;
+        const work = object(result.candidate), candidate = teamEvidenceRefSchema.safeParse(work?.ref);
+        // Only a saved source and its check can substantiate a trial, including a Lean failure.
+        if (lean.checkedSource && work?.file === lean.checkedSource.file && context.solverRunId && candidate.success && raw.includes(candidate.data))
+          lean.candidate = { ref: candidate.data, solverRunId: context.solverRunId, ...(context.nativeRole && { nativeRole: context.nativeRole }) };
+      }
       const found = result && !library && !lean && /\bsearch-lean\b/u.test(command.text) ? leanSearch(result, masked) : undefined;
       const withheld = !library && !lean && !found && (command.hidden || output.hidden || outsideCwd);
       const shownCommand = clip(command.text.replace(/\b([a-f0-9]{12})[a-f0-9]{52}\b/gu, '$1…'), limits.command);
@@ -232,12 +311,37 @@ const only = (item: Item, allowed: readonly string[]) => Object.keys(item).every
 
 export function isWebAgentLeanCheck(value: unknown): value is WebAgentLeanCheck {
   const lean = object(value);
-  return !!lean && only(lean, ['passed', 'timedOut', 'messages', 'omittedMessages']) && typeof lean.passed === 'boolean' && flag(lean.timedOut) &&
-    integer(lean.omittedMessages) && Array.isArray(lean.messages) && lean.messages.length <= limits.leanMessages && lean.messages.every(entry => {
+  const diagnostic = (entry: unknown) => {
       const message = object(entry);
-      return !!message && only(message, ['severity', 'file', 'line', 'column', 'text']) && ['error', 'warning', 'info'].includes(message.severity as string) &&
-        short(message.file, 1_000) && integer(message.line) && integer(message.column) && typeof message.text === 'string' && short(message.text, limits.leanMessage);
-    });
+      return !!message && only(message, ['severity', 'file', 'line', 'column', 'text', 'goalText']) &&
+        ['error', 'warning', 'info'].includes(message.severity as string) && short(message.file, 1_000) &&
+        integer(message.line) && integer(message.column) && typeof message.text === 'string' &&
+        short(message.text, limits.leanMessage) && short(message.goalText, limits.leanMessage);
+  };
+  if (!lean || !only(lean, ['passed', 'timedOut', 'messages', 'omittedMessages', 'firstBlocking', 'classification',
+    'sourceDigest', 'environmentDigest', 'artifacts', 'checkedSource', 'candidate']) || typeof lean.passed !== 'boolean' ||
+      !flag(lean.timedOut) || !integer(lean.omittedMessages) ||
+      lean.classification !== undefined && !classification(lean.classification) ||
+      lean.firstBlocking !== undefined && !diagnostic(lean.firstBlocking) ||
+      lean.sourceDigest !== undefined && !digest(lean.sourceDigest) || lean.environmentDigest !== undefined && !digest(lean.environmentDigest) ||
+      !Array.isArray(lean.messages) || lean.messages.length > limits.leanMessages || !lean.messages.every(diagnostic)) return false;
+  if (lean.artifacts !== undefined && (!Array.isArray(lean.artifacts) || lean.artifacts.length > limits.leanArtifacts ||
+    !lean.artifacts.every(value => {
+      const ref = object(value);
+      return ref && only(ref, ['path', 'digest', 'sourceDigest', 'environmentDigest']) && typeof ref.path === 'string' &&
+        short(ref.path, 1_000) && repositoryRelativePath(ref.path) && digest(ref.digest) && digest(ref.sourceDigest) && digest(ref.environmentDigest);
+    }))) return false;
+  const checked = object(lean.checkedSource);
+  if (lean.checkedSource !== undefined && (!checked || !only(checked, ['file', 'digest', 'text', 'artifact']) ||
+      typeof checked.file !== 'string' || !short(checked.file, 1_000) || !repositoryRelativePath(checked.file) ||
+      typeof checked.text !== 'string' || Buffer.byteLength(checked.text) > limits.leanSource || mathDigest(checked.text) !== checked.digest ||
+      !Array.isArray(lean.artifacts) || !lean.artifacts.some(ref => ref.digest === checked.artifact &&
+        ref.sourceDigest === lean.sourceDigest && ref.environmentDigest === lean.environmentDigest))) return false;
+  const candidate = object(lean.candidate);
+  return lean.candidate === undefined || Boolean(checked && candidate && only(candidate, ['ref', 'solverRunId', 'nativeRole']) &&
+    (candidate.nativeRole === undefined || candidate.nativeRole === 'lead' || candidate.nativeRole === 'member') &&
+    teamEvidenceRefSchema.safeParse(candidate.ref).success && typeof candidate.solverRunId === 'string' &&
+    candidate.solverRunId.length > 0 && candidate.solverRunId.length <= 128);
 }
 function isLeanSearch(value: unknown) {
   return Array.isArray(value) && value.length >= 1 && value.length <= limits.queries && value.every(entry => {

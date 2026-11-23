@@ -187,11 +187,15 @@ export class AgentTeamNativeControl {
     await this.queue(sender, recipient, { kind: 'plaintext', text: message });
   }
 
-  private async queue(sender: string | null, recipient: string, message: Json, nativeCommunication = false): Promise<string> {
+  private async queue(sender: string | null, recipient: string, message: Json,
+    kind: 'advisory' | 'discussion' | 'completion' = 'advisory'): Promise<string> {
     const id = crypto.randomUUID(), author = sender === null ? '/morpheus' : this.identity(sender).path,
       target = this.identity(recipient).path;
+    const member = kind === 'discussion' && sender && sender !== this.archive.nativeControl!.rootThreadId
+      ? this.workerByThread(sender) : undefined;
     this.archive.nativeControl!.mailbox.push({ id, threadId: recipient, author, recipient: target,
-      ...(nativeCommunication ? { communication: message } : { message }), status: 'queued' });
+      ...(kind === 'completion' ? { communication: message } : { message }), status: 'queued',
+      ...(kind === 'discussion' ? { sentAt: Date.now(), originTaskId: member?.tasks.find(task => task.status === 'running')?.id } : {}) });
     this.save();
     await this.flush(recipient);
     return id;
@@ -330,7 +334,7 @@ export class AgentTeamNativeControl {
         if (target === caller) throw new Error('math_team_message_self_addressed');
         if (input.mode === 'queueOnly') {
           return this.inOrder(target, async () => {
-            const submissionId = await this.queue(caller, target, object(input.message));
+            const submissionId = await this.queue(caller, target, object(input.message), 'discussion');
             const snapshot = this.snapshot(target);
             return { threadId: target, metadata: object(snapshot.kind === 'loaded'
               ? object(snapshot.agent).metadata : snapshot.metadata), submissionId };
@@ -387,7 +391,7 @@ export class AgentTeamNativeControl {
           if (payload.completionMessage && typeof payload.completionMessage === 'object') {
             const parent = text(payload.parentThreadId);
             if (parent !== native.parentThreadId) throw new Error('math_team_native_parent_changed');
-            await this.queue(caller, parent, object(payload.completionMessage), true);
+            await this.queue(caller, parent, object(payload.completionMessage), 'completion');
           }
         }
         this.save(); return {};

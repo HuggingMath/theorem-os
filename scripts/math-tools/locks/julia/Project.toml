@@ -1,0 +1,8 @@
+[deps]
+BifurcationKit = "0f109fa4-8a5d-4b75-95aa-f515264e7665"
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+DynamicalSystems = "61744808-ddfa-5f27-97ff-6e42cc95d634"
+HomotopyContinuation = "f213a82b-91d6-5c5d-acf7-10f1c761b327"
+IntervalArithmetic = "d1acc4aa-44c8-5952-acd4-ba5d80a2a253"
+IntervalRootFinding = "d2bf35a9-74e0-55ec-b149-d360ff49b807"
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"

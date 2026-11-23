@@ -1,9 +1,14 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import type { MathAgentOptions, MathAgentSession } from '../src/runtime/codexSession';
 import { isWebAgentActionBody, sanitizeAgentItem, unwrapShell, type AgentActionContext } from '../apps/web/agentActions';
 import { webAgentActionLimits, type WebAgentActionBody, type WorkerInput } from '../apps/web/shared';
 import type { SolverProblem } from '../src/solver/problem';
 import type { SolverRunState } from '../src/solver/archive';
+import { canonicalMathJson, mathDigest } from '../src/math/mathRuntimeIo';
+import { writeWorkerProject } from '../src/solver/workerProject';
+import { temporaryDirectory } from './helpers/files';
 
 const { opened, turns } = vi.hoisted(() => ({ opened: [] as MathAgentOptions[], turns: [] as Parameters<MathAgentSession['run']>[] }));
 vi.mock('../src/runtime/codexSession', async original => ({ ...await original<object>(),
@@ -18,6 +23,7 @@ const app = '/opt/theorem-os', run = '/work/run-abc123', own = `${run}/workspace
 // Agent shells cannot read the application; they run the bundled commands from outside it.
 const tools = '/opt/theoremos-agent-tools/math.mjs';
 const key = 'sk-agent-actions-fixture-key';
+const provider = { id: 'local', name: 'Local fixture', baseUrl: 'http://127.0.0.1:1/v1' };
 const context: AgentActionContext = { workerId: 'engineer', worktree: own, tool: tools, apiKey: key,
   hidden: [app, '/var/lib/theoremos/builds', run] };
 const done = (item: Record<string, unknown>) => sanitizeAgentItem('completed', { id: 'item-1', status: 'completed', ...item }, context);
@@ -30,6 +36,55 @@ const libraryCommand = (operation: string, result: unknown, extra: Record<string
   cwd: own, command: `bun '${tools}' library ${operation}`, aggregatedOutput: JSON.stringify(result), ...extra });
 
 describe('Agent actions as the run owner sees them', () => {
+  test('retains the matching Lean source and native recipient identity, but keeps stale diagnostics detached', async () => {
+    const root = temporaryDirectory('web-check-probe-');
+    try {
+      const project = path.join(root, 'proof'), file = 'Probe.lean', absolute = path.join(project, file);
+      const artifacts = path.join(project, '.lake', 'diagnostic-artifacts');
+      fs.mkdirSync(artifacts, { recursive: true });
+      writeWorkerProject(root, 'proof');
+      const source = 'example : False := by\n  trivial\n', sourceDigest = mathDigest('source snapshot');
+      const environmentDigest = mathDigest('toolchain and imports'), text = 'unsolved goals\n⊢ False';
+      const firstBlocking = { severity: 'error', file: absolute, line: 2, column: 2, message: text, goalText: '⊢ False' };
+      fs.writeFileSync(absolute, source);
+      const record = canonicalMathJson({ schema: 'theoremos.lean-diagnostics.v1', sourceDigest, environmentDigest,
+        sourceCurrent: true, file, exitCode: 1, sourceFiles: [{ file, digest: mathDigest(source) }] });
+      const artifact = mathDigest(record), relative = '.lake/diagnostic-artifacts/' + artifact + '.json';
+      fs.writeFileSync(path.join(artifacts, artifact + '.json'), record);
+      const ref = 'research:' + mathDigest('peer finding');
+      const result = { timedOut: false, exitCode: 1, classification: 'lean', sourceDigest, environmentDigest,
+        firstBlocking, messages: [], candidate: { ref, file }, diagnosticArtifacts: [{ path: relative, digest: artifact, sourceDigest, environmentDigest }] };
+      const item = () => ({ id: 'probe', type: 'commandExecution', cwd: root, exitCode: 1,
+        command: `math check-lean --file ${file} --candidate ${ref}`, aggregatedOutput: JSON.stringify(result) });
+      const action = () => sanitizeAgentItem('completed', item(), { workerId: 'consumer', worktree: root, hidden: [], solverRunId: 'solver-a' });
+      const saved = action();
+      expect(isWebAgentActionBody(saved)).toBe(true);
+      expect(saved?.lean).toMatchObject({
+        classification: 'lean', checkedSource: { file, text: source, artifact }, candidate: { ref, solverRunId: 'solver-a' },
+        firstBlocking: { file, line: 2, goalText: '⊢ False' }, sourceDigest, environmentDigest,
+      });
+      // The root and a native child called "solver" have the same process ID; only the child has attributed initial input.
+      const sent: WebAgentActionBody[] = [];
+      const request = { id: 'fixture', provider, input: { apiKey: key, workers: 1, coordination: 'cooperative' } } as unknown as WorkerInput;
+      const modules = webSolverModules(request, { sink: action => sent.push(action), hidden: [], solverRunId: () => 'solver-a' });
+      for (const nativeAgentControl of [{}, { initialInput: { author: '/root' } }]) {
+        const session = await modules.M1.open({ workspace: root, nativeAgentControl,
+          environment: { DEEPSCIENTIST_MATH_WORKER_ID: 'solver' } } as unknown as MathAgentOptions);
+        try { opened.at(-1)!.onItem!('completed', item()); } finally { await session.close(); }
+      }
+      expect(sent.every(isWebAgentActionBody)).toBe(true);
+      expect(sent.map(action => [action.workerId, action.lean?.candidate?.nativeRole])).toEqual([['solver', 'lead'], ['solver', 'member']]);
+      result.candidate.file = 'DifferentProbe.lean';
+      expect(action()?.lean?.candidate).toBeUndefined();
+      fs.writeFileSync(absolute, 'example : True := by trivial\n');
+      const stale = action();
+      expect(stale?.lean?.checkedSource).toBeUndefined();
+      expect(stale?.lean?.candidate).toBeUndefined();
+      expect(stale?.lean?.firstBlocking?.goalText).toBe('⊢ False');
+      expect(saved?.lean?.checkedSource?.text).toBe(source);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   test('a Lean check reads as its messages, errors first, with host paths masked', () => {
     const action = done({ type: 'commandExecution', exitCode: 1, durationMs: 1840, cwd: own,
       command: `/bin/bash -lc "bun ${tools} check-lean --workspace ${own}/generated/problem --file Submission.lean --timeout-seconds 120"`,
@@ -290,7 +345,7 @@ describe('Agent actions as the run owner sees them', () => {
   });
 
   test.each(['lead', 'engineer', 'researcher', 'reviewer'])('the web %s explains mathematical progress on initial and continuation turns', async workerId => {
-    const request = { id: 'fixture', input: { apiKey: key, workers: 4, coordination: 'cooperative' } } as unknown as WorkerInput;
+    const request = { id: 'fixture', provider, input: { apiKey: key, workers: 4, coordination: 'cooperative' } } as unknown as WorkerInput;
     const instructions = 'Keep the frozen task and existing delivery protocol. Independent host checking accepts the proof.';
     opened.length = 0; turns.length = 0;
     const session = await webSolverModules(request, { sink: () => {}, hidden: [app, run] }).M1.open({
@@ -317,7 +372,7 @@ describe('Agent actions as the run owner sees them', () => {
   });
 
   test.each([false, true])('sessions without an observable worker retain their run messages (actions enabled: %s)', async observe => {
-    const request = { id: 'fixture', input: { apiKey: key, workers: 1, coordination: 'cooperative' } } as unknown as WorkerInput;
+    const request = { id: 'fixture', provider, input: { apiKey: key, workers: 1, coordination: 'cooperative' } } as unknown as WorkerInput;
     opened.length = 0; turns.length = 0;
     const originalItem = vi.fn(), originalUpdate = vi.fn(), instructions = 'Original session instructions.';
     const session = await webSolverModules(request, observe ? { sink: () => {}, hidden: [app, run] } : undefined).M1.open({

@@ -240,7 +240,7 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
     expect(state.agentTeam!.deliveries).toHaveLength(1);
     expect(state.agentTeam!.adoptions.map(adoption => adoption.status)).toEqual(['completed']);
     expect(events.filter(item => item.event === 'team_event' && item.details?.kind === 'failed'))
-      .toMatchObject([{ details: { from: 'child', to: 'lead', taskId: first!.id, text: first!.error } }]);
+      .toMatchObject([{ details: { from: 'child', to: 'lead', taskId: first!.id, text: expect.stringContaining(first!.error!) } }]);
 
     const childTrace = trace(worker.worktree), childFrames = childTrace.filter(frame => frame.direction === 'host');
     const childStart = childFrames.find(frame => frame.method === 'thread/start')!;

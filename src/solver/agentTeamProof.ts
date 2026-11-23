@@ -42,6 +42,7 @@ export class ReusedTeamCheckFailure extends DeclarationArtifactCheckError {
   }
 }
 type IntegrationInput = CheckInput & { delivery: AgentTeamProofDelivery; worktree: string; expectedCommit: string };
+type AdoptionLocation = Pick<IntegrationInput, 'state' | 'worktree' | 'expectedCommit' | 'evidenceDirectory'>;
 const hash = z.string().regex(/^[a-f0-9]{64}$/u), commitHash = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u);
 const identitySchema = { runId: z.string().min(1), problemReceiptDigest: hash, environmentDigest: hash };
 const provenanceSchema = z.object({ objectiveRevision: z.number().int().positive().optional(), objectiveDigest: hash.optional(),
@@ -91,7 +92,7 @@ export function readAgentTeamProofDelivery(file: string, state: DeclarationArtif
   return validateDelivery(JSON.parse(readMathText(file)), state);
 }
 
-function evidenceFile(input: CheckInput, kind: 'deliveries' | 'adoptions' | 'adoption-intents', id: string,
+function evidenceFile(input: Pick<CheckInput, 'state' | 'evidenceDirectory'>, kind: 'deliveries' | 'adoptions' | 'adoption-intents', id: string,
   worktree: string): string {
   assertMathCanonicalPath(input.evidenceDirectory);
   if ([input.state.problem.workspace, worktree].some(root => isMathPathWithin(root, input.evidenceDirectory)))
@@ -110,7 +111,7 @@ function persist(input: CheckInput, kind: 'deliveries' | 'adoptions' | 'adoption
   } else writeMathTextDurable(file, text, 0o400);
 }
 
-const intentId = (input: IntegrationInput, delivery: AgentTeamProofDelivery) => mathDigest(canonicalMathJson({
+const intentId = (input: AdoptionLocation, delivery: AgentTeamProofDelivery) => mathDigest(canonicalMathJson({
   ...identityOf(input.state), worktree: input.worktree, deliveryId: delivery.id, beforeCommit: input.expectedCommit,
 }));
 
@@ -128,7 +129,7 @@ function validateAdoption(value: unknown, state: DeclarationArtifactIdentity,
   return adoption;
 }
 
-function readIntent(input: IntegrationInput, delivery: AgentTeamProofDelivery): AgentTeamProofAdoption | undefined {
+function readIntent(input: AdoptionLocation, delivery: AgentTeamProofDelivery): AgentTeamProofAdoption | undefined {
   const id = intentId(input, delivery), file = evidenceFile(input, 'adoption-intents', id, input.worktree);
   if (!fs.existsSync(file)) return;
   const intent = z.object({ schema: z.literal('theorem-os.agent-team-proof-adoption-intent.v1'), id: hash,
@@ -138,6 +139,20 @@ function readIntent(input: IntegrationInput, delivery: AgentTeamProofDelivery): 
   const adoption = validateAdoption(intent.adoption, input.state, delivery);
   if (adoption.beforeCommit !== input.expectedCommit) return fail('adoption_intent_changed');
   return adoption;
+}
+
+/** Read the finalized checked transition, including historical journals without a receipt ID. */
+export function readRecordedAgentTeamAdoption(input: AdoptionLocation & { commit: string; receiptId?: string },
+  delivery: AgentTeamProofDelivery): AgentTeamProofAdoption | undefined {
+  // The final receipt identifies the checked commit; the intent binds it to this receiver's worktree.
+  const id = readIntent(input, delivery)?.id;
+  if (!id) return;
+  if (input.receiptId !== undefined && input.receiptId !== id) return fail('adoption_identity_changed');
+  const file = evidenceFile(input, 'adoptions', id, input.worktree);
+  const receipt = validateAdoption(JSON.parse(readMathText(file)), input.state, delivery);
+  if (receipt.id !== id || receipt.commit !== input.commit || receipt.beforeCommit !== input.expectedCommit)
+    return fail('adoption_identity_changed');
+  return receipt;
 }
 
 function retainEvidence(input: CheckInput, worktree: string, artifacts: readonly DeclarationArtifact[], commit: string): void {

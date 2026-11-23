@@ -60,6 +60,14 @@ A member reports the first usable finding, local probe result or blocker when it
 
 Native members use `send_message` for findings, probe results, blockers and route changes. Choose a useful question or probe and report its result when it matters to someone else, with its assumptions and evidence. Historical host-tools additionally support optional structured `progress` records. Private transcript commentary is not a shared message, and reported progress does not grant proof acceptance.
 
+For example, send the consumer the exact candidate type, the hypotheses that work, the application that fails, and the goal Lean leaves open. Keep those facts and the next experiment in RESEARCH.md. After `send_message`, retain its `submission_id` in the notes so Lead can match the message to the saved artifact.
+
+- When you try a peer result, save the single Lean probe and use the normal `check-lean` command with `--candidate` and its reference. Use `message:<submission_id>`, `research:<artifactId>`, or `delivery:<deliveryId>` from this run. Report the result and any remaining hypotheses.
+- When a finding changes an assignment, put one line such as `Based on: research:<artifactId>` in the native spawn or `followup_task` message. Give the new scope in the body. Keep any `Profiles:` header on the first line.
+- For formal reuse, use `adopt` with the checked delivery ID and the consumer workspace. The host records the integration receipt when the write succeeds.
+
+Use a fixed research or delivery ID when you do not have the message ID. If another member takes over, give them that fixed reference and the first open goal so they can continue without access to the earlier member's working files.
+
 Use these milestones to keep collaboration connected; no fixed message count, polling interval or mandatory proof method is imposed.
 
 ### Handoff and limits

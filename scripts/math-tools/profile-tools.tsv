@@ -1,0 +1,21 @@
+compute	gfan	0.6.2	gfan gfan_buchberger	Groebner fans and polynomial bases; gfan_buchberger reads a ring and polynomial set from stdin.
+compute	linbox	1.7.1	linbox-config	Exact linear algebra. Use sage for A.charpoly('x',algorithm='linbox') or linbox-config for the C++ library.
+compute	mpsolve	3.2.1	mpsolve	Approximate complex roots of a univariate polynomial; mpsolve -j1 -o20 FILE.pol.
+compute	plantri	5.8	plantri fullgen	Generate non-isomorphic planar graphs or fullerenes; plantri -u N counts planar triangulations.
+compute	vipr	1.1+99eec19	viprchk	Check a mixed-integer programming certificate using rational arithmetic: viprchk FILE.vipr.
+compute	lean-auto	4.33.0+a66de83	lean-auto-check	Independent Lean 4.33.0 project with Lean-auto and Duper. lean-auto-check FILE.lean checks an exploratory file; formal submissions still use the original project imports and axiom rules.
+real	dreal	4.21.06.2	dreal	Nonlinear real and transcendental constraints, dreal FILE.smt2. A delta-sat model satisfies relaxed constraints; check against the original statement.
+real	redlog	rev7462	redpsl	REDUCE with PSL and Redlog. Read REDUCE text from stdin; load_package redlog, select the ordered-field theory with rlset ofsf and use rlqe to eliminate quantifiers.
+cert	drat-trim	git.2e3b2dc0	drat-trim	Check a Boolean refutation against the exact DIMACS input: drat-trim FILE.cnf PROOF.drat.
+cert	pseudo-boolean	2+veripb3.0.2.cake438b8f83	roundingsat veripb cake_pb	Generate and check pseudo-Boolean certificates. Use RoundingSat, VeriPB and then CakePB. For cake_pb require the positive VERIFIED result line; its exit status alone is insufficient.
+cert	carcara	1.1.0	carcara	Check an Alethe proof against SMT-LIB: carcara check PROOF.alethe FILE.smt2; a holey result still has unchecked steps.
+cert	gappa	1.4.1	gappa	Generate interval or floating-point error proofs. gappa -Bcoq < FILE.g and coqc can replay supported proofs.
+cert	rocq-interval	4.9.0+coq8.18.0	coqc	Coq 8.18.0 with Interval 4.9.0 and Gappa. coqc FILE.v checks interval bounds in a separate proof assistant.
+julia	julia-math	1.12.7	math-julia	Preinstalled Julia project: IntervalArithmetic, IntervalRootFinding, HomotopyContinuation, DynamicalSystems, BifurcationKit, Makie and CairoMakie. Lightweight example: math-julia --compiled-modules=existing -O1 FILE.jl.
+visual	visual-python	4.2.0+contour1.4.0.pyvista0.49.2	visual-python	Python for SymPy Plot Backends, ContourPy and PyVista. Save data, grid and plotting code with image or interactive HTML.
+visual	gmsh	4.15.2	gmsh	Generate and inspect meshes and region markers. Use gmsh FILE.geo -2 -o FILE.msh.
+visual	paraview	5.11.2	pvpython pvbatch paraview	ParaView and its Python interpreter. Use pvpython FILE.py for headless grid analysis; preserve mesh and pipeline state.
+visual	geometry-cxx	5.6+clipper2.0.1	visual-cxx	C++ compiler entry for CGAL 5.6 exact geometry and Clipper2 2.0.1 polygon clipping and offsetting.
+visual	ipe	7.2.28	ipe iperender ipetoipe	Draw and render mathematical vector figures; iperender -svg -page 1 FILE.ipe OUT.svg works headlessly.
+path	visualproof	0.12.2	visualproof	Lean source, proof states and dependencies. Use the pinned build of the Lean project.
+path	graphviz	14.1.2	dot	Graphviz diagram layout, for example dot -Tsvg SOURCE.dot -o OUTPUT.svg.

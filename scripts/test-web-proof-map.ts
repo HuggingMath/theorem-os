@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 // End-to-end Playwright verification for the Kervaire126-inspired Solving Progress Proof Map
-// across planned multi-stage DAGs, unplanned 3-stage pipelines, /?sample showcase, light & dark themes,
-// zh & en locales, and 320px / 390px / 1440px viewports.
+// across native teams, planned DAGs, unplanned pipelines and the sample, in both locales and multiple viewports.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -11,6 +10,7 @@ import { readWebConfig } from '../apps/web/config';
 import { createWebService } from '../apps/web/server';
 import type { WebRunner } from '../apps/web/runner';
 import type { WebObservation } from '../apps/web/collaboration';
+import type { WorkerMessage } from '../apps/web/shared';
 import { localeStorageKey } from '../apps/web/i18n';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { audit } from './web-a11y';
@@ -29,9 +29,9 @@ const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'theoremos-proof-map-')
 const credential = 'sk-local-proof-map-fixture';
 const now = () => new Date().toISOString();
 const checks: object[] = [], errors: string[] = [], external: string[] = [], commands: object[] = [];
-let phase = 'setup', mode: 'dag' | 'unplanned' = 'dag', browser: Browser | undefined;
+let phase = 'setup', mode: 'dag' | 'unplanned' | 'native' = 'dag', browser: Browser | undefined;
 
-type Control = { observation: WebObservation; emit(): void; finish(): void };
+type Control = { observation: WebObservation; emit(): void; publish(message: WorkerMessage): void; finish(): void };
 const controls = new Map<string, Control>();
 
 function dagObservation(id: string): WebObservation {
@@ -276,6 +276,7 @@ const runner: WebRunner = {
     await new Promise<void>(resolve => {
       const control: Control = {
         observation: mode === 'dag' ? dagObservation(input.id) : unplannedObservation(input.id),
+        publish: send,
         finish: resolve,
         emit() {
           this.observation.sequence++;
@@ -283,6 +284,10 @@ const runner: WebRunner = {
           this.observation.snapshot.stateDigest = mathDigest('pm-' + this.observation.sequence);
           send({ type: 'observation', observation: structuredClone(this.observation) });
         },
+      };
+      if (mode === 'native') control.observation.inspection.nativeTeam = {
+        schema: 'theorem-os.web-native-team.v1', runId: control.observation.solverRunId, maxAgents: 8,
+        memberCount: 0, taskCount: 0, taskOmissions: 0, tasks: [], findings: [], deliveries: [], adoptions: [],
       };
       controls.set(input.id, control);
       signal.addEventListener('abort', () => resolve(), { once: true });
@@ -387,21 +392,29 @@ async function assertCleanFitAndA11y(page: Page) {
   assert.deepEqual(a11yIssues, [], `${phase}: accessibility issues: ${JSON.stringify(a11yIssues)}`);
 }
 
+async function openLiveWorkspace(page: Page) {
+  const live = page.locator('#chat-live-panel');
+  if (!await live.isVisible()) {
+    await openChatResultDetails(page);
+    await page.locator('#research-chat-thread [data-research-artifact="live"]').click();
+  }
+  return live;
+}
+
 try {
   browser = await startBrowser(service.server, port);
 
-  // 1. Sample showcase (`/?sample`) renders inline conversation ProofMap immediately without opening <details>.
+  // The saved sample exposes its Proof Map in the workbench.
   for (const [width, locale, theme] of [[1440, 'zh', 'light'], [1440, 'en', 'dark'], [390, 'zh', 'light'], [320, 'en', 'light']] as const) {
     phase = `sample/${locale}/${theme}/${width}`;
     const { ctx, page } = await openPage(width, locale, theme);
     try {
       await page.goto(`${origin}/?sample`);
       await page.locator('[data-chat-sample-note]').waitFor();
-      const convMap = page.locator('#research-chat-thread [data-proof-map="conversation"]');
-      await convMap.waitFor({ state: 'visible' });
-      assert.equal(await page.locator('[data-chat-result-more]').evaluate(el => (el as HTMLDetailsElement).open), false,
-        'Sample keeps <details> closed while ProofMap is directly visible above it');
-      const reductionText = await convMap.locator('[data-pm-reduction]').innerText();
+      const live = await openLiveWorkspace(page);
+      await live.locator('[data-live-tab="plan"]').click();
+      const map = live.locator('[data-proof-map="workspace"]');
+      const reductionText = await map.locator('[data-pm-reduction]').innerText();
       assert.doesNotMatch(reductionText, /%|百分比|预计|\bETA\b/iu, 'Never claim percentages or ETAs');
       await assertCleanFitAndA11y(page);
       await page.screenshot({ path: path.join(output, `sample-proof-map-${locale}-${theme}-${width}.png`), fullPage: true });
@@ -412,7 +425,7 @@ try {
     }
   }
 
-  // 2. Live 5-node Kervaire-style DAG across conversation + workspace panels, SVG edge routing, Use/Prove expansion, guidance, and live transition.
+  // Live DAG, routed edges, task details, guidance and streamed progress.
   mode = 'dag';
   for (const [width, locale, theme] of [[1440, 'zh', 'light'], [1440, 'zh', 'dark'], [1440, 'en', 'light'], [390, 'zh', 'light'], [320, 'en', 'light']] as const) {
     phase = `dag/${locale}/${theme}/${width}`;
@@ -422,24 +435,12 @@ try {
       const started = await startRun(page);
       runId = started.runId;
 
-      // Inline conversation ProofMap is visible right in the thread!
-      const convMap = page.locator('#research-chat-thread [data-proof-map="conversation"]');
-      await convMap.waitFor({ state: 'visible' });
-      assert.equal(await convMap.locator('[data-pm-stage]').count(), 4, '4 topological stages (research -> sketch -> lemmas -> goal)');
-      assert.equal(await convMap.locator('[data-pm-step]').count(), 4, '4 progressive bottleneck narrowing steps');
-      const convText = await convMap.innerText();
-      assert.doesNotMatch(convText, /%|百分比|预计|\bETA\b/iu);
-      await assertCleanFitAndA11y(page);
-      await page.screenshot({ path: path.join(output, `dag-conversation-${locale}-${theme}-${width}.png`), fullPage: true });
-
-      // Open live workspace panel and verify workspace ProofMap, routed SVG edges, inline Use/Prove detail, and guidance wiring!
-      const live = page.locator('#chat-live-panel');
-      if (!await live.isVisible()) {
-        await openChatResultDetails(page);
-        await page.locator('#research-chat-thread [data-research-artifact="live"]').click();
-      }
+      const live = await openLiveWorkspace(page);
       const wsMap = live.locator('[data-proof-map="workspace"]');
       await wsMap.waitFor({ state: 'visible' });
+      assert.equal(await wsMap.locator('[data-pm-stage]').count(), 4);
+      assert.equal(await wsMap.locator('[data-pm-step]').count(), 4);
+      assert.doesNotMatch(await wsMap.innerText(), /%|百分比|预计|\bETA\b/iu);
       await wsMap.locator('[data-pm-goal-bridge]').waitFor({ state: 'visible' });
 
       // Check SVG edges are non-empty orthogonal paths!
@@ -471,7 +472,19 @@ try {
         // Stream live progress: `lemma_bound` passes verification and `goal_main` becomes active!
         const control = controls.get(runId)!;
         const boundTask = control.observation.inspection.tasks.find(t => t.id === 'lemma_bound')!;
+        const premise = 'remaining_tail_estimate';
+        boundTask.status = 'conditional';
+        boundTask.proof = { status: 'conditional', conditions: [{ taskId: premise, taskDigest: mathDigest(premise) }] };
+        control.emit();
+        await boundCard.getByText('条件核验通过', { exact: true }).waitFor();
+        assert.equal(await boundCard.getAttribute('data-pm-origin'), 'conditional');
+        if (await boundCard.locator('.live-task-head').getAttribute('aria-expanded') === 'false')
+          await boundCard.locator('.live-task-head').click();
+        await boundCard.locator('.pm-detail-conditions').getByText(premise, { exact: true }).waitFor();
+        assert.doesNotMatch(await boundCard.innerText(), /尚未记录该任务的 Lean 核验/u);
+
         boundTask.status = 'completed';
+        boundTask.proof = { status: 'checked' };
         (boundTask as any).feedback = undefined;
         (boundTask as any).verifiedArtifact = { artifactId: 'art-bound', sha256: mathDigest('bound-ok') };
         const goalTask = control.observation.inspection.tasks.find(t => t.id === 'goal_main')!;
@@ -511,11 +524,7 @@ try {
     try {
       const started = await startRun(page);
       runId = started.runId;
-      assert.equal(await page.locator('#research-chat-thread [data-proof-map="conversation"]').count(), 0,
-        'Unplanned single-task run keeps conversation thread compact without DAG map');
-      await openChatResultDetails(page);
-      await page.locator('#research-chat-thread [data-research-artifact="live"]').click();
-      const live = page.locator('#chat-live-panel');
+      const live = await openLiveWorkspace(page);
       await live.locator('.live-code').waitFor({ state: 'visible' });
       assert.equal(await live.locator('.live-workspace').getAttribute('data-live-tab-shown'), 'file');
       await live.locator('[data-live-tab="plan"]').click();
@@ -524,6 +533,120 @@ try {
       assert.equal(await pipeMap.locator('[data-pm-stage]').count(), 3);
       await assertCleanFitAndA11y(page);
       await page.screenshot({ path: path.join(output, 'pipeline-workspace-zh-light-1440.png'), fullPage: true });
+      checks.push({ phase, ok: true });
+      console.log(`PASS ${phase}`);
+    } finally {
+      if (runId) controls.get(runId)?.finish();
+      await ctx.close();
+    }
+  }
+
+  mode = 'native';
+  phase = 'native/zh/light/1440';
+  {
+    const { ctx, page } = await openPage(1440, 'zh', 'light');
+    let runId: string | undefined;
+    try {
+      ({ runId } = await startRun(page));
+      const live = await openLiveWorkspace(page), map = live.locator('[data-pm-mode="native"]');
+      await map.getByText('尚未派工', { exact: true }).waitFor();
+      const control = controls.get(runId)!, team = control.observation.inspection.nativeTeam!;
+      team.memberCount = 3; team.taskCount = 3;
+      team.tasks = [
+        { id: 'helper', memberId: 'prover', objective: 'Supply the auxiliary declaration.', revision: 1, profiles: ['prover'], status: 'running' },
+        { id: 'consumer', memberId: 'engineer', objective: 'Apply the proposed helper.', revision: 1, profiles: ['engineer'], status: 'checking' },
+        { id: 'second-consumer', memberId: 'solver', objective: 'Check the private suggestion.', revision: 1, profiles: ['prover'], status: 'running' },
+      ];
+      control.emit();
+      await map.locator('[data-team-task="helper"]').getByText('推进中，尚无发现记录').waitFor();
+      await map.locator('[data-team-task="consumer"]').getByText('宿主正在检查交付').waitFor();
+      assert.equal(await map.locator('[data-pm-edge]').count(), 0);
+      const sourceDigest = mathDigest('saved source'), environmentDigest = mathDigest('environment'), commit = 'a'.repeat(40);
+      const leadRef = 'message:' + crypto.randomUUID(), memberRef = 'message:' + crypto.randomUUID();
+      team.findings.push({ ref: leadRef, from: 'prover', to: 'lead', taskId: 'helper',
+        status: 'accepted', text: 'Still searching the library.' });
+      control.emit();
+      const helperTask = map.locator('[data-team-task="helper"]');
+      await helperTask.locator('button.pm-node-head').click();
+      await helperTask.getByText('消息已入队', { exact: false }).waitFor();
+      await helperTask.getByText('推进中，尚无发现记录', { exact: true }).waitFor();
+      await helperTask.locator('button.pm-node-head').click();
+      const source = 'theorem helper : True := by trivial\n', receipt = 'lean-offline-delivery';
+      const proof = { commit, sourceDigest, environmentDigest, sources: [{ file: 'Submission.lean', source }],
+        declarations: [{ file: 'Submission.lean', name: 'helper', type: 'True', checkedCommit: commit,
+          receipts: [{ id: receipt, status: 'kernel_verified' }] }] };
+      const ref = 'research:' + mathDigest('research');
+      team.tasks[0]!.status = 'delivered'; team.tasks[0]!.deliveryId = mathDigest('delivery');
+      team.tasks[1]!.status = 'rejected'; team.tasks[1]!.reassignment = { ref, revision: 1 };
+      team.findings.push({ ref, from: 'prover', taskId: 'helper', status: 'recorded', text: 'The premise can be tested.' });
+      team.deliveries.push({ id: team.tasks[0]!.deliveryId!, taskId: 'helper', memberId: 'prover', proof, references: [] });
+      control.emit();
+      await map.locator('[data-team-task="consumer"]').getByText('交付检查未通过').waitFor();
+      await map.locator('[data-team-reassignment]').waitFor();
+      const card = map.locator('[data-team-delivery]');
+      await card.locator('button.pm-node-head').click();
+      await card.getByText('交付回执与源码').click();
+      await card.getByText('查看固定源码').click();
+      await card.locator('[data-team-frozen-source]').waitFor({ state: 'visible' });
+      const adoptionProof = { ...proof, commit: 'b'.repeat(40), sources: [{ file: 'Submission.lean', source: source + '-- lead version\n' }] };
+      team.adoptions.push({ id: 'adoption', deliveryId: team.deliveries[0]!.id, targetId: 'lead', status: 'completed',
+        commit: adoptionProof.commit, receiptId: 'offline-integration-receipt', proof: adoptionProof });
+      control.emit();
+      await card.getByText('已采纳', { exact: true }).waitFor();
+      assert.equal(await card.locator('[data-team-frozen-source]:visible').textContent(), source);
+      assert.equal(await card.locator('[data-team-check-receipt="lean-offline-delivery"]:visible').count(), 1);
+      await card.getByText('已采纳至 lead').click();
+      await card.locator('[data-team-adoption-receipt]').waitFor();
+      await map.getByText('原题尚未通过验收', { exact: true }).first().waitFor();
+
+      const file = 'Trial.lean', probe = 'example : False := by\n  trivial\n', artifact = mathDigest('diagnostic'), otherRun = 'old-round';
+      let probeNumber = 0;
+      const probeAction = (solverRunId: string, checkedSource: boolean, workerId = 'engineer', candidateRef = ref,
+        nativeRole?: 'lead' | 'member'): WorkerMessage => ({ type: 'action', action: {
+        workerId, itemId: 'probe-' + ++probeNumber, phase: 'completed', kind: 'command', status: 'failed',
+        command: 'math check-lean --file ' + file, exitCode: 1,
+        lean: { passed: false, classification: 'lean', sourceDigest, environmentDigest, messages: [],
+          firstBlocking: { severity: 'error', file, line: 2, text: 'unsolved goals', goalText: '⊢ False' },
+          artifacts: [{ path: '.lake/diagnostic-artifacts/' + artifact + '.json', digest: artifact, sourceDigest, environmentDigest }],
+          ...(checkedSource && { checkedSource: { file, digest: mathDigest(probe), text: probe, artifact },
+            candidate: { ref: candidateRef, solverRunId, nativeRole } }),
+        },
+      } });
+      control.publish(probeAction(otherRun, true));
+      control.publish(probeAction(team.runId, true));
+      const task = map.locator('[data-team-task="helper"]');
+      await task.locator('button.pm-node-head').click();
+      await task.locator('[data-team-candidate-trial]').waitFor();
+      assert.equal(await task.locator('[data-team-candidate-trial]').count(), 1);
+      await task.getByRole('button', { name: '查看 Lean 检查' }).click();
+      await live.locator('[data-marks="2"]').waitFor();
+      assert.match((await live.locator('.live-code').textContent())!, /example : False/u);
+      control.publish(probeAction(team.runId, false));
+      await live.locator('[data-live-tab="plan"]').click();
+      // The old check remains bound to its saved source after the new result arrives.
+      await task.getByRole('button', { name: '查看 Lean 检查' }).click();
+      await live.locator('[data-marks="2"]').waitFor();
+      await live.locator('[data-live-tab="plan"]').click();
+      // The root uses the process identity "solver". A child with that same name receives different private messages.
+      team.findings.push({ ref: memberRef, from: 'prover', to: 'solver', taskId: 'helper', status: 'accepted', text: 'Check the premise.' });
+      control.emit();
+      control.publish(probeAction(team.runId, true, 'solver', leadRef, 'member'));
+      control.publish(probeAction(team.runId, true, 'solver', memberRef, 'lead'));
+      control.publish(probeAction(team.runId, true, 'solver', leadRef)); // Historical ambiguous actor.
+      control.publish(probeAction(team.runId, true, 'solver', memberRef, 'member'));
+      control.publish(probeAction(team.runId, true, 'solver', leadRef, 'lead'));
+      const trials = task.locator('[data-team-candidate-trial]');
+      await trials.getByText('lead', { exact: true }).waitFor();
+      await trials.getByText('solver', { exact: true }).waitFor();
+      assert.equal(await trials.count(), 3, 'one public trial and one for each private recipient');
+      team.deliveries[0]!.references = [{ file: 'Submission.lean', name: 'helper', target: 'goal', relation: 'direct' }];
+      control.emit();
+      control.publish({ type: 'result', result: { status: 'evaluated_passed', proof: source, report: { theoremNames: ['goal'] } } });
+      control.finish();
+      await map.getByText('原题已通过验收', { exact: true }).first().waitFor();
+      await card.locator('[data-team-final-reference="direct"]').waitFor();
+      await assertCleanFitAndA11y(page);
+      await page.screenshot({ path: path.join(output, 'native-workspace-zh.png'), fullPage: true });
       checks.push({ phase, ok: true });
       console.log(`PASS ${phase}`);
     } finally {

@@ -1,0 +1,3 @@
+(assume positive p)
+(assume negative (not p))
+(step contradiction (cl) :rule resolution :premises (positive negative))

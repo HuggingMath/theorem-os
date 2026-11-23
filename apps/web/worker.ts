@@ -198,7 +198,8 @@ Use public commentary messages in the language of the original problem. At the s
 Write user-facing mathematical explanations and observed results; keep private reasoning and scratch work private. Continue to maintain RESEARCH.md and the required protocol JSON, and also provide the public explanation through commentary. Keep the existing delivery contracts, allowed edits and independent proof acceptance unchanged.
 Continue the assigned work in this same turn after each update. Updates need no extra model request or user confirmation. Give updates at meaningful points; an update is not required before every command.`;
 
-export function webSolverModules(request: WorkerInput, actions?: { sink: (action: WebAgentActionBody) => void; hidden: readonly string[] },
+export function webSolverModules(request: WorkerInput,
+  actions?: { sink: (action: WebAgentActionBody) => void; hidden: readonly string[]; solverRunId?: () => string | undefined },
   isolation?: WebAgentIsolation): SolverModules {
   webResearchArguments(request.input, request.provider);
   const base = configurableSolverModules(request.input.modulePlan, request.input.coordination, request.input.workers);
@@ -212,7 +213,10 @@ export function webSolverModules(request: WorkerInput, actions?: { sink: (action
         const workerId = options.environment?.DEEPSCIENTIST_MATH_WORKER_ID;
         // Each item is sanitized here, inside the container, before it is written to the host.
         const context = actions && workerId ? { workerId, worktree: options.workspace, hidden: actions.hidden,
-          tool: isolation?.tools ?? path.join(root, 'bin/math.ts'), apiKey: request.input.apiKey } : undefined;
+          tool: isolation?.tools ?? path.join(root, 'bin/math.ts'), apiKey: request.input.apiKey,
+          solverRunId: actions.solverRunId?.(), ...(options.nativeAgentControl && {
+            nativeRole: options.nativeAgentControl.initialInput ? 'member' as const : 'lead' as const,
+          }) } : undefined;
         // Native item ids are scoped to one session; a restarted session may number its own.
         const session = ++sessions;
         const stream = context ? createAgentActionStream(actions!.sink) : undefined;
@@ -285,11 +289,13 @@ async function main() {
         send({ type: 'progress', event: 'observation_unavailable', message: `研究观察暂不可用：${error.message}。` });
     }).finally(() => { capturePending = undefined; });
   let latestArtifact: WebArtifact | undefined;
+  let solverRunId: string | undefined;
   const forwardProgress = createWebProgressForwarder(send);
   console.log = (...args: unknown[]) => {
     for (const value of args) if (typeof value === 'string') {
       try {
         const event = JSON.parse(value);
+        if (event.event === 'ready' && typeof event.runId === 'string') solverRunId = event.runId;
         forwardProgress(event);
         if (['turn_checkpoint', 'proof_check_started', 'candidate_selected', 'evaluation_started'].includes(event.event)) sampleArtifact?.();
       } catch { /* Unstructured runtime output stays private to this disposable container. */ }
@@ -318,7 +324,7 @@ async function main() {
     const tools = process.env.THEOREMOS_WORKER_AGENT_TOOLS || webAgentToolsDefault;
     // Without the bundle the shells would need the application itself, so the run stops rather than expose it.
     if (!fs.existsSync(tools) || isMathPathWithin(root, fs.realpathSync(tools))) throw new Error('math_agent_tools_unavailable');
-    const modules = webSolverModules(request, { sink: action => send({ type: 'action', action }),
+    const modules = webSolverModules(request, { sink: action => send({ type: 'action', action }), solverRunId: () => solverRunId,
       // The application, its build state (…/builds/<id>/manifest.json) and this run's directory: the other Agents' worktrees,
       // the Codex profile and the solver's state. An Agent's own worktree inside the run directory is shown relative.
       hidden: [root, buildState, buildFile, directory, path.join(workspaceRoot, 'active-run.json')] },
@@ -326,6 +332,7 @@ async function main() {
     const completed = await runWebLibraryResearch({ directory, request, seed: receipt, output, continuationFile,
       libraryCatalog: webAgentLibraryAccess(environment.id), run: async round => {
       output = round.output;
+      solverRunId = undefined;
       writeWebActiveRun({ webRunId: request.id, directory, output }, path.join(workspaceRoot, 'active-run.json'));
       bridge = createWebWorkerBridge({ webRunId: request.id, directory, output, apiKey: key, onMessage: send,
         ...(round.previousSolverRunId ? { libraryRestart: { previousSolverRunId: round.previousSolverRunId, round: round.round } } : {}) });
