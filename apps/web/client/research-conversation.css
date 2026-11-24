@@ -23,7 +23,7 @@ body[data-output-open=true] #runs-panel{background:var(--card)}
   body[data-output-open=true] #runs-panel>.run-detail{border:0;box-shadow:none}
 }
 .research-conversation{display:flex;flex-direction:column;gap:32px;min-width:0;max-width:760px;margin:0 auto;padding:40px 24px 56px;font-size:15px;line-height:1.9}
-.research-conversation-original{align-self:flex-end;max-width:90%;padding:16px 22px;border-radius:4px;background:var(--gray-100);min-width:0}
+.research-conversation-original{align-self:flex-end;max-width:90%;padding:16px 22px;border-radius:12px;background:var(--gray-100);min-width:0}
 .research-conversation-label{margin:0 0 10px;color:var(--muted);font-size:12px}
 .research-conversation-problem{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
 .research-conversation-lean{margin:0;max-height:300px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-family:var(--mono);font-size:13px;line-height:1.85}
@@ -247,14 +247,14 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 .chat-result-details>[data-research-artifact=live]>svg{width:15px;height:15px;flex-shrink:0}
 .chat-result-more-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:12px 0 4px}
 .chat-result-more-actions :is(.button,.text-button){max-width:100%;min-height:36px;padding:7px 13px;border-radius:8px;white-space:normal;text-align:left}
-.chat-result-more-actions .text-button{border:1px solid transparent;color:var(--gray-700)}
-.chat-result-more-actions .text-button:hover{background:var(--gray-50);border-color:var(--line);color:var(--ink)}
+.chat-result-more-actions .text-button{border:1px solid var(--line);background:var(--card);color:var(--gray-700);font-weight:500}
+.chat-result-more-actions .text-button:hover{background:var(--gray-50);border-color:var(--gray-300);color:var(--ink)}
 @media(max-width:600px),(pointer:coarse){
   .research-conversation-artifacts button,.chat-result-details>[data-research-artifact=live],.chat-result-more-actions :is(.button,.text-button){min-height:40px}
 }
 #research-problem-draft:empty{display:none}
 #research-problem-draft{flex:none;max-height:52dvh;overflow:auto;scrollbar-width:thin;width:100%;max-width:808px;margin:0 auto;padding:8px 24px}
-.chat-problem-draft{padding:18px 20px;border:1px solid var(--line);border-radius:4px;background:var(--card);font-size:14px;line-height:1.8;overflow-wrap:anywhere}
+.chat-problem-draft{padding:18px 20px;border:1px solid var(--line);border-radius:10px;background:var(--card);font-size:14px;line-height:1.8;overflow-wrap:anywhere}
 .chat-problem-draft h2{font-size:16px;margin:0 0 10px}
 .chat-problem-draft h3{font-size:14px;margin:0 0 10px}
 .chat-problem-draft-help{margin:12px 0;color:var(--muted);font-size:12px}
@@ -273,7 +273,7 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 .chat-plan-progress .text-button{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:0;color:var(--ink)}
 .chat-plan-progress svg{width:14px;height:14px;flex:none}
 .chat-plan-progress svg:last-child{width:12px;height:12px;color:var(--muted)}
-.chat-decision{margin:22px 0;padding:20px;border:1px solid var(--line);border-radius:4px;background:var(--card);font-size:14px;line-height:1.8}
+.chat-decision{margin:22px 0;padding:20px;border:1px solid var(--line);border-radius:10px;background:var(--card);font-size:14px;line-height:1.8}
 .chat-decision[data-waiting=true]{border-color:var(--blue-300)}
 .chat-decision>header{display:flex;align-items:flex-start;gap:10px;margin-bottom:14px}
 .chat-decision>header svg{width:18px;height:18px;flex:none;margin-top:4px;color:var(--blue-600)}
@@ -309,7 +309,7 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
 .chat-model-fields>label:first-child{grid-column:1/-1}
 .chat-model-fields :disabled{opacity:.85}
 #formalize-settings>.chat-settings-fields{padding-top:0}
-.chat-research-settings-heading{position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--card);border-bottom:1px solid var(--line)}
+.chat-research-settings-heading{position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 -18px;padding:4px 18px;background:var(--card);border-bottom:1px solid var(--line)}
 .chat-research-settings-heading>.text-button{min-height:44px;font-size:12px}
 /* Anchor the open picker above the entire composer so the message input stays clickable. */
 @media(height > 600px){
@@ -357,7 +357,9 @@ body[data-chat-empty=true] #research-conversation-panel #natural-research{margin
   }
 }
 /* On the empty home the composer sits mid-page under the heading, so the settings open below it instead of over the input. */
-body[data-chat-empty=true] .chat-settings-fields{top:calc(100% + 10px);bottom:auto;max-height:min(56dvh,440px)}
+body[data-chat-empty=true] #formalize-form:has(.chat-composer-settings[open]){position:relative}
+body[data-chat-empty=true] .chat-composer-toolbar:has(>.chat-composer-settings[open]){position:static}
+body[data-chat-empty=true] .chat-settings-fields{top:calc(100% + 10px);bottom:auto;max-height:min(62dvh,540px)}
 .chat-settings-options{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
 .chat-settings-options label{min-width:0}
 #natural-research .chat-settings-fields :is(input:not([type=radio]),select){display:block;width:100%;min-width:0;border:1px solid var(--line);background-color:var(--card);color:var(--ink);border-radius:4px;padding:10px;font-size:13px}
@@ -717,7 +719,7 @@ body[data-chat-empty=false] #research-conversation-panel:not(:has(.chat-connecti
 @media(forced-colors:active){.thinking-body{border-color:CanvasText}}
 
 /* The solving process: a checklist with the full diagnostic records. */
-.solve-process{margin:18px 0 0;border:1px solid var(--line);border-radius:4px;background:var(--card)}
+.solve-process{margin:18px 0 0;border:1px solid var(--line);border-radius:10px;background:var(--card)}
 .solve-process>summary{display:flex;align-items:center;gap:10px;min-height:44px;padding:10px 14px;list-style:none;cursor:pointer;font-size:13px;color:var(--gray-700)}
 .solve-process>summary::-webkit-details-marker{display:none}
 .solve-process>summary>svg{margin-left:auto;width:14px;height:14px;flex-shrink:0;transition:transform .15s}
