@@ -25,8 +25,10 @@ body.formalize-page{height:auto;min-height:100dvh;overflow:visible}
 :is(.formalize-page,.formalize-embedded) input:not([type=checkbox]),:is(.formalize-page,.formalize-embedded) select,:is(.formalize-page,.formalize-embedded) textarea{display:block;width:100%;min-width:0;border:1px solid var(--line);border-radius:4px;background-color:var(--card);padding:12px}
 :is(.formalize-page,.formalize-embedded) select{height:40px;padding:8px 34px 8px 12px;line-height:1.35}
 :is(.formalize-page,.formalize-embedded) textarea{resize:vertical;min-height:220px;line-height:1.85}
-:is(.formalize-page,.formalize-embedded) label{display:block;font-weight:500}
-:is(.formalize-page,.formalize-embedded) label .field-note{display:block;font-weight:400;margin-top:6px}
+:is(.formalize-page,.formalize-embedded) label{display:block;font-weight:500;margin-bottom:0}
+:is(.formalize-page,.formalize-embedded) label .field-note{display:block;font-weight:400;margin:6px 0 0}
+:is(.formalize-page,.formalize-embedded) label .field-note:empty{display:none}
+:is(.formalize-page,.formalize-embedded) .formalize-settings-fields>label+input{margin-top:-8px}
 .formalize-options{display:grid;grid-template-columns:1fr 1fr;gap:20px}
 .formalize-options select{margin-top:8px}
 .formalize-budget{padding:16px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);font-size:13px;color:var(--muted);line-height:1.9;overflow-wrap:anywhere}

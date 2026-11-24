@@ -634,7 +634,8 @@ export class TrajectoryView {
     const level = <div class="collab-detail-toggle trajectory-detail-toggle" role="group" aria-label={t('信息详略')} title={t('简洁和详细对对话、协作与轨迹同时生效')}>
       {(['simple', 'full'] as const).map(value => <button key={value} type="button" aria-pressed={(value === 'simple') === simple} data-trajectory-detail={value}
         data-focus-key={`trajectory-detail-${value}`} onClick={() => setDetailLevel(value)}>{value === 'simple' ? t('简洁') : t('详细')}</button>)}</div>;
-    const heading = (summary?: string) => <div class="trajectory-heading"><h3>{state.mode === 'roadmap' ? t('解题路线图') : t('解题轨迹')}</h3>
+    const heading = (summary?: string, showTitle = true) => <div class={`trajectory-heading${showTitle ? '' : ' trajectory-heading-actions'}`}>
+      {showTitle && <h3>{state.mode === 'roadmap' ? t('解题路线图') : t('解题轨迹')}</h3>}
       {summary && <span class="trajectory-summary">{summary}</span>}
       <div class="trajectory-view-toggle" role="group" aria-label={t('显示方式')}>
         {(['roadmap', 'steps'] as const).map(mode => <button key={mode} type="button" data-trajectory-view={mode}
@@ -698,7 +699,7 @@ export class TrajectoryView {
       if (route && state.mapNode && route.nodes.some(node => node.id === state.mapNode)) route.initial = state.mapNode;
       return <div class="trajectory-layout" data-mode="roadmap" data-viewer-host>
         <section class="trajectory trajectory-roadmap">
-          {!this.overviewAction && heading()}{failure}
+          {!this.overviewAction && heading(undefined, !route)}{failure}
           {route ? <SolutionRouteGraph key={run.id} model={route} compact onSelect={id => { state.mapNode = id; state.panel = undefined; this.render(); }}
             onOpen={target => {
               if (target.startsWith('task:')) { this.showNode(run.id, target); return; }
