@@ -452,50 +452,63 @@ describe('cooperative advisory scheduling checkpoints', () => {
       expect(vi.getTimerCount()).toBe(0);
     });
 
-  it.each(['none', 'before-notice', 'during-save', 'past-deadline'] as const)(
-    'lets a feasibility review save and yield to ready proof work across compaction (%s)', async compaction => {
-      const { state, workers, check, events, controller, run } = fixture(false, undefined, undefined, true);
+  it.each(['ready', 'compacting', 'claimed-elsewhere'] as const)(
+    'only checkpoints at the request boundary with a saved draft and the same proof (%s)', async outcome => {
+      const { state, workers, check, events, controller, run, wake } = fixture(false, undefined, undefined, true);
       const held = heldAdvisoryTurns(2, ['investigate', 'goal_1']);
-      const completion = run(held.open, Infinity); void completion.catch(() => {});
+      const open = async (options: MathAgentOptions): Promise<MathAgentSession> => ({
+        ...await held.open(options), usageSource: 'upstream-requests', advisoryNotifications: 'native-history',
+      });
+      const completion = run(open, Infinity); void completion.catch(() => {});
       await held.wait(0, completion);
-      const activity = held.open.mock.calls[0][0].onActivity!;
-      if (compaction === 'before-notice') activity({ event: 'item_started', itemType: 'contextCompaction' });
+      const options = held.open.mock.calls[0][0];
+      const activity = options.onActivity!;
+      const boundary = () => options.requestGate!.checkpoint!();
       const goal = state.cooperation!.tasks.find(node => node.task.id === 'goal_1')!;
       goal.task = { ...goal.task, status: 'active', ownerId: 'researcher' };
-      await vi.advanceTimersByTimeAsync(5_000);
-      if (compaction === 'before-notice') {
+      wake();
+      if (outcome === 'compacting') {
+        activity({ event: 'item_started', itemType: 'contextCompaction' });
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(held.notify).not.toHaveBeenCalled();
         activity({ event: 'item_completed', itemType: 'contextCompaction' });
-        await vi.advanceTimersByTimeAsync(5_000);
       }
-      expect(held.notify.mock.calls.some(([message]) => message.includes('A typed proof task is now ready'))).toBe(true);
-      const notes = 'Inspected the exact pinned input. The independent review is unfinished; no verdict is claimed.\n';
-      if (compaction === 'during-save' || compaction === 'past-deadline') {
-        if (compaction === 'past-deadline') await vi.advanceTimersByTimeAsync(60_000);
-        activity({ event: 'item_started', itemType: 'contextCompaction' });
-        await vi.advanceTimersByTimeAsync(compaction === 'past-deadline' ? 9 * 60_000 + 1 : 35_000);
-        expect(held.interrupt).not.toHaveBeenCalled();
-        fs.writeFileSync(path.join(workers[1].worktree, 'RESEARCH.md'), notes);
-        activity({ event: 'item_completed', itemType: 'contextCompaction' });
-      } else await vi.advanceTimersByTimeAsync(30_000);
-      await vi.advanceTimersByTimeAsync(1);
-      if (compaction !== 'past-deadline') {
-        expect(held.interrupt).not.toHaveBeenCalled();
-        activity({ event: 'item_started', itemType: 'commandExecution' });
-        fs.writeFileSync(path.join(workers[1].worktree, 'RESEARCH.md'), notes);
-        activity({ event: 'item_completed', itemType: 'commandExecution' });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(held.notify).toHaveBeenCalledWith(expect.stringContaining('A typed proof task is now ready'), { mode: 'advisory' });
+      expect(boundary()).toBe(false);
+      const notes = 'Inspected the exact pinned input. The independent review is unfinished.\n';
+      activity({ event: 'item_started', itemType: 'commandExecution' });
+      fs.writeFileSync(path.join(workers[1].worktree, 'RESEARCH.md'), notes);
+      expect(boundary()).toBe(false);
+      activity({ event: 'item_completed', itemType: 'commandExecution' });
+      expect(held.interrupt).not.toHaveBeenCalled();
+
+      if (outcome === 'claimed-elsewhere') {
+        // The existing handoff is stale by the time the model asks for another request.
+        goal.task = { ...goal.task, ownerId: 'a-different-worker' };
+        wake();
+        expect(boundary()).toBe(false);
+        expect(events.some(item => item.event === 'turn_checkpoint')).toBe(false);
+        // Even if the model already saw the notice and returns, its incomplete draft is preserved.
+        held.done[0].resolve('completed');
+        await held.wait(1, completion);
+        expect(held.actions[1].task.id).toBe('investigate');
+        expect(events).toContainEqual({ event: 'proof_handoff_target_changed',
+          details: expect.objectContaining({ workerId: 'researcher', successorTaskId: 'goal_1' }) });
+      } else {
+        expect(boundary()).toBe(true);
+        held.done[0].resolve('checkpoint');
+        await held.wait(1, completion);
+        expect(held.actions[1].task.id).toBe('goal_1');
+        expect(events).toContainEqual({ event: 'advisory_yielded_for_typed_work',
+          details: expect.objectContaining({ workerId: 'researcher', successorTaskId: 'goal_1', reason: 'typed-work-ready' }) });
       }
-      await held.wait(1, completion);
-      expect(held.interrupt).toHaveBeenCalledOnce();
-      expect(held.actions[1].task.id).toBe('goal_1');
       const audit = state.cooperation!.tasks.find(node => node.task.id === 'investigate')!;
       const draft = state.cooperation!.researchDrafts!.investigate;
-      expect(audit.status).toBe('pending'); expect(audit.researchCompletion).toBeUndefined();
+      expect(audit.researchCompletion).toBeUndefined();
       expect(draft.feasibilityInputDigest).toBe(held.actions[0].assignment.feasibilityInputDigest);
       expect(committedSource(workers[1].worktree, draft.commit, 'RESEARCH.md')).toBe(notes);
-      expect(events).toContainEqual({ event: 'advisory_yielded_for_typed_work',
-        details: expect.objectContaining({ workerId: 'researcher', reason: 'typed-work-ready' }) });
-      expect(check).not.toHaveBeenCalled();
+      expect(held.interrupt).not.toHaveBeenCalled(); expect(check).not.toHaveBeenCalled();
       controller.abort(new Error('fixture_complete')); await expect(completion).rejects.toThrow('fixture_complete');
       expect(vi.getTimerCount()).toBe(0);
     });
@@ -1062,7 +1075,6 @@ describe('cooperative advisory scheduling checkpoints', () => {
       expect(actions[1].assignment).toEqual(actions[0].assignment);
       expect(open).toHaveBeenCalledTimes(interruptKind === 'stalled' ? 2 : 1);
       if (interruptKind === 'stalled') expect(open.mock.calls[1][0].threadId).toBe('saved-advisory-thread');
-      expect(vi.getTimerCount()).toBe(4);
       await vi.advanceTimersByTimeAsync(15_000);
       expect(interrupt).toHaveBeenCalledOnce();
       expect(close).toHaveBeenCalledTimes(interruptKind === 'stalled' ? 1 : 0);

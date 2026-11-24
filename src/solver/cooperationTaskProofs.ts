@@ -563,7 +563,7 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       return false;
     }
   }
-  protected async researchCheckpoint(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>, commit: string) {
+  protected async researchCheckpoint(worker: ResearchWorker, action: Extract<CooperativeAction, { kind: 'task' }>, commit: string, countStagnation: boolean) {
     if (isFeasibilityReview(action.task) && !this.node(action.task.id).nextCheckId) {
       // A saved independent review is only a handoff, even if its notes contain a provisional result.
       // Do not publish it, complete the review or apply ordinary research stagnation parking.
@@ -574,29 +574,33 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       return;
     }
     const node = this.node(action.task.id), taskDigest = digest(node.task);
-    const inputDigest = this.checkpointInputDigest(node.task, worker.id), outputDigest = this.checkpointOutputDigest(worker.worktree, commit);
-    const localInputDigest = this.checkpointLocalInputDigest(node.task, worker.id);
     const notesBlob = git(worker.worktree, ['ls-tree', '--format=%(objectname)', commit, '--', 'RESEARCH.md']);
     const notes = notesBlob ? committedSource(worker.worktree, commit, 'RESEARCH.md') : '';
     const artifacts = this.archive.researchDrafts?.[node.task.id]?.artifacts;
-    const candidate = checkpointCandidate(notes, artifacts);
     const previous = this.archive.researchCheckpoints?.[node.task.id];
-    const sameInput = previous?.taskDigest === taskDigest && (previous.localInputDigest
-      ? previous.localInputDigest === localInputDigest : previous.inputDigest === inputDigest);
-    const count = sameInput && previous.outputDigest === outputDigest
-      ? previous.count + 1 : 1;
-    const unchangedEvidenceCount = sameInput && previous.candidateOutputDigest === candidate.digest
-      ? (previous.unchangedEvidenceCount ?? 1) + 1 : 1;
-    // Scheduling checkpoints can repeatedly resume the same assignment. Count them
-    // alongside ordinary checkpoints, but only pause after sustained unchanged
-    // output and repeated identical candidate evidence.
-    const paused = count >= 3 && unchangedEvidenceCount >= 2;
     const advisoryCheckpoint = this.input.state.workers?.find(record => record.id === worker.id)?.advisoryCheckpoint;
     const checkpointScope = mathDigest(canonicalMathJson({ kind: 'task', taskDigest }));
-    const checkpoint = (this.archive.researchCheckpoints ??= {})[node.task.id] = { taskDigest, inputDigest, outputDigest,
-      localInputDigest, candidateOutputDigest: candidate.digest, candidateStatus: candidate.status, unchangedEvidenceCount, count, paused,
-      ...(advisoryCheckpoint?.scope === checkpointScope ? { advisoryCheckpoint: { ...advisoryCheckpoint } } : {}) };
-    this.input.emit('research_checkpoint_recorded', { taskId: node.task.id, ...checkpoint });
+    let checkpoint: NonNullable<typeof this.archive.researchCheckpoints>[string] | undefined;
+    if (countStagnation) {
+      const inputDigest = this.checkpointInputDigest(node.task, worker.id), outputDigest = this.checkpointOutputDigest(worker.worktree, commit);
+      const localInputDigest = this.checkpointLocalInputDigest(node.task, worker.id);
+      const candidate = checkpointCandidate(notes, artifacts);
+      const sameInput = previous?.taskDigest === taskDigest && (previous.localInputDigest
+        ? previous.localInputDigest === localInputDigest : previous.inputDigest === inputDigest);
+      const count = sameInput && previous.outputDigest === outputDigest
+        ? previous.count + 1 : 1;
+      const unchangedEvidenceCount = sameInput && previous.candidateOutputDigest === candidate.digest
+        ? (previous.unchangedEvidenceCount ?? 1) + 1 : 1;
+      const paused = count >= 3 && unchangedEvidenceCount >= 2;
+      checkpoint = (this.archive.researchCheckpoints ??= {})[node.task.id] = { taskDigest, inputDigest, outputDigest,
+        localInputDigest, candidateOutputDigest: candidate.digest, candidateStatus: candidate.status, unchangedEvidenceCount, count, paused,
+        ...(advisoryCheckpoint?.scope === checkpointScope ? { advisoryCheckpoint: { ...advisoryCheckpoint } } : {}) };
+      this.input.emit('research_checkpoint_recorded', { taskId: node.task.id, ...checkpoint });
+    } else {
+      if (previous?.taskDigest === taskDigest && advisoryCheckpoint?.scope === checkpointScope)
+        previous.advisoryCheckpoint = { ...advisoryCheckpoint };
+      this.input.emit('research_proof_handoff_saved', { taskId: node.task.id, workerId: worker.id, commit });
+    }
     // A checkpoint is a partial publication, not a completed investigation. Only
     // explicit control JSON is eligible; ordinary prose and unfinished JSON remain drafts.
     let finding: any;
@@ -613,7 +617,8 @@ export abstract class CooperationTaskProofs extends CooperationStatements {
       await this.publishResearchFinding(worker, action, commit, { kind: 'notes', text: notes }, { artifacts, checkpoint: true });
       if (!this.current(action)) return;
     }
-    if (checkpoint.paused) {
+    if (checkpoint?.paused) {
+      const { inputDigest, outputDigest } = checkpoint;
       const scope = `assigned-local-inference/checkpoint:${mathDigest(canonicalMathJson({ inputDigest, outputDigest }))}`;
       this.reportBlockers(node.task, [{ mechanism: 'unchanged-research-checkpoint', scope }]);
       Object.assign(checkpoint, { blockerId: this.archive.blockers?.find(record => record.taskId === node.task.id && record.scope === scope)?.id });

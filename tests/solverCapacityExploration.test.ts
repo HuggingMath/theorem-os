@@ -399,8 +399,11 @@ describe('host exploration for spare cooperative capacity', () => {
     const typed: TaskRecord = { task: { id: 'engineer_typed_work', kind: 'lemma', ownerId: engineer.id,
       objective: 'Prove the exact newly available typed input.', proofPath: 'Submission.lean',
       theoremName: 'Tutorial.engineer_typed_work', type: 'True', dependsOn: [], revision: 0 }, status: 'pending', attempts: 0 };
-    state.cooperation!.tasks.push(typed); refresh();
-    expect(cooperative.shouldYieldCapacityExploration(engineer, action)).toBe(true);
+    state.cooperation!.tasks.push(typed);
+    const goal = state.cooperation!.tasks.find(item => item.task.kind === 'goal')!;
+    goal.task = { ...goal.task, dependsOn: [typed.task.id] };
+    refresh();
+    expect(cooperative.proofHandoffTarget(engineer, action)?.capacity === true).toBe(true);
   });
 
   it('resumes a running exploration with its original assignment rather than spending another method tombstone', async () => {
@@ -506,14 +509,17 @@ describe('host exploration for spare cooperative capacity', () => {
   it('yields a running exploration for an owned typed task even when its current group slot is full', async () => {
     const worker = provers()[0], action = await claim(worker), route = state.cooperation!.groups![0];
     route.group = { ...route.group, maxConcurrent: route.busy }; refresh();
-    expect(cooperative.shouldYieldCapacityExploration(worker, action)).toBe(false);
+    expect(cooperative.proofHandoffTarget(worker, action)?.capacity === true).toBe(false);
     const typed: TaskRecord = { task: { id: 'ready_typed_step', kind: 'lemma', ownerId: worker.id,
       objective: 'Prove the exact newly available interface.', proofPath: 'Submission.lean',
       theoremName: 'Tutorial.ready_typed_step', type: 'True', dependsOn: [], revision: 0 }, status: 'pending', attempts: 0 };
-    state.cooperation!.tasks.push(typed); refresh();
-    expect(cooperative.shouldYieldCapacityExploration(worker, action)).toBe(true);
+    state.cooperation!.tasks.push(typed);
+    const goal = state.cooperation!.tasks.find(item => item.task.kind === 'goal')!;
+    goal.task = { ...goal.task, dependsOn: [typed.task.id] };
+    refresh();
+    expect(cooperative.proofHandoffTarget(worker, action)?.capacity === true).toBe(true);
     typed.task = { ...typed.task, ownerId: provers()[1].id }; refresh();
-    expect(cooperative.shouldYieldCapacityExploration(worker, action)).toBe(false);
+    expect(cooperative.proofHandoffTarget(worker, action)?.capacity === true).toBe(false);
   });
   describe('four workers with a solving deadline', () => {
     const timedBudget = { maxTurns: Infinity, remainingMs: 2 * 60 * 60_000 };

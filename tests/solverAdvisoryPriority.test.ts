@@ -27,7 +27,7 @@ describe('advisory turns yielding to executable proof work', () => {
   const publishTypedWork = () => {
     node('checked_bridge').task = { ...node('checked_bridge').task, status: 'active' }; refresh();
   };
-  const shouldYield = () => cooperative.shouldYieldAdvisoryForTypedWork(engineer, action);
+  const shouldYield = () => Boolean(cooperative.proofHandoffTarget(engineer, action));
 
   beforeEach(async () => {
     const example = localExample('solver-advisory-priority-', 'lead');
@@ -123,13 +123,85 @@ describe('advisory turns yielding to executable proof work', () => {
 
   it('does not discount a slot held by another worker or yield an in-flight proof', () => {
     publishTypedWork();
-    expect(cooperative.shouldYieldAdvisoryForTypedWork(peer, action)).toBe(false);
+    expect(cooperative.proofHandoffTarget(peer, action)).toBeUndefined();
     const current = node(action.task.id);
     current.task = { ...current.task, kind: 'lemma', reviewScope: undefined, proofPath: 'Submission.lean',
       theoremName: 'Tutorial.active_proof', type: 'True' };
     current.assignment!.taskDigest = taskVersion(current.task);
     action = { ...action, task: current.task };
     expect(shouldYield()).toBe(false);
+  });
+
+  it('keeps running when full dispatch would choose a higher-priority review', async () => {
+    publishTypedWork();
+    state.cooperation!.tasks.push({
+      status: 'pending', attempts: 0,
+      task: { ...node('bridge_audit').task, id: 'fresh_review', objective: 'Independently test the other route before formalization.' },
+    });
+    refresh();
+    expect(shouldYield()).toBe(false);
+    cooperative.deactivate(engineer);
+    cooperative.interrupted(engineer, action);
+    const replacement = await cooperative.next(engineer, budget);
+    expect(replacement).toMatchObject({ kind: 'task', task: { id: 'fresh_review', kind: 'research' } });
+  });
+
+  it('accounts for a statement review that would take the released slot before a proof', async () => {
+    publishTypedWork();
+    vi.spyOn(directSolverModules.M5, 'reviewer').mockImplementation(available => available.find(worker => worker.id === engineer.id));
+    const helper = node('checked_bridge');
+    state.cooperation!.statementReviews = [{
+      id: 'bridge-statement-review', taskId: helper.task.id, taskDigest: taskVersion(helper.task),
+      snapshotDigest: 'fixture-snapshot', environmentDigest: state.environmentDigest, commit: problem.baseCommit,
+      leanStatement: 'True', intendedStatement: 'True holds.', premises: [], dependencies: [],
+      workspace: engineer.worktree, files: [], status: 'pending',
+    }];
+    expect(shouldYield()).toBe(false);
+    cooperative.deactivate(engineer);
+    cooperative.interrupted(engineer, action);
+    expect(await cooperative.next(engineer, budget)).toMatchObject({ kind: 'backtranslate', taskId: helper.task.id });
+  });
+
+  it('keeps the researcher on task when an idle peer would pick up the same proof', () => {
+    const group = state.cooperation!.groups![0];
+    group.group = { ...group.group, maxConcurrent: 2 };
+    node('checked_bridge').task = { ...node('checked_bridge').task, ownerId: undefined };
+    publishTypedWork();
+    expect(shouldYield()).toBe(false);
+    group.group = { ...group.group, maxConcurrent: 1 }; refresh();
+    expect(shouldYield()).toBe(true);
+  });
+
+  it('ignores an executable lemma that is outside the active proof route', () => {
+    for (const goal of state.cooperation!.tasks.filter(item => item.task.kind === 'goal'))
+      goal.task = { ...goal.task, status: 'paused' };
+    publishTypedWork();
+    expect(shouldYield()).toBe(false);
+  });
+
+  it('retains repeated early handoffs without parking research or spending its unchanged checkpoints', async () => {
+    const current = node(action.task.id);
+    current.task = { ...current.task, reviewScope: undefined };
+    current.assignment!.taskDigest = taskVersion(current.task);
+    action = { ...action, task: current.task };
+    const notes = 'A partial reduction with one remaining estimate.\n';
+    fs.writeFileSync(path.join(engineer.worktree, 'RESEARCH.md'), notes);
+    const commit = commitSolverSources(problem, engineer.worktree);
+    cooperative.deactivate(engineer);
+    await cooperative.deliver(engineer, action, commit, true, 'scheduling-checkpoint');
+    expect(state.cooperation!.researchCheckpoints?.bridge_audit).toMatchObject({ count: 1, paused: false });
+
+    for (let i = 0; i < 3; i++) {
+      const resumed = await cooperative.next(engineer, budget);
+      if (resumed?.kind !== 'task') throw new Error('fixture_expected_resumed_research');
+      expect(resumed.task.id).toBe('bridge_audit');
+      const saved = commitSolverSources(problem, engineer.worktree);
+      await cooperative.deliver(engineer, resumed, saved, true, 'proof-handoff');
+    }
+    expect(current.status).toBe('pending');
+    expect(state.cooperation!.researchCheckpoints?.bridge_audit).toMatchObject({ count: 1, paused: false });
+    expect(state.cooperation!.researchDrafts?.bridge_audit?.assignmentId).toBe(action.assignment.assignmentId);
+    expect(state.cooperation!.blockers?.some(item => item.mechanism === 'unchanged-research-checkpoint')).not.toBe(true);
   });
 
   it('retains a yielded review as an exact-input draft, runs its proof consumer, and can resume the review', async () => {
@@ -170,7 +242,7 @@ describe('advisory turns yielding to executable proof work', () => {
       goal.task = { ...goal.task, status: 'paused' };
     vi.useFakeTimers();
     vi.spyOn(CooperativeResearch.prototype, 'start').mockImplementation(() => {});
-    const started = deferred(), done = deferred<string>();
+    const started = deferred(), done = deferred<string>(), saved = deferred();
     const notes = 'Saved exact pinned-library observations and reproduction commands.\nThe independent review is unfinished.\n';
     const notify = vi.fn(async (message: string) => {
       if (message.includes('A typed proof task is now ready')) {
@@ -179,7 +251,7 @@ describe('advisory turns yielding to executable proof work', () => {
       }
     });
     const open = vi.fn(async (options: MathAgentOptions): Promise<MathAgentSession> => ({
-      threadId: 'natural-review-handoff', notify,
+      threadId: 'natural-review-handoff', notify, advisoryNotifications: 'native-history',
       interrupt: async () => { done.resolve('interrupted'); },
       close: async () => { done.resolve('interrupted'); },
       run: async (_message, _id, _workspace, onStarted) => {
@@ -195,15 +267,19 @@ describe('advisory turns yielding to executable proof work', () => {
           sources: { problemReceiptDigest: problem.receiptDigest } }) } },
       access: workerAccess(workers, directory), root: directory, buildFile: path.join(directory, 'build.json'),
       taskText: 'Prove the original targets.', executable: 'offline-fixture', profile: 'offline-fixture',
-      signal: controller.signal, deadline: Infinity, maxTurnMs: Infinity, maxTurns: 1, maxTotalTokens: 0,
-      goalProgressReviewMs: 24 * 3_600_000, save: () => {}, emit: () => {},
+      signal: controller.signal, deadline: Infinity, maxTurnMs: Infinity, maxTurns: 2, maxTotalTokens: 0,
+      goalProgressReviewMs: 24 * 3_600_000, save: () => {},
+      emit: event => { if (event === 'feasibility_review_checkpoint_saved') saved.resolve(); },
     });
     try {
       await Promise.race([started.promise, completion.then(() => { throw new Error('fixture_expected_review_turn'); })]);
+      // The helper becomes eligible on an active goal's path once the review has started.
+      for (const goal of state.cooperation!.tasks.filter(item => item.task.kind === 'goal'))
+        goal.task = { ...goal.task, status: 'active' };
       publishTypedWork();
       await vi.advanceTimersByTimeAsync(5_000);
-      await completion;
-      expect(notify).toHaveBeenCalledWith(expect.stringContaining('A typed proof task is now ready'));
+      await Promise.race([saved.promise, completion.then(() => { throw new Error('fixture_expected_saved_review'); })]);
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining('A typed proof task is now ready'), { mode: 'advisory' });
       const audit = node('bridge_audit');
       expect(audit.status).toBe('pending');
       expect(audit.finding).toBeUndefined(); expect(audit.researchCompletion).toBeUndefined();

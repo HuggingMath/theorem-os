@@ -345,6 +345,8 @@ export async function runResearchWorkers(input: {
       let pendingTurn: Promise<void> | undefined;
       let planningCheckpoint = false;
       let cooperativeCheckpoint = false;
+      let proofHandoffCheckpoint = false;
+      let checkpointAtModelBoundary: (() => boolean) | undefined;
       let contextSchedulingCheckpoint = false;
       let compactionRestart = false;
       let explicitCompaction = false, contextUsageVersion = 0, compactedUsageVersion = -1;
@@ -435,12 +437,12 @@ export async function runResearchWorkers(input: {
         if (!advisoryTurn || previous?.scope !== advisoryTurn.scope) return;
         const contentDigest = advisoryContentDigest();
         const progress = contentDigest !== undefined && contentDigest !== advisoryTurn.contentDigest;
-        const noProgressStreak = completed || progress ? 0 : checkpoint
+        const noProgressStreak = completed || progress ? 0 : checkpoint && !proofHandoffCheckpoint
           ? Math.min(Number.MAX_SAFE_INTEGER, previous.noProgressStreak + 1) : previous.noProgressStreak;
         rememberAdvisoryCheckpoint({ scope: previous.scope, noProgressStreak,
           contentDigest: contentDigest ?? previous.contentDigest, inputDigest: advisoryTurn.inputDigest });
         if (checkpoint) emit('cooperative_checkpoint_saved', { noProgressStreak, progress,
-          protected: false });
+          protected: false, ...(proofHandoffCheckpoint ? { reason: 'proof-handoff' } : {}) });
         save();
       };
       const modelTurn = async <T>(run: (started: (turnId: string) => void) => Promise<T>,
@@ -459,6 +461,7 @@ export async function runResearchWorkers(input: {
         cooperation?.settleTurn(worker);
         planningCheckpoint = false;
         cooperativeCheckpoint = false;
+        proofHandoffCheckpoint = false;
         contextSchedulingCheckpoint = false;
         advisoryTurn = undefined;
         usage.begin(assignment);
@@ -490,7 +493,7 @@ export async function runResearchWorkers(input: {
         let noticeTimer: ReturnType<typeof setTimeout> | undefined;
         let checkpointTimer: ReturnType<typeof setTimeout> | undefined;
         let interruptTimer: ReturnType<typeof setTimeout> | undefined;
-        let capacityTimer: ReturnType<typeof setInterval> | undefined;
+        let proofHandoffTimer: ReturnType<typeof setInterval> | undefined;
         let contextTimer: ReturnType<typeof setInterval> | undefined;
         let compactionTimer: ReturnType<typeof setTimeout> | undefined;
         let compactionStartedAt: number | undefined;
@@ -503,7 +506,8 @@ export async function runResearchWorkers(input: {
         let requestWaitTimer: ReturnType<typeof setTimeout> | undefined;
         let cutAtRequestBoundary: (() => void) | undefined;
         let noticeDelivery: 'unavailable' | 'pending' | 'delivered' | 'failed' = 'unavailable';
-        let typedWorkYield = false;
+        let requestedProof: (NonNullable<ReturnType<CooperativeResearch['proofHandoffTarget']>> & { turnId: string }) | undefined;
+        let proofNoticeDelivered = false;
         let afterNotice: ((delivered: boolean) => void) | undefined;
         const live = () => !finished && !signal.aborted && session === activeSession;
         const current = () => live() && Boolean(assignment && cooperation?.current(assignment));
@@ -680,8 +684,8 @@ export async function runResearchWorkers(input: {
           if (noProgressStreak && backoff) emit('cooperative_checkpoint_deferred', { turnId, checkpointAfterMs,
             noProgressStreak, protected: false, reason: 'no-durable-progress' });
           let noticeSequence = 0;
-          const sendNotice = (yieldForProof = false) => {
-            if (!current() || noticeSent && !yieldForProof || assignment?.kind === 'lead' && cooperation?.planSnapshot(assignment)) return;
+          const sendNotice = () => {
+            if (!current() || noticeSent || assignment?.kind === 'lead' && cooperation?.planSnapshot(assignment)) return;
             noticeSent = true;
             const sequence = ++noticeSequence;
             noticeDelivery = activeSession.notify ? 'pending' : 'unavailable';
@@ -692,13 +696,7 @@ export async function runResearchWorkers(input: {
               if (!current() || assignment?.kind === 'lead' && cooperation?.planSnapshot(assignment)) return;
               // A goal turn is never yielded, so its reminder must not promise a checkpoint that will
               // not come: it asks for the durable handoff and leaves the writing turn running.
-              return activeSession.notify?.(yieldForProof
-                ? 'A typed proof task is now ready for you. Save this investigation or review\'s exact inspected inputs, ' +
-                  'current argument, reproduction commands and observed results in root RESEARCH.md now, then return. ' +
-                  'Do not start another search. This checkpoint preserves an unfinished draft with its original inputs; ' +
-                  'it is not a completed review verdict or proof acceptance. The host will yield this assignment at a safe ' +
-                  'request boundary within the existing fixed checkpoint wait, then dispatch eligible proof work.'
-                : assignment?.kind === 'task' && isFeasibilityReview(assignment.task)
+              return activeSession.notify?.(assignment?.kind === 'task' && isFeasibilityReview(assignment.task)
                 ? 'Save this independent review\'s intermediate work in root RESEARCH.md now: the exact inspected inputs, ' +
                   'methods already tried, exact failed search scope, remaining uncertainties, and complete useful scratch-probe ' +
                   'code with reproduction commands and observed results. A scratch path alone is not a recoverable probe; ' +
@@ -739,16 +737,13 @@ export async function runResearchWorkers(input: {
               afterNotice?.(false);
             });
           };
-          const checkpoint = (yieldForProof = false) => {
+          const checkpoint = () => {
             if (compactionStartedAt !== undefined) return;
             if (researchAssignment && !researchHandoffNotes() && current() && !checkpointRequested && !readyRequested)
               emit('research_checkpoint_missing_notes', { taskId: researchAssignment.task.id,
                 assignmentId: researchAssignment.assignment.assignmentId });
-            if (interruptForCheckpoint('cooperative_checkpoint_interrupted',
-              { turnId, checkpointAfterMs, noProgressStreak, protected: false }) && (yieldForProof || typedWorkYield))
-              emit(assignment?.kind === 'task' && state.cooperation?.tasks.some(node =>
-                node.task.id === assignment.task.id && node.capacityExploration)
-                ? 'capacity_exploration_yielded' : 'advisory_yielded_for_typed_work', { turnId, reason: 'typed-work-ready' });
+            interruptForCheckpoint('cooperative_checkpoint_interrupted',
+              { turnId, checkpointAfterMs, noProgressStreak, protected: false });
           };
           // Interrupting a streaming request discards its unfinished reasoning and tool call, and research whose every
           // cut lands mid-request saves nothing and is parked as unchanged. A slice cut (initial plan, revision or
@@ -871,16 +866,6 @@ export async function runResearchWorkers(input: {
               return;
             }
             sliceStartedAt = Date.now();
-            if (typedWorkYield) {
-              // Compaction pauses the handoff's save timer, but cannot lose the requested yield
-              // or reset the original wait deadline when maintenance returns.
-              if (requestWaited && Date.now() - waitStartedAt >= advisoryRequestWaitMs) cut('wait-limit');
-              else if (!afterNotice) {
-                checkpointTimer = setTimeout(() => awaitRequest(true), 0);
-                checkpointTimer.unref();
-              }
-              return;
-            }
             if (!noticeSent) {
               noticeTimer = setTimeout(sendNotice, Math.max(0, noticeAfterMs - activeSliceMs));
               noticeTimer.unref();
@@ -891,19 +876,48 @@ export async function runResearchWorkers(input: {
             checkpointTimer.unref();
           };
           scheduleSlice(); watchCompaction();
-          if (researchAssignment) {
-            capacityTimer = setInterval(() => {
-              if (!current() || compactionStartedAt !== undefined || typedWorkYield ||
-                  !cooperation?.shouldYieldAdvisoryForTypedWork(worker, researchAssignment)) return;
-              // Preserve the existing capacity checkpoint; planned investigations and independent
-              // reviews first get a save instruction and the same bounded handoff window.
-              if (cooperation.shouldYieldCapacityExploration(worker, researchAssignment)) { checkpoint(true); return; }
-              typedWorkYield = true;
-              clearTimeout(noticeTimer); clearTimeout(checkpointTimer);
-              cutAtRequestBoundary = undefined;
-              sendNotice(true); endSlice();
+          if (researchAssignment && activeSession.advisoryNotifications === 'native-history' && activeSession.notify) {
+            const proofTarget = () => {
+              if (compactionStartedAt !== undefined || !current() || checkpointRequested || readyRequested) return;
+              return cooperation?.proofHandoffTarget(worker, researchAssignment);
+            };
+            const sameTarget = () => {
+              const target = proofTarget();
+              return Boolean(target && requestedProof?.taskId === target.taskId && requestedProof?.taskDigest === target.taskDigest);
+            };
+            if (activeSession.usageSource === 'upstream-requests') {
+              checkpointAtModelBoundary = () => {
+                if (!proofNoticeDelivered || toolsRunning || !sameTarget() || !researchHandoffNotes()) return false;
+                proofHandoffCheckpoint = true;
+                return true;
+              };
+            }
+            proofHandoffTimer = setInterval(() => {
+              if (requestedProof || !clockArmed) return;
+              const target = proofTarget();
+              if (!target) return;
+              requestedProof = { ...target, turnId };
+              // Native history is consumed after the current response and its tools. Steering here
+              // would cancel the response on direct-provider sessions with no host request relay.
+              void activeSession.notify!(
+                'A typed proof task is now ready. Finish the current model response and tool work, then save ' +
+                'this investigation in worktree-root RESEARCH.md. Keep the exact inputs, current argument, ' +
+                'reproduction commands, results and next unresolved step. After saving, return so the host can ' +
+                'recheck the proposed switch. Leave an unfinished investigation as a draft.',
+                { mode: 'advisory' }).then(() => {
+                if (current()) {
+                  proofNoticeDelivered = true;
+                  emit('proof_handoff_notice_delivered', { turnId, taskId: researchAssignment.task.id,
+                    successorTaskId: target.taskId, successorTaskDigest: target.taskDigest });
+                }
+              }, error => {
+                if (!current()) return;
+                requestedProof = undefined;
+                const reason = noticeFailureReason(error);
+                if (reason !== undefined) emit('proof_handoff_notice_failed', { turnId, reason });
+              });
             }, advisoryProgressPollMs);
-            capacityTimer.unref();
+            proofHandoffTimer.unref();
           }
         };
         let completed = false;
@@ -913,18 +927,27 @@ export async function runResearchWorkers(input: {
           if (usage.stopReason && detail !== usage.stopReason) throw new Error(detail);
           planningCheckpoint = usage.stopReason === 'math_initial_planning_limit';
           const resultStatus = typeof result === 'string' ? result : result && typeof result === 'object' && 'status' in result ? result.status : undefined;
-          // The typed-work notice explicitly requests an unfinished handoff. A cooperative natural
-          // return honors that request too; prose notes must not become a completed review verdict.
-          cooperativeCheckpoint = typedWorkYield && resultStatus === 'completed' || checkpointRequested && (resultStatus === 'interrupted' || resultStatus === 'checkpoint' ||
+          // A natural return after the save request preserves an unfinished draft. A relay
+          // checkpoint confirms the same successor and a current draft at the unpaid boundary.
+          proofHandoffCheckpoint ||= Boolean(proofNoticeDelivered && resultStatus === 'completed');
+          cooperativeCheckpoint = proofHandoffCheckpoint || checkpointRequested && (resultStatus === 'interrupted' || resultStatus === 'checkpoint' ||
             checkpointClosing && resultStatus === 'failed' && researchFailureReason(detail) === 'math_codex_transport_closed');
           completed = resultStatus === 'completed';
+          if (proofHandoffCheckpoint && researchAssignment && requestedProof) {
+            const target = cooperation?.proofHandoffTarget(worker, researchAssignment);
+            const valid = target?.taskId === requestedProof.taskId && target?.taskDigest === requestedProof.taskDigest;
+            emit(valid ? requestedProof.capacity ? 'capacity_exploration_yielded' : 'advisory_yielded_for_typed_work'
+              : 'proof_handoff_target_changed', { turnId: requestedProof.turnId, taskId: researchAssignment.task.id,
+              successorTaskId: requestedProof.taskId, successorTaskDigest: requestedProof.taskDigest,
+              reason: valid ? 'typed-work-ready' : 'successor-no-longer-dispatchable' });
+          }
           if (completed) recovered();
           return result;
         }
         catch (error) {
           planningCheckpoint = usage.stopReason === 'math_initial_planning_limit' &&
             failureDetail(error, activeSession.lastError, activeSession.lastFailureDiagnostic) === usage.stopReason;
-          cooperativeCheckpoint = checkpointRequested && checkpointClosing &&
+          cooperativeCheckpoint = proofHandoffCheckpoint || checkpointRequested && checkpointClosing &&
             researchFailureReason(failureDetail(error, activeSession.lastError, activeSession.lastFailureDiagnostic)) === 'math_codex_transport_closed';
           throw error;
         }
@@ -934,12 +957,13 @@ export async function runResearchWorkers(input: {
           cutAtRequestBoundary = undefined;
           afterNotice = undefined;
           clearTimeout(compactionTimer); clearTimeout(firstActivityTimer); turnActivity = undefined;
-          clearInterval(capacityTimer); clearInterval(contextTimer);
+          clearInterval(proofHandoffTimer); clearInterval(contextTimer);
+          checkpointAtModelBoundary = undefined;
           // A transport failure may settle run() before process-group teardown finishes.
           // Do not freeze sources or reopen this thread until the writer is fully closed.
           try {
             if (checkpointClosing) await close();
-            if (completed) recordAdvisoryOutput(false, true);
+            if (completed && !proofHandoffCheckpoint) recordAdvisoryOutput(false, true);
           } finally { usage.finish(completed); }
         }
       };
@@ -986,7 +1010,7 @@ export async function runResearchWorkers(input: {
       signal.addEventListener('abort', cancel, { once: true });
       const beginTurn = async (currentContext: ContextBundle, assignment?: CooperativeAction, operation: ResearchOperation = 'direct') => {
         access.assertHarnessCurrent?.();
-        usage.resetTurn(); planningCheckpoint = false; cooperativeCheckpoint = false;
+        usage.resetTurn(); planningCheckpoint = false; cooperativeCheckpoint = false; proofHandoffCheckpoint = false;
         rebuildContext = false;
         while ((pendingTurn = waitForTurn())) await pendingTurn;
         if (assignment && !cooperation!.current(assignment)) return false;
@@ -1041,6 +1065,8 @@ export async function runResearchWorkers(input: {
               const sessionId = crypto.randomUUID();
               const resumingThread = research.threadId;
               const usageCallbacks = usage.bindSession(sessionId, () => session?.lastInputTokens);
+              if (usageCallbacks.requestGate) usageCallbacks.requestGate.checkpoint = () =>
+                checkpointAtModelBoundary?.() ?? false;
               if (team && usageCallbacks.requestGate) usageCallbacks.requestGate = team.leadRequestGate(usageCallbacks.requestGate);
               access.assertHarnessCurrent?.();
               session = await modules.M1.open({ executable: input.executable, profile: input.profile,
@@ -1574,7 +1600,8 @@ export async function runResearchWorkers(input: {
               team?.leadAdoptionCheckpoint ? { reason: 'math_team_adoption_checkpoint' } :
               planningCheckpoint ? { reason: 'math_initial_planning_limit' } :
               contextSchedulingCheckpoint ? { reason: 'math_context_scheduling_checkpoint' } :
-                cooperativeCheckpoint ? { reason: 'math_cooperative_scheduling_checkpoint' } : {}) });
+                proofHandoffCheckpoint ? { reason: 'math_proof_handoff_checkpoint' } :
+                  cooperativeCheckpoint ? { reason: 'math_cooperative_scheduling_checkpoint' } : {}) });
           if (turn === 'failed') emit('turn_failed', { reason: researchFailureReason(turnError), ...(diagnostic ? { diagnostic } : {}) });
           const sourceError = sourceFeedback();
           if (sourceError) {
@@ -1645,7 +1672,8 @@ export async function runResearchWorkers(input: {
               const commit = commitSolverSources(state.problem, worker.worktree);
               recordAdvisoryOutput(turn === 'checkpoint');
               const deliver = () => cooperation.deliver(worker, assignment, commit, turn !== 'completed',
-                turn === 'failed' ? 'request-failure' : cooperativeCheckpoint ? 'scheduling-checkpoint' : 'checkpoint');
+                turn === 'failed' ? 'request-failure' : proofHandoffCheckpoint ? 'proof-handoff' :
+                  cooperativeCheckpoint ? 'scheduling-checkpoint' : 'checkpoint');
               const delivery = assignment.kind === 'task' || assignment.kind === 'lead' ? await deliver() : await exclusiveCheck(deliver);
               if (assignment.kind === 'lead' && turn === 'checkpoint') await cooperation.startInitialTasks();
               research.check = delivery.check;

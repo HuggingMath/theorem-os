@@ -8,7 +8,7 @@ import { deliveryDetails, reviewVerdict, readMathResponse as block } from './del
 import { assertStatementSnapshot, captureStatementContexts, createStatementSnapshotter, isStatementAction, readBacktranslation, resetStatementReview,
   writeStatementSnapshot, type StatementAction, type StatementReview } from './statementReview';
 import { captureProofReferences, proofReferencesUnchanged } from './proofReferences';
-import { taskGroup, hasTaskReferences, isDefinitionTask, type CooperativeTask, type TaskRecord } from './tasks';
+import { taskGroup, hasTaskReferences, isDefinitionTask, type CooperativeTask, type RouteRecord, type TaskRecord } from './tasks';
 import { digest } from './cooperationShared';
 import { CooperationCore } from './cooperationCore';
 
@@ -24,11 +24,12 @@ export abstract class CooperationStatements extends CooperationCore {
       this.archive.canonicalCommit === scope.commit && this.input.state.environmentDigest === scope.environmentDigest &&
       this.statementTaskIdentity() === scope.tasksDigest ? scope.required : undefined;
   }
-  protected statementReviewAllowed(task: CooperativeTask, dispatch = false) {
+  protected statementReviewAllowed(task: CooperativeTask, dispatch = false,
+    tasks: readonly TaskRecord[] = this.archive.tasks, groups: readonly RouteRecord[] | undefined = this.archive.groups) {
     if (this.synchronizationBlocked(task)) return false;
     const required = this.fixedStatementReviewTasks();
     if (required) return required.get(task.id) === digest(task);
-    return dispatch ? routeAllowsTask(task, this.archive.tasks, this.archive.groups) :
+    return dispatch ? routeAllowsTask(task, tasks, groups) :
       (task.status ?? 'active') === 'active' &&
       this.archive.groups?.find(route => route.group.id === taskGroup(task))?.group.status === 'active';
   }
