@@ -1,6 +1,7 @@
 import { render } from 'preact';
 import { useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { animateEntrance } from '../motion';
+import { Rich } from '../richText';
 import { Icon } from './Icon';
 import { t } from '../../i18n';
 
@@ -68,7 +69,7 @@ function Palette({ commands, session }: { commands: readonly PaletteCommand[]; s
           {heading && <p class="palette-group" aria-hidden="true">{heading}</p>}
           <button type="button" id={`palette-${command.id}`} role="option" tabIndex={-1} aria-selected={position === selected}
             onMouseMove={() => { if (position !== selected) setIndex(position); }} onClick={() => choose(command)}>
-            <Icon name={command.icon} /><span class="palette-label" lang={command.lang}>{command.label}</span>{command.hint && <span class="palette-hint">{command.hint}</span>}
+            <Icon name={command.icon} /><span class="palette-label" lang={command.lang}><Rich text={command.label} inline /></span>{command.hint && <span class="palette-hint">{command.hint}</span>}
             {position === selected && <Icon name="corner-down-left" />}
           </button>
         </li>;
