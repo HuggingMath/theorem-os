@@ -1,13 +1,15 @@
-<!-- README_SYNC: source=2cbe72f0cfde; updated=2026-11-18 -->
+<!-- README_SYNC: source=2cbe72f0cfde; updated=2026-11-24 -->
 <p align="center">简体中文 · <a href="./README_EN.md">English</a></p>
 
 <div align="center">
   <img src="./docs/assets/mark.png" alt="" width="64" height="64">
   <h1>TheoremOS</h1>
   <p><strong>从自然语言原题出发，构造并独立核验 Lean 证明。</strong></p>
-  <p><a href="https://theoremos.top/">产品官网</a> · <a href="https://app.theoremos.top/">在线工作台</a> · <a href="https://theoremos.top/archive.html">公开证明档案</a></p>
+  <p>由<a href="https://www.westlake.edu.cn/">西湖大学</a> <a href="https://westlakenlp.com/"><strong>WestlakeNLP 实验室</strong></a>研发</p>
+  <p><a href="https://theoremos.top/">产品官网</a> · <a href="https://app.theoremos.top/">在线工作台</a> · <a href="https://theoremos.top/archive.html">公开证明档案</a> · <a href="https://github.com/HuggingMath/TheoremOS">官网与档案仓库</a></p>
 </div>
 
+[![WestlakeNLP Lab](https://img.shields.io/badge/Lab-WestlakeNLP-1e3a5f)](https://westlakenlp.com/)
 [![Lean 4 · Mathlib](https://img.shields.io/badge/Lean_4-Mathlib-315cf5.svg)](./docs/web-workbench.md)
 [![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue.svg)](./LICENSE)
 
@@ -81,4 +83,4 @@ TheoremOS 自有源码采用 [AGPL-3.0-only](./LICENSE)。[授权范围](./LICEN
 
 在论文、报告或演示中使用 TheoremOS 时，建议按 [CITATION.cff](./CITATION.cff) 引用，并注明所用版本或提交。题目、数据和第三方软件请分别注明原作者与出处。独立修改版请说明与官方版本的关系，避免被误认为官方发布或得到上游背书。
 
-感谢 [Lean](https://lean-lang.org/)、[Mathlib](https://github.com/leanprover-community/mathlib4) 和 [Lean-Eval](https://github.com/leanprover/lean-eval) 提供工具与评测资源。
+TheoremOS 由[西湖大学](https://www.westlake.edu.cn/) [**WestlakeNLP 实验室**](https://westlakenlp.com/)（自然语言处理实验室，由[张岳教授](https://en.westlake.edu.cn/faculty/nlp/yue-zhang.html)领导，X: [@NlpWestlake](https://x.com/NlpWestlake)）研发。感谢 [Lean](https://lean-lang.org/)、[Mathlib](https://github.com/leanprover-community/mathlib4) 和 [Lean-Eval](https://github.com/leanprover/lean-eval) 提供工具与评测资源。
