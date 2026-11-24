@@ -1,13 +1,15 @@
-import { parseCooperationPlan } from './tasks';
+import { parseCooperationPlan, type CooperationPlanProblem } from './tasks';
 import { assertPlanTaskTypeContracts } from './taskTypeContract';
 import { limitMathOutput } from '../math/mathProcess';
-import { type SolverProblem } from './problem';
 import { type ProofCheck } from './modules/evidence';
 import { readMathResponse as block, type DeliveryRecord } from './deliveries';
+import type { LandedHelper } from './incrementalHelpers';
 import { type TaskProof } from './cooperativeProof';
 import { type StatementReview } from './statementReview';
 import { type DeliveryArtifactManifest } from './deliveryArtifacts';
-import { type BlockerBasis, type RouteBlocker } from './routeControl';
+import { routeRetirementSchema, type BlockerBasis, type RouteBlocker, type RetiredRoute, type RouteRetirement } from './routeControl';
+import { z } from 'zod';
+import { invalidPlanField, PlanValidationError, planFieldPath, type PlanIssue } from './planDiagnostics';
 import { type ProofRoute } from './proofRoutes';
 import { type ObligationSnapshot, type ObligationProgressReceipt } from './obligationProgress';
 import { type TaskConsumerProjection } from './taskConsumers';
@@ -77,6 +79,7 @@ export type FailedTaskInput = { id: string; taskId: string; taskDigest: string; 
   canonicalSourceDigest: string; canonicalTargetDigest: string; feedback: string;
   repair?: { taskId: string; taskDigest: string; workerId: string; pending: boolean; startedAttempt?: number } };
 export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; canonicalCommit?: string; leadSeedCommit?: string; review?: ReviewRecord; error?: string;
+  landedHelpers?: LandedHelper[];
   /** Context-only notes actually delivered to this worker; decisions remain separate from proof state. */
   humanGuidance?: HumanGuidanceRecord[];
   /** Context-only reverse uses, projected from the full archive without expanding execution visibility. */
@@ -108,7 +111,7 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
   planPublicationRejection?: PlanPublicationRejection;
   /** Worker-private projection of the current checkpoint request's diagnostic. */
   contextCheckpointRejection?: ContextCheckpointRejection;
-  planRejection?: { proposalDigest: string; inputDigest: string; error: string; stalled: boolean };
+  planRejection?: { proposalDigest: string; inputDigest: string; error: string; stalled: boolean; malformed?: true; issues?: PlanIssue[] };
   lastLeadInputDigest?: string;
   /** Durable Lead wake-ups; a restart re-asks those whose dispatch did not settle. */
   leadWakes?: import('./leadWakes').LeadWakes;
@@ -141,6 +144,9 @@ export type CooperationState = { tasks: TaskRecord[]; groups?: RouteRecord[]; ca
     targetTaskId: string; taskId: string }[];
   failedTaskInputs?: FailedTaskInput[];
   blockers?: RouteBlocker[];
+  retiredRoutes?: RetiredRoute[];
+  /** Branch-exclusive members are kept by task ID after their proof route leaves the graph. */
+  retiredRouteTasks?: Record<string, string>;
   proofRoutes?: ProofRoute[];
   progressSnapshot?: ObligationSnapshot;
   progressReceipts?: ObligationProgressReceipt[];
@@ -172,6 +178,10 @@ export function leadPlanPublicationTarget(action: CooperativeAction | undefined)
   return { file, kind: 'plan' as const, dispatchNonce: nonce, baseVersion: action.planVersion };
 }
 
+export const LEAD_PLAN_REPAIR_INSTRUCTION =
+  'Validate the candidate JSON from the Lead worktree with theorem-os plan-validate --file .scratch/plan.json. ' +
+  'Use theorem-os plan-apply --file .scratch/plan.json to save a validated plan in RESEARCH.md.';
+
 /** Reuse the saved diagnostic across turns while always targeting the current dispatch. */
 export function leadPlanPublicationFeedback(action: CooperativeAction | undefined,
   state: Pick<CooperationState, 'planVersion' | 'planPublicationRejection'>): string | undefined {
@@ -182,7 +192,8 @@ export function leadPlanPublicationFeedback(action: CooperativeAction | undefine
     JSON.stringify(target) + '. ' +
     'Preserve the log and use the current assignment protocol; a saved rejection may come from an earlier dispatch. ' +
     'Keep kind:"plan", baseVersion and any dispatchNonce at the top level of the same event as tasks or upsert/remove; ' +
-    'a bare plan patch is not a publication event. Only the first valid publication in a dispatch is accepted. This intake feedback grants no proof acceptance.';
+    'a bare plan patch is not a publication event. Only the first valid publication in a dispatch is accepted. This intake feedback grants no proof acceptance. ' +
+    LEAD_PLAN_REPAIR_INSTRUCTION;
 }
 export const deliveryInputFields = (record: DeliveryRecord) => ({
   taskId: record.taskId, taskDigest: record.taskDigest, kind: record.kind, status: record.status,
@@ -193,15 +204,29 @@ export const deliveryInputFields = (record: DeliveryRecord) => ({
   sourceUses: record.sourceUses, searchCheckpoint: record.searchCheckpoint,
 });
 export type LeadPlan = ReturnType<typeof parseCooperationPlan> & { fromPatch?: boolean; goalPathDecisions?: GoalPathDecisions;
-  goalProgressDecision?: GoalProgressDecision; researchDecisions?: unknown; nextCheckDecisions?: NextCheckDecision[] };
+  goalProgressDecision?: GoalProgressDecision; researchDecisions?: unknown; nextCheckDecisions?: NextCheckDecision[];
+  retireRoutes?: RouteRetirement[] };
 type LeadPlanOptions = Parameters<typeof expandPlanPatch>[2] & { goalPath?: GoalPathReview; restoring?: boolean };
 /**
  * Model proposes tasks or a revision of the accepted graph; the host validates coverage, exact targets and an acyclic
  * dependency graph. A revision may answer the current goal-path review, whose mechanical candidates expand first.
  */
-export function parseLeadPlan(problem: SolverProblem, value: unknown, base?: PlanPatchBase, options: LeadPlanOptions = {}): LeadPlan {
+export function parseLeadPlan(problem: CooperationPlanProblem, value: unknown, base?: PlanPatchBase, options: LeadPlanOptions = {}): LeadPlan {
   const { goalPath, restoring, ...patchOptions } = options;
   value = liftNestedPlanPatch(value);
+  const retirement = value && typeof value === 'object' && 'retireRoutes' in value
+    ? z.array(routeRetirementSchema).min(1).max(32).safeParse(value.retireRoutes) : undefined;
+  if (retirement && !retirement.success) {
+    const issues = retirement.error.issues.map(issue => ({ path: planFieldPath(['retireRoutes', ...issue.path]), message: issue.message }));
+    throw new PlanValidationError('math_plan_invalid_retire_routes',
+      issues.map(issue => `${issue.path}: ${issue.message}`).join('\n'), issues);
+  }
+  if (retirement?.success) {
+    const routes = retirement.data.map(item => item.routeId);
+    const repeated = routes.findIndex((route, index) => routes.indexOf(route) !== index);
+    if (repeated >= 0) throw invalidPlanField('math_plan_invalid_retire_routes', `retireRoutes[${repeated}].routeId`,
+      'Each retired route ID may appear only once.');
+  }
   const progressDecision = parseGoalProgressDecision(value, restoring);
   const nextCheckDecisions = parseNextCheckDecisions(value);
   const answered = applyGoalPathDecisions(value, goalPath, base);
@@ -213,8 +238,9 @@ export function parseLeadPlan(problem: SolverProblem, value: unknown, base?: Pla
   const patched = isPlanPatch(answered.value);
   const plan = parseCooperationPlan(problem, isPlanPatch(answered.value) ? expandPlanPatch(answered.value, base, patchOptions) : answered.value);
   assertPlanTaskTypeContracts(plan.tasks, base?.tasks);
-  return { ...plan, ...(patched ? { fromPatch: true } : {}), ...decisions };
+  return { ...plan, ...(patched ? { fromPatch: true } : {}), ...decisions,
+    ...(retirement?.success ? { retireRoutes: retirement.data } : {}) };
 }
-export function readCooperationPlan(problem: SolverProblem, worktree: string, base?: PlanPatchBase, options?: LeadPlanOptions): LeadPlan {
+export function readCooperationPlan(problem: CooperationPlanProblem, worktree: string, base?: PlanPatchBase, options?: LeadPlanOptions): LeadPlan {
   return parseLeadPlan(problem, block(worktree, 'math-plan'), base, options);
 }

@@ -5,7 +5,7 @@ import { mathematicsRuntimeInstruction } from '../math/mathRuntimeEnvironment';
 import { mathToolsInstruction } from '../math/mathTools';
 import { assertMathAgentSkillsCurrent } from '../runtime/agentSkills';
 import type { SolverRunState } from './archive';
-import { compileContextSections, compileTaskContext, type ContextSection } from './contextCompiler';
+import { compileContextSections, compileTaskContext, portfolioContextSections, type ContextSection } from './contextCompiler';
 import { continuationContextSection, readContinuationSnapshot } from './continuationInput';
 import { solverProofFeedback } from './feedback';
 import type { ContextAccess, ContextBundle, ResearchDispatchOptions } from './modules/context';
@@ -15,7 +15,7 @@ import { materializeResearchToolHelp } from './researchToolHelp';
 import { buildResearchToolGuide } from './researchToolGuide';
 import { researchSkillIdentity } from './researchSkill';
 import { skillResearchContinuationSection } from './skillResearchContext';
-import { assignmentDeliveryFile, isAdvisoryTask, leadPlanDeliveryFile } from './tasks';
+import { assignmentDeliveryFile, isAdvisoryTask, isFeasibilityReview, isFinalCandidateReview, leadPlanDeliveryFile, type CooperativeTask } from './tasks';
 
 /** Static shared guidance also serves a native single-task baseline without manufacturing solver state. */
 export function buildCommonResearchGuide(problem: SolverProblem,
@@ -30,7 +30,8 @@ export function buildCommonResearchGuide(problem: SolverProblem,
       : 'Choose mathematical methods using the pinned skill; the host retains the current workflow and delivery contracts. ') +
     `Lean project: ${path.join(access.worktree, problem.projectRelative)}. Owned Lean paths: ${JSON.stringify(editable)}. ` +
     `Save public research notes at ${path.join(access.worktree, 'RESEARCH.md')}; scratch experiments belong under .scratch/tmp. ` +
-    'For original declarations, keep kinds, names, types, hypotheses, imports, options and scopes fixed; edit only permitted proof/definition bodies. ' +
+    'For original declarations, keep kinds, names, types, hypotheses, options and scopes fixed. Edit only permitted proof or definition bodies. ' +
+    'Keep all existing imports. When the assignment permits source edits in a Mathlib project, you may add import Mathlib or any pinned Mathlib.* import in owned files without creating import cycles. ' +
     'Independent helper declarations may be added inside editable owned Lean files when the current assignment permits source edits; any narrower assignment restrictions still apply. ' +
     'Preserve trusted and frozen source. Accepted proofs cannot use sorry, admit, native_decide, unsafe or new axioms. ' +
     'Do not read external candidate solutions or alter host skill, help, configuration, receipts or run state. ' +
@@ -56,8 +57,10 @@ export function buildCommonResearchContext(problem: SolverProblem, state: Readon
   if (Boolean(access.continuation) !== Boolean(state.continuationDigest)) throw new Error('math_continuation_identity_missing');
   const { instructions: commonInstructions, command } = buildCommonResearchGuide(problem, access, state.environmentDigest);
   const action = access.assignment, cooperation = state.cooperation;
-  const readOnly = action?.kind === 'lead' || action?.kind === 'review';
-  const mandatory: ContextSection[] = [{ id: 'common-guidance-identity', kind: 'assignment',
+  const readOnly = action?.kind === 'lead' || action?.kind === 'review' || action?.kind === 'task' &&
+    (isFeasibilityReview(action.task) || isFinalCandidateReview(action.task));
+  const mandatory: ContextSection[] = [...(action?.kind === 'review' ? [] : portfolioContextSections(state)),
+  { id: 'common-guidance-identity', kind: 'assignment',
     text: 'Frozen shared mathematical skill:\n' + canonicalMathJson(state.commonResearchSkill) },
   { id: 'saved-research', kind: 'sources', text: 'Read current owned sources and worktree-root RESEARCH.md before continuing. ' +
     'Saved notes and source references are advisory until independently checked.' }];
@@ -67,6 +70,7 @@ export function buildCommonResearchContext(problem: SolverProblem, state: Readon
     ? solverProofFeedback(state.check, access.previousCheck, access.previousFailures ?? state.failures) : undefined].filter(Boolean).join('\n\n');
   let protocol: string;
   let workContract: ContextBundle['workContract'];
+  const taskContinuation = action?.kind === 'task' && !isFeasibilityReview(action.task) && !isFinalCandidateReview(action.task);
   if (action && cooperation) {
     // deliveryGuidance contains legacy mathematical heuristics. The comparison keeps
     // the actual ownership/evidence contract and obtains methods solely from the shared skill.
@@ -77,7 +81,8 @@ export function buildCommonResearchContext(problem: SolverProblem, state: Readon
       text: 'Required fields for this host decision:\n' + cooperation.leadDecisionInstruction });
     protocol = 'Perform only the current assignment and preserve unrelated sources from its seed commit. ' +
       'The host owns task selection, workspaces and integration; do not start another agent yourself. ' +
-      (readOnly ? 'Leave all Lean sources unchanged. ' : '') + cooperativeDeliveryProtocol(action);
+      (readOnly ? 'Leave all Lean sources unchanged. ' : '') +
+      cooperativeDeliveryProtocol(action, 'the current delivery log named in the assignment message');
   } else {
     protocol = 'Save source and RESEARCH.md, stop writing and return at a natural delivery point. ' +
       'When every original target is complete, a successful check-lean covering its files also hands writing back to the host. ' +
@@ -91,7 +96,7 @@ export function buildCommonResearchContext(problem: SolverProblem, state: Readon
   if (state.researchMode === 'skill' && fs.existsSync(declarationFeedback)) mandatory.push({ id: 'declaration-feedback', kind: 'feedback',
     text: `Read current host declaration feedback from ${declarationFeedback} before resubmitting.` });
   const instructions = commonInstructions + '\nExecution and delivery protocol:\n' + protocol;
-  const compile = (options: ResearchDispatchOptions = {}) => state.researchMode === 'skill' && options.continuation
+  const compile = (options: ResearchDispatchOptions = {}) => !action && state.researchMode === 'skill' && options.continuation
     ? compileContextSections({ instructions,
       mandatory: [skillResearchContinuationSection(problem, state), ...mandatory,
         ...(feedback ? [{ id: 'host-feedback', kind: 'feedback' as const, text: feedback }] : []),
@@ -100,17 +105,27 @@ export function buildCommonResearchContext(problem: SolverProblem, state: Readon
       maxContextBytes: access.maxContextBytes, maxOptionalContextBytes: access.maxOptionalContextBytes, inlineManifest: false })
     : compileTaskContext({ problem, cooperation, action,
     instructions, taskText: access.taskText, feedback, frozenContexts, environmentDigest: state.environmentDigest,
+    taskSwitch: taskContinuation && (options.taskSwitch || options.continuation),
     maxContextBytes: access.maxContextBytes, maxOptionalContextBytes: access.maxOptionalContextBytes,
     mandatory: [...mandatory, ...(options.checkpointInstruction ? [{ id: 'dispatch-checkpoint', kind: 'checkpoint' as const,
       text: options.checkpointInstruction }] : [])] });
-  const continued = state.researchMode === 'skill' ? compile({ continuation: true }) : undefined;
+  const continued = taskContinuation || !action && state.researchMode === 'skill' ? compile({ continuation: true }) : undefined;
   return { instructions, ...compile(), ...(continued ? {
     continuationMessage: continued.message, continuationManifest: continued.manifest } : {}),
     compileDispatch: compile, assignment: action, workContract,
     scope: 'original-problem-and-allowed-library', sources: { problemReceiptDigest: problem.receiptDigest } };
 }
 
-export function cooperativeDeliveryProtocol(action: NonNullable<ContextAccess['assignment']>): string {
+export function cooperativeHelperProtocol(task: CooperativeTask, log: string): string {
+  if (isFeasibilityReview(task) || isFinalCandidateReview(task)) return '';
+  return 'To share completed standalone helpers during this assignment, save them in owned Lean files and append ' +
+    '{"kind":"helpers","declarations":[{"file":"Submission.lean","name":"Qualified.helper"}],"summary":"What the helper proves"} ' +
+    'as one JSON line to ' + log + '. Nominate new declarations with no unresolved premises from unproved declarations. ' +
+    'The host verifies them independently and can land them while your assigned target remains unfinished. ' +
+    (isAdvisoryTask(task) ? 'Restore your temporary Lean edits after the host acknowledges the submission and before ordinary findings delivery. ' : '');
+}
+
+export function cooperativeDeliveryProtocol(action: NonNullable<ContextAccess['assignment']>, taskLog?: string): string {
   if (action.kind === 'review') return 'Review the fixed candidate and matching evidence without editing it. ' +
     'Save one JSON object in RESEARCH.md: {"verdict":"accepted|changes_requested","summary":"...","evidenceRefs":[]}, then return. ';
   if (action.kind === 'lead') {
@@ -122,19 +137,21 @@ export function cooperativeDeliveryProtocol(action: NonNullable<ContextAccess['a
       JSON.stringify({ kind: 'plan', baseVersion: action.planVersion, ...(nonce ? { dispatchNonce: nonce } : {}),
         summary: 'route and current work', tasks: [] }) + '. Replace the empty tasks array with the actual complete graph. ' +
       'Current required researchDecisions, progressReview and nextCheckDecisions belong in that same object. ' +
+      'Assign small shared foundation lemmas before their consumers and delegate exploratory computation. To stop work on a refuted group or proof route, use retireRoutes:[{routeId,reason,evidenceRefs}] in the current plan. ' +
       'Alternatively save the complete graph in one math-plan JSON fence in RESEARCH.md and return. ' +
       'Do not truncate delivery logs, modify run state, accept unchecked tasks or wait for human plan approval yourself. ';
   }
   if (action.kind === 'task') {
-    const log = assignmentDeliveryFile(action.assignment);
+    const log = taskLog ?? assignmentDeliveryFile(action.assignment);
+    const helpers = cooperativeHelperProtocol(action.task, log);
     if (isAdvisoryTask(action.task)) return `Append {"kind":"research","finding":{"summary":"complete finding","conclusion":"supporting|refuted|inconclusive",` +
       `"evidenceRefs":[],"remainingObligations":[],"lemmaRequests":[]}} as a JSON line to ${log}, then return. ` +
       'Use exactly one conclusion value. Retain complete notes and reproducible evidence. Findings are advisory. ' +
-      'Leave Lean files as in the assignment seed on delivery. Do not truncate logs or submit fabricated proof receipts. ';
+      'Leave Lean files as in the assignment seed on ordinary findings delivery. Do not truncate logs or submit fabricated proof receipts. ' + helpers;
     return 'Save only the assigned exact declaration in its allowed proof file; preserve other original goals, helper interfaces and seed proofs. ' +
       `Append {"kind":"ready","summary":"saved assigned proof"} as a JSON line to ${log}, then stop writing and return. ` +
       'Natural return also submits saved work. Do not run git add/commit or provide commit/targets/receipts; the host freezes and checks them. ' +
-      'Conditional assignments use their fixed dependencies; no stub or additional assumption establishes unconditional acceptance. ';
+      'Conditional assignments use their fixed dependencies; no stub or additional assumption establishes unconditional acceptance. ' + helpers;
   }
   return 'Return saved evidence through the current host assignment; the host performs integration and proof acceptance. ';
 }

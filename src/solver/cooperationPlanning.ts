@@ -16,6 +16,7 @@ import { keepRespacedObjectives, taskGroup, taskVersion, taskProofContractVersio
 import { digest, HumanEditRecord, InitialPlanPublication, RETRY_DISPATCH, DispatchResult, bounded, deliveryInputFields, readCooperationPlan,
   type LeadPlan } from './cooperationShared';
 import { formatPlanJson, liftNestedPlanPatch, type PlanPatchBase } from './planPatch';
+import { PlanValidationError, type PlanIssue } from './planDiagnostics';
 import { collapseTaskFamilies } from './taskFamilies';
 import { dropLeadWakes, LEAD_MAX_BACKOFF } from './leadWakes';
 import { CooperationIntegration } from './cooperationIntegration';
@@ -25,6 +26,20 @@ import { currentNextCheck, prepareNextCheckDecisions } from './nextChecks';
 import { prepareGoalProgressDecision, requireGoalProgressDecision } from './goalProgress';
 import { answerResearchInputs } from './researchDecisions';
 import { leadResearchInputs } from './contextCompiler';
+import { retireCooperativeRoutes } from './cooperationRoutes';
+import { isStatementAction } from './statementReview';
+
+class InvalidLeadPlanDraft extends Error {
+  readonly issues?: PlanIssue[];
+
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : 'math_plan_invalid', { cause });
+    if (cause instanceof PlanValidationError) this.issues = cause.issues;
+    else if (cause instanceof SyntaxError) this.issues = [{ path: 'RESEARCH.md.math-plan', message: 'Invalid JSON: ' + cause.message }];
+    else if (this.message === 'math_math-plan_requires_one_block') this.issues = [{ path: 'RESEARCH.md.math-plan',
+      message: 'Supply exactly one math-plan block with a complete JSON plan or revision.' }];
+  }
+}
 
 /** Lead plan acceptance, plan identity and the idle original-goal frontier. */
 export abstract class CooperationPlanning extends CooperationIntegration {
@@ -56,9 +71,12 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     const rebased = Boolean(action?.kind === 'lead' && this.current(action) && this.publishedPlans.has(action) &&
       action.planVersion && action.planVersion !== base?.version);
     // A rebased repeat of an applied publication already answered the review it was written against.
-    return readCooperationPlan(this.input.state.problem, this.lead.worktree, base, {
-      acceptedBaseVersions: [...(base ? [base.version] : []), ...(rebased ? [(action as { planVersion: string }).planVersion] : [])],
-      rebased, restoring: !action, ...(rebased ? {} : { goalPath: this.goalPathReview() }) });
+    const goalPath = rebased ? undefined : this.goalPathReview();
+    try {
+      return readCooperationPlan(this.input.state.problem, this.lead.worktree, base, {
+        acceptedBaseVersions: [...(base ? [base.version] : []), ...(rebased ? [(action as { planVersion: string }).planVersion] : [])],
+        rebased, restoring: !action, goalPath });
+    } catch (error) { throw new InvalidLeadPlanDraft(error); }
   }
   protected planningInputDigest(scope: 'dispatch' | 'pause' | 'rejection' = 'dispatch') {
     // Starting or checkpointing the same unresolved task does not give a rejected plan new evidence.
@@ -165,14 +183,14 @@ export abstract class CooperationPlanning extends CooperationIntegration {
   }
   protected proposedPlanDigest(source?: string) {
     try {
-      const { tasks, groups, proofRoutes, upsert, remove, baseVersion, goalPath, progressReview,
+      const { tasks, groups, proofRoutes, upsert, remove, baseVersion, goalPath, progressReview, retireRoutes,
         researchDecisions, nextCheckDecisions, guidanceDecisions } = liftNestedPlanPatch(source === undefined
         ? block(this.lead.worktree, 'math-plan') : parseMathResponse(source, 'math-plan')) as Record<string, unknown>;
-      const revision = upsert !== undefined || remove !== undefined;
+      const revision = upsert !== undefined || remove !== undefined || (retireRoutes !== undefined && tasks === undefined);
       // A decision-only correction is a changed response even when its task graph stays the same.
       // Publication nonces and prose are not part of the decision and cannot reopen an unchanged rejection.
       return mathDigest(canonicalMathJson({ tasks, groups, proofRoutes, ...(revision ? { upsert, remove, baseVersion } : {}),
-        goalPath, progressReview, researchDecisions, nextCheckDecisions, guidanceDecisions }));
+        goalPath, progressReview, researchDecisions, nextCheckDecisions, guidanceDecisions, retireRoutes }));
     } catch {
       if (source !== undefined) return mathDigest(source);
       // A notes-only commit must not make an identical malformed response new input.
@@ -185,13 +203,18 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     // Saving this same rejected draft is bookkeeping, not a new mathematical input for another retry.
     const proposalDigest = this.proposedPlanDigest(), inputDigest = this.planningInputDigest('rejection');
     const previous = this.archive.planRejection;
-    const stalled = previous?.proposalDigest === proposalDigest && previous.inputDigest === inputDigest && previous.error === reason;
+    const malformed = error instanceof InvalidLeadPlanDraft;
+    const stalled = Boolean(previous?.inputDigest === inputDigest && (malformed && previous.malformed ||
+      previous.proposalDigest === proposalDigest && previous.error === reason));
     // Restore can reread the same saved draft without a new Lead submission.
-    if (stalled && recoveryKind === 'restore') return;
+    if (stalled && recoveryKind === 'restore' && previous?.proposalDigest === proposalDigest) return;
     this.archive.error = reason;
-    this.archive.planRejection = { proposalDigest, inputDigest, error: reason, stalled };
-    // A repeated rejection of the same proposal for the same input answers its wake-ups; it is not new input.
-    if (stalled) dropLeadWakes(this.archive.leadWakes!); else this.wakeLead('plan-rejected');
+    this.archive.planRejection = { proposalDigest, inputDigest, error: reason, stalled,
+      ...(malformed ? { malformed: true, issues: error.issues } : {}) };
+    // Private feedback already gives the Lead one repair turn. Repeated malformed drafts on
+    // unchanged evidence do not earn another turn by changing prose, formatting or the bad field.
+    if (stalled) dropLeadWakes(this.archive.leadWakes!);
+    else if (!malformed) this.wakeLead('plan-rejected');
     this.input.emit('plan_rejected', { ...this.archive.planRejection,
       ...(recoveryKind && recoveryKind !== 'restore' ? { incomplete: true, recoveryKind } : {}) });
   }
@@ -211,11 +234,13 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       return merged;
     });
   }
-  protected preserveLeadDraft(commit: string, seedCommit: string | undefined, reason: string, requestDecision = true) {
-    const summary = `Saved Lead draft pending integration: ${reason}. ` +
+  protected preserveLeadDraft(commit: string, seedCommit: string | undefined, reason: string,
+    { requestDecision = true, shareSource = true } = {}) {
+    this.pin(commit);
+    const summary = `Saved Lead draft pending integration: ${requestDecision ? reason : 'owned Lean source changes'}. ` +
       `Inspect git show ${commit}:PROJECT_RELATIVE_PATH and reapply the useful declarations against the current canonical sources. ` +
       'This draft has no proof acceptance.';
-    if (!this.archive.deliveries?.some(record => record.producer === this.lead.id && record.kind === 'progress' &&
+    if (shareSource && !this.archive.deliveries?.some(record => record.producer === this.lead.id && record.kind === 'progress' &&
         record.commit === commit && record.summary.startsWith('Saved Lead draft pending integration:'))) {
       this.record(this.lead, undefined, 'progress', 'advisory', summary, { commit });
     }
@@ -278,6 +303,9 @@ export abstract class CooperationPlanning extends CooperationIntegration {
   /** Validate a proposed decision without publishing, changing tasks or claiming proof acceptance. */
   protected preparePlan(plan: LeadPlan, decidingAction?: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>,
     restoringPlan = false) {
+    this.includePortfolioFoundation(plan);
+    const retirement = retireCooperativeRoutes(plan, this.archive, plan.retireRoutes);
+    if (retirement) Object.assign(plan, retirement.plan);
     plan.tasks = keepRespacedObjectives(plan.tasks, new Map(this.archive.tasks.map(node => [node.task.id, node.task])));
     const nextCheckDecisions = prepareNextCheckDecisions(this.archive, this.explorationIdentity, plan,
       plan.nextCheckDecisions, decidingAction ? this.presentedNextCheckOutcomes.get(decidingAction) : []);
@@ -322,7 +350,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
         throw new Error('math_plan_group_engineer_unavailable');
       return { ...group };
     });
-    return { plan, nextCheckDecisions, researchDecisions, progressDecision, configuredGroups, shown };
+    return { plan, nextCheckDecisions, researchDecisions, progressDecision, configuredGroups, shown, retirement };
   }
   protected async acceptPlan(planInput?: LeadPlan, edit?: HumanEditRecord,
     publication?: { action: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>;
@@ -330,7 +358,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     leadAction?: Extract<CooperativeAction, { kind: 'lead' | 'assemble' }>) {
     const decidingAction = publication?.action ?? leadAction;
     const restoringPlan = !decidingAction && !edit && this.archive.tasks.length > 0;
-    const { plan, nextCheckDecisions, researchDecisions, progressDecision, configuredGroups, shown } = this.preparePlan(
+    const { plan, nextCheckDecisions, researchDecisions, progressDecision, configuredGroups, shown, retirement } = this.preparePlan(
       planInput ?? this.readLeadPlan(leadAction), decidingAction, restoringPlan);
     const { tasks, proofRoutes } = plan;
     const publicationResponseDigest = publication ? this.proposedPlanDigest(
@@ -367,10 +395,21 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     });
     this.archive.groups = configuredGroups.map(group => ({ group, turns: previousGroups.get(group.id)?.turns ?? 0 }));
     this.archive.proofRoutes = proofRoutes;
+    if (retirement) {
+      this.archive.retiredRoutes = retirement.retiredRoutes;
+      this.archive.retiredRouteTasks = retirement.retiredRouteTasks;
+      this.stopRetiredRouteTasks();
+    }
     this.syncProofRoutes();
     if (invalidated.size) { this.archive.review = undefined; this.lastAssembly = undefined; }
+    const retiredWork: (() => Promise<void>)[] = [];
     for (const [id, active] of this.active) {
       if (active.action.kind === 'review' && !this.archive.review && !active.cancelled) { active.cancelled = true; void active.interrupt().catch(() => {}); }
+      if (retirement && (active.action.kind === 'task' && this.actionRouteRetired(active.action) ||
+          isStatementAction(active.action) && !this.current(active.action))) {
+        if (!active.cancelled) { active.cancelled = true; retiredWork.push(active.interrupt); }
+        continue;
+      }
       if (active.action.kind !== 'task') continue;
       const action = active.action;
       const node = this.archive.tasks.find(item => item.task.id === action.task.id);
@@ -421,7 +460,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     if (plan.goalPathDecisions && decidingAction) this.recordGoalPathDecisions(decidingAction, plan.goalPathDecisions);
     if (progressDecision && decidingAction) this.goalProgressDecisions.set(decidingAction, progressDecision);
     // A revision is not a graph: the next dispatch's notes show the complete accepted result.
-    if (plan.fromPatch) this.archive.planEdited = true;
+    if (plan.fromPatch || retirement?.added.length) this.archive.planEdited = true;
     // Replaying unchanged saved notes during restore does not correct a rejected live event.
     if (edit || publication || leadAction || this.archive.planPublicationRejection?.baseVersion !== this.archive.planVersion)
       this.archive.planPublicationRejection = undefined;
@@ -441,12 +480,15 @@ export abstract class CooperationPlanning extends CooperationIntegration {
     const missingStatementContext = (node: TaskRecord) => !this.statementContexts.has(statementSnapshot(
       this.input.state.problem, node.task, this.lead.worktree, this.archive.canonicalCommit!, this.input.state.environmentDigest,
       this.dependencies(node.task).map(dependency => ({ task: dependency.task, taskDigest: digest(dependency.task) }))).snapshotDigest);
-    const synchronize = this.archive.tasks.filter(node => revalidate.has(node.task.id) || node.task.statementReview &&
+    const synchronize = this.archive.tasks.filter(node => revalidate.has(node.task.id) ||
+      node.task.status !== 'stopped' && node.task.statementReview &&
       (invalidated.has(node.task.id) || !current.has(node.task.id) || !this.archive.statementReviews?.some(review =>
         review.taskId === node.task.id && review.taskDigest === digest(node.task) && review.status !== 'superseded') ||
         missingStatementContext(node)));
     this.markPendingValidation(synchronize, revalidate);
     this.changed(edit);
+    for (const interrupt of retiredWork) void interrupt().catch(() => {});
+    for (const route of retirement?.added ?? []) this.input.emit('cooperative_route_retired', route);
     this.input.emit('plan_updated', { groups: this.archive.groups, tasks: tasks.map(task =>
       ({ id: task.id, kind: task.kind, dependsOn: task.dependsOn, groupId: taskGroup(task), sharing: task.sharing ?? 'problem' })), invalidated: [...invalidated] });
     if (this.archive.tasks.some(node => node.pendingValidation)) this.schedulePlanSynchronization();
@@ -455,6 +497,45 @@ export abstract class CooperationPlanning extends CooperationIntegration {
       if (edit) edit.pendingSync = undefined;
     }
     this.changed(edit);
+  }
+  private includePortfolioFoundation(plan: LeadPlan) {
+    const gate = this.input.state.portfolioExploration?.gate;
+    if (this.archive.tasks.length || !gate?.primaryRouteId || !gate.foundationLemmas.length) return;
+    const liveGroups = plan.groups.filter(group => group.status === 'active' &&
+      !this.archive.retiredRoutes?.some(route => route.routeId === group.id) &&
+      !plan.retireRoutes?.some(route => route.routeId === group.id));
+    const selected = liveGroups.find(group => group.id === gate.primaryRouteId) ??
+      liveGroups.find(group => group.id !== gate.backupRouteId &&
+        plan.tasks.some(task => task.kind === 'goal' && taskGroup(task) === group.id));
+    if (!selected) return;
+    const groupId = selected.id;
+    const goals = plan.tasks.filter(task => task.kind === 'goal' && taskGroup(task) === groupId);
+    if (!goals.length) return;
+
+    const problem = this.input.state.problem;
+    for (const seed of gate.foundationLemmas) {
+      const { id, proofPath, theoremName, type, objective } = seed;
+      if (Object.hasOwn(problem.frozenFiles ?? {}, proofPath) || !problem.ownedFiles.includes(proofPath) ||
+          (problem.declarations[proofPath] ?? []).some(item => item.name.split('.').at(-1) === theoremName.split('.').at(-1)))
+        continue;
+      const existing = plan.tasks.find(task => task.id === id ||
+        task.theoremName?.split('.').at(-1) === theoremName.split('.').at(-1));
+      if (existing && (existing.kind !== 'lemma' || existing.theoremName !== theoremName || existing.type !== type ||
+          existing.proofPath !== proofPath || existing.status && existing.status !== 'active')) continue;
+      const input = existing ?? { id, proofPath, theoremName, type, objective, kind: 'lemma' as const,
+        groupId, sharing: 'problem' as const, dependsOn: [], revision: 0 };
+      const tasks = plan.tasks.map(task => goals.some(goal => goal.id === task.id) && !task.dependsOn.includes(input.id)
+        ? { ...task, dependsOn: [...task.dependsOn, input.id] } : task);
+      if (!existing) tasks.unshift(input);
+      try {
+        const validated = parseCooperationPlan(problem, { ...plan, tasks });
+        assertPlanTaskTypeContracts(validated.tasks);
+        plan.tasks = validated.tasks;
+      } catch (error) {
+        // Scout interfaces are advisory. Skip an invalid starter without rejecting a valid Lead plan.
+        if (!(error instanceof Error) || !error.message.startsWith('math_')) throw error;
+      }
+    }
   }
   /** A proposed source answer becomes durable only when its changed Lean file reaches the canonical commit. */
   protected settleSourceResearchDecisions(action: CooperativeAction, previousCommit: string, mergedCommit: string) {
@@ -523,6 +604,7 @@ export abstract class CooperationPlanning extends CooperationIntegration {
   protected planVersion() {
     return mathDigest(canonicalMathJson({ tasks: this.plannedTasks().map(node => node.task),
       groups: this.archive.groups?.map(route => route.group),
+      ...(this.archive.retiredRoutes?.length ? { retiredRoutes: this.archive.retiredRoutes } : {}),
       ...(this.archive.proofRoutes?.length ? { proofRoutes: this.archive.proofRoutes } : {}) }));
   }
   /**

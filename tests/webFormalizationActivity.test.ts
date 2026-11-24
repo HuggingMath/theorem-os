@@ -104,7 +104,7 @@ describe('formalization process view for its owner', () => {
       expect(actions()).toHaveLength(1);
       for (let index = 0; index < 100; index++) observer.onItemUpdate!({ id: 'r', type: 'reasoning', summary: [`Public step ${index}. ${PROTOCOL}`] });
       expect(actions()).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(4_000);
       expect(actions()).toHaveLength(2); expect(actions().at(-1)!.text).toBe('Public step 99. …');
       observer.onItemUpdate!({ id: 'r', type: 'reasoning', summary: ['Pending summary'] });
       observer.onItem!('completed', { id: 'r', type: 'reasoning', summary: ['Final public summary'] });

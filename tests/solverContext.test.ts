@@ -2,6 +2,7 @@ import { expect, it } from 'vitest';
 import { buildResearchContext, finalizeResearchDispatch } from '../src/solver/modules/context';
 import type { SolverProblem } from '../src/solver/problem';
 import type { SolverRunState } from '../src/solver/archive';
+import { mathDigest } from '../src/math/mathRuntimeIo';
 import type { DeliveryReceipt } from '../src/solver/deliveryReceipts';
 import { deliveryDetails, parseMathResponse, type DeliveryRecord } from '../src/solver/deliveries';
 import { assignmentDeliveryFile, leadPlanDeliveryFile, taskVersion, type CooperativeAction, type CooperativeTask } from '../src/solver/tasks';
@@ -50,6 +51,58 @@ it('deduplicates repeated findings and progress while preserving exact Lean type
   expect(JSON.parse(graph)[0].type).toBe(exactType);
 });
 
+it('indexes an 80-task and 100-delivery archive while retaining current planning inputs', () => {
+  const exactType = '∀ n : Nat, n = n';
+  const formalStatement = 'theorem target : True := by sorry\n' + '-- Frozen background.\n'.repeat(800);
+  const problem = { projectRelative: 'problem', ownedFiles: ['Submission.lean'], targets: [],
+    declarations: { 'Submission.lean': [{ name: 'target', header: 'theorem target : True' }] },
+    baseCommit: 'fixed-commit', receiptDigest: 'problem', trustedFiles: { 'Challenge.lean': mathDigest(formalStatement) },
+    contract: { formalStatement, assumptions: [] } } as unknown as SolverProblem;
+  const goal: CooperativeTask = { id: 'goal', kind: 'goal', objective: 'Prove the target', dependsOn: ['open-certificate'],
+    revision: 0, theoremName: 'target', proofPath: 'Submission.lean', type: 'True' };
+  const helper: CooperativeTask = { id: 'open-certificate', kind: 'lemma', objective: 'Build the certificate',
+    dependsOn: [], revision: 0, theoremName: 'certificate', proofPath: 'Submission.lean', type: exactType };
+  const archived = Array.from({ length: 78 }, (_, i): CooperativeTask => ({ id: 'search-' + i, kind: 'research',
+    objective: 'Archive body ' + 'Old mathematical route rationale. '.repeat(70), dependsOn: [], revision: 0 }));
+  const deliveries: DeliveryRecord[] = Array.from({ length: 100 }, (_, i) => {
+    const task = archived[i % archived.length];
+    return { id: 'delivery-' + i, kind: 'progress', status: 'advisory', taskId: task.id, taskDigest: taskVersion(task),
+      summary: 'Past progress ' + i + '\n' + 'Long old delivery argument. '.repeat(70),
+      producer: 'peer', statement: '', premises: [], dependencies: [], remainingObligations: [], evidenceRefs: [],
+      createdAt: i, commit: 'saved-notes-commit' };
+  });
+  const action: CooperativeAction = { kind: 'lead', seedCommit: 'fixed-commit', planVersion: 'current-plan',
+    planNonce: 'receipt', planningInputDigest: 'decision' };
+  const state = { cooperation: { tasks: [goal, helper, ...archived].map((task, i) => ({
+    task, status: i < 2 ? 'pending' : 'completed', attempts: 1,
+    ...(i >= 2 ? { finding: 'Historical reasoning '.repeat(140) } : {}),
+  })), deliveries } } as unknown as SolverRunState;
+  const context = buildResearchContext(problem, state, { root: '/runtime', worktree: '/proof', environment: {},
+    taskText: 'Prove the target', retrievalRoot: '/library', frozenContexts: { 'Submission.lean': formalStatement },
+    assignment: action });
+  expect(Buffer.byteLength(context.message)).toBeLessThan(32 * 1024);
+  expect(context.message).toContain(exactType);
+  expect(context.message).toContain('theorem target : True');
+  expect(context.message).toContain('current-plan');
+  expect(context.manifest!.included).toContainEqual(expect.objectContaining({ id: 'task-record-index', required: true }));
+  expect(context.message).toContain('saved-notes-commit');
+  expect(context.message).not.toContain('Long old delivery argument. '.repeat(20));
+});
+
+it('compiles a same-route task switch from exact interfaces and the new delivery path', () => {
+  const first = gapContext('lemma', 'Large frozen problem. '.repeat(350));
+  const second = gapContext('lemma', 'Large frozen problem. '.repeat(350), 'Prove a distinct estimate.');
+  const switched = finalizeResearchDispatch(second, { taskSwitch: true });
+  const assignment = second.assignment as Extract<CooperativeAction, { kind: 'task' }>;
+  expect(first.instructions).toBe(switched.instructions);
+  expect(switched.message).toContain('Switch to the assignment below');
+  expect(switched.message).toContain(JSON.stringify(assignment));
+  expect(switched.message).toContain(assignmentDeliveryFile(assignment.assignment));
+  expect(switched.message).toContain(JSON.stringify(second.workContract));
+  expect(switched.message).not.toContain('Large frozen problem.');
+  expect(switched.message.length).toBeLessThan(second.message.length / 2);
+});
+
 it('names the bundled Agent commands instead of the application when the shell cannot read it', () => {
   const problem = { projectRelative: '.', ownedFiles: ['Submission.lean'], declarations: {}, targets: [], receiptDigest: 'problem',
     baseCommit: 'fixed-commit', contract: { formalStatement: 'theorem target : True := by sorry', assumptions: [] } } as unknown as SolverProblem;
@@ -79,6 +132,8 @@ it.each(['cooperative', 'independent'] as const)('gives a single solver a comple
     customModuleRules: [{ id: 'team-rule', name: 'Team rule', slot: 'M5', mode: 'append', enabled: true,
       instructions: 'TEAM_ONLY_SENTINEL' }] });
   const instructions = context.instructions;
+  expect(instructions).toContain('Keep all existing imports');
+  expect(instructions).toContain('you may add import Mathlib or any pinned Mathlib.* import');
   expect(instructions).toContain('save all proof files and a concise worktree-root RESEARCH.md before the final diagnostic');
   expect(instructions).toContain("check-lean --worktree '/proof' --file 'Submission.lean' --file 'Other.lean' --timeout-seconds 0");
   expect(instructions).not.toContain("--file 'Submission.lean' --file 'Submission.lean'");
@@ -145,10 +200,10 @@ it.each([false, true])('keeps the Lead on read-only planning and prompt delivery
     expect(dispatched.instructions).toContain('put a direct original-goal task in the graph; the assigned worker carries out its proof');
     expect(dispatched.instructions).toContain('Return the plan without running Lean diagnostics');
     expect(dispatched.instructions).toContain('Leave all Lean source files, imports and environment configuration unchanged');
-    expect(dispatched.instructions).toContain('names, parameters, types, assumptions, existing imports');
+    expect(dispatched.instructions).toContain('Keep all existing imports');
     expect(dispatched.instructions).toContain('Plan a shared helper before its consumers when needed; assigned workers implement it');
     expect(dispatched.instructions).toContain('only a further substantive change requires another final plan response');
-    for (const writableAdvice of ['bodies must be filled', 'You may add explicit Mathlib.* imports', 'Add helpers in owned modules',
+    for (const writableAdvice of ['bodies must be filled', 'you may add import Mathlib or any pinned Mathlib.* import', 'Add helpers in owned modules',
       'For diagnostics, run', 'check-lean --workspace', 'proof-search --workspace', 'Repair the earliest error',
       'restore the offending context', 'For type lookup, add single-name #check'])
       expect(dispatched.instructions).not.toContain(writableAdvice);
@@ -281,8 +336,9 @@ it.each(['lemma', 'goal'] as const)('keeps Lead planning requests out of a dispa
     expect(dispatched.instructions).toContain('plan approval belong to the Lead and host');
     expect(dispatched.instructions).toContain('before dispatching typed proof work');
     expect(dispatched.instructions).toContain('do not start another planning or approval cycle');
-    expect(dispatched.instructions).toContain(`append JSON to ${deliveryFile}`);
-    expect(dispatched.instructions).toContain('create it by appending if absent');
+    expect(dispatched.instructions).toContain('append JSON to the current delivery log');
+    expect(dispatched.message).toContain(`Current delivery log: ${deliveryFile}`);
+    expect(dispatched.instructions).toContain('Create it by appending if absent');
     expect(dispatched.message).toContain(JSON.stringify(context.assignment));
     expect(dispatched.workContract).toEqual(context.workContract);
     expect(dispatched.manifest!.usedBytes).toBeLessThanOrEqual(dispatched.manifest!.maxBytes);
@@ -351,7 +407,8 @@ it('asks researchers to save scoped negative evidence and publish a schema-valid
   expect(deliveryDetails(finding)).toMatchObject({ evidenceRefs: [],
     remainingObligations: ['precise unresolved mathematical inference'] });
   expect(context.instructions).toContain('publishing does not finish or park your proof task');
-  expect(context.instructions).toContain('leave Lean sources unchanged');
+  expect(context.instructions).toContain('Restore Lean sources to the assignment seed before ordinary findings delivery.');
+  expect(context.instructions).toContain('after the host acknowledges the submission');
   expect(context.instructions).toContain('visible kind:"goal" original consumer');
   expect(context.instructions).toContain('ordinary research delivery IDs are not prior gap references');
   expect(context.instructions).toContain('omit only previousDeliveryId and keep the required previousGap description');
@@ -397,7 +454,7 @@ it('keeps fixed-candidate review read-only and ends delivery after the evidence 
   expect(dispatched.instructions).not.toContain('Add helpers in owned modules');
   expect(dispatched.instructions).not.toContain('def declarations whose bodies must be filled');
   expect(dispatched.instructions).not.toContain('Extract their shared argument into a newly named lemma');
-  expect(dispatched.instructions).not.toContain('You may add explicit Mathlib.* imports');
+  expect(dispatched.instructions).not.toContain('you may add import Mathlib or any pinned Mathlib.* import');
   expect(dispatched.instructions).not.toContain('restore the offending context or declaration');
   expect(dispatched.instructions).not.toContain('Before any checkpoint, recovery decision or context rotation');
   expect(dispatched.instructions).toContain('it is not the file SHA256 or the host owned-source digest');

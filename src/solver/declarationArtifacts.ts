@@ -247,6 +247,8 @@ export async function checkDeclarationArtifacts(input: {
   state: DeclarationArtifactIdentity; worktree: string; commit: string;
   declarations: DeclarationSubmission['declarations']; env: NodeJS.ProcessEnv; signal: AbortSignal; timeoutMs?: number;
   allowAuxiliaryDefinitions?: boolean;
+  /** Only for host-selected declarations whose signature comes from independently checked source. */
+  inferredExpectedTypes?: ReadonlySet<string>;
   assertWriterStopped: () => void;
 }): Promise<readonly DeclarationArtifact[]> {
   const declarations = parseDeclarationSubmission({ declarations: input.declarations }).declarations;
@@ -281,19 +283,25 @@ export async function checkDeclarationArtifacts(input: {
       const original = problem.targets.some(target => target.proofPath === declaration.file && target.theoremName === declaration.name);
       if (definition && original) return submissionFail('definition_must_be_auxiliary');
       // A transient projection request reuses source isolation, not cooperation state or scheduling.
+      const checkHelperInDraft = input.inferredExpectedTypes?.has(declaration.file + '\0' + declaration.name) === true;
+      const type = checkHelperInDraft ? undefined : declaration.type;
       const task: CooperativeTask = { id: `declaration-${declarationDigest}`, kind: original ? 'goal' : 'lemma',
         ...(definition && { declaration: 'definition' }), objective: declaration.description || `Check ${declaration.name}`, proofPath: declaration.file,
-        theoremName: declaration.name, type: declaration.type, dependsOn: [], revision: 0 };
-      const project = createTaskSourceProjector(problem, checkout, commit, { compact: true });
-      const sources = submissionContent(() => project(task, []), ['math_task_type_invalid', 'math_task_missing_declaration',
-        'math_task_ambiguous_declaration', 'math_task_requires_theorem', 'math_task_requires_definition', 'math_task_helper_is_original_declaration']);
-      for (const [file, text] of sources) fs.writeFileSync(path.join(checkout, problem.projectRelative, file), text);
-      const checkedCommit = commitSolverProjection(problem, checkout, `Check declaration ${declaration.name}`);
+        theoremName: declaration.name, type, dependsOn: [], revision: 0 };
+      let checkedCommit = commit;
+      if (!checkHelperInDraft) {
+        const project = createTaskSourceProjector(problem, checkout, commit, { compact: true });
+        const sources = submissionContent(() => project(task, []), ['math_task_type_invalid', 'math_task_missing_declaration',
+          'math_task_ambiguous_declaration', 'math_task_requires_theorem', 'math_task_requires_definition', 'math_task_helper_is_original_declaration']);
+        for (const [file, text] of sources) fs.writeFileSync(path.join(checkout, problem.projectRelative, file), text);
+        checkedCommit = commitSolverProjection(problem, checkout, `Check declaration ${declaration.name}`);
+      }
       const result = await checkProjectedDeclarations(problem, checkout, worktree, checkedCommit,
         [{ proofPath: declaration.file, theoremName: declaration.name, digest: declarationDigest,
           missingError: 'math_declaration_artifact_declaration_missing' }],
         { env: environment.env, signal, timeoutMs: input.timeoutMs ?? Infinity,
-          expectedDeclarationType: declaration.type, prepareLocalDependencies: problem.kind === 'lean-eval',
+          expectedDeclarationType: type, prepareLocalDependencies: checkHelperInDraft || problem.kind === 'lean-eval',
+          ...(checkHelperInDraft ? { checkDeclarationsInDraft: true } : {}),
           collectDeclarationReferences: true }).catch(error => {
         if (error instanceof Error && error.message === 'math_declaration_artifact_declaration_missing')
           throw new DeclarationSubmissionError(error.message, { cause: error });

@@ -12,6 +12,7 @@ import { readAgentTeamProofDelivery } from '../src/solver/agentTeamProof';
 import { directSolverModules } from '../src/solver/modules';
 import { git, readSolverProblem } from '../src/solver/problem';
 import { prepareResearchSkill, researchSkillIdentity } from '../src/solver/researchSkill';
+import type { SoftSliceSettings } from '../src/solver/softSlice';
 import { deferred } from './helpers/async';
 import { temporaryDirectory } from './helpers/files';
 import { solverState } from './helpers/solver';
@@ -25,7 +26,7 @@ const helper = 'theorem helper : True := by trivial\n';
 const declarations = [{ file: 'Submission.lean', name: 'Recovery.helper', type: 'True' }];
 const fixtures: ReturnType<typeof fixture>[] = [];
 
-function fixture(maxAgents = 2) {
+function fixture(maxAgents = 2, softSlice?: SoftSliceSettings, stallInterrupt = false) {
   const directory = temporaryDirectory('agent-team-source-recovery-');
   const receipt = bootstrapLeanTask(path.join(directory, 'primary'), { source: original, task: 'Prove True.' });
   const problem = readSolverProblem(receipt.workspaceRoot, receipt.activeProblemPath), root = path.resolve('.');
@@ -40,27 +41,30 @@ function fixture(maxAgents = 2) {
     ELAN_HOME: path.join(os.homedir(), '.elan'), LEAN_PATH: '', LEAN_SYSROOT: '',
     DEEPSCIENTIST_MATH_SANDBOX_BACKEND: 'bwrap', DEEPSCIENTIST_MATH_ENV_FILE: path.join(directory, 'missing.env') };
   const controller = new AbortController(), teams: AgentResearchTeam[] = [];
-  const sessions: { options: MathAgentOptions; message: string; complete: () => void }[] = [];
+  const sessions: { options: MathAgentOptions; message: string; notices: string[]; complete: () => void }[] = [];
   const events: { event: string; details?: Record<string, unknown> }[] = [];
   const stateFile = path.join(directory, 'run-state.json');
   const makeTeam = (current: SolverRunState) => {
     const team = new AgentResearchTeam({ state: current, root, taskText: 'Prove True.',
       leadAccess: { environment, retrievalRoot: path.join(current.worktree, problem.projectRelative), researchSkill: skill },
       modules: { ...directSolverModules, M1: { ...directSolverModules.M1, open: async options => {
-        const outcome = deferred<string>(), record = { options, message: '', complete: () => outcome.resolve('completed') };
+        const outcome = deferred<string>(), record = { options, message: '', notices: [] as string[], complete: () => outcome.resolve('completed') };
         sessions.push(record);
         const session: MathAgentSession = { threadId: options.threadId ?? 'source-recovery-member',
           usageSource: 'upstream-requests',
           run: async (message, _id, _workspace, started) => {
             record.message = message; started('source-recovery-turn-' + sessions.length); return outcome.promise;
           },
-          notify: async () => {}, interrupt: async () => { outcome.resolve('interrupted'); },
-          stopForFreeze: async () => ({ status: 'stopped' }), close: async () => {},
+          notify: async message => { record.notices.push(message); },
+          interrupt: async () => { if (!stallInterrupt) outcome.resolve('interrupted'); },
+          stopForFreeze: async () => ({ status: 'stopped' }),
+          close: async () => { if (stallInterrupt) outcome.resolve('interrupted'); },
         };
         return session;
       } } },
       executable: 'offline-no-model', profile: 'offline-no-credentials', signal: controller.signal,
       maxAgents, maxTurns: Infinity, maxTurnMs: Infinity, maxTotalTokens: 0, remainingMs: () => Infinity,
+      softSlice,
       save: () => writeSolverRunState(stateFile, current), emit: (event, details) => { events.push({ event, details }); },
       exclusiveCheck: operation => operation(),
     });
@@ -91,6 +95,99 @@ async function idle(team: AgentResearchTeam) {
 }
 
 describe('recoverable team source rejections', () => {
+  it('preserves an unfinished child assignment that returns after a two-compaction milestone notice', async () => {
+    const f = fixture(2, { softSliceMs: 0, maxCompactionsPerSlice: 2 });
+    await f.call({ operation: 'spawn', agentId: 'member', message: 'Investigate a partial proof.' });
+    const session = await f.session(0), worker = f.team.archive.workers[0]!;
+    const activity = session.options.onActivity!;
+    activity({ event: 'item_started', itemType: 'contextCompaction' });
+    activity({ event: 'item_completed', itemType: 'contextCompaction' });
+    expect(session.notices).toEqual([]);
+    activity({ event: 'item_completed', itemType: 'contextCompaction' });
+    expect(session.notices).toEqual([expect.stringContaining('submit_helpers')]);
+    expect(f.events).toContainEqual({ event: 'compaction_circuit_breaker_triggered', details: expect.objectContaining({
+      workerId: worker.id, taskId: worker.tasks[0]!.id, completedCompactions: 2,
+    }) });
+    const notes = path.join(worker.worktree, 'RESEARCH.md');
+    fs.writeFileSync(notes, 'The remaining step is the original goal.\n');
+    session.complete(); await idle(f.team);
+    expect(worker.tasks[0]).toMatchObject({ status: 'paused', researchArtifactId: expect.any(String),
+      pauseRequested: { kind: 'handoff', reason: 'math_soft_slice_milestone' } });
+    expect(fs.readFileSync(notes, 'utf8')).toContain('remaining step');
+  });
+
+  it('closes an unsettled writer after the milestone checkpoint and preserves its draft', async () => {
+    const f = fixture(2, { softSliceMs: 0, maxCompactionsPerSlice: 1, softSliceGraceMs: 1 }, true);
+    await f.call({ operation: 'spawn', agentId: 'member', message: 'Investigate a partial proof.' });
+    const session = await f.session(0), worker = f.team.archive.workers[0]!;
+    fs.writeFileSync(path.join(worker.worktree, 'RESEARCH.md'), 'This draft belongs to the same task.\n');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      session.options.onActivity!({ event: 'item_completed', itemType: 'contextCompaction' });
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect(f.events).toContainEqual({ event: 'soft_slice_checkpoint_requested',
+        details: expect.objectContaining({ workerId: worker.id, boundary: 'wait-limit' }) });
+      expect(worker.tasks[0]!.status).toBe('running');
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(f.events).toContainEqual({ event: 'soft_slice_session_closed',
+        details: expect.objectContaining({ workerId: worker.id, reason: 'interrupt-not-settled' }) });
+    } finally { vi.useRealTimers(); }
+    await idle(f.team);
+    expect(worker.tasks[0]).toMatchObject({ status: 'paused', researchArtifactId: expect.any(String),
+      pauseRequested: { kind: 'handoff', reason: 'math_soft_slice_checkpoint' } });
+    expect(worker.writerStopUnconfirmed).toBeUndefined();
+  });
+
+  it('lands standalone helpers with the producer task open and installs them in a peer with unpublished work', async () => {
+    const f = fixture(3);
+    await f.call({ operation: 'spawn', agentId: 'member', message: 'Prove the goal and its helper lemmas.' });
+    const a = await f.session(0), producer = f.team.archive.workers[0]!;
+    await f.call({ operation: 'spawn', agentId: 'peer', message: 'Draft another proof step.' });
+    const b = await f.session(1), consumer = f.team.archive.workers[1]!;
+    const helperProofs = helper + 'theorem second : True := helper\n';
+    const draft = 'theorem draft : True := by sorry\n';
+    fs.writeFileSync(f.source(producer.worktree), original.replace('theorem goal', helperProofs + 'theorem goal'));
+    fs.writeFileSync(f.source(consumer.worktree), original.replace('end Recovery', draft + 'end Recovery'));
+    const names = [...declarations, { ...declarations[0]!, name: 'Recovery.second' }];
+    expect(await f.call({ operation: 'submit_helpers', summary: 'Verified standalone facts.', declarations: names }, 'member'))
+      .toMatchObject({ ok: true, status: 'pending-writer-stop' });
+    expect(f.team.archive.canonicalCommit).toBeUndefined();
+    expect(a.options.requestGate!.checkpoint!()).toBe(true);
+    a.complete();
+    await expect.poll(() => f.team.archive.canonicalCommit, { timeout: 20_000 }).toBeTruthy();
+    const commit = f.team.archive.canonicalCommit!;
+    expect(readSolverRunState(f.stateFile).agentTeam!.landedHelpers?.map(item => item.qualifiedName))
+      .toEqual(['Recovery.helper', 'Recovery.second']);
+    expect(git(f.state.worktree, ['show', commit + ':' + f.problem.projectRelative + '/Submission.lean']))
+      .toBe(original.replace('theorem goal', helperProofs + 'theorem goal').trimEnd());
+    expect(producer.tasks[0]).toMatchObject({ status: 'paused' });
+    expect(producer.tasks[0]!.deliveryId).toBeUndefined();
+    expect(f.state.check).toBeUndefined();
+    expect(b.notices.some(message => message.includes('Recovery.second') && !message.includes(':= '))).toBe(true);
+    expect(consumer.tasks[0]!.status).toBe('running');
+    expect(fs.readFileSync(f.source(consumer.worktree), 'utf8')).not.toContain('theorem second');
+    b.complete(); await idle(f.team);
+
+    await f.team.flushAdoptions();
+    expect(fs.readFileSync(f.source(f.state.worktree), 'utf8')).toContain('theorem goal : True := by sorry');
+    await f.call({ operation: 'assign', agentId: 'peer', message: 'Use the landed helpers to finish both proofs.' });
+    const next = await f.session(2);
+    expect(next.message).toContain('landedHelpers');
+    expect(next.message).toContain('Recovery.second');
+    const seeded = fs.readFileSync(f.source(consumer.worktree), 'utf8');
+    expect(seeded).toContain(helperProofs);
+    expect(seeded).toContain(draft);
+    fs.writeFileSync(f.source(consumer.worktree), seeded.replaceAll('by sorry', 'by exact second'));
+    await f.call({ operation: 'submit', summary: 'Reused the verified helpers.', declarations: [
+      { ...declarations[0]!, name: 'Recovery.goal' }, { ...declarations[0]!, name: 'Recovery.draft' },
+    ] }, 'peer');
+    next.complete(); await idle(f.team);
+    const delivery = f.team.archive.deliveries.find(item => item.agentId === 'peer')!;
+    expect(readAgentTeamProofDelivery(delivery.path, f.state).artifacts.map(item => item.declaration.name))
+      .toEqual(['Recovery.helper', 'Recovery.second', 'Recovery.goal', 'Recovery.draft']);
+    expect(f.state.check).toBeUndefined();
+  }, 60_000);
+
   it('preserves the rejected Lean interface and check receipt for the producer, a repair peer and restored history', async () => {
     const f = fixture(3); await f.call({ operation: 'spawn', agentId: 'member', message: 'Prove the helper.' });
     const first = await f.session(0), worker = f.team.archive.workers[0]!;

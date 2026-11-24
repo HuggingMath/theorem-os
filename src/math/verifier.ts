@@ -3,7 +3,7 @@ import { createLeanDiagnosticCapture, leanDiagnosticPreview, renderLeanDiagnosti
 import type { LeanDiagnosticMessage } from './leanTypes';
 type ProcessResult = MathProcessResult & { sandboxBackend?: SandboxBackend;
   sourceDiagnostics?: { stdout?: LeanDiagnosticMessage; stderr?: LeanDiagnosticMessage } };
-import { declarationHashes, inspectLeanSource } from './leanSource';
+import { declarationHashes, inspectLeanDeclarationRegions, inspectLeanSource, inspectScopedLeanDeclarations } from './leanSource';
 export { hashMathFormalSourceDeclaration, inspectLeanDeclarationRegions, inspectLeanDeclarations, inspectLeanSource } from './leanSource';
 export type { MathematicsLeanSourceDeclaration } from './leanSource';
 
@@ -73,6 +73,8 @@ export type MathematicsVerifierExecutionOptions = {
   prepareLocalDependencies?: boolean;
   /** Restrict source staging to construction files while preserving verifier source checks. */
   constructionSourcesOnly?: boolean;
+  /** Host helper checks bind named declarations while allowing unrelated holes in the same committed file. */
+  checkDeclarationsInDraft?: boolean;
   /** Exact closed type checked outside the source section, inline or after a module import. */
   expectedDeclarationType?: string;
   expectedDeclarationTypes?: Readonly<Record<string, string>>;
@@ -211,6 +213,7 @@ type PreparedFile = {
   directProofReferences?: Map<string, LeanDeclarationReferences['proof']>;
   proofHash: string;
   inspection: Pick<MathematicsVerifierResult, 'sorryCount' | 'admitCount' | 'axioms'>;
+  declarationInspections?: Map<string, PreparedFile['inspection']>;
   items: PreparedItem[];
 };
 
@@ -1877,7 +1880,8 @@ const prepareLeanDeclarationQuery = async (
     dependencyCandidates?: readonly string[];
     referenceModules?: readonly { module: string; file: string }[];
     directProof?: boolean;
-  }>
+  }>,
+  privateMarkers = false
 ): Promise<LeanDeclarationQuery | undefined> => {
   const theoremNameSet = new Set<string>();
   for (const item of items) {
@@ -1891,7 +1895,7 @@ const prepareLeanDeclarationQuery = async (
   );
   const queryAbsolutePath = path.join(verificationProjectRoot, ...queryRelativePath.split('/'));
   const theoremQueries = theoremNames.map((name) => {
-    const markerId = mathDigest(name).slice(0, 16);
+    const markerId = privateMarkers ? crypto.randomBytes(8).toString('hex') : mathDigest(name).slice(0, 16);
     return {
       name,
       localName: name.split('.').at(-1),
@@ -2272,7 +2276,7 @@ async function verifyFormalFile(file: PreparedFile, context: FormalFileVerificat
     name && !file.declarationHashes.has(name) && !file.declarationHashes.has(localDeclarationName(name)));
   const declarationMismatchItems = file.items.filter(item => item.theoremName && item.expectedSourceDeclarationHash &&
     declarationNamed(file.sourceDeclarationHashes, item.theoremName) !== item.expectedSourceDeclarationHash);
-  const verifiableItems = file.items.filter(item =>
+  let verifiableItems = file.items.filter(item =>
     !missingDeclarationItems.includes(item) && !declarationMismatchItems.includes(item));
   for (const item of missingDeclarationItems)
     reject(`The requested theorem declaration was not found in ${file.relativeProofPath}: ${item.theoremName}`, [item]);
@@ -2280,20 +2284,34 @@ async function verifyFormalFile(file: PreparedFile, context: FormalFileVerificat
     reject(`The theorem declaration in ${file.relativeProofPath} does not match the immutable formal statement: ${item.theoremName}`, [item]);
   if (verifiableItems.length === 0) return;
 
-  const draftAccepted =
-    file.inspection.sorryCount === 0 &&
-    file.inspection.admitCount === 0 &&
-    file.inspection.axioms.length === 0;
-  emit('check.draft_checked', {
-    proofPath: file.relativeProofPath,
-    status: draftAccepted ? 'accepted' : 'rejected',
-    ...file.inspection,
-  });
-  if (!draftAccepted) {
-    const error =
-      file.inspection.sorryCount > 0 || file.inspection.admitCount > 0
-        ? 'Proof source contains sorry or admit.'
-        : `Proof source declares explicit axioms: ${file.inspection.axioms.join(', ')}.`;
+  const checkDraft = (inspection: PreparedFile['inspection']) => {
+    const accepted = !inspection.sorryCount && !inspection.admitCount && !inspection.axioms.length;
+    emit('check.draft_checked', { proofPath: file.relativeProofPath, status: accepted ? 'accepted' : 'rejected', ...inspection });
+    return accepted;
+  };
+  if (options.checkDeclarationsInDraft && !file.inspection.axioms.length) {
+    const positions = new Map(inspectScopedLeanDeclarations(file.source).map(item => [item.qualifiedName, item.startOffset]));
+    const regions = new Map(inspectLeanDeclarationRegions(file.source).map(region => [region.startOffset, region]));
+    const inspections = file.declarationInspections = new Map();
+    verifiableItems = verifiableItems.filter(item => {
+      const start = item.theoremName ? positions.get(item.theoremName) : undefined;
+      const region = start === undefined ? undefined : regions.get(start);
+      if (!item.theoremName || !item.expectedSourceDeclarationHash || !region) {
+        reject('A helper check in a draft requires one exact source-bound declaration name.', [item]);
+        return false;
+      }
+      const inspection = inspectLeanSource(file.source.slice(region.startOffset, region.endOffset));
+      inspections.set(item.theoremName, inspection);
+      if (!checkDraft(inspection)) {
+        reject('Helper source contains sorry or admit.', [item]);
+        return false;
+      }
+      return true;
+    });
+    if (verifiableItems.length === 0) return;
+  } else if (!checkDraft(file.inspection)) {
+    const error = file.inspection.sorryCount || file.inspection.admitCount ? 'Proof source contains sorry or admit.'
+      : `Proof source declares explicit axioms: ${file.inspection.axioms.join(', ')}.`;
     reject(error, verifiableItems);
     return;
   }
@@ -2304,7 +2322,8 @@ async function verifyFormalFile(file: PreparedFile, context: FormalFileVerificat
   const localModules = (options.prepareLocalDependencies || options.collectDeclarationReferences) && lakeFile
     ? mathLocalModuleGraph(verificationProjectRoot, file.relativeProofPath) : undefined;
   const helperModule =
-    localModules && (options.expectedDeclarationType || options.expectedDeclarationTypes || options.forbiddenImportModules || options.dependencyCandidates || options.collectDeclarationReferences)
+    localModules && (options.checkDeclarationsInDraft || options.expectedDeclarationType || options.expectedDeclarationTypes ||
+      options.forbiddenImportModules || options.dependencyCandidates || options.collectDeclarationReferences)
       ? localModules!.at(-1)!.module
       : undefined;
   if (helperModule && !/^[A-Za-z_][A-Za-z0-9_']*(?:\.[A-Za-z_][A-Za-z0-9_']*)*$/u.test(helperModule))
@@ -2326,7 +2345,8 @@ async function verifyFormalFile(file: PreparedFile, context: FormalFileVerificat
             ? localModules ?? [{ module: '', file: file.relativeProofPath }] : undefined,
           directProof: options.collectDirectProofReferences,
         }
-      : undefined
+      : undefined,
+    options.checkDeclarationsInDraft
   );
   const verificationPath = declarationQuery?.relativePath || file.relativeProofPath;
   let processResult: ProcessResult;
@@ -2539,6 +2559,7 @@ async function checkManyFormalVerificationsUnbounded(
     const checkedAt = Date.now();
     for (const item of selectedItems) {
       const theoremName = item.theoremName;
+      const inspection = (theoremName && file.declarationInspections?.get(theoremName)) || file.inspection;
       const base: ResultBase = {
         targetCommit,
         statementHash: item.statementHash,
@@ -2564,8 +2585,8 @@ async function checkManyFormalVerificationsUnbounded(
         statementBinding: 'caller-bound-to-committed-declaration',
         toolchain,
         goalsRemaining: status === 'kernel_verified' ? 0 : 1,
-        sorryCount: file.inspection.sorryCount,
-        admitCount: file.inspection.admitCount,
+        sorryCount: inspection.sorryCount,
+        admitCount: inspection.admitCount,
         axioms: (theoremName && declarationNamed(file.axiomDependencies, theoremName)) || file.inspection.axioms,
         checkedAt,
         checkId: item.checkId,
@@ -3005,6 +3026,7 @@ async function buildFormalVerificationCacheKey(
       targetCommit: resolvedTarget,
       verifierCommandPath: options.verifierCommandPath || null,
       prepareLocalDependencies: options.prepareLocalDependencies ?? false,
+      ...(options.checkDeclarationsInDraft ? { checkDeclarationsInDraft: true } : {}),
       expectedDeclarationType: options.expectedDeclarationType ?? null,
       expectedDeclarationTypes: options.expectedDeclarationTypes ?? null,
       forbiddenImportModules: options.forbiddenImportModules ?? [],

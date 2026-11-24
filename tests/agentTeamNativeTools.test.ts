@@ -21,9 +21,29 @@ const nativeAvailable = spawnSync(executable, ['--version'], {
   env: { PATH: process.env.PATH }, timeout: 5000, stdio: 'ignore',
 }).status === 0;
 const operations = ['spawn', 'assign', 'amend', 'finish', 'coordinate', 'budget', 'resume', 'history', 'publish', 'cancel',
-  'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop'];
-const nativeLeadOperations = ['finish', 'history', 'inspect', 'inspect-research', 'adopt'];
-const nativeMemberOperations = ['yield', 'history', 'inspect', 'inspect-research', 'submit'];
+  'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'retire_route', 'route_summary'];
+const memberOperations = ['progress', 'yield', 'history', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'submit',
+  'submit_helpers', 'route_summary'];
+const nativeLeadOperations = ['finish', 'history', 'inspect', 'inspect-research', 'adopt', 'retire_route', 'route_summary'];
+const nativeMemberOperations = ['yield', 'history', 'inspect', 'inspect-research', 'submit', 'submit_helpers', 'route_summary'];
+
+/** Codex may normalize validation keywords, but it must preserve every branch and field. */
+function expectAdvertisedOperations(host: Json, expected: string[], schema: Json) {
+  expect(host).toBeDefined();
+  const parameters = host.parameters;
+  expect(parameters).toMatchObject({ type: 'object', required: ['operation'], additionalProperties: false,
+    properties: { operation: { type: 'string', enum: expected } } });
+  expect(Object.keys(parameters.properties).sort()).toEqual(Object.keys(schema.properties).sort());
+  if (expected.length > 16) expect(parameters).not.toHaveProperty('oneOf');
+  else {
+    expect(parameters.oneOf.map((branch: Json) => branch.properties.operation.enum[0])).toEqual(expected);
+    for (const [index, branch] of schema.oneOf.entries()) {
+      expect(parameters.oneOf[index]).toMatchObject({ type: 'object', required: branch.required, additionalProperties: false });
+      expect(Object.keys(parameters.oneOf[index].properties).sort()).toEqual(Object.keys(branch.properties).sort());
+    }
+  }
+  for (const operation of expected) expect(host.description).toContain(operation + ': required ');
+}
 
 let directory: string | undefined, session: MathAgentSession | undefined, server: Server | undefined;
 afterEach(async () => {
@@ -158,25 +178,24 @@ describe.skipIf(!nativeAvailable)('real Codex dynamic team tool transport withou
     // Capability names, required arguments and the host round trip are the contract.
     expect(advertised?.parameters, JSON.stringify(advertised)).toMatchObject({ type: 'object', required: ['operation'], additionalProperties: false,
       properties: { operation: { type: 'string' }, agentId: { type: 'string' }, message: { type: 'string' } } });
-    const allowed = actor === 'member' ? ['history', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'submit', 'yield', 'progress'] :
+    const allowed = actor === 'member' ? memberOperations :
       finiteBudget ? operations : operations.filter(name => name !== 'budget');
-    expect(advertised?.parameters.properties.operation.enum).toEqual(actor === 'member'
-      ? expect.arrayContaining(allowed) : allowed);
+    expectAdvertisedOperations(advertised!, allowed, tools.definitions[0]!.inputSchema);
     expect(advertised?.description).toContain('message: required agentId, message;');
     expect(advertised?.description).toContain(`the host fixes the sender as "${actor}"; agentId names the recipient`);
     expect(advertised?.description).toContain('Self-addressed messages are rejected.');
-    if (finiteBudget) expect(advertised?.parameters).not.toHaveProperty('oneOf');
-    else {
-      expect(advertised?.parameters.oneOf).toHaveLength(advertised?.parameters.properties.operation.enum.length);
+    if (actor === 'member') {
       const messageSchema = advertised?.parameters.oneOf.find((branch: Json) => branch.properties.operation.enum[0] === 'message');
       expect(messageSchema).toMatchObject({ required: ['operation', 'agentId', 'message'], additionalProperties: false });
     }
+    expect(advertised?.description).toContain('route_summary: required none; optional routeId, includeRetired; other fields forbidden.');
+    expect(advertised?.parameters.properties.includeRetired).toMatchObject({ type: 'boolean' });
+    expect(advertised?.parameters.properties.routeId).toMatchObject({ type: 'string' });
     if (actor === 'lead') {
       expect(advertised?.description).toContain('coordinate: required decision, reason, nextStep;');
-      if (!finiteBudget) {
-        const coordinateSchema = advertised?.parameters.oneOf.find((branch: Json) => branch.properties.operation.enum[0] === 'coordinate');
-        expect(coordinateSchema).toMatchObject({ required: ['operation', 'decision', 'reason', 'nextStep'], additionalProperties: false });
-      }
+      expect(advertised?.description).toContain('retire_route: required routeId, reason; optional evidenceRefs; other fields forbidden.');
+      expect(advertised?.parameters.properties).toMatchObject({ decision: { type: 'string', enum: ['defer', 'continue'] },
+        reason: { type: 'string' }, nextStep: { type: 'string' }, evidenceRefs: { type: 'array', items: { type: 'string' } } });
     } else {
       expect(advertised?.description).toContain('submit: required summary, declarations; optional objectiveRevision; other fields forbidden.');
       const submitSchema = advertised?.parameters.oneOf.find((branch: Json) => branch.properties.operation.enum[0] === 'submit');
@@ -306,7 +325,7 @@ describe.skipIf(!nativeAvailable)('real Codex dynamic team tool transport withou
           'theoremos_team', 'ordinary_research_probe', 'exec_command',
         ]));
         const host = advertised.find(tool => tool.name === 'theoremos_team');
-        expect([...host!.parameters.properties.operation.enum].sort()).toEqual([...nativeLeadOperations].sort());
+        expectAdvertisedOperations(host!, nativeLeadOperations, tools.definitions[0]!.inputSchema);
         for (const property of ['decision', 'nextStep', 'budget', 'leadReserve', 'objectiveRevision'])
           expect(host!.parameters.properties).not.toHaveProperty(property);
       }
@@ -388,7 +407,7 @@ describe.skipIf(!nativeAvailable)('real Codex dynamic team tool transport withou
         const host = declaredTools(body).find(tool => tool.name === 'theoremos_team');
         const child = text.includes('NATIVE_ACTUAL_CHILD_FIXTURE');
         const allowed = child ? nativeMemberOperations : nativeLeadOperations;
-        expect([...host!.parameters.properties.operation.enum].sort()).toEqual([...allowed].sort());
+        expectAdvertisedOperations(host!, allowed, team.tools(child ? 'member' : 'lead').definitions[0]!.inputSchema);
         const mode = effectiveMultiAgentMode(body);
         expect(mode).toBeDefined();
         expect(mode).not.toContain('Any earlier instruction enabling proactive multi-agent delegation no longer applies');

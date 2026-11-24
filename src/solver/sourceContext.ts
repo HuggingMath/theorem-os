@@ -1,9 +1,11 @@
 import { inspectLeanDeclarationRegions, inspectScopedLeanDeclarations } from '../math/leanSource';
 import { mathConstructionImports } from '../math/mathConstructionSources';
 
-/** Only explicit modules from the pinned Mathlib package may extend proof imports. */
+export const isSolverMathlibImport = (module: string): boolean => /^Mathlib(?:\.[A-Za-z_][A-Za-z0-9_']*)*$/u.test(module);
+
+/** Allow the root module and explicit submodules of the pinned Mathlib package. */
 export function solverMathlibImports(source: string): string[] {
-  return mathConstructionImports(source).filter(module => /^Mathlib(?:\.[A-Za-z_][A-Za-z0-9_']*)+$/u.test(module));
+  return mathConstructionImports(source).filter(isSolverMathlibImport);
 }
 
 /** Regions of `source` holding an original: the same written name and, for a repeated one, the same qualified name. */

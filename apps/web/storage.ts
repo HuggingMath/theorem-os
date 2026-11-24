@@ -5,9 +5,12 @@ import { canonicalMathJson, mathDigest, syncMathDirectory, writeMathFrozen } fro
 import type { WebArchive, WebCheckReceipt, WebCommandResult, WebObservation, WebTaskSource } from './collaboration';
 import type { WebAccountIdentity, WebAgentAction, WebEvent, WebExplanation, WebRun, WorkerExplanationCheckpoint } from './shared';
 import type { WebShareSnapshot } from './share';
+import { compactObservation, hydrateObservation, type CompactWebObservation } from './observationSources';
 
 export type WebCreation = { schema: 'theorem-os.web-creation.v1'; requestId: string; digest: string };
 type StoredRun = { owner: string; run: WebRun; creation?: WebCreation };
+type RunRecord = StoredRun & { observationSequence?: number };
+type ObservationRecord = WebObservation | CompactWebObservation;
 type StoredExplanationCheckpoint = { binding: string; checkpoint: WorkerExplanationCheckpoint };
 
 export type StoredWebSession = { id: string; csrf: string; touchedAt: number; account?: WebAccountIdentity & { id: string }; passwordResetUntil?: number };
@@ -166,14 +169,26 @@ export class WebStorage {
     if (run.observation) this.saveObservation(owner, run.observation);
     for (const event of run.events) this.saveRecord([...directory, 'events', `${event.sequence}.json`], event, true);
     creation ??= this.getRecord<StoredRun>([...directory, 'run.json'])?.creation;
-    this.saveRecord([...directory, 'run.json'], { owner, run, ...(creation ? { creation } : {}) });
+    const { observation, ...summary } = run;
+    this.saveRecord([...directory, 'run.json'], { owner, run: summary,
+      ...(observation ? { observationSequence: observation.sequence } : {}), ...(creation ? { creation } : {}) });
+  }
+  private readRun(directory: string[]): StoredRun | undefined {
+    const stored = this.getRecord<RunRecord>([...directory, 'run.json']);
+    if (!stored) return;
+    const { observationSequence, ...result } = stored;
+    if (observationSequence !== undefined) {
+      const observation = this.readObservation(directory, observationSequence);
+      if (observation) result.run.observation = observation;
+    }
+    return result;
   }
   getRun(owner: string, id: string): WebRun | undefined {
-    return this.getRecord<{ owner: string; run: WebRun }>([...this.runPath(owner, id), 'run.json'])?.run;
+    return this.readRun(this.runPath(owner, id))?.run;
   }
   loadRuns(): StoredRun[] {
     return this.listRecords(['owners']).flatMap(directory => this.listRecords(['owners', directory, 'runs'])
-      .map(id => this.getRecord<StoredRun>(['owners', directory, 'runs', id, 'run.json']))
+      .map(id => this.readRun(['owners', directory, 'runs', id]))
       .filter((item): item is StoredRun => Boolean(item)))
       .sort((a, b) => a.run.createdAt.localeCompare(b.run.createdAt));
   }
@@ -216,15 +231,43 @@ export class WebStorage {
   saveObservation(owner: string, observation: WebObservation): void {
     if (!Number.isSafeInteger(observation.sequence) || observation.sequence < 1) throw new Error('web_storage_invalid_observation_sequence');
     const directory = this.runPath(owner, observation.webRunId);
-    this.saveRecord([...directory, 'observations', `${observation.sequence}.json`], observation, true);
+    const recordPath = [...directory, 'observations', `${observation.sequence}.json`];
+    const existing = this.getRecord<ObservationRecord>(recordPath);
+    if (existing?.sources.some(source => typeof source.source === 'string')) {
+      // A run restored from an older server can still save its last inline observation.
+      this.saveRecord(recordPath, observation, true);
+      return;
+    }
+    const record = compactObservation(observation, (digest, source) => {
+      const segments = [...directory, 'source-blobs', `${digest}.json`], key = this.key(segments);
+      if (!(this.root ? fs.existsSync(path.join(this.root, key)) : this.memory.has(key))) this.saveRecord(segments, source, true);
+    });
+    this.saveRecord(recordPath, record, true);
+  }
+  private hydrateObservations(directory: string[], records: ObservationRecord[]): WebObservation[] {
+    const sources = new Map<string, string>();
+    return records.map(record => hydrateObservation(record, digest => {
+      const cached = sources.get(digest);
+      if (cached !== undefined) return cached;
+      const text = this.getRecord<string>([...directory, 'source-blobs', `${digest}.json`]);
+      if (text !== undefined) sources.set(digest, text);
+      return text;
+    }));
+  }
+  private readObservation(directory: string[], sequence: number): WebObservation | undefined {
+    const observation = this.getRecord<ObservationRecord>([...directory, 'observations', `${sequence}.json`]);
+    return observation && this.hydrateObservations(directory, [observation])[0];
   }
   listObservations(owner: string, runId: string): WebObservation[] {
-    const directory = [...this.runPath(owner, runId), 'observations'];
-    return bySequence(this.listRecords(directory).map(file => this.getRecord<WebObservation>([...directory, file])!));
+    const directory = this.runPath(owner, runId), observations = [...directory, 'observations'];
+    return this.hydrateObservations(directory, bySequence(this.listRecords(observations)
+      .map(file => this.getRecord<ObservationRecord>([...observations, file])!)));
   }
   getObservation(owner: string, runId: string, sequence?: number): WebObservation | undefined {
-    if (sequence !== undefined) return this.getRecord([...this.runPath(owner, runId), 'observations', `${sequence}.json`]);
-    return this.listObservations(owner, runId).at(-1);
+    const directory = this.runPath(owner, runId);
+    if (sequence === undefined) sequence = this.listRecords([...directory, 'observations'])
+      .reduce((latest, file) => /^\d+\.json$/u.test(file) ? Math.max(latest, Number.parseInt(file, 10)) : latest, 0);
+    return sequence ? this.readObservation(directory, sequence) : undefined;
   }
   getTaskSource(owner: string, runId: string, taskId: string, version?: string, commit?: string): WebTaskSource | undefined {
     return this.listObservations(owner, runId).reverse().flatMap(item => item.sources)
@@ -309,7 +352,8 @@ export class WebStorage {
     return this.recordsAfter<WebAgentAction>([...this.runPath(owner, runId), 'actions'], after, limit);
   }
   listObservationsAfter(owner: string, runId: string, after: number, limit: number): WebObservation[] {
-    return this.recordsAfter<WebObservation>([...this.runPath(owner, runId), 'observations'], after, limit);
+    const directory = this.runPath(owner, runId);
+    return this.hydrateObservations(directory, this.recordsAfter<ObservationRecord>([...directory, 'observations'], after, limit));
   }
   /** Numbered records after `after` in sequence order; reading stops at a record that cannot be parsed, to be read again later. */
   listRecordsAfter<T>(directory: string[], after: number, limit: number): T[] { return this.recordsAfter<T>(directory, after, limit); }

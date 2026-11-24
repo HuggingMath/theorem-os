@@ -6,11 +6,12 @@ import type { ContextBundle } from './modules/context';
 import { routeAllowsTask } from './modules/search';
 import { deliveryDetails, reviewVerdict, readMathResponse as block } from './deliveries';
 import { assertStatementSnapshot, captureStatementContexts, createStatementSnapshotter, isStatementAction, readBacktranslation, resetStatementReview,
-  writeStatementSnapshot, type StatementAction, type StatementReview } from './statementReview';
+  writeStatementSnapshot, type StatementAction } from './statementReview';
 import { captureProofReferences, proofReferencesUnchanged } from './proofReferences';
 import { taskGroup, hasTaskReferences, isDefinitionTask, type CooperativeTask, type RouteRecord, type TaskRecord } from './tasks';
 import { digest } from './cooperationShared';
 import { CooperationCore } from './cooperationCore';
+import { retiredCooperativeRoute } from './cooperationRoutes';
 
 /** Statement translation reviews and their fixed-snapshot contexts. */
 export abstract class CooperationStatements extends CooperationCore {
@@ -51,12 +52,9 @@ export abstract class CooperationStatements extends CooperationCore {
   }
   /** A lemma type naming a planned definition elaborates only after that definition's body is canonical. */
   private statementTasks(nodes: readonly TaskRecord[]) {
-    return nodes.filter(node => node.task.statementReview && this.dependencies(node.task, nodes)
+    return nodes.filter(node => node.task.statementReview &&
+      (node.status === 'integrated' || !retiredCooperativeRoute(node.task, this.archive)) && this.dependencies(node.task, nodes)
       .every(dependency => !isDefinitionTask(dependency.task) || dependency.status === 'integrated')).map(node => node.task);
-  }
-  protected supersedeStatementReview(review: StatementReview) {
-    review.status = 'superseded';
-    for (const record of this.archive.deliveries ?? []) if (record.statementReviewId === review.id) record.status = 'superseded';
   }
   protected prepareStatementContexts(nodes: readonly TaskRecord[] = this.archive.tasks,
     canonical = this.archive.canonicalCommit!,

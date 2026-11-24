@@ -51,12 +51,16 @@ import { assertMathAgentSkillsCurrent, type MathAgentSkill } from '../runtime/ag
 import { buildSkillResearchContext, teamTurnTiming } from './skillResearchContext';
 import { stopProofWriter } from './proofWriter';
 import { createSkillProofLifecycle } from './skillProofLifecycle';
+import { createSoftSlice, softSliceSettings, type SoftSliceSettings } from './softSlice';
+import { portfolioUsageRecords } from './portfolioExploration';
 
 // Scheduling checkpoints preserve unlimited solving budgets and resume the same assignment/thread.
 const advisoryCheckpointNoticeMs = 90_000;
 const advisoryCheckpointMs = 120_000;
 const advisoryInterruptGraceMs = 10_000;
 const advisoryProgressPollMs = 5_000;
+const MIN_ADVISORY_SLICE_MS = 180_000;
+export const LEAD_MAX_PLANNING_COMMANDS = 15;
 const advisoryMaxBackoff = LEAD_MAX_BACKOFF;
 // Provider latency is not mathematical work: the advisory clock starts only at the model's first
 // item, with a hard cap so a turn that never responds still yields a resumable checkpoint.
@@ -141,10 +145,14 @@ export async function runResearchWorkers(input: {
   signal: AbortSignal; deadline: number; maxTurns: number; maxTurnMs: number; maxTotalTokens: number; proofTimeoutMs?: number;
   executionBudget?: { remainingMs(): number; setWaiting(waiting: boolean): void };
   prepareTeamWorker?: (id: string, worktree: string) => Promise<WorkerAccess>;
-  freshContinuationChecks?: readonly TaskProof[]; goalProgressReviewMs?: number;
+  freshContinuationChecks?: readonly TaskProof[]; goalProgressReviewMs?: number; minAdvisorySliceMs?: number;
+  softSlice?: SoftSliceSettings;
+  leadMaxPlanningCommands?: number;
   save: () => void; emit: (event: string, details?: Record<string, unknown>) => void;
 }): Promise<{ worktree: string; check: ProofCheck } | undefined> {
   const { state, modules, save } = input;
+  const milestoneSettings = softSliceSettings(input.softSlice ?? {});
+  const leadMaxPlanningCommands = input.leadMaxPlanningCommands ?? LEAD_MAX_PLANNING_COMMANDS;
   assertAgentTeamProcessesStopped(state);
   const parallel = Boolean(state.workers);
   const skillResearch = state.researchMode === 'skill';
@@ -179,7 +187,8 @@ export async function runResearchWorkers(input: {
     ': recover into a new isolated workspace before starting another writer.');
   for (const { research } of records) initializeUsageAccounting(research);
   const enforcement = state.tokenBudget?.enforcement;
-  state.tokenBudget = buildTokenBudget(input.maxTotalTokens, [...records.map(record => record.research), ...(state.agentTeam?.workers ?? [])], enforcement);
+  state.tokenBudget = buildTokenBudget(input.maxTotalTokens,
+    [...records.map(record => record.research), ...(state.agentTeam?.workers ?? []), ...portfolioUsageRecords(state)], enforcement);
   const dispatchAllowed = () => modelDispatchAllowed(state.tokenBudget!);
   const accepted = records.find(({ worker }) => worker.id === (state.winningWorker ?? 'solver'));
   if (accepted && !state.pendingResearchFreeze && state.check?.passed && ['running', 'checking', 'evaluating', 'finished'].includes(state.phase) &&
@@ -225,14 +234,14 @@ export async function runResearchWorkers(input: {
     modules, executable: input.executable, profile: input.profile, signal,
     maxAgents: state.researchDelegation.maxAgents, maxTurns: input.maxTurns, maxTurnMs: input.maxTurnMs,
     maxTotalTokens: input.maxTotalTokens, proofTimeoutMs: input.proofTimeoutMs, remainingMs: () => budget().remainingMs,
-    prepareWorker: input.prepareTeamWorker, save, emit: input.emit, exclusiveCheck,
+    prepareWorker: input.prepareTeamWorker, softSlice: input.softSlice, save, emit: input.emit, exclusiveCheck,
   }) : undefined;
   const turnTiming = team ? teamTurnTiming(input.maxTurnMs)
     : { turnTimeoutMs: Number.isFinite(input.maxTurnMs) ? input.maxTurnMs : undefined };
   const updateUsage = () => {
     if (parallel) state.usage = aggregateUsage(state.workers!);
     const previous = state.tokenBudget!.status;
-    const usageRecords = [...records.map(record => record.research), ...(team?.usageRecords ?? [])];
+    const usageRecords = [...records.map(record => record.research), ...(team?.usageRecords ?? []), ...portfolioUsageRecords(state)];
     state.tokenBudget = buildTokenBudget(input.maxTotalTokens, usageRecords, enforcement);
     if (team) state.teamUsage = aggregateUsage(usageRecords);
     if (state.tokenBudget.status !== previous && !dispatchAllowed()) input.emit('model_budget_stopped', { ...state.tokenBudget });
@@ -284,8 +293,9 @@ export async function runResearchWorkers(input: {
           recovery.waitedMs += Math.max(0, Date.now() - started); save();
         }
       };
-      const contextResearchBases = new WeakMap<ContextBundle, { basis: ResearchBasis; publishedBasis?: ResearchBasis;
-        dispatchDigest: string }>();
+      const contextResearchBases = new WeakMap<ContextBundle, (manifest: ContextBundle['manifest']) => {
+        basis: ResearchBasis; publishedBasis?: ResearchBasis; dispatchDigest: string;
+      }>();
       const context = (feedback?: string, previousCheck?: ProofCheck, previousFailures = research.failures,
         assignment?: CooperativeAction) => {
         access.assertKnowledgeCurrent?.();
@@ -313,28 +323,28 @@ export async function runResearchWorkers(input: {
             tasks: scoped.tasks, deliveries: scoped.deliveries,
           });
           const previous = assignment.assignment.researchBasis;
-          const included = new Set(currentContext.manifest?.included.map(item => item.id));
-          const missing = currentContext.manifest && basis.dependencies.some(input => {
-            const known = previous?.dependencies.find(item => item.taskId === input.taskId);
-            if (known && canonicalMathJson(known) === canonicalMathJson(input)) return false;
-            if (input.findingDigest && !included.has(`finding:${input.taskId}`)) return true;
-            return scoped.deliveries?.some(delivery => delivery.kind === 'research' && delivery.status !== 'superseded' &&
-              delivery.taskId === input.taskId && delivery.taskDigest === input.taskDigest &&
-              (!included.has(`delivery:${delivery.id}`) || Boolean(delivery.finding) &&
-                !included.has(`finding:delivery:${delivery.id}`) && !included.has(`finding:${input.taskId}`)));
-          });
           const dependencyIds = new Set(basis.dependencies.map(input => input.taskId));
           const dependencySections = new Set(basis.dependencies.map(input => `finding:${input.taskId}`));
           for (const delivery of scoped.deliveries ?? []) if (delivery.kind === 'research' && delivery.taskId && dependencyIds.has(delivery.taskId)) {
             dependencySections.add(`delivery:${delivery.id}`);
             dependencySections.add(`finding:delivery:${delivery.id}`);
           }
-          // Thread freshness records what was dispatched, independently of consumption provenance.
-          // Selection matters too: a previously omitted finding may now fit without changing its basis.
-          const dispatchDigest = mathDigest(canonicalMathJson({ basis, included: currentContext.manifest?.included
-            .filter(item => dependencySections.has(item.id)).map(item => item.id).sort() }));
-          // Omitted new advisory material cannot retroactively become a consumed input.
-          contextResearchBases.set(currentContext, { basis, publishedBasis: missing ? previous : basis, dispatchDigest });
+          contextResearchBases.set(currentContext, manifest => {
+            const included = new Set(manifest?.included.map(item => item.id));
+            const missing = manifest && basis.dependencies.some(input => {
+              const known = previous?.dependencies.find(item => item.taskId === input.taskId);
+              if (known && canonicalMathJson(known) === canonicalMathJson(input)) return false;
+              if (input.findingDigest && !included.has(`finding:${input.taskId}`)) return true;
+              return scoped.deliveries?.some(delivery => delivery.kind === 'research' && delivery.status !== 'superseded' &&
+                delivery.taskId === input.taskId && delivery.taskDigest === input.taskDigest &&
+                (!included.has(`delivery:${delivery.id}`) || Boolean(delivery.finding) &&
+                  !included.has(`finding:delivery:${delivery.id}`) && !included.has(`finding:${input.taskId}`)));
+            });
+            // Selection matters: a previously omitted finding may now fit without changing the basis.
+            const dispatchDigest = mathDigest(canonicalMathJson({ basis, included: manifest?.included
+              .filter(item => dependencySections.has(item.id)).map(item => item.id).sort() }));
+            return { basis, publishedBasis: missing ? previous : basis, dispatchDigest };
+          });
         }
         return currentContext;
       };
@@ -347,6 +357,8 @@ export async function runResearchWorkers(input: {
       let cooperativeCheckpoint = false;
       let proofHandoffCheckpoint = false;
       let checkpointAtModelBoundary: (() => boolean) | undefined;
+      let softSliceAtModelBoundary: (() => boolean) | undefined;
+      let softSliceCheckpoint = false;
       let contextSchedulingCheckpoint = false;
       let compactionRestart = false;
       let explicitCompaction = false, contextUsageVersion = 0, compactedUsageVersion = -1;
@@ -463,6 +475,7 @@ export async function runResearchWorkers(input: {
         cooperativeCheckpoint = false;
         proofHandoffCheckpoint = false;
         contextSchedulingCheckpoint = false;
+        softSliceCheckpoint = false;
         advisoryTurn = undefined;
         usage.begin(assignment);
         team?.beginLeadTurn();
@@ -506,8 +519,9 @@ export async function runResearchWorkers(input: {
         let requestWaitTimer: ReturnType<typeof setTimeout> | undefined;
         let cutAtRequestBoundary: (() => void) | undefined;
         let noticeDelivery: 'unavailable' | 'pending' | 'delivered' | 'failed' = 'unavailable';
+        let planningCommands = 0;
         let requestedProof: (NonNullable<ReturnType<CooperativeResearch['proofHandoffTarget']>> & { turnId: string }) | undefined;
-        let proofNoticeDelivered = false;
+        let proofNoticeDelivered = false, handoffAtBoundary = false;
         let afterNotice: ((delivered: boolean) => void) | undefined;
         const live = () => !finished && !signal.aborted && session === activeSession;
         const current = () => live() && Boolean(assignment && cooperation?.current(assignment));
@@ -527,15 +541,47 @@ export async function runResearchWorkers(input: {
           // close() retains research.threadId; the next session resumes the saved thread.
           void close().catch(() => {});
         };
-        const interruptForCheckpoint = (event: string, details: Record<string, unknown>) => {
-          if (!current() || checkpointRequested || readyRequested) return false;
+        const interruptForCheckpoint = (event: string, details: Record<string, unknown>, accepts = current) => {
+          if (!accepts() || checkpointRequested || readyRequested) return false;
           checkpointRequested = true;
           emit(event, details);
           interruptTimer = setTimeout(closeStalledTurn, advisoryInterruptGraceMs);
           interruptTimer.unref();
           void Promise.resolve().then(async () => {
-            if (current()) await activeSession.interrupt();
+            if (accepts()) await activeSession.interrupt();
           }).catch(closeStalledTurn);
+          return true;
+        };
+        let milestoneTurnId: string | undefined;
+        const milestoneOwner = () => live() && (!assignment || current()) && !stopRequested;
+        const milestoneCurrent = () => milestoneOwner() && !checkpointRequested && !readyRequested && !softSliceCheckpoint;
+        const milestone = (kind === 'proof' || kind === 'research') &&
+          !(assignment?.kind === 'task' && (isFeasibilityReview(assignment.task) || isFinalCandidateReview(assignment.task)))
+          ? createSoftSlice(milestoneSettings, {
+            current: milestoneCurrent,
+            notice: (reason, completedCompactions) => {
+              emit(reason === 'time' ? 'soft_slice_milestone_requested' : 'compaction_circuit_breaker_triggered',
+                { turnId: milestoneTurnId, completedCompactions, graceMs: milestoneSettings.graceMs });
+              const submission = assignment?.kind === 'task'
+                ? 'Publish standalone helpers as a helpers event in the assignment delivery log. '
+                : skillMode ? 'Nominate standalone helpers for host checking in .scratch/declaration-submission.json. '
+                  : 'Save standalone helpers in the owned Lean files for host checking. ';
+              void activeSession.notify?.(submission +
+                'Write fewer than 20 lines in worktree-root RESEARCH.md covering what is established, the exact obstruction, ' +
+                'and the next route or smaller obligation. Save your files and return after the current request and tools settle.',
+                activeSession.advisoryNotifications === 'native-history' ? { mode: 'advisory' } : { waitForRequest: true })
+                .catch(error => {
+                  const reason = noticeFailureReason(error);
+                  if (reason !== undefined && milestoneCurrent()) emit('soft_slice_notice_failed', { reason });
+                });
+            },
+            interrupt: () => { softSliceCheckpoint = interruptForCheckpoint('soft_slice_checkpoint_requested',
+              { turnId: milestoneTurnId, boundary: 'wait-limit' }, milestoneOwner); },
+          }) : undefined;
+        if (milestone) softSliceAtModelBoundary = () => {
+          if (toolsRunning || !milestone.useBoundary()) return false;
+          softSliceCheckpoint = true;
+          emit('soft_slice_checkpoint_requested', { turnId: milestoneTurnId, boundary: 'request' });
           return true;
         };
         const watchCompaction = () => {
@@ -551,6 +597,17 @@ export async function runResearchWorkers(input: {
           compactionTimer.unref();
         };
         turnActivity = activity => {
+          if (assignment?.kind === 'lead' && current() && activity.event === 'item_started' &&
+              activity.itemType === 'commandExecution' && ++planningCommands === leadMaxPlanningCommands + 1) {
+            emit('lead_planning_command_guardrail_triggered', {
+              commandCount: planningCommands, limit: leadMaxPlanningCommands, planVersion: assignment.planVersion,
+            });
+            void activeSession.notify?.(
+              'Stop running exploratory commands in this planning turn. Use the evidence you have to decide and publish the plan now. ' +
+              'Delegate further computations and route probes to workers, and assign the smallest shared foundation lemmas before their consumers.',
+              activeSession.advisoryNotifications === 'native-history' ? { mode: 'advisory' } : { waitForRequest: true },
+            ).catch(() => {});
+          }
           // Echoed input and compaction are not model work. Start the advisory clock at the first
           // model output or tool activity, preserving the independent fallback for a silent turn.
           if (!clockArmed && activity.itemType !== 'userMessage' && activity.itemType !== 'contextCompaction') {
@@ -567,11 +624,15 @@ export async function runResearchWorkers(input: {
               toolsRunning = Math.max(0, toolsRunning - 1);
               // The request that was streaming has returned and its tool results are recorded: cut here.
               if (!toolsRunning) cutAtRequestBoundary?.();
+              if (!toolsRunning && activeSession.usageSource !== 'upstream-requests' && milestone?.useBoundary())
+                softSliceCheckpoint = interruptForCheckpoint('soft_slice_checkpoint_requested',
+                  { turnId: milestoneTurnId, boundary: 'tool' }, milestoneOwner);
             }
           }
           // Native context maintenance applies to Skill sessions without cooperative assignments too.
           if (live() && activity.itemType === 'contextCompaction' &&
               (activity.event === 'item_started' || activity.event === 'item_completed')) dispatchedContexts.clear();
+          if (activity.itemType === 'contextCompaction' && activity.event === 'item_completed') milestone?.compacted();
           if (current() && activity.itemType === 'contextCompaction') {
             if (activity.event === 'item_started' && compactionStartedAt === undefined) {
               compactionStartedAt = Date.now();
@@ -631,6 +692,8 @@ export async function runResearchWorkers(input: {
         const started = (turnId: string) => {
           usage.turnStarted(turnId);
           onStarted(turnId);
+          milestoneTurnId = turnId;
+          milestone?.start();
           if (armed || !current()) return;
           armed = true;
           if (assignment && !isStatementAction(assignment)) {
@@ -877,8 +940,10 @@ export async function runResearchWorkers(input: {
           };
           scheduleSlice(); watchCompaction();
           if (researchAssignment && activeSession.advisoryNotifications === 'native-history' && activeSession.notify) {
+            const handoffAfter = Date.now() + (input.minAdvisorySliceMs ?? MIN_ADVISORY_SLICE_MS);
             const proofTarget = () => {
-              if (compactionStartedAt !== undefined || !current() || checkpointRequested || readyRequested) return;
+              if (Date.now() < handoffAfter || compactionStartedAt !== undefined || !current() ||
+                  checkpointRequested || readyRequested || stopRequested) return;
               return cooperation?.proofHandoffTarget(worker, researchAssignment);
             };
             const sameTarget = () => {
@@ -888,7 +953,7 @@ export async function runResearchWorkers(input: {
             if (activeSession.usageSource === 'upstream-requests') {
               checkpointAtModelBoundary = () => {
                 if (!proofNoticeDelivered || toolsRunning || !sameTarget() || !researchHandoffNotes()) return false;
-                proofHandoffCheckpoint = true;
+                handoffAtBoundary = true;
                 return true;
               };
             }
@@ -927,24 +992,18 @@ export async function runResearchWorkers(input: {
           if (usage.stopReason && detail !== usage.stopReason) throw new Error(detail);
           planningCheckpoint = usage.stopReason === 'math_initial_planning_limit';
           const resultStatus = typeof result === 'string' ? result : result && typeof result === 'object' && 'status' in result ? result.status : undefined;
+          if (milestone?.requested && resultStatus === 'completed') softSliceCheckpoint = true;
           // A natural return after the save request preserves an unfinished draft. A relay
           // checkpoint confirms the same successor and a current draft at the unpaid boundary.
-          proofHandoffCheckpoint ||= Boolean(proofNoticeDelivered && resultStatus === 'completed');
+          proofHandoffCheckpoint = handoffAtBoundary || Boolean(proofNoticeDelivered && resultStatus === 'completed');
           cooperativeCheckpoint = proofHandoffCheckpoint || checkpointRequested && (resultStatus === 'interrupted' || resultStatus === 'checkpoint' ||
             checkpointClosing && resultStatus === 'failed' && researchFailureReason(detail) === 'math_codex_transport_closed');
           completed = resultStatus === 'completed';
-          if (proofHandoffCheckpoint && researchAssignment && requestedProof) {
-            const target = cooperation?.proofHandoffTarget(worker, researchAssignment);
-            const valid = target?.taskId === requestedProof.taskId && target?.taskDigest === requestedProof.taskDigest;
-            emit(valid ? requestedProof.capacity ? 'capacity_exploration_yielded' : 'advisory_yielded_for_typed_work'
-              : 'proof_handoff_target_changed', { turnId: requestedProof.turnId, taskId: researchAssignment.task.id,
-              successorTaskId: requestedProof.taskId, successorTaskDigest: requestedProof.taskDigest,
-              reason: valid ? 'typed-work-ready' : 'successor-no-longer-dispatchable' });
-          }
           if (completed) recovered();
           return result;
         }
         catch (error) {
+          proofHandoffCheckpoint = handoffAtBoundary;
           planningCheckpoint = usage.stopReason === 'math_initial_planning_limit' &&
             failureDetail(error, activeSession.lastError, activeSession.lastFailureDiagnostic) === usage.stopReason;
           cooperativeCheckpoint = proofHandoffCheckpoint || checkpointRequested && checkpointClosing &&
@@ -953,6 +1012,8 @@ export async function runResearchWorkers(input: {
         }
         finally {
           finished = true;
+          milestone?.stop();
+          softSliceAtModelBoundary = undefined;
           clearTimeout(noticeTimer); clearTimeout(checkpointTimer); clearTimeout(interruptTimer); clearTimeout(requestWaitTimer);
           cutAtRequestBoundary = undefined;
           afterNotice = undefined;
@@ -962,6 +1023,16 @@ export async function runResearchWorkers(input: {
           // A transport failure may settle run() before process-group teardown finishes.
           // Do not freeze sources or reopen this thread until the writer is fully closed.
           try {
+            if (proofHandoffCheckpoint && researchAssignment && requestedProof) {
+              const target = cooperation!.proofHandoffTarget(worker, researchAssignment);
+              const valid = target?.taskId === requestedProof.taskId && target?.taskDigest === requestedProof.taskDigest;
+              // A boundary cut already displaced the turn even if the target changed while it settled.
+              if (valid || handoffAtBoundary) cooperation!.recordProofHandoff(worker, researchAssignment.task.id, requestedProof.taskId);
+              emit(valid ? requestedProof.capacity ? 'capacity_exploration_yielded' : 'advisory_yielded_for_typed_work'
+                : 'proof_handoff_target_changed', { turnId: requestedProof.turnId, taskId: researchAssignment.task.id,
+                successorTaskId: requestedProof.taskId, successorTaskDigest: requestedProof.taskDigest,
+                reason: valid ? 'typed-work-ready' : 'successor-no-longer-dispatchable' });
+            }
             if (checkpointClosing) await close();
             if (completed && !proofHandoffCheckpoint) recordAdvisoryOutput(false, true);
           } finally { usage.finish(completed); }
@@ -1066,7 +1137,7 @@ export async function runResearchWorkers(input: {
               const resumingThread = research.threadId;
               const usageCallbacks = usage.bindSession(sessionId, () => session?.lastInputTokens);
               if (usageCallbacks.requestGate) usageCallbacks.requestGate.checkpoint = () =>
-                checkpointAtModelBoundary?.() ?? false;
+                (softSliceAtModelBoundary?.() ?? false) || (checkpointAtModelBoundary?.() ?? false);
               if (team && usageCallbacks.requestGate) usageCallbacks.requestGate = team.leadRequestGate(usageCallbacks.requestGate);
               access.assertHarnessCurrent?.();
               session = await modules.M1.open({ executable: input.executable, profile: input.profile,
@@ -1107,6 +1178,18 @@ export async function runResearchWorkers(input: {
               if (team && session.processIdentity) { state.writerProcess = session.processIdentity; save(); }
             } catch (error) {
               signal.throwIfAborted();
+              // M1.open disposes failed launches before rejecting. Rebuild Lead's
+              // instructions for host tools before reserving the same turn again.
+              const fallback = !session && state.turns - Number(reservedTurn) <=
+                portfolioUsageRecords(state).reduce((total, scout) => total + scout.turns, 0)
+                ? team?.fallbackLeadTransport(error) : undefined;
+              if (fallback) {
+                usage.sessionClosed(usage.sessionId);
+                rebuildContext = true;
+                unreserveTurn(); save();
+                input.emit('team_transport_fallback', fallback);
+                return false;
+              }
               if (error instanceof LeanEnvironmentHealthCheckError)
                 emit('lean_environment_unavailable', { workerId: worker.id, health: error.health });
               if (assignment && !cooperation!.current(assignment)) return false;
@@ -1186,6 +1269,11 @@ export async function runResearchWorkers(input: {
       };
       const rotateSession = async (reason: 'context' | 'responsibility' | 'route' | 'request') => {
         dispatchedContexts.clear();
+        sessionInstructions = undefined;
+        if (parallel) {
+          (research as SolverWorkerState).sessionRouteId = undefined;
+          (research as SolverWorkerState).sessionTaskContextDigest = undefined;
+        }
         const previous = research.threadId;
         await close();
         if (previous) research.previousThreadIds = [...(research.previousThreadIds ?? []), previous];
@@ -1340,10 +1428,12 @@ export async function runResearchWorkers(input: {
             lifecycle: proofLifecycle, close, save, emit })) { unstarted = undefined; continue; }
           while ((pendingTurn = waitForTurn())) await pendingTurn;
           if (!dispatchAllowed() || state.turns >= input.maxTurns || budget().remainingMs <= 0) break;
+          let sameRouteSwitch = false;
           if (assignment) {
             const record = research as SolverWorkerState;
-            const feasibility = assignment.kind === 'task' && isFeasibilityReview(assignment.task);
-            const role = assignment.kind === 'review' || isStatementAction(assignment) || feasibility ? 'reviewer' :
+            const taskReview = assignment.kind === 'task' &&
+              (isFeasibilityReview(assignment.task) || isFinalCandidateReview(assignment.task));
+            const role = assignment.kind === 'review' || isStatementAction(assignment) || taskReview ? 'reviewer' :
               assignment.kind === 'task' ? researchTaskRole(assignment.task) : worker.role;
             const groupId = assignment.kind === 'task' ? taskGroup(assignment.task) : undefined;
             const roleChanged = record.sessionRole && record.sessionRole !== role;
@@ -1351,19 +1441,27 @@ export async function runResearchWorkers(input: {
             // A legacy saved coordination thread is replaced once; refreshed nonces reuse the planning thread.
             const leadModeChanged = leadMode !== undefined && record.sessionLeadMode !== undefined &&
               record.sessionLeadMode !== leadMode;
-            const groupChanged = record.sessionGroupId && record.sessionGroupId !== groupId;
+            const routeId = assignment.kind === 'task' ? assignment.assignment.routeId : undefined;
+            const groupChanged = (record.sessionGroupId !== undefined && record.sessionGroupId !== groupId) ||
+              (record.sessionTaskId !== undefined && record.sessionRouteId !== routeId);
             const versionChanged = assignment.kind === 'task' && record.sessionTaskId === assignment.task.id &&
               record.sessionTaskVersion && record.sessionTaskVersion !== assignment.assignment.taskDigest;
             const sessionAssignmentId = assignment.kind === 'task'
               ? assignment.assignment.assignmentId ?? `legacy-task:${assignment.assignment.seedCommit}` : undefined;
-            const reviewAssignmentChanged = feasibility && record.sessionAssignmentId !== sessionAssignmentId;
-            const reviewTargetChanged = (feasibility || record.sessionRole === 'reviewer') &&
+            const reviewAssignmentChanged = taskReview && record.sessionAssignmentId !== sessionAssignmentId;
+            const reviewTargetChanged = (taskReview || record.sessionRole === 'reviewer') &&
               (record.sessionTaskId !== (assignment.kind === 'task' ? assignment.task.id : undefined) || versionChanged);
+            const taskChanged = assignment.kind === 'task' && record.sessionTaskId &&
+              record.sessionTaskId !== assignment.task.id;
             if (isStatementAction(assignment) || record.sessionStatementReview || roleChanged || leadModeChanged ||
                 reviewTargetChanged || reviewAssignmentChanged)
               await rotateSession('responsibility');
             else if (groupChanged) await rotateSession('route');
             else if (versionChanged) await rotateSession('context');
+            else if (taskChanged && research.threadId && (research.contextCheckpoint ||
+                Math.max(session?.lastInputTokens ?? 0, research.lastInputTokens ?? 0) >= 90_000))
+              await rotateSession('context');
+            else sameRouteSwitch = Boolean(taskChanged && record.sessionGroupId === groupId);
             if (groupChanged) {
               research.check = undefined; feedbackCheck = undefined;
             }
@@ -1455,6 +1553,12 @@ export async function runResearchWorkers(input: {
           const repair = sourceFeedback();
           if (repair) research.check = undefined;
           const currentContext = context(repair, feedbackCheck, feedbackFailures, assignment);
+          const taskContextDigest = assignment?.kind === 'task' ? mathDigest(canonicalMathJson({
+            instructions: currentContext.instructions, environment: state.environmentDigest,
+          })) : undefined;
+          const previousTaskContextDigest = (research as SolverWorkerState).sessionTaskContextDigest;
+          if (taskContextDigest && research.threadId && previousTaskContextDigest && previousTaskContextDigest !== taskContextDigest)
+            await rotateSession('responsibility');
           const responsibility = skillMode ? canonicalMathJson({ kind: 'skill', taskDigest: state.taskDigest,
             problemReceiptDigest: state.problem.receiptDigest, environmentDigest: state.environmentDigest,
             researchSkill: state.researchSkill, commonResearchSkill: state.commonResearchSkill,
@@ -1462,22 +1566,27 @@ export async function runResearchWorkers(input: {
             : assignment?.kind === 'lead' ? canonicalMathJson({ planVersion: assignment.planVersion,
             initial: Boolean(assignment.initialPlanNonce),
             problemReceiptDigest: state.problem.receiptDigest, environmentDigest: state.environmentDigest })
-            : assignment?.kind === 'task' && !isFeasibilityReview(assignment.task) ? canonicalMathJson({
+            : assignment?.kind === 'task' && !isFeasibilityReview(assignment.task) && !isFinalCandidateReview(assignment.task) ? canonicalMathJson({
               kind: 'task', task: assignment.task, assignment: promptAction(assignment),
               problemReceiptDigest: state.problem.receiptDigest, environmentDigest: state.environmentDigest,
               workContract: currentContext.workContract, instructions: currentContext.instructions }) : undefined;
-          const contextBasis = contextResearchBases.get(currentContext);
+          const selectBasis = contextResearchBases.get(currentContext);
+          const fullContextBasis = selectBasis?.(currentContext.manifest);
           const dispatchedContext = responsibility === undefined ? undefined : dispatchedContexts.get(responsibility);
-          const researchInputsChanged = contextBasis && dispatchedContext?.researchInputDigest !== contextBasis.dispatchDigest;
+          const researchInputsChanged = fullContextBasis && dispatchedContext?.researchInputDigest !== fullContextBasis.dispatchDigest;
           const continuation = access.nativeContinuity !== false && !researchInputsChanged && responsibility !== undefined && Boolean(research.threadId) &&
             currentContext.continuationMessage !== undefined &&
             dispatchedContext?.threadId === research.threadId;
+          const taskSwitch = access.nativeContinuity !== false && sameRouteSwitch && !dispatchedContext &&
+            Boolean(research.threadId && dispatchedContexts.size) && currentContext.continuationMessage !== undefined;
           Object.assign(currentContext, finalizeResearchDispatch(currentContext, {
             continuation,
+            taskSwitch,
             checkpointInstruction: research.threadId && research.contextCheckpoint?.threadId === research.threadId && !currentCheckpointNotesDigest()
               ? contextCheckpointInstruction(assignment) : undefined,
           }));
-          // Resume the same thread with new instructions, preserving its history and cumulative usage.
+          const contextBasis = taskSwitch ? selectBasis?.(currentContext.manifest) : fullContextBasis;
+          // A refreshed Lead nonce updates session instructions while preserving its planning history.
           if (session && sessionInstructions !== currentContext.instructions) await close();
           if (!await beginTurn(currentContext, assignment, operation)) {
             if (rebuildContext) { if (assignment) releaseUnstartedTurn(assignment); continue; }
@@ -1494,8 +1603,11 @@ export async function runResearchWorkers(input: {
             try {
               candidate = await modelTurn(started => modules.M1.execute(state.problem, currentContext, operation, worker, turnSession, signal, turnId => {
                 executedTurnId = turnId;
-                if (!continuation && assignment?.kind === 'task' && contextBasis && cooperation!.current(assignment)) {
-                  assignment.assignment.researchBasis = contextBasis.publishedBasis;
+                if (assignment?.kind === 'task' && cooperation!.current(assignment)) {
+                  const record = research as SolverWorkerState;
+                  record.sessionRouteId = assignment.assignment.routeId;
+                  record.sessionTaskContextDigest = taskContextDigest;
+                  if (!continuation && contextBasis) assignment.assignment.researchBasis = contextBasis.publishedBasis;
                   save();
                 }
                 if (responsibility !== undefined) {
@@ -1504,7 +1616,7 @@ export async function runResearchWorkers(input: {
                     researchInputDigest: contextBasis?.dispatchDigest });
                   if (dispatchedContexts.size > 32) dispatchedContexts.delete(dispatchedContexts.keys().next().value!);
                 } else dispatchedContexts.clear();
-                emit('context_dispatched', { mode: continuation ? 'continuation' : 'full', threadId: turnSession.threadId,
+                emit('context_dispatched', { mode: taskSwitch ? 'task-switch' : continuation ? 'continuation' : 'full', threadId: turnSession.threadId,
                   messageBytes: Buffer.byteLength(currentContext.message), messageDigest: mathDigest(currentContext.message),
                   compiledContentDigest: currentContext.manifest?.contentDigest });
                 started(turnId);
@@ -1512,12 +1624,13 @@ export async function runResearchWorkers(input: {
             } catch (error) {
               signal.throwIfAborted();
               executionError = failureDetail(error, turnSession.lastError, turnSession.lastFailureDiagnostic);
-              if (!recoverableResearchFailure(executionError) && !locallyStopped(executionError)) throw error;
+              if (!softSliceCheckpoint && !recoverableResearchFailure(executionError) && !locallyStopped(executionError)) throw error;
               // The writer must stop before the ordinary saved-source checks and delivery run.
               candidate = { status: 'failed', worktree: worker.worktree, problemReceiptDigest: state.problem.receiptDigest,
                 operation, provenance: { workerId: worker.id, threadId: turnSession.threadId } };
             }
-            if (candidate && (planningCheckpoint || cooperativeCheckpoint)) candidate = { ...candidate, status: 'checkpoint' };
+            if (candidate && (planningCheckpoint || cooperativeCheckpoint || softSliceCheckpoint))
+              candidate = { ...candidate, status: 'checkpoint' };
             if (!candidate) {
               if (assignment && dispatchAllowed() && budget().remainingMs > 0 && !signal.aborted) {
                 releaseUnstartedTurn(assignment); await rotateSession('context'); continue;
@@ -1599,6 +1712,7 @@ export async function runResearchWorkers(input: {
             ...(team?.leadCompletionCheckpoint ? { reason: 'math_team_completion_checkpoint' } :
               team?.leadAdoptionCheckpoint ? { reason: 'math_team_adoption_checkpoint' } :
               planningCheckpoint ? { reason: 'math_initial_planning_limit' } :
+              softSliceCheckpoint ? { reason: 'math_soft_slice_checkpoint' } :
               contextSchedulingCheckpoint ? { reason: 'math_context_scheduling_checkpoint' } :
                 proofHandoffCheckpoint ? { reason: 'math_proof_handoff_checkpoint' } :
                   cooperativeCheckpoint ? { reason: 'math_cooperative_scheduling_checkpoint' } : {}) });
@@ -1637,12 +1751,12 @@ export async function runResearchWorkers(input: {
             }
           }
           if (cooperation && assignment?.kind === 'task' && turn === 'checkpoint' &&
-              !['research', 'sketch'].includes(assignment.task.kind) && (contextSchedulingCheckpoint ||
+              !['research', 'sketch'].includes(assignment.task.kind) && (softSliceCheckpoint || contextSchedulingCheckpoint ||
                 cooperativeCheckpoint && hasTaskConnectionCheck(assignment.task, assignment.assignment))) {
             // A yielded connection or context handoff is not an unfinished proof submission.
             // settleTurn above still handles a published ready record through the writer-freeze barrier first.
             const commit = commitSolverSources(state.problem, worker.worktree);
-            const reason = contextSchedulingCheckpoint ? 'context' : 'connection';
+            const reason = softSliceCheckpoint || contextSchedulingCheckpoint ? 'context' : 'connection';
             recordAdvisoryOutput(true);
             cooperation.retainContextDraft(worker, assignment, commit, reason);
             cooperation.interrupted(worker, assignment);

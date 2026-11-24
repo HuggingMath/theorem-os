@@ -19,7 +19,7 @@ import { libraryDeclarationConflict } from '../math/libraryPacks';
 import { maskLeanComments } from '../math/leanSyntax';
 import type { EffectiveLibraryBinding } from '../math/libraryEffectivePack';
 import type { LibraryHostTaskIdentity } from '../math/libraryHostConfig';
-import { originalDeclarationRegions, solverSourceContext as sourceContext } from './sourceContext';
+import { isSolverMathlibImport, originalDeclarationRegions, solverSourceContext as sourceContext } from './sourceContext';
 import { assertMathAgentSkillsCurrent, type MathAgentSkill } from '../runtime/agentSkills';
 export { originalDeclarationRegions, solverMathlibImports } from './sourceContext';
 
@@ -55,7 +55,7 @@ export class SolverSourceError extends Error {
       return `${this.declarationName ?? 'This declaration'} is already declared by a frozen Submission/Library module. Remove or rename the copy and use the library declaration by importing its module.`;
     return this.message === 'math_original_context_changed'
       ? 'Restore the original imports, namespace/section placement, variables, opens, scopes and options from the seed commit. ' +
-        'Keep new helpers; move helper-specific scopes and instances inside their proofs. Added imports may use explicit Mathlib.* modules, frozen local modules already imported by the original owned sources, or other owned modules; avoid import cycles.'
+        'Keep new helpers; move helper-specific scopes and instances inside their proofs. Added imports may use Mathlib or any pinned Mathlib.* module, frozen local modules already imported by the original owned sources, or other owned modules; avoid import cycles.'
       : `Restore the original name, parameters, type and any frozen proof or definition body${this.declarationName ? ` of ${this.declarationName}` : ''} from the seed commit. Preserve new proof work.`;
   }
 }
@@ -117,8 +117,7 @@ export function solverProofImports(problem: SolverSourceConstraints, source: str
   for (const file of Object.keys(problem.declarations))
     if (isAllowedMathProofSource(file) && /^[A-Z][A-Za-z0-9_]*(?:\/[A-Z][A-Za-z0-9_]*)*\.lean$/u.test(file))
       local.add(file.slice(0, -'.lean'.length).replaceAll('/', '.'));
-  return mathConstructionImports(source).filter(module => local.has(module) ||
-    /^Mathlib(?:\.[A-Za-z_][A-Za-z0-9_']*)+$/u.test(module));
+  return mathConstructionImports(source).filter(module => local.has(module) || isSolverMathlibImport(module));
 }
 
 /** Ignore comments and spacing outside literals; strings and every effective context command remain bound. */
@@ -232,7 +231,7 @@ export function readSolverProblem(workspacePath: string, receiptFile: string): S
 
 /** Shared source preflight; diagnostic copies remain advisory, host checks use the frozen state. */
 export function assertSolverProjectSources(problem: SolverSourceConstraints, project: string): void {
-  let addedLocalImportFile: string | undefined;
+  let addedImportFile: string | undefined;
   for (const [relative, digest] of Object.entries(problem.trustedFiles)) {
     const target = path.join(project, relative);
     assertMathCanonicalPath(target);
@@ -253,8 +252,8 @@ export function assertSolverProjectSources(problem: SolverSourceConstraints, pro
     const source = fs.readFileSync(file, 'utf8');
     ownedSources[relative] = source;
     const allowedImports = solverProofImports(problem, source);
-    if (allowedImports.some(module => !module.startsWith('Mathlib.') && !problem.sourceImports?.[relative]?.includes(module)))
-      addedLocalImportFile = relative;
+    if (allowedImports.some(module => !problem.sourceImports?.[relative]?.includes(module)))
+      addedImportFile = relative;
     const changedDeclaration = (regions: ReturnType<typeof inspectLeanDeclarationRegions>) => {
       const matching = originalDeclarationRegions(source, regions);
       return originals.find(original => {
@@ -286,11 +285,12 @@ export function assertSolverProjectSources(problem: SolverSourceConstraints, pro
   }
   const conflict = Object.keys(frozenSources).length ? libraryDeclarationConflict(frozenSources, ownedSources) : undefined;
   if (conflict) throw new SolverSourceError(conflict.file, 'math_library_declaration_redeclared', conflict.name);
-  if (addedLocalImportFile) {
+  if (addedImportFile) {
+    // Only project-local modules enter this graph, including any local module named like a package import.
     try { mathLocalModuleBuildOrder(project, Object.keys(problem.declarations)); }
     catch (error) {
       if (error instanceof Error && error.message === 'math_local_module_import_cycle')
-        throw new SolverSourceError(addedLocalImportFile, 'math_local_module_import_cycle');
+        throw new SolverSourceError(addedImportFile, 'math_local_module_import_cycle');
       throw error;
     }
   }

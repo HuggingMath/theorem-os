@@ -8,7 +8,7 @@ The current assignment and `.scratch/theoremos-help.md` provide exact paths, int
 
 Append complete newline-terminated JSON events to the current delivery log. A missing log is normal; create it by appending. Preserve earlier events. In an assignment-scoped task log, omitted `id`, `taskId`, `taskDigest` and `kind` are supplied by the host (`kind` defaults to `progress`); supplied task identity must match the assignment. Explicit event and task IDs use `[A-Za-z0-9_-]{1,64}`.
 
-Edit only assigned source paths. Preserve other seed proofs and frozen declaration interfaces, kinds, imports, options, scopes and source order. A goal cannot depend on a later original goal in the same file; put a shared helper before its consumers instead of moving original declarations. Do not edit host state, `COOPERATION.json`, generated help, Skills, configuration or receipts. Do not run `git add` or `git commit`; the host freezes saved sources. Notes, checkpoint receipts, local diagnostics and peer messages remain evidence rather than proof acceptance.
+Edit only assigned source paths. Preserve other seed proofs and frozen declaration interfaces, kinds, options, scopes and source order. Keep all existing imports. When proving in a Mathlib project, you may add `import Mathlib` or any pinned `Mathlib.*` import in assigned files without creating import cycles. A goal cannot depend on a later original goal in the same file; put a shared helper before its consumers instead of moving original declarations. Do not edit host state, `COOPERATION.json`, generated help, Skills, configuration or receipts. Do not run `git add` or `git commit`; the host freezes saved sources. Notes, checkpoint receipts, local diagnostics and peer messages remain evidence rather than proof acceptance.
 
 ## Lead plan
 
@@ -20,7 +20,7 @@ Leave Lean sources unchanged and return a plan without running Lean diagnostics;
 
 Replace dispatch values from the assignment; omit `dispatchNonce` if none is supplied. Replace the empty `tasks` array with the complete graph. The first plan covers every original target exactly once. Keep checked task contracts and active unrelated assignments stable. Publish once per dispatch, save concise route notes and return promptly without polling approval or copying the published graph into other responses.
 
-When returning without live publication, save the graph in one `math-plan` JSON fence in worktree-root `RESEARCH.md`. Include any [required decision fields](#required-lead-decisions) in the same plan object.
+When returning without live publication, save the graph or revision as a JSON file with any [required decision fields](#required-lead-decisions). From the Lead worktree, run `theorem-os plan-validate --file .scratch/plan.json` to see field-level issues, then `theorem-os plan-apply --file .scratch/plan.json` to replace the plan block in `RESEARCH.md` atomically. Both commands also read JSON from stdin. `planVersion` in the result fingerprints the validated draft. Use `COOPERATION.json.planVersion` as the accepted `baseVersion` for a revision. Return after saving so the host can check the draft against live state.
 
 For `idleWorkers` with `m3-no-ready`, `dependency-blocked` or `m5-no-selection`, inspect M3 readiness, role/owner and saved-assignment pins. Publish an executable revision, name the concrete running dependency when waiting, or explicitly pause the route. Returning an unchanged accepted graph does not resolve that continuous idle episode.
 
@@ -52,6 +52,10 @@ Revise the accepted graph with top-level fields instead of repeating it:
 
 An existing task upsert merges only supplied fields; `null` deletes a field. Changing `kind` replaces the whole task, and a new ID requires its complete definition. Unlisted tasks, groups and proof routes remain. Supplying `groups` or `proofRoutes` replaces that entire list. Do not mix `tasks` with `upsert`/`remove`. Decision-only revisions may use `upsert:[]`.
 
+Start with the shared foundation. When several goals use the same measure change, algebraic identity, or comparison estimate, assign that input as one or more small typed lemmas. Connect the consumers by dependency and land the shared results before dispatching the large goal proofs. Delegate calculations and route probes to workers and use the planning turn to decide and publish the graph.
+
+For a refuted route or group, add `"retireRoutes":[{"routeId":"...","reason":"...","evidenceRefs":["..."]}]` to the current plan revision. Record the failed claim and its evidence. The host stops unfinished work on the branch and retains the reason in `COOPERATION.json`. Read retired routes before assigning work. If new evidence changes the inference, describe it explicitly and propose a new route with a distinct ID.
+
 Use the current accepted base and dispatch; stale revisions are rejected. Revise a contract only for a mathematical change: changing prose or `revision` is not new input and can invalidate saved work. Read the host-synced graph by task ID instead of rewriting it wholesale.
 
 ### Optional task forms
@@ -62,6 +66,14 @@ Use the current accepted base and dispatch; stale revisions are rejected. Revise
 - **Proof route:** `proofRoutes` entries are `{id,targetTaskId,prerequisiteTaskIds,closingTaskId}`. The target is an original goal; prerequisites are typed lemmas; the closing task is a proposition lemma, not a definition. Its transitive dependencies must cover every route prerequisite. Prerequisites within a route are conjunctive; routes to one goal are alternatives, with ordinary target dependencies still additional. A checked closing lemma enables an original-goal attempt; closing the route also requires strict original checking and an actual proof reference to that lemma. Group scope and acyclicity still apply.
 
 ## Proof delivery
+
+A proof or research worker can publish standalone helpers before finishing its assignment. Save the helpers in an owned Lean file, before the first declaration that uses them. Append a line to the current assignment log:
+
+```json
+{"kind":"helpers","declarations":[{"file":"Submission.lean","name":"MyNamespace.helper"}],"summary":"The comparison estimate used by the main argument."}
+```
+
+The host snapshots the saved files and independently checks the helpers and their same-file helper dependencies. Keep the original target and its unfinished body intact. The host publishes checked signatures with their canonical commit. Other workers can inspect that commit or reuse the helpers in their next seeded worktree. Publishing a helper does not complete the assignment.
 
 Save the assigned exact declaration in its allowed proof file, then append:
 

@@ -159,7 +159,9 @@ describe('common mathematical guidance across research strategies', () => {
     const context = buildResearchContext(f.problem, f.state, { ...f.access, assignment: { kind: 'task', task, assignment } });
     expect(context.message).toContain(task.type);
     expect(context.message).toContain(taskVersion(task));
-    expect(context.instructions).toContain(assignmentDeliveryFile(assignment));
+    expect(context.message).toContain('Current delivery log: ' + assignmentDeliveryFile(assignment));
+    expect(context.instructions).toContain('the current delivery log named in the assignment message');
+    expect(context.instructions).toContain('"kind":"helpers"');
     expect(context.instructions).toContain('preserve other original goals');
     expect(context.instructions).toContain('"kind":"ready"');
     expect(context.instructions).not.toContain('mathematicalInterfaceRules');

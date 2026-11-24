@@ -14,6 +14,7 @@ import { CooperationTaskProofs, type ProofDeliveryAnnotation, type ProofDelivery
 import { reusableFreshConditionalCheck } from './freshContinuationChecks';
 import type { ResearchWorker } from './modules/organization';
 import { VerifierFailureError } from './verifierFailure';
+import { IncrementalHelperRejection, landVerifiedHelpers, type HelperNomination } from './incrementalHelpers';
 
 const recheckBatchFallbacks = new Set([...taskSourceRejections, 'math_task_batch_projection_mismatch', 'math_task_missing_declaration',
   'math_task_batch_resource_limit']);
@@ -34,6 +35,51 @@ function expectedRejection(error: unknown, expected: ReadonlySet<string>): Error
 
 /** Integration of checked task proofs into the canonical commit and their rechecks. */
 export abstract class CooperationIntegration extends CooperationTaskProofs {
+  protected integrateWorkerHelpers(worker: ResearchWorker, action: Extract<import('./tasks').CooperativeAction, { kind: 'task' }>,
+    sourceCommit: string, declarations: HelperNomination[], summary: string) {
+    return this.queueIntegration(async () => {
+      const current = () => !this.stopping && !this.input.signal.aborted && this.current(action);
+      const state = this.input.state;
+      const environmentDigest = state.environmentDigest, problemReceiptDigest = state.problem.receiptDigest;
+      while (current() && state.environmentDigest === environmentDigest && state.problem.receiptDigest === problemReceiptDigest) {
+        const expectedCommit = this.archive.canonicalCommit!;
+        const eligible = ({ file, name }: HelperNomination) => worker.ownedFiles.includes(file) &&
+          !this.archive.tasks.some(({ task }) => task.proofPath === file && task.theoremName === name);
+        let result: Awaited<ReturnType<typeof landVerifiedHelpers>>;
+        try {
+          result = await landVerifiedHelpers({
+            state, sourceWorktree: worker.worktree, sourceCommit, seedCommit: action.assignment.seedCommit,
+            worktree: this.lead.worktree, expectedCommit, declarations, allowHelper: eligible,
+            env: this.input.access.get(this.lead.id)!.environment, signal: this.input.signal, timeoutMs: this.input.timeoutMs,
+          });
+        } catch (error) {
+          if (!(error instanceof IncrementalHelperRejection)) throw error;
+          this.input.emit('incremental_helpers_rejected', { workerId: worker.id, taskId: action.task.id, reason: error.message });
+          const active = this.active.get(worker.id);
+          if (current() && active?.action === action)
+            void active.notify('Helper submission rejected: ' + error.message, { mode: 'advisory' }).catch(() => {});
+          return;
+        }
+        if (!current() || state.environmentDigest !== environmentDigest || state.problem.receiptDigest !== problemReceiptDigest) return;
+        if (this.archive.canonicalCommit !== expectedCommit) continue;
+        if (!result.helpers.length || !result.helpers.every(helper => eligible({ file: helper.file, name: helper.qualifiedName }))) return;
+        this.pin(result.commit);
+        this.archive.canonicalCommit = result.commit;
+        (this.archive.landedHelpers ??= []).push(...result.helpers);
+        this.changed();
+        this.input.emit('incremental_helpers_landed', { workerId: worker.id, taskId: action.task.id,
+          commit: result.commit, declarations: result.helpers.map(helper => helper.qualifiedName), summary });
+        const message = `Verified ${result.helpers.length} canonical helpers at ${result.commit}. Available in the next seeded worktree. ` +
+          'Read landedHelpers in COOPERATION.json for the signature index.\n' +
+          result.helpers.slice(0, 8).map(helper => `${helper.type.slice(0, 240)} (${helper.file})`).join('\n');
+        for (const active of this.active.values()) {
+          if (!active.cancelled && this.current(active.action))
+            void active.notify(message, { mode: 'advisory' }).catch(() => {});
+        }
+        return;
+      }
+    });
+  }
   private canonicalCheckAssignment(task: CooperativeTask, seedCommit: string, tasks: readonly TaskRecord[]): TaskAssignment {
     return { taskId: task.id, taskDigest: digest(task), workerId: this.lead.id, seedCommit,
       dependencies: this.dependencies(task, tasks).map(node => ({ taskId: node.task.id, taskDigest: digest(node.task) })) };

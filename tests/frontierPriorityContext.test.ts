@@ -58,7 +58,8 @@ it.each(['lemma', 'goal', 'research', 'sketch'] as const)(
 
     expect(context.manifest).toMatchObject({ maxOptionalBytes: 0, optionalBytes: 0 });
     expect(context.manifest!.included).toContainEqual(expect.objectContaining({ id: 'assignment-policy', required: true }));
-    expect(context.instructions).toContain(assignmentDeliveryFile(action.assignment));
+    expect(context.message).toContain('Current delivery log: ' + assignmentDeliveryFile(action.assignment));
+    expect(context.instructions).toContain('"kind":"helpers","declarations":');
     expect(context.instructions).toContain('"kind":"research","finding":');
     expect(context.instructions).toContain('publishing does not finish or park your proof task');
     expect(context.instructions).toContain('The host freezes the saved sources and independently checks and integrates them');

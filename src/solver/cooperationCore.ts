@@ -16,7 +16,7 @@ import { proofReadyRecord, type ProofReadyRecord } from './proofReady';
 import type { ProofCheck } from './modules/evidence';
 import { createTaskSourceProjector, isAttributedTaskProof, ownedSourceDigest, TaskProofCache, type TaskProof } from './cooperativeProof';
 import { researchSourceTasks, scopedResearchSources } from './researchSources';
-import { isStatementAction, statementReviewSummary } from './statementReview';
+import { isStatementAction, statementReviewSummary, type StatementReview } from './statementReview';
 import { type ProofReferences } from './proofReferences';
 import { attributeTaskReferences } from './taskReferenceAttribution';
 import { buildProofContinuation } from './progress';
@@ -24,11 +24,14 @@ import { leadResearchInputs } from './contextCompiler';
 import type { ResearchDecision } from './researchDecisions';
 import { recordRouteBlockers, refreshRouteBlockers, validateBlockerProposals } from './routeControl';
 import { parseProofRoutes } from './proofRoutes';
+import { retireCooperativeRoutes, retiredCooperativeRoute } from './cooperationRoutes';
 import { createProofRoutePriorityIndex } from './routePriority';
 import { captureObligationSnapshot, diffObligationProgress } from './obligationProgress';
 import { reviewGoalPaths } from './goalPathReview';
 import { reviewProjectionDependencies } from './projectionDependencyReview';
 import type { GoalPathDecisions } from './goalPathDecisions';
+import type { PlanPatchBase } from './planPatch';
+import type { PlanToolContext } from './planTool';
 import { bindMathematicalGap, mathematicalGapVisible } from './mathematicalGaps';
 import { currentNextCheck, proposedNextChecks } from './nextChecks';
 import { proposedDefinitionContractChecks } from './definitionContractChecks';
@@ -123,6 +126,7 @@ export abstract class CooperationCore {
   protected abstract refreshResearchCheckpoints(): void;
   protected abstract suspendResearchDrafts(worker: ResearchWorker, taskId?: string): void;
   protected abstract planVersion(): string;
+  protected abstract planPatchBase(): PlanPatchBase | undefined;
   protected abstract canAssemble(commit: string): boolean;
   protected abstract synchronizationPending(): boolean;
   abstract contextState(action?: CooperativeAction, worker?: ResearchWorker, versions?: TaskVersions): CooperationState;
@@ -144,6 +148,34 @@ export abstract class CooperationCore {
     if (this.archive.leadWakes) reopenLeadWakes(this.archive.leadWakes);
     else this.archive.leadWakes = emptyLeadWakes();
     this.archive.proofRoutes = parseProofRoutes(this.archive.proofRoutes, this.archive.tasks.map(node => node.task));
+    const gateRetirements = input.state.portfolioExploration?.gate?.retiredRoutes ?? [];
+    let retirementChanged = false;
+    if (gateRetirements.length) {
+      const retired = new Map(gateRetirements.map(route => [route.routeId, route]));
+      for (const route of this.archive.retiredRoutes ?? []) retired.set(route.routeId, route);
+      retirementChanged = retired.size !== (this.archive.retiredRoutes?.length ?? 0);
+      this.archive.retiredRoutes = [...retired.values()];
+    }
+    if (this.archive.retiredRoutes?.length) {
+      const retirement = retireCooperativeRoutes({
+        tasks: this.archive.tasks.map(node => node.task),
+        groups: this.archive.groups?.map(route => route.group) ?? [],
+        proofRoutes: this.archive.proofRoutes,
+      }, this.archive);
+      if (retirement) {
+        this.archive.retiredRouteTasks = retirement.retiredRouteTasks;
+        retirementChanged ||= (this.archive.proofRoutes?.length ?? 0) !== (retirement.plan.proofRoutes?.length ?? 0);
+        this.archive.proofRoutes = retirement.plan.proofRoutes;
+        for (const route of this.archive.groups ?? []) {
+          if (route.group.status !== 'stopped' && this.archive.retiredRoutes.some(record => record.routeId === route.group.id)) {
+            route.group = { ...route.group, status: 'stopped' };
+            retirementChanged = true;
+          }
+        }
+        if (this.stopRetiredRouteTasks() || retirementChanged)
+          this.archive.planVersion = this.planVersion();
+      }
+    }
     this.syncProofRoutes();
     if (!this.archive.canonicalCommit) {
       this.archive.canonicalCommit = git(this.lead.worktree, ['rev-parse', 'HEAD']);
@@ -494,6 +526,46 @@ export abstract class CooperationCore {
   protected syncProofRoutes() {
     for (const node of this.archive.tasks) node.alternativeRoutes = this.archive.proofRoutes?.filter(route => route.targetTaskId === node.task.id);
   }
+  protected supersedeStatementReview(review: StatementReview) {
+    review.status = 'superseded';
+    for (const record of this.archive.deliveries ?? []) if (record.statementReviewId === review.id) record.status = 'superseded';
+  }
+  protected stopRetiredRouteTasks() {
+    if (!this.archive.retiredRoutes?.length) return false;
+    let changed = false;
+    for (const node of this.archive.tasks) {
+      if (node.status === 'integrated') continue;
+      const route = retiredCooperativeRoute(node.task, this.archive);
+      if (!route) {
+        if (!node.assignment?.routeId || !this.archive.retiredRoutes.some(item => item.routeId === node.assignment?.routeId)) continue;
+        if (node.status === 'running') this.moveTask(node, 'pending', 'interrupted');
+        node.assignment = undefined;
+        changed = true;
+        continue;
+      }
+      const feedback = `math_route_retired: ${route.routeId}: ${route.reason}`;
+      if (node.status === 'blocked' && node.task.status === 'stopped' && node.feedback === feedback && !node.assignment) continue;
+      node.task = { ...node.task, status: 'stopped' };
+      this.moveTask(node, 'blocked', 'route-retired');
+      node.assignment = undefined;
+      node.pendingValidation = undefined;
+      node.feedback = feedback;
+      changed = true;
+    }
+    for (const review of this.archive.statementReviews ?? []) {
+      if (review.status === 'superseded') continue;
+      const node = this.node(review.taskId);
+      if (node && node.status !== 'integrated' && retiredCooperativeRoute(node.task, this.archive)) {
+        this.supersedeStatementReview(review);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+  protected actionRouteRetired(action: Extract<CooperativeAction, { kind: 'task' }>) {
+    return Boolean(retiredCooperativeRoute(action.task, this.archive) ||
+      this.archive.retiredRoutes?.some(route => route.routeId === action.assignment.routeId));
+  }
   protected recordDispatchWait(worker: ResearchWorker,
     observation: Omit<DispatchWaitObservation, 'observedAt' | 'endedAt' | 'planVersion'>) {
     const record = this.input.state.workers?.find(item => item.id === worker.id);
@@ -526,6 +598,7 @@ export abstract class CooperationCore {
     this.refreshCapacityExplorations();
     this.refreshFeasibilityAssignments();
     this.refreshResearchCheckpoints();
+    this.stopRetiredRouteTasks();
     for (const blocker of refreshRouteBlockers(this.archive.blockers ?? [], this.archive.tasks,
       this.input.state.environmentDigest, this.input.state.problem.receiptDigest)) {
       this.wakeLead('route-reopened');
@@ -549,8 +622,10 @@ export abstract class CooperationCore {
       const owners = busy.get(groupId) ?? new Set<string | undefined>(); owners.add(workerId); busy.set(groupId, owners);
     };
     for (const node of this.archive.tasks) if (node.status === 'running') occupy(taskGroup(node.task), node.assignment?.workerId);
-    for (const [id, active] of this.active) if (active.action.kind === 'task') occupy(taskGroup(active.action.task), id);
-    for (const publication of this.proofPublications.values()) occupy(taskGroup(publication.action.task), publication.workerId);
+    for (const [id, active] of this.active) if (active.action.kind === 'task' &&
+        !this.actionRouteRetired(active.action)) occupy(taskGroup(active.action.task), id);
+    for (const publication of this.proofPublications.values()) if (!this.actionRouteRetired(publication.action))
+      occupy(taskGroup(publication.action.task), publication.workerId);
     for (const review of this.archive.statementReviews ?? []) {
       const node = nodes.get(review.taskId);
       if (node && ['translating', 'reviewing'].includes(review.status)) occupy(taskGroup(node.task), review.workerId);
@@ -607,6 +682,13 @@ export abstract class CooperationCore {
       const deliveries = (scoped.deliveries ?? []).filter(record => recentDeliveries.has(record.id) || requiredCheckDeliveries.has(record.id));
       writeMathJsonDurable(path.join(worker.worktree, 'COOPERATION.json'), {
         planVersion: this.archive.planVersion,
+        ...(worker.id === this.lead.id ? { planTool: {
+          problem: { targets: this.input.state.problem.targets, ownedFiles: this.input.state.problem.ownedFiles,
+            frozenFiles: this.input.state.problem.frozenFiles, declarations: this.input.state.problem.declarations },
+          base: this.planPatchBase(), goalPath: scoped.goalPathReview,
+        } satisfies PlanToolContext } : {}),
+        ...(scoped.landedHelpers?.length ? { landedHelpers: scoped.landedHelpers } : {}),
+        ...(scoped.retiredRoutes?.length ? { retiredRoutes: scoped.retiredRoutes } : {}),
         edits: (this.archive.edits ?? []).slice(-16),
         agents,
         dispatchWaits: (this.input.state.workers ?? []).flatMap(peer => {
@@ -874,7 +956,8 @@ export abstract class CooperationCore {
       return Boolean(review && review.status === 'running' && review.commit === action.seedCommit &&
         review.sourceDigest === action.sourceDigest && review.assignmentId === action.assignmentId);
     }
-    return action.kind !== 'task' || this.archive.tasks.some(node => node.assignment === action.assignment && digest(node.task) === action.assignment.taskDigest &&
+    return action.kind !== 'task' || !this.actionRouteRetired(action) &&
+      this.archive.tasks.some(node => node.assignment === action.assignment && digest(node.task) === action.assignment.taskDigest &&
       (!node.nextCheckId || this.archive.nextChecks?.some(record => record.id === node.nextCheckId && record.status === 'pending' &&
         currentNextCheck(record, this.archive, { problemReceiptDigest: this.input.state.problem.receiptDigest,
           environmentDigest: this.input.state.environmentDigest }))) &&

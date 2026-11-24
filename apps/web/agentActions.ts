@@ -408,6 +408,14 @@ export function isWebAgentActionBody(value: unknown): value is WebAgentActionBod
 
 /** Coalesce only sanitized public text snapshots; lifecycle reports and tool actions remain immediate. */
 export function createAgentActionStream(send: (action: WebAgentActionBody) => void) {
+  const reasoningIntervalMs = 4_000, reasoningPreviewBytes = 2_048;
+  const runningPreview = (action: WebAgentActionBody) => {
+    if (action.kind !== 'reasoning' || !action.text || Buffer.byteLength(action.text) <= reasoningPreviewBytes) return action;
+    const bytes = Buffer.from(action.text);
+    let start = bytes.length - reasoningPreviewBytes + Buffer.byteLength('…');
+    while ((bytes[start]! & 0xc0) === 0x80) start++;
+    return { ...action, text: '…' + bytes.toString('utf8', start), textClipped: true };
+  };
   type Entry = { sentAt?: number; signature?: string; latest?: WebAgentActionBody; pending?: WebAgentActionBody;
     timer?: ReturnType<typeof setTimeout>; completed?: boolean };
   const entries = new Map<string, Entry>();
@@ -442,13 +450,15 @@ export function createAgentActionStream(send: (action: WebAgentActionBody) => vo
       if (!action.textSource) { if (!incremental) deliver(action); return; }
       if (!entry) { entry = {}; entries.set(itemId, entry); }
       entry.latest = action;
-      if (!incremental) { emit(entry, action); return; }
-      if (entry.signature === signature(action)) {
+      const preview = runningPreview(action);
+      if (!incremental) { emit(entry, preview); return; }
+      if (entry.signature === signature(preview)) {
         clearTimeout(entry.timer); entry.timer = undefined; entry.pending = undefined; return;
       }
-      entry.pending = action;
-      const remaining = entry.sentAt === undefined ? 0 : Math.max(0, 1_000 - (Date.now() - entry.sentAt));
-      if (!remaining) { clearTimeout(entry.timer); entry.timer = undefined; emit(entry, action); }
+      entry.pending = preview;
+      const interval = action.kind === 'reasoning' ? reasoningIntervalMs : 1_000;
+      const remaining = entry.sentAt === undefined ? 0 : Math.max(0, interval - (Date.now() - entry.sentAt));
+      if (!remaining) { clearTimeout(entry.timer); entry.timer = undefined; emit(entry, preview); }
       else if (!entry.timer) {
         entry.timer = setTimeout(() => {
           entry!.timer = undefined;

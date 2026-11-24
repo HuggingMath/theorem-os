@@ -1,5 +1,19 @@
+import { z } from 'zod';
 import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
 import { freshlyAccepted, hasTaskAcceptance, isAdvisoryTask, taskGroup, taskVersion, type CooperativeTask, type TaskRecord } from './tasks';
+
+export const portfolioRouteIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/u);
+export const routeRetirementSchema = z.object({
+  routeId: portfolioRouteIdSchema,
+  reason: z.string().trim().min(1).max(3000),
+  evidenceRefs: z.array(z.string().trim().min(1).max(1000)).max(16).optional(),
+}).strict();
+export const retiredRouteSchema = routeRetirementSchema.extend({
+  retiredAt: z.number().int().nonnegative(),
+  source: z.enum(['portfolio', 'lead']),
+});
+export type RouteRetirement = z.infer<typeof routeRetirementSchema>;
+export type RetiredRoute = z.infer<typeof retiredRouteSchema>;
 
 export type ReopenCondition = { kind: 'contract-changed' } | { kind: 'environment-changed' } |
   { kind: 'dependency-checked'; taskId: string };

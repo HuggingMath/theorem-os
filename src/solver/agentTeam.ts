@@ -10,7 +10,7 @@ import { bindLeanPackages } from '../math/leanDiagnostics';
 import type { SolverRunState } from './archive';
 import type { WorkerAccess } from './research';
 import type { SolverModules } from './modules';
-import { git, commitSolverSources, solverSourceConstraints, SolverSourceError } from './problem';
+import { git, commitSolverSources, solverSourceConstraints, SolverSourceError, withSolverWorktree } from './problem';
 import { solverSourceFeedback } from './feedback';
 import { prepareResearchSkill } from './researchSkill';
 import { buildSkillResearchContext, teamTurnTiming } from './skillResearchContext';
@@ -30,7 +30,7 @@ import { ownedSourceDigest } from './cooperativeProof';
 import { agentTeamWorkerSection } from './agentTeamContext';
 import { saveAgentTeamResearchArtifact, inspectAgentTeamResearchArtifact } from './agentTeamResearch';
 import { agentTeamChildAdmission, projectAgentTeamBudget } from './agentTeamBudget';
-import { agentTeamOverview, agentTeamTaskHistory } from './agentTeamViews';
+import { agentTeamOverview, agentTeamRouteSummary, agentTeamTaskHistory } from './agentTeamViews';
 import { agentTeamProfileSelection, resolveNewMemberProfiles, resolveAgentTeamProfiles } from './agentTeamProfiles';
 import { writeWorkerProject } from './workerProject';
 import { agentTeamRequestSchema as request, agentTeamToolDefinition as teamTool,
@@ -40,9 +40,23 @@ import type { ModelRequestGate } from '../runtime/modelRequest';
 import { LeanEnvironmentHealthCheckError } from '../runtime/leanHealthCheck';
 import { prepareAgentTeamWorkspace } from './agentTeamWorkspace';
 import { AgentTeamNativeControl, nativeSpawnHistory, nativeTeamAssignmentMessage, type NativeTeamAcceptedChild, type NativeTeamSpawn } from './agentTeamNative';
+import { IncrementalHelperRejection, landVerifiedHelpers } from './incrementalHelpers';
+import { createSoftSlice, softSliceSettings, type SoftSliceSettings } from './softSlice';
+import { portfolioRouteIdSchema, type RetiredRoute, type routeRetirementSchema } from './routeControl';
 
-type LiveWorker = { session?: MathAgentSession; task: Promise<void>; abort: AbortController; cancelledTaskId?: string;
-  admittedTurnId?: string; runSettled?: boolean };
+type LiveWorker = { session?: MathAgentSession; task: Promise<void>; abort: AbortController; routeAbort: AbortController;
+  cancelledTaskId?: string; admittedTurnId?: string; runSettled?: boolean };
+const CHECKPOINT_CLOSE_GRACE_MS = 10_000;
+
+/** Native AgentControl carries an attributed message rather than a separate route field. */
+function nativeTaskRoute(message: string) {
+  const firstLine = message.trimStart().split('\n', 1)[0]!;
+  if (!/^Route\s*:/iu.test(firstLine)) return { message, routeId: undefined };
+  const route = portfolioRouteIdSchema.safeParse(firstLine.slice(firstLine.indexOf(':') + 1).trim());
+  const objective = message.trimStart().slice(firstLine.length).trimStart();
+  if (!route.success || !objective) throw new NativeAgentControlInputError('math_team_native_route_invalid: Use Route: ROUTE_ID on the first line, followed by the task.');
+  return { message: objective, routeId: route.data };
+}
 
 /** Check persisted process identities before preparing or reading recovered proof workspaces. */
 export function assertAgentTeamProcessesStopped(state: SolverRunState) {
@@ -65,12 +79,16 @@ function correctableProofFailure(error: unknown) {
   return error instanceof Error && /^math_agent_team_proof_(?:undeclared_source_change|declaration_missing|declaration_outside_ownership|import_removed)$/u.test(error.message);
 }
 
+function teamTaskResearchSummary(task: AgentTeamTask) {
+  return task.summary ?? task.pauseRequested?.reason ?? task.cancelRequested?.reason ?? task.error ?? 'Research saved.';
+}
+
 /** Mechanical execution of Agent decisions. Mathematical decomposition and adoption stay with Lead. */
 export class AgentResearchTeam {
   readonly archive: AgentTeamState;
   readonly directory: string;
   private live = new Map<string, LiveWorker>();
-  private readonly nativeControl?: AgentTeamNativeControl;
+  private nativeControl?: AgentTeamNativeControl;
   private readonly nativeIdle = new Map<string, MathAgentSession>();
   private readonly failedNominations: TeamFailureCache = new Map();
   private readonly nativeStarts = new Map<string, { promise: Promise<NativeTeamAcceptedChild>;
@@ -88,6 +106,7 @@ export class AgentResearchTeam {
     executable: string; profile: string; signal: AbortSignal; maxAgents: number; maxTurns: number;
     maxTurnMs: number; maxTotalTokens: number; proofTimeoutMs?: number; remainingMs: () => number;
     prepareWorker?: (id: string, worktree: string) => Promise<WorkerAccess>;
+    softSlice?: SoftSliceSettings;
     save: () => void; emit: (event: string, details?: Record<string, unknown>) => void;
     exclusiveCheck: <T>(operation: () => Promise<T>) => Promise<T>;
   }) {
@@ -96,6 +115,10 @@ export class AgentResearchTeam {
     fs.mkdirSync(path.join(path.dirname(input.state.worktree), 'team-workspaces'), { recursive: true, mode: 0o700 });
     this.archive = input.state.agentTeam ??= { schema: 'theorem-os.agent-team.v1', workers: [], events: [],
       deliveries: [], adoptions: [], operations: [] };
+    for (const route of input.state.portfolioExploration?.gate?.retiredRoutes ?? []) {
+      if (!this.archive.retiredRoutes?.some(item => item.routeId === route.routeId))
+        (this.archive.retiredRoutes ??= []).push(route);
+    }
     agentTeamStateSchema.parse(this.archive);
     let sequence = Math.max(0, ...this.archive.workers.flatMap(worker => worker.tasks.map(task => task.sequence ?? 0)));
     for (const worker of this.archive.workers) for (const task of worker.tasks) task.sequence ??= ++sequence;
@@ -108,7 +131,7 @@ export class AgentResearchTeam {
       admit: (worker, turnId) => {
         const live = this.live.get(worker.id);
         if (!live || live.runSettled || live.admittedTurnId && live.admittedTurnId !== turnId ||
-            !worker.tasks.some(task => task.status === 'running') || worker.writerStopUnconfirmed)
+            !worker.tasks.some(task => task.status === 'running' && !task.cancelRequested) || worker.writerStopUnconfirmed)
           throw new Error('math_team_native_turn_not_dispatched:' + turnId);
         live.admittedTurnId = turnId;
         worker.native!.turnId = turnId; worker.native!.status = 'running';
@@ -122,6 +145,23 @@ export class AgentResearchTeam {
   get hasActiveWorkers() { return this.live.size > 0; }
   get nativeAgentControlEnabled() { return this.archive.transport === 'native-agent-control'; }
   nativeAgentControlOptions(actor = 'lead') { return this.nativeControl?.options(actor); }
+  fallbackLeadTransport(error: unknown) {
+    const { state, signal } = this.input;
+    if (!this.nativeAgentControlEnabled || signal.aborted || this.leadSession || state.threadId || state.writerProcess ||
+        state.usageAccounting?.startedTurns || state.requestUsageAccounting?.startedRequests || this.archive.workers.length)
+      return;
+    if (!(error instanceof Error)) return;
+    if (error.cause instanceof Error && /auth|api[_ -]?key|credential|abort/iu.test(error.cause.message)) return;
+    const match = /^(math_codex_rpc_failed|math_codex_rpc_timeout)(?::(?:(-?\d+|invalid_code):)?(initialize|thread\/start|theoremos\/agentControl\/(?:capabilities|snapshot)))?$/u.exec(error.message);
+    const transport = /^(math_codex_transport_closed)(?::[\w:=.-]+)?$/u.exec(error.message);
+    const backend = /^(math_native_agent_control_(?:backend_required|closed)|math_codex_thread_missing)$/u.exec(error.message);
+    const reason = (match ?? transport ?? backend)?.[1];
+    if (!reason || match?.[2] === '401' || match?.[2] === '403') return;
+    this.archive.transport = 'host-tools';
+    delete this.archive.nativeControl;
+    this.nativeControl = undefined;
+    return { from: 'native-agent-control', to: 'host-tools', reason, error: error.message };
+  }
   private get budgetControlsEnabled() { return this.input.maxTotalTokens > 0 || Number.isFinite(this.input.maxTurns); }
   setLeadSession(session?: MathAgentSession) {
     this.leadSession = session;
@@ -153,7 +193,8 @@ export class AgentResearchTeam {
         return true;
       }
       const adoptions = this.archive.adoptions.filter(item => item.targetId === 'lead' &&
-        ['queued', 'integrating'].includes(item.status));
+        ['queued', 'integrating'].includes(item.status) &&
+        this.archive.deliveries.find(delivery => delivery.id === item.deliveryId)?.kind !== 'helpers');
       if (!adoptions.length) return false;
       if (!this.leadAdoptionCheckpoint) {
         this.leadAdoptionCheckpoint = true;
@@ -166,8 +207,9 @@ export class AgentResearchTeam {
 
   private changed() {
     const { state } = this.input;
-    state.tokenBudget = buildTokenBudget(this.input.maxTotalTokens, [state, ...this.usageRecords], state.tokenBudget?.enforcement);
-    state.teamUsage = aggregateUsage([state, ...this.usageRecords]);
+    const records = [state, ...this.usageRecords, ...(state.portfolioExploration?.scouts ?? [])];
+    state.tokenBudget = buildTokenBudget(this.input.maxTotalTokens, records, state.tokenBudget?.enforcement);
+    state.teamUsage = aggregateUsage(records);
     this.input.save();
     for (const wake of this.waiters) wake();
   }
@@ -223,6 +265,7 @@ export class AgentResearchTeam {
         if (operation.agentId) this.worker(operation.agentId);
         return agentTeamTaskHistory(this.archive, operation);
       }
+      if (operation.operation === 'route_summary') return agentTeamRouteSummary(this.archive, operation);
       const key = canonicalMathJson([actor, context.threadId, context.turnId, context.callId]);
       const digest = mathDigest(canonicalMathJson(operation));
       // Serializing mutations also prevents concurrent spawn/adoption calls from racing capacity or source checks.
@@ -253,6 +296,69 @@ export class AgentResearchTeam {
     const worker = this.archive.workers.find(item => item.id === id);
     if (!worker) throw new Error('math_team_agent_unknown:' + id);
     return worker;
+  }
+
+  private occupiedAgentSlots() {
+    return this.archive.workers.filter(worker => {
+      const active = this.live.get(worker.id);
+      return worker.status !== 'stopped' || Boolean(active && !active.routeAbort.signal.aborted);
+    }).length;
+  }
+
+  private assertRouteAvailable(routeId?: string) {
+    if (routeId && this.archive.retiredRoutes?.some(route => route.routeId === routeId))
+      throw new Error('math_team_route_retired:' + routeId + ': Review the saved evidence and use a new route ID only for a materially revised route.');
+  }
+
+  private retireRoute(input: z.infer<typeof routeRetirementSchema>) {
+    const existing = this.archive.retiredRoutes?.find(route => route.routeId === input.routeId);
+    if (existing) return { ok: true, retiredRoute: existing, cancelledTaskIds: [], releasedAgentIds: [] };
+    const retiredRoute: RetiredRoute = { ...input, retiredAt: Date.now(), source: 'lead' };
+    (this.archive.retiredRoutes ??= []).push(retiredRoute);
+    const cancelledTaskIds: string[] = [], releasedAgentIds: string[] = [];
+    const interrupted: LiveWorker[] = [], idle: AgentTeamWorker[] = [];
+    for (const worker of this.archive.workers) {
+      const pending = worker.pendingDelivery?.taskId;
+      const affected = worker.tasks.filter(task => task.routeId === input.routeId &&
+        (['queued', 'running', 'paused'].includes(task.status) || pending === task.id || task.helperSubmission));
+      if (!affected.length) continue;
+      const executing = affected.find(task => task.status === 'running' || pending === task.id || task.helperSubmission);
+      for (const task of affected) {
+        cancelledTaskIds.push(task.id);
+        task.cancelRequested = { at: retiredRoute.retiredAt, reason: retiredRoute.reason };
+        task.helperSubmission = undefined;
+        if (pending === task.id) worker.pendingDelivery = undefined;
+        if (task.status !== 'running') {
+          task.status = 'cancelled'; task.finishedAt = retiredRoute.retiredAt;
+        }
+      }
+      const live = this.live.get(worker.id);
+      if (!worker.tasks.some(task => !task.cancelRequested && ['queued', 'running', 'paused'].includes(task.status))) {
+        worker.status = 'stopped';
+        worker.activity = live ? 'stopping' : 'idle';
+        releasedAgentIds.push(worker.id);
+        idle.push(worker);
+      }
+      if (live && (executing || worker.status === 'stopped')) {
+        worker.activity = 'stopping';
+        interrupted.push(live);
+      }
+    }
+    // Save the entire route decision before signalling workers. Reuse of an
+    // affected member still goes through its stopped-writer barrier.
+    this.changed();
+    for (const entry of interrupted) {
+      const reason = new Error('math_team_route_retired:' + input.routeId);
+      entry.routeAbort.abort(reason);
+      entry.abort.abort(reason);
+      void entry.session?.interrupt().catch(() => {});
+    }
+    for (const worker of idle)
+      void this.closeNativeIdle(worker).catch(() => { /* stopProofWriter durably records failures. */ });
+    const text = 'Route ' + input.routeId + ' retired. ' + input.reason;
+    for (const to of ['lead', ...this.archive.workers.filter(worker => worker.status !== 'stopped').map(worker => worker.id)])
+      this.event(null, to, 'route-retired', text);
+    return { ok: true, retiredRoute, cancelledTaskIds, releasedAgentIds };
   }
 
   private nativeStart(worker: AgentTeamWorker) {
@@ -288,12 +394,14 @@ export class AgentResearchTeam {
   }
 
   private async spawnNative(request: NativeTeamSpawn, signal: AbortSignal): Promise<NativeTeamAcceptedChild> {
-    if (this.archive.workers.filter(item => item.status !== 'stopped' || this.live.has(item.id)).length >= this.input.maxAgents - 1)
+    const { message, routeId } = nativeTaskRoute(request.message);
+    this.assertRouteAvailable(routeId);
+    if (this.occupiedAgentSlots() >= this.input.maxAgents - 1)
       throw new NativeAgentControlInputError('math_team_capacity_exceeded');
     const leaf = request.agentPath.slice('/root/'.length);
     const id = /^[A-Za-z0-9_-]{1,64}$/u.test(leaf) && leaf !== 'lead' ? leaf : 'native-' + mathDigest(request.agentPath).slice(0, 24);
     if (this.archive.workers.some(worker => worker.id === id)) throw new Error('math_team_agent_exists');
-    const task = this.newTask(request.message);
+    const task = this.newTask(message, undefined, { routeId });
     const seedCommit = git(this.input.state.worktree, ['rev-parse', 'HEAD']);
     const spawnHistory = nativeSpawnHistory(request.bootstrap);
     const worker: AgentTeamWorker = { id, role: 'researcher',
@@ -314,7 +422,8 @@ export class AgentResearchTeam {
   }
 
   private async followupNative(worker: AgentTeamWorker, initialInput: Record<string, unknown>, signal: AbortSignal): Promise<NativeTeamAcceptedChild> {
-    const message = nativeTeamAssignmentMessage(initialInput.input as Record<string, unknown>);
+    const { message, routeId } = nativeTaskRoute(nativeTeamAssignmentMessage(initialInput.input as Record<string, unknown>));
+    this.assertRouteAvailable(routeId);
     if (worker.writerStopUnconfirmed) throw new Error('math_writer_stop_unconfirmed:' + worker.id);
     if (worker.status === 'stopped') throw new Error('math_team_agent_stopped');
     const profiles = message.trimStart().startsWith('Profiles:') ? this.memberProfiles(message, worker) : undefined;
@@ -323,8 +432,11 @@ export class AgentResearchTeam {
       const connection = active.session.nativeAgentControl;
       if (!connection) throw new Error('math_team_native_backend_required');
       const task = worker.tasks.find(task => task.status === 'running');
-      if (!task) throw new Error('math_team_task_not_running');
-      if (task.declarations) throw new NativeAgentControlInputError(
+      if (!task || task.cancelRequested) throw new Error('math_team_task_not_running');
+      if (routeId !== undefined && routeId !== task.routeId)
+        throw new NativeAgentControlInputError('math_team_route_switch_requires_stopped_task');
+      this.assertRouteAvailable(task.routeId);
+      if (task.declarations || task.helperSubmission) throw new NativeAgentControlInputError(
         'math_team_submission_pending: this member has already submitted. Send new work after its writer stops and the nomination is checked.');
       const changedProfiles = profiles && canonicalMathJson(profiles.evidence.selected) !== canonicalMathJson(task.profileEvidence?.selected);
       // Preserve the attributed native message and codec. The receiver's frozen
@@ -334,21 +446,26 @@ export class AgentResearchTeam {
         ...(changedProfiles ? { contextItems: [{ type: 'message', role: 'user',
           content: [{ type: 'input_text', text: profiles.section.text }] }] } : {}) });
       if (result.accepted !== true || typeof result.submissionId !== 'string') throw new Error('math_team_native_input_not_accepted');
+      if (task.cancelRequested) throw new Error('math_team_task_not_running');
       this.saveNativeFollowup(task, message, profiles?.evidence ?? task.profileEvidence);
       const accepted = this.nativeControl!.accepted(worker, active.session, worker.native!.turnId!);
       return { ...accepted, submissionId: result.submissionId };
     }
     if (active) await active.task;
     await this.closeNativeIdle(worker);
+    if ((worker.status as string) === 'stopped') throw new Error('math_team_agent_stopped');
+    this.assertRouteAvailable(routeId);
     worker.native!.initialInput = initialInput;
     this.nativeStart(worker);
-    const saved = worker.tasks.toReversed().find(task => ['paused', 'interrupted', 'queued'].includes(task.status) && !task.cancelRequested && !task.deliveryId);
+    const saved = worker.tasks.toReversed().find(task => ['paused', 'interrupted', 'queued'].includes(task.status) &&
+      !task.cancelRequested && !task.deliveryId && (routeId === undefined || routeId === task.routeId));
     if (saved) {
+      this.assertRouteAvailable(saved.routeId);
       this.saveNativeFollowup(saved, message, profiles?.evidence);
       saved.pauseRequested = undefined; saved.status = 'queued'; saved.error = undefined;
       this.launch(worker);
     } else {
-      this.enqueue(worker, this.newTask(message, profiles?.evidence));
+      this.enqueue(worker, this.newTask(message, profiles?.evidence, { routeId }));
     }
     return this.waitNativeStart(worker, signal);
   }
@@ -381,6 +498,7 @@ export class AgentResearchTeam {
   }
 
   private async loadNative(worker: AgentTeamWorker) {
+    if (worker.status === 'stopped') throw new Error('math_team_agent_stopped');
     if (this.live.get(worker.id)?.session || this.nativeIdle.has(worker.id)) return;
     if (this.live.has(worker.id) || worker.writerStopUnconfirmed || worker.pendingDelivery ||
         ['checking', 'integrating', 'stopping'].includes(worker.activity ?? '')) throw new Error('math_team_native_member_busy');
@@ -408,6 +526,7 @@ export class AgentResearchTeam {
     this.nativeIdle.set(worker.id, session);
     if (worker.native && session.nativeConfiguration) worker.native.runtimeConfiguration = session.nativeConfiguration;
     worker.writerProcess = session.processIdentity; this.changed();
+    if ((worker.status as string) === 'stopped') await this.closeNativeIdle(worker);
   }
 
   private snapshot(actor: string, after: number) {
@@ -473,9 +592,10 @@ export class AgentResearchTeam {
         return { ok: true, coordination, advisory: true };
       }
       case 'spawn': {
+        this.assertRouteAvailable(operation.routeId);
         if (operation.agentId === 'lead' || this.archive.workers.some(item => item.id === operation.agentId))
           throw new Error('math_team_agent_exists');
-        if (this.archive.workers.filter(item => item.status !== 'stopped' || this.live.has(item.id)).length >= this.input.maxAgents - 1)
+        if (this.occupiedAgentSlots() >= this.input.maxAgents - 1)
           throw new Error('math_team_capacity_exceeded');
         const task = this.newTask(operation.message, undefined, operation);
         const worktree = path.join(path.dirname(this.input.state.worktree), 'team-workspaces', operation.agentId);
@@ -487,6 +607,7 @@ export class AgentResearchTeam {
         return this.enqueue(worker, task);
       }
       case 'assign': {
+        this.assertRouteAvailable(operation.routeId);
         const worker = this.worker(operation.agentId);
         if (worker.status === 'stopped') throw new Error('math_team_agent_stopped');
         return this.enqueue(worker, this.newTask(operation.message, this.memberProfiles(operation.message, worker).evidence, operation));
@@ -566,6 +687,7 @@ export class AgentResearchTeam {
       case 'resume': {
         const worker = this.worker(operation.agentId), task = worker.tasks.find(task => task.id === operation.taskId);
         if (!task) throw new Error('math_team_task_unknown');
+        this.assertRouteAvailable(task.routeId);
         if (worker.status === 'stopped') throw new Error('math_team_agent_stopped');
         if (worker.writerStopUnconfirmed) throw new Error('math_writer_stop_unconfirmed:' + worker.id);
         if (task.status !== 'paused') throw new Error('math_team_task_not_paused');
@@ -597,7 +719,7 @@ export class AgentResearchTeam {
         const active = this.live.get(worker.id);
         if (task.status === 'running' && !active) throw new Error('math_team_task_not_running');
         const replacement: AgentTeamTask | undefined = operation.replacement
-          ? this.newTask(operation.replacement, this.memberProfiles(operation.replacement, worker).evidence) : undefined;
+          ? this.newTask(operation.replacement, this.memberProfiles(operation.replacement, worker).evidence, { routeId: task.routeId }) : undefined;
         if (replacement && worker.native) worker.native.initialInput = { author: '/root',
           input: { kind: 'message', mode: 'triggerTurn', message: { kind: 'plaintext', text: replacement.message } }, startOptions: {} };
         task.cancelRequested = { at: Date.now(), reason: operation.reason, replacementTaskId: replacement?.id };
@@ -675,11 +797,12 @@ export class AgentResearchTeam {
           artifacts: delivery.artifacts.map(artifact => ({ id: artifact.id, declaration: artifact.declaration,
             proof: artifact.proof })), originalProblemAcceptance: 'not-assessed' };
       }
-      case 'submit': {
+      case 'submit':
+      case 'submit_helpers': {
         if (actor === 'lead') throw new Error('math_team_child_submission_required');
         const worker = this.worker(actor), task = worker.tasks.find(item => item.status === 'running');
         if (!task || task.cancelRequested || task.pauseRequested || !this.live.has(actor)) throw new Error('math_team_task_not_running');
-        if (task.declarations) throw new Error('math_team_submission_pending');
+        if (task.declarations || task.helperSubmission) throw new Error('math_team_submission_pending');
         if (!this.nativeAgentControlEnabled && operation.objectiveRevision !== undefined && operation.objectiveRevision !== (task.objectiveRevision ?? 1))
           throw new Error('math_team_objective_revision_changed');
         if (!this.nativeAgentControlEnabled && operation.objectiveRevision === undefined && task.objectiveHistory?.length)
@@ -690,6 +813,14 @@ export class AgentResearchTeam {
           ownedFiles: this.input.state.problem.ownedFiles,
           hint: 'Declaration file paths are relative to the Lean project. Use an exact owned file path; ' +
             'put helpers in an editable owned Lean file or keep exploratory files under .scratch. No nomination was saved; correct the declarations and submit again.' };
+        if (operation.operation === 'submit_helpers') {
+          task.helperSubmission = operation.declarations;
+          task.summary = operation.summary;
+          task.pauseRequested = { at: Date.now(), kind: 'handoff', reason: 'Standalone helper handoff. The assignment remains open.' };
+          this.changed();
+          return { ok: true, status: 'pending-writer-stop', taskId: task.id,
+            instruction: 'Save source and notes, then return. The host verifies standalone helpers and the assignment can resume afterward.' };
+        }
         task.nomination = { objectiveRevision: task.objectiveRevision ?? 1, objectiveDigest: mathDigest(task.message), workKind: task.workKind };
         task.declarations = operation.declarations; task.summary = operation.summary; this.changed();
         return { ok: true, status: 'pending-writer-stop', taskId: task.id,
@@ -715,6 +846,10 @@ export class AgentResearchTeam {
         return { ok: true, adoption, ...(targetId === 'lead' ? {
           instruction: 'Sources and notes should already be saved. Return now; the host also releases your writer before the next model request, checks and integrates this delivery, then continues your saved thread.' } : {}) };
       }
+      case 'retire_route': {
+        const { operation: _operation, ...retirement } = operation;
+        return this.retireRoute(retirement);
+      }
       case 'stop': {
         const worker = this.worker(operation.agentId), active = this.live.get(worker.id);
         worker.status = 'stopped'; this.changed();
@@ -739,9 +874,10 @@ export class AgentResearchTeam {
   }
 
   private newTask(message: string, profileEvidence = this.memberProfiles(message).evidence,
-    { budget, workKind }: Pick<AgentTeamTask, 'budget' | 'workKind'> = {}): AgentTeamTask {
+    { budget, workKind, routeId }: Pick<AgentTeamTask, 'budget' | 'workKind' | 'routeId'> = {}): AgentTeamTask {
+    this.assertRouteAvailable(routeId);
     return { id: crypto.randomUUID(), message, status: 'queued', createdAt: Date.now(), turns: 0, budget,
-      objectiveRevision: 1, workKind,
+      objectiveRevision: 1, workKind, routeId,
       profileEvidence,
       sequence: Math.max(0, ...this.archive.workers.flatMap(worker => worker.tasks.map(task => task.sequence ?? 0))) + 1 };
   }
@@ -762,7 +898,7 @@ export class AgentResearchTeam {
     return { ok: true, agentId: worker.id, taskId: task.id, status: 'queued',
       worktree: worker.worktree, seedCommit: worker.seedCommit,
       selectedProfiles: task.profileEvidence!.selected,
-      profileEvidence: task.profileEvidence, objectiveRevision: task.objectiveRevision, workKind: task.workKind };
+      profileEvidence: task.profileEvidence, objectiveRevision: task.objectiveRevision, workKind: task.workKind, routeId: task.routeId };
   }
 
   private async prepare(worker: AgentTeamWorker) {
@@ -808,6 +944,7 @@ export class AgentResearchTeam {
       };
     }
     task.status = 'failed'; task.error = reason; task.finishedAt ??= Date.now();
+    task.helperSubmission = undefined;
     worker.pendingDelivery = undefined;
     if (worker.status !== 'stopped') worker.status = worker.tasks.some(task => task.status === 'paused') ? 'paused' : 'idle';
     worker.activity = worker.status === 'paused' ? 'paused' : 'idle'; worker.phase = 'prepared';
@@ -818,10 +955,11 @@ export class AgentResearchTeam {
   private launch(worker: AgentTeamWorker) {
     if (this.live.has(worker.id) || this.stopping || this.input.signal.aborted || worker.status === 'stopped' || worker.writerStopUnconfirmed) return;
     const abort = new AbortController();
-    const entry: LiveWorker = { abort, task: undefined as unknown as Promise<void> };
+    const entry: LiveWorker = { abort, routeAbort: new AbortController(), task: undefined as unknown as Promise<void> };
     this.live.set(worker.id, entry);
     entry.task = Promise.resolve().then(async () => {
       if (!this.access.has(worker.id)) await this.prepare(worker);
+      await this.flushHelperSubmissions(worker);
       if (worker.pendingDelivery) await this.finishDelivery(worker);
       await this.flushAdoptions(worker.id);
       while (!this.stopping && !abort.signal.aborted && worker.status !== 'stopped') {
@@ -833,6 +971,7 @@ export class AgentResearchTeam {
           this.pauseForBudget(worker, task, admission.reason); break;
         }
         if (this.input.remainingMs() <= 0) break;
+        await this.flushAdoptions(worker.id);
         await this.runTask(worker, task, entry);
       }
     }).catch(error => {
@@ -847,7 +986,7 @@ export class AgentResearchTeam {
       this.live.delete(worker.id); this.changed();
       // Per-task interruption consumes this controller. Reuse the member only after runTask has
       // confirmed shutdown and saved its draft; a global stop or quarantine must never relaunch it.
-      if (entry.cancelledTaskId && worker.tasks.find(task => task.id === entry.cancelledTaskId)?.researchArtifactId &&
+      if ((entry.routeAbort.signal.aborted || entry.cancelledTaskId && worker.tasks.find(task => task.id === entry.cancelledTaskId)?.researchArtifactId) &&
           worker.tasks.some(task => task.status === 'queued') && modelDispatchAllowed(this.input.state.tokenBudget!) &&
           this.input.remainingMs() > 0 && this.input.state.turns < this.input.maxTurns) this.launch(worker);
     });
@@ -859,6 +998,8 @@ export class AgentResearchTeam {
     await this.closeNativeIdle(worker);
     const { state } = this.input, access = this.access.get(worker.id)!;
     const signal = AbortSignal.any([this.input.signal, entry.abort.signal]);
+    if (signal.aborted || task.status !== 'queued' || task.cancelRequested) return;
+    this.assertRouteAvailable(task.routeId);
     access.assertHarnessCurrent?.(); access.assertKnowledgeCurrent?.();
     if (worker.writerStopUnconfirmed) throw new Error('math_writer_stop_unconfirmed:' + worker.id);
     const sourceFeedback = this.sourceFeedback(worker);
@@ -879,6 +1020,35 @@ export class AgentResearchTeam {
       emit: (event, details) => this.input.emit(event, { ...details, workerId: worker.id }) });
     const sessionId = crypto.randomUUID();
     const callbacks = usage.bindSession(sessionId, () => entry.session?.lastInputTokens);
+    const sliceSettings = softSliceSettings(this.input.softSlice ?? {});
+    let milestoneCheckpoint = false, turnId: string | undefined;
+    let checkpointCloseTimer: ReturnType<typeof setTimeout> | undefined, closingSession: Promise<void> | undefined;
+    const closeSession = (session: MathAgentSession) => closingSession ??= Promise.resolve().then(() => session.close());
+    const milestone = createSoftSlice(sliceSettings, {
+      current: () => Boolean(entry.session) && !signal.aborted && !entry.runSettled && !task.pauseRequested && !task.cancelRequested && !task.declarations,
+      notice: (reason, completedCompactions) => {
+        this.input.emit(reason === 'time' ? 'soft_slice_milestone_requested' : 'compaction_circuit_breaker_triggered',
+          { workerId: worker.id, taskId: task.id, turnId, completedCompactions, graceMs: sliceSettings.graceMs });
+        const active = entry.session;
+        void active?.notify?.(
+          'Use theoremos_team submit_helpers for standalone helpers. Write fewer than 20 lines in worktree-root RESEARCH.md covering what is established, the exact obstruction, and the next route or smaller obligation. Save your files and return after the current request and tools settle.',
+          active.advisoryNotifications === 'native-history' ? { mode: 'advisory' } : { waitForRequest: true }).catch(() => {});
+      },
+      interrupt: () => {
+        const active = entry.session;
+        if (!active) return;
+        milestoneCheckpoint = true;
+        this.input.emit('soft_slice_checkpoint_requested', { workerId: worker.id, taskId: task.id, turnId, boundary: 'wait-limit' });
+        const closeStalledTurn = () => {
+          if (entry.runSettled || entry.session !== active || closingSession) return;
+          this.input.emit('soft_slice_session_closed', { workerId: worker.id, taskId: task.id, turnId, reason: 'interrupt-not-settled' });
+          void closeSession(active).catch(() => {});
+        };
+        checkpointCloseTimer = setTimeout(closeStalledTurn, CHECKPOINT_CLOSE_GRACE_MS);
+        checkpointCloseTimer.unref();
+        void Promise.resolve().then(() => active.interrupt()).catch(closeStalledTurn);
+      },
+    });
     const requestGate: NonNullable<typeof callbacks.requestGate> = identity => {
       const admission = agentTeamChildAdmission(this.budgetInput(task), 'request');
       if (admission.allowed === false) {
@@ -893,6 +1063,11 @@ export class AgentResearchTeam {
     requestGate.checkpoint = () => {
       if (callbacks.requestGate?.checkpoint?.()) return true;
       if ((worker.requestUsageAccounting?.pendingRequests ?? 0) > 0) return false;
+      if (milestone.useBoundary()) {
+        milestoneCheckpoint = true;
+        this.input.emit('soft_slice_checkpoint_requested', { workerId: worker.id, taskId: task.id, turnId, boundary: 'request' });
+        return true;
+      }
       // Nomination and handoff are member decisions. Finish the current response
       // and its tools, then release the writer before any further paid request.
       return task.declarations !== undefined || task.pauseRequested?.kind === 'handoff';
@@ -936,6 +1111,7 @@ export class AgentResearchTeam {
         ...turnTiming,
         onActivity: activity => {
           worker.lastActivity = { ...activity, at: Date.now() };
+          if (activity.event === 'item_completed' && activity.itemType === 'contextCompaction') milestone.compacted();
           if (activity.event === 'lean_environment_ready') this.input.emit('lean_environment_ready', { workerId: worker.id, health: activity.health });
           this.changed();
         }, ...callbacks, requestGate });
@@ -946,7 +1122,8 @@ export class AgentResearchTeam {
       signal.throwIfAborted();
       if (!modelDispatchAllowed(state.tokenBudget!) || this.input.remainingMs() <= 0) throw new Error('math_team_dispatch_stopped');
       usage.begin(undefined, task.id); task.turns = (task.turns ?? 0) + 1; started = true; this.changed();
-      const status = await entry.session.run(context.message, task.id, worker.worktree, turnId => {
+      const status = await entry.session.run(context.message, task.id, worker.worktree, activeTurnId => {
+        turnId = activeTurnId; milestone.start();
         worker.threadId = entry.session!.threadId; worker.cursor = inboxThrough; usage.turnStarted(turnId); this.changed();
         if (this.nativeControl) {
           if (worker.threadId !== worker.native!.threadId) throw new Error('math_team_native_start_identity_changed');
@@ -955,8 +1132,10 @@ export class AgentResearchTeam {
           if (pending) { pending.accepted = true; pending.resolve(accepted); }
         }
       });
-      if (status === 'checkpoint' && !task.declarations) {
-        task.pauseRequested ??= { at: Date.now(), kind: 'budget', reason: 'math_team_turn_checkpoint' };
+      if ((status === 'checkpoint' || milestoneCheckpoint) && !task.declarations) {
+        task.pauseRequested ??= milestoneCheckpoint
+          ? { at: Date.now(), kind: 'handoff', reason: 'math_soft_slice_checkpoint' }
+          : { at: Date.now(), kind: 'budget', reason: 'math_team_turn_checkpoint' };
         this.changed();
       }
       completed = ['completed', 'submitted'].includes(status) || status === 'checkpoint' && task.declarations !== undefined;
@@ -969,14 +1148,16 @@ export class AgentResearchTeam {
       if (error instanceof LeanEnvironmentHealthCheckError)
         this.input.emit('lean_environment_unavailable', { workerId: worker.id, health: error.health });
     } finally {
+      milestone.stop();
+      clearTimeout(checkpointCloseTimer);
       entry.runSettled = true;
       try {
         if (entry.session) {
           const current = entry.session;
           worker.activity = 'stopping'; this.changed();
-          if (signal.aborted) await current.interrupt().catch(() => {});
+          if (signal.aborted && !closingSession) await current.interrupt().catch(() => {});
           await stopProofWriter({ session: current, record: worker, workerId: worker.id,
-            close: async () => { await current.close(); entry.session = undefined; usage.sessionClosed(sessionId); },
+            close: async () => { await closeSession(current); entry.session = undefined; usage.sessionClosed(sessionId); },
             save: () => this.changed(), deferred: reason => this.input.emit('team_writer_stop_deferred', { workerId: worker.id, reason }) });
           this.nativeControl?.writerStopped(worker.id);
           worker.writerProcess = undefined;
@@ -986,6 +1167,9 @@ export class AgentResearchTeam {
         if (started) usage.finish(completed);
         else if (reserved) { state.turns--; worker.turns--; }
         if (writerStopped) {
+          if ((milestoneCheckpoint || milestone.requested && completed) && !task.declarations)
+            task.pauseRequested ??= { at: Date.now(), kind: 'handoff', reason: milestoneCheckpoint
+              ? 'math_soft_slice_checkpoint' : 'math_soft_slice_milestone' };
           task.status = task.cancelRequested ? 'cancelled' : task.pauseRequested ? 'paused' : outcome;
           if (task.status === 'paused') task.pausedAt = Date.now(); else task.finishedAt = Date.now();
           worker.phase = 'prepared';
@@ -1005,12 +1189,13 @@ export class AgentResearchTeam {
       }
     }
     access.assertHarnessCurrent?.();
+    await this.flushHelperSubmissions(worker);
     if (worker.pendingDelivery) {
       await this.finishDelivery(worker);
     } else {
       this.event(worker.id, 'lead', task.status === 'completed' ? 'completed' : task.status === 'failed' ? 'failed' :
         task.status === 'cancelled' ? 'cancelled' : task.status === 'paused' ? 'paused' : 'interrupted',
-        (task.status === 'failed' ? task.error : undefined) ?? task.summary ?? task.pauseRequested?.reason ?? task.cancelRequested?.reason ?? task.error ?? 'Research saved.',
+        (task.status === 'failed' ? task.error : undefined) ?? teamTaskResearchSummary(task),
         { taskId: task.id, researchArtifactId: task.researchArtifactId });
     }
   }
@@ -1025,7 +1210,7 @@ export class AgentResearchTeam {
     }
     const reference = saveAgentTeamResearchArtifact({ directory: path.join(this.directory, 'research'), state: this.input.state,
       worktree: worker.worktree, agentId: worker.id, taskId: task.id, commit: task.sourceCommit,
-      summary: task.summary ?? task.pauseRequested?.reason ?? task.cancelRequested?.reason ?? task.error ?? 'Research saved.', status: task.status });
+      summary: teamTaskResearchSummary(task), status: task.status });
     if (!this.archive.researchArtifacts?.some(item => item.id === reference.id)) (this.archive.researchArtifacts ??= []).push(reference);
     task.researchArtifactId = reference.id;
     this.changed();
@@ -1049,21 +1234,107 @@ export class AgentResearchTeam {
     return [...declarations.values()];
   }
 
+  private async flushHelperSubmissions(worker: AgentTeamWorker) {
+    const task = worker.tasks.find(item => item.helperSubmission);
+    if (!task || this.input.signal.aborted) return;
+    if (task.cancelRequested || worker.status === 'stopped') {
+      task.helperSubmission = undefined; this.changed(); return;
+    }
+    const nominations = task.helperSubmission!;
+    const local = this.live.get(worker.id)?.routeAbort.signal;
+    const signal = local ? AbortSignal.any([this.input.signal, local]) : this.input.signal;
+    const assertWriterStopped = () => {
+      signal.throwIfAborted();
+      if (worker.writerStopUnconfirmed || this.live.get(worker.id)?.session || this.nativeIdle.has(worker.id))
+        throw new Error('math_writer_stop_unconfirmed:' + worker.id);
+      this.access.get(worker.id)?.assertHarnessCurrent?.();
+    };
+    const { state } = this.input;
+    try {
+      assertWriterStopped();
+      const sourceCommit = task.sourceCommit ?? commitSolverSources(state.problem, worker.worktree);
+      await this.input.exclusiveCheck(async () => {
+        const expectedCommit = this.archive.canonicalCommit ?? git(state.worktree, ['rev-parse', 'HEAD']);
+        const result = await landVerifiedHelpers({ state, worktree: state.worktree, expectedCommit,
+          sourceWorktree: worker.worktree, sourceCommit, seedCommit: task.seedCommit ?? worker.seedCommit,
+          declarations: nominations.map(({ file, name, type, kind }) => ({ file, name, type, kind })),
+          env: this.input.leadAccess.environment, signal, timeoutMs: this.input.proofTimeoutMs,
+          assertCurrent: assertWriterStopped });
+        if (!result.helpers.length) {
+          task.helperSubmission = undefined;
+          this.event(null, worker.id, 'helpers', 'The nominated helpers already exist in the canonical sources.', { taskId: task.id });
+          return;
+        }
+        // Register the partial patch as ordinary stopped-writer evidence, so peers
+        // use the same checked adoption and pending-draft baseline as other deliveries.
+        const evidenceDirectory = path.join(this.directory, 'proofs');
+        const delivery = await withSolverWorktree(state.worktree, result.commit, async checkout => {
+          const project = path.join(checkout, state.problem.projectRelative);
+          const packages = path.join(state.worktree, state.problem.projectRelative, '.lake', 'packages');
+          if (fs.existsSync(packages)) bindLeanPackages(project, packages);
+          return checkAgentTeamProofDelivery({ state, agentId: worker.id, worktree: checkout,
+            seedCommit: expectedCommit, declarations: result.declarations,
+            inferredHelperTypes: result.declarations.map(({ file, name }) => file + '\0' + name),
+            provenance: { taskId: task.id, objectiveRevision: task.objectiveRevision ?? 1,
+              objectiveDigest: mathDigest(task.message), workKind: task.workKind,
+              ...(worker.native ? { spawnHistory: worker.native.spawnHistory ?? 'unknown' } : {}),
+              exposures: structuredClone(worker.exposures ?? []) },
+            env: this.input.leadAccess.environment, signal, timeoutMs: this.input.proofTimeoutMs,
+            evidenceDirectory, assertWriterStopped });
+        });
+        signal.throwIfAborted();
+        this.archive.canonicalCommit = delivery.commit;
+        const landedAt = Date.now();
+        (this.archive.landedHelpers ??= []).push(...result.helpers.map(helper => ({ ...helper, landedAt })));
+        this.archive.deliveries.push({ id: delivery.id, agentId: worker.id, taskId: task.id, kind: 'helpers',
+          path: path.join(evidenceDirectory, 'deliveries', delivery.id + '.json'),
+          declarationCount: delivery.declarations.length, summary: task.summary?.slice(0, 200) });
+        task.helperSubmission = undefined;
+        this.changed();
+        const signatures = result.helpers.slice(0, 8).map(({ file, qualifiedName, type }) => ({ file, qualifiedName, type: type.slice(0, 240) }));
+        const notice = 'Verified ' + result.helpers.length + ' standalone helpers at ' + delivery.commit + '.\n' +
+          canonicalMathJson(signatures) + '\nUse inspect for the full signature list. The host applies these sources before your next turn. ' +
+          'The producer assignment remains open.';
+        for (const actor of new Set(['lead', worker.id, ...this.live.keys()])) {
+          this.event(null, actor, 'helpers', notice, { taskId: task.id, deliveryId: delivery.id });
+        }
+        this.input.emit('incremental_helpers_landed', { workerId: worker.id, taskId: task.id,
+          commit: delivery.commit, declarations: result.helpers.map(helper => helper.qualifiedName) });
+      });
+    } catch (error) {
+      if (task.cancelRequested && signal.aborted) return;
+      if (!(error instanceof IncrementalHelperRejection) && !correctableProofFailure(error)) throw error;
+      task.helperSubmission = undefined;
+      task.error = (error as Error).message;
+      this.event(null, worker.id, 'failed', task.error, { taskId: task.id });
+      this.event(worker.id, 'lead', 'failed', task.error, { taskId: task.id });
+    }
+  }
+
   private async finishDelivery(worker: AgentTeamWorker) {
     await this.closeNativeIdle(worker);
-    const pending = worker.pendingDelivery!;
+    const pending = worker.pendingDelivery;
+    if (!pending) return;
     if (worker.writerStopUnconfirmed || this.live.get(worker.id)?.session) throw new Error('math_writer_stop_unconfirmed:' + worker.id);
     const task = worker.tasks.find(item => item.id === pending.taskId)!;
+    // Native turn interruption preserves a nomination. Retirement withdraws it.
+    const local = this.live.get(worker.id)?.routeAbort.signal;
+    const signal = local ? AbortSignal.any([this.input.signal, local]) : this.input.signal;
     worker.activity = 'checking'; worker.phase = 'checking'; this.changed();
     try {
+      const explicit = new Set(task.declarations?.map(({ file, name }) => file + '\0' + name));
+      const inferredHelperTypes = (worker.pendingPeerDeliveries ?? []).flatMap(id => {
+        const reference = this.archive.deliveries.find(delivery => delivery.id === id);
+        return reference?.kind === 'helpers' ? readAgentTeamProofDelivery(reference.path, this.input.state).inferredHelperTypes ?? [] : [];
+      }).filter(key => !explicit.has(key));
       const commit = commitSolverSources(this.input.state.problem, worker.worktree);
       const digest = solverSourceDigest(this.input.state.problem, worker.worktree);
       if (pending.commit && (pending.commit !== commit || pending.sourceDigest !== digest)) throw new Error('math_team_delivery_source_changed');
       pending.commit = commit; pending.sourceDigest = digest; this.changed();
       const delivery = await this.input.exclusiveCheck(() => checkAgentTeamProofDelivery({ state: this.input.state,
         failureCache: this.nativeAgentControlEnabled ? this.failedNominations : undefined,
-        agentId: worker.id, worktree: worker.worktree, seedCommit: pending.seedCommit, declarations: pending.declarations,
-        env: this.access.get(worker.id)!.environment, signal: this.input.signal, timeoutMs: this.input.proofTimeoutMs,
+        agentId: worker.id, worktree: worker.worktree, seedCommit: pending.seedCommit, declarations: pending.declarations, inferredHelperTypes,
+        env: this.access.get(worker.id)!.environment, signal, timeoutMs: this.input.proofTimeoutMs,
         // Older checkpoints do not record when a nomination was made relative to a followup.
         provenance: { ...(task.nomination ?? (!task.objectiveHistory?.length && (task.objectiveRevision ?? 1) === 1
           ? { objectiveRevision: 1, workKind: task.workKind } : {})), taskId: task.id,
@@ -1072,9 +1343,11 @@ export class AgentResearchTeam {
         assertWriterStopped: () => {
           if (worker.writerStopUnconfirmed || this.live.get(worker.id)?.session) throw new Error('math_writer_stop_unconfirmed:' + worker.id);
         }, evidenceDirectory: path.join(this.directory, 'proofs') }));
+      signal.throwIfAborted();
       task.deliveryId = delivery.id;
       if (!this.archive.deliveries.some(item => item.id === delivery.id)) this.archive.deliveries.push({
-        id: delivery.id, agentId: worker.id, taskId: task.id, path: path.join(this.directory, 'proofs/deliveries', delivery.id + '.json') });
+        id: delivery.id, agentId: worker.id, taskId: task.id, path: path.join(this.directory, 'proofs/deliveries', delivery.id + '.json'),
+        declarationCount: delivery.declarations.length, summary: task.summary?.slice(0, 200) });
       worker.pendingDelivery = undefined; worker.pendingSourceBase = undefined; worker.pendingPeerDeliveries = undefined;
       const ready = delivery.declarations.slice(0, 8).map(item => item.name).join(', ');
       const more = delivery.declarations.length - 8;
@@ -1083,6 +1356,12 @@ export class AgentResearchTeam {
       this.event(worker.id, 'lead', 'delivery', checked + (task.summary ? '\n' + task.summary : ''),
         { taskId: task.id, deliveryId: delivery.id, researchArtifactId: task.researchArtifactId });
     } catch (error) {
+      if (task.cancelRequested && signal.aborted) {
+        worker.phase = 'prepared';
+        worker.activity = 'idle';
+        this.changed();
+        return;
+      }
       // Keep infrastructure failures pending; deterministic proof feedback is correctable by another explicit assignment.
       if (correctableProofFailure(error)) {
         this.rejectSubmission(worker, task, error);
@@ -1101,9 +1380,16 @@ export class AgentResearchTeam {
     const { state } = this.input;
     const target = targetId === 'lead' ? undefined : this.worker(targetId);
     if (target) await this.closeNativeIdle(target);
-    if (this.live.get(targetId)?.session || target?.writerStopUnconfirmed || targetId === 'lead' && state.writerStopUnconfirmed)
+    if (this.live.get(targetId)?.session || target?.writerStopUnconfirmed || targetId === 'lead' && (this.leadSession || state.writerStopUnconfirmed))
       throw new Error('math_team_target_writing');
     const worktree = target?.worktree ?? state.worktree;
+    const helpers = this.archive.deliveries.filter(delivery => delivery.kind === 'helpers' &&
+      !this.archive.adoptions.some(adoption => adoption.deliveryId === delivery.id && adoption.targetId === targetId));
+    if (helpers.length && !solverSourceFeedback(state.problem, worktree)) {
+      for (const delivery of helpers) this.archive.adoptions.push({ id: crypto.randomUUID(),
+        deliveryId: delivery.id, targetId, status: 'queued' });
+      this.changed();
+    }
     for (const adoption of this.archive.adoptions.filter(item => item.targetId === targetId && ['queued', 'integrating'].includes(item.status))) {
       const reference = this.archive.deliveries.find(item => item.id === adoption.deliveryId)!;
       const delivery = readAgentTeamProofDelivery(reference.path, state);
@@ -1116,7 +1402,7 @@ export class AgentResearchTeam {
           expectedCommit: adoption.expectedCommit!, env: (target ? this.access.get(targetId) : this.input.leadAccess)!.environment,
           signal: this.input.signal, timeoutMs: this.input.proofTimeoutMs,
           evidenceDirectory: path.join(this.directory, 'proofs'), assertWriterStopped: () => {
-            if (this.live.get(targetId)?.session || target?.writerStopUnconfirmed || targetId === 'lead' && state.writerStopUnconfirmed)
+            if (this.live.get(targetId)?.session || target?.writerStopUnconfirmed || targetId === 'lead' && (this.leadSession || state.writerStopUnconfirmed))
               throw new Error('math_team_target_writing');
           } }));
         adoption.status = 'completed'; adoption.commit = result.commit; adoption.receiptId = result.id; adoption.error = undefined;
@@ -1124,8 +1410,9 @@ export class AgentResearchTeam {
         if (targetId === 'lead') {
           state.check = undefined;
           // Save the next acceptance step with adoption completion, so restart needs no extra model turn.
-          state.pendingResearchFreeze = { commit: result.commit, sourceDigest: result.sourceDigest,
-            problemReceiptDigest: state.problem.receiptDigest, environmentDigest: state.environmentDigest };
+          if (reference.kind !== 'helpers' || state.pendingResearchFreeze)
+            state.pendingResearchFreeze = { commit: result.commit, sourceDigest: result.sourceDigest,
+              problemReceiptDigest: state.problem.receiptDigest, environmentDigest: state.environmentDigest };
         } else {
           // An adopted peer is part of the next transfer until the member's own draft
           // has been delivered. Retain the old ancestor instead of losing that draft.
@@ -1194,6 +1481,7 @@ export class AgentResearchTeam {
           this.changed();
         }
       }
+      await this.flushHelperSubmissions(worker);
       if (worker.pendingDelivery) await this.finishDelivery(worker);
     }
     await this.flushAdoptions();

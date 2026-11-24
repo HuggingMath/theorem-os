@@ -7,6 +7,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { readWebConfig, webDefaults } from '../apps/web/config';
 import { DockerWebRunner, parseWorkerMessage, webPrivateImagePaths } from '../apps/web/runner';
 import { webProofMessageSink } from '../apps/web/proofJournal';
+import { createWebHostDisconnectWatchdog, webWorkerHeartbeatMs } from '../apps/web/workerDisconnect';
+import { writeMathJsonDurable } from '../src/math/mathRuntimeIo';
 import type { WorkerExplanationInput, WorkerExplanationMessage, WorkerInput, WorkerMessage } from '../apps/web/shared';
 
 function candidateCheckDocker(reply: { severity?: string; wrongMarker?: boolean; plain?: boolean; exitCode: number }) {
@@ -113,6 +115,102 @@ main().catch(() => process.exit(1));
         messages: [{ type: 'result', result: { report: { fixture: '[REDACTED]' } } }] });
       expect(saved).not.toContain('secret');
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it.each(['stdout error', 'stdout close', 'missed control heartbeat'] as const)
+    ('aborts after the disconnect grace period and flushes the journal for %s', async transport => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-worker-disconnect-'));
+      const output = new Writable({ write(_chunk, _encoding, done) { done(); } });
+      const sink = webProofMessageSink(output, 'sk-offline-fixture', { directory, webRunId: 'journal-fixture' });
+      const forcedExit = vi.fn();
+      vi.useFakeTimers();
+      const watchdog = createWebHostDisconnectWatchdog(output, { graceMs: 100, onAbort: forcedExit });
+      const stateFile = path.join(directory, 'state.json');
+      const run = (async () => {
+        try {
+          await new Promise<never>((_, reject) => watchdog.signal.addEventListener('abort',
+            () => reject(watchdog.signal.reason), { once: true }));
+        } finally {
+          writeMathJsonDurable(stateFile, { phase: 'finished', reason: watchdog.signal.reason });
+          sink({ type: 'result', result: { status: 'limit_reached', proof: '',
+            report: { reason: 'math_host_disconnected' } } });
+          watchdog.stop();
+        }
+      })().catch(error => error);
+      try {
+        if (transport === 'stdout error') output.emit('error', Object.assign(new Error('broken pipe'), { code: 'EPIPE' }));
+        if (transport === 'stdout close') output.emit('close');
+        if (transport === 'missed control heartbeat') {
+          watchdog.heartbeat();
+          await vi.advanceTimersByTimeAsync(80);
+          watchdog.heartbeat();
+        }
+        await vi.advanceTimersByTimeAsync(99);
+        expect(watchdog.signal.aborted).toBe(false);
+        expect(fs.existsSync(stateFile)).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await run).toBe('host_disconnected');
+        expect(forcedExit).toHaveBeenCalledTimes(1);
+        expect(JSON.parse(fs.readFileSync(stateFile, 'utf8'))).toEqual({ phase: 'finished', reason: 'host_disconnected' });
+        expect(JSON.parse(fs.readFileSync(path.join(directory, 'terminal.json'), 'utf8'))).toMatchObject({
+          webRunId: 'journal-fixture', messages: [{ type: 'result', result: { status: 'limit_reached' } }],
+        });
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        watchdog.stop();
+        vi.useRealTimers();
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    });
+
+  it('keeps the proof input pipe open for heartbeats when the image advertises support', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'theoremos-worker-heartbeat-'));
+    fs.writeFileSync(path.join(root, 'docker'), `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args[0] === 'image') process.stdout.write('v1|v1|v1|v1\\n');
+else if (args[0] === 'create') {
+  if (!args.includes('THEOREMOS_WORKER_CONTROL=1')) process.exit(1);
+} else if (args[0] === 'start') {
+  const lines = require('node:readline').createInterface({ input: process.stdin });
+  let request;
+  lines.on('line', line => {
+    if (!request) {
+      request = JSON.parse(line);
+      process.stdout.write(JSON.stringify({ type: 'progress', event: 'ready', message: 'Ready' }) + '\\n');
+    } else if (line === '') {
+      process.stdout.write(JSON.stringify({ type: 'result', result: { status: 'incomplete', proof: '', report: {} } }) + '\\n');
+      lines.close(); process.stdin.destroy();
+    }
+  });
+} else if (args[0] !== 'rm' && args[0] !== 'exec') process.exit(1);
+`, { mode: 0o700 });
+    vi.stubEnv('PATH', root);
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const controller = new AbortController(), config = readWebConfig({});
+    let run: Promise<void> | undefined;
+    try {
+      const runner = new DockerWebRunner(config);
+      expect((await runner.readiness()).ready).toBe(true);
+      const messages: WorkerMessage[] = [];
+      let ready!: () => void;
+      const receivedRequest = new Promise<void>(resolve => { ready = resolve; });
+      run = runner.run({ id: 'worker-control-fixture', provider: config.providers[0], input: {
+        ...webDefaults, providerId: config.providers[0].id, apiKey: 'sk-offline-fixture',
+        source: 'theorem goal : True := by sorry', task: 'Offline heartbeat fixture', maxRunSeconds: 0,
+      } }, message => { messages.push(message); if (message.type === 'progress') ready(); }, controller.signal);
+      await Promise.race([receivedRequest, run.then(() => { throw new Error('worker_closed_before_request'); })]);
+      expect(messages.map(message => message.type)).toEqual(['progress']);
+      await vi.advanceTimersByTimeAsync(webWorkerHeartbeatMs);
+      await run;
+      expect(messages.map(message => message.type)).toEqual(['progress', 'result']);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      controller.abort();
+      await run?.catch(() => {});
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('delivers Lean acceptance over stdout when its journal cannot be written', () => {
@@ -231,6 +329,7 @@ main().catch(() => process.exit(1));
       const calls = fs.readFileSync(path.join(root, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
       expect(calls.filter(args => args[0] === 'create')).toHaveLength(1);
       expect(calls.filter(args => args[0] === 'start')).toHaveLength(1);
+      expect(calls.filter(args => args[0] === 'rm')).toHaveLength(1);
       expect(fs.existsSync(path.join(root, 'container'))).toBe(false);
       expect(messages.map(message => message.type === 'progress' ? message.event : message.type)).toEqual(decision === 'approve'
         ? ['plan_approval_wait_started', 'plan_approval_wait_ended', 'result'] : ['plan_approval_wait_started']);
@@ -295,7 +394,7 @@ main().catch(() => process.exit(1));
       expect(fs.existsSync(path.join(root, 'container'))).toBe(false);
 
       const received = JSON.parse(fs.readFileSync(path.join(root, 'private-input.json'), 'utf8'));
-      expect(received).toEqual(request);
+      expect(received).toEqual({ ...request, observationSourceRefs: true });
       expect(received).toMatchObject({
         provider: { id: 'sub2api', baseUrl: 'http://host.docker.internal:8080/v1' },
         input: { model: 'deepseek-flash', effort: 'high' },

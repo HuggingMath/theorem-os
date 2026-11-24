@@ -146,6 +146,25 @@ describe('advisory turns yielding to executable proof work', () => {
     expect(replacement).toMatchObject({ kind: 'task', task: { id: 'fresh_review', kind: 'research' } });
   });
 
+  it('disables further handoffs for ten minutes after dispatch returns the worker to research', async () => {
+    vi.useFakeTimers();
+    publishTypedWork();
+    const target = cooperative.proofHandoffTarget(engineer, action);
+    expect(target?.taskId).toBe('checked_bridge');
+    cooperative.recordProofHandoff(engineer, action.task.id, target!.taskId);
+    cooperative.deactivate(engineer);
+    cooperative.interrupted(engineer, action);
+    node('checked_bridge').task = { ...node('checked_bridge').task, status: 'paused' }; refresh();
+    const replacement = await cooperative.next(engineer, budget);
+    expect(replacement).toMatchObject({ kind: 'task', task: { id: 'bridge_audit', kind: 'research' } });
+    publishTypedWork();
+    expect(cooperative.proofHandoffTarget(engineer, replacement!)).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(10 * 60_000 - 1);
+    expect(cooperative.proofHandoffTarget(engineer, replacement!)).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(cooperative.proofHandoffTarget(engineer, replacement!)?.taskId).toBe('checked_bridge');
+  });
+
   it('accounts for a statement review that would take the released slot before a proof', async () => {
     publishTypedWork();
     vi.spyOn(directSolverModules.M5, 'reviewer').mockImplementation(available => available.find(worker => worker.id === engineer.id));
@@ -268,7 +287,7 @@ describe('advisory turns yielding to executable proof work', () => {
       access: workerAccess(workers, directory), root: directory, buildFile: path.join(directory, 'build.json'),
       taskText: 'Prove the original targets.', executable: 'offline-fixture', profile: 'offline-fixture',
       signal: controller.signal, deadline: Infinity, maxTurnMs: Infinity, maxTurns: 2, maxTotalTokens: 0,
-      goalProgressReviewMs: 24 * 3_600_000, save: () => {},
+      goalProgressReviewMs: 24 * 3_600_000, minAdvisorySliceMs: 5_000, save: () => {},
       emit: event => { if (event === 'feasibility_review_checkpoint_saved') saved.resolve(); },
     });
     try {

@@ -38,7 +38,8 @@ import { assignmentDeliveryFile, isDefinitionTask, isFeasibilityReview, taskGrou
 import { consumeLeadWakes, dropLeadWakes, LEAD_MAX_BACKOFF, leadWakePending, settleLeadWakes } from './leadWakes';
 import { idlePeerEpisode, idlePeersAwaitingLead, IDLE_PEER_WAKE_MS, leadInbox, leadInboxBasis, NO_WORK_STAGES, type LeadInboxBasis } from './leadInbox';
 import { restoreResidue } from './stateInvariants';
-import { digest, directDeliveryRejections, isTaskSourceRepairFeedback, leadPlanPublicationTarget, rejectionCode, CooperationState, TaskVersions, DispatchBudget, RETRY_DISPATCH, DispatchResult, bounded } from './cooperationShared';
+import { digest, directDeliveryRejections, isTaskSourceRepairFeedback, leadPlanPublicationTarget, LEAD_PLAN_REPAIR_INSTRUCTION,
+  rejectionCode, CooperationState, TaskVersions, DispatchBudget, RETRY_DISPATCH, DispatchResult, bounded } from './cooperationShared';
 import { CooperationInputs } from './cooperationInputs';
 import { ResearchAdmissionError } from './researchAdmission';
 export { parseCooperationPlan } from './tasks';
@@ -46,6 +47,8 @@ export { taskGroup, taskVersion, taskReferenceDependencies, assignmentDeliveryFi
 export type { CooperativeTask, RouteGroup, RouteRecord, TaskAssignment, TaskRecord, CooperativeAction } from './tasks';
 export { readCooperationPlan } from './cooperationShared';
 export type { ReviewRecord, HumanEditRecord, InitialPlanPublication, CooperationState } from './cooperationShared';
+
+const PREEMPTION_MISMATCH_COOLDOWN_MS = 10 * 60_000;
 
 /** Lead plans; workers claim distinct ready obligations; only checked source enters the canonical proof. */
 export class CooperativeResearch extends CooperationInputs {
@@ -153,9 +156,17 @@ export class CooperativeResearch extends CooperationInputs {
     }
     return false;
   }
+  private pendingProofHandoffs = new Map<string, { taskId: string; targetTaskId: string }>();
+  private preemptionCooldowns = new Map<string, number>();
+
+  recordProofHandoff(worker: ResearchWorker, taskId: string, targetTaskId: string) {
+    this.pendingProofHandoffs.set(worker.id, { taskId, targetTaskId });
+  }
+
   /** Preview the normal dispatch after releasing this assignment and its route slot. */
   proofHandoffTarget(worker: ResearchWorker, action: CooperativeAction): { taskId: string; taskDigest: string; capacity: boolean } | undefined {
     if (action.kind !== 'task' || action.assignment.workerId !== worker.id || !advisory(action.task) ||
+        Date.now() < (this.preemptionCooldowns.get(worker.id) ?? 0) ||
         !this.current(action) || this.stopping || this.failure || this.input.signal.aborted ||
         !this.liveWorkers.has(this.lead.id) || !this.liveWorkers.has(worker.id) || this.planApprovalPending() ||
         this.input.modelDispatchAllowed?.() === false || this.goalProgressBudget &&
@@ -345,7 +356,7 @@ export class CooperativeResearch extends CooperationInputs {
           const initial = !this.archive.tasks.length;
           // Host-synced notes describe the accepted graph, not a new answer to findings that
           // arrived since it was accepted. Changed drafts and explicit decisions still validate.
-          const inherited = !initial && !plan.fromPatch && plan.researchDecisions === undefined &&
+          const inherited = !initial && !plan.fromPatch && !plan.retireRoutes?.length && plan.researchDecisions === undefined &&
             !plan.goalProgressDecision && !plan.goalPathDecisions && !plan.nextCheckDecisions &&
             canonicalMathJson({ tasks: plan.tasks, groups: plan.groups, proofRoutes: plan.proofRoutes ?? [] }) ===
             canonicalMathJson({ tasks: this.plannedTasks().map(node => node.task),
@@ -413,7 +424,18 @@ export class CooperativeResearch extends CooperationInputs {
       const modelAllowed = this.input.modelDispatchAllowed?.() !== false;
       const result = await (worker.id === this.lead.id
         ? this.nextLead(worker, budget, modelAllowed) : this.nextPeer(worker, budget, modelAllowed));
-      if (result !== RETRY_DISPATCH) return result;
+      if (result === RETRY_DISPATCH) continue;
+      const handoff = this.pendingProofHandoffs.get(worker.id);
+      this.pendingProofHandoffs.delete(worker.id);
+      // Dispatch may retry while work is being prepared. Only a real assignment can repeat the preemption loop.
+      if (handoff && result && (result.kind !== 'task' || advisory(result.task))) {
+        const cooldownUntil = Date.now() + PREEMPTION_MISMATCH_COOLDOWN_MS;
+        this.preemptionCooldowns.set(worker.id, cooldownUntil);
+        this.input.emit('cooperative_preemption_mismatch', { workerId: worker.id, ...handoff,
+          assignedKind: result.kind === 'task' ? result.task.kind : result.kind,
+          assignedTaskId: result.kind === 'task' ? result.task.id : undefined, cooldownUntil });
+      }
+      return result;
     }
   }
   private async nextLead(worker: ResearchWorker, budget: DispatchBudget, modelAllowed: boolean): Promise<DispatchResult> {
@@ -581,7 +603,8 @@ export class CooperativeResearch extends CooperationInputs {
     if (obligations.nextCheck) required.push('Include nextCheckDecisions for each still-unanswered presented outcome: ' +
       JSON.stringify(obligations.nextCheckOutcomes.map(record => ({ checkId: record.id,
         outcomeDeliveryId: record.outcome?.deliveryId }))) + '.');
-    if (obligations.feedback) required.push('Repair the current host plan validation feedback; an unchanged saved draft does not answer it.');
+    if (obligations.feedback) required.push('Repair the current host plan validation feedback; an unchanged saved draft does not answer it. ' +
+      LEAD_PLAN_REPAIR_INSTRUCTION);
     const target = this.publishedPlans.has(action) ? undefined : leadPlanPublicationTarget(action);
     const { file, ...envelope } = target ?? {};
     const revision = Boolean(this.archive.tasks.length && action.planVersion);
@@ -1283,6 +1306,7 @@ export class CooperativeResearch extends CooperationInputs {
       parallelQuestions: parallelQuestions(this.archive.tasks, task).filter(question => !ordinaryWorker || task ||
         versions.get(question.taskId)?.task.sharing !== 'group'),
       consumerInterfaces: task ? taskConsumerProjection(task, this.archive.tasks, this.archive.proofRoutes) : undefined,
+      landedHelpers: this.archive.landedHelpers,
       mathematicalGaps: mathematicalGaps(this.archive, { problemReceiptDigest: this.input.state.problem.receiptDigest,
         environmentDigest: this.input.state.environmentDigest }, gapViewer),
       nextChecks: visibleNextChecks(this.archive, gapViewer),
@@ -1324,18 +1348,24 @@ export class CooperativeResearch extends CooperationInputs {
         const notesFile = path.join(worker.worktree, 'RESEARCH.md');
         const savedNotes = (publishedPlan || schedulingDraft) && fs.existsSync(notesFile)
           ? readMathText(notesFile, MAX_RESEARCH_NOTES_BYTES) : '';
-        let unchangedCheckpoint = false;
+        let unchangedCheckpoint = false, changedNotes = false;
         if (schedulingDraft) {
           try {
             const seedNotes = git(worker.worktree, ['ls-tree', '--name-only', action.seedCommit, '--', 'RESEARCH.md'])
               ? committedSource(worker.worktree, action.seedCommit, 'RESEARCH.md') : '';
             unchangedCheckpoint = this.proposedPlanDigest(seedNotes) === this.proposedPlanDigest(savedNotes);
+            changedNotes = seedNotes.trim() !== savedNotes.trim();
           } catch { /* Without a readable dispatch baseline, validate the saved response normally. */ }
         }
         const notes = savedNotes.trimStart();
-        const hasFinalPlan = this.publishedPlans.get(action)?.responseDigest !== this.proposedPlanDigest() &&
-          (notes.startsWith('{') || /```(?:math|json|math-plan)\s*\n/u.test(notes));
-        if (unchangedCheckpoint && !requiredDecision) {
+        const hasPlanResponse = notes.startsWith('{') || /```(?:math|json|math-[a-z-]+)\b/u.test(notes);
+        const hasFinalPlan = hasPlanResponse && this.publishedPlans.get(action)?.responseDigest !== this.proposedPlanDigest();
+        if (schedulingDraft && changedNotes && notes.trim() && !hasPlanResponse) {
+          // A scheduled yield can save fresh mathematical notes before Lead has a decision to submit.
+          this.pin(commit);
+          if (requiredDecision) this.wakeLead('lead-checkpoint-unchanged');
+          this.input.emit('lead_checkpoint_saved', { commit, seedCommit: action.seedCommit, reason: 'notes-only-draft' });
+        } else if (unchangedCheckpoint && !requiredDecision) {
           // Inherited control notes are a draft, not a fresh response to this dispatch.
           // Continue below so saved Lean source changes still take the ordinary merge path.
           this.pin(commit); this.wakeLead('lead-checkpoint-unchanged');
@@ -1344,14 +1374,16 @@ export class CooperativeResearch extends CooperationInputs {
         } else if (publishedPlan && !hasFinalPlan) {
           // A published immutable event remains useful when the continued writer only saves notes.
           accepted = true;
-        } else await this.acceptPlan(undefined, undefined, undefined, action);
-        if (!unchangedCheckpoint || requiredDecision) accepted = true;
+        } else {
+          await this.acceptPlan(undefined, undefined, undefined, action);
+          accepted = true;
+        }
       } catch (error) {
         this.rejectPlan(error, recovering ? recoveryKind : undefined);
         if (recovering) {
-          // A checkpoint or failed request may leave only a partial graph. Keep it resumable.
+          // Keep partial notes resumable, and share a draft only when its owned Lean source changed.
           const reason = error instanceof Error ? error.message : 'math_plan_incomplete';
-          this.preserveLeadDraft(commit, action.seedCommit, reason, false);
+          this.preserveLeadDraft(commit, action.seedCommit, reason, { requestDecision: false, shareSource: sourceChanged });
         }
         if (!this.archive.tasks.length && !(recovering && recoveryKind === 'request-failure')) {
           try { await this.startInitialTasks(); }
@@ -1388,7 +1420,7 @@ export class CooperativeResearch extends CooperationInputs {
       for (;;) {
         const snapshot = await this.input.exclusiveCheck(async () => {
           if (this.archive.planVersion !== staged.planVersion) {
-            this.preserveLeadDraft(commit, action.seedCommit, 'math_lead_decision_superseded', false); this.changed(); return;
+            this.preserveLeadDraft(commit, action.seedCommit, 'math_lead_decision_superseded', { requestDecision: false }); this.changed(); return;
           }
           return { canonical: this.archive.canonicalCommit!, environmentDigest: this.input.state.environmentDigest,
             problemReceiptDigest: this.input.state.problem.receiptDigest };
@@ -1398,7 +1430,7 @@ export class CooperativeResearch extends CooperationInputs {
         const published = await this.input.exclusiveCheck(async () => {
           this.input.signal.throwIfAborted();
           if (this.archive.planVersion !== staged.planVersion) {
-            this.preserveLeadDraft(commit, action.seedCommit, 'math_lead_decision_superseded', false); this.changed(); return 'superseded';
+            this.preserveLeadDraft(commit, action.seedCommit, 'math_lead_decision_superseded', { requestDecision: false }); this.changed(); return 'superseded';
           }
           if (this.archive.canonicalCommit !== snapshot.canonical || this.input.state.environmentDigest !== snapshot.environmentDigest ||
               this.input.state.problem.receiptDigest !== snapshot.problemReceiptDigest) return 'retry';
@@ -1427,7 +1459,7 @@ export class CooperativeResearch extends CooperationInputs {
       if (error instanceof VerificationCheckpointError || error instanceof Error && error.message === 'math_verifier_unavailable') throw error;
       await this.input.exclusiveCheck(async () => {
         this.preserveLeadDraft(commit, action.seedCommit, error instanceof Error ? error.message : 'math_lead_integration_failed',
-          this.archive.planVersion === staged.planVersion);
+          { requestDecision: this.archive.planVersion === staged.planVersion });
         this.changed();
       });
       return { checkWhole: false, ...saved };

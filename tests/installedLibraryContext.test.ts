@@ -447,7 +447,7 @@ describe('installed library retrieval in actual task context', () => {
     expect(context.instructions).toContain('respect the frozen assumptions');
     expect(context.instructions).toContain('intended consumer and exact remaining inference');
     for (const writableAdvice of ['library request --worktree', 'adapt only needed declarations',
-      'You may add explicit Mathlib.* imports', 'Add helpers in owned modules', 'check-lean --workspace',
+      'you may add import Mathlib or any pinned Mathlib.* import', 'Add helpers in owned modules', 'check-lean --workspace',
       'add application:{expression:']) expect(context.instructions).not.toContain(writableAdvice);
     expect(context.instructions.split('\n').find(line => line.startsWith('Edit only ')))
       .toBe(`Edit only ${path.join(f.receipt.workspaceRoot, 'RESEARCH.md')}, ${path.join(f.receipt.workspaceRoot, leadPlanDeliveryFile(assignment)!)}.`);
@@ -479,7 +479,7 @@ describe('installed library retrieval in actual task context', () => {
     expect(context.instructions).toContain('do not import, request or copy modules during review');
     expect(context.instructions).not.toContain('library request --worktree');
     expect(context.instructions).not.toContain('adapt only needed declarations');
-    expect(context.instructions).not.toContain('You may add explicit Mathlib.* imports');
+    expect(context.instructions).not.toContain('you may add import Mathlib or any pinned Mathlib.* import');
     expect(context.instructions).not.toContain('Add helpers in owned modules');
     expect(context.instructions.split('\n').find(line => line.startsWith('Edit only ')))
       .toBe(`Edit only ${path.join(f.receipt.workspaceRoot, 'RESEARCH.md')}.`);

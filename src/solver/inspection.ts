@@ -14,6 +14,7 @@ import { planApprovalInspection } from './planApproval';
 import { agentTeamOverview } from './agentTeamViews';
 import { buildAgentTeamContributions, teamContributionsSchema } from './agentTeamContributions';
 import { projectAgentTeamBudget } from './agentTeamBudget';
+import { portfolioUsageRecords } from './portfolioExploration';
 
 /** Binds a report to the stored observation; this does not replay or accept its proof evidence. */
 export function runInspectionSnapshot(state: SolverRunState, result?: Record<string, unknown>) {
@@ -58,7 +59,8 @@ function dispatchWaitRecord(state: SolverRunState, observation?: DispatchWaitObs
 export function buildRunInspection(state: SolverRunState, result?: Record<string, unknown>) {
   const skillMode = state.researchMode === 'skill' && !state.workers;
   const teamMode = state.researchDelegation?.mode === 'team';
-  const usageRecords = [...(state.workers ?? [state]), ...(state.agentTeam?.workers ?? [])];
+  const scouts = portfolioUsageRecords(state);
+  const usageRecords = [...(state.workers ?? [state]), ...(state.agentTeam?.workers ?? []), ...scouts];
   const receiptObservation = summarizeUsageObservation([{ runId: state.runId, observedAt: 0, records: usageRecords }],
     { runId: state.runId, startedAt: 0, endedAt: Number.MAX_SAFE_INTEGER });
   const tokenBudget = buildTokenBudget(state.tokenBudget?.maxTotalTokens ?? state.agentTeam?.hostLimits?.maxTotalTokens ?? 0,
@@ -109,7 +111,7 @@ export function buildRunInspection(state: SolverRunState, result?: Record<string
         : state.researchDelegation,
       buildDigest: state.buildDigest, environmentDigest: state.environmentDigest, methodDigest: state.methodDigest,
       knowledgeDigest: state.knowledgeDigest },
-    turns: state.turns, usage: teamMode ? aggregateUsage(usageRecords) : state.usage,
+    turns: state.turns, usage: teamMode || scouts.length ? aggregateUsage(usageRecords) : state.usage,
     requestUsage: { observedRequests: receiptObservation.denominator.observedRequestStarts,
       reportedRequests: receiptObservation.requestsWithCompleteUsage, pendingRequests: receiptObservation.pendingRequests,
       missingRequests: receiptObservation.knownMissingRequests, missingReasons: receiptObservation.missingReasons,

@@ -266,6 +266,38 @@ describe('isolated solver and host acceptance', () => {
     expect(JSON.parse(fs.readFileSync(output, 'utf8'))).toMatchObject({ status: 'evaluated_passed', explanations: { status: 'disabled' } });
   });
 
+  it('runs the saved opt-in portfolio before proof dispatch and keeps scout Lean edits out of the proof worktree', async () => {
+    const flags = [...args, '--workers', '2', '--coordination', 'independent', '--max-turns', '3', '--no-explanations'];
+    expect(await runSolver([...flags, '--portfolio-exploration', '--portfolio-seconds', '30', '--startup-only'], directory)).toBe(0);
+    const stateFile = output + '.runtime/state.json';
+    expect(readSolverRunState(stateFile).portfolioExploration).toMatchObject({ phase: 'exploring', durationMs: 30_000 });
+    const dispatched: string[] = [];
+    host.createSession.mockImplementation(session('fixture-thread', async (options, message) => {
+      const worker = options.environment!.DEEPSCIENTIST_MATH_WORKER_ID!;
+      dispatched.push(worker);
+      const source = path.join(options.workspace, problem.projectRelative, 'Submission.lean');
+      expect(fs.readFileSync(source, 'utf8')).toBe(original);
+      if (worker.startsWith('portfolio-')) {
+        const routeId = worker.slice('portfolio-'.length);
+        fs.writeFileSync(source, 'axiom scout_edit : False\n');
+        fs.writeFileSync(path.join(options.workspace, 'PORTFOLIO.json'), JSON.stringify({ reports: [{
+          routeId, status: 'proposed', blueprintSummary: 'Prove the original targets by a common reduction.',
+          keyTransformations: [], proposedFoundationLemmas: [],
+        }] }));
+      } else {
+        expect(message).toContain('Phase 1 portfolio gate');
+        fs.writeFileSync(source, original.replaceAll('by sorry', 'by trivial'));
+      }
+      return 'completed';
+    }, { stopForFreeze: async () => ({ status: 'stopped' }) }));
+    expect(await runSolver([...flags, '--resume'], directory)).toBe(0);
+    expect(dispatched.slice(0, 2).sort()).toEqual(['portfolio-explicit-constructive', 'portfolio-structural-symmetry']);
+    expect(dispatched).toHaveLength(3);
+    expect(readSolverRunState(stateFile)).toMatchObject({
+      turns: 3, check: { passed: true }, portfolioExploration: { phase: 'completed' },
+    });
+  });
+
   it('does not generate explanations for failed acceptance', async () => {
     host.officialGate.mockResolvedValue({ comparison: { status: 'failed' } });
     expect(await runSolver(args, directory)).toBe(2);
@@ -1379,23 +1411,30 @@ describe('isolated solver and host acceptance', () => {
     expect(host.verify).not.toHaveBeenCalled();
   });
 
-  it('allows explicit Mathlib imports while preserving original imports and trusted inputs', () => {
+  it('allows root and explicit Mathlib imports while preserving original imports, declarations and trusted inputs', () => {
     const file = path.join(project, 'Submission.lean');
-    const baseline = 'import Mathlib.Data.Nat.Basic\n' + original;
+    const imports = ['Mathlib.MeasureTheory.Integral.Bochner.Basic', 'Mathlib.MeasureTheory.Measure.Lebesgue.Basic',
+      'Mathlib.Analysis.SpecialFunctions.Log.Basic'];
+    const baseline = imports.map(module => `import ${module}\n`).join('') + original;
     fs.writeFileSync(file, baseline);
     commitSolverSources(problem, workspace);
     problem = readSolverProblem(workspace, problem.activeProblemPath);
-    expect(problem.sourceImports?.['Submission.lean']).toEqual(['Mathlib.Data.Nat.Basic']);
-    const candidate = 'import Mathlib.Analysis.SpecialFunctions.Trigonometric.InverseDeriv\n' + baseline;
+    expect(problem.sourceImports?.['Submission.lean']).toEqual(imports);
+    const candidate = 'import Mathlib\nimport Mathlib.Analysis.Calculus.Deriv.Basic\n' + baseline;
     fs.writeFileSync(file, candidate);
+    expect(() => assertSolverProjectSources(problem, project)).not.toThrow();
     expect(() => assertSolverSources(problem, workspace)).not.toThrow();
     const { sourceImports: _imports, ...legacy } = problem;
     expect(() => assertSolverProjectSources(legacy, project)).toThrow('math_original_context_changed');
-    for (const source of [original, candidate.replace('import Mathlib.Data.Nat.Basic\n', ''),
-      ...['import Other', 'import Solution', 'import Mathlib', 'import Mathlib.Data.Real.Basic variable (h : False)']
+    for (const source of [original, candidate.replace(`import ${imports[0]}\n`, ''),
+      ...['import Other', 'import Solution', 'import MathlibExtra', 'import Mathlib.Data.Real.Basic variable (h : False)']
         .map(command => command + '\n' + baseline)]) {
       fs.writeFileSync(file, source);
       expect(() => assertSolverProjectSources(problem, project)).toThrow('math_original_context_changed');
+    }
+    for (const source of [candidate.replace('first : True', 'first : False'), candidate.replace('fixed : Nat := 2', 'fixed : Nat := 3')]) {
+      fs.writeFileSync(file, source);
+      expect(() => assertSolverProjectSources(problem, project)).toThrow('math_original_declaration_changed');
     }
     fs.writeFileSync(file, candidate);
     fs.writeFileSync(path.join(project, 'Challenge.lean'), 'import Mathlib.Data.Nat.Basic\n' + original);

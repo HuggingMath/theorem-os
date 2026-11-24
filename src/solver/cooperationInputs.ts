@@ -1,17 +1,19 @@
 import { parseCooperationPlan, isAdvisoryTask as advisory } from './tasks';
 import path from 'node:path';
+import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { VerificationCheckpointError } from './verificationCheckpoint';
-import { canonicalMathJson, mathDigest } from '../math/mathRuntimeIo';
+import { canonicalMathJson, mathDigest, readMathFile } from '../math/mathRuntimeIo';
+import { assertMathCanonicalPath } from '../math/paths';
 import { mathGitResult } from '../math/mathGit';
 import { type ResearchWorker } from './modules/organization';
 import { taskCanStart } from './modules/search';
 import { deliveryDetails, readDeliveryLines, readMathResponse, parseMathResponse } from './deliveries';
-import { committedSource, git } from './problem';
+import { assertSolverSources, committedSource, commitSolverProjection, git, withSolverWorktree } from './problem';
 import { isStatementAction } from './statementReview';
 import { captureDeliveryArtifacts } from './deliveryArtifacts';
 import { bindMathematicalGap } from './mathematicalGaps';
-import { assignmentDeliveryFile, leadPlanDeliveryFile, type TaskRecord, type CooperativeAction } from './tasks';
+import { assignmentDeliveryFile, isFeasibilityReview, isFinalCandidateReview, leadPlanDeliveryFile, type TaskRecord, type CooperativeAction } from './tasks';
 import { directDeliveryRejections, rejectionCode, HumanEditRecord, TaskVersions, bounded, leadPlanPublicationFeedback, parseLeadPlan,
   type PlanPublicationRejection } from './cooperationShared';
 import { CooperationPlanning } from './cooperationPlanning';
@@ -20,6 +22,7 @@ import { acceptContextCheckpoint, contextCheckpointRejection, contextCheckpointR
 import { MAX_PLAN_APPROVAL_REJECTIONS, planApprovalInputSchema, planApprovalLog, planApprovalStatus, type PlanApprovalInput } from './planApproval';
 import { latestProofSearchRecord, retainProofSearchCheckpoint } from './proofSearchRecords';
 import { recordHumanGuidanceDecisions } from './humanGuidance';
+import { helperNominationsSchema } from './incrementalHelpers';
 
 /** Worker delivery intake. */
 export abstract class CooperationInputs extends CooperationPlanning {
@@ -457,6 +460,37 @@ export abstract class CooperationInputs extends CooperationPlanning {
     const automaticId = scoped ? mathDigest(canonicalMathJson({ file: assignmentKey, value })) : undefined;
     if (scoped) value = { id: automaticId, kind: 'progress', taskId: action.task.id,
       taskDigest: action.assignment.taskDigest, ...value };
+    if (value.kind === 'helpers') {
+      const declarations = helperNominationsSchema.safeParse(value.declarations);
+      if (!scoped || value.taskId !== action.task.id || value.taskDigest !== action.assignment.taskDigest ||
+          worker.id !== action.assignment.workerId || isFeasibilityReview(action.task) || isFinalCandidateReview(action.task) ||
+          !declarations.success || typeof value.summary !== 'string' || value.summary.length > 3000)
+        throw new Error('math_delivery_invalid');
+      if (!this.current(action)) return;
+      const problem = this.input.state.problem, head = git(worker.worktree, ['rev-parse', 'HEAD']);
+      // Freeze the bytes without staging in the writer's index or changing its checkout.
+      let commit: string;
+      try {
+        const files = problem.ownedFiles.map(file => {
+          const relative = path.join(problem.projectRelative, file);
+          const source = path.join(worker.worktree, relative);
+          assertMathCanonicalPath(source);
+          return { relative, bytes: readMathFile(source, 4 * 1024 * 1024).bytes };
+        });
+        commit = await withSolverWorktree(worker.worktree, head, async checkout => {
+          for (const { relative, bytes } of files) fs.writeFileSync(path.join(checkout, relative), bytes);
+          assertSolverSources(problem, checkout);
+          return commitSolverProjection(problem, checkout, 'Freeze standalone helper submission');
+        });
+      } catch (error) {
+        this.input.signal.throwIfAborted();
+        this.input.emit('incremental_helpers_rejected', { workerId: worker.id, taskId: action.task.id,
+          reason: error instanceof Error ? error.message : 'math_helper_snapshot_failed' });
+        return;
+      }
+      await this.integrateWorkerHelpers(worker, action, commit, declarations.data, value.summary);
+      return;
+    }
     if (value.kind === 'research') {
       const misplaced = ['mathematicalGap', 'lemmaRequests', 'blockers'].filter(key => Object.hasOwn(value, key));
       if (misplaced.length) throw new ResearchAdmissionError({ status: 'rejected', code: 'math_research_delivery_invalid',

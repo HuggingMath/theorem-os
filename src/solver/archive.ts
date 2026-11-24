@@ -23,8 +23,10 @@ import { proofImportRecordSchema } from './proofImportRecord';
 import { proofSearchCheckpointReferenceSchema, proofSearchRecordSchema } from './proofSearchRecords';
 import { researchBasisSchema, researchRecordSchema } from './researchRecords';
 import { nextCheckRecordSchema } from './nextCheckContract';
+import { retiredRouteSchema } from './routeControl';
 import { goalProgressStateSchema } from './goalProgress';
 import { MIN_TEAM_AGENTS, MAX_TEAM_AGENTS } from './teamCapacity';
+import { portfolioExplorationSchema, portfolioScoutSchema, type PortfolioExploration } from './portfolioExploration';
 
 /** A recorded dispatch observation, never a permission to dispatch or accept a proof. */
 export type DispatchWaitObservation = {
@@ -49,8 +51,10 @@ export type SolverWorkerState = Pick<SolverRunState, 'worktree' | 'threadId' | '
   /** A legacy saved coordination thread is replaced once by the Lead's planning thread. */
   sessionLeadMode?: 'planning' | 'coordination';
   sessionGroupId?: string;
+  sessionRouteId?: string;
   sessionTaskId?: string;
   sessionTaskVersion?: string;
+  sessionTaskContextDigest?: string;
   sessionAssignmentId?: string;
   sessionStatementReview?: boolean;
   scheduling?: { status: 'working' | 'preparing' | 'stopping' | 'idle' | 'stopped'; since: number;
@@ -86,6 +90,7 @@ export type SolverRunState = {
   commonResearchSkill?: { name: string; digest: string; loading: 'native' | 'file' };
   researchDelegation?: { mode: 'read-only'; maxAgents: number } | { mode: 'team'; maxAgents: number; preferredProfiles?: string[]; personalExperts?: PersonalExpertSet };
   agentTeam?: AgentTeamState;
+  portfolioExploration?: PortfolioExploration;
   teamUsage?: Record<string, unknown>;
   writerProcess?: import('../runtime/harnessProcess').HarnessProcessIdentity;
   nativeAgents?: import('../runtime/nativeDelegation').NativeResearchAgent[];
@@ -367,6 +372,11 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
     z.object({ mode: z.literal('read-only'), maxAgents: z.number().int().min(2).max(4) }).strict(),
   ]).optional(),
   agentTeam: agentTeamStateSchema.optional(), teamUsage: record.optional(), writerProcess: writerProcessSchema.optional(),
+  portfolioExploration: portfolioExplorationSchema.extend({
+    scouts: z.array(portfolioScoutSchema.extend({
+      usageAccounting: usageAccounting.optional(), requestUsageAccounting: requestUsageAccountingSchema.optional(),
+    })).max(3),
+  }).optional(),
   nativeAgents: z.array(z.object({ threadId: z.string().min(1), parentThreadId: z.string().min(1),
     startedAt: safeCount, updatedAt: safeCount, status: z.enum(['running', 'completed', 'errored', 'interrupted', 'stopped', 'unknown']),
     usage: record.optional(), message: z.string().optional(), stoppedAt: safeCount.optional(),
@@ -384,7 +394,9 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
   planApproval: z.boolean().optional(),
   workers: z.array(research.extend({ id: z.string(), role, sessionRole: role.optional(),
     sessionLeadMode: z.enum(['planning', 'coordination']).optional(),
-    sessionAssignmentId: z.string().optional(),
+    sessionGroupId: z.string().optional(), sessionRouteId: z.string().optional(), sessionTaskId: z.string().optional(),
+    sessionTaskVersion: z.string().optional(), sessionTaskContextDigest: z.string().optional(),
+    sessionAssignmentId: z.string().optional(), sessionStatementReview: z.boolean().optional(),
     scheduling: z.object({ status: z.enum(['working', 'preparing', 'stopping', 'idle', 'stopped']), since: safeCount,
       action: z.string().optional(), taskId: z.string().optional(), wait: dispatchWaitObservation.optional() }).optional() })).optional(),
   cooperation: z.object({ tasks: z.array(taskRecord), groups: z.array(z.object({ group: z.object({ id: z.string(),
@@ -395,8 +407,10 @@ const runState = research.extend({ schema: z.literal('deepscientist.math.solver.
       searchCheckpoint: proofSearchCheckpointReferenceSchema.optional() }).passthrough()).optional(),
     nextChecks: z.array(nextCheckRecordSchema).optional(),
     deliveryReceipts: z.array(deliveryReceiptSchema).optional(), blockers: z.array(routeBlocker).optional(),
+    retiredRoutes: z.array(retiredRouteSchema).optional(), retiredRouteTasks: z.record(z.string()).optional(),
     proofReadyRecords: z.array(proofReadyRecordSchema).optional(),
     proofImports: z.array(proofImportRecordSchema).optional(),
+    landedHelpers: z.array(z.object({ qualifiedName: z.string(), file: z.string(), commit: z.string(), type: z.string() })).optional(),
     proofSearchRecords: z.record(proofSearchRecordSchema).optional(),
     initialPlanPublication: planPublication.optional(), planPublication: planPublication.optional(),
     lastLeadPauseInputDigest: z.string().regex(/^[a-f0-9]{64}$/u).optional(),

@@ -49,7 +49,7 @@ export type WebFormalizationRequest = { original: string; environment: WebEnviro
   requestId?: string; providerId?: string; model?: string; researchEffort?: 'low' | 'high' | 'max'; maxRunSeconds?: number; maxTotalTokens?: number; research?: Partial<WebResearchBudget> };
 export type WorkerFormalizationInput = Omit<WebFormalizationRequest, 'solve' | 'humanReview' | 'requestId' | 'providerId' | 'research' | 'researchEffort' | 'autoExplain' | 'explanationLanguage'> & { id: string; model: string; provider: WebWorkerProvider;
   maxRunSeconds: number; maxTotalTokens: number; maxRounds: number; maxPlanningRounds: number; reviewers: number;
-  contextProtocol?: LeanStatementContextProtocol; reviewMode?: 'direct' };
+  contextProtocol?: LeanStatementContextProtocol; reviewMode?: 'direct'; outputDelivery?: 'native-schema' | 'file' };
 export type WorkerFormalizationAuditMessage = { type: 'audit-progress'; tokens: number }
   | { type: 'audit-result'; result: FormalizationAuditResult }
   | { type: 'audit-error'; reason: string };

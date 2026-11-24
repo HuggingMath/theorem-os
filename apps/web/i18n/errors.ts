@@ -14,6 +14,8 @@ export const errors: Record<string, string> = {
   '原生团队容量必须为 2 至 8 人（含 Lead）。': 'Choose a native team capacity of 2 to 8, including Lead.',
   '原生团队需要 Codex 执行器。': 'Native teams require the Codex harness.',
   '角色偏好仅适用于 Codex 原生团队。': 'Profile preferences require a native Codex team.',
+  '路线探索至少需要两名研究员。': 'Portfolio exploration requires at least two researchers.',
+  '路线探索时长必须在启用路线探索时设为 1 至 86400 秒的整数。': 'Set an exploration duration of 1 to 86400 whole seconds with portfolio exploration enabled.',
   '当前运行镜像不支持个人专家资料。请移除专家资产或更新运行镜像。': 'This worker image does not support personal experts. Remove the selected expert assets or update the worker image.',
   '每个个人专家在一次运行中只能选择一个发布版本。': 'Select only one release of each personal expert per run.',
   '每次运行最多选择 32 个个人专家。': 'Select up to 32 personal experts per run.',

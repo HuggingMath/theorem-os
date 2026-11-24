@@ -248,9 +248,12 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
     expect(childFrames.filter(frame => frame.method === 'thread/start')).toHaveLength(1);
     expect(childResumes.map(frame => frame.params.threadId)).toEqual(['followup-child']);
     expect(childResumes[0]!.params.dynamicTools).toBeUndefined();
-    expect(childStart.params.dynamicTools[0].inputSchema.properties.operation.enum)
-      .toEqual(expect.arrayContaining(['message', 'poll', 'wait', 'inspect', 'inspect-research', 'submit', 'yield', 'history']));
-    expect(childStart.params.dynamicTools[0].inputSchema.properties.operation.enum).toHaveLength(9);
+    const childToolSchema = childStart.params.dynamicTools[0].inputSchema;
+    const childOperations = ['progress', 'yield', 'history', 'message', 'poll', 'wait', 'inspect', 'inspect-research',
+      'submit', 'submit_helpers', 'route_summary'];
+    expect(childToolSchema.properties.operation.enum).toEqual(childOperations);
+    expect(childToolSchema.oneOf.map((branch: { properties: { operation: { enum: string[] } } }) =>
+      branch.properties.operation.enum[0])).toEqual(childOperations);
     expect([childStart, ...childResumes].every(frame => frame.params.developerInstructions.includes(
       'your agentId is "child", and your coordinator is lead.'))).toBe(true);
     expect([childStart, ...childResumes].some(frame => frame.params.developerInstructions.includes('You are the Lead'))).toBe(false);
@@ -268,9 +271,11 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
     expect(childTrace.some(frame => frame.observation === 'worker-followup-context')).toBe(true);
 
     const leadTrace = trace(worktree), leadFrames = leadTrace.filter(frame => frame.direction === 'host');
-    expect(leadFrames.find(frame => frame.method === 'thread/start')!.params.dynamicTools[0].inputSchema.properties.operation.enum)
-      .toEqual(expect.arrayContaining(['spawn', 'assign', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop', 'publish', 'cancel', 'budget', 'resume', 'history', 'coordinate']));
-    expect(leadFrames.find(frame => frame.method === 'thread/start')!.params.dynamicTools[0].inputSchema.properties.operation.enum).toHaveLength(17);
+    const leadToolSchema = leadFrames.find(frame => frame.method === 'thread/start')!.params.dynamicTools[0].inputSchema;
+    expect(leadToolSchema.properties.operation.enum).toEqual(['spawn', 'assign', 'amend', 'finish', 'coordinate', 'budget',
+      'resume', 'history', 'publish', 'cancel', 'message', 'poll', 'wait', 'inspect', 'inspect-research', 'adopt', 'stop',
+      'retire_route', 'route_summary']);
+    expect(leadToolSchema).not.toHaveProperty('oneOf');
     expect(leadFrames.filter(frame => frame.method === 'thread/resume').map(frame => frame.params.threadId))
       .toEqual(['followup-lead']);
     expect(leadTrace).toContainEqual({ observation: 'lead-assigned-correction',
@@ -478,12 +483,11 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
     const args = ['--workspace', receipt.workspaceRoot, '--task-file', taskFile,
       '--output', output, '--build-manifest', buildFile, '--harness', 'codex',
       '--harness-profile', profile, '--harness-executable', executable,
-      '--model', 'fixture-model', '--effort', 'high', '--research-mode', 'skill',
-      '--skill-delegation', 'team', '--skill-max-agents', '3', '--no-explanations',
+      '--model', 'fixture-model', '--effort', 'high', '--no-explanations',
       '--prepare-timeout-seconds', '30', '--max-run-seconds', '60', '--max-turns', '8',
       '--max-turn-seconds', '30', '--max-total-tokens', '1000', '--proof-timeout-seconds', '30',
       '--evaluator-timeout-seconds', '30'];
-    expect(await runSolver([...args, '--startup-only'], root)).toBe(0);
+    expect(await runSolver([...args, '--agent-team', '3', '--startup-only'], root)).toBe(0);
     const historicalFile = path.join(output + '.runtime', 'state.json');
     const historical = readSolverRunState(historicalFile);
     expect(historical.agentTeam?.transport).toBe('native-agent-control');
@@ -491,7 +495,7 @@ describe.skipIf(process.platform !== 'linux')('Agent team through native tool RP
     // saved runs retain it even when the current default uses AgentControl.
     delete historical.agentTeam!.transport;
     writeSolverRunState(historicalFile, historical);
-    const code = await runSolver([...args, '--resume'], root);
+    const code = await runSolver([...args, '--research-mode', 'skill', '--skill-delegation', 'team', '--skill-max-agents', '3', '--resume'], root);
     const result = JSON.parse(fs.readFileSync(output, 'utf8'));
     expect(code, JSON.stringify({ result, events })).toBe(0);
     expect(result).toMatchObject({ status: 'evaluated_passed', solver_ready_receipt_valid: true,

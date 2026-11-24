@@ -7,7 +7,7 @@ import { WebStorage } from '../apps/web/storage';
 import { WebResearchPersonal } from '../apps/web/researchPersonal';
 import { WebResearchProjects } from '../apps/web/researchProjects';
 import type { WebResearchProblems } from '../apps/web/researchProblems';
-import { webResearchArguments, webResearchModeError } from '../apps/web/researchMode';
+import { webAgentTeamPreset, webPortfolioPreset, webResearchArguments, webResearchModeError } from '../apps/web/researchMode';
 import { webSolverModules } from '../apps/web/worker';
 import { directSolverModules } from '../src/solver/modules';
 import { decodeTaskDraft, encodeTaskDraft, type TaskDraft } from '../apps/web/client/draft';
@@ -15,11 +15,14 @@ import { leanProblemDraft } from '../apps/web/client/problemDrafts';
 import { matchesProblemRun } from '../apps/web/problemDraftSubmission';
 import { loadWebSample } from '../apps/web/sample';
 import { isWebObservation, parseWorkerMessage, type WebRunner } from '../apps/web/runner';
+import { projectWebNativeTeam } from '../apps/web/nativeTeamObservation';
 import type { WebObservation } from '../apps/web/collaboration';
 import type { WebProvider, WebRunInput, WorkerInput, WorkerMessage } from '../apps/web/shared';
 import { mathDigest } from '../src/math/mathRuntimeIo';
 import { personalExpertCardsDigest } from '../src/solver/personalExperts';
 import { defaultResearchModulePlan } from '../src/solver/modules/policy';
+import { buildRunInspection } from '../src/solver/inspection';
+import { localExample, solverState } from './helpers/solver';
 
 const provider: WebProvider = { id: 'fixture', name: 'Offline fixture', baseUrl: 'http://127.0.0.1:1/v1' };
 const input = (overrides: Partial<WebRunInput> = {}): WebRunInput => ({ providerId: provider.id, apiKey: 'sk-disposable-fixture',
@@ -50,11 +53,29 @@ function observation(id: string, sequence: number): WebObservation {
 }
 
 describe('Web Skill research arrangement and frozen identity', () => {
+  it('opts into portfolio scouting with enough capacity and freezes its configuration for dispatch', async () => {
+    const fixture = controlled(), jobs = new WebJobs(fixture.runner, { concurrency: 1, queueLimit: 4 }); queues.push(jobs);
+    const selected = input({ workers: 2, coordination: 'cooperative', portfolioExploration: true, portfolioSeconds: 45 });
+    const run = jobs.create('owner', selected, provider, undefined, 'portfolio');
+    await tick();
+    expect(run).toMatchObject({ portfolioExploration: true, portfolioSeconds: 45 });
+    expect(webResearchArguments(fixture.actual.input, provider).slice(-3))
+      .toEqual(['--portfolio-exploration', '--portfolio-seconds', '45']);
+    expect(webResearchArguments({ ...selected, portfolioExploration: undefined, portfolioSeconds: undefined }))
+      .toEqual(['--research-mode', 'skill', '--skill-loading', 'native']);
+    expect(webResearchArguments({ ...selected, portfolioExploration: false, portfolioSeconds: undefined }).at(-1)).toBe('--skip-portfolio');
+    expect(webResearchArguments(input({ nativeTeamCapacity: 2, portfolioExploration: true })).at(-1)).toBe('--portfolio-exploration');
+    expect(webPortfolioPreset({ workers: 2 })).toBe(true);
+    expect(webPortfolioPreset({ workers: 2, portfolioExploration: false })).toBe(false);
+    for (const invalid of [{ workers: 1 }, { portfolioSeconds: 0 }, { portfolioExploration: false }])
+      expect(webResearchModeError({ ...selected, ...invalid })).toBeDefined();
+    expect(() => jobs.replay('owner', { ...selected, portfolioSeconds: 46 }, provider, 'portfolio')).toThrow(/不同/);
+  });
   it('restores a native team with the chosen capacity, rejects host scheduling, and binds observations to the same team', async () => {
     const selected = { ...draft(), nativeTeamCapacity: 3 };
     expect(decodeTaskDraft(JSON.parse(encodeTaskDraft(selected)))).toEqual(selected);
     expect(leanProblemDraft(selected).draft.nativeTeamCapacity).toBe(3);
-    const team = input({ nativeTeamCapacity: 3, skillLoading: 'file' });
+    const team = input({ ...webAgentTeamPreset(), skillLoading: 'file' });
     expect(webResearchArguments(team, provider)).toEqual(['--research-mode', 'skill', '--skill-loading', 'file',
       '--skill-delegation', 'team', '--skill-max-agents', '3']);
     for (const change of [{ workers: 3 }, { coordination: 'cooperative' as const }, { planApproval: true }, { nativeTeamCapacity: 1 }, { nativeTeamCapacity: 9 }])
@@ -66,6 +87,17 @@ describe('Web Skill research arrangement and frozen identity', () => {
     const record = observation(run.id, 1);
     fixture.send({ type: 'observation', observation: record }); expect(run.observation).toBeUndefined();
     record.inspection.configuration.researchDelegation = { mode: 'team', maxAgents: 3 };
+    // A startup downgrade of the tool transport leaves the team arrangement frozen.
+    const { directory, workspace, problem } = localExample('web-team-fallback-'); roots.push(directory);
+    const state = solverState(problem, workspace, { runId: record.solverRunId,
+      researchDelegation: { mode: 'team', maxAgents: 3 }, agentTeam: {
+        schema: 'theorem-os.agent-team.v1', transport: 'host-tools', workers: [], events: [], deliveries: [], adoptions: [], operations: [],
+      } });
+    record.inspection.nativeTeam = projectWebNativeTeam(state, directory, buildRunInspection(state).agentTeam!, () => {
+      throw new Error('There are no proof commits in this fixture');
+    });
+    expect(record.inspection.nativeTeam).toMatchObject({ transport: 'host-tools', maxAgents: 3, taskCount: 0 });
+    expect(isWebObservation(record)).toBe(true);
     fixture.send({ type: 'observation', observation: record }); expect(run.observation?.sequence).toBe(1);
     expect(() => jobs.replay('owner', { ...team, nativeTeamCapacity: 4 }, provider, 'native-team')).toThrow(/不同/);
   });

@@ -29,6 +29,7 @@ function taskProjection(task: AgentTeamTask, historyOffset: number, full = false
   const result = {
     id: task.id, sequence: task.sequence, historyOffset, status: task.status,
     objectiveRevision: task.objectiveRevision ?? 1, workKind: task.workKind,
+    ...(task.routeId ? { routeId: task.routeId } : {}),
     profileEvidence: full ? task.profileEvidence : task.profileEvidence && {
       skillDigest: task.profileEvidence.skillDigest, selected: task.profileEvidence.selected,
       loaded: task.profileEvidence.loaded, unresolved: task.profileEvidence.unresolved,
@@ -131,6 +132,7 @@ export function agentTeamOverview(state: Readonly<SolverRunState>,
   const research = team?.researchState;
   const researchPreview = research && preview(research.summary, RESEARCH_TEXT);
   const refs = team?.researchArtifacts ?? [], deliveries = team?.deliveries ?? [], adoptions = team?.adoptions ?? [];
+  const retiredRoutes = team?.retiredRoutes ?? [];
   const selectedAdoptions = new Set(adoptions.filter(item => ['queued', 'integrating'].includes(item.status)).slice(0, 4).map(item => item.id));
   for (const item of adoptions.toReversed()) {
     if (selectedAdoptions.size >= REFERENCES) break;
@@ -163,10 +165,16 @@ export function agentTeamOverview(state: Readonly<SolverRunState>,
     }),
     ...(research && { researchState: { revision: research.revision, publishedAt: research.publishedAt,
       summary: researchPreview!.text, advisory: true, ...(researchPreview!.truncated ? { summaryTruncated: true } : {}) } }),
+    ...(retiredRoutes.length > 0 && { retiredRouteCount: retiredRoutes.length,
+      retiredRoutes: retiredRoutes.slice(-REFERENCES).map(route => ({ ...route,
+        reason: preview(route.reason, TASK_TEXT).text, evidenceRefs: route.evidenceRefs?.slice(0, 4) })) }),
     completionRequested: team?.completionRequested && { at: team.completionRequested.at,
       summary: preview(team.completionRequested.summary, EVENT_TEXT).text },
+    ...(team?.landedHelpers?.length ? { canonicalCommit: team.canonicalCommit,
+      landedHelpers: team.landedHelpers.slice(-REFERENCES).map(helper => ({ ...helper, type: preview(helper.type, 240).text })),
+      landedHelperCount: team.landedHelpers.length } : {}),
     researchArtifacts: refs.slice(-REFERENCES).map(({ id, agentId, taskId, commit }) => ({ id, agentId, taskId, commit })),
-    deliveries: deliveries.slice(-REFERENCES).map(({ id, agentId, taskId }) => ({ id, agentId, taskId })),
+    deliveries: deliveries.slice(-REFERENCES).map(({ id, agentId, taskId, kind }) => ({ id, agentId, taskId, ...(kind ? { kind } : {}) })),
     adoptions: adoptions.filter(item => selectedAdoptions.has(item.id)).map(item => ({ id: item.id, deliveryId: item.deliveryId, targetId: item.targetId,
       status: item.status, expectedCommit: item.expectedCommit, commit: item.commit,
       error: item.error && preview(item.error, TASK_TEXT).text,
@@ -185,6 +193,82 @@ export function agentTeamOverview(state: Readonly<SolverRunState>,
       proof: 'History includes deliveryId. Use inspect for exact checked declarations and evidence; overview omits declaration arrays.',
       omissions: 'Only selected members, current/next/recent tasks and recent references are shown. Use global history for omitted members and tasks; archived state is retained.',
     },
+  };
+}
+
+function oneLine(value: string, limit: number) {
+  const clipped = preview(value.trim().replace(/[\s\p{Cc}]+/gu, ' '), limit);
+  return clipped.truncated ? clipped.text + '…' : clipped.text;
+}
+
+/** Bound each section by its serialized UTF-8 bytes, including JSON escapes. */
+function routeSummaryRows<T>(rows: readonly T[], bytes: number) {
+  let used = 2; // Array brackets.
+  const selected: T[] = [];
+  for (const row of rows) {
+    const size = Buffer.byteLength(JSON.stringify(row)) + Number(selected.length > 0);
+    if (used + size > bytes) break;
+    selected.push(row);
+    used += size;
+  }
+  return selected;
+}
+
+const routeTaskRank = { running: 0, queued: 1, paused: 2, completed: 3 } as const;
+
+/** A read-only index for route decisions. Full task and proof evidence stays behind history and inspect. */
+export function agentTeamRouteSummary(team: Readonly<AgentTeamState>,
+  { routeId, includeRetired = true }: { routeId?: string; includeRetired?: boolean } = {}) {
+  const retired = new Map((team.retiredRoutes ?? []).map(route => [route.routeId, route]));
+  const matched = team.workers.flatMap(worker => worker.tasks.filter(task =>
+    (routeId === undefined || routeId === task.routeId) && (includeRetired || !task.routeId || !retired.has(task.routeId)))
+    .map(task => ({ workerId: worker.id, task })));
+  const byTask = new Map(matched.map(({ task }) => [task.id, task]));
+  const activeRoutes = new Map<string | null, { routeId: string | null; running: number; queued: number; paused: number; completed: number }>();
+  const taskRows = matched.flatMap(({ task, workerId }) => {
+    const status = task.status;
+    if (status !== 'running' && status !== 'queued' && status !== 'paused' && status !== 'completed') return [];
+    const key = task.routeId ?? null;
+    if (!key || !retired.has(key)) {
+      let group = activeRoutes.get(key);
+      if (!group) {
+        group = { routeId: key, running: 0, queued: 0, paused: 0, completed: 0 };
+        activeRoutes.set(key, group);
+      }
+      group[status]++;
+    }
+    return [{ taskId: oneLine(task.id, 64), workerId, routeId: key, status, workKind: task.workKind ?? null,
+      objective: oneLine(task.message, 100), sequence: task.sequence ?? 0 }];
+  }).sort((a, b) => routeTaskRank[a.status] - routeTaskRank[b.status] || b.sequence - a.sequence);
+  const routes = routeSummaryRows([...activeRoutes.values()].sort((a, b) =>
+    (b.running + b.queued + b.paused) - (a.running + a.queued + a.paused)), 800);
+  const tasks = routeSummaryRows(taskRows.map(({ sequence: _sequence, ...row }) => row), 2200);
+  const retirementRows = includeRetired ? [...retired.values()].toReversed()
+    .filter(route => routeId === undefined || route.routeId === routeId)
+    .map(route => ({ routeId: route.routeId, source: route.source, reason: oneLine(route.reason, 120),
+      evidenceRefCount: route.evidenceRefs?.length ?? 0 })) : [];
+  const retiredRoutes = routeSummaryRows(retirementRows, 950);
+  const helpers = team.landedHelpers ?? [];
+  const landedHelpers = routeSummaryRows(helpers.slice(-8).reverse().map(helper => ({
+    file: oneLine(helper.file, 96), qualifiedName: oneLine(helper.qualifiedName, 120),
+    signature: oneLine(helper.type, 120), landedAt: helper.landedAt ?? null,
+  })), 1200);
+  const deliveries = routeId === undefined && includeRetired ? team.deliveries :
+    team.deliveries.filter(delivery => byTask.has(delivery.taskId));
+  const recentDeliveries = routeSummaryRows(deliveries.slice(-8).reverse().map(delivery => {
+    const task = byTask.get(delivery.taskId);
+    return { id: oneLine(delivery.id, 64), producer: delivery.agentId, kind: delivery.kind ?? 'proof',
+      declarationCount: delivery.declarationCount ?? (task?.deliveryId === delivery.id && task.declarations ? task.declarations.length : null),
+      summary: oneLine(delivery.summary ?? task?.summary ?? 'Independently checked delivery.', 100) };
+  }), 1250);
+  const research = team.researchState;
+  return {
+    ok: true, routeId: routeId ?? null, canonicalCommit: team.canonicalCommit,
+    routes, tasks, retiredRoutes, landedHelpers, recentDeliveries,
+    research: research ? { revision: research.revision, summary: oneLine(research.summary, 160) } : null,
+    omitted: { routes: activeRoutes.size - routes.length, tasks: taskRows.length - tasks.length,
+      retiredRoutes: retirementRows.length - retiredRoutes.length, landedHelpers: helpers.length - landedHelpers.length,
+      recentDeliveries: deliveries.length - recentDeliveries.length },
   };
 }
 

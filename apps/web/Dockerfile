@@ -96,6 +96,7 @@ RUN timeout 30s python3 scripts/codex-backend/check-capabilities.py "$THEOREMOS_
 LABEL org.theoremos.native-agent-control=v1
 LABEL org.theoremos.team-profile-preferences=v1
 LABEL org.theoremos.team-expert-cards=v1
+LABEL org.theoremos.worker-control=v1
 ENTRYPOINT ["/opt/theorem-os/apps/web/worker-entrypoint.sh"]
 
 FROM source AS web
