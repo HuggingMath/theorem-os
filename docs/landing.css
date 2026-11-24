@@ -392,7 +392,7 @@ summary svg { flex-shrink: 0; transition: transform 180ms var(--ease-out); }
 .faq-list details + details { margin-top: 8px; }
 .faq-list summary { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 64px; cursor: pointer; list-style: none; font-size: 18px; font-weight: 500; }
 .faq-list summary svg { width: 18px; height: 18px; }
-.faq-list details[open] { background: var(--surface); color: var(--ink); padding-bottom: 20px; }
+.faq-list details[open] { background: var(--dark-surface); color: inherit; padding-bottom: 20px; }
 .faq-list details[open] summary svg { transform: rotate(45deg); }
 .faq-list details p { margin-top: 8px; font-size: 16px; }
 .faq-list details p a { text-decoration: underline; }
