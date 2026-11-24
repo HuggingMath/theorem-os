@@ -56,7 +56,7 @@ async function scenario(name: string, viewport: { width: number; height: number 
     const request = route.request(), url = new URL(request.url());
     if (url.origin !== allowedOrigin) {
       // Preserve the real target=_blank click while replacing its external navigation locally.
-      if (request.isNavigationRequest() && url.href === 'https://github.com/LikC1606/TheoremOS') {
+      if (request.isNavigationRequest() && url.href === 'https://github.com/HuggingMath/TheoremOS') {
         githubClicks.push(url.href);
         return route.fulfill({ contentType: 'text/html', body: '<p id="audit-external-target">GitHub click intercepted locally</p>' });
       }

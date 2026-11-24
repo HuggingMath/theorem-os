@@ -1,6 +1,6 @@
 # 产品宣传网站与证明档案
 
-线上地址：<https://theoremos.top/>（英文 `/en/`）。网站在本仓库（私有）构建，产物与公开成果发布到公开仓库 [LikC1606/TheoremOS](https://github.com/LikC1606/TheoremOS)，再把同一份产物上传到 Cloudflare Workers 提供服务。公开仓库的 GitHub Pages 地址 <https://likc1606.github.io/TheoremOS/> 保留，由仓库里的 `CNAME` 跳转到正式域名。公开仓库不包含运行时源码。
+线上地址：<https://theoremos.top/>（英文 `/en/`）。网站在本仓库（私有）构建，产物与公开成果发布到公开仓库 [HuggingMath/TheoremOS](https://github.com/HuggingMath/TheoremOS)，再把同一份产物上传到 Cloudflare Workers 提供服务。公开仓库的 GitHub Pages 地址 <https://huggingmath.github.io/TheoremOS/> 保留，由仓库里的 `CNAME` 跳转到正式域名。公开仓库不包含运行时源码。
 
 静态网站包含三个入口：
 
@@ -100,7 +100,7 @@ bun run build:site
 
 正式域名 `theoremos.top` 在阿里云注册，DNS 托管在 Cloudflare（NS 为 `fay` / `houston.ns.cloudflare.com`）。站点是 Worker `theorem-os` 的静态资源，路由 `theoremos.top/*` 指向它；根域名的 AAAA `100::`（代理）只是让路由生效的占位记录，`www` 跳转到根域名。HTTP 一律 301 到 HTTPS，证书由 Cloudflare 自动签发。静态资源设置 `html_handling: auto-trailing-slash`（`/x.html` 307 到 `/x`，保留查询参数）和 `not_found_handling: 404-page`。
 
-`docs/web/site.ts` 的 `pagesOrigin` 为 `https://likc1606.github.io/TheoremOS`，`customDomain` 为 `theoremos.top`。首页直接使用正式域名，其余页面源文件中的 Pages 绝对地址（`og:image`、`hreflang`）由构建替换为正式域名，并写出 `CNAME`。换域名时同步更新首页绝对地址和 `customDomain`、重新构建发布，再运行 `node scripts/capture-promo.mjs` 更新分享卡片上的网址。工作台里的官网链接在 `apps/web/client/feedback.ts` 的 `siteUrl` 和各页面的 `data-site` 链接里，需要一起改。
+`docs/web/site.ts` 的 `pagesOrigin` 为 `https://huggingmath.github.io/TheoremOS`，`customDomain` 为 `theoremos.top`。首页直接使用正式域名，其余页面源文件中的 Pages 绝对地址（`og:image`、`hreflang`）由构建替换为正式域名，并写出 `CNAME`。换域名时同步更新首页绝对地址和 `customDomain`、重新构建发布，再运行 `node scripts/capture-promo.mjs` 更新分享卡片上的网址。工作台里的官网链接在 `apps/web/client/feedback.ts` 的 `siteUrl` 和各页面的 `data-site` 链接里，需要一起改。
 
 ## 验证
 
@@ -139,7 +139,7 @@ bun run test:site
 bun run export:site /home/lzh/theorem-os-site
 ```
 
-`export:site` 要求目标是 origin 为 `LikC1606/TheoremOS` 且没有未提交改动的克隆。它清空除 `.git` 以外的内容，按上面的清单复制，再扫描本机路径、私有仓库链接、API Key 与内网地址；发现问题即停止并提示恢复方法。脚本不提交，检查 `git status` 后再手动提交推送。推送后把同一份目录上传到 Worker `theorem-os` 的静态资源（Cloudflare 的 assets upload session → upload → 更新脚本三步，API token 只需 Workers Scripts Write，用完撤回），并确认 `https://theoremos.top/` 已更新。公开仓库的 Pages 保持 **Deploy from a branch → main → / (root)**，用于旧地址跳转。
+`export:site` 要求目标是 origin 为 `HuggingMath/TheoremOS` 且没有未提交改动的克隆。它清空除 `.git` 以外的内容，按上面的清单复制，再扫描本机路径、私有仓库链接、API Key 与内网地址；发现问题即停止并提示恢复方法。脚本不提交，检查 `git status` 后再手动提交推送。推送后把同一份目录上传到 Worker `theorem-os` 的静态资源（Cloudflare 的 assets upload session → upload → 更新脚本三步，API token 只需 Workers Scripts Write，用完撤回），并确认 `https://theoremos.top/` 已更新。公开仓库的 Pages 保持 **Deploy from a branch → main → / (root)**，用于旧地址跳转。
 
 ## 视觉素材
 

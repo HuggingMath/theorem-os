@@ -12,7 +12,7 @@
 
 | 方法 | Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | 总用时（分钟） | 通过题数 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| **[TheoremOS + GPT-5.6](https://github.com/LikC1606/theorem-os/tree/main/examples/imo2026/results/20261024)（本项目）** | **17.68** | **72.26** | **114.00** | **13.01** | 19.25 | **49.36** | **285.55** | 6/6 |
+| **[TheoremOS + GPT-5.6](https://github.com/HuggingMath/theorem-os/tree/main/examples/imo2026/results/20261024)（本项目）** | **17.68** | **72.26** | **114.00** | **13.01** | 19.25 | **49.36** | **285.55** | 6/6 |
 | [Humanfia + GPT-5.6](https://github.com/humanfia/hoa-qed/blob/1c918ec9a96c7751ce9c283304e1aebd7ffb19a3/imo2026/README.md) | 38.10 | 100.40 | 187.10 | 58.70 | 46.50 | 66.90 | 497.70 | 6/6 |
 | [Humanfia + Kimi-K3 / Codex](https://github.com/humanfia/hoa-qed/blob/1c918ec9a96c7751ce9c283304e1aebd7ffb19a3/imo2026/README.md) | 87.10 | 224.30 | 343.70 | 75.60 | 91.90 | 212.40 | 1034.90 | 6/6 |
 | [AxiomProver](https://github.com/AxiomMath/IMO2026/blob/c5a6a089d06d3619afe7ff45c5ccab9e2a30d5d2/README.md) | 24.00 | 360.00 | 869.00 | 39.00 | 65.00 | 139.00 | 1496.00 | 6/6 |

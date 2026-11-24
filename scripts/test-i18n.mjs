@@ -324,10 +324,10 @@ try {
     assert.equal(await page.locator('[data-umami-event="open-workbench-hero"]').getAttribute('href'), 'https://app.theoremos.top/');
     assert.equal(await page.locator('[data-umami-event="open-workbench-hero"]').isVisible(), true);
     assert.equal(await page.locator('.nav-start').getAttribute('href'), '#start');
-    assert.equal(await page.locator('#start [data-umami-event="apply-github"]').getAttribute('href'), 'https://github.com/LikC1606/TheoremOS/issues/new?template=early-access.yml');
+    assert.equal(await page.locator('#start [data-umami-event="apply-github"]').getAttribute('href'), 'https://github.com/HuggingMath/TheoremOS/issues/new?template=early-access.yml');
     assert.equal(await page.locator('#start a[data-umami-event="open-workbench"]').getAttribute('href'), 'https://app.theoremos.top/');
     const apply = page.locator('#start a[data-umami-event="apply-github"]');
-    assert.equal(await apply.getAttribute('href'), 'https://github.com/LikC1606/TheoremOS/issues/new?template=early-access.yml');
+    assert.equal(await apply.getAttribute('href'), 'https://github.com/HuggingMath/TheoremOS/issues/new?template=early-access.yml');
     const email = new URL(await page.locator('#start a[href^="mailto:"]').first().getAttribute('href'));
     assert.equal(email.protocol, 'mailto:');
     assert.equal(email.pathname, 'liuzhenhao@westlake.edu.cn');
@@ -411,7 +411,7 @@ try {
     await page.waitForURL(`${hosted}en/index.html#start`);
     await page.waitForFunction(() => document.documentElement.dataset.landingReady === 'true');
     assert.equal(await page.getAttribute('html', 'lang'), 'en');
-    assert.equal(await page.locator('#start [data-umami-event="apply-github"]').getAttribute('href'), 'https://github.com/LikC1606/TheoremOS/issues/new?template=early-access.yml');
+    assert.equal(await page.locator('#start [data-umami-event="apply-github"]').getAttribute('href'), 'https://github.com/HuggingMath/TheoremOS/issues/new?template=early-access.yml');
     await open(page, `${hosted}en/archive.html#view=quickstart`);
     assert.equal(await page.locator('.quickstart-access a').getAttribute('href'), 'index.html#start');
     assert.equal(new URL(await page.locator('.quickstart-access a').getAttribute('href'), page.url()).href, `${hosted}en/index.html#start`);

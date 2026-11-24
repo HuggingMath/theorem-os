@@ -84,7 +84,7 @@ const checkStart = async page => {
   assert.equal(await open.getAttribute('href'), 'https://app.theoremos.top/');
   const apply = start.locator('[data-umami-event="apply-github"]');
   assert.match(await apply.innerText(), /申请|内测/);
-  assert.equal(await apply.getAttribute('href'), 'https://github.com/LikC1606/TheoremOS/issues/new?template=early-access.yml');
+  assert.equal(await apply.getAttribute('href'), 'https://github.com/HuggingMath/TheoremOS/issues/new?template=early-access.yml');
   assert.match(await start.innerText(), /公开/);
   const email = new URL(await start.locator('a[href^="mailto:"]').first().getAttribute('href'));
   assert.equal(email.protocol, 'mailto:');
@@ -440,8 +440,9 @@ try {
   await page.locator('#tab-m3').click();
 
   await checkStart(page);
-  const links = await page.locator('a[href*="github.com/LikC1606"]').evaluateAll(anchors => anchors.map(anchor => anchor.href));
-  assert.ok(links.length > 0 && links.every(href => href.startsWith('https://github.com/LikC1606/TheoremOS')), `Only the public site repository may be linked: ${links}`);
+  assert.equal(await page.locator('a[href*="github.com/LikC1606"]').count(), 0, 'Legacy personal GitHub links must not remain');
+  const links = await page.locator('a[href*="github.com/HuggingMath"]').evaluateAll(anchors => anchors.map(anchor => anchor.href));
+  assert.ok(links.length > 0 && links.every(href => href.startsWith('https://github.com/HuggingMath/TheoremOS')), `Only the public site repository may be linked: ${links}`);
 
   const summary = page.locator('.faq-list summary').first();
   await summary.click();
