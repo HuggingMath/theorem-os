@@ -1,6 +1,7 @@
 import { render } from 'preact';
 import { useLayoutEffect, useRef } from 'preact/hooks';
 import { rollDigits, rollStatus } from '../motion';
+import { Rich } from '../richText';
 import { Icon, Spinner } from './Icon';
 import { fill } from './Section';
 import { locale, t } from '../../i18n';
@@ -189,7 +190,7 @@ function RunHeader(props: RunHeaderProps) {
   return <>
     <header class="detail-heading" data-run={props.id} data-updated-at={props.updated}>
       <div class="detail-heading-text">
-        <h2 translate={false} title={props.title}>{props.title}</h2>
+        <h2 translate={false} title={props.title}><Rich text={props.title} inline /></h2>
         <div class="detail-statusline">
           <StatusBadge status={props.status} />
           {props.sample && <span class="badge sample-badge" data-sample-badge><Icon name="eye" />{t('示例 · 只读')}</span>}

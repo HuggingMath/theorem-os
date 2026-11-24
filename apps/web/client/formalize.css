@@ -2,7 +2,10 @@ html.formalize-root{height:auto;overflow:auto}
 .formalize-page .skip-link{top:8px;transform:none;clip-path:inset(100%)}
 .formalize-page .skip-link:focus{clip-path:none}
 body.formalize-page{height:auto;min-height:100dvh;overflow:visible}
-.formalize-page .topbar{flex-wrap:wrap;min-height:64px;height:auto;padding-block:12px;gap:12px}
+.formalize-page .topbar{flex-wrap:wrap;min-height:56px;height:auto;padding-block:8px;gap:12px}
+.formalize-page .topbar-actions{gap:8px}
+.formalize-page .topbar-actions :is(.locale-switch,.button){min-height:36px;padding:6px 13px;border-radius:9999px;border-color:var(--line);background:var(--card)}
+.formalize-page .topbar-actions :is(.locale-switch,.button):hover{background:var(--gray-50);border-color:var(--gray-200)}
 .formalize-shell{width:min(1440px,100%);margin:0 auto;padding:48px 36px 80px}
 .formalize-intro{max-width:760px;margin-bottom:36px}
 .formalize-eyebrow{color:var(--blue);font-size:13px;margin-bottom:8px}
@@ -19,7 +22,8 @@ body.formalize-page{height:auto;min-height:100dvh;overflow:visible}
 .formalize-examples{padding-bottom:20px;border-bottom:1px solid var(--line)}
 .formalize-examples select{margin-top:10px}
 .formalize-examples .field-note{margin-top:10px;line-height:1.8}
-:is(.formalize-page,.formalize-embedded) input:not([type=checkbox]),:is(.formalize-page,.formalize-embedded) select,:is(.formalize-page,.formalize-embedded) textarea{display:block;width:100%;min-width:0;border:1px solid var(--line);border-radius:4px;background:var(--card);padding:12px}
+:is(.formalize-page,.formalize-embedded) input:not([type=checkbox]),:is(.formalize-page,.formalize-embedded) select,:is(.formalize-page,.formalize-embedded) textarea{display:block;width:100%;min-width:0;border:1px solid var(--line);border-radius:4px;background-color:var(--card);padding:12px}
+:is(.formalize-page,.formalize-embedded) select{height:40px;padding:8px 34px 8px 12px;line-height:1.35}
 :is(.formalize-page,.formalize-embedded) textarea{resize:vertical;min-height:220px;line-height:1.85}
 :is(.formalize-page,.formalize-embedded) label{display:block;font-weight:500}
 :is(.formalize-page,.formalize-embedded) label .field-note{display:block;font-weight:400;margin-top:6px}
@@ -35,6 +39,7 @@ body.formalize-page{height:auto;min-height:100dvh;overflow:visible}
 .formalize-record[aria-pressed=true]{border-color:var(--line);background:var(--card)}
 .formalize-record:hover{background:var(--gray-50)}
 .formalize-record-title{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
+.formalize-record-title:has(.katex){line-height:1.7}
 .formalize-record-meta{display:block;color:var(--muted);font-size:12px;margin-top:8px}
 .formalize-current{margin-top:48px;border-top:1px solid var(--line);padding-top:28px;scroll-margin-top:24px}
 #formalize-progress{color:var(--muted);font-size:13px}

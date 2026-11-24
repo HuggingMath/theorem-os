@@ -60,6 +60,8 @@ function Topbar(props: TopbarProps) {
       </button>}
       <span id="connection-status" class={`connection-status ${props.connection.tone}`} hidden={props.connection.tone === 'ready'} role="status" title={props.connection.label}><span class="status-dot" />{props.connection.label}</span>
     </div>
+    <button type="button" class="topbar-control topbar-command" onClick={props.onPalette} title={`${t('打开命令面板')} (${props.mac ? '⌘K' : 'Ctrl K'})`}
+      aria-haspopup="dialog" aria-keyshortcuts={props.mac ? 'Meta+K' : 'Control+K'}><Icon name="search" /><span>{tx('搜索', 'Search')}</span><kbd aria-hidden="true">{props.mac ? '⌘K' : 'Ctrl K'}</kbd></button>
     <details class="navigation-menu" data-navigation-menu ref={menu} open={open}
       onToggle={event => setOpen((event.currentTarget as HTMLDetailsElement).open)}
       onFocusOut={event => { if (!menu.current?.contains(event.relatedTarget as Node)) close(); }}

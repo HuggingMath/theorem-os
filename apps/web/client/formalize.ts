@@ -1,4 +1,6 @@
+import { h, render } from 'preact';
 import type { WebSession, WebFormalizationReport } from '../shared';
+import { Rich } from './richText';
 import type { WebFormalization, WebFormalizationCapabilities, WebFormalizationRequest } from '../formalizationTypes';
 import type { WebConversation } from '../conversationTypes';
 import { webFormalizationDefaults } from '../formalizationTypes';
@@ -202,12 +204,14 @@ function drawCapabilities() {
 }
 function drawList() {
   if (embedded) $('.formalize-history').hidden = !state.items.length;
-  const list = $('#formalize-list'); list.replaceChildren();
+  const list = $('#formalize-list');
+  for (const existing of list.querySelectorAll('.formalize-record-title')) render(null, existing);
+  list.replaceChildren();
   if (!state.items.length) { const empty = document.createElement('p'); empty.className = 'field-note'; empty.textContent = t('还没有形式化记录。'); list.append(empty); }
   for (const item of state.items) {
     const button = document.createElement('button'); button.type = 'button'; button.className = 'formalize-record'; button.dataset.id = item.id;
     button.setAttribute('aria-pressed', String(item.id === state.selected));
-    const title = document.createElement('span'); title.className = 'formalize-record-title'; title.textContent = item.original; title.translate = false;
+    const title = document.createElement('span'); title.className = 'formalize-record-title'; title.translate = false; render(h(Rich, { text: item.original, inline: true }), title);
     const meta = document.createElement('span'); meta.className = 'formalize-record-meta';
     meta.textContent = `${statusName(item)} · ${new Date(item.createdAt).toLocaleString(localeTag, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`;
     button.append(title, meta); button.addEventListener('click', () => { if (!state.busy) void select(item.id); }); list.append(button);

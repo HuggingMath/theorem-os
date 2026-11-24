@@ -11,6 +11,7 @@ import { DiffRows, fill } from './Section';
 import { SideViewer } from './SideViewer';
 import { TermHint } from './TermHint';
 import { shownLines } from '../../presentation';
+import { Rich } from '../richText';
 import { t } from '../../i18n';
 import type { WebRun, WebSession } from '../../shared';
 import type { NextStep } from '../../report';
@@ -196,7 +197,7 @@ function ResultDocument(props: ResultPanelProps) {
     {props.later && <Later runs={props.later} comparing={props.compare?.id} />}
     {/* The task stays readable; how it was run is background and stays folded. */}
     <section class="result-section result-task">
-      <div class="result-task-copy"><h3>{t('研究任务')}</h3><p class="task-content" translate={false}>{props.task}</p></div>
+      <div class="result-task-copy"><h3>{t('研究任务')}</h3><p class="task-content" translate={false}>{/\$\$[\s\S]+?\$\$|\$(?:[^$\n]|\\\$)+\$|\\\(|\\\[/.test(props.task) ? <Rich text={props.task} /> : props.task}</p></div>
       <details class="target-diagnostics result-config"><summary>{t('执行配置')}</summary>
         <FactList facts={props.facts} />{props.config.length > 0 && <FactList facts={props.config} />}</details>
     </section>

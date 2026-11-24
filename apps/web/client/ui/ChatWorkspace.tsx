@@ -855,7 +855,7 @@ function ChatHistory(props: ChatHistoryProps) {
       <summary>{t('管理题目记录')}<span>{props.records.length} / {props.recordLimit}</span></summary>
       <p class="chat-history-empty">{t('记录满后可在这里清理。有研究使用的题目，需要先删除关联研究。')}</p>
       {props.records.map(item => <div class="chat-problem-record" key={item.id} data-chat-record={item.id}>
-        <a href={`formalize.html?id=${encodeURIComponent(item.id)}`} target="_blank" rel="noreferrer" translate={false}>{item.original}</a>
+        <a href={`formalize.html?id=${encodeURIComponent(item.id)}`} target="_blank" rel="noreferrer" translate={false}><Rich text={item.original} inline /></a>
         <div>{item.runId && <a class="text-button" href={`?run=${encodeURIComponent(item.runId)}`}>{t('查看关联研究')}</a>}
           <button type="button" class="text-button" data-chat-delete-record disabled={busy || ['queued', 'running'].includes(item.status)} onClick={event => edit(item.id, 'record', item.original, event.currentTarget)}>{t('删除题目')}</button></div>
         {confirmation(item.id)}
