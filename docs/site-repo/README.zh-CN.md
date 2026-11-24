@@ -19,7 +19,7 @@
 
 **TheoremOS 是一套与数学家协作攻克高难度证明的 AI 研究系统。** 研究者可用自然语言、TeX 或 Lean 4 提出问题，审核形式化陈述并把控整体方向；系统在给定算力预算内负责检索结论、拆解引理、探索证明，并由独立 Lean 程序严格核验完整证明。您可通过免本地配置的[云端工作台](https://app.theoremos.top/)直接开始使用，或查看[访问说明](docs/ACCESS.md)了解内测申请与 CLI 研究合作。
 
-> **研究内测**：[云端工作台](https://app.theoremos.top/)采用邮箱白名单免费内测（需自备支持 Responses API 的模型密钥）。可通过 [GitHub Issue](https://github.com/LikC1606/TheoremOS/issues/new?template=early-access.yml) 申请开通，CLI 实验与合作方式详见[访问说明](docs/ACCESS.md)。
+> **研究内测**：[云端工作台](https://app.theoremos.top/)采用邮箱白名单免费内测（需自备支持 Responses API 的模型密钥）。可通过 [GitHub Issue](https://github.com/HuggingMath/TheoremOS/issues/new?template=early-access.yml) 申请开通，CLI 实验与合作方式详见[访问说明](docs/ACCESS.md)。
 
 > 🏆 **研究成果与评测表现**：本仓库公开了系统完成的 **28 条高难度前沿数学证明记录**，涵盖代数数论、黎曼几何、泛函分析与统计物理等领域，其中包括 **[10 份通过 Lean-Eval 官方评测的证明](#lean-eval10-份官方通过的证明)**，以及 **[18 条经本地 Lean 与原题检查程序复核的 OpenAI Math 证明记录](#openai-math18-条证明记录)**。
 
@@ -116,7 +116,7 @@
 * **🎓 面向数学研究者**：欢迎带着手头正在攻关的问题、初步思路或尚未完成的 Lean 证明前来交流。我们可以依托 TheoremOS 共同核对定义与假设、推演多条证明路线、排查缺失的关键辅助引理，并评估已有结论能否高效复用，借助 AI 加速研究进程。
 * **🤖 面向数学 Agent 研究同行**：欢迎共同探讨搜索策略、上下文选择与多智能体协作机制。系统底层的执行、结果检查、搜索调度、上下文管理和职责分配均为解耦的可替换模块，并配备完整的 CLI 实验工具——欢迎基于此平台开展消融实验，共同探索不同协作模式与决策组件的实际增益。
 
-💌 **联系方式**：有意合作请发送邮件至 **[liuzhenhao@westlake.edu.cn](mailto:liuzhenhao@westlake.edu.cn)**，欢迎附上题目来源或 Lean 陈述、已尝试的方法以及希望共同探讨的问题。公开的学术讨论与功能建议，欢迎随时 **[提交 GitHub Issue](https://github.com/LikC1606/TheoremOS/issues/new)**。
+💌 **联系方式**：有意合作请发送邮件至 **[liuzhenhao@westlake.edu.cn](mailto:liuzhenhao@westlake.edu.cn)**，欢迎附上题目来源或 Lean 陈述、已尝试的方法以及希望共同探讨的问题。公开的学术讨论与功能建议，欢迎随时 **[提交 GitHub Issue](https://github.com/HuggingMath/TheoremOS/issues/new)**。
 
 ---
 
@@ -128,7 +128,7 @@ TheoremOS 目前通过邮箱白名单机制开放研究内测。**内测期间�
 
 **内测接入流程：**
 
-1. **申请内测**：通过 **[GitHub Issue 申请通道](https://github.com/LikC1606/TheoremOS/issues/new?template=early-access.yml)** 简要说明研究用途（可选附公开题目或 Lean 陈述链接）；也可直接发邮件至 **[liuzhenhao@westlake.edu.cn](mailto:liuzhenhao@westlake.edu.cn)** 申请。*(安全提示：公开 Issue 中请勿填写 API Key 或个人隐私信息)*
+1. **申请内测**：通过 **[GitHub Issue 申请通道](https://github.com/HuggingMath/TheoremOS/issues/new?template=early-access.yml)** 简要说明研究用途（可选附公开题目或 Lean 陈述链接）；也可直接发邮件至 **[liuzhenhao@westlake.edu.cn](mailto:liuzhenhao@westlake.edu.cn)** 申请。*(安全提示：公开 Issue 中请勿填写 API Key 或个人隐私信息)*
 2. **确认白名单权限**：审核通过后，按回复指引通过邮件确认登录邮箱；加入白名单后，使用邮箱验证码即可登录 **[app.theoremos.top](https://app.theoremos.top/)** 云端工作台。
 3. **接入模型服务**：连接 OpenAI 或兼容 Responses API 的大模型服务，填写自己的 API Key，选择推理模型并设置形式化与证明预算。
 4. **提交任务与核查**：直接提交自然语言、$\TeX$ 或已有的 Lean 题目与未完成证明，在线核对 Lean 陈述，实时查看证明推演过程与模型用量，并可随时一键下载源码、检查报告和复查文件。
@@ -146,7 +146,7 @@ TheoremOS 目前通过邮箱白名单机制开放研究内测。**内测期间�
 - **证明复核指引**：[`docs/VERIFY.zh-CN.md`](docs/VERIFY.zh-CN.md) — 提供无需 Mathlib 的 Lean 入门检查示例与 Dimitrov 官方冻结工作区复核步骤，并说明全部 28 条公开证明记录的构成（含 10 份具有 Lean-Eval 官方通过记录的证明，以及 18 条经本项目运行 Lean 与原题比较器核验、OpenAI 官方结果尚未确认的记录）。
 - **许可与引用**：[`LICENSE`](LICENSE)、[`docs/PUBLIC-MATERIALS.md`](docs/PUBLIC-MATERIALS.md)（公开材料许可说明）与 [`CITATION.cff`](CITATION.cff)。
 - **版本记录**：[`CHANGELOG.md`](CHANGELOG.md)。
-- **问题反馈与建议**：欢迎通过 [GitHub Issues](https://github.com/LikC1606/TheoremOS/issues/new/choose) 提交内测申请、Bug 报告、功能建议或问题咨询。
+- **问题反馈与建议**：欢迎通过 [GitHub Issues](https://github.com/HuggingMath/TheoremOS/issues/new/choose) 提交内测申请、Bug 报告、功能建议或问题咨询。
 
 ---
 

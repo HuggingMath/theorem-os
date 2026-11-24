@@ -94,7 +94,7 @@ describe('GitHub Pages archive catalog', () => {
     expect(accepted.model).toBe('Original project + original model');
     expect(accepted.official?.resultUrl).toBe('https://example.com/result');
     expect(accepted.local).toBeUndefined();
-    expect(accepted.sources[0].url).toBe('https://github.com/LikC1606/TheoremOS/blob/main/accepted/example/Submission.lean');
+    expect(accepted.sources[0].url).toBe('https://github.com/HuggingMath/TheoremOS/blob/main/accepted/example/Submission.lean');
     expect(research).toMatchObject({
       status: 'in_progress_not_officially_accepted', snapshot: { taskStatuses: { completed: 3 } },
     });
@@ -203,7 +203,7 @@ describe('GitHub Pages archive catalog', () => {
       const record = records.find(record => record.id === entry.problem_id)!;
       expect(record).toMatchObject({
         status: 'official_accepted', model: entry.model, updatedAt: result.result_reported_at,
-        archiveUrl: `https://github.com/LikC1606/TheoremOS/tree/main/submitted/${entry.directory}`,
+        archiveUrl: `https://github.com/HuggingMath/TheoremOS/tree/main/submitted/${entry.directory}`,
         official: { statementRevision: 1, resultUrl: result.result_url, resultBody: result.result_body,
           sourceCommit: entry.original_source_commit, checksums: entry.source_sha256 },
         local: { kernelVerified: true, sourceBinding: 'matches', receipt: `official-${entry.problem_id}` },

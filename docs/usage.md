@@ -34,7 +34,7 @@ bun run math doctor --lean-only --json
 | 验证环境 | Bubblewrap（`bwrap`）；只读依赖环境还需要 `squashfuse` 或 `snapfuse`、`fusermount3` 或 `fusermount`、`mksquashfs`，以及可用的 FUSE 挂载权限 |
 
 ```bash
-git clone https://github.com/LikC1606/theorem-os.git
+git clone https://github.com/HuggingMath/theorem-os.git
 cd theorem-os
 bun install --frozen-lockfile
 bun run build
